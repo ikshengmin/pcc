@@ -130,8 +130,7 @@ CAPABILITY = (
     # Exact owner marker/local controls move to checked positives in test_rust_owner_where_bounds.
     ('self-predicate', 'struct H{x:u64}impl H{fn f(self)where Self:Sized{}}', 'where Self predicates'),
     # Exact required local-trait method control moved to test_rust_trait_local_contracts.
-    ('trait-where', 'trait A{}trait B{fn f<U>(u:U)->U where U:A;}', 'where constraints'),
-    ('impl-trait-where', 'trait A{fn f<U:Copy>(u:U)->U;}struct H{x:u64}impl A for H{fn f<U>(u:U)->U where U:Copy{u}}', 'where constraints'),
+    # Exact trait-method where originals now checked in test_rust_trait_where_contracts.
     ('method-lifetime', "struct H{x:u64}impl H{fn f<'a,'b>(&self,u:&'a u64)where 'a:'b{}}", 'lifetime and higher-ranked where'),
     ('relaxed-local', 'trait A{fn n(&self)->u64;}struct H{x:u64}impl H{fn f<U:?Sized+A>(&self,u:&U)->u64{u.n()}}', 'relaxed local-trait parameter layouts'),
 )

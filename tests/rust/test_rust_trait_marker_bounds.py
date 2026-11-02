@@ -4,7 +4,7 @@ https://doc.rust-lang.org/reference/items/associated-items.html#associated-funct
 https://doc.rust-lang.org/error_codes/E0276.html
 https://doc.rust-lang.org/reference/trait-bounds.html#sized
 Required canonical call contracts remain separate from impl body assumptions;
-default bodies, generic impls, arbitrary trait bounds, DST and where clauses remain gaps.
+default bodies, generic impls and DST remain gaps; where contracts have separate tests.
 The analysis helper produces facts only. Every public marker/reference positive
 needs a genuine source/options-bound rustc token before owned code generation.
 """
@@ -152,12 +152,44 @@ def test_trait_contract_and_unused_body_errors_are_owned_analysis_not_certificat
         analyze_source(text)
 
 
+# Retain these exact older capability inputs. Local names are ordinary traits,
+# not builtin marker permissions, even in unused required method signatures.
+PRIOR_LOCAL_CAPABILITIES = (
+    ('later-local-copy', 'trait T{fn f<U:Copy>(u:U)->U;}trait Copy{}', 'T', 'Copy'),
+    ('current-local-copy', 'trait Copy{fn f<U:Copy>(u:U)->U;}', 'Copy', 'Copy'),
+    ('local-sized', 'trait T{fn f<U:Sized>();}trait Sized{}', 'T', 'Sized'),
+)
+
+
+@pytest.mark.parametrize('name,text,trait,bound', PRIOR_LOCAL_CAPABILITIES)
+def test_local_names_in_old_required_signatures_keep_local_canonical_identity(name, text, trait, bound):
+    checker = analyze_source(text)
+    parameter, = checker.traits.method_parameters[trait, 'f']
+    assert checker.traits.parameter_bounds[parameter] == frozenset({bound})
+    assert checker.standard_markers.constraints[parameter] == frozenset({SIZED})
+    assert not checker.copy_type(parameter)
+
+
+@pytest.mark.parametrize('name,text,trait,bound', PRIOR_LOCAL_CAPABILITIES)
+def test_old_local_signature_controls_need_actual_token_before_sema(name, text, trait, bound, monkeypatch):
+    from pcc.frontends.rust.semantics import Checker
+    monkeypatch.setattr(Checker, 'check', lambda *a: pytest.fail('uncertified local signature reached Sema'))
+    with pytest.raises(RustError, match='local trait bounds require an actual'):
+        compile_rust(text, experimental_rustc_checked=True)
+
+
+@pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
+@pytest.mark.parametrize('name,text,trait,bound', PRIOR_LOCAL_CAPABILITIES)
+def test_exact_old_local_signature_controls_are_actual_checked_positives(name, text, trait, bound, tmp_path, monkeypatch):
+    from tests.rust.test_rust_local_trait_bounds import checked_owned
+    # Actual check precedes the helper's forbidden-Popen/MoveChecker owned phase.
+    checked_owned(text, tmp_path / name, monkeypatch)
+
+
 CAPABILITY = (
-    ('later-local-copy', 'trait T{fn f<U:Copy>(u:U)->U;}trait Copy{}', 'local/user trait'),
-    ('current-local-copy', 'trait Copy{fn f<U:Copy>(u:U)->U;}', 'local/user trait'),
-    ('local-sized', 'trait T{fn f<U:Sized>();}trait Sized{}', 'local/user trait'),
+    # Exact local Copy/Sized inputs are certified positives below.
     ('clone', 'trait T{fn f<U:Clone>(u:U)->U;}', 'only canonical'),
-    ('where', 'trait T{fn f<U>(u:U)->U where U:Copy;}', 'where constraints'),
+    # Exact trait-method where originals now checked in test_rust_trait_where_contracts.
     ('default', 'trait T{fn f<U:Copy>(u:U)->U{u}}', 'default trait'),
     ('generic-impl', 'struct R<X>{x:X}trait T{fn f<U:Copy>(u:U)->U;}impl<X>T for R<X>{fn f<U:Copy>(u:U)->U{u}}', 'blanket/generic'),
     ('dst', 'struct R{x:u64}trait T{fn f<U:?Sized>(&self,u:&U);}impl T for R{fn f<U:?Sized>(&self,u:&U){}}fn f(s:&[u64]){R{x:0}.f(s)}', 'slice types'),

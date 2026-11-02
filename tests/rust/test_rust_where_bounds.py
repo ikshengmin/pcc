@@ -183,7 +183,7 @@ REFERENCE_INVALID = (
 CAPABILITY = (
     # Exact inherent associated-where control is retained as a positive in
     # test_rust_inherent_local_bounds; trait contracts remain a separate gap.
-    ('trait-method', 'trait A{fn f<T>(x:T)->T where T:Copy;}', 'where constraints'),
+    # Exact trait-method where originals now checked in test_rust_trait_where_contracts.
     ('concrete', 'fn f()where u64:Copy{}', 'subjects must be declared'),
     ('compound', 'fn f<T>()where [T;0]:Copy{}', 'subjects must be declared'),
     ('projection', 'fn f<T>()where T:Iterator,T::Item:Copy{}', 'generic trait|where projections|only canonical'),

@@ -178,10 +178,14 @@ class StaticTraits:
                 self.call_bounds.update(
                     (parameter, self.parameter_bounds[required_parameter])
                     for required_parameter, parameter in zip(required_parameters, parameters))
-                scope = {p.text: value for p, value in zip(required.type_parameters, parameters)}
-                scope['Self'] = owner
-                expected = tuple(checker.generics.normalize(ty, token, scope) for token, ty, _ in required.params)
-                result = checker.generics.normalize(required.result, required.token, scope)
+                # Compare declaration-resolved types by alpha substitution.
+                # Never resolve raw required paths in the impl environment:
+                # its parameter names may shadow nominal/trait declarations.
+                self_parameter, signature = self.signatures[trait, name]
+                bindings = dict(zip(required_parameters, parameters))
+                bindings[self_parameter] = owner
+                expected = tuple(substitute(ty, bindings) for _, ty, _ in signature.params)
+                result = substitute(signature.result, bindings)
                 if expected != tuple(ty for _, ty, _ in function.params) or result != function.result:
                     raise function.token.error('trait implementation method signature mismatch')
 

@@ -3,7 +3,7 @@
 https://doc.rust-lang.org/reference/items/associated-items.html
 https://doc.rust-lang.org/reference/trait-bounds.html#bound-satisfaction
 https://doc.rust-lang.org/error_codes/E0276.html
-No new solver, blanket impls, trait-method where clauses or borrow admission.
+No new solver, blanket impls or borrow admission in this inline-contract module.
 All execution is delegated to CI with actual same-input rustc certification.
 """
 from pathlib import Path
@@ -143,8 +143,7 @@ REFERENCE_INVALID = (
     ('moved-argument', 'trait Read{fn read(&self)->u64;}trait Ops{fn f<U:Read>(u:U);}struct R{x:u64}impl Ops for R{fn f<V:Read>(v:V){let moved=v;v.read();}}', '', 'E0382'),
 )
 CAPABILITY = (
-    ('required-where', 'trait A{}trait Ops{fn f<U>(u:U)->U where U:A;}', 'where constraints'),
-    ('impl-where', 'trait A{}trait Ops{fn f<U:A>(u:U)->U;}struct R{x:u64}impl Ops for R{fn f<V>(v:V)->V where V:A{v}}', 'where constraints'),
+    # Exact trait-method where originals now checked in test_rust_trait_where_contracts.
     ('relaxed-local-layout', 'trait A{}trait Ops{fn f<U:?Sized+A>(u:&U);}', 'relaxed local-trait parameter layouts'),
 )
 

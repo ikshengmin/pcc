@@ -548,11 +548,14 @@ class Parser:
                 break
         return tuple(bounds)
 
-    def function_where_clause(self, parameters, *, owner_parameters=None):
+    def function_where_clause(self, parameters, *, owner_parameters=None, declaration=False):
         declared = {parameter.text for parameter in parameters}
         owners = {parameter.text for parameter in owner_parameters or ()}
+        # Required associated functions end in a semicolon, not a body. Keep
+        # the body delimiter too so default bodies retain their explicit gate.
+        terminators = {'{', ';'} if declaration else {'{'}
         predicates = []
-        while self.token.text != '{':
+        while self.token.text not in terminators:
             if self.token.kind == 'lifetime' or self.token.text == 'for':
                 raise self.token.error('lifetime and higher-ranked where predicates are not implemented')
             if owner_parameters is not None and self.token.text == 'Self':
@@ -563,7 +566,7 @@ class Parser:
             if self.token.text != ':':
                 raise self.token.error('where projections/equality predicates are not implemented; expected a parameter colon')
             self.take()
-            bounds = self.type_parameter_bounds({',', '{'})
+            bounds = self.type_parameter_bounds({','} | terminators)
             if parameter.text in owners and any(bound.relaxed for bound in bounds):
                 # The enclosing impl/data parameter already has its Sized
                 # declaration. A method cannot retroactively relax it.
@@ -973,14 +976,14 @@ class Parser:
         where_token, where_predicates = None, ()
         if self.token.text == "where":
             where_token = self.take()
-            if (implementation is not None and implementation.trait is not None
-                    or abi != 'Rust' or no_mangle or declaration):
-                raise where_token.error('where constraints are implemented only on free functions and inherent method type parameters')
+            if abi != 'Rust' or no_mangle or declaration and not trait_declaration:
+                raise where_token.error('where constraints are implemented only on Rust functions and method type parameters')
             # Owner predicates constrain this method, not the whole impl.
             # Keep their subjects in the existing fixed-prefix/suffix vector;
             # GenericFunctions checks both before requesting an instance.
             where_predicates = self.function_where_clause(parameters,
-                owner_parameters=implementation.type_parameters if implementation is not None else None)
+                owner_parameters=implementation.type_parameters if implementation is not None else None,
+                declaration=trait_declaration)
         if declaration:
             if trait_declaration and self.token.text == "{":
                 raise self.token.error("default trait method bodies are not implemented")
