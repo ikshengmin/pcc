@@ -8,6 +8,8 @@ import subprocess
 
 import pytest
 
+from tests.ci_validation_support import has_only_validation_plan_dependency
+
 from scripts import ci_bootstrap_partition as partition
 from scripts import ci_pytest_markers as gate
 
@@ -165,7 +167,7 @@ def test_workflow_keeps_local_owner_exclusive_and_old_postcheck_prerequisites():
     nonmac, following = workflow.split("\n  other-platform-native-wheel:", 1)[1].split("\n  pcc1-package-parity:", 1)
     mac = following.split("\n  pytest-markers:", 1)[0]
     for block in (nonmac, mac):
-        assert "\n    needs:" not in block
+        assert has_only_validation_plan_dependency(block)
         assert block.count("id: bootstrap_owner") == 1
         assert block.index("id: stage1_export") < block.index("id: bootstrap_owner") < block.index("id: native_prior")
         assert "continue-on-error" not in block

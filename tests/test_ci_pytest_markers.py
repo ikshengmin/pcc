@@ -239,20 +239,20 @@ def test_unified_workflow_covers_both_groups_on_four_native_platforms(tmp_path, 
     # Preserve existing independent Stage1/preflight graph, including invalid
     # manual configuration rejection before any existing heavy job can start.
     existing = workflow.split('\n  macos-pcc0-regressions:\n', 1)[1].split('\n  pytest-markers:\n', 1)[0]
-    assert '\n    needs:' not in existing
-    assert existing.count("if: ${{ !inputs.full_chain || inputs.pytest_selection == 'not integration' }}") == 7
+    assert re.findall(r'^    needs: (.+)$', existing, re.M) == ['validation-plan'] * 7
+    assert existing.count("if: ${{ needs.validation-plan.outputs.legacy == 'true' && (!inputs.full_chain || inputs.pytest_selection == 'not integration') }}") == 7
     expected_jobs = {
         'macos-pcc0-regressions', 'macos-pcc0-float-doc-regressions',
         'macos-pcc0-indexed-split', 'worker-prior-preflight',
         'windows-rss-publication', 'other-platform-native-wheel', 'pcc1-package-parity',
     }
     job_ids = set(re.findall(r'^  ([a-z][a-z0-9-]*):$', workflow.split('jobs:\n', 1)[1], re.M))
-    assert job_ids == expected_jobs | {'ci-plan', 'pytest-markers'}
-    predicate = "    if: ${{ !inputs.full_chain || inputs.pytest_selection == 'not integration' }}"
+    assert job_ids == expected_jobs | {'ci-plan', 'pytest-markers', 'validation-plan', 'source-validation', 'cpp17'}
+    predicate = "    if: ${{ needs.validation-plan.outputs.legacy == 'true' && (!inputs.full_chain || inputs.pytest_selection == 'not integration') }}"
     for name in expected_jobs:
         # Job-level if is independent of ci-plan status and precedes all steps.
         block = workflow.split('\n  ' + name + ':\n', 1)[1]
-        assert block.splitlines()[0] == predicate
+        assert block.splitlines()[:2] == ["    needs: validation-plan", predicate]
     for selection in ('both', 'integration'):
         assert not (not True or selection == 'not integration')
     nonmac = workflow.split('\n  other-platform-native-wheel:', 1)[1].split('\n  pcc1-package-parity:', 1)[0]

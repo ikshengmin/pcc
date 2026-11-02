@@ -12,6 +12,8 @@ import weakref
 
 import pytest
 
+from tests.ci_validation_support import has_only_validation_plan_dependency
+
 from scripts import ci_worker_size_prior_gate as gate
 from tests.integration.test_worker_size_prior_closed_world import require_definition
 
@@ -1215,17 +1217,23 @@ def workflow_job(text, name):
 
 
 def assert_workflow_marker_permissions(text):
-    # Only the same-run artifact consumer declares permissions. Do not expose
-    # its read scope globally or add any permission to the original producers.
-    assert re.findall(r"(?m)^\s*permissions:[^\n]*", text) == ["    permissions:"]
-    marker = workflow_job(text, "pytest-markers")
-    permission_block = re.search(r"(?m)^    permissions:\n((?:      [^\n]*\n)+)", marker)
-    assert permission_block is not None
-    assert permission_block.group(1) == "      contents: read\n      actions: read\n"
+    # Global scope is contents-read only. The planner and same-run artifact
+    # consumer alone add Actions read; no original producer gains permissions.
+    global_block = re.search(r"(?m)^permissions:\n((?:  [^\n]*\n)+)", text)
+    assert global_block is not None and global_block.group(1) == "  contents: read\n"
+    assert len(re.findall(r"(?m)^\s*permissions:[^\n]*", text)) == 3
+    for name in ("validation-plan", "pytest-markers"):
+        body = workflow_job(text, name)
+        permission_block = re.search(r"(?m)^    permissions:\n((?:      [^\n]*\n)+)", body)
+        assert permission_block is not None
+        assert permission_block.group(1) == "      contents: read\n      actions: read\n"
+
 
 
 def assert_workflow_job_budgets(text):
     expected = {
+        "validation-plan": 5,
+        "source-validation": 15,
         "ci-plan": 5,
         "macos-pcc0-regressions": 25,
         "macos-pcc0-float-doc-regressions": 25,
@@ -1235,6 +1243,7 @@ def assert_workflow_job_budgets(text):
         "other-platform-native-wheel": 360,
         "pcc1-package-parity": 200,
         "pytest-markers": 60,
+        "cpp17": 15,
     }
     jobs = text.split("\njobs:\n", 1)[1]
     assert re.findall(r"(?m)^  ([A-Za-z0-9_-]+):$", jobs) == list(expected)
@@ -1374,9 +1383,9 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
         assert body.index("--phase stage1") < body.index("--phase pcc1")
         assert body.count("--phase stage1") == body.count("--phase pcc1") == 1
         assert "build/worker-prior-gate/**/*.json" in body
-        assert "needs:" not in body and "actions/download-artifact" not in body
+        assert has_only_validation_plan_dependency(body) and "actions/download-artifact" not in body
     for body in (preflight, publication):
-        assert "needs:" not in body and "actions/download-artifact" not in body
+        assert has_only_validation_plan_dependency(body) and "actions/download-artifact" not in body
         assert "--phase stage1" not in body and "--phase pcc1" not in body
     assert "fail-fast: false" in preflight
     assert "timeout-minutes: 190" in preflight
@@ -1454,7 +1463,7 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
     for name in ("macos-pcc0-regressions", "macos-pcc0-float-doc-regressions", "macos-pcc0-indexed-split"):
         body = workflow_job(text, name)
         assert "timeout-minutes: 25" in body and "scripts/ci_macos_regression_gate.py" in body
-        assert "ci_worker_size_prior_gate.py" not in body and "needs:" not in body
+        assert "ci_worker_size_prior_gate.py" not in body and has_only_validation_plan_dependency(body)
     assert 'PCC_BOOTSTRAP_STAGE_TIMEOUT: "7200"' in mac
     assert 'PCC_BOOTSTRAP_AUTO_TREE_RSS_CEILING_BYTES: "4294967296"' in mac
     assert 'PCC_BOOTSTRAP_MIN_TREE_RSS_BYTES: "2147483648"' in mac
@@ -1470,9 +1479,13 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
         ("  ci-plan:\n", "  ci-plan:\n    permissions: read-all\n"),
         ("  other-platform-native-wheel:\n", "  other-platform-native-wheel:\n    permissions: read-all\n"),
     ):
-        assert text.count(before) == 1
-        with pytest.raises(AssertionError):
-            assert_workflow_marker_permissions(text.replace(before, after, 1))
+        assert text.count(before) >= 1
+        # Check every occurrence: either read-only consumer is a hard boundary.
+        for index in range(text.count(before)):
+            prefix, suffix = text.split(before, index + 1)[:-1], text.split(before, index + 1)[-1]
+            mutated = before.join(prefix) + after + suffix
+            with pytest.raises(AssertionError):
+                assert_workflow_marker_permissions(mutated)
     # A push qualifies Stage1 plus the five-collector canary; the full
     # Stage2/Stage3 chain is a manual dispatch input, never a soft failure.
     assert "full_chain:" in text and "type: boolean" in text

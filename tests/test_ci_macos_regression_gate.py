@@ -10,6 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.ci_validation_support import has_only_validation_plan_dependency
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
@@ -154,7 +156,7 @@ def test_workflow_keeps_stage1_configuration_and_evidence_separate():
     assert "name: Preserve macOS bootstrap evidence\n        if: always()" in stage1
     assert "PCC_WITH_THREADS" not in stage1
     assert "ci_macos_regression_gate" not in stage1
-    assert "needs:" not in smoke
+    assert has_only_validation_plan_dependency(smoke)
     assert "--profile float-doc" not in smoke + stage1
     assert "build/macos-float-doc" not in smoke + stage1
     for path in (
@@ -441,7 +443,7 @@ def test_float_doc_workflow_is_independent_bounded_and_triggered():
     assert "name: macos-pcc0-float-doc-receipts" in job
     assert "retention-days: 7" in job and "compression-level: 0" in job
     assert job.count("if: always()") == 2
-    assert "needs:" not in job and "actions/download-artifact" not in job
+    assert has_only_validation_plan_dependency(job) and "actions/download-artifact" not in job
     assert "env -u LC_ALL" not in job
     assert "build/macos-regressions" not in job and "build/bootstrap" not in job
     assert "--profile float-doc" not in _workflow_job(workflow, "macos-pcc0-regressions")
@@ -564,9 +566,9 @@ def test_indexed_split_workflow_is_independent_of_macos_stage1_opt_in():
     assert "path: build/macos-indexed-split/evidence/" in job
     assert "name: macos-pcc0-indexed-split-receipts" in job
     assert job.count("if: always()") == 2
-    assert "needs:" not in job and "actions/download-artifact" not in job
+    assert has_only_validation_plan_dependency(job) and "actions/download-artifact" not in job
     assert "env -u LC_ALL" not in job
-    assert "needs:" not in stage1
+    assert has_only_validation_plan_dependency(stage1)
     assert stage1.count('PCC_HOST_INDEXED_PROCESS_SPLIT: "1"') == 1
     assert ('      - name: Build current pcc1\n        env:\n'
             '          # Opt in only this Stage1 build; the bridge gate runs independently.\n'
@@ -575,7 +577,7 @@ def test_indexed_split_workflow_is_independent_of_macos_stage1_opt_in():
     assert 'PCC_BOOTSTRAP_STAGE_TIMEOUT: "7200"' in stage1
     assert "timeout-minutes: 200" in stage1
     assert "PCC_HOST_INDEXED_PROCESS_SPLIT" not in other
-    assert "needs:" not in other
+    assert has_only_validation_plan_dependency(other)
     for name in ("indexed-split", "indexed-handoff-closure"):
         path = INDEXED_SPLIT_NODES[name][0].split("::", 1)[0]
         assert workflow.count('      - "' + path + '"') == 2
@@ -703,7 +705,7 @@ def test_handoff_default_xdist_workflow_is_bounded_without_stage1_dependency():
     assert job.index("--handoff-xdist") < job.index("--profile indexed-split")
     assert "timeout-minutes: 25" in job
     assert workflow.count('      - "tests/python/test_pipeline_indexed_handoff.py"') == 2
-    assert "needs:" not in _workflow_job(workflow, "pcc1-package-parity")
+    assert has_only_validation_plan_dependency(_workflow_job(workflow, "pcc1-package-parity"))
 
 
 def test_gc_sweep_gate_selects_twenty_nine_native_and_ten_host_cases():

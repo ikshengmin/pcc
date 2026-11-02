@@ -1,0 +1,1629 @@
+{
+  "functions": {
+    "tests/cpp/test_cpp_aggregate_initialization.py": {
+      "test_cpp_aggregate_owned_execution_matches_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      },
+      "test_previously_gated_nonempty_aggregate_executes_through_separate_observer": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_arithmetic_casts.py": {
+      "test_arithmetic_casts_execute_against_explicit_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_c_object_linkage.py": {
+      "test_c_object_external_names_and_storage_have_an_independent_observer": {
+        "activity": "external-reference",
+        "reason": [
+          "C++17 external reference via tests.cpp.owned_execution.compile_reference_cpp"
+        ]
+      },
+      "test_c_objects_cross_translation_units_and_namespaces": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      },
+      "test_c_objects_execute_against_explicit_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_c_pointer_linkage.py": {
+      "test_c_object_pointers_execute_against_explicit_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      },
+      "test_const_record_c_pointer_across_independent_translation_units": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      },
+      "test_const_record_c_pointer_has_independent_owned_layout_observer": {
+        "activity": "external-reference",
+        "reason": [
+          "C++17 external reference via tests.cpp.owned_execution.compile_reference_cpp"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_c_scalar_float_linkage.py": {
+      "test_c_float_double_native_registers_match_real_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "C++17 external reference via tests.cpp.owned_execution.compile_reference_cpp"
+        ]
+      },
+      "test_c_floating_originals_execute_against_real_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_c_variadics.py": {
+      "test_original_variadic_declaration_links_with_same_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      },
+      "test_preserved_variadic_originals_execute_against_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      },
+      "test_variadic_caller_abi_matches_real_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "C++17 external reference via tests.cpp.owned_execution.compile_reference_cpp"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_cctype_header.py": {
+      "test_public_header_inclusion_executes_but_does_not_claim_ctype_runtime": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct C++17 reference compiler subprocess"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_class_enums.py": {
+      "test_class_enum_owned_execution_matches_explicit_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      },
+      "test_member_enum_class_prefix_substitutions_match_independent_symbols": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct C++17 reference compiler subprocess"
+        ]
+      },
+      "test_member_enum_value_abi_across_independent_translation_units": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_class_execution.py": {
+      "test_cpp_class_layout_observed_by_independent_owned_assembly": {
+        "activity": "external-reference",
+        "reason": [
+          "C++17 external reference via tests.cpp.owned_execution.compile_reference_cpp"
+        ]
+      },
+      "test_cpp_class_mangled_exports_match_explicit_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct C++17 reference compiler subprocess"
+        ]
+      },
+      "test_cpp_class_owned_execution_matches_explicit_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      },
+      "test_cpp_class_pointer_abi_across_independent_translation_units": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_climits_header.py": {
+      "test_climits_public_objects_execute_against_explicit_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct C++17 reference compiler subprocess"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_compound_assignment.py": {
+      "test_compound_assignment_executes_against_explicit_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_constructor_execution.py": {
+      "test_constructor_complete_object_matches_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      },
+      "test_constructor_out_of_line_complete_object_links_across_translation_units": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_control_execution.py": {
+      "test_cpp_control_owned_execution_matches_explicit_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "C++17 external reference via tests.cpp.owned_execution.compile_reference_cpp"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_cstdarg.py": {
+      "test_cstdarg_originals_execute_against_explicit_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "C++17 external reference via tests.cpp.owned_execution.compile_reference_cpp"
+        ]
+      },
+      "test_variadic_independent_translation_units_match_real_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "C++17 external reference via tests.cpp.owned_execution.compile_reference_cpp"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_cstddef_header.py": {
+      "test_decltype_nullptr_originals_execute_against_explicit_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      },
+      "test_exact_namespace_nullptr_initializer_executes_against_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      },
+      "test_nullptr_no_fetch_originals_match_explicit_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      },
+      "test_nullptr_parameter_and_result_cross_translation_units": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      },
+      "test_real_cstddef_original_executes_with_separate_system_header_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct C++17 reference compiler subprocess"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_cstdio_header.py": {
+      "test_preserved_va_list_storage_original_executes_against_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "C++17 external reference via tests.cpp.owned_execution.compile_reference_cpp"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_cstdlib_header.py": {
+      "test_full_owned_header_public_no_call_program_against_actual_cpp17": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct C++17 reference compiler subprocess"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_cstring_header.py": {
+      "test_original_conditional_header_program_is_accepted_by_explicit_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct C++17 reference compiler subprocess"
+        ]
+      },
+      "test_public_cstring_declarations_execute_against_explicit_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct C++17 reference compiler subprocess"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_declarators.py": {
+      "test_declarator_binding_matches_explicit_cpp17_type_oracle": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct C++17 reference compiler subprocess"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_default_member_initializer_execution.py": {
+      "test_default_member_initializer_originals_match_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      },
+      "test_default_member_initializer_out_of_line_constructor_two_units": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_destructor_execution.py": {
+      "test_complete_object_destructor_links_across_translation_units": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      },
+      "test_destructor_original_programs_match_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      },
+      "test_original_unused_destructor_declarations_execute_with_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_do_while.py": {
+      "test_do_while_executes_against_explicit_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_enum_execution.py": {
+      "test_enum_exports_preserve_nominal_substitutions_against_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct C++17 reference compiler subprocess"
+        ]
+      },
+      "test_enum_field_storage_alignment_observed_independently": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_enum_execution.compare_observer"
+        ]
+      },
+      "test_enum_small_and_wide_argument_abi_observed_by_owned_assembly": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_enum_execution.compare_observer"
+        ]
+      },
+      "test_nominal_enum_parameters_and_returns_across_independent_units": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_enum_semantics.py": {
+      "test_namespace_enum_owned_execution_matches_explicit_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_extended_float_declarations.py": {
+      "test_extended_type_only_originals_match_real_cpp17": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      },
+      "test_original_extended_declaration_matches_real_cpp17": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_fixed_arrays.py": {
+      "test_array_parameter_abi_across_independent_translation_units": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      },
+      "test_array_pointer_mangle_and_row_stride_have_an_independent_observer": {
+        "activity": "external-reference",
+        "reason": [
+          "C++17 external reference via tests.cpp.owned_execution.compile_reference_cpp"
+        ]
+      },
+      "test_fixed_arrays_execute_against_explicit_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      },
+      "test_preserved_trivial_record_array_original_executes_against_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_for_statements.py": {
+      "test_for_and_increment_execute_against_explicit_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_function_declaration_contracts.py": {
+      "test_declaration_contract_originals_match_real_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_function_type_declarations.py": {
+      "test_callback_declaration_originals_link_against_real_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_grouped_names.py": {
+      "test_grouped_cpp_names_owned_execution_matches_explicit_cpp17_oracle": {
+        "activity": "external-reference",
+        "reason": [
+          "C++17 external reference via tests.cpp.owned_execution.compile_reference_cpp"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_instantiation_registry.py": {
+      "test_shared_registry_cpp_execution_matches_explicit_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_integral_constant_initialization.py": {
+      "test_integral_constant_admission_executes_original_ast_against_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_language_linkage.py": {
+      "test_c_eight_argument_entry_is_observed_by_independent_amd64_assembly": {
+        "activity": "external-reference",
+        "reason": [
+          "C++17 external reference via tests.cpp.owned_execution.compile_reference_cpp"
+        ]
+      },
+      "test_c_linkage_executes_against_explicit_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      },
+      "test_c_linkage_identity_across_independent_translation_units": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_member_functions.py": {
+      "test_method_exports_match_independent_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct C++17 reference compiler subprocess"
+        ]
+      },
+      "test_pointer_member_calls_between_independent_cpp_translation_units": {
+        "activity": "external-reference",
+        "reason": [
+          "C++17 external reference via tests.cpp.owned_execution.compile_reference_cpp"
+        ]
+      },
+      "test_pointer_method_this_and_stack_slots_observed_by_independent_assembly": {
+        "activity": "external-reference",
+        "reason": [
+          "C++17 external reference via tests.cpp.owned_execution.compile_reference_cpp"
+        ]
+      },
+      "test_pointer_receiver_original_source_executes_with_foreign_object_fixture": {
+        "activity": "external-reference",
+        "reason": [
+          "C++17 external reference via tests.cpp.owned_execution.compile_reference_cpp"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_multilevel_pointers.py": {
+      "test_deep_pointer_rule_originals_match_real_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      },
+      "test_original_formerly_rejected_source_matches_real_cpp17": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_namespace_objects.py": {
+      "test_internal_objects_with_same_spelling_are_distinct_across_translation_units": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      },
+      "test_namespace_data_names_and_full_width_storage_have_an_independent_observer": {
+        "activity": "external-reference",
+        "reason": [
+          "C++17 external reference via tests.cpp.owned_execution.compile_reference_cpp"
+        ]
+      },
+      "test_namespace_object_execution_matches_explicit_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      },
+      "test_namespace_object_external_symbols_across_two_translation_units": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      },
+      "test_public_namespace_object_artifact_executes_without_external_build_tools": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct C++17 reference compiler subprocess"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_namespaces.py": {
+      "test_namespace_owned_execution_and_explicit_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "C++17 external reference via tests.cpp.owned_execution.compile_reference_cpp"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_numpy_scalar_execution.py": {
+      "test_cpp_stream_observer_preserves_signed_and_full_width_bytes": {
+        "activity": "external-reference",
+        "reason": [
+          "C++17 external reference via tests.cpp.owned_execution.compile_reference_cpp"
+        ]
+      },
+      "test_numpy_scalar_all_half_patterns_owned_execution_and_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "C++17 external reference via tests.cpp.owned_execution.compile_reference_cpp"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_object_enumerators.py": {
+      "test_object_enumerator_owned_execution_matches_explicit_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_overload_execution.py": {
+      "test_cpp_overload_host_owned_matches_explicit_cpp17_oracle": {
+        "activity": "external-reference",
+        "reason": [
+          "C++17 external reference via tests.cpp.owned_execution.compile_reference_cpp"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_owned_execution.py": {
+      "test_cpp_host_owned_matches_explicit_cpp17_oracle": {
+        "activity": "external-reference",
+        "reason": [
+          "C++17 external reference via tests.cpp.owned_execution.compile_reference_cpp"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_placement_new.py": {
+      "test_placement_originals_execute_against_genuine_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "C++17 external reference via tests.cpp.test_cpp_placement_new.compile_reference_with_new"
+        ]
+      },
+      "test_preserved_variadic_placement_original_is_ambiguous_in_cpp17": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct C++17 reference compiler subprocess"
+        ]
+      },
+      "test_real_new_header_original_is_valid_for_explicit_external_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "C++17 external reference via tests.cpp.test_cpp_placement_new.compile_reference_with_new"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_platform_execution.py": {
+      "test_cpp_platform_explicit_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "C++17 external reference via tests.cpp.owned_execution.compile_reference_cpp"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_pointer_execution.py": {
+      "test_cpp_pointer_mangled_exports_match_explicit_gpp17_assembly": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct C++17 reference compiler subprocess"
+        ]
+      },
+      "test_cpp_pointer_owned_execution_matches_explicit_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_pointer_execution.execute_and_compare"
+        ]
+      },
+      "test_cpp_pointer_separate_translation_units_execute_with_const_signature_identity": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_pointer_execution.execute_and_compare"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_postfix_projection.py": {
+      "test_postfix_originals_match_same_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_projects.py": {
+      "test_cpp_tinyxml2_explicit_cpp17_reference_oracle": {
+        "activity": "external-reference",
+        "reason": [
+          "Selected C++ compiler passed to compile_project_oracle on unchanged project closure"
+        ]
+      },
+      "test_cpp_tinyxml2_upstream_tests_explicit_cpp17_reference_oracle": {
+        "activity": "external-reference",
+        "reason": [
+          "Selected C++ compiler passed to compile_project_oracle on unchanged project closure"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_public_driver_execution.py": {
+      "test_cpp_dependency_public_route_never_uses_system_cpp": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct C++17 reference compiler subprocess"
+        ]
+      },
+      "test_public_cli_emits_stable_owned_cpp_object_and_executes": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct C++17 reference compiler subprocess"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_record_declarations.py": {
+      "test_original_record_declaration_matches_real_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_sizeof.py": {
+      "test_sizeof_invalid_original_reference_rejection": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct C++17 reference compiler subprocess"
+        ]
+      },
+      "test_sizeof_public_full_width_raw_observer": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct C++17 reference compiler subprocess"
+        ]
+      },
+      "test_sizeof_public_native_same_original_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.sizeof_execution.execute_public_row_pair"
+        ]
+      },
+      "test_sizeof_same_original_native_and_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.sizeof_execution.execute_row_pair"
+        ]
+      },
+      "test_sizeof_valid_member_gaps_original_reference_only": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct C++17 reference compiler subprocess"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_static_member_execution.py": {
+      "test_nonstatic_body_can_call_static_without_forwarding_this": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_static_member_execution._execute_foreign_fixture"
+        ]
+      },
+      "test_static_abi_registers_and_stack_have_no_hidden_object": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_static_member_execution._execute_foreign_fixture"
+        ]
+      },
+      "test_static_mangled_exports_match_independent_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct C++17 reference compiler subprocess"
+        ]
+      },
+      "test_static_methods_link_across_independent_translation_units": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      },
+      "test_static_object_postfix_evaluates_once_before_arguments": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_static_member_execution._execute_foreign_fixture"
+        ]
+      },
+      "test_static_original_program_matches_explicit_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_stdint_header.py": {
+      "test_stdint_originals_execute_against_explicit_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct C++17 reference compiler subprocess"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_switch.py": {
+      "test_switch_executes_against_explicit_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_template_execution.py": {
+      "test_cpp_template_host_owned_matches_explicit_cpp17_oracle": {
+        "activity": "external-reference",
+        "reason": [
+          "C++17 external reference via tests.cpp.owned_execution.compile_reference_cpp"
+        ]
+      },
+      "test_cpp_template_multi_tu_explicit_cpp17_reference_only": {
+        "activity": "external-reference",
+        "reason": [
+          "C++17 external reference via tests.cpp.owned_execution.compile_reference_cpp"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_void_execution.py": {
+      "test_cpp_void_effects_match_explicit_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "C++17 external reference via tests.cpp.owned_execution.compile_reference_cpp"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_wchar_type.py": {
+      "test_wchar_originals_match_actual_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      }
+    },
+    "tests/go/test_array_range.py": {
+      "test_official_go_receives_identical_original_array_range_program": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference"
+        ]
+      },
+      "test_official_go_rejects_identical_invalid_array_range_source": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference_rejection"
+        ]
+      }
+    },
+    "tests/go/test_arrays.py": {
+      "test_official_go_receives_identical_original_array_program": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference"
+        ]
+      }
+    },
+    "tests/go/test_builtin_io.py": {
+      "test_complete_original_and_output_programs_match_full_raw_streams": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference"
+        ]
+      },
+      "test_official_go_builds_exact_retained_rune_fixture_without_running_it": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference"
+        ]
+      },
+      "test_official_go_builds_unsupported_builtin_originals_without_execution": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference"
+        ]
+      },
+      "test_official_go_rejects_identical_invalid_builtin_inputs": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference_rejection"
+        ]
+      },
+      "test_official_terminal_panic_keeps_full_implementation_specific_streams": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference"
+        ]
+      },
+      "test_real_broken_stderr_matches_official_terminal_status": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference"
+        ]
+      }
+    },
+    "tests/go/test_declarations.py": {
+      "test_official_go_receives_identical_complete_declarations_program": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference"
+        ]
+      },
+      "test_official_go_rejects_identical_invalid_constant_inputs": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference_rejection"
+        ]
+      },
+      "test_official_go_rejects_same_nonterminating_empty_declaration_group": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference_rejection"
+        ]
+      }
+    },
+    "tests/go/test_diagnostics.py": {
+      "test_same_complete_control_program_matches_official_raw_process_streams": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference"
+        ]
+      }
+    },
+    "tests/go/test_execution.py": {
+      "test_go_explicit_official_compiler_oracle_receives_identical_program": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference"
+        ]
+      }
+    },
+    "tests/go/test_integer_range.py": {
+      "test_identical_integer_range_program_matches_official_raw_streams": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference"
+        ]
+      },
+      "test_official_go_rejects_identical_invalid_integer_ranges": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference_rejection"
+        ]
+      }
+    },
+    "tests/go/test_methods.py": {
+      "test_official_go_receives_identical_imported_method_project": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference_packages"
+        ]
+      },
+      "test_official_go_receives_identical_original_methods": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference"
+        ]
+      },
+      "test_official_go_rejects_identical_invalid_method_declarations": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference_rejection"
+        ]
+      }
+    },
+    "tests/go/test_nullable_pointers.py": {
+      "test_identical_graduated_frontiers_match_official_raw_streams": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference"
+        ]
+      },
+      "test_identical_imported_pointer_project_matches_official_raw_streams": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference_packages"
+        ]
+      },
+      "test_identical_invalid_pointer_parameter_sources_are_rejected_by_official_go": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference_rejection"
+        ]
+      },
+      "test_identical_nullable_pointer_program_matches_official_raw_streams": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference"
+        ]
+      },
+      "test_official_go_typechecks_identical_valid_unsupported_originals": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference"
+        ]
+      }
+    },
+    "tests/go/test_packages.py": {
+      "test_official_go_rejects_same_sibling_file_import_conflict": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference_packages_rejection"
+        ]
+      },
+      "test_original_package_sources_match_the_official_go_oracle": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference_packages"
+        ]
+      }
+    },
+    "tests/go/test_pointer_array_range.py": {
+      "test_identical_pointer_array_originals_match_official_raw_streams": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference"
+        ]
+      },
+      "test_official_go_builds_identical_unsupported_range_frontiers_without_execution": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference"
+        ]
+      },
+      "test_official_go_rejects_identical_invalid_pointer_array_ranges": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference_rejection"
+        ]
+      }
+    },
+    "tests/go/test_pointer_methods.py": {
+      "test_identical_imported_pointer_method_project_matches_official_raw_streams": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference_packages"
+        ]
+      },
+      "test_identical_pointer_method_originals_match_official_raw_streams": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference"
+        ]
+      },
+      "test_official_go_builds_identical_unsupported_receiver_frontiers_without_execution": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference"
+        ]
+      },
+      "test_official_go_rejects_identical_invalid_pointer_methods": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference_rejection"
+        ]
+      }
+    },
+    "tests/go/test_pointers.py": {
+      "test_official_reference_executes_retained_nil_method_panic_frontier": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference"
+        ]
+      },
+      "test_official_reference_rejects_identical_invalid_pointer_sources": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference_rejection"
+        ]
+      },
+      "test_original_review_invalid_sources_match_official_rejection": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference_rejection"
+        ]
+      },
+      "test_original_review_programs_match_official_raw_streams": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference"
+        ]
+      },
+      "test_retained_original_pointer_order_diagnostic": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct official Go reference subprocess"
+        ]
+      },
+      "test_same_deterministic_pointer_program_matches_official_raw_process_streams": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference"
+        ]
+      }
+    },
+    "tests/go/test_records.py": {
+      "test_official_go_receives_identical_imported_record_project": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference_packages"
+        ]
+      },
+      "test_official_go_receives_the_identical_original_record_program": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference"
+        ]
+      },
+      "test_official_go_rejects_the_same_nominal_type_or_literal_error": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference_rejection"
+        ]
+      }
+    },
+    "tests/go/test_results.py": {
+      "test_official_go_receives_identical_complete_results_program": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference"
+        ]
+      },
+      "test_official_go_rejects_the_same_bare_return_shadow": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference_rejection"
+        ]
+      }
+    },
+    "tests/go/test_string_tables.py": {
+      "test_official_go_checks_the_same_complete_table_file_and_authored_component_main": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference_packages"
+        ]
+      }
+    },
+    "tests/go/test_strings.py": {
+      "test_official_go_checks_the_identical_complete_string_program": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference"
+        ]
+      },
+      "test_official_go_rejects_identical_invalid_string_semantics": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference_rejection"
+        ]
+      },
+      "test_official_go_rejects_the_same_retained_invalid_separator_originals": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference_rejection"
+        ]
+      },
+      "test_raw_and_interpreted_source_carriage_returns_keep_original_bytes": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference"
+        ]
+      }
+    },
+    "tests/go/test_switches.py": {
+      "test_official_go_receives_identical_original_switch_program": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference"
+        ]
+      },
+      "test_official_go_rejects_identical_invalid_switch_source": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference_rejection"
+        ]
+      },
+      "test_official_go_rejects_same_complete_retained_original_switch": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference_rejection"
+        ]
+      }
+    },
+    "tests/java/test_source_array_model.py": {
+      "test_exact_array_model_originals_against_selected_jdk_only": {
+        "activity": "external-reference",
+        "reason": [
+          "Selected JDK compiler/runtime through recorded raw subprocesses"
+        ]
+      }
+    },
+    "tests/java/test_source_labels.py": {
+      "test_exact_labeled_originals_jdk_raw_and_rejections": {
+        "activity": "external-reference",
+        "reason": [
+          "Selected JDK compiler/runtime through recorded raw subprocesses"
+        ]
+      }
+    },
+    "tests/java/test_source_narrow_primitives.py": {
+      "test_exact_narrow_originals_match_jdk_raw_processes_and_rejections": {
+        "activity": "external-reference",
+        "reason": [
+          "Selected JDK compiler/runtime through recorded raw subprocesses"
+        ]
+      }
+    },
+    "tests/java/test_source_raw_reference.py": {
+      "test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit": {
+        "activity": "external-reference",
+        "reason": [
+          "Selected JDK compiler/runtime through recorded raw subprocesses"
+        ]
+      }
+    },
+    "tests/rust/test_rust_aggregates.py": {
+      "test_development_only_rustc_aggregate_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.rust.test_rust_frontend.test_development_only_rustc_checks_the_same_source"
+        ]
+      },
+      "test_original_aggregate_program_cross_emits_arm64_macho": {
+        "activity": "mandatory-same-input-when-required",
+        "conditional": true,
+        "reason": [
+          "Calls tests.rust.test_rust_targets.test_original_scalar_programs_cross_emit_arm64_macho_without_source_rewrite"
+        ]
+      },
+      "test_upstream_meson_adder_is_unchanged_and_lowers_declared_foreign_calls": {
+        "activity": "mandatory-same-input-certification",
+        "reason": [
+          "Mandatory same-input Rust certifier via tests.rust.certification_support.certify_source"
+        ]
+      }
+    },
+    "tests/rust/test_rust_array_for.py": {
+      "test_actual_check_does_not_replace_owned_capability_and_panic_checks": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "reason": [
+          "Calls tests.rust.test_rust_certified_references.certify"
+        ]
+      },
+      "test_original_for_programs_have_actual_checked_full_width_native_pairs": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "reason": [
+          "Calls tests.rust.test_rust_certified_references.certify",
+          "Calls tests.rust.test_rust_method_reference.test_unchanged_inherent_programs_match_actual_rustc_native_execution"
+        ]
+      },
+      "test_original_iterator_ownership_rejections_belong_to_actual_checker": {
+        "activity": "mandatory-same-input-certification",
+        "reason": [
+          "Mandatory same-input Rust certifier via pcc.frontends.rust.compile_rust_checked"
+        ]
+      }
+    },
+    "tests/rust/test_rust_arrays.py": {
+      "test_array_index_alias_invalidity_is_owned_by_actual_external_checker": {
+        "activity": "mandatory-same-input-certification",
+        "reason": [
+          "Mandatory same-input Rust certifier via pcc.frontends.rust.compile_rust_checked"
+        ]
+      },
+      "test_original_array_programs_have_actual_checked_full_width_native_pairs": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "reason": [
+          "Calls tests.rust.test_rust_certified_references.certify",
+          "Calls tests.rust.test_rust_method_reference.test_unchanged_inherent_programs_match_actual_rustc_native_execution"
+        ]
+      }
+    },
+    "tests/rust/test_rust_call_inference.py": {
+      "test_original_inferred_call_program_arm64_macho_cross_only": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "reason": [
+          "Calls tests.rust.test_rust_targets.test_original_scalar_programs_cross_emit_arm64_macho_without_source_rewrite",
+          "Reviewed reference-bearing or mixed parameter originals; actual target-bound certification remains mandatory"
+        ]
+      },
+      "test_original_inferred_call_program_full_width_owned_execution": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "reason": [
+          "Calls tests.rust.test_rust_patterns.test_original_match_fixture_full_width_owned_execution",
+          "Reviewed reference-bearing or mixed parameter originals; actual target-bound certification remains mandatory"
+        ]
+      },
+      "test_original_inferred_call_program_rustc_typechecks": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.rust.test_rust_frontend.test_development_only_rustc_checks_the_same_source"
+        ]
+      },
+      "test_original_inferred_call_programs_match_native_rustc": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.rust.test_rust_method_reference.test_unchanged_inherent_programs_match_actual_rustc_native_execution"
+        ]
+      }
+    },
+    "tests/rust/test_rust_certified_references.py": {
+      "test_actual_external_check_removes_partial_owned_loan_barrier": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "reason": [
+          "Calls tests.rust.test_rust_certified_references.certify"
+        ]
+      },
+      "test_borrow_invalid_original_is_rejected_in_external_phase": {
+        "activity": "mandatory-same-input-certification",
+        "reason": [
+          "Mandatory same-input Rust certifier via pcc.frontends.rust.compile_rust_checked"
+        ]
+      },
+      "test_certified_originals_have_full_width_owned_and_external_native_results": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "reason": [
+          "Calls tests.rust.test_rust_certified_references.certify",
+          "Calls tests.rust.test_rust_method_reference.test_unchanged_inherent_programs_match_actual_rustc_native_execution"
+        ]
+      },
+      "test_successful_record_is_bound_to_exact_source_options_and_tool_metadata": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "reason": [
+          "Calls tests.rust.test_rust_certified_references.certify"
+        ]
+      },
+      "test_supported_transition_entry_checks_then_compiles_and_rejects_stale_evidence": {
+        "activity": "mandatory-same-input-certification",
+        "reason": [
+          "Mandatory same-input Rust certifier via pcc.frontends.rust.check_rust_source",
+          "Mandatory same-input Rust certifier via pcc.frontends.rust.compile_rust_checked"
+        ]
+      }
+    },
+    "tests/rust/test_rust_enum_rematch.py": {
+      "test_development_only_rustc_rejects_same_retained_enum_rematch": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct actual rustc subprocess"
+        ]
+      }
+    },
+    "tests/rust/test_rust_ffi.py": {
+      "test_development_only_rustc_checks_unchanged_ffi_source": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct actual rustc subprocess"
+        ]
+      },
+      "test_ffi_valid_source_shapes": {
+        "activity": "mandatory-same-input-certification",
+        "reason": [
+          "Mandatory same-input Rust certifier via tests.rust.certification_support.certify_source"
+        ]
+      },
+      "test_original_meson_rust_and_c_objects_link_and_execute_full_width": {
+        "activity": "mandatory-same-input-certification",
+        "reason": [
+          "Mandatory same-input Rust certifier via tests.rust.certification_support.certify_source"
+        ]
+      },
+      "test_original_meson_sources_cross_emit_macho_with_true_external_relocations": {
+        "activity": "mandatory-same-input-certification",
+        "reason": [
+          "Mandatory same-input Rust certifier via tests.rust.certification_support.certify_source"
+        ]
+      },
+      "test_shared_reference_program_cross_emits_arm64_macho": {
+        "activity": "mandatory-same-input-certification",
+        "reason": [
+          "Mandatory same-input Rust certifier via tests.rust.certification_support.certify_source"
+        ]
+      },
+      "test_shared_repr_c_reference_layout_copy_and_rebinding_execute_full_width": {
+        "activity": "mandatory-same-input-certification",
+        "reason": [
+          "Mandatory same-input Rust certifier via tests.rust.certification_support.certify_source"
+        ]
+      }
+    },
+    "tests/rust/test_rust_frontend.py": {
+      "test_development_only_rustc_checks_the_same_source": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct actual rustc subprocess"
+        ]
+      }
+    },
+    "tests/rust/test_rust_generic_data.py": {
+      "test_development_only_rustc_checks_identical_generic_data_source": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.rust.test_rust_frontend.test_development_only_rustc_checks_the_same_source"
+        ]
+      },
+      "test_original_generic_data_program_cross_emits_arm64_macho": {
+        "activity": "mandatory-same-input-when-required",
+        "conditional": true,
+        "reason": [
+          "Calls tests.rust.test_rust_targets.test_original_scalar_programs_cross_emit_arm64_macho_without_source_rewrite"
+        ]
+      },
+      "test_original_generic_data_program_runs_full_width_owned_native": {
+        "activity": "mandatory-same-input-when-required",
+        "conditional": true,
+        "reason": [
+          "Calls tests.rust.test_rust_patterns.test_original_match_fixture_full_width_owned_execution"
+        ]
+      }
+    },
+    "tests/rust/test_rust_generic_functions.py": {
+      "test_development_only_rustc_checks_identical_generic_function_source": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.rust.test_rust_frontend.test_development_only_rustc_checks_the_same_source"
+        ]
+      },
+      "test_original_generic_function_program_cross_emits_arm64_macho": {
+        "activity": "mandatory-same-input-when-required",
+        "conditional": true,
+        "reason": [
+          "Calls tests.rust.test_rust_targets.test_original_scalar_programs_cross_emit_arm64_macho_without_source_rewrite"
+        ]
+      },
+      "test_original_generic_function_program_runs_full_width_owned_native": {
+        "activity": "mandatory-same-input-when-required",
+        "conditional": true,
+        "reason": [
+          "Calls tests.rust.test_rust_patterns.test_original_match_fixture_full_width_owned_execution"
+        ]
+      }
+    },
+    "tests/rust/test_rust_method_generics.py": {
+      "test_actual_checker_rejects_original_generic_method_move_before_ir": {
+        "activity": "mandatory-same-input-certification",
+        "reason": [
+          "Mandatory same-input Rust certifier via pcc.frontends.rust.compile_rust_checked"
+        ]
+      },
+      "test_original_u16_result_context_is_valid_rust_but_owned_capability_gap": {
+        "activity": "mandatory-same-input-certification",
+        "reason": [
+          "Mandatory same-input Rust certifier via tests.rust.certification_support.certify_source"
+        ]
+      },
+      "test_reference_method_cross_object_requires_matching_target_check": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "reason": [
+          "Calls tests.rust.test_rust_targets.test_original_scalar_programs_cross_emit_arm64_macho_without_source_rewrite",
+          "Reviewed reference-bearing or mixed parameter originals; actual target-bound certification remains mandatory"
+        ]
+      },
+      "test_unchanged_method_generic_originals_match_native_rustc": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.rust.test_rust_method_reference.test_unchanged_inherent_programs_match_actual_rustc_native_execution"
+        ]
+      }
+    },
+    "tests/rust/test_rust_method_reference.py": {
+      "test_unchanged_inherent_programs_match_actual_rustc_native_execution": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct actual rustc subprocess"
+        ]
+      }
+    },
+    "tests/rust/test_rust_methods.py": {
+      "test_development_only_rustc_checks_original_inherent_source": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.rust.test_rust_frontend.test_development_only_rustc_checks_the_same_source"
+        ]
+      },
+      "test_original_inherent_program_cross_emits_arm64_macho": {
+        "activity": "mandatory-same-input-when-required",
+        "conditional": true,
+        "reason": [
+          "Calls tests.rust.test_rust_targets.test_original_scalar_programs_cross_emit_arm64_macho_without_source_rewrite"
+        ]
+      },
+      "test_original_inherent_program_has_full_width_owned_native_result": {
+        "activity": "mandatory-same-input-when-required",
+        "conditional": true,
+        "reason": [
+          "Calls tests.rust.test_rust_patterns.test_original_match_fixture_full_width_owned_execution"
+        ]
+      }
+    },
+    "tests/rust/test_rust_patterns.py": {
+      "test_development_only_rustc_checks_match_sources": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.rust.test_rust_frontend.test_development_only_rustc_checks_the_same_source"
+        ]
+      },
+      "test_match_original_source_cross_emits_darwin": {
+        "activity": "mandatory-same-input-when-required",
+        "conditional": true,
+        "reason": [
+          "Calls tests.rust.test_rust_targets.test_original_scalar_programs_cross_emit_arm64_macho_without_source_rewrite"
+        ]
+      },
+      "test_original_match_fixture_full_width_owned_execution": {
+        "activity": "mandatory-same-input-when-required",
+        "conditional": true,
+        "reason": [
+          "Mandatory same-input Rust certifier via tests.rust.certification_support.certify_source"
+        ]
+      }
+    },
+    "tests/rust/test_rust_payload_control.py": {
+      "test_constructor_return_original_program_cross_emits_macho": {
+        "activity": "mandatory-same-input-when-required",
+        "conditional": true,
+        "reason": [
+          "Calls tests.rust.test_rust_targets.test_original_scalar_programs_cross_emit_arm64_macho_without_source_rewrite"
+        ]
+      },
+      "test_constructor_return_skips_later_operands_in_complete_original_program": {
+        "activity": "mandatory-same-input-when-required",
+        "conditional": true,
+        "reason": [
+          "Calls tests.rust.test_rust_patterns.test_original_match_fixture_full_width_owned_execution"
+        ]
+      },
+      "test_development_only_rustc_checks_original_constructor_return_program": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.rust.test_rust_frontend.test_development_only_rustc_checks_the_same_source"
+        ]
+      }
+    },
+    "tests/rust/test_rust_payloads.py": {
+      "test_development_only_rustc_checks_original_payload_program": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.rust.test_rust_frontend.test_development_only_rustc_checks_the_same_source"
+        ]
+      },
+      "test_original_payload_program_cross_macho": {
+        "activity": "mandatory-same-input-when-required",
+        "conditional": true,
+        "reason": [
+          "Calls tests.rust.test_rust_targets.test_original_scalar_programs_cross_emit_arm64_macho_without_source_rewrite"
+        ]
+      },
+      "test_original_payload_program_full_width_native": {
+        "activity": "mandatory-same-input-when-required",
+        "conditional": true,
+        "reason": [
+          "Calls tests.rust.test_rust_patterns.test_original_match_fixture_full_width_owned_execution"
+        ]
+      }
+    },
+    "tests/rust/test_rust_reference_admission.py": {
+      "test_actual_checker_rejects_unchanged_noncopy_move_before_reference_lowering": {
+        "activity": "mandatory-same-input-certification",
+        "reason": [
+          "Mandatory same-input Rust certifier via pcc.frontends.rust.compile_rust_checked"
+        ]
+      },
+      "test_actual_minted_token_cannot_change_target_or_overflow_options": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "reason": [
+          "Calls tests.rust.test_rust_certified_references.certify"
+        ]
+      },
+      "test_checked_legacy_readonly_originals_bypass_partial_move_admission": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "reason": [
+          "Calls tests.rust.test_rust_certified_references.certify"
+        ]
+      }
+    },
+    "tests/rust/test_rust_result_context.py": {
+      "test_reference_context_cross_object_requires_matching_target_check": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "reason": [
+          "Calls tests.rust.test_rust_targets.test_original_scalar_programs_cross_emit_arm64_macho_without_source_rewrite",
+          "Reviewed reference-bearing or mixed parameter originals; actual target-bound certification remains mandatory"
+        ]
+      },
+      "test_unchanged_result_context_originals_match_native_rustc": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.rust.test_rust_method_reference.test_unchanged_inherent_programs_match_actual_rustc_native_execution"
+        ]
+      }
+    },
+    "tests/rust/test_rust_shared_loans.py": {
+      "test_exact_original_parameter_rebinding_is_rejected_by_rustc": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct actual rustc subprocess"
+        ]
+      },
+      "test_original_conflicting_loans_are_rejected_by_rustc": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct actual rustc subprocess"
+        ]
+      },
+      "test_original_shared_loan_program_arm64_macho_cross_only": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "reason": [
+          "Calls tests.rust.test_rust_targets.test_original_scalar_programs_cross_emit_arm64_macho_without_source_rewrite",
+          "Reviewed reference-bearing or mixed parameter originals; actual target-bound certification remains mandatory"
+        ]
+      },
+      "test_original_shared_loan_program_full_width_owned_execution": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "reason": [
+          "Calls tests.rust.test_rust_patterns.test_original_match_fixture_full_width_owned_execution",
+          "Reviewed reference-bearing or mixed parameter originals; actual target-bound certification remains mandatory"
+        ]
+      },
+      "test_original_shared_loan_program_rustc_typechecks": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.rust.test_rust_frontend.test_development_only_rustc_checks_the_same_source"
+        ]
+      },
+      "test_original_shared_loan_programs_match_native_rustc": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.rust.test_rust_method_reference.test_unchanged_inherent_programs_match_actual_rustc_native_execution"
+        ]
+      }
+    },
+    "tests/rust/test_rust_statement_boundary.py": {
+      "test_value_forms_have_actual_same_input_external_check_and_owned_object": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "reason": [
+          "Calls tests.rust.test_rust_certified_references.certify"
+        ]
+      }
+    },
+    "tests/rust/test_rust_target_sized_integers.py": {
+      "test_original_target_sized_program_has_actual_full_width_native_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.rust.test_rust_method_reference.test_unchanged_inherent_programs_match_actual_rustc_native_execution"
+        ]
+      }
+    },
+    "tests/rust/test_rust_targets.py": {
+      "test_original_scalar_programs_cross_emit_arm64_macho_without_source_rewrite": {
+        "activity": "mandatory-same-input-when-required",
+        "conditional": true,
+        "reason": [
+          "Mandatory same-input Rust certifier via tests.rust.certification_support.certify_source"
+        ]
+      }
+    },
+    "tests/rust/test_rust_traits.py": {
+      "test_actual_rustc_rejects_exact_invalid_trait_originals_before_owned_ir": {
+        "activity": "mandatory-same-input-certification",
+        "reason": [
+          "Mandatory same-input Rust certifier via pcc.frontends.rust.compile_rust_checked"
+        ]
+      },
+      "test_reference_trait_cross_object_requires_actual_target_check": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "reason": [
+          "Calls tests.rust.test_rust_targets.test_original_scalar_programs_cross_emit_arm64_macho_without_source_rewrite",
+          "Reviewed reference-bearing or mixed parameter originals; actual target-bound certification remains mandatory"
+        ]
+      },
+      "test_unchanged_static_trait_originals_match_actual_native_rustc": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.rust.test_rust_method_reference.test_unchanged_inherent_programs_match_actual_rustc_native_execution"
+        ]
+      }
+    }
+  },
+  "method": "AST/source-reviewed direct reference calls and helper edges; no test bodies or imports executed. Function registry is classification only, never a prerequisite waiver or certification token. Unknown functions remain selected in ordinary/integration.",
+  "schema": 1
+}
