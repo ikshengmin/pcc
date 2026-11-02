@@ -1279,6 +1279,26 @@ def py_obj_compare_builtin_rooted(left_slot, right_slot, op: int) -> int:
     return -1
 
 
+@c_abi_export("py_obj_contains_builtin_rooted")
+def py_obj_contains_builtin_rooted(container_slot, needle_slot) -> int:
+    """Exact str membership from caller roots; -1 requests leased dispatch.
+
+    As for rooted comparison, the byte-search implementation has runtime
+    polls but no managed allocation or user callback. Do not mark it leaf.
+    """
+    container = pcc_gc_load_borrowed_ptr(null(), container_slot)
+    needle = pcc_gc_load_borrowed_ptr(null(), needle_slot)
+    if ptr_is_null(container) != 0 or ptr_is_null(needle) != 0:
+        return -1
+    if _type_of(container) != PY_TYPE_STR or _type_of(needle) != PY_TYPE_STR:
+        return -1
+    if pcc_capi_is_cext_type_tag(PY_TYPE_STR) != 0:
+        return -1
+    if py_str_contains(container, needle) != 0:
+        return 1
+    return 0
+
+
 @c_abi_export("py_builtin_any_all")
 def py_builtin_any_all(iterable, want_all: int) -> int:
     """any(iterable) (``want_all`` 0) or all(iterable) (1): 1/0, -1 on error.

@@ -166,9 +166,14 @@ implicit poll and must pass a scalar, call-free, acyclic IR check. Unproved
 operations and dynamic/aggregate allocas are rejected. Slot callers retain
 root healing and omit only the admitted call's address leases. Sixty-seven
 distinct focused ordinary checks pass, including the real valueclass-tuple
-iteration path and negative leaf-admission cases. Its actual runtime build
-and native execution remain pending. Statically typed string membership,
-whole-language and native-pcc1 gates remain open.
+iteration path and negative leaf-admission cases. Frozen `b06e2394a` builds the
+actual tuple-length body with no calls or thread polls, then passes the tuple
+iteration, comparison and membership/arithmetic CPython probes on GC0-4.
+The string-membership follow-up reads exact str pairs from caller roots and
+uses the existing byte-search implementation; non-string pairs retain leased
+dispatch. Thirteen focused ordinary checks pass, including typed-str call
+sites, but the new entry has not yet executed natively. Whole-language and
+native-pcc1 gates remain open.
 Static-method generation also exposes the pre-existing `_call_user` and
 `_emit_post_call_err_check` signature drift; this batch preserves those entries
 and adds only its two new method schemas.

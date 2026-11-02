@@ -95,10 +95,30 @@ class CompareMembershipLoweringMixin:
             return None
         previous = set_frame_operand_modes(self, sources)
         try:
-            status = self._slot_call_runtime_call(
+            primitive = self.builder.call(
+                self.runtime["py_obj_contains_builtin_rooted"],
+                [self._as_gc_ptr(sources[1][0]), self._as_gc_ptr(sources[0][0])],
+                name=self._fresh("frame.contains.primitive"),
+            )
+            self._emit_post_call_err_check(expr.span)
+            primitive_end = self.builder.block
+            leased_block = self.current_function.append_basic_block(self._fresh("contains.leased"))
+            result_block = self.current_function.append_basic_block(self._fresh("contains.value"))
+            handled = self.builder.icmp_signed(
+                ">=", primitive, ir.Constant(_I64, 0), name=self._fresh("contains.handled"),
+            )
+            self.builder.cbranch(handled, result_block, leased_block)
+            self.builder.position_at_end(leased_block)
+            leased = self._slot_call_runtime_call(
                 runtime_name, tuple(source[0] for source in sources),
                 argument_order=(1, 0), span=expr.span,
             )
+            leased_end = self.builder.block
+            self.builder.branch(result_block)
+            self.builder.position_at_end(result_block)
+            status = self.builder.phi(_I64, name=self._fresh("contains.value"))
+            status.add_incoming(primitive, primitive_end)
+            status.add_incoming(leased, leased_end)
         finally:
             restore_frame_operand_modes(self, previous)
         contains = self.builder.icmp_signed(
@@ -1663,12 +1683,6 @@ class CompareMembershipLoweringMixin:
                 )
             return contains
         container_ty = expr.rhs.ty
-        if (
-            isinstance(container_ty, StrType)
-            and isinstance(expr.lhs.ty, StrType)
-            and not self._expr_looks_cpython(expr.lhs)
-        ):
-            return self._emit_owned_string_predicate(expr, True)
         weak_dict_kind = self._weak_dict_kind_for_expr(expr.rhs)
         if weak_dict_kind == "value":
             frame_helper = "py_weak_value_dict_contains"
@@ -1676,13 +1690,17 @@ class CompareMembershipLoweringMixin:
             frame_helper = "py_list_contains"
         elif isinstance(container_ty, DictType):
             frame_helper = "py_dict_contains"
-        elif isinstance(container_ty, StrType):
-            frame_helper = "py_str_contains"
         else:
             frame_helper = "py_obj_contains"
         rooted = self._emit_frame_rooted_membership(expr, frame_helper)
         if rooted is not None:
             return rooted
+        if (
+            isinstance(container_ty, StrType)
+            and isinstance(expr.lhs.ty, StrType)
+            and not self._expr_looks_cpython(expr.lhs)
+        ):
+            return self._emit_owned_string_predicate(expr, True)
 
         # Evaluate each operand once, in Python order. Preserve the original
         # domain until the container is known: a late CPython container must

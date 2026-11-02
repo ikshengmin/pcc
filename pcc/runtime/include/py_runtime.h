@@ -1361,6 +1361,8 @@ int64_t   py_obj_assign_subscript(PyObject *o, PyObject *k, PyObject *v);
 int64_t   py_obj_delete_subscript(PyObject *o, PyObject *k);
 int64_t   py_obj_len(PyObject *o);
 int64_t   py_obj_contains(PyObject *container, PyObject *item);
+/* Traced private slots; exact strings return 0/1, others require leased dispatch. */
+int64_t   py_obj_contains_builtin_rooted(PyObject **container, PyObject **item);
 PyObject *py_str_splitlines(PyObject *s);
 PyObject *py_str_splitlines_keepends(PyObject *s, int keepends);
 PyObject *py_str_lstrip(PyObject *s);

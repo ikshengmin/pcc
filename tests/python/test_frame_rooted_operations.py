@@ -22,6 +22,8 @@ def membership(needle, haystack):
     return needle in haystack
 def absent(needle, haystack):
     return needle not in haystack
+def strings(needle: str, haystack: str):
+    return needle in haystack
 def divide(left, right):
     return sink(left / right)
 def floor(left, right):
@@ -43,6 +45,7 @@ def operations_ir(tmp_path):
 
 @pytest.mark.parametrize("name,inputs", (
     ("membership", ("needle", "haystack")), ("absent", ("needle", "haystack")),
+    ("strings", ("needle", "haystack")),
     ("divide", ("left", "right")), ("floor", ("left", "right")),
     ("modulo", ("left", "right")),
 ))
@@ -54,8 +57,9 @@ def test_operations_lease_the_original_inputs_without_copying_them(operations_ir
     for source in inputs:
         assert re.search(r"@pcc_gc_borrowed_lease_acquire\(ptr %" + source + r"\.addr", body), body
         assert not re.search(r"@pcc_gc_root_copy_local\([^\n]*ptr %" + source + r"\.addr", body)
-    if name in ("membership", "absent"):
+    if name in ("membership", "absent", "strings"):
         assert "@pcc_gc_pin(" not in body and "@pcc_gc_retain(" not in body
+        assert "@py_obj_contains_builtin_rooted(" in body
 
 
 PROGRAM = '''import gc
@@ -64,6 +68,9 @@ def sink(value):
     return value
 
 def membership(needle, haystack):
+    return needle in haystack, needle not in haystack
+
+def strings(needle: str, haystack: str):
     return needle in haystack, needle not in haystack
 
 def arithmetic(left, right):
@@ -129,6 +136,8 @@ def main():
     right = Value(2)
     print(arithmetic(left, right), left.value, right.value)
     print(membership(left, Container(7)))
+    print(strings("", ""), strings("β", "αβγ"))
+    print(strings("missing", "prefix" * 100), strings("prefix", "prefix" * 100))
     after_error(left, Broken("kept"))
     after_division_error(7, 0)
     owned_membership(4)
