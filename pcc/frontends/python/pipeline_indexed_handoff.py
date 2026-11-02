@@ -179,16 +179,18 @@ def _manifest(request):
              "manifest digest mismatch")
     try:
         lines = raw.decode("utf-8").splitlines()
-        _require(len(lines) >= 13
+        _require(len(lines) >= 14
                  and lines[0] == "pcc.frontends.python.codegen_worker.v4",
                  "expected singleton v4 manifest")
         result_path = _path(lines[1], "result path")
         ir_dir = _path(lines[2], "IR directory")
-        _require(lines[4] == "codegen" and lines[7] == "off",
-                 "expected codegen/off manifest")
-        siblings = int(lines[10])
+        # v4 writes entry, scaffold mode, verbosity, then siblings. The
+        # removed libpython selector is not a field in this manifest.
+        _require(lines[4] == "codegen" and lines[7] in ("on", "off")
+                 and lines[8] in ("0", "1"), "expected codegen manifest")
+        siblings = int(lines[9])
         _require(siblings >= 0, "negative sibling count")
-        position = 11 + siblings
+        position = 10 + siblings
         count = int(lines[position])
         position += 1
         _require(0 <= request["index"] < count and count <= len(lines),

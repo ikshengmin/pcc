@@ -132,6 +132,16 @@ five-GC qualification are pending. GC4 remains default-off; C-API export
 ownership, class reclamation and GC1-3 count removal remain open. Full-suite
 and bootstrap runs await the maintainer's explicit permission.
 
+The bounded host frontend/backend split exposed a prerequisite defect:
+`pipeline_indexed_handoff._manifest` still expected the removed libpython
+field and rejected the current v4 writer. The reader now consumes the current
+scaffold/verbosity/sibling positions and rejects the obsolete extra field.
+`test_pipeline_indexed_handoff.py` passes 31 tests and 48 subtests, including
+the actual writer with both scaffold modes and sibling lists;
+`test_host_indexed_process_split.py` passes 19 tests. These local Mac host
+checks do not establish successful native request-program compilation; that
+rerun remains pending under the same build cap.
+
 `9da3787f5` removes temporary roots and leases for proven permanent dictionary,
 subscript/slice and integer-tree inputs. Its 68 focused ordinary checks pass.
 The changed object-operand program matches CPython under GC0-4; the existing

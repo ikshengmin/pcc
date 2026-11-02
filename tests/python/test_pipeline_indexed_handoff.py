@@ -1,4 +1,4 @@
-"""Pure host contract tests; no compiler, native runtime, or PCC package import.
+"""Host handoff contracts, including the production manifest writer's format.
 
 Load the standalone stdlib-only helper directly. Fake kernels deliberately
 reject instruction projection, and the fake encoder emits only a synthetic
@@ -79,7 +79,7 @@ class HandoffContractTests(unittest.TestCase):
         self.manifest.write_text("\n".join([
             "pcc.frontends.python.codegen_worker.v4", str(self.result), str(self.ir),
             str(self.root / "exports.json"), "codegen", str(self.root / "ast"),
-            "sample", "off", "direct", "0", "0", "1",
+            "sample", "on", "0", "0", "1",
             "0\tsample\t" + str(self.root / "sample.py"), "1", "0", "",
         ]))
         self.fields = {
@@ -153,6 +153,32 @@ class HandoffContractTests(unittest.TestCase):
                              [4 + 2 * index, 3 + index])
         self.assertEqual(seal["pidx_sha256"], hashlib.sha256(self.sidecar.read_bytes()).hexdigest())
         self.assertEqual(seal["pidx_size"], self.sidecar.stat().st_size)
+
+    def test_production_v4_writer_is_accepted_with_both_scaffold_modes(self):
+        from pcc.frontends.python.pipeline_frontend_workers import write_worker_manifest
+
+        for scaffold in ("on", "off"):
+            for siblings in ([], ["dependency"]):
+                with self.subTest(scaffold=scaffold, siblings=siblings):
+                    write_worker_manifest(
+                        str(self.manifest), str(self.result), str(self.ir),
+                        str(self.root / "exports.json"), str(self.root / "ast"),
+                        [str(self.root / "sample.py"), str(self.root / "dependency.py")],
+                        ["sample", "dependency"], [0], entry_module="sample",
+                        sibling_inits=siblings, ir_scaffold_mode=scaffold, verbose=True,
+                    )
+                    request = dict(self.fields, manifest_sha256=hashlib.sha256(
+                        self.manifest.read_bytes()).hexdigest())
+                    self.assertEqual(handoff._manifest(request), (str(self.ir), str(self.result)))
+
+    def test_obsolete_libpython_field_is_rejected_even_with_matching_digest(self):
+        lines = self.manifest.read_text().splitlines()
+        lines.insert(7, "off")
+        self.manifest.write_text("\n".join(lines) + "\n")
+        request = dict(self.fields, manifest_sha256=hashlib.sha256(
+            self.manifest.read_bytes()).hexdigest())
+        with self.assertRaisesRegex(ValueError, "invalid manifest"):
+            handoff._manifest(request)
 
     def test_timing_and_no_timing_result_rows_and_idempotent_prepare(self):
         for timing in (False, True):
