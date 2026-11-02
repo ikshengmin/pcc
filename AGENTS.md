@@ -63,11 +63,13 @@ These are required outcomes, not assertions that migration is complete. See
   this frontend work. Small source/code/test work continues independently;
   serialize only heavy gates and shared runtime/backend publication. Each
   change includes focused tests and whole affected-language validation before
-  push. After a shared runtime/backend batch, wait for the user's relayed Mac
-  QPS assessment before another. Do not access or run on the user's Mac.
-  User-reported Mac results are external evidence; separately authorized cloud
-  macOS CI is a distinct, source-labeled lane, not permission for device access.
-  Never weaken correctness or resource limits to obtain a pass.
+  push. Never weaken correctness or resource limits to obtain a pass.
+- Remote or cloud agents must not access or run on the user's Mac; for them,
+  user-reported Mac results are external evidence, and after a shared
+  runtime/backend batch they wait for the user's relayed Mac QPS assessment.
+- An agent running locally on the Mac works in this workspace normally:
+  it builds, tests and measures here, and labels its results as local Mac
+  evidence. Full-suite and bootstrap runs still need the user's explicit OK.
 - Preserve ordinary Python/C semantics, arbitrary-precision Python integers,
   identity, exceptions, finalizers, weakrefs and resurrection. Value layouts
   and fixed-width machine types are explicit. No package-specific shortcuts.
