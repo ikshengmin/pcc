@@ -36,7 +36,7 @@ from pcc.frontends.cpp.arrays import (
 )
 from pcc.frontends.cpp.objects import parse_namespace_object
 from pcc.frontends.cpp.types import (
-    ArithmeticTypes, ArrayType, ConstType, FunctionType, PointerType, TYPE_WORDS, array_type, canonical_type, c_type_names, const_qualified, contains_array,
+    ArithmeticTypes, ArrayType, ConstType, FunctionType, PointerType, ReferenceType, TYPE_WORDS, array_type, canonical_type, c_type_names, const_qualified, contains_array,
     composite_qualified_pointer, contains_function, function_type, is_enum_type, pointer_type, qualify_const, unqualified,
 )
 from pcc.frontends.cpp.templates import (
@@ -381,6 +381,8 @@ class CppParser:
     def _check_value_type(self, dtype, token):
         plain = unqualified(dtype)
         nominal = unqualified(plain.pointee) if isinstance(plain, PointerType) else plain
+        if self.parsing_template and isinstance(dtype, ReferenceType):
+            raise CppDiagnostic("cpp.unsupported.references", "reference template deduction/replay is not implemented", token.coord)
         if self.parsing_template and contains_array(dtype):
             raise CppDiagnostic("cpp.unsupported.array-templates", "array template typing/deduction is not implemented", token.coord)
         if self.parsing_template and is_enum_type(nominal):
@@ -522,11 +524,15 @@ class CppParser:
             elif chunk.kind == "array":
                 dtype = make_array_type(dtype, chunk.bound, self.types, chunk.coord,
                                         allow_class_element=getattr(self, "class_array_alias", False))
+            elif chunk.kind in ("lvalue-reference", "rvalue-reference"):
+                dtype = self._reference(dtype, chunk.token)
             else:
                 raise CppDiagnostic("cpp.unsupported.references", "reference alias semantics are not implemented", chunk.coord)
         return dtype
 
     def _pointer(self, dtype, token, qualifiers=()):
+        if isinstance(dtype, ReferenceType):
+            raise CppDiagnostic("cpp.invalid-reference-type", "a pointer cannot point to a reference", token.coord)
         leaf = dtype
         while array_type(leaf):
             leaf = leaf.element
@@ -541,10 +547,24 @@ class CppParser:
         result = PointerType(dtype)
         return qualify_const(result) if "const" in qualifiers else result
 
+    def _reference(self, dtype, token):
+        if token.value != '&' or self.parsing_template or self.template_function is not None:
+            raise CppDiagnostic("cpp.unsupported.references", "rvalue/dependent references require additional semantics", token.coord)
+        if isinstance(dtype, ReferenceType):
+            raise CppDiagnostic("cpp.unsupported.references", "reference collapsing requires declaration provenance", token.coord)
+        if unqualified(dtype) == 'void':
+            raise CppDiagnostic("cpp.invalid-reference-type", "a reference cannot refer to void", token.coord)
+        if array_type(dtype) or function_type(dtype):
+            raise CppDiagnostic("cpp.unsupported.references", "array/function reference binding is not implemented", token.coord)
+        return ReferenceType(dtype)
+
     def _abstract_pointer_type(self, dtype):
-        while self._peek().value == "*":
+        while self._peek().value in ("*", "&", "&&"):
             token = self.cursor.take()
-            dtype = self._pointer(dtype, token, parse_cv_qualifiers(self.cursor))
+            if token.value == '*':
+                dtype = self._pointer(dtype, token, parse_cv_qualifiers(self.cursor))
+            else:
+                dtype = self._reference(dtype, token)
         return dtype
 
     def _apply_declarator(self, declaration, dtype, function=False, member=False, allow_class_element=False):
@@ -569,6 +589,9 @@ class CppParser:
                     raise CppDiagnostic("cpp.unsupported.array-templates", "dependent array bounds/types are not implemented", chunk.coord)
                 dtype = make_array_type(dtype, chunk.bound, self.types, chunk.coord,
                                         allow_class_element=allow_class_element or getattr(self, "class_array_alias", False))
+                continue
+            if chunk.kind in ("lvalue-reference", "rvalue-reference"):
+                dtype = self._reference(dtype, chunk.token)
                 continue
             if chunk.kind != "pointer":
                 feature = "references" if "reference" in chunk.kind else (
@@ -607,6 +630,8 @@ class CppParser:
 
     @staticmethod
     def _scalar_type(name, dtype, coord):
+        if isinstance(dtype, ReferenceType):
+            return c_ast.PtrDecl([], CppParser._scalar_type(name, dtype.referent, coord), coord)
         if array_type(dtype):
             dimension = None if dtype.bound is None else c_ast.Constant("int", str(dtype.bound), coord)
             return c_ast.ArrayDecl(CppParser._scalar_type(name, dtype.element, coord), dimension, [], coord)
@@ -702,6 +727,9 @@ class CppParser:
         return self._nullptr_rvalue(expression).node
 
     def _convert(self, expression, dtype, coord, force=False, contextual=False):
+        if isinstance(dtype, ReferenceType):
+            from pcc.frontends.cpp.references import bind
+            return bind(self, expression, dtype, coord)
         dtype = unqualified(dtype)
         self._check_extended_value_type(dtype, expression.node)
         if array_type(dtype):
@@ -945,10 +973,14 @@ class CppParser:
         access_scope = member_owner.scope if member_owner is not None else parent
         for accessed, access_coord in return_lookup.deferred_member_access:
             access_scope.check_member_access(accessed, access_coord)
+        if name.value == "operator=" and any(default_arguments):
+            raise CppDiagnostic("cpp.invalid-assignment-operator", "assignment operator parameters cannot have defaults", name.coord)
         if any(default_arguments) and (not is_function or template_parameters or variadic
                 or any(contains_function(dtype) for _, dtype in params)):
             raise CppDiagnostic("cpp.unsupported.default-argument-context",
                                 "defaults require an ordinary non-variadic function with scalar/object-pointer parameters", name.coord)
+        if isinstance(result_type, ReferenceType):
+            raise CppDiagnostic("cpp.unsupported.references", "reference results and namespace reference objects require lifetime/return semantics", name.coord)
         if not is_function:
             if name.kind == "OPERATOR_FUNCTION_ID":
                 raise CppDiagnostic("cpp.invalid-allocation-function", "operator name must declare a function", name.coord)
@@ -978,8 +1010,9 @@ class CppParser:
                 raise CppDiagnostic("cpp.unsupported.class-value-abi",
                                     "class by-value function ABI/lifetime is not implemented", name.coord)
             pointee = plain
-            while pointer_type(pointee) or array_type(pointee):
-                pointee = unqualified(pointee.pointee if pointer_type(pointee) else pointee.element)
+            while pointer_type(pointee) or array_type(pointee) or isinstance(pointee, ReferenceType):
+                pointee = unqualified(pointee.referent if isinstance(pointee, ReferenceType)
+                                      else pointee.pointee if pointer_type(pointee) else pointee.element)
             if isinstance(pointee, ClassType) and pointee.internal_linkage:
                 raise CppDiagnostic("cpp.unsupported.class-linkage",
                                     "function signatures involving internal-linkage class types are not implemented", name.coord)
@@ -991,6 +1024,12 @@ class CppParser:
             raise CppDiagnostic("cpp.main-language-linkage",
                                 "main cannot have a language linkage specification", name.coord)
         definition = self._peek().value == "{"
+        if variadic and any(isinstance(t, ReferenceType) for _, t in params):
+            raise CppDiagnostic("cpp.unsupported.references", "variadic reference signatures require dedicated va_start/ABI admission", name.coord)
+        if template_parameters and any(isinstance(t, ReferenceType) for _, t in params):
+            raise CppDiagnostic("cpp.unsupported.references", "reference template parameter deduction is not implemented", name.coord)
+        if any(isinstance(t, ReferenceType) and is_class_type(t.referent) for _, t in params) and definition:
+            raise CppDiagnostic("cpp.unsupported.class-reference-values", "class-reference function bodies require class value/lifetime semantics", name.coord)
         if definition or member_owner is not None or template_parameters:
             for dtype in (result_type,) + tuple(t for _, t in params):
                 self._check_value_type(dtype, name)
@@ -1041,7 +1080,7 @@ class CppParser:
             # Incomplete object pointees and void are valid: this admission
             # neither completes them nor promises cross-language layout.
             if any(not self.types.integral(dtype) and unqualified(dtype) not in ("void", "float", "double", "long double")
-                   and not pointer_type(dtype) and not is_class_type(dtype)
+                   and not pointer_type(dtype) and not isinstance(dtype, ReferenceType) and not is_class_type(dtype)
                    for dtype in (result_type,) + new_symbol.parameters):
                 raise CppDiagnostic("cpp.unsupported.c-linkage-signature",
                                     "C-linkage signatures require declarable fundamental scalars or pointers", name.coord)
@@ -1245,6 +1284,8 @@ class CppParser:
         if self._is_declaration(allow_range=for_init):
             dtype = self._type()
             name, dtype = self._declarator(dtype, allow_class_element=True)
+            if isinstance(dtype, ReferenceType):
+                raise CppDiagnostic("cpp.unsupported.references", "local reference initialization/lifetime is not implemented", name.coord)
             self._check_object_type(dtype, name.coord)
             # The point of declaration precedes the initializer.
             symbol = self.scope.declare(Symbol(
@@ -1879,6 +1920,8 @@ class CppParser:
                 dtype = make_array_type(dtype, chunk.bound, self.types, chunk.coord)
             elif chunk.kind == "pointer":
                 dtype = self._pointer(dtype, chunk.token, chunk.qualifiers)
+            elif chunk.kind in ("lvalue-reference", "rvalue-reference"):
+                dtype = self._reference(dtype, chunk.token)
             else:
                 raise CppDiagnostic("cpp.unsupported.references", "reference sizeof requires a reference-type model", chunk.coord)
         return dtype
@@ -2117,6 +2160,9 @@ class CppParser:
             self._check_extended_value_type(dtype, selected)
 
     def _call_expression(self, group, arguments, coord):
+        if (self.template_function is not None or self.instantiating_template) and any(
+                isinstance(t, ReferenceType) for candidate in group.overloads for t in candidate.parameters):
+            raise CppDiagnostic("cpp.unsupported.references", "reference calls in template replay require value-category deduction", coord)
         if any(contains_array(arg.dtype) for arg in arguments):
             if (self.template_function is not None or self.instantiating_template
                     or any(candidate.template_parameters for candidate in group.overloads)):
@@ -2165,7 +2211,8 @@ class CppParser:
                     raise CppDiagnostic("cpp.unsupported.enum-templates",
                                         "enum results in template definitions require dependent lookup", coord)
             return Expression(Pattern("call", coord, snapshot, arguments), dtype)
-        selected = resolve_overload(group, argument_types, self.types, coord, null_constants)
+        selected = resolve_overload(group, argument_types, self.types, coord, null_constants,
+                                    [arg.lvalue or arg.assignment_result for arg in arguments])
         self._check_call_value_abi(selected, coord)
         if selected.nonthrowing or selected.noreturn:
             raise CppDiagnostic("cpp.unsupported.exceptions", "invoking declared noexcept/noreturn contracts requires runtime contract support", coord)
@@ -2290,6 +2337,8 @@ class CppParser:
             self._unsupported(token)
         if token.value in TYPE_WORDS or symbol is not None and symbol.kind in ("type", "template-type"):
             dtype = canonical_type([token.value]) if token.value in TYPE_WORDS else symbol.dtype
+            if isinstance(dtype, ReferenceType):
+                raise CppDiagnostic("cpp.unsupported.references", "reference casts require value-category/lifetime semantics", token.coord)
             if contains_function(dtype):
                 raise CppDiagnostic("cpp.unsupported.function-pointers", "functional callback conversions are not implemented", token.coord)
             if array_type(dtype):
@@ -2386,6 +2435,11 @@ class CppParser:
         if self.template_function is not None:
             return Expression(Pattern("name", token.coord, symbol), symbol.dtype,
                               symbol.kind == "value", symbol)
+        if isinstance(symbol.dtype, ReferenceType):
+            result = Expression(c_ast.UnaryOp('*', c_ast.ID(symbol.c_name, token.coord), token.coord),
+                                symbol.dtype.referent, True, symbol)
+            result.decltype_entity = symbol.dtype
+            return result
         fact = self._symbol_constant_fact(symbol, token.coord)
         return Expression(c_ast.ID(symbol.c_name, token.coord), symbol.dtype,
                           symbol.kind == "value", symbol,

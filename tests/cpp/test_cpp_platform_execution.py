@@ -37,6 +37,7 @@ from tests.cpp.test_cpp_inline_methods import SINGLE_PROGRAMS as INLINE_METHOD_P
 from tests.cpp.test_cpp_anonymous_class_enums import SINGLE_PROGRAMS as ANONYMOUS_ENUM_PROGRAMS
 from tests.cpp.test_cpp_pointer_additive import CASES as POINTER_OFFSET_PROGRAMS
 from tests.cpp.test_cpp_default_arguments import CASES as DEFAULT_ARGUMENT_PROGRAMS
+from tests.cpp.test_cpp_lvalue_references import CASES as LVALUE_REFERENCE_PROGRAMS
 
 
 CASES = tuple(
@@ -73,6 +74,14 @@ DEFAULT_ARGUMENT_CASES = tuple(
     )
 )
 CASES += DEFAULT_ARGUMENT_CASES
+
+# Exact direct-reference originals also use the native platform ABI lane.
+LVALUE_REFERENCE_CASES = tuple(
+    ('reference-' + name, dict(LVALUE_REFERENCE_PROGRAMS)[name], 42)
+    for name in ('parameter-alias-write', 'effectful-address-once',
+                 'mutable-reference-overload', 'top-level-const-pointer-reference')
+)
+CASES += LVALUE_REFERENCE_CASES
 
 
 def _forbidden_process(*args, **kwargs):

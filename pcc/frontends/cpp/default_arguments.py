@@ -8,7 +8,7 @@ from copy import deepcopy
 
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.sema import Scope
-from pcc.frontends.cpp.types import unqualified
+from pcc.frontends.cpp.types import ReferenceType, unqualified
 
 
 class DefaultArgument:
@@ -27,6 +27,9 @@ class DefaultArgument:
 def collect(parser, dtype):
     """Retain the exact assignment-expression token interval, no rewriting."""
     token = parser._expect('=')
+    if isinstance(dtype, ReferenceType):
+        raise CppDiagnostic('cpp.unsupported.default-argument-context',
+                            'reference defaults require binding/lifetime semantics', token.coord)
     if parser.parsing_template or parser.template_function is not None:
         raise CppDiagnostic('cpp.unsupported.default-argument-context',
                             'template default arguments are not implemented', token.coord)

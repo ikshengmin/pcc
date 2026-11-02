@@ -11,10 +11,12 @@ from pcc.frontends.cpp.classes import is_class_type, require_complete
 from pcc.frontends.cpp.constants import KNOWN, NOT_CONSTANT
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.initializers import ListInitializer, _lower_scalar
-from pcc.frontends.cpp.types import ArrayType, ConstType, array_type, function_type, unqualified
+from pcc.frontends.cpp.types import ArrayType, ConstType, ReferenceType, array_type, function_type, unqualified
 
 
 def make_array_type(element, bound_expression, types, coord, allow_class_element=False):
+    if isinstance(element, ReferenceType):
+        raise CppDiagnostic("cpp.invalid-array-element", "an array cannot have reference elements", coord)
     if unqualified(element) == "void" or function_type(element):
         raise CppDiagnostic("cpp.invalid-array-element", "an array cannot have void or function elements", coord)
     if is_class_type(element):

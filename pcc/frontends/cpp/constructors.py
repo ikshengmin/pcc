@@ -13,7 +13,7 @@ from pcc.frontends.cpp.declarators import DeclaratorParser, QualifiedName, parse
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.members import mangle_member
 from pcc.frontends.cpp.sema import Scope, Symbol, resolve_overload
-from pcc.frontends.cpp.types import ConstType, PointerType, contains_function, is_enum_type, unqualified
+from pcc.frontends.cpp.types import ConstType, PointerType, ReferenceType, contains_function, is_enum_type, unqualified
 
 
 def constructor_ahead(parser):
@@ -90,13 +90,16 @@ def parse_constructor(parser, definition=None):
             raise CppDiagnostic("cpp.unsupported.class-value-abi", "constructor class-by-value arguments require copy semantics", name.coord)
         plain = unqualified(dtype)
         pointee = plain
-        while isinstance(pointee, PointerType):
-            pointee = unqualified(pointee.pointee)
+        while isinstance(pointee, (PointerType, ReferenceType)):
+            pointee = unqualified(pointee.referent if isinstance(pointee, ReferenceType) else pointee.pointee)
         if is_class_type(pointee) and pointee.internal_linkage:
             raise CppDiagnostic("cpp.unsupported.class-linkage", "constructor signatures with internal-linkage class types require ABI support", name.coord)
         if is_enum_type(pointee) and pointee.internal_linkage:
             raise CppDiagnostic("cpp.unsupported.enum-linkage", "constructor signatures with internal-linkage enum types require ABI support", name.coord)
     inline_definition = not outside and parser._peek().value != ";"
+    if (outside or inline_definition) and any(isinstance(t, ReferenceType) and is_class_type(t.referent)
+                                               for _, t in params):
+        raise CppDiagnostic("cpp.unsupported.class-reference-values", "class-reference constructor bodies require copy/lifetime semantics", name.coord)
     if outside and parser._peek().value not in (":", "{"):
         raise CppDiagnostic("cpp.member-definition-required", "out-of-class constructor declaration requires a body", name.coord)
     signature = tuple(unqualified(dtype) for _, dtype in params)
@@ -308,7 +311,7 @@ def constructor_call(parser, dtype, arguments, address, coord, require_closed=Fa
     """Select the existing C1 at an already-evaluated complete-object address."""
     selected = resolve_overload(dtype.definition.constructors,
                                 [arg.dtype for arg in arguments], parser.types, coord,
-                                [arg.null_pointer for arg in arguments])
+                                [arg.null_pointer for arg in arguments], [arg.lvalue or arg.assignment_result for arg in arguments])
     parser.scope.check_member_access(selected, coord)
     if require_closed and not getattr(selected, 'closed_normal_body', False):
         raise CppDiagnostic('cpp.unsupported.placement-constructor-effects',

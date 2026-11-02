@@ -1,4 +1,4 @@
-"""C++ arithmetic/builtin-pointer identity over PCC's target-owned C ABI.
+"""C++ arithmetic, pointer and reference identity over PCC's target-owned C ABI.
 
 Equal storage widths do not make distinct C++ types equal (long and long long
 are a common example). Keep language identity/rank until Sema inserts explicit
@@ -84,7 +84,8 @@ def array_type(dtype):
 
 def contains_array(dtype):
     dtype = unqualified(dtype)
-    return array_type(dtype) or isinstance(dtype, PointerType) and contains_array(dtype.pointee)
+    return (array_type(dtype) or isinstance(dtype, PointerType) and contains_array(dtype.pointee)
+            or isinstance(dtype, ReferenceType) and contains_array(dtype.referent))
 
 
 class FunctionType:
@@ -113,9 +114,28 @@ def function_type(dtype):
 
 def contains_function(dtype):
     dtype = unqualified(dtype)
+    if isinstance(dtype, ReferenceType):
+        return contains_function(dtype.referent)
     if isinstance(dtype, (PointerType, ArrayType)):
         return contains_function(dtype.pointee if isinstance(dtype, PointerType) else dtype.element)
     return isinstance(dtype, FunctionType)
+
+
+class ReferenceType:
+    """An lvalue reference has identity, not nullable/rebindable pointer semantics."""
+
+    def __init__(self, referent):
+        self.referent = referent
+
+    def __eq__(self, other):
+        return isinstance(other, ReferenceType) and self.referent == other.referent
+
+    def __hash__(self):
+        return hash(("lvalue-reference", self.referent))
+
+
+def reference_type(dtype):
+    return isinstance(dtype, ReferenceType)
 
 
 class PointerType:
@@ -140,6 +160,8 @@ def unqualified(dtype):
 
 
 def qualify_const(dtype):
+    if reference_type(dtype):
+        return dtype  # [dcl.ref]: cv introduced through a typedef is ignored.
     if function_type(dtype):
         return dtype  # [dcl.fct]: cv added through a typedef-name is ignored.
     if array_type(dtype):
@@ -264,6 +286,8 @@ def _mangle_type(dtype, substitutions):
         encoded = ("F" + ("Y" if dtype.language_linkage == "C" else "")
                    + _mangle_type(dtype.result, substitutions)
                    + ("".join(_mangle_type(p, substitutions) for p in dtype.parameters) or "v") + "E")
+    elif isinstance(dtype, ReferenceType):
+        encoded = "R" + _mangle_type(dtype.referent, substitutions)
     elif isinstance(dtype, PointerType):
         encoded = "P" + _mangle_type(dtype.pointee, substitutions)
     elif getattr(dtype, "cpp_class_type", False) or is_enum_type(dtype):

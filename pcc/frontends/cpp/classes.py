@@ -138,6 +138,9 @@ class ClassDefinition:
         if self.complete:
             raise ValueError("cannot append a member to a completed class")
         dtype = unqualified(symbol.dtype)
+        from pcc.frontends.cpp.types import ReferenceType
+        if isinstance(dtype, ReferenceType):
+            raise CppDiagnostic("cpp.unsupported.references", "reference data members require initialization/lifetime semantics", symbol.coord)
         if contains_function(dtype):
             raise CppDiagnostic("cpp.unsupported.function-pointers", "callback members require function-value semantics", symbol.coord)
         if array_type(dtype):
@@ -368,6 +371,12 @@ def parse_class(parser):
             if storage:
                 if mutable:
                     raise CppDiagnostic("cpp.invalid-mutable", "mutable applies only to non-static data members", token.coord)
+                parser.cursor.position = member_start
+                definition.method_declarations.append(parser._function(member_definition=definition))
+                continue
+            if parser._peek().value == "operator":
+                if mutable:
+                    raise CppDiagnostic("cpp.invalid-mutable", "mutable applies only to data members", token.coord)
                 parser.cursor.position = member_start
                 definition.method_declarations.append(parser._function(member_definition=definition))
                 continue

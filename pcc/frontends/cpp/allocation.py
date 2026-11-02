@@ -23,6 +23,8 @@ def declaration_name(parser):
     from pcc.frontends.cpp.parser import CppToken
     token = parser.cursor.take()
     operation = parser.cursor.take()
+    if operation.value == '=':
+        return CppToken('OPERATOR_FUNCTION_ID', 'operator=', token.coord)
     if operation.value not in ('new', 'delete'):
         parser._unsupported(operation, 'operator-function semantics are not implemented')
     name = 'operator ' + operation.value
@@ -34,6 +36,14 @@ def declaration_name(parser):
 
 def validate_declaration(parser, name, result, parameters, nonthrowing,
                          defining, member, storage, template_parameters, variadic):
+    if name.value == 'operator=':
+        if member is None or len(parameters) != 1 or variadic or storage is not None:
+            raise CppDiagnostic('cpp.invalid-assignment-operator',
+                                'assignment operator requires a non-static member with one parameter', name.coord)
+        if defining or template_parameters:
+            raise CppDiagnostic('cpp.unsupported.assignment-operators',
+                                'assignment operator bodies and calls require overload/lifetime semantics', name.coord)
+        return
     if name.value not in OPERATOR_CODES:
         return
     if member is not None:
@@ -109,7 +119,8 @@ def parse_new(parser):
         raise CppDiagnostic('cpp.undeclared-allocation-function', 'placement new requires its allocation function declaration', coord)
     size_type = c_size_type_name(parser.types.target_triple)
     selected = resolve_overload(group, [size_type] + [arg.dtype for arg in placement], parser.types,
-                                coord, [False] + [arg.null_pointer for arg in placement])
+                                coord, [False] + [arg.null_pointer for arg in placement],
+                                [False] + [arg.lvalue or arg.assignment_result for arg in placement])
     if (selected.variadic or selected.parameters != (size_type, PointerType('void')) or not selected.nonthrowing
             or selected.language_linkage != 'C++' or selected.dtype != PointerType('void')):
         raise CppDiagnostic('cpp.unsupported.placement-allocation-overload',

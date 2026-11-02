@@ -31,7 +31,8 @@ def mangle_member(owner, name, parameters, const=False):
     prefix += str(len(owner.name)) + owner.name
     # The complete owner is a TYPE substitution, not a namespace spelling.
     substitutions.append(owner)
-    encoded = "_ZN" + ("K" if const else "") + prefix + str(len(name)) + name + "E"
+    encoded_name = "aS" if name == "operator=" else str(len(name)) + name
+    encoded = "_ZN" + ("K" if const else "") + prefix + encoded_name + "E"
     return encoded + ("".join(_mangle_type(unqualified(t), substitutions)
                               for t in parameters) or "v")
 
@@ -113,7 +114,8 @@ def call_member(parser, group, object_expression, arguments, coord, address_avai
         candidates.overloads.append(candidate)
     actuals = [object_expression] + arguments
     selected = resolve_overload(candidates, [arg.dtype for arg in actuals], parser.types,
-                                coord, [arg.null_pointer for arg in actuals]).member_origin
+                                coord, [arg.null_pointer for arg in actuals],
+                                [arg.lvalue or arg.assignment_result for arg in actuals]).member_origin
     parser.scope.check_member_access(selected, coord)
     if not address_available:
         raise CppDiagnostic("cpp.unsupported.member-object-address",
@@ -158,7 +160,8 @@ def call_static_member(parser, group, arguments, coord, discarded_base=None):
     if any(is_class_type(arg.dtype) for arg in arguments):
         raise CppDiagnostic("cpp.unsupported.class-value-abi", "class by-value arguments need lifetime ABI", coord)
     selected = resolve_overload(group, [arg.dtype for arg in arguments], parser.types,
-                                coord, [arg.null_pointer for arg in arguments])
+                                coord, [arg.null_pointer for arg in arguments],
+                                [arg.lvalue or arg.assignment_result for arg in arguments])
     parser.scope.check_member_access(selected, coord)
     from pcc.frontends.cpp.default_arguments import expand
     arguments = expand(parser, selected, arguments, coord)

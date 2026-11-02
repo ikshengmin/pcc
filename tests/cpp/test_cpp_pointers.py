@@ -69,7 +69,6 @@ NEGATIVE_CASES = (
     ("int f(){int x=1;int *p=&x;return p<p;}", "cpp.unsupported.pointer-operators"),
     ("int f(){volatile int x=1;return x;}", "cpp.unsupported.volatile"),
     ("int f(int *volatile p);", "cpp.unsupported.volatile"),
-    ("int f(int &p);", "cpp.unsupported.references"),
     ("int (*fp)();", "cpp.unsupported.function-pointers"),
     ("int f(){int *p=new int;return 0;}", "cpp.unsupported.allocation"),
     ("template<class T>T *f(T *p){return p;}", "cpp.unsupported.pointer-templates"),

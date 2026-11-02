@@ -134,7 +134,8 @@ class CppParserTests(unittest.TestCase):
                         "cpp.unsupported.exceptions")
 
     def test_references_and_function_pointer_conversions_are_explicit(self):
-        self.diagnostic("int f(int &x){return x;}", "cpp.unsupported.references")
+        ast = self.parse("int f(int &x){return x;}")
+        self.assertEqual(ast.ext[0].decl.name, "_Z1fRi")
         self.diagnostic("int f(){return 1;} int main(){return f;}", "cpp.unsupported.syntax")
 
     def test_preprocessor_and_unknown_trailing_source_do_not_disappear(self):

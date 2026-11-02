@@ -4,7 +4,7 @@ N4659 [expr.sizeof]/1-4,6, [expr]/8, [expr.prim.id]/2.3,
 [basic.fundamental]/10, [dcl.array]/1, [expr.unary.op]/3-4,
 [class.mfct.non-static]/3, [class.this]/1:
 https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2017/n4659.pdf
-No class layout duplication, template sizeof, references, volatile or packs.
+No class layout duplication, template sizeof, volatile or packs.
 Long double storage queries do NOT qualify long double arithmetic/call ABI.
 TinyXML2's original sizeof(char)/sizeof(error) uses motivate this slice;
 sizeof(T), sizeof(*item), cstdio and the whole project remain separate gaps.
@@ -101,7 +101,6 @@ DEFERRED = (
     ('struct S{int x;};int f(){return sizeof(&S::x);}', 'cpp.unsupported.member-pointers'),
     ('struct S{int x;};int f(){return sizeof(S);}', 'cpp.unsupported.sizeof-class-layout'),
     ('struct S{int x;};int f(S*p){return sizeof(*p);}', 'cpp.unsupported.sizeof-class-layout'),
-    ('int f(){return sizeof(int&);}', 'cpp.unsupported.references'),
     ('int f(){return sizeof(int(*)());}', 'cpp.unsupported.function-pointers'),
     ('struct S{};int f(){return sizeof(S[2]);}', 'cpp.unsupported.class-array-lifetime'),
     ('int f(){return sizeof(volatile int);}', 'cpp.unsupported.volatile'),

@@ -74,7 +74,6 @@ UNSUPPORTED = (
     'extern "C" long double f(long double x){return x;}',
     'struct R{int value;~R();};extern "C" R f(R);',
     'extern "C" int f(int (*callback)(int));',
-    'extern "C" int f(int&);',
     'extern "C" int f(...);',
 )
 

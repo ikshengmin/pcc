@@ -9,7 +9,7 @@ from types import MappingProxyType
 
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.types import (
-    ConstType, array_type, is_enum_type, mangle_function, mangle_object, pointer_type, unqualified,
+    ConstType, ReferenceType, array_type, is_enum_type, mangle_function, mangle_object, pointer_type, unqualified,
 )
 from pcc.frontends.cpp.templates import (
     deduce, mangle_instance, same_type, signature_key, substitute,
@@ -539,7 +539,7 @@ def argument_dependent_lookup(name, arguments, ordinary, coord):
     return Scope._merge(candidates, name, coord)
 
 
-def resolve_overload(group, arguments, types, coord, null_constants=None):
+def resolve_overload(group, arguments, types, coord, null_constants=None, lvalues=None):
     """Select a unique best viable candidate, using a per-argument partial order.
 
     Summing conversion costs is wrong: better on one argument and worse on
@@ -547,7 +547,13 @@ def resolve_overload(group, arguments, types, coord, null_constants=None):
     richer reference/template/user-defined rules must be added before those
     forms are admitted by the parser.
     """
+    source_arguments = list(arguments)
     arguments = [unqualified(argument) for argument in arguments]
+    if lvalues is None and any(isinstance(t, ReferenceType)
+                               for candidate in group.overloads for t in candidate.parameters):
+        raise CppDiagnostic("cpp.unsupported.references",
+                            "reference overload resolution requires source value categories", coord)
+    lvalues = [False] * len(arguments) if lvalues is None else lvalues
     if null_constants is None:
         null_constants = [False] * len(arguments)
     if (any(pointer_type(t) or t == "nullptr" for t in arguments)
@@ -578,8 +584,12 @@ def resolve_overload(group, arguments, types, coord, null_constants=None):
                 candidate.template_origin = origin
                 candidate.template_arguments = bindings
         ranks = []
-        for source, destination, null in zip(arguments, candidate.parameters, null_constants):
-            rank = types.conversion_rank(source, destination, null)
+        for index, (source, destination, null) in enumerate(zip(arguments, candidate.parameters, null_constants)):
+            if isinstance(destination, ReferenceType):
+                from pcc.frontends.cpp.references import conversion_rank
+                rank = conversion_rank(source_arguments[index], destination, lvalues[index], types, null)
+            else:
+                rank = types.conversion_rank(source, destination, null)
             if rank is None:
                 break
             ranks.append(rank)
@@ -603,8 +613,12 @@ def resolve_overload(group, arguments, types, coord, null_constants=None):
                 if first_ellipsis or second_ellipsis:
                     comparisons.append(int(first_ellipsis) - int(second_ellipsis))
                 else:
-                    comparisons.append(types.compare_conversions(
-                        source, candidate.parameters[index], other.parameters[index], null))
+                    first, second = candidate.parameters[index], other.parameters[index]
+                    if isinstance(first, ReferenceType) or isinstance(second, ReferenceType):
+                        from pcc.frontends.cpp.references import compare
+                        comparisons.append(compare(source_arguments[index], first, second, types, null))
+                    else:
+                        comparisons.append(types.compare_conversions(source, first, second, null))
             no_worse = all(value <= 0 for value in comparisons)
             better = any(value < 0 for value in comparisons)
             non_template_preferred = (candidate.template_origin is None

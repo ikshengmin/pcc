@@ -3,7 +3,7 @@
 N4659 [expr.sizeof]/1-4,6; [expr]/8; [basic.fundamental]/10.
 Reuse the actual target scalar ABI facts. Do not duplicate class layout or
 invoke codegen to obtain a semantic constant. Unsupported record layout,
-references and dependent types remain separate explicit capabilities.
+class reference layout and dependent types remain separate explicit capabilities.
 """
 from pcc.frontends.c.c_abi_layout import (
     builtin_scalar_layout, c_size_type_name, pointer_scalar_layout,
@@ -11,11 +11,13 @@ from pcc.frontends.c.c_abi_layout import (
 from pcc.frontends.cpp.classes import is_class_type, require_complete
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.types import (
-    ArrayType, PointerType, c_type_names, function_type, is_enum_type, unqualified,
+    ArrayType, PointerType, ReferenceType, c_type_names, function_type, is_enum_type, unqualified,
 )
 
 
 def sizeof_type(dtype, types, coord):
+    if isinstance(dtype, ReferenceType):
+        return sizeof_type(dtype.referent, types, coord)
     plain = unqualified(dtype)
     if plain == "void" or function_type(plain):
         raise CppDiagnostic("cpp.invalid-sizeof", "sizeof requires a complete object type, not void or a function", coord)

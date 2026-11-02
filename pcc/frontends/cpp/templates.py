@@ -5,7 +5,7 @@ not C AST nodes: only a successfully substituted and checked instance may enter
 the existing C lowering path.
 """
 
-from pcc.frontends.cpp.types import scalar_mangling_code
+from pcc.frontends.cpp.types import ReferenceType, scalar_mangling_code
 
 
 class TypeParameter:
@@ -24,10 +24,13 @@ class Pattern:
 
 
 def dependent(dtype):
-    return dtype is None or isinstance(dtype, TypeParameter)
+    return (dtype is None or isinstance(dtype, TypeParameter)
+            or isinstance(dtype, ReferenceType) and dependent(dtype.referent))
 
 
 def type_key(dtype):
+    if isinstance(dtype, ReferenceType):
+        return ("lvalue-reference", type_key(dtype.referent))
     return ("parameter", dtype.index) if isinstance(dtype, TypeParameter) else ("scalar", dtype)
 
 
@@ -36,6 +39,8 @@ def same_type(lhs, rhs):
 
 
 def substitute(dtype, arguments):
+    if isinstance(dtype, ReferenceType):
+        return ReferenceType(substitute(dtype.referent, arguments))
     return arguments[dtype.index] if isinstance(dtype, TypeParameter) else dtype
 
 
