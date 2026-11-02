@@ -49,7 +49,8 @@ class GenericFunctions:
             scope[parameter.text] = TypeParameter('function ' + function.declaration_name,
                                                   index, parameter.text)
         marker_bounds = self.checker.traits.prepare_function_bounds(function, scope)
-        self.checker.standard_markers.prepare(replace(function, parameter_bounds=marker_bounds), scope)
+        self.checker.standard_markers.prepare(replace(function, parameter_bounds=marker_bounds,
+                                                      where_predicates=()), scope)
         self.bound_calls[function.declaration_name] = {}
         self.parameters[function.declaration_name] = tuple(scope.values())
         if function.type_parameters:

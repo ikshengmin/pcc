@@ -40,7 +40,8 @@ from pcc.frontends.cpp.types import (
     composite_qualified_pointer, contains_function, function_type, is_enum_type, pointer_type, qualify_const, unqualified,
 )
 from pcc.frontends.cpp.templates import (
-    Pattern, TypeParameter, dependent, same_type, substitute,
+    Pattern, TemplateArgument, TypeParameter, ValueParameter, argument_dependent,
+    dependent, same_type, substitute,
 )
 
 
@@ -783,19 +784,42 @@ class CppParser:
         self.parsing_template = True
         parameters = []
         try:
+            if self._peek().value == ">":
+                self._unsupported(keyword, "explicit specializations are not implemented")
             while True:
-                if self._peek().value not in ("class", "typename"):
-                    self._unsupported(self._peek(), "only type template parameters are implemented")
-                self.cursor.take()
-                name = self._identifier()
-                dtype = TypeParameter(len(parameters), name.value, name.coord)
-                self.scope.declare(Symbol(name.value, "template-type", name.coord, dtype=dtype))
-                parameters.append(dtype)
+                if self._peek().value in ("class", "typename"):
+                    self.cursor.take()
+                    name = self._identifier()
+                    parameter = TypeParameter(len(parameters), name.value, name.coord)
+                    self.scope.declare(Symbol(name.value, "template-type", name.coord, dtype=parameter))
+                else:
+                    token = self._peek()
+                    dtype = self._type(check_lowering=False)
+                    if self._peek().value in ("*", "&", "&&", "(", "..."):
+                        raise CppDiagnostic("cpp.unsupported.non-type-template-parameters",
+                                            "pointer/reference/pack non-type template parameters are not implemented", token.coord)
+                    name = self._identifier()
+                    if self._peek().value in ("[", "("):
+                        raise CppDiagnostic("cpp.unsupported.non-type-template-parameters",
+                                            "array/function non-type template parameters are not implemented", token.coord)
+                    dtype = unqualified(dtype)
+                    if is_enum_type(dtype):
+                        raise CppDiagnostic("cpp.unsupported.enum-templates",
+                                            "enum non-type template parameters are not implemented", token.coord)
+                    if not isinstance(dtype, TypeParameter) and not self.types.integral(dtype):
+                        raise CppDiagnostic("cpp.unsupported.non-type-template-parameters",
+                                            "only integral non-type template parameters are implemented", token.coord)
+                    parameter = ValueParameter(len(parameters), name.value, dtype, name.coord)
+                    symbol = Symbol(name.value, "template-value", name.coord, dtype=dtype)
+                    symbol.template_parameter = parameter
+                    self.scope.declare(symbol)
+                parameters.append(parameter)
+                if self._peek().value == "=":
+                    raise CppDiagnostic("cpp.unsupported.template-default-arguments",
+                                        "template defaults, including value-dependent defaults, are not implemented", self._peek().coord)
                 if self._accept(">"):
                     break
                 self._expect(",")
-            if not parameters:
-                self._unsupported(keyword, "explicit specializations are not implemented")
             self._function(template_parameters=tuple(parameters), declaration_scope=parent)
         finally:
             self.scope = parent
@@ -999,7 +1023,7 @@ class CppParser:
         if member_owner is None and storage is not None and (storage.value == "static" or template_parameters):
             raise CppDiagnostic("cpp.unsupported.function-storage",
                                 "function storage specifiers require function linkage semantics", storage.coord)
-        if self.scope.lookup_lexical(name.value) is not None and self.scope.lookup_lexical(name.value).kind == "template-type":
+        if self.scope.lookup_lexical(name.value) is not None and self.scope.lookup_lexical(name.value).kind in ("template-type", "template-value"):
             raise CppDiagnostic("cpp.template-parameter-shadowing",
                                 "function name shadows a template parameter", name.coord)
         declaration_only = (self._peek().value == ";" and member_owner is None and not template_parameters)
@@ -1692,11 +1716,15 @@ class CppParser:
                           constant_fact=not_constant(unqualified(lhs.dtype),
                                                      "modification of a runtime object", coord))
 
-    def _binary(self, minimum):
+    def _binary(self, minimum, template_argument=False):
         lhs = self._unary()
         while _BINARY_PRECEDENCE.get(self._peek().value, 0) >= minimum:
+            # [temp.names]: an unparenthesized > closes a template argument;
+            # parentheses/call arguments enter their own expression grammar.
+            if template_argument and self._peek().value in (">", ">>"):
+                break
             token = self.cursor.take()
-            rhs = self._binary(_BINARY_PRECEDENCE[token.value] + 1)
+            rhs = self._binary(_BINARY_PRECEDENCE[token.value] + 1, template_argument)
             lhs = self._binary_expression(token.value, lhs, rhs, token.coord)
         return lhs
 
@@ -1799,9 +1827,12 @@ class CppParser:
             else:
                 operand_type = self.types.common(lhs.dtype, rhs.dtype)
             dtype = "bool" if logical or comparison else operand_type
+        rhs_type = self.types.promote(rhs.dtype) if shift and not dependent(rhs.dtype) else operand_type
         if self.template_function is not None:
-            return Expression(Pattern("binary", coord, operator, [lhs, rhs]), dtype)
-        rhs_type = self.types.promote(rhs.dtype) if shift else operand_type
+            fact = (None if dependent(dtype) else binary_fact(
+                operator, self._constant_fact(lhs), self._constant_fact(rhs),
+                operand_type, rhs_type, dtype, self.types, coord))
+            return Expression(Pattern("binary", coord, operator, [lhs, rhs]), dtype, constant_fact=fact)
         node = c_ast.BinaryOp(operator, self._convert(lhs, operand_type, coord, contextual=logical),
                               self._convert(rhs, rhs_type, coord, contextual=logical), coord)
         if logical or comparison:
@@ -2134,7 +2165,9 @@ class CppParser:
                 raise CppDiagnostic("cpp.invalid-operands", "operator requires an integral operand", coord)
             dtype = "bool" if operator == "!" else self.types.promote(expression.dtype)
         if self.template_function is not None:
-            return Expression(Pattern("unary", coord, operator, [expression]), dtype)
+            fact = (None if dependent(dtype) else unary_fact(
+                operator, self._constant_fact(expression), dtype, dtype, self.types, coord))
+            return Expression(Pattern("unary", coord, operator, [expression]), dtype, constant_fact=fact)
         node = c_ast.UnaryOp(operator, self._convert(expression, dtype, coord, contextual=operator == "!"), coord)
         if operator == "!":
             node = self._convert(Expression(node, "int"), "bool", coord)
@@ -2159,7 +2192,7 @@ class CppParser:
                 raise CppDiagnostic("cpp.unsupported.class-value-abi", "record declaration projection does not implement copy/materialization at a call", coord)
             self._check_extended_value_type(dtype, selected)
 
-    def _call_expression(self, group, arguments, coord):
+    def _call_expression(self, group, arguments, coord, explicit_arguments=None):
         if (self.template_function is not None or self.instantiating_template) and any(
                 isinstance(t, ReferenceType) for candidate in group.overloads for t in candidate.parameters):
             raise CppDiagnostic("cpp.unsupported.references", "reference calls in template replay require value-category deduction", coord)
@@ -2192,8 +2225,10 @@ class CppParser:
             snapshot = Symbol(group.name, "function", group.coord)
             snapshot.overloads = list(group.overloads)
             dtype = None
-            if not any(dependent(t) for t in argument_types):
-                selected = resolve_overload(snapshot, argument_types, self.types, coord, null_constants)
+            if (not any(dependent(t) for t in argument_types)
+                    and not any(argument_dependent(a) for a in explicit_arguments or ())):
+                selected = resolve_overload(snapshot, argument_types, self.types, coord, null_constants,
+                                            explicit_arguments=explicit_arguments)
                 if len(arguments) < len(selected.parameters):
                     raise CppDiagnostic("cpp.unsupported.default-argument-context",
                                         "default arguments at template call sites are not implemented", coord)
@@ -2210,9 +2245,10 @@ class CppParser:
                 if is_enum_type(nominal):
                     raise CppDiagnostic("cpp.unsupported.enum-templates",
                                         "enum results in template definitions require dependent lookup", coord)
-            return Expression(Pattern("call", coord, snapshot, arguments), dtype)
+            call = (snapshot, explicit_arguments) if explicit_arguments is not None else snapshot
+            return Expression(Pattern("call", coord, call, arguments), dtype)
         selected = resolve_overload(group, argument_types, self.types, coord, null_constants,
-                                    [arg.lvalue or arg.assignment_result for arg in arguments])
+                                    [arg.lvalue or arg.assignment_result for arg in arguments], explicit_arguments)
         self._check_call_value_abi(selected, coord)
         if selected.nonthrowing or selected.noreturn:
             raise CppDiagnostic("cpp.unsupported.exceptions", "invoking declared noexcept/noreturn contracts requires runtime contract support", coord)
@@ -2255,6 +2291,60 @@ class CppParser:
                                           c_ast.ExprList(converted, coord), coord), dtype,
                           constant_fact=not_constant(dtype, "call to a non-constexpr function", coord))
 
+    def _explicit_template_arguments(self):
+        """Parse type-ids or typed expressions, never re-lex or replace tokens.
+
+        The expression parser itself owns nested parentheses and function calls.
+        It stops only at an unparenthesized template closing delimiter. Nested
+        class template type-ids remain outside this function-template slice.
+        """
+        self._expect("<")
+        arguments = []
+        if self._accept(">"):
+            return tuple(arguments)
+        while True:
+            start = self.cursor.position
+            coord = self._peek().coord
+            is_type_argument = False
+            if self._is_type(self._peek()):
+                with self.cursor.tentative():
+                    self._abstract_pointer_type(self._type(check_lowering=False))
+                    is_type_argument = self._peek().value in (",", ">", ">>")
+                    if self._peek().value == "[":
+                        raise CppDiagnostic("cpp.unsupported.template-type-arguments",
+                                            "array template type arguments are not implemented", coord)
+                    if self._peek().value == "(":
+                        while self._accept("("):
+                            pass
+                        if (self._peek().value in ("*", "&", "&&", ")", "[")
+                                or self._is_type(self._peek())):
+                            # [temp.arg]/2 resolves int() to a function type-id,
+                            # irrespective of whether the parameter is a value.
+                            # Do not reinterpret it as integer value-initialization.
+                            raise CppDiagnostic("cpp.unsupported.template-type-arguments",
+                                                "function/grouped template type arguments are not implemented", coord)
+            if is_type_argument:
+                dtype = self._abstract_pointer_type(self._type(check_lowering=False))
+                if (not isinstance(dtype, TypeParameter)
+                        and not self.types.arithmetic_operand(dtype) and dtype != "void"
+                        or isinstance(dtype, ConstType) or is_enum_type(dtype)):
+                    raise CppDiagnostic("cpp.unsupported.template-type-arguments",
+                                        "explicit template type arguments require arithmetic types", coord)
+                argument = TemplateArgument("type", dtype, coord)
+            else:
+                expression = self._binary(1, template_argument=True)
+                self._require_value(expression)
+                argument = TemplateArgument("value", expression, coord)
+            argument.tokens = tuple(self.cursor.tokens[start:self.cursor.position])
+            arguments.append(argument)
+            if self._accept(">"):
+                break
+            if self._peek().value == ">>":
+                raise CppDiagnostic("cpp.unsupported.template-argument-syntax",
+                                    "nested template type-ids are not implemented; parenthesize value shifts", self._peek().coord)
+            self._expect(",")
+        return tuple(arguments)
+
     def _call_arguments(self):
         arguments = []
         if not self._accept(")"):
@@ -2287,6 +2377,9 @@ class CppParser:
             if self.member_function is None or self.this_symbol is None:
                 raise CppDiagnostic("cpp.this-outside-member", "this requires a non-static member function", token.coord)
             return self._implicit_object(self.member_function.class_owner, token.coord)
+        if token.value == "const_cast":
+            from pcc.frontends.cpp.const_casts import parse
+            return parse(self, token)
         if token.value == "static_cast":
             self._expect("<")
             dtype = self._abstract_pointer_type(self._type())
@@ -2334,6 +2427,9 @@ class CppParser:
             token = name.identifier
             symbol = self.scope.resolve_name(name)
         elif token.value not in TYPE_WORDS:
+            if token.value == "static_assert" and self.template_function is not None:
+                raise CppDiagnostic("cpp.unsupported.template-static-assert",
+                                    "dependent static assertions require instantiation-time assertion checking", token.coord)
             self._unsupported(token)
         if token.value in TYPE_WORDS or symbol is not None and symbol.kind in ("type", "template-type"):
             dtype = canonical_type([token.value]) if token.value in TYPE_WORDS else symbol.dtype
@@ -2370,6 +2466,13 @@ class CppParser:
                 and any(candidate.owner is not None and candidate.owner.kind == "namespace" and not candidate.owner.namespace_path()
                         for candidate in symbol.overloads)):
             raise CppDiagnostic("cpp.main-use", "C++ does not permit use of main", token.coord)
+        explicit_arguments = None
+        if (symbol is not None and symbol.kind == "function" and self._peek().value == "<"
+                and any(candidate.template_parameters for candidate in symbol.overloads)):
+            explicit_arguments = self._explicit_template_arguments()
+            if self._peek().value != "(":
+                raise CppDiagnostic("cpp.unsupported.template-id-values",
+                                    "a function template-id is implemented only as a direct call", token.coord)
         if self._accept("("):
             if symbol is not None and symbol.kind != "function":
                 raise CppDiagnostic("cpp.not-callable", f"'{token.value}' is not callable", token.coord)
@@ -2394,7 +2497,7 @@ class CppParser:
                     raise CppDiagnostic("cpp.unsupported.dependent-lookup",
                                         "ADL-only dependent call lookup is not implemented", token.coord)
                 raise CppDiagnostic("cpp.undeclared", f"undeclared name '{token.value}'", token.coord)
-            return self._call_expression(symbol, arguments, token.coord)
+            return self._call_expression(symbol, arguments, token.coord, explicit_arguments)
         if symbol is None:
             raise CppDiagnostic("cpp.undeclared", f"undeclared name '{token.value}'", token.coord)
         default_binding = getattr(self, "default_argument_binding", None)
@@ -2402,6 +2505,9 @@ class CppParser:
                 and not self.unevaluated_depth):
             raise CppDiagnostic("cpp.default-argument-parameter-use",
                                 "a parameter cannot be potentially evaluated in a default argument", token.coord)
+        if symbol.kind == "template-value":
+            return Expression(Pattern("template-value", token.coord, symbol.template_parameter),
+                              symbol.dtype, symbol=symbol)
         if symbol.kind == "enumerator":
             result = self._enum_constant_expression(symbol.dtype, symbol.enum_value, token.coord)
             result.decltype_entity = symbol.dtype
@@ -2430,8 +2536,15 @@ class CppParser:
                 result.qualified_member = symbol
             return result
         if self.template_function is not None and getattr(symbol, "namespace_object", False):
+            fact = symbol.constant_fact
+            if (isinstance(symbol.dtype, ConstType) and self.types.integral(symbol.dtype)
+                    and symbol.initialization_complete and fact is not None and fact.status == KNOWN):
+                # Capture this declaration's completed integral constant proof,
+                # not its spelling or a later lookup in the caller's scope.
+                return Expression(Pattern("constant-name", token.coord, (symbol, fact)),
+                                  symbol.dtype, True, symbol, constant_fact=fact)
             raise CppDiagnostic("cpp.unsupported.namespace-object-templates",
-                                "template namespace object bindings are not implemented", token.coord)
+                                "template namespace object bindings require a completed integral constant", token.coord)
         if self.template_function is not None:
             return Expression(Pattern("name", token.coord, symbol), symbol.dtype,
                               symbol.kind == "value", symbol)
@@ -2471,6 +2584,16 @@ class CppParser:
         if kind == "literal":
             literal_kind, value, dtype, integer_value = pattern.value
             return self._literal(literal_kind, value, dtype, coord, integer_value)
+        if kind in ("template-value", "constant-name"):
+            argument = (bindings[pattern.value.index] if kind == "template-value" else pattern.value[1])
+            # Project a checked typed value; bool/character/small integers need
+            # an explicit C cast because an integer AST token alone is int.
+            suffix = {"unsigned int": "u", "long": "l", "unsigned long": "ul",
+                      "long long": "ll", "unsigned long long": "ull"}.get(argument.dtype, "")
+            node = c_ast.Constant("int", str(argument.value) + suffix, coord)
+            typename = c_ast.Typename(None, [], self._scalar_type(None, argument.dtype, coord), coord)
+            return Expression(c_ast.Cast(typename, node, coord), argument.dtype,
+                              constant_fact=known(argument.dtype, argument.value, coord))
         if kind == "name":
             symbol = pattern.value
             return environment[id(symbol)]
@@ -2493,6 +2616,14 @@ class CppParser:
         if kind == "compound-assignment":
             return self._compound_assignment_expression(pattern.value, arguments[0], arguments[1], coord)
         if kind == "call":
+            if isinstance(pattern.value, tuple):
+                group, explicit = pattern.value
+                substituted = tuple(TemplateArgument(
+                    argument.kind,
+                    substitute(argument.value, bindings) if argument.kind == "type" else
+                    self._instantiate_expression(argument.value, bindings, environment),
+                    argument.coord, argument.tokens) for argument in explicit)
+                return self._call_expression(group, arguments, coord, substituted)
             return self._call_expression(pattern.value, arguments, coord)
         raise CppDiagnostic("cpp.internal-pattern", "unknown expression pattern", coord)
 

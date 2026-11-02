@@ -173,7 +173,7 @@ class StaticTraits:
         marker_bounds = []
         for parameter in scope.values():
             self.parameter_bounds[parameter] = frozenset()
-        for name, bounds in function.parameter_bounds:
+        for name, bounds in function.effective_parameter_bounds:
             local, markers = set(), []
             for bound in bounds:
                 if bound.path not in self.traits or bound.path in scope:
@@ -200,7 +200,7 @@ class StaticTraits:
         names = {trait.token.text for trait in self.declarations}
         first = next((bound.token for function in self.checker.functions
                       if function.implementation is None
-                      for _, bounds in function.parameter_bounds for bound in bounds
+                      for _, bounds in function.effective_parameter_bounds for bound in bounds
                       if bound.path in names and not bound.relaxed
                       and bound.path not in {p.text for p in function.type_parameters}), None)
         if first is None:

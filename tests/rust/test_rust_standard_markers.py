@@ -120,7 +120,7 @@ CAPABILITY = (
     ('local-relaxed', 'trait Sized{}fn f<T:?Sized>(){}', 'local/user trait'),
     ('data', 'struct R<T:Copy>{x:T}', 'bounds'),
     ('impl', 'struct R<T>{x:T}impl<T:Copy>R<T>{}', 'bounds'),
-    ('where', 'fn f<T>(x:T)->T where T:Copy{x}', 'where constraints'),
+    # Exact free-function where control retained in test_rust_where_bounds.
     ('dst', 'fn f<T:?Sized>(x:&T){}fn g(x:&[u64]){f(x)}', 'slice types'),
     ('no-core', '#![no_core]fn f<T:Copy>(x:T)->T{x}', 'no_core requires'),
     ('lang', '#[lang="copy"]trait Copy{}', 'unsupported Rust attribute'),
@@ -163,7 +163,7 @@ def test_actual_same_input_marker_check_precedes_owned_phase(name,tmp_path,monke
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 def test_valid_local_trait_and_dst_sources_remain_capability_gaps_not_rust_rejections(tmp_path):
     for name,text,message in CAPABILITY:
-        if name not in {'clone', 'data', 'impl', 'where', 'dst'}:
+        if name not in {'clone', 'data', 'impl', 'dst'}:
             continue
         checked = certify_source(text, tmp_path / name)
         with pytest.raises(RustError, match=message):

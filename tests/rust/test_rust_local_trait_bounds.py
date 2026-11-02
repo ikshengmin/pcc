@@ -156,7 +156,8 @@ CAPABILITY = (
     ('method-local', 'trait A{}struct R{x:u64}impl R{fn f<T:A>(self,x:T)->T{x}}', 'local/user trait bounds on method parameters'),
     ('trait-method-local', 'trait A{}trait B{fn f<T:A>(self,x:T)->T;}', 'local/user trait bounds'),
     ('relaxed-layout', 'trait A{fn read(&self)->u64;}fn unused<T:?Sized+A>(x:&T)->u64{x.read()}', 'relaxed local-trait parameter layouts'),
-    ('where', 'trait A{}fn unused<T>(x:T)->T where T:A{x}', 'where constraints'),
+    # Exact free-function where control retained as an actual-certified
+    # positive in test_rust_where_bounds; this table contains remaining gaps.
     ('blanket-impl', 'trait A{}struct R<T>{x:T}impl<T> A for R<T>{}', 'blanket/generic'),
 )
 

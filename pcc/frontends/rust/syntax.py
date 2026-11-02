@@ -191,6 +191,12 @@ class TypeBound:
     relaxed: bool = False
 
 
+@dataclass(frozen=True)
+class WherePredicate:
+    parameter: Token
+    bounds: tuple[TypeBound, ...]
+
+
 @dataclass
 class Function:
     token: Token
@@ -213,6 +219,23 @@ class Function:
     parameter_bounds: tuple[tuple[Token, tuple[TypeBound, ...]], ...] = ()
     # Abstract trait signature only: never an emitted body or separate instance.
     bound_trait: tuple[str, object] | None = None
+    where_token: Token | None = None
+    where_predicates: tuple[WherePredicate, ...] = ()
+
+    @property
+    def effective_parameter_bounds(self):
+        # Preserve both source forms on the AST. Their obligations accumulate
+        # by declared parameter; a later predicate must never reset an earlier
+        # inline/where constraint. Keep duplicates for relaxed-bound validation.
+        merged = {}
+        groups = list(self.parameter_bounds)
+        groups.extend((predicate.parameter, predicate.bounds) for predicate in self.where_predicates)
+        for parameter, bounds in groups:
+            token, combined = merged.setdefault(parameter.text, (parameter, []))
+            combined.extend(bounds)
+            if len(combined) > 16:
+                raise parameter.error('combined type parameter bounds exceed implementation limit (16)')
+        return tuple((token, tuple(bounds)) for token, bounds in merged.values())
 
     @property
     def owner_parameter_count(self):
@@ -481,19 +504,7 @@ class Parser:
                 raise self.token.error("generic parameter count exceeds implementation limit (16)")
             if self.token.text == ":" and allow_bounds and not lifetime_parameter:
                 self.take()
-                bounds = []
-                while True:
-                    bound_token = self.token
-                    relaxed = self.accept("?")
-                    path = self.name().text
-                    while self.accept("::"):
-                        path += "::" + self.name().text
-                    bounds.append(TypeBound(bound_token, path, relaxed))
-                    if len(bounds) > 16:
-                        raise bound_token.error("type parameter bounds exceed implementation limit (16)")
-                    if not self.accept("+"):
-                        break
-                self.last_parameter_bounds.append((parameters[-1], tuple(bounds)))
+                self.last_parameter_bounds.append((parameters[-1], self.type_parameter_bounds({',', '>'})))
             if self.token.text in {":", "="}:
                 raise self.token.error("generic bounds and default arguments require trait/constraint checking, which is not implemented")
             if self.accept(">"):
@@ -502,6 +513,49 @@ class Parser:
             if self.accept(">"):
                 break
         return tuple(parameters)
+
+    def type_parameter_bounds(self, terminators):
+        bounds = []
+        while self.token.text not in terminators:
+            bound_token = self.token
+            if self.token.kind == 'lifetime':
+                raise self.token.error('lifetime bounds require lifetime solving, which is not implemented')
+            if self.token.text == 'for':
+                raise self.token.error('higher-ranked trait bounds are not implemented')
+            if self.token.text == '(':
+                raise self.token.error('parenthesized trait bounds are not implemented')
+            relaxed = self.accept('?')
+            path = self.name().text
+            while self.accept('::'):
+                path += '::' + self.name().text
+            if self.token.text == '<':
+                raise self.token.error('generic trait bounds and associated projections are not implemented')
+            bounds.append(TypeBound(bound_token, path, relaxed))
+            if len(bounds) > 16:
+                raise bound_token.error('type parameter bounds exceed implementation limit (16)')
+            if not self.accept('+'):
+                break
+        return tuple(bounds)
+
+    def function_where_clause(self, parameters):
+        declared = {parameter.text for parameter in parameters}
+        predicates = []
+        while self.token.text != '{':
+            if self.token.kind == 'lifetime' or self.token.text == 'for':
+                raise self.token.error('lifetime and higher-ranked where predicates are not implemented')
+            if self.token.kind != 'name' or self.token.text not in declared:
+                raise self.token.error('where predicate subjects must be declared type parameters; concrete/compound predicates are not implemented')
+            parameter = self.take()
+            if self.token.text != ':':
+                raise self.token.error('where projections/equality predicates are not implemented; expected a parameter colon')
+            self.take()
+            bounds = self.type_parameter_bounds({',', '{'})
+            predicates.append(WherePredicate(parameter, bounds))
+            if len(predicates) > 64:
+                raise parameter.error('where predicates exceed implementation limit (64)')
+            if not self.accept(','):
+                break
+        return tuple(predicates)
 
     def expression_path(self, token: Token) -> tuple[object, str | None]:
         parts = [token.text]
@@ -892,8 +946,12 @@ class Parser:
                 if self.accept(")"):
                     break
         result = self.type() if self.accept("->") else "()"
+        where_token, where_predicates = None, ()
         if self.token.text == "where":
-            raise self.token.error("generic where constraints require trait checking, which is not implemented")
+            where_token = self.take()
+            if implementation is not None or abi != 'Rust' or no_mangle or declaration:
+                raise where_token.error('where constraints are implemented only on ordinary free-function definitions')
+            where_predicates = self.function_where_clause(parameters)
         if declaration:
             if trait_declaration and self.token.text == "{":
                 raise self.token.error("default trait method bodies are not implemented")
@@ -905,7 +963,8 @@ class Parser:
         return Function(name, params, result, body, abi, public, no_mangle, unsafe,
                         type_parameters=parameters, implementation=implementation, receiver=receiver,
                         lifetime_parameters=lifetime_parameters, explicit_receiver=explicit_receiver, documentation=documentation,
-                        parameter_bounds=parameter_bounds)
+                        parameter_bounds=parameter_bounds,
+                        where_token=where_token, where_predicates=where_predicates)
 
     def block(self, *, function_inner_docs=False) -> Expr:
         token = self.expect("{")

@@ -86,7 +86,7 @@ class StandardMarkers:
     def prepare(self, function, scope):
         for parameter in scope.values():
             self.constraints[parameter] = frozenset({SIZED})
-        for name, bounds in function.parameter_bounds:
+        for name, bounds in function.effective_parameter_bounds:
             parameter = scope[name.text]
             explicit, relaxed = set(), False
             for bound in bounds:

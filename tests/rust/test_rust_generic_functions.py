@@ -45,7 +45,8 @@ INVALID = [
     ('fn id<T>(x:T)->T{x} fn answer(){let id=1;id::<i64>(2);}', 'unshadowed'),
     ('fn bad<T:Copy>(x:T)->T{x}', 'standard marker bounds require an actual'),
     ('fn bad<T=i64>(x:T)->T{x}', 'bounds and default'),
-    ('fn bad<T>(x:T)->T where T:Copy{x}', 'where constraints'),
+    # The exact prior free-function where control is now an actual-certified
+    # positive in test_rust_where_bounds; unsupported owner contexts stay gated.
     ('fn bad<const N:u64>(){}', 'const generic'),
     ('extern "C" fn bad<T>(x:T){}', 'foreign/export ABI'),
     ('#[no_mangle] fn bad<T>(x:T){}', 'foreign/export ABI'),

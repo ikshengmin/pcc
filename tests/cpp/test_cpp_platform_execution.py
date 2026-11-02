@@ -38,6 +38,7 @@ from tests.cpp.test_cpp_anonymous_class_enums import SINGLE_PROGRAMS as ANONYMOU
 from tests.cpp.test_cpp_pointer_additive import CASES as POINTER_OFFSET_PROGRAMS
 from tests.cpp.test_cpp_default_arguments import CASES as DEFAULT_ARGUMENT_PROGRAMS
 from tests.cpp.test_cpp_lvalue_references import CASES as LVALUE_REFERENCE_PROGRAMS
+from tests.cpp.test_cpp_const_casts import CASES as CONST_CAST_PROGRAMS
 
 
 CASES = tuple(
@@ -82,6 +83,13 @@ LVALUE_REFERENCE_CASES = tuple(
                  'mutable-reference-overload', 'top-level-const-pointer-reference')
 )
 CASES += LVALUE_REFERENCE_CASES
+
+CONST_CAST_CASES = tuple(
+    ('const-cast-' + name, dict(CONST_CAST_PROGRAMS)[name], 42)
+    for name in ('original-interned-body', 'pointer-to-const-pointer-level',
+                 'pointer-to-array-shape', 'typed-null-pointer')
+)
+CASES += CONST_CAST_CASES
 
 
 def _forbidden_process(*args, **kwargs):

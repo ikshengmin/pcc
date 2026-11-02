@@ -293,7 +293,7 @@ class Scope:
             raise CppDiagnostic("cpp.using-scoped-enumerator",
                                 "C++17 using-declarations cannot name a scoped enumerator", coord)
         hidden = self.lookup_lexical(symbol.name)
-        if hidden is not None and hidden.kind == "template-type":
+        if hidden is not None and hidden.kind in ("template-type", "template-value"):
             raise CppDiagnostic("cpp.template-parameter-shadowing",
                                 "using-declaration shadows a template parameter", coord)
         previous = self.names.get(symbol.name)
@@ -326,7 +326,7 @@ class Scope:
         if symbol.name in self.forbidden_redeclarations:
             raise CppDiagnostic("cpp.redeclaration", "for-init name redeclared in outermost loop body", symbol.coord)
         hidden = self.lookup_lexical(symbol.name)
-        if hidden is not None and hidden.kind == "template-type":
+        if hidden is not None and hidden.kind in ("template-type", "template-value"):
             raise CppDiagnostic("cpp.template-parameter-shadowing",
                                 f"declaration shadows template parameter '{symbol.name}'", symbol.coord)
         previous = self.names.get(symbol.name)
@@ -539,7 +539,8 @@ def argument_dependent_lookup(name, arguments, ordinary, coord):
     return Scope._merge(candidates, name, coord)
 
 
-def resolve_overload(group, arguments, types, coord, null_constants=None, lvalues=None):
+def resolve_overload(group, arguments, types, coord, null_constants=None, lvalues=None,
+                     explicit_arguments=None):
     """Select a unique best viable candidate, using a per-argument partial order.
 
     Summing conversion costs is wrong: better on one argument and worse on
@@ -562,7 +563,10 @@ def resolve_overload(group, arguments, types, coord, null_constants=None, lvalue
         raise CppDiagnostic("cpp.unsupported.pointer-templates",
                             "pointer-involving template overload sets are not implemented", coord)
     viable = []
+    binding_errors = []
     for candidate in group.overloads:
+        if explicit_arguments is not None and not candidate.template_parameters:
+            continue
         count = len(candidate.parameters)
         if len(arguments) < count:
             defaults = getattr(candidate, "default_arguments", ())
@@ -571,7 +575,11 @@ def resolve_overload(group, arguments, types, coord, null_constants=None, lvalue
         elif len(arguments) > count and not candidate.variadic:
             continue
         if candidate.template_parameters:
-            bindings = deduce(candidate, arguments)
+            try:
+                bindings = deduce(candidate, arguments, explicit_arguments, types)
+            except CppDiagnostic as error:
+                binding_errors.append(error)
+                continue
             if bindings is None:
                 continue
             origin = candidate
@@ -583,6 +591,7 @@ def resolve_overload(group, arguments, types, coord, null_constants=None, lvalue
                                    parameters=tuple(substitute(p, bindings) for p in origin.parameters))
                 candidate.template_origin = origin
                 candidate.template_arguments = bindings
+                candidate.explicit_template_arguments = explicit_arguments
         ranks = []
         for index, (source, destination, null) in enumerate(zip(arguments, candidate.parameters, null_constants)):
             if isinstance(destination, ReferenceType):
@@ -598,6 +607,8 @@ def resolve_overload(group, arguments, types, coord, null_constants=None, lvalue
         if len(ranks) == len(arguments):
             viable.append((candidate, ranks))
     if not viable:
+        if binding_errors and all(error.code == binding_errors[0].code for error in binding_errors):
+            raise binding_errors[0]
         raise CppDiagnostic("cpp.no-viable-overload",
                             f"no viable overload for '{group.name}'", coord)
     best = []
