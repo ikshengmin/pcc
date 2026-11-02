@@ -153,9 +153,8 @@ REFERENCE_INVALID = (
     ('move-not-borrow-bypass', 'trait Read{fn read(&self)->u64;}fn unused<T:Read>(x:T){let moved=x;x.read();}', '', 'E0382'),
 )
 CAPABILITY = (
-    # Exact inherent method-local control moved to the certified positives in
-    # test_rust_inherent_local_bounds; trait method contracts stay unsupported.
-    ('trait-method-local', 'trait A{}trait B{fn f<T:A>(self,x:T)->T;}', 'local/user trait bounds'),
+    # Exact method-local controls are retained as certified positives in
+    # test_rust_inherent_local_bounds and test_rust_trait_local_contracts.
     ('relaxed-layout', 'trait A{fn read(&self)->u64;}fn unused<T:?Sized+A>(x:&T)->u64{x.read()}', 'relaxed local-trait parameter layouts'),
     # Exact free-function where control retained as an actual-certified
     # positive in test_rust_where_bounds; this table contains remaining gaps.

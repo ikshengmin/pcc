@@ -20,6 +20,10 @@ class StaticTraits:
         self.method_parameters = {}
         self.signatures = {}
         self.parameter_bounds = {}
+        # An implementation may declare fewer obligations than its trait.
+        # Calls must retain the required contract without granting those
+        # extra assumptions to the implementation's abstract body.
+        self.call_bounds = {}
 
     def restricted_signature(self, function):
         if function.lifetime_parameters:
@@ -44,17 +48,23 @@ class StaticTraits:
                 raise token.error('supertraits require declared local traits; external/builtin trait loading is not implemented')
             return path
         self.hierarchy = TraitHierarchy(declarations, parent)
-        impl_tokens = {}
+        # All trait names/members are identities before any signature bounds
+        # are resolved: a method may mention its own or a later local trait.
         for trait in self.declarations:
             name = trait.token.text
             if name in self.traits or name in checker.generics.definitions or name in PRIMITIVES or name == 'Self':
                 raise trait.token.error('duplicate or reserved trait type name')
             methods = {}
             for function in trait.methods:
-                self.restricted_signature(function)
                 if function.token.text in methods:
                     raise function.token.error('duplicate trait associated item')
                 methods[function.token.text] = function
+            self.traits[name] = methods
+        impl_tokens = {}
+        for trait in self.declarations:
+            name = trait.token.text
+            for function in trait.methods:
+                self.restricted_signature(function)
                 scope = {'Self': TypeParameter('trait ' + name, 0, 'Self')}
                 for index, parameter in enumerate(function.type_parameters, 1):
                     if parameter.text in scope or parameter.text in PRIMITIVES:
@@ -64,7 +74,9 @@ class StaticTraits:
                 # Self is intentionally NOT a method type parameter and must
                 # not acquire the implicit Sized default from prepare().
                 method_scope = {p.text: scope[p.text] for p in function.type_parameters}
-                checker.standard_markers.prepare(function, method_scope)
+                marker_bounds = self.prepare_function_bounds(function, method_scope)
+                checker.standard_markers.prepare(replace(function, parameter_bounds=marker_bounds,
+                                                          where_predicates=()), method_scope)
                 self.method_parameters[name, function.token.text] = tuple(method_scope.values())
                 checker.type_scope, checker.abstract_function = scope, True
                 # Unlike ordinary type parameters, trait Self is not implicitly
@@ -97,7 +109,6 @@ class StaticTraits:
                     result=checker.generics.normalize(function.result, function.token))
                 self.signatures[name, function.token.text] = scope['Self'], signature
                 checker.function_generics.parameters[signature.declaration_name] = tuple(method_scope.values())
-            self.traits[name] = methods
         checker.type_scope, checker.abstract_function = {}, False
         for index, implementation in enumerate(self.implementations):
             if implementation.trait is None:
@@ -152,7 +163,9 @@ class StaticTraits:
                 constraints = checker.standard_markers.constraints
                 contracts = [(constraints[required_parameter], constraints[parameter])
                              for required_parameter, parameter in zip(required_parameters, parameters)]
-                if any(not actual <= expected for expected, actual in contracts):
+                local_contracts = [(self.parameter_bounds[required_parameter], self.parameter_bounds[parameter])
+                                   for required_parameter, parameter in zip(required_parameters, parameters)]
+                if any(not actual <= expected for expected, actual in contracts + local_contracts):
                     raise function.token.error('trait implementation method bounds are stricter than the trait contract')
                 # Selection always produces the implementation function, but
                 # a call through dot/type/trait-qualified syntax must retain
@@ -161,6 +174,9 @@ class StaticTraits:
                 # inject stronger trait assumptions into that body.
                 checker.standard_markers.call_constraints.update(
                     (parameter, constraints[required_parameter])
+                    for required_parameter, parameter in zip(required_parameters, parameters))
+                self.call_bounds.update(
+                    (parameter, self.parameter_bounds[required_parameter])
                     for required_parameter, parameter in zip(required_parameters, parameters))
                 scope = {p.text: value for p, value in zip(required.type_parameters, parameters)}
                 scope['Self'] = owner
@@ -181,13 +197,6 @@ class StaticTraits:
                     continue
                 if bound.relaxed:
                     raise bound.token.error('local/user trait bounds cannot be relaxed; only canonical ?Sized is supported')
-                if function.implementation is not None:
-                    if function.implementation.trait is not None:
-                        raise bound.token.error('local/user trait bounds on trait method parameters are not implemented')
-                    # An inherent method's owner prefix has declaration-bound
-                    # identities just like its suffix. Its predicates remain
-                    # local to this method and are checked at every selection;
-                    # they do not make an unconstrained sibling method valid.
                 if self.checker.module_resolution is not None:
                     raise bound.token.error('module-scoped local trait bounds are not implemented')
                 local.add(bound.path)
@@ -203,8 +212,9 @@ class StaticTraits:
         # check or concrete scheduling. The semantic pass below resolves the
         # bound and checks all obligations, including unused declarations.
         names = {trait.token.text for trait in self.declarations}
-        first = next((bound.token for function in self.checker.functions
-                      if function.implementation is None or function.implementation.trait is None
+        functions = list(self.checker.functions)
+        functions.extend(function for trait in self.declarations for function in trait.methods)
+        first = next((bound.token for function in functions
                       for _, bounds in function.effective_parameter_bounds for bound in bounds
                       if bound.path in names and not bound.relaxed
                       and bound.path not in {p.text for p in function.type_parameters}), None)
@@ -225,7 +235,7 @@ class StaticTraits:
 
     def check_function_call(self, parameters, arguments, token):
         for parameter, argument in zip(parameters, arguments):
-            for trait in sorted(self.parameter_bounds.get(parameter, ())):
+            for trait in sorted(self.call_bounds.get(parameter, self.parameter_bounds.get(parameter, ()))):
                 self.require(argument, trait, token)
 
     def abstract_method(self, owner, trait, name, token):
