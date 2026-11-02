@@ -171,7 +171,13 @@ passes 54 checks including emitted sorting, duplicate compaction and pin-only
 refresh; 16 dispatcher cases verify automatic/explicit step order and failed
 stop handling. Two object-closure probes pass after registering the new raw
 ABI signature (self/LLVM emission with an external assembler, labeled
-reference checks). Full-runtime moving-step validation remains pending.
+reference checks). The fresh `46b65d239` runtime passes the complete dispatcher
+file (8 checks) and the owned native selected-object regression: a list held
+only in a volatile C local enters the relocation set, then survives a real
+step at the same raw address with a current conservative pin. The same probe
+on the prior word-index runtime returns code 14, observing an installed
+forwarding entry; the corrected runtime returns 0. This verifies this GC4
+moving boundary, not completion of GC1-4 count removal.
 
 An additional exception-root probe exposes an existing builtin-exception
 limitation: `ValueError(shared_list, index).args[0] is shared_list` fails under
