@@ -8,7 +8,7 @@ https://timsong-cpp.github.io/cppwp/n4659/dcl.init.aggr
 https://timsong-cpp.github.io/cppwp/n4659/class.ctor
 
 Only explicit D1s with source-proven closed cleanup chains are admitted.
-Nontrivial member C1 construction, implicit D1 synthesis, unknown effects,
+Unknown-effect member C1 construction, implicit D1 synthesis, unknown effects,
 exception cleanup, arrays, bases and virtual destruction remain deferred.
 Owned native/reference obligations use fixed-target direct x86_64 ELF; this
 is not native pcc1, platform merged-stackmap or whole-project acceptance.
@@ -147,6 +147,9 @@ DECLARATION_CONTROLS = (
     ('nonaggregate-public-d1-empty-list-without-bodies', NONAGGREGATE_PUBLIC_DECLARATIONS + 'void f(){O o{};}'),
 )
 
+# Exact previously deferred source, now a positive declaration/body obligation.
+ORIGINAL_CLOSED_MEMBER_C1 = 'struct M{M(){}~M(){}};struct O{M member;O(){}~O(){}};'
+
 INVALID = (
     ('private-member-d1-inline', 'class M{~M(){}};struct O{M member;~O(){}};', 'cpp.member-access'),
     ('private-member-d1-outside', 'class M{~M(){}};struct O{M member;~O();};O::~O(){}', 'cpp.member-access'),
@@ -180,7 +183,6 @@ DEFERRED = (
     ('unknown-body-local-d1-call', 'void effect();struct Local{~Local(){effect();}};struct M{~M(){}};'
      'struct O{M member;~O(){Local local;}};', 'cpp.unsupported.destructor-subobjects'),
     ('body-local-constructor-call', 'struct Local{Local(){}};struct M{~M(){}};struct O{M member;~O(){Local local;}};', 'cpp.unsupported.destructor-subobjects'),
-    ('member-c1-still-needs-failure-cleanup', 'struct M{M(){}~M(){}};struct O{M member;O(){}~O(){}};', 'cpp.unsupported.destructor-subobjects'),
     ('aggregate-initializer-call-after-member', 'int effect();struct M{~M(){}};struct O{M member;int n;~O(){}};'
      'void f(){O o{{},effect()};}', 'cpp.unsupported.destructor-subobjects'),
     ('aggregate-initializer-default-argument-call', 'int effect();int use(int n=effect());'
@@ -220,6 +222,14 @@ def test_member_d1_prototype_does_not_require_or_invent_a_body_proof():
     destructor = parser.scope.names['O'].dtype.definition.destructor
     assert not destructor.defined
     assert not getattr(destructor, 'closed_destruction_body', False)
+
+
+def test_original_closed_member_c1_source_is_preserved_as_positive():
+    parser = CppParser()
+    parser.parse(ORIGINAL_CLOSED_MEMBER_C1)
+    owner = parser.scope.names['O'].dtype.definition
+    assert owner.constructors.overloads[0].closed_construction_body
+    assert not owner.constructors.overloads[0].closed_normal_body
 
 
 @pytest.mark.parametrize('name,source', DECLARATION_CONTROLS, ids=[row[0] for row in DECLARATION_CONTROLS])

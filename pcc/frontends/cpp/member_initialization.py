@@ -1,9 +1,10 @@
-"""Declared C1 construction of trivially destructible class members.
+"""Declared C1 construction with bounded, source-proven member lifetimes.
 
 N4659 [class.base.init]/7,9,13: initialize the actual member subobject in
 declaration order, before the enclosing constructor body. This is neither
 aggregate assignment nor synthesis of an implicit special member. Arrays,
-implicit member constructors and non-trivial destruction remain explicit gaps.
+implicit special members and unknown construction effects remain explicit gaps.
+Members with declared D1s require the enclosing constructor's closed-path proof.
 """
 
 from pcc.frontends.c.ast import c_ast
@@ -31,17 +32,21 @@ def requires_destruction(dtype):
 
 
 def require_declared_constructor(member):
-    if requires_destruction(member.dtype):
+    definition = unqualified(member.dtype).definition
+    if requires_destruction(member.dtype) and definition.destructor is None:
         raise CppDiagnostic("cpp.unsupported.destructor-subobjects",
-                            "class member construction requires non-trivial member destruction support", member.coord)
-    if not unqualified(member.dtype).definition.constructors.overloads:
+                            "member construction requires a declared destructor, not implicit D1 synthesis", member.coord)
+    if not definition.constructors.overloads:
         raise CppDiagnostic("cpp.unsupported.constructor-subobjects",
                             "implicit member default/value/copy construction requires special-member semantics", member.coord)
 
 
-def initialize(parser, member, this, initializer):
+def initialize(parser, member, this, initializer, *, construction_calls=None):
     """Call a selected C1 directly at the member's address; never zero/copy it."""
     require_declared_constructor(member)
+    if requires_destruction(member.dtype) and construction_calls is None:
+        raise CppDiagnostic("cpp.unsupported.destructor-subobjects",
+                            "member construction requires an enclosing closed-construction proof", member.coord)
     from pcc.frontends.cpp.constructors import constructor_call
     field = c_ast.StructRef(c_ast.ID(this.c_name, member.coord), "->",
                            c_ast.ID(member.c_name, member.coord), member.coord)
@@ -50,4 +55,5 @@ def initialize(parser, member, this, initializer):
     # Every admitted declared C1 is user-provided (defaulted/deleted C1 forms
     # remain gated). Both omitted/default initialization and explicit () value
     # initialization therefore call it, with no preceding whole-object zeroing.
-    return constructor_call(parser, unqualified(member.dtype), arguments, address, member.coord)
+    return constructor_call(parser, unqualified(member.dtype), arguments, address, member.coord,
+                            construction_calls=construction_calls)

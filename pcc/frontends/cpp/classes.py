@@ -4,7 +4,8 @@ This layer owns class declaration/completeness, non-static data members and
 access. It does not erase class syntax or give a C struct C++ constructor
 semantics. Implicit trivial special members and bounded complete-object
 constructors use this layout; constructors.py owns explicit construction of
-scalar/pointer subobjects and declared C1 class members with trivial destruction.
+scalar/pointer subobjects and declared C1 members with bounded closed lifetime
+proofs when destruction is nontrivial.
 destructors.py and lifetimes.py own bounded normal exits and explicitly
 declared member destruction. Bases, virtual functions, unions, implicit
 non-trivial special members and exception unwinding remain gaps.

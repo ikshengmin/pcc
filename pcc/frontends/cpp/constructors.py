@@ -2,7 +2,8 @@
 
 N4659 [class.ctor], [class.base.init], [dcl.init], [over.match.ctor].
 Out-of-class bodies and delayed in-class bodies share scalar/pointer member
-initialization and declared C1 calls for trivially destructible class members.
+initialization and declared C1 calls for class members. Nontrivial member
+lifetimes require explicit D1s and a closed construction proof over all effects.
 In-class definitions additionally require the shared external-ODR
 linkage contract before emission. No base-object C2, unwind, copy, or dynamic
 initialization semantics are synthesized.
@@ -196,13 +197,14 @@ def parse_member_initializers(parser, definition):
     return initializers
 
 
-def lower_member_initializers(parser, definition, this, initializers):
+def lower_member_initializers(parser, definition, this, initializers, *, construction_calls=None):
     """Initialize concrete fields in declaration order, without zeroing omissions."""
     stores = []
     for member in definition.members:
         if is_class_type(member.dtype):
             from pcc.frontends.cpp.member_initialization import initialize
-            stores.append(initialize(parser, member, this, initializers.get(member)))
+            stores.append(initialize(parser, member, this, initializers.get(member),
+                                     construction_calls=construction_calls))
             continue
         if member not in initializers and getattr(member, 'default_initializer_tokens', None) is not None:
             from pcc.frontends.cpp.default_member_initializers import value as default_value
@@ -227,17 +229,29 @@ def bind_constructor_body(parser, definition, symbol, parameter_scope, declarati
     """Bind a body in its original parameter scope against a completed class."""
     parent = parser.scope
     owner = definition.dtype
+    from pcc.frontends.cpp.destructors import member_destructors
+    selected_destructors = member_destructors(definition, parameter_scope)
+    if selected_destructors and definition.destructor is None:
+        raise CppDiagnostic("cpp.unsupported.destructor-subobjects",
+                            "member construction requires a declared enclosing destructor", coord)
+    construction_calls = {}
     previous_member, previous_this, previous_return = parser.member_function, parser.this_symbol, parser.return_type
     parser.scope = parameter_scope
     parser.member_function, parser.this_symbol, parser.return_type = symbol, this, "void"
     try:
         initializers = parse_member_initializers(parser, definition)
-        stores = lower_member_initializers(parser, definition, this, initializers)
+        stores = lower_member_initializers(parser, definition, this, initializers,
+                                          construction_calls=construction_calls)
         body = parser._block(new_scope=False)
         body.block_items = stores + body.block_items
     finally:
         parser.scope = parent
         parser.member_function, parser.this_symbol, parser.return_type = previous_member, previous_this, previous_return
+    closed = closed_construction_body(body, construction_calls)
+    if selected_destructors and not closed:
+        raise CppDiagnostic("cpp.unsupported.destructor-subobjects",
+                            "unknown construction effects require partial member exception cleanup", coord)
+    symbol.closed_construction_body = closed
     symbol.closed_normal_body = call_free_body(body)
     return c_ast.FuncDef(declaration, None, body, coord)
 
@@ -370,8 +384,27 @@ def call_free_body(body):
     return True
 
 
+def closed_construction_body(body, construction_calls):
+    """Prove exact generated member C1 chains, including every argument effect.
+
+    Expanded defaults, scalar stores and the completed body are all visited.
+    A permitted C1 node never hides its address/argument descendants. Names,
+    prototypes and ordinary user calls cannot establish this proof. This is
+    separate from placement's deliberately call-free closed_normal_body.
+    """
+    pending = [body]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, c_ast.FuncCall):
+            selected = construction_calls.get(node)
+            if selected is None or not getattr(selected, "closed_construction_body", False):
+                return False
+        pending.extend(child for _name, child in node.children())
+    return True
+
+
 def constructor_call(parser, dtype, arguments, address, coord, require_closed=False, *,
-                     direct_list=False, copy_initialization=False):
+                     direct_list=False, copy_initialization=False, construction_calls=None):
     """Select the existing C1 at an already-evaluated complete-object address."""
     group = dtype.definition.constructors
     if (len(arguments) == 1 and unqualified(arguments[0].dtype) is dtype
@@ -393,6 +426,11 @@ def constructor_call(parser, dtype, arguments, address, coord, require_closed=Fa
     parser.scope.check_member_access(selected, coord)
     from pcc.frontends.cpp.class_template_members import request_body
     request_body(parser, selected, coord)
+    from pcc.frontends.cpp.member_initialization import requires_destruction
+    member_cleanup = any(requires_destruction(member.dtype) for member in dtype.definition.members)
+    if member_cleanup and not getattr(selected, "closed_construction_body", False):
+        raise CppDiagnostic("cpp.unsupported.destructor-subobjects",
+                            "member-owning constructor call requires a bound closed-construction proof", coord)
     if require_closed and not getattr(selected, 'closed_normal_body', False):
         raise CppDiagnostic('cpp.unsupported.placement-constructor-effects',
                             'unknown constructor effects need exception/cleanup integration', coord)
@@ -418,9 +456,14 @@ def constructor_call(parser, dtype, arguments, address, coord, require_closed=Fa
         converted = [convert_constructor_argument(parser, arg, target, coord)
                      for arg, target in zip(arguments, selected.parameters)]
     call = c_ast.FuncCall(c_ast.ID(selected.c_name, coord), c_ast.ExprList([address] + converted, coord), coord)
-    if preparation:
-        return c_ast.StmtExpr(c_ast.Compound(preparation + [call], coord), coord)
-    return call
+    invocation = (c_ast.StmtExpr(c_ast.Compound(preparation + [call], coord), coord)
+                  if preparation else call)
+    if member_cleanup and not closed_construction_body(invocation, {call: selected}):
+        raise CppDiagnostic("cpp.unsupported.destructor-subobjects",
+                            "member-owning construction requires closed argument and default effects", coord)
+    if construction_calls is not None:
+        construction_calls[call] = selected
+    return invocation
 
 
 def convert_constructor_argument(parser, expression, dtype, coord):
