@@ -270,6 +270,9 @@ class Lowerer:
             return
         if kind == "range":
             ranged = statement.exprs[0]
+            if is_string(ranged.type):
+                self.string_range(statement)
+                return
             dtype = underlying(ranged.type)
             pointer_range = isinstance(dtype, PointerType)
             if pointer_range:
@@ -600,6 +603,124 @@ class Lowerer:
         result.add_incoming(ir.Constant(ir.IntType(1), 1), equal_block)
         result.add_incoming(ir.Constant(ir.IntType(1), 0), unequal)
         return result
+
+    def string_range(self, statement):
+        """Iterate the captured immutable bytes, not the source variable.
+
+        Byte offsets and rune values use the ordinary assignment path, so LHS
+        address effects precede stores and run only on actual iterations.
+        The hidden offset/decoded width cannot be mutated by the source body.
+        """
+        value = self.expression(statement.exprs[0])
+        pointer = self.builder.extract_value(value, 0)
+        length = self.builder.extract_value(value, 1)
+        offset_slot = self.temps[id(statement.range_index)]
+        self.builder.store(ir.Constant(ir.IntType(64), 0), offset_slot)
+        check = self.function.append_basic_block("string.range.check")
+        body = self.function.append_basic_block("string.range.body")
+        post = self.function.append_basic_block("string.range.post")
+        done = self.function.append_basic_block("string.range.done")
+        self.builder.branch(check)
+        self.builder.position_at_end(check)
+        offset = self.builder.load(offset_slot)
+        self.builder.cbranch(self.builder.icmp_unsigned("<", offset, length), body, done)
+        self.builder.position_at_end(body)
+        rune, width = self.string_decode_rune(pointer, length, offset)
+        if statement.init is not None:
+            for expr, value in zip(statement.init.exprs, (offset, rune)):
+                self.saved_values[id(expr)] = value
+            self.statement(statement.init)
+            for expr in statement.init.exprs:
+                del self.saved_values[id(expr)]
+        self.loops.append((post, done))
+        self.breaks.append(done)
+        self.statements(statement.body)
+        self.breaks.pop()
+        self.loops.pop()
+        if not self.builder.block.is_terminated:
+            self.builder.branch(post)
+        self.builder.position_at_end(post)
+        self.builder.store(self.builder.add(offset, width), offset_slot)
+        self.builder.branch(check)
+        self.builder.position_at_end(done)
+
+    def string_decode_rune(self, pointer, length, offset):
+        """Emit a bounded UTF-8 scalar decoder; caller proved offset < length.
+
+        Every continuation load is dominated by a remaining-length check.
+        Reject overlong encodings, surrogates and values above U+10FFFF.
+        All malformed/truncated sequences yield U+FFFD and consume ONE byte,
+        so a later valid byte (including NUL) is never swallowed with an error.
+        This uses public IR only, not a language runtime or host decoder.
+        """
+        byte_type, rune_type, size_type = ir.IntType(8), ir.IntType(32), ir.IntType(64)
+        first = self.builder.load(self.builder.gep(pointer, [offset]))
+        ascii_block = self.function.append_basic_block("string.rune.ascii")
+        multibyte = self.function.append_basic_block("string.rune.multibyte")
+        invalid = self.function.append_basic_block("string.rune.invalid")
+        done = self.function.append_basic_block("string.rune.done")
+        self.builder.cbranch(self.builder.icmp_unsigned("<", first, ir.Constant(byte_type, 0x80)),
+                             ascii_block, multibyte)
+        self.builder.position_at_end(ascii_block)
+        ascii_rune = self.builder.zext(first, rune_type)
+        self.builder.branch(done)
+        incoming = [(ascii_rune, 1, ascii_block)]
+        self.builder.position_at_end(multibyte)
+        remaining = self.builder.sub(length, offset)
+        for width, low, high, mask, minimum in (
+            (2, 0xc2, 0xdf, 0x1f, 0x80),
+            (3, 0xe0, 0xef, 0x0f, 0x800),
+            (4, 0xf0, 0xf4, 0x07, 0x10000),
+        ):
+            available = self.function.append_basic_block("string.rune.available")
+            decode = self.function.append_basic_block("string.rune.decode")
+            accepted = self.function.append_basic_block("string.rune.accepted")
+            following = (self.function.append_basic_block("string.rune.next")
+                         if width < 4 else invalid)
+            lead = self.builder.and_(
+                self.builder.icmp_unsigned(">=", first, ir.Constant(byte_type, low)),
+                self.builder.icmp_unsigned("<=", first, ir.Constant(byte_type, high)))
+            self.builder.cbranch(lead, available, following)
+            self.builder.position_at_end(available)
+            self.builder.cbranch(
+                self.builder.icmp_unsigned(">=", remaining, ir.Constant(size_type, width)),
+                decode, invalid)
+            self.builder.position_at_end(decode)
+            rune = self.builder.zext(self.builder.and_(first, ir.Constant(byte_type, mask)), rune_type)
+            valid = ir.Constant(ir.IntType(1), 1)
+            for index in range(1, width):
+                at = self.builder.add(offset, ir.Constant(size_type, index))
+                byte = self.builder.load(self.builder.gep(pointer, [at]))
+                continuation = self.builder.and_(
+                    self.builder.icmp_unsigned(">=", byte, ir.Constant(byte_type, 0x80)),
+                    self.builder.icmp_unsigned("<=", byte, ir.Constant(byte_type, 0xbf)))
+                valid = self.builder.and_(valid, continuation)
+                bits = self.builder.zext(self.builder.and_(byte, ir.Constant(byte_type, 0x3f)), rune_type)
+                rune = self.builder.or_(self.builder.shl(rune, ir.Constant(rune_type, 6)), bits)
+            valid = self.builder.and_(valid, self.builder.icmp_unsigned(">=", rune, ir.Constant(rune_type, minimum)))
+            if width == 3:
+                scalar = self.builder.or_(
+                    self.builder.icmp_unsigned("<", rune, ir.Constant(rune_type, 0xd800)),
+                    self.builder.icmp_unsigned(">", rune, ir.Constant(rune_type, 0xdfff)))
+                valid = self.builder.and_(valid, scalar)
+            if width == 4:
+                valid = self.builder.and_(valid, self.builder.icmp_unsigned("<=", rune, ir.Constant(rune_type, 0x10ffff)))
+            self.builder.cbranch(valid, accepted, invalid)
+            self.builder.position_at_end(accepted)
+            self.builder.branch(done)
+            incoming.append((rune, width, accepted))
+            if width < 4:
+                self.builder.position_at_end(following)
+        self.builder.position_at_end(invalid)
+        self.builder.branch(done)
+        incoming.append((ir.Constant(rune_type, 0xfffd), 1, invalid))
+        self.builder.position_at_end(done)
+        result = self.builder.phi(rune_type)
+        size = self.builder.phi(size_type)
+        for rune, width, block in incoming:
+            result.add_incoming(rune, block)
+            size.add_incoming(ir.Constant(size_type, width), block)
+        return result, size
 
     def string_compare(self, expr):
         left, right = [self.expression(item) for item in expr.args]

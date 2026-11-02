@@ -103,7 +103,13 @@ UNSUPPORTED = [
 ]
 
 
-@pytest.mark.parametrize('code,original', UNSUPPORTED)
+# Preserve this original verbatim; test_string_range owns its positive/native/
+# same-input reference obligations. The remaining pointer frontiers stay live.
+GRADUATED_STRING_RANGE = ('non-array-range', source('', 'for range "abc"{}'))
+ACTIVE_UNSUPPORTED = [case for case in UNSUPPORTED if case != GRADUATED_STRING_RANGE]
+
+
+@pytest.mark.parametrize('code,original', ACTIVE_UNSUPPORTED)
 def test_valid_unsupported_pointer_array_frontiers_keep_exact_inputs(code, original, monkeypatch):
     from pcc.frontends.go.lowering import Lowerer
     monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('unsupported range reached IR'))
@@ -191,7 +197,7 @@ def test_official_go_rejects_identical_invalid_pointer_array_ranges(body, messag
 @pytest.mark.integration
 @pytest.mark.pcc_gate(env='PCC_GO_REFERENCE')
 @pytest.mark.xdist_group(name='go-reference')
-@pytest.mark.parametrize('code,original', UNSUPPORTED)
+@pytest.mark.parametrize('code,original', ACTIVE_UNSUPPORTED)
 def test_official_go_builds_identical_unsupported_range_frontiers_without_execution(code, original, tmp_path):
     with pytest.raises(UnsupportedGo) as caught:
         compile_go(original)

@@ -50,7 +50,15 @@ INVALID = [
 ]
 
 
-@pytest.mark.parametrize('body,declarations,message', INVALID)
+# Preserve the exact original and all legacy list positions for the reference
+# controls. The string input now has positive/native/same-source obligations
+# in test_string_range.py, rather than an expected unsupported diagnostic.
+GRADUATED_STRING_RANGE = ('for range "abc"{}', '', 'fixed array')
+
+
+@pytest.mark.parametrize('body,declarations,message', [
+    case for case in INVALID if case != GRADUATED_STRING_RANGE
+])
 def test_invalid_range_and_length_source_fails_before_ir(body, declarations, message, monkeypatch):
     from pcc.frontends.go.lowering import Lowerer
     monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('invalid range reached IR'))

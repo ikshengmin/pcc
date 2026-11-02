@@ -789,10 +789,15 @@ class Analyzer:
                     # pointer, never a snapshot of the pointed-to array.
                     self.function.temporaries.append(ranged)
                 value_types = ("int", array_type.element)
+            elif is_string(ranged.type):
+                if len(statement.targets) > 2:
+                    raise GoDiagnostic(statement.token, "string range permits at most two iteration variables")
+                # Capture the immutable byte descriptor once. Decoding needs
+                # neither allocation nor the arbitrary-index panic contract.
+                statement.evaluate_range = True
+                value_types = ("int", "int32")
             else:
-                if is_string(ranged.type):
-                    raise UnsupportedGo(ranged.token, "go.unsupported.non-array-range", "range currently requires a fixed array or integer, or a pointer to a fixed array; other iterator/runtime contracts are not implemented")
-                raise GoDiagnostic(ranged.token, "range currently requires a fixed array or integer, or a pointer to a fixed array; other iterator/runtime contracts are not implemented")
+                raise GoDiagnostic(ranged.token, "range currently requires a fixed array or integer, a string, or a pointer to a fixed array; other iterator/runtime contracts are not implemented")
             statement.range_index = Expr("range_index", statement.token, type=value_types[0])
             self.function.temporaries.append(statement.range_index)
             values = [Expr("range_value", statement.token, type=typ) for typ in value_types][:len(statement.targets)]

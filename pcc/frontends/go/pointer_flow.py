@@ -10,7 +10,9 @@ from dataclasses import dataclass, field
 
 from pcc.frontends.go.diagnostics import UnsupportedGo
 from pcc.frontends.go.records import underlying
-from pcc.frontends.go.types import ArrayType, PointerType, Results, result_types
+from pcc.frontends.go.types import (
+    ArrayType, PointerType, Results, is_string, result_types,
+)
 
 
 NIL, NONNULL, UNKNOWN = 1, 2, 3
@@ -124,16 +126,20 @@ class Graph:
             return (self.statement(statement.init, header, breaking, continuing, falling)
                     if statement.init is not None else header)
         if kind == 'range':
-            # A statically empty array/integer range has no body edge. Dynamic
-            # integer bounds preserve both edges, including zero iterations;
+            # A statically empty array/integer/string range has no body edge.
+            # Dynamic bounds preserve both edges, including zero iterations;
             # do not infer nonnil facts from an unknown trip count.
             ranged = statement.exprs[0]
             dtype = underlying(ranged.type)
             pointer_range = isinstance(dtype, PointerType)
             if pointer_range:
                 dtype = underlying(dtype.element)
-            has_body = (dtype.count > 0 if isinstance(dtype, ArrayType) else
-                        ranged.constant is None or ranged.constant > 0)
+            if isinstance(dtype, ArrayType):
+                has_body = dtype.count > 0
+            elif is_string(ranged.type):
+                has_body = ranged.constant is None or bool(ranged.constant)
+            else:
+                has_body = ranged.constant is None or ranged.constant > 0
             header = self.add('range_check', has_body)
             body = self.sequence(statement.body, header, following, header, falling)
             if statement.init is not None:

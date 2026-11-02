@@ -300,11 +300,42 @@ length; this is not a substitute for arbitrary dynamic bounds panics.
 Range-declared variables have per-iteration Go semantics. The current admitted
 values do not qualify distinct per-iteration address identity: addresses of
 per-iteration bindings, captured closures and stored method values remain
-explicit gaps, not a claim of escaping-loop-variable support. Slice/pointer/string/map/channel/function range remain
-unsupported; no slice backing, UTF-8 iterator, scheduler or managed allocation
-is manufactured. Relevant rules are the official Go specification's
+explicit gaps, not a claim of escaping-loop-variable support. Pointer-to-array
+and string range have separate bounded source implementations below.
+Slice/map/channel/function range remain unsupported; no slice backing,
+scheduler or managed allocation is manufactured. Relevant rules are the official Go specification's
 [range clauses](https://go.dev/ref/spec#For_range) and
 [length and capacity](https://go.dev/ref/spec#Length_and_capacity).
+
+## UTF-8 string range: source implementation, CI acceptance UNRUN
+
+String range now consumes the existing immutable `{byte pointer, byte length}`
+descriptor, captured once before iteration-target or body effects. Indices are
+byte offsets of type `int`; values have type `rune` (`int32`), independently of
+defined string type identity. Zero, one and two targets, blank targets,
+ordinary assignment targets and structured `break`/`continue` reuse the existing
+source semantics. Index-only and bare range still decode UTF-8 widths.
+
+The decoder is ordinary public IR, with every load dominated by the captured
+length. It recognizes Unicode scalar encodings, including embedded NUL, and
+consumes one byte with U+FFFD for invalid, overlong, surrogate, out-of-range or
+truncated encodings. It neither calls a Go/Python runtime nor adds allocation,
+GC, backend, dynamic string construction or arbitrary-index panic support.
+Per-iteration escaping addresses remain explicitly unsupported.
+
+`tests/go/test_string_range.py` and its unchanged shared `string_range.go`
+fixture declare spec-linked typing/diagnostic checks, 27 full-width native
+observations, complete-program execution, two exact graduated rejection inputs
+and official-Go same-source comparisons. **All are UNRUN for this change**:
+no local tests, imports, compiler calls, probes or collection were performed.
+The feature ledger distinguishes source implementation from unrun acceptance;
+historical evidence does not qualify these bytes. CI must run the focused and
+whole-Go ordinary/integration/reference lanes. Native pcc1, Mac execution,
+enry's unmodified core and Python extension end-to-end are not qualified.
+
+The relevant specification contracts are [range clauses](https://go.dev/ref/spec#For_range),
+[string types](https://go.dev/ref/spec#String_types) and
+[assignments](https://go.dev/ref/spec#Assignments).
 
 ## Integer range implementation and acceptance
 
@@ -606,7 +637,7 @@ rebound to a changed unit file or presented as a new execution.
 | `go.capability.local-type-declarations` | Explicitly unimplemented boundary: local type declarations | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.method-values` | Explicitly unimplemented boundary: method values | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.negative-shift-panic` | Explicitly unimplemented boundary: negative shift panic | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
-| `go.capability.non-array-range` | Explicitly unimplemented: string and pointer-to-array range; integer-range implementation is separate | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.string-range.utf8` | Source implementation: byte-offset/rune UTF-8 iteration on existing immutable strings | All new unit/native/same-source reference obligations UNRUN in CI | Implementation `supported`; acceptance `unrun` |
 | `go.capability.package-initialization` | Explicitly unimplemented boundary: package initialization | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.pointer-receivers` | Implemented: bounded direct non-retaining pointer-receiver methods | Qualified in L for PM-U / -P / -D and 23 full-width observations | `supported` |
 | `go.capability.predeclared-shadowing` | Explicitly unimplemented boundary: predeclared shadowing | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |

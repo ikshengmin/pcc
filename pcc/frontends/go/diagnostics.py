@@ -34,7 +34,6 @@ UNIMPLEMENTED_FEATURES = {
     'go.unsupported.local-type-declarations': 'go.capability.local-type-declarations',
     'go.unsupported.method-values': 'go.capability.method-values',
     'go.unsupported.negative-shift-panic': 'go.capability.negative-shift-panic',
-    'go.unsupported.non-array-range': 'go.capability.non-array-range',
     'go.unsupported.package-initialization': 'go.capability.package-initialization',
     'go.unsupported.pointer-escape': 'go.capability.pointer-escape',
     'go.unsupported.pointer-signatures': 'go.capability.pointer-signatures',
