@@ -123,8 +123,8 @@ constructor cycles and unassigned locals. Primitive payload slots have a
 header-free layout plan; no object, tracing descriptor or vtable is registered.
 Native `compile_source(s)` still rejects explicit instance features before IR
 until shared managed allocation, roots, construction/publication and dispatch
-are implemented. Final-instance-field DU, inherited Object overrides, references,
-arrays and inheritance remain explicit model boundaries. This API is not a
+are implemented. Blank-final-instance-field DU, inherited Object overrides,
+general references and inheritance remain explicit model boundaries. This API is not a
 separate runtime or evidence that a Java application can allocate objects.
 
 Heap objects/arrays, runtime fields and class initialization, exceptions,
@@ -162,7 +162,7 @@ supplied dependencies have separate codes. The frozen class-file compatibility
 experiment retains its message-only errors and is not source acceptance.
 
 These codes do not change the object/runtime boundary: class analysis is a
-semantic model, final instance fields remain gated, and the unpublished blank
+semantic model, blank final instance fields remain gated, and the unpublished blank
 final model/reference disagreement is not part of this source revision.
 
 ### Primitive-array semantic model (not native arrays)
@@ -176,7 +176,7 @@ and out-of-bounds access remain valid source with **unimplemented runtime effect
 the analyzer does not replace them with constants or stack arrays.
 
 `compile_source` / `compile_sources` still reject managed arrays before IR.
-Array fields/layout, multidimensional/reference/float/double arrays, array casts
+Managed array-field layout, multidimensional/reference/float/double arrays, array casts
 and inherited array methods remain outside this model. The authored complete
 sources have a separate opt-in JDK compiler/execution reference lane; its outputs
 are not PCC array-native execution or a raw native differential. The complete
@@ -186,3 +186,41 @@ runtime-abrupt/instance examples without executing them, and rejected 22 invalid
 originals. Its explicit source/target 21 contract uses the current runtime's
 platform library, not cross-release API compatibility. Managed-array native
 allocation and execution remain unimplemented.
+
+### Primitive-array instance fields (source-only prerequisite)
+
+The same parser and class analyzer now retain one-dimensional primitive-array
+instance fields, including per-declarator brackets, null defaults, field/array
+initializers, ordered instance initialization, receiver and unqualified reads,
+length, reference rebinding and component stores. Local/parameter shadowing and
+simple-name forward-reference restrictions apply to the field reference itself.
+Declaration-initialized `final` array fields cannot be rebound, but their
+components can change; these references and their lengths are not constants.
+Blank finals, static array initialization and general object references stay
+explicit unsupported boundaries. JLS 4.12.4/5, 8.3.1.2, 8.3.2/3 and 10 govern
+this semantic slice.
+
+The class model retains array fields in declaration order with a null default;
+reference slot size/alignment and **all field offsets and aggregate layout** in
+a mixed reference class remain unknown (`None`). It does not guess pointer
+width, allocate objects, register GC descriptors or lower references into scalar
+IR. Existing primitive-only layout plans are unchanged. Native `compile_source`
+and `compile_sources` still fail closed before managed storage can reach IR.
+
+`tests/java/test_source_array_fields.py` contains complete independently authored
+originals for semantic checks, invalid Java, native rejection and an opt-in JDK
+reference. Only the separate JDK observer allocates instances and runs those
+originals; it is not a PCC native comparison. All new execution, including
+ordinary, reference and whole-Java validation, is **UNRUN**, delegated to CI.
+
+This prerequisite was selected by source-reading ZXing 3.5.3, release commit
+`f0f1a94439db0300ff0c4618f4e0a41aa630aeac`:
+[GenericGF](https://github.com/zxing/zxing/blob/f0f1a94439db0300ff0c4618f4e0a41aa630aeac/core/src/main/java/com/google/zxing/common/reedsolomon/GenericGF.java),
+[GenericGFPoly](https://github.com/zxing/zxing/blob/f0f1a94439db0300ff0c4618f4e0a41aa630aeac/core/src/main/java/com/google/zxing/common/reedsolomon/GenericGFPoly.java), and
+[ReedSolomonEncoder](https://github.com/zxing/zxing/blob/f0f1a94439db0300ff0c4618f4e0a41aa630aeac/core/src/main/java/com/google/zxing/common/reedsolomon/ReedSolomonEncoder.java).
+The inspected files carry Apache-2.0 notices; no upstream implementation was
+copied. Their blank-final fields still need definite-unassignment analysis;
+objects/arrays need managed execution, and `System.arraycopy`, exceptions,
+dynamic remainder, enhanced-for, strings and collections remain further gaps.
+This change does not compile or qualify ZXing, nor establish Java-as-Python
+extension support. The bytecode/JAR compatibility experiment is unchanged.

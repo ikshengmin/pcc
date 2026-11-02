@@ -196,7 +196,6 @@ def test_invalid_original_class_model_is_not_accepted(text, message):
     ("class Record{final int value=42;}", "definite-unassignment"),
     ("class Record{static int value=42;}", "class initialization"),
     ("class Record{int hashCode(){return 42;}}", "inherited-method"),
-    ("class Record{int[] values;}", "array fields"),
     ("class Record{int get(){return new Record();}}", "unsupported Java expression"),
     ("class Record extends Other{}", "inheritance"),
     ("class Record{static {}}", "static initializer execution"),
@@ -204,6 +203,21 @@ def test_invalid_original_class_model_is_not_accepted(text, message):
 def test_unimplemented_class_semantics_remain_explicit(text, message):
     with pytest.raises(UnsupportedJava, match=message):
         analyze_class_sources({"Record.java": text})
+
+
+def test_original_array_field_boundary_now_has_a_source_model_only(monkeypatch):
+    from pcc.frontends.java.source_lowering import SourceLowerer
+    from pcc.frontends.java.source_types import ArrayType
+    text = "class Record{int[] values;}"
+    monkeypatch.setattr(SourceLowerer, "lower", lambda *a: pytest.fail("managed field reached native IR"))
+    model = analyze_class_sources({"Record.java": text}).models["Record"]
+    assert model.fields[0].field.dtype == ArrayType("int")
+    assert model.fields[0].default_value is None
+    assert model.fields[0].offset is None and model.payload_size is None
+    assert not model.runtime_registered
+    with pytest.raises(UnsupportedJava) as caught:
+        compile_source(text, filename="Record.java")
+    assert caught.value.code == "java.unsupported.instance-methods"
 
 
 @pytest.mark.parametrize("text", [dict(VALID)[name] for name in (

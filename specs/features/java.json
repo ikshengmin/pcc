@@ -231,7 +231,7 @@
         "JLS-10",
         "JLS-15"
       ],
-      "scope": "JLS 10,15.10. Native array allocation, runtime length/bounds/store checks, roots and tracing remain unimplemented. The separate analyze_class_sources semantic model does not admit arrays into compile_source/compile_sources; array fields also remain gated pending managed descriptor/layout contracts.",
+      "scope": "JLS 10,15.10. Native array allocation, runtime length/bounds/store checks, roots and tracing remain unimplemented. The separate analyze_class_sources semantic model does not admit arrays or array fields into compile_source/compile_sources; managed descriptor/layout contracts remain unavailable.",
       "status": "explicitly_unimplemented",
       "tests": [
         "tests/java/test_source_frontend.py::test_source_runtime_and_lexical_boundaries_fail_explicitly",
@@ -793,6 +793,48 @@
         "java.unsupported.array-model-shape"
       ],
       "evidence": []
+    },
+    {
+      "id": "java.instance-array-field-model",
+      "title": "Primitive-array instance fields in the existing source semantic model",
+      "chapter_ids": ["JLS-4", "JLS-8", "JLS-10", "JLS-15", "JLS-16"],
+      "scope": "JLS 4.12.4/5,8.3.1.2,8.3.2/3,10.2/6/7,15.21.3,15.26. One-dimensional boolean/integral instance-array fields, per-declarator brackets, ordered field/instance initializers, null defaults, reference identity and assignment typing, local shadowing, receiver/length/component access, declaration-initialized final references with mutable components. Existing source parser/ClassAnalyzer consumers only; no managed lowering or guessed reference layout. Blank finals, static arrays, general object references and native allocation stay gated. Independently authored complete-source prerequisites do not qualify ZXing or Java extensions. All execution is UNRUN, delegated to CI.",
+      "tests": [
+        "tests/java/test_source_array_fields.py",
+        "tests/java/test_source_array_model.py::test_original_instance_array_field_is_now_semantic_only",
+        "tests/java/test_source_class_model.py::test_original_array_field_boundary_now_has_a_source_model_only"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:8913ed7940f1de4e072cf4a53e7d6c8c81f2cbd7aebeeea6be70b106260bb911",
+        "sources": [
+          {"path": "pcc/frontends/java/source_syntax.py", "sha256": "265420955b3bf4a1bb00f86d2e2936a700032d2678bf75a3e7522ec5e8afdee2"},
+          {"path": "pcc/frontends/java/source_array_model.py", "sha256": "cf650f231f1ed698dc4ed611ddf8f86cdec1d3c5501faa6ee4053bc2f59a195b"},
+          {"path": "pcc/frontends/java/source_class_model.py", "sha256": "c3c80a733dce692b8b8ce2839f9e7589ac72afd71510b27d08338c7d1feb7a91"}
+        ]
+      },
+      "acceptance": [
+        {
+          "id": "current-source-model-and-native-boundary",
+          "kind": "full-feature",
+          "scope": "Source-model semantics, native rejection and exact-original external JDK reference obligations; not PCC managed native execution or real-library acceptance.",
+          "status": "unrun",
+          "source_revision": "sha256:8913ed7940f1de4e072cf4a53e7d6c8c81f2cbd7aebeeea6be70b106260bb911",
+          "mode": "pcc0",
+          "platform": "linux-x86_64",
+          "backend": "self",
+          "gc": "not_applicable",
+          "required_tests": [
+            "tests/java/test_source_array_fields.py",
+            "tests/java/test_source_array_model.py::test_original_instance_array_field_is_now_semantic_only",
+            "tests/java/test_source_class_model.py::test_original_array_field_boundary_now_has_a_source_model_only"
+          ],
+          "evidence": [],
+          "reason": "User delegated execution to CI. No local tests, imports, compiler calls, probes or collection were run. Model/reference checks and the native rejection boundary are UNRUN; managed native execution remains explicitly unavailable."
+        }
+      ]
     },
     {
       "id": "java.narrow-primitive-declarations",

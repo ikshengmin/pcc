@@ -125,7 +125,6 @@ def test_read_and_store_plans_retain_jls_abrupt_completion_order_once():
 
 
 @pytest.mark.parametrize("text", [
-    "class ArrayExample{int[] field;}",
     "class ArrayExample{static int[][] f(){return null;}}",
     original("int[][] a=new int[2][3];return 42;"),
     original("int[] a=(int[])null;return 42;"),
@@ -134,6 +133,19 @@ def test_array_runtime_and_wider_shape_boundaries_remain_explicit(text):
     with pytest.raises(UnsupportedJava) as caught:
         analyze_class_sources({"ArrayExample.java": text})
     assert caught.value.code in {"java.unsupported.array-storage", "java.unsupported.array-model-shape"}
+
+
+def test_original_instance_array_field_is_now_semantic_only(monkeypatch):
+    from pcc.frontends.java.source_lowering import SourceLowerer
+    text = "class ArrayExample{int[] field;}"
+    monkeypatch.setattr(SourceLowerer, "lower", lambda *a: pytest.fail("array field reached native IR"))
+    model = analyze_class_sources({"ArrayExample.java": text}).models["ArrayExample"]
+    assert model.fields[0].field.dtype == ArrayType("int")
+    assert model.fields[0].default_value is None
+    assert model.payload_size is None and model.payload_alignment is None
+    assert not model.runtime_registered
+    with pytest.raises(UnsupportedJava):
+        compile_source(text, filename="ArrayExample.java")
 
 
 @pytest.mark.parametrize("name,text", PROGRAMS, ids=[x[0] for x in PROGRAMS])
@@ -160,6 +172,12 @@ def test_native_postfix_arrays_are_capability_failures_before_ir(body, monkeypat
 @pytest.mark.xdist_group(name="java-array-model-reference")
 def test_exact_array_model_originals_against_selected_jdk_only(tmp_path, request):
     """JDK runtime positives + compile rejection; PCC runtime remains gated."""
+    check_originals_reference(tmp_path, request, PROGRAMS, VALID_ONLY, INVALID)
+
+
+def check_originals_reference(tmp_path, request, programs, valid_only, invalid, *,
+                              invocation="ArrayExample.run()", source_input=None):
+    """Reference-only observer; the original source units are never rewritten."""
     java = Path(os.environ["PCC_JAVA_RAW_REFERENCE"]).resolve(strict=True)
     level = os.environ.get("PCC_JAVA_RAW_REFERENCE_SOURCE", "21")
     assert level in {"17", "21"}
@@ -169,18 +187,19 @@ def test_exact_array_model_originals_against_selected_jdk_only(tmp_path, request
     assert version and int(version.group(1).split(".")[0]) >= int(level)
     driver = Path(__file__).with_name("ArrayModelReference.java")
     before = tool_identity(java)
-    source_inputs = {str(path): digest(path) for path in (Path(__file__), driver)}
+    inputs = (Path(__file__), driver) + (() if source_input is None else (source_input,))
+    source_inputs = {str(path): digest(path) for path in inputs}
     originals, observers, rows = [], [], []
-    for name, text in PROGRAMS + VALID_ONLY + [(n, t) for n, t, _ in INVALID]:
+    for name, text in programs + valid_only + [(n, t) for n, t, _ in invalid]:
         directory = tmp_path / name
         directory.mkdir()
         unit = directory / "ArrayExample.java"
         unit.write_bytes(text.encode("utf-8"))
         originals.append((unit, text))
-        kind = "run" if name in dict(PROGRAMS) else "typecheck" if name in dict(VALID_ONLY) else "reject"
+        kind = "run" if name in dict(programs) else "typecheck" if name in dict(valid_only) else "reject"
         if kind == "run":
             observer = directory / "PccArrayObserve.java"
-            body = "public final class PccArrayObserve{public static int value(){return ArrayExample.run();}}"
+            body = "public final class PccArrayObserve{public static int value(){return " + invocation + ";}}"
             observer.write_bytes(body.encode("utf-8"))
             observers.append((observer, body))
         rows.append(name + "\t" + kind)
@@ -196,7 +215,7 @@ def test_exact_array_model_originals_against_selected_jdk_only(tmp_path, request
     def finish_identity():
         after = tool_identity(java)
         unchanged = all(path.read_bytes() == text.encode("utf-8") for path, text in originals + observers)
-        inputs_after = {str(path): digest(path) for path in (Path(__file__), driver)}
+        inputs_after = {str(path): digest(path) for path in inputs}
         (tmp_path / "owner-post.json").write_text(json.dumps({**owner, "tools_after": after,
             "inputs_after": inputs_after, "originals_and_observers_unchanged": unchanged}, indent=2) + "\n")
         assert before == after and source_inputs == inputs_after and unchanged
@@ -219,9 +238,9 @@ def test_exact_array_model_originals_against_selected_jdk_only(tmp_path, request
     result = record_process((str(java), *JVM_LIMITS, "-cp", str(driver_classes), "ArrayModelReference",
                              str(tmp_path), level), tmp_path, "reference-batch", 60)
     assert result[0] == 0, result
-    for name, _ in PROGRAMS:
+    for name, _ in programs:
         assert (tmp_path / name / "runtime-value.txt").read_text() == "42"
-    for name, _ in PROGRAMS + VALID_ONLY:
+    for name, _ in programs + valid_only:
         assert (tmp_path / name / "compiler-status.txt").read_text() == "0"
-    for name, _, _ in INVALID:
+    for name, _, _ in invalid:
         assert int((tmp_path / name / "compiler-status.txt").read_text()) != 0

@@ -4,7 +4,8 @@ The same source syntax and scalar/structured-flow sema are reused. Receiver
 fields and constructors remain typed nodes, never fabricated stack objects or
 raw-malloc payloads. Layout describes primitive payload fields only; runtime
 identity/GC roots, construction/publication and dispatch remain shared-runtime
-prerequisites. No descriptor below is registered with a runtime.
+prerequisites. Classes containing array references have no payload layout yet.
+No descriptor below is registered with a runtime.
 """
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -14,7 +15,7 @@ from .source_array_model import ArrayModelAnalyzer
 from .source_project import SourceProject
 from .source_sema import SourceAnalyzer
 from .source_syntax import Node, SourceMethod, SourceParser
-from .source_types import INTEGRAL, NUMERIC, promoted, select_method
+from .source_types import ArrayType, INTEGRAL, NUMERIC, promoted, select_method
 
 
 @dataclass(frozen=True)
@@ -25,18 +26,28 @@ class ReceiverType:
 @dataclass(frozen=True)
 class PrimitiveFieldSlot:
     field: object
-    offset: int
+    offset: int | None
     size: int
     alignment: int
+
+
+@dataclass(frozen=True)
+class ArrayReferenceFieldSlot:
+    """Source reference, not a guessed pointer-sized managed-storage slot."""
+    field: object
+    offset: None = None
+    size: None = None
+    alignment: None = None
+    default_value: None = None  # JLS 4.12.5: null before instance initialization.
 
 
 @dataclass(frozen=True)
 class SourceClassModel:
     source: object
     constructors: tuple
-    fields: tuple[PrimitiveFieldSlot, ...]
-    payload_size: int
-    payload_alignment: int
+    fields: tuple[PrimitiveFieldSlot | ArrayReferenceFieldSlot, ...]
+    payload_size: int | None
+    payload_alignment: int | None
     initialization_steps: tuple = ()
     superclass: str = "java/lang/Object"
     runtime_registered: bool = False
@@ -99,7 +110,7 @@ class ClassAnalyzer(ArrayModelAnalyzer, SourceAnalyzer):
             self.field_states[field.token.text] = "complete"
         finally:
             self.current_field = previous
-        # A mutable instance field is never a constant variable.
+        # Neither a mutable field nor a final array reference is a constant variable.
         return None
 
     def field_read(self, node, field, *, explicit_receiver=False):
@@ -274,15 +285,22 @@ class ClassModelProject(SourceProject):
                  "float": 4, "double": 8}
         for program in self.programs:
             slots, offset, alignment = [], 0, 1
+            reference_layout = any(isinstance(field.dtype, ArrayType) and "static" not in field.modifiers
+                                   for field in program.fields)
             for field in program.fields:
                 if "static" in field.modifiers:
+                    continue
+                if isinstance(field.dtype, ArrayType):
+                    slots.append(ArrayReferenceFieldSlot(field))
                     continue
                 size = sizes[field.dtype]
                 alignment = max(alignment, size)
                 offset = (offset + size - 1) // size * size
-                slots.append(PrimitiveFieldSlot(field, offset, size, size))
+                slots.append(PrimitiveFieldSlot(field, None if reference_layout else offset, size, size))
                 offset += size
             payload_size = (offset + alignment - 1) // alignment * alignment
+            if reference_layout:
+                payload_size, alignment = None, None
             self.models[program.name] = SourceClassModel(program,
                 tuple(self.analyzers[program.name].constructors.values()), tuple(slots), payload_size, alignment,
                 program.initialization_steps)

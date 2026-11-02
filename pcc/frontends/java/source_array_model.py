@@ -2,7 +2,7 @@
 
 JLS 10, 15.10 and 15.26. The typed nodes retain distinct read/store check order;
 these are semantic obligations, not an emitted exception, allocation or GC ABI.
-Only one-dimensional boolean/integral arrays are admitted here. Reference fields,
+Only one-dimensional boolean/integral arrays are admitted here. Other reference fields,
 Object supertypes, clone/casts and multidimensional/reference arrays remain gated.
 """
 from .source_syntax import Node, Token
@@ -32,7 +32,8 @@ class ArrayModelAnalyzer:
     def array_expression(self, node, assigned):
         if node.kind == "name" and "." in node.value:
             root, suffix = node.value.split(".", 1)
-            if any(root in scope for scope in self.scopes):
+            if (any(root in scope for scope in self.scopes)
+                    or root in self.fields and isinstance(self.fields[root].dtype, ArrayType)):
                 if suffix != "length":
                     node.token.error("array members other than length require the next reference domain",
                                      code="java.unsupported.array-model-shape")
@@ -41,6 +42,8 @@ class ArrayModelAnalyzer:
         if node.kind == "call" and "." in node.value:
             root = node.value.split(".", 1)[0]
             binding = next((scope[root] for scope in reversed(self.scopes) if root in scope), None)
+            if binding is None:
+                binding = self.fields.get(root)
             if binding is not None and isinstance(binding.dtype, ArrayType):
                 node.token.error("array methods require the next reference domain",
                                  code="java.unsupported.array-model-shape")

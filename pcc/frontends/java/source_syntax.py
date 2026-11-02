@@ -376,28 +376,29 @@ class SourceParser:
             result_type = self.array_suffix(result.text)
             method_name = self.identifier()
             if self.peek().text != "(":
-                result_type = self.array_suffix(result_type)
-                if isinstance(result_type, ArrayType):
-                    result.error("array fields require shared Java storage and class initialization",
-                                 code="java.unsupported.array-storage")
+                common_type = result_type
                 if result.text == "void":
                     result.error("a field cannot have void type")
                 if mods - {"public", "private", "protected", "static", "final"}:
                     result.error("invalid constant-field modifier")
                 instance = self.class_model and "static" not in mods
-                if instance and "final" in mods:
-                    result.error("final instance fields require constructor definite-unassignment semantics", code="java.unsupported.final-instance-fields")
                 if not instance and "final" not in mods:
                     result.error("mutable static fields require shared Java class initialization", code="java.unsupported.static-initialization")
                 while True:
-                    if self.peek().text == "[":
-                        self.peek().error("array fields require shared Java storage and class initialization",
-                                          code="java.unsupported.array-storage")
+                    field_type = self.array_suffix(common_type)
+                    if isinstance(field_type, ArrayType) and not instance:
+                        result.error("static array fields require shared Java class initialization",
+                                     code="java.unsupported.array-storage")
                     initialized = bool(self.accept("="))
+                    if instance and "final" in mods and not (isinstance(field_type, ArrayType) and initialized):
+                        result.error("final instance fields require constructor definite-unassignment semantics",
+                                     code="java.unsupported.final-instance-fields")
                     if not initialized and not instance:
                         method_name.error("blank final fields require shared Java class initialization", code="java.unsupported.static-initialization")
-                    initializer = self.expression() if initialized else None
-                    field = SourceField(method_name, result.text, initializer, frozenset(mods), owner, len(fields))
+                    initializer = ((self.array_initializer(field_type)
+                                    if isinstance(field_type, ArrayType) and self.peek().text == "{" else self.expression())
+                                   if initialized else None)
+                    field = SourceField(method_name, field_type, initializer, frozenset(mods), owner, len(fields))
                     fields.append(field)
                     if instance and initialized:
                         initialization_steps.append(field)
