@@ -127,9 +127,8 @@ REFERENCE_INVALID = (
     ('moved-reference-receiver', 'trait A{fn n(&self)->u64;}struct H{x:u64}impl H{fn f<U>(self,u:U)where U:A{let moved=u;u.n();}}', '', 'E0382'),
 )
 CAPABILITY = (
-    ('owner-marker', 'struct H<T>{x:T}impl<T>H<T>{fn f(&self)where T:Copy{}}', 'impl-owner/Self'),
-    ('owner-local', 'trait A{}struct H<T>{x:T}impl<T>H<T>{fn f(&self)where T:A{}}', 'impl-owner/Self'),
-    ('self-predicate', 'struct H{x:u64}impl H{fn f(self)where Self:Sized{}}', 'impl-owner/Self'),
+    # Exact owner marker/local controls move to checked positives in test_rust_owner_where_bounds.
+    ('self-predicate', 'struct H{x:u64}impl H{fn f(self)where Self:Sized{}}', 'where Self predicates'),
     ('trait-local', 'trait A{}trait B{fn f<U:A>(u:U)->U;}', 'local/user trait bounds'),
     ('trait-where', 'trait A{}trait B{fn f<U>(u:U)->U where U:A;}', 'where constraints'),
     ('impl-trait-where', 'trait A{fn f<U:Copy>(u:U)->U;}struct H{x:u64}impl A for H{fn f<U>(u:U)->U where U:Copy{u}}', 'where constraints'),

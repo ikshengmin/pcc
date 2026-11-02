@@ -539,13 +539,13 @@ class Parser:
 
     def function_where_clause(self, parameters, *, owner_parameters=None):
         declared = {parameter.text for parameter in parameters}
+        owners = {parameter.text for parameter in owner_parameters or ()}
         predicates = []
         while self.token.text != '{':
             if self.token.kind == 'lifetime' or self.token.text == 'for':
                 raise self.token.error('lifetime and higher-ranked where predicates are not implemented')
-            if owner_parameters is not None and (self.token.text == 'Self' or
-                    self.token.text in {parameter.text for parameter in owner_parameters}):
-                raise self.token.error('where predicates on impl-owner/Self types require conditional method availability, which is not implemented')
+            if owner_parameters is not None and self.token.text == 'Self':
+                raise self.token.error('where Self predicates require nominal-type obligations, which are not implemented')
             if self.token.kind != 'name' or self.token.text not in declared:
                 raise self.token.error('where predicate subjects must be declared type parameters; concrete/compound predicates are not implemented')
             parameter = self.take()
@@ -553,6 +553,10 @@ class Parser:
                 raise self.token.error('where projections/equality predicates are not implemented; expected a parameter colon')
             self.take()
             bounds = self.type_parameter_bounds({',', '{'})
+            if parameter.text in owners and any(bound.relaxed for bound in bounds):
+                # The enclosing impl/data parameter already has its Sized
+                # declaration. A method cannot retroactively relax it.
+                raise parameter.error('relaxed bounds on enclosing impl parameters are not supported; declare relaxation at the parameter definition')
             predicates.append(WherePredicate(parameter, bounds))
             if len(predicates) > 64:
                 raise parameter.error('where predicates exceed implementation limit (64)')
@@ -888,7 +892,6 @@ class Parser:
         # separately validates the canonical contract of required/impl methods;
         # an impl prefix still has its own implicit Sized obligations.
         parameters = self.generic_parameters(allow_lifetimes=True, allow_bounds=True)
-        method_parameters = parameters
         parameter_bounds = tuple(self.last_parameter_bounds)
         lifetime_parameters = tuple(self.last_lifetime_parameters)
         if implementation is not None:
@@ -956,10 +959,10 @@ class Parser:
             if (implementation is not None and implementation.trait is not None
                     or abi != 'Rust' or no_mangle or declaration):
                 raise where_token.error('where constraints are implemented only on free functions and inherent method type parameters')
-            # An impl prefix determines the receiver's already-known owner.
-            # Conditional owner/Self predicates affect method availability in
-            # addition to suffix inference; do not silently treat them as suffixes.
-            where_predicates = self.function_where_clause(method_parameters,
+            # Owner predicates constrain this method, not the whole impl.
+            # Keep their subjects in the existing fixed-prefix/suffix vector;
+            # GenericFunctions checks both before requesting an instance.
+            where_predicates = self.function_where_clause(parameters,
                 owner_parameters=implementation.type_parameters if implementation is not None else None)
         if declaration:
             if trait_declaration and self.token.text == "{":

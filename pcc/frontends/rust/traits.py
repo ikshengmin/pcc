@@ -184,8 +184,10 @@ class StaticTraits:
                 if function.implementation is not None:
                     if function.implementation.trait is not None:
                         raise bound.token.error('local/user trait bounds on trait method parameters are not implemented')
-                    if name.text in {p.text for p in function.implementation.type_parameters}:
-                        raise name.error('local trait bounds on impl-owner parameters require conditional method availability, which is not implemented')
+                    # An inherent method's owner prefix has declaration-bound
+                    # identities just like its suffix. Its predicates remain
+                    # local to this method and are checked at every selection;
+                    # they do not make an unconstrained sibling method valid.
                 if self.checker.module_resolution is not None:
                     raise bound.token.error('module-scoped local trait bounds are not implemented')
                 local.add(bound.path)
