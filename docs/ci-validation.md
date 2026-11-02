@@ -30,6 +30,23 @@ never removes a test. Conditional Rust certification stays with its original
 ordinary/integration test. The checked-in shared scope is a module inventory,
 refreshed for ELF, Mach-O and ODR tests; historical counts/outcomes are not reused.
 
+Collection uses a frozen, disjoint plan of at most ten complete modules per
+single-process shard. Each shard has the original 90-second/1-GiB guard; the
+15-minute job envelope is unchanged. Every requested module, including empty
+modules, must have an actual successful collector report. Missing, duplicate,
+failed/skipped nested collection, malformed terminal evidence, or contradictory
+selection/count/exit evidence stops the job before any test body. Exit 5 is valid
+only for zero selected nodes; a globally empty raw inventory remains an error.
+Completed shard receipts and modules still awaiting complete inventory survive
+a later collection failure. Collection alone is never execution PASS.
+
+Only the exact complete canonical-node union feeds the existing global batch
+planner, so xdist groups spanning collection shards still execute together.
+Worker inventories must match the frozen raw metadata for every file in their
+body batch, including other lanes and unmet prerequisites, ignoring only xdist's
+final node-ID decoration. Partition-dependent gate, group or identity drift is
+an evidence error, never an automatic omission or a new qualification claim.
+
 Every source-lane test-body process retains six workers, `loadgroup`, the existing
 90-second/1-GiB aggregate process-tree guard and 1-GiB free-disk floor. Collection
 alone uses one process. Each job retains the 15-minute envelope. Resource,

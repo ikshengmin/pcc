@@ -241,8 +241,10 @@ class CUnevaluatedTypeMixin:
             self._resolve_query_declarator(node.type)
             return
         if isinstance(node, c_ast.CompoundLiteral):
-            self._resolve_query_declarator(node.type.type)
-            self._validate_query_expression(node.init)
+            # A nested compound literal owns its own initializer target type,
+            # including fixed/inferred array designators. Merely walking its
+            # initializer values misses names used in designator expressions.
+            self._generic_expr_type_key(node, value_context=False)
             return
         if isinstance(node, c_ast.NamedInitializer):
             self._validate_query_expression(node.expr)

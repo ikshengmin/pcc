@@ -392,7 +392,7 @@ class CInitializerLoweringMixin:
 
         return []
 
-    def _normalize_struct_init_list(self, init_node, ir_type):
+    def _normalize_struct_init_list(self, init_node, ir_type, *, recursive=True):
         if not isinstance(init_node, c_ast.InitList):
             return init_node
 
@@ -415,7 +415,7 @@ class CInitializerLoweringMixin:
 
             expr = exprs[cursor]
             if isinstance(expr, c_ast.InitList):
-                normalized.append(self._normalize_initializer_for_type(expr, member_type))
+                normalized.append(self._normalize_initializer_for_type(expr, member_type) if recursive else expr)
                 cursor += 1
                 continue
 
@@ -438,7 +438,7 @@ class CInitializerLoweringMixin:
             member_init = c_ast.InitList(
                 exprs[cursor : cursor + consumed], init_node.coord
             )
-            normalized.append(self._normalize_initializer_for_type(member_init, member_type))
+            normalized.append(self._normalize_initializer_for_type(member_init, member_type) if recursive else member_init)
             cursor += consumed
 
         if cursor < len(exprs):

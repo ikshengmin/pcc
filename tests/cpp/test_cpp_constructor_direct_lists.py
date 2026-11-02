@@ -105,10 +105,6 @@ INVALID = (
 DEFERRED = (
     ("nested-braced-argument", "struct S{S(int);};int f(){S s{{42}};return 0;}",
      "cpp.unsupported.constructor-list-initialization"),
-    ("copy-list", "struct S{S(int);};int f(){S s={42};return 0;}",
-     "cpp.unsupported.constructor-list-initialization"),
-    ("copy-converting", "struct S{S(int);};int f(){S s=42;return 0;}",
-     "cpp.unsupported.constructor-list-initialization"),
     ("same-type-copy-list-element", "struct S{S(int);S(const S&);};int f(){S a(42);S b{a};return 0;}",
      "cpp.unsupported.class-initialization"),
     ("class-reference-candidate-set", "struct Values{};struct S{S(int);S(const Values&);};"

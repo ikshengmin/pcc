@@ -22,6 +22,7 @@ LANES = ("ordinary", "integration", "reference")
 TIMEOUT = 90
 RSS = 1073741824
 DISK_FLOOR = 1073741824
+COLLECTION_MODULES = 10
 REFERENCES = ROOT / "scripts/data/ci_validation_references.json"
 
 
@@ -55,6 +56,112 @@ def modules(domain, root=ROOT):
     if not paths:
         raise ValueError("empty source validation domain")
     return sorted(path.relative_to(root).as_posix() for path in paths)
+
+
+def collection_plan(files):
+    """Bound collection by whole modules; never exclude an inventoried file."""
+    if (not isinstance(files, list) or not files or
+            any(not isinstance(path, str) or not path.endswith(".py") or
+                Path(path).is_absolute() or ".." in Path(path).parts or "::" in path for path in files) or
+            len(files) != len(set(files))):
+        raise ValueError("invalid/duplicate collection module inventory")
+    ordered = sorted(files)
+    return [ordered[index:index + COLLECTION_MODULES] for index in range(0, len(ordered), COLLECTION_MODULES)]
+
+
+def inventory_rows(rows, files):
+    """Validate identities and retain all raw rows, including unmet gates."""
+    if not isinstance(rows, list):
+        raise ValueError("raw inventory rows must be a list")
+    identities, nodeids = set(), set()
+    for row in rows:
+        if (not isinstance(row, dict) or
+                not all(isinstance(row.get(key), str) and row[key]
+                        for key in ("nodeid", "canonical_nodeid", "file", "function")) or
+                row["file"] not in files or not row["canonical_nodeid"].startswith(row["file"] + "::") or
+                row.get("lane") not in LANES or type(row.get("selected_by_repository")) is not bool or
+                not isinstance(row.get("groups"), list) or
+                not all(isinstance(group, str) for group in row["groups"]) or
+                not isinstance(row.get("gates"), list) or
+                not all(isinstance(gate, dict) for gate in row["gates"]) or
+                "reference_activity" not in row):
+            raise ValueError("malformed or out-of-shard raw inventory row")
+        if row["canonical_nodeid"] in identities or row["nodeid"] in nodeids:
+            raise ValueError("duplicate raw inventory identity")
+        identities.add(row["canonical_nodeid"])
+        nodeids.add(row["nodeid"])
+    return rows
+
+
+def summarize_collection(directory, files, code):
+    """A complete collection witness is never test-execution PASS evidence."""
+    paths = sorted((directory / "inventory").glob("*.json"))
+    if [path.name for path in paths] != ["controller.json"]:
+        raise ValueError("one controller-only collection inventory required")
+    witness = json.loads(paths[0].read_text())
+    if (not isinstance(witness, dict) or witness.get("collect_only") is not True or
+            type(witness.get("workers")) is not int or witness["workers"] != 0 or
+            witness.get("dist") != "no" or witness.get("local_schedule") != {"workers": 0, "dist": "no"} or
+            witness.get("marker") != "" or witness.get("requested_modules") != files):
+        raise ValueError("collection command, module manifest, or scheduling differs")
+    reports = witness.get("module_reports")
+    if (not isinstance(reports, list) or len(reports) != len(files) or
+            any(not isinstance(row, dict) or row.get("outcome") != "passed" or
+                row.get("nodeid") not in files for row in reports) or
+            {row["nodeid"] for row in reports} != set(files) or witness.get("collection_anomalies") != []):
+        raise ValueError("missing/duplicate/failed/skipped module or nested collection evidence")
+    rows = inventory_rows(witness.get("rows"), files)
+    if witness.get("raw_nodeids") != [row["canonical_nodeid"] for row in rows]:
+        raise ValueError("raw collection identities and metadata rows disagree")
+    if any(row["nodeid"] != row["canonical_nodeid"] for row in rows):
+        raise ValueError("single-process collection changed canonical node identities")
+    selected = witness.get("selected")
+    if (not isinstance(selected, list) or not all(isinstance(node, str) for node in selected) or
+            len(selected) != len(set(selected)) or
+            set(selected) != {row["nodeid"] for row in rows if row["selected_by_repository"]}):
+        raise ValueError("collection selected identities disagree with repository gate evidence")
+    events = [json.loads(line) for line in (directory / "live.jsonl").read_text().splitlines()]
+    if not events or any(not isinstance(event, dict) or not isinstance(event.get("event"), str) for event in events):
+        raise ValueError("malformed or missing collection live evidence")
+    starts = [event for event in events if event["event"] == "start"]
+    finishes = [event for event in events if event["event"] == "finish"]
+    collected = [event for event in events if event["event"] == "collected"]
+    deselections = [event.get("nodeids") for event in events if event["event"] == "deselected"]
+    if any(not isinstance(nodes, list) or not all(isinstance(node, str) for node in nodes) for nodes in deselections):
+        raise ValueError("malformed collection deselection evidence")
+    deselected = [node for nodes in deselections for node in nodes]
+    if (len(deselected) != len(set(deselected)) or
+            set(deselected) != {row["nodeid"] for row in rows if not row["selected_by_repository"]}):
+        raise ValueError("collection deselection disagrees with prerequisite inventory")
+    permitted = {"start", "finish", "collected", "deselected"}
+    if (len(starts) != 1 or events[0] is not starts[0] or starts[0].get("collect_only") is not True or
+            type(starts[0].get("maxfail")) is not int or starts[0]["maxfail"] != 0 or
+            len(finishes) != 1 or events[-1] is not finishes[0] or
+            len(collected) != 1 or collected[0].get("nodeids") != selected or
+            any(event["event"] not in permitted for event in events)):
+        raise ValueError("nonterminal, duplicate, interrupted, or executing collection evidence")
+    finish = finishes[0]
+    expected_code = 0 if selected else 5
+    if (type(code) is not int or code != expected_code or
+            type(finish.get("exitstatus")) is not int or finish["exitstatus"] != code or
+            type(finish.get("testscollected")) is not int or finish["testscollected"] != len(selected) or
+            type(finish.get("testsfailed")) is not int or finish["testsfailed"] != 0 or
+            finish.get("shouldstop") or finish.get("shouldfail")):
+        raise ValueError("collection terminal counts/exit disagree")
+    return {"modules": files, "rows": rows, "selected_count": len(selected), "status": "COLLECTED_NOT_EXECUTED"}
+
+
+def merge_collections(parts, files):
+    plan = collection_plan(files)
+    if (not isinstance(parts, list) or len(parts) != len(plan) or
+            any(not isinstance(part, dict) or part.get("modules") != expected
+                or part.get("status") != "COLLECTED_NOT_EXECUTED" for part, expected in zip(parts, plan))):
+        raise ValueError("collection shards do not cover the exact disjoint module inventory")
+    rows = [row for part in parts for row in inventory_rows(part.get("rows"), part["modules"])]
+    inventory_rows(rows, files)
+    if not rows:
+        raise ValueError("empty raw inventory")
+    return rows
 
 
 def batches(rows, lane):
@@ -153,7 +260,7 @@ def run_guard(directory, command, environment, original):
     return result["returncode"]
 
 
-def summarize_batch(directory, expected):
+def summarize_batch(directory, expected, frozen_rows=None):
     """Keep valid partial evidence; admission errors never erase earlier reports."""
     errors, events, mapping = [], [], {}
     try:
@@ -163,6 +270,17 @@ def summarize_batch(directory, expected):
         witness = witnesses[0]
         if witness["collect_only"] or witness["workers"] != 6 or witness["dist"] != "loadgroup":
             raise ValueError("original execution scheduling differs")
+        if frozen_rows is not None:
+            files = sorted({row["file"] for row in frozen_rows})
+            actual = inventory_rows(witness["rows"], files)
+            if witness.get("raw_nodeids") != [row["canonical_nodeid"] for row in actual]:
+                raise ValueError("raw execution identities and metadata rows disagree")
+            frozen = inventory_rows(frozen_rows, files)
+            def metadata(values):
+                return {row["canonical_nodeid"]: {key: value for key, value in row.items() if key != "nodeid"}
+                        for row in values}
+            if metadata(actual) != metadata(frozen):
+                raise ValueError("execution raw inventory differs from frozen collection metadata")
         selected = witness["selected"]
         candidate = {row["nodeid"]: row["canonical_nodeid"] for row in witness["rows"]}
         if (len(selected) != len(set(selected)) or len(selected) != len(expected) or
@@ -276,7 +394,8 @@ def campaign_status(receipt):
                          for batch in receipt["batches"])
     if session_failed or "FAIL" in statuses:
         return "FAIL"
-    if receipt["unrun"] or receipt.get("unattempted") or any(status != "PASS" for status in statuses):
+    if (receipt["unrun"] or receipt.get("unattempted") or receipt.get("collection_pending_modules") or
+            any(status != "PASS" for status in statuses)):
         return "INCOMPLETE_UNRUN"
     return "NOT_APPLICABLE" if not receipt["lane_count"] else "PASS"
 
@@ -292,7 +411,8 @@ def run(args):
     receipt = {"status": "RUNNING", "domain": args.domain, "lane": args.lane,
                "claim": "host-PCC bounded source tests; not native pcc1 or whole-project qualification",
                "workers": 6, "dist": "loadgroup", "timeout_s": TIMEOUT, "rss_bytes": RSS,
-               "batches": [], "unrun": [], "unattempted": []}
+               "batches": [], "unrun": [], "unattempted": [],
+               "collections": [], "collection_pending_modules": []}
     try:
         options = shlex.split(tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["pytest"]["ini_options"]["addopts"])
         if options != ["-n", "6", "--dist=loadgroup", "-m", "not integration"]:
@@ -323,18 +443,34 @@ def run(args):
                    PYTEST_ADDOPTS="", PYTHONDONTWRITEBYTECODE="1", PCC_PYTEST_AUTO_CLEAN="0",
                    PCC_VALIDATION_REFERENCES=str(REFERENCES),
                    PCC_VALIDATION_SOURCE_MANIFEST=str(args.out / "source-before.json"))
-        collect = args.out / "collection"
-        collect.mkdir()
-        env["PCC_VALIDATION_INVENTORY"] = str(collect / "inventory")
-        code = run_guard(collect, pytest_command(collect, files, collect=True), env, original)
-        if code not in (0, 5):
-            raise ValueError("collection failed")
-        rows = json.loads((collect / "inventory/controller.json").read_text())["rows"]
-        ids = [row["canonical_nodeid"] for row in rows]
-        if len(ids) != len(set(ids)) or not rows:
-            raise ValueError("empty/duplicate raw inventory")
-        if any(row["lane"] not in LANES for row in rows):
-            raise ValueError("unclassified execution lane")
+        env.pop("PCC_VALIDATION_SELECTION", None)
+        shards = collection_plan(files)
+        save(args.out / "collection-plan.json", shards)
+        receipt["collection_pending_modules"] = [path for shard in shards for path in shard]
+        parts = []
+        for index, shard in enumerate(shards):
+            collect = args.out / f"collection-{index:03}"
+            collect.mkdir()
+            save(collect / "modules.json", shard)
+            env.update(PCC_VALIDATION_INVENTORY=str(collect / "inventory"),
+                       PCC_VALIDATION_COLLECTION=str(collect / "modules.json"))
+            part = {"directory": collect.name, "modules": shard, "status": "COLLECTION_INCOMPLETE"}
+            receipt["collections"].append(part)
+            save(args.out / "receipt.json", receipt)
+            try:
+                code = run_guard(collect, pytest_command(collect, shard, collect=True), env, original)
+                collected = summarize_collection(collect, shard, code)
+            except Exception as error:
+                part["error"] = type(error).__name__ + ": " + str(error)
+                raise
+            parts.append(collected)
+            part.update(status=collected["status"], returncode=code, raw_count=len(collected["rows"]),
+                        selected_count=collected["selected_count"])
+            receipt["collection_pending_modules"] = [path for pending in shards[index + 1:] for path in pending]
+            save(args.out / "receipt.json", receipt)
+        rows = merge_collections(parts, files)
+        save(args.out / "raw-inventory.json", {"modules": files, "rows": rows})
+        env.pop("PCC_VALIDATION_COLLECTION", None)
         receipt["raw_union_count"] = len(rows)
         receipt["lane_count"] = sum(row["lane"] == args.lane for row in rows)
         receipt["unrun"] = [dict(row, status="UNRUN_PREREQUISITE") for row in rows
@@ -354,7 +490,8 @@ def run(args):
                 code = run_guard(directory, pytest_command(directory, sorted({row["file"] for row in batch})), env, original)
             except Exception as error:
                 guard_error = type(error).__name__ + ": " + str(error)
-            summary = summarize_batch(directory, expected)
+            batch_files = {row["file"] for row in batch}
+            summary = summarize_batch(directory, expected, [row for row in rows if row["file"] in batch_files])
             save(directory / "outcomes.json", summary)
             result = {"directory": directory.name, "returncode": code, "guard_error": guard_error, **summary}
             proceed, reason = batch_continuation(result)

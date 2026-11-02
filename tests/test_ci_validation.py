@@ -105,8 +105,204 @@ def test_reviewed_reference_functions_exist_and_rust_negative_controls_stay():
 
 
 def row(module, index, *, group=(), selected=True, lane="ordinary"):
-    return {"file": module, "canonical_nodeid": f"{module}::test_{index}", "groups": list(group),
+    return {"file": module, "canonical_nodeid": f"{module}::test_{index}", "nodeid": f"{module}::test_{index}",
+            "function": f"test_{index}", "groups": list(group), "gates": [], "reference_activity": "fixture",
             "selected_by_repository": selected, "lane": lane}
+
+
+def _collection_reports(directory, files, rows):
+    """Authored collection model only; no pytest/compiler process is started."""
+    inventory = directory / "inventory"
+    inventory.mkdir(exist_ok=True)
+    selected = [entry["nodeid"] for entry in rows if entry["selected_by_repository"]]
+    witness = {"collect_only": True, "workers": 0, "dist": "no", "marker": "",
+               "local_schedule": {"workers": 0, "dist": "no"}, "requested_modules": files,
+               "module_reports": [{"nodeid": path, "outcome": "passed"} for path in files],
+               "collection_anomalies": [], "rows": rows, "raw_nodeids": [entry["canonical_nodeid"] for entry in rows],
+               "selected": selected}
+    code = 0 if selected else 5
+    events = [{"event": "start", "collect_only": True, "maxfail": 0},
+              {"event": "collected", "nodeids": selected},
+              {"event": "finish", "exitstatus": code, "testsfailed": 0, "testscollected": len(selected)}]
+    deselected = [entry["nodeid"] for entry in rows if not entry["selected_by_repository"]]
+    if deselected:
+        events.insert(1, {"event": "deselected", "nodeids": deselected})
+    (inventory / "controller.json").write_text(json.dumps(witness))
+    (directory / "live.jsonl").write_text("".join(json.dumps(event) + "\n" for event in events))
+    return witness, events, code
+
+
+def test_collection_plan_is_complete_disjoint_and_does_not_split_modules():
+    files = [f"tests/test_{index:03}.py" for index in range(23)]
+    plan = run.collection_plan(list(reversed(files)))
+    assert [len(part) for part in plan] == [10, 10, 3]
+    assert [path for part in plan for path in part] == files
+    for invalid in ([], ["a.py", "a.py"], ["../a.py"], ["a.py::test_1"], [None]):
+        with pytest.raises(ValueError):
+            run.collection_plan(invalid)
+
+
+def test_collection_merge_rejoins_cross_shard_groups_and_keeps_prerequisites(tmp_path):
+    files = [f"tests/test_{index:03}.py" for index in range(12)]
+    parts = []
+    for index, paths in enumerate(run.collection_plan(files)):
+        directory = tmp_path / str(index)
+        directory.mkdir()
+        rows = [row(path, 0, group=("shared",) if path in (files[0], files[-1]) else (),
+                    selected=path != files[1], lane="integration" if path == files[2] else "ordinary")
+                for path in paths if path != files[3]]  # A genuinely empty module is still witnessed.
+        _witness, _events, code = _collection_reports(directory, paths, rows)
+        parts.append(run.summarize_collection(directory, paths, code))
+    merged = run.merge_collections(parts, files)
+    assert len(merged) == 11 and len({entry["canonical_nodeid"] for entry in merged}) == 11
+    assert next(entry for entry in merged if entry["file"] == files[1])["selected_by_repository"] is False
+    plan = run.batches(merged, "ordinary")
+    owners = [{entry["file"] for entry in batch} for batch in plan]
+    assert any({files[0], files[-1]} <= owner for owner in owners)
+    assert {entry["canonical_nodeid"] for batch in plan for entry in batch} == {
+        entry["canonical_nodeid"] for entry in merged if entry["selected_by_repository"] and entry["lane"] == "ordinary"}
+    for bad in (parts[:-1], list(reversed(parts)), parts + [parts[0]]):
+        with pytest.raises(ValueError, match="exact disjoint"):
+            run.merge_collections(bad, files)
+
+
+@pytest.mark.parametrize("blocked", [False, True])
+def test_zero_selected_collection_requires_exit_five_and_is_not_execution(tmp_path, blocked):
+    rows = [row("a.py", 0, selected=False)] if blocked else []
+    _witness, _events, code = _collection_reports(tmp_path, ["a.py"], rows)
+    assert code == 5
+    part = run.summarize_collection(tmp_path, ["a.py"], code)
+    assert part["status"] == "COLLECTED_NOT_EXECUTED" and part["selected_count"] == 0
+    with pytest.raises(ValueError, match="counts/exit"):
+        run.summarize_collection(tmp_path, ["a.py"], 0)
+    if blocked:
+        assert run.merge_collections([part], ["a.py"]) == rows
+    else:
+        with pytest.raises(ValueError, match="empty raw inventory"):
+            run.merge_collections([part], ["a.py"])
+
+
+@pytest.mark.parametrize("fault", [None, "missing-module", "duplicate-module", "nested-skip"])
+def test_collection_plugin_records_actual_collectors_including_empty_modules(tmp_path, monkeypatch, fault):
+    from scripts import ci_validation_inventory as inventory
+
+    files = ["a.py", "empty.py"]
+    manifest = tmp_path / "modules.json"
+    manifest.write_text(json.dumps(files))
+    registry = tmp_path / "references.json"
+    registry.write_text('{"functions":{}}')
+    monkeypatch.setenv("PCC_VALIDATION_INVENTORY", str(tmp_path / "inventory"))
+    monkeypatch.setenv("PCC_VALIDATION_COLLECTION", str(manifest))
+    monkeypatch.setenv("PCC_VALIDATION_REFERENCES", str(registry))
+    monkeypatch.delenv("PCC_VALIDATION_SELECTION", raising=False)
+    registered = []
+    options = {"collectonly": True, "numprocesses": 0, "dist": "no", "markexpr": "", "keyword": ""}
+    config = SimpleNamespace(rootpath=tmp_path, getoption=options.__getitem__,
+                             pluginmanager=SimpleNamespace(register=lambda plugin, name: registered.append(plugin)))
+    inventory.pytest_configure(config)
+    plugin, = registered
+    module_reports = ["a.py"] if fault == "missing-module" else ["a.py", "empty.py"]
+    if fault == "duplicate-module":
+        module_reports.append("a.py")
+    for nodeid in module_reports:
+        plugin.pytest_collectreport(SimpleNamespace(nodeid=nodeid, outcome="passed"))
+    if fault == "nested-skip":
+        plugin.pytest_collectreport(SimpleNamespace(nodeid="a.py::TestSkipped", outcome="skipped", longreprtext="unavailable"))
+    item = SimpleNamespace(path=tmp_path / "a.py", nodeid="a.py::test_0", name="test_0", originalname="test_0",
+                           get_closest_marker=lambda name: None, iter_markers=lambda name: [])
+    hook = plugin.pytest_collection_modifyitems([item])
+    next(hook)
+    with pytest.raises(StopIteration):
+        next(hook)
+    events = [{"event": "start", "collect_only": True, "maxfail": 0},
+              {"event": "collected", "nodeids": [item.nodeid]},
+              {"event": "finish", "exitstatus": 0, "testsfailed": 0, "testscollected": 1}]
+    (tmp_path / "live.jsonl").write_text("".join(json.dumps(event) + "\n" for event in events))
+    if fault is None:
+        summary = run.summarize_collection(tmp_path, files, 0)
+        assert summary["status"] == "COLLECTED_NOT_EXECUTED" and len(summary["rows"]) == 1
+    else:
+        with pytest.raises(ValueError, match="collection evidence"):
+            run.summarize_collection(tmp_path, files, 0)
+
+
+@pytest.mark.parametrize("fault", [
+    "missing-inventory", "extra-worker", "missing-module", "duplicate-module", "unexpected-module",
+    "module-skip", "nested-skip", "nested-failure", "requested-files", "duplicate-row", "foreign-row",
+    "malformed-row", "duplicate-selected", "missing-selected", "workers", "missing-start", "missing-finish",
+    "duplicate-finish", "failed-count", "collected-count", "collected-list", "exit", "executed", "truncated",
+    "maxfail", "unknown-event", "canonical-decoration", "missing-unselected-row",
+    "malformed-deselection", "contradictory-deselection",
+])
+def test_collection_missing_malformed_or_partial_evidence_fails_closed(tmp_path, fault):
+    files = ["a.py", "empty.py"]
+    witness, events, code = _collection_reports(tmp_path, files, [row("a.py", 0)])
+    if fault == "missing-module":
+        witness["module_reports"].pop()
+    elif fault == "duplicate-module":
+        witness["module_reports"][1] = dict(witness["module_reports"][0])
+    elif fault == "unexpected-module":
+        witness["module_reports"][1]["nodeid"] = "other.py"
+    elif fault == "module-skip":
+        witness["module_reports"][1]["outcome"] = "skipped"
+    elif fault in ("nested-skip", "nested-failure"):
+        witness["collection_anomalies"] = [{"nodeid": "a.py::SkippedClass",
+                                             "outcome": "skipped" if fault == "nested-skip" else "failed"}]
+    elif fault == "requested-files":
+        witness["requested_modules"] = ["a.py"]
+    elif fault == "duplicate-row":
+        witness["rows"].append(dict(witness["rows"][0]))
+    elif fault == "foreign-row":
+        witness["rows"].append(row("other.py", 0))
+    elif fault == "malformed-row":
+        witness["rows"][0]["selected_by_repository"] = "true"
+    elif fault == "missing-unselected-row":
+        witness["raw_nodeids"].append("a.py::test_blocked")
+    elif fault == "malformed-deselection":
+        events.insert(1, {"event": "deselected", "nodeids": "a.py::test_0"})
+    elif fault == "contradictory-deselection":
+        events.insert(1, {"event": "deselected", "nodeids": ["a.py::test_0"]})
+    elif fault == "canonical-decoration":
+        witness["rows"][0]["nodeid"] += "@group"
+    elif fault == "duplicate-selected":
+        witness["selected"] *= 2
+    elif fault == "missing-selected":
+        witness["selected"] = []
+    elif fault == "workers":
+        witness["workers"] = 6
+    elif fault == "missing-start":
+        events.pop(0)
+    elif fault == "missing-finish":
+        events.pop()
+    elif fault == "duplicate-finish":
+        events.append(dict(events[-1]))
+    elif fault == "failed-count":
+        events[-1]["testsfailed"] = 1
+    elif fault == "collected-count":
+        events[-1]["testscollected"] = 2
+    elif fault == "collected-list":
+        events[1]["nodeids"] = ["unexpected.py::test_0"]
+    elif fault == "exit":
+        events[-1]["exitstatus"] = 5
+        code = 5
+    elif fault == "executed":
+        events.insert(2, {"event": "report", "nodeid": "a.py::test_0", "when": "call", "outcome": "passed"})
+    elif fault == "maxfail":
+        events[0]["maxfail"] = 1
+    elif fault == "unknown-event":
+        events.insert(2, {"event": "unknown-collection-protocol"})
+    inventory = tmp_path / "inventory/controller.json"
+    inventory.write_text(json.dumps(witness))
+    (tmp_path / "live.jsonl").write_text("".join(json.dumps(event) + "\n" for event in events))
+    if fault == "missing-inventory":
+        inventory.unlink()
+    elif fault == "extra-worker":
+        inventory.with_name("gw0.json").write_text(json.dumps(witness))
+    elif fault == "truncated":
+        with (tmp_path / "live.jsonl").open("a") as stream:
+            stream.write('{"event":')
+    with pytest.raises(ValueError):
+        run.summarize_collection(tmp_path, files, code)
 
 
 def test_batches_preserve_exact_union_modules_and_transitive_xdist_groups():
@@ -365,7 +561,11 @@ def _batch_reports(directory, expected, events):
     inventory.mkdir(exist_ok=True)
     witness = {"collect_only": False, "workers": 6, "dist": "loadgroup",
                "selected": [node + "@group" for node in expected],
-               "rows": [{"nodeid": node + "@group", "canonical_nodeid": node} for node in expected]}
+               "raw_nodeids": expected,
+               "rows": [{"nodeid": node + "@group", "canonical_nodeid": node,
+                         "file": node.split("::")[0], "function": node.split("::")[-1].split("[")[0],
+                         "groups": [], "gates": [], "reference_activity": "fixture",
+                         "selected_by_repository": True, "lane": "ordinary"} for node in expected]}
     for index in range(6):
         (inventory / f"gw{index}.json").write_text(json.dumps(witness))
     (directory / "live.jsonl").write_text("".join(json.dumps(event) + "\n" for event in events))
@@ -374,6 +574,40 @@ def _batch_reports(directory, expected, events):
 def _node_reports(node, *, failed=False, phases=("setup", "call", "teardown")):
     return [{"event": "report", "nodeid": node + "@group", "when": phase,
              "outcome": "failed" if failed and phase == "call" else "passed"} for phase in phases]
+
+
+@pytest.mark.parametrize("fault", [None, "lane", "groups", "gates", "reference", "selected", "function",
+                                   "missing-unselected", "added-raw-node", "duplicate-raw-node"])
+def test_body_inventory_matches_every_frozen_raw_row_not_only_selected_nodes(tmp_path, fault):
+    frozen = [row("a.py", 0), row("a.py", 1, selected=False, lane="integration")]
+    node = frozen[0]["canonical_nodeid"]
+    events = [{"event": "start", "maxfail": 0}, *_node_reports(node),
+              {"event": "finish", "exitstatus": 0, "testsfailed": 0}]
+    _batch_reports(tmp_path, [node], events)
+    actual = [dict(entry, nodeid=entry["nodeid"] + "@group") for entry in frozen]
+    changes = {"lane": ("lane", "reference"), "groups": ("groups", ["changed"]),
+               "gates": ("gates", [{"env": "CHANGED"}]), "reference": ("reference_activity", "changed"),
+               "selected": ("selected_by_repository", True), "function": ("function", "different")}
+    if fault in changes:
+        key, value = changes[fault]
+        actual[1][key] = value
+    elif fault == "missing-unselected":
+        actual.pop()
+    elif fault == "added-raw-node":
+        actual.append(row("a.py", 2, selected=False))
+    elif fault == "duplicate-raw-node":
+        actual.append(dict(actual[1]))
+    for path in (tmp_path / "inventory").glob("gw*.json"):
+        witness = json.loads(path.read_text())
+        witness["rows"] = actual
+        witness["raw_nodeids"] = [entry["canonical_nodeid"] for entry in actual]
+        path.write_text(json.dumps(witness))
+    result = run.summarize_batch(tmp_path, [node], frozen)
+    if fault is None:
+        assert result["outcomes"][0]["status"] == "PASS" and not result["evidence_errors"]
+    else:
+        assert result["evidence_errors"] and result["outcomes"][0]["status"] != "PASS"
+        assert not run.batch_continuation(dict(result, returncode=0, guard_error=None))[0]
 
 
 def _subtest_report(node, index, *, outcome="passed", **extra):
@@ -615,11 +849,9 @@ def test_campaign_saves_failed_batch_before_deciding_independent_continuation(tm
     attempts = []
 
     def guarded(directory, command, environment, original):
-        if directory.name == "collection":
-            inventory = directory / "inventory"
-            inventory.mkdir()
-            (inventory / "controller.json").write_text(json.dumps({"rows": rows}))
-            return 0
+        if directory.name.startswith("collection-"):
+            files = json.loads((directory / "modules.json").read_text())
+            return _collection_reports(directory, files, [entry for entry in rows if entry["file"] in files])[2]
         attempts.append(directory.name)
         expected = json.loads((directory / "selection.json").read_text())
         node = expected[0]
@@ -653,6 +885,55 @@ def test_campaign_saves_failed_batch_before_deciding_independent_continuation(tm
         assert receipt["status"] == "INFRASTRUCTURE_OR_RESOURCE_FAILURE"
         assert receipt["unattempted"] == ["b.py::test_0"]
         assert not receipt["batches"][0]["continue_independent_batches"]
+
+
+@pytest.mark.parametrize("fault", ["resource", "missing-finish", "missing-module"])
+def test_collection_abort_keeps_completed_shards_and_never_admits_test_bodies(tmp_path, monkeypatch, fault):
+    """Orchestration model only: guard and identities are not executed."""
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "pyproject.toml").write_text(
+        '[tool.pytest.ini_options]\naddopts="-n 6 --dist=loadgroup -m \'not integration\'"\n')
+    setup = tmp_path / "tools.json"
+    setup.write_text("{}")
+    monkeypatch.setenv("PCC_CI_TOOL_RECEIPT", str(setup))
+    monkeypatch.setenv("GITHUB_SHA", "fixture-source")
+    monkeypatch.setenv("PCC_VALIDATION_SELECTION", "must-not-be-inherited")
+    monkeypatch.delenv("PCC_RUSTC_INSTALL_RECEIPT", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.setattr(run, "ROOT", root)
+    monkeypatch.setattr(run, "identity", lambda: {"sha": "fixture-source", "files": {}})
+    monkeypatch.setattr(tools, "verify_tool_receipt", lambda receipt: {"verified": []})
+    files = [f"test_{index:02}.py" for index in range(12)]
+    monkeypatch.setattr(run, "modules", lambda domain: files)
+    attempts = []
+
+    def guarded(directory, command, environment, original):
+        attempts.append(directory.name)
+        assert directory.name.startswith("collection-")
+        assert "PCC_VALIDATION_SELECTION" not in environment
+        assert "--collect-only" in command and "-n0" in command
+        shard = json.loads(Path(environment["PCC_VALIDATION_COLLECTION"]).read_text())
+        witness, events, code = _collection_reports(directory, shard, [row(path, 0) for path in shard])
+        if directory.name == "collection-001":
+            if fault == "resource":
+                raise ValueError("resource/guard anomaly")
+            if fault == "missing-finish":
+                (directory / "live.jsonl").write_text("".join(json.dumps(event) + "\n" for event in events[:-1]))
+            else:
+                witness["module_reports"].pop()
+                (directory / "inventory/controller.json").write_text(json.dumps(witness))
+        return code
+
+    monkeypatch.setattr(run, "run_guard", guarded)
+    out = tmp_path / "campaign"
+    assert run.run(SimpleNamespace(domain="shared", lane="ordinary", out=out)) == 1
+    receipt = json.loads((out / "receipt.json").read_text())
+    assert attempts == ["collection-000", "collection-001"]
+    assert receipt["status"] == "INFRASTRUCTURE_OR_RESOURCE_FAILURE" and receipt["batches"] == []
+    assert [part["status"] for part in receipt["collections"]] == ["COLLECTED_NOT_EXECUTED", "COLLECTION_INCOMPLETE"]
+    assert receipt["collection_pending_modules"] == files[10:]
+    assert "lane_count" not in receipt and not (out / "raw-inventory.json").exists()
 
 
 def test_live_report_records_actual_interrupt_internalerror_worker_and_stop_evidence():

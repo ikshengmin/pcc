@@ -150,7 +150,6 @@ def test_default_records_are_separate_from_function_type_and_abi():
     ('int f(int x={1});','cpp.unsupported.default-argument-context'),
     ('template<class T> int f(T x=1){return x;}','cpp.unsupported.default-argument-context'),
     ('int f(int x=1,...);','cpp.unsupported.default-argument-context'),
-    ('struct S{S(int x=1);};','cpp.unsupported.default-argument-context'),
 ))
 def test_invalid_or_explicitly_unsupported_default_contexts(source,code):
     with pytest.raises(CppDiagnostic) as caught:

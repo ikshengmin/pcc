@@ -54,7 +54,7 @@ def _declaration(parser, symbol, params, parameter_symbols, defining):
     return declaration, this
 
 
-def parse_constructor(parser, definition=None):
+def parse_constructor(parser, definition=None, *, explicit=False):
     parent = parser.scope
     outside = definition is None
     name = parse_qualified_name(parser.cursor, parser._identifier)
@@ -74,13 +74,16 @@ def parse_constructor(parser, definition=None):
             raise CppDiagnostic("cpp.invalid-constructor", "in-class constructor names must be unqualified", name.coord)
     parameter_scope = Scope(definition.scope)
     parser.scope = parameter_scope
-    params, parameter_symbols = [], []
+    params, parameter_symbols, default_arguments = [], [], []
     try:
         parser._expect("(")
-        parser._parameter_clause(params, parameter_symbols)
+        parser._parameter_clause(params, parameter_symbols, defaults=default_arguments)
         parser._expect(")")
     finally:
         parser.scope = parent
+    if outside and any(default_arguments):
+        raise CppDiagnostic("cpp.unsupported.default-argument-context",
+                            "out-of-class constructor default additions require special-member declaration rules", name.coord)
     if parser._peek().value in ("const", "volatile"):
         raise CppDiagnostic("cpp.constructor-cv", "constructors cannot have cv-qualifiers", parser._peek().coord)
     for _, dtype in params:
@@ -119,11 +122,14 @@ def parse_constructor(parser, definition=None):
         symbol.class_owner, symbol.access = owner, definition.access
         symbol.owner = definition.scope
         symbol.constructor = True
+        symbol.constructor_explicit = explicit
         symbol.method_static = False
         symbol.method_const = False
         symbol.internal_linkage = owner.internal_linkage
         symbol.c_name = _complete_name(owner, signature)
         group.overloads.append(symbol)
+    from pcc.frontends.cpp.default_arguments import merge
+    merge(parser, symbol, default_arguments, definition.scope)
     parser.function_projection_names.add(symbol.c_name)
     for parameter in parameter_symbols:
         if parameter is not None:
@@ -293,6 +299,7 @@ def construct_local(parser, symbol):
     dtype = unqualified(symbol.dtype)
     arguments = []
     direct_list = False
+    copy_initialization = False
     if parser._accept("("):
         if _function_declaration_ahead(parser):
             raise CppDiagnostic("cpp.unsupported.block-function-declarations", "function declaration ambiguity is not object construction", parser._peek().coord)
@@ -307,10 +314,22 @@ def construct_local(parser, symbol):
         from pcc.frontends.cpp.constructor_lists import parse_arguments
         arguments = parse_arguments(parser)
         direct_list = True
-    elif parser._peek().value == "=":
-        raise CppDiagnostic("cpp.unsupported.constructor-list-initialization", "copy construction requires its separate overload and conversion rules", parser._peek().coord)
+    elif parser._accept("="):
+        copy_initialization = True
+        if parser._peek().value == "{":
+            from pcc.frontends.cpp.constructor_lists import parse_arguments
+            arguments = parse_arguments(parser)
+            direct_list = True
+        else:
+            expression = parser._expression()
+            parser._require_value(expression, allow_class=True)
+            if is_class_type(expression.dtype):
+                raise CppDiagnostic("cpp.unsupported.class-initialization",
+                                    "class copy/materialization requires separate lifetime semantics", expression.node.coord)
+            arguments = [parser._decay_array(expression)]
     address = c_ast.UnaryOp("&", c_ast.ID(symbol.c_name, symbol.coord), symbol.coord)
-    call = constructor_call(parser, dtype, arguments, address, symbol.coord, direct_list=direct_list)
+    call = constructor_call(parser, dtype, arguments, address, symbol.coord,
+                            direct_list=direct_list, copy_initialization=copy_initialization)
     parser._expect(";")
     symbol.initialization_complete = True
     symbol.jump_entry = "initialized"
@@ -329,12 +348,17 @@ def call_free_body(body):
     return True
 
 
-def constructor_call(parser, dtype, arguments, address, coord, require_closed=False, *, direct_list=False):
+def constructor_call(parser, dtype, arguments, address, coord, require_closed=False, *,
+                     direct_list=False, copy_initialization=False):
     """Select the existing C1 at an already-evaluated complete-object address."""
-    if direct_list:
+    group = dtype.definition.constructors
+    if copy_initialization and not direct_list:
+        from pcc.frontends.cpp.constructor_lists import converting_candidates
+        group = converting_candidates(group)
+    if direct_list or copy_initialization:
         from pcc.frontends.cpp.constructor_lists import require_simple_candidates
-        require_simple_candidates(dtype.definition.constructors, coord)
-    selected = resolve_overload(dtype.definition.constructors,
+        require_simple_candidates(group, coord)
+    selected = resolve_overload(group,
                                 [arg.dtype for arg in arguments], parser.types, coord,
                                 [arg.null_pointer for arg in arguments], [arg.lvalue or arg.assignment_result for arg in arguments])
     parser.scope.check_member_access(selected, coord)
@@ -343,11 +367,23 @@ def constructor_call(parser, dtype, arguments, address, coord, require_closed=Fa
     if require_closed and not getattr(selected, 'closed_normal_body', False):
         raise CppDiagnostic('cpp.unsupported.placement-constructor-effects',
                             'unknown constructor effects need exception/cleanup integration', coord)
-    preparation = []
     if direct_list:
         # Narrowing is checked only after overload selection, never used to
         # discard a better candidate in favor of a non-narrowing alternative.
-        from pcc.frontends.cpp.constructor_lists import sequence_arguments
+        from pcc.frontends.cpp.constructor_lists import check_arguments, sequence_arguments
+        check_arguments(parser, arguments, selected.parameters)
+        if copy_initialization and getattr(selected, "constructor_explicit", False):
+            # The chosen explicit candidate makes this form ill-formed; do
+            # not demand temporary materialization merely to diagnose it.
+            raise CppDiagnostic("cpp.explicit-copy-list", "copy-list-initialization selected an explicit constructor", coord)
+    from pcc.frontends.cpp.default_arguments import expand
+    arguments = expand(parser, selected, arguments, coord)
+    preparation = []
+    if direct_list:
+        # Only the supplied initializer-list clauses were narrowing-checked
+        # above. Defaults were copy-initialized at their declaration, and are
+        # not source-list clauses. Evaluating them after the supplied clauses
+        # is a permitted implementation order, not a C++ ordering guarantee.
         preparation, converted = sequence_arguments(parser, arguments, selected.parameters)
     else:
         converted = [parser._convert(arg, target, coord)

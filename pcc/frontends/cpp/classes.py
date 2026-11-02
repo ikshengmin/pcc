@@ -351,8 +351,19 @@ def parse_class(parser):
                 from pcc.frontends.cpp.destructors import parse_destructor
                 definition.method_declarations.append(parse_destructor(parser, definition))
                 continue
+            if token.value == "explicit":
+                parser.cursor.take()
+                next_token = parser._peek()
+                if (next_token.value == dtype.name
+                        and parser.cursor.tokens[parser.cursor.position + 1].value == "("):
+                    from pcc.frontends.cpp.constructors import parse_constructor
+                    definition.method_declarations.append(parse_constructor(parser, definition, explicit=True))
+                    continue
+                if next_token.value in ("operator", "inline", "constexpr", "("):
+                    _unsupported(token, "conversion functions and combined/parenthesized constructor specifiers are not implemented")
+                raise CppDiagnostic("cpp.invalid-explicit", "explicit requires a constructor or conversion function", token.coord)
             if token.value in ("class", "struct", "union", "friend", "virtual",
-                               "template", "constexpr", "explicit", "operator"):
+                               "template", "constexpr", "operator"):
                 _unsupported(token, "non-data class member semantics are not implemented")
             if token.value == "enum":
                 from pcc.frontends.cpp.enums import parse_enum

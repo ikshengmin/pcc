@@ -1,4 +1,4 @@
-"""Local direct-list C1 arguments, N4659 [dcl.init.list]/3.6,4,7.
+"""Local converting/list C1 arguments, N4659 [dcl.init.list], [over.match.copy].
 
 The candidate-set guard excludes initializer-list/class-parameter constructors;
 class-value arguments and nested braced clauses remain explicit boundaries.
@@ -15,6 +15,20 @@ from pcc.frontends.cpp.initializers import (
     parse_initializer_list,
 )
 from pcc.frontends.cpp.types import ReferenceType, array_type, unqualified
+
+
+def converting_candidates(group):
+    """Copy-initialization excludes explicit constructors before ranking.
+
+    Reuse the canonical symbols; the filtered overload view neither changes
+    declaration identity/access nor makes an explicit constructor implicit.
+    Copy-list-initialization does not use this filter.
+    """
+    from pcc.frontends.cpp.sema import Symbol
+    candidates = Symbol(group.name, group.kind, group.coord)
+    candidates.overloads = [candidate for candidate in group.overloads
+                            if not getattr(candidate, "constructor_explicit", False)]
+    return candidates
 
 
 def parse_arguments(parser):
@@ -49,19 +63,24 @@ def require_simple_candidates(group, coord):
                 )
 
 
+def check_arguments(parser, arguments, parameters):
+    """Apply narrowing after overload resolution, before parameter lowering."""
+    for expression, dtype in zip(arguments, parameters):
+        if not isinstance(dtype, ReferenceType):
+            check_list_conversion(expression, dtype, parser.types, expression.node.coord)
+
+
 def sequence_arguments(parser, arguments, parameters):
     """Evaluate each original clause/conversion once, in brace order.
 
-    Scalar parameters are copy-initialized, so the existing list-conversion
-    check applies (including no implicit nullptr-to-bool conversion). References
+    The caller already checked scalar copy-initialization/list conversions
+    (including no implicit nullptr-to-bool conversion). References
     retain the existing direct-binding/temporary-lifetime rules. Saving the
     bound address, not the referent value, preserves aliasing across clauses.
     """
     declarations, values = [], []
     for expression, dtype in zip(arguments, parameters):
         coord = expression.node.coord
-        if not isinstance(dtype, ReferenceType):
-            check_list_conversion(expression, dtype, parser.types, coord)
         converted = parser._convert(expression, dtype, coord)
         name = parser._fresh_projection_name("__pcc_cpp_constructor_arg_")
         declarations.append(parser._decl(name, dtype, coord, converted))

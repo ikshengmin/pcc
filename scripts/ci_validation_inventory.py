@@ -41,6 +41,13 @@ def pytest_configure(config):
     selection_file = os.environ.get("PCC_VALIDATION_SELECTION")
     allowed = set(json.loads(Path(selection_file).read_text())) if selection_file else None
     collecting = config.getoption("collectonly")
+    requested_modules = (json.loads(Path(os.environ["PCC_VALIDATION_COLLECTION"]).read_text())
+                         if collecting else [])
+    if collecting and (not isinstance(requested_modules, list) or not requested_modules
+                       or any(not isinstance(path, str) for path in requested_modules)
+                       or len(requested_modules) != len(set(requested_modules))):
+        raise pytest.UsageError("exact collection module manifest required")
+    module_reports, collection_anomalies = [], []
     local_schedule = {"workers": config.getoption("numprocesses"), "dist": config.getoption("dist")}
     if hasattr(config, "workerinput"):
         schedule = config.workerinput.get("pcc_validation_schedule")
@@ -52,6 +59,18 @@ def pytest_configure(config):
         raise pytest.UsageError("lane partition owns the complete unfiltered marker union")
 
     class Inventory:
+        def pytest_collectreport(self, report):
+            if not collecting:
+                return
+            evidence = {"nodeid": report.nodeid, "outcome": report.outcome}
+            # These are actual collector reports, not an echo of argv. Empty
+            # modules still have one successful module report. Class/package
+            # skips and failures cannot silently shrink the raw node union.
+            if report.nodeid.endswith(".py") or report.nodeid in requested_modules:
+                module_reports.append(evidence)
+            if report.outcome != "passed":
+                collection_anomalies.append(dict(evidence, longrepr=report.longreprtext))
+
         @pytest.hookimpl(optionalhook=True)
         def pytest_configure_node(self, node):
             # xdist workers deliberately run local -n0/dist=no. The scheduling
@@ -90,9 +109,12 @@ def pytest_configure(config):
                 retained = {id(item) for item, row in before if row["canonical_nodeid"] in allowed}
                 items[:] = [item for item in items if id(item) in retained]
             worker = getattr(config, "workerinput", {}).get("workerid", "controller")
-            value = {"rows": rows, "selected": [item.nodeid for item in items],
+            value = {"rows": rows, "raw_nodeids": [row["canonical_nodeid"] for _item, row in before],
+                     "selected": [item.nodeid for item in items],
                      "collect_only": collecting, **schedule,
-                     "local_schedule": local_schedule, "marker": config.getoption("markexpr")}
+                     "local_schedule": local_schedule, "marker": config.getoption("markexpr"),
+                     "requested_modules": requested_modules, "module_reports": module_reports,
+                     "collection_anomalies": collection_anomalies}
             (out / (worker + ".json")).write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
             return result
 

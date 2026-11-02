@@ -42,6 +42,37 @@ def test_address_of_dereference_reads_pointer_but_not_volatile_referent():
 
 
 PROGRAMS = (
+    ('generic-address-anonymous-field-explicit-reset', 'struct S{struct{int x;int y;};int b[3];};int main(void){return _Generic(&(struct S){.x=1,.b={[2]=3}},struct S*:42,default:1);}'),
+    ('generic-address-designated-aggregate-scalar-continuation', 'struct S{int a[2];};int main(void){return _Generic(&(struct S){.a=1,2},struct S*:42,default:1);}'),
+    ('gnu-generic-address-valid-range-designator', 'int main(void){return _Generic(&(int[3]){[0 ... 1]=0},int(*)[3]:42,default:1);}'),
+    ('generic-address-sizeof-object-designator', 'int main(void){int n;return _Generic(&(int[2]){[sizeof(n)/sizeof(int)]=0},int(*)[2]:42,default:1);}'),
+    ('generic-address-independent-array-value-literal', 'int main(void){return _Generic(&(int*[1]){(int[2]){[1]=0}},int*(*)[1]:42,default:1);}'),
+    ('generic-address-mixed-independent-value-literal', 'struct S{int*p;int a[2];};int main(void){return _Generic(&(struct S){{(int[2]){[1]=0}},{[1]=0}},struct S*:42,default:1);}'),
+    ('generic-address-designator-resets-continuation', 'struct S{int a[2];int b[3];};int main(void){return _Generic(&(struct S){.a[0]=1,.b={[2]=3}},struct S*:42,default:1);}'),
+    ('generic-address-nested-compound-designator-no-effects', 'int take(int*);int main(void){return _Generic(&(int[1]){take((int[2]){[1]=0})},int(*)[1]:42,default:1);}'),
+    ('generic-address-continuation-nested-compound-no-effects', 'int take(int*);struct S{int a[2];};int main(void){return _Generic(&(struct S){.a[0]=1,take((int[2]){[1]=0})},struct S*:42,default:1);}'),
+    ('generic-address-designated-scalar-continuation', 'struct S{int a[2];};int main(void){return _Generic(&(struct S){.a[0]=1,2},struct S*:42,default:1);}'),
+    ('generic-address-fixed-compound-designator', 'int main(void){return _Generic(&(int[2]){[1]=0},int(*)[2]:42,default:1);}'),
+    ('generic-address-fixed-compound-field-designator', 'struct S{int n;};int main(void){return _Generic(&(struct S[2]){[0].n=1},struct S(*)[2]:42,default:1);}'),
+    ('generic-address-inferred-compound-custom-layout', 'struct S{char c;unsigned b:1;int a[2];};int main(void){return _Generic(&(struct S[]){[0].a[1]=7},struct S(*)[1]:42,default:1);}'),
+    ('generic-address-inferred-compound-member-designator', 'struct S{int n;};int main(void){return _Generic(&(struct S[]){[0].n=1},struct S(*)[1]:42,default:1);}'),
+    ('generic-address-inferred-compound-nested-index', 'enum{N=1};int main(void){return _Generic(&(int[][2]){[1][N]=0},int(*)[2][2]:42,default:1);}'),
+    ('generic-address-inferred-compound-array', 'int main(void){return _Generic(&(int[]){0,0},int(*)[2]:42,default:1);}'),
+    ('generic-address-inferred-compound-rows', 'int main(void){return _Generic(&(int[][2]){1,2,3,4},int(*)[2][2]:42,default:1);}'),
+    ('generic-address-inferred-compound-no-effects', 'int side(void);int main(void){return _Generic(&(int[]){side(),0},int(*)[2]:42,default:1);}'),
+    ('generic-address-inferred-compound-designator', 'int main(void){return _Generic(&(int[]){[3]=0},int(*)[4]:42,default:1);}'),
+    ('generic-address-wide-string-array', 'int main(void){return _Generic(&L"xy",int(*)[3]:42,default:1);}'),
+    ('gnu-generic-address-local-const-shadow', 'int n;int main(void){return _Generic(&({const int n=0;n;}),const int*:42,default:1);}'),
+    ('generic-address-parenthesized-compound-array', 'int main(void){return _Generic(&((int[3]){0}),int(*)[3]:42,default:1);}'),
+    ('generic-address-const-pointer-object', 'int main(void){int*const p=0;return _Generic(&p,int*const*:42,default:1);}'),
+    ('generic-address-function-dereference', 'int f(void){return 42;}int main(void){return _Generic(&*f,int(*)(void):42,default:1);}'),
+    ('generic-address-string-array', 'int main(void){return _Generic(&"xy",char(*)[3]:42,default:1);}'),
+    ('generic-address-compound-array', 'int main(void){return _Generic(&(int[3]){0},int(*)[3]:42,default:1);}'),
+    ('gnu-generic-address-local-array-scope', 'int main(void){char a;return _Generic(&({int a[3];a;}),int(*)[3]:42,default:1);}'),
+    ('generic-address-array-not-decayed', 'int main(void){int a[3];return _Generic(&a,int(*)[3]:42,default:1);}'),
+    ('generic-address-const-object', 'int main(void){const int n=0;return _Generic(&n,const int*:42,default:1);}'),
+    ('generic-address-function', 'int f(void){return 42;}int main(void){return _Generic(&f,int(*)(void):42,default:1);}'),
+    ('generic-address-selected-array', 'int main(void){int a[3];return _Generic(&_Generic(0,int:a),int(*)[3]:42,default:1);}'),
     ('gnu-whole-vla-scoped-address', 'int main(void){int n=3;int a[n];if(sizeof(*(&({a;})))!=sizeof(a))return 1;return 42;}'),
     ('gnu-unevaluated-local-address-scope', 'int main(void){int x=0;if(sizeof(&({int x=42;x;}))!=sizeof(int*))return 1;return 42;}'),
     ('whole-vla-address-unevaluated', 'int main(void){int n=3;int a[n];if(sizeof(&a)!=sizeof(void*))return 1;return 42;}'),
@@ -112,6 +143,31 @@ PROGRAMS = (
     ('wide-string-array-address', 'int main(void){int(*p)[3]=&L"xy";if(sizeof(*p)!=3*sizeof(int))return 1;if((*p)[1]!=L\'y\')return 2;return 42;}'),
     ('string-array-address', 'int main(void){char(*p)[3]=&"xy";if(sizeof(*p)!=3)return 1;if((*p)[1]!=\'y\')return 2;return 42;}'),
 )
+
+
+# These unchanged positives reached the x86_64 dynamic-stack capability
+# boundary in CI. Keep their object/native obligations below; independent IR
+# checks qualify only frontend lowering, never backend execution support.
+VLA_BACKEND_PREREQUISITE_NAMES = frozenset((
+    'gnu-query-captured-vla-extent',
+    'gnu-scoped-vla-decay-preserved',
+    'gnu-whole-vla-scoped-address',
+    'vla-element-address-once',
+    'whole-vla-address-generic',
+    'whole-vla-address-unevaluated',
+))
+VLA_IR_PROGRAMS = tuple(row for row in PROGRAMS if row[0] in VLA_BACKEND_PREREQUISITE_NAMES)
+
+
+@pytest.mark.parametrize('name,source', VLA_IR_PROGRAMS, ids=[row[0] for row in VLA_IR_PROGRAMS])
+def test_vla_address_original_frontend_ir_is_stable(name, source):
+    texts = []
+    for _ in range(2):
+        generator = CCodeGenerator(translation_unit_name=name+'.c',
+                                  pass_ctx=PassContext(opt_level=0, target_triple=TARGET))
+        generator.generate_code(make_c_parser().parse(source))
+        texts.append(str(generator.module))
+    assert texts[0] == texts[1]
 
 
 @pytest.mark.parametrize('name,source', PROGRAMS, ids=[row[0] for row in PROGRAMS])
@@ -192,6 +248,10 @@ POINTER_TO_VLA_ORIGINAL = 'int main(void){int n=3;int a[n];int(*p)[n]=&a;if(size
 
 
 BOUNDARY_ORIGINALS = (
+    ('generic-unmodeled-completed-scalar-continuation', 'struct S{int a[2];int b[3];};int main(void){return _Generic(&(struct S){.a[0]=1,2,{[2]=3}},struct S*:42,default:1);}', 'c11', 'nested initializer continuation type query'),
+    ('generic-unmodeled-array-element', 'int main(void){int a[1];return _Generic(a[0],int:42,default:1);}', 'c11', 'unsupported _Generic controlling expression type inference'),
+    ('generic-unmodeled-field-arithmetic', 'struct S{double d;};int main(void){struct S s;return _Generic(s.d+0,double:42,default:1);}', 'c11', 'unsupported _Generic controlling expression type inference'),
+    ('generic-unmodeled-field-conditional', 'struct S{double d;};int main(void){struct S s;return _Generic(1?s.d:0,double:42,default:1);}', 'c11', 'unsupported _Generic controlling expression type inference'),
     ('whole-vla-address-stride', 'int main(void){int n=3;int a[n];if((char*)(&a+1)-(char*)&a!=sizeof(a))return 1;return 42;}', 'c11', 'whole VLA object address requires variably modified pointer semantics'),
     ('pointer-to-vla', POINTER_TO_VLA_ORIGINAL, 'c11', "Not a constant expression: identifier 'n'"),
 )
@@ -283,6 +343,18 @@ def test_unmaterialized_nested_vla_query_never_invents_static_extent():
 
 @pytest.mark.parametrize('source,message', (
     ('int main(void){return sizeof(&({int x=missing;x;}));}', 'missing'),
+    ('struct S{struct{int x;int y;};int b[3];};int main(void){return _Generic(&(struct S){.x=1,{[2]=3}},struct S*:42,default:1);}', 'nested initializer continuation type query'),
+    ('struct S{int a[2];int b[3];};int main(void){return _Generic(&(struct S){.a=1,{[2]=3}},struct S*:42,default:1);}', 'nested initializer continuation type query'),
+    ('int main(void){return _Generic(&(int[3]){[2 ... 1]=0},int(*)[3]:42,default:1);}', 'range is reversed'),
+    ('struct S{int a[2];int b[3];};int main(void){return _Generic(&(struct S){.a[0]=1,{[2]=3}},struct S*:42,default:1);}', 'nested initializer continuation type query'),
+    ('int take(int*);int main(void){return _Generic(&(int[1]){take((int[2]){[missing]=0})},int(*)[1]:42,default:1);}', 'missing'),
+    ('int main(void){return _Generic(&(int[2]){[missing]=0},int(*)[2]:42,default:1);}', 'missing'),
+    ('int main(void){int n=1;return _Generic(&(int[2]){[n]=0},int(*)[2]:42,default:1);}', 'integer constant expression'),
+    ('struct S{int n;};int main(void){return _Generic(&(struct S[2]){[0].missing=0},struct S(*)[2]:42,default:1);}', 'member designator'),
+    ('int main(void){return _Generic(&(int[2]){[2]=0},int(*)[2]:42,default:1);}', 'outside the declared extent'),
+    ('int main(void){return _Generic(&(int[1][2]){{[missing]=0}},int(*)[1][2]:42,default:1);}', 'missing'),
+    ('int main(void){return _Generic(&(int[]){missing,0},int(*)[2]:42,default:1);}', 'missing'),
+    ('int main(void){return _Generic(&(int[2]){missing,0},int(*)[2]:42,default:1);}', 'missing'),
     ('int main(void){return sizeof(&({int a[1];int*p=&a[missing];p;}));}', 'missing'),
     ('int main(void){return sizeof(&({int x;int*p=&_Generic(missing,default:x);p;}));}', 'missing'),
     ('int main(void){return sizeof(&({_Static_assert(0,"no");int x;x;}));}', 'static assertion failed'),
@@ -299,9 +371,13 @@ def test_unevaluated_local_queries_still_check_names_and_lvalue_rules(source, me
 def test_query_binding_preserves_module_and_emission_identity():
     generator = CCodeGenerator(translation_unit_name='pure-query.c',
                               pass_ctx=PassContext(opt_level=0, target_triple=TARGET))
-    generator.generate_code(make_c_parser().parse('int side(void);typedef int K;typedef K Saved;'))
-    tree = make_c_parser().parse('int probe(void){return sizeof(&({typedef long long K;Saved x=side();x;}));}')
-    query = tree.ext[0].body.block_items[0].expr.expr
+    # Parse one translation unit so Saved retains its parser typedef binding.
+    # Only emit the declaration prefix: the query below remains type-only.
+    tree = make_c_parser().parse('int side(void);typedef int K;typedef K Saved;'
+                                 'int probe(void){return sizeof(&({typedef long long K;Saved x=side();x;}));}')
+    query = tree.ext[-1].body.block_items[0].expr.expr
+    tree.ext = tree.ext[:-1]
+    generator.generate_code(tree)
     before = (str(generator.module), tuple(generator.module.globals), generator._scope_id_counter,
               generator._current_scope_id, generator.env, generator._decl_ast_types, generator._typedef_ast_types)
     dtype = generator._infer_sizeof_operand_ir_type(query)
@@ -320,3 +396,64 @@ def test_query_layout_gap_is_reported_before_module_mutation():
     with pytest.raises(CodegenError, match='fresh aggregate definitions'):
         generator._infer_sizeof_operand_ir_type(query)
     assert (str(generator.module), tuple(generator.module.globals), generator._scope_id_counter) == before
+
+
+@pytest.mark.parametrize('source', (
+    'int main(void){int a[1];return _Generic(a[0],int:42,default:1);}',
+    'struct S{double d;};int main(void){struct S s;return _Generic(s.d+0,double:42,default:1);}',
+    'struct S{double d;};int main(void){struct S s;return _Generic(1?s.d:0,double:42,default:1);}',
+))
+def test_unmodeled_generic_control_does_not_silently_select_default(source):
+    # Valid C with a currently unmodeled Generic expression-key shape: default
+    # is not permission to substitute a missing controlling type or operand.
+    with pytest.raises(CodegenError, match='unsupported _Generic controlling expression type inference'):
+        compile_unit(source, 'generic-unmodeled-control.c')
+
+
+@pytest.mark.parametrize('target,element', (
+    ('x86_64-unknown-linux-gnu', 'int'),
+    ('aarch64-unknown-linux-gnu', 'unsigned int'),
+    ('arm64-apple-darwin', 'int'),
+    ('x86_64-pc-windows-msvc', 'unsigned short'),
+))
+def test_generic_wide_string_address_uses_target_c_integer_identity(target, element):
+    generator = CCodeGenerator(translation_unit_name='wide-generic-query.c',
+                              pass_ctx=PassContext(opt_level=0, target_triple=target))
+    source = 'int f(void){return _Generic(&L"xy",'+element+'(*)[3]:42,default:1);}'
+    tree = make_c_parser().parse(source)
+    query = tree.ext[0].body.block_items[0].expr
+    before = str(generator.module)
+    assert generator._select_generic_association(query).value == '42'
+    assert str(generator.module) == before
+
+
+def test_struct_initializer_default_normalization_keeps_recursive_contract():
+    generator = CCodeGenerator(translation_unit_name='normalization-contract.c',
+                              pass_ctx=PassContext(opt_level=0, target_triple=TARGET))
+    tree = make_c_parser().parse('struct S{int*p;int a[2];};'
+                                 'struct S value={{(int[2]){[1]=0}},{[1]=0}};')
+    declaration = tree.ext.pop()
+    generator.generate_code(tree)
+    dtype = generator._resolve_ast_type(declaration.type)
+    implicit = generator._normalize_struct_init_list(declaration.init, dtype)
+    explicit = generator._normalize_struct_init_list(declaration.init, dtype, recursive=True)
+    shallow = generator._normalize_struct_init_list(declaration.init, dtype, recursive=False)
+    assert repr(implicit) == repr(explicit)
+    assert shallow.exprs[0] is declaration.init.exprs[0]
+    assert shallow.exprs[1] is declaration.init.exprs[1]
+
+
+@pytest.mark.parametrize('qualifier', ('', 'const '))
+def test_ssa_object_is_not_a_designator_integer_constant_expression(qualifier):
+    from pcc.frontends.c.passes import PassPipeline
+    from pcc.frontends.c.passes.context import AllocStrategy
+
+    source = ('int main(void){'+qualifier+'int n=1;'
+              'return _Generic(&(int[2]){[n]=0},int(*)[2]:42,default:1);}')
+    tree = make_c_parser().parse(source)
+    context = PassContext(opt_level=0, target_triple=TARGET)
+    PassPipeline.minimal().run_high_tier(tree, context)
+    assert context.get_var('main', 'n').alloc_strategy == AllocStrategy.SSA
+    generator = CCodeGenerator(translation_unit_name='ssa-designator.c', pass_ctx=context)
+    with pytest.raises(CodegenError, match='integer constant expression'):
+        generator.generate_code(tree)

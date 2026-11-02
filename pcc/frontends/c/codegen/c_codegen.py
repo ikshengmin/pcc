@@ -14,6 +14,7 @@ from pcc.ir.compat import add_raw_function_attribute
 from pcc.frontends.c.c_abi_layout import (
     builtin_integer_is_unsigned,
     builtin_scalar_layout,
+    c_target_predefines,
     c_target_triple,
     floating_scalar_layout,
     integer_literal_type_name,
@@ -4417,7 +4418,125 @@ class CCodeGenerator(
         result_names = lhs_names if decision.source == "lhs" else rhs_names
         return ("base", (), result_names)
 
-    def _generic_expr_type_key(self, node):
+    def _validate_generic_designator_constant_names(self, node):
+        """SSA-folded objects are not C integer constant-expression names."""
+        if isinstance(node, c_ast.ID):
+            scope = next((scope for scope in self.env.maps if node.name in scope), None)
+            binding = scope[node.name][1] if scope is not None else None
+            if (binding is None or scope.get('__pcc_enum_constant_' + node.name) is not binding):
+                raise CodegenError('array designator requires an integer constant expression')
+            return
+        if isinstance(node, c_ast.UnaryOp) and node.op in ('sizeof', '_Alignof', '__alignof', '__alignof__'):
+            return  # Its operand is checked by the pure type query, not read.
+        if isinstance(node, c_ast.GenericSelection):
+            selected = self._select_generic_association(node)
+            if selected is None:
+                raise CodegenError('no matching association in designator constant expression')
+            self._validate_generic_designator_constant_names(selected)
+            return
+        for _name, child in node.children():
+            self._validate_generic_designator_constant_names(child)
+
+    def _validate_generic_initializer_designators(self, initializer, target, *, incomplete=False):
+        """Validate designators using existing semantic types, never storage."""
+        def contains_designator(node):
+            # Compound literals inside value expressions are validated by
+            # their own pure type owner, not this surrounding target's type.
+            return (isinstance(node, c_ast.NamedInitializer)
+                    or (isinstance(node, c_ast.InitList)
+                        and any(contains_designator(child) for child in node.exprs or [])))
+
+        if not contains_designator(initializer):
+            return
+        if isinstance(target, ir.ArrayType):
+            normalized = self._normalize_array_init_list(initializer, target.element)
+        elif _is_struct_ir_type(target) and not getattr(target, 'is_union', False):
+            normalized = self._normalize_struct_init_list(initializer, target, recursive=False)
+        else:
+            normalized = initializer
+        if not isinstance(normalized, c_ast.InitList):
+            return
+        cursor = 0
+        continuation_unknown = False
+        for expr in normalized.exprs or []:
+            current = target
+            if isinstance(expr, c_ast.NamedInitializer):
+                # A nested designation resumes within that subobject, not at
+                # the next top-level field. A new explicit path resets this.
+                continuation_unknown = len(expr.name or []) > 1
+                for depth, designator in enumerate(expr.name or []):
+                    if isinstance(current, ir.ArrayType):
+                        bounds = ((designator.start, designator.end)
+                                  if isinstance(designator, c_ast.RangeDesignator)
+                                  else (designator,))
+                        indices = []
+                        for bound in bounds:
+                            self._validate_query_expression(bound)
+                            if not self._query_bound_is_constant(bound):
+                                raise CodegenError('array designator requires an integer constant expression')
+                            self._validate_generic_designator_constant_names(bound)
+                            index = int(self._eval_const_expr(bound, integer_constant=True))
+                            if index < 0 or (not (incomplete and depth == 0) and index >= current.count):
+                                raise CodegenError('array designator is outside the declared extent')
+                            indices.append(index)
+                        if len(indices) == 2 and indices[0] > indices[1]:
+                            raise CodegenError('array designator range is reversed')
+                        if depth == 0:
+                            cursor = max(indices) + 1
+                        current = current.element
+                    else:
+                        # .field and [ID] share an AST node; the target type
+                        # determines which namespace the designator belongs to.
+                        path = (self._aggregate_field_path(current, designator.name)
+                                if isinstance(designator, c_ast.ID) else None)
+                        if path is None:
+                            raise CodegenError('invalid compound initializer member designator')
+                        continuation_unknown |= len(path) > 1
+                        if depth == 0:
+                            cursor = path[0] + 1
+                        for index in path:
+                            layout = self._aggregate_layout_by_index(current, index)
+                            current = (layout.semantic_ir_type if layout is not None
+                                       else self._aggregate_member_ir_type(current, index))
+                if not isinstance(expr.expr, c_ast.InitList):
+                    if isinstance(current, ir.ArrayType):
+                        continuation_unknown |= not self._is_array_string_initializer(expr.expr, current)
+                    elif _is_struct_ir_type(current) or getattr(current, 'is_union', False):
+                        continuation_unknown |= not self._initializer_expr_matches_type(expr.expr, current)
+                self._validate_generic_initializer_designators(expr.expr, current)
+            else:
+                # Do not invent a second ordinary-initializer validity owner:
+                # scalar continuation after a nested designator follows C's
+                # current-subobject rules, not just a top-level field cursor.
+                if not contains_designator(expr):
+                    cursor += 1
+                    continue
+                if continuation_unknown:
+                    raise CodegenError('unsupported nested initializer continuation type query')
+                if isinstance(target, ir.ArrayType):
+                    current = target.element
+                elif _is_struct_ir_type(target) or getattr(target, 'is_union', False):
+                    members = self._aggregate_member_ir_types(target)
+                    if cursor >= len(members):
+                        raise CodegenError('unsupported nested initializer continuation type query')
+                    current = members[cursor]
+                self._validate_generic_initializer_designators(expr, current)
+                cursor += 1
+
+    @staticmethod
+    def _generic_value_context_key(key):
+        """Apply only the outer value conversions, retaining pointee identity."""
+        if not isinstance(key, tuple) or not key:
+            return key
+        if key[0] == "array":
+            return ("ptr", (), key[2])
+        if key[0] == "func":
+            return ("ptr", (), key)
+        if key[0] in ("base", "ptr", "struct", "union", "enum"):
+            return (key[0], (), *key[2:])
+        return key
+
+    def _generic_expr_type_key(self, node, *, value_context=True):
         if node is None:
             return None
 
@@ -4426,8 +4545,8 @@ class CCodeGenerator(
             if decl_type is not None:
                 return self._generic_type_key_from_type(
                     decl_type,
-                    strip_top_level_quals=True,
-                    decay_top_level=True,
+                    strip_top_level_quals=value_context,
+                    decay_top_level=value_context,
                 )
             return None
 
@@ -4446,35 +4565,52 @@ class CCodeGenerator(
                 return self._generic_type_key_from_type(
                     self._make_identifier_type(names)
                 )
-            if node.type == "wstring":
-                return (
-                    "ptr",
-                    (),
-                    self._generic_type_key_from_type(
-                        self._make_identifier_type(["wchar_t"])
-                    ),
-                )
-            if node.type == "string":
-                return (
-                    "ptr",
-                    (),
-                    self._generic_type_key_from_type(
-                        self._make_identifier_type(["char"])
-                    ),
-                )
+            if node.type in ("string", "wstring"):
+                # C wchar_t is a typedef of the target ABI integer type,
+                # unlike the distinct nominal C++ fundamental type.
+                element = (c_target_predefines(str(self.module.triple))["__WCHAR_TYPE__"]
+                           if node.type == "wstring" else "char")
+                key = ("array", len(self._string_literal_data(node)),
+                       self._generic_type_key_from_type(self._make_identifier_type(element.split())))
+                return self._generic_value_context_key(key) if value_context else key
             return None
+
+        if isinstance(node, c_ast.CompoundLiteral):
+            with self._unevaluated_declaration_scope():
+                self._validate_query_expression(node.init)
+                key = self._generic_type_key_from_type(node.type)
+                declarator = node.type.type if isinstance(node.type, c_ast.Typename) else node.type
+                incomplete = isinstance(key, tuple) and key[0] == "array" and key[1] is None
+                if incomplete:
+                    if not isinstance(declarator, c_ast.ArrayDecl) or declarator.dim is not None:
+                        raise CodegenError('unsupported _Generic compound array extent inference')
+                    element = self._resolve_query_declarator(declarator.type)
+                    target = ir.ArrayType(element, 0)
+                else:
+                    target = self._resolve_query_declarator(declarator)
+                # Fixed and inferred bounds share one typed designator owner.
+                self._validate_generic_initializer_designators(node.init, target, incomplete=incomplete)
+                if incomplete:
+                    extent = self._infer_array_count_from_initializer(node.init, element)
+                    if extent is None:
+                        raise CodegenError('unsupported _Generic compound array extent inference')
+                    key = ("array", extent, key[2])
+            return self._generic_value_context_key(key) if value_context else key
 
         if isinstance(node, c_ast.Cast):
             return self._generic_type_key_from_type(node.to_type.type)
 
         if isinstance(node, c_ast.UnaryOp):
             if node.op == "&":
-                expr_key = self._generic_expr_type_key(node.expr)
+                # Address formation suppresses lvalue/array/function value
+                # conversions; pointer-to-array is not pointer-to-pointer.
+                expr_key = self._generic_expr_type_key(node.expr, value_context=False)
                 return ("ptr", (), expr_key) if expr_key is not None else None
             if node.op == "*":
                 expr_key = self._generic_expr_type_key(node.expr)
                 if isinstance(expr_key, tuple) and expr_key[0] == "ptr":
-                    return expr_key[2]
+                    key = expr_key[2]
+                    return self._generic_value_context_key(key) if value_context else key
                 return None
             if node.op == "!":
                 return self._generic_type_key_from_type(
@@ -4496,7 +4632,7 @@ class CCodeGenerator(
             lhs_key = self._generic_expr_type_key(node.left)
             rhs_key = self._generic_expr_type_key(node.right)
             if lhs_key is None or rhs_key is None:
-                return lhs_key or rhs_key
+                return None
             if node.op in ("+", "-", "*", "/", "%", "<<", ">>", "&", "|", "^"):
                 return self._generic_usual_arithmetic_conversion_key(lhs_key, rhs_key)
             return lhs_key
@@ -4507,7 +4643,7 @@ class CCodeGenerator(
             if true_key == false_key:
                 return true_key
             if true_key is None or false_key is None:
-                return true_key or false_key
+                return None
             if self._generic_is_base_key(true_key) and self._generic_is_base_key(false_key):
                 return self._generic_usual_arithmetic_conversion_key(
                     true_key, false_key
@@ -4528,21 +4664,26 @@ class CCodeGenerator(
                 return callee_key[2][1]
             return None
 
-        if isinstance(node, c_ast.StmtExpr) and getattr(node.stmt, "block_items", None):
-            for item in reversed(node.stmt.block_items):
-                if self._is_expression_node(item):
-                    return self._generic_expr_type_key(item)
-            return None
+        if isinstance(node, c_ast.StmtExpr):
+            with self._unevaluated_declaration_scope():
+                items = list(getattr(node.stmt, "block_items", None) or [])
+                for item in items:
+                    self._bind_query_statement(item)
+                if items and self._is_expression_node(items[-1]):
+                    return self._generic_expr_type_key(items[-1], value_context=value_context)
+                return None
 
         if isinstance(node, c_ast.GenericSelection):
             selected = self._select_generic_association(node)
             if selected is not None:
-                return self._generic_expr_type_key(selected)
+                return self._generic_expr_type_key(selected, value_context=value_context)
 
         return None
 
     def _select_generic_association(self, node):
         controlling_key = self._generic_expr_type_key(node.expr)
+        if controlling_key is None:
+            raise CodegenError('unsupported _Generic controlling expression type inference')
         default_expr = None
         for assoc in node.associations or []:
             if assoc.type is None:
