@@ -1,0 +1,271 @@
+{
+  "schema_version": 1,
+  "kind": "bounded_ci_pass_summary",
+  "compiler_revision": "e82f57b5b43d66d77c3fa71fdf39ffcbaf5009e0",
+  "ci": {
+    "run_id": 41411705867,
+    "status": "completed",
+    "conclusion": "failure",
+    "jobs": 42,
+    "successful_jobs": 12,
+    "failed_jobs": 30,
+    "terminal_evidence_sha256": "00b91e080989411e2a0946ae05b16f5afb4465b8f83bf1d6750b7a3f8526a911"
+  },
+  "scope": {
+    "selection": "Five Rust inferred-receiver originals and three Go array fixture cases only; four pytest nodes, eight input cases.",
+    "summary_only": true,
+    "exporter_qualified_allowlist": false,
+    "execution_owner": "host pcc0 generates native programs; this is not a native pcc1 compiler result",
+    "not_qualified": [
+      "whole-language suites",
+      "whole projects",
+      "NumPy",
+      "native pcc1",
+      "self-host fixed point",
+      "five GC backends"
+    ],
+    "outside_this_artifact": [
+      "Java",
+      "C++",
+      "macOS execution",
+      "all other cases and later source revisions"
+    ],
+    "method": "Read and hash retained CI artifacts and inspect matching source only; no new tests, compilers or programs executed."
+  },
+  "execution": {
+    "mode": "pcc0",
+    "platform": "linux-x86_64",
+    "backend": "self",
+    "host_python": "CPython 3.15.0",
+    "gc": "not_exercised"
+  },
+  "result_boundary": "Every selected case has matching raw stdout/stderr and zero exit for the host-PCC-generated native program and its external reference. This does not change the failed overall CI or Go integration outcome.",
+  "language_evidence": {
+    "rust": {
+      "lane": "integration",
+      "lane_outcome": "PASS",
+      "archive_sha256": "8e2fe5560bb42745ed43af371c7d5b34c56f916847274cd388acbaec08e02094",
+      "lane_evidence_sha256": "4e3bd47be31b77ecce966d2dfb5c01c0059350d5dd0f29041706b3073874b4cf",
+      "source_identity_sha256": "1e0062a3d820c92596e02fba166fc28df1714898e9749902a0c8addaef8a6708",
+      "tool_identity_sha256": "98ecf8a720bbada3189218b8dc0609fa7dee5b406dd3ccb934d2c4bad153e656",
+      "source_before_after_identical": true,
+      "tool_before_after_identical": true,
+      "reference": {
+        "name": "rustc",
+        "version": "1.91.1",
+        "commit": "ed61e7d7e242494fb7057f2657300d9e77bb4fcb",
+        "edition": "2021",
+        "platform": "x86_64-unknown-linux-gnu",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "compiler_sha256": "5eadaaf4fe086d76547b17dc3c1ba880d0082b93f7d8bc65612770da8e79fe8e",
+        "linker": "GCC system C linker driver",
+        "linker_version": "13.3.0 (Ubuntu 13.3.0-6ubuntu2~24.04.1)",
+        "linker_sha256": "1b99826121ae6682a634e5efe09bd3e3df58ce58e0b28f849114ab5b89139c26",
+        "observer": "separate rustc rlib + std observer"
+      }
+    },
+    "go": {
+      "lane": "integration",
+      "lane_outcome": "FAIL",
+      "archive_sha256": "d50bf2f5ebeae19f412283d6226af66d527444aedff8e752fc9b48302412504c",
+      "lane_evidence_sha256": "f1c8339e34a83172ee7a052f7ec2ed4322c15ad9d938c00c483cde6627aad439",
+      "source_identity_sha256": "1e0062a3d820c92596e02fba166fc28df1714898e9749902a0c8addaef8a6708",
+      "tool_identity_sha256": "551eb068892a3f254ff1828dea36640cb7d894b945b66e39c0acf4ce634e3f90",
+      "source_before_after_identical": true,
+      "tool_before_after_identical": true,
+      "reference": {
+        "name": "official Go gc toolchain",
+        "version": "go1.24.13",
+        "platform": "linux/amd64",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "compiler_sha256": "84a0e87421e4cc48036b48ee32374de17479b7f8592822dcc57c93aa3ff337a7"
+      }
+    }
+  },
+  "entries": [
+    {
+      "language": "rust",
+      "test_id": "tests/rust/test_rust_inferred_receivers.py::test_unchanged_inferred_receiver_originals_match_native_rustc",
+      "case_id": "inferred_receiver_empty",
+      "source": "tests/rust/programs/inferred_receiver_empty.rs",
+      "input_sha256": "c810405a13ed17283bebc1d1eb59d854bc2ae344b43c24e436f96293f739bbfc",
+      "test_source_sha256": "1d097ab29cd565d7e090b1f352b3fc4861986803205ff7032e6271599b50e28a",
+      "outcome": "passed",
+      "comparison": "same-input raw stdout/stderr/exit",
+      "evidence_sha256": {
+        "actual_execution": "7590247dc0a243f68dbba67df02d55d02babb5b98306258562607af6a4fe2108",
+        "reference_runtime_comparison": "acf4f668596a4eeba6338abe1ef0b25b0df7bf414f67cdb96b935aa00b965444",
+        "reference_compilation": "cc1ad82a417bc86eef19a734e23b10d03dde54d62072991b241b071ad905e00b",
+        "actual_binary": "1fd97fd00397ccf4251cb56e18bb80dddd1c3d78f06693fe9638277d252a031d",
+        "reference_binary": "942fd979495a5bdb8d65fe9b44b5384ca88ac3f7a34230ed1fe952722f70c4c7",
+        "reference_observer": "27e9357aabb7a88efbf91152ac81704095545f29938e981e2e93e15703dbf763",
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "language": "rust",
+      "test_id": "tests/rust/test_rust_inferred_receivers.py::test_unchanged_inferred_receiver_originals_match_native_rustc",
+      "case_id": "inferred_receiver_order",
+      "source": "tests/rust/programs/inferred_receiver_order.rs",
+      "input_sha256": "77da64c14b63e4fc2cf2ca1b761eda53580c105dfa7d5695eb379751f3e09b5d",
+      "test_source_sha256": "1d097ab29cd565d7e090b1f352b3fc4861986803205ff7032e6271599b50e28a",
+      "outcome": "passed",
+      "comparison": "same-input raw stdout/stderr/exit",
+      "evidence_sha256": {
+        "actual_execution": "ac5556a4426c3b1fa1d67c26493075adab0c368063764cc9651070e318d2d673",
+        "reference_runtime_comparison": "957cf141e259e9c04393ebcafc13e5d7fd90ce28366cee530ad3bf10f6e01e0b",
+        "reference_compilation": "0e99fd62dd3cce4ee2ea798038af4f1f6a6cd62011a034492551ff971353f37d",
+        "actual_binary": "5713b93b970f85f97a629cb413402b482b7d8c7ce3d4fe10a4c028778f54a338",
+        "reference_binary": "5b7fa0dbd861ab6254b7adb0e935306433537907a303f8aaece7e7dd28256619",
+        "reference_observer": "27e9357aabb7a88efbf91152ac81704095545f29938e981e2e93e15703dbf763",
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "language": "rust",
+      "test_id": "tests/rust/test_rust_inferred_receivers.py::test_unchanged_inferred_receiver_originals_match_native_rustc",
+      "case_id": "inferred_receiver_references",
+      "source": "tests/rust/programs/inferred_receiver_references.rs",
+      "input_sha256": "5494d3d02859bab681aad87b3611d85c76b1a5c01d24b4e4bd30fb9254605a95",
+      "test_source_sha256": "1d097ab29cd565d7e090b1f352b3fc4861986803205ff7032e6271599b50e28a",
+      "outcome": "passed",
+      "comparison": "same-input raw stdout/stderr/exit",
+      "evidence_sha256": {
+        "actual_execution": "ab639ab0959f209d7a610955fd7da67fc0c493e2042f123ba4ceb1a178ef93f8",
+        "reference_runtime_comparison": "c77344d0f27e67fa141252ec31ff8a42ee0783640e7831883e31b18971faf48b",
+        "reference_compilation": "5a444a64cc70f302eb800198aa2229c005a585a6a583ffe4779bab80f1fdc8f3",
+        "actual_binary": "19efb5acfed2a382a4d17740fc90b6b2bf347e6c268d61015746da48456532a4",
+        "reference_binary": "1b46513dccf113f7d0493e98dd673597841b4b8640ba1305c42f51f92a7fb47a",
+        "reference_observer": "27e9357aabb7a88efbf91152ac81704095545f29938e981e2e93e15703dbf763",
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "language": "rust",
+      "test_id": "tests/rust/test_rust_inferred_receivers.py::test_unchanged_inferred_receiver_originals_match_native_rustc",
+      "case_id": "inferred_receiver_result",
+      "source": "tests/rust/programs/inferred_receiver_result.rs",
+      "input_sha256": "ade2c093bdb8892e658b9ba8b1f37fba9c15dcf17bc0de15b440874383309580",
+      "test_source_sha256": "1d097ab29cd565d7e090b1f352b3fc4861986803205ff7032e6271599b50e28a",
+      "outcome": "passed",
+      "comparison": "same-input raw stdout/stderr/exit",
+      "evidence_sha256": {
+        "actual_execution": "e080f34917280d2f9ee98ad00f96f01dfb43d7870188b29dc01c0ad05a8dd3ab",
+        "reference_runtime_comparison": "16c38a03f64e83d2a40c06ab6253f6da3f7f0affeb285bf6aade8024ea8bd6bb",
+        "reference_compilation": "56dc97fa0b766357caf5ab15667de5859c79748f85c3e32066601763f316c05b",
+        "actual_binary": "098a41738eec11ebf0c5a6f8488cecd3103e7399174cb243ffbd76fd54e29aac",
+        "reference_binary": "57895150f9844508aad82838235c36e946deb8425f960822f501d728f12e01d6",
+        "reference_observer": "27e9357aabb7a88efbf91152ac81704095545f29938e981e2e93e15703dbf763",
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "language": "rust",
+      "test_id": "tests/rust/test_rust_inferred_receivers.py::test_unchanged_inferred_receiver_originals_match_native_rustc",
+      "case_id": "inferred_receiver_suffix",
+      "source": "tests/rust/programs/inferred_receiver_suffix.rs",
+      "input_sha256": "05873c831cd902b47353238ade9de6f4ebc3ffedce88421af82c8155089051fd",
+      "test_source_sha256": "1d097ab29cd565d7e090b1f352b3fc4861986803205ff7032e6271599b50e28a",
+      "outcome": "passed",
+      "comparison": "same-input raw stdout/stderr/exit",
+      "evidence_sha256": {
+        "actual_execution": "66829f4004d53c73255a18b0f3f7350e2567435f9d545e486a2da58c63a3a2bb",
+        "reference_runtime_comparison": "1c03e4ffdf7dad82c92ef3ee3f3b9b40e6c72790d4fe96b713f64c324793b0c6",
+        "reference_compilation": "33627a7c61bccb92cd67a004d86f9e449c7e745fe752914728195174a59b0001",
+        "actual_binary": "553aa9374174f538ee8caf2826ed65049d6444528c90c4c4b2bec2c8bfd0e644",
+        "reference_binary": "393ff53287e2185f60c89461248f7acdf1fffb603ac135666af63edd5a373be4",
+        "reference_observer": "27e9357aabb7a88efbf91152ac81704095545f29938e981e2e93e15703dbf763",
+        "stdout_sha256": "aeb75d1514cbdb001af65f8826553df8fe6b2e11c67ff3a54435ea400894d7ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "language": "go",
+      "test_id": "tests/go/test_generic_arrays.py::test_identical_array_generic_programs_match_official[originals0]",
+      "case_id": "array-originals0",
+      "source": "tests/go/test_generic_arrays.py::GRADUATED",
+      "input_sha256": "2451fdf1e678d28ad5f40cd6a74b788128dac4c3e0562bd41f121710970d770a",
+      "input_hash_kind": "original UTF-8 bytes",
+      "input_files": [
+        {
+          "source": "graduated.go",
+          "sha256": "2451fdf1e678d28ad5f40cd6a74b788128dac4c3e0562bd41f121710970d770a"
+        }
+      ],
+      "test_source_sha256": "97365c89b3e4626df57f4296c2b8ffe0669f3eac75873ba6fc1368fab1b5ba41",
+      "outcome": "passed",
+      "comparison": "same-input raw stdout/stderr/exit",
+      "evidence_sha256": {
+        "actual_execution": "cf53217ef31d892e29f9ace339a25bdb516d77b0e52fb264fa4a11812cb830e9",
+        "reference_execution": "4db7bf4681d2e3f56ff49d0bf43626e88bb814252be98f8abcb7f0bf773c3641",
+        "reference_compilation": "acf6e61f9c65697dce4078cdbab52d16ba76625a9ccab22a4756789e59c33768",
+        "actual_binary": "efb3b838c1a1c1dc4dd740fccc9131b984d50cb69a56abddf12c4fed3d030ce9",
+        "reference_binary": "fd4485bf8bcd5ceb001f75a638f44b455eafd233d99398099c603c6d7ed43527",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "language": "go",
+      "test_id": "tests/go/test_generic_arrays.py::test_identical_array_generic_programs_match_official[originals1]",
+      "case_id": "array-originals1",
+      "source": "tests/go/fixtures/generic_arrays.go",
+      "input_sha256": "cfe68f1ff37286f05c1f0f0aef133546edb833e6bc87b782e04c8d7fb6350c30",
+      "input_hash_kind": "original UTF-8 bytes",
+      "input_files": [
+        {
+          "source": "generic_arrays.go",
+          "sha256": "cfe68f1ff37286f05c1f0f0aef133546edb833e6bc87b782e04c8d7fb6350c30"
+        }
+      ],
+      "test_source_sha256": "97365c89b3e4626df57f4296c2b8ffe0669f3eac75873ba6fc1368fab1b5ba41",
+      "outcome": "passed",
+      "comparison": "same-input raw stdout/stderr/exit",
+      "evidence_sha256": {
+        "actual_execution": "5a5af9dc22ba9e642a8cb72bd49739e8034f3f46ee02a541f25d52483990f169",
+        "reference_execution": "b19bee5c092957d51e850894b635da182741d7507b7c5d0e781c7e6f3b3fae91",
+        "reference_compilation": "70310b59f45007b1befbb83585e4a06ffa7056b4f6897c794e7bccb10a8c5de8",
+        "actual_binary": "e5f313ff11b86f783d7e328277940082047309184f4224fc94dee9c93cee1d5e",
+        "reference_binary": "a7b60c3c5e3651b586a8b1f0a109f815ba1c9a0a7ea0d9bd32dacfe8fb5bcdb8",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "language": "go",
+      "test_id": "tests/go/test_generic_arrays.py::test_identical_imported_array_generics_match_official",
+      "case_id": "imported-array-fixture",
+      "source": "tests/go/test_generic_arrays.py::PROJECT",
+      "input_sha256": "78e90c3341c4176995f5df7e7e4563a4e2528ed5378a9bc683f6d2d793c4877c",
+      "input_hash_kind": "SHA256 of UTF-8 json.dumps(PROJECT, sort_keys=True), matching retained test source",
+      "input_files": [
+        {
+          "source": "main/main.go",
+          "sha256": "8fdec529301b17b0106095aedf3fc0d6f83d07956d78bc31f1007181b56c9a09"
+        },
+        {
+          "source": "values/values.go",
+          "sha256": "5f059a95d942a054d86c532a8f78afb5a91d7c697abc33ab74591195a1c21e87"
+        }
+      ],
+      "test_source_sha256": "97365c89b3e4626df57f4296c2b8ffe0669f3eac75873ba6fc1368fab1b5ba41",
+      "outcome": "passed",
+      "comparison": "same-input raw stdout/stderr/exit",
+      "evidence_sha256": {
+        "actual_execution": "f7c2e4915578642fe2d2995b42123991c1004463853aca2e414f0f5e04bb2bef",
+        "reference_execution": "1997941c029bee3e328da6a2c98bf08fc8d82d859b5ad67b9452b6b96746125d",
+        "reference_compilation": "0298b79f0a9ce469941eb576b5756431579d79ee54141d010bb67edc021f54ef",
+        "actual_binary": "a0e4e95065a6f049ff37c1c70bf7f888d4d453c813826ac0d51921f4de08fc0e",
+        "reference_binary": "f84fa2bad62acd353b7c2eda4f8204a952219e2edac54ed8b4ba0889308c6b4f",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    }
+  ]
+}

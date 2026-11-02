@@ -292,6 +292,7 @@ def construct_local(parser, symbol):
     """Keep storage in its lexical block, followed by one complete-object call."""
     dtype = unqualified(symbol.dtype)
     arguments = []
+    direct_list = False
     if parser._accept("("):
         if _function_declaration_ahead(parser):
             raise CppDiagnostic("cpp.unsupported.block-function-declarations", "function declaration ambiguity is not object construction", parser._peek().coord)
@@ -302,10 +303,14 @@ def construct_local(parser, symbol):
             if parser._accept(")"):
                 break
             parser._expect(",")
-    elif parser._peek().value in ("=", "{"):
-        raise CppDiagnostic("cpp.unsupported.constructor-list-initialization", "copy/list construction requires its separate overload and conversion rules", parser._peek().coord)
+    elif parser._peek().value == "{":
+        from pcc.frontends.cpp.constructor_lists import parse_arguments
+        arguments = parse_arguments(parser)
+        direct_list = True
+    elif parser._peek().value == "=":
+        raise CppDiagnostic("cpp.unsupported.constructor-list-initialization", "copy construction requires its separate overload and conversion rules", parser._peek().coord)
     address = c_ast.UnaryOp("&", c_ast.ID(symbol.c_name, symbol.coord), symbol.coord)
-    call = constructor_call(parser, dtype, arguments, address, symbol.coord)
+    call = constructor_call(parser, dtype, arguments, address, symbol.coord, direct_list=direct_list)
     parser._expect(";")
     symbol.initialization_complete = True
     symbol.jump_entry = "initialized"
@@ -324,8 +329,11 @@ def call_free_body(body):
     return True
 
 
-def constructor_call(parser, dtype, arguments, address, coord, require_closed=False):
+def constructor_call(parser, dtype, arguments, address, coord, require_closed=False, *, direct_list=False):
     """Select the existing C1 at an already-evaluated complete-object address."""
+    if direct_list:
+        from pcc.frontends.cpp.constructor_lists import require_simple_candidates
+        require_simple_candidates(dtype.definition.constructors, coord)
     selected = resolve_overload(dtype.definition.constructors,
                                 [arg.dtype for arg in arguments], parser.types, coord,
                                 [arg.null_pointer for arg in arguments], [arg.lvalue or arg.assignment_result for arg in arguments])
@@ -335,6 +343,16 @@ def constructor_call(parser, dtype, arguments, address, coord, require_closed=Fa
     if require_closed and not getattr(selected, 'closed_normal_body', False):
         raise CppDiagnostic('cpp.unsupported.placement-constructor-effects',
                             'unknown constructor effects need exception/cleanup integration', coord)
-    converted = [address] + [parser._convert(arg, target, coord)
-                             for arg, target in zip(arguments, selected.parameters)]
-    return c_ast.FuncCall(c_ast.ID(selected.c_name, coord), c_ast.ExprList(converted, coord), coord)
+    preparation = []
+    if direct_list:
+        # Narrowing is checked only after overload selection, never used to
+        # discard a better candidate in favor of a non-narrowing alternative.
+        from pcc.frontends.cpp.constructor_lists import sequence_arguments
+        preparation, converted = sequence_arguments(parser, arguments, selected.parameters)
+    else:
+        converted = [parser._convert(arg, target, coord)
+                     for arg, target in zip(arguments, selected.parameters)]
+    call = c_ast.FuncCall(c_ast.ID(selected.c_name, coord), c_ast.ExprList([address] + converted, coord), coord)
+    if preparation:
+        return c_ast.StmtExpr(c_ast.Compound(preparation + [call], coord), coord)
+    return call

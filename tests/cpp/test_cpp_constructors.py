@@ -132,7 +132,6 @@ UNSUPPORTED_CONSTRUCTORS = (
     'struct S{S();};S::S():S(){}',
     'struct B{};struct S:B{S();};',
     'struct A{int x;};struct S{A a;S();};',
-    'struct S{S();};S::S(){}int f(){S s{};return 0;}',
     'struct S{S();};S::S(){}int f(){S s;S t=s;return 0;}',
     'struct S{S();};struct A{S s;};int f(){A a;return 0;}',
     'struct S{S();};struct A{S s;};int f(){A a{};return 0;}',
@@ -152,6 +151,13 @@ def test_original_constructor_declaration_is_preserved_as_positive():
     ast = CppParser().parse('struct S{S();};')
     assert ast.ext[1].name == '_ZN1SC1Ev'
     assert len(ast.ext[1].type.args.params) == 1
+
+
+def test_original_empty_direct_list_constructor_is_preserved_as_positive():
+    # Exact formerly rejected valid source; the direct-list corpus supplies
+    # its native/reference observer without replacing this original input.
+    ast = CppParser().parse('struct S{S();};S::S(){}int f(){S s{};return 0;}')
+    assert ast.ext[-1].decl.name == '_Z1fv'
 
 
 def test_omitted_scalar_initialization_does_not_invent_zero_stores():
