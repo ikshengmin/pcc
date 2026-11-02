@@ -27,6 +27,7 @@ _CSTR = _I8.as_pointer()
 UNSAFE_INTRINSICS = frozenset(
     {
         "malloc",
+        "capture_gc_registers",
         "cstr",
         "global_addr",
         "function_addr",
@@ -301,6 +302,7 @@ _UNSAFE_INTRINSIC_FAMILIES = (
     (
         'null',
         'frame_address',
+        'capture_gc_registers',
         'ptr_eq',
         'ptr_is_null',
         'is_tagged_int',
@@ -2378,6 +2380,18 @@ class UnsafeIntrinsicMixin:
             return self.builder.call(
                 frame_fn, [ir.Constant(ir.IntType(32), 0)],
                 name=self._fresh("unsafe.frame"),
+            )
+        if intrinsic == "capture_gc_registers":
+            self._unsafe_expect_arity(intrinsic, expr, 1)
+            capture = self.module.globals.get("llvm.pcc.capture.gc.registers")
+            if capture is None:
+                capture = ir.Function(
+                    self.module, ir.FunctionType(_CSTR, [_CSTR]),
+                    name="llvm.pcc.capture.gc.registers",
+                )
+            return self.builder.call(
+                capture, [self._unsafe_ptr_arg(expr.args[0])],
+                name=self._fresh("unsafe.stack"),
             )
         if intrinsic in ("ptr_eq", "ptr_is_null", "is_tagged_int"):
             if intrinsic == "ptr_eq":

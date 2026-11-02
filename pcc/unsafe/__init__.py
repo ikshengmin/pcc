@@ -255,6 +255,17 @@ def frame_address() -> Any:
     _trap("frame_address")
 
 
+def capture_gc_registers(buffer: Any) -> Any:
+    """Save callee-preserved machine roots into 16 pointer-sized words.
+
+    The buffer must be writable, eight-byte aligned and at least 128 bytes.
+    Return the current stack pointer. All 16 words are initialized; callers
+    scan them conservatively together with the live stack. This owned-backend
+    operation neither calls a runtime helper nor reaches a safepoint.
+    """
+    _trap("capture_gc_registers")
+
+
 def ptr_eq(lhs: Any, rhs: Any) -> bool:
     _trap("ptr_eq")
 
@@ -1289,6 +1300,7 @@ __all__ = [
     "f64_pair_second",
     "null",
     "frame_address",
+    "capture_gc_registers",
     "ptr_eq",
     "ptr_is_null",
     "is_tagged_int",

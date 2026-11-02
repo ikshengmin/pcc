@@ -121,6 +121,15 @@ result of -1, reproduced on pre-change `f2a5c3753`; packed `sink(*(+True,))`
 correctly returns 1 and exercises the changed object-operand path. The direct
 scalar defect is recorded and left unchanged.
 
+The GC4 prototype now has an owned `capture_gc_registers` intrinsic: 16
+initialized machine words plus the current stack pointer, without a runtime
+call. Four-target object checks and four Darwin arm64 native sentinel runs
+(text/indexed IR, callee-register allocation off/on) pass, together with the
+frame-pointer checks: 13 tests. The sentinel test scans both the captured
+registers and the still-live frame, including values saved by the prologue.
+Thread snapshot integration, count-free marking/reclamation and QPS remain
+unfinished; this primitive does not enable count-free GC4.
+
 ### Measured P0 batch: `02acaa2f5` -> `0fbc8d977`
 
 Seven rotated paired runs on Darwin arm64, host pcc0/self/no-libpython,

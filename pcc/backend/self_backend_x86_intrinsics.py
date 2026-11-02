@@ -32,6 +32,20 @@ def emit(func, dest, ret_type, callee, args, windows=False):
         lines = _materialize_global_address(args[0][1], "r11")
         lines.extend(_store_reg_to_slot("r11", func.value_slots[dest].offset, ret_type))
         return lines
+    if callee == "llvm.pcc.capture.gc.registers":
+        if len(args) != 1 or not args[0][0].is_ptr or not ret_type.is_ptr:
+            raise BackendUnavailable("GC register capture requires one pointer and returns a pointer")
+        lines = _materialize_value(func, args[0][1], args[0][0], "r11")
+        # Include Win64's additional preserved GPRs even on SysV. Extra
+        # conservative candidates are harmless; no saved GPR is overwritten.
+        registers = ("rbx", "rbp", "r12", "r13", "r14", "r15", "rdi", "rsi", "rsp")
+        for index, register in enumerate(registers):
+            lines.append(f"  mov QWORD PTR [r11 + {index * 8}], {register}")
+        for index in range(len(registers), 16):
+            lines.append(f"  mov QWORD PTR [r11 + {index * 8}], 0")
+        if dest is not None and dest in func.value_slots:
+            lines.extend(_store_reg_to_slot("rsp", func.value_slots[dest].offset, ret_type))
+        return lines
     if callee.startswith("llvm.frameaddress."):
         # Every prologue pushes the caller's rbp and points rbp at it.
         if len(args) != 1 or args[0][1] != "0":

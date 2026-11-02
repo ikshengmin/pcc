@@ -95,6 +95,7 @@ _UNSAFE_RAW_POINTER_RETURNS = frozenset(
         "int_to_ptr",
         "null",
         "frame_address",
+        "capture_gc_registers",
         "tag_int",
         "load_ptr",
         "memset",

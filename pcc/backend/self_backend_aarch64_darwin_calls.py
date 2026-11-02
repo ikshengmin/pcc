@@ -2545,6 +2545,22 @@ def emit_call_instruction(
             committed = store_value_regs_to_value_slot(func, dest, result_register)
         lines.extend(committed)
         return lines
+    if not is_indirect and callee == "llvm.pcc.capture.gc.registers":
+        if len(args) != 1 or not args[0][0].is_ptr or not ret_type.is_ptr:
+            raise BackendUnavailable("GC register capture requires one pointer and returns a pointer")
+        # x9/x10 are emitter scratch registers, outside the allocated x19-x28
+        # callee-preserved pool. Materializing the buffer cannot erase a root.
+        lines = materialize_value(func, args[0][1], args[0][0], 9, module_symbols)
+        for first in range(19, 31, 2):
+            offset = (first - 19) * 8
+            lines.append(f"  stp x{first}, x{first + 1}, [x9, #{offset}]")
+        lines.extend([
+            "  mov x10, sp", "  stp x10, xzr, [x9, #96]",
+            "  stp xzr, xzr, [x9, #112]",
+        ])
+        if dest is not None and parsed_function_has_value_slot(func, dest):
+            lines.extend(store_value_regs_to_value_slot(func, dest, 10))
+        return lines
     if not is_indirect and callee.startswith("llvm.frameaddress."):
         # Every prologue saves the caller's x29/x30 and points x29 at them; a
         # call keeps even a leaf off the frameless path, so x29 is this frame.

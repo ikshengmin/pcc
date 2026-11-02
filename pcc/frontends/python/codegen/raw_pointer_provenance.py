@@ -11,7 +11,8 @@ from pcc.frontends.python.py_ast_contract import PY_AST_FIELD_NAME_OVERRIDES
 # selects this unmanaged ABI view. In particular, tag_int is NOT a raw address.
 _RAW_VIEW_INTRINSICS = frozenset({
     'malloc', 'calloc', 'realloc', 'cstr', 'global_addr', 'function_addr',
-    'global_load_ptr', 'ptr_add', 'stack_alloc', 'int_to_ptr', 'null', 'frame_address', 'load_ptr',
+    'global_load_ptr', 'ptr_add', 'stack_alloc', 'int_to_ptr', 'null', 'frame_address',
+    'capture_gc_registers', 'load_ptr',
     'memset', 'memcpy', 'memmove', 'getenv', 'call_ptr0', 'call_ptr1', 'call_ptr2',
     'call_ptr3', 'call_ptr4', 'call_ptr_ptr_i64', 'call_ptr_ptr_ptr_i32',
     'call_ptr_ptr_ptr_i64_ptr', 'call_ptr_i64_i64', 'dynamic_library_open',

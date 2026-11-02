@@ -631,7 +631,8 @@ _BUILTIN_TYPES: dict[str, Type] = {
 # ``tag_int`` is excluded: it produces an object representation on purpose.
 _POINTER_INTRINSICS: frozenset[str] = frozenset({
     "malloc", "calloc", "realloc", "cstr", "global_addr", "function_addr",
-    "global_load_ptr", "ptr_add", "int_to_ptr", "null", "frame_address", "load_ptr", "memset",
+    "global_load_ptr", "ptr_add", "int_to_ptr", "null", "frame_address",
+    "capture_gc_registers", "load_ptr", "memset",
     "memcpy", "memmove", "getcwd", "stack_alloc", "dynamic_library_open",
     "dynamic_library_open_global", "dynamic_library_symbol",
     "darwin_libsystem_symbol", "page_alloc", "va_arg_ptr", "va_cursor",
