@@ -120,7 +120,9 @@ def test_unused_generic_bodies_and_constraints_fail_before_materialization(decla
 INVALID_CALLS = [
     (IDENTITY, '_=Identity(nil)', 'cannot infer', 'cannot infer'),
     ('func Zero[T any]()T{var x T;return x}', 'var x int=Zero();_=x', 'cannot infer', 'cannot infer'),
-    (IDENTITY, '_=Identity[int,string](3)', 'too many generic', 'too many type arguments'),
+    # Observed normal Go 1.24.13 source rejection; keep the exact invalid
+    # original and require its count-specific diagnostic, not a build failure.
+    (IDENTITY, '_=Identity[int,string](3)', 'too many generic', 'got 2 type arguments but want 1'),
     ('func F(x int)int{return x}', '_=F[int](3)', 'nongeneric', 'cannot index'),
     (IDENTITY, 'x:=3;_=Identity[x](4)', 'must denote a type', 'is not a type'),
     ('func First[T any](a,b T)T{return a}', '_=First(256,uint8(1))', 'overflows uint8', 'overflows uint8'),

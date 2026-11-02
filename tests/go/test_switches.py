@@ -12,41 +12,74 @@ from tests.go.test_execution import forbid_external_compiler, units
 from tests.go.test_records import source
 
 
-INVALID = [
-    ('switch 1{default:;default:}', '', 'multiple default'),
-    ('switch 1{case 1:;case 1:}', '', 'duplicate constant'),
-    ('switch "a"{case "a":;case "\\x61":}', '', 'duplicate constant'),
-    ('switch uint8(1){case 256:}', '', 'overflows uint8'),
-    ('switch 1{case true:}', '', 'cannot use'),
-    ('switch true{case 1:}', '', 'cannot use'),
-    ('switch int(1){case int64(1):}', '', 'mismatched operand types'),
-    ('switch A(1){case B(1):}', 'type A int;type B int', 'mismatched operand types'),
-    ('switch A{}{}', 'type A struct{X int}', 'semicolon or newline'),
-    ('switch (A{}){}', 'type A struct{X int}', 'comparison support'),
-    ('switch [2]int{}{}', '', 'comparison support'),
-    ('switch f(){}', 'func f()(int,int){return 1,2}', 'comparison support'),
-    ('switch 1{case missing:}', '', 'undefined name'),
-    ('switch 1{case 1:x:=7;_=x;case x:}', '', 'undefined name'),
-    ('switch x:=1;x{case 1:};_=x', '', 'undefined name'),
-    ('switch 1{case 1:continue}', '', 'outside loop'),
-    ('fallthrough', '', 'final non-empty'),
-    ('switch 1{case 1:fallthrough}', '', 'non-final switch clause'),
-    ('switch 1{case 1:fallthrough;_=7;case 2:}', '', 'final non-empty'),
-    ('switch 1{case 1:{fallthrough};case 2:}', '', 'final non-empty'),
-    ('switch 1{case 1:if true{fallthrough};case 2:}', '', 'final non-empty'),
-    ('switch 1{case 1:for{fallthrough};case 2:}', '', 'final non-empty'),
-    ('switch 1{case 1:fallthrough;const();case 2:}', '', 'final non-empty'),
-    ('switch 1{case 1:x:=1;x:=2;_=x}', '', 'at least one new'),
-    ('switch 1{case 1:x:=1}', '', 'declared and not used'),
-    ('switch 1{case 1:break Outer}', '', 'semicolon or newline'),
+# Stable historical keys keep the existing official rejection node identities.
+# Cases 9/10 were valid aggregate selectors, not invalid Go; their exact source
+# now has separately named positive obligations below. Earlier negative-test
+# outcomes (including the stale assertion failure) remain historical evidence.
+INVALID = {
+    0: ('switch 1{default:;default:}', '', 'multiple default'),
+    1: ('switch 1{case 1:;case 1:}', '', 'duplicate constant'),
+    2: ('switch "a"{case "a":;case "\\x61":}', '', 'duplicate constant'),
+    3: ('switch uint8(1){case 256:}', '', 'overflows uint8'),
+    4: ('switch 1{case true:}', '', 'cannot use'),
+    5: ('switch true{case 1:}', '', 'cannot use'),
+    6: ('switch int(1){case int64(1):}', '', 'mismatched operand types'),
+    7: ('switch A(1){case B(1):}', 'type A int;type B int', 'mismatched operand types'),
+    8: ('switch A{}{}', 'type A struct{X int}', 'semicolon or newline'),
+    11: ('switch f(){}', 'func f()(int,int){return 1,2}', 'switch requires a comparable type'),
+    12: ('switch 1{case missing:}', '', 'undefined name'),
+    13: ('switch 1{case 1:x:=7;_=x;case x:}', '', 'undefined name'),
+    14: ('switch x:=1;x{case 1:};_=x', '', 'undefined name'),
+    15: ('switch 1{case 1:continue}', '', 'outside loop'),
+    16: ('fallthrough', '', 'final non-empty'),
+    17: ('switch 1{case 1:fallthrough}', '', 'non-final switch clause'),
+    18: ('switch 1{case 1:fallthrough;_=7;case 2:}', '', 'final non-empty'),
+    19: ('switch 1{case 1:{fallthrough};case 2:}', '', 'final non-empty'),
+    20: ('switch 1{case 1:if true{fallthrough};case 2:}', '', 'final non-empty'),
+    21: ('switch 1{case 1:for{fallthrough};case 2:}', '', 'final non-empty'),
+    22: ('switch 1{case 1:fallthrough;const();case 2:}', '', 'final non-empty'),
+    23: ('switch 1{case 1:x:=1;x:=2;_=x}', '', 'at least one new'),
+    24: ('switch 1{case 1:x:=1}', '', 'declared and not used'),
+    25: ('switch 1{case 1:break Outer}', '', 'semicolon or newline'),
+}
+
+GRADUATED_AGGREGATE_SWITCHES = [
+    source('type A struct{X int}', 'switch (A{}){}'),
+    source('', 'switch [2]int{}{}'),
 ]
 
 
-@pytest.mark.parametrize('body,declarations,message', INVALID)
+@pytest.mark.parametrize('body,declarations,message', INVALID.values())
 def test_invalid_switch_source_fails_before_ir(body,declarations,message,monkeypatch):
     from pcc.frontends.go.lowering import Lowerer
     monkeypatch.setattr(Lowerer,'lower',lambda *args:pytest.fail('invalid switch reached IR'))
     with pytest.raises(GoDiagnostic,match=message):compile_go(source(declarations,body))
+
+
+@pytest.mark.parametrize('original', GRADUATED_AGGREGATE_SWITCHES)
+def test_exact_aggregate_switch_frontiers_are_now_supported(original, monkeypatch):
+    # https://go.dev/ref/spec#Expression_switches: arrays/structs are comparable
+    # when their components are comparable. Keep the original empty bodies.
+    forbid_external_compiler(monkeypatch)
+    compile_go(original)
+
+
+@pytest.mark.integration
+@pytest.mark.pcc_gate(env='PCC_GO_REFERENCE')
+@pytest.mark.xdist_group(name='go-reference')
+@pytest.mark.parametrize('original', GRADUATED_AGGREGATE_SWITCHES)
+def test_exact_aggregate_switch_frontiers_match_native_and_official_streams(original, tmp_path, monkeypatch):
+    from tests.go.test_nullable_pointers import record_pair
+    originals = (('original.go', original),)
+    with monkeypatch.context() as denied:
+        forbid_external_compiler(denied)
+        artifact = compile_owned(originals)
+    binary = tmp_path/'aggregate-switch-original'
+    write_artifact(artifact, binary)
+    reference = compile_reference(originals, tmp_path/'reference', compiler=os.environ['PCC_GO_REFERENCE'],
+                                  cache=os.environ['PCC_GO_REFERENCE_CACHE'])
+    assert (reference.parent/'original.go').read_bytes() == original.encode()
+    record_pair(tmp_path, hashlib.sha256(original.encode()).hexdigest(), binary, reference)
 
 
 @pytest.mark.parametrize('body',[
