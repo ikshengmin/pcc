@@ -574,6 +574,25 @@ def _node_pool_lock_word(kind: int):
 
 
 # Ready node: thread@0, next@8, root_handle@16, pool_kind@24 (32 bytes).
+def _pooled_node_root(node):
+    # A cached node keeps its empty slot registered. Reusing that stable
+    # address needs only the normal root write barrier, not registry mutation.
+    handle = load_ptr(node, 16)
+    if ptr_is_null(handle):
+        handle = pcc_gc_scheduler_root_register_handle(node)
+        store_ptr(node, 16, handle)
+    return handle
+
+
+def _pooled_node_dispose(node) -> None:
+    # Only an empty, uncached node reaches here, outside every pool lock.
+    handle = load_ptr(node, 16)
+    if ptr_is_null(handle) == 0:
+        store_ptr(node, 16, null())
+        pcc_gc_scheduler_root_unregister_handle(handle)
+    free(node)
+
+
 def _ready_alloc():
     word = _node_pool_lock_word(1)
     _raw_queue_lock(word)
@@ -586,11 +605,11 @@ def _ready_alloc():
     if ptr_is_null(node):
         node = malloc(32)
         if ptr_is_null(node) == 0:
+            store_ptr(node, 16, null())
             _counter_add(global_addr("pcc_vthread_ready_alloc_py"), 1)
     if ptr_is_null(node) == 0:
         store_ptr(node, 0, null())
         store_ptr(node, 8, null())
-        store_ptr(node, 16, null())
         store_i64(node, 24, 1)
     return node
 
@@ -611,11 +630,11 @@ def _channel_group_alloc():
     if ptr_is_null(group):
         group = malloc(80)
         if ptr_is_null(group) == 0:
+            store_ptr(group, 16, null())
             pcc_vthread_waiter_pool_note_allocation()
     if ptr_is_null(group) == 0:
         store_ptr(group, 0, null())
         store_ptr(group, 8, null())
-        store_ptr(group, 16, null())
         store_i64(group, 24, 3)
         store_ptr(group, 32, null())
         store_ptr(group, 40, null())
@@ -630,7 +649,6 @@ def _channel_group_alloc():
 
 
 def _channel_group_recycle(group) -> None:
-    store_ptr(group, 16, null())
     store_i64(group, 24, 3)
     store_ptr(group, 32, null())
     store_ptr(group, 40, null())
@@ -643,7 +661,7 @@ def _channel_group_recycle(group) -> None:
     cached = _counter(global_addr("pcc_vthread_channel_free_count_py"))
     if cached >= 4096:
         _raw_queue_unlock(word)
-        free(group)
+        _pooled_node_dispose(group)
         return
     store_ptr(group, 8, global_load_ptr("pcc_vthread_channel_free_py"))
     global_store_ptr("pcc_vthread_channel_free_py", group)
@@ -655,7 +673,6 @@ def _channel_group_recycle(group) -> None:
 def _channel_group_release(group) -> None:
     handle = load_ptr(group, 16)
     if ptr_is_null(handle) == 0:
-        pcc_gc_scheduler_root_unregister_handle(handle)
         pcc_vthread_effect_note_waiter_root_leave()
     pcc_gc_store_root(group, null())
     _channel_group_recycle(group)
@@ -665,11 +682,10 @@ def _channel_group_reserve(vthread):
     group = _channel_group_alloc()
     if ptr_is_null(group):
         return null()
-    handle = pcc_gc_scheduler_root_register_handle(group)
+    handle = _pooled_node_root(group)
     if ptr_is_null(handle):
         _channel_group_release(group)
         return null()
-    store_ptr(group, 16, handle)
     pcc_vthread_effect_note_waiter_root_enter()
     pcc_gc_store_root(group, vthread)
     return group
@@ -679,7 +695,6 @@ def _ready_release(node) -> None:
     pool_kind = load_i64(node, 24)
     handle = load_ptr(node, 16)
     if ptr_is_null(handle) == 0:
-        pcc_gc_scheduler_root_unregister_handle(handle)
         if pool_kind == 2:
             _effect(2, 1, -1, -1)
         elif pool_kind == 3:
@@ -693,13 +708,12 @@ def _ready_release(node) -> None:
     if pool_kind == 3:
         _channel_group_recycle(node)
         return
-    store_ptr(node, 16, null())
     store_i64(node, 24, 1)
     word = _node_pool_lock_word(1)
     _raw_queue_lock(word)
     if _counter(global_addr("pcc_vthread_ready_cached_py")) >= 4096:
         _raw_queue_unlock(word)
-        free(node)
+        _pooled_node_dispose(node)
         return
     store_ptr(node, 8, global_load_ptr("pcc_vthread_ready_free_py"))
     global_store_ptr("pcc_vthread_ready_free_py", node)
@@ -720,11 +734,11 @@ def _join_alloc():
     if ptr_is_null(node):
         node = malloc(32)
         if ptr_is_null(node) == 0:
+            store_ptr(node, 16, null())
             pcc_vthread_waiter_pool_note_allocation()
     if ptr_is_null(node) == 0:
         store_ptr(node, 0, null())
         store_ptr(node, 8, null())
-        store_ptr(node, 16, null())
         store_i64(node, 24, 2)
     pcc_vthread_waiter_pool_note_cached(
         _counter(global_addr("pcc_vthread_join_free_count_py"))
@@ -733,14 +747,13 @@ def _join_alloc():
 
 
 def _join_recycle(node) -> None:
-    store_ptr(node, 16, null())
     store_i64(node, 24, 2)
     word = _node_pool_lock_word(2)
     _raw_queue_lock(word)
     cached = _counter(global_addr("pcc_vthread_join_free_count_py"))
     if cached >= 4096:
         _raw_queue_unlock(word)
-        free(node)
+        _pooled_node_dispose(node)
         return
     store_ptr(node, 8, global_load_ptr("pcc_vthread_join_free_py"))
     global_store_ptr("pcc_vthread_join_free_py", node)
@@ -752,7 +765,6 @@ def _join_recycle(node) -> None:
 def _join_release(node) -> None:
     handle = load_ptr(node, 16)
     if ptr_is_null(handle) == 0:
-        pcc_gc_scheduler_root_unregister_handle(handle)
         pcc_vthread_effect_note_waiter_root_leave()
     pcc_gc_store_root(node, null())
     _join_recycle(node)
@@ -963,11 +975,10 @@ def _enqueue(vthread) -> int:
     node = _ready_alloc()
     if ptr_is_null(node):
         return -1
-    handle = pcc_gc_scheduler_root_register_handle(node)
+    handle = _pooled_node_root(node)
     if ptr_is_null(handle):
-        free(node)
+        _pooled_node_dispose(node)
         return -1
-    store_ptr(node, 16, handle)
     pcc_gc_store_root(node, vthread)
     _effect(1, 0, 1, -1)
     _publish_ready_node(vthread, node)
@@ -979,11 +990,10 @@ def _ready_reserve(vthread):
     node = _ready_alloc()
     if ptr_is_null(node):
         return null()
-    handle = pcc_gc_scheduler_root_register_handle(node)
+    handle = _pooled_node_root(node)
     if ptr_is_null(handle):
         _ready_release(node)
         return null()
-    store_ptr(node, 16, handle)
     pcc_gc_store_root(node, vthread)
     _effect(1, 0, 1, -1)
     return node
@@ -1014,11 +1024,10 @@ def _join_enqueue(target, waiter) -> int:
     node = _join_alloc()
     if ptr_is_null(node):
         return -1
-    handle = pcc_gc_scheduler_root_register_handle(node)
+    handle = _pooled_node_root(node)
     if ptr_is_null(handle):
         _join_release(node)
         return -1
-    store_ptr(node, 16, handle)
     pcc_vthread_effect_note_waiter_root_enter()
     pcc_gc_store_root(node, waiter)
     tail = load_ptr(target, 96)

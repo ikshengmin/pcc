@@ -71,7 +71,7 @@ class Model:
             "PY_TYPE_VIRTUAL_THREAD": VTHREAD_TYPE,
         }
         names = {"_enqueue", "_publish_ready_node", "_dequeue_from", "_step_finished",
-                 "_ready_node_take", "_join_wake_all"}
+                 "_ready_node_take", "_join_wake_all", "_pooled_node_root", "_pooled_node_dispose"}
         nodes = [node for node in ast.parse(SOURCE.read_text()).body
                  if isinstance(node, ast.FunctionDef) and node.name in names]
         assert {node.name for node in nodes} == names

@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from pcc1_gate import find_current_pcc1
+from tests.python.vthread_pool_root_probe import CACHED_POOL_ROOT_PROBE
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -99,7 +100,7 @@ def test_threaded_pcc_python_archive_runs_persistent_carriers_and_pin_metrics(
     probe = tmp_path / "pcc_py_carriers_probe.c"
     exe = tmp_path / "pcc_py_carriers_probe"
     probe.write_text(
-        textwrap.dedent(
+        CACHED_POOL_ROOT_PROBE + textwrap.dedent(
             r"""
             #include "py_runtime.h"
             #include <poll.h>
@@ -192,6 +193,8 @@ def test_threaded_pcc_python_archive_runs_persistent_carriers_and_pin_metrics(
                 if (py_virtual_thread_carrier_count() != 1) return 17;
                 if (py_virtual_thread_carrier_queue_count() != 0) return 18;
                 if (py_virtual_thread_ready_count() != 0) return 19;
+                int64_t cached_roots = cached_pool_roots();
+                if (cached_roots < 0 || pcc_gc_scheduler_root_count() != cached_roots) return 20;
 
                 int fds[2];
                 if (pipe(fds) != 0) return 21;
@@ -202,19 +205,20 @@ def test_threaded_pcc_python_archive_runs_persistent_carriers_and_pin_metrics(
                     py_virtual_thread_block_on_fd(parked, fds[0], POLLIN, -1)
                     != 0
                 ) return 24;
-                if (pcc_gc_scheduler_root_count() != 1) return 25;
+                if (pcc_gc_scheduler_root_count() != cached_roots + 1) return 25;
                 if (py_virtual_thread_carrier_pool_stop() != 2) return 26;
                 if (py_virtual_thread_io_wait_count() != 1) return 27;
-                if (pcc_gc_scheduler_root_count() != 1) return 28;
+                if (pcc_gc_scheduler_root_count() != cached_roots + 1) return 28;
                 if (py_virtual_thread_carrier_pool_start(2) != 2) return 29;
                 if (py_virtual_thread_carrier_pool_stop() != 2) return 30;
                 if (py_virtual_thread_io_wait_count() != 1) return 31;
-                if (pcc_gc_scheduler_root_count() != 1) return 32;
+                if (pcc_gc_scheduler_root_count() != cached_roots + 1) return 32;
                 if (write(fds[1], "r", 1) != 1) return 33;
                 if (py_virtual_thread_poll_io(0) != 1) return 34;
                 if (py_virtual_thread_run_once() != 1) return 35;
                 if (py_virtual_thread_state(parked) != 4) return 36;
-                if (pcc_gc_scheduler_root_count() != 0) return 37;
+                cached_roots = cached_pool_roots();
+                if (cached_roots < 0 || pcc_gc_scheduler_root_count() != cached_roots) return 37;
                 close(fds[0]);
                 close(fds[1]);
                 py_decref(parked);

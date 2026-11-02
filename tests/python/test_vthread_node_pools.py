@@ -26,6 +26,9 @@ class Pools:
         self.next_pointer = 4096
         self.freed = []
         self.retired = []
+        self.registered = {}
+        self.registration_calls = 0
+        self.fail_registration = False
         self.fail_allocation = False
         self.yield_on_atomic = False
         self.namespace = {
@@ -49,6 +52,7 @@ class Pools:
             "_counter_add": self.add,
             "malloc": self.allocate,
             "free": self.free,
+            "pcc_gc_scheduler_root_register_handle": self.register,
             "pcc_gc_scheduler_root_unregister_handle": self.retire,
             "pcc_gc_store_root": self.store_root,
             "_effect": lambda *args: None,
@@ -58,6 +62,7 @@ class Pools:
             "pcc_vthread_waiter_pool_note_cached": lambda count: None,
         }
         names = {"_raw_queue_lock", "_raw_queue_unlock", "_node_pool_lock_word",
+                 "_pooled_node_root", "_pooled_node_dispose", "_ready_reserve",
                  "_ready_alloc", "_ready_release", "_join_alloc", "_join_recycle",
                  "_channel_group_alloc", "_channel_group_recycle"}
         nodes = [node for node in ast.parse(SOURCE.read_text()).body
@@ -124,7 +129,20 @@ class Pools:
     def retire(self, handle):
         self.outside()
         assert handle not in self.retired
+        assert self.load(self.registered.pop(handle), 0) == 0
         self.retired.append(handle)
+
+    def register(self, node):
+        self.outside()
+        assert self.load(node, 0) == 0
+        if self.fail_registration:
+            return 0
+        handle = ("root", node)
+        with self.atomic:
+            assert handle not in self.registered
+            self.registered[handle] = node
+            self.registration_calls += 1
+        return handle
 
     def store_root(self, node, value):
         self.outside()
@@ -141,16 +159,20 @@ class Pools:
 
 
 @pytest.mark.parametrize("kind", KINDS)
-def test_transferred_ready_nodes_return_to_their_pool_after_retiring_the_root(kind):
+def test_cached_nodes_keep_one_empty_registration_without_retaining_the_task(kind):
     pools = Pools()
     node = pools.acquire(kind)
+    handle = pools.namespace["_pooled_node_root"](node)
     pools.store(node, 0, "thread")
-    pools.store(node, 16, "root handle")
     pools.release(node)
-    assert pools.retired == ["root handle"]
+    assert pools.retired == []
+    assert pools.registered == {handle: node}
+    assert pools.load(node, 0) == 0
     assert pools.cached(kind) == 1
     assert pools.acquire(kind) == node
-    assert [pools.load(node, offset) for offset in (0, 8, 16, 24)] == [0, 0, 0, kind]
+    assert [pools.load(node, offset) for offset in (0, 8, 16, 24)] == [0, 0, handle, kind]
+    assert pools.namespace["_pooled_node_root"](node) == handle
+    assert pools.registration_calls == 1
     assert pools.cached(kind) == 0
     pools.outside()
 
@@ -159,9 +181,13 @@ def test_transferred_ready_nodes_return_to_their_pool_after_retiring_the_root(ki
 def test_full_pool_releases_raw_storage_after_unlocking(kind):
     pools = Pools()
     node = pools.acquire(kind)
+    handle = pools.namespace["_pooled_node_root"](node)
+    pools.store(node, 0, "task")
     pools.store((KINDS[kind][1], 0), 0, 4096)
     pools.release(node)
     assert pools.freed == [node]
+    assert pools.retired == [handle]
+    assert pools.registered == {}
     assert pools.cached(kind) == 4096
     pools.outside()
 
@@ -175,6 +201,20 @@ def test_failed_allocation_leaves_no_pool_lock_owned(kind):
     pools.outside()
     pools.fail_allocation = False
     assert pools.acquire(kind) != 0
+
+
+def test_failed_registration_keeps_a_retryable_empty_node():
+    pools = Pools()
+    pools.fail_registration = True
+    assert pools.namespace["_ready_reserve"]("task") == 0
+    assert pools.cached(1) == 1 and not pools.registered
+    pools.fail_registration = False
+    node = pools.namespace["_ready_reserve"]("task")
+    assert pools.load(node, 0) == "task"
+    assert pools.registration_calls == 1
+    pools.release(node)
+    assert pools.load(node, 0) == 0
+    pools.outside()
 
 
 @pytest.mark.parametrize("residue", range(0, 128, 8))
@@ -197,6 +237,7 @@ def test_four_carriers_cannot_own_the_same_cached_node(kind):
         barrier.wait(timeout=5)
         for _ in range(40):
             node = pools.acquire(kind)
+            pools.namespace["_pooled_node_root"](node)
             with owners_lock:
                 assert node not in owners
                 owners.add(node)
@@ -213,6 +254,8 @@ def test_four_carriers_cannot_own_the_same_cached_node(kind):
     assert not owners
     count = pools.cached(kind)
     assert 1 <= count <= 4
+    assert pools.registration_calls == count
+    assert all(pools.load(node, 0) == 0 for node in pools.registered.values())
     drained = [pools.acquire(kind) for _ in range(count)]
     assert len(set(drained)) == count
     assert pools.cached(kind) == 0

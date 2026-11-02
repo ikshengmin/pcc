@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.python.vthread_pool_root_probe import CACHED_POOL_ROOT_PROBE
+
 REPO_ROOT = Path(__file__).absolute().parents[2]
 RUNTIME_DIR = REPO_ROOT / "pcc" / "runtime"
 
@@ -20,7 +22,7 @@ def _slice_between(src: str, start: str, end: str) -> str:
 def _compile(tmp_path: Path, source: str, runtime_archive: Path) -> Path:
     src = tmp_path / "vthread_ready_entry_pool_probe.c"
     exe = tmp_path / "vthread_ready_entry_pool_probe.out"
-    src.write_text(textwrap.dedent(source).lstrip(), encoding="utf-8")
+    src.write_text(CACHED_POOL_ROOT_PROBE + textwrap.dedent(source).lstrip(), encoding="utf-8")
     build = subprocess.run(
         [
             os.environ.get("CC", "cc"),
@@ -55,6 +57,10 @@ def test_virtual_thread_ready_entry_pool_preserves_roots_across_backends(
         #include <stdio.h>
         #include <stdlib.h>
 
+        static int empty_cached_root(void) {
+            return cached_pool_roots() == 1 && pcc_gc_scheduler_root_count() == 1;
+        }
+
         static int check_backend(int64_t backend) {
             if (pcc_gc_set_backend(backend) != 0) return 0;
             pcc_gc_telemetry_reset();
@@ -72,7 +78,8 @@ def test_virtual_thread_ready_entry_pool_preserves_roots_across_backends(
 
                 PyObject *ready = py_virtual_thread_poll_ready();
                 if (ready == 0) return 0;
-                if (pcc_gc_scheduler_root_count() != 0) return 0;
+                /* One bounded cached registration remains, holding NULL. */
+                if (!empty_cached_root()) return 0;
                 if (py_type_of(ready) != PY_TYPE_VIRTUAL_THREAD) return 0;
                 if (py_virtual_thread_state(ready) != 2) return 0;
                 if (py_virtual_thread_complete(ready, py_None) != 0) return 0;
@@ -81,7 +88,7 @@ def test_virtual_thread_ready_entry_pool_preserves_roots_across_backends(
                 if (py_virtual_thread_ready_count() != 0) return 0;
                 if (py_virtual_thread_timer_count() != 0) return 0;
                 if (py_virtual_thread_io_wait_count() != 0) return 0;
-                if (pcc_gc_scheduler_root_count() != 0) return 0;
+                if (!empty_cached_root()) return 0;
             }
             if (py_virtual_thread_node_pool_stat(
                     PCC_VTHREAD_NODE_READY,
@@ -109,9 +116,10 @@ def test_virtual_thread_ready_entry_pool_preserves_roots_across_backends(
         """,
         pcc_runtime_archive,
     )
-    for backend in range(5):
+    for backend, tracing in [(value, "0") for value in range(5)] + [(4, "1")]:
         proc = subprocess.run([str(exe), str(backend)], capture_output=True, text=True,
-                              timeout=60)
+                              timeout=60, env=dict(os.environ, PCC_GC_BACKEND=str(backend),
+                                                   PCC_GC4_TRACING_ONLY=tracing))
         assert proc.returncode == 0, proc.stdout + proc.stderr
         assert proc.stdout.strip() == f"{backend}:1"
 
@@ -215,7 +223,8 @@ def test_local_deque_overflow_and_queued_roots_on_five_collectors(
             if (executed != JOBS || !parent_done) return 15;
             for (int i = 0; i < JOBS; ++i) if (seen[i] != 1) return 16;
             if (py_virtual_thread_ready_count() != 0) return 17;
-            if (pcc_gc_scheduler_root_count() != 0) return 18;
+            int64_t cached = cached_pool_roots();
+            if (cached <= 0 || pcc_gc_scheduler_root_count() != cached) return 18;
             puts("deque-overflow-roots-ok");
             return 0;
         }

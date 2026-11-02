@@ -173,6 +173,34 @@ Nine focused model/policy/object checks pass; native/QPS revalidation is pending
 The adjacent `test_same_backend_reset_loses_to_a_concurrent_switch` failure
 also reproduces on frozen `0fbc8d977` and is left unchanged.
 
+The merged `0013c2849` candidate passes the 64 MiB idle-step regression and
+both tracing-only native lifecycle/value tests (three tests), plus ten
+default-mode executions of the sync and actual request workloads over GC0-4.
+Its GC4 off/on packet stays below the unchanged 1 GiB limit, but the
+tracing-only four-worker run times out at 30 s in repeat 3. Only three complete
+paired rotations exist: one-worker GC4 medians 4,684 -> 2,291 QPS, four-worker
+1,915 -> 1,395, paired changes -51.08%/-27.59%. Remaining rotations and sync
+measurements are unrun. This is a performance regression; the prototype stays
+default-off.
+
+The separate default-GC0 packet **completed all seven rotations** on
+`843fae806` versus `0013c2849`: one-worker medians 37,057 -> 37,173, four-worker
+76,545 -> 74,815; paired median changes +0.36%/-0.22%. Same-packet CPython
+3.15.0 asyncio is 84,842/260,392. Inputs, archives and binaries stayed unchanged.
+This does not include the subsequent scheduler-root cache change and does not
+meet either throughput target.
+
+Four exact-process profiles of GC4 off/on complete with correct workload
+output. In the four-worker samples, graph-lock queue spinning is 65.81%/62.92%
+of self samples; direct graph-lock callers include scheduler-root registration
+23.62%/24.12% and unregistration 9.12%/9.21%. These are diagnostic sample
+shares, not QPS results. The next change retains an empty registered root in
+each bounded ready/join/channel node cache, publishes values through the same
+root barrier, and retires the registration when raw storage is freed. Its 47
+model checks pass; native and throughput validation are pending. The public
+scheduler-root count still counts registrations, including these cached NULL
+slots; tests check their emptiness, exact counts and 4096-node bounds.
+
 ### Measured P0 batch: `02acaa2f5` -> `0fbc8d977`
 
 Seven rotated paired runs on Darwin arm64, host pcc0/self/no-libpython,
