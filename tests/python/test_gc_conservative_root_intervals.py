@@ -225,7 +225,8 @@ static long nodes[3][11];
 static long owner[9];
 static long span[6];
 static long storage[512];
-static long candidate;
+static long candidates[8];
+static long candidate_count;
 static long marked;
 static long visits;
 void *malloc(long size) { return size <= 4096 ? storage : (void *)0; }
@@ -239,9 +240,10 @@ void pcc_gc_mark_root_gray_if_known(void *object) {
     if ((long)object == 16384) marked |= 4;
 }
 long pcc_thread_visit_conservative_words(void *callback, void *context) {
-    ((void (*)(void *, void *))callback)((void *)candidate, context);
+    for (long i = 0; i < candidate_count; ++i)
+        ((void (*)(void *, void *))callback)((void *)candidates[i], context);
     visits++;
-    return 1;
+    return candidate_count;
 }
 int main(void) {
     nodes[0][0] = 12288; nodes[0][1] = 32; nodes[0][2] = (long)nodes[1];
@@ -250,15 +252,23 @@ int main(void) {
     nodes[1][6] = (long)owner; owner[8] = (long)span;
     span[1] = 12280; span[2] = 32;
     pcc_gc_object_head = nodes[0];
-    long candidates[6] = {8199, 8208, 12290, 12312, 16384, -1};
+    long single_candidates[6] = {8199, 8208, 12290, 12312, 16384, -1};
     long expected[6] = {1, 0, 3, 2, 0, 0};
+    candidate_count = 1;
     for (int i = 0; i < 6; ++i) {
-        candidate = candidates[i]; marked = 0;
+        candidates[0] = single_candidates[i]; marked = 0;
         pcc_gc_gray_conservative_thread_roots();
         if (marked != expected[i]) return i + 1;
     }
+    /* Execute sorting and duplicate compaction, including both interior roots. */
+    candidates[0] = 12312; candidates[1] = 8199; candidates[2] = 0;
+    candidates[3] = 12290; candidates[4] = -1; candidates[5] = 8199;
+    candidates[6] = 8208; candidates[7] = 9223372036854775807L;
+    candidate_count = 8; marked = 0;
+    pcc_gc_gray_conservative_thread_roots();
+    if (marked != 3) return 8;
     /* Each stopped snapshot is visited once to size and once to fill words. */
-    return visits == 12 ? 0 : 7;
+    return visits == 14 ? 0 : 7;
 }
 '''
 
