@@ -1,10 +1,11 @@
 """Explicit member D1s: authored C++17 CI obligations, locally UNRUN.
 
 N4659 [class.dtor]/8-9, [class.base.init]/12, [dcl.init.aggr],
-[stmt.jump]/2 and [stmt.return]/3:
+[class.ctor]/5.8,7, [stmt.jump]/2 and [stmt.return]/3:
 https://timsong-cpp.github.io/cppwp/n4659/class.dtor
 https://timsong-cpp.github.io/cppwp/n4659/class.base.init
 https://timsong-cpp.github.io/cppwp/n4659/dcl.init.aggr
+https://timsong-cpp.github.io/cppwp/n4659/class.ctor
 
 Only explicit D1s with source-proven closed cleanup chains are admitted.
 Nontrivial member C1 construction, implicit D1 synthesis, unknown effects,
@@ -65,6 +66,24 @@ SINGLE_PROGRAMS = (
         'struct Middle{M first;M last;~Middle(){trace=trace*10+3;}};'
         'struct Outer{Middle middle;M tail;~Outer(){trace=trace*10+5;}};',
         '{Outer o{{{1},{2}},{4}};}', 54321)),
+    ('recursive-default-initialization-with-public-d1', traced(
+        'struct Middle{M first;M last;~Middle(){trace=trace*10+3;}};'
+        'struct Outer{Middle middle;M tail;~Outer(){trace=trace*10+5;}};',
+        '{Outer o;o.middle.first.n=1;o.middle.last.n=2;o.tail.n=4;}', 54321)),
+    ('private-d1-default-construction-in-owner',
+     'class Leaf{~Leaf(){}public:static int work(){Leaf value;return 42;}};'
+     'int cpp_test_entry(){return Leaf::work();}'),
+    ('nonaggregate-empty-list-public-member-d1',
+     'int trace=0;struct M{int n;~M(){trace+=n+21;}};'
+     'class Middle{M member;public:~Middle(){}};struct O{Middle member;~O(){}};'
+     'int cpp_test_entry(){{O o{};}return trace+21;}'),
+    ('nonaggregate-copy-list-public-member-d1',
+     'int trace=0;struct M{int n;~M(){trace+=n+21;}};'
+     'class Middle{M member;public:~Middle(){}};struct O{Middle member;~O(){}};'
+     'int cpp_test_entry(){{O o={};}return trace+21;}'),
+    ('aggregate-empty-list-bypasses-deleted-default-constructor',
+     'int trace=0;struct M{const int n;~M(){trace+=n;}};struct O{M member;~O(){}};'
+     'int cpp_test_entry(){{O o{};}return trace+42;}'),
     ('independent-outer-local-order', traced(PAIR, '{O first{{1},{2}};O last{{4},{5}};}', 354321)),
     ('const-member-and-mixed-trivial-fields', traced(
         'struct Empty{};struct O{const M first;int scalar;Empty empty;M last;~O(){}};',
@@ -102,15 +121,55 @@ STRPAIR_SHA256 = 'a57ee0c74413af6f03762f867f8704b0bb4c1f3fa08560b02017f2fbd649d8
 STRPAIR_BOUNDARY = ('class StrPair{public:~StrPair();void Reset();};\n' + STRPAIR_DESTRUCTOR +
                     'struct Owner{StrPair value;~Owner(){}};')
 
+NESTED_PRIVATE_DECLARATIONS = (
+    'class M{~M();};struct Middle{M member;~Middle();};struct O{Middle member;~O();};'
+)
+NESTED_PROTECTED_DECLARATIONS = (
+    'class M{protected:~M();};struct Middle{M member;~Middle();};struct O{Middle member;~O();};'
+)
+NESTED_PUBLIC_DECLARATIONS = (
+    'struct M{~M();};struct Middle{M member;~Middle();};struct O{Middle member;~O();};'
+)
+NONAGGREGATE_PRIVATE_DECLARATIONS = (
+    'class M{~M();};class Middle{M member;public:~Middle();};struct O{Middle member;~O();};'
+)
+NONAGGREGATE_PROTECTED_DECLARATIONS = (
+    'class M{protected:~M();};class Middle{M member;public:~Middle();};struct O{Middle member;~O();};'
+)
+NONAGGREGATE_PUBLIC_DECLARATIONS = (
+    'struct M{~M();};class Middle{M member;public:~Middle();};struct O{Middle member;~O();};'
+)
+DECLARATION_CONTROLS = (
+    ('nested-private-d1-declarations-without-construction', NESTED_PRIVATE_DECLARATIONS),
+    ('nested-protected-d1-declarations-without-construction', NESTED_PROTECTED_DECLARATIONS),
+    ('nested-public-d1-implicit-construction-without-bodies', NESTED_PUBLIC_DECLARATIONS + 'void f(){O o;}'),
+    ('nonaggregate-private-d1-declarations-without-construction', NONAGGREGATE_PRIVATE_DECLARATIONS),
+    ('nonaggregate-public-d1-empty-list-without-bodies', NONAGGREGATE_PUBLIC_DECLARATIONS + 'void f(){O o{};}'),
+)
+
 INVALID = (
     ('private-member-d1-inline', 'class M{~M(){}};struct O{M member;~O(){}};', 'cpp.member-access'),
     ('private-member-d1-outside', 'class M{~M(){}};struct O{M member;~O();};O::~O(){}', 'cpp.member-access'),
     ('private-member-d1-implicit-construction', 'class M{~M(){}};struct O{M member;~O();};void f(){O o;}', 'cpp.member-access'),
+    ('nested-private-member-d1-implicit-construction', NESTED_PRIVATE_DECLARATIONS + 'void f(){O o;}', 'cpp.member-access'),
+    ('nested-protected-member-d1-implicit-construction', NESTED_PROTECTED_DECLARATIONS + 'void f(){O o;}', 'cpp.member-access'),
+    ('nonaggregate-private-member-d1-default', NONAGGREGATE_PRIVATE_DECLARATIONS + 'void f(){O o;}', 'cpp.member-access'),
+    ('nonaggregate-private-member-d1-direct-empty-list', NONAGGREGATE_PRIVATE_DECLARATIONS + 'void f(){Middle o{};}', 'cpp.member-access'),
+    ('nonaggregate-private-member-d1-nested-empty-list', NONAGGREGATE_PRIVATE_DECLARATIONS + 'void f(){O o{};}', 'cpp.member-access'),
+    ('nonaggregate-private-member-d1-nested-copy-list', NONAGGREGATE_PRIVATE_DECLARATIONS + 'void f(){O o={};}', 'cpp.member-access'),
+    ('nonaggregate-protected-member-d1-nested-empty-list', NONAGGREGATE_PROTECTED_DECLARATIONS + 'void f(){O o{};}', 'cpp.member-access'),
+    ('implicit-constructor-cannot-borrow-callers-private-access',
+     'class M{~M();public:static void f();};struct Middle{M member;~Middle();};'
+     'void M::f(){Middle o;}', 'cpp.member-access'),
+    ('empty-list-constructor-cannot-borrow-callers-private-access',
+     'class M{~M();public:static void f();};class Middle{M member;public:~Middle();};'
+     'void M::f(){Middle o{};}', 'cpp.member-access'),
     ('private-outer-d1-at-use', 'struct M{~M(){}};class O{M member;~O(){}};void f(){O o;}', 'cpp.member-access'),
     ('return-value-in-member-owning-d1', 'struct M{~M(){}};struct O{M member;~O(){return 1;}};', 'cpp.destructor-return-value'),
 )
 
 DEFERRED = (
+    ('implicit-default-parentheses-declare-function', NONAGGREGATE_PRIVATE_DECLARATIONS + 'void f(){O o();}', 'cpp.unsupported.class-initialization'),
     ('implicit-outer-d1', 'struct M{~M(){}};struct O{M member;};void f(){O o;}', 'cpp.unsupported.destructor-subobjects'),
     ('implicit-intermediate-d1', 'struct M{~M(){}};struct Middle{M member;};struct O{Middle member;~O(){}};', 'cpp.unsupported.destructor-subobjects'),
     ('member-d1-definition-not-available', 'struct M{~M();};struct O{M member;~O(){}};M::~M(){}', 'cpp.unsupported.destructor-subobjects'),
@@ -161,6 +220,16 @@ def test_member_d1_prototype_does_not_require_or_invent_a_body_proof():
     destructor = parser.scope.names['O'].dtype.definition.destructor
     assert not destructor.defined
     assert not getattr(destructor, 'closed_destruction_body', False)
+
+
+@pytest.mark.parametrize('name,source', DECLARATION_CONTROLS, ids=[row[0] for row in DECLARATION_CONTROLS])
+def test_default_construction_access_does_not_require_destructor_bodies(name, source):
+    parser = CppParser()
+    parser.parse(source)
+    for name in ('M', 'Middle', 'O'):
+        destructor = parser.scope.names[name].dtype.definition.destructor
+        assert not destructor.defined
+        assert not getattr(destructor, 'closed_destruction_body', False)
 
 
 def test_exact_upstream_strpair_destructor_bytes_remain_an_explicit_boundary():

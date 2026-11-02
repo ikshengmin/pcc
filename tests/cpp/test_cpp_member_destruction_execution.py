@@ -4,7 +4,12 @@ import pytest
 
 from tests.cpp.sizeof_execution import execute_row_pair
 from tests.cpp.test_cpp_constructor_direct_list_execution import syntax_reference
-from tests.cpp.test_cpp_member_destruction import DEFERRED, INVALID, PROGRAMS
+from tests.cpp.test_cpp_member_destruction import (
+    DECLARATION_CONTROLS,
+    DEFERRED,
+    INVALID,
+    PROGRAMS,
+)
 
 
 @pytest.mark.integration
@@ -17,6 +22,13 @@ def test_member_destructor_originals_match_cpp17(name, units, tmp_path, monkeypa
 @pytest.mark.parametrize('name,source,code', INVALID, ids=[row[0] for row in INVALID])
 def test_invalid_member_destructor_original_is_rejected_by_reference(name, source, code, tmp_path):
     assert syntax_reference(tmp_path, name, source).returncode != 0
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('name,source', DECLARATION_CONTROLS, ids=[row[0] for row in DECLARATION_CONTROLS])
+def test_member_destructor_declaration_controls_are_valid_reference_only(name, source, tmp_path):
+    result = syntax_reference(tmp_path, name, source)
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.integration

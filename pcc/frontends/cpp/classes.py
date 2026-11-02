@@ -535,6 +535,25 @@ def member_access(parser, expression, operator, member):
     return result
 
 
+def _check_implicit_default_destructor_access(definition):
+    """Check each implicit constructor in its own member-access context."""
+    pending = [definition]
+    while pending:
+        current = pending.pop()
+        if current.constructors.overloads:
+            # A user-declared constructor owns its subobject initialization.
+            continue
+        for member in current.members:
+            if not is_class_type(member.dtype):
+                continue
+            child = unqualified(member.dtype).definition
+            # [class.ctor]/5.8,7: a declared enclosing D1 does not supply
+            # this constructor check. No destructor body proof is needed.
+            if child.destructor is not None:
+                current.scope.check_member_access(child.destructor, member.coord)
+            pending.append(child)
+
+
 def default_initialize(dtype, coord):
     """Check implicit trivial default construction; no synthetic constructor."""
     require_complete(dtype, coord)
@@ -553,6 +572,7 @@ def default_initialize(dtype, coord):
         if any(has_initializers(child) for child in children):
             unsupported(coord)
         pending.extend(children)
+    _check_implicit_default_destructor_access(owner.definition)
     if owner.definition.default_constructor_deleted:
         raise CppDiagnostic("cpp.deleted-default-constructor", "default constructor of '" + owner.name + "' is deleted", coord)
     if isinstance(dtype, ConstType) and not owner.definition.const_default_constructible:
@@ -578,6 +598,10 @@ def empty_list_initialize(dtype, coord):
     if definition.constructors.overloads:
         raise CppDiagnostic("cpp.unsupported.constructor-list-initialization",
                             "constructor list initialization requires separate overload rules", coord)
+    if not definition.aggregate:
+        # Only a nonaggregate's empty list invokes its implicit default
+        # constructor. Aggregate lists may bypass a deleted default ctor.
+        _check_implicit_default_destructor_access(definition)
     if not definition.aggregate and definition.default_constructor_deleted:
         raise CppDiagnostic("cpp.deleted-default-constructor", "default constructor of '" + owner.name + "' is deleted", coord)
     if (not definition.aggregate and isinstance(dtype, ConstType)
