@@ -41,6 +41,7 @@ from tests.cpp.test_cpp_lvalue_references import CASES as LVALUE_REFERENCE_PROGR
 from tests.cpp.test_cpp_const_casts import CASES as CONST_CAST_PROGRAMS
 from tests.cpp.test_cpp_class_templates import CASES as CLASS_TEMPLATE_PROGRAMS
 from tests.cpp.test_cpp_class_template_members import CASES as CLASS_TEMPLATE_MEMBER_PROGRAMS
+from tests.cpp.test_cpp_object_addresses import CASES as OBJECT_ADDRESS_PROGRAMS
 from tests.cpp.test_cpp_source_newlines import PROGRAMS as SOURCE_NEWLINE_PROGRAMS
 
 
@@ -72,6 +73,11 @@ FRONTEND_CASES = (
     ("pointer-offset-formal-row-stride", dict(POINTER_OFFSET_PROGRAMS)["formal-row-stride"], 42),
 )
 CASES += FRONTEND_CASES + CLASS_TEMPLATE_MEMBER_CASES
+CASES += tuple(
+    ('object-address-' + name, dict(OBJECT_ADDRESS_PROGRAMS)[name], 42)
+    for name in ('receiver-before-argument-once', 'array-index-receiver-once',
+                 'nested-subobject-receiver', 'pattern-dot-through-dereference')
+)
 
 # Reuse exact single-TU originals on both platform runners. The Linux-only
 # multi-TU/default-argument helper remains selected by the Linux whole suite.

@@ -43,8 +43,8 @@ RETAINED_PROGRAMS = tuple((name, ((name+'.cpp', source),)) for name, source in R
     )),
 )
 
-# Independently authored pointer-receiver programs; the original dot sources
-# above remain exact explicit-gap obligations rather than being edited away.
+# Independently authored pointer-receiver controls; the exact original dot
+# sources above are retained and now exercise the shared address owner.
 CASES = (
     ('aggregate-getter', 'template<class T>struct Box{T value;T get(){return value;}};int cpp_test_entry(){Box<int>b{42};return (&b)->get();}'),
     ('later-private-helper', 'template<class T>class Box{public:T get(){return helper();}private:static T helper(){return 42;}};int cpp_test_entry(){Box<int>b;return (&b)->get();}'),
@@ -80,16 +80,14 @@ PROGRAMS = tuple((name, ((name+'.cpp', source),)) for name, source in CASES) + (
 
 
 @pytest.mark.parametrize('name,source', RETAINED_DOT_CASES[:-1], ids=[row[0] for row in RETAINED_DOT_CASES[:-1]])
-def test_original_dot_programs_retain_explicit_address_boundary(name, source):
-    with pytest.raises(CppDiagnostic) as error:
-        CppParser().parse(source)
-    assert error.value.code == 'cpp.unsupported.member-object-address'
+def test_original_dot_programs_use_shared_address_owner(name, source):
+    units = ((name+'.cpp', source),)
+    assert compile_host_cpp(units) == compile_host_cpp(units)
 
 
-def test_original_cross_tu_dot_entry_retains_explicit_address_boundary():
-    with pytest.raises(CppDiagnostic) as error:
-        CppParser().parse(dict(RETAINED_PROGRAMS)['cross-tu-method-and-c1'][1][1])
-    assert error.value.code == 'cpp.unsupported.member-object-address'
+def test_original_cross_tu_dot_entry_uses_shared_address_owner():
+    units = dict(RETAINED_PROGRAMS)['cross-tu-method-and-c1']
+    assert compile_host_cpp(units) == compile_host_cpp(units)
 
 
 
@@ -141,7 +139,7 @@ def test_member_owner_encoding_and_substitution_order(namespace, expected):
     ('template<class T>struct Box{T f(){return missing;}};', 'cpp.undeclared'),
     ('template<class T>struct Box{T value;T f()const{value=42;return value;}};', 'cpp.const-assignment'),
     ('template<class T>struct Box{static T f(){return value;}T value;};', 'cpp.nonstatic-member-without-object'),
-    ('template<class T>struct Box{T f(T a,T b){return a%b;}};int f(){Box<double>b;return b.f(1.0,2.0);}', 'cpp.unsupported.member-object-address'),
+    ('template<class T>struct Box{T f(T a,T b){return a%b;}};int f(){Box<double>b;return b.f(1.0,2.0);}', 'cpp.invalid-operands'),
     ('template<class T>struct Box{T f(T a,T b){return a%b;}};int f(){Box<double>b;return (&b)->f(1.0,2.0);}', 'cpp.invalid-operands'),
     ('template<class T>class Box{T f(){return 42;}};int f(){Box<int>b;return b.f();}', 'cpp.member-access'),
     ('template<class T>struct Box{const int n;Box(){}};', 'cpp.const-initializer'),

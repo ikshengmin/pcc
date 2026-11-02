@@ -295,6 +295,7 @@
   ],
   "extra_modules": [
     "tests/multilanguage/test_record_pointer_c_abi.py",
-    "tests/multilanguage/test_scalar_c_abi.py"
+    "tests/multilanguage/test_scalar_c_abi.py",
+    "tests/c/test_c_address_only.py"
   ]
 }

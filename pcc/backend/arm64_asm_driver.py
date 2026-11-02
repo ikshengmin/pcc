@@ -154,6 +154,95 @@ def _split_data_items(rest: str) -> list[str]:
     return [item.strip() for item in rest.split(",") if item.strip()]
 
 
+def _anchor_weak_stackmap_functions(
+    sections: list[Section], occupied_names: set[str],
+) -> list[Section]:
+    """Keep stack-map ranges attached to physical bodies, not ODR winners.
+
+    Unlike unwind/DWARF pointers, the stack-map ABI requires a zero payload
+    field and a plain symbol relocation. A local, non-weak alias preserves
+    that ABI while keeping the record's final offsets with its own body.
+    Calls and ordinary function pointers must still bind the public symbol.
+    """
+    weak_names = {
+        symbol.name
+        for section in sections if section.is_code
+        for symbol in section.symbols
+        if symbol.external and symbol.weak_definition
+    }
+    if not weak_names:
+        return sections
+    occupied = set(occupied_names)
+    # Reserve both sides without changing undefined-symbol resolution. A
+    # missing SUBTRACTOR minuend must not become valid by acquiring an alias.
+    for section in sections:
+        for relocation in section.relocations:
+            if type(relocation.symbol) is str:
+                occupied.add(relocation.symbol)
+            if type(relocation.minuend) is str:
+                occupied.add(relocation.minuend)
+    anchors: dict[str, str] = {}
+    rewritten: dict[int, tuple[Relocation, ...]] = {}
+    for index, section in enumerate(sections):
+        if (section.segname, section.sectname) != ("__DATA", "__pcc_stackmaps"):
+            continue
+        relocations: list[Relocation] = []
+        changed = False
+        for relocation in section.relocations:
+            if (
+                type(relocation.offset) is not int
+                or type(relocation.type) is not int
+                or type(relocation.length) is not int
+                or type(relocation.addend) is not int
+                or type(relocation.pcrel) is not bool
+                or type(relocation.symbol) is not str
+                or relocation.symbol not in weak_names
+                or relocation.type != spec.ARM64_RELOC_UNSIGNED
+                or relocation.pcrel or relocation.length != 3
+                or relocation.section is not None
+                or relocation.minuend is not None or relocation.addend
+                or relocation.target_offset is not None
+                or section.data[relocation.offset:relocation.offset + 8] != b"\0" * 8
+            ):
+                relocations.append(relocation)
+                continue
+            anchor = anchors.get(relocation.symbol)
+            if anchor is None:
+                ordinal = len(anchors)
+                anchor = f"l_pcc_stackmap_body_{ordinal}"
+                while anchor in occupied:
+                    ordinal += 1
+                    anchor = f"l_pcc_stackmap_body_{ordinal}"
+                occupied.add(anchor)
+                anchors[relocation.symbol] = anchor
+            relocations.append(Relocation(
+                relocation.offset, anchor, spec.ARM64_RELOC_UNSIGNED,
+                pcrel=False, length=3,
+            ))
+            changed = True
+        if changed:
+            rewritten[index] = tuple(relocations)
+    if not anchors:
+        return sections
+    result: list[Section] = []
+    for index, section in enumerate(sections):
+        local_symbols = tuple(
+            TextSymbol(anchors[symbol.name], symbol.offset, external=False)
+            for symbol in section.symbols if symbol.name in anchors
+        )
+        if not local_symbols and index not in rewritten:
+            result.append(section)
+            continue
+        result.append(Section(
+            sectname=section.sectname, segname=section.segname,
+            data=section.data, align_log2=section.align_log2, flags=section.flags,
+            symbols=section.symbols + local_symbols,
+            relocations=rewritten.get(index, section.relocations),
+            zerofill_size=section.zerofill_size, data_in_code=section.data_in_code,
+        ))
+    return result
+
+
 class AArch64ModuleBuilder:
     """One directive/section owner shared by streaming emission and text APIs.
 
@@ -552,6 +641,10 @@ class AArch64ModuleBuilder:
             raise EncodeError(
                 f"private-extern symbols were not defined: {sorted(missing_private)!r}"
             )
+
+        sections = _anchor_weak_stackmap_functions(
+            sections, defined_names | undefined | self.globl | self.private_extern,
+        )
 
         # as(1) represents compact-unwind and DWARF pointers to functions defined
         # by this object as section-target relocations, independent of the

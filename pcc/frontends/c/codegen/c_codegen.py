@@ -77,6 +77,7 @@ from pcc.frontends.c.codegen.c_libc_declarations import (
     refresh_libc_registry_from_declarative,
 )
 from pcc.frontends.c.codegen.c_expression_flow import CExpressionFlowMixin
+from pcc.frontends.c.codegen.c_unevaluated_types import CUnevaluatedTypeMixin, UnevaluatedVLAType
 from pcc.frontends.c.codegen.c_control_flow import CControlFlowMixin
 from pcc.frontends.c.codegen.c_declaration_lowering import CDeclarationLoweringMixin
 from pcc.frontends.c.codegen.c_initializer_lowering import CInitializerLoweringMixin
@@ -248,6 +249,7 @@ _AARCH64_BRANCH_PROTECTION_ATTRS = (
 
 
 class CCodeGenerator(
+    CUnevaluatedTypeMixin,
     CExpressionFlowMixin,
     CControlFlowMixin,
     CDeclarationLoweringMixin,
@@ -1277,7 +1279,7 @@ class CCodeGenerator(
         return lhs_type
 
     def _decay_ir_type(self, ir_type):
-        if isinstance(ir_type, ir.ArrayType):
+        if isinstance(ir_type, (ir.ArrayType, UnevaluatedVLAType)):
             return ir.PointerType(ir_type.element)
         return ir_type
 
@@ -2308,6 +2310,259 @@ class CCodeGenerator(
         # assignments still receive the required value semantics.
         return self._safe_load(dest_addr, name="aggcopy.value"), dest_addr
 
+    def _tag_address_from_decl_type(self, address, decl_type):
+        # An address carries the unsignedness of the future loaded value,
+        # not the signedness of the pointer itself. Preserve pointer chains.
+        if decl_type is not None:
+            if (self._is_unsigned_scalar_decl_type(decl_type)
+                    or self._has_unsigned_scalar_pointee(decl_type)):
+                self._tag_unsigned_pointee(address)
+            if (isinstance(decl_type, c_ast.PtrDecl)
+                    and self._func_decl_returns_unsigned(decl_type.type)):
+                self._tag_unsigned_return(address)
+        return address
+
+    def _is_stored_lvalue_shape(self, node):
+        """Select the address path without evaluating or probing a value path.
+
+        Aggregate call/cast rvalues retain their existing materialization owner.
+        This predicate does not claim that every legal C lvalue is modeled.
+        """
+        if isinstance(node, (c_ast.ID, c_ast.ArrayRef, c_ast.CompoundLiteral)):
+            return True
+        if isinstance(node, c_ast.Constant):
+            return node.type in ('string', 'wstring')
+        if isinstance(node, c_ast.UnaryOp):
+            return node.op == '*'
+        if isinstance(node, c_ast.StructRef):
+            return node.type == '->' or (node.type == '.' and self._is_stored_lvalue_shape(node.name))
+        if isinstance(node, c_ast.Cast):
+            return isinstance(node.expr, c_ast.InitList)
+        if isinstance(node, c_ast.StmtExpr):
+            # Its declarations are not in scope here. The scoped statement-
+            # expression owner can preserve its actual final lvalue instead.
+            return False
+        if isinstance(node, c_ast.GenericSelection):
+            selected = self._select_generic_association(node)
+            return selected is not None and self._is_stored_lvalue_shape(selected)
+        return False
+
+    def _validate_address_shape(self, node, defer_generic=False):
+        """Reject unsupported syntax before emitting an operand's effects.
+
+        Type/layout checks occur in the existing semantic owners. This is not
+        an attempted value lowering followed by an address fallback.
+        """
+        if isinstance(node, (c_ast.ID, c_ast.CompoundLiteral)):
+            return
+        if isinstance(node, c_ast.Constant) and node.type in ('string', 'wstring'):
+            return
+        if isinstance(node, c_ast.UnaryOp) and node.op == '*':
+            return
+        if isinstance(node, c_ast.Cast) and isinstance(node.expr, c_ast.InitList):
+            return
+        if isinstance(node, c_ast.StructRef):
+            if node.type == '.':
+                self._validate_address_shape(node.name, defer_generic=defer_generic)
+            elif node.type != '->':
+                raise CodegenError('unsupported address-only member operator')
+            return
+        if isinstance(node, c_ast.ArrayRef):
+            return
+        if isinstance(node, c_ast.GenericSelection):
+            if defer_generic:
+                return
+            selected = self._select_generic_association(node)
+            if selected is None:
+                raise SemanticError('no matching association in _Generic selection')
+            self._validate_address_shape(selected)
+            return
+        if isinstance(node, c_ast.StmtExpr):
+            items = list(getattr(node.stmt, 'block_items', None) or [])
+            if not items or not self._is_expression_node(items[-1]):
+                raise CodegenError('address-only statement expression requires a final lvalue')
+            # The block's declarations are not bound yet. Select any final
+            # generic arm only inside codegen_StmtExpr's actual scope, after
+            # its earlier statements have been emitted once; no fallback.
+            self._validate_address_shape(items[-1], defer_generic=True)
+            return
+        raise CodegenError('unsupported address-only lvalue shape: ' + type(node).__name__)
+
+    @staticmethod
+    def _address_base_contains_statement_expression(node):
+        pending = [node]
+        while pending:
+            part = pending.pop()
+            if isinstance(part, c_ast.StmtExpr):
+                return True
+            pending.extend(child for _name, child in part.children())
+        return False
+
+    def _codegen_scoped_address_operand(self, node, allow_no_value=False):
+        """Evaluate a scoped base once, distinguishing array storage and value.
+
+        The statement-expression owner binds its declarations before deciding
+        the final lvalue. Only a required scalar/pointer value is then fetched;
+        an array keeps its whole-array address and an invalid aggregate is not
+        fetched merely to discover that it cannot be a subscript operand.
+        """
+        if isinstance(node, c_ast.GenericSelection):
+            selected = self._select_generic_association(node)
+            if selected is None:
+                raise SemanticError('no matching association in _Generic selection')
+            result = self._codegen_scoped_address_operand(selected, allow_no_value=allow_no_value)
+            self._set_expr_ir_type(node, result[2])
+            return result
+        if isinstance(node, c_ast.StmtExpr):
+            value, address = self.codegen_StmtExpr(node, preserve_final_lvalue=True)
+        else:
+            literal_shape = (isinstance(node, c_ast.CompoundLiteral)
+                             or (isinstance(node, c_ast.Cast) and isinstance(node.expr, c_ast.InitList)))
+            if ((literal_shape or not self._address_base_contains_statement_expression(node))
+                    and self._is_stored_lvalue_shape(node)):
+                known_type = self._infer_sizeof_operand_ir_type(node)
+                if isinstance(known_type, ir.ArrayType):
+                    address = self._codegen_lvalue_address(node)
+                    return address, address, known_type
+            value, address = self.codegen(node)
+        if value is None:
+            if allow_no_value:
+                return value, address, ir.VoidType()
+            raise CodegenError('scoped address operand has no value')
+        dtype = self._get_expr_ir_type(node) or value.type
+        if isinstance(node, (c_ast.ExprList, c_ast.TernaryOp)) and isinstance(dtype, ir.ArrayType):
+            value = self._decay_array_expr_to_pointer(node, value)
+            dtype = self._decay_ir_type(dtype)
+            self._set_expr_ir_type(node, dtype)
+        if (value is address and isinstance(getattr(address, 'type', None), ir.PointerType)
+                and address.type.pointee == dtype
+                and isinstance(dtype, (ir.PointerType, ir.IntType))):
+            value = self._safe_load(address)
+            self._propagate_binding_tags(value, address)
+            if self._is_unsigned_pointee(address):
+                self._tag_unsigned_loaded_value(value)
+            if self._is_unsigned_return(address):
+                self._tag_unsigned_return(value)
+        return value, address, dtype
+
+    def _codegen_value_context_operand(self, node):
+        """Apply value-context array decay without copying array storage."""
+        value, address, dtype = self._codegen_scoped_address_operand(node, allow_no_value=True)
+        if isinstance(dtype, ir.ArrayType):
+            value = self._decay_array_expr_to_pointer(node, address if address is not None else value)
+        elif (value is not None and value is address
+              and isinstance(getattr(address, 'type', None), ir.PointerType)
+              and address.type.pointee == dtype and not isinstance(dtype, ir.FunctionType)):
+            # A scoped float/aggregate lvalue still needs its ordinary value
+            # here; only array conversion is storage-only in this context.
+            value = self._safe_load(address)
+            self._propagate_binding_tags(value, address)
+        return value, address
+
+    def _is_whole_vla_designator(self, node):
+        if isinstance(node, c_ast.GenericSelection):
+            selected = self._select_generic_association(node)
+            return selected is not None and self._is_whole_vla_designator(selected)
+        if isinstance(node, c_ast.ID):
+            if node.name not in {"__func__", "__FUNCTION__", "__PRETTY_FUNCTION__"}:
+                _dtype, binding = self.lookup(node.name)
+                return self._is_vla_binding(binding)
+        return False
+
+    def _reject_unmodeled_whole_vla_address(self, node):
+        if self._is_whole_vla_designator(node):
+            raise CodegenError('whole VLA object address requires variably modified pointer semantics')
+
+    def _codegen_lvalue_address(self, node):
+        """C 6.5.3.2: compute an object's address without fetching that object.
+
+        Pointer bases and indices still evaluate once. Nested aggregate layout
+        remains owned by the ordinary field helpers; no offsets are duplicated.
+        The result retains the full pointee, including arrays rather than their
+        ordinary value-context decay. Unknown forms never fall back to a read.
+        """
+        self._validate_address_shape(node)
+        if isinstance(node, c_ast.ID):
+            if node.name in {'__func__', '__FUNCTION__', '__PRETTY_FUNCTION__'}:
+                _value, address = self.codegen_ID(node)
+                return address
+            self._reject_unmodeled_whole_vla_address(node)
+            dtype, address = self.lookup(node.name)
+            self._set_expr_ir_type(node, dtype)
+            if isinstance(address, ir.Function):
+                return self._propagate_binding_tags(address, address)
+            if not isinstance(getattr(address, 'type', None), ir.PointerType):
+                raise CodegenError('address operand does not designate stored object')
+            if self._is_unsigned_binding(address) or self._is_unsigned_pointee_binding(address):
+                self._tag_unsigned_pointee(address)
+            if self._is_unsigned_return_binding(address):
+                self._tag_unsigned_return(address)
+            return address
+        if isinstance(node, c_ast.UnaryOp):
+            # &*p cancels the dereference, but not evaluation of p.
+            pointer, _binding = self.codegen(node.expr)
+            if not isinstance(getattr(pointer, 'type', None), ir.PointerType):
+                raise CodegenError('address-of dereference requires a pointer')
+            self._set_expr_ir_type(node, pointer.type.pointee)
+            return pointer
+        if isinstance(node, c_ast.StructRef):
+            address = None
+            if node.type == '.' and self._address_base_contains_statement_expression(node.name):
+                # A final generic arm can depend on declarations inside this
+                # base. Let its existing scoped owner bind them exactly once.
+                address = self._codegen_lvalue_address(node.name)
+                base_type = self._get_expr_ir_type(node.name) or address.type.pointee
+            elif node.type == '->' and self._address_base_contains_statement_expression(node.name):
+                address, _binding, base_type = self._codegen_scoped_address_operand(node.name)
+            else:
+                base_type = self._infer_sizeof_operand_ir_type(node.name)
+            aggregate_type = base_type
+            if node.type == '->':
+                if isinstance(base_type, (ir.ArrayType, UnevaluatedVLAType)):
+                    aggregate_type = base_type.element
+                elif isinstance(base_type, ir.PointerType):
+                    aggregate_type = base_type.pointee
+                else:
+                    raise CodegenError('address-only arrow requires an aggregate pointer')
+            # Resolve every field/bit-field boundary before evaluating the base.
+            self._validate_addressable_field(aggregate_type, node.field.name)
+            if node.type == '.':
+                if address is None:
+                    address = self._codegen_lvalue_address(node.name)
+            elif address is None:
+                address, _binding = self.codegen(node.name)
+            target = ir.PointerType(aggregate_type)
+            if address.type != target:
+                address = self.builder.bitcast(address, target)
+            _value, address = self._codegen_aggregate_field_access(
+                node, address, aggregate_type, node.field.name, address_only=True)
+            return address
+        if isinstance(node, c_ast.ArrayRef):
+            _value, address = self.codegen_ArrayRef(node, address_only=True)
+            return address
+        if isinstance(node, c_ast.GenericSelection):
+            selected = self._select_generic_association(node)
+            address = self._codegen_lvalue_address(selected)
+            self._set_expr_ir_type(node, self._get_expr_ir_type(selected))
+            return address
+        if isinstance(node, c_ast.StmtExpr):
+            _value, address = self.codegen_StmtExpr(node, address_only=True)
+            return address
+        if isinstance(node, c_ast.CompoundLiteral):
+            _value, address = self._materialize_compound_literal(node.type.type, node.init, address_only=True)
+            self._set_expr_ir_type(node, address.type.pointee)
+            return address
+        if isinstance(node, c_ast.Cast):
+            _value, address = self._materialize_compound_literal(node.to_type.type, node.expr, address_only=True)
+            self._set_expr_ir_type(node, address.type.pointee)
+            return address
+        # Constant lowering returns an array *value*, not stored bytes. Use
+        # the initializer owner's literal storage, retaining the full array
+        # pointee instead of its ordinary value-context element decay.
+        address = self._make_global_string_literal_constant(node)
+        self._set_expr_ir_type(node, address.type.pointee)
+        return address
+
     def codegen_UnaryOp(self, node):
 
         result = None
@@ -2398,6 +2653,8 @@ class CCodeGenerator(
                 result_ptr
             ):
                 self._tag_unsigned_loaded_value(result)
+            if self._is_unsigned_return(name_ir) and isinstance(result.type, ir.PointerType):
+                self._tag_unsigned_return(result)
 
         elif node.op == "&":
             if isinstance(node.expr, c_ast.StructRef) and self._is_offsetof_like_structref(
@@ -2415,24 +2672,9 @@ class CCodeGenerator(
                     )
                     self._set_expr_ir_type(node, result.type)
                     return result, None
-            name_ir, name_ptr = self.codegen(node.expr)
-            if name_ptr is None:
-                # Functions are already first-class pointers in LLVM IR.
-                # Taking their address should preserve the function symbol,
-                # not turn it into a null pointer.
-                result = name_ir
-                result_ptr = None
-            else:
-                result_ptr = name_ptr
-                result = result_ptr
-            # A member/array lvalue carries its declaration's signedness on
-            # the loaded value, even when its computed address has no binding.
-            # Preserve that type information when taking its address so atomic
-            # builtins and indirect loads promote unsigned narrow objects.
-            if self._is_unsigned_binding(result_ptr) or self._is_unsigned_val(name_ir):
-                self._tag_unsigned_pointee(result)
-            if self._is_unsigned_return_binding(result_ptr):
-                self._tag_unsigned_return(result)
+            result = self._codegen_lvalue_address(node.expr)
+            self._set_expr_ir_type(node, result.type)
+            result_ptr = None
 
         elif node.op == "+":
             operand, _ = self.codegen(node.expr)
@@ -2510,6 +2752,13 @@ class CCodeGenerator(
             size = self._ir_type_size(ir_type)
         else:
             semantic_type = self._infer_sizeof_operand_ir_type(expr)
+            if isinstance(semantic_type, UnevaluatedVLAType):
+                if semantic_type.binding is None:
+                    raise CodegenError('variable array query requires an existing runtime extent')
+                runtime_size = self._vla_byte_size(semantic_type.binding)
+                if runtime_size is None:
+                    raise CodegenError('variable array query has no captured runtime extent')
+                return self._tag_unsigned(runtime_size)
             size = self._ir_type_size(semantic_type)
         result = ir.Constant(int64_t, size)
         return self._tag_unsigned(result)
@@ -2712,6 +2961,8 @@ class CCodeGenerator(
 
     def _resolve_ast_type(self, node_type):
         """Recursively resolve an AST type to IR type, with typedef support."""
+        if getattr(self, '_unevaluated_binding_depth', 0):
+            return self._resolve_query_declarator(node_type)
         if isinstance(node_type, c_ast.Struct):
             return self.codegen_Struct(node_type)
         elif isinstance(node_type, c_ast.Union):
@@ -2892,7 +3143,12 @@ class CCodeGenerator(
             base = self._alloca_in_entry(value.type, f"{name}.tmp")
             self._safe_store(value, base)
         idx0 = ir.Constant(int64_t, 0)
-        return self.builder.gep(base, [idx0, idx0], name=name)
+        result = self.builder.gep(base, [idx0, idx0], name=name)
+        if self._is_unsigned_pointee(value) or self._is_unsigned_pointee(base):
+            self._tag_unsigned_pointee(result)
+        if self._is_unsigned_return(value) or self._is_unsigned_return(base):
+            self._tag_unsigned_return(result)
+        return result
 
     def _decay_array_expr_to_pointer(self, expr_node, value, name="arrayexprdecay"):
         """Apply array-to-pointer decay using the expression's semantic type."""
@@ -2905,7 +3161,12 @@ class CCodeGenerator(
                 and value.type.pointee == semantic_type
             ):
                 idx0 = ir.Constant(int64_t, 0)
-                return self.builder.gep(value, [idx0, idx0], name=name)
+                result = self.builder.gep(value, [idx0, idx0], name=name)
+                if self._is_unsigned_pointee(value):
+                    self._tag_unsigned_pointee(result)
+                if self._is_unsigned_return(value):
+                    self._tag_unsigned_return(result)
+                return result
         return self._decay_array_value_to_pointer(value, name)
 
     def _safe_store(self, value, ptr):
@@ -3102,10 +3363,16 @@ class CCodeGenerator(
 
     def _ir_type_align(self, ir_type):
         """Return natural alignment of an IR type in bytes."""
+        if isinstance(ir_type, (UnevaluatedVLAType, ir.ArrayType)):
+            return self._ir_type_align(ir_type.element)
         return _ir_type_align_static(ir_type)
 
     def _ir_type_size(self, ir_type):
         """Compute byte size of an IR type with proper alignment/padding."""
+        if isinstance(ir_type, UnevaluatedVLAType):
+            raise CodegenError('variable array query requires an existing runtime extent')
+        if isinstance(ir_type, ir.ArrayType):
+            return ir_type.count * self._ir_type_size(ir_type.element)
         return _ir_type_size_static(ir_type)
 
     @staticmethod
@@ -3581,6 +3848,8 @@ class CCodeGenerator(
 
     def _get_aggregate_field_info_by_path(self, aggregate_type, field_path):
         field_index = field_path[0]
+        if field_index in getattr(aggregate_type, 'bitfield_member_indices', ()):
+            raise CodegenError("offsetof on bit-field is not supported")
 
         if getattr(aggregate_type, "is_union", False):
             field_type = self._aggregate_member_ir_type(aggregate_type, field_index)
@@ -3640,6 +3909,33 @@ class CCodeGenerator(
             semantic_field_type, field_path[1:]
         )
         return offset + nested_offset, nested_type
+
+    def _validate_addressable_field(self, aggregate_type, field_name):
+        """Reject bit-fields along the resolved field path before base effects.
+
+        Union layout has no custom storage layout record. Keep its declaration
+        bit-field identity separately; neither offsets nor value access change.
+        Anonymous-member paths use the same member/layout owners as access.
+        """
+        path = self._aggregate_field_path(aggregate_type, field_name)
+        if path is None:
+            raise CodegenError(f"Field '{field_name}' not found in aggregate")
+        current = aggregate_type
+        for index in path:
+            if index in getattr(current, 'bitfield_member_indices', ()):
+                raise CodegenError("cannot take the address of a bit-field")
+            if getattr(current, 'has_custom_layout', False):
+                layout = self._aggregate_layout_by_index(current, index)
+                if layout is None:
+                    raise CodegenError(f"Field index {index} not found in aggregate")
+                if layout.is_bitfield:
+                    raise CodegenError("cannot take the address of a bit-field")
+                current = layout.semantic_ir_type
+            else:
+                field_type = self._aggregate_member_ir_type(current, index)
+                current = self._refine_member_ir_type(current, index, field_type)
+        # Retain the ordinary semantic layout/path validation as well.
+        self._get_aggregate_field_info_by_path(aggregate_type, path)
 
     def _get_aggregate_field_info(self, aggregate_type, field_name):
         """Return byte offset and semantic IR type for a struct/union field."""
@@ -3715,8 +4011,16 @@ class CCodeGenerator(
             return self._float_literal_ir_type(node.value)
 
         if isinstance(node, c_ast.ID):
+            if node.name in {"__func__", "__FUNCTION__", "__PRETTY_FUNCTION__"}:
+                _name, array_type = self._implicit_function_name_literal(node)
+                return array_type
             try:
-                ir_type, _ = self.lookup(node.name)
+                ir_type, binding = self.lookup(node.name)
+                if isinstance(binding, ir.Function):
+                    return binding.function_type
+                if self._is_vla_binding(binding):
+                    return UnevaluatedVLAType(binding.type.pointee,
+                                              self._lookup_decl_ast_type(node.name), binding)
             except SemanticError:
                 decl_type = self._lookup_decl_ast_type(node.name)
                 if decl_type is None:
@@ -3725,13 +4029,15 @@ class CCodeGenerator(
             return ir_type
 
         if isinstance(node, c_ast.CompoundLiteral):
+            if getattr(self, '_unevaluated_binding_depth', 0):
+                return self._resolve_query_declarator(node.type.type)
             return self._compound_literal_ir_type(node.type.type, init_node=node.init)
 
         if isinstance(node, c_ast.StructRef):
             base_type = self._infer_sizeof_operand_ir_type(node.name)
             aggregate_type = base_type
             if node.type == "->":
-                if isinstance(base_type, ir.ArrayType):
+                if isinstance(base_type, (ir.ArrayType, UnevaluatedVLAType)):
                     aggregate_type = base_type.element
                 elif not isinstance(base_type, ir.PointerType):
                     raise CodegenError(
@@ -3746,7 +4052,7 @@ class CCodeGenerator(
 
         if isinstance(node, c_ast.ArrayRef):
             base_type = self._infer_sizeof_operand_ir_type(node.name)
-            if isinstance(base_type, ir.ArrayType):
+            if isinstance(base_type, (ir.ArrayType, UnevaluatedVLAType)):
                 return base_type.element
             if isinstance(base_type, ir.PointerType):
                 return base_type.pointee
@@ -3759,10 +4065,10 @@ class CCodeGenerator(
 
         if isinstance(node, c_ast.UnaryOp):
             if node.op == "&":
-                return ir.PointerType(self._infer_sizeof_operand_ir_type(node.expr))
+                return ir.PointerType(self._infer_unevaluated_address_pointee(node.expr))
             if node.op == "*":
                 base_type = self._infer_sizeof_operand_ir_type(node.expr)
-                if isinstance(base_type, ir.ArrayType):
+                if isinstance(base_type, (ir.ArrayType, UnevaluatedVLAType)):
                     return base_type.element
                 if not isinstance(base_type, ir.PointerType):
                     raise CodegenError(
@@ -3817,8 +4123,11 @@ class CCodeGenerator(
             return self._usual_arithmetic_conversion_ir_type(lhs_type, rhs_type)
 
         if isinstance(node, c_ast.TernaryOp):
-            true_type = self._infer_sizeof_operand_ir_type(node.iftrue)
+            true_type = self._infer_sizeof_operand_ir_type(
+                node.iftrue if node.iftrue is not None else node.cond)
             false_type = self._infer_sizeof_operand_ir_type(node.iffalse)
+            true_type = self._decay_ir_type(true_type)
+            false_type = self._decay_ir_type(false_type)
             if true_type == false_type:
                 return true_type
             if (
@@ -3840,13 +4149,16 @@ class CCodeGenerator(
                 return true_type
             return true_type
 
-        if isinstance(node, c_ast.ExprList) and node.exprs:
-            return self._infer_sizeof_operand_ir_type(node.exprs[-1])
+        if isinstance(node, c_ast.Assignment):
+            # The converted result has the left operand's type, but is not
+            # an addressable C lvalue. Runtime assignment still occurs once.
+            return self._infer_sizeof_operand_ir_type(node.lvalue)
 
-        if isinstance(node, c_ast.StmtExpr) and getattr(node.stmt, "block_items", None):
-            for item in reversed(node.stmt.block_items):
-                if self._is_expression_node(item):
-                    return self._infer_sizeof_operand_ir_type(item)
+        if isinstance(node, c_ast.ExprList) and node.exprs:
+            return self._decay_ir_type(self._infer_sizeof_operand_ir_type(node.exprs[-1]))
+
+        if isinstance(node, c_ast.StmtExpr):
+            return self._infer_unevaluated_statement_expression(node)
 
         if isinstance(node, c_ast.GenericSelection):
             selected = self._select_generic_association(node)
@@ -3854,10 +4166,17 @@ class CCodeGenerator(
                 return self._infer_sizeof_operand_ir_type(selected)
 
         if isinstance(node, c_ast.FuncCall):
+            # A prototype is enough: do not depend on a previously emitted
+            # definition or evaluate a callee to discover its result type.
             if isinstance(node.name, c_ast.ID):
-                ret_type = getattr(self, "func_return_types", {}).get(node.name.name)
-                if ret_type is not None:
-                    return ret_type
+                _declared_type, binding = self.lookup(node.name.name)
+                if isinstance(binding, ir.Function):
+                    return binding.function_type.return_type
+            callee_type = self._infer_sizeof_operand_ir_type(node.name)
+            if isinstance(callee_type, ir.PointerType):
+                callee_type = callee_type.pointee
+            if isinstance(callee_type, ir.FunctionType):
+                return callee_type.return_type
 
         raise CodegenError(f"Cannot infer sizeof operand type: {type(node).__name__}")
 
@@ -3928,13 +4247,14 @@ class CCodeGenerator(
             if isinstance(inner, c_ast.IdentifierType) and len(inner.names) == 1:
                 resolved = self._lookup_typedef_ast_type(inner.names[0])
                 if resolved is not None:
-                    return self._generic_type_key_from_type(
-                        resolved,
-                        inherited_quals=merged_quals,
-                        top_level=top_level,
-                        strip_top_level_quals=strip_top_level_quals,
-                        decay_top_level=decay_top_level,
-                    )
+                    with self._query_typedef_definition_scope(inner.names[0]):
+                        return self._generic_type_key_from_type(
+                            resolved,
+                            inherited_quals=merged_quals,
+                            top_level=top_level,
+                            strip_top_level_quals=strip_top_level_quals,
+                            decay_top_level=decay_top_level,
+                        )
             effective_quals = (
                 ()
                 if top_level and strip_top_level_quals
@@ -4438,14 +4758,14 @@ class CCodeGenerator(
                 chosen = node.iftrue if node.iftrue is not None else node.cond
             else:
                 chosen = node.iffalse
-            result = self.codegen(chosen)
+            result = self._codegen_value_context_operand(chosen)
             result_val, _ = result
             if result_val is not None:
                 semantic_type = self._get_expr_ir_type(
                     chosen, getattr(result_val, "type", None)
                 )
                 if semantic_type is not None:
-                    self._set_expr_ir_type(node, semantic_type)
+                    self._set_expr_ir_type(node, self._decay_ir_type(semantic_type))
             return result
 
         cond_val, _ = self.codegen(node.cond)
@@ -4461,11 +4781,11 @@ class CCodeGenerator(
         if node.iftrue is None:
             true_val = cond_val
         else:
-            true_val, _ = self.codegen(node.iftrue)
+            true_val, _ = self._codegen_value_context_operand(node.iftrue)
         true_bb_end = self.builder.block
 
         self.builder.position_at_end(else_bb)
-        false_val, _ = self.codegen(node.iffalse)
+        false_val, _ = self._codegen_value_context_operand(node.iffalse)
         false_bb_end = self.builder.block
 
         def zero_value(target_type):
@@ -5485,14 +5805,25 @@ class CCodeGenerator(
             value = self._implicit_convert(value, target_type)
         return value
 
-    def _materialize_compound_literal(self, ast_type, init_node):
+    def _materialize_compound_literal(self, ast_type, init_node, address_only=False):
         dest_ir_type = self._compound_literal_ir_type(ast_type, init_node)
         if self.builder is None:
+            if address_only:
+                raise CodegenError('compound literal static addresses require constant-initializer lowering')
             return self._build_const_init(init_node, dest_ir_type), None
         tmp_ptr = self._alloca_in_entry(dest_ir_type, "compoundlit")
         self._safe_store(self._zero_initializer(dest_ir_type), tmp_ptr)
         self._init_runtime_value(tmp_ptr, dest_ir_type, init_node)
-        value = self._safe_load(tmp_ptr, name="compoundlitval")
+        if address_only:
+            self._tag_address_from_decl_type(tmp_ptr, ast_type)
+            return tmp_ptr, tmp_ptr
+        if isinstance(dest_ir_type, ir.ArrayType):
+            # An array expression decays to its original initial element; it
+            # is never fetched and copied just to obtain a pointer value.
+            zero = ir.Constant(int64_t, 0)
+            value = self.builder.gep(tmp_ptr, [zero, zero], name="compoundlitdecay")
+        else:
+            value = self._safe_load(tmp_ptr, name="compoundlitval")
         self._tag_value_from_decl_type(value, ast_type)
         return value, tmp_ptr
 
@@ -6070,11 +6401,17 @@ class CCodeGenerator(
         # Numeric conversions
         return self._implicit_convert(arg, expected)
 
+    def _implicit_function_name_literal(self, node):
+        """Share the implicit array's spelling and extent without emitting IR."""
+        name = self._function_display_name or (
+            self.function.name if self.function is not None else node.name
+        )
+        data = self._string_bytes(self._process_escapes(name) + "\00")
+        return name, ir.ArrayType(int8_t, len(data))
+
     def codegen_ID(self, node):
         if node.name in {"__func__", "__FUNCTION__", "__PRETTY_FUNCTION__"}:
-            func_name = self._function_display_name or (
-                self.function.name if self.function is not None else node.name
-            )
+            func_name, _array_type = self._implicit_function_name_literal(node)
             gv = self._make_global_string_constant(func_name, name_hint="funcname")
             ptr = self._const_pointer_to_first_elem(gv, cstring)
             # `__func__` behaves like an implicitly-declared local array object,
@@ -6108,11 +6445,50 @@ class CCodeGenerator(
         result = self._safe_load(var)
         return self._propagate_binding_tags(result, var), var
 
-    def codegen_ArrayRef(self, node):
+    def codegen_ArrayRef(self, node, address_only=False):
 
         name = node.name
         subscript = node.subscript
-        name_ir, name_ptr = self.codegen(name)
+        prepared_name = prepared_subscript = None
+        if address_only:
+            if (self._address_base_contains_statement_expression(name)
+                    or self._address_base_contains_statement_expression(subscript)):
+                # Preserve the existing base-before-index sequence, including
+                # C++17 projections. Both values are retained if C i[p] swaps
+                # their semantic roles; neither operand is evaluated again.
+                prepared_name = self._codegen_scoped_address_operand(name)
+                prepared_subscript = self._codegen_scoped_address_operand(subscript)
+                base_type, index_type = prepared_name[2], prepared_subscript[2]
+            else:
+                base_type = self._infer_sizeof_operand_ir_type(name)
+                index_type = self._infer_sizeof_operand_ir_type(subscript)
+            if isinstance(base_type, UnevaluatedVLAType):
+                base_type = self._decay_ir_type(base_type)
+            if isinstance(index_type, UnevaluatedVLAType):
+                index_type = self._decay_ir_type(index_type)
+            if not isinstance(base_type, (ir.ArrayType, ir.PointerType)):
+                if isinstance(index_type, (ir.ArrayType, ir.PointerType)):
+                    name, subscript = subscript, name
+                    base_type, index_type = index_type, base_type
+                    prepared_name, prepared_subscript = prepared_subscript, prepared_name
+                else:
+                    raise CodegenError('address-only subscript requires a pointer or array')
+            if not isinstance(index_type, ir.IntType):
+                raise CodegenError('array subscript requires an integer index')
+            if prepared_name is not None:
+                name_ir, name_ptr, _dtype = prepared_name
+                if isinstance(base_type, ir.ArrayType):
+                    if name_ptr is None:
+                        raise CodegenError('scoped array address requires stored array')
+                    name_ir = name_ptr
+            elif isinstance(base_type, ir.ArrayType):
+                self._validate_address_shape(name)
+                name_ptr = self._codegen_lvalue_address(name)
+                name_ir = name_ptr
+            else:
+                name_ir, name_ptr = self.codegen(name)
+        else:
+            name_ir, name_ptr = self.codegen(name)
         if name_ir is None:
             return ir.Constant(int64_t, 0), None
         if (
@@ -6127,7 +6503,10 @@ class CCodeGenerator(
             gv.global_constant = True
             gv.linkage = "internal"
             name_ptr = gv
-        subscript_ir, subscript_ptr = self.codegen(subscript)
+        if prepared_subscript is not None:
+            subscript_ir, subscript_ptr, _dtype = prepared_subscript
+        else:
+            subscript_ir, subscript_ptr = self.codegen(subscript)
         if subscript_ir is None:
             return ir.Constant(int64_t, 0), None
 
@@ -6137,7 +6516,7 @@ class CCodeGenerator(
             subscript_ir = self.builder.fptoui(subscript_ir, ir.IntType(64))
 
         # Pointer subscript: p[i] -> *(p + i)
-        name_type = self._get_expr_ir_type(name) or name_ir.type
+        name_type = base_type if address_only else (self._get_expr_ir_type(name) or name_ir.type)
         if isinstance(name_type, ir.PointerType) and isinstance(
             name_ir.type, ir.PointerType
         ):
@@ -6153,7 +6532,7 @@ class CCodeGenerator(
                     self._tag_unsigned_pointee(elem_ptr)
                 node.ir_type = elem_ptr.type.pointee
                 return elem_ptr, elem_ptr
-            value_result = self._safe_load(elem_ptr)
+            value_result = elem_ptr if address_only else self._safe_load(elem_ptr)
             if self._is_unsigned_pointee(name_ir) or self._is_unsigned_pointee(
                 name_ptr
             ):
@@ -6169,7 +6548,7 @@ class CCodeGenerator(
                 else name_ir
             )
             elem_ptr = self.builder.gep(ptr, [subscript_ir], name="ptridx")
-            value_result = self._safe_load(elem_ptr)
+            value_result = elem_ptr if address_only else self._safe_load(elem_ptr)
             if self._is_unsigned_pointee(name_ir) or self._is_unsigned_pointee(ptr):
                 self._tag_unsigned_loaded_value(value_result)
             node.ir_type = (
@@ -6211,7 +6590,7 @@ class CCodeGenerator(
                 node.ir_type = value_ir_type
                 return elem_ptr, elem_ptr
             else:
-                value_result = self._safe_load(elem_ptr)
+                value_result = elem_ptr if address_only else self._safe_load(elem_ptr)
                 if self._is_unsigned_pointee(name_ir) or self._is_unsigned_pointee(
                     name_ptr
                 ):
@@ -6238,7 +6617,7 @@ class CCodeGenerator(
             node.ir_type = value_ir_type
             return value_ptr, value_ptr
         else:
-            value_result = self._safe_load(value_ptr)
+            value_result = value_ptr if address_only else self._safe_load(value_ptr)
             if self._is_unsigned_pointee(name_ir) or self._is_unsigned_pointee(
                 name_ptr
             ):
@@ -6271,9 +6650,12 @@ class CCodeGenerator(
     def codegen_Compound(self, node):
         return self._codegen_compound_items(node, use_new_scope=True)
 
-    def codegen_StmtExpr(self, node):
+    def codegen_StmtExpr(self, node, address_only=False, preserve_final_lvalue=False):
+        if address_only:
+            self._validate_address_shape(node)
         result = ir.Constant(int64_t, 0)
         result_ptr = None
+        final_address = False
         with self.new_scope():
             items = list(getattr(node.stmt, "block_items", None) or [])
             for stmt in items:
@@ -6292,7 +6674,20 @@ class CCodeGenerator(
                     else:
                         continue
                 else:
-                    current = self.codegen(stmt)
+                    if stmt is items[-1] and (address_only or preserve_final_lvalue):
+                        if address_only or (self._is_stored_lvalue_shape(stmt)
+                                            and not self._is_whole_vla_designator(stmt)):
+                            address = self._codegen_lvalue_address(stmt)
+                            current = address, address
+                            final_address = True
+                        elif isinstance(stmt, c_ast.StmtExpr):
+                            current = self.codegen_StmtExpr(stmt, preserve_final_lvalue=True)
+                        else:
+                            # Chosen in the actual declaration scope before
+                            # evaluation, not a failed address/value retry.
+                            current = self.codegen(stmt)
+                    else:
+                        current = self.codegen(stmt)
 
                 if self._is_expression_node(stmt):
                     current_val, current_ptr = current
@@ -6304,6 +6699,8 @@ class CCodeGenerator(
                         )
                         if semantic_type is not None:
                             self._set_expr_ir_type(node, semantic_type)
+        if address_only and not final_address:
+            raise CodegenError('address-only statement expression has no reachable final lvalue')
         return result, result_ptr
 
     def _stmt_contains_label(self, node):
@@ -6657,11 +7054,13 @@ class CCodeGenerator(
             union_type.named_member_indices = {}
             union_type.visible_field_paths = {}
             union_type.is_union = True
+            union_type.bitfield_member_indices = frozenset()
             if node.name:
                 self.define(self._tag_type_key(node.name), (union_type, None))
             return union_type
 
         member_names = []
+        bitfield_member_indices = set()
         member_types = {}
         member_decl_types = {}
         member_types_by_index = []
@@ -6670,6 +7069,8 @@ class CCodeGenerator(
         max_size = 0
         max_align = 1
         for field_index, decl in enumerate(node.decls):
+            if decl.bitsize is not None:
+                bitfield_member_indices.add(field_index)
             if isinstance(decl.type, c_ast.ArrayDecl):
                 ir_t = self._build_array_ir_type(decl.type)
             else:
@@ -6709,6 +7110,7 @@ class CCodeGenerator(
             member_names, member_types_by_index
         )
         union_type.is_union = True
+        union_type.bitfield_member_indices = frozenset(bitfield_member_indices)
 
         if node.name:
             self.define(self._tag_type_key(node.name), (union_type, None))
@@ -6716,8 +7118,12 @@ class CCodeGenerator(
         return union_type
 
     def _finalize_aggregate_field_access(
-        self, node, typed_field_addr, semantic_field_type, decl_type=None
+        self, node, typed_field_addr, semantic_field_type, decl_type=None, address_only=False
     ):
+        if address_only:
+            self._tag_address_from_decl_type(typed_field_addr, decl_type)
+            self._set_expr_ir_type(node, semantic_field_type)
+            return typed_field_addr, typed_field_addr
         if isinstance(semantic_field_type, ir.ArrayType):
             elem_ptr = self.builder.gep(
                 typed_field_addr,
@@ -6736,7 +7142,7 @@ class CCodeGenerator(
         return field_value, typed_field_addr
 
     def _codegen_aggregate_path_access(
-        self, node, aggregate_addr, aggregate_type, field_path
+        self, node, aggregate_addr, aggregate_type, field_path, address_only=False
     ):
         field_index = field_path[0]
         is_last = len(field_path) == 1
@@ -6749,6 +7155,8 @@ class CCodeGenerator(
                 )
 
             if layout.is_bitfield:
+                if address_only:
+                    raise CodegenError("cannot take the address of a bit-field")
                 if not is_last:
                     raise RuntimeError(
                         f"Field '{node.field.name}' not found in struct"
@@ -6787,6 +7195,7 @@ class CCodeGenerator(
                     typed_field_addr,
                     layout.semantic_ir_type,
                     layout.decl_type,
+                    address_only=address_only,
                 )
             if not self._is_aggregate_ir_type(layout.semantic_ir_type):
                 raise RuntimeError(f"Field '{node.field.name}' not found in struct")
@@ -6795,6 +7204,7 @@ class CCodeGenerator(
                 typed_field_addr,
                 layout.semantic_ir_type,
                 field_path[1:],
+                address_only=address_only,
             )
 
         if getattr(aggregate_type, "is_union", False):
@@ -6813,6 +7223,7 @@ class CCodeGenerator(
                     typed_field_addr,
                     semantic_field_type,
                     decl_type,
+                    address_only=address_only,
                 )
             if not self._is_aggregate_ir_type(semantic_field_type):
                 raise RuntimeError(f"Field '{node.field.name}' not found in struct")
@@ -6821,6 +7232,7 @@ class CCodeGenerator(
                 typed_field_addr,
                 semantic_field_type,
                 field_path[1:],
+                address_only=address_only,
             )
 
         if not hasattr(aggregate_type, "members"):
@@ -6861,6 +7273,7 @@ class CCodeGenerator(
                 typed_field_addr,
                 semantic_field_type,
                 decl_type,
+                address_only=address_only,
             )
         if not self._is_aggregate_ir_type(semantic_field_type):
             raise RuntimeError(f"Field '{node.field.name}' not found in struct")
@@ -6869,10 +7282,11 @@ class CCodeGenerator(
             typed_field_addr,
             semantic_field_type,
             field_path[1:],
+            address_only=address_only,
         )
 
     def _codegen_aggregate_field_access(
-        self, node, aggregate_addr, aggregate_type, field_name
+        self, node, aggregate_addr, aggregate_type, field_name, address_only=False
     ):
         direct_field_index = self._aggregate_direct_member_index(
             aggregate_type, field_name
@@ -6883,6 +7297,7 @@ class CCodeGenerator(
                 aggregate_addr,
                 aggregate_type,
                 direct_field_index,
+                address_only=address_only,
             )
 
         field_path = self._aggregate_field_path(aggregate_type, field_name)
@@ -6899,10 +7314,11 @@ class CCodeGenerator(
             aggregate_addr,
             aggregate_type,
             field_path,
+            address_only=address_only,
         )
 
     def _codegen_direct_aggregate_field_access(
-        self, node, aggregate_addr, aggregate_type, field_index
+        self, node, aggregate_addr, aggregate_type, field_index, address_only=False
     ):
         if getattr(aggregate_type, "has_custom_layout", False):
             layout = self._aggregate_layout_by_index(aggregate_type, field_index)
@@ -6910,6 +7326,8 @@ class CCodeGenerator(
                 raise RuntimeError(f"Field '{node.field.name}' not found in struct")
 
             if layout.is_bitfield:
+                if address_only:
+                    raise CodegenError("cannot take the address of a bit-field")
                 container_ptr = self._byte_offset_ptr(
                     aggregate_addr,
                     layout.storage_byte_offset,
@@ -6943,6 +7361,7 @@ class CCodeGenerator(
                 typed_field_addr,
                 layout.semantic_ir_type,
                 layout.decl_type,
+                address_only=address_only,
             )
 
         if getattr(aggregate_type, "is_union", False):
@@ -6960,6 +7379,7 @@ class CCodeGenerator(
                 typed_field_addr,
                 semantic_field_type,
                 decl_type,
+                address_only=address_only,
             )
 
         if not hasattr(aggregate_type, "members"):
@@ -6996,9 +7416,19 @@ class CCodeGenerator(
             typed_field_addr,
             semantic_field_type,
             decl_type,
+            address_only=address_only,
         )
 
     def codegen_StructRef(self, node):
+
+        if node.type == '.' and self._is_stored_lvalue_shape(node.name):
+            struct_addr = self._codegen_lvalue_address(node.name)
+            struct_type = self._get_expr_ir_type(node.name) or struct_addr.type.pointee
+            target = ir.PointerType(struct_type)
+            if struct_addr.type != target:
+                struct_addr = self.builder.bitcast(struct_addr, target)
+            return self._codegen_aggregate_field_access(
+                node, struct_addr, struct_type, node.field.name)
 
         if isinstance(node.name, c_ast.StructRef):
             inner_val, inner_addr = self.codegen_StructRef(node.name)
@@ -7064,7 +7494,10 @@ class CCodeGenerator(
                 struct_addr = struct_instance_addr
         else:
             # Cast/UnaryOp/other expression as struct base: ((Type*)ptr)->field
-            val, addr = self.codegen(node.name)
+            if node.type == '.' and isinstance(node.name, c_ast.StmtExpr):
+                val, addr = self.codegen_StmtExpr(node.name, preserve_final_lvalue=True)
+            else:
+                val, addr = self.codegen(node.name)
             semantic_base_type = self._get_expr_ir_type(node.name)
             if node.type == "->":
                 struct_addr = val
@@ -7134,13 +7567,13 @@ class CCodeGenerator(
         last_expr = None
         for expr in node.exprs:
             last_expr = expr
-            result, result_ptr = self.codegen(expr)
+            result, result_ptr = self._codegen_value_context_operand(expr)
         if last_expr is not None:
             semantic_result_type = self._get_expr_ir_type(
                 last_expr, getattr(result, "type", None)
             )
             if semantic_result_type is not None:
-                self._set_expr_ir_type(node, semantic_result_type)
+                self._set_expr_ir_type(node, self._decay_ir_type(semantic_result_type))
         return result, result_ptr
 
     def codegen_GenericSelection(self, node):
@@ -7208,9 +7641,11 @@ class CCodeGenerator(
             for enumerator in node.values.enumerators:
                 if enumerator.value:
                     current_val = self._eval_const_expr(enumerator.value)
-                self.define(
-                    enumerator.name, (int32_t, ir.Constant(int32_t, current_val))
-                )
+                enum_constant = ir.Constant(int32_t, current_val)
+                self.define(enumerator.name, (int32_t, enum_constant))
+                # Declaration identity is separate from an unrelated outer
+                # object of the same name or an SSA-bound const object.
+                self.env['__pcc_enum_constant_' + enumerator.name] = enum_constant
                 if min_value is None or current_val < min_value:
                     min_value = current_val
                 if max_value is None or current_val > max_value:

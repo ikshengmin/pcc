@@ -1,9 +1,9 @@
 """Non-inline pointer-receiver members, not general member/lifetime support.
 
 Original C++17 sources for N4659 [class.mfct], [over.match.funcs], [class.access]
-and Itanium 3.1.2.1/5.1.5. Dot-call sources below remain valid-but-unsupported:
-the existing shared C address operator can pre-read aggregates. No zero-init,
-array-wrapper, fake builtin or source rewrite supplies their missing semantics.
+and Itanium 3.1.2.1/5.1.5. The original dot-call sources now exercise the
+shared address-only C owner. No zero-init, array-wrapper, fake builtin or
+source rewrite supplies object-address semantics.
 
 Native pointer inputs are supplied by an independent foreign ABI fixture.
 PCC compiles each original C++ caller/method normally. The fixture supplies
@@ -154,10 +154,11 @@ def test_pointer_receivers_compile_deterministically_without_aggregate_preread(c
 
 
 @pytest.mark.parametrize('name,source', DEFERRED_DOT_CASES, ids=[row[0] for row in DEFERRED_DOT_CASES])
-def test_exact_original_dot_positive_intent_remains_explicitly_deferred(name, source):
-    with pytest.raises(CppDiagnostic) as error:
-        CppParser().parse(source)
-    assert error.value.code == 'cpp.unsupported.member-object-address'
+def test_exact_original_dot_sources_compile_with_shared_address_owner(name, source):
+    units = ((name+'.cpp', source),)
+    first = compile_host_cpp(units)
+    assert first == compile_host_cpp(units)
+    assert not re.search(r'\bload\s+(?:%"[^"]+"|%[\w.$]+)\s*,', '\n'.join(first.ir))
 
 
 @pytest.mark.parametrize('source,code', INVALID)

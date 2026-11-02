@@ -468,16 +468,16 @@ def member_access(parser, expression, operator, member):
         if operator == ".":
             if not expression.lvalue:
                 _unsupported(member, "class temporary materialization is not implemented")
-            # Keep the exact nominal/cv object type for overload and access
-            # checking, but do not fabricate an address through C's eager
-            # aggregate-value path. No node is emitted for this pending plan.
-            object_expression = type(expression)(None, PointerType(expression.dtype))
+            # The common C address-only owner now lowers this glvalue without
+            # fetching its aggregate value. Keep exact nominal/cv identity;
+            # call_member captures the resulting address before every argument.
+            object_expression = parser._unary_expression("&", expression, member.coord)
         else:
             object_expression = expression
         if not parser._accept("("):
             raise CppDiagnostic("cpp.unsupported.member-pointers", "a member function name requires an immediate call", member.coord)
         return call_member(parser, symbol, object_expression, parser._call_arguments(), member.coord,
-                           address_available=operator == "->")
+                           address_available=True)
     parser.scope.check_member_access(symbol, member.coord)
     if symbol.kind == "enumerator":
         if operator == ".":

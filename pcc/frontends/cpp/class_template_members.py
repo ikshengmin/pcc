@@ -355,7 +355,8 @@ def pattern_call(parser, group, receiver, arguments, coord, static, address_avai
     from pcc.frontends.cpp.sema import resolve_overload
     owner = parser.class_template_method.owner
     if receiver is not None and not address_available:
-        unsupported(coord, 'class-valued member receivers require additional address/discarded-value Pattern semantics')
+        receiver = parser._unary_expression('&', receiver, coord)
+        address_available = True
     if getattr(group, 'class_owner', None) is not owner.injected:
         unsupported(coord, 'foreign-class member call binding is not implemented in class template Patterns')
     candidates = [method for method in group.overloads if len(method.parameters) == len(arguments)]

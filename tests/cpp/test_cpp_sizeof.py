@@ -106,7 +106,6 @@ DEFERRED = (
     ('int f(){return sizeof(volatile int);}', 'cpp.unsupported.volatile'),
     ('template<class T>int f(T x){return sizeof(x);}', 'cpp.unsupported.sizeof-templates'),
     ('int f(){return sizeof...(T);}', 'cpp.unsupported.sizeof-packs'),
-    ('struct S{int f();};int g(){S s{};return sizeof(s.f());}', 'cpp.unsupported.member-object-address'),
 )
 
 
