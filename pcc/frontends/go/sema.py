@@ -1355,13 +1355,15 @@ class Analyzer:
                 isinstance(underlying(right.type), (ArrayType, StructType))):
             if op not in ("==", "!="):
                 raise GoDiagnostic(expr.token, "aggregates permit only equality and inequality operators")
-            if not comparable(left.type) or not comparable(right.type):
-                raise GoDiagnostic(expr.token, "operation is not permitted by the type parameter constraint")
             if left.type != right.type:
                 if same_underlying(left.type, right.type) and not (is_named(left.type) and is_named(right.type)):
                     coerce(right, left.type)
                 else:
                     raise GoDiagnostic(expr.token, "mismatched aggregate operand types")
+            # First diagnose incompatible operand types (including nil), not
+            # a generic constraint on an ordinary concrete array comparison.
+            if not comparable(left.type) or not comparable(right.type):
+                raise GoDiagnostic(expr.token, "operation is not permitted by the type parameter constraint")
             # Abstract array elements must be comparable independently of
             # concrete calls. Concrete storage still uses admitted leaves;
             # pointer/interface/slice aggregates fail during type resolution.

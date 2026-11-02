@@ -92,6 +92,8 @@ INVALID = [
     ('type A struct{X int};type B struct{X int}', 'var a A;var b B;_=a==b', 'mismatched aggregate', 'mismatched types'),
     ('', 'a:=struct{X int}{};b:=struct{Y int}{};_=a==b', 'mismatched aggregate', 'mismatched types'),
     ('', 'var a [1]int;_=a==nil', 'mismatched aggregate', 'mismatched types'),
+    ('', 'var a [0]int;_=nil==a', 'mismatched aggregate', 'mismatched types'),
+    ('type A [1]int', 'var a A;_=a!=nil', 'mismatched aggregate', 'mismatched types'),
     ('', 'var a [1]int;_=a< a', 'only equality', 'operator < not defined'),
     ('type A struct{X int}', 'var a A;_=a+a', 'only equality', r'operator \+ not defined'),
     ('', 'var a [1]int;switch a{case [2]int{}:}', 'mismatched aggregate', 'mismatched types'),
