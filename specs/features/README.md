@@ -5,19 +5,24 @@ scripts/cpython_conformance/run.py, not another compiler or suite runner.
 
 ## Coverage contract
 
-Exactly three feature states are accepted: supported,
+Exactly three implementation states are accepted: supported,
 explicitly_unimplemented, missing. Each feature has an ID, normative chapter
 links, explicit narrow scope, test IDs, diagnostic mappings and evidence IDs.
-Missing can mean missing implementation or missing required qualification:
-the scope must distinguish them. Out-of-scope reasons are orthogonal.
+New rows separate source-bound implementation from execution acceptance using
+the explicit objects below. Implemented code is not labeled missing merely
+because acceptance is unfinished. Out-of-scope reasons are orthogonal.
 
-Supported requires passing unit, real-program and same-original-source raw
+Legacy rows with only `status` retain their original historical contract:
+supported requires passing unit, real-program and same-original-source raw
 differential evidence in the SAME compiler revision, pcc0/pcc1 mode, platform,
 backend and GC configuration. Reports expose those exact lanes. Unit tests must
 exit zero; a program may intentionally exit nonzero if its exact reference does.
 stdout, stderr and exit are compared separately. Metadata/typecheck references
 and normalized primitive-value comparisons cannot qualify raw-stream support.
 Java semantic models do not qualify native object/runtime execution.
+Legacy `missing` can mean absent implementation or absent qualification; do not
+infer a separate implementation or current acceptance status from it. Existing
+language files and their historical evidence need not be rewritten.
 
 Chapter inventory and feature inventory completeness are separate flags.
 Coverage denominators are inventoried rows, not all normative requirements.
@@ -36,6 +41,77 @@ Diagnostics contain inventory_complete, notes, codes mapping code to feature_id
 and source {path, sha256}, and message_only source-bound gaps. Each explicit
 unsupported row needs a stable code or a mapped message-only boundary. Generic
 syntax diagnostics do not substitute for a feature-specific unsupported error.
+
+### Explicit implementation and acceptance (additive schema-1 extension)
+
+An explicit feature replaces the deprecated top-level `status` with:
+
+```json
+{
+  "implementation": {
+    "status": "supported",
+    "source_revision": "FULL_IMMUTABLE_REVISION",
+    "sources": [{"path": "repository/relative/source", "sha256": "SOURCE_SHA256"}]
+  },
+  "acceptance": []
+}
+```
+
+The placeholders illustrate the shape, not valid hashes or acceptance evidence.
+Implementation requires one or more unique, source-bound paths. Its status uses
+the same three implementation states and does not require execution acceptance
+to pass. Explicitly unimplemented still requires a mapped source-bound diagnostic.
+The optional legacy `status`, if retained, must equal `implementation.status`
+and still obey all old validation rules. Omit it for implemented but unqualified
+new rows; never add contradictory parallel truths or weaken legacy validation.
+
+Acceptance is optional. Absent or empty means **unrecorded**, not passed.
+Each record has exactly these fields (plus optional `reason`):
+
+```text
+id, kind="full-feature", scope, status, source_revision,
+mode, platform, backend, gc, required_tests, evidence
+```
+
+Only full-feature acceptance is supported by this extension. Every record binds
+the complete nonempty feature `tests` set through `required_tests`, the exact
+implementation revision, all execution axes, and **all and only** the ledger's
+evidence IDs for those tests in that revision and lane. Every matching row must
+also be linked by the feature. A failed or unrun matching observation cannot be
+hidden by omitting it from both lists. IDs and scope/revision/axis tuples
+are unique within a feature. Historical evidence in other revisions remains
+historical and cannot qualify the explicit implementation's current acceptance.
+
+This is not a schema for individual ordinary/unit, integration, reference or
+shared qualification stages. An ordinary-only stage cannot claim full-feature
+acceptance merely because that stage passed. Supporting independently declared
+stage obligation sets requires a separate extension; `scope` is not permission
+to select an arbitrary passing subset. Feature test inventories themselves remain
+bounded declarations, not proof of complete language or upstream-suite coverage.
+
+Acceptance has the following strict vocabulary and checked meanings:
+
+| Status | Required observations |
+|---|---|
+| `passed` | Supported implementation; every required test observed; every bound outcome passed; a passing unit plus a runtime program/raw differential pair with identical test/source/input identities and actual stdout/stderr/exit. |
+| `failed` | At least one bound failed observation, even if other obligations remain unfinished. |
+| `blocked` | At least one blocked observation and no failed observation. |
+| `unrun` | No observations, or only evidence whose outcome is `not_run`. |
+| `pending` | Partial successful observations but incomplete full-feature proof; no failed or blocked observation. |
+
+Every nonpass needs a nonempty `reason`; a reason never substitutes for the
+required observations. Unknown fields/statuses and synonyms such as `accepted`,
+`running` or acceptance `not_run` are rejected. Evidence retains its existing
+`not_run` outcome; acceptance deliberately uses `unrun`.
+
+Reports separate explicit implementation counts/scopes from acceptance
+counts/records. Compatibility `features`/`chapters` counts retain legacy status
+or explicit implementation meaning, never acceptance percentages. Existing
+`qualified_scopes` contains only legacy rows, labeled
+`legacy_evidence_qualification` with acceptance `unrecorded`. Neither historical
+triplets nor matching source hashes automatically create current acceptance.
+All these checks remain metadata validation, not execution certification: passed
+baseline export still revalidates retained process artifacts independently.
 
 Evidence contains id, test_id, kind (unit/program/differential), purpose
 (unit/runtime/typecheck/rejection), independent outcome, immutable source_revision,

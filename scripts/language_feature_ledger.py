@@ -15,6 +15,7 @@ from collections import Counter, defaultdict
 from pathlib import Path, PurePosixPath
 
 STATUSES = ("supported", "explicitly_unimplemented", "missing")
+ACCEPTANCE_STATUSES = ("passed", "pending", "failed", "blocked", "unrun")
 KINDS = {"unit", "program", "differential"}
 OUTCOMES = {"passed", "failed", "blocked", "not_run"}
 AXES = ("mode", "platform", "backend", "gc")
@@ -141,6 +142,110 @@ def validate_evidence(row, root=None):
                     name + ": acceptance/rejection does not agree")
 
 
+def feature_status(feature):
+    """Explicit implementation is independent of the deprecated legacy status."""
+    if "implementation" in feature:
+        return feature["implementation"]["status"]
+    return feature["status"]
+
+
+def validate_implementation(feature, root=None):
+    name = "feature " + feature["id"] + ".implementation"
+    feature_fields = {"id", "title", "chapter_ids", "scope", "status", "tests", "diagnostics",
+                      "evidence", "out_of_scope_reason", "implementation", "acceptance"}
+    require(feature.keys() <= feature_fields, name + ": unknown explicit feature fields")
+    value = feature["implementation"]
+    require(isinstance(value, dict) and set(value) == {"status", "source_revision", "sources"},
+            name + ": status, source_revision and sources are required; unknown fields are not allowed")
+    require(value["status"] in STATUSES, name + ": invalid implementation status")
+    require(bool(REVISION.fullmatch(value.get("source_revision", ""))), name + ": source revision required")
+    require(isinstance(value["sources"], list) and bool(value["sources"]), name + ": source bindings required")
+    paths = set()
+    for source in value["sources"]:
+        require(isinstance(source, dict) and set(source) == {"path", "sha256"},
+                name + ": source requires only path and sha256")
+        source_identity(source, name, root)
+        require(source["path"] == PurePosixPath(source["path"]).as_posix(),
+                name + ": source path must be canonical")
+        require(source["path"] not in paths, name + ": duplicate source path")
+        paths.add(source["path"])
+    if "status" in feature:
+        require(feature["status"] == value["status"], name + ": legacy status disagrees with implementation")
+
+
+def acceptance_proof(rows):
+    """A unit plus the same original program/observation in a raw differential."""
+    units = [row for row in rows if row["kind"] == "unit" and row["purpose"] == "unit"
+             and row["outcome"] == "passed"]
+    programs = [row for row in rows if row["kind"] == "program" and row["purpose"] == "runtime"
+                and row["outcome"] == "passed"]
+    differentials = [row for row in rows if row["kind"] == "differential" and row["purpose"] == "runtime"
+                     and row["outcome"] == "passed"
+                     and row.get("comparison", {}).get("kind") == "raw_process_streams"]
+    return bool(units) and any(
+        program["test_id"] == differential["test_id"]
+        and program["source"] == differential["source"]
+        and program["input_sha256"] == differential["input_sha256"]
+        and same_result(program["actual"], differential["actual"])
+        for program in programs for differential in differentials
+    )
+
+
+def validate_acceptance(feature, evidence):
+    name = "feature " + feature["id"] + ".acceptance"
+    require("implementation" in feature, name + ": explicit implementation required")
+    records = unique(feature["acceptance"], name)
+    seen_lanes = set()
+    for record in records.values():
+        label = name + "." + record["id"]
+        required = {"id", "kind", "scope", "status", "source_revision", "required_tests", "evidence", *AXES}
+        require(required <= record.keys() and record.keys() <= required | {"reason"},
+                label + ": missing or unknown acceptance fields")
+        nonempty(record["scope"], label + ".scope")
+        require(record["kind"] == "full-feature", label + ": only full-feature acceptance is supported")
+        require(record["status"] in ACCEPTANCE_STATUSES, label + ": invalid acceptance status")
+        require(record["source_revision"] == feature["implementation"]["source_revision"],
+                label + ": acceptance revision differs from implementation")
+        execution_axes(record, label)
+        lane = tuple(record[key] for key in ("scope", "source_revision", *AXES))
+        require(lane not in seen_lanes, label + ": duplicate acceptance scope and lane")
+        seen_lanes.add(lane)
+        string_list(record["required_tests"], label + ".required_tests")
+        require(bool(record["required_tests"])
+                and set(record["required_tests"]) == set(feature["tests"]),
+                label + ": required_tests must cover the complete feature test set")
+        string_list(record["evidence"], label + ".evidence")
+        matching = [row for row in evidence.values()
+                    if row["test_id"] in record["required_tests"]
+                    and all(row[axis] == record[axis] for axis in (*AXES, "source_revision"))]
+        require({row["id"] for row in matching} <= set(feature["evidence"]),
+                label + ": feature must bind all matching ledger evidence for its required tests")
+        require(set(record["evidence"]) == {row["id"] for row in matching},
+                label + ": must bind all and only feature evidence in this revision and lane")
+        outcomes = {row["outcome"] for row in matching}
+        observed = {row["test_id"] for row in matching if row["outcome"] != "not_run"}
+        ready = (observed == set(record["required_tests"])
+                 and outcomes == {"passed"} and acceptance_proof(matching))
+        status = record["status"]
+        if status == "passed":
+            require(feature_status(feature) == "supported", label + ": passed acceptance requires implemented support")
+            require(ready, label + ": passed requires complete passing coverage and matching unit/program/raw differential proof")
+        else:
+            nonempty(record.get("reason"), label + ": nonpass reason required")
+            if status == "failed":
+                require("failed" in outcomes, label + ": failed requires failed evidence")
+            elif status == "blocked":
+                require("blocked" in outcomes and "failed" not in outcomes,
+                        label + ": blocked requires blocked evidence and cannot hide failure")
+            elif status == "unrun":
+                require(outcomes <= {"not_run"}, label + ": unrun cannot hide observed outcomes")
+            else:
+                require("passed" in outcomes and not outcomes & {"failed", "blocked"} and not ready,
+                        label + ": pending requires partial success, incomplete proof and no failed or blocked evidence")
+        if "reason" in record:
+            nonempty(record["reason"], label + ".reason")
+
+
 def validate_ledger(data, root=None):
     require(data.get("schema_version") == 1, "schema_version must be 1")
     nonempty(data.get("language"), "language")
@@ -164,7 +269,10 @@ def validate_ledger(data, root=None):
         name = "feature " + feature["id"]
         for key in ("title", "scope"):
             nonempty(feature.get(key), name + "." + key)
-        require(feature.get("status") in STATUSES, name + ": invalid feature status")
+        if "implementation" in feature:
+            validate_implementation(feature, root)
+        else:
+            require(feature.get("status") in STATUSES, name + ": invalid feature status")
         for key in ("chapter_ids", "tests", "diagnostics", "evidence"):
             string_list(feature.get(key), name + "." + key)
         require(bool(feature["chapter_ids"]), name + ": specification chapter required")
@@ -173,7 +281,9 @@ def validate_ledger(data, root=None):
         selected = [evidence[key] for key in feature["evidence"]]
         require(all(row["test_id"] in feature["tests"] for row in selected),
                 name + ": evidence test not listed")
-        if feature["status"] == "supported":
+        # Preserve old validation when a legacy status is present. Explicit-only
+        # rows describe implementation without requiring acceptance to pass.
+        if feature.get("status") == "supported":
             qualified = defaultdict(set)
             for row in selected:
                 if row["outcome"] != "passed":
@@ -184,6 +294,8 @@ def validate_ledger(data, root=None):
                     qualified[tuple(row[key] for key in (*AXES, "source_revision"))].add(row["kind"])
             require(any(kinds >= KINDS for kinds in qualified.values()),
                     name + ": supported requires unit, runnable program and runtime differential in one execution mode")
+        if "acceptance" in feature:
+            validate_acceptance(feature, evidence)
         if "out_of_scope_reason" in feature:
             nonempty(feature["out_of_scope_reason"], name + ".out_of_scope_reason")
     diagnostics = data.get("diagnostics", {})
@@ -210,7 +322,7 @@ def validate_ledger(data, root=None):
             require(row["feature_id"] in features, "message_only: unknown feature")
     mapped_messages = {row.get("feature_id") for row in diagnostics["message_only"]}
     for feature in features.values():
-        if feature["status"] == "explicitly_unimplemented":
+        if feature_status(feature) == "explicitly_unimplemented":
             require(bool(feature["diagnostics"]) or feature["id"] in mapped_messages,
                     "feature " + feature["id"] + ": explicitly_unimplemented requires a mapped source-bound diagnostic")
     require(not diagnostics["inventory_complete"] or not diagnostics["message_only"],
@@ -400,7 +512,7 @@ def coverage(data):
     rows = data["features"]
 
     def counts(items):
-        counts_ = Counter(row["status"] for row in items)
+        counts_ = Counter(feature_status(row) for row in items)
         return {"denominator": len(items), **{status: counts_[status] for status in STATUSES},
                 "supported_fraction": counts_["supported"] / len(items) if items else None}
 
@@ -418,8 +530,13 @@ def coverage(data):
         return [dict(zip((*AXES, "source_revision"), lane))
                 for lane, kinds in sorted(grouped.items()) if kinds >= KINDS]
 
+    explicit = [row for row in rows if "implementation" in row]
+    acceptance = [{"feature_id": row["id"], **record}
+                  for row in explicit for record in row.get("acceptance", [])]
+    acceptance_counts = Counter(record["status"] for record in acceptance)
     return {"language": data["language"], "inventory": data["inventory"],
-            "supported_meaning": "qualified only in the listed execution lanes, not all modes or platforms",
+            "supported_meaning": "legacy statuses retain historical evidence semantics; explicit implementation is not acceptance",
+            "feature_counts_meaning": "legacy status or explicit implementation; never acceptance counts",
             "evidence_validation": "metadata_only; raw artifacts require separate receipt verification",
             "features": counts(rows), "chapters": [
                 {"id": chapter["id"], "title": chapter["title"],
@@ -430,8 +547,18 @@ def coverage(data):
                             "message_only_gaps": len(data["diagnostics"]["message_only"])},
             "qualified_scopes": [
                 {"feature_id": row["id"], "scope": row["scope"], "evidence": row["evidence"],
-                 "execution_lanes": lanes(row)}
-                for row in rows if row["status"] == "supported"]}
+                 "execution_lanes": lanes(row), "classification": "legacy_evidence_qualification",
+                 "acceptance_status": "unrecorded"}
+                for row in rows if "implementation" not in row and row["status"] == "supported"],
+            "implementation": counts(explicit),
+            "implementation_scopes": [
+                {"feature_id": row["id"], "scope": row["scope"], "implementation": row["implementation"],
+                 "acceptance_status": "recorded" if row.get("acceptance") else "unrecorded"}
+                for row in explicit],
+            "acceptance": {"denominator": len(acceptance),
+                           **{status: acceptance_counts[status] for status in ACCEPTANCE_STATUSES},
+                           "unrecorded_features": sum(not row.get("acceptance") for row in rows)},
+            "acceptance_scopes": acceptance}
 
 
 def main(argv=None):

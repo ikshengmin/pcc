@@ -497,3 +497,356 @@ def test_derived_capture_cannot_change_parent_process_observation(tmp_path):
     record["result"] = artifact(tmp_path, "derived-capture.json", json.dumps(receipt).encode())
     with pytest.raises(ledger.LedgerError, match="parent captured raw process observation mismatch"):
         conformance.verify_execution(record, process(), "derived")
+
+
+def explicit_document():
+    """Extend the existing valid metadata fixture, never a published execution."""
+    data = document()
+    feature = data["features"][0]
+    del feature["status"]
+    feature["implementation"] = {
+        "status": "supported", "source_revision": REVISION,
+        "sources": [copy.deepcopy(data["evidence"][0]["source"])],
+    }
+    feature["acceptance"] = [{
+        "id": "fixture-full", "kind": "full-feature", "scope": "Existing bounded fixture obligations",
+        "status": "passed", "source_revision": REVISION,
+        "mode": "pcc0", "platform": "linux-x86_64", "backend": "self", "gc": "not_applicable",
+        "required_tests": list(feature["tests"]), "evidence": list(feature["evidence"]),
+    }]
+    return data
+
+
+def unobserved(row, outcome="not_run"):
+    row["outcome"] = outcome
+    row.pop("actual", None)
+    row.pop("expected", None)
+
+
+def test_explicit_implementation_does_not_require_acceptance_or_legacy_status():
+    data = explicit_document()
+    feature = data["features"][0]
+    feature["evidence"] = []
+    del feature["acceptance"]
+    data["evidence"] = []
+    ledger.validate_ledger(data, ROOT)
+    report = ledger.coverage(data)
+    assert report["implementation"]["supported"] == 1
+    assert report["acceptance"]["passed"] == 0
+    assert report["acceptance"]["unrecorded_features"] == 1
+    assert report["qualified_scopes"] == []
+    assert report["implementation_scopes"][0]["acceptance_status"] == "unrecorded"
+
+
+def test_explicit_full_acceptance_validates_without_mutating_legacy_fixture():
+    data = explicit_document()
+    before = copy.deepcopy(data)
+    ledger.validate_ledger(data, ROOT)
+    report = ledger.coverage(data)
+    assert data == before
+    assert report["acceptance"]["passed"] == 1
+    assert report["acceptance_scopes"][0]["kind"] == "full-feature"
+    assert report["qualified_scopes"] == []
+    legacy = document()
+    before = copy.deepcopy(legacy)
+    report = ledger.coverage(legacy)
+    assert legacy == before
+    assert report["qualified_scopes"][0]["classification"] == "legacy_evidence_qualification"
+    assert report["qualified_scopes"][0]["acceptance_status"] == "unrecorded"
+    assert report["implementation"]["denominator"] == 0
+    assert report["acceptance"]["passed"] == 0
+    assert report["acceptance"]["unrecorded_features"] == 1
+
+
+@pytest.mark.parametrize("status", ["pending", "failed", "blocked", "unrun"])
+def test_implemented_feature_can_have_nonpassing_acceptance(status):
+    data = explicit_document()
+    record = data["features"][0]["acceptance"][0]
+    record.update(status=status, reason="Fixture observation boundary, not a compiler result")
+    if status == "failed":
+        data["evidence"][0]["outcome"] = "failed"
+        data["evidence"][0]["actual"]["exit_code"] = 1
+    elif status == "blocked":
+        unobserved(data["evidence"][1], "blocked")
+        unobserved(data["evidence"][2])
+    else:
+        for row in data["evidence"][0 if status == "unrun" else 1:]:
+            unobserved(row)
+    ledger.validate_ledger(data, ROOT)
+    report = ledger.coverage(data)
+    assert report["implementation"]["supported"] == 1
+    assert report["acceptance"][status] == 1
+    assert report["acceptance"]["passed"] == 0
+
+
+@pytest.mark.parametrize("legacy", ["missing", "explicitly_unimplemented"])
+def test_parallel_legacy_and_implementation_statuses_cannot_disagree(legacy):
+    data = explicit_document()
+    data["features"][0]["status"] = legacy
+    with pytest.raises(ledger.LedgerError, match="legacy status disagrees"):
+        ledger.validate_ledger(data)
+
+
+def test_agreeing_legacy_status_keeps_original_proof_requirement():
+    data = explicit_document()
+    feature = data["features"][0]
+    feature["status"] = "supported"
+    ledger.validate_ledger(data)
+    del feature["acceptance"]
+    feature["evidence"] = ["unit"]
+    with pytest.raises(ledger.LedgerError, match="supported requires"):
+        ledger.validate_ledger(data)
+    del feature["status"]
+    ledger.validate_ledger(data)
+
+
+def test_explicit_unimplemented_without_legacy_status_keeps_diagnostic_requirement():
+    data = explicit_document()
+    feature = data["features"][0]
+    feature["implementation"]["status"] = "explicitly_unimplemented"
+    del feature["acceptance"]
+    with pytest.raises(ledger.LedgerError, match="requires a mapped source-bound diagnostic"):
+        ledger.validate_ledger(data)
+
+
+@pytest.mark.parametrize("change", ["empty", "duplicate", "alias-duplicate", "bad-hash", "bad-revision", "extra", "source-extra"])
+def test_implementation_identity_is_strict(change):
+    data = explicit_document()
+    implementation = data["features"][0]["implementation"]
+    if change == "empty":
+        implementation["sources"] = []
+    elif change == "duplicate":
+        implementation["sources"] *= 2
+    elif change == "alias-duplicate":
+        alias = copy.deepcopy(implementation["sources"][0])
+        alias["path"] = "./" + alias["path"]
+        implementation["sources"].append(alias)
+    elif change == "bad-hash":
+        implementation["sources"][0]["sha256"] = "not-a-hash"
+    elif change == "bad-revision":
+        implementation["source_revision"] = "HEAD"
+    elif change == "extra":
+        implementation["acceptance_status"] = "passed"
+    else:
+        implementation["sources"][0]["accepted"] = True
+    with pytest.raises(ledger.LedgerError):
+        ledger.validate_ledger(data)
+
+
+def test_implementation_source_hash_is_verified_against_requested_snapshot():
+    data = explicit_document()
+    data["features"][0]["implementation"]["sources"][0]["sha256"] = "f" * 64
+    with pytest.raises(ledger.LedgerError, match="source hash mismatch"):
+        ledger.validate_ledger(data, ROOT)
+
+
+@pytest.mark.parametrize("status", ["accepted", "running", "not_run", "supported", "unknown"])
+def test_acceptance_vocabulary_is_not_legacy_or_evidence_vocabulary(status):
+    data = explicit_document()
+    data["features"][0]["acceptance"][0]["status"] = status
+    with pytest.raises(ledger.LedgerError, match="invalid acceptance status"):
+        ledger.validate_ledger(data)
+
+
+@pytest.mark.parametrize("change", ["extra", "feature-extra", "ordinary-stage", "missing-axis", "no-implementation"])
+def test_acceptance_contract_cannot_silently_widen_or_change_stage(change):
+    data = explicit_document()
+    feature = data["features"][0]
+    record = feature["acceptance"][0]
+    if change == "extra":
+        record["acceptance_status"] = "passed"
+    elif change == "feature-extra":
+        feature["implementation_status"] = "missing"
+    elif change == "ordinary-stage":
+        record["kind"] = "unit"
+    elif change == "missing-axis":
+        del record["backend"]
+    else:
+        del feature["implementation"]
+        feature["status"] = "supported"
+    with pytest.raises(ledger.LedgerError):
+        ledger.validate_ledger(data)
+
+
+@pytest.mark.parametrize("axis,value", [
+    ("source_revision", "2" * 40), ("mode", "pcc1"), ("platform", "darwin-arm64"),
+    ("backend", "llvm"), ("gc", "generational"),
+])
+def test_acceptance_cannot_relabel_historical_or_other_lane_evidence(axis, value):
+    data = explicit_document()
+    data["features"][0]["acceptance"][0][axis] = value
+    with pytest.raises(ledger.LedgerError, match="revision differs|all and only"):
+        ledger.validate_ledger(data)
+
+
+@pytest.mark.parametrize("change", ["empty-tests", "unknown-test", "omitted-test", "duplicate-test",
+                                   "empty-evidence", "unknown-evidence", "duplicate-evidence"])
+def test_acceptance_requirements_and_observations_are_exact(change):
+    data = explicit_document()
+    feature = data["features"][0]
+    record = feature["acceptance"][0]
+    if change == "empty-tests":
+        record["required_tests"] = []
+    elif change == "unknown-test":
+        record["required_tests"].append("not-a-feature-test")
+    elif change == "omitted-test":
+        feature["tests"].append("required-but-unobserved")
+    elif change == "duplicate-test":
+        record["required_tests"] *= 2
+    elif change == "empty-evidence":
+        record["evidence"] = []
+    elif change == "unknown-evidence":
+        record["evidence"].append("unknown")
+    else:
+        record["evidence"] *= 2
+    with pytest.raises(ledger.LedgerError):
+        ledger.validate_ledger(data)
+
+
+@pytest.mark.parametrize("outcome", ["failed", "blocked", "not_run"])
+def test_acceptance_cannot_drop_nonpassing_same_lane_evidence(outcome):
+    data = explicit_document()
+    extra = copy.deepcopy(data["evidence"][0])
+    extra["id"] = "nonpassing-repeat"
+    if outcome == "failed":
+        extra["outcome"] = "failed"
+        extra["actual"]["exit_code"] = 1
+    else:
+        unobserved(extra, outcome)
+    data["evidence"].append(extra)
+    data["features"][0]["evidence"].append(extra["id"])
+    with pytest.raises(ledger.LedgerError, match="all and only"):
+        ledger.validate_ledger(data)
+    data["features"][0]["acceptance"][0]["evidence"].append(extra["id"])
+    with pytest.raises(ledger.LedgerError, match="passed requires complete"):
+        ledger.validate_ledger(data)
+
+
+def test_full_acceptance_requires_every_declared_test_to_have_observation():
+    data = explicit_document()
+    feature = data["features"][0]
+    feature["tests"].append("required-but-unobserved")
+    feature["acceptance"][0]["required_tests"] = list(feature["tests"])
+    with pytest.raises(ledger.LedgerError, match="passed requires complete"):
+        ledger.validate_ledger(data)
+
+
+@pytest.mark.parametrize("field", ["input_sha256", "source", "actual", "test_id"])
+def test_full_acceptance_requires_same_original_program_and_raw_differential(field):
+    data = explicit_document()
+    program = data["evidence"][1]
+    if field == "input_sha256":
+        program[field] = "f" * 64
+    elif field == "source":
+        program[field]["sha256"] = "f" * 64
+    elif field == "actual":
+        program[field]["stdout_sha256"] = "f" * 64
+    else:
+        program[field] = "separate-test"
+        data["features"][0]["tests"].append(program[field])
+        data["features"][0]["acceptance"][0]["required_tests"].append(program[field])
+    with pytest.raises(ledger.LedgerError, match="passed requires complete"):
+        ledger.validate_ledger(data)
+
+
+@pytest.mark.parametrize("kind", ["normalized", "typecheck", "no-program", "no-unit"])
+def test_partial_or_nonruntime_proof_cannot_claim_full_acceptance(kind):
+    data = explicit_document()
+    differential = data["evidence"][2]
+    if kind == "normalized":
+        differential["comparison"] = {"kind": "normalized_primitive_value", "description": "Fixture only"}
+        differential["raw_reference"] = process()
+    elif kind == "typecheck":
+        differential["purpose"] = "typecheck"
+        differential["reference"]["kind"] = "metadata_typecheck"
+    else:
+        missing = "program" if kind == "no-program" else "unit"
+        data["evidence"] = [row for row in data["evidence"] if row["id"] != missing]
+        data["features"][0]["evidence"].remove(missing)
+        data["features"][0]["acceptance"][0]["evidence"].remove(missing)
+    with pytest.raises(ledger.LedgerError, match="passed requires complete"):
+        ledger.validate_ledger(data)
+
+
+@pytest.mark.parametrize("duplicate_id", [False, True])
+def test_acceptance_scope_and_lane_are_unique(duplicate_id):
+    data = explicit_document()
+    records = data["features"][0]["acceptance"]
+    extra = copy.deepcopy(records[0])
+    if not duplicate_id:
+        extra["id"] = "same-lane-other-id"
+    records.append(extra)
+    with pytest.raises(ledger.LedgerError, match="duplicate"):
+        ledger.validate_ledger(data)
+
+
+@pytest.mark.parametrize("status", ["failed", "blocked", "unrun", "pending"])
+def test_nonpass_labels_require_observations_not_just_caller_flags(status):
+    data = explicit_document()
+    data["features"][0]["acceptance"][0].update(status=status, reason="Label alone is insufficient")
+    with pytest.raises(ledger.LedgerError):
+        ledger.validate_ledger(data)
+
+
+@pytest.mark.parametrize("status", ["blocked", "pending", "unrun"])
+def test_nonpass_cannot_hide_failed_observation(status):
+    data = explicit_document()
+    data["evidence"][0].update(outcome="failed", actual=process(exit_code=1))
+    data["features"][0]["acceptance"][0].update(status=status, reason="Must retain failure")
+    with pytest.raises(ledger.LedgerError):
+        ledger.validate_ledger(data)
+
+
+def test_nonpass_reason_is_required_and_unrun_is_not_pending():
+    data = explicit_document()
+    record = data["features"][0]["acceptance"][0]
+    for row in data["evidence"]:
+        unobserved(row)
+    record["status"] = "unrun"
+    with pytest.raises(ledger.LedgerError, match="nonpass reason required"):
+        ledger.validate_ledger(data)
+    record["reason"] = "No execution observations exist"
+    ledger.validate_ledger(data)
+    record["status"] = "pending"
+    with pytest.raises(ledger.LedgerError, match="partial success"):
+        ledger.validate_ledger(data)
+
+
+def test_acceptance_flag_does_not_authorize_passed_baseline_export():
+    with pytest.raises(ledger.LedgerError, match="no retained receipt"):
+        conformance.qualified_allowlist(explicit_document(), {"records": []})
+
+
+@pytest.mark.parametrize("outcome", ["failed", "blocked", "not_run"])
+def test_feature_and_acceptance_cannot_both_hide_matching_ledger_evidence(outcome):
+    data = explicit_document()
+    extra = copy.deepcopy(data["evidence"][0])
+    extra["id"] = "unlinked-nonpass"
+    if outcome == "failed":
+        extra.update(outcome="failed", actual=process(exit_code=1))
+    else:
+        unobserved(extra, outcome)
+    data["evidence"].append(extra)
+    with pytest.raises(ledger.LedgerError, match="feature must bind all matching ledger evidence"):
+        ledger.validate_ledger(data)
+
+
+@pytest.mark.parametrize("status", ["passed", "implemented", "pending"])
+def test_explicit_implementation_vocabulary_remains_the_three_states(status):
+    data = explicit_document()
+    data["features"][0]["implementation"]["status"] = status
+    with pytest.raises(ledger.LedgerError, match="invalid implementation status"):
+        ledger.validate_ledger(data)
+
+
+def test_failed_raw_comparison_is_separate_from_implemented_support():
+    data = explicit_document()
+    differential = data["evidence"][2]
+    differential["actual"] = process(stdout=b"different fixture observation")
+    differential["outcome"] = "failed"
+    data["features"][0]["acceptance"][0].update(status="failed", reason="Raw fixture streams disagree")
+    ledger.validate_ledger(data)
+    report = ledger.coverage(data)
+    assert report["implementation"]["supported"] == 1
+    assert report["acceptance"]["failed"] == 1
+    assert report["acceptance"]["passed"] == 0
