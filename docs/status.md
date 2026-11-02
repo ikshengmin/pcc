@@ -190,8 +190,17 @@ not align their array bases. The baseline queue address is 0 mod 128; the
 candidate is 104 mod 128, splitting its header across a boundary. The alignment
 fix reserves padding and rounds both deque and pool-lock bases to 128 bytes.
 Fifty-six focused checks cover all 16 pointer-aligned starting residues, storage
-bounds and concurrent reuse. Native accessors and the QPS effect of this fix
-are still unrun; the layout observation is not yet a proven performance cause.
+bounds and concurrent reuse. The isolated `f2a5c3753` source (published as
+`775e3eb94` after preserving the C++ peer update) passes ten emitted baseline
+runs and seven selected native regressions. The C-linked probe executes all
+64 deque and three pool accessors, checks real alignment/storage bounds, then
+runs its 600-task overflow/GC test across GC0-4.
+Its seven-pair comparison against `817bffe6d` does not establish a speedup:
+paired QPS changes -1.79% / -3.24%, while cycles change -0.29% / +0.41%.
+Load rises 6.23 -> 7.64 and four-worker ranges are broad. The stronger layout
+invariant is verified, but it is not a proven explanation or cure for the
+earlier throughput regression. These isolated artifacts exclude the unrelated
+C++ merge and do not qualify the complete merged tree.
 Static-method generation also exposes the pre-existing `_call_user` and
 `_emit_post_call_err_check` signature drift; this batch preserves those entries
 and adds only its two new method schemas.
