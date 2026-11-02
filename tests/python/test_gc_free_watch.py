@@ -43,6 +43,7 @@ class WatchRuntime:
         self.globals = {
             "pcc_gc_config_initialized": {0: 1},
             "pcc_gc_backend_selected": {0: 0},
+            "pcc_gc_backend4_no_refcounts": {0: 0},
             "pcc_diagnostics_runtime_log_fast_state": {0: 0},
         }
         self.notes = []

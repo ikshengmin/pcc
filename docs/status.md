@@ -179,6 +179,24 @@ on the prior word-index runtime returns code 14, observing an installed
 forwarding entry; the corrected runtime returns 0. This verifies this GC4
 moving boundary, not completion of GC1-4 count removal.
 
+The class-reclamation increment over `4126ce0cc` removes the tracing-only
+sweep's dependence on a last class decref. Class owning slots, including
+role-2 base links, are detached after finalization/resurrection checks; layout
+storage remains until pending ordinary objects are destroyed. Empty owning
+slots record completed clearing without repeatedly spending a bounded slice
+on the same class. Only then does tracing reclaim class metadata, within the
+original per-call reclamation budget. Ordinary destructors are marked finalized
+before terminal type cleanup, avoiding a second lookup through cleared class
+namespaces. The legacy counted branch is unchanged.
+
+Local focused checks pass: 20 sweep-verdict tests, 22 free-watch tests and
+9 selected sweep-kernel checks (including two labeled external-assembler
+object-closure probes). The model fixtures now explicitly initialize the
+existing tracing-only flag, and the phase assertion includes the previously
+added weak-callback reachability refresh. Actual class-reclamation execution
+and the fresh-runtime lifecycle rerun remain pending; this is not yet a
+completed count-free collector or a five-GC qualification.
+
 An additional exception-root probe exposes an existing builtin-exception
 limitation: `ValueError(shared_list, index).args[0] is shared_list` fails under
 GC0 on both the word-index arm and the pre-change control. This remains an

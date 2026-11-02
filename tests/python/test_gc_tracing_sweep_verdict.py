@@ -29,7 +29,7 @@ WHITE, BLACK, FINALIZED, CANDIDATE = 8, 32, 4, 1024
 
 
 class _SweepBoundary:
-    def __init__(self, *, backend=2, held_epoch=-1, finish_epoch=-1):
+    def __init__(self, *, backend=2, held_epoch=-1, finish_epoch=-1, count_free=False):
         self.nodes = []
         self.roots = []
         self.events = []
@@ -39,6 +39,7 @@ class _SweepBoundary:
             "pcc_gc_backend_selected": {0: backend},
             "pcc_gc_tracing_finish_stop_epoch": {0: finish_epoch},
             "pcc_gc_user_finalizer_runs": {0: 0},
+            "pcc_gc_backend4_no_refcounts": {0: int(count_free)},
         }
         self.forwardings = {}
         namespace = {
@@ -47,10 +48,14 @@ class _SweepBoundary:
             "global_addr": self.global_cells.__getitem__,
             "global_load_ptr": lambda name: self.nodes[0] if self.nodes else None,
             "ptr_is_null": lambda ptr: int(ptr is None),
-            "load_ptr": lambda ptr, offset: ptr[offset],
+            "load_ptr": self.load_pointer,
             "load_i32": lambda ptr, offset: ptr[offset],
             "load_i64": lambda ptr, offset: ptr[offset],
             "store_i32": lambda ptr, offset, value: ptr.__setitem__(offset, value),
+            "store_i64": lambda ptr, offset, value: ptr.__setitem__(offset, value),
+            "store_ptr": self.store_pointer,
+            "stack_alloc": lambda size: {},
+            "null": lambda: None,
             "pcc_gc_object_node_is_active": lambda node: int(node["active"]),
             "pcc_gc_forwarding_index_find": lambda obj: self.forwardings.get(id(obj)),
             "pcc_gc_object_is_address_pinned": lambda obj: int(obj["pinned"]),
@@ -61,28 +66,64 @@ class _SweepBoundary:
             "pcc_thread_world_stop_epoch_held": lambda: self.held_epoch,
             "pcc_gc_tracing_clear_unreachable": self.clear,
             "pcc_gc_tracing_finalize_unreachable": self.reclaim,
+            "pcc_gc_visit_object_slots": self.visit_slots,
+            "py_weakref_invalidate_tracing_candidates": self.invalidate_candidates,
         }
         tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
         names = {
             "pcc_gc_tracing_recheck_reachability_after_finalizers",
             "pcc_gc_tracing_sweep_unreachable",
+            "_class_note_owned_slot", "_class_needs_clear", "_clear_class_layout_slot",
         }
+        constants = [node for node in tree.body if isinstance(node, ast.AnnAssign)
+                     and isinstance(node.target, ast.Name)
+                     and node.target.id.startswith("_CLASS_CLEAR_")]
         tree.body = [node for node in tree.body
                      if isinstance(node, ast.FunctionDef) and node.name in names]
         assert {node.name for node in tree.body} == names
         for node in tree.body:
             node.decorator_list = []
+        tree.body = constants + tree.body
         exec(compile(tree, str(SOURCE), "exec"), namespace)
         self.sweep = namespace["pcc_gc_tracing_sweep_unreachable"]
 
-    def object(self, name, *, candidate=True, pinned=False, cext=False):
-        obj = {8: 10001 if cext else 100, 12: WHITE | (CANDIDATE if candidate else 0),
-               "name": name, "edges": [], "pinned": pinned, "weakref_live": True}
+    def object(self, name, *, candidate=True, pinned=False, cext=False, is_class=False):
+        tag = ABI_CONSTANTS["object.type.class"] if is_class else (10001 if cext else 100)
+        obj = {8: tag, 12: WHITE | (CANDIDATE if candidate else 0),
+               "name": name, "edges": [], "layout": [], "derived": [],
+               "pinned": pinned, "weakref_live": True}
         node = {0: obj, 16: None, "active": True}
         if self.nodes:
             self.nodes[-1][16] = node
         self.nodes.append(node)
         return obj
+
+    def load_pointer(self, pointer, offset):
+        if isinstance(pointer, tuple):
+            assert offset == 0
+            obj, group, index = pointer
+            return obj[group][index]
+        return pointer[offset]
+
+    def store_pointer(self, pointer, offset, value):
+        if isinstance(pointer, tuple):
+            assert offset == 0
+            obj, group, index = pointer
+            obj[group][index] = value
+        else:
+            pointer[offset] = value
+
+    def visit_slots(self, obj, visitor, context):
+        for group, role in (("edges", 1), ("layout", 2), ("derived", 3)):
+            for index in range(len(obj[group])):
+                visitor((obj, group, index), role, context)
+        return 1
+
+    def invalidate_candidates(self):
+        for node in self.nodes:
+            if node["active"] and node[0][12] & CANDIDATE:
+                node[0]["weakref_live"] = False
+        return 0
 
     def forward(self, source, target):
         self.forwardings[id(source)] = {0: source, 8: target}
@@ -109,10 +150,12 @@ class _SweepBoundary:
                 continue
             seen.add(id(obj))
             obj[12] = (obj[12] & ~56) | BLACK
-            pending.extend(obj["edges"])
+            pending.extend(value for value in obj["edges"] + obj["layout"] if value is not None)
         return len(seen)
 
     def dispatch(self, obj):
+        if obj[8] == ABI_CONSTANTS["object.type.class"]:
+            return
         if obj[12] & FINALIZED:
             return
         obj[12] |= FINALIZED
@@ -132,6 +175,15 @@ class _SweepBoundary:
         obj["edges"].clear()
 
     def reclaim(self, obj):
+        if self.global_cells["pcc_gc_backend4_no_refcounts"][0]:
+            if obj[8] == ABI_CONSTANTS["object.type.class"]:
+                assert not obj["edges"] and not any(value is not None for value in obj["layout"])
+                assert not any(node["active"] and node[0][8] != ABI_CONSTANTS["object.type.class"]
+                               and node[0][12] & CANDIDATE for node in self.nodes)
+            else:
+                for owner in obj["layout"]:
+                    if owner is not None:
+                        assert any(node["active"] and node[0] is owner for node in self.nodes)
         self.events.append("free:" + obj["name"])
         for node in self.nodes:
             if node[0] is obj:
@@ -164,6 +216,68 @@ def test_dead_cycle_finalizes_before_clear_and_reclaims_once():
     assert boundary.sweep(1) == 0
     assert boundary.events.count("del:child") == 1
     assert boundary.events.count("free:child") == 1
+
+
+@pytest.mark.parametrize("budget", (1, 2, 3, 8))
+def test_count_free_classes_retire_after_instances_with_bounded_progress(budget):
+    boundary = _SweepBoundary(backend=4, count_free=True)
+    base = boundary.object("base", is_class=True)
+    child_class = boundary.object("class", is_class=True)
+    first = boundary.object("first")
+    second = boundary.object("second")
+    base["edges"] = [first]
+    child_class["edges"] = [second]
+    child_class["layout"] = [base]
+    child_class["derived"] = [child_class, base]
+    first["layout"] = [child_class]
+    second["layout"] = [child_class]
+    first["edges"] = [second]
+    second["edges"] = [first]
+    counts = []
+    for _ in range(10):
+        counts.append(boundary.sweep(budget))
+        assert 0 <= counts[-1] <= budget
+        if not any(node["active"] for node in boundary.nodes):
+            break
+    assert sum(counts) == 4
+    assert not any(node["active"] for node in boundary.nodes)
+    for name in ("base", "class"):
+        assert boundary.events.count("clear:" + name) == 1
+        assert boundary.events.index("free:" + name) > boundary.events.index("free:first")
+        assert boundary.events.index("free:" + name) > boundary.events.index("free:second")
+    assert boundary.events.count("del:first") == boundary.events.count("del:second") == 1
+    # Borrowed MRO data is neither an owning edge nor a reclamation dependency.
+    assert child_class["derived"] == [child_class, base]
+
+
+def test_count_free_empty_class_does_not_wait_for_a_reference_count():
+    boundary = _SweepBoundary(backend=4, count_free=True)
+    cls = boundary.object("class", is_class=True)
+    assert boundary.sweep(1) == 1
+    assert not boundary.nodes[0]["active"]
+    assert not cls["weakref_live"]
+
+
+def test_count_free_resurrection_keeps_instance_and_class_graph_intact():
+    boundary = _SweepBoundary(backend=4, count_free=True)
+    cls = boundary.object("class", is_class=True)
+    child = boundary.object("child")
+    child["layout"] = [cls]
+    cls["edges"] = [child]
+    boundary.callbacks["child"] = lambda obj: boundary.roots.append(obj)
+    assert boundary.sweep(2) == 0
+    assert cls["edges"] == [child] and child["layout"] == [cls]
+    assert all(node["active"] for node in boundary.nodes)
+    assert not any(event.startswith("clear:") or event.startswith("free:")
+                   for event in boundary.events)
+
+
+def test_counted_class_lifetime_policy_is_preserved():
+    boundary = _SweepBoundary(backend=4)
+    cls = boundary.object("class", is_class=True)
+    assert boundary.sweep(1) == 0
+    assert boundary.nodes[0]["active"]
+    assert cls[12] & CANDIDATE == 0
 
 
 def test_post_finalizer_recheck_preserves_resurrected_graph_and_weakref():

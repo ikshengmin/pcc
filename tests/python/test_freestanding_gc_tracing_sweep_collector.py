@@ -20,6 +20,9 @@ MANAGED_SOURCE = RUNTIME_DIR / "py" / "py_gc_backend.py"
 MAKEFILE = RUNTIME_DIR / "Makefile"
 
 OWNED_SYMBOLS = {
+    "pcc_gc_tracing_class_note_owned_slot",
+    "pcc_gc_tracing_class_needs_clear",
+    "pcc_gc_tracing_clear_class_layout_slot",
     "pcc_gc_tracing_finalize_unreachable",
     "pcc_gc_tracing_has_sweep_candidate",
     "pcc_gc_tracing_recheck_reachability_after_finalizers",
@@ -37,6 +40,7 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_object_node_is_active",
     "pcc_gc_seed_roots",
     "pcc_gc_tracing_clear_unreachable",
+    "pcc_gc_visit_object_slots",
     "pcc_py_gc_minor_graph_lock",
     "pcc_py_gc_minor_graph_unlock",
     "pcc_refcount_forget",
@@ -145,7 +149,8 @@ def test_tracing_sweep_preserves_pep442_and_two_pass_order():
     )[1]
 
     recheck = "pcc_gc_tracing_recheck_reachability_after_finalizers()"
-    assert sweep.count(recheck) == 2
+    # Initial verdict refresh, callback resurrection, then finalizer resurrection.
+    assert sweep.count(recheck) == 3
     assert sweep.index("if budget <= 0:") < sweep.index(recheck)
     assert sweep.index(recheck) < sweep.index("py_user_del_dispatch(obj)")
     assert sweep.index("py_user_del_dispatch(obj)") < sweep.rindex(recheck)
@@ -381,6 +386,9 @@ class _SweepModel(_CandidateModel):
         load_i32 = env["load_i32"]
 
         def load_i32_tag(base, offset):
+            if base == "pcc_gc_backend4_no_refcounts":
+                assert offset == 0
+                return 0
             if base == "pcc_gc_backend_selected":
                 assert offset == 0
                 return model.words[base]
