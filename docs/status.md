@@ -127,8 +127,15 @@ call. Four-target object checks and four Darwin arm64 native sentinel runs
 (text/indexed IR, callee-register allocation off/on) pass, together with the
 frame-pointer checks: 13 tests. The sentinel test scans both the captured
 registers and the still-live frame, including values saved by the prologue.
-Thread snapshot integration, count-free marking/reclamation and QPS remain
-unfinished; this primitive does not enable count-free GC4.
+`d17d61557` adds frozen register/stack snapshots for parked and kernel-blocked
+mutators, plus the stop owner. Nine actual-body model checks pass; an owned C
+probe with one owner, two exited threads and one parked thread passes under
+GC0-4 with the source-built runtime (one integration test, five executions).
+The conservative marker uses sorted object/payload extents and checks every
+overlapping owner before dereferencing a candidate. Fifteen interval checks
+pass, including an emitted owned-code build/scan/disposal program and a
+separate interval-membership oracle. Count-free marking/reclamation and QPS
+remain unfinished; these primitives do not enable count-free GC4.
 
 ### Measured P0 batch: `02acaa2f5` -> `0fbc8d977`
 

@@ -1,0 +1,165 @@
+"""Conservative roots use owned extents, including overlapping payloads."""
+from __future__ import annotations
+
+import ast
+import os
+from pathlib import Path
+import platform
+import random
+import subprocess
+
+import pytest
+
+SOURCE = Path(__file__).resolve().parents[2] / "pcc/runtime/py/freestanding_gc_conservative_roots.py"
+
+
+class IntervalMemory:
+    def __init__(self):
+        self.words = {}
+        self.marked = set()
+        self.active = set()
+        self.namespace = {
+            "i64": int, "ptr_add": lambda base, offset: base + offset,
+            "ptr_is_null": lambda pointer: pointer == 0, "ptr_to_int": int,
+            "load_i64": self.load, "load_ptr": self.load,
+            "store_i64": self.store, "store_ptr": self.store,
+            "pcc_gc_object_node_is_active": lambda node: int(node in self.active),
+            "pcc_gc_mark_root_gray_if_known": self.marked.add,
+            "pcc_platform_abort": self.abort,
+        }
+        tree = ast.parse(SOURCE.read_text())
+        selected = []
+        for node in tree.body:
+            if isinstance(node, ast.AnnAssign):
+                selected.append(node)
+            elif isinstance(node, ast.FunctionDef):
+                node.decorator_list = []
+                selected.append(node)
+        exec(compile(ast.Module(body=selected, type_ignores=[]), str(SOURCE), "exec"), self.namespace)
+
+    def load(self, base, offset):
+        # A mistaken dereference of an arbitrary candidate fails here.
+        return self.words[base + offset]
+
+    def store(self, base, offset, value):
+        self.words[base + offset] = value
+
+    def abort(self):
+        raise RuntimeError("invalid extent")
+
+    def install(self, intervals):
+        for index, (start, end, owner) in enumerate(intervals):
+            self.namespace["_append_interval"](0x10000, index, owner, start, end - start)
+            self.words[owner] = owner + 0x400000
+            self.words[owner + 56] = 0
+            self.active.add(owner)
+        self.namespace["pcc_gc_conservative_sort_intervals"](0x10000, len(intervals))
+        self.words[0x20000] = 0x10000
+        self.words[0x20008] = len(intervals)
+
+
+@pytest.mark.parametrize("count", (0, 1, 2, 3, 4, 5, 16, 51))
+def test_marked_owners_match_independent_interval_membership(count):
+    rng = random.Random(8723 + count)
+    intervals = []
+    for index in range(count):
+        start = rng.randrange(1000, 1500)
+        intervals.append((start, start + rng.randrange(1, 200), 0x30000 + index * 128))
+    memory = IntervalMemory()
+    memory.install(intervals)
+    for candidate in (0, -1, 9223372036854775807, *range(950, 1750)):
+        memory.marked.clear()
+        memory.namespace["pcc_gc_conservative_mark_word"](candidate, 0x20000)
+        expected = {owner + 0x400000 for start, end, owner in intervals if start <= candidate < end}
+        assert memory.marked == expected, (candidate, intervals)
+
+
+def test_end_is_exclusive_and_dead_owners_are_never_revived():
+    memory = IntervalMemory()
+    memory.install([(0x5000, 0x5010, 0x30000), (0x5008, 0x5020, 0x30100)])
+    memory.active.remove(0x30000)
+    memory.namespace["pcc_gc_conservative_mark_word"](0x5009, 0x20000)
+    assert memory.marked == {0x430100}
+    assert memory.words[0x30000 + 56] == 0
+    assert memory.words[0x30100 + 56] == 1
+    memory.marked.clear()
+    memory.namespace["pcc_gc_conservative_mark_word"](0x5020, 0x20000)
+    assert memory.marked == set()
+
+
+@pytest.mark.parametrize("base,size", ((0, 16), (-1, 16), (1000, 0), (1000, -1),
+                                      (9223372036854775800, 16)))
+def test_invalid_extents_abort_without_publishing_an_entry(base, size):
+    memory = IntervalMemory()
+    with pytest.raises(RuntimeError, match="invalid extent"):
+        memory.namespace["_append_interval"](0x10000, 0, 0x30000, base, size)
+    assert memory.words == {}
+
+
+NATIVE_DRIVER = r'''
+extern void pcc_gc_gray_conservative_thread_roots(void);
+void *pcc_gc_object_head;
+static long nodes[3][11];
+static long owner[9];
+static long span[6];
+static long storage[512];
+static long candidate;
+static long marked;
+static long visits;
+void *malloc(long size) { return size <= 4096 ? storage : (void *)0; }
+void free(void *value) { (void)value; }
+void pcc_platform_abort(void) { __builtin_trap(); }
+long pcc_thread_world_stop_epoch_held(void) { return 1; }
+long pcc_gc_object_node_is_active(void *node) { return ((long *)node)[4] == 0; }
+void pcc_gc_mark_root_gray_if_known(void *object) {
+    if ((long)object == 8192) marked |= 1;
+    if ((long)object == 12288) marked |= 2;
+    if ((long)object == 16384) marked |= 4;
+}
+long pcc_thread_visit_conservative_words(void *callback, void *context) {
+    ((void (*)(void *, void *))callback)((void *)candidate, context);
+    visits++;
+    return 1;
+}
+int main(void) {
+    nodes[0][0] = 12288; nodes[0][1] = 32; nodes[0][2] = (long)nodes[1];
+    nodes[1][0] = 8192; nodes[1][1] = 16; nodes[1][2] = (long)nodes[2];
+    nodes[2][0] = 16384; nodes[2][1] = 16; nodes[2][4] = 1;
+    nodes[1][6] = (long)owner; owner[8] = (long)span;
+    span[1] = 12280; span[2] = 32;
+    pcc_gc_object_head = nodes[0];
+    long candidates[6] = {8199, 8208, 12290, 12312, 16384, -1};
+    long expected[6] = {1, 0, 3, 2, 0, 0};
+    for (int i = 0; i < 6; ++i) {
+        candidate = candidates[i]; marked = 0;
+        pcc_gc_gray_conservative_thread_roots();
+        if (marked != expected[i]) return i + 1;
+    }
+    return visits == 6 ? 0 : 7;
+}
+'''
+
+
+@pytest.mark.skipif(platform.system() != "Darwin" or platform.machine() != "arm64",
+                    reason="native Darwin arm64 execution")
+def test_owned_interval_index_executes_full_build_scan_and_disposal(tmp_path, monkeypatch):
+    from pcc.backend.macho_exec import link_executable
+    from pcc.backend.owned_object_emit import emit_owned_object
+    from pcc.frontends.python.pipeline import compile_python
+    from tests.python.test_owned_external_tls import _c_ir
+
+    # This isolated raw-memory kernel probe has no thread runtime. The complete
+    # runtime lane retains its production poll policy and real stopped world.
+    monkeypatch.setenv("PCC_IMPLICIT_THREAD_SAFEPOINTS", "0")
+    output_ir = tmp_path / "intervals.ll"
+    compile_python(str(SOURCE), str(output_ir), emit_llvm_only=True,
+                   python_library=True, backend="self")
+    target = "arm64-apple-darwin"
+    kernel = emit_owned_object(output_ir.read_text(), target)
+    driver = emit_owned_object(_c_ir(NATIVE_DRIVER, target), target)
+    binary = tmp_path / "intervals"
+    binary.write_bytes(link_executable([kernel, driver]))
+    binary.chmod(0o755)
+    result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=15,
+                            env=dict(os.environ, PATH="/nonexistent"))
+    assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
