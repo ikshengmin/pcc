@@ -82,6 +82,7 @@ RAW_FUNCTION_IMPORTS = {
     "py_incref",
 }
 RAW_GLOBAL_IMPORTS = {
+    "pcc_gc_live_bytes",
     "pcc_gc_cms_sweep_pending",
     # pcc_gc_backend4_maybe_auto_step's admission and reseed ownership.
     "pcc_gc_backend4_auto_step_pending",

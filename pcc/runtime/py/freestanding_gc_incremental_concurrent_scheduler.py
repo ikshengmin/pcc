@@ -941,13 +941,17 @@ def pcc_gc_backend4_maybe_auto_step() -> None:
     if stopped == 0:
         pcc_gc_reclaim_retired_index_tables()
         processed = pcc_gc_step(budget)
-        pcc_gc_tracing_discharge_debt(processed)
-        if processed == 0:
-            # An idle collector has no work to pay the debt with. Keeping the
-            # debt re-armed this step at every safepoint: after one large
-            # allocation each loop back-edge ran a stop-the-world step and a
-            # full relocation-candidate ranking. Clear it so the next step
-            # waits for another threshold of allocation.
+        # A GC4 step includes remembered entries, aging and relocation. Its
+        # total is not a count of traced objects: crediting all of it can pay
+        # the entire allocation debt without starting a mark. The background
+        # marker then sees no debt while uncollected allocations keep growing.
+        # Mark completion already pays the debt; marker/assist slices account
+        # for their own traced work separately.
+        if (processed == 0
+                and load_i64(global_addr("pcc_gc_live_bytes"), 0)
+                <= load_i64(global_addr("pcc_gc_tracing_marked_bytes"), 0)):
+            # Preserve the idle-step fast exit only when the heap has not
+            # grown beyond the last mark. Unmarked growth must keep its debt.
             atomic_rmw_i64("xchg", global_addr("pcc_gc_debt_bytes"), 0, 0, "acq_rel")
 
     pcc_py_gc_minor_graph_lock()

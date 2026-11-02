@@ -159,6 +159,20 @@ queued refs across callbacks and rechecks resurrection before finalizers.
 Its 85 focused ordinary checks pass; the expanded native lifecycle rerun is
 pending. No new QPS result is established.
 
+The expanded `a513679ef` native lifecycle and value tests both pass (including
+two weakrefs, nested collection and an unreachable weakref's silent callback).
+The first 40k-request GC4 off/on packet fails its unchanged 1 GiB tree-RSS
+limit in the tracing-only arm; it yields no candidate QPS or four-worker
+comparison. The actual executable exposes a pacing error: a GC4 step returns
+65,536 mixed remembered/aging/relocation work items while mark commits remain
+2 and live/marked bytes are 13,314,669/700,613; its caller then discharges
+6,305,650 allocation-debt bytes to zero. Nonmarking work must not pay marking
+debt. The fix leaves payment to tracing progress/completion and permits a
+zero-work debt reset only when live bytes do not exceed the last marked heap.
+Nine focused model/policy/object checks pass; native/QPS revalidation is pending.
+The adjacent `test_same_backend_reset_loses_to_a_concurrent_switch` failure
+also reproduces on frozen `0fbc8d977` and is left unchanged.
+
 ### Measured P0 batch: `02acaa2f5` -> `0fbc8d977`
 
 Seven rotated paired runs on Darwin arm64, host pcc0/self/no-libpython,
