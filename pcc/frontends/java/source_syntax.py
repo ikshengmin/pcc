@@ -638,11 +638,14 @@ class SourceParser:
             target = expression
             while target.kind == "group":
                 target = target.children[0]
-            if target.kind == "name" and "." not in target.value:
-                # Same semantic local/field binding as a bare-name statement;
-                # parentheses must not turn a write into an array value read.
+            if (target.kind == "name" and "." not in target.value
+                    or target.kind == "receiver_field"):
+                # JLS 15.8.5: grouping preserves the variable. Keep an explicit
+                # receiver distinct from a bare name so local shadowing cannot
+                # retarget this.field; neither is an array-component access.
                 rhs = [] if operation.text in {"++", "--"} else [self.expression()]
-                return Node("assign", target.token, operation.text, rhs)
+                kind = "field_assign" if target.kind == "receiver_field" else "assign"
+                return Node(kind, target.token, operation.text, rhs)
             if expression.kind not in {"array_access", "array_length", "group", "name"}:
                 operation.error("array assignment requires an array component variable")
             children = [expression] + ([] if operation.text in {"++", "--"} else [self.expression()])
