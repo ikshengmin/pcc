@@ -12,10 +12,14 @@ from pathlib import Path
 import time
 
 import pytest
+from _pytest._io.saferepr import saferepr
+from _pytest.subtests import SubtestReport
 
 
 def pytest_addoption(parser):
     parser.addoption("--pcc-live-report", default=None, help="New JSONL report path")
+    parser.addoption("--pcc-live-subtests", action="store_true", default=False,
+                     help="Separate explicit subtest events for subtest-aware consumers")
 
 
 def pytest_configure(config):
@@ -29,6 +33,8 @@ class LiveReport:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.stream = path.open("x", encoding="utf-8")
         self.collections = set()
+        self.subtest_counts = {}
+        self.separate_subtests = config.getoption("--pcc-live-subtests")
         self.write(
             "start",
             argv=list(config.invocation_params.args),
@@ -39,6 +45,8 @@ class LiveReport:
             ignore_glob=config.getoption("ignore_glob") or [],
             deselect=config.getoption("deselect") or [],
             collect_only=config.getoption("collectonly"),
+            maxfail=config.getoption("maxfail"),
+            separate_subtests=self.separate_subtests,
             lf=bool(config.getoption("lf", default=False)),
             stepwise=bool(config.getoption("stepwise", default=False)),
             stepwise_skip=bool(config.getoption("stepwise_skip", default=False)),
@@ -64,7 +72,7 @@ class LiveReport:
     def write(self, event, **fields):
         self.stream.write(json.dumps({"event": event, "time": time.time(), **fields}) + "\n")
         self.stream.flush()
-        if fields.get("outcome") == "failed" or event == "finish":
+        if fields.get("outcome") == "failed" or event in {"finish", "internalerror", "interrupt", "worker_crash"}:
             os.fsync(self.stream.fileno())
 
     def pytest_runtest_logreport(self, report):
@@ -78,7 +86,20 @@ class LiveReport:
             fields["longrepr"] = report.longreprtext
         if hasattr(report, "wasxfail"):
             fields["wasxfail"] = report.wasxfail
-        self.write("report", **fields)
+        if self.separate_subtests and isinstance(report, SubtestReport):
+            # uv.lock pins pytest 9's real SubtestReport, also reconstructed by
+            # xdist from its "SubTestReport" transport discriminator. Never
+            # reinterpret duplicate ordinary call phases as passing subtests.
+            index = self.subtest_counts.get(report.nodeid, 0) + 1
+            self.subtest_counts[report.nodeid] = index
+            fields.update(subtest_index=index, report_type="_pytest.subtests.SubtestReport",
+                          subtest_context={"msg": report.context.msg,
+                                           "kwargs": {key: saferepr(value) for key, value in report.context.kwargs.items()}})
+            self.write("subtest", **fields)
+        else:
+            # Existing strict consumers count all raw reports and reject extra
+            # phases. Do not hide subtests from a consumer that did not opt in.
+            self.write("report", **fields)
 
     def pytest_collectreport(self, report):
         if report.failed:
@@ -106,12 +127,25 @@ class LiveReport:
     def pytest_deselected(self, items):
         self.write("deselected", nodeids=[item.nodeid for item in items])
 
+    def pytest_internalerror(self, excrepr, excinfo):
+        self.write("internalerror", exception_type=excinfo.typename, longrepr=str(excrepr))
+
+    def pytest_keyboard_interrupt(self, excinfo):
+        self.write("interrupt", exception_type=excinfo.typename, longrepr=str(excinfo.value))
+
+    @pytest.hookimpl(optionalhook=True)
+    def pytest_testnodedown(self, node, error):
+        if error is not None:
+            self.write("worker_crash", worker=node.gateway.id, error=str(error))
+
     def pytest_sessionfinish(self, session, exitstatus):
         self.write(
             "finish",
             exitstatus=int(exitstatus),
             testscollected=session.testscollected,
             testsfailed=session.testsfailed,
+            shouldstop=str(session.shouldstop) if session.shouldstop else "",
+            shouldfail=str(session.shouldfail) if session.shouldfail else "",
         )
 
     def pytest_unconfigure(self, config):

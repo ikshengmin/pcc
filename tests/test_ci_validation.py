@@ -128,9 +128,11 @@ def test_shared_scope_refreshes_new_elf_macho_odr_modules_without_old_counts():
     assert "7056" not in json.dumps(shared)
 
 
-def test_guard_keeps_six_workers_90_seconds_1gib_and_fail_fast(tmp_path):
+def test_guard_keeps_six_workers_90_seconds_1gib_without_injected_fail_fast(tmp_path):
     command = run.pytest_command(tmp_path, ["tests/example.py"])
-    assert "-x" in command and "--maxfail=0" not in command and "-n0" not in command
+    assert "-x" not in command and not any(arg.startswith("--maxfail") for arg in command)
+    assert "-n0" not in command and "-n" not in command
+    assert "--pcc-live-subtests" in command
     collection = run.pytest_command(tmp_path, ["tests/example.py"], collect=True)
     assert "--collect-only" in collection and "-n0" in collection
     guarded = run.guarded_command(tmp_path, command)
@@ -141,6 +143,23 @@ def test_guard_keeps_six_workers_90_seconds_1gib_and_fail_fast(tmp_path):
     assert guarded[guarded.index("--darwin-preflight-reserve-bytes") + 1] == "536870912"
     assert "--performance-lock" in guarded and "--process-rss-history" in guarded
     assert run.DISK_FLOOR == 1073741824
+
+
+@pytest.mark.parametrize("wrapper_code,target_code", [(0, 0), (1, 1), (2, 0), (0, 1)])
+def test_guard_wrapper_exit_must_match_terminal_target_receipt(tmp_path, monkeypatch, wrapper_code, target_code):
+    original = {"sha": "fixture"}
+    monkeypatch.setattr(run, "identity", lambda: original)
+    monkeypatch.setattr(run.shutil, "disk_usage", lambda path: SimpleNamespace(free=2 * run.DISK_FLOOR))
+    monkeypatch.setattr(run.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=wrapper_code))
+    (tmp_path / "result.json").write_text(json.dumps({
+        "status": "COMPLETE", "timeout_s": run.TIMEOUT, "max_tree_rss_bytes": run.RSS,
+        "peak_tree_rss_bytes": 0, "returncode": target_code,
+    }))
+    if wrapper_code == target_code:
+        assert run.run_guard(tmp_path, ["unused"], {}, original) == target_code
+    else:
+        with pytest.raises(ValueError, match="guard exit differs"):
+            run.run_guard(tmp_path, ["unused"], {}, original)
 
 
 def _ci_admission_without_launch(tmp_path, monkeypatch, *, rejection=None):
@@ -325,17 +344,330 @@ def test_terminal_receipts_keep_failure_and_unfinished_nodes_not_false_pass(tmp_
                         for index in (1, 2)]}
     for index in range(6):
         (inventory / f'gw{index}.json').write_text(json.dumps(witness))
-    events = [{'event': 'report', 'nodeid': 'a.py::test_1@group', 'when': 'setup', 'outcome': 'passed'},
+    events = [{'event': 'start', 'maxfail': 0},
+              {'event': 'report', 'nodeid': 'a.py::test_1@group', 'when': 'setup', 'outcome': 'passed'},
               {'event': 'report', 'nodeid': 'a.py::test_1@group', 'when': 'call', 'outcome': 'failed'},
               {'event': 'report', 'nodeid': 'a.py::test_1@group', 'when': 'teardown', 'outcome': 'passed'},
-              {'event': 'finish', 'exitstatus': 1}]
+              {'event': 'finish', 'exitstatus': 1, 'testsfailed': 1}]
     (tmp_path / 'live.jsonl').write_text(''.join(json.dumps(row) + '\n' for row in events))
     result = run.summarize_batch(tmp_path, ['a.py::test_1', 'a.py::test_2'])
     assert [row['status'] for row in result['outcomes']] == ['FAIL', 'UNRUN_OR_SKIPPED']
     assert result['pytest_exitstatus'] == 1
     (inventory / 'gw5.json').unlink()
-    with pytest.raises(ValueError, match='six identical'):
-        run.summarize_batch(tmp_path, ['a.py::test_1', 'a.py::test_2'])
+    missing = run.summarize_batch(tmp_path, ['a.py::test_1', 'a.py::test_2'])
+    assert any('six identical' in error for error in missing['evidence_errors'])
+    assert len(missing['unattributed_reports']) == 3
+    assert all(row['status'] == 'UNRUN_OR_SKIPPED' for row in missing['outcomes'])
+
+
+def _batch_reports(directory, expected, events):
+    inventory = directory / "inventory"
+    inventory.mkdir(exist_ok=True)
+    witness = {"collect_only": False, "workers": 6, "dist": "loadgroup",
+               "selected": [node + "@group" for node in expected],
+               "rows": [{"nodeid": node + "@group", "canonical_nodeid": node} for node in expected]}
+    for index in range(6):
+        (inventory / f"gw{index}.json").write_text(json.dumps(witness))
+    (directory / "live.jsonl").write_text("".join(json.dumps(event) + "\n" for event in events))
+
+
+def _node_reports(node, *, failed=False, phases=("setup", "call", "teardown")):
+    return [{"event": "report", "nodeid": node + "@group", "when": phase,
+             "outcome": "failed" if failed and phase == "call" else "passed"} for phase in phases]
+
+
+def _subtest_report(node, index, *, outcome="passed", **extra):
+    return {"event": "subtest", "nodeid": node + "@group", "when": "call", "outcome": outcome,
+            "report_type": "_pytest.subtests.SubtestReport", "subtest_index": index,
+            "subtest_context": {"msg": None, "kwargs": {"case": repr(index)}}, **extra}
+
+
+def test_pinned_pytest_subtest_transport_is_an_explicit_event_not_duplicate_parent_call():
+    from _pytest.reports import TestReport
+    from _pytest.subtests import SubtestContext, SubtestReport
+    from scripts.pytest_live_report import LiveReport
+
+    reporter = object.__new__(LiveReport)
+    reporter.subtest_counts = {}
+    reporter.separate_subtests = True
+    events = []
+    reporter.write = lambda event, **fields: events.append({"event": event, **fields})
+    parent = TestReport(nodeid="case.py::test_parent", location=("case.py", 0, "test_parent"),
+                        keywords={}, outcome="passed", longrepr=None, when="call")
+    context = SubtestContext(msg="same original", kwargs={"expression": "1<2"})
+    child = SubtestReport._new(parent, context, captured_output=None, captured_logs=None)
+    transport = child._to_json()
+    assert transport["_report_type"] == "SubTestReport"
+    reporter.pytest_runtest_logreport(SubtestReport._from_json(transport))
+    reporter.pytest_runtest_logreport(SubtestReport._from_json(transport))
+    # An ordinary report with a context attribute is still an ordinary phase.
+    parent.context = context
+    reporter.pytest_runtest_logreport(parent)
+    assert [event["event"] for event in events] == ["subtest", "subtest", "report"]
+    assert [event["subtest_index"] for event in events[:2]] == [1, 2]
+    assert events[0]["subtest_context"] == {"msg": "same original", "kwargs": {"expression": repr("1<2")}}
+
+
+@pytest.mark.parametrize("consumer", ["worker-prior", "macos-regression", "complete-markers"])
+@pytest.mark.parametrize("outcome,xfail", [
+    ("passed", False), ("failed", False), ("skipped", False),
+    ("passed", True), ("skipped", True),
+])
+def test_legacy_report_consumers_keep_subtests_visible_and_fail_closed(tmp_path, consumer, outcome, xfail):
+    """Authored report-model regression; no pytest process or native qualification."""
+    from _pytest.reports import TestReport
+    from _pytest.subtests import SubtestContext, SubtestReport
+    from scripts import ci_macos_regression_gate, ci_pytest_markers, ci_worker_size_prior_gate
+    from scripts.pytest_live_report import LiveReport, pytest_addoption
+
+    options = {}
+    pytest_addoption(SimpleNamespace(addoption=lambda name, **kwargs: options.update({name: kwargs})))
+    assert options["--pcc-live-subtests"]["default"] is False
+    assert options["--pcc-live-subtests"]["action"] == "store_true"
+    values = {name: option["default"] for name, option in options.items()}
+    values.update(markexpr="not integration", maxfail=0, collectonly=False)
+    config = SimpleNamespace(invocation_params=SimpleNamespace(args=[]), rootpath=tmp_path,
+                             inipath=None, getoption=lambda name, default=None: values.get(name, default))
+    path = tmp_path / "live.jsonl"
+    reporter = LiveReport(path, config)
+    node = "case.py::test_parent"
+    reporter.record_collection([node])
+    fields = dict(nodeid=node, location=("case.py", 0, "test_parent"), keywords={}, longrepr=None)
+    reporter.pytest_runtest_logreport(TestReport(**fields, outcome="passed", when="setup"))
+    subtest = SubtestReport._new(
+        TestReport(**fields, outcome=outcome, when="call"),
+        SubtestContext(msg="explicit child", kwargs={}), captured_output=None, captured_logs=None,
+    )
+    if xfail:
+        subtest.wasxfail = "expected child failure"
+    reporter.pytest_runtest_logreport(subtest)
+    for phase in ("call", "teardown"):
+        reporter.pytest_runtest_logreport(TestReport(**fields, outcome="passed", when=phase))
+    code = int(outcome == "failed")
+    reporter.pytest_sessionfinish(SimpleNamespace(testscollected=1, testsfailed=code,
+                                                 shouldstop=False, shouldfail=False), code)
+    reporter.pytest_unconfigure(config)
+    events = [json.loads(line) for line in path.read_text().splitlines()]
+    assert not events[0]["separate_subtests"]
+    assert not any(event["event"] == "subtest" for event in events)
+    reports = [event for event in events if event["event"] == "report"]
+    assert len(reports) == 4 and reports[1]["outcome"] == outcome
+    assert ("wasxfail" in reports[1]) is xfail
+    # The unchanged consumers rejected subtest/duplicate raw phases before the
+    # source-lane schema was added. An all-green parent cannot change that.
+    if consumer == "worker-prior":
+        (tmp_path / "target.stdout").write_text(
+            "created: 6/6 workers\n6 workers [1 item]\nscheduling tests via LoadGroupScheduling\n")
+        with pytest.raises(AssertionError):
+            ci_worker_size_prior_gate.verify_pytest(tmp_path, [node])
+    elif consumer == "macos-regression":
+        with pytest.raises(AssertionError):
+            ci_macos_regression_gate.verify_execution_report(path, [node])
+    else:
+        inventory = {"marker": "not integration", "expected": [node], "selected": [node],
+                     "unexpected": [], "gated_out": []}
+        for index in range(6):
+            (tmp_path / f"inventory-gw{index}.json").write_text(json.dumps(inventory))
+        (tmp_path / "configuration.json").write_text(json.dumps(
+            {"marker": "not integration", "workers": 6, "dist": "loadgroup"}))
+        with pytest.raises(ValueError):
+            ci_pytest_markers.summarize(tmp_path, "not integration")
+
+
+def test_ten_and_five_successful_unittest_subcases_remain_two_parent_nodes(tmp_path):
+    expected = ["control.py::ScalarControlFlowTests::test_relational",
+                "control.py::ScalarControlFlowTests::test_void"]
+    events = [{"event": "start", "maxfail": 0}]
+    for node, count in zip(expected, (10, 5)):
+        events += _node_reports(node, phases=("setup",))
+        events += [_subtest_report(node, index) for index in range(1, count + 1)]
+        events += _node_reports(node, phases=("call", "teardown"))
+    events.append({"event": "finish", "exitstatus": 0, "testsfailed": 0})
+    _batch_reports(tmp_path, expected, events)
+    summary = run.summarize_batch(tmp_path, expected)
+    assert not summary["evidence_errors"] and len(summary["outcomes"]) == 2
+    assert [len(row["subtests"]) for row in summary["outcomes"]] == [10, 5]
+    assert all(row["status"] == "PASS" and row["full_phase"] for row in summary["outcomes"])
+    batch = dict(summary, returncode=0, guard_error=None)
+    assert run.batch_continuation(batch)[0]
+    assert run.campaign_status({"batches": [batch], "unrun": [], "lane_count": 2}) == "PASS"
+
+
+@pytest.mark.parametrize("outcome,xfail,expected_status", [
+    ("failed", False, "FAIL"), ("skipped", False, "UNRUN_OR_SKIPPED"),
+    ("passed", True, "UNRUN_OR_SKIPPED"), ("skipped", True, "UNRUN_OR_SKIPPED"),
+])
+def test_subcase_failure_skip_or_xfail_cannot_be_hidden_by_green_parent_phases(
+    tmp_path, outcome, xfail, expected_status,
+):
+    node = "a.py::test_parent"
+    subtest = _subtest_report(node, 1, outcome=outcome, **({"wasxfail": "expected"} if xfail else {}))
+    code = int(outcome == "failed")
+    events = [{"event": "start", "maxfail": 0}, *_node_reports(node, phases=("setup",)), subtest,
+              *_node_reports(node, phases=("call", "teardown")),
+              {"event": "finish", "exitstatus": code, "testsfailed": code}]
+    _batch_reports(tmp_path, [node], events)
+    summary = run.summarize_batch(tmp_path, [node])
+    assert len(summary["outcomes"]) == 1
+    assert summary["outcomes"][0]["status"] == expected_status
+    assert summary["outcomes"][0]["full_phase"] and len(summary["outcomes"][0]["subtests"]) == 1
+    batch = dict(summary, returncode=code, guard_error=None)
+    assert run.campaign_status({"batches": [batch], "unrun": [], "lane_count": 1}) != "PASS"
+
+
+@pytest.mark.parametrize("anomaly", ["duplicate-subtest", "missing-parent-call", "ordinary-duplicate"])
+def test_subtest_support_never_waives_duplicate_or_missing_parent_phase(tmp_path, anomaly):
+    node = "a.py::test_parent"
+    phases = ("setup", "teardown") if anomaly == "missing-parent-call" else ("setup", "call", "teardown")
+    events = [{"event": "start", "maxfail": 0}, *_node_reports(node, phases=phases), _subtest_report(node, 1)]
+    if anomaly == "duplicate-subtest":
+        events.append(_subtest_report(node, 1))
+    elif anomaly == "ordinary-duplicate":
+        events += _node_reports(node, phases=("call",))
+    events.append({"event": "finish", "exitstatus": 0, "testsfailed": 0})
+    _batch_reports(tmp_path, [node], events)
+    summary = run.summarize_batch(tmp_path, [node])
+    batch = dict(summary, returncode=0, guard_error=None)
+    assert summary["outcomes"][0]["status"] != "PASS"
+    assert not run.batch_continuation(batch)[0]
+    assert run.campaign_status({"batches": [batch], "unrun": [], "lane_count": 1}) != "PASS"
+
+
+@pytest.mark.parametrize("end", ["missing", "truncated", "interrupt", "internalerror", "worker_crash"])
+def test_partial_reports_keep_full_phase_pass_distinct_from_call_only(tmp_path, end):
+    expected = ["a.py::test_full", "a.py::test_partial"]
+    events = [{"event": "start", "maxfail": 0}, *_node_reports(expected[0]),
+              *_node_reports(expected[1], phases=("call",))]
+    if end not in {"missing", "truncated"}:
+        events += [{"event": end, "longrepr": "session stopped"},
+                   {"event": "finish", "exitstatus": 2, "testsfailed": 0}]
+    _batch_reports(tmp_path, expected, events)
+    if end == "truncated":
+        with (tmp_path / "live.jsonl").open("a") as stream:
+            stream.write('{"event":')
+    summary = run.summarize_batch(tmp_path, expected)
+    full, partial = summary["outcomes"]
+    assert full["status"] == "PASS" and full["full_phase"]
+    assert partial["status"] == "UNRUN_OR_SKIPPED" and not partial["full_phase"]
+    assert partial["call_outcome"] == "passed" and partial["observed_phases"] == ["call"]
+    batch = dict(summary, returncode=2, guard_error=None)
+    assert not run.batch_continuation(batch)[0]
+    assert run.campaign_status({"batches": [batch], "unrun": [], "lane_count": 2}) == "FAIL"
+
+
+@pytest.mark.parametrize("code,exitstatus,event,shouldstop", [
+    (2, 2, None, ""), (1, 1, "interrupt", ""), (1, 1, "internalerror", ""),
+    (1, 1, "worker_crash", ""), (1, 1, "collection", ""),
+    (1, 1, None, "stopping after 1 failures"), (0, 1, None, ""),
+])
+def test_nonordinary_sessions_never_admit_later_batches_even_with_assertion_reports(
+    tmp_path, code, exitstatus, event, shouldstop,
+):
+    node = "a.py::test_failed"
+    events = [{"event": "start", "maxfail": 0}, *_node_reports(node, failed=True)]
+    if event:
+        events.append({"event": event, "outcome": "failed"})
+    events.append({"event": "finish", "exitstatus": exitstatus, "testsfailed": 1, "shouldstop": shouldstop})
+    _batch_reports(tmp_path, [node], events)
+    summary = run.summarize_batch(tmp_path, [node])
+    assert summary["outcomes"][0]["status"] == "FAIL"
+    assert not run.batch_continuation(dict(summary, returncode=code, guard_error=None))[0]
+
+
+@pytest.mark.parametrize("anomaly", ["duplicate-phase", "unexpected-node", "maxfail", "missing-finish"])
+def test_report_policy_anomalies_keep_evidence_and_cannot_be_green(tmp_path, anomaly):
+    node = "a.py::test_passed"
+    events = [{"event": "start", "maxfail": 1 if anomaly == "maxfail" else 0}, *_node_reports(node)]
+    if anomaly == "duplicate-phase":
+        events += _node_reports(node, phases=("call",))
+    elif anomaly == "unexpected-node":
+        events += _node_reports("other.py::test_extra", phases=("call",))
+    if anomaly != "missing-finish":
+        events.append({"event": "finish", "exitstatus": 0, "testsfailed": 0})
+    _batch_reports(tmp_path, [node], events)
+    summary = run.summarize_batch(tmp_path, [node])
+    assert summary["evidence_errors"]
+    assert len(summary["outcomes"][0]["reports"]) >= 3
+    batch = dict(summary, returncode=0, guard_error=None)
+    assert not run.batch_continuation(batch)[0]
+    assert run.campaign_status({"batches": [batch], "unrun": [], "lane_count": 1}) == "FAIL"
+
+
+@pytest.mark.parametrize("first", ["assertion", "interrupt", "resource"])
+def test_campaign_saves_failed_batch_before_deciding_independent_continuation(tmp_path, monkeypatch, first):
+    """Model the public campaign orchestration; no pytest or compiler subprocess."""
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "pyproject.toml").write_text(
+        '[tool.pytest.ini_options]\naddopts="-n 6 --dist=loadgroup -m \'not integration\'"\n')
+    setup = tmp_path / "tools.json"
+    setup.write_text("{}")
+    monkeypatch.setenv("PCC_CI_TOOL_RECEIPT", str(setup))
+    monkeypatch.setenv("GITHUB_SHA", "fixture-source")
+    monkeypatch.delenv("PCC_RUSTC_INSTALL_RECEIPT", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.setattr(run, "ROOT", root)
+    monkeypatch.setattr(run, "identity", lambda: {"sha": "fixture-source", "files": {}})
+    monkeypatch.setattr(tools, "verify_tool_receipt", lambda receipt: {"verified": []})
+    monkeypatch.setattr(run, "modules", lambda domain: ["a.py", "b.py"])
+    rows = [row("a.py", 0), row("b.py", 0)]
+    monkeypatch.setattr(run, "batches", lambda collected, lane: [[entry] for entry in collected])
+    attempts = []
+
+    def guarded(directory, command, environment, original):
+        if directory.name == "collection":
+            inventory = directory / "inventory"
+            inventory.mkdir()
+            (inventory / "controller.json").write_text(json.dumps({"rows": rows}))
+            return 0
+        attempts.append(directory.name)
+        expected = json.loads((directory / "selection.json").read_text())
+        node = expected[0]
+        failing = directory.name == "batch-000"
+        events = [{"event": "start", "maxfail": 0}]
+        if failing and first == "resource":
+            events += _node_reports(node, phases=("call",))
+            _batch_reports(directory, expected, events)
+            raise ValueError("resource/guard anomaly; no later batch admitted")
+        events += _node_reports(node, failed=failing)
+        code = 1 if failing else 0
+        if failing and first == "interrupt":
+            events.append({"event": "interrupt", "exception_type": "Interrupted"})
+            code = 2
+        events.append({"event": "finish", "exitstatus": code, "testsfailed": int(failing)})
+        _batch_reports(directory, expected, events)
+        return code
+
+    monkeypatch.setattr(run, "run_guard", guarded)
+    out = tmp_path / "campaign"
+    assert run.run(SimpleNamespace(domain="go", lane="ordinary", out=out)) == 1
+    receipt = json.loads((out / "receipt.json").read_text())
+    first_outcomes = json.loads((out / "batch-000/outcomes.json").read_text())
+    assert first_outcomes["outcomes"][0]["call_outcome"] == ("passed" if first == "resource" else "failed")
+    if first == "assertion":
+        assert attempts == ["batch-000", "batch-001"]
+        assert receipt["status"] == "FAIL" and receipt["unattempted"] == []
+        assert [batch["continue_independent_batches"] for batch in receipt["batches"]] == [True, True]
+    else:
+        assert attempts == ["batch-000"]
+        assert receipt["status"] == "INFRASTRUCTURE_OR_RESOURCE_FAILURE"
+        assert receipt["unattempted"] == ["b.py::test_0"]
+        assert not receipt["batches"][0]["continue_independent_batches"]
+
+
+def test_live_report_records_actual_interrupt_internalerror_worker_and_stop_evidence():
+    from scripts.pytest_live_report import LiveReport
+    reporter = object.__new__(LiveReport)
+    events = []
+    reporter.write = lambda event, **fields: events.append({"event": event, **fields})
+    exception = SimpleNamespace(typename="KeyboardInterrupt", value="actual interruption")
+    reporter.pytest_keyboard_interrupt(exception)
+    reporter.pytest_internalerror("actual internal error", exception)
+    reporter.pytest_testnodedown(SimpleNamespace(gateway=SimpleNamespace(id="gw3")), "worker exited")
+    reporter.pytest_sessionfinish(SimpleNamespace(testscollected=4, testsfailed=1,
+                                                  shouldstop="stopped", shouldfail=False), 2)
+    assert [event["event"] for event in events] == ["interrupt", "internalerror", "worker_crash", "finish"]
+    assert events[-1]["exitstatus"] == 2 and events[-1]["shouldstop"] == "stopped"
 
 
 def test_rust_ci_installs_real_pinned_host_and_cross_std_before_attestation():

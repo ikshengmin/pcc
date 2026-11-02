@@ -30,13 +30,22 @@ never removes a test. Conditional Rust certification stays with its original
 ordinary/integration test. The checked-in shared scope is a module inventory,
 refreshed for ELF, Mach-O and ODR tests; historical counts/outcomes are not reused.
 
-Every test-body process retains six workers, `loadgroup`, `-x`, the existing
+Every source-lane test-body process retains six workers, `loadgroup`, the existing
 90-second/1-GiB aggregate process-tree guard and 1-GiB free-disk floor. Collection
 alone uses one process. Each job retains the 15-minute envelope. Resource,
-source-identity or infrastructure anomalies stop that job; independent frozen
-batches continue after ordinary assertion failure, with unfinished nodes marked
-UNRUN. Durable raw inventory, per-worker selection, node reports, commands,
+source-identity or infrastructure anomalies stop that job. Source batches do not
+inject fail-fast: ordinary assertion failures retain later nodes and independent
+batches. Interrupted/internal-error sessions stop, but their valid reports are
+saved first. Full setup/call/teardown PASS is distinct from call-only evidence;
+unfinished and later unattempted nodes remain UNRUN. Durable raw inventory,
+per-worker selection, node reports, commands,
 stdout/stderr, RSS history and source hashes are uploaded even after failure.
+Pytest's explicit subtest reports retain their parent-relative identity and
+outcomes without adding selected nodes. A parent passes only with complete
+phases and passing, non-xfailed subtests; ordinary duplicate phases remain invalid.
+The source runner explicitly enables `--pcc-live-subtests`. Other live-report
+consumers retain the original raw-report stream and their existing fail-closed
+duplicate-phase checks; this does not silently widen legacy qualification.
 
 Missing prerequisites remain `UNRUN_PREREQUISITE`; skipped/unfinished nodes
 cannot make a source job green. Actual runner tool identities are recorded.

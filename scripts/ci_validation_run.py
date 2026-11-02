@@ -109,9 +109,9 @@ def guarded_command(directory, command):
 
 
 def pytest_command(directory, files, *, collect=False):
-    command = [sys.executable, "-m", "pytest", "-x", "-vv", "--tb=short", "-m", "",
+    command = [sys.executable, "-m", "pytest", "-vv", "--tb=short", "-m", "",
                "-p", "scripts.ci_validation_inventory", "-p", "scripts.pytest_live_report",
-               "--pcc-live-report", str(directory / "live.jsonl"),
+               "--pcc-live-report", str(directory / "live.jsonl"), "--pcc-live-subtests",
                "--basetemp", str(directory / "tmp"), "--junitxml", str(directory / "junit.xml")]
     if collect:
         # Single-process collection only. Every test-body run retains six.
@@ -141,59 +141,142 @@ def run_guard(directory, command, environment, original):
         raise ValueError("source identity changed before batch")
     if shutil.disk_usage(directory).free < DISK_FLOOR:
         raise ValueError("original 1-GiB free-disk floor not met")
-    subprocess.run(guarded_command(directory, command), cwd=ROOT, env=environment, check=False)
+    wrapper = subprocess.run(guarded_command(directory, command), cwd=ROOT, env=environment, check=False)
     result = json.loads((directory / "result.json").read_text())
     if (result["status"] != "COMPLETE" or result["timeout_s"] != TIMEOUT or
             result["max_tree_rss_bytes"] != RSS or result["peak_tree_rss_bytes"] > RSS):
         raise ValueError("resource/guard anomaly; no later batch admitted")
+    if wrapper.returncode != result["returncode"]:
+        raise ValueError("guard exit differs from its terminal target receipt")
     if identity() != original or shutil.disk_usage(directory).free < DISK_FLOOR:
         raise ValueError("source/disk postcondition differs; no later batch admitted")
     return result["returncode"]
 
 
 def summarize_batch(directory, expected):
-    witnesses = [json.loads(path.read_text()) for path in sorted((directory / "inventory").glob("gw*.json"))]
-    if len(witnesses) != 6 or any(row != witnesses[0] for row in witnesses):
-        raise ValueError("six identical worker inventories required")
-    witness = witnesses[0]
-    if witness["collect_only"] or witness["workers"] != 6 or witness["dist"] != "loadgroup":
-        raise ValueError("original execution scheduling differs")
-    selected = set(witness["selected"])
-    mapping = {row["nodeid"]: row["canonical_nodeid"] for row in witness["rows"]}
-    if {mapping[node] for node in selected} != set(expected):
-        raise ValueError("executed selection differs from frozen batch")
-    events = [json.loads(line) for line in (directory / "live.jsonl").read_text().splitlines()]
-    if not events or events[-1]["event"] != "finish":
-        raise ValueError("pytest did not produce terminal report")
-    outcomes = {}
+    """Keep valid partial evidence; admission errors never erase earlier reports."""
+    errors, events, mapping = [], [], {}
+    try:
+        witnesses = [json.loads(path.read_text()) for path in sorted((directory / "inventory").glob("gw*.json"))]
+        if len(witnesses) != 6 or any(row != witnesses[0] for row in witnesses):
+            raise ValueError("six identical worker inventories required")
+        witness = witnesses[0]
+        if witness["collect_only"] or witness["workers"] != 6 or witness["dist"] != "loadgroup":
+            raise ValueError("original execution scheduling differs")
+        selected = witness["selected"]
+        candidate = {row["nodeid"]: row["canonical_nodeid"] for row in witness["rows"]}
+        if (len(selected) != len(set(selected)) or len(selected) != len(expected) or
+                {candidate[node] for node in selected} != set(expected)):
+            raise ValueError("executed selection differs from frozen batch")
+        mapping = {node: candidate[node] for node in selected}
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        errors.append("inventory: " + str(error))
+    try:
+        lines = (directory / "live.jsonl").read_text().splitlines()
+    except (OSError, UnicodeError) as error:
+        errors.append("live report: " + str(error))
+        lines = []
+    for index, line in enumerate(lines):
+        try:
+            event = json.loads(line)
+            if not isinstance(event, dict) or not isinstance(event.get("event"), str):
+                raise ValueError("invalid event shape")
+            events.append(event)
+        except ValueError as error:
+            errors.append(f"live report line {index + 1}: {error}")
+    starts = [event for event in events if event["event"] == "start"]
+    if len(starts) != 1 or starts[0].get("maxfail") != 0:
+        errors.append("one start event with maxfail=0 required")
+    finishes = [event for event in events if event["event"] == "finish"]
+    finish = finishes[0] if len(finishes) == 1 and events[-1] is finishes[0] else {}
+    if not finish:
+        errors.append("pytest did not produce one terminal finish report")
+    for field in ("exitstatus", "testsfailed"):
+        if type(finish.get(field)) is not int or finish[field] < 0:
+            errors.append("invalid/missing pytest " + field)
+    session_events = [event for event in events if event["event"] in {
+        "internalerror", "interrupt", "worker_crash", "collection"}]
+    if finish.get("shouldstop") or finish.get("shouldfail"):
+        session_events.append({"event": "session_stop", "shouldstop": finish.get("shouldstop"),
+                               "shouldfail": finish.get("shouldfail")})
+    outcomes, subtests, unattributed, invalid_nodes = {}, {}, [], set()
     for event in events:
-        if event["event"] == "report":
-            if event["nodeid"] not in selected:
-                raise ValueError("unexpected executed node")
-            phases = outcomes.setdefault(event["nodeid"], {})
-            if event["when"] in phases:
-                raise ValueError("duplicate pytest phase")
-            phases[event["when"]] = event
+        if event["event"] in {"report", "subtest"}:
+            if (not all(isinstance(event.get(key), str) for key in ("nodeid", "when", "outcome"))
+                    or event["nodeid"] not in mapping or event["when"] not in {"setup", "call", "teardown"}
+                    or event["outcome"] not in {"passed", "failed", "skipped"}):
+                unattributed.append(event)
+                errors.append("unmapped or malformed test report")
+                if isinstance(event.get("nodeid"), str) and event["nodeid"] in mapping:
+                    invalid_nodes.add(mapping[event["nodeid"]])
+                continue
+            node = mapping[event["nodeid"]]
+            if event["event"] == "subtest":
+                context = event.get("subtest_context")
+                valid = (event["when"] == "call" and type(event.get("subtest_index")) is int
+                         and event["subtest_index"] > 0 and event.get("report_type") == "_pytest.subtests.SubtestReport"
+                         and isinstance(context, dict) and isinstance(context.get("kwargs"), dict)
+                         and (context.get("msg") is None or isinstance(context["msg"], str)))
+                if not valid:
+                    errors.append("malformed subtest identity: " + node)
+                    invalid_nodes.add(node)
+                subtests.setdefault(node, []).append(event)
+            else:
+                outcomes.setdefault(node, []).append(event)
     rows = []
-    for node in sorted(selected):
-        phases = outcomes.get(node, {})
-        complete = set(phases) == {"setup", "call", "teardown"}
-        passed = complete and all(event["outcome"] == "passed" and "wasxfail" not in event
-                                  for event in phases.values())
-        failed = any(event["outcome"] == "failed" for event in phases.values())
-        rows.append({"nodeid": mapping[node], "status": "PASS" if passed else "FAIL" if failed else "UNRUN_OR_SKIPPED",
-                     "reports": list(phases.values())})
-    return {"outcomes": rows, "pytest_exitstatus": int(events[-1]["exitstatus"]),
-            "pytest_testsfailed": int(events[-1].get("testsfailed", 0))}
+    for node in sorted(expected):
+        reports = outcomes.get(node, [])
+        phases = {event["when"]: event for event in reports}
+        unique = len(phases) == len(reports)
+        if not unique:
+            errors.append("duplicate pytest phase: " + node)
+        children = subtests.get(node, [])
+        if [event.get("subtest_index") for event in children] != list(range(1, len(children) + 1)):
+            errors.append("duplicate/nonsequential subtest identity: " + node)
+            invalid_nodes.add(node)
+        complete = unique and set(phases) == {"setup", "call", "teardown"}
+        passed = (complete and node not in invalid_nodes
+                  and all(event["outcome"] == "passed" and "wasxfail" not in event for event in reports + children))
+        failed = any(event["outcome"] == "failed" for event in reports + children)
+        terminal = unique and (complete or (set(phases) == {"setup", "teardown"}
+                                            and phases["setup"]["outcome"] in {"failed", "skipped"}))
+        calls = [event for event in reports if event["when"] == "call"]
+        rows.append({"nodeid": node, "status": "PASS" if passed else "FAIL" if failed else "UNRUN_OR_SKIPPED",
+                     "full_phase": complete, "terminal_node": terminal,
+                     "call_outcome": calls[0]["outcome"] if len(calls) == 1 else "NOT_RECORDED_OR_AMBIGUOUS",
+                     "observed_phases": sorted(phases), "reports": reports, "subtests": children})
+    return {"outcomes": rows, "pytest_exitstatus": finish.get("exitstatus"),
+            "pytest_testsfailed": finish.get("testsfailed"), "session_events": session_events,
+            "evidence_errors": errors, "unattributed_reports": unattributed}
+
+
+def batch_continuation(batch):
+    """Only an ordinary completed pytest session may admit independent work."""
+    if batch.get("guard_error"):
+        return False, "resource/guard/source/disk anomaly"
+    if batch["evidence_errors"] or batch["session_events"]:
+        return False, "incomplete/invalid evidence or interrupted/internal-error session"
+    code = batch["returncode"]
+    if code not in (0, 1) or code != batch["pytest_exitstatus"]:
+        return False, "nonordinary or inconsistent pytest exit"
+    if not all(row["terminal_node"] for row in batch["outcomes"]):
+        return False, "selected nodes lack terminal phase evidence"
+    failed = any(row["status"] == "FAIL" for row in batch["outcomes"])
+    if (code == 0 and (failed or batch["pytest_testsfailed"] != 0) or
+            code == 1 and (not failed or batch["pytest_testsfailed"] <= 0)):
+        return False, "pytest exit and reported failures disagree"
+    return True, "completed test-failure session" if code else "completed pytest session"
 
 
 def campaign_status(receipt):
     statuses = [row["status"] for batch in receipt["batches"] for row in batch["outcomes"]]
     session_failed = any(batch["returncode"] != 0 or batch["pytest_exitstatus"] != 0 or
-                         batch["pytest_testsfailed"] != 0 for batch in receipt["batches"])
+                         batch["pytest_testsfailed"] != 0 or batch.get("guard_error") or
+                         batch.get("evidence_errors") or batch.get("session_events")
+                         for batch in receipt["batches"])
     if session_failed or "FAIL" in statuses:
         return "FAIL"
-    if receipt["unrun"] or any(status != "PASS" for status in statuses):
+    if receipt["unrun"] or receipt.get("unattempted") or any(status != "PASS" for status in statuses):
         return "INCOMPLETE_UNRUN"
     return "NOT_APPLICABLE" if not receipt["lane_count"] else "PASS"
 
@@ -209,7 +292,7 @@ def run(args):
     receipt = {"status": "RUNNING", "domain": args.domain, "lane": args.lane,
                "claim": "host-PCC bounded source tests; not native pcc1 or whole-project qualification",
                "workers": 6, "dist": "loadgroup", "timeout_s": TIMEOUT, "rss_bytes": RSS,
-               "batches": [], "unrun": []}
+               "batches": [], "unrun": [], "unattempted": []}
     try:
         options = shlex.split(tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["pytest"]["ini_options"]["addopts"])
         if options != ["-n", "6", "--dist=loadgroup", "-m", "not integration"]:
@@ -257,6 +340,7 @@ def run(args):
         receipt["unrun"] = [dict(row, status="UNRUN_PREREQUISITE") for row in rows
                             if row["lane"] == args.lane and not row["selected_by_repository"]]
         plan = batches(rows, args.lane)
+        receipt["unattempted"] = [row["canonical_nodeid"] for batch in plan for row in batch]
         save(args.out / "batch-plan.json", [[row["canonical_nodeid"] for row in batch] for batch in plan])
         for index, batch in enumerate(plan):
             directory = args.out / f"batch-{index:03}"
@@ -265,15 +349,23 @@ def run(args):
             save(directory / "selection.json", expected)
             env.update(PCC_VALIDATION_SELECTION=str(directory / "selection.json"),
                        PCC_VALIDATION_INVENTORY=str(directory / "inventory"))
-            code = run_guard(directory, pytest_command(directory, sorted({row["file"] for row in batch})), env, original)
-            if code not in (0, 1):
-                raise ValueError("pytest infrastructure exit; no later batch admitted")
+            code, guard_error = None, None
+            try:
+                code = run_guard(directory, pytest_command(directory, sorted({row["file"] for row in batch})), env, original)
+            except Exception as error:
+                guard_error = type(error).__name__ + ": " + str(error)
             summary = summarize_batch(directory, expected)
             save(directory / "outcomes.json", summary)
-            receipt["batches"].append({"directory": directory.name, "returncode": code, **summary})
+            result = {"directory": directory.name, "returncode": code, "guard_error": guard_error, **summary}
+            proceed, reason = batch_continuation(result)
+            result.update(continue_independent_batches=proceed, continuation_reason=reason)
+            receipt["batches"].append(result)
+            receipt["unattempted"] = [row["canonical_nodeid"] for pending in plan[index + 1:] for row in pending]
             save(args.out / "receipt.json", receipt)
-            # Assertion failures remain visible; independent frozen batches still
-            # run. -x retains unfinished nodes within the failed batch as UNRUN.
+            if not proceed:
+                raise ValueError(reason + "; no later batch admitted")
+            # Ordinary assertion/fixture failures stay FAIL, but do not suppress
+            # independent frozen batches. Resource/session anomalies stop here.
         save(args.out / "source-after.json", identity())
         receipt["status"] = campaign_status(receipt)
     except Exception as error:
