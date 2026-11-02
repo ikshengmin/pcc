@@ -431,6 +431,9 @@ def parse_class(parser):
 
 def member_access(parser, expression, operator, member):
     """Resolve a data member, check access, then emit the shared C StructRef."""
+    if getattr(parser, 'class_template_method', None) is not None:
+        from pcc.frontends.cpp.class_template_members import pattern_member_access
+        return pattern_member_access(parser, expression, operator, member)
     dtype = expression.dtype
     if operator == "->":
         pointer = unqualified(dtype)

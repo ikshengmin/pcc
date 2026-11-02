@@ -19,25 +19,19 @@ from pcc.frontends.cpp.types import ConstType, PointerType, _mangle_type, unqual
 
 
 def mangle_member(owner, name, parameters, const=False):
-    namespaces = owner.qualified_name[:-1]
-    substitutions = [("namespace-prefix", namespaces[:i + 1])
-                     for i in range(len(namespaces))]
-    parts = namespaces
-    prefix = ""
-    if parts and parts[0] == "std":
-        prefix, parts = "St", parts[1:]
-        substitutions = substitutions[1:]
-    prefix += "".join(str(len(part)) + part for part in parts)
-    prefix += str(len(owner.name)) + owner.name
-    # The complete owner is a TYPE substitution, not a namespace spelling.
-    substitutions.append(owner)
+    substitutions = []
+    prefix = _mangle_type(unqualified(owner), substitutions)
+    # Use the type owner's real namespace/template-prefix substitution order.
+    # Only nested-name framing is removed; template-argument E remains intact.
+    if prefix.startswith("N") and prefix.endswith("E"):
+        prefix = prefix[1:-1]
     encoded_name = "aS" if name == "operator=" else str(len(name)) + name
     encoded = "_ZN" + ("K" if const else "") + prefix + encoded_name + "E"
     return encoded + ("".join(_mangle_type(unqualified(t), substitutions)
                               for t in parameters) or "v")
 
 
-def declare_member_function(definition, symbol, const=False, outside=False, static=False):
+def declare_member_function(definition, symbol, const=False, outside=False, static=False, encode_name=True):
     if static and const:
         raise CppDiagnostic("cpp.static-member-cv", "a static member function cannot have cv-qualifiers", symbol.coord)
     scope = definition.scope
@@ -79,7 +73,8 @@ def declare_member_function(definition, symbol, const=False, outside=False, stat
     symbol.owner = scope
     symbol.language_linkage = "C++"
     symbol.internal_linkage = definition.dtype.internal_linkage
-    symbol.c_name = mangle_member(definition.dtype, symbol.name, symbol.parameters, const)
+    if encode_name:
+        symbol.c_name = mangle_member(definition.dtype, symbol.name, symbol.parameters, const)
     if group is None:
         group = Symbol(symbol.name, "function", symbol.coord)
         group.class_owner = definition.dtype
@@ -95,16 +90,8 @@ def object_pointer_type(method):
     return PointerType(owner)
 
 
-def call_member(parser, group, object_expression, arguments, coord, address_available=True):
-    if parser.template_function is not None or parser.instantiating_template:
-        raise CppDiagnostic("cpp.unsupported.member-templates", "member calls in templates require dependent lookup", coord)
-    arguments = [parser._decay_array(arg) for arg in arguments]
-    from pcc.frontends.cpp.classes import is_class_type
-    if any(is_class_type(arg.dtype) for arg in arguments):
-        raise CppDiagnostic("cpp.unsupported.class-value-abi", "class by-value arguments need lifetime ABI", coord)
-    # Use the same partial-order conversion owner as ordinary overloads. The
-    # implicit-object candidate is local; canonical explicit signatures remain
-    # unchanged for redeclaration identity and ABI encoding.
+def select_member_overload(parser, group, object_expression, arguments, coord):
+    """Shared implicit-object ranking, usable before body projection."""
     candidates = Symbol(group.name, "function", coord)
     for method in group.overloads:
         candidate = Symbol(method.name, "function", method.coord, dtype=method.dtype,
@@ -113,10 +100,28 @@ def call_member(parser, group, object_expression, arguments, coord, address_avai
         candidate.default_arguments = (None,) + tuple(getattr(method, "default_arguments", (None,) * len(method.parameters)))
         candidates.overloads.append(candidate)
     actuals = [object_expression] + arguments
-    selected = resolve_overload(candidates, [arg.dtype for arg in actuals], parser.types,
+    return resolve_overload(candidates, [arg.dtype for arg in actuals], parser.types,
                                 coord, [arg.null_pointer for arg in actuals],
                                 [arg.lvalue or arg.assignment_result for arg in actuals]).member_origin
+
+
+def call_member(parser, group, object_expression, arguments, coord, address_available=True):
+    if getattr(parser, 'class_template_method', None) is not None:
+        from pcc.frontends.cpp.class_template_members import pattern_call
+        return pattern_call(parser, group, object_expression, arguments, coord, False, address_available)
+    if parser.template_function is not None or (parser.instantiating_template and getattr(parser, 'class_template_instance', None) is None):
+        raise CppDiagnostic("cpp.unsupported.member-templates", "member calls in templates require dependent lookup", coord)
+    arguments = [parser._decay_array(arg) for arg in arguments]
+    from pcc.frontends.cpp.classes import is_class_type
+    if any(is_class_type(arg.dtype) for arg in arguments):
+        raise CppDiagnostic("cpp.unsupported.class-value-abi", "class by-value arguments need lifetime ABI", coord)
+    # Use the same partial-order conversion owner as ordinary overloads. The
+    # implicit-object candidate is local; canonical explicit signatures remain
+    # unchanged for redeclaration identity and ABI encoding.
+    selected = select_member_overload(parser, group, object_expression, arguments, coord)
     parser.scope.check_member_access(selected, coord)
+    from pcc.frontends.cpp.class_template_members import request_body
+    request_body(parser, selected, coord)
     if not address_available:
         raise CppDiagnostic("cpp.unsupported.member-object-address",
                             "dot member calls require shared address-only aggregate lowering", coord)
@@ -153,7 +158,12 @@ def call_static_member(parser, group, arguments, coord, discarded_base=None):
     from pcc.frontends.cpp.classes import is_class_type
     from pcc.frontends.cpp.parser import Expression
 
-    if parser.template_function is not None or parser.instantiating_template:
+    if getattr(parser, 'class_template_method', None) is not None:
+        from pcc.frontends.cpp.class_template_members import pattern_call
+        if discarded_base is not None:
+            raise CppDiagnostic('cpp.unsupported.member-templates', 'untyped discarded receiver cannot enter a method Pattern', coord)
+        return pattern_call(parser, group, None, arguments, coord, True)
+    if parser.template_function is not None or (parser.instantiating_template and getattr(parser, 'class_template_instance', None) is None):
         raise CppDiagnostic("cpp.unsupported.member-templates",
                             "member calls in templates require dependent lookup", coord)
     arguments = [parser._decay_array(arg) for arg in arguments]
@@ -163,6 +173,8 @@ def call_static_member(parser, group, arguments, coord, discarded_base=None):
                                 coord, [arg.null_pointer for arg in arguments],
                                 [arg.lvalue or arg.assignment_result for arg in arguments])
     parser.scope.check_member_access(selected, coord)
+    from pcc.frontends.cpp.class_template_members import request_body
+    request_body(parser, selected, coord)
     from pcc.frontends.cpp.default_arguments import expand
     arguments = expand(parser, selected, arguments, coord)
     converted = [parser._convert(arg, dtype, coord)

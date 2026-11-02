@@ -146,6 +146,62 @@ def parse_constructor(parser, definition=None):
     return bind_constructor_body(parser, definition, symbol, parameter_scope, declaration, this, name.coord)
 
 
+def parse_member_initializers(parser, definition):
+    """Bind initializer names/expressions in the active constructor scope.
+
+    The caller may retain typed Pattern expressions; this pass does not emit
+    stores or decide a dependent member's eventual initialization conversion.
+    """
+    owner = definition.dtype
+    initializers = {}
+    if parser._accept(":"):
+        while True:
+            member = parser._identifier()
+            if member.value == owner.name:
+                raise CppDiagnostic("cpp.unsupported.delegating-constructors", "delegation requires constructor lifetime integration", member.coord)
+            target = definition.scope.lookup(member.value, member.coord)
+            if (target is not None and target.kind == "type"
+                    and unqualified(target.dtype) is owner):
+                raise CppDiagnostic("cpp.unsupported.delegating-constructors",
+                                    "delegation requires constructor lifetime integration", member.coord)
+            if target is None or target.kind != "member" or target.class_owner is not owner:
+                raise CppDiagnostic("cpp.invalid-member-initializer", "initializer must name a direct non-static data member", member.coord)
+            if target in initializers:
+                raise CppDiagnostic("cpp.duplicate-member-initializer", "data member initialized more than once", member.coord)
+            if parser._peek().value != "(":
+                raise CppDiagnostic("cpp.unsupported.constructor-list-initialization", "braced member initialization requires direct-list conversion rules", parser._peek().coord)
+            parser._expect("(")
+            expression = None if parser._peek().value == ")" else parser._expression()
+            parser._expect(")")
+            initializers[target] = expression
+            if not parser._accept(","):
+                break
+    return initializers
+
+
+def lower_member_initializers(parser, definition, this, initializers):
+    """Initialize concrete fields in declaration order, without zeroing omissions."""
+    stores = []
+    for member in definition.members:
+        if member not in initializers and getattr(member, 'default_initializer_tokens', None) is not None:
+            from pcc.frontends.cpp.default_member_initializers import value as default_value
+            value = default_value(member, c_ast.ID(this.c_name, member.coord))
+        elif member not in initializers:
+            if isinstance(member.dtype, ConstType):
+                raise CppDiagnostic("cpp.const-initializer", "const data member requires initialization", member.coord)
+            # Default initialization of a scalar leaves it indeterminate.
+            continue
+        else:
+            expression = initializers[member]
+            value = (c_ast.Constant("int", "0", member.coord) if expression is None else
+                     parser._convert(expression, member.dtype, member.coord, contextual=True))
+        field = c_ast.StructRef(c_ast.ID(this.c_name, member.coord), "->",
+                               c_ast.ID(member.c_name, member.coord), member.coord)
+        # This is construction, not C++ assignment to a live const object.
+        stores.append(c_ast.Assignment("=", field, value, member.coord))
+    return stores
+
+
 def bind_constructor_body(parser, definition, symbol, parameter_scope, declaration, this, coord):
     """Bind a body in its original parameter scope against a completed class."""
     parent = parser.scope
@@ -154,47 +210,8 @@ def bind_constructor_body(parser, definition, symbol, parameter_scope, declarati
     parser.scope = parameter_scope
     parser.member_function, parser.this_symbol, parser.return_type = symbol, this, "void"
     try:
-        initializers = {}
-        if parser._accept(":"):
-            while True:
-                member = parser._identifier()
-                if member.value == owner.name:
-                    raise CppDiagnostic("cpp.unsupported.delegating-constructors", "delegation requires constructor lifetime integration", member.coord)
-                target = definition.scope.lookup(member.value, member.coord)
-                if (target is not None and target.kind == "type"
-                        and unqualified(target.dtype) is owner):
-                    raise CppDiagnostic("cpp.unsupported.delegating-constructors",
-                                        "delegation requires constructor lifetime integration", member.coord)
-                if target is None or target.kind != "member" or target.class_owner is not owner:
-                    raise CppDiagnostic("cpp.invalid-member-initializer", "initializer must name a direct non-static data member", member.coord)
-                if target in initializers:
-                    raise CppDiagnostic("cpp.duplicate-member-initializer", "data member initialized more than once", member.coord)
-                if parser._peek().value != "(":
-                    raise CppDiagnostic("cpp.unsupported.constructor-list-initialization", "braced member initialization requires direct-list conversion rules", parser._peek().coord)
-                parser._expect("(")
-                expression = None if parser._peek().value == ")" else parser._expression()
-                parser._expect(")")
-                initializers[target] = expression
-                if not parser._accept(","):
-                    break
-        stores = []
-        for member in definition.members:
-            if member not in initializers and getattr(member, 'default_initializer_tokens', None) is not None:
-                from pcc.frontends.cpp.default_member_initializers import value as default_value
-                value = default_value(member, c_ast.ID(this.c_name, member.coord))
-            elif member not in initializers:
-                if isinstance(member.dtype, ConstType):
-                    raise CppDiagnostic("cpp.const-initializer", "const data member requires initialization", member.coord)
-                # Default initialization of a scalar leaves it indeterminate.
-                continue
-            else:
-                expression = initializers[member]
-                value = (c_ast.Constant("int", "0", member.coord) if expression is None else
-                         parser._convert(expression, member.dtype, member.coord, contextual=True))
-            field = c_ast.StructRef(c_ast.ID(this.c_name, member.coord), "->",
-                                   c_ast.ID(member.c_name, member.coord), member.coord)
-            # This is construction, not C++ assignment to a live const object.
-            stores.append(c_ast.Assignment("=", field, value, member.coord))
+        initializers = parse_member_initializers(parser, definition)
+        stores = lower_member_initializers(parser, definition, this, initializers)
         body = parser._block(new_scope=False)
         body.block_items = stores + body.block_items
     finally:
@@ -313,6 +330,8 @@ def constructor_call(parser, dtype, arguments, address, coord, require_closed=Fa
                                 [arg.dtype for arg in arguments], parser.types, coord,
                                 [arg.null_pointer for arg in arguments], [arg.lvalue or arg.assignment_result for arg in arguments])
     parser.scope.check_member_access(selected, coord)
+    from pcc.frontends.cpp.class_template_members import request_body
+    request_body(parser, selected, coord)
     if require_closed and not getattr(selected, 'closed_normal_body', False):
         raise CppDiagnostic('cpp.unsupported.placement-constructor-effects',
                             'unknown constructor effects need exception/cleanup integration', coord)

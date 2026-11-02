@@ -40,6 +40,14 @@ from tests.cpp.test_cpp_default_arguments import CASES as DEFAULT_ARGUMENT_PROGR
 from tests.cpp.test_cpp_lvalue_references import CASES as LVALUE_REFERENCE_PROGRAMS
 from tests.cpp.test_cpp_const_casts import CASES as CONST_CAST_PROGRAMS
 from tests.cpp.test_cpp_class_templates import CASES as CLASS_TEMPLATE_PROGRAMS
+from tests.cpp.test_cpp_class_template_members import CASES as CLASS_TEMPLATE_MEMBER_PROGRAMS
+
+
+CLASS_TEMPLATE_MEMBER_CASES = tuple(
+    ('class-template-member-' + name, dict(CLASS_TEMPLATE_MEMBER_PROGRAMS)[name], 42)
+    for name in ('aggregate-getter', 'constructor-later-member',
+                 'const-overload', 'recursive-body')
+)
 
 
 CASES = tuple(
@@ -62,7 +70,7 @@ FRONTEND_CASES = (
     ("private-anonymous-later-member", dict(ANONYMOUS_ENUM_PROGRAMS)["private-later-member"], 42),
     ("pointer-offset-formal-row-stride", dict(POINTER_OFFSET_PROGRAMS)["formal-row-stride"], 42),
 )
-CASES += FRONTEND_CASES
+CASES += FRONTEND_CASES + CLASS_TEMPLATE_MEMBER_CASES
 
 # Reuse exact single-TU originals on both platform runners. The Linux-only
 # multi-TU/default-argument helper remains selected by the Linux whole suite.

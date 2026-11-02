@@ -185,8 +185,10 @@ class CppParser:
                 raise CppDiagnostic("cpp.unsupported.internal-object-declaration",
                                     "undefined internal objects need ODR-use tracking", symbol.coord)
         from pcc.frontends.cpp.class_templates import ClassTemplatePattern, emit_instance
+        from pcc.frontends.cpp.class_template_members import MethodInstance, instantiate_body
         instances = self.instance_registry.drain(
             lambda entry: emit_instance(self, entry) if isinstance(entry.context, ClassTemplatePattern)
+            else instantiate_body(self, entry.context) if isinstance(entry.context, MethodInstance)
             else self._instantiate_body(entry.value, entry.context),
         )
         instances = [item for item in instances if item is not None]
@@ -552,7 +554,7 @@ class CppParser:
             raise CppDiagnostic("cpp.unsupported.multilevel-pointers", "array-of-pointer pointee qualification requires deeper pointer rules", token.coord)
         if array_type(dtype) and dtype.bound is None:
             raise CppDiagnostic("cpp.unsupported.unknown-bound-array-pointers", "pointer to an unknown-bound array requires separate completeness rules", token.coord)
-        if self.parsing_template:
+        if self.parsing_template and not getattr(self, 'class_template_signature', False):
             raise CppDiagnostic("cpp.unsupported.pointer-templates", "pointer template types are not implemented", token.coord)
         if "volatile" in qualifiers:
             raise CppDiagnostic("cpp.unsupported.volatile", "volatile access lowering is not implemented", token.coord)
@@ -756,17 +758,10 @@ class CppParser:
         if dtype == "void" and force:
             self._require_value(expression, allow_void=True)
             if self.template_function is not None:
-                return Pattern("cast", coord, dtype, [expression])
+                return Pattern("cast", coord, (dtype, force, contextual), [expression])
             typename = c_ast.Typename(None, [], self._scalar_type(None, dtype, coord), coord)
             return c_ast.Cast(typename, expression.node, coord)
         self._require_value(expression)
-        if self.template_function is not None:
-            if not dependent(expression.dtype) and not dependent(dtype):
-                if self.types.conversion_rank(expression.dtype, dtype, expression.null_pointer) is None:
-                    raise CppDiagnostic("cpp.invalid-conversion", "unsupported conversion", coord)
-            if same_type(expression.dtype, dtype) and not force:
-                return expression.node
-            return Pattern("cast", coord, dtype, [expression])
         nullptr_bool = unqualified(expression.dtype) == "nullptr" and dtype == "bool" and (force or contextual)
         enum_explicit = (force and is_enum_type(expression.dtype)
                          and self.types.arithmetic_operand(dtype) and not is_enum_type(dtype))
@@ -774,6 +769,14 @@ class CppParser:
                 and unqualified(expression.dtype) is not dtype):
             raise CppDiagnostic("cpp.unsupported.enum-casts",
                                 "casts to a distinct enum require range/conversion semantics", coord)
+        if self.template_function is not None:
+            if not dependent(expression.dtype) and not dependent(dtype):
+                if (self.types.conversion_rank(expression.dtype, dtype, expression.null_pointer) is None
+                        and not nullptr_bool and not enum_explicit):
+                    raise CppDiagnostic("cpp.invalid-conversion", "unsupported conversion", coord)
+            if same_type(expression.dtype, dtype) and not force:
+                return expression.node
+            return Pattern("cast", coord, (dtype, force, contextual), [expression])
         if (self.types.conversion_rank(expression.dtype, dtype, expression.null_pointer) is None
                 and not nullptr_bool and not enum_explicit):
             raise CppDiagnostic("cpp.invalid-conversion", "unsupported conversion", coord)
@@ -1364,6 +1367,7 @@ class CppParser:
             ))
             init = None
             initializer = None
+            direct_initializer = False
             if array_type(dtype):
                 leaf = dtype
                 while array_type(leaf):
@@ -1431,6 +1435,7 @@ class CppParser:
                 self._require_value(expression)
                 init = self._convert(expression, dtype, name.coord, contextual=True)
                 initializer = expression
+                direct_initializer = True
                 self._expect(")")
             elif is_enum_type(dtype) and self._peek().value == "{":
                 raise CppDiagnostic("cpp.unsupported.enum-list-initialization",
@@ -1446,7 +1451,7 @@ class CppParser:
             self._expect(";")
             symbol.jump_entry = "uninitialized" if initializer is None else "initialized"
             if self.template_function is not None:
-                return Pattern("decl", name.coord, symbol,
+                return Pattern("decl", name.coord, (symbol, direct_initializer),
                                [] if initializer is None else [initializer])
             if (isinstance(dtype, ConstType) and (self.types.integral(dtype) or is_enum_type(dtype))
                     and initializer is not None):
@@ -1834,6 +1839,9 @@ class CppParser:
         self._require_value(rhs)
         left, right = unqualified(lhs.dtype), unqualified(rhs.dtype)
         if any(is_enum_type(t) and t.scoped for t in (left, right)):
+            if self.template_function is not None:
+                raise CppDiagnostic("cpp.unsupported.enum-templates",
+                                    "scoped enum operations need typed template Pattern support", coord)
             if left is not right or operator not in _COMPARISONS:
                 raise CppDiagnostic("cpp.invalid-operands",
                                     "scoped enums require same-type comparison operands", coord)
@@ -1858,6 +1866,10 @@ class CppParser:
             if operator not in ("==", "!="):
                 raise CppDiagnostic("cpp.unsupported.pointer-operators",
                                     "pointer ordering and this pointer operator are not implemented", coord)
+            if self.template_function is not None:
+                if not dependent(lhs.dtype) and not dependent(rhs.dtype):
+                    self._composite_pointer_type(lhs, rhs, coord)
+                return Expression(Pattern("binary", coord, operator, [lhs, rhs]), "bool")
             operand_type = self._composite_pointer_type(lhs, rhs, coord)
             node = c_ast.BinaryOp(operator, self._convert(lhs, operand_type, coord),
                                   self._convert(rhs, operand_type, coord), coord)
@@ -2067,7 +2079,7 @@ class CppParser:
                 expression = explicit_destructor(self, expression, operator)
                 continue
             member = self._identifier()
-            if self.template_function is not None:
+            if self.template_function is not None and getattr(self, 'class_template_method', None) is None:
                 raise CppDiagnostic("cpp.unsupported.dependent-lookup", "template member lookup is not implemented", operator.coord)
             expression = member_access(self, expression, operator.value, member)
         return expression
@@ -2175,7 +2187,7 @@ class CppParser:
             expression = self._decay_array(expression)
         self._require_value(expression, allow_class=operator == "&", object_address=operator == "&")
         if operator in ("&", "*"):
-            if self.parsing_template:
+            if self.parsing_template and getattr(self, 'class_template_method', None) is None:
                 raise CppDiagnostic("cpp.unsupported.pointer-templates", "pointer template expressions are not implemented", coord)
             if operator == "&":
                 if expression.assignment_result:
@@ -2185,9 +2197,13 @@ class CppParser:
                 dtype = PointerType(expression.dtype)
             else:
                 pointer = unqualified(expression.dtype)
+                if self.template_function is not None and dependent(pointer) and not isinstance(pointer, PointerType):
+                    return Expression(Pattern('unary', coord, operator, [expression]), None, True)
                 if not isinstance(pointer, PointerType) or unqualified(pointer.pointee) == "void":
                     raise CppDiagnostic("cpp.invalid-dereference", "dereference requires a pointer to an object", coord)
                 dtype = pointer.pointee
+            if self.template_function is not None:
+                return Expression(Pattern('unary', coord, operator, [expression]), dtype, operator == '*')
             # Do not emit a load through the pointee merely to take its address.
             if operator == "&" and isinstance(expression.node, c_ast.UnaryOp) and expression.node.op == "*":
                 return Expression(expression.node.expr, dtype)
@@ -2408,6 +2424,8 @@ class CppParser:
         if self.member_function is None or self.this_symbol is None or self.member_function.class_owner is not owner:
             raise CppDiagnostic("cpp.nonstatic-member-without-object", "a non-static member requires an object", coord)
         symbol = self.this_symbol
+        if getattr(self, 'class_template_method', None) is not None:
+            return Expression(Pattern('member-this', coord, symbol), symbol.dtype)
         node = c_ast.ID(symbol.c_name, coord)
         receivers = getattr(self, 'default_initializer_receivers', None)
         if receivers is not None:
@@ -2436,7 +2454,7 @@ class CppParser:
             self._expect(")")
             return self._explicit_arithmetic_cast(dtype, expression, token.coord, "static_cast")
         if token.value == "nullptr":
-            if self.parsing_template:
+            if self.parsing_template and getattr(self, 'class_template_method', None) is None:
                 raise CppDiagnostic("cpp.unsupported.pointer-templates", "nullptr template expressions are not implemented", token.coord)
             return self._literal("int", "0", "nullptr", token.coord)
         if token.value == "(":
@@ -2538,6 +2556,11 @@ class CppParser:
                     return call_static_member(self, symbol, arguments, token.coord)
                 return call_member(self, symbol, self._implicit_object(symbol.class_owner, token.coord), arguments, token.coord)
             if not name.global_scope and len(name.parts) == 1:
+                if (getattr(self, 'class_template_method', None) is not None
+                        and (any(dependent(arg.dtype) for arg in arguments)
+                             or any(argument_dependent(arg) for arg in explicit_arguments or ()))):
+                    raise CppDiagnostic("cpp.unsupported.dependent-lookup",
+                                        "unqualified dependent free calls require instantiation-time ADL", token.coord)
                 symbol = argument_dependent_lookup(token.value, [arg.dtype for arg in arguments], symbol, token.coord)
             if symbol is None:
                 if self.template_function is not None and any(dependent(arg.dtype) for arg in arguments):
@@ -2625,6 +2648,13 @@ class CppParser:
         return Expression(c_ast.Cast(typename, node, coord), dtype,
                           constant_fact=known(dtype, value, coord))
 
+    def _substitute_pattern_type(self, dtype, bindings, coord):
+        context = getattr(self, 'class_template_instance', None)
+        if context is None:
+            return substitute(dtype, bindings)
+        from pcc.frontends.cpp.class_templates import substitute_member
+        return substitute_member(dtype, bindings, context.symbol.class_owner, coord)
+
     def _instantiate_expression(self, expression, bindings, environment):
         pattern = expression.node if isinstance(expression, Expression) else expression
         kind, coord = pattern.kind, pattern.coord
@@ -2641,16 +2671,31 @@ class CppParser:
             typename = c_ast.Typename(None, [], self._scalar_type(None, argument.dtype, coord), coord)
             return Expression(c_ast.Cast(typename, node, coord), argument.dtype,
                               constant_fact=known(argument.dtype, argument.value, coord))
-        if kind == "name":
+        if kind in ("name", "member-this"):
             symbol = pattern.value
             return environment[id(symbol)]
+        if kind == 'member-field':
+            member, operator, token = pattern.value
+            base = self._instantiate_expression(pattern.children[0], bindings, environment)
+            return member_access(self, base, operator, token)
         arguments = [self._instantiate_expression(child, bindings, environment)
                      for child in pattern.children]
+        if kind == 'member-call':
+            from pcc.frontends.cpp.members import call_member, call_static_member
+            group, static, has_receiver, address_available = pattern.value
+            context = self.class_template_instance
+            concrete = context.symbol.class_owner.template_member_groups[group]
+            receiver = arguments.pop(0) if has_receiver else None
+            if static:
+                return call_static_member(self, concrete, arguments, coord,
+                                          None if receiver is None else receiver.node)
+            return call_member(self, concrete, receiver, arguments, coord, address_available)
         if kind == "cast":
-            dtype = substitute(pattern.value, bindings)
-            return Expression(self._convert(arguments[0], dtype, coord, force=True), dtype,
+            original_type, force, contextual = pattern.value
+            dtype = self._substitute_pattern_type(original_type, bindings, coord)
+            return Expression(self._convert(arguments[0], dtype, coord, force=force, contextual=contextual), dtype,
                               constant_fact=converted_fact(self._constant_fact(arguments[0]), dtype,
-                                                           self.types, coord))
+                                                           self.types, coord, allow_scoped=force))
         if kind == "binary":
             return self._binary_expression(pattern.value, arguments[0], arguments[1], coord)
         if kind == "unary":
@@ -2709,14 +2754,20 @@ class CppParser:
         if kind in ("break", "continue"):
             return c_ast.Break(coord) if kind == "break" else c_ast.Continue(coord)
         if kind == "decl":
-            symbol = pattern.value
-            dtype = substitute(symbol.dtype, bindings)
+            symbol, direct_initializer = pattern.value
+            dtype = self._substitute_pattern_type(symbol.dtype, bindings, coord)
+            if (getattr(self, 'class_template_instance', None) is not None
+                    and (is_class_type(dtype) or isinstance(dtype, ReferenceType) or contains_array(dtype))):
+                raise CppDiagnostic('cpp.unsupported.member-templates',
+                                    'class template local subobjects/references/arrays require lifetime-aware Pattern replay', coord)
             self._check_object_type(dtype, coord)
+            if isinstance(dtype, ConstType) and not pattern.children:
+                raise CppDiagnostic("cpp.const-initializer", "const objects require an initializer", coord)
             environment[id(symbol)] = Expression(c_ast.ID(symbol.c_name, coord), dtype, True)
             init = None
             if pattern.children:
                 expression = self._instantiate_expression(pattern.children[0], bindings, environment)
-                init = self._convert(expression, dtype, coord)
+                init = self._convert(expression, dtype, coord, contextual=direct_initializer)
             return self._decl(symbol.c_name, dtype, coord, init)
         if kind == "return":
             expression = (self._instantiate_expression(pattern.children[0], bindings, environment)

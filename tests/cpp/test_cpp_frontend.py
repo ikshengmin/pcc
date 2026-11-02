@@ -125,7 +125,8 @@ class CppParserTests(unittest.TestCase):
         ast = self.parse("int f(int); int f(int,int); int main(){return f(1,2);}")
         self.assertEqual(ast.ext[2].body.block_items[0].expr.name.name, "_Z1fii")
         self.assertEqual(self.parse("template<class T> struct Box {};").ext, [])
-        self.diagnostic("template<class T> struct Box { T f(){return 0;} };",
+        self.assertEqual(self.parse("template<class T> struct Box { T f(){return 0;} };").ext, [])
+        self.diagnostic("template<class T> struct Box { ~Box(){} };",
                         "cpp.unsupported.class-templates")
 
     def test_lifetimes_and_exceptions_are_never_dropped(self):

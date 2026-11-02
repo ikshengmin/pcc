@@ -4,8 +4,9 @@ N4659 [temp.class], [temp.inst]: forming a pointer to a specialization does
 not instantiate its layout. The shared InstanceRegistry owns identity and
 scheduling; this owner only checks C++ completeness and emits ordinary C
 records. No token replacement, alternate layout engine, or instance cache.
-Member-function patterns, bases, arrays and specializations remain explicit
-capability boundaries rather than unparsed, supposedly validated bodies.
+Ordinary member bodies are typed once at definition time and instantiated on
+ODR-use. Bases, arrays, destructor bodies and specializations remain explicit
+capability boundaries, never unparsed, supposedly validated bodies.
 """
 
 from pcc.frontends.c.ast import c_ast
@@ -24,8 +25,13 @@ def unsupported(coord, message):
 
 
 class InjectedClassPattern:
+    cpp_class_pattern = True
+
     def __init__(self, owner):
         self.owner = owner
+        self.name, self.qualified_name, self.coord = owner.name, owner.qualified_name, owner.coord
+        self.internal_linkage = owner.scope.internal_linkage
+        self.declaration_scope = owner.scope
 
 
 class ClassTemplatePattern:
@@ -35,6 +41,11 @@ class ClassTemplatePattern:
         self.qualified_name = scope.namespace_path() + (name,)
         self.members = None
         self.injected = InjectedClassPattern(self)
+        self.member_scope = None
+        self.member_symbols = []
+        self.methods = []
+        self.constructors = Symbol(name, 'function', coord)
+        self.method_definition = None
 
 
 def parameter_key(parameters):
@@ -74,6 +85,10 @@ def parse_declaration(parser, parameters, parent):
     scope = Scope(parameter_scope, kind='class', name=name.value)
     scope.declare(Symbol(name.value, 'type', name.coord, dtype=pattern.injected))
     parser.scope = scope
+    scope.class_type = pattern.injected
+    pattern.member_scope = scope
+    from pcc.frontends.cpp.class_template_members import PatternDefinition
+    pattern.method_definition = PatternDefinition(pattern)
     members = []
     access = 'private' if keyword.value == 'class' else 'public'
     try:
@@ -86,11 +101,19 @@ def parse_declaration(parser, parameters, parent):
             if parser._accept(';'):
                 continue
             if token.value in ('using', 'typedef', 'enum', 'class', 'struct', 'union',
-                               'friend', 'static', 'virtual', 'template', '~', 'explicit',
-                               'constexpr') or token.value == name.value and parser.cursor.tokens[parser.cursor.position + 1].value == '(':
+                               'friend', 'virtual', 'template', '~', 'explicit',
+                               'constexpr'):
                 unsupported(token.coord, 'class template members currently require scalar/pointer data declarations')
+            from pcc.frontends.cpp.class_template_members import parse_signature
+            pattern.method_definition.access = access
+            if token.value == name.value and parser.cursor.tokens[parser.cursor.position + 1].value == '(':
+                parse_signature(parser, pattern, parser._identifier(), 'void', constructor=True)
+                continue
+            static = parser._accept('static') is not None
             mutable = parser._accept('mutable') is not None
             base = parser._type(check_lowering=False)
+            method = False
+            prior_data = False
             while True:
                 declaration = DeclaratorParser(parser.cursor, parser._identifier,
                                                 parse_functions=False).parse()
@@ -107,9 +130,17 @@ def parse_declaration(parser, parameters, parent):
                     dtype = PointerType(dtype)
                     if 'const' in chunk.qualifiers:
                         dtype = qualify_const(dtype)
-                if parser._peek().value in ('(', '=', '{', ':'):
-                    unsupported(parser._peek().coord, 'class template methods, member initializers and bit-fields are not implemented')
                 member = declaration.name.identifier
+                if parser._peek().value == '(':
+                    if mutable:
+                        raise CppDiagnostic('cpp.invalid-mutable', 'mutable applies only to data members', member.coord)
+                    if prior_data:
+                        unsupported(member.coord, 'mixed data/function declarator lists are not implemented')
+                    parse_signature(parser, pattern, member, dtype, static=static)
+                    method = True
+                    break
+                if static or parser._peek().value in ('=', '{', ':'):
+                    unsupported(parser._peek().coord, 'class template static data, member initializers and bit-fields are not implemented')
                 if member.value == name.value:
                     unsupported(member.coord, 'same-named class template data members are not implemented')
                 if contains_function(dtype) or isinstance(unqualified(dtype), ReferenceType):
@@ -121,10 +152,14 @@ def parse_declaration(parser, parameters, parent):
                 if mutable and isinstance(dtype, ConstType):
                     raise CppDiagnostic('cpp.invalid-mutable', 'a mutable member cannot be const-qualified', member.coord)
                 symbol = scope.declare(Symbol(member.value, 'member', member.coord, dtype=dtype))
+                symbol.class_owner, symbol.access, symbol.mutable = pattern.injected, access, mutable
+                pattern.member_symbols.append(symbol)
                 members.append((symbol.name, dtype, member.coord, access, mutable))
+                prior_data = True
                 if not parser._accept(','):
                     break
-            parser._expect(';')
+            if not method:
+                parser._expect(';')
         parser._expect(';')
     finally:
         parser.scope = parameter_scope
@@ -133,6 +168,8 @@ def parse_declaration(parser, parameters, parent):
     # parameters still substitute by their stable mixed-list ordinal.
     pattern.members = tuple(members)
     pattern.class_key = keyword.value
+    from pcc.frontends.cpp.class_template_members import bind_patterns
+    bind_patterns(parser, pattern)
 
 
 def bind_arguments(parser, pattern):
@@ -223,9 +260,12 @@ def complete_layout(parser, dtype, pattern, arguments, coord):
                 unsupported(at, 'by-value class template subobjects are not implemented')
             definition.set_access(access)
             definition.add_member(Symbol(name, 'member', at, dtype=member_type), mutable)
+        from pcc.frontends.cpp.class_template_members import declare_instances
+        before = len(parser.class_template_declarations)
+        declare_instances(parser, pattern, definition, arguments)
         definition.finish()
         dtype.layout_state = 'complete'
-        parser.class_template_declarations.append(definition.c_declaration(parser._scalar_type))
+        parser.class_template_declarations.insert(before, definition.c_declaration(parser._scalar_type))
     except BaseException as error:
         dtype.layout_failure, dtype.layout_state = error, 'failed'
         raise

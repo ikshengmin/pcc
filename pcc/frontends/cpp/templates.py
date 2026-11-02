@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pcc.frontends.cpp.constants import KNOWN, NOT_CONSTANT, converted_fact
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.types import (
-    ReferenceType, is_enum_type, scalar_mangling_code, unqualified,
+    ArrayType, ConstType, PointerType, ReferenceType, is_enum_type, scalar_mangling_code, unqualified,
 )
 
 
@@ -120,13 +120,26 @@ class Pattern:
 
 
 def dependent(dtype):
-    return (dtype is None or isinstance(dtype, TypeParameter)
-            or isinstance(dtype, ReferenceType) and dependent(dtype.referent))
+    if dtype is None or isinstance(dtype, TypeParameter) or getattr(dtype, 'cpp_class_pattern', False):
+        return True
+    if isinstance(dtype, ConstType):
+        return dependent(dtype.base)
+    if isinstance(dtype, PointerType):
+        return dependent(dtype.pointee)
+    if isinstance(dtype, ArrayType):
+        return dependent(dtype.element)
+    return isinstance(dtype, ReferenceType) and dependent(dtype.referent)
 
 
 def type_key(dtype):
     if isinstance(dtype, ReferenceType):
         return ("lvalue-reference", type_key(dtype.referent))
+    if isinstance(dtype, ConstType):
+        return ("const", type_key(dtype.base))
+    if isinstance(dtype, PointerType):
+        return ("pointer", type_key(dtype.pointee))
+    if isinstance(dtype, ArrayType):
+        return ("array", type_key(dtype.element), dtype.bound)
     return ("parameter", dtype.index) if isinstance(dtype, TypeParameter) else ("scalar", dtype)
 
 
@@ -135,8 +148,18 @@ def same_type(lhs, rhs):
 
 
 def substitute(dtype, arguments):
+    from pcc.frontends.cpp.types import qualify_const
     if isinstance(dtype, ReferenceType):
         return ReferenceType(substitute(dtype.referent, arguments))
+    if isinstance(dtype, ConstType):
+        return qualify_const(substitute(dtype.base, arguments))
+    if isinstance(dtype, PointerType):
+        pointee = substitute(dtype.pointee, arguments)
+        if isinstance(unqualified(pointee), ReferenceType):
+            raise CppDiagnostic('cpp.invalid-reference-type', 'substitution cannot form a pointer to a reference', None)
+        return PointerType(pointee)
+    if isinstance(dtype, ArrayType):
+        return ArrayType(substitute(dtype.element, arguments), dtype.bound)
     return arguments[dtype.index] if isinstance(dtype, TypeParameter) else dtype
 
 
