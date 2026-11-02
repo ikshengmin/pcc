@@ -10,6 +10,7 @@ import re
 import unicodedata
 
 from pcc.frontends.go.diagnostics import UnsupportedGo
+from pcc.frontends.go.generics import GenericSession, TypeParameter, comparable, contains_parameter
 from pcc.frontends.go.syntax import (
     ArraySyntax, Expr, GoDiagnostic, PointerSyntax, Stmt, StructSyntax, TypeName,
 )
@@ -132,11 +133,14 @@ def coerce(expr, dtype):
 
 
 class Analyzer:
-    def __init__(self, program, *, imports=None, require_main=True, package_path=None):
+    def __init__(self, program, *, imports=None, require_main=True, package_path=None, generics=None):
         self.program = program
         self.imports = imports or {}
         self.require_main = require_main
         self.package_path = package_path
+        self.generics = generics if generics is not None else GenericSession()
+        self.type_bindings = {}
+        self.abstract_function = False
         self.functions = {}
         self.types = {}
         self.globals = {}
@@ -209,6 +213,7 @@ class Analyzer:
             for symbol in declaration.symbols:
                 self.resolve_constant(symbol)
         for function in self.program.functions:
+            self.type_bindings = self.generics.prepare(self, function)
             function.params = [(token, self.resolve_type(dtype)) for token, dtype in function.params]
             function.result = self.resolve_type(function.result)
             if any(isinstance(underlying(dtype), PointerType)
@@ -244,13 +249,14 @@ class Analyzer:
                 function.receiver = (token, receiver_type)
                 function.params.insert(0, (token, receiver_type))
                 function.abi_symbol = function_symbol(dtype.name + "." + name, self.package_path)
+        self.type_bindings = {}
         for symbol in self.globals.values():
             self.resolve_constant(symbol)
         main = self.functions.get("main")
         if self.require_main:
             if main is None:
                 raise GoDiagnostic(self.program.token, "package main requires func main()")
-            if main.params or main.result != "void":
+            if main.params or main.result != "void" or main.type_parameters:
                 raise GoDiagnostic(main.token, "main must have no parameters and no result")
         for function in self.program.functions:
             self.analyze_function(function)
@@ -261,7 +267,7 @@ class Analyzer:
         return self.program
 
     def imported(self, qualifier, token):
-        if any(qualifier in scope for scope in self.scopes):
+        if any(qualifier in scope for scope in self.scopes) or qualifier in self.type_bindings:
             raise GoDiagnostic(token, "package selector is shadowed by local variable " + qualifier)
         binding = self.imports.get(token.filename, {}).get(qualifier)
         if binding is None:
@@ -311,6 +317,9 @@ class Analyzer:
                 element = self.resolve_type(dtype.element)
             finally:
                 self.pointer_type_depth -= 1
+            if contains_parameter(element):
+                raise UnsupportedGo(dtype.token, 'go.unsupported.generic-boundaries',
+                                    'dependent pointer layouts require abstract lifetime checking')
             if isinstance(underlying(element), PointerType):
                 raise UnsupportedGo(dtype.token, 'go.unsupported.pointer-storage',
                                     "pointer-bearing pointees require a recursive lifetime/storage contract")
@@ -323,6 +332,8 @@ class Analyzer:
             else:
                 if any(dtype.token.text in scope for scope in self.scopes):
                     raise GoDiagnostic(dtype.token, "identifier is not a type: " + dtype.token.text)
+                if dtype.token.text in self.type_bindings:
+                    return self.type_bindings[dtype.token.text]
                 owner = self
             declaration = owner.types.get(dtype.token.text)
             if declaration is None:
@@ -340,6 +351,9 @@ class Analyzer:
                 names.add(token.text)
                 package = "" if unicodedata.category(token.text[0]) == "Lu" else (self.package_path or "<main>")
                 field_type = self.resolve_type(field_type)
+                if contains_parameter(field_type):
+                    raise UnsupportedGo(token, 'go.unsupported.generic-boundaries',
+                                        'dependent record layouts require generic data checking')
                 if isinstance(underlying(field_type), PointerType):
                     raise UnsupportedGo(token, 'go.unsupported.pointer-storage',
                                         "pointer-bearing records require aggregate lifetime/storage analysis")
@@ -357,6 +371,9 @@ class Analyzer:
         if not isinstance(dtype, ArraySyntax):
             return dtype
         element = self.resolve_type(dtype.element)
+        if contains_parameter(element):
+            raise UnsupportedGo(dtype.token, 'go.unsupported.generic-boundaries',
+                                'dependent array layouts require generic data checking')
         if isinstance(underlying(element), PointerType):
             raise UnsupportedGo(dtype.token, 'go.unsupported.pointer-storage',
                                 "pointer-bearing arrays require aggregate lifetime/storage analysis")
@@ -441,12 +458,16 @@ class Analyzer:
 
     def analyze_function(self, function):
         self.function = function
+        self.type_bindings = function.type_bindings
+        self.abstract_function = bool(function.type_parameters)
         self.scopes = [{}]
         self.loop_depth = 0
         self.break_depth = 0
         self.allowed_fallthrough = None
         for token, dtype in function.params:
             self.check_name(token)
+            if token.text in self.type_bindings:
+                raise GoDiagnostic(token, "parameter redeclares type parameter " + token.text)
             symbol = Symbol(token, dtype, parameter=True, depth=1)
             if token.text != "_":
                 if token.text in self.scopes[-1]:
@@ -458,6 +479,8 @@ class Analyzer:
             if token is None:
                 continue
             self.check_name(token)
+            if token.text in self.type_bindings:
+                raise GoDiagnostic(token, "result redeclares type parameter " + token.text)
             if token.text != "_" and token.text in self.scopes[-1]:
                 raise GoDiagnostic(token, "duplicate parameter or result " + token.text)
             symbol = Symbol(token, dtype, parameter=True, depth=1)
@@ -482,6 +505,8 @@ class Analyzer:
 
     def declare(self, token, dtype, constant=None):
         self.check_name(token)
+        if len(self.scopes) == 1 and token.text in self.type_bindings:
+            raise GoDiagnostic(token, "redeclaration in this block: " + token.text)
         if token.text != "_" and token.text in self.scopes[-1]:
             raise GoDiagnostic(token, "redeclaration in this block: " + token.text)
         symbol = Symbol(token, dtype, constant=constant, depth=len(self.scopes),
@@ -517,6 +542,9 @@ class Analyzer:
 
     def address_of(self, arg, token):
         """Use the same region/identity rules for explicit and receiver addresses."""
+        if contains_parameter(arg.type):
+            raise UnsupportedGo(token, 'go.unsupported.generic-boundaries',
+                                'addresses of type-parameter values require abstract lifetime checking')
         if arg.kind in ("array", "struct"):
             raise UnsupportedGo(token, 'go.unsupported.pointer-composite-address',
                                 "addressed composite literals require distinct allocation/lifetime analysis")
@@ -669,7 +697,8 @@ class Analyzer:
             # The equality checker owns assignability, pointer identity and
             # aggregate value comparison. Lowering captures the selector once.
             if not (is_integer(selector.type) or is_boolean(selector.type) or is_string(selector.type)
-                    or isinstance(underlying(selector.type), (PointerType, ArrayType, StructType))):
+                    or isinstance(underlying(selector.type), (PointerType, ArrayType, StructType))
+                    or isinstance(selector.type, TypeParameter) and comparable(selector.type)):
                 raise GoDiagnostic(selector.token, "switch requires a comparable type")
             statement.exprs = [selector]
             defaults, constants = 0, set()
@@ -836,6 +865,14 @@ class Analyzer:
         if expr.type is not None:
             return
         kind = expr.kind
+        if kind in ("index", "type_apply"):
+            base = expr.args[0] if kind == "index" else expr.callee
+            function = self.direct_function(base)
+            if function is not None and function.type_parameters:
+                raise UnsupportedGo(expr.token, 'go.unsupported.generic-boundaries',
+                                    'instantiated function values require function-value support')
+            if kind == "type_apply":
+                raise GoDiagnostic(expr.token, "multiple indices require a generic function instantiation")
         if kind in ("array", "composite"):
             syntax = expr.value
             if isinstance(syntax, ArraySyntax) and syntax.length is None:
@@ -952,6 +989,11 @@ class Analyzer:
             expr.type, expr.constant = "untyped int", integer_literal(expr)
             return
         if kind == "name":
+            if expr.value in self.type_bindings and not any(expr.value in scope for scope in self.scopes):
+                raise GoDiagnostic(expr.token, "type parameter is not an expression: " + expr.value)
+            if expr.value in self.functions and self.functions[expr.value].type_parameters and not any(expr.value in scope for scope in self.scopes):
+                raise UnsupportedGo(expr.token, 'go.unsupported.generic-boundaries',
+                                    'generic function values require direct instantiation calls')
             if expr.value == "iota":
                 if self.iota is None:
                     raise GoDiagnostic(expr.token, "iota is only defined within a constant declaration")
@@ -972,11 +1014,14 @@ class Analyzer:
         if kind == "selector":
             base = expr.args[0]
             bindings = self.imports.get(expr.token.filename, {})
-            local = base.kind == "name" and any(base.value in scope for scope in self.scopes)
+            local = base.kind == "name" and (any(base.value in scope for scope in self.scopes) or base.value in self.type_bindings)
             if base.kind == "name" and base.value in bindings and not local:
                 if base.parenthesized:
                     raise GoDiagnostic(base.token, "selector requires an unparenthesized imported package name")
                 imported = self.imported(base.value, expr.token)
+                if expr.value in imported.functions and imported.functions[expr.value].type_parameters:
+                    raise UnsupportedGo(expr.token, 'go.unsupported.generic-boundaries',
+                                        'generic function values require direct instantiation calls')
                 symbol = imported.globals.get(expr.value)
                 if symbol is None:
                     raise GoDiagnostic(expr.token, "undefined imported constant or variable " + expr.value)
@@ -1024,6 +1069,16 @@ class Analyzer:
         if kind == "call":
             name = expr.value
             callee = expr.callee
+            if callee is not None and callee.kind in ("index", "type_apply"):
+                base = callee.args[0] if callee.kind == "index" else callee.callee
+                explicit = callee.args[1:] if callee.kind == "index" else callee.args
+                function = self.direct_function(base)
+                if function is None:
+                    raise GoDiagnostic(expr.token, "type application requires a direct generic function")
+                expr.value = function.token.text
+                selected = self.generics.select(self, function, expr.args, explicit)
+                self.call(expr, selected)
+                return
             if callee is not None and callee.kind in ("unary", "type"):
                 dtype = self.type_operand(callee)
                 if dtype is None:
@@ -1034,7 +1089,7 @@ class Analyzer:
                 base = callee.args[0]
                 binding = (self.imports.get(expr.token.filename, {}).get(base.value)
                            if base.kind == "name" else None)
-                shadowed = base.kind == "name" and any(base.value in scope for scope in self.scopes)
+                shadowed = base.kind == "name" and (any(base.value in scope for scope in self.scopes) or base.value in self.type_bindings)
                 if binding is not None and not shadowed:
                     if base.parenthesized:
                         raise GoDiagnostic(base.token, "selector requires an unparenthesized imported package name")
@@ -1095,7 +1150,7 @@ class Analyzer:
                     raise GoDiagnostic(expr.token, name + " requires an admitted array" + (" or string" if name == "len" else ""))
                 return
             # Values in a lexical scope shadow package type/function names.
-            if any(name in scope for scope in self.scopes) or name in self.globals:
+            if any(name in scope for scope in self.scopes) or name in self.globals and name not in self.type_bindings:
                 raise GoDiagnostic(expr.token, "cannot call non-function " + name)
             if name in ("print", "println", "panic"):
                 values = self.values(expr.args)
@@ -1120,8 +1175,9 @@ class Analyzer:
                     coerce(argument, default_type(argument.type))
                 expr.kind, expr.type = "builtin_io", "void"
                 return
-            if name in TYPE_NAMES or name in self.types:
-                target = TYPE_NAMES[name] if name in TYPE_NAMES else self.resolve_type_declaration(self.types[name])
+            if name in TYPE_NAMES or name in self.types or name in self.type_bindings:
+                target = (self.type_bindings[name] if name in self.type_bindings else
+                          TYPE_NAMES[name] if name in TYPE_NAMES else self.resolve_type_declaration(self.types[name]))
                 self.conversion(expr, target)
                 return
             function = self.functions.get(name)
@@ -1169,12 +1225,19 @@ class Analyzer:
             element = self.type_operand(expr.args[0])
             if element is None:
                 return None
+            if contains_parameter(element):
+                raise UnsupportedGo(expr.token, 'go.unsupported.generic-boundaries',
+                                    'dependent pointer layouts require abstract lifetime checking')
             if isinstance(underlying(element), PointerType):
                 raise UnsupportedGo(expr.token, 'go.unsupported.pointer-storage',
                                     "pointer-bearing pointees require a recursive lifetime/storage contract")
             return PointerType(element)
         if expr.kind == "name":
-            if any(expr.value in scope for scope in self.scopes) or expr.value in self.globals:
+            if any(expr.value in scope for scope in self.scopes):
+                return None
+            if expr.value in self.type_bindings:
+                return self.type_bindings[expr.value]
+            if expr.value in self.globals:
                 return None
             if expr.value in self.types:
                 return self.resolve_type_declaration(self.types[expr.value])
@@ -1230,7 +1293,23 @@ class Analyzer:
         expr.type, expr.constant = target, arg.constant
         check_representable(expr)
 
+    def direct_function(self, expression):
+        if expression.kind == "name":
+            if (any(expression.value in scope for scope in self.scopes) or
+                    expression.value in self.type_bindings or expression.value in self.globals):
+                return None
+            return self.functions.get(expression.value)
+        if expression.kind == "selector" and expression.args[0].kind == "name":
+            base = expression.args[0]
+            if base.value in self.imports.get(expression.token.filename, {}) and not any(base.value in scope for scope in self.scopes):
+                if base.parenthesized:
+                    raise GoDiagnostic(base.token, "selector requires an unparenthesized imported package name")
+                return self.imported(base.value, expression.token).functions.get(expression.value)
+        return None
+
     def call(self, expr, function, *, receiver=None, pointer_receiver_type=None):
+        if function.type_parameters:
+            function = self.generics.select(self, function, expr.args)
         values = self.values(expr.args)
         parameters = function.params[1:] if receiver is not None else function.params
         if pointer_receiver_type is not None:
@@ -1253,6 +1332,13 @@ class Analyzer:
     def binary(self, expr):
         left, right = expr.args
         op = expr.value
+        if isinstance(left.type, TypeParameter) or isinstance(right.type, TypeParameter):
+            if left.type != right.type:
+                raise GoDiagnostic(expr.token, "mismatched type-parameter operands")
+            if op not in ("==", "!=") or not comparable(left.type):
+                raise GoDiagnostic(expr.token, "operation is not permitted by the type parameter constraint")
+            expr.kind, expr.type = "generic_compare", "untyped bool"
+            return
         if (isinstance(underlying(left.type), (ArrayType, StructType)) or
                 isinstance(underlying(right.type), (ArrayType, StructType))):
             if op not in ("==", "!="):

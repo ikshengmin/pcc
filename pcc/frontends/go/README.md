@@ -38,8 +38,8 @@ external compiler fallback, independent collector, or scheduler.
   composite literals, positional/keyed elements, zero-filled holes, ordinary
   indexing and mutable package/local storage. Arrays retain value-copy semantics
   in assignment, parameters and returns through the private PCC Go ABI (not a C
-  ABI claim). Array lengths are limited to 4096 elements; nested arrays and array
-  equality are explicit gaps. Assignment evaluates index operands and right-hand
+  ABI claim). Array lengths are limited to 4096 elements; nested arrays remain an
+  explicit gap, while source-only equality support is described below. Assignment evaluates index operands and right-hand
   values before stores; compound assignment evaluates its target only once.
 - Package variables with zero initialization or statically evaluable scalar/array
   initializers. Variables are storage, not constants. Initializers that read
@@ -53,7 +53,8 @@ external compiler fallback, independent collector, or scheduler.
 
 Package defined/alias types, ordinary value structs and direct value-receiver
 methods are described below. Go predeclared-name shadowing, dynamic package
-initialization, floating/complex types, interfaces/generics, escaping pointers, stored
+initialization, floating/complex types, runtime interfaces/general type sets, generic
+data types, escaping pointers, stored
 method values/closures, dynamically allocated strings, general I/O and panic unwind,
 defer/recover, goroutines/channels and standard-library dependencies remain
 explicit diagnostics. This is not complete Go, native pcc1 qualification,
@@ -545,7 +546,7 @@ qualification are not established here. Cross-object tests do not renew Mac
 execution evidence.
 
 Legacy **schema1** `status` rows retain their historical qualification meaning.
-The pointer-switch and aggregate-comparison/switch rows use the existing additive schema1 `implementation` and
+The pointer-switch, aggregate-comparison/switch and direct-generic-function rows use the existing additive schema1 `implementation` and
 `acceptance` objects: implemented source is distinct from acceptance, which is
 **unrun** for this change. No schema2 migration or ignored JSON fields are used.
 Historical evidence keeps its original revision and source hashes; it is not
@@ -577,6 +578,9 @@ rebound to a changed unit file or presented as a new execution.
 | `go.inventory.system` | Not fully inventoried; existing admitted behavior is described above | Chapter-wide acceptance not inventoried; no feature-wide pass inferred | `missing` |
 | `go.capability.aggregate-comparison` | Implemented: admitted value arrays/records, component equality | Authored CI obligations in `test_aggregate_equality.py`; acceptance **unrun** | Replaced by explicit implementation/acceptance |
 | `go.capability.aggregate-switch` | Implemented: captured value aggregate selectors and ordered cases | Authored CI obligations in `test_aggregate_equality.py`; acceptance **unrun** | Replaced by explicit implementation/acceptance |
+| `go.generics.direct-value-functions` | Implemented: declaration-checked any/comparable direct functions, argument inference and shared instances | Authored CI obligations in `test_generic_functions.py`; acceptance **unrun** | Explicit implementation/acceptance |
+| `go.capability.generic-boundaries` | Explicit constraint/storage/function-value frontiers | Diagnostic and official build-only obligations authored, **UNRUN** | `explicitly_unimplemented` |
+| `go.capability.limit-generic-instances` | Explicit 128-instance session bound | Diagnostic and official build-only obligations authored, **UNRUN** | `explicitly_unimplemented` |
 | `go.capability.array-bounds-panic` | Explicitly unimplemented boundary: array bounds panic | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.array-element-types` | Explicitly unimplemented boundary: array element types | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.blank-function-declarations` | Explicitly unimplemented boundary: blank function declarations | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
@@ -807,3 +811,55 @@ Rules: [comparison operators](https://go.dev/ref/spec#Comparison_operators),
 [assignability](https://go.dev/ref/spec#Assignability),
 [expression switches](https://go.dev/ref/spec#Expression_switches), and
 [evaluation order](https://go.dev/ref/spec#Order_of_evaluation).
+
+### Direct generic value functions — source implementation, acceptance unrun
+
+Direct functions can declare `any` and `comparable` type parameters and use
+explicit type arguments (including a partial prefix) or argument-constrained
+inference. Typed argument information precedes untyped constant defaulting;
+normal source assignability and constant representability follow substitution.
+Aliases share type identity; distinct defined types do not. Result context alone
+does not infer a direct call's otherwise unconstrained type parameter.
+
+Each generic body is checked unconditionally using declaration-bound opaque type
+parameters, including unused functions. `any` permits value transport and zero
+values, not arbitrary operators; `comparable` additionally permits equality and
+expression switches. Constraints resolve to predeclared identities only after
+checking signature/package/import shadowing. Existing predeclared-name shadowing
+frontiers remain explicit; a shadowed spelling is never silently treated as the
+builtin. Invalid generic bodies are not legalized by a favorable concrete call.
+
+One package-graph `pcc.support.instantiation.InstanceRegistry` owns concrete
+identity, recursive placeholders, FIFO completion and sticky failures. Existing
+C++/Rust consumers and the shared registry are unchanged. Imported generic bodies
+retain their declaration's source/import/type scope. All ordinary and abstract
+source bodies are typed before instance draining; concrete and abstract closed
+call-graph/nullness/lifetime checks finish before IR. Generic templates and
+signature-only abstract selections never reach lowering. Concrete instances use
+the existing value layouts, ABI, lowering and owned backend, with no erasure,
+dictionary runtime, new allocator, noalias assumptions or separate Go runtime.
+
+The concrete type-argument domain is existing admitted nonpointer scalar, array
+and record values. Ordinary concrete pointer parameters inside a generic function
+still require their own source nil guards and non-retention proof; aliasing is
+preserved. Pointer type arguments, dependent pointer/array/record layouts,
+addresses of opaque parameter values, union/underlying/exact/named/method
+constraints, generic data declarations/receivers and stored generic function
+values remain explicit boundaries. Function type-parameter count is bounded at
+256; concrete instances are bounded at 128 per supplied package graph.
+
+`tests/go/test_generic_functions.py` authors unconditional invalid-declaration
+checks, identity/inference/scope controls, 15 full-width native observers, a
+complete original program and imported package-graph raw pairs, strict actual
+reference rejection obligations, and valid-unsupported build-only controls.
+The simulated sticky-failure test is mechanism-only, not Go execution evidence.
+**All new acceptance is UNRUN**: no local imports, tests, compiler calls or
+execution probes ran. Historical evidence rows retain their original revisions
+and hashes. This is not complete generics, unchanged-project/stdlib success,
+Mac/native-pcc1 or shared-GC qualification.
+
+Rules: [type parameters](https://go.dev/ref/spec#Type_parameter_declarations),
+[instantiation](https://go.dev/ref/spec#Instantiations),
+[type inference](https://go.dev/ref/spec#Type_inference),
+[constraint satisfaction](https://go.dev/ref/spec#Satisfying_a_type_constraint),
+and [scope](https://go.dev/ref/spec#Declarations_and_scope).

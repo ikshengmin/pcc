@@ -75,6 +75,9 @@ CASES = [
     ('limit-struct-fields', original('type T struct{'+ ';'.join('x'+str(i)+' int' for i in range(257))+'}')),
     ('limit-record-layout', original('type T struct{a [4096]int;b int}')),
     ('builtin-io', original('func f(p *int){print(p)}')),
+    ('generic-boundaries', original('func f[T ~int](x T)T{return x}')),
+    ('limit-generic-instances', original('func f[T any](x T)T{return x}',
+        ';'.join('_=f(['+str(n)+']int{})' for n in range(129)))),
 ]
 
 

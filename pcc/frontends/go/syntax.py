@@ -228,6 +228,8 @@ class Function:
     result_names: list = field(default_factory=list)
     result_symbols: list = field(default_factory=list)
     receiver: object = None
+    type_parameters: list = field(default_factory=list)
+    type_bindings: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -400,6 +402,14 @@ class GoParser:
         declarations = []
         while not grouped or not self.accept(")"):
             name = self.take("name")
+            # `[N]element` remains an ordinary array type declaration. The
+            # supported generic-declaration frontier must not steal that
+            # preexisting grammar merely because both begin with a bracket.
+            if (self.at("[") and self.tokens[self.index + 1].kind == "name"
+                    and self.tokens[self.index + 2].kind in
+                    ("name", ",", "~", "interface", "[", "struct", "chan", "map", "func")):
+                self.unsupported(name, 'go.unsupported.generic-boundaries',
+                                 "generic type declarations require separate identity/layout checking")
             alias = bool(self.accept("="))
             declarations.append(TypeDeclaration(name, self.datatype(), alias))
             if not grouped:
@@ -451,6 +461,9 @@ class GoParser:
                 self.fail(self.current, "method receiver must be exactly one non-variadic parameter")
             receiver = (receiver_names[0], receiver_types[0])
         name = self.take("name")
+        type_parameters = self.type_parameter_list() if self.accept("[") else []
+        if receiver is not None and type_parameters:
+            self.fail(name, "methods must not declare function type parameters")
         self.take("(")
         types, names = self.parameter_list()
         blank = Token("name", "_", name.filename, name.line, name.column)
@@ -458,7 +471,180 @@ class GoParser:
         if receiver is not None:
             receiver = (receiver[0] or blank, receiver[1])
         result, result_names = self.function_results()
-        return Function(name, params, result, self.block(), result_names=result_names, receiver=receiver)
+        return Function(name, params, result, self.block(), result_names=result_names,
+                        receiver=receiver, type_parameters=type_parameters)
+
+    def type_parameter_list(self):
+        parameters = []
+        if self.at("]"):
+            self.fail(self.current, "type parameter list must not be empty")
+        while True:
+            names = [self.take("name")]
+            while self.accept(","):
+                names.append(self.take("name"))
+            constraint = self.current
+            # Parse type terms before reporting the capability boundary. A
+            # valid exact *int, []int or struct constraint is not invalid Go;
+            # conversely, a missing pointee/element/field type remains syntax
+            # invalid. This reader never supplies a representation to Sema.
+            simple_name = self.at("name") and self.tokens[self.index + 1].kind in (",", "]")
+            self.constraint_element()
+            if not self.at(",") and not self.at("]"):
+                self.fail(self.current, "expected ',' or ']' after type parameter constraint")
+            if not simple_name:
+                self.unsupported(constraint, 'go.unsupported.generic-boundaries',
+                                 "non-name constraints require general type-set resolution")
+            parameters.extend((name, constraint) for name in names)
+            if len(parameters) > 256:
+                self.unsupported(constraint, 'go.unsupported.limit-function-arity',
+                                 "function exceeds implementation limit (256 type parameters)")
+            if not self.accept(",") or self.at("]"):
+                break
+        self.take("]")
+        return parameters
+
+    def constraint_element(self):
+        """Syntax-only TypeElem reader for the explicit type-set frontier."""
+        while True:
+            self.accept("~")
+            self.constraint_type()
+            if not self.accept("|"):
+                return
+
+    def constraint_type(self):
+        # Unlike datatype(), this syntax reader admits runtime type spellings
+        # without admitting their storage or operations. Its entire result is
+        # discarded at the generic-boundaries diagnostic above.
+        if self.accept("*"):
+            self.constraint_type()
+        elif self.accept("["):
+            if not self.accept("]"):
+                self.expression()
+                self.take("]")
+            self.constraint_type()
+        elif self.accept("("):
+            self.constraint_type()
+            self.take(")")
+        elif self.accept("map"):
+            self.take("[")
+            self.constraint_type()
+            self.take("]")
+            self.constraint_type()
+        elif self.accept("chan"):
+            self.accept("<-")
+            self.constraint_type()
+        elif self.accept("<-"):
+            self.take("chan")
+            self.constraint_type()
+        elif self.accept("func"):
+            self.constraint_signature()
+        elif self.accept("struct"):
+            self.take("{")
+            while not self.at("}"):
+                if self.at("*"):
+                    self.take("*")
+                    self.constraint_type_name()
+                elif self.constraint_embedded_field():
+                    self.constraint_type_name()
+                else:
+                    self.take("name")
+                    while self.accept(","):
+                        self.take("name")
+                    self.constraint_type()
+                self.accept("string")  # Optional field tag.
+                self.end_statement()
+            self.take("}")
+        elif self.accept("interface"):
+            self.take("{")
+            while not self.at("}"):
+                if self.at("name") and self.tokens[self.index + 1].kind == "(":
+                    self.take("name")
+                    self.constraint_signature()
+                else:
+                    self.constraint_element()
+                self.end_statement()
+            self.take("}")
+        else:
+            self.constraint_type_name()
+
+    def constraint_embedded_field(self):
+        if not self.at("name"):
+            return False
+        following = self.tokens[self.index + 1].kind
+        if following in (";", "}", ".", "string"):
+            return True
+        if following != "[":
+            return False
+        # X[A] alone is an instantiated embedded type; X [N]int instead
+        # declares a named array field. Do not guess from '[' alone.
+        index = self.constraint_bracket_end(self.index + 1)
+        return index is not None and self.tokens[index].kind in (";", "}", "string")
+
+    def constraint_bracket_end(self, index):
+        depth = 0
+        while self.tokens[index].kind != "eof":
+            kind = self.tokens[index].kind
+            depth += kind == "["
+            depth -= kind == "]"
+            index += 1
+            if depth == 0:
+                return index
+        return None
+
+    def constraint_type_name(self):
+        self.take("name")
+        if self.accept("."):
+            self.take("name")
+        if self.accept("["):
+            self.constraint_type()
+            while self.accept(",") and not self.at("]"):
+                self.constraint_type()
+            self.take("]")
+
+    def constraint_signature(self):
+        self.take("(")
+        self.constraint_parameters()
+        if self.accept("("):
+            self.constraint_parameters(allow_variadic=False)
+        elif self.current.kind in ("name", "*", "[", "struct", "interface", "map", "chan", "<-", "func"):
+            self.constraint_type()
+
+    def constraint_parameters(self, *, allow_variadic=True):
+        naming = None
+        while not self.at(")"):
+            # Distinguish identifier lists followed by a type from unnamed
+            # types. Scope/type validity is intentionally not claimed here.
+            index, named = self.index, False
+            while self.tokens[index].kind == "name":
+                index += 1
+                if self.tokens[index].kind == "[":
+                    end = self.constraint_bracket_end(index)
+                    if end is not None and self.tokens[end].kind in (",", ")"):
+                        break  # Unnamed instantiated type, not a named array.
+                if self.tokens[index].kind in (
+                    "name", "*", "[", "(", "struct", "interface", "map", "chan", "<-", "func", "...",
+                ):
+                    named = True
+                    break
+                if self.tokens[index].kind != ",":
+                    break
+                index += 1
+            if naming is not None and naming != named:
+                self.fail(self.current, "mixed named and unnamed parameters")
+            naming = named
+            if named:
+                self.take("name")
+                while self.accept(","):
+                    self.take("name")
+            variadic = bool(self.accept("..."))
+            if variadic and not allow_variadic:
+                self.fail(self.current, "variadic result is not permitted")
+            self.constraint_type()
+            if not self.accept(","):
+                break
+            if variadic and not self.at(")"):
+                self.fail(self.current, "variadic parameter must be last")
+        self.take(")")
 
     def function_results(self):
         if not self.accept("("):
@@ -696,7 +882,7 @@ class GoParser:
                     dtype = TypeName(left.token)
                 left = self.composite_literal(left.token, dtype)
             elif self.accept("("):
-                if left.kind not in ("name", "selector", "type") and not (left.kind == "unary" and left.value == "*"):
+                if left.kind not in ("name", "selector", "type", "index", "type_apply") and not (left.kind == "unary" and left.value == "*"):
                     self.fail(token, "only named function calls/conversions are supported")
                 previous, self.named_literals = self.named_literals, True
                 args = [] if self.at(")") else self.expression_list(terminator=")")
@@ -705,9 +891,12 @@ class GoParser:
                 qualifier = left.args[0].value if left.kind == "selector" and left.args[0].kind == "name" else None
                 left = Expr("call", left.token, left.value, args, qualifier=qualifier, callee=left)
             elif self.accept("["):
-                index = self.expression()
+                arguments = self.expression_list(terminator="]")
+                trailing_comma = self.tokens[self.index - 1].kind == ","
                 self.take("]")
-                left = Expr("index", index.token, args=[left, index])
+                left = (Expr("index", arguments[0].token, args=[left, arguments[0]])
+                        if len(arguments) == 1 and not trailing_comma else
+                        Expr("type_apply", left.token, args=arguments, callee=left))
             else:
                 break
         while BINARY_PRECEDENCE.get(self.current.kind, 0) >= minimum:

@@ -9,6 +9,7 @@ initializers remain separate, unsupported driver/runtime boundaries.
 from dataclasses import dataclass
 
 from pcc.frontends.go.diagnostics import UnsupportedGo
+from pcc.frontends.go.generics import GenericSession
 from pcc.frontends.go.lowering import Lowerer
 from pcc.frontends.go.sema import Analyzer, PREDECLARED
 from pcc.frontends.go.syntax import GoDiagnostic, GoParser, Program
@@ -47,6 +48,7 @@ def compile_packages(packages, *, main_package, target_triple):
     if main_package not in packages:
         raise ValueError("Go main package source is missing")
     analyzed, active, order = {}, set(), []
+    generics = GenericSession()
 
     def visit(path, import_token=None):
         if path in active:
@@ -72,7 +74,7 @@ def compile_packages(packages, *, main_package, target_triple):
                 raise GoDiagnostic(imported.token, "duplicate import name " + alias)
             file_imports[alias] = ImportBinding(imported.token, alias, dependency)
         analyzer = Analyzer(program, imports=imports, require_main=path == main_package,
-                            package_path=None if path == main_package else path)
+                            package_path=None if path == main_package else path, generics=generics)
         analyzer.analyze()
         active.remove(path)
         analyzed[path] = analyzer
@@ -82,10 +84,13 @@ def compile_packages(packages, *, main_package, target_triple):
     main = visit(main_package).program
     if not supported_target(target_triple):
         raise GoDiagnostic(main.token, "Go scalar frontend requires a supported 64-bit target")
+    generics.materialize()
+    # One closed check includes every concrete function plus all independently
+    # typed generic declarations/signature selections, including unused ones.
+    # Filtering non-emitted declarations afterward does not weaken the proof.
+    generics.validate_abstract(order)
+    # Declarations and signature-only abstract selections never reach IR.
     linked = Program(main.token, [function for program in order for function in program.functions], [],
                      variables=[variable for program in order for variable in program.variables])
-    # All supplied source callees (including recursion/imports) must satisfy
-    # the non-retaining contract before a nullable pointer can enter a call.
-    from pcc.frontends.go.pointer_flow import validate_pointer_flow
-    validate_pointer_flow(linked)
+    linked.functions = [function for function in linked.functions if not function.type_parameters]
     return Lowerer(linked, target_triple, main.token.filename).lower()
