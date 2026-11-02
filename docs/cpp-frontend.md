@@ -28,6 +28,17 @@ fail explicitly. Unsupported C++ is never retried with the C parser.
 frontend development. Existing C passes, code generation and owned emitters are
 reused. C++ source participates in compilation-cache content identity.
 
+Physical line endings follow N4659 [lex.phases]/1: LF, CRLF and lone CR each
+denote one newline. The C++ parser maps these to LF in its private lexer input,
+matching the owned preprocessor, without changing the original source or its
+receipt hash. Direct-parser line/column diagnostics count physical lines and
+characters within each line (or honor supplied `#line` markers); ordinary
+quoted literals cannot contain unescaped physical newlines. Unicode
+line/paragraph separators are not physical newline aliases.
+Macro expansion and phase-2 splicing (including continued line comments and
+split tokens) remain owned by `preprocess_cpp`; the direct parser development
+entrypoint is not a replacement for that preprocessing pipeline.
+
 The public CLI object-emission tests execute those exact objects using the owned
 ELF linker and an ABI startup observer, then compare with an explicit G++17
 reference. File dependencies use the same owned preprocessor and C++ semantic

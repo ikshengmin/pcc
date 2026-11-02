@@ -336,7 +336,13 @@ class CppParser:
         # not to the lexer; buffered tokens must survive later scope changes.
         lexer = CLexer(error, lambda: None, lambda: None, lambda name: False)
         lexer.filename = filename
-        lexer.input(text)
+        # [lex.phases]/1: accept LF, CRLF and CR physical line endings, as
+        # the owned preprocessor does. CLexer consumes LF only. Map before
+        # lexing (including comments/literals), never by dropping CR tokens:
+        # a physical newline inside an ordinary quoted literal stays invalid.
+        # This private view leaves the caller's source/receipt bytes intact;
+        # one LF per physical line also preserves line/column diagnostics.
+        lexer.input(text.replace("\r\n", "\n").replace("\r", "\n"))
         tokens = []
         while True:
             token = lexer.token()

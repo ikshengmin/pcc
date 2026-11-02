@@ -41,6 +41,7 @@ from tests.cpp.test_cpp_lvalue_references import CASES as LVALUE_REFERENCE_PROGR
 from tests.cpp.test_cpp_const_casts import CASES as CONST_CAST_PROGRAMS
 from tests.cpp.test_cpp_class_templates import CASES as CLASS_TEMPLATE_PROGRAMS
 from tests.cpp.test_cpp_class_template_members import CASES as CLASS_TEMPLATE_MEMBER_PROGRAMS
+from tests.cpp.test_cpp_source_newlines import PROGRAMS as SOURCE_NEWLINE_PROGRAMS
 
 
 CLASS_TEMPLATE_MEMBER_CASES = tuple(
@@ -106,6 +107,7 @@ CLASS_TEMPLATE_CASES = tuple(
                  'mixed-parameter-identity', 'pointer-only-does-not-instantiate-void')
 )
 CASES += CLASS_TEMPLATE_CASES
+CASES += SOURCE_NEWLINE_PROGRAMS
 
 
 def _forbidden_process(*args, **kwargs):
