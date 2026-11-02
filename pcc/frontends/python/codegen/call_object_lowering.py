@@ -45,7 +45,10 @@ from pcc.frontends.python.py_ast import (
     ValueArrayType,
 )
 from pcc.frontends.python.codegen import marshal
-from pcc.frontends.python.codegen.static_object_operands import emit_nonmoving_literal_operand
+from pcc.frontends.python.codegen.static_object_operands import (
+    emit_borrowed_runtime_operand,
+    emit_nonmoving_literal_operand,
+)
 from pcc.frontends.python.codegen.errors import CPythonValueRequired, L1CodegenError
 from pcc.frontends.python.codegen.local_bound_lowering import check_local_bound
 from pcc.frontends.python.codegen.cpy_import_state import (
@@ -61,6 +64,17 @@ _I8 = ir.IntType(8)
 _I32 = ir.IntType(32)
 _I64 = ir.IntType(64)
 _CSTR = _I8.as_pointer()
+
+
+def literal_integer_runtime_operand(host, expression, label):
+    """Normalize arithmetic bool leaves without materializing a temporary root."""
+    if (isinstance(expression, (IntLit, BoolLit))
+            and not getattr(host, "_generator_ctx_stack", ())):
+        value = expression.value
+        if isinstance(expression, BoolLit):
+            value = 1 if value else 0
+        return host._emit_int_literal_object(value)
+    return host._emit_slot_call_literal_integer(expression, label)
 
 
 def frame_operand_sources(host, operands):
@@ -457,7 +471,7 @@ class CallObjectLoweringMixin:
     def _release_slot_call_roots(self, roots) -> None:
         borrowed = getattr(self, "_slot_call_borrowed_operands", {})
         for slot in reversed(roots):
-            if borrowed.get(id(slot)) is slot:
+            if self._value_is_never_gc_object(slot) or borrowed.get(id(slot)) is slot:
                 continue
             _slot, flag, lifo = self._slot_call_root_record(slot)
             if flag is not None:
@@ -473,7 +487,9 @@ class CallObjectLoweringMixin:
 
     def _slot_call_cleanup_block(self, roots, target, leases=()):
         borrowed = getattr(self, "_slot_call_borrowed_operands", {})
-        roots = tuple(slot for slot in roots if borrowed.get(id(slot)) is not slot)
+        roots = tuple(slot for slot in roots
+                      if not self._value_is_never_gc_object(slot)
+                      and borrowed.get(id(slot)) is not slot)
         if not roots and not leases:
             return target
         # Share only this function's identical cleanup program. Keep all
@@ -1506,14 +1522,17 @@ class CallObjectLoweringMixin:
                 self._publish_slot_call_owned(output, value, label="integer literal")
             else:
                 first_expr = expr.operand if isinstance(expr, UnaryOp) else expr.lhs
-                first = self._emit_slot_call_literal_integer(first_expr, label + ".left")
+                first = literal_integer_runtime_operand(self, first_expr, label + ".left")
                 roots.append(first)
                 self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                 self._cpy_operand_cleanup_block = self._try_err_block
                 identity = (isinstance(expr, UnaryOp) and expr.op == "+"
                             and self._slot_call_literal_integer_kind(first_expr) == 1)
                 if identity:
-                    self._slot_call_copy_source(output, first, span=expr.span)
+                    if self._value_is_never_gc_object(first):
+                        self._publish_slot_call_owned(output, first, label="integer identity")
+                    else:
+                        self._slot_call_copy_source(output, first, span=expr.span)
                 else:
                     arguments = [first]
                     if isinstance(expr, UnaryOp):
@@ -1536,14 +1555,14 @@ class CallObjectLoweringMixin:
                             "<<": "py_int_shl", ">>": "py_int_shr",
                         }[expr.op]
                     if second_expr is not None:
-                        second = self._emit_slot_call_literal_integer(second_expr, label + ".right")
+                        second = literal_integer_runtime_operand(self, second_expr, label + ".right")
                         roots.append(second)
                         arguments.append(second)
                         self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                         self._cpy_operand_cleanup_block = self._try_err_block
                     if isinstance(expr, BinOp) and expr.op in ("<<", ">>"):
                         zero_expr = IntLit(span=expr.span, ty=IntType(name="int"), value=0)
-                        zero = self._emit_slot_call_literal_integer(zero_expr, label + ".zero")
+                        zero = literal_integer_runtime_operand(self, zero_expr, label + ".zero")
                         roots.append(zero)
                         self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                         self._cpy_operand_cleanup_block = self._try_err_block
@@ -1638,7 +1657,9 @@ class CallObjectLoweringMixin:
     ):
         """Expose raw operands only while independent counted leases live.
 
-        Inputs are owning roots or proven unchanged borrowed parameter roots.
+        Inputs are owning roots, proven unchanged borrowed parameter roots,
+        or exact permanent values from emit_borrowed_runtime_operand. Permanent
+        values need neither a root nor an address lease, including across callbacks.
         Results go directly to an
         empty output root before any lease release, error check, or cleanup.
         The scalar token/status values are the only SSA values crossing waits.
@@ -1651,6 +1672,8 @@ class CallObjectLoweringMixin:
         no_safepoint = runtime_name in NO_SAFEPOINT_RUNTIME_FUNCTIONS
         try:
             for slot in (() if no_safepoint else roots):
+                if self._value_is_never_gc_object(slot):
+                    continue
                 self._try_err_block = self._slot_call_cleanup_block((), target, tuple(leases))
                 self._cpy_operand_cleanup_block = self._try_err_block
                 borrowed = getattr(self, "_slot_call_borrowed_operands", {})
@@ -1668,13 +1691,15 @@ class CallObjectLoweringMixin:
             if no_safepoint:
                 # Root healing is still required. Once loaded, these raw
                 # values cross only the verified bounded leaf call.
-                values = [self.builder.call(
+                values = [slot if self._value_is_never_gc_object(slot) else self.builder.call(
                     self.runtime["pcc_gc_load_borrowed_ptr"],
                     [ir.Constant(_CSTR, None), self._as_gc_ptr(slot)],
                     name=self._fresh("call.slot.leaf.argument"),
                 ) for slot in roots]
             else:
-                values = [self.builder.load(slot, name=self._fresh("call.slot.argument")) for slot in roots]
+                values = [slot if self._value_is_never_gc_object(slot) else
+                          self.builder.load(slot, name=self._fresh("call.slot.argument"))
+                          for slot in roots]
             arguments = values + list(suffix_args)
             if argument_order:
                 arguments = [arguments[index] for index in argument_order]
@@ -2308,11 +2333,11 @@ class CallObjectLoweringMixin:
             for key_expr, value_expr in pairs:
                 if isinstance(key_expr, Name) and key_expr.ident == "**":
                     raise L1CodegenError("slot-call dict literal mapping expansion requires a mapping-only slot producer")
-                key = self._emit_slot_call_operand(key_expr, label + ".key")
+                key = emit_borrowed_runtime_operand(self, key_expr, label + ".key")
                 roots.append(key)
                 self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                 self._cpy_operand_cleanup_block = self._try_err_block
-                item = self._emit_slot_call_operand(value_expr, label + ".value")
+                item = emit_borrowed_runtime_operand(self, value_expr, label + ".value")
                 roots.append(item)
                 self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                 self._cpy_operand_cleanup_block = self._try_err_block
@@ -2329,8 +2354,8 @@ class CallObjectLoweringMixin:
     def _emit_slot_call_slice(self, expr, label):
         """A slice object operand (``a[:, k]`` keys), built into its own root.
 
-        As a direct slice key in _emit_slot_call_subscript: each bound is a
-        rooted operand and py_slice_new publishes into the output root.
+        As a direct slice key in _emit_slot_call_subscript: dynamic bounds are
+        rooted, permanent bounds are borrowed, and the result owns a new root.
         """
         output = self._new_slot_call_root(label)
         previous = self._current_try_err_block()
@@ -2344,7 +2369,7 @@ class CallObjectLoweringMixin:
             for part in (expr.lo, expr.hi, expr.step):
                 if part is None:
                     part = NoneLit(span=expr.span, ty=NoneType(name="None"))
-                bound = self._emit_slot_call_operand(part, label + ".bound")
+                bound = emit_borrowed_runtime_operand(self, part, label + ".bound")
                 bounds.append(bound)
                 roots.append(bound)
                 self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
@@ -2379,7 +2404,7 @@ class CallObjectLoweringMixin:
                 for part in (expr.idx.lo, expr.idx.hi, expr.idx.step):
                     if part is None:
                         part = NoneLit(span=expr.idx.span, ty=NoneType(name="None"))
-                    bound = self._emit_slot_call_operand(part, label + ".slice.bound")
+                    bound = emit_borrowed_runtime_operand(self, part, label + ".slice.bound")
                     bounds.append(bound)
                     roots.append(bound)
                     self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
@@ -2392,7 +2417,7 @@ class CallObjectLoweringMixin:
                     "py_slice_new", tuple(bounds), result_slot=key, span=expr.idx.span,
                 )
             else:
-                key = self._emit_slot_call_operand(expr.idx, label + ".key")
+                key = emit_borrowed_runtime_operand(self, expr.idx, label + ".key")
                 roots.append(key)
                 self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                 self._cpy_operand_cleanup_block = self._try_err_block

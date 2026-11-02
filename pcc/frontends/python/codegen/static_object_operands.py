@@ -4,6 +4,19 @@ from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
 
 
+def emit_borrowed_runtime_operand(host, expression, label):
+    """Produce a permanent value or an owning slot for a borrowing runtime call.
+
+    Only the slot-call runtime/cleanup protocol accepts this mixed input form.
+    Resumable expressions retain their heap-frame spill protocol.
+    """
+    if not getattr(host, "_generator_ctx_stack", ()):
+        value = emit_nonmoving_literal_operand(host, expression)
+        if value is not None:
+            return value
+    return host._emit_slot_call_operand(expression, label)
+
+
 def emit_nonmoving_literal_operand(host, expression):
     """Return a proven permanent object, or decline without emitting code.
 
