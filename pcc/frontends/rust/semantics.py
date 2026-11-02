@@ -618,7 +618,7 @@ class Checker:
             arguments_checked = False
             if callee.kind == "field":
                 receiver = callee.children[0]
-                from .call_inference import partial, pending_integer
+                from .call_inference import partial
                 receiver_type = partial(self.expression(receiver, place_context=True))
                 array_type = receiver_type.referent if isinstance(receiver_type, SharedReference) else receiver_type
                 if isinstance(array_type, FixedArrayType) and callee.value == "len":
@@ -628,8 +628,6 @@ class Checker:
                         raise callee.token.error("array len expects no arguments")
                     expr.kind, expr.value, expr.children, expr.ty = "array_len", array_type.length, [receiver], "usize"
                     return "usize"
-                if pending_integer(receiver_type):
-                    raise receiver.token.error("method selection on an unresolved inferred receiver requires later constraint solving, which is not implemented")
                 fn, fixed_arguments = pinned_method or self.methods.lookup(receiver_type, callee.value, callee.token, receiver=True)
                 if isinstance(fn.params[0][1], SharedReference) and not isinstance(receiver_type, SharedReference):
                     if self.through_array_index(receiver) and not self.externally_checked:
@@ -704,14 +702,23 @@ class Checker:
             if explicit_arguments is not None and fn.implementation is not None:
                 if len(explicit_arguments) != inferable_count:
                     raise callee.token.error("generic method argument count mismatch")
-            if inferable_count and explicit_arguments is None:
-                from .call_inference import infer
+            from .call_inference import infer, pending_integer
+            pending_owner = any(pending_integer(argument) for argument in fixed_arguments)
+            if (inferable_count and explicit_arguments is None) or pending_owner:
+                # The selected nominal owner is known, but its argument slots
+                # may be constrained by this method's operands/result or later
+                # body context. Do not register an unresolved instance or
+                # default its integer variables before those constraints land.
+                fixed = fixed_arguments
+                if explicit_arguments is not None:
+                    fixed += tuple(self.generics.normalize(ty, callee.token)
+                                   for ty in explicit_arguments)
                 types = [arg.ty if receiver_checked and index == 0 else
                          self.expression(arg, allow_borrow=isinstance(param_ty, SharedReference))
                          for index, (arg, (_, param_ty, _)) in enumerate(zip(children[1:], fn.params))]
                 declaration = fn
                 fn, arguments = infer(self, declaration, types, callee.token,
-                                      fixed_arguments=fixed_arguments)
+                                      fixed_arguments=fixed)
                 self.inferred_calls.append((expr, declaration, arguments, callee.token))
                 arguments_checked = True
             else:

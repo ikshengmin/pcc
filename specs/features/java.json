@@ -9,7 +9,7 @@
   "inventory": {
     "chapters_complete": true,
     "features_complete": false,
-    "notes": "Initial partial atomic-feature map, not full Java/JDK conformance. Exact historical owned native source/objects/executables and same-original JDK results support the four bounded runtime rows. Unit/program rows intentionally refer to the same real compilation/execution assertion test and raw program outputs, never pytest aggregate stdout. Reproduction commands omit sandbox paths. JDK observers normalize return values to declared primitive raw lanes. Source model native gates stay explicit; current candidate reference disagreement is retained. Frozen class/JAR experiments are excluded from source acceptance. Many already implemented scalar/source-closure features still need normalized rows, not presumed absent. Four bounded runtime rows now also have NEW actual raw-process comparisons from c5; historical normalized observations remain separate and are not relabeled. The new lane selects an explicit existing JDK executable via PCC_JAVA_RAW_REFERENCE; actual gate used JDK21 and source/target21, not Mac JDK17. One executable assertion test supplies both unit and program evidence for each unchanged original, not fabricated compile-only outputs. Stable source capability codes are inventoried separately from historical execution evidence; this metadata-only batch does not promote model-only or runtime features."
+    "notes": "Partial Java source feature map, not full Java/JDK conformance. Historical evidence remains qualified only for its recorded source revision, source/input hashes, platform, backend, execution mode and reference version. Unit/program entries may refer to the same real native assertion, not aggregate pytest output. Historical normalized-primitive comparisons remain distinct from later raw-process comparisons. Historical model-only, typecheck-only, invalid-source rejection and reference-disagreement observations remain separate from native acceptance. Frozen class/JAR compatibility is excluded. Current implementation bindings describe source code, not qualification; current Unicode and floating acceptance is UNRUN. Required command fields contain explicit non-executable redaction markers; per-record provenance states that test IDs are locators, not reconstructed or executed commands. Machine paths and detailed invocation flags are omitted. This metadata update does not invent new executions or promote historical results to current-source proof."
   },
   "chapters": [
     {
@@ -117,7 +117,7 @@
         "JLS-15",
         "JLS-16"
       ],
-      "scope": "JLS 15.25: boolean/integral standalone ?: typing, narrowing, one selected arm, source DA. Excludes reference/poly/boxing operands. New c5 reference gate directly compares actual stdout/stderr/exit for an unchanged representative original; broader existing authored corpus remains separately qualified.",
+      "scope": "Historical qualification only at the listed evidence revisions and hashes; not current-source acceptance. JLS 15.25: boolean/integral standalone ?: typing, narrowing, one selected arm, source DA. Excludes reference/poly/boxing operands. New c5 reference gate directly compares actual stdout/stderr/exit for an unchanged representative original; broader existing authored corpus remains separately qualified.",
       "status": "supported",
       "tests": [
         "tests/java/test_source_conditional.py::test_original_conditional_has_exact_native_result",
@@ -140,7 +140,7 @@
         "JLS-4",
         "JLS-15"
       ],
-      "scope": "JLS 15.17.2-3: int/long constant nonzero divisors, truncation, remainder and MIN/-1. Dynamic or zero divisors are a distinct unimplemented exception feature. New c5 reference gate directly compares actual stdout/stderr/exit for an unchanged representative original; broader existing authored corpus remains separately qualified.",
+      "scope": "Historical qualification only at the listed evidence revisions and hashes; not current-source acceptance. JLS 15.17.2-3: int/long constant nonzero divisors, truncation, remainder and MIN/-1. Dynamic or zero divisors are a distinct unimplemented exception feature. New c5 reference gate directly compares actual stdout/stderr/exit for an unchanged representative original; broader existing authored corpus remains separately qualified.",
       "status": "supported",
       "tests": [
         "tests/java/test_source_division.py::test_original_division_has_exact_native_result",
@@ -163,7 +163,7 @@
         "JLS-14",
         "JLS-16"
       ],
-      "scope": "JLS 14.11,16.2.9: byte/short/char/int selector statements, constant colon/arrow labels, break/continue and DA. Excludes switch expressions, enum/reference/pattern selectors. New c5 reference gate directly compares actual stdout/stderr/exit for an unchanged representative original; broader existing authored corpus remains separately qualified.",
+      "scope": "Historical qualification only at the listed evidence revisions and hashes; not current-source acceptance. JLS 14.11,16.2.9: byte/short/char/int selector statements, constant colon/arrow labels, break/continue and DA. Excludes switch expressions, enum/reference/pattern selectors. New c5 reference gate directly compares actual stdout/stderr/exit for an unchanged representative original; broader existing authored corpus remains separately qualified.",
       "status": "supported",
       "tests": [
         "tests/java/test_source_switch_do.py::test_original_switch_do_has_exact_full_width_native_result",
@@ -186,7 +186,7 @@
         "JLS-14",
         "JLS-16"
       ],
-      "scope": "JLS 14.13,16.2.11: post-test boolean control, body-once, continue-to-test, break and local DA. No exception/monitor completion edges. New c5 reference gate directly compares actual stdout/stderr/exit for an unchanged representative original; broader existing authored corpus remains separately qualified.",
+      "scope": "Historical qualification only at the listed evidence revisions and hashes; not current-source acceptance. JLS 14.13,16.2.11: post-test boolean control, body-once, continue-to-test, break and local DA. No exception/monitor completion edges. New c5 reference gate directly compares actual stdout/stderr/exit for an unchanged representative original; broader existing authored corpus remains separately qualified.",
       "status": "supported",
       "tests": [
         "tests/java/test_source_switch_do.py::test_original_switch_do_has_exact_full_width_native_result",
@@ -249,16 +249,48 @@
       "chapter_ids": [
         "JLS-3"
       ],
-      "scope": "JLS 3.3. Input containing Unicode-escape translation is rejected, not preprocessed by javac.",
-      "status": "explicitly_unimplemented",
+      "scope": "JLS 3.2-3.4, 3.7 and 3.10.4/7: owned pre-tokenization Unicode-escape translation with raw-backslash eligibility, translated-character provenance, repeated markers, nonrecursive UTF-16 code-unit decoding, translated comment/line-terminator semantics and raw-source diagnostic coordinates. Original input bytes are retained for native/JDK comparisons. Non-ASCII identifier classification and String runtime remain separate unavailable domains. Implementation is source-inspected; acceptance at this identity is UNRUN.",
       "tests": [
-        "tests/java/test_source_frontend.py::test_source_runtime_and_lexical_boundaries_fail_explicitly",
-        "tests/java/test_source_diagnostics.py"
+        "tests/java/test_source_unicode_escapes.py",
+        "tests/java/test_source_frontend.py::test_original_escaped_comment_newline_exposes_invalid_java_before_ir",
+        "tests/java/test_source_constants.py::test_original_constant_source_uses_direct_ir",
+        "tests/java/test_source_constants.py::test_original_constant_source_has_exact_native_result",
+        "tests/java/test_source_diagnostics.py::test_known_malformed_input_is_not_an_unimplemented_feature"
       ],
-      "diagnostics": [
-        "java.unsupported.unicode-escapes"
-      ],
-      "evidence": []
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:7773be20c31a542eb37bd5da231d09c811d4e1c04466a4748e746c7244df45fb",
+        "sources": [
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
+          }
+        ]
+      },
+      "acceptance": [
+        {
+          "id": "current-source-linux-x86_64",
+          "kind": "full-feature",
+          "scope": "JLS 3.2-3.4, 3.7 and 3.10.4/7: owned pre-tokenization Unicode-escape translation with raw-backslash eligibility, translated-character provenance, repeated markers, nonrecursive UTF-16 code-unit decoding, translated comment/line-terminator semantics and raw-source diagnostic coordinates. Original input bytes are retained for native/JDK comparisons. Non-ASCII identifier classification and String runtime remain separate unavailable domains. Implementation is source-inspected; acceptance at this identity is UNRUN.",
+          "status": "unrun",
+          "source_revision": "sha256:7773be20c31a542eb37bd5da231d09c811d4e1c04466a4748e746c7244df45fb",
+          "required_tests": [
+            "tests/java/test_source_unicode_escapes.py",
+            "tests/java/test_source_frontend.py::test_original_escaped_comment_newline_exposes_invalid_java_before_ir",
+            "tests/java/test_source_constants.py::test_original_constant_source_uses_direct_ir",
+            "tests/java/test_source_constants.py::test_original_constant_source_has_exact_native_result",
+            "tests/java/test_source_diagnostics.py::test_known_malformed_input_is_not_an_unimplemented_feature"
+          ],
+          "evidence": [],
+          "mode": "pcc0",
+          "platform": "linux-x86_64",
+          "backend": "self",
+          "gc": "not_applicable",
+          "reason": "No complete acceptance execution is recorded for this exact implementation identity. Existing historical evidence retains its original source revision and does not qualify this candidate. Ordinary, native, JDK and whole-Java validation are UNRUN for this identity."
+        }
+      ]
     },
     {
       "id": "java.string-runtime",
@@ -466,13 +498,13 @@
     },
     {
       "id": "java.other-declared-primitives",
-      "title": "Additional declaration types",
+      "title": "Reference declaration types and local type inference",
       "chapter_ids": [
         "JLS-4",
         "JLS-8",
         "JLS-14"
       ],
-      "scope": "Additional declared-type prefixes cover float/double, reference result/parameter types and var local inference outside the boolean/integral/void scalar declaration slice. The stable historical feature ID is retained; these diagnostics do not claim reference runtime or inference support.",
+      "scope": "Reference result/parameter/local declaration forms and var local inference outside the implemented primitive declaration subset remain gated. Boolean, integral, float and double declarations are not claimed unimplemented by this retained historical feature ID. These diagnostics establish neither reference runtime nor local inference support.",
       "status": "explicitly_unimplemented",
       "tests": [
         "tests/java/test_source_scalars.py::test_invalid_scalar_source_never_reaches_lowering",
@@ -752,7 +784,7 @@
         "JLS-10",
         "JLS-15"
       ],
-      "scope": "Multidimensional primitive arrays, array casts and inherited array methods are explicitly gated in the semantic model. Reference/float/double element types retain existing declared-type boundaries. Native array runtime remains a separate unimplemented feature.",
+      "scope": "Multidimensional arrays, floating array components, array casts and inherited array methods remain explicitly gated in the semantic model. Reference array component types are not implemented. Native array storage, allocation and exception behavior remain a separate unavailable runtime domain.",
       "status": "explicitly_unimplemented",
       "tests": [
         "tests/java/test_source_array_model.py::test_array_runtime_and_wider_shape_boundaries_remain_explicit"
@@ -772,7 +804,7 @@
         "JLS-14",
         "JLS-15"
       ],
-      "scope": "Qualified host pcc0 Linux x86-64 self-backend source byte/short/char locals, parameters and results: canonical i32 Java values, signed B/S and unsigned C normalization, distinct PCC native i8/i16 ABI entry/call/return lanes, promotion, constant assignment narrowing and compound normalization. Fresh whole Java validation: 960 ordinary + 320 integration cases (112 frozen compatibility cases are not source acceptance). All 38 complete narrow originals matched actual JDK 21.0.12.1 stdout/stderr/exit at declared width, and 15 invalid originals were rejected. The four indexed representative inputs cover B/S/C and eight-slot independent entry. Current-platform source/target 21 only; no JVM ABI, instance or native-array claim.",
+      "scope": "Historical qualification only at the listed evidence revisions and hashes; not current-source acceptance. Qualified host pcc0 Linux x86-64 self-backend source byte/short/char locals, parameters and results: canonical i32 Java values, signed B/S and unsigned C normalization, distinct PCC native i8/i16 ABI entry/call/return lanes, promotion, constant assignment narrowing and compound normalization. Fresh whole Java validation: 960 ordinary + 320 integration cases (112 frozen compatibility cases are not source acceptance). All 38 complete narrow originals matched actual JDK 21.0.12.1 stdout/stderr/exit at declared width, and 15 invalid originals were rejected. The four indexed representative inputs cover B/S/C and eight-slot independent entry. Current-platform source/target 21 only; no JVM ABI, instance or native-array claim.",
       "status": "supported",
       "tests": [
         "tests/java/test_source_narrow_primitives.py",
@@ -802,7 +834,7 @@
         "JLS-14",
         "JLS-16"
       ],
-      "scope": "Qualified host pcc0 Linux x86-64 self-backend labeled statements, target-specific break/continue, independent label namespace, direct-loop continue, normal-completion and definite-assignment joins, and owned IR branches including outer for updates/do tests. Fresh whole Java validation: 1016 ordinary + 354 integration (112 frozen compatibility cases excluded from source acceptance). All 33 complete executable originals matched actual JDK 21.0.12.1 stdout/stderr/exit; 19 invalid originals were rejected. Three nonterminating originals were compiler-checked only, never executed. Current-platform source/target 21 only; no finally unwinding, bytecode expansion or native object/array claim.",
+      "scope": "Historical qualification only at the listed evidence revisions and hashes; not current-source acceptance. Qualified host pcc0 Linux x86-64 self-backend labeled statements, target-specific break/continue, independent label namespace, direct-loop continue, normal-completion and definite-assignment joins, and owned IR branches including outer for updates/do tests. Fresh whole Java validation: 1016 ordinary + 354 integration (112 frozen compatibility cases excluded from source acceptance). All 33 complete executable originals matched actual JDK 21.0.12.1 stdout/stderr/exit; 19 invalid originals were rejected. Three nonterminating originals were compiler-checked only, never executed. Current-platform source/target 21 only; no finally unwinding, bytecode expansion or native object/array claim.",
       "status": "supported",
       "tests": [
         "tests/java/test_source_labels.py",
@@ -823,6 +855,100 @@
         "java.labels.c182.da-all-labeled-exits.program",
         "java.labels.c182.da-all-labeled-exits.differential"
       ]
+    },
+    {
+      "id": "java.floating-primitives",
+      "title": "Source float and double primitive operations",
+      "chapter_ids": [
+        "JLS-3",
+        "JLS-4",
+        "JLS-5",
+        "JLS-15"
+      ],
+      "scope": "Owned float/double source literals, declarations, overload/call lanes, numeric promotion, arithmetic and comparisons, casts and assignment conversion, including guarded saturating floating-to-integral conversion before narrow integral normalization. Source implementation is separate from full-feature acceptance; no historical native count is promoted to this Unicode-overlaid source identity. Floating remainder, native floating arrays and managed instance execution remain separate unavailable domains.",
+      "tests": [
+        "tests/java/test_source_floating.py",
+        "tests/java/test_source_floating_darwin_abi.py"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:7773be20c31a542eb37bd5da231d09c811d4e1c04466a4748e746c7244df45fb",
+        "sources": [
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
+          },
+          {
+            "path": "pcc/frontends/java/source_sema.py",
+            "sha256": "56f866ddcdef9d9473a18b048782c4c39f92b53caeaa738f733b39e77046abe7"
+          },
+          {
+            "path": "pcc/frontends/java/source_types.py",
+            "sha256": "16389f008060e42b759a5ecca5cee5ab024de13bb6f91a54998b0c1918988a7f"
+          },
+          {
+            "path": "pcc/frontends/java/source_lowering.py",
+            "sha256": "1f82bcb220d68afaad9fbb6df5fed5b99e5c248836f6e36e00d7dd89b6fce984"
+          },
+          {
+            "path": "pcc/frontends/java/floating_semantics.py",
+            "sha256": "7ac975fdda321b05e7b495d921d62b5e8b9e55262e332f79a606374af7a9d8ea"
+          }
+        ]
+      },
+      "acceptance": [
+        {
+          "id": "current-source-linux-x86_64",
+          "kind": "full-feature",
+          "scope": "Owned float/double source literals, declarations, overload/call lanes, numeric promotion, arithmetic and comparisons, casts and assignment conversion, including guarded saturating floating-to-integral conversion before narrow integral normalization. Source implementation is separate from full-feature acceptance; no historical native count is promoted to this Unicode-overlaid source identity. Floating remainder, native floating arrays and managed instance execution remain separate unavailable domains.",
+          "status": "unrun",
+          "source_revision": "sha256:7773be20c31a542eb37bd5da231d09c811d4e1c04466a4748e746c7244df45fb",
+          "required_tests": [
+            "tests/java/test_source_floating.py",
+            "tests/java/test_source_floating_darwin_abi.py"
+          ],
+          "evidence": [],
+          "mode": "pcc0",
+          "platform": "linux-x86_64",
+          "backend": "self",
+          "gc": "not_applicable",
+          "reason": "No complete acceptance execution is recorded for this exact implementation identity. Existing historical evidence retains its original source revision and does not qualify this candidate. Ordinary, native, JDK and whole-Java validation are UNRUN for this identity."
+        }
+      ]
+    },
+    {
+      "id": "java.floating-remainder",
+      "title": "Floating truncating remainder",
+      "chapter_ids": [
+        "JLS-15"
+      ],
+      "scope": "JLS 15.17.3 and 15.26.2: float/double remainder and remainder assignment require an owned IEEE truncating-remainder primitive. They remain explicitly rejected rather than synthesized from rounded division.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/java/test_source_floating.py::test_remainder_is_explicit_and_never_synthesized_from_rounded_division"
+      ],
+      "diagnostics": [
+        "java.unsupported.floating-remainder"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "java.assignment-expression-nonlocal-targets",
+      "title": "Nonlocal assignment-expression targets",
+      "chapter_ids": [
+        "JLS-15"
+      ],
+      "scope": "JLS 15.14-15.15 and 15.26: scalar local assignment/increment expressions are implemented separately; receiver-field and array-component expression writes require the next variable-access domain. This boundary is not a claim that local assignment expressions are unavailable.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/java/test_source_assignment_expressions.py::test_model_nonlocal_expression_writes_remain_explicit"
+      ],
+      "diagnostics": [
+        "java.unsupported.assignment-expression-target"
+      ],
+      "evidence": []
     }
   ],
   "diagnostics": {
@@ -834,12 +960,12 @@
         "feature_id": "java.abstract-classes",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+          "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+            "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
           }
         ]
       },
@@ -848,12 +974,12 @@
         "feature_id": "java.interfaces-annotations",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+          "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+            "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
           }
         ]
       },
@@ -862,12 +988,12 @@
         "feature_id": "java.division-dynamic-exception",
         "source": {
           "path": "pcc/frontends/java/source_sema.py",
-          "sha256": "ec38275d64841254037b0a10d281d51641ffd4514a9f161f9209a7f1f930b169"
+          "sha256": "56f866ddcdef9d9473a18b048782c4c39f92b53caeaa738f733b39e77046abe7"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_sema.py",
-            "sha256": "ec38275d64841254037b0a10d281d51641ffd4514a9f161f9209a7f1f930b169"
+            "sha256": "56f866ddcdef9d9473a18b048782c4c39f92b53caeaa738f733b39e77046abe7"
           }
         ]
       },
@@ -876,16 +1002,16 @@
         "feature_id": "java.array-model-wider-shapes",
         "source": {
           "path": "pcc/frontends/java/source_array_model.py",
-          "sha256": "5d4f8e3f6bc8759eee0ae1696b9c149a5805dcc69e9bed291ca656a016f89b2c"
+          "sha256": "6fb672df479969d3ee22897d08f0ecacb5b48642c3eed62249ef397d819a8d08"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_array_model.py",
-            "sha256": "5d4f8e3f6bc8759eee0ae1696b9c149a5805dcc69e9bed291ca656a016f89b2c"
+            "sha256": "6fb672df479969d3ee22897d08f0ecacb5b48642c3eed62249ef397d819a8d08"
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+            "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
           }
         ]
       },
@@ -894,12 +1020,12 @@
         "feature_id": "java.arrays-native",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+          "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+            "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
           }
         ]
       },
@@ -908,12 +1034,26 @@
         "feature_id": "java.assert-statements",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+          "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+            "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.assignment-expression-target",
+        "feature_id": "java.assignment-expression-nonlocal-targets",
+        "source": {
+          "path": "pcc/frontends/java/source_sema.py",
+          "sha256": "56f866ddcdef9d9473a18b048782c4c39f92b53caeaa738f733b39e77046abe7"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_sema.py",
+            "sha256": "56f866ddcdef9d9473a18b048782c4c39f92b53caeaa738f733b39e77046abe7"
           }
         ]
       },
@@ -922,12 +1062,12 @@
         "feature_id": "java.blank-final-local",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+          "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+            "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
           }
         ]
       },
@@ -936,16 +1076,16 @@
         "feature_id": "java.objects-native",
         "source": {
           "path": "pcc/frontends/java/source_class_model.py",
-          "sha256": "a18501c294c0d1240d8b8bf9e04220062ee2f94c4319958e0702e04e79150dcd"
+          "sha256": "f5e802ac6330b2f9fb0894d1b6c46190b0537dc7fe0f3978d343f98a59673815"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "a18501c294c0d1240d8b8bf9e04220062ee2f94c4319958e0702e04e79150dcd"
+            "sha256": "f5e802ac6330b2f9fb0894d1b6c46190b0537dc7fe0f3978d343f98a59673815"
           },
           {
             "path": "pcc/frontends/java/source_sema.py",
-            "sha256": "ec38275d64841254037b0a10d281d51641ffd4514a9f161f9209a7f1f930b169"
+            "sha256": "56f866ddcdef9d9473a18b048782c4c39f92b53caeaa738f733b39e77046abe7"
           }
         ]
       },
@@ -954,12 +1094,12 @@
         "feature_id": "java.inheritance-generics",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+          "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+            "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
           }
         ]
       },
@@ -968,12 +1108,12 @@
         "feature_id": "java.class-initialization",
         "source": {
           "path": "pcc/frontends/java/source_sema.py",
-          "sha256": "ec38275d64841254037b0a10d281d51641ffd4514a9f161f9209a7f1f930b169"
+          "sha256": "56f866ddcdef9d9473a18b048782c4c39f92b53caeaa738f733b39e77046abe7"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_sema.py",
-            "sha256": "ec38275d64841254037b0a10d281d51641ffd4514a9f161f9209a7f1f930b169"
+            "sha256": "56f866ddcdef9d9473a18b048782c4c39f92b53caeaa738f733b39e77046abe7"
           }
         ]
       },
@@ -982,12 +1122,12 @@
         "feature_id": "java.other-declared-primitives",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+          "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+            "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
           }
         ]
       },
@@ -996,12 +1136,12 @@
         "feature_id": "java.other-declared-primitives",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+          "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+            "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
           }
         ]
       },
@@ -1010,12 +1150,12 @@
         "feature_id": "java.other-declared-primitives",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+          "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+            "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
           }
         ]
       },
@@ -1052,12 +1192,26 @@
         "feature_id": "java.blank-final-instance-model",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+          "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+            "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
+          }
+        ]
+      },
+      {
+        "code": "java.unsupported.floating-remainder",
+        "feature_id": "java.floating-remainder",
+        "source": {
+          "path": "pcc/frontends/java/source_sema.py",
+          "sha256": "56f866ddcdef9d9473a18b048782c4c39f92b53caeaa738f733b39e77046abe7"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_sema.py",
+            "sha256": "56f866ddcdef9d9473a18b048782c4c39f92b53caeaa738f733b39e77046abe7"
           }
         ]
       },
@@ -1066,12 +1220,12 @@
         "feature_id": "java.inheritance-generics",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+          "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+            "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
           }
         ]
       },
@@ -1094,12 +1248,12 @@
         "feature_id": "java.objects-native",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+          "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+            "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
           }
         ]
       },
@@ -1108,12 +1262,12 @@
         "feature_id": "java.local-types",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+          "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+            "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
           }
         ]
       },
@@ -1122,12 +1276,12 @@
         "feature_id": "java.implementation-limits",
         "source": {
           "path": "pcc/frontends/java/source_sema.py",
-          "sha256": "ec38275d64841254037b0a10d281d51641ffd4514a9f161f9209a7f1f930b169"
+          "sha256": "56f866ddcdef9d9473a18b048782c4c39f92b53caeaa738f733b39e77046abe7"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_sema.py",
-            "sha256": "ec38275d64841254037b0a10d281d51641ffd4514a9f161f9209a7f1f930b169"
+            "sha256": "56f866ddcdef9d9473a18b048782c4c39f92b53caeaa738f733b39e77046abe7"
           }
         ]
       },
@@ -1145,7 +1299,7 @@
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+            "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
           }
         ]
       },
@@ -1163,7 +1317,7 @@
           },
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "a18501c294c0d1240d8b8bf9e04220062ee2f94c4319958e0702e04e79150dcd"
+            "sha256": "f5e802ac6330b2f9fb0894d1b6c46190b0537dc7fe0f3978d343f98a59673815"
           }
         ]
       },
@@ -1172,12 +1326,12 @@
         "feature_id": "java.objects-native",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+          "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+            "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
           }
         ]
       },
@@ -1186,12 +1340,12 @@
         "feature_id": "java.object-inherited-methods",
         "source": {
           "path": "pcc/frontends/java/source_class_model.py",
-          "sha256": "a18501c294c0d1240d8b8bf9e04220062ee2f94c4319958e0702e04e79150dcd"
+          "sha256": "f5e802ac6330b2f9fb0894d1b6c46190b0537dc7fe0f3978d343f98a59673815"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "a18501c294c0d1240d8b8bf9e04220062ee2f94c4319958e0702e04e79150dcd"
+            "sha256": "f5e802ac6330b2f9fb0894d1b6c46190b0537dc7fe0f3978d343f98a59673815"
           }
         ]
       },
@@ -1200,12 +1354,12 @@
         "feature_id": "java.imports-expanded",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+          "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+            "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
           }
         ]
       },
@@ -1223,7 +1377,7 @@
           },
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "a18501c294c0d1240d8b8bf9e04220062ee2f94c4319958e0702e04e79150dcd"
+            "sha256": "f5e802ac6330b2f9fb0894d1b6c46190b0537dc7fe0f3978d343f98a59673815"
           }
         ]
       },
@@ -1232,12 +1386,12 @@
         "feature_id": "java.conditional-reference",
         "source": {
           "path": "pcc/frontends/java/source_types.py",
-          "sha256": "4e84c86d63c0604a9623f85c1a31139cff219b1bc9772a98212ded18a3d0962b"
+          "sha256": "16389f008060e42b759a5ecca5cee5ab024de13bb6f91a54998b0c1918988a7f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_types.py",
-            "sha256": "4e84c86d63c0604a9623f85c1a31139cff219b1bc9772a98212ded18a3d0962b"
+            "sha256": "16389f008060e42b759a5ecca5cee5ab024de13bb6f91a54998b0c1918988a7f"
           }
         ]
       },
@@ -1246,12 +1400,12 @@
         "feature_id": "java.runtime-statements",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+          "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+            "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
           }
         ]
       },
@@ -1274,12 +1428,12 @@
         "feature_id": "java.implementation-limits",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+          "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+            "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
           }
         ]
       },
@@ -1288,12 +1442,12 @@
         "feature_id": "java.special-methods",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+          "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+            "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
           }
         ]
       },
@@ -1302,12 +1456,12 @@
         "feature_id": "java.imports-expanded",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+          "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+            "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
           }
         ]
       },
@@ -1316,16 +1470,16 @@
         "feature_id": "java.class-initialization",
         "source": {
           "path": "pcc/frontends/java/source_sema.py",
-          "sha256": "ec38275d64841254037b0a10d281d51641ffd4514a9f161f9209a7f1f930b169"
+          "sha256": "56f866ddcdef9d9473a18b048782c4c39f92b53caeaa738f733b39e77046abe7"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_sema.py",
-            "sha256": "ec38275d64841254037b0a10d281d51641ffd4514a9f161f9209a7f1f930b169"
+            "sha256": "56f866ddcdef9d9473a18b048782c4c39f92b53caeaa738f733b39e77046abe7"
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+            "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
           }
         ]
       },
@@ -1334,12 +1488,12 @@
         "feature_id": "java.string-runtime",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+          "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+            "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
           }
         ]
       },
@@ -1348,12 +1502,12 @@
         "feature_id": "java.switch-expressions",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+          "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+            "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
           }
         ]
       },
@@ -1376,26 +1530,12 @@
         "feature_id": "java.implementation-limits",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+          "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
-          }
-        ]
-      },
-      {
-        "code": "java.unsupported.unicode-escapes",
-        "feature_id": "java.unicode-translation",
-        "source": {
-          "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
-        },
-        "source_sites": [
-          {
-            "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+            "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
           }
         ]
       },
@@ -1404,18 +1544,18 @@
         "feature_id": "java.unicode-tokens",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+          "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "2a9fb4d702fcfb35c2268b66179cf7313799742cdf916e66544035e79205fe77"
+            "sha256": "d677ea8ea720a1ca873148dbab18f6cd6d4212e486446955fdb9f8d6eccae28e"
           }
         ]
       }
     ],
     "message_only": [],
-    "notes": "Every current SOURCE UnsupportedJava call and Token capability site has an explicit stable code. Dynamic helper forwarding carries an explicit caller code, never message-text inference. Codes preserve existing str(error) and args; malformed token/modifier/type starts remain JavaError with code=None. Frozen class-file compatibility remains message-only and outside this source acceptance inventory; therefore whole-frontend inventory_complete stays false. Current source-site hashes bind qualified971/c5 plus diagnostic metadata changes, not unpublished1eb. Implementation limits and missing supplied dependencies are distinguished from native language/runtime gaps. A capability diagnostic identifies the first unavailable domain, not proof the remainder of input is valid."
+    "notes": "Current Java source capability sites are bound to exact implementation file hashes independently of historical execution evidence. Dynamic helper forwarding preserves explicit caller codes. Malformed input remains JavaError with code=None. Unicode escapes are now translated before tokenization; the obsolete Unicode-escape capability is removed, without removing malformed-original rejection obligations. Floating remainder and nonlocal assignment-expression targets remain explicitly unavailable. Frozen class-file compatibility remains message-only and outside the source inventory, so whole-frontend inventory_complete remains false. Updating source-site hashes is metadata maintenance, not native, JDK, Mac or pcc1 qualification."
   },
   "evidence": [
     {
@@ -1434,16 +1574,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_conditional.py::test_original_conditional_has_exact_native_result"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -1451,7 +1582,13 @@
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
       },
-      "input_sha256": "be9abc273cb1d42d0de5af02a9b6fcbffe5f366be14c0f8e2d55ad7abe5bf23d"
+      "input_sha256": "be9abc273cb1d42d0de5af02a9b6fcbffe5f366be14c0f8e2d55ad7abe5bf23d",
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
+      }
     },
     {
       "id": "java.conditional-primitive.program",
@@ -1469,16 +1606,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_conditional.py::test_original_conditional_has_exact_native_result"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -1486,7 +1614,13 @@
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
       },
-      "input_sha256": "be9abc273cb1d42d0de5af02a9b6fcbffe5f366be14c0f8e2d55ad7abe5bf23d"
+      "input_sha256": "be9abc273cb1d42d0de5af02a9b6fcbffe5f366be14c0f8e2d55ad7abe5bf23d",
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
+      }
     },
     {
       "id": "java.conditional-primitive.differential",
@@ -1504,16 +1638,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_conditional.py::test_original_conditional_has_exact_native_result"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -1532,17 +1657,6 @@
         "role": "external_reference",
         "kind": "native_execution",
         "platform": "linux-x86_64",
-        "command": [
-          "java",
-          "-Xms16m",
-          "-Xmx128m",
-          "-XX:MaxMetaspaceSize=96m",
-          "-cp",
-          "reference/harness-classes",
-          "PccSourceReference",
-          "reference/plan.tsv",
-          "reference/results.tsv"
-        ],
         "input_sha256": "be9abc273cb1d42d0de5af02a9b6fcbffe5f366be14c0f8e2d55ad7abe5bf23d"
       },
       "comparison": {
@@ -1558,7 +1672,13 @@
         "case_name": "unchosen-false-arm-must-not-run",
         "observed_value": "42"
       },
-      "input_sha256": "be9abc273cb1d42d0de5af02a9b6fcbffe5f366be14c0f8e2d55ad7abe5bf23d"
+      "input_sha256": "be9abc273cb1d42d0de5af02a9b6fcbffe5f366be14c0f8e2d55ad7abe5bf23d",
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
+      }
     },
     {
       "id": "java.division-constant-integral.unit",
@@ -1576,16 +1696,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_division.py::test_original_division_has_exact_native_result"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -1593,7 +1704,13 @@
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
       },
-      "input_sha256": "1cdcc003f17c96c60f458cbf26fbff210f91c7ccc945c360b5797b2f1572c75d"
+      "input_sha256": "1cdcc003f17c96c60f458cbf26fbff210f91c7ccc945c360b5797b2f1572c75d",
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
+      }
     },
     {
       "id": "java.division-constant-integral.program",
@@ -1611,16 +1728,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_division.py::test_original_division_has_exact_native_result"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -1628,7 +1736,13 @@
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
       },
-      "input_sha256": "1cdcc003f17c96c60f458cbf26fbff210f91c7ccc945c360b5797b2f1572c75d"
+      "input_sha256": "1cdcc003f17c96c60f458cbf26fbff210f91c7ccc945c360b5797b2f1572c75d",
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
+      }
     },
     {
       "id": "java.division-constant-integral.differential",
@@ -1646,16 +1760,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_division.py::test_original_division_has_exact_native_result"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -1674,17 +1779,6 @@
         "role": "external_reference",
         "kind": "native_execution",
         "platform": "linux-x86_64",
-        "command": [
-          "java",
-          "-Xms16m",
-          "-Xmx128m",
-          "-XX:MaxMetaspaceSize=96m",
-          "-cp",
-          "reference/harness-classes",
-          "PccSourceReference",
-          "reference/plan.tsv",
-          "reference/results.tsv"
-        ],
         "input_sha256": "1cdcc003f17c96c60f458cbf26fbff210f91c7ccc945c360b5797b2f1572c75d"
       },
       "comparison": {
@@ -1700,7 +1794,13 @@
         "case_name": "long-no-float-rounding",
         "observed_value": "3074457345618258602"
       },
-      "input_sha256": "1cdcc003f17c96c60f458cbf26fbff210f91c7ccc945c360b5797b2f1572c75d"
+      "input_sha256": "1cdcc003f17c96c60f458cbf26fbff210f91c7ccc945c360b5797b2f1572c75d",
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
+      }
     },
     {
       "id": "java.switch-primitive.unit",
@@ -1718,16 +1818,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_switch_do.py::test_original_switch_do_has_exact_full_width_native_result"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -1735,7 +1826,13 @@
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
       },
-      "input_sha256": "ea2831e3d5c760c89c8116939a374299cd11d5aec9adf875cafe4a7ad9e638c2"
+      "input_sha256": "ea2831e3d5c760c89c8116939a374299cd11d5aec9adf875cafe4a7ad9e638c2",
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
+      }
     },
     {
       "id": "java.switch-primitive.program",
@@ -1753,16 +1850,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_switch_do.py::test_original_switch_do_has_exact_full_width_native_result"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -1770,7 +1858,13 @@
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
       },
-      "input_sha256": "ea2831e3d5c760c89c8116939a374299cd11d5aec9adf875cafe4a7ad9e638c2"
+      "input_sha256": "ea2831e3d5c760c89c8116939a374299cd11d5aec9adf875cafe4a7ad9e638c2",
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
+      }
     },
     {
       "id": "java.switch-primitive.differential",
@@ -1788,16 +1882,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_switch_do.py::test_original_switch_do_has_exact_full_width_native_result"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -1816,17 +1901,6 @@
         "role": "external_reference",
         "kind": "native_execution",
         "platform": "linux-x86_64",
-        "command": [
-          "java",
-          "-Xms16m",
-          "-Xmx128m",
-          "-XX:MaxMetaspaceSize=96m",
-          "-cp",
-          "reference/harness-classes",
-          "PccSourceReference",
-          "reference/plan.tsv",
-          "reference/results.tsv"
-        ],
         "input_sha256": "ea2831e3d5c760c89c8116939a374299cd11d5aec9adf875cafe4a7ad9e638c2"
       },
       "comparison": {
@@ -1842,7 +1916,13 @@
         "case_name": "switch-fallthrough",
         "observed_value": "42"
       },
-      "input_sha256": "ea2831e3d5c760c89c8116939a374299cd11d5aec9adf875cafe4a7ad9e638c2"
+      "input_sha256": "ea2831e3d5c760c89c8116939a374299cd11d5aec9adf875cafe4a7ad9e638c2",
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
+      }
     },
     {
       "id": "java.do-while.unit",
@@ -1860,16 +1940,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_switch_do.py::test_original_switch_do_has_exact_full_width_native_result"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -1877,7 +1948,13 @@
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
       },
-      "input_sha256": "367ef4aec60b86f9c25f94ad3720a5755be7882055e352959799d95af1d3d414"
+      "input_sha256": "367ef4aec60b86f9c25f94ad3720a5755be7882055e352959799d95af1d3d414",
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
+      }
     },
     {
       "id": "java.do-while.program",
@@ -1895,16 +1972,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_switch_do.py::test_original_switch_do_has_exact_full_width_native_result"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -1912,7 +1980,13 @@
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
       },
-      "input_sha256": "367ef4aec60b86f9c25f94ad3720a5755be7882055e352959799d95af1d3d414"
+      "input_sha256": "367ef4aec60b86f9c25f94ad3720a5755be7882055e352959799d95af1d3d414",
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
+      }
     },
     {
       "id": "java.do-while.differential",
@@ -1930,16 +2004,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_switch_do.py::test_original_switch_do_has_exact_full_width_native_result"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -1958,17 +2023,6 @@
         "role": "external_reference",
         "kind": "native_execution",
         "platform": "linux-x86_64",
-        "command": [
-          "java",
-          "-Xms16m",
-          "-Xmx128m",
-          "-XX:MaxMetaspaceSize=96m",
-          "-cp",
-          "reference/harness-classes",
-          "PccSourceReference",
-          "reference/plan.tsv",
-          "reference/results.tsv"
-        ],
         "input_sha256": "367ef4aec60b86f9c25f94ad3720a5755be7882055e352959799d95af1d3d414"
       },
       "comparison": {
@@ -1984,7 +2038,13 @@
         "case_name": "do-continue-to-test",
         "observed_value": "42"
       },
-      "input_sha256": "367ef4aec60b86f9c25f94ad3720a5755be7882055e352959799d95af1d3d414"
+      "input_sha256": "367ef4aec60b86f9c25f94ad3720a5755be7882055e352959799d95af1d3d414",
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
+      }
     },
     {
       "id": "java.conditional-primitive.raw-unit",
@@ -2003,22 +2063,19 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
         "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
+      },
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
       }
     },
     {
@@ -2038,22 +2095,19 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
         "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
+      },
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
       }
     },
     {
@@ -2073,16 +2127,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -2105,16 +2150,7 @@
         "role": "external_reference",
         "kind": "native_execution",
         "platform": "linux-x86_64",
-        "input_sha256": "be9abc273cb1d42d0de5af02a9b6fcbffe5f366be14c0f8e2d55ad7abe5bf23d",
-        "command": [
-          "java",
-          "-Xms16m",
-          "-Xmx128m",
-          "-XX:MaxMetaspaceSize=96m",
-          "-cp",
-          "reference/classes",
-          "PccRawObserve"
-        ]
+        "input_sha256": "be9abc273cb1d42d0de5af02a9b6fcbffe5f366be14c0f8e2d55ad7abe5bf23d"
       },
       "raw_reference": {
         "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
@@ -2122,6 +2158,12 @@
         "exit_code": 0,
         "scope": "one actual process for this exact original program",
         "case_name": "unchosen-false-arm-must-not-run"
+      },
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
       }
     },
     {
@@ -2141,22 +2183,19 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
         "stdout_sha256": "20c0216bf3cfa7fc6b4b34fb7e5c8a70fb48d4d4deb2a91ada94936566da25f7",
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
+      },
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
       }
     },
     {
@@ -2176,22 +2215,19 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
         "stdout_sha256": "20c0216bf3cfa7fc6b4b34fb7e5c8a70fb48d4d4deb2a91ada94936566da25f7",
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
+      },
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
       }
     },
     {
@@ -2211,16 +2247,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -2243,16 +2270,7 @@
         "role": "external_reference",
         "kind": "native_execution",
         "platform": "linux-x86_64",
-        "input_sha256": "1cdcc003f17c96c60f458cbf26fbff210f91c7ccc945c360b5797b2f1572c75d",
-        "command": [
-          "java",
-          "-Xms16m",
-          "-Xmx128m",
-          "-XX:MaxMetaspaceSize=96m",
-          "-cp",
-          "reference/classes",
-          "PccRawObserve"
-        ]
+        "input_sha256": "1cdcc003f17c96c60f458cbf26fbff210f91c7ccc945c360b5797b2f1572c75d"
       },
       "raw_reference": {
         "stdout_sha256": "20c0216bf3cfa7fc6b4b34fb7e5c8a70fb48d4d4deb2a91ada94936566da25f7",
@@ -2260,6 +2278,12 @@
         "exit_code": 0,
         "scope": "one actual process for this exact original program",
         "case_name": "long-no-float-rounding"
+      },
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
       }
     },
     {
@@ -2279,22 +2303,19 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
         "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
+      },
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
       }
     },
     {
@@ -2314,22 +2335,19 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
         "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
+      },
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
       }
     },
     {
@@ -2349,16 +2367,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -2381,16 +2390,7 @@
         "role": "external_reference",
         "kind": "native_execution",
         "platform": "linux-x86_64",
-        "input_sha256": "ea2831e3d5c760c89c8116939a374299cd11d5aec9adf875cafe4a7ad9e638c2",
-        "command": [
-          "java",
-          "-Xms16m",
-          "-Xmx128m",
-          "-XX:MaxMetaspaceSize=96m",
-          "-cp",
-          "reference/classes",
-          "PccRawObserve"
-        ]
+        "input_sha256": "ea2831e3d5c760c89c8116939a374299cd11d5aec9adf875cafe4a7ad9e638c2"
       },
       "raw_reference": {
         "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
@@ -2398,6 +2398,12 @@
         "exit_code": 0,
         "scope": "one actual process for this exact original program",
         "case_name": "switch-fallthrough"
+      },
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
       }
     },
     {
@@ -2417,22 +2423,19 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
         "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
+      },
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
       }
     },
     {
@@ -2452,22 +2455,19 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
         "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
+      },
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
       }
     },
     {
@@ -2487,16 +2487,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_raw_reference.py::test_original_sources_match_actual_native_and_jdk_stdout_stderr_exit"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -2519,16 +2510,7 @@
         "role": "external_reference",
         "kind": "native_execution",
         "platform": "linux-x86_64",
-        "input_sha256": "367ef4aec60b86f9c25f94ad3720a5755be7882055e352959799d95af1d3d414",
-        "command": [
-          "java",
-          "-Xms16m",
-          "-Xmx128m",
-          "-XX:MaxMetaspaceSize=96m",
-          "-cp",
-          "reference/classes",
-          "PccRawObserve"
-        ]
+        "input_sha256": "367ef4aec60b86f9c25f94ad3720a5755be7882055e352959799d95af1d3d414"
       },
       "raw_reference": {
         "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
@@ -2536,6 +2518,12 @@
         "exit_code": 0,
         "scope": "one actual process for this exact original program",
         "case_name": "do-continue-to-test"
+      },
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
       }
     },
     {
@@ -2554,19 +2542,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "env",
-        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
-        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_narrow_primitives.py::test_exact_narrow_originals_match_jdk_raw_processes_and_rejections"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -2574,7 +2550,13 @@
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
       },
-      "input_sha256": "3c22623feadb242fabf7a4b33aac93ba8aebfe1e2ac7794003c6acb15b4b2a35"
+      "input_sha256": "3c22623feadb242fabf7a4b33aac93ba8aebfe1e2ac7794003c6acb15b4b2a35",
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
+      }
     },
     {
       "id": "java.narrow.df3e.direct-byte-negative.program",
@@ -2592,19 +2574,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "env",
-        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
-        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_narrow_primitives.py::test_exact_narrow_originals_match_jdk_raw_processes_and_rejections"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -2612,7 +2582,13 @@
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
       },
-      "input_sha256": "3c22623feadb242fabf7a4b33aac93ba8aebfe1e2ac7794003c6acb15b4b2a35"
+      "input_sha256": "3c22623feadb242fabf7a4b33aac93ba8aebfe1e2ac7794003c6acb15b4b2a35",
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
+      }
     },
     {
       "id": "java.narrow.df3e.direct-byte-negative.differential",
@@ -2630,19 +2606,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "env",
-        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
-        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_narrow_primitives.py::test_exact_narrow_originals_match_jdk_raw_processes_and_rejections"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -2662,20 +2626,17 @@
         "role": "external_reference",
         "kind": "native_execution",
         "platform": "linux-x86_64",
-        "command": [
-          "java",
-          "-Xms16m",
-          "-Xmx128m",
-          "-XX:MaxMetaspaceSize=96m",
-          "-cp",
-          "classes",
-          "PccNarrowObserve"
-        ],
         "input_sha256": "3c22623feadb242fabf7a4b33aac93ba8aebfe1e2ac7794003c6acb15b4b2a35"
       },
       "comparison": {
         "kind": "raw_process_streams",
         "description": "Same unchanged original and call arguments; independent native assembly and separate JVM observer emit exact declared-width little-endian bytes. Compare actual stdout, stderr and process exit, without decimal normalization."
+      },
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
       }
     },
     {
@@ -2694,19 +2655,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "env",
-        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
-        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_narrow_primitives.py::test_exact_narrow_originals_match_jdk_raw_processes_and_rejections"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -2714,7 +2663,13 @@
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
       },
-      "input_sha256": "b73f7ebb80ad9413f2b78259d37ecb0a49c9727d4e01d83d1468df3c52975b48"
+      "input_sha256": "b73f7ebb80ad9413f2b78259d37ecb0a49c9727d4e01d83d1468df3c52975b48",
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
+      }
     },
     {
       "id": "java.narrow.df3e.direct-short-negative.program",
@@ -2732,19 +2687,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "env",
-        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
-        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_narrow_primitives.py::test_exact_narrow_originals_match_jdk_raw_processes_and_rejections"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -2752,7 +2695,13 @@
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
       },
-      "input_sha256": "b73f7ebb80ad9413f2b78259d37ecb0a49c9727d4e01d83d1468df3c52975b48"
+      "input_sha256": "b73f7ebb80ad9413f2b78259d37ecb0a49c9727d4e01d83d1468df3c52975b48",
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
+      }
     },
     {
       "id": "java.narrow.df3e.direct-short-negative.differential",
@@ -2770,19 +2719,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "env",
-        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
-        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_narrow_primitives.py::test_exact_narrow_originals_match_jdk_raw_processes_and_rejections"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -2802,20 +2739,17 @@
         "role": "external_reference",
         "kind": "native_execution",
         "platform": "linux-x86_64",
-        "command": [
-          "java",
-          "-Xms16m",
-          "-Xmx128m",
-          "-XX:MaxMetaspaceSize=96m",
-          "-cp",
-          "classes",
-          "PccNarrowObserve"
-        ],
         "input_sha256": "b73f7ebb80ad9413f2b78259d37ecb0a49c9727d4e01d83d1468df3c52975b48"
       },
       "comparison": {
         "kind": "raw_process_streams",
         "description": "Same unchanged original and call arguments; independent native assembly and separate JVM observer emit exact declared-width little-endian bytes. Compare actual stdout, stderr and process exit, without decimal normalization."
+      },
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
       }
     },
     {
@@ -2834,19 +2768,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "env",
-        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
-        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_narrow_primitives.py::test_exact_narrow_originals_match_jdk_raw_processes_and_rejections"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -2854,7 +2776,13 @@
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
       },
-      "input_sha256": "f1ec7f6272b77b4f5e91fbc519e1c3c76ccc42a175dbf8f586dbc409384e18cc"
+      "input_sha256": "f1ec7f6272b77b4f5e91fbc519e1c3c76ccc42a175dbf8f586dbc409384e18cc",
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
+      }
     },
     {
       "id": "java.narrow.df3e.direct-char-high-bit.program",
@@ -2872,19 +2800,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "env",
-        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
-        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_narrow_primitives.py::test_exact_narrow_originals_match_jdk_raw_processes_and_rejections"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -2892,7 +2808,13 @@
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
       },
-      "input_sha256": "f1ec7f6272b77b4f5e91fbc519e1c3c76ccc42a175dbf8f586dbc409384e18cc"
+      "input_sha256": "f1ec7f6272b77b4f5e91fbc519e1c3c76ccc42a175dbf8f586dbc409384e18cc",
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
+      }
     },
     {
       "id": "java.narrow.df3e.direct-char-high-bit.differential",
@@ -2910,19 +2832,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "env",
-        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
-        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_narrow_primitives.py::test_exact_narrow_originals_match_jdk_raw_processes_and_rejections"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -2942,20 +2852,17 @@
         "role": "external_reference",
         "kind": "native_execution",
         "platform": "linux-x86_64",
-        "command": [
-          "java",
-          "-Xms16m",
-          "-Xmx128m",
-          "-XX:MaxMetaspaceSize=96m",
-          "-cp",
-          "classes",
-          "PccNarrowObserve"
-        ],
         "input_sha256": "f1ec7f6272b77b4f5e91fbc519e1c3c76ccc42a175dbf8f586dbc409384e18cc"
       },
       "comparison": {
         "kind": "raw_process_streams",
         "description": "Same unchanged original and call arguments; independent native assembly and separate JVM observer emit exact declared-width little-endian bytes. Compare actual stdout, stderr and process exit, without decimal normalization."
+      },
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
       }
     },
     {
@@ -2974,19 +2881,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "env",
-        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
-        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_narrow_primitives.py::test_exact_narrow_originals_match_jdk_raw_processes_and_rejections"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -2994,7 +2889,13 @@
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
       },
-      "input_sha256": "ebaaf24cdf4c32d0f4860e64c8338fd791c69e0bfacc2d0b73a19ac975e59916"
+      "input_sha256": "ebaaf24cdf4c32d0f4860e64c8338fd791c69e0bfacc2d0b73a19ac975e59916",
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
+      }
     },
     {
       "id": "java.narrow.df3e.eight-lanes-independent-entry.program",
@@ -3012,19 +2913,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "env",
-        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
-        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_narrow_primitives.py::test_exact_narrow_originals_match_jdk_raw_processes_and_rejections"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -3032,7 +2921,13 @@
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
       },
-      "input_sha256": "ebaaf24cdf4c32d0f4860e64c8338fd791c69e0bfacc2d0b73a19ac975e59916"
+      "input_sha256": "ebaaf24cdf4c32d0f4860e64c8338fd791c69e0bfacc2d0b73a19ac975e59916",
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
+      }
     },
     {
       "id": "java.narrow.df3e.eight-lanes-independent-entry.differential",
@@ -3050,19 +2945,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "env",
-        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
-        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_narrow_primitives.py::test_exact_narrow_originals_match_jdk_raw_processes_and_rejections"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -3082,20 +2965,17 @@
         "role": "external_reference",
         "kind": "native_execution",
         "platform": "linux-x86_64",
-        "command": [
-          "java",
-          "-Xms16m",
-          "-Xmx128m",
-          "-XX:MaxMetaspaceSize=96m",
-          "-cp",
-          "classes",
-          "PccNarrowObserve"
-        ],
         "input_sha256": "ebaaf24cdf4c32d0f4860e64c8338fd791c69e0bfacc2d0b73a19ac975e59916"
       },
       "comparison": {
         "kind": "raw_process_streams",
         "description": "Same unchanged original and call arguments; independent native assembly and separate JVM observer emit exact declared-width little-endian bytes. Compare actual stdout, stderr and process exit, without decimal normalization."
+      },
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
       }
     },
     {
@@ -3114,19 +2994,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "env",
-        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
-        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -3134,7 +3002,13 @@
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
       },
-      "input_sha256": "1cf8800ada0edc460c3414b21838f5ed2aed22efdcf5c60f5f3c2f21ae50de34"
+      "input_sha256": "1cf8800ada0edc460c3414b21838f5ed2aed22efdcf5c60f5f3c2f21ae50de34",
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
+      }
     },
     {
       "id": "java.labels.c182.sibling-label-identity.program",
@@ -3152,19 +3026,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "env",
-        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
-        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -3172,7 +3034,13 @@
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
       },
-      "input_sha256": "1cf8800ada0edc460c3414b21838f5ed2aed22efdcf5c60f5f3c2f21ae50de34"
+      "input_sha256": "1cf8800ada0edc460c3414b21838f5ed2aed22efdcf5c60f5f3c2f21ae50de34",
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
+      }
     },
     {
       "id": "java.labels.c182.sibling-label-identity.differential",
@@ -3190,19 +3058,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "env",
-        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
-        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -3222,20 +3078,17 @@
         "role": "external_reference",
         "kind": "native_execution",
         "platform": "linux-x86_64",
-        "command": [
-          "java",
-          "-Xms16m",
-          "-Xmx128m",
-          "-XX:MaxMetaspaceSize=96m",
-          "-cp",
-          "classes",
-          "PccNarrowObserve"
-        ],
         "input_sha256": "1cf8800ada0edc460c3414b21838f5ed2aed22efdcf5c60f5f3c2f21ae50de34"
       },
       "comparison": {
         "kind": "raw_process_streams",
         "description": "Same unchanged original and call arguments; independent native assembly and separate JVM observer emit exact declared-width little-endian bytes. Compare actual stdout, stderr and process exit, without decimal normalization."
+      },
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
       }
     },
     {
@@ -3254,19 +3107,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "env",
-        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
-        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -3274,7 +3115,13 @@
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
       },
-      "input_sha256": "4f4fd1d98ad99de6fdde318613d074e14ff4395a93f40f6cb853a6c42c943d77"
+      "input_sha256": "4f4fd1d98ad99de6fdde318613d074e14ff4395a93f40f6cb853a6c42c943d77",
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
+      }
     },
     {
       "id": "java.labels.c182.outer-for-continue-update.program",
@@ -3292,19 +3139,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "env",
-        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
-        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -3312,7 +3147,13 @@
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
       },
-      "input_sha256": "4f4fd1d98ad99de6fdde318613d074e14ff4395a93f40f6cb853a6c42c943d77"
+      "input_sha256": "4f4fd1d98ad99de6fdde318613d074e14ff4395a93f40f6cb853a6c42c943d77",
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
+      }
     },
     {
       "id": "java.labels.c182.outer-for-continue-update.differential",
@@ -3330,19 +3171,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "env",
-        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
-        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -3362,20 +3191,17 @@
         "role": "external_reference",
         "kind": "native_execution",
         "platform": "linux-x86_64",
-        "command": [
-          "java",
-          "-Xms16m",
-          "-Xmx128m",
-          "-XX:MaxMetaspaceSize=96m",
-          "-cp",
-          "classes",
-          "PccNarrowObserve"
-        ],
         "input_sha256": "4f4fd1d98ad99de6fdde318613d074e14ff4395a93f40f6cb853a6c42c943d77"
       },
       "comparison": {
         "kind": "raw_process_streams",
         "description": "Same unchanged original and call arguments; independent native assembly and separate JVM observer emit exact declared-width little-endian bytes. Compare actual stdout, stderr and process exit, without decimal normalization."
+      },
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
       }
     },
     {
@@ -3394,19 +3220,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "env",
-        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
-        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -3414,7 +3228,13 @@
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
       },
-      "input_sha256": "9fc9bfaddef34956fe94a59f8e1d6531afe71ed4abd1b43b9027d508b45fd0ad"
+      "input_sha256": "9fc9bfaddef34956fe94a59f8e1d6531afe71ed4abd1b43b9027d508b45fd0ad",
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
+      }
     },
     {
       "id": "java.labels.c182.outer-do-continue-test.program",
@@ -3432,19 +3252,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "env",
-        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
-        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -3452,7 +3260,13 @@
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
       },
-      "input_sha256": "9fc9bfaddef34956fe94a59f8e1d6531afe71ed4abd1b43b9027d508b45fd0ad"
+      "input_sha256": "9fc9bfaddef34956fe94a59f8e1d6531afe71ed4abd1b43b9027d508b45fd0ad",
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
+      }
     },
     {
       "id": "java.labels.c182.outer-do-continue-test.differential",
@@ -3470,19 +3284,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "env",
-        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
-        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -3502,20 +3304,17 @@
         "role": "external_reference",
         "kind": "native_execution",
         "platform": "linux-x86_64",
-        "command": [
-          "java",
-          "-Xms16m",
-          "-Xmx128m",
-          "-XX:MaxMetaspaceSize=96m",
-          "-cp",
-          "classes",
-          "PccNarrowObserve"
-        ],
         "input_sha256": "9fc9bfaddef34956fe94a59f8e1d6531afe71ed4abd1b43b9027d508b45fd0ad"
       },
       "comparison": {
         "kind": "raw_process_streams",
         "description": "Same unchanged original and call arguments; independent native assembly and separate JVM observer emit exact declared-width little-endian bytes. Compare actual stdout, stderr and process exit, without decimal normalization."
+      },
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
       }
     },
     {
@@ -3534,19 +3333,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "env",
-        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
-        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -3554,7 +3341,13 @@
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
       },
-      "input_sha256": "468f3199d44ebd823a09a289558a641ffca6e8889c783de8d42682fc7c185e41"
+      "input_sha256": "468f3199d44ebd823a09a289558a641ffca6e8889c783de8d42682fc7c185e41",
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
+      }
     },
     {
       "id": "java.labels.c182.da-all-labeled-exits.program",
@@ -3572,19 +3365,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "env",
-        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
-        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -3592,7 +3373,13 @@
         "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "exit_code": 0
       },
-      "input_sha256": "468f3199d44ebd823a09a289558a641ffca6e8889c783de8d42682fc7c185e41"
+      "input_sha256": "468f3199d44ebd823a09a289558a641ffca6e8889c783de8d42682fc7c185e41",
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
+      }
     },
     {
       "id": "java.labels.c182.da-all-labeled-exits.differential",
@@ -3610,19 +3397,7 @@
       "backend": "self",
       "gc": "not_applicable",
       "command": [
-        "env",
-        "PCC_JAVA_RAW_REFERENCE=/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
-        "PCC_JAVA_RAW_REFERENCE_SOURCE=21",
-        "uv",
-        "run",
-        "--offline",
-        "--no-sync",
-        "pytest",
-        "-x",
-        "-vv",
-        "-m",
-        "integration",
-        "tests/java/test_source_labels.py::test_exact_labeled_originals_jdk_raw_and_rejections"
+        "[historical invocation redacted; not an executable command]"
       ],
       "command_kind": "reproduction",
       "actual": {
@@ -3642,20 +3417,17 @@
         "role": "external_reference",
         "kind": "native_execution",
         "platform": "linux-x86_64",
-        "command": [
-          "java",
-          "-Xms16m",
-          "-Xmx128m",
-          "-XX:MaxMetaspaceSize=96m",
-          "-cp",
-          "classes",
-          "PccNarrowObserve"
-        ],
         "input_sha256": "468f3199d44ebd823a09a289558a641ffca6e8889c783de8d42682fc7c185e41"
       },
       "comparison": {
         "kind": "raw_process_streams",
         "description": "Same unchanged original and call arguments; independent native assembly and separate JVM observer emit exact declared-width little-endian bytes. Compare actual stdout, stderr and process exit, without decimal normalization."
+      },
+      "command_provenance": {
+        "representation": "non_executable_redaction_marker",
+        "original_command_kind": "reproduction",
+        "scope": "historical evidence and reference invocation details",
+        "note": "Detailed historical invocations are intentionally omitted. test_id is a test locator, not a reconstruction of the executed command. Existing evidence identities and outcomes are unchanged; no new execution is asserted."
       }
     }
   ]

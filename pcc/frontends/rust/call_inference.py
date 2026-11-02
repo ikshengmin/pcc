@@ -42,6 +42,8 @@ def infer(checker, function, arguments, token, *, fixed_arguments=()):
     # Keep each call's unknowns shared with its substituted result/parameters.
     # Later annotations, return types and argument contexts constrain these
     # same variables before finish selects the concrete shared-registry entry.
+    # Fixed owner slots may themselves be shared inference variables. An
+    # explicit method suffix is fixed too, never replaced by fresh unknowns.
     assert len(fixed_arguments) <= len(parameters)
     bindings = {parameter: fixed_arguments[index] if index < len(fixed_arguments) else InferredType(
         token, description=f"generic parameter {parameter.name} (result-context inference)")

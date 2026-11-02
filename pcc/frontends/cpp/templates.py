@@ -10,7 +10,8 @@ from dataclasses import dataclass
 from pcc.frontends.cpp.constants import KNOWN, NOT_CONSTANT, converted_fact
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.types import (
-    ArrayType, ConstType, PointerType, ReferenceType, is_enum_type, scalar_mangling_code, unqualified,
+    ArrayType, ConstType, PointerType, ReferenceType, _substitution,
+    is_enum_type, scalar_mangling_code, unqualified,
 )
 
 
@@ -219,11 +220,28 @@ def mangle_argument(argument):
 
 
 def mangle_instance(function, arguments):
-    """Itanium scalar template arguments, including typed integral literals."""
-    prefix = "_Z" + str(len(function.name)) + function.name
-    prefix += "I" + "".join(mangle_argument(t) for t in arguments) + "E"
-    # The template prefix occupies substitution slot zero. Template parameter
-    # references are separate candidates from their actual scalar arguments.
+    """Itanium 5.1.2/5.1.8: namespace-owned scalar function templates.
+
+    Encode the declaring namespace, never a using-declaration's scope or a
+    namespace alias spelling. Namespace prefixes enter the substitution table
+    before the template prefix and dependent parameter types; ::std is the
+    ABI's predefined substitution and does not consume a numbered entry.
+    """
+    path = function.owner.namespace_path() if function.owner is not None else ()
+    name = str(len(function.name)) + function.name
+    name += "I" + "".join(mangle_argument(t) for t in arguments) + "E"
+    namespace_count = len(path)
+    if path == ("std",):
+        name = "St" + name
+        namespace_count = 0
+    elif path:
+        prefix, parts = "", path
+        if path[0] == "std":
+            prefix, parts = "St", path[1:]
+            namespace_count -= 1
+        name = "N" + prefix + "".join(str(len(part)) + part for part in parts) + name + "E"
+    # Scalar template arguments add no substitution entries. The template
+    # prefix itself follows the namespace prefixes, before the first T_.
     substitutions = {}
     encoded = []
     for dtype in (function.dtype,) + function.parameters:
@@ -231,18 +249,10 @@ def mangle_instance(function, arguments):
             encoded.append(scalar_mangling_code(dtype))
             continue
         if dtype.index in substitutions:
-            index = substitutions[dtype.index]
-            digits = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-            number = ""
-            while True:
-                number = digits[index % 36] + number
-                index //= 36
-                if index == 0:
-                    break
-            encoded.append("S" + number + "_")
+            encoded.append(_substitution(substitutions[dtype.index]))
         else:
-            substitutions[dtype.index] = len(substitutions)
+            substitutions[dtype.index] = namespace_count + 1 + len(substitutions)
             encoded.append("T_" if dtype.index == 0 else "T" + str(dtype.index - 1) + "_")
     if not function.parameters:
         encoded.append("v")
-    return prefix + "".join(encoded)
+    return "_Z" + name + "".join(encoded)

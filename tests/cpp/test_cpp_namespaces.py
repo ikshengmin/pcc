@@ -154,7 +154,6 @@ NEGATIVE_CASES = (
     ("int f(){return Missing::f();}", "cpp.not-a-namespace"),
     ("namespace A {int f(){return later();}int later();}", "cpp.undeclared"),
     ("namespace A {int f(int);}int g(){ {using A::f;}return f(1);}", "cpp.undeclared"),
-    ("namespace A {template<class T>T f(T x){return x;}}", "cpp.unsupported.namespace-templates"),
     ("template<class T>int f(T x){return T::g(x);}", "cpp.unsupported.dependent-lookup"),
     ("namespace A {int f(){return 1;}}int g(){return A : : f();}", "cpp.invalid-qualified-name"),
 )
@@ -215,3 +214,15 @@ def test_original_qualified_namespace_definition_retains_canonical_symbol():
     namespace = parser.scope.names['A'].namespace_scope
     assert namespace.names['f'].overloads[0].defined
     assert tree.ext[-1].decl.name == '_ZN1A1fEv'
+
+
+def test_original_namespace_function_template_retains_declaring_scope():
+    # N4659 [temp.pre], [temp.fct]: preserve the exact former valid rejection.
+    # test_cpp_namespace_templates adds only an observer to this same input.
+    parser = CppParser()
+    tree = parser.parse("namespace A {template<class T>T f(T x){return x;}}")
+    namespace = parser.scope.names["A"].namespace_scope
+    origin = namespace.names["f"].overloads[0]
+    assert origin.owner is namespace
+    assert origin.defined and origin.pattern is not None
+    assert not tree.ext  # An unused template must not force an instantiation.

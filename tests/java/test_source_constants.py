@@ -31,6 +31,7 @@ CASES = [
     ("character-arithmetic", "static final char LETTER='A';", "return LETTER-23;", "int", "", 42),
     ("character-octal", r"static final char OCTAL='\377';", "return OCTAL;", "int", "", 255),
     ("character-unicode-bmp", "static final char LETTER='中';", "return LETTER;", "int", "", 20013),
+    ("character-unicode-escape", "", "return '\\u0041';", "int", "", 65),
     ("character-selects-int-overload", "", "return f('x');", "int", "static int f(int x){return 42;}static int f(long x){return 7;}", 42),
     ("char-to-byte-constant", "static final byte B='A';", "return B;", "int", "", 65),
 ]
@@ -110,7 +111,6 @@ def test_invalid_constant_source_fails_before_ir(fields, body, message, monkeypa
     (original("static final int[] VALUES={2,3,5};", "return 42;"), "array fields"),
     (original('static final String MESSAGE="unchanged";', "return 42;"), "unsupported Java source token"),
     (original("static { int value=42; }", "return 42;"), "source method results"),
-    (original("", "return '\\u0041';"), "Unicode-escape translation"),
 ])
 def test_runtime_or_lexical_boundaries_do_not_drop_original_declarations(text, message, monkeypatch):
     from pcc.frontends.java.source_lowering import SourceLowerer

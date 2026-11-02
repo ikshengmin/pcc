@@ -34,7 +34,6 @@ CAPABILITIES = [
     (original('return "text";'), "string-literals", "unsupported Java source token"),
     ("@Deprecated class Diagnostic{}", "annotations", "unsupported Java source token"),
     (original("int π=1;return π;"), "unicode-tokens", "unsupported Java source token"),
-    (original("return 42; // \\u000a comment\n"), "unicode-escapes", "Unicode-escape translation"),
     ("abstract class Diagnostic{}", "abstract-classes", "unsupported top-level class modifiers"),
     ("class Diagnostic extends Object{}", "class-supertypes-generics", "inheritance, generics"),
     ("class Diagnostic<T>{}", "class-supertypes-generics", "inheritance, generics"),
@@ -105,6 +104,9 @@ def test_semantic_model_capability_is_not_runtime_support(source, suffix, messag
 
 
 INVALID = [
+    # Original escape boundary retained verbatim: the translated newline ends
+    # the comment, exposing invalid Java rather than an unavailable feature.
+    original("return 42; // \\u000a comment\n"),
     original("return #;"), original("return `;"), original("return ; +;"),
     original("return );"), original("return else;"), original("final return 42;"),
     "private class Diagnostic{}", "static class Diagnostic{}", "native class Diagnostic{}",

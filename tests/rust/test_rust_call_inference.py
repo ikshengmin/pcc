@@ -74,7 +74,6 @@ def test_inferred_and_explicit_calls_share_one_semantic_instance_registry():
     ('fn id<T>(x:T)->T{x} fn f()->i32{id(4294967296)}','out of range'),
     ('fn unused<T>(){} fn f(){unused();}','result-context inference'),
     ('fn id<T>(x:T)->T{x} fn f(p:&u64){id(p);}','reference arguments'),
-    ('struct R<T>{x:T} impl<T> R<T>{fn get(self)->T{self.x}} fn make<T>(x:T)->R<T>{R::<T>{x:x}} fn f()->u64{make(1).get()}','unresolved inferred receiver'),
 ])
 def test_invalid_or_unimplemented_inference_fails_before_ir(source,message,monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer

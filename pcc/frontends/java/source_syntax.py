@@ -2,9 +2,10 @@
 
 Initial grammar: one ordinary class, static primitive/void methods and scalar locals,
 structured control flow and scalar expressions. Unsupported grammar is never
-discarded. Unicode-escape translation and non-ASCII identifiers are explicit
-boundaries rather than an approximation of Java's lexical translation rules.
+discarded. Unicode escapes are translated before comments and tokens, retaining
+raw-source diagnostic coordinates. Non-ASCII identifiers remain explicit gaps.
 """
+from bisect import bisect_right
 from dataclasses import dataclass, field
 import re
 
@@ -112,16 +113,69 @@ class SourceClass:
         return self.name.rpartition("/")[0]
 
 
+def _raw_token(text, filename, offset, line_starts):
+    line = bisect_right(line_starts, offset)
+    return Token(text, filename, line, offset - line_starts[line - 1] + 1)
+
+
+def _translate_unicode_escapes(source, filename, line_starts):
+    """JLS 3.3: one nonrecursive pass over raw input, before lexical analysis.
+
+    A translated backslash makes the next raw backslash eligible regardless
+    of parity. Otherwise eligibility uses the complete trailing backslash run
+    in the translated result, including backslashes produced by escapes.
+
+    Each escape records only where its contraction ends. Positions before
+    that endpoint map to the escape's initial raw backslash; later positions
+    add the cumulative contraction. No per-character source map is needed.
+    """
+    if "\\u" not in source:
+        return source, [], []
+    result, ends, contractions = [], [], []
+    position, backslashes, previous_escape = 0, 0, False
+    while position < len(source):
+        start = position
+        character = source[position]
+        position += 1
+        escaped = (character == "\\" and (previous_escape or backslashes % 2 == 0)
+                   and source[position:position + 1] == "u")
+        if escaped:
+            while source[position:position + 1] == "u":
+                position += 1
+            digits = source[position:position + 4]
+            if len(digits) != 4 or any(digit not in "0123456789abcdefABCDEF" for digit in digits):
+                _raw_token("\\", filename, start, line_starts).error("malformed Java Unicode escape")
+            # Each escape is one UTF-16 code unit, not a Unicode scalar value:
+            # retain lone surrogates and do not combine adjacent surrogate pairs.
+            character = chr(int(digits, 16))
+            position += 4
+            ends.append(len(result) + 1)
+            contractions.append(position - len(result) - 1)
+        result.append(character)
+        backslashes = backslashes + 1 if character == "\\" else 0
+        previous_escape = escaped
+    return "".join(result), ends, contractions
+
+
 def tokenize(source, filename):
     if not isinstance(source, str):
         raise JavaError("Java source input must be text")
     if len(source) > 1_048_576:
         raise UnsupportedJava("Java source exceeds the initial 1 MiB input limit", code="java.unsupported.source-size-limit")
-    if "\\u" in source:
-        raise UnsupportedJava("Java Unicode-escape translation is not implemented", code="java.unsupported.unicode-escapes")
-    tokens, pos, line, column = [], 0, 1, 1
+    # Diagnostics refer to the supplied source, not a rewritten copy. In
+    # particular an escaped newline terminates a comment without inventing a
+    # physical line in the user's file. Raw CRLF still counts as one newline.
+    line_starts = [0, *(match.end() for match in re.finditer(r"\r\n|\r|\n", source))]
+    source, escape_ends, contractions = _translate_unicode_escapes(source, filename, line_starts)
+
+    def token_at(text, position):
+        escape = bisect_right(escape_ends, position) - 1
+        raw = position + (contractions[escape] if escape >= 0 else 0)
+        return _raw_token(text, filename, raw, line_starts)
+
+    tokens, pos = [], 0
     while pos < len(source):
-        start, at_line, at_column = pos, line, column
+        start = pos
         if source[pos] in " \t\f\r\n":
             pos += 1
             if source[start] == "\r" and source[pos:pos + 1] == "\n":
@@ -132,15 +186,15 @@ def tokenize(source, filename):
         elif source.startswith("/*", pos):
             end = source.find("*/", pos + 2)
             if end < 0:
-                Token("/*", filename, line, column).error("unterminated comment")
+                token_at("/*", pos).error("unterminated comment")
             pos = end + 2
         else:
             match = (CHAR_LITERAL.match(source, pos) if source[pos] == "'" else
                      FLOAT_LITERAL.match(source, pos) or LEXEME.match(source, pos))
             if not match:
                 if source[pos] == "'":
-                    Token("'", filename, line, column).error("invalid Java character literal")
-                token = Token(source[pos], filename, line, column)
+                    token_at("'", pos).error("invalid Java character literal")
+                token = token_at(source[pos], pos)
                 if source[pos] == '"':
                     token.error("unsupported Java source token", code="java.unsupported.string-literals")
                 if source[pos] == "@":
@@ -149,16 +203,10 @@ def tokenize(source, filename):
                     token.error("unsupported Java source token", code="java.unsupported.unicode-tokens")
                 token.error("unsupported Java source token")
             pos = match.end()
-            tokens.append(Token(match.group(), filename, line, column))
+            tokens.append(token_at(match.group(), start))
             if len(tokens) > 100_000:
                 raise UnsupportedJava("Java source exceeds the initial token budget", code="java.unsupported.token-limit")
-        fragment = source[start:pos].replace("\r\n", "\n").replace("\r", "\n")
-        if "\n" in fragment:
-            line += fragment.count("\n")
-            column = len(fragment.rsplit("\n", 1)[1]) + 1
-        else:
-            column += pos - start
-    tokens.append(Token("<eof>", filename, line, column))
+    tokens.append(token_at("<eof>", pos))
     return tokens
 
 

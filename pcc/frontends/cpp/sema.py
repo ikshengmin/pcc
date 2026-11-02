@@ -616,6 +616,11 @@ def resolve_overload(group, arguments, types, coord, null_constants=None, lvalue
                 candidate.template_origin = origin
                 candidate.template_arguments = bindings
                 candidate.explicit_template_arguments = explicit_arguments
+                # A specialization belongs to its declaration's namespace,
+                # not the scope importing or calling the template. In
+                # particular, unnamed-namespace instances remain TU-local.
+                candidate.owner = origin.owner
+                candidate.internal_linkage = origin.internal_linkage
         ranks = []
         for index, (source, destination, null) in enumerate(zip(arguments, candidate.parameters, null_constants)):
             if isinstance(destination, ReferenceType):

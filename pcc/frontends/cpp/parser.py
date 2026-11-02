@@ -842,9 +842,6 @@ class CppParser:
                 from pcc.frontends.cpp.class_templates import parse_declaration
                 parse_declaration(self, tuple(parameters), parent)
             else:
-                if parent.namespace_path():
-                    raise CppDiagnostic("cpp.unsupported.namespace-templates",
-                                        "namespace function templates require qualified template ABI and lookup", keyword.coord)
                 self._function(template_parameters=tuple(parameters), declaration_scope=parent)
         finally:
             self.scope = parent
@@ -2795,6 +2792,8 @@ class CppParser:
             parameters.append(self._decl(symbol.c_name, dtype, symbol.coord))
             environment[id(symbol)] = Expression(c_ast.ID(symbol.c_name, symbol.coord), dtype, True)
         declaration = self._decl(instance.c_name, instance.dtype, origin.coord)
+        if instance.internal_linkage:
+            declaration.storage = ["static"]
         declaration.type = c_ast.FuncDecl(c_ast.ParamList(parameters, origin.coord),
                                           declaration.type, origin.coord)
         previous_return = self.return_type

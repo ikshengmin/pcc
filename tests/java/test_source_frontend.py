@@ -124,12 +124,21 @@ def test_source_semantic_errors_are_rejected_before_ir(body, helpers, message, m
     ("class C {int run(){return 1;}}", "static source methods"),
     ("class C {static synchronized int run(){return 1;}}", "static source methods"),
     (source("return new Object();"), "unsupported Java"),
-    (source("return 1; // \\u000a comment\n"), "Unicode-escape"),
     (source("int π=1;return π;"), "unsupported Java source token"),
 ])
 def test_source_runtime_and_lexical_boundaries_fail_explicitly(original, message):
     with pytest.raises(UnsupportedJava, match=message):
         compile_source(original)
+
+
+def test_original_escaped_comment_newline_exposes_invalid_java_before_ir(monkeypatch):
+    from pcc.frontends.java.source_lowering import SourceLowerer
+    monkeypatch.setattr(SourceLowerer, "lower", lambda *args: pytest.fail("invalid original reached IR"))
+    # Preserve the exact old boundary input: translation exposes `comment` as
+    # source, so implementing escapes must not turn this original into a pass.
+    with pytest.raises(JavaError) as caught:
+        compile_source(source("return 1; // \\u000a comment\n"))
+    assert type(caught.value) is JavaError
 
 
 @pytest.mark.parametrize("literal,expected", [

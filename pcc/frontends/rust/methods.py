@@ -1,6 +1,7 @@
 """Nominal method lookup with ordered concrete static trait candidates.
 
-Impl parameters are inferred only by matching an already-known nominal owner.
+Impl parameters are matched against an already-known nominal owner. Its type
+arguments may remain inference variables only when they cannot affect lookup.
 Bodies use the same abstract checker and shared function instance worklist as
 free functions. Method parameters are inferred later by the ordinary call
 checker; lookup must not prematurely materialize an owner-only instance.
@@ -95,6 +96,30 @@ class InherentMethods:
                    and all(local.proves(argument, trait) for trait in local.parameter_bounds[parameter])
                    for parameter, argument in zip(self.parameters[implementation], arguments))
 
+    def check_inferred_receiver(self, owner, name, token):
+        """Admit unresolved arguments, never an unresolved nominal identity.
+
+        A bounded or competing trait candidate can change which receiver wins
+        after inference. Leave those cases at the existing capability boundary
+        rather than guessing from a default integer or retrying a failed call.
+        """
+        from .standard_markers import SIZED
+
+        if isinstance(owner, TypeApplication):
+            inherent = self.declarations.get((owner.name, name))
+            local, markers = self.checker.traits, self.checker.standard_markers
+            if inherent is not None and inherent.receiver:
+                parameters = self.parameters[inherent.implementation]
+                unconditional = all(not local.parameter_bounds[parameter]
+                                    and markers.constraints[parameter] <= {SIZED}
+                                    for parameter in parameters)
+                competing = any(isinstance(target, TypeApplication)
+                                and target.name == owner.name and name in members
+                                for (_, target), members in local.impls.items())
+                if unconditional and not competing:
+                    return
+        raise token.error('method selection on an unresolved inferred receiver requires later constraint solving, which is not implemented')
+
     def lookup(self, owner, name, token, *, receiver=False):
         through_reference = isinstance(owner, SharedReference)
         reference_mutable = owner.mutable if through_reference else None
@@ -103,6 +128,10 @@ class InherentMethods:
         # Typed receivers are canonical, source-qualified owners are lexical.
         if not receiver:
             owner = self.checker.generics.normalize(owner, token)
+        else:
+            from .call_inference import pending_integer
+            if pending_integer(owner):
+                self.check_inferred_receiver(owner, name, token)
         self.checker.valid_type(owner, token)
         base = owner.name if isinstance(owner, TypeApplication) else owner
         if not receiver:
