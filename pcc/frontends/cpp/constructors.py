@@ -100,9 +100,6 @@ def parse_constructor(parser, definition=None, *, explicit=False):
         if is_enum_type(pointee) and pointee.internal_linkage:
             raise CppDiagnostic("cpp.unsupported.enum-linkage", "constructor signatures with internal-linkage enum types require ABI support", name.coord)
     inline_definition = not outside and parser._peek().value != ";"
-    if (outside or inline_definition) and any(isinstance(t, ReferenceType) and is_class_type(t.referent)
-                                               for _, t in params):
-        raise CppDiagnostic("cpp.unsupported.class-reference-values", "class-reference constructor bodies require copy/lifetime semantics", name.coord)
     if outside and parser._peek().value not in (":", "{"):
         raise CppDiagnostic("cpp.member-definition-required", "out-of-class constructor declaration requires a body", name.coord)
     signature = tuple(unqualified(dtype) for _, dtype in params)
@@ -305,7 +302,12 @@ def construct_local(parser, symbol):
             raise CppDiagnostic("cpp.unsupported.block-function-declarations", "function declaration ambiguity is not object construction", parser._peek().coord)
         while True:
             expression = parser._expression()
-            parser._require_value(expression)
+            # A class lvalue may bind a selected reference parameter without
+            # loading/copying its aggregate value. Only constructor selection
+            # opts into that address-only path; ordinary function calls retain
+            # their separate class-value/ADL capability boundary.
+            parser._require_value(expression, allow_class=True,
+                                  object_address=is_class_type(expression.dtype))
             arguments.append(parser._decay_array(expression))
             if parser._accept(")"):
                 break
@@ -352,6 +354,13 @@ def constructor_call(parser, dtype, arguments, address, coord, require_closed=Fa
                      direct_list=False, copy_initialization=False):
     """Select the existing C1 at an already-evaluated complete-object address."""
     group = dtype.definition.constructors
+    if (len(arguments) == 1 and unqualified(arguments[0].dtype) is dtype
+            and not any(is_copy_constructor(candidate, dtype) for candidate in group.overloads)):
+        # A same-class argument can select an implicitly declared copy
+        # constructor even when no spelled constructor is viable. Do not
+        # mistake the incomplete candidate set for a no-viable diagnostic.
+        raise CppDiagnostic("cpp.unsupported.class-initialization",
+                            "implicit copy constructor declaration/definition requires special-member semantics", coord)
     if copy_initialization and not direct_list:
         from pcc.frontends.cpp.constructor_lists import converting_candidates
         group = converting_candidates(group)
@@ -386,9 +395,29 @@ def constructor_call(parser, dtype, arguments, address, coord, require_closed=Fa
         # is a permitted implementation order, not a C++ ordering guarantee.
         preparation, converted = sequence_arguments(parser, arguments, selected.parameters)
     else:
-        converted = [parser._convert(arg, target, coord)
+        converted = [convert_constructor_argument(parser, arg, target, coord)
                      for arg, target in zip(arguments, selected.parameters)]
     call = c_ast.FuncCall(c_ast.ID(selected.c_name, coord), c_ast.ExprList([address] + converted, coord), coord)
     if preparation:
         return c_ast.StmtExpr(c_ast.Compound(preparation + [call], coord), coord)
     return call
+
+
+def convert_constructor_argument(parser, expression, dtype, coord):
+    """Borrow compatible class lvalues only at a selected C1 reference slot."""
+    if isinstance(dtype, ReferenceType) and is_class_type(dtype.referent):
+        from pcc.frontends.cpp.references import bind
+        return bind(parser, expression, dtype, coord, allow_class=True)
+    return parser._convert(expression, dtype, coord)
+
+
+def is_copy_constructor(symbol, owner):
+    """N4659 [class.copy.ctor]/1: a same-class reference plus only defaults."""
+    if not symbol.parameters:
+        return False
+    first = symbol.parameters[0]
+    if not isinstance(first, ReferenceType) or unqualified(first.referent) is not owner:
+        return False
+    defaults = getattr(symbol, "default_arguments", ())
+    return len(symbol.parameters) == 1 or (
+        len(defaults) == len(symbol.parameters) and all(defaults[1:]))

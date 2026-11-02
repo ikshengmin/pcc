@@ -2,7 +2,8 @@
 
 Reference identity survives overload selection and declaration matching. Only
 projection to C uses an address parameter; source names denote the referent.
-Temporary materialization, reference results and copying classes remain gaps.
+Selected constructor parameters may also borrow compatible class lvalues;
+temporary materialization, reference results and implicit class copies remain gaps.
 """
 from pcc.frontends.c.ast import c_ast
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
@@ -38,12 +39,12 @@ def compare(source, first, second, types, null_pointer=False):
         second.referent if second_ref else second, null_pointer)
 
 
-def bind(parser, expression, destination, coord):
+def bind(parser, expression, destination, coord, *, allow_class=False):
     from pcc.frontends.cpp.classes import is_class_type
     if expression.assignment_result:
         raise CppDiagnostic('cpp.unsupported.references',
                             'binding assignment-result lvalues requires address-preserving lowering', coord)
-    if is_class_type(destination.referent):
+    if is_class_type(destination.referent) and not allow_class:
         raise CppDiagnostic('cpp.unsupported.class-reference-values',
                             'class-reference declarations do not implement class value/copy calls', coord)
     if not directly_compatible(expression.dtype, destination, expression.lvalue):
