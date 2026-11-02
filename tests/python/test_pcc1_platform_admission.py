@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import shutil
 import struct
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -22,6 +23,7 @@ from pcc.frontends.python import pipeline_targets
 from pcc.tools import runtime_archive_provenance as provenance
 from scripts import verify_pcc1_platform as admission
 from scripts import bootstrap_platform as platform_producer
+from scripts import platform_process_watchdog as watchdog
 
 
 def _write(path, value):
@@ -141,9 +143,14 @@ def product(tmp_path, monkeypatch):
         else:
             text = "0\n" + str(2**80 + 42) + "\n"
         log.write_text(text)
-        log.with_suffix(".resources.jsonl").write_text("{\"elapsed\":0,\"rss\":1,\"processes\":[]}\n")
-        return {"seconds": 1.0, "peak_tree_rss": 1, "log": str(log),
-                "command": command, "launched_command": command}
+        sample = {"elapsed": 0, "rss": 1, "processes": []}
+        record = {"seconds": 1.0, "peak_tree_rss": 1, "log": str(log),
+                  "command": command, "launched_command": command}
+        if kwargs.get("observe_stage1") and not kwargs.get("native"):
+            record["stage1_observation"] = watchdog._stage1_observation(kwargs["env"], "linux")
+            sample.update({"cpu_time": [], "stage1_observation": record["stage1_observation"]})
+        log.with_suffix(".resources.jsonl").write_text(json.dumps(sample) + "\n")
+        return record
 
     monkeypatch.setattr(platform_producer, "run", modeled_execution)
     directory = tmp_path / "stage1"
@@ -169,6 +176,11 @@ def _change(path, edit):
 
 
 def test_actual_platform_producer_and_consumer_contract(product, monkeypatch):
+    stage = json.loads(product.receipt.read_text())["stages"][0]
+    assert stage["command"] == stage["launched_command"] == [
+        sys.executable, "-m", "pcc", "--backend", "self", "--ir-scaffold=on",
+        str(product.source / "pcc/__main__.py"), "-o", str(product.compiler),
+    ]
     monkeypatch.setattr(platform_producer, "run", lambda *args, **kwargs: pytest.fail("producer executed"))
     monkeypatch.setattr(owned_runtime_build, "ensure_target_runtime",
                         lambda *args, **kwargs: pytest.fail("runtime provisioning attempted"))
@@ -180,6 +192,121 @@ def test_actual_platform_producer_and_consumer_contract(product, monkeypatch):
     assert str(product.directory / "canary1") in result["files"]
     assert "fixed point and application benchmark unproven" in result["qualification"]
     assert before == {str(path): path.read_bytes() for path in product.directory.rglob("*") if path.is_file()}
+
+
+@pytest.mark.parametrize("start,stop,replacement", [
+    pytest.param(0, 1, ["python"], id="relative-host"),
+    pytest.param(1, 2, ["-c"], id="wrong-host-mode"),
+    pytest.param(2, 3, ["other"], id="wrong-module"),
+    pytest.param(3, 4, ["--other"], id="wrong-backend-option"),
+    pytest.param(4, 5, ["llvm"], id="foreign-backend"),
+    pytest.param(5, 6, ["--ir-scaffold=off"], id="wrong-scaffold"),
+    pytest.param(5, 6, [], id="missing-scaffold"),
+    pytest.param(5, 5, ["--python-libpython", "off"], id="removed-libpython-option"),
+    pytest.param(6, 6, ["--extra"], id="extra-option"),
+    pytest.param(9, 9, ["--extra"], id="trailing-option"),
+    pytest.param(6, 7, ["pcc/__main__.py"], id="relative-source"),
+    pytest.param(6, 7, ["/other/pcc/__init__.py"], id="wrong-source-entry"),
+    pytest.param(6, 7, [None], id="untyped-source"),
+    pytest.param(7, 8, ["--output"], id="wrong-output-option"),
+    pytest.param(8, 9, ["other-pcc1"], id="wrong-output"),
+])
+def test_rejects_mutated_stage1_build_command(product, start, stop, replacement):
+    def mutate(receipt):
+        stage = receipt["stages"][0]
+        command = stage["command"]
+        command[start:stop] = replacement
+        # Keep execution records consistent: the command policy itself must
+        # reject extra options and changed ownership/entrypoint/output tokens.
+        stage["launched_command"] = command.copy()
+
+    _change(product.receipt, mutate)
+    with pytest.raises(admission.AdmissionError, match="invalid Stage1 build command"):
+        _admit(product)
+
+
+def test_rejects_stage1_launched_command_different_from_admitted_command(product):
+    def mutate(receipt):
+        receipt["stages"][0]["launched_command"][4] = "llvm"
+
+    _change(product.receipt, mutate)
+    with pytest.raises(admission.AdmissionError, match="invalid completed execution record"):
+        _admit(product)
+
+
+@pytest.fixture
+def observation(monkeypatch):
+    monkeypatch.setattr(watchdog.os, "sysconf", lambda name: 250, raising=False)
+    return watchdog._stage1_observation({"ImageVersion": "20261029.1"}, "linux")
+
+
+@pytest.mark.parametrize("frequency", [250, None])
+def test_admits_historical_observation_without_querying_current_host(monkeypatch, frequency):
+    monkeypatch.setattr(watchdog.os, "sysconf", lambda name: frequency, raising=False)
+    observation = watchdog._stage1_observation({"ImageVersion": "20261029.1"}, "linux")
+    monkeypatch.setattr(watchdog.os, "sysconf", lambda *args: pytest.fail("host capacity queried"))
+    monkeypatch.setenv("ImageVersion", "different-current-host")
+    admission._stage1_observation(observation)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("schema", "pcc.stage1-cpu-observation.v2"), ("unexpected", None),
+    ("cpu_status", "unavailable"), ("cpu_source", "external"),
+    ("unavailable_reason", "not sampled"), ("cpu_columns", []), ("cpu_unit", "seconds"),
+    ("ticks_per_second", True), ("ticks_per_second", 0), ("ticks_per_second", -1),
+    ("ticks_per_second", "250"), ("ticks_per_second", 250.0), ("ticks_per_second", None),
+    ("tick_frequency_source", None), ("tick_frequency_status", "unavailable"),
+    ("null_cpu_fields", "zero"), ("coverage", "complete_tree_cpu"),
+    ("effective_cpu_quota", 8), ("affinity_cpu_count", 8), ("capacity_status", "available"),
+    ("runner_environment", {}),
+])
+def test_rejects_invalid_stage1_observation_metadata(observation, field, value):
+    observation[field] = value
+    with pytest.raises(admission.AdmissionError, match="Stage1 observation"):
+        admission._stage1_observation(observation)
+
+
+@pytest.mark.parametrize("missing", ["schema", "ticks_per_second", "runner_environment"])
+def test_rejects_missing_stage1_observation_field(observation, missing):
+    observation.pop(missing)
+    with pytest.raises(admission.AdmissionError, match="Stage1 observation schema"):
+        admission._stage1_observation(observation)
+
+
+@pytest.mark.parametrize("value", [True, 4, "", "x" * 129, "bad\nvalue", "非ASCII", "path/value"])
+def test_rejects_unbounded_or_untyped_observation_environment_value(observation, value):
+    observation["runner_environment"]["ImageVersion"]["value"] = value
+    with pytest.raises(admission.AdmissionError, match="Stage1 observation environment value"):
+        admission._stage1_observation(observation)
+
+
+@pytest.mark.parametrize("item", [
+    None, {}, {"value": "valid", "status": "supplied_environment", "extra": None},
+    {"value": None, "status": "supplied_environment"},
+    {"value": "valid", "status": "unavailable"},
+])
+def test_rejects_malformed_observation_environment_item(observation, item):
+    observation["runner_environment"]["ImageVersion"] = item
+    with pytest.raises(admission.AdmissionError, match="Stage1 observation environment"):
+        admission._stage1_observation(observation)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "unknown"])
+def test_rejects_wrong_observation_environment_allowlist(observation, mutation):
+    environment = observation["runner_environment"]
+    if mutation == "missing":
+        environment.pop("RUNNER_OS")
+    else:
+        environment["RUNNER_NAME"] = {"value": "other", "status": "supplied_environment"}
+    with pytest.raises(admission.AdmissionError, match="Stage1 observation environment fields"):
+        admission._stage1_observation(observation)
+
+
+@pytest.mark.parametrize("value", [None, {}])
+def test_rejects_invalid_observation_in_actual_stage1_receipt(product, value):
+    _change(product.receipt, lambda receipt: receipt["stages"][0].update({"stage1_observation": value}))
+    with pytest.raises(admission.AdmissionError, match="Stage1 observation schema"):
+        _admit(product)
 
 
 @pytest.mark.parametrize("profile", [

@@ -378,6 +378,7 @@ def test_exported_relocated_tree_passes_the_real_platform_consumer(tmp_path, mon
     """
     from pcc.frontends.python import owned_runtime_build
     from scripts import bootstrap_platform as producer
+    from scripts import platform_process_watchdog as watchdog
     from scripts import verify_pcc1_platform as consumer
     from tests.python.test_pcc1_platform_admission import _executable, _runtime_fixture
 
@@ -427,8 +428,11 @@ def test_exported_relocated_tree_passes_the_real_platform_consumer(tmp_path, mon
         # The existing consumer accepts empty logs/samples; don't manufacture
         # observations just to satisfy a packaging nonempty-file check.
         log.with_suffix(".resources.jsonl").write_bytes(b"")
-        return {"seconds": 1.0, "peak_tree_rss": 1, "log": str(log),
-                "command": command, "launched_command": command}
+        record = {"seconds": 1.0, "peak_tree_rss": 1, "log": str(log),
+                  "command": command, "launched_command": command}
+        if kwargs.get("observe_stage1") and not kwargs.get("native"):
+            record["stage1_observation"] = watchdog._stage1_observation(kwargs["env"], "linux")
+        return record
 
     monkeypatch.setattr(producer, "run", modeled_execution)
     shared_directory = root / SHARED

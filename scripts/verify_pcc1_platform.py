@@ -25,7 +25,9 @@ TARGET = "x86_64-unknown-linux-gnu"
 SOURCE_INPUTS = ("pcc", "scripts", "src", "include", "utils", "hatch_build.py",
                  "pyproject.toml", "uv.lock", ".python-version")
 EXECUTION_FIELDS = {"seconds", "peak_tree_rss", "log", "command", "launched_command"}
-STAGE_FIELDS = EXECUTION_FIELDS | {"stage", "sha256", "input_compiler_sha256", "dependencies", "canary"}
+STAGE_FIELDS = EXECUTION_FIELDS | {
+    "stage", "sha256", "input_compiler_sha256", "dependencies", "canary", "stage1_observation",
+}
 RECEIPT_FIELDS = {
     "schema", "target", "gc", "source", "runtime", "configuration", "compiler_path",
     "worker_jobs", "tree_rss_limit", "stages", "fixed_point", "qualification_scope",
@@ -277,6 +279,57 @@ def _execution(record, expected_command, expected_log, rss_limit):
              and record.get("log") == str(expected_log), "invalid completed execution record")
 
 
+def _stage1_observation(record):
+    """Validate Linux producer metadata, not current host capacity or ownership.
+
+    The optional clock frequency and supplied environment describe the build
+    host. They must not be re-queried or compared to the admitting host.
+    """
+    fixed = {
+        "schema": "pcc.stage1-cpu-observation.v1",
+        "cpu_status": "sampled",
+        "cpu_source": "same_linux_proc_stat_read",
+        "unavailable_reason": None,
+        "cpu_columns": ["pid", "start_time_ticks", "own_user_ticks", "own_system_ticks"],
+        "cpu_unit": "clock_ticks",
+        "null_cpu_fields": "unavailable_or_malformed_own_cpu_fields",
+        "coverage": "sampled_owned_processes_only_not_complete_tree_cpu",
+        "effective_cpu_quota": None,
+        "affinity_cpu_count": None,
+        "capacity_status": "unavailable_not_observed",
+    }
+    _require(isinstance(record, dict)
+             and set(record) == set(fixed) | {
+                 "ticks_per_second", "tick_frequency_source", "tick_frequency_status", "runner_environment",
+             }
+             and all(record[key] == value for key, value in fixed.items()),
+             "invalid Stage1 observation schema")
+    frequency = record["ticks_per_second"]
+    _require((frequency is None or type(frequency) is int and frequency > 0)
+             and record["tick_frequency_source"] == (
+                 None if frequency is None else "os.sysconf(SC_CLK_TCK)")
+             and record["tick_frequency_status"] == (
+                 "unavailable" if frequency is None else "available"),
+             "invalid Stage1 observation clock metadata")
+    environment = record["runner_environment"]
+    _require(isinstance(environment, dict) and set(environment) == {
+        "RUNNER_OS", "RUNNER_ARCH", "ImageOS", "ImageVersion",
+        "PCC_PY_FRONTEND_JOBS", "PCC_SELF_BACKEND_JOBS",
+    }, "invalid Stage1 observation environment fields")
+    for item in environment.values():
+        _require(isinstance(item, dict) and set(item) == {"value", "status"},
+                 "invalid Stage1 observation environment item")
+        value = item["value"]
+        if value is None:
+            _require(item["status"] == "unavailable", "invalid Stage1 observation environment status")
+        else:
+            _require(type(value) is str and 0 < len(value) <= 128
+                     and all(character.isascii() and
+                             (character.isalnum() or character in "._+-") for character in value)
+                     and item["status"] == "supplied_environment",
+                     "invalid Stage1 observation environment value")
+
+
 def verify_platform_compiler(receipt_path, *, compiler, runtime_archive,
                              source_root, gc_backend, threads, refcount="atomic"):
     """Admit an un-reused Stage1 plus its native canary from the real producer.
@@ -321,17 +374,18 @@ def verify_platform_compiler(receipt_path, *, compiler, runtime_archive,
                  and type(stage.get("stage")) is int and stage["stage"] == 1
                  and _sha256(stage.get("input_compiler_sha256")),
                  "require the original un-reused Stage1 producer receipt")
+        _stage1_observation(stage["stage1_observation"])
         original_compiler = receipt.get("compiler_path")
         _require(isinstance(original_compiler, str) and Path(original_compiler).is_absolute()
                  and Path(original_compiler).name == "pcc1", "invalid producer compiler path")
         original_dir = Path(original_compiler).parent
         command = stage.get("command")
-        _require(isinstance(command, list) and len(command) == 11
+        _require(isinstance(command, list) and len(command) == 9
                  and isinstance(command[0], str) and Path(command[0]).is_absolute()
-                 and command[1:8] == ["-m", "pcc", "--backend", "self", "--ir-scaffold=on"]
+                 and command[1:6] == ["-m", "pcc", "--backend", "self", "--ir-scaffold=on"]
                  and command[-2:] == ["-o", original_compiler]
-                 and isinstance(command[8], str) and Path(command[8]).is_absolute()
-                 and command[8].endswith("/pcc/__main__.py"), "invalid Stage1 build command")
+                 and isinstance(command[6], str) and Path(command[6]).is_absolute()
+                 and command[6].endswith("/pcc/__main__.py"), "invalid Stage1 build command")
         stage_execution = {key: stage[key] for key in EXECUTION_FIELDS}
         _execution(stage_execution, command, original_dir / "stage1.log", rss_limit)
         compiler_record = files.add(compiler)
