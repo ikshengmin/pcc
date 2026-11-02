@@ -214,6 +214,7 @@ class StaticTraits:
         names = {trait.token.text for trait in self.declarations}
         functions = list(self.checker.functions)
         functions.extend(function for trait in self.declarations for function in trait.methods)
+        functions.extend(self.implementations)  # Empty impl headers are still declarations.
         first = next((bound.token for function in functions
                       for _, bounds in function.effective_parameter_bounds for bound in bounds
                       if bound.path in names and not bound.relaxed
@@ -227,10 +228,12 @@ class StaticTraits:
         if checked.provenance.edition != str(self.checker.standard_markers.policy.edition):
             raise first.error('local trait context and checked edition differ')
 
+    def proves(self, owner, trait):
+        return (trait in self.parameter_bounds.get(owner, ())
+                if isinstance(owner, TypeParameter) else (trait, owner) in self.impls)
+
     def require(self, owner, trait, token):
-        satisfied = (trait in self.parameter_bounds.get(owner, ())
-                     if isinstance(owner, TypeParameter) else (trait, owner) in self.impls)
-        if not satisfied:
+        if not self.proves(owner, trait):
             raise token.error(f'unsatisfied local trait bound {owner}: {trait}')
 
     def check_function_call(self, parameters, arguments, token):

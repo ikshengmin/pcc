@@ -148,7 +148,7 @@ REFERENCE_INVALID = (
 )
 CAPABILITY = (
     ('self', 'struct H{x:u64}impl H{fn f(self)where Self:Sized{}}', 'where Self predicates'),
-    ('bounded-impl', 'struct H<T>{x:T}impl<T:Copy>H<T>{fn f(self)->T{self.x}}', 'bounds'),
+    # Exact bounded impl control is retained in test_rust_inherent_impl_bounds.
     ('trait-method', 'trait A{fn f<U>(u:U)->U where U:Copy;}', 'where constraints'),
 )
 

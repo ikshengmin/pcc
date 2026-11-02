@@ -171,6 +171,12 @@ class Implementation:
     type_parameters: tuple[Token, ...] = ()
     trait: str | None = None
     documentation: tuple[Documentation, ...] = ()
+    parameter_bounds: tuple[tuple[Token, tuple[TypeBound, ...]], ...] = ()
+    where_predicates: tuple[WherePredicate, ...] = ()
+
+    @property
+    def effective_parameter_bounds(self):
+        return merge_parameter_bounds(self.parameter_bounds, self.where_predicates)
 
 
 @dataclass
@@ -195,6 +201,19 @@ class TypeBound:
 class WherePredicate:
     parameter: Token
     bounds: tuple[TypeBound, ...]
+
+
+def merge_parameter_bounds(parameter_bounds, where_predicates):
+    # Keep source ASTs intact; repeated predicates accumulate obligations.
+    merged = {}
+    groups = list(parameter_bounds)
+    groups.extend((predicate.parameter, predicate.bounds) for predicate in where_predicates)
+    for parameter, bounds in groups:
+        token, combined = merged.setdefault(parameter.text, (parameter, []))
+        combined.extend(bounds)
+        if len(combined) > 16:
+            raise parameter.error('combined type parameter bounds exceed implementation limit (16)')
+    return tuple((token, tuple(bounds)) for token, bounds in merged.values())
 
 
 @dataclass
@@ -227,15 +246,7 @@ class Function:
         # Preserve both source forms on the AST. Their obligations accumulate
         # by declared parameter; a later predicate must never reset an earlier
         # inline/where constraint. Keep duplicates for relaxed-bound validation.
-        merged = {}
-        groups = list(self.parameter_bounds)
-        groups.extend((predicate.parameter, predicate.bounds) for predicate in self.where_predicates)
-        for parameter, bounds in groups:
-            token, combined = merged.setdefault(parameter.text, (parameter, []))
-            combined.extend(bounds)
-            if len(combined) > 16:
-                raise parameter.error('combined type parameter bounds exceed implementation limit (16)')
-        return tuple((token, tuple(bounds)) for token, bounds in merged.values())
+        return merge_parameter_bounds(self.parameter_bounds, self.where_predicates)
 
     @property
     def owner_parameter_count(self):
@@ -795,18 +806,24 @@ class Parser:
                 if public or repr_c or enum_repr or no_mangle:
                     raise self.token.error("visibility and attributes on impl blocks are not implemented")
                 token = self.tokens[self.pos - 1]
-                parameters = self.generic_parameters()
+                parameters = self.generic_parameters(allow_bounds=True)
+                parameter_bounds = tuple(self.last_parameter_bounds)
                 owner = self.type()
                 trait_name = None
                 if self.accept("for"):
                     if parameters or not isinstance(owner, str):
                         raise token.error("generic traits and blanket/generic trait impls are not implemented")
                     trait_name, owner = owner, self.type()
+                where_predicates = ()
                 if self.token.text == "where":
-                    raise self.token.error("impl constraints are not implemented")
+                    where_token = self.take()
+                    if trait_name is not None:
+                        raise where_token.error("trait impl constraints require generic/coherence checking, which is not implemented")
+                    where_predicates = self.function_where_clause(parameters, owner_parameters=())
                 self.expect("{")
                 docs.extend(self.documentation(inner=True))
-                implementation = Implementation(token, owner, parameters, trait_name, tuple(docs))
+                implementation = Implementation(token, owner, parameters, trait_name, tuple(docs),
+                                                parameter_bounds, where_predicates)
                 self.implementations.append(implementation)
                 while not self.accept("}"):
                     method_docs = self.documentation()

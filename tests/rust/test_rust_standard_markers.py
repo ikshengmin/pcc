@@ -119,7 +119,7 @@ CAPABILITY = (
     ('nostd-std', '#![no_std]fn f<T:std::marker::Copy>(x:T)->T{x}', 'unavailable'),
     ('local-relaxed', 'trait Sized{}fn f<T:?Sized>(){}', 'local/user trait'),
     ('data', 'struct R<T:Copy>{x:T}', 'bounds'),
-    ('impl', 'struct R<T>{x:T}impl<T:Copy>R<T>{}', 'bounds'),
+    # Exact impl control is a checked positive in test_rust_inherent_impl_bounds.
     # Exact free-function where control retained in test_rust_where_bounds.
     ('dst', 'fn f<T:?Sized>(x:&T){}fn g(x:&[u64]){f(x)}', 'slice types'),
     ('no-core', '#![no_core]fn f<T:Copy>(x:T)->T{x}', 'no_core requires'),

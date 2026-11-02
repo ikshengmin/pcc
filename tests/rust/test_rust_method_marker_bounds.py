@@ -98,7 +98,7 @@ def test_method_abstract_and_call_obligations_fail_without_lowering(name,text,me
 CAPABILITY = (
     # Exact local-copy and method-where controls are now certified-positive
     # CI inputs in test_rust_inherent_local_bounds, not capability rejections.
-    ('impl-bound', 'struct R<T>{x:T}impl<T:Copy> R<T>{}', 'bounds'),
+    # Exact impl-bound control is retained in test_rust_inherent_impl_bounds.
     ('data-bound', 'struct R<T:Copy>{x:T}', 'bounds'),
     ('clone', 'struct R{x:u64}impl R{fn take<U:Clone>(self,u:U)->U{u}}', 'only canonical'),
     ('dst', 'struct R{x:u64}impl R{fn inspect<U:?Sized>(&self,u:&U){}}fn f(s:&[u64]){R{x:0}.inspect(s)}', 'slice types'),

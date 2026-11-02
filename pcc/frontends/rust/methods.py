@@ -5,8 +5,10 @@ Bodies use the same abstract checker and shared function instance worklist as
 free functions. Method parameters are inferred later by the ordinary call
 checker; lookup must not prematurely materialize an owner-only instance.
 """
+from dataclasses import replace
+
 from .generics import PRIMITIVES
-from .types import SharedReference, TypeApplication
+from .types import SharedReference, TypeApplication, TypeParameter
 
 
 class InherentMethods:
@@ -14,6 +16,7 @@ class InherentMethods:
         self.checker = checker
         self.implementations = implementations
         self.declarations = {}
+        self.parameters = {}
 
     def prepare(self):
         for implementation in self.implementations:
@@ -41,6 +44,19 @@ class InherentMethods:
                     raise implementation.token.error('specialized, repeated or unconstrained impl parameters require coherence checking, which is not implemented')
             elif isinstance(owner, TypeApplication) or names:
                 raise implementation.token.error('nongeneric impl owner cannot have generic arguments or unconstrained parameters')
+            token = implementation.token
+            identity = f'inherent impl {token.source_path or "<input>"}:{token.line}:{token.column}'
+            scope = {p.text: TypeParameter(identity, i, p.text)
+                     for i, p in enumerate(implementation.type_parameters)}
+            # Resolve in the impl's lexical scope, before any method suffix
+            # can shadow a trait spelling. Even an empty impl must be checked.
+            local = self.checker.traits
+            markers = self.checker.standard_markers
+            marker_bounds = local.prepare_function_bounds(implementation, scope)
+            markers.prepare(replace(implementation, parameter_bounds=marker_bounds,
+                                    where_predicates=()), scope)
+            self.parameters[implementation] = tuple(scope.values())
+            self.checker.generics.normalize(owner, token, scope)
         for function in self.checker.functions:
             if function.implementation is None or function.implementation.trait is not None:
                 continue
@@ -53,6 +69,31 @@ class InherentMethods:
             if hasattr(definition, 'variants') and any(t.text == function.token.text for t, _ in definition.variants):
                 raise function.token.error('associated names colliding with enum variants are not implemented')
             self.declarations[key] = function
+
+    def inherit_contract(self, function, scope):
+        implementation = function.implementation
+        if implementation is None or implementation.trait is not None:
+            return
+        local = self.checker.traits.parameter_bounds
+        markers = self.checker.standard_markers.constraints
+        for parameter in self.parameters[implementation]:
+            target = scope[parameter.name]
+            local[target] = local[target] | local[parameter]
+            markers[target] = markers[target] | markers[parameter]
+
+    def owner_arguments(self, implementation, owner):
+        if not implementation.type_parameters:
+            return ()
+        bindings = dict(zip(implementation.owner.arguments, owner.arguments))
+        return tuple(bindings[p.text] for p in implementation.type_parameters)
+
+    def applicable(self, function, owner):
+        implementation = function.implementation
+        local, markers = self.checker.traits, self.checker.standard_markers
+        arguments = self.owner_arguments(implementation, owner)
+        return all(markers.satisfies(markers.constraints[parameter], argument)
+                   and all(local.proves(argument, trait) for trait in local.parameter_bounds[parameter])
+                   for parameter, argument in zip(self.parameters[implementation], arguments))
 
     def lookup(self, owner, name, token, *, receiver=False):
         through_reference = isinstance(owner, SharedReference)
@@ -72,6 +113,11 @@ class InherentMethods:
                 # legal but requires its trait-qualified path here.
                 return None
         inherent = self.declarations.get((base, name))
+        unavailable = inherent is not None and not self.applicable(inherent, owner)
+        if unavailable:
+            # Only enclosing impl predicates affect candidate availability.
+            # Method where/suffix predicates remain post-selection checks.
+            inherent = None
         traits = self.checker.traits.candidates(owner, name)
         function = None
         if receiver:
@@ -98,6 +144,8 @@ class InherentMethods:
             if function is None:
                 if inherent is not None or traits:
                     raise token.error('associated function has no self receiver; use its qualified type path')
+                if unavailable:
+                    raise token.error('unsatisfied inherent impl bounds')
                 raise token.error('unknown inherent or concrete trait method')
         elif inherent is not None:
             function = inherent
@@ -106,14 +154,12 @@ class InherentMethods:
         elif traits:
             function = traits[0]
         else:
+            if unavailable:
+                raise token.error('unsatisfied inherent impl bounds')
             return None
         # Resolution is complete. Do not retry another candidate because this
         # selected receiver fails mutability, move or lifetime requirements.
         if receiver and through_reference and not isinstance(function.params[0][1], SharedReference):
             raise token.error('cannot move a value receiver out of a shared reference; general autoderef is not implemented')
-        arguments = ()
-        if function.implementation.type_parameters:
-            pattern = function.implementation.owner
-            bindings = dict(zip(pattern.arguments, owner.arguments))
-            arguments = tuple(bindings[p.text] for p in function.implementation.type_parameters)
+        arguments = self.owner_arguments(function.implementation, owner)
         return function, arguments

@@ -130,6 +130,10 @@ class StandardMarkers:
             return all(self.proves_sized(item) for item in children(ty))
         return True  # Called only after existing type/layout validation.
 
+    def satisfies(self, obligations, argument):
+        return ((SIZED not in obligations or self.proves_sized(argument))
+                and (COPY not in obligations or self.checker.copy_type(argument)))
+
     def check_call(self, parameters, arguments, token):
         for parameter, argument in zip(parameters, arguments):
             obligations = self.call_constraints.get(parameter, self.constraints[parameter])

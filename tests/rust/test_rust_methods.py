@@ -49,7 +49,7 @@ def compile_source(source):
     ('struct R{x:i64} impl R{fn f(self:Self){}}', 'explicit receiver'),
     ('struct R{x:i64} impl R{fn f(&mut self){}}', 'mutable references require a matching external rustc check record'),
     ('struct R{x:i64} impl Trait for R{}', 'trait impls'),
-    ('struct R<T>{x:T} impl<T:Copy> R<T>{}', 'bounds'),
+    # Exact bounded impl source is a certified positive in test_rust_inherent_impl_bounds.
     ('struct R{x:i64} impl R{fn f(self){self.x=1;}}', 'immutable'),
     ('struct R{x:i64} impl R{fn f(self)->i64{missing(self)}}', 'unknown function'),
     ('struct R<T>{x:T} impl<T> R<T>{fn f(self)->T{self.x+self.x}}', 'operator'),
