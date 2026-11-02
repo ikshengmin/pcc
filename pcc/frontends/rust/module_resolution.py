@@ -166,12 +166,13 @@ def inline_crate(parser, functions):
     files = MappingProxyType({path: file})
     encoded = path.encode('utf-8')
     closure = sha256(len(encoded).to_bytes(8, 'big') + encoded + bytes.fromhex(raw_hash)).hexdigest()
-    identity = CrateId('rust', path, 2021, closure)
+    edition = parser.crate_policy.edition
+    identity = CrateId('rust', path, edition, closure)
     body = ModuleBody(functions, parser.records, parser.enums, parser.implementations,
                       parser.traits, parser.modules, parser.crate_documentation,
                       parser.crate_aliases, parser.crate_policy)
     graph = _Loader(files).load_body(file, body, ModuleId(identity, ()), PurePosixPath('.'), None, inline=False)
-    return CrateSyntax(graph, 2021, files)
+    return CrateSyntax(graph, edition, files)
 
 
 def analyze_crate_syntax(crate, *, pointer_bits=64):

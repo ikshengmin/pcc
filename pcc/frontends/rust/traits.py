@@ -228,7 +228,8 @@ class StaticTraits:
         from .external_check import CheckedRustSource
         if type(checked) is not CheckedRustSource:
             raise first.error('local trait bounds require an actual source/options-bound CheckedRustSource during this transition')
-        checked.validate(source, target_triple=target, overflow_checks=overflow_checks)
+        checked.validate(source, target_triple=target, overflow_checks=overflow_checks,
+                         edition=self.checker.standard_markers.policy.edition)
         if checked.provenance.edition != str(self.checker.standard_markers.policy.edition):
             raise first.error('local trait context and checked edition differ')
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .certification import ExternalRustcCheck
+from .editions import require_edition
 from .external_check import (
     CheckedRustSource, RustcToolchain, RustExternalCheckError,
     check_rust_source, compile_rust_checked,
@@ -32,6 +33,7 @@ class RustCompilation:
     target_triple: str = DEFAULT_TARGET
     data_layout: str = LINUX_LAYOUT
     standard_marker_contract: object = None
+    edition: int = 2021
 
     @property
     def ir_text(self) -> str:
@@ -58,7 +60,8 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
                  overflow_checks: bool = False,
                  rustc_check: CheckedRustSource | None = None,
                  module_name: str = "rust",
-                 target_triple: str = DEFAULT_TARGET) -> RustCompilation:
+                 target_triple: str = DEFAULT_TARGET,
+                 edition: int = 2021) -> RustCompilation:
     """Lower a rustc-checked, nonheap scalar/aggregate crate into PCC's public IR.
 
     The legacy opt-in is caller attestation for value-only experimental input,
@@ -66,10 +69,13 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
     accepts only an adapter-minted CheckedRustSource after the explicit external
     check_rust_source phase. Ordinary provenance records do not authorize this
     path. This owned phase invokes no rustc process and never consumes MIR.
+    Edition is an explicit source/options identity (default 2021 for existing
+    callers), not proof of complete edition semantics or project dependencies.
     Arithmetic uses Rust's overflow-checks-off wrapping semantics;
     foldable literal/operator overflow is rejected; panic-capable division fails
     closed. This does not claim rustc lint or variable-state constprop parity.
     """
+    edition = require_edition(edition)
     if rustc_check is not None and type(rustc_check) is not CheckedRustSource:
         raise RustError("a caller-constructed external record is not proof of checking; use check_rust_source or compile_rust_checked")
     if experimental_rustc_checked is not True and rustc_check is None:
@@ -80,8 +86,9 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
         raise RustError("invalid Rust module_name: expected a string label")
     target = resolve_target(target_triple)
     if rustc_check is not None:
-        rustc_check.validate(source, target_triple=target.triple, overflow_checks=overflow_checks)
-    parser = Parser(source)
+        rustc_check.validate(source, target_triple=target.triple,
+                             overflow_checks=overflow_checks, edition=edition)
+    parser = Parser(source, edition=edition)
     functions = parser.parse()
     resolution = None
     records, enums = parser.records, parser.enums
@@ -109,7 +116,7 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
     module = lowerer.lower()
     return RustCompilation(module, dict(lowerer.symbols), externally_checked=rustc_check is not None,
                            target_triple=target.triple, data_layout=target.data_layout,
-                           standard_marker_contract=marker_context)
+                           standard_marker_contract=marker_context, edition=edition)
 
 
 __all__ = ["ExternalRustcCheck", "CheckedRustSource", "RustcToolchain",

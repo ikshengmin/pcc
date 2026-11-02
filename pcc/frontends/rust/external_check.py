@@ -14,6 +14,7 @@ from pathlib import Path
 import subprocess
 
 from .certification import ExternalRustcCheck
+from .editions import require_edition
 from .syntax import RustError
 from .targets import DEFAULT_TARGET, resolve_target
 
@@ -61,31 +62,35 @@ class CheckedRustSource:
     def provenance(self):
         return self._record
 
-    def validate(self, source, *, target_triple, overflow_checks):
+    def validate(self, source, *, target_triple, overflow_checks, edition=2021):
         if self._seal is not _SEAL or source != self._source:
             raise RustError('checked Rust source token does not match the unchanged Rust source bytes')
-        self._record.validate(source, target_triple=target_triple, overflow_checks=overflow_checks)
+        self._record.validate(source, target_triple=target_triple,
+                              overflow_checks=overflow_checks, edition=edition)
 
     def compile_owned(self, *, module_name='rust'):
         """Pure PCC phase: no external process, using the exact checked bytes."""
         from . import compile_rust
         return compile_rust(self._source, rustc_check=self, module_name=module_name,
                             target_triple=self._record.target_triple,
-                            overflow_checks=self._record.overflow_checks)
+                            overflow_checks=self._record.overflow_checks,
+                            edition=int(self._record.edition))
 
 
 def check_rust_source(source: str, *, toolchain: RustcToolchain,
                       evidence_directory: Path, target_triple: str = DEFAULT_TARGET,
-                      overflow_checks: bool = False) -> CheckedRustSource:
+                      overflow_checks: bool = False,
+                      edition: int = 2021) -> CheckedRustSource:
     """Actually check frozen bytes with rustc, or fail without an admission token.
 
-    The supported context is edition2021, no cfg/extern dependencies and
+    The bounded context is the selected edition, no cfg/extern dependencies and
     overflow-checks off. Evidence must use a fresh directory: an old metadata
     file can never satisfy this invocation. The caller supplies an audited
     installation pin, not merely a desired version label.
     """
     if type(source) is not str or type(toolchain) is not RustcToolchain:
         raise RustError('external checking requires source text and an audited RustcToolchain')
+    edition = require_edition(edition)
     if overflow_checks is not False:
         raise RustError('external checked Rust overflow options are unsupported')
     target = resolve_target(target_triple)
@@ -129,7 +134,7 @@ def check_rust_source(source: str, *, toolchain: RustcToolchain,
     sysroot = run('rustc-sysroot', [str(compiler), '--print=sysroot'])
     if Path(sysroot.stdout.decode().strip()).resolve() != root:
         raise RustExternalCheckError('rustc selected a different sysroot; PATH/rustup proxy is not a direct installation')
-    command = [str(compiler), '--edition=2021', '--target=' + target.triple, '-Coverflow-checks=off',
+    command = [str(compiler), '--edition=' + str(edition), '--target=' + target.triple, '-Coverflow-checks=off',
                '--emit=metadata', '--crate-type=lib', '--crate-name=certified_input',
                str(path), '-o', str(metadata)]
     result = run('check', command)
@@ -137,12 +142,12 @@ def check_rust_source(source: str, *, toolchain: RustcToolchain,
             or _file_sha(compiler) != toolchain.compiler_sha256):
         raise RustExternalCheckError('external check source/tool/output identity changed or metadata is missing')
     record = ExternalRustcCheck(
-        source_sha256=_sha(original), edition='2021', target_triple=target.triple,
+        source_sha256=_sha(original), edition=str(edition), target_triple=target.triple,
         cfg=(), dependencies=(), overflow_checks=False,
         compiler_sha256=toolchain.compiler_sha256, compiler_version=version.stdout.decode(),
         command=tuple(command), exit_code=result.returncode,
         stderr_sha256=_sha(result.stderr), metadata_sha256=_file_sha(metadata))
-    record.validate(source, target_triple=target.triple, overflow_checks=False)
+    record.validate(source, target_triple=target.triple, overflow_checks=False, edition=edition)
     from dataclasses import asdict
     (directory / 'external-check.json').write_text(json.dumps(asdict(record), indent=2) + '\n')
     return CheckedRustSource(source, record, _seal=_SEAL)
@@ -150,8 +155,10 @@ def check_rust_source(source: str, *, toolchain: RustcToolchain,
 
 def compile_rust_checked(source: str, *, toolchain: RustcToolchain,
                          evidence_directory: Path, target_triple: str = DEFAULT_TARGET,
-                         overflow_checks: bool = False, module_name: str = 'rust'):
+                         overflow_checks: bool = False, module_name: str = 'rust',
+                         edition: int = 2021):
     """Supported transitional entry: actual external check, then owned lowering."""
     checked = check_rust_source(source, toolchain=toolchain, evidence_directory=evidence_directory,
-                                target_triple=target_triple, overflow_checks=overflow_checks)
+                                target_triple=target_triple, overflow_checks=overflow_checks,
+                                edition=edition)
     return checked.compile_owned(module_name=module_name)

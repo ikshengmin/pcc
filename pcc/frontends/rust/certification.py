@@ -11,6 +11,7 @@ import hashlib
 import re
 
 from .syntax import RustError
+from .editions import require_edition
 
 
 @dataclass(frozen=True)
@@ -28,13 +29,15 @@ class ExternalRustcCheck:
     stderr_sha256: str
     metadata_sha256: str
 
-    def validate(self, source: str, *, target_triple: str, overflow_checks: bool) -> None:
+    def validate(self, source: str, *, target_triple: str, overflow_checks: bool,
+                 edition: int = 2021) -> None:
+        edition = require_edition(edition)
         def digest(value):
             return isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value)
 
         if self.source_sha256 != hashlib.sha256(source.encode('utf-8')).hexdigest():
             raise RustError('external rustc check does not match the unchanged Rust source bytes')
-        if (self.edition != '2021' or self.target_triple != target_triple
+        if (self.edition != str(edition) or self.target_triple != target_triple
                 or self.cfg != () or self.dependencies != ()
                 or self.overflow_checks is not overflow_checks):
             raise RustError('external rustc check configuration does not match the supported edition/target/cfg/dependency/options context')
@@ -49,7 +52,7 @@ class ExternalRustcCheck:
         # Extra/duplicate flags, response files, cfg and extern arguments could
         # otherwise contradict the normalized record despite required options
         # also being present. More build contexts need an explicit later adapter.
-        options = ('--edition=2021', '--target=' + target_triple,
+        options = ('--edition=' + str(edition), '--target=' + target_triple,
                    '-Coverflow-checks=off', '--emit=metadata', '--crate-type=lib',
                    '--crate-name=certified_input')
         if (len(self.command) != 10 or self.command[1:7] != options

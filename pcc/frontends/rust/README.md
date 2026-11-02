@@ -16,6 +16,29 @@ source/options-bound `CheckedRustSource` from the explicit external checker.
 The default call without either explicit value-only opt-in or a checked token
 rejects compilation. Host-PCC evidence is not native pcc1/fixed-point proof.
 
+### Explicit edition identity
+
+`compile_rust`, `check_rust_source` and `compile_rust_checked` accept the integer
+`edition=` option (2015, 2018, 2021 or 2024), retaining 2021 as the compatibility
+default. It reaches the existing Parser/crate policy, inline module identities,
+and `RustCompilation.edition`; this is context propagation, **not complete
+edition conformance**. The source-map parser already requires an edition.
+
+The explicit transitional checker puts the selected edition in its actual
+rustc command and source-bound provenance. `checked.compile_owned()` retains
+that selection; a direct `compile_rust(..., rustc_check=checked, edition=...)`
+must match it, including when the caller omits the option and defaults to 2021.
+A genuine 2021 token cannot authorize 2024 parsing of the same bytes. Explicit
+marker/local-trait checks revalidate the same edition; caller flags and
+provenance-shaped records remain non-certifying. There is no fallback to a
+different edition if rustc or PCC rejects the input.
+
+The edition tests keep unchanged source fixtures and separate owned-context,
+actual external certification, and native/reference observations. All new
+execution obligations are **UNRUN pending CI**. No Cargo dependency graph,
+build script, macro expansion, core/alloc/std, or orjson extension qualification
+is implied, and edition 2024 selection does not satisfy orjson's Rust 1.95 MSRV.
+
 ## Reference lowering requires actual external checking
 
 Use `check_rust_source(...)` followed by `compile_rust(..., rustc_check=checked)`,
@@ -480,7 +503,7 @@ formal rebinding programs are distinct positives, not edits to that negative.
 is a supported **explicit external transition phase**. It runs the audited pinned
 installation's direct `rustc`, verifies full `-vV` and actual sysroot (not a
 rustup/PATH proxy), writes and checks exactly the supplied UTF-8 bytes with the
-closed edition2021/target/overflow options, and requires successful fresh metadata.
+closed selected-edition/target/overflow options, and requires successful fresh metadata.
 Failures, timeouts, missing metadata or source/tool drift cannot mint a token.
 `compile_rust_checked(...)` is the convenience check-then-owned-lower entry.
 

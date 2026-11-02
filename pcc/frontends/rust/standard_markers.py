@@ -148,7 +148,8 @@ class StandardMarkers:
         from .external_check import CheckedRustSource
         if type(checked) is not CheckedRustSource:
             raise self.first_explicit_bound.error('standard marker bounds require an actual source/options-bound CheckedRustSource during this transition')
-        checked.validate(source, target_triple=target, overflow_checks=overflow_checks)
+        checked.validate(source, target_triple=target, overflow_checks=overflow_checks,
+                         edition=self.policy.edition)
         record = checked.provenance
         if record.edition != str(self.policy.edition):
             raise self.first_explicit_bound.error('standard marker context and checked edition differ')
