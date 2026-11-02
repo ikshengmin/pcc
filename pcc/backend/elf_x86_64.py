@@ -392,6 +392,12 @@ def _validate_object(obj: ElfObject) -> None:
                 raise ElfError(f"TLS symbol {symbol.name!r} is outside a TLS section")
 
     for section in obj.sections:
+        if section.name in (".eh_frame", ".debug_frame", ".pcc_stackmaps"):
+            for relocation in section.relocations:
+                target = obj.symbols[relocation.symbol_index]
+                if (target.binding == STB_WEAK
+                        and target.section_index != SHN_UNDEF):
+                    raise ElfError("weak function metadata requires a physical local anchor")
         if section.name != ".pcc_stackmaps":
             continue
         if (
@@ -1003,7 +1009,7 @@ def _symbol_identity(
     symbol_index: int,
 ) -> tuple[str, object]:
     symbol = objects[object_index].symbols[symbol_index]
-    if symbol.binding == STB_LOCAL or symbol.section_index != SHN_UNDEF:
+    if symbol.binding == STB_LOCAL or (symbol.section_index != SHN_UNDEF and symbol.binding != STB_WEAK):
         return ("local", (object_index, symbol_index))
     if symbol.name in definitions:
         return ("global", symbol.name)

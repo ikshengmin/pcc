@@ -8,8 +8,10 @@ not a host compiler query; short-enum and MSVC policies are not inferred.
 
 This module shares Scope/Symbol and the typed constant-fact owner. It neither
 rewrites enum declarations into source text nor invokes a C parser/evaluator.
-Local, anonymous and dependent enum declarations remain explicit capability
-boundaries. Named namespace/class enums need no C storage declaration.
+Local, namespace-anonymous and dependent enum declarations remain explicit
+capability boundaries. Named namespace/class and unnamed class enums need no
+C storage declaration. Unnamed class identity uses Itanium 5.1.5.5 lexical
+ordinals; no synthetic identifier is inserted into source name lookup.
 """
 
 from pcc.backend.self_backend_target_match import (
@@ -84,6 +86,7 @@ class EnumType:
     def __init__(self, name, qualified_name, coord, scoped=False, underlying=None,
                  declaration_scope=None, internal_linkage=False, types=None):
         self.name = name
+        self.unnamed_ordinal = None
         self.qualified_name = tuple(qualified_name)
         self.coord = coord
         self.scoped = scoped
@@ -257,7 +260,7 @@ def enum_promotion_type(dtype, types):
 
 
 def parse_enum(parser):
-    """Consume a named namespace/class declaration without runtime storage."""
+    """Consume a named or class-scope unnamed enum without runtime storage."""
     keyword = parser._expect("enum")
     if parser.parsing_template or parser.template_function is not None:
         raise CppDiagnostic("cpp.unsupported.enum-templates", "dependent enum declarations are not implemented", keyword.coord)
@@ -273,61 +276,80 @@ def parse_enum(parser):
     if parser._peek().value in ("class", "struct"):
         parser.cursor.take()
         scoped = True
-    if parser._peek().value in ("{", ":"):
-        raise CppDiagnostic("cpp.unsupported.anonymous-enums", "anonymous enum identity/linkage is not implemented", parser._peek().coord)
-    name = parser._identifier()
-    if parser._peek().value == "::" or (parser._peek().value == ":"
-            and parser.cursor.tokens[parser.cursor.position + 1].value == ":"):
-        raise CppDiagnostic("cpp.unsupported.enum-qualified-definition", "qualified enum definitions are not implemented", name.coord)
+    anonymous = parser._peek().value in ("{", ":")
+    if anonymous:
+        if scoped:
+            raise CppDiagnostic("cpp.enum-name-required", "a scoped enumeration requires a name", parser._peek().coord)
+        if parser.scope.kind != "class":
+            raise CppDiagnostic("cpp.unsupported.anonymous-enums", "namespace anonymous enum identity/linkage is not implemented", parser._peek().coord)
+        name = None
+    else:
+        name = parser._identifier()
+        if parser._peek().value == "::" or (parser._peek().value == ":"
+                and parser.cursor.tokens[parser.cursor.position + 1].value == ":"):
+            raise CppDiagnostic("cpp.unsupported.enum-qualified-definition", "qualified enum definitions are not implemented", name.coord)
+    coord = keyword.coord if anonymous else name.coord
     underlying = None
     if parser._accept(":"):
         underlying = unqualified(parser._type(check_lowering=False))
         if not parser.types.integral(underlying):
-            raise CppDiagnostic("cpp.enum-underlying-type", "enum base must name an integral type", name.coord)
+            raise CppDiagnostic("cpp.enum-underlying-type", "enum base must name an integral type", coord)
     elif scoped:
         underlying = "int"
-    if not scoped and underlying is None and parser._peek().value == ";":
+    if not anonymous and not scoped and underlying is None and parser._peek().value == ";":
         raise CppDiagnostic("cpp.unsupported.enum-elaborated-declaration", "unfixed forward or elaborated enum declarations are not implemented", name.coord)
     parent = parser.scope
     enclosing_class = getattr(parent, "class_type", None)
-    if enclosing_class is not None and name.value == enclosing_class.name:
-        raise CppDiagnostic("cpp.class-name-member",
-                            "a member enum cannot have its enclosing class name", name.coord)
-    previous = parent.names.get(name.value)
-    if getattr(previous, "namespace_object", False):
-        raise CppDiagnostic("cpp.unsupported.tag-hiding",
-                            "enum/object dual name lookup is not implemented", name.coord)
-    if previous is not None:
-        if not getattr(previous, "enum_declaration", False):
-            raise CppDiagnostic("cpp.redeclaration", "enum name conflicts with another declaration", name.coord)
-        if previous.owner is not parent:
-            raise CppDiagnostic("cpp.unsupported.enum-redeclaration", "an imported enum cannot be completed in another scope", name.coord)
-        dtype = previous.dtype
-        if dtype.scoped != scoped or dtype.fixed != (underlying is not None):
-            raise CppDiagnostic("cpp.enum-redeclaration", "enum scopedness or fixed-underlying status differs", name.coord)
-        if dtype.fixed and dtype.underlying != underlying:
-            raise CppDiagnostic("cpp.enum-underlying-mismatch", "enum underlying type differs from its prior declaration", name.coord)
-        if enclosing_class is not None:
-            if previous.access != enclosing_class.definition.access:
-                raise CppDiagnostic("cpp.enum-access-redeclaration",
-                                    "member enum redeclared with different access", name.coord)
-            if parser._peek().value == ";":
-                raise CppDiagnostic("cpp.redeclaration",
-                                    "a member enum cannot be declared twice without a definition", name.coord)
+    if anonymous:
+        # No opaque unnamed declaration exists. In particular enum : int;
+        # must not take the named fixed-enum forward-declaration return path.
+        if parser._peek().value != "{":
+            raise CppDiagnostic("cpp.enum-definition-required", "an unnamed enumeration requires a definition", parser._peek().coord)
+        definition = enclosing_class.definition
+        dtype = EnumType("<unnamed enum>", enclosing_class.qualified_name + ("<unnamed enum>",), coord,
+                         underlying=underlying, declaration_scope=parent,
+                         internal_linkage=enclosing_class.internal_linkage, types=parser.types)
+        dtype.unnamed_ordinal = definition.unnamed_type_count
+        definition.unnamed_type_count += 1
     else:
-        owner_name = enclosing_class.qualified_name if enclosing_class is not None else parent.namespace_path()
-        dtype = EnumType(name.value, owner_name + (name.value,), name.coord,
-                         scoped=scoped, underlying=underlying, declaration_scope=parent,
-                         internal_linkage=parent.namespace().internal_linkage, types=parser.types)
-        previous = parent.declare(Symbol(name.value, "type", name.coord, dtype=dtype))
-        previous.enum_declaration = True
-        if enclosing_class is not None:
-            previous.class_owner = enclosing_class
-            previous.access = enclosing_class.definition.access
-    if parser._accept(";"):
-        if not dtype.fixed:
-            raise CppDiagnostic("cpp.unsupported.enum-elaborated-declaration", "unfixed enum requires a definition; elaborated enum declarations are not implemented", name.coord)
-        return None
+        if enclosing_class is not None and name.value == enclosing_class.name:
+            raise CppDiagnostic("cpp.class-name-member",
+                                "a member enum cannot have its enclosing class name", name.coord)
+        previous = parent.names.get(name.value)
+        if getattr(previous, "namespace_object", False):
+            raise CppDiagnostic("cpp.unsupported.tag-hiding",
+                                "enum/object dual name lookup is not implemented", name.coord)
+        if previous is not None:
+            if not getattr(previous, "enum_declaration", False):
+                raise CppDiagnostic("cpp.redeclaration", "enum name conflicts with another declaration", name.coord)
+            if previous.owner is not parent:
+                raise CppDiagnostic("cpp.unsupported.enum-redeclaration", "an imported enum cannot be completed in another scope", name.coord)
+            dtype = previous.dtype
+            if dtype.scoped != scoped or dtype.fixed != (underlying is not None):
+                raise CppDiagnostic("cpp.enum-redeclaration", "enum scopedness or fixed-underlying status differs", name.coord)
+            if dtype.fixed and dtype.underlying != underlying:
+                raise CppDiagnostic("cpp.enum-underlying-mismatch", "enum underlying type differs from its prior declaration", name.coord)
+            if enclosing_class is not None:
+                if previous.access != enclosing_class.definition.access:
+                    raise CppDiagnostic("cpp.enum-access-redeclaration",
+                                        "member enum redeclared with different access", name.coord)
+                if parser._peek().value == ";":
+                    raise CppDiagnostic("cpp.redeclaration",
+                                        "a member enum cannot be declared twice without a definition", name.coord)
+        else:
+            owner_name = enclosing_class.qualified_name if enclosing_class is not None else parent.namespace_path()
+            dtype = EnumType(name.value, owner_name + (name.value,), name.coord,
+                             scoped=scoped, underlying=underlying, declaration_scope=parent,
+                             internal_linkage=parent.namespace().internal_linkage, types=parser.types)
+            previous = parent.declare(Symbol(name.value, "type", name.coord, dtype=dtype))
+            previous.enum_declaration = True
+            if enclosing_class is not None:
+                previous.class_owner = enclosing_class
+                previous.access = enclosing_class.definition.access
+        if parser._accept(";"):
+            if not dtype.fixed:
+                raise CppDiagnostic("cpp.unsupported.enum-elaborated-declaration", "unfixed enum requires a definition; elaborated enum declarations are not implemented", name.coord)
+            return None
     if parser._peek().value != "{":
         raise CppDiagnostic("cpp.unsupported.enum-declarators", "enum definition followed by object declarators is not implemented", parser._peek().coord)
     dtype.begin_definition()
@@ -352,6 +374,13 @@ def parse_enum(parser):
         parser.scope = parent
     if parser._peek().value != ";":
         raise CppDiagnostic("cpp.unsupported.enum-declarators", "enum definitions with object declarators are not implemented", parser._peek().coord)
+    if anonymous and not dtype.enumerators:
+        # [class.mem]/2 requires a member name or unnamed bit-field. The enum
+        # grammar alone allows an empty body, but enum {}; declares neither.
+        # Check only after rejecting object declarators: enum {} object; is a
+        # different, currently unimplemented declaration, not this invalid one.
+        raise CppDiagnostic("cpp.enum-member-name-required",
+                            "an unnamed member enum without a declarator must declare an enumerator", coord)
     parser._expect(";")
     dtype.finish(parser.types)
     return None

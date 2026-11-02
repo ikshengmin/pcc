@@ -1000,8 +1000,9 @@ class CppParser:
             if storage is not None and (member_definition is None or storage.value != "static"):
                 raise CppDiagnostic("cpp.invalid-member-storage",
                                     "only an in-class declaration may specify static for a member function", storage.coord)
-            if member_definition is not None and definition:
-                raise CppDiagnostic("cpp.unsupported.inline-member-functions", "in-class bodies need C++ inline/ODR emission", name.coord)
+            if member_definition is not None and definition and member_owner.dtype.internal_linkage:
+                raise CppDiagnostic("cpp.unsupported.class-linkage",
+                                    "in-class methods of internal-linkage classes require distinct definition ownership", name.coord)
             if member_definition is None and not definition:
                 raise CppDiagnostic("cpp.member-definition-required", "an out-of-class member declaration must be a definition", name.coord)
         if member_owner is None and name.value == "main" and not parent.namespace_path() and params:
@@ -1094,6 +1095,22 @@ class CppParser:
         if not definition:
             self._expect(";")
             return declaration
+        if member_definition is not None:
+            from pcc.frontends.cpp.inline_methods import DeferredMethod
+            from pcc.frontends.cpp.inline_constructors import collect_body
+            symbol.definition_linkage = "external_odr"
+            member_definition.inline_methods.append(DeferredMethod(
+                symbol, result_type, parameter_scope, parameter_symbols, declaration,
+                this_symbol, collect_body(self), name.coord,
+            ))
+            return declaration
+        return self._bind_function_body(symbol, result_type, parameter_scope, parameter_symbols,
+                                        declaration, this_symbol, member_owner, name.coord)
+
+    def _bind_function_body(self, symbol, result_type, parameter_scope, parameter_symbols,
+                            declaration, this_symbol, member_owner, coord):
+        """One body-binding path for ordinary and delayed in-class definitions."""
+        parent = self.scope
         self.scope = parameter_scope
         previous_return_type = self.return_type
         previous_member, previous_this = self.member_function, self.this_symbol
@@ -1109,12 +1126,11 @@ class CppParser:
             self.return_type = previous_return_type
             self.current_function = previous_function
             self.member_function, self.this_symbol = previous_member, previous_this
-        if member_owner is None and name.value == "main" and not parent.namespace_path():
+        if member_owner is None and symbol.name == "main" and not parent.namespace_path():
             # Reaching the end of main is a C++ return of zero, not C's general
             # fallthrough behavior. Appending after a return is harmless AST.
-            body.block_items.append(c_ast.Return(c_ast.Constant("int", "0", name.coord),
-                                                 name.coord))
-        return c_ast.FuncDef(declaration, None, body, name.coord)
+            body.block_items.append(c_ast.Return(c_ast.Constant("int", "0", coord), coord))
+        return c_ast.FuncDef(declaration, None, body, coord)
 
     def _block(self, new_scope=True):
         start = self._expect("{")
@@ -1626,6 +1642,58 @@ class CppParser:
             lhs = self._binary_expression(token.value, lhs, rhs, token.coord)
         return lhs
 
+    def _pointer_additive_expression(self, operator, lhs, rhs, coord):
+        """[expr.add] runtime pointer offsets with preserved typed row stride."""
+        left, right = unqualified(lhs.dtype), unqualified(rhs.dtype)
+        if self.template_function is not None and (dependent(left) or dependent(right)):
+            # The substituted operand can change offset into pointer difference
+            # or an invalid operation. Do not guess its result type yet.
+            return Expression(Pattern("binary", coord, operator, [lhs, rhs]), None)
+        left_pointer, right_pointer = pointer_type(left), pointer_type(right)
+        if left_pointer and right_pointer:
+            if operator == "-":
+                raise CppDiagnostic("cpp.unsupported.pointer-operators",
+                                    "pointer difference is not implemented", coord)
+            raise CppDiagnostic("cpp.invalid-operands", "two pointers cannot be added", coord)
+        if left_pointer:
+            dtype, offset = left, rhs
+        elif right_pointer and operator == "+":
+            dtype, offset = right, lhs
+        else:
+            raise CppDiagnostic("cpp.invalid-operands",
+                                "pointer offset requires a pointer and an integral operand", coord)
+        pointee = unqualified(dtype.pointee)
+        if pointee == "void" or function_type(pointee):
+            raise CppDiagnostic("cpp.invalid-operands",
+                                "pointer offset requires a complete object pointee", coord)
+        require_complete(pointee, coord)
+        require_complete_array(pointee, coord)
+        if is_enum_type(pointee) and not pointee.complete:
+            raise CppDiagnostic("cpp.incomplete-enum", "pointer offset requires a complete enum", coord)
+        if not dependent(offset.dtype) and not self.types.integral_operand(offset.dtype):
+            raise CppDiagnostic("cpp.invalid-operands",
+                                "pointer offset requires an integral or unscoped enum operand", coord)
+        if self.template_function is not None:
+            # Retain original operands for instance-local type checking and
+            # replay. Never mix typed C locals into a template Pattern tree.
+            return Expression(Pattern("binary", coord, operator, [lhs, rhs]), dtype)
+        if dependent(offset.dtype):
+            raise CppDiagnostic("cpp.unsupported.pointer-templates",
+                                "dependent pointer offset requires template instantiation", coord)
+        offset_type = self.types.promote(offset.dtype)
+        left_type, right_type = (dtype, offset_type) if left_pointer else (offset_type, dtype)
+        left_name = self._fresh_projection_name("__pcc_cpp_offset_l_")
+        right_name = self._fresh_projection_name("__pcc_cpp_offset_r_")
+        declarations = [self._decl(left_name, left_type, coord, self._convert(lhs, left_type, coord)),
+                        self._decl(right_name, right_type, coord, self._convert(rhs, right_type, coord))]
+        # Additive operands have no required relative ordering; this chooses
+        # one permitted evaluation order, once each. Typed locals also restore
+        # array pointees erased by a generic C formal/result projection.
+        value = c_ast.BinaryOp(operator, c_ast.ID(left_name, coord), c_ast.ID(right_name, coord), coord)
+        node = c_ast.StmtExpr(c_ast.Compound(declarations + [value], coord), coord)
+        return Expression(node, dtype, constant_fact=unmodeled(
+            dtype, "pointer offset constant-expression proof is not implemented", coord))
+
     def _binary_expression(self, operator, lhs, rhs, coord):
         lhs, rhs = self._decay_array(lhs), self._decay_array(rhs)
         if is_class_type(lhs.dtype) or is_class_type(rhs.dtype):
@@ -1653,9 +1721,11 @@ class CppParser:
         shift = operator in ("<<", ">>")
         pointer_operands = any(pointer_type(e.dtype) or unqualified(e.dtype) == "nullptr" for e in (lhs, rhs))
         if pointer_operands and not logical:
+            if operator in ("+", "-"):
+                return self._pointer_additive_expression(operator, lhs, rhs, coord)
             if operator not in ("==", "!="):
                 raise CppDiagnostic("cpp.unsupported.pointer-operators",
-                                    "pointer arithmetic and ordering are not implemented", coord)
+                                    "pointer ordering and this pointer operator are not implemented", coord)
             operand_type = self._composite_pointer_type(lhs, rhs, coord)
             node = c_ast.BinaryOp(operator, self._convert(lhs, operand_type, coord),
                                   self._convert(rhs, operand_type, coord), coord)

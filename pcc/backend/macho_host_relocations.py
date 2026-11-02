@@ -30,7 +30,7 @@ _MODEL_FIELDS = {
         "sectname", "segname", "data", "align_log2", "flags", "symbols",
         "relocations", "zerofill_size", "data_in_code",
     ),
-    TextSymbol: ("name", "offset", "external", "private_external"),
+    TextSymbol: ("name", "offset", "external", "private_external", "weak_definition"),
     Relocation: (
         "offset", "symbol", "type", "pcrel", "length", "addend", "section",
         "minuend", "target_offset",

@@ -981,6 +981,8 @@ def _prepare_executable_image(
         symbol = defined.get(name)
         if symbol is None:
             raise LinkError("requested Mach-O export is not defined: " + name)
+        if symbol["n_desc"] & spec.N_WEAK_DEF:
+            raise LinkError("exporting weak definitions requires unsupported dynamic coalescing")
         if not symbol["n_type"] & spec.N_EXT or symbol["n_type"] & spec.N_PEXT:
             raise LinkError("requested Mach-O export is not public: " + name)
     if entry not in defined:

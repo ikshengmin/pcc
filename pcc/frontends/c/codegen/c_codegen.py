@@ -6427,6 +6427,15 @@ class CCodeGenerator(
         return ir_type, None
 
     def codegen_FuncDef(self, node):
+        definition_linkage = node.decl.definition_linkage
+        if definition_linkage not in ("external", "external_odr"):
+            raise SemanticError("unsupported function definition linkage: " + definition_linkage)
+        if definition_linkage == "external_odr":
+            from pcc.backend.definition_linkage import supports_external_odr_function_definitions
+            if not supports_external_odr_function_definitions(str(self.module.triple)):
+                raise SemanticError("external_odr function definitions unavailable for target: " + str(self.module.triple))
+            if "static" in node.decl.storage or "inline" in node.decl.funcspec:
+                raise SemanticError("external_odr conflicts with C static/inline linkage")
 
         # deep level func have deep level
         # we don't want funcdecl in codegen_decl too
@@ -6492,6 +6501,10 @@ class CCodeGenerator(
                         self.function.linkage = "internal"
                 except Exception:
                     raise SemanticError(f"failed to define function '{funcname}'")
+            if definition_linkage == "external_odr":
+                if needs_internal_linkage:
+                    raise SemanticError("external_odr conflicts with internal function linkage")
+                self.function.linkage = "weak_odr"
             if self._func_decl_returns_unsigned(node.decl.type):
                 self._mark_unsigned_return(self.function)
             # Add stack protector attribute for security hardening

@@ -1809,6 +1809,10 @@ def _emit_gep_instruction(
 
 
 def _emit_prologue(func: ParsedFunction) -> list[str]:
+    from .definition_linkage import checked_function_definition_linkage
+    linkage = checked_function_definition_linkage(
+        func, "x86_64-pc-windows-msvc" if _WINDOWS_ABI else "x86_64-unknown-linux-gnu"
+    )
     if _WINDOWS_ABI:
         from .self_backend_win64_abi import prologue
         return prologue(func)
@@ -1817,6 +1821,8 @@ def _emit_prologue(func: ParsedFunction) -> list[str]:
     lines = ["", ".text", ".p2align 4, 0x90"]
     if func.is_global:
         lines.append(f".globl {symbol}")
+    if linkage == "external_odr":
+        lines.append(f".weak {symbol}")
     lines.append(f".type {symbol}, @function")
     lines.append(f"{symbol}:")
     if is_process_entry:

@@ -120,6 +120,10 @@ def _hash_native_shape(digest, native: NativeObject) -> None:
             b"1" if symbol.private_external else b"0",
         )
         _feed(digest, b"symbol-weak-reference", b"1" if symbol.weak_reference else b"0")
+        if symbol.weak_definition:
+            # Preserve established non-ODR cache identities; new metadata
+            # must never alias an old strong-definition cache entry.
+            _feed(digest, b"symbol-weak-definition", b"1")
     for section in native.sections:
         _feed_text(digest, b"segment-name", section.segname)
         _feed_text(digest, b"section-name", section.sectname)
@@ -184,6 +188,10 @@ def _hash_packed_native_shape(
             b"1" if symbol.private_external else b"0",
         )
         _feed(digest, b"symbol-weak-reference", b"1" if symbol.weak_reference else b"0")
+        if symbol.weak_definition:
+            # Preserve established non-ODR cache identities; new metadata
+            # must never alias an old strong-definition cache entry.
+            _feed(digest, b"symbol-weak-definition", b"1")
     for section_index, section in enumerate(native.sections):
         _feed_text(digest, b"segment-name", section.segname)
         _feed_text(digest, b"section-name", section.sectname)
@@ -234,7 +242,8 @@ def _native_shape_is_patchable(native: NativeObject) -> bool:
     # field would not reproduce a cold merge, so this shape stays cold.  A
     # stack-map table is rebuilt from every input's records (and may be
     # transcoded), never concatenated, so it stays cold too.
-    return all(
+    # Coalesced bodies are not yet proven for the payload-only cache patch.
+    return not any(symbol.weak_definition for symbol in native.symbols) and all(
         section.sectname != "__pcc_stackmaps"
         for section in native.sections
     ) and all(
@@ -245,7 +254,8 @@ def _native_shape_is_patchable(native: NativeObject) -> bool:
 
 
 def _packed_native_shape_is_patchable(native: PackedNativeObject) -> bool:
-    return all(
+    # Coalesced bodies are not yet proven for the payload-only cache patch.
+    return not any(symbol.weak_definition for symbol in native.symbols) and all(
         section.sectname != "__pcc_stackmaps"
         for section in native.sections
     ) and all(

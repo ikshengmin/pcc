@@ -123,7 +123,6 @@ def test_constructor_invalid_programs_have_owned_diagnostics(source, code):
 
 
 UNSUPPORTED_CONSTRUCTORS = (
-    'struct S{S(){}};',
     'struct S{S(int);};int f(){S s();return 0;}',
     'struct S{S(int);};int f(){S s(int());return 0;}',
     'struct S{S(int);};int f(){int x=42;S s(int(x));return 0;}',

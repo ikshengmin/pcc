@@ -1991,6 +1991,17 @@ def _parse_functions(ir_text: str, *, type_context=None) -> list[ParsedFunction]
             header_text, type_context=type_context
         )
         prefix = prefix_text.strip().split()
+        from .definition_linkage import definition_linkage_from_ir
+        linkage_tokens = [token for token in prefix if token in (
+            "external", "internal", "private", "weak", "weak_odr", "linkonce",
+            "linkonce_odr", "available_externally", "common", "appending",
+            "extern_weak",
+        )]
+        if len(linkage_tokens) > 1:
+            raise BackendUnavailable("conflicting function definition linkages")
+        definition_linkage = definition_linkage_from_ir(
+            linkage_tokens[0] if linkage_tokens else ""
+        )
         name = decode_global_name(name_text)
         check_simple_symbol_name(name)
         debug = None
@@ -2005,7 +2016,8 @@ def _parse_functions(ir_text: str, *, type_context=None) -> list[ParsedFunction]
                 name=name,
                 ret_type=ret_type,
                 args=args,
-                is_global="internal" not in prefix,
+                is_global=definition_linkage != "internal",
+                definition_linkage=definition_linkage,
                 is_vararg=_arg_list_is_vararg(args_text),
                 blocks=blocks,
                 value_types={},

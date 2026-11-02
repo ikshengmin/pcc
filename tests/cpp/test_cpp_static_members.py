@@ -91,7 +91,6 @@ INVALID_STATIC_CASES = (
 )
 
 DEFERRED_STATIC_CASES = (
-    ('struct S{static int f(){return 42;}};', 'cpp.unsupported.inline-member-functions'),
     ('struct S{static int value;};', 'cpp.unsupported.static-data-members'),
     ('struct S{static int f(int);int f(long);};', 'cpp.unsupported.mixed-static-overloads'),
     ('struct S{int f(int);static int f(long);};', 'cpp.unsupported.mixed-static-overloads'),

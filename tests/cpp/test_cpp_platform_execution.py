@@ -32,6 +32,10 @@ from tests.cpp.platform_execution import (
 )
 from tests.cpp.test_cpp_class_semantics import CLASS_CASES
 from tests.cpp.test_cpp_aggregate_initialization import AGGREGATE_CASES
+from tests.cpp.test_cpp_inline_constructors import INLINE_PROGRAMS
+from tests.cpp.test_cpp_inline_methods import SINGLE_PROGRAMS as INLINE_METHOD_PROGRAMS
+from tests.cpp.test_cpp_anonymous_class_enums import SINGLE_PROGRAMS as ANONYMOUS_ENUM_PROGRAMS
+from tests.cpp.test_cpp_pointer_additive import CASES as POINTER_OFFSET_PROGRAMS
 
 
 CASES = tuple(
@@ -42,6 +46,19 @@ CASES = tuple(
     ("observer-negative-int", "int cpp_test_entry(){return -1234567;}", -1234567),
     ("observer-high-bytes", "int cpp_test_entry(){return 16909060;}", 16909060),
 )
+
+
+# Exact existing single-TU originals, reused by the unchanged Linux/macOS
+# workflow's cross-object, native and explicit-reference entrypoints. No
+# flattening of multi-TU tests and no additional platform availability claims.
+FRONTEND_CASES = (
+    ("inline-c1-complete-class-value", dict(INLINE_PROGRAMS)["complete-class-value"], 42),
+    ("inline-method-later-field", dict(INLINE_METHOD_PROGRAMS)["later-field"], 42),
+    ("inline-static-receiver-order", dict(INLINE_METHOD_PROGRAMS)["static-receiver-before-argument"], 42),
+    ("private-anonymous-later-member", dict(ANONYMOUS_ENUM_PROGRAMS)["private-later-member"], 42),
+    ("pointer-offset-formal-row-stride", dict(POINTER_OFFSET_PROGRAMS)["formal-row-stride"], 42),
+)
+CASES += FRONTEND_CASES
 
 
 def _forbidden_process(*args, **kwargs):

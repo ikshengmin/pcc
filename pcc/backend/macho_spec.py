@@ -118,6 +118,7 @@ N_PEXT = 0x10
 N_TYPE = 0x0E
 N_EXT = 0x01
 N_WEAK_REF = 0x0040
+N_WEAK_DEF = 0x0080
 
 # A shared image may bind an explicitly named provider in the main executable.
 # The chained import table uses the signed special ordinal; nlist stores its

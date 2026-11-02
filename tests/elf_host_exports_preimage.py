@@ -9,6 +9,11 @@ This module imports no production code and performs no link or compiler run.
 
 import hashlib
 
+from tests.elf_external_odr_preimage import (
+    OWNER_SHA256 as EXTERNAL_ODR_OWNER_SHA256,
+    without_external_odr,
+)
+
 
 OWNER_SHA256 = "74d0f5db1fb1507526fe460f66416dd2a6fd9fd4c704a5bb2e2bb03aa0e2f864"
 BASE_OWNER_SHA256 = "4e4c195e57dd0cc668589b8c7e5156c4563a1bb9f309a508ff663147c564e54a"
@@ -144,6 +149,9 @@ OWNER_REVERSE_EDITS = (
 
 def without_host_exports(source):
     digest = hashlib.sha256(source.encode()).hexdigest()
+    if digest == EXTERNAL_ODR_OWNER_SHA256:
+        source = without_external_odr(source)
+        digest = hashlib.sha256(source.encode()).hexdigest()
     if digest == BASE_OWNER_SHA256:
         return source
     assert digest == OWNER_SHA256

@@ -351,6 +351,7 @@ def _read_descriptor(path, ledger):
         metadata, scratch = _pco_allocation_bounds(raw, ledger)
         ledger.check(ledger.immutable(len(raw)) + metadata + scratch, label="Mach-O PCO decode owners")
         packed = native.decode_packed_native_object(raw)
+        link._validate_weak_definition_object(packed)
         stack_functions, row_counts, target_counts = [], [], []
         for index, section in enumerate(packed.sections):
             rows = targets = 0
@@ -1103,6 +1104,7 @@ def _archive_descriptor(raw, index, ledger):
     from .macho_exec import _validate_input_load_commands
 
     obj = link._coerce_link_object(raw, index)
+    link._validate_weak_definition_object(obj)
     _validate_input_load_commands([obj])
     if obj.header["filetype"] != spec.MH_OBJECT or obj.header["cputype"] != spec.CPU_TYPE_ARM64 or obj.header["cpusubtype"] != spec.CPU_SUBTYPE_ARM64_ALL:
         raise link.LinkError("archive input is not an arm64-all MH_OBJECT")
@@ -1266,7 +1268,8 @@ def _section_target_symbol_index(merged, ledger):
     result = {}
     for key, target in merged.items():
         for symbol in target.symbols:
-            result.setdefault((key, symbol.offset), symbol.name)
+            if not symbol.weak_definition:
+                result.setdefault((key, symbol.offset), symbol.name)
     # The completed table owns only its storage and one two-element key
     # tuple per distinct address. Its section keys, offsets and names are
     # borrowed from order/merged, which stay charged and live until it retires.
@@ -1383,7 +1386,9 @@ def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None, *
         for index, descriptor in enumerate(descriptors):
             for symbol_index, symbol in enumerate(descriptor.symbols):
                 if link._symbol_type(symbol) & spec.N_TYPE == spec.N_SECT and link._symbol_type(symbol) & spec.N_EXT:
-                    definitions.add(link._symbol_name(symbol), SymbolDefinition(index, symbol_index))
+                    definitions.add(link._symbol_name(symbol), SymbolDefinition(
+                        index, symbol_index, link._symbol_is_weak_definition(symbol),
+                    ))
         definitions.freeze()
         local_renames = link._local_symbol_renames([item.symbols for item in descriptors])
         defined, referenced = {}, set()

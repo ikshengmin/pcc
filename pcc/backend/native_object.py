@@ -86,6 +86,7 @@ _DATA_IN_CODE = struct.Struct("<QII")
 _SYMBOL_EXTERNAL = 1
 _SYMBOL_PRIVATE_EXTERNAL = 2
 _SYMBOL_WEAK_REFERENCE = 4
+_SYMBOL_WEAK_DEFINITION = 8
 _UINT64_MAX = (1 << 64) - 1
 _RELOCATION_SCALAR_COUNT = 9
 _FINAL_LINK_RELOCATION_SCALAR_COUNT = 6
@@ -180,6 +181,7 @@ class NativeSymbol:
     external: bool
     private_external: bool = False
     weak_reference: bool = False
+    weak_definition: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -269,6 +271,7 @@ class NativeObject:
                         offset=symbol.offset,
                         external=symbol.external,
                         private_external=symbol.private_external,
+                        weak_definition=symbol.weak_definition,
                     ))
             if external:
                 break
@@ -379,6 +382,7 @@ class NativeObject:
                 offset=symbol.offset,
                 external=symbol.external,
                 private_external=symbol.private_external,
+                weak_definition=symbol.weak_definition,
             ))
 
         sections: list[Section] = []
@@ -433,6 +437,10 @@ class PackedNativeSymbol:
     @property
     def weak_reference(self) -> bool:
         return bool(self.flags & _SYMBOL_WEAK_REFERENCE)
+
+    @property
+    def weak_definition(self) -> bool:
+        return bool(self.flags & _SYMBOL_WEAK_DEFINITION)
 
 
 @dataclass(frozen=True, slots=True)
@@ -724,6 +732,10 @@ def _validate_native_object(obj: NativeObject) -> None:
             raise NativeObjectError("weak reference flag must be boolean")
         if symbol.weak_reference and symbol.section_index:
             raise NativeObjectError("weak reference must be undefined")
+        if not isinstance(symbol.weak_definition, bool):
+            raise NativeObjectError("weak definition flag must be boolean")
+        if symbol.weak_definition and (not symbol.external or not symbol.section_index):
+            raise NativeObjectError("weak definition must be externally defined")
         if symbol.section_index == 0:
             saw_undefined = True
             if not symbol.external or symbol.private_external or symbol.offset != 0:
@@ -1004,7 +1016,8 @@ class NativeObjectView:
                 "name": symbol.name,
                 "n_type": n_type,
                 "n_sect": symbol.section_index,
-                "n_desc": spec.N_WEAK_REF if symbol.weak_reference else 0,
+                "n_desc": ((spec.N_WEAK_REF if symbol.weak_reference else 0)
+                           | (spec.N_WEAK_DEF if symbol.weak_definition else 0)),
                 "n_value": n_value,
             })
 
@@ -1311,6 +1324,7 @@ def encode_native_object(obj: NativeObject) -> bytes:
                 if symbol.private_external else 0
             )
             | (_SYMBOL_WEAK_REFERENCE if symbol.weak_reference else 0)
+            | (_SYMBOL_WEAK_DEFINITION if symbol.weak_definition else 0)
         )
         out.append(_SYMBOL.pack(symbol.section_index, symbol.offset, flags))
     for section in obj.sections:
@@ -1415,7 +1429,7 @@ def _final_symbol_rows(source_sections, undefined_names, weak_names, addrs) -> l
                     "name": symbol.name,
                     "n_type": n_type,
                     "n_sect": index,
-                    "n_desc": 0,
+                    "n_desc": spec.N_WEAK_DEF if symbol.weak_definition else 0,
                     "n_value": addrs[index - 1] + symbol.offset,
                 })
     for name in sorted(undefined_names):
@@ -1789,6 +1803,7 @@ def encode_native_object_from_sections(
                         _SYMBOL_PRIVATE_EXTERNAL
                         if symbol.private_external else 0
                     )
+                    | (_SYMBOL_WEAK_DEFINITION if symbol.weak_definition else 0)
                 )
                 out.append(_SYMBOL.pack(section_index, symbol.offset, flags))
                 symbol_index[symbol.name] = next_symbol_index
@@ -1904,7 +1919,7 @@ def decode_native_object(data: bytes) -> NativeObject:
     for _index in range(symbol_count):
         name = reader.name("symbol")
         section_index, offset, flags = reader.unpack(_SYMBOL)
-        if flags & ~(_SYMBOL_EXTERNAL | _SYMBOL_PRIVATE_EXTERNAL | _SYMBOL_WEAK_REFERENCE):
+        if flags & ~(_SYMBOL_EXTERNAL | _SYMBOL_PRIVATE_EXTERNAL | _SYMBOL_WEAK_REFERENCE | _SYMBOL_WEAK_DEFINITION):
             raise NativeObjectError("native symbol has unknown flag bits")
         symbols.append(NativeSymbol(
             name=name,
@@ -1913,6 +1928,7 @@ def decode_native_object(data: bytes) -> NativeObject:
             external=bool(flags & _SYMBOL_EXTERNAL),
             private_external=bool(flags & _SYMBOL_PRIVATE_EXTERNAL),
             weak_reference=bool(flags & _SYMBOL_WEAK_REFERENCE),
+            weak_definition=bool(flags & _SYMBOL_WEAK_DEFINITION),
         ))
 
     sections: list[NativeSection] = []
@@ -1991,7 +2007,7 @@ def decode_packed_native_object(data: bytes) -> PackedNativeObject:
     for _index in range(symbol_count):
         name = reader.name("symbol")
         section_index, offset, flags = reader.unpack(_SYMBOL)
-        if flags & ~(_SYMBOL_EXTERNAL | _SYMBOL_PRIVATE_EXTERNAL | _SYMBOL_WEAK_REFERENCE):
+        if flags & ~(_SYMBOL_EXTERNAL | _SYMBOL_PRIVATE_EXTERNAL | _SYMBOL_WEAK_REFERENCE | _SYMBOL_WEAK_DEFINITION):
             raise NativeObjectError("native symbol has unknown flag bits")
         symbols.append(PackedNativeSymbol(name, section_index, offset, flags))
 
@@ -2197,6 +2213,10 @@ def _validate_packed_native_object(
             raise NativeObjectError("weak reference flag must be boolean")
         if symbol.weak_reference and symbol.section_index:
             raise NativeObjectError("weak reference must be undefined")
+        if not isinstance(symbol.weak_definition, bool):
+            raise NativeObjectError("weak definition flag must be boolean")
+        if symbol.weak_definition and (not symbol.external or not symbol.section_index):
+            raise NativeObjectError("weak definition must be externally defined")
         if symbol.section_index == 0:
             saw_undefined = True
             if (
@@ -2309,6 +2329,8 @@ def _validate_packed_native_object(
                 )
         _validate_packed_data_in_code(section)
         for symbol in section_symbols:
+            if symbol.weak_definition and not (section.flags & spec.S_ATTR_PURE_INSTRUCTIONS):
+                raise NativeObjectError("weak definition requires an external code symbol")
             if not 0 <= symbol.offset < section.vm_size:
                 raise NativeObjectError(
                     f"symbol {symbol.name!r} offset {symbol.offset} outside "

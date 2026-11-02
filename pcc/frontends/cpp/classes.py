@@ -116,6 +116,10 @@ class ClassDefinition:
         self.access = "private" if class_key == "class" else "public"
         self.members = []
         self.method_declarations = []
+        self.inline_constructors = []
+        self.inline_methods = []
+        # ABI lexical ordinal for unnamed class-scope types, including empty ones.
+        self.unnamed_type_count = 0
         self.constructors = Symbol(dtype.name, "function", dtype.coord)
         self.destructor = None
         self.complete = False
@@ -367,6 +371,7 @@ def parse_class(parser):
                 definition.method_declarations.append(parser._function(member_definition=definition))
                 continue
             prior_data = False
+            function_member = False
             while True:
                 member, member_type = parser._declarator(base)
                 if parser._peek().value == "(":
@@ -376,6 +381,7 @@ def parse_class(parser):
                         raise CppDiagnostic("cpp.invalid-mutable", "mutable applies only to data members", member.coord)
                     parser.cursor.position = member_start
                     definition.method_declarations.append(parser._function(member_definition=definition))
+                    function_member = True
                     break
                 if parser._peek().value in ("{", ":"):
                     _unsupported(parser._peek(), "braced default member initializers and bit-fields are not implemented")
@@ -389,7 +395,9 @@ def parse_class(parser):
                 prior_data = True
                 if not parser._accept(","):
                     break
-            if parser.cursor.tokens[parser.cursor.position - 1].value != ";":
+            # _function consumes its own declaration/body terminator. Only
+            # data-member declarators share the semicolon requirement here.
+            if not function_member and parser.cursor.tokens[parser.cursor.position - 1].value != ";":
                 parser._expect(";")
     finally:
         parser.scope = parent
@@ -397,6 +405,10 @@ def parse_class(parser):
     definition.finish()
     from pcc.frontends.cpp.default_member_initializers import bind
     bind(parser, definition)
+    from pcc.frontends.cpp.inline_constructors import bind_definitions
+    bind_definitions(parser, definition)
+    from pcc.frontends.cpp.inline_methods import bind_methods
+    bind_methods(parser, definition)
     parser.last_class_definition = definition
     return definition.c_declaration(parser._scalar_type)
 

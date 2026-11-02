@@ -2475,6 +2475,7 @@ class PackedAArch64TextBuilder:
         self.active_data_start: int = -1
         self.active_data_kind: int = -1
         self.layout_finalized: bool = False
+        self.layout_weak_definitions: tuple[str, ...] = ()
         self.closed: bool = False
 
     def append_encoded(self, word: int, relocation_kind: int, symbol_id: int) -> None:
@@ -2613,14 +2614,22 @@ class PackedAArch64TextBuilder:
         self.instruction_lines.append(line)
         self.pc += 4
 
-    def finalize_layout(self) -> None:
+    def finalize_layout(self, *, weak_definitions=()) -> None:
         """Freeze the relaxed layout before any PC-based metadata is written."""
         if self.closed:
             raise EncodeError("text builder is closed")
+        weak_names = tuple(sorted(weak_definitions)) if weak_definitions else ()
         if self.layout_finalized:
+            if weak_names != self.layout_weak_definitions:
+                raise EncodeError("weak definitions changed after text layout was finalized")
             return
         if self.active_data_start >= 0:
             raise EncodeError("unterminated .data_region")
+        _reject_weak_conditional_targets(
+            self.instruction_lines, self.structured_relocations,
+            self.structured_symbol_names, weak_definitions,
+        )
+        self.layout_weak_definitions = weak_names
         relaxed = _relax_conditional_branches(
             self.entries, self.instruction_lines, self.data_chunks,
             self.structured_relocations, self.structured_symbol_names,
@@ -2638,14 +2647,14 @@ class PackedAArch64TextBuilder:
             self.pc += 4 * added_words
         self.layout_finalized = True
 
-    def finish(self) -> AssembledText:
+    def finish(self, *, weak_definitions=()) -> AssembledText:
         try:
-            self.finalize_layout()
+            self.finalize_layout(weak_definitions=weak_definitions)
             return _finalize_text_entries(
                 self.entries, self.instruction_lines, self.data_chunks,
                 self.structured_relocations, self.structured_symbol_names,
                 self.labels, self.data_in_code,
-                layout_finalized=True,
+                layout_finalized=True, weak_definitions=weak_definitions,
             )
         finally:
             self.close()
@@ -2737,6 +2746,7 @@ def _finalize_text_entries(
     data_in_code: list[DataInCodeRegion],
     *,
     layout_finalized: bool = False,
+    weak_definitions=(),
 ) -> AssembledText:
     word_run = CompilerIntArena()
     try:
@@ -2748,6 +2758,10 @@ def _finalize_text_entries(
                 entries, data_chunks, structured_relocations,
                 structured_symbol_names,
             )
+            _reject_weak_conditional_targets(
+                instruction_lines, structured_relocations,
+                structured_symbol_names, weak_definitions,
+            )
             relaxed = _relax_conditional_branches(
                 entries, instruction_lines, data_chunks, structured_relocations,
                 structured_symbol_names, labels, data_in_code,
@@ -2758,7 +2772,7 @@ def _finalize_text_entries(
                 entries, structured_relocations, labels, data_in_code = relaxed
         return _encode_text_entries_active(
             entries, instruction_lines, data_chunks, structured_relocations,
-            structured_symbol_names, labels, data_in_code, word_run,
+            structured_symbol_names, labels, data_in_code, word_run, weak_definitions,
         )
     finally:
         word_run.close()
@@ -2834,6 +2848,28 @@ def _conditional_branch_target(line: str) -> str:
             return ""
         return line[comma + 1:].strip()
     return ""
+
+
+def _reject_weak_conditional_targets(
+    instruction_lines, structured_relocations, structured_symbol_names,
+    weak_definitions,
+) -> None:
+    # Inspect original inputs before relaxation can hide a branch19 as a
+    # local inverted skip plus an otherwise-supported external branch26.
+    if not weak_definitions:
+        return
+    for line in instruction_lines:
+        if _conditional_branch_target(line) in weak_definitions:
+            raise EncodeError("weak definition branch requires a linker relocation")
+    index = 0
+    while index < len(structured_relocations):
+        if structured_relocations.get_unchecked(index + 1) == STRUCTURED_FIXUP_BRANCH19:
+            symbol_id = structured_relocations.get_unchecked(index + 2)
+            if not 0 <= symbol_id < len(structured_symbol_names):
+                raise EncodeError("text relocation symbol is outside its owner")
+            if structured_symbol_names[symbol_id] in weak_definitions:
+                raise EncodeError("weak definition branch requires a linker relocation")
+        index += 3
 
 
 def _inverted_skip_word(line: str) -> int:
@@ -3048,6 +3084,7 @@ def _encode_text_entries_active(
     labels: dict[str, int],
     data_in_code: list[DataInCodeRegion],
     word_run: CompilerIntArena,
+    weak_definitions=(),
 ) -> AssembledText:
     entry_instruction = 0
     entry_data = 1
@@ -3062,6 +3099,8 @@ def _encode_text_entries_active(
     undefined: set[str] = set()
 
     def resolve_branch(target: str, width_bits: int, at: int) -> int:
+        if target in weak_definitions:
+            raise EncodeError("weak definition branch requires a linker relocation")
         if target not in labels:
             raise EncodeError(f"branch to unknown label {target!r}")
         delta = labels[target] - at
@@ -3083,7 +3122,7 @@ def _encode_text_entries_active(
     )
 
     def same_atom(target: str, at: int) -> bool:
-        if target not in labels or target.startswith("L"):
+        if target not in labels or target.startswith("L") or target in weak_definitions:
             return False
         # A native call now reaches this canonical rule for every call site.
         # Locate its atom without a per-call scan of all preceding functions.

@@ -2136,12 +2136,15 @@ def build_direct_indexed_function(function: _ir.Function, *, type_context=None) 
             block_lines,
             type_context=type_context,
         )
+    from pcc.backend.definition_linkage import definition_linkage_from_ir
+    definition_linkage = definition_linkage_from_ir(str(function.linkage or ""))
     parsed = ParsedFunction(
         name=str(function.name),
         ret_type=parse_ir_type(str(function.ftype.return_type), type_context=type_context),
         type_context=type_context,
         args=args,
-        is_global=str(function.linkage or "") != "internal",
+        is_global=definition_linkage != "internal",
+        definition_linkage=definition_linkage,
         is_vararg=bool(function.ftype.var_arg),
         blocks=[],
         value_types={},

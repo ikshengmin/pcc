@@ -14,6 +14,7 @@ from pcc.backend.self_backend_aarch64_darwin import (
 from pcc.backend.arm64_encode import (
     EncodeError,
     PackedAArch64TextBuilder,
+    STRUCTURED_FIXUP_CALL,
     STRUCTURED_RELOCATION_BRANCH26,
     append_emitted_instruction_record,
     assemble_text,
@@ -662,9 +663,10 @@ def test_structured_driver_keeps_words_out_of_generic_line_slots(monkeypatch):
     observed = []
     original = PackedAArch64TextBuilder.finish
 
-    def observe(builder):
+    def observe(builder, *, weak_definitions=()):
+        assert set(weak_definitions) == set()
         observed.append((len(builder.instruction_lines), len(builder.entries)))
-        return original(builder)
+        return original(builder, weak_definitions=weak_definitions)
 
     monkeypatch.setattr(PackedAArch64TextBuilder, "finish", observe)
     records = CompilerIntArena()
@@ -680,6 +682,57 @@ def test_structured_driver_keeps_words_out_of_generic_line_slots(monkeypatch):
         assert records.get_unchecked(4) == 3
     finally:
         records.close()
+
+
+@pytest.mark.parametrize("structured", [False, True], ids=["text", "encoded"])
+def test_driver_forwards_nonempty_weak_definitions_to_text_finish(
+    monkeypatch, structured,
+):
+    observed = []
+    original = PackedAArch64TextBuilder.finish
+
+    def observe(builder, *, weak_definitions=()):
+        assert set(weak_definitions) == {"_probe"}
+        observed.append(frozenset(weak_definitions))
+        return original(builder, weak_definitions=weak_definitions)
+
+    monkeypatch.setattr(PackedAArch64TextBuilder, "finish", observe)
+    source = [
+        ".section __TEXT,__text,regular,pure_instructions",
+        ".globl _probe", ".weak_definition _probe", "_probe:",
+        "bl _probe", "ret",
+    ]
+    records = CompilerIntArena() if structured else None
+    if records is not None:
+        records.append4(4, 0x94000000, STRUCTURED_FIXUP_CALL, 0)
+        records.append4(5, 0xD65F03C0, 0, -1)
+        source[4:] = ["", ""]
+    try:
+        sections, undefined = assemble_lines(
+            source, encoded_line_records=records,
+            structured_symbol_names=("_probe",),
+        )
+        assert observed == [frozenset({"_probe"})]
+        assert undefined == []
+        text = sections[0]
+        assert text.data == bytes.fromhex("00000094c0035fd6")
+        assert [
+            (symbol.name, symbol.offset, symbol.external, symbol.weak_definition)
+            for symbol in text.symbols
+        ] == [("_probe", 0, True, True)]
+        # Dropping the keyword would resolve this recursive call locally,
+        # violating prevailing-definition address identity across objects.
+        assert len(text.relocations) == 1
+        relocation = text.relocations[0]
+        assert (relocation.offset, relocation.symbol, relocation.pcrel) == (
+            0, "_probe", True,
+        )
+        if records is not None:
+            assert records.get_unchecked(0) == 4
+            assert records.get_unchecked(4) == 5
+    finally:
+        if records is not None:
+            records.close()
 
 
 def test_common_emitter_vocabulary_publishes_only_scalar_records() -> None:

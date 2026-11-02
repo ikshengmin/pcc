@@ -60,6 +60,8 @@ def from_sections(sections, undefined=()) -> ElfObject:
     for index, section in enumerate(sections, 1):
         name, flags = _section_spec(section)
         for symbol in section.symbols:
+            if symbol.weak_definition:
+                raise ElfError("external_odr function definitions unavailable for AArch64 ELF")
             kind = STT_TLS if flags & SHF_TLS else (
                 STT_FUNC if flags & SHF_EXECINSTR else STT_OBJECT
             )

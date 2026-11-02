@@ -62,6 +62,7 @@ class SymbolDefinition:
 
     input_index: int
     symbol_index: int
+    weak_definition: bool = False
 
 
 @dataclass(frozen=True)
@@ -109,6 +110,8 @@ class ShardedSymbolDefinitions:
             raise ParallelLinkError("symbol definition name must be non-empty text")
         if not isinstance(definition, SymbolDefinition):
             raise ParallelLinkError("symbol definition provenance is invalid")
+        if not isinstance(definition.weak_definition, bool):
+            raise ParallelLinkError("weak definition flag must be boolean")
         if (
             not isinstance(definition.input_index, int)
             or isinstance(definition.input_index, bool)
@@ -161,6 +164,9 @@ class ShardedSymbolDefinitions:
 
     def owner(self, name: str) -> SymbolDefinition | None:
         definitions = self.definitions(name)
+        for definition in definitions:
+            if not definition.weak_definition:
+                return definition
         return definitions[0] if definitions else None
 
 

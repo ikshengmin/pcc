@@ -53,6 +53,8 @@ def _check_imports(merged, host_import_symbols=()):
     # Share the executable linker's native loader intrinsic and host oracle.
     # Do not turn an unsupported import into a different execution owner.
     for symbol in merged.symbols:
+        if symbol.weak_definition:
+            raise BackendUnavailable("owned shared libraries do not support weak-definition coalescing")
         if symbol.section_index and symbol.name in host_import_symbols:
             raise BackendUnavailable("owned shared library defines a host-provider symbol: " + symbol.name)
         if symbol.section_index or symbol.weak_reference:

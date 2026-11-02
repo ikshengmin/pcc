@@ -168,6 +168,7 @@ class AArch64ModuleBuilder:
         self.order: list[tuple[str, str]] = []
         self.globl: set[str] = set()
         self.private_extern: set[str] = set()
+        self.weak_definitions: set[str] = set()
         self.current: _SectionBuffer | None = None
         self.structured_symbol_names = structured_symbol_names
         self.text_layout_finalized: bool = False
@@ -238,6 +239,7 @@ class AArch64ModuleBuilder:
             name, offset,
             external=(name in self.globl or name in self.private_extern),
             private_external=(name in self.private_extern),
+            weak_definition=(name in self.weak_definitions),
         ))
 
     def finalize_text_layout(self) -> None:
@@ -248,7 +250,7 @@ class AArch64ModuleBuilder:
             if buffer.text_error is not None:
                 raise buffer.text_error
             if buffer.text_builder is not None:
-                buffer.text_builder.finalize_layout()
+                buffer.text_builder.finalize_layout(weak_definitions=self.weak_definitions)
         self.text_layout_finalized = True
 
     def text_label_offsets(self) -> dict[str, int]:
@@ -325,6 +327,13 @@ class AArch64ModuleBuilder:
 
         if line.startswith(".globl"):
             self.globl.add(line.split()[1].strip())
+            return
+
+        if directive_name == ".weak_definition":
+            fields = line.split()
+            if len(fields) != 2 or not fields[1]:
+                raise EncodeError("bad .weak_definition directive")
+            self.weak_definitions.add(fields[1])
             return
 
         if line.startswith(".private_extern"):
@@ -460,13 +469,14 @@ class AArch64ModuleBuilder:
                 if buf.text_error is not None:
                     raise buf.text_error
                 assert buf.text_builder is not None
-                assembled = buf.text_builder.finish()
+                assembled = buf.text_builder.finish(weak_definitions=self.weak_definitions)
                 symbols = tuple(
                     TextSymbol(
                         name,
                         off,
                         external=(name in self.globl or name in self.private_extern),
                         private_external=(name in self.private_extern),
+                        weak_definition=(name in self.weak_definitions),
                     )
                     for name, off in assembled.labels.items()
                     if not name.startswith("L")  # assembler-local, not symbols
@@ -493,6 +503,7 @@ class AArch64ModuleBuilder:
                             or symbol.name in self.private_extern
                         ),
                         private_external=(symbol.name in self.private_extern),
+                        weak_definition=(symbol.name in self.weak_definitions),
                     )
                     for symbol in buf.symbols
                 )
@@ -534,6 +545,8 @@ class AArch64ModuleBuilder:
         # peers in the same segment, while __DATA still precedes __LD.
         sections.sort(key=lambda section: seg_rank.get(section.segname, 2))
 
+        if not self.weak_definitions.issubset(defined_names):
+            raise EncodeError("weak definition must name a defined code symbol")
         missing_private = self.private_extern - defined_names
         if missing_private:
             raise EncodeError(

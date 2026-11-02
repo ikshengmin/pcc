@@ -100,7 +100,7 @@ INVALID_CLASS_ENUM_CASES = (
 
 UNIMPLEMENTED_CLASS_ENUM_CASES = (
     # Original object/member cases moved verbatim to test_cpp_object_enumerators.
-    "struct S{enum{A};};",
+    # Exact anonymous-enum original retained in test_cpp_anonymous_class_enums.
     "struct S{enum E:int;};enum S::E:int{A};",
     "struct S{enum E{A};};template<class T>int f(T x){return S::A;}",
     "struct S{struct Inner{enum E{A};};};",

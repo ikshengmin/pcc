@@ -83,6 +83,8 @@ def emit_function_prologue(
     func: ParsedFunction,
     module_symbols: PreparedModuleSymbols,
 ) -> list[str]:
+    from .definition_linkage import checked_function_definition_linkage
+    linkage = checked_function_definition_linkage(func, module_symbols.target_triple)
     # Target-specific preparation belongs immediately before target emission.
     # The allocator is conservative and leaves every preassigned stack slot in
     # place, so an unsupported shape remains byte-for-byte on the spill path.
@@ -104,6 +106,8 @@ def emit_function_prologue(
     lines = ["", ".p2align 2"]
     if func.is_global:
         lines.append(f".globl {symbol}")
+    if linkage == "external_odr":
+        lines.append(f".weak_definition {symbol}")
     lines.append(f"{symbol}:")
     linux = is_aarch64_linux_triple(module_symbols.target_triple)
     func.platform_frame_extra = 192 if linux and func.is_vararg else 0

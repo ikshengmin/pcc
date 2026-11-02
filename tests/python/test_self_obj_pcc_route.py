@@ -25,7 +25,12 @@ from types import SimpleNamespace
 import pytest
 
 from pcc.backend import BackendUnavailable
-from pcc.backend import arm64_asm_driver, macho_obj, native_object
+from pcc.backend import (
+    arm64_asm_driver,
+    macho_obj,
+    native_object,
+    relocatable_merge,
+)
 from pcc.backend import macho_spec as spec
 from pcc.backend import x86_64_asm_driver
 from pcc.backend import elf_x86_64
@@ -223,11 +228,13 @@ def test_darwin_default_uses_pcc_writer_without_system_assembler(
             )
         ], ["_ext"]
 
-    def fake_emit(sections, *, undefined):
+    def fake_emit(sections, *, undefined, weak_undefined=()):
         assert len(sections) == 1
         assert sections[0].sectname == "__text"
         assert sections[0].data == bytes.fromhex("c0035fd6")
+        assert sections[0].symbols == (macho_obj.TextSymbol("_main", 0),)
         assert undefined == ["_ext"]
+        assert weak_undefined == ()
         return b"pcc-macho-object"
 
     monkeypatch.setattr(
@@ -247,6 +254,44 @@ def test_darwin_default_uses_pcc_writer_without_system_assembler(
 
     assert seen["asm"] == "pcc-direct-asm"
     assert output.read_bytes() == b"pcc-macho-object"
+
+
+@pytest.mark.parametrize("weak", [False, True], ids=["ordinary", "weak"])
+def test_native_macho_writer_preserves_definition_and_reference_metadata(
+    monkeypatch, weak,
+):
+    assembly = ".section __TEXT,__text,regular,pure_instructions\n.globl _main\n"
+    if weak:
+        assembly += ".weak_definition _main\n"
+    assembly += "_main:\nbl _ext\nret\n"
+    sections, undefined = arm64_asm_driver.assemble_file(assembly)
+    weak_undefined = ("_ext",) if weak else ()
+    obj = native_object.NativeObject.from_sections(
+        sections, undefined=undefined, weak_undefined=weak_undefined,
+    )
+    real_emit = native_object.emit_object
+    observed = []
+
+    def record_emit(actual_sections, *, undefined, weak_undefined=()):
+        assert actual_sections == sections
+        assert undefined == ["_ext"]
+        assert weak_undefined == (("_ext",) if weak else ())
+        assert actual_sections[0].symbols == (
+            macho_obj.TextSymbol("_main", 0, weak_definition=weak),
+        )
+        observed.append(weak_undefined)
+        return real_emit(
+            actual_sections, undefined=undefined, weak_undefined=weak_undefined,
+        )
+
+    monkeypatch.setattr(native_object, "emit_object", record_emit)
+    result = spec.parse_object(obj.to_macho())
+    symbols = {symbol["name"]: symbol for symbol in result.symbols()}
+    assert observed == [weak_undefined]
+    assert symbols["_main"]["n_desc"] == (spec.N_WEAK_DEF if weak else 0)
+    assert symbols["_main"]["n_sect"] == 1
+    assert symbols["_ext"]["n_desc"] == (spec.N_WEAK_REF if weak else 0)
+    assert symbols["_ext"]["n_sect"] == 0
 
 
 def test_explicit_system_as_uses_only_the_oracle_route(tmp_path, monkeypatch):
@@ -319,6 +364,26 @@ def test_linux_default_uses_pcc_encoder_without_system_assembler(
         ),),
         symbols=(elf_x86_64.ElfSymbol.null(),),
     )
+    real_merge = relocatable_merge.merge_elf_objects
+    real_emit = elf_x86_64.emit_relocatable
+    original_bytes = real_emit(sentinel)
+    seen = {}
+
+    def record_merge(objects):
+        objects = tuple(objects)
+        assert len(objects) == 1 and objects[0] is sentinel
+        assert "merged" not in seen
+        merged = real_merge(objects)
+        assert merged == sentinel
+        assert merged is not sentinel
+        seen["merged"] = merged
+        return merged
+
+    def fake_emit(obj):
+        assert obj is seen["merged"]
+        assert obj == sentinel
+        return b"pcc-elf-object"
+
     monkeypatch.delenv("PCC_SELF_OBJ", raising=False)
     monkeypatch.setattr(
         evaluator,
@@ -331,14 +396,126 @@ def test_linux_default_uses_pcc_encoder_without_system_assembler(
         lambda text: sentinel if text == "owned-linux-asm" else pytest.fail(text),
     )
     monkeypatch.setattr(
+        relocatable_merge, "merge_elf_objects", record_merge,
+    )
+    monkeypatch.setattr(
         elf_x86_64,
         "emit_relocatable",
-        lambda obj: b"pcc-elf-object" if obj is sentinel else pytest.fail(obj),
+        fake_emit,
     )
     evaluator._emit_compiled_units_self_backend(
         _linux_unit(), emit_obj=str(output), optimize=False,
     )
     assert output.read_bytes() == b"pcc-elf-object"
+    assert real_emit(sentinel) == original_bytes
+
+
+def test_linux_default_real_merge_preserves_weak_symbols_and_relocation_owners(
+    tmp_path, monkeypatch,
+):
+    evaluator = _route_evaluator(monkeypatch)
+    output = tmp_path / "merged.o"
+    elf = elf_x86_64
+    text_flags = elf.SHF_ALLOC | elf.SHF_EXECINSTR
+    data_flags = elf.SHF_ALLOC | elf.SHF_WRITE
+    first = elf.ElfObject(
+        sections=(
+            elf.ElfSection(".text", elf.SHT_PROGBITS, text_flags, 1, b"\xc3"),
+            elf.ElfSection(
+                ".data", elf.SHT_PROGBITS, data_flags, 8, b"\0" * 16,
+                relocations=(
+                    elf.ElfRelocation(0, 1, elf.R_X86_64_64),
+                    elf.ElfRelocation(8, 2, elf.R_X86_64_64),
+                ),
+            ),
+        ),
+        symbols=(
+            elf.ElfSymbol.null(),
+            elf.ElfSymbol("answer", 1, 0, 1, elf.STB_WEAK, elf.STT_FUNC),
+            elf.ElfSymbol(
+                "optional", elf.SHN_UNDEF, 0, 0, elf.STB_WEAK, elf.STT_NOTYPE,
+            ),
+        ),
+    )
+    second = elf.ElfObject(
+        sections=(
+            elf.ElfSection(".text", elf.SHT_PROGBITS, text_flags, 1, b"\x90\xc3"),
+        ),
+        symbols=(
+            elf.ElfSymbol.null(),
+            elf.ElfSymbol("answer", 1, 0, 2, elf.STB_GLOBAL, elf.STT_FUNC),
+        ),
+    )
+    expected = elf.ElfObject(
+        sections=(
+            elf.ElfSection(
+                ".text", elf.SHT_PROGBITS, text_flags, 1, b"\xc3\x90\xc3",
+            ),
+            elf.ElfSection(
+                ".data", elf.SHT_PROGBITS, data_flags, 8, b"\0" * 16,
+                relocations=(
+                    elf.ElfRelocation(0, 2, elf.R_X86_64_64),
+                    elf.ElfRelocation(8, 3, elf.R_X86_64_64),
+                ),
+            ),
+        ),
+        symbols=(
+            elf.ElfSymbol.null(),
+            elf.ElfSymbol(
+                "answer.__pcc_object_0_1", 1, 0, 1, elf.STB_LOCAL, elf.STT_FUNC,
+            ),
+            elf.ElfSymbol("answer", 1, 1, 2, elf.STB_GLOBAL, elf.STT_FUNC),
+            elf.ElfSymbol(
+                "optional", elf.SHN_UNDEF, 0, 0, elf.STB_WEAK, elf.STT_NOTYPE,
+            ),
+        ),
+    )
+    inputs = (first, second)
+    real_merge = relocatable_merge.merge_elf_objects
+    real_emit = elf.emit_relocatable
+    original_bytes = tuple(real_emit(obj) for obj in inputs)
+    seen = {}
+    triple = 'target triple = "x86_64-unknown-linux-gnu"\n'
+    units = [
+        ("first", triple + "; first\n", None, ()),
+        ("second", triple + "; second\n", None, ()),
+    ]
+    assemblies = {units[0][1]: "first-asm", units[1][1]: "second-asm"}
+
+    def record_merge(objects):
+        objects = tuple(objects)
+        assert len(objects) == 2
+        assert all(actual is original for actual, original in zip(objects, inputs))
+        assert "merged" not in seen
+        result = real_merge(objects)
+        assert result == expected
+        assert all(result is not original for original in inputs)
+        assert tuple(real_emit(obj) for obj in inputs) == original_bytes
+        seen["merged"] = result
+        return result
+
+    def record_emit(obj):
+        assert obj is seen["merged"]
+        assert obj == expected
+        return real_emit(obj)
+
+    monkeypatch.delenv("PCC_SELF_OBJ", raising=False)
+    monkeypatch.setattr(
+        evaluator, "_system_cc",
+        lambda: pytest.fail("owned Linux merge resolved system cc"),
+    )
+    monkeypatch.setattr(c_evaluator, "emit_self_asm", lambda ir: assemblies[ir])
+    monkeypatch.setattr(
+        x86_64_asm_driver, "assemble_file",
+        lambda text: {"first-asm": first, "second-asm": second}[text],
+    )
+    monkeypatch.setattr(relocatable_merge, "merge_elf_objects", record_merge)
+    monkeypatch.setattr(elf, "emit_relocatable", record_emit)
+    evaluator._emit_compiled_units_self_backend(
+        units, emit_obj=str(output), optimize=False,
+    )
+    assert output.read_bytes() == real_emit(expected)
+    assert tuple(real_emit(obj) for obj in inputs) == original_bytes
 
 
 @_LINUX_GATE

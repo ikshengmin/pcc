@@ -1430,6 +1430,9 @@ class ParsedFunction:
     # The function moves the stack pointer at run time (a counted alloca, see
     # self_backend_dynamic_alloca); every epilogue first restores SP from x29.
     aarch64_dynamic_stack: bool = False
+    # Empty is the legacy is_global-only representation. Keep this at the end
+    # so positional constructors and ordinary indexed wire bytes are unchanged.
+    definition_linkage: str = ""
 
 
 def parsed_module_instruction_arena_profile(module: ParsedModule) -> dict[str, int]:

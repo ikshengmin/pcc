@@ -29,6 +29,7 @@ from .elf_x86_64 import (
     SHT_PROGBITS,
     STB_GLOBAL,
     STB_LOCAL,
+    STB_WEAK,
     STT_FUNC,
     STT_NOTYPE,
     STT_OBJECT,
@@ -49,6 +50,7 @@ from .x86_64_encode import (
 @dataclass(slots=True)
 class _SymbolMeta:
     global_: bool = False
+    weak: bool = False
     type: int = STT_NOTYPE
     size: int | None = None
 
@@ -361,6 +363,17 @@ class X86ModuleBuilder:
                 continue
             elif line.startswith(".section"):
                 current = _switch_section(sections, order, _section_from_directive(line))
+                continue
+            elif line.startswith(".weak "):
+                name = line.split(None, 1)[1].strip()
+                if not name or "," in name or " " in name:
+                    raise X86EncodeError(f"bad .weak directive {line!r}")
+                meta = symbols.get(name)
+                if meta is None:
+                    meta = _SymbolMeta()
+                    symbols[name] = meta
+                meta.global_ = True
+                meta.weak = True
                 continue
             elif line.startswith(".globl "):
                 name = line.split(None, 1)[1].strip()
@@ -833,7 +846,7 @@ def _assemble_file(
                 section_indices[section_name],
                 offset,
                 symbol_size or 0,
-                STB_GLOBAL if symbol_global else STB_LOCAL,
+                STB_WEAK if meta is not None and meta.weak else STB_GLOBAL if symbol_global else STB_LOCAL,
                 symbol_type,
             )
             (global_symbols if symbol_global else local_symbols).append(record)
@@ -846,7 +859,7 @@ def _assemble_file(
     for name in sorted(undefined_symbols):
         meta = symbol_meta.get(name)
         global_symbols.append(ElfSymbol(
-            name, 0, 0, 0, STB_GLOBAL,
+            name, 0, 0, 0, STB_WEAK if meta is not None and meta.weak else STB_GLOBAL,
             STT_NOTYPE if meta is None else meta.type,
         ))
     all_symbols = [ElfSymbol.null(), *local_symbols, *global_symbols]

@@ -943,6 +943,8 @@ def apply_semantic_layout(
                 offset=moved_offset[owner.name] + (symbol.offset - owner.offset),
                 external=symbol.external,
                 private_external=symbol.private_external,
+                weak_reference=symbol.weak_reference,
+                weak_definition=symbol.weak_definition,
             )
         )
 

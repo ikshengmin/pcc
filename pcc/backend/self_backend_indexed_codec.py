@@ -42,6 +42,7 @@ def _wire_bool(value, name: str) -> bool:
 
 _SCHEMA = "pcc.self-backend.indexed-module.v1"
 _DEBUG_SCHEMA = "pcc.self-backend.indexed-module.v2"
+_ODR_SCHEMA = "pcc.self-backend.indexed-module.v3"
 _MAGIC = b"PCCIDXMOD1\n"
 _MAX_HEADER_BYTES = 512 * 1024 * 1024
 
@@ -264,7 +265,7 @@ def _function_to_wire(function: ParsedFunction, kernel: IndexedFunctionKernel):
     arena_lengths = []
     for wire_name, arena in _kernel_arenas(kernel):
         arena_lengths.append([wire_name, len(arena)])
-    return {
+    value = {
         "name": function.name,
         "ret_type": _type_to_wire(function.ret_type),
         "args": [
@@ -286,6 +287,18 @@ def _function_to_wire(function: ParsedFunction, kernel: IndexedFunctionKernel):
         "types": [_type_to_wire(item) for item in kernel.types],
         "arenas": arena_lengths,
     }
+    # Target validation belongs to emission; validate the linkage/global pair
+    # here without silently dropping any non-legacy value during transport.
+    linkage = function.definition_linkage
+    if linkage == "":
+        linkage = "external" if function.is_global else "internal"
+    if linkage not in ("external", "internal", "external_odr"):
+        raise BackendUnavailable("unsupported indexed function definition linkage")
+    if function.is_global != (linkage != "internal"):
+        raise BackendUnavailable("inconsistent indexed function definition linkage")
+    if linkage == "external_odr":
+        value["definition_linkage"] = linkage
+    return value
 
 
 # At most 64 KiB of wire bytes per write, plus 8,192 scalar byte objects.
@@ -358,6 +371,11 @@ def encode_indexed_module_file(path: str, module: ParsedModule) -> None:
         # Old v1 readers must reject a debug module rather than ignore its
         # additional header and silently emit a source-less artifact.
         header["schema"] = _DEBUG_SCHEMA
+    if any(row.get("definition_linkage") == "external_odr" for row in functions):
+        # v1/v2 readers ignore unknown function keys: force them to reject
+        # instead of silently strengthening an ODR definition. v3 may also
+        # carry source_debug; ordinary v1/v2 bytes remain unchanged.
+        header["schema"] = _ODR_SCHEMA
     header_bytes = json.dumps(header, sort_keys=True).encode("utf-8")
     if len(header_bytes) > _MAX_HEADER_BYTES:
         raise BackendUnavailable("indexed module header exceeds the size limit")
@@ -506,11 +524,21 @@ def _seed_from_wire(value) -> tuple[ParsedFunction, tuple[tuple[str, int], ...]]
             raise BackendUnavailable("indexed module arena order is invalid")
         arena_inventory.append((expected_name, row[1]))
         index += 1
+    is_global = _wire_bool(value.get("is_global", False), "global flag")
+    definition_linkage = _wire_str(
+        value.get("definition_linkage", "external" if is_global else "internal"),
+        "function definition linkage",
+    )
+    if definition_linkage not in ("external", "internal", "external_odr"):
+        raise BackendUnavailable("unsupported indexed function definition linkage")
+    if is_global != (definition_linkage != "internal"):
+        raise BackendUnavailable("inconsistent indexed function definition linkage")
     function = ParsedFunction(
         name=_wire_str(value.get("name", ""), "function name"),
         ret_type=ret_type,
         args=args,
-        is_global=_wire_bool(value.get("is_global", False), "global flag"),
+        is_global=is_global,
+        definition_linkage=definition_linkage,
         is_vararg=_wire_bool(value.get("is_vararg", False), "vararg flag"),
         blocks=[],
         value_types={},
@@ -562,12 +590,13 @@ def decode_indexed_module_file(path: str) -> ParsedModule:
             raise BackendUnavailable("indexed module header is invalid") from exc
         if (
             not isinstance(header, dict)
-            or header.get("schema") not in (_SCHEMA, _DEBUG_SCHEMA)
+            or header.get("schema") not in (_SCHEMA, _DEBUG_SCHEMA, _ODR_SCHEMA)
             or header.get("scalar_width") != 8
             or header.get("byte_order") != "little"
         ):
             raise BackendUnavailable("indexed module header contract mismatch")
-        if ((header["schema"] == _DEBUG_SCHEMA) != ("source_debug" in header)):
+        if (header["schema"] != _ODR_SCHEMA
+                and ((header["schema"] == _DEBUG_SCHEMA) != ("source_debug" in header))):
             raise BackendUnavailable("indexed module source debug version mismatch")
         function_rows = header.get("functions")
         global_rows = header.get("globals")
@@ -582,6 +611,9 @@ def decode_indexed_module_file(path: str) -> ParsedModule:
             inventories.append(inventory)
             for _name, count in inventory:
                 total_scalars += count
+        has_odr = any(function.definition_linkage == "external_odr" for function in functions)
+        if has_odr != (header["schema"] == _ODR_SCHEMA):
+            raise BackendUnavailable("indexed module definition linkage version mismatch")
         header_total_scalars = _wire_int(
             header.get("total_scalars", -1), "total scalar count"
         )

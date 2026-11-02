@@ -1,9 +1,10 @@
 """Complete-object construction with the existing record layout and C ABI.
 
 N4659 [class.ctor], [class.base.init], [dcl.init], [over.match.ctor].
-Only non-inline out-of-class definitions, automatic complete objects, and
-scalar/pointer subobjects are projected. No base-object C2, destructor, unwind,
-copy, inline-ODR, or dynamic-initialization semantics are synthesized.
+Out-of-class bodies and delayed in-class bodies share scalar/pointer member
+initialization. In-class definitions additionally require the shared external-ODR
+linkage contract before emission. No base-object C2, unwind, copy, or dynamic
+initialization semantics are synthesized.
 """
 
 from pcc.frontends.c.ast import c_ast
@@ -95,8 +96,7 @@ def parse_constructor(parser, definition=None):
             raise CppDiagnostic("cpp.unsupported.class-linkage", "constructor signatures with internal-linkage class types require ABI support", name.coord)
         if is_enum_type(pointee) and pointee.internal_linkage:
             raise CppDiagnostic("cpp.unsupported.enum-linkage", "constructor signatures with internal-linkage enum types require ABI support", name.coord)
-    if not outside and parser._peek().value != ";":
-        raise CppDiagnostic("cpp.unsupported.inline-member-functions", "in-class constructor bodies require inline/ODR emission", name.coord)
+    inline_definition = not outside and parser._peek().value != ";"
     if outside and parser._peek().value not in (":", "{"):
         raise CppDiagnostic("cpp.member-definition-required", "out-of-class constructor declaration requires a body", name.coord)
     signature = tuple(unqualified(dtype) for _, dtype in params)
@@ -125,10 +125,28 @@ def parse_constructor(parser, definition=None):
     for parameter in parameter_symbols:
         if parameter is not None:
             parameter.c_name = parser._local_projection_name(parameter.name)
-    declaration, this = _declaration(parser, symbol, params, parameter_symbols, outside)
+    declaration, this = _declaration(parser, symbol, params, parameter_symbols, outside or inline_definition)
+    if inline_definition:
+        if owner.internal_linkage:
+            raise CppDiagnostic("cpp.unsupported.class-linkage",
+                                "in-class constructors of internal-linkage classes require distinct definition ownership", name.coord)
+        from pcc.frontends.cpp.inline_constructors import DeferredConstructor, collect_definition
+        tokens = collect_definition(parser, owner)
+        symbol.definition_linkage = "external_odr"
+        definition.inline_constructors.append(DeferredConstructor(
+            symbol, parameter_scope, declaration, this, tokens, name.coord,
+        ))
+        return declaration
     if not outside:
         parser._expect(";")
         return declaration
+    return bind_constructor_body(parser, definition, symbol, parameter_scope, declaration, this, name.coord)
+
+
+def bind_constructor_body(parser, definition, symbol, parameter_scope, declaration, this, coord):
+    """Bind a body in its original parameter scope against a completed class."""
+    parent = parser.scope
+    owner = definition.dtype
     previous_member, previous_this, previous_return = parser.member_function, parser.this_symbol, parser.return_type
     parser.scope = parameter_scope
     parser.member_function, parser.this_symbol, parser.return_type = symbol, this, "void"
@@ -139,8 +157,12 @@ def parse_constructor(parser, definition=None):
                 member = parser._identifier()
                 if member.value == owner.name:
                     raise CppDiagnostic("cpp.unsupported.delegating-constructors", "delegation requires constructor lifetime integration", member.coord)
-                target = definition.scope.names.get(member.value)
-                if target is None or target.kind != "member":
+                target = definition.scope.lookup(member.value, member.coord)
+                if (target is not None and target.kind == "type"
+                        and unqualified(target.dtype) is owner):
+                    raise CppDiagnostic("cpp.unsupported.delegating-constructors",
+                                        "delegation requires constructor lifetime integration", member.coord)
+                if target is None or target.kind != "member" or target.class_owner is not owner:
                     raise CppDiagnostic("cpp.invalid-member-initializer", "initializer must name a direct non-static data member", member.coord)
                 if target in initializers:
                     raise CppDiagnostic("cpp.duplicate-member-initializer", "data member initialized more than once", member.coord)
@@ -176,7 +198,7 @@ def parse_constructor(parser, definition=None):
         parser.scope = parent
         parser.member_function, parser.this_symbol, parser.return_type = previous_member, previous_this, previous_return
     symbol.closed_normal_body = call_free_body(body)
-    return c_ast.FuncDef(declaration, None, body, name.coord)
+    return c_ast.FuncDef(declaration, None, body, coord)
 
 
 

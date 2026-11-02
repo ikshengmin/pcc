@@ -77,6 +77,7 @@ class TextSymbol:
     offset: int
     external: bool = True
     private_external: bool = False
+    weak_definition: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -582,6 +583,10 @@ def _validate_section(
     for sym in sec.symbols:
         if not sym.name or not sym.name.isascii():
             raise MachOEmitError(f"bad symbol name {sym.name!r}")
+        if not isinstance(sym.weak_definition, bool):
+            raise MachOEmitError("weak definition flag must be boolean")
+        if sym.weak_definition and (not sym.external or not sec.is_code):
+            raise MachOEmitError("weak definition requires an external code symbol")
         if sym.private_external and not sym.external:
             raise MachOEmitError(
                 f"private-extern symbol {sym.name!r} must also be external"
@@ -1185,7 +1190,7 @@ def emit_object(
                 | (spec.N_PEXT if sym.private_external else 0)
             ),
             "n_sect": section_index,
-            "n_desc": 0,
+            "n_desc": spec.N_WEAK_DEF if sym.weak_definition else 0,
             "n_value": addrs[section_index - 1] + sym.offset,
         })
         for sym, section_index in defined

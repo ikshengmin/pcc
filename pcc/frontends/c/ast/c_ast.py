@@ -319,12 +319,14 @@ class Continue(Node):
     attr_names = ()
 
 class Decl(Node):
-    __slots__ = ('name', 'quals', 'storage', 'funcspec', 'type', 'init', 'bitsize', 'coord', '__weakref__')
-    def __init__(self, name, quals, storage, funcspec, type, init, bitsize, coord=None):
+    __slots__ = ('name', 'quals', 'storage', 'funcspec', 'type', 'init', 'bitsize', 'coord', '__weakref__', 'definition_linkage')
+    def __init__(self, name, quals, storage, funcspec, type, init, bitsize, coord=None, definition_linkage='external'):
         self.name = name
         self.quals = quals
         self.storage = storage
         self.funcspec = funcspec
+        # Frontend-resolved definition policy; distinct from C inline semantics.
+        self.definition_linkage = definition_linkage
         self.type = type
         self.init = init
         self.bitsize = bitsize

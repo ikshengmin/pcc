@@ -181,6 +181,14 @@ def _symbol_is_weak_reference(symbol) -> bool:
     return bool(symbol["n_desc"] & spec.N_WEAK_REF)
 
 
+def _symbol_is_weak_definition(symbol) -> bool:
+    if isinstance(symbol, PackedNativeSymbol):
+        return symbol.weak_definition
+    if isinstance(symbol, NativeSymbol):
+        return symbol.weak_definition
+    return bool(symbol["n_desc"] & spec.N_WEAK_DEF)
+
+
 def _symbol_name(symbol) -> str:
     if isinstance(symbol, PackedNativeSymbol):
         return symbol.name
@@ -860,6 +868,53 @@ def _fold_relocation_rows_into(
     return count
 
 
+def _validate_weak_definition_object(obj) -> None:
+    """Bound weak ODR support to external code and physical metadata anchors.
+
+    Runtime/DWARF metadata belongs to an emitted body, not its coalesced public
+    name. Section targets and ordinary local anchors retain that distinction;
+    symbolic weak targets must not silently switch to another input's body.
+    """
+    is_native = isinstance(obj, (NativeObject, PackedNativeObject))
+    symbols = obj.symbols if is_native else obj.symbols()
+    sections = obj.sections if is_native else obj.sections()
+    weak_indices = set()
+    for index, symbol in enumerate(symbols):
+        if not _symbol_is_weak_definition(symbol):
+            continue
+        section_index = _symbol_section_index(symbol)
+        if (not (_symbol_type(symbol) & spec.N_EXT)
+                or not 1 <= section_index <= len(sections)
+                or not (_section_flags(sections[section_index - 1]) & spec.S_ATTR_PURE_INSTRUCTIONS)
+                or _symbol_is_weak_reference(symbol)):
+            raise LinkError("weak definition requires an external code symbol")
+        weak_indices.add(index)
+    if not weak_indices:
+        return
+    for section_index, section in enumerate(sections):
+        key = _section_key(section)
+        if key[0] != "__DWARF" and key not in (
+            ("__LD", "__compact_unwind"), ("__TEXT", "__eh_frame"),
+            ("__DATA", "__pcc_stackmaps"),
+        ):
+            continue
+        if isinstance(obj, PackedNativeObject):
+            for fields in obj.relocation_fields(section_index):
+                if fields[1] in weak_indices or fields[7] in weak_indices:
+                    raise LinkError("weak definition metadata requires a physical local or section target")
+        elif isinstance(obj, NativeObject):
+            for relocation in section.relocations:
+                if (relocation.symbol_index in weak_indices
+                        or relocation.minuend_index in weak_indices):
+                    raise LinkError("weak definition metadata requires a physical local or section target")
+        else:
+            for info in obj.relocation_infos(section):
+                if (((info >> spec.RELOC_EXTERN_SHIFT) & 1)
+                        and ((info >> spec.RELOC_TYPE_SHIFT) & 15) != spec.ARM64_RELOC_ADDEND
+                        and (info & spec.RELOC_SYMBOLNUM_MASK) in weak_indices):
+                    raise LinkError("weak definition metadata requires a physical local or section target")
+
+
 def _inspect_link_input(
     item: tuple[int, LinkInput, ShardedSymbolDefinitions],
 ) -> _InspectedLinkInput:
@@ -867,6 +922,7 @@ def _inspect_link_input(
 
     index, data, definitions = item
     obj = _coerce_link_object(data, index)
+    _validate_weak_definition_object(obj)
     if isinstance(obj, PackedNativeObject):
         symbols = obj.symbols
         targeted = obj.relocation_target_indices
@@ -874,7 +930,7 @@ def _inspect_link_input(
             if symbol.section_index and symbol.external:
                 definitions.add(
                     symbol.name,
-                    SymbolDefinition(index, symbol_index),
+                    SymbolDefinition(index, symbol_index, symbol.weak_definition),
                 )
         return _InspectedLinkInput(
             obj,
@@ -896,7 +952,7 @@ def _inspect_link_input(
             if symbol.section_index and symbol.external:
                 definitions.add(
                     symbol.name,
-                    SymbolDefinition(index, symbol_index),
+                    SymbolDefinition(index, symbol_index, symbol.weak_definition),
                 )
         return _InspectedLinkInput(
             obj,
@@ -958,7 +1014,7 @@ def _inspect_link_input(
         ):
             definitions.add(
                 symbol["name"],
-                SymbolDefinition(index, symbol_index),
+                SymbolDefinition(index, symbol_index, _symbol_is_weak_definition(symbol)),
             )
     return _InspectedLinkInput(obj, symbols, frozenset(targeted))
 
@@ -1039,7 +1095,11 @@ def _merge_input_symbols(
         name = local_rename.get(name, name)
         if sym_type & spec.N_EXT:
             owner = external_definitions.owner(name)
-            if owner != SymbolDefinition(index, symbol_index):
+            if owner != SymbolDefinition(index, symbol_index, _symbol_is_weak_definition(sym)):
+                if _symbol_is_weak_definition(sym):
+                    # Retain the physical input body; ordinary symbolic
+                    # references bind only the prevailing definition.
+                    continue
                 raise LinkError(f"duplicate definition of {name!r}")
         if name in defined:
             raise LinkError(f"duplicate definition of {name!r}")
@@ -1064,6 +1124,7 @@ def _merge_input_symbols(
             offset,
             external=bool(sym_type & spec.N_EXT),
             private_external=bool(sym_type & spec.N_PEXT),
+            weak_definition=_symbol_is_weak_definition(sym),
         ))
         defined[name] = merged_key
 
@@ -1564,7 +1625,8 @@ def link_relocatable_native(
     symbol_at: dict[tuple[tuple[str, str], int], str] = {}
     for key, section in merged.items():
         for sym in section.symbols:
-            symbol_at.setdefault((key, sym.offset), sym.name)
+            if not sym.weak_definition:
+                symbol_at.setdefault((key, sym.offset), sym.name)
 
     for target, entry, input_addrs, input_keys in rebases:
         offset = entry.offset

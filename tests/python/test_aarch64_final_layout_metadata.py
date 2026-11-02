@@ -161,8 +161,9 @@ def test_emitted_metadata_uses_final_relaxed_layout(
             assert any(location is not None for _label, location in debug_plan.rows)
         return result
 
-    def record_assembled_text(builder):
-        result = real_finish(builder)
+    def record_assembled_text(builder, *, weak_definitions=()):
+        assert set(weak_definitions) == set()
+        result = real_finish(builder, weak_definitions=weak_definitions)
         assembled_results.append(result)
         return result
 

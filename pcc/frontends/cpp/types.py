@@ -217,7 +217,10 @@ def _substitution(index):
 
 def _mangle_class(dtype, substitutions):
     parts = dtype.qualified_name
-    name = str(len(parts[-1])) + parts[-1]
+    ordinal = getattr(dtype, "unnamed_ordinal", None)
+    # Itanium 5.1.5.5: this is an unnamed-type-name, not a source-name.
+    name = ("Ut" + (str(ordinal - 1) if ordinal else "") + "_"
+            if ordinal is not None else str(len(parts[-1])) + parts[-1])
     namespaces = parts[:-1]
     enclosing_class = getattr(dtype, "enclosing_class", None)
     # For a member enum the last prefix is a nominal class type, not a
