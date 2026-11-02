@@ -137,6 +137,18 @@ pass, including an emitted owned-code build/scan/disposal program and a
 separate interval-membership oracle. Count-free marking/reclamation and QPS
 remain unfinished; these primitives do not enable count-free GC4.
 
+The opt-in `PCC_GC_BACKEND=4 PCC_GC4_TRACING_ONLY=1` prototype now selects
+conservative external roots, refreshes cycle-local pins, indexes graph leaves
+and suppresses ordinary/prepared reference updates. Other collectors reject
+that option; the default keeps reference counting. The new mode has 15 focused
+root-selection/ABI checks and 20 reference-update/configuration checks,
+including separately labeled self/LLVM object probes. Its value-liveness and
+weakref/finalizer/resurrection native programs are not yet qualified; C-API
+export ownership, class reclamation, lifecycle ordering and heap-growth gates
+remain open. Do not use this experimental mode as production/QPS evidence.
+The existing CMS harness also lacks the metric-shard owner symbols; that
+unrelated link failure is recorded without repairing its scheduler fixture.
+
 ### Measured P0 batch: `02acaa2f5` -> `0fbc8d977`
 
 Seven rotated paired runs on Darwin arm64, host pcc0/self/no-libpython,

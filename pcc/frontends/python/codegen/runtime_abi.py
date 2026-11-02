@@ -1764,6 +1764,7 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         # single-threaded kernel), written with the backend and the probe.
         'pcc_gc_refcount_fast',
         'pcc_gc_refcount_atomic',
+        'pcc_gc_backend4_no_refcounts',
         'pcc_gc_cms_mutator_assists',
         'pcc_gc_cms_queue_pushes',
         'pcc_gc_cms_wb_flushes',

@@ -38,6 +38,7 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_gray_count_increment_acq_rel",
     "pcc_gc_gray_current_roots",
     "pcc_gc_gray_refcount_external_roots",
+    "pcc_gc_gray_conservative_thread_roots",
     "pcc_gc_load_ptr",
     "pcc_gc_forwarding_index_find",
     "pcc_gc_object_is_known_no_lock",
@@ -51,6 +52,7 @@ RAW_FUNCTION_IMPORTS = {
     "py_incref",
 }
 RAW_GLOBAL_IMPORTS = {
+    "pcc_gc_backend4_no_refcounts",
     "pcc_gc_backend_selected",
     "pcc_gc_explicit_collect_active",
     "pcc_gc_mark_active",

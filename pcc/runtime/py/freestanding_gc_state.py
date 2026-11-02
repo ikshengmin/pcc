@@ -129,6 +129,9 @@ define_global_i32("pcc_gc_refcount_fast", 0)
 # atomic reference-count updates (any number of threads), and only a
 # count that would reach zero takes the full release path.
 define_global_i32("pcc_gc_refcount_atomic", 0)
+# Opt-in GC4 prototype. Fixed before allocation; zero preserves every
+# collector's existing count-based ownership and external-root scan.
+define_global_i32("pcc_gc_backend4_no_refcounts", 0)
 define_global_i32("pcc_gc_config_initialized", 0)
 define_global_i32("pcc_gc_read_barrier_enabled", 1)
 define_global_i32("pcc_gc_backend0_frame_roots_enabled", 0)

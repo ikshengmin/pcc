@@ -50,8 +50,12 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_threads_enabled",
     "pcc_thread_start",
     "pcc_thread_safepoint_gate",
+    "pcc_thread_enable_conservative_roots",
 }
 RAW_GLOBAL_IMPORTS = {
+    "pcc_gc_backend4_no_refcounts",
+    "pcc_gc_frame_registry_inactive",
+    "pcc_gc_backend0_frame_roots_enabled",
     "pcc_gc_cms_sweep_pending",
     "pcc_gc_backend_selected",
     "pcc_gc_refcount_fast",
@@ -210,6 +214,7 @@ def test_public_collection_preserves_config_and_collection_order():
     )[0]
     for env_name in (
         "PCC_GC_BACKEND",
+        "PCC_GC4_TRACING_ONLY",
         "PCC_GC_PAUSE",
         "PCC_GC_STEPMUL",
         "PCC_GC_STEP_MUL",
@@ -349,6 +354,7 @@ int64_t pcc_thread_join(void *raw, void *result_out) {
     return rc;
 }
 void pcc_thread_safepoint_gate(void) {}
+void pcc_thread_enable_conservative_roots(void) { abort(); }
 int64_t pcc_platform_sleep_ns(int64_t ns) {
     struct timespec delay = { ns / 1000000000, ns % 1000000000 };
     return nanosleep(&delay, NULL);

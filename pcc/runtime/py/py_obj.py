@@ -1924,6 +1924,8 @@ def _py_refcount_prepared_reset(prepared, o) -> None:
 # pcc user classes and must be refcounted.
 def _py_incref_prepare(o, prepared) -> None:
     _py_refcount_prepared_reset(prepared, o)
+    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
+        return
     if ptr_is_null(o) != 0:
         return
     if is_tagged_int(o) != 0:
@@ -2049,6 +2051,8 @@ def py_incref(o) -> None:
             if atomic_load_i64(o, PYOBJECTHEADER_REFCOUNT_OFFSET, "relaxed") >= 0:
                 atomic_rmw_i64("add", o, PYOBJECTHEADER_REFCOUNT_OFFSET, 1, "relaxed")
                 return
+    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
+        return
     _py_incref_checked_tail(o)
 
 
@@ -2101,6 +2105,8 @@ def _py_incref_checked_tail(o) -> None:
 
 def _py_decref_prepare(o, prepared) -> None:
     _py_refcount_prepared_reset(prepared, o)
+    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
+        return
     if ptr_is_null(o) != 0:
         return
     if is_tagged_int(o) != 0:
@@ -2272,6 +2278,8 @@ def py_decref(o) -> None:
                 if observed == count:
                     return
                 count = observed
+    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
+        return
     _py_decref_checked_tail(o)
 
 

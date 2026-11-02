@@ -3,6 +3,7 @@
 from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
+    global_addr,
     global_load_ptr,
     is_tagged_int,
     load_i32,
@@ -10,6 +11,7 @@ from pcc.unsafe import (
     load_ptr,
     ptr_is_null,
     store_i32,
+    store_i64,
 )
 
 
@@ -44,6 +46,10 @@ def pcc_gc_prepare_object_list_mark(explicit_collect: i64) -> None:
             node = nxt
             continue
         flags: i64 = load_i32(obj, 12)
+        if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
+            # gc_refs is a cycle-local conservative pin in count-free GC4.
+            # Never retain last cycle's conservative candidates as roots.
+            store_i64(node, 56, 0)
         if (flags & 16384) != 0 and explicit_collect == 0:
             store_i32(obj, 12, (flags & ~(56 | 16384)) | 32)
         else:

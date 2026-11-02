@@ -35,6 +35,9 @@ pcc_gc_gray_current_roots = extern("pcc_gc_gray_current_roots", (), c_void)
 pcc_gc_gray_refcount_external_roots = extern(
     "pcc_gc_gray_refcount_external_roots", (), c_void
 )
+pcc_gc_gray_conservative_thread_roots = extern(
+    "pcc_gc_gray_conservative_thread_roots", (), c_void
+)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_forwarding_index_find = extern(
     "pcc_gc_forwarding_index_find", (c_ptr,), c_ptr
@@ -140,7 +143,10 @@ def pcc_gc_seed_roots() -> None:
         0,
     )
     pcc_gc_prepare_object_list_mark(explicit_collect)
-    pcc_gc_gray_refcount_external_roots()
+    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
+        pcc_gc_gray_conservative_thread_roots()
+    else:
+        pcc_gc_gray_refcount_external_roots()
     pcc_gc_gray_current_roots()
 
 

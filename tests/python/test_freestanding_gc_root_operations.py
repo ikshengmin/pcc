@@ -76,6 +76,7 @@ RAW_FUNCTION_IMPORTS = RAW_ONLY_CROSS_OBJECT_SYMBOLS | {
     "pcc_gc_granule_span",
 }
 RAW_GLOBAL_IMPORTS = {
+    "pcc_gc_backend4_no_refcounts",
     "pcc_gc_backend_selected", "pcc_gc_gray_count",
     # A lease on a non-moving collector is a no-op once the configuration
     # is known, unless the provenance probe checks it.

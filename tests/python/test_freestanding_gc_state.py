@@ -184,7 +184,9 @@ def test_freestanding_gc_state_has_complete_raw_abi_and_initial_values(
     # Frame entries read the published registry word
     # (pcc_gc_frame_registry_inactive) and the final stack-walk answer
     # (pcc_gc_stackmap_walk_state).
-    assert len(expected) == 233
+    # The opt-in GC4 tracing-only configuration adds one frozen mode word.
+    assert len(expected) == 234
+    assert expected["pcc_gc_backend4_no_refcounts"] == ("define_global_i32", 0)
     assert expected["pcc_gc_frame_registry_inactive"] == ("define_global_i32", 0)
     assert expected["pcc_gc_stackmap_walk_state"] == ("define_global_i32", 0)
     assert expected["pcc_gc_backend3_oldify_suspended"] == ("define_global_i32", 0)

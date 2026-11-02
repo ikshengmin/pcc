@@ -2872,6 +2872,8 @@ def pcc_gc_set_backend(backend: int) -> int:
     _init_config()
     if backend < 0 or backend > 4:
         return -1
+    if backend != 4 and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
+        return -1
     # The collector is selected before the first managed allocation, by
     # PCC_GC_BACKEND or by one call here, and never changes afterwards: code
     # on a non-moving collector holds raw object pointers without pins or
@@ -4701,6 +4703,7 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
             (backend == 3 or backend == 4)
             and ptr_is_null(pending_block) != 0
             and _backend3_graph_leaf_tag(load_i32(o, 8)) != 0
+            and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0
         ):
             graph_leaf = 1
         if graph_leaf == 0:

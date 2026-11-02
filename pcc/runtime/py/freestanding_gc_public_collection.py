@@ -37,6 +37,7 @@ pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 pcc_threads_enabled = extern("pcc_threads_enabled", (), c_int64)
 pcc_thread_start = extern("pcc_thread_start", (c_ptr, c_ptr, c_ptr), c_int64)
 pcc_thread_safepoint_gate = extern("pcc_thread_safepoint_gate", (), c_void)
+pcc_thread_enable_conservative_roots = extern("pcc_thread_enable_conservative_roots", (), c_void)
 pcc_platform_sleep_ns = extern("pcc_platform_sleep_ns", (c_int64,), c_int64)
 pcc_gc_tracing_step_cycle = extern(
     "pcc_gc_tracing_step_cycle", (c_int64,), c_int64
@@ -282,6 +283,16 @@ def pcc_gc_config_ensure() -> i64:
         pcc_platform_getenv(cstr("PCC_GC_BACKEND")),
         load_i32(global_addr("pcc_gc_backend_selected"), 0),
     )
+    tracing_only: i64 = pcc_gc_config_parse_env_i32(
+        pcc_platform_getenv(cstr("PCC_GC4_TRACING_ONLY")), 0, 0, 1
+    )
+    if tracing_only != 0 and backend != 4:
+        pcc_platform_write(2, cstr("pcc runtime: PCC_GC4_TRACING_ONLY requires PCC_GC_BACKEND=4\n"), 60)
+        pcc_platform_abort()
+        return backend
+    if tracing_only != 0:
+        pcc_thread_enable_conservative_roots()
+    store_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0, tracing_only)
     pause: i64 = pcc_gc_config_parse_env_i32(
         pcc_platform_getenv(cstr("PCC_GC_PAUSE")), 1000, 50, 1000
     )
