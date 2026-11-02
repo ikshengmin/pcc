@@ -81,6 +81,9 @@ pcc_gc_gray_count_increment_acq_rel = extern(
 pcc_gc_pointer_is_managed = extern(
     "pcc_gc_pointer_is_managed", (c_ptr,), c_int64
 )
+pcc_gc_pin_conservative_thread_roots = extern(
+    "pcc_gc_pin_conservative_thread_roots", (), c_void
+)
 pcc_gc_backend3_remember_owner = extern(
     "pcc_gc_backend3_remember_owner", (c_ptr, c_int64), c_void
 )
@@ -149,6 +152,12 @@ def pcc_gc_step(budget: i64) -> i64:
         if pcc_stop_the_world() != 0:
             return 0
         acquired_world = 1
+    if backend == 3 and load_i32(
+        global_addr("pcc_gc_backend4_no_refcounts"), 0
+    ) != 0:
+        # Young copying can precede a major mark. Refresh current raw roots
+        # without starting/restarting the marking state machine.
+        pcc_gc_pin_conservative_thread_roots()
     if load_i32(global_addr("pcc_gc_explicit_collect_active"), 0) == 0:
         # Stack-map step 3: automatic steps run where an allocation triggered
         # them; compare that stack's mapped roots with the registered ones
@@ -221,6 +230,8 @@ def pcc_gc_step(budget: i64) -> i64:
             ):
                 # Retirement frees relocation sources: as for evacuation,
                 # every other mutator must be parked at an application gate.
+                if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
+                    pcc_gc_pin_conservative_thread_roots()
                 retired: i64 = pcc_gc_backend4_remap_and_retire_stopped_world()
                 processed = processed + retired
                 if retired > 0:
@@ -251,6 +262,10 @@ def pcc_gc_step(budget: i64) -> i64:
                 if pcc_thread_live_count() > 1 and pcc_thread_all_stopped_at_gates() == 0:
                     may_relocate = 0
                 if processed < budget and may_relocate != 0:
+                    # Refresh before selection/copy, which may run before a
+                    # mark seeds roots. Steps that only drain/age need no scan.
+                    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
+                        pcc_gc_pin_conservative_thread_roots()
                     processed = processed + pcc_gc_backend4_evacuation_page_drain(
                         budget - processed
                     )

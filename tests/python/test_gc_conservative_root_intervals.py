@@ -106,6 +106,7 @@ class FrozenWordMemory(IntervalMemory):
         self.freed = []
         self.next_address = 0x800000
         self.head = 0
+        self.graph_locks = []
         self.namespace.update(
             stack_alloc=lambda size: 0x700000,
             malloc=self.allocate,
@@ -113,6 +114,8 @@ class FrozenWordMemory(IntervalMemory):
             global_load_ptr=lambda name: self.head,
             pcc_thread_world_stop_epoch_held=lambda: 1,
             pcc_thread_visit_conservative_words=self.visit,
+            pcc_py_gc_minor_graph_lock=lambda: self.graph_locks.append(1),
+            pcc_py_gc_minor_graph_unlock=lambda: self.graph_locks.pop(),
         )
 
     def allocate(self, size):
@@ -199,6 +202,24 @@ def test_word_index_retains_all_overlapping_owners_and_unaligned_interior_roots(
     assert memory.marked == {0x1000, 0x2000, 9223372036854775800}
 
 
+def test_moving_step_refreshes_pins_without_marking_or_retaining_old_raw_roots():
+    memory = FrozenWordMemory([[0x2009]])
+    memory.heap([(0x1000, 16, [], True), (0x2000, 16, [], True)])
+    memory.words[0x30000 + 56] = 1
+    visit = memory.visit
+
+    def locked_visit(callback, context):
+        assert memory.graph_locks == [1]
+        return visit(callback, context)
+
+    memory.namespace["pcc_thread_visit_conservative_words"] = locked_visit
+    memory.namespace["pcc_gc_pin_conservative_thread_roots"]()
+    assert memory.words[0x30000 + 56] == 0
+    assert memory.words[0x30080 + 56] == 1
+    assert memory.marked == set()
+    assert memory.graph_locks == []
+
+
 @pytest.mark.parametrize("snapshots", ([None], [[1000], None], [[1000], []], [[1000], [1000, 1001]]))
 def test_missing_or_changing_snapshots_fail_before_marking(snapshots):
     memory = FrozenWordMemory(snapshots)
@@ -220,6 +241,7 @@ def test_word_scan_rejects_invalid_owned_extents_even_without_candidates(base, s
 
 NATIVE_DRIVER = r'''
 extern void pcc_gc_gray_conservative_thread_roots(void);
+extern void pcc_gc_pin_conservative_thread_roots(void);
 void *pcc_gc_object_head;
 static long nodes[3][11];
 static long owner[9];
@@ -229,6 +251,9 @@ static long candidates[8];
 static long candidate_count;
 static long marked;
 static long visits;
+static long graph_depth;
+void pcc_py_gc_minor_graph_lock(void) { graph_depth++; }
+void pcc_py_gc_minor_graph_unlock(void) { graph_depth--; }
 void *malloc(long size) { return size <= 4096 ? storage : (void *)0; }
 void free(void *value) { (void)value; }
 void pcc_platform_abort(void) { __builtin_trap(); }
@@ -267,8 +292,12 @@ int main(void) {
     candidate_count = 8; marked = 0;
     pcc_gc_gray_conservative_thread_roots();
     if (marked != 3) return 8;
+    candidates[0] = 8199; candidate_count = 1; marked = 0;
+    pcc_gc_pin_conservative_thread_roots();
+    if (marked != 0 || graph_depth != 0) return 9;
+    if (nodes[0][7] != 0 || nodes[1][7] != 1 || nodes[2][7] != 0) return 10;
     /* Each stopped snapshot is visited once to size and once to fill words. */
-    return visits == 14 ? 0 : 7;
+    return visits == 16 ? 0 : 7;
 }
 '''
 

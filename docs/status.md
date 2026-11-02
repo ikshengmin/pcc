@@ -110,6 +110,10 @@ release statistics, dead-code cleanup and pyperformance are deferred behind
 these four. The interrupted historical pyperformance run is not being resumed.
 The acceptance target remains exceeding CPython 3.15.0 asyncio at both one
 and four workers; intermediate code changes and small gains do not satisfy it.
+The maintainer reiterated that GC1-4 must use their tracing models without
+ordinary reference counting. First bring the five collectors to comparable
+performance, then exceed CPython. Improving an opt-in GC4 helper does not
+complete that migration or authorize retaining RC in GC1-3.
 
 Local Mac work over `ba51f3a58` replaces the GC4 tracing-only mark's heap-wide
 interval sort with a sorted, deduplicated index of frozen mutator words.
@@ -127,10 +131,26 @@ samples to interval sorting and 1.70% to its scan entry; both off/on programs
 return the exact expected output. These shares are diagnostic, not throughput
 gains. Runtime construction and five-GC synchronous checks complete, but the
 request-program build exceeds its 1-GiB process-tree cap and is stopped.
-The new index's full-runtime execution, paired 1/4-worker throughput and
-five-GC qualification are pending. GC4 remains default-off; C-API export
+The subsequent normal source builds use a 4-GiB cap within the maintainer's
+explicitly approved original 8-GiB build maximum; tests and timing retain
+their 1-GiB cap. Both arms execute the synchronous and request smoke programs
+under GC0-4. The new index also passes both GC4 value/lifecycle integration
+tests with its freshly built runtime. GC4 remains default-off; C-API export
 ownership, class reclamation and GC1-3 count removal remain open. Full-suite
 and bootstrap runs await the maintainer's explicit permission.
+
+The runtime comparison freezes `e82f57b5b` versus `8a38fb65a`, both with the
+same `pipeline_indexed_handoff.py` correction from `7819747a7`, and identical
+workload inputs. Both arms enable GC4 tracing-only mode. The first combined
+packet stops when the four-worker control exceeds its 30-second process
+limit. A separate seven-rotation one-worker enumeration records three control
+timeouts and one candidate timeout. Successful-run medians are 2,204 QPS
+(4 controls) and 2,257 (6 candidates); only four complete pairs exist, with
+paired median +7.50%, three positive and one negative. Same-packet CPython's
+median is 79,253 QPS, ranging from 22,832 to 88,055. Synchronous median
+instructions/operation are 880,669 -> 803,013. These are incomplete, variable
+results, not a qualified throughput improvement. Four-worker paired medians
+and current GC0 throughput are not established by this packet.
 
 The bounded host frontend/backend split exposed a prerequisite defect:
 `pipeline_indexed_handoff._manifest` still expected the removed libpython
@@ -139,8 +159,25 @@ scaffold/verbosity/sibling positions and rejects the obsolete extra field.
 `test_pipeline_indexed_handoff.py` passes 31 tests and 48 subtests, including
 the actual writer with both scaffold modes and sibling lists;
 `test_host_indexed_process_split.py` passes 19 tests. These local Mac host
-checks do not establish successful native request-program compilation; that
-rerun remains pending under the same build cap.
+checks do not themselves establish native execution. The subsequent normal
+source-program builds above succeed; the split frontend still exceeded its
+separate 1-GiB attempt, so it is not claimed memory-qualified at that cap.
+
+A further count-free prerequisite refreshes conservative address pins from
+the current stopped-world snapshot before young copying or GC4 evacuation/
+retirement. It preserves marking colors and drops old snapshot pins; GC4
+steps that only drain/age do not perform the additional scan. The root file
+passes 54 checks including emitted sorting, duplicate compaction and pin-only
+refresh; 16 dispatcher cases verify automatic/explicit step order and failed
+stop handling. Two object-closure probes pass after registering the new raw
+ABI signature (self/LLVM emission with an external assembler, labeled
+reference checks). Full-runtime moving-step validation remains pending.
+
+An additional exception-root probe exposes an existing builtin-exception
+limitation: `ValueError(shared_list, index).args[0] is shared_list` fails under
+GC0 on both the word-index arm and the pre-change control. This remains an
+open semantic failure, not a passing exception-liveness check or evidence of
+a tracing regression; the original failing program is retained outside Git.
 
 `9da3787f5` removes temporary roots and leases for proven permanent dictionary,
 subscript/slice and integer-tree inputs. Its 68 focused ordinary checks pass.

@@ -32,6 +32,8 @@ pcc_thread_visit_conservative_words = extern(
 )
 pcc_thread_world_stop_epoch_held = extern("pcc_thread_world_stop_epoch_held", (), c_int64)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
+pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 
 _INTERVAL_START: i64 = 0
 _INTERVAL_END: i64 = 8
@@ -231,8 +233,8 @@ def _extent_has_word(words, count: i64, base, size: i64) -> i64:
     return 0
 
 
-@c_abi_export("pcc_gc_gray_conservative_thread_roots")
-def pcc_gc_gray_conservative_thread_roots() -> None:
+@c_abi_export("pcc_gc_scan_conservative_thread_roots")
+def _scan_thread_roots(mark: i64) -> None:
     if pcc_thread_world_stop_epoch_held() < 0:
         pcc_platform_abort()
         return
@@ -261,6 +263,11 @@ def pcc_gc_gray_conservative_thread_roots() -> None:
     node = global_load_ptr("pcc_gc_object_head")
     while ptr_is_null(node) == 0:
         if pcc_gc_object_node_is_active(node) != 0:
+            # A stopped-world relocation step needs CURRENT raw addresses,
+            # including objects allocated since the last completed mark.
+            # Retire old conservative pins without changing marking colors.
+            if mark == 0:
+                store_i64(node, 56, 0)
             rooted: i64 = _extent_has_word(words, count, load_ptr(node, 0), load_i64(node, 8))
             owner = load_ptr(node, 48)
             if ptr_is_null(owner) == 0:
@@ -272,6 +279,21 @@ def pcc_gc_gray_conservative_thread_roots() -> None:
             if rooted != 0:
                 # The same cycle-local pin prevents relocation of raw roots.
                 store_i64(node, 56, 1)
-                pcc_gc_mark_root_gray_if_known(load_ptr(node, 0))
+                if mark != 0:
+                    pcc_gc_mark_root_gray_if_known(load_ptr(node, 0))
         node = load_ptr(node, 16)
     free(words)
+
+
+@c_abi_export("pcc_gc_gray_conservative_thread_roots")
+def pcc_gc_gray_conservative_thread_roots() -> None:
+    _scan_thread_roots(1)
+
+
+@c_abi_export("pcc_gc_pin_conservative_thread_roots")
+def pcc_gc_pin_conservative_thread_roots() -> None:
+    # The caller owns the stopped world. The graph lock excludes collector
+    # metadata changes while resolving frozen words to object/payload owners.
+    pcc_py_gc_minor_graph_lock()
+    _scan_thread_roots(0)
+    pcc_py_gc_minor_graph_unlock()

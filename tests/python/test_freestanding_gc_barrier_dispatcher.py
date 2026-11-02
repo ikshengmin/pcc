@@ -58,6 +58,7 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_incremental_concurrent_step",
     "pcc_gc_object_is_known_no_lock",
     "pcc_gc_pointer_is_managed",
+    "pcc_gc_pin_conservative_thread_roots",
     "pcc_gc_precise_stack_diff_if_requested",
     "pcc_gc_tracing_has_sweep_candidate",
     "pcc_gc_tracing_record_pause",
@@ -75,6 +76,7 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_thread_owns_stopped_world",
 } | RAW_PROVIDER_SYMBOLS
 RAW_GLOBAL_IMPORTS = {
+    "pcc_gc_backend4_no_refcounts",
     # GC3 copies young objects only while other mutators are at gates.
     "pcc_gc_backend3_oldify_suspended",
     "pcc_gc_backend4_genzgc_store_barriers",
