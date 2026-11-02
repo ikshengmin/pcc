@@ -201,6 +201,16 @@ model checks pass; native and throughput validation are pending. The public
 scheduler-root count still counts registrations, including these cached NULL
 slots; tests check their emptiness, exact counts and 4096-node bounds.
 
+`34b484058` implements that root cache. All nine selected native checks now
+pass: the ready-pool probe covers GC0-4 plus tracing-only GC4; overflow,
+completion races, shared locks, channels and migration cover the established
+collector lanes; persistent carriers and both prototype programs also pass.
+Three C probes initially failed to compile because the shared test snippet
+preceded its private introspection declaration. Adding the matching prototype
+fixes those probes; the three failed and two previously unrun cases pass on
+rerun against the unchanged admitted runtime. Default-GC0 throughput comparison
+for this cache change is still pending.
+
 ### Measured P0 batch: `02acaa2f5` -> `0fbc8d977`
 
 Seven rotated paired runs on Darwin arm64, host pcc0/self/no-libpython,

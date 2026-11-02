@@ -2,6 +2,7 @@
 
 CACHED_POOL_ROOT_PROBE = r'''
 #include "py_runtime.h"
+extern int64_t pcc_gc_slot_is_runtime_root(PyObject **slot);
 extern void *pcc_vthread_ready_free_py;
 extern void *pcc_vthread_join_free_py;
 extern void *pcc_vthread_channel_free_py;
