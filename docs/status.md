@@ -244,6 +244,22 @@ fresh admitted runtime, and automatic provisioning is disabled. The remaining
 reference suites and native pcc1 qualification remain pending; this candidate
 is not release-qualified.
 
+The committed source is `9c763b08d`. Its owned runtime and both workload
+programs build successfully; all ten program/GC combinations execute with the
+expected results. A later policy run reaches the unchanged 1-GiB tree cap
+with six concurrent workers and also records unavailable stack-map-runtime
+fixtures; it is interrupted, not green. Heavy tests will be scheduled by file
+while retaining six workers and the original guards.
+
+Follow-up review catches a consumer of the new frame sequence: the optional
+text frame-address fold recognized only a separate SUB, so a later temporary
+call-stack adjustment could be mistaken for the entire frame. It now models
+the pre-indexed save and ordinary post-indexed release, and invalidates its
+model on other SP writebacks. All 184 selected fold/liveness/stack-map emission
+checks pass, including a native program that distinguishes a frame local (42)
+from a temporary call-stack word (99). The default-pipeline throughput packet
+on frozen `9c763b08d` is still in progress and does not qualify this follow-up.
+
 ### Measured P0 batch: `02acaa2f5` -> `0fbc8d977`
 
 Seven rotated paired runs on Darwin arm64, host pcc0/self/no-libpython,

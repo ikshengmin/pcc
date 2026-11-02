@@ -8,6 +8,11 @@ away.  These cases pin the proof obligations: a modelled frame, a dead address
 register, an encodable displacement, and ``sp`` unchanged since the prologue.
 """
 
+import platform
+import subprocess
+
+import pytest
+
 from pcc.backend.self_backend_target_passes import (
     FoldFrameAddressPass,
     SelfTargetPassContext,
@@ -86,6 +91,83 @@ L_more:
   ret
 """)
     assert "  ldr x9, [sp, #64]" in out
+
+
+_PAIR_PROLOGUE = _PROLOGUE.replace("  sub sp, sp, #1088", "  stp x19, x20, [sp, #-496]!")
+
+
+def test_models_preindexed_save_and_postindexed_return_without_moving_slots():
+    out = _fold(_PAIR_PROLOGUE + """  sub x15, x29, #400
+  ldur x9, [x15]
+  ldp x19, x20, [sp], #496
+  ldp x29, x30, [sp], #16
+  autiasp
+  ret
+L_later:
+  sub x16, x29, #416
+  ldur x10, [x16]
+  ret
+""")
+    assert "  ldr x9, [sp, #96]" in out
+    assert "  ldr x10, [sp, #80]" in out
+
+
+def test_call_stack_adjustment_after_preindexed_save_is_not_the_frame_size():
+    out = _fold(_PAIR_PROLOGUE + """  sub sp, sp, #16
+  sub x15, x29, #8
+  ldur x9, [x15]
+  add sp, sp, #16
+  ret
+""")
+    assert "  sub x15, x29, #8" in out
+    assert "  ldr x9, [sp, #8]" not in out
+
+
+def test_unmodelled_writeback_invalidates_the_frame():
+    for instruction in ("stp x9, x10, [sp, #-16]!", "ldp x9, x10, [sp], #16"):
+        out = _fold(_PAIR_PROLOGUE + "  " + instruction + "\n" + """  sub x15, x29, #400
+  ldur x9, [x15]
+  ret
+""")
+        assert "  sub x15, x29, #400" in out
+
+
+@pytest.mark.skipif(platform.system() != "Darwin" or platform.machine() != "arm64",
+                    reason="native Darwin arm64 frame-address execution")
+def test_folded_frame_reads_local_above_temporary_call_stack(tmp_path):
+    from pcc.backend.macho_exec import link_executable
+    from pcc.backend.native_object import decode_native_object
+    from pcc.backend.target_objects import encode_assembly_object
+
+    source = """.section __TEXT,__text,regular,pure_instructions
+.globl _main
+_main:
+  paciasp
+  stp x29, x30, [sp, #-16]!
+  mov x29, sp
+  stp x19, xzr, [sp, #-64]!
+  mov x19, #42
+  stur x19, [x29, #-8]
+  sub sp, sp, #16
+  mov x9, #99
+  str x9, [sp, #8]
+  sub x15, x29, #8
+  ldur x0, [x15]
+  add sp, sp, #16
+  cmp x0, #42
+  cset w0, ne
+  ldp x19, xzr, [sp], #64
+  ldp x29, x30, [sp], #16
+  autiasp
+  ret
+"""
+    folded = "\n".join(_fold(source))
+    obj = decode_native_object(encode_assembly_object(folded, "arm64-apple-darwin"))
+    output = tmp_path / "frame-address"
+    output.write_bytes(link_executable([obj]))
+    output.chmod(0o755)
+    result = subprocess.run([str(output)], capture_output=True, text=True, timeout=15)
+    assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
 
 
 def test_byte_access_uses_the_unscaled_immediate_form():

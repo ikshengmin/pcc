@@ -833,6 +833,33 @@ def fold_aarch64_frame_addresses(lines: list[str]) -> list[str]:
             index += 1
             continue
 
+        frame_pair = re.fullmatch(
+            r"stp (?:x\d+|xzr), (?:x\d+|xzr), \[sp, #-(\d+)\]!", stripped
+        )
+        if frame_pair is not None and saw_frame_pointer:
+            frame_size = int(frame_pair.group(1))
+            saw_frame_pointer = False
+            out.append(line)
+            index += 1
+            continue
+
+        if re.search(r"\[sp(?:, [^\]]+)?\](?:!|,)", stripped):
+            release_pair = re.fullmatch(
+                r"ldp (?:x\d+|xzr), (?:x\d+|xzr), \[sp\], #(\d+)", stripped
+            )
+            ordinary_release = (
+                release_pair is not None
+                and frame_size == int(release_pair.group(1))
+                and index + 1 < len(lines)
+                and lines[index + 1].strip() == _AARCH64_EPILOGUE_RESTORE
+            )
+            if stripped != _AARCH64_EPILOGUE_RESTORE and not ordinary_release:
+                frame_size = None
+                saw_frame_pointer = False
+            out.append(line)
+            index += 1
+            continue
+
         stack_adjust = re.fullmatch(r"(add|sub) sp, sp, #(\d+)", stripped)
         if stack_adjust is not None:
             amount = int(stack_adjust.group(2))
