@@ -49,14 +49,45 @@ def contains_parameter(dtype):
     return False
 
 
-def substitute(dtype, bindings):
+def substitute(dtype, bindings, token):
     if isinstance(dtype, TypeParameter):
         return bindings.get(dtype, dtype)
     if isinstance(dtype, Results):
-        return Results(tuple(substitute(item, bindings) for item in dtype.elements))
-    # Dependent composite signatures/storage are explicitly gated at type
-    # resolution; concrete nominal types must retain their original identity.
+        return Results(tuple(substitute(item, bindings, token) for item in dtype.elements))
+    if isinstance(dtype, ArrayType):
+        from pcc.frontends.go.sema import checked_array_type
+        return checked_array_type(token, dtype.count, substitute(dtype.element, bindings, token))
+    # Concrete nominal types retain declaration identity; dependent pointer
+    # and record layouts still fail during source type resolution.
     return dtype
+
+
+def infer_argument(formal, actual, token, parameters, explicit, bindings, *, exact=False):
+    """Assignment equations are loose at the root, exact inside an array.
+
+    In particular, [2]Named and [2]int cannot agree merely because Named's
+    underlying type is int. A named outer array may still match [2]T.
+    Untyped constants are collected separately by select, never recursively.
+    """
+    if isinstance(formal, TypeParameter) and formal in parameters:
+        if formal in explicit:
+            return  # Source assignability is checked after substitution.
+        previous = bindings.get(formal)
+        if previous is None:
+            bindings[formal] = actual
+        elif previous != actual:
+            if not exact and same_underlying(previous, actual) and not (is_named(previous) and is_named(actual)):
+                if is_named(actual):
+                    bindings[formal] = actual
+            else:
+                raise GoDiagnostic(token, 'conflicting inferred type arguments')
+        return
+    if isinstance(formal, ArrayType) and contains_parameter(formal):
+        actual_array = underlying(actual) if not exact else actual
+        if not isinstance(actual_array, ArrayType) or formal.count != actual_array.count:
+            raise GoDiagnostic(token, 'cannot infer type arguments from incompatible array argument')
+        infer_argument(formal.element, actual_array.element, token, parameters, explicit,
+                       bindings, exact=True)
 
 
 def type_code(dtype):
@@ -165,22 +196,11 @@ class GenericSession:
         explicit_parameters = set(bindings)
         constants = {}
         for (_, formal), value in zip(function.params, values):
-            if not isinstance(formal, TypeParameter) or formal not in parameters:
-                continue
             if isinstance(value.type, str) and value.type.startswith('untyped '):
-                constants.setdefault(formal, []).append(value)
+                if isinstance(formal, TypeParameter) and formal in parameters:
+                    constants.setdefault(formal, []).append(value)
                 continue
-            if formal in explicit_parameters:
-                continue  # Source assignability is checked after substitution.
-            previous = bindings.get(formal)
-            if previous is None:
-                bindings[formal] = value.type
-            elif previous != value.type:
-                if same_underlying(previous, value.type) and not (is_named(previous) and is_named(value.type)):
-                    if is_named(value.type):
-                        bindings[formal] = value.type
-                else:
-                    raise GoDiagnostic(value.token, 'conflicting inferred type arguments')
+            infer_argument(formal, value.type, value.token, parameters, explicit_parameters, bindings)
         for parameter in parameters:
             if parameter not in bindings:
                 types = {value.type for value in constants.get(parameter, []) if value.type != 'untyped nil'}
@@ -194,8 +214,8 @@ class GenericSession:
             if parameter.constraint is COMPARABLE and not comparable(argument):
                 raise GoDiagnostic(function.token, str(argument) + ' does not satisfy comparable')
         arguments = tuple(bindings[parameter] for parameter in parameters)
-        params = [(token, substitute(dtype, bindings)) for token, dtype in function.params]
-        result = substitute(function.result, bindings)
+        params = [(token, substitute(dtype, bindings, token)) for token, dtype in function.params]
+        result = substitute(function.result, bindings, function.token)
         if caller.abstract_function:
             # A signature-only selection is sufficient to check this source
             # call. It never requests code or substitutes a favorable concrete

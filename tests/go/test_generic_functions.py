@@ -182,7 +182,8 @@ UNSUPPORTED = [
     ('generic-boundaries', source('type Box[T any] struct{Value T}')),
     ('generic-boundaries', source(IDENTITY, 'x:=3;_=Identity(&x)')),
     ('generic-boundaries', source('func F[T any](p *T){}')),
-    ('generic-boundaries', source('func F[T any](x [2]T){}')),
+    # The identical former [2]T original is retained as a positive control in
+    # test_generic_arrays.py; pointer and record frontiers stay negative.
     ('generic-boundaries', source('func F[T any](x struct{Value T}){}')),
     ('generic-boundaries', source('func F[T any](x T){p:=&x;_=p}')),
     ('generic-boundaries', source(IDENTITY, 'f:=Identity[int];_=f(3)')),

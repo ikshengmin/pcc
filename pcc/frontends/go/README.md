@@ -842,7 +842,7 @@ dictionary runtime, new allocator, noalias assumptions or separate Go runtime.
 The concrete type-argument domain is existing admitted nonpointer scalar, array
 and record values. Ordinary concrete pointer parameters inside a generic function
 still require their own source nil guards and non-retention proof; aliasing is
-preserved. Pointer type arguments, dependent pointer/array/record layouts,
+preserved. Pointer type arguments, dependent pointer/record layouts,
 addresses of opaque parameter values, union/underlying/exact/named/method
 constraints, generic data declarations/receivers and stored generic function
 values remain explicit boundaries. Function type-parameter count is bounded at
@@ -863,3 +863,35 @@ Rules: [type parameters](https://go.dev/ref/spec#Type_parameter_declarations),
 [type inference](https://go.dev/ref/spec#Type_inference),
 [constraint satisfaction](https://go.dev/ref/spec#Satisfying_a_type_constraint),
 and [scope](https://go.dev/ref/spec#Declarations_and_scope).
+
+#### Fixed-array generic signatures — source implementation, acceptance unrun
+
+Fixed `[N]T` parameters/results, local values and composite literals now retain
+the abstract element type through declaration checking. Direct calls infer `T`
+from array elements; a named outer array can match the unnamed formal, but
+element types unify exactly and lengths must agree. Aliases retain identity;
+different defined element types never unify by representation. Explicit or
+partial type arguments, typed-before-untyped inference, recursive forwarding,
+multiple results and imported defining scopes use the same instance registry.
+
+Declaration checking permits transport, indexing, range and constant length
+operations on `[N]T`; equality and expression switches still require comparable
+elements, even for an unused generic function or a zero-length array. Signature
+substitution rechecks concrete array storage before any instance reaches IR.
+Only existing integer/bool element representations are admitted. Nested,
+string/record/pointer-element arrays and addresses of abstract array values
+remain unsupported, rather than obtaining an unchecked layout through generics.
+
+`tests/go/test_generic_arrays.py` preserves the exact former `[2]T` capability
+control as a positive source/native/reference obligation. It adds 11 full-width
+native observers, same-original raw execution pairs, nominal/length/element
+rejections, unused invalid bodies, valid-unsupported build-only controls and an
+imported package pair. These are **authored CI obligations, execution UNRUN**;
+no local imports, tests, compilers or probes were run. No backend/runtime or
+shared-GC changes, complete generics or real-project acceptance is claimed.
+
+Rules: [arrays](https://go.dev/ref/spec#Array_types),
+[type unification](https://go.dev/ref/spec#Type_unification),
+[assignability](https://go.dev/ref/spec#Assignability),
+[comparisons](https://go.dev/ref/spec#Comparison_operators), and
+[evaluation order](https://go.dev/ref/spec#Order_of_evaluation).

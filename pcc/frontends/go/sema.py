@@ -74,6 +74,29 @@ def is_boolean(dtype):
     return underlying(dtype) in ("bool", "untyped bool")
 
 
+def checked_array_type(token, count, element):
+    """Abstract elements are opaque; every concrete instance rechecks layout.
+
+    Accepting [N]T does not introduce string, pointer or aggregate array
+    storage. Those existing boundaries also apply to substituted signatures,
+    including unused result values and zero-length arrays.
+    """
+    if not isinstance(element, TypeParameter):
+        if isinstance(underlying(element), PointerType):
+            raise UnsupportedGo(token, 'go.unsupported.pointer-storage',
+                                "pointer-bearing arrays require aggregate lifetime/storage analysis")
+        if isinstance(underlying(element), ArrayType) or is_string(element):
+            raise UnsupportedGo(token, 'go.unsupported.array-element-types',
+                                "nested arrays and string-element arrays are not implemented")
+        if not is_integer(element) and not is_boolean(element):
+            raise UnsupportedGo(token, 'go.unsupported.array-element-types',
+                                "arrays of aggregate elements are not implemented")
+    if count > 4096:
+        raise UnsupportedGo(token, 'go.unsupported.limit-array-elements',
+                            "array exceeds implementation limit (4096 elements)")
+    return ArrayType(count, element)
+
+
 def default_type(dtype):
     return {"untyped int": "int", "untyped bool": "bool", "untyped string": "string"}.get(dtype, dtype)
 
@@ -371,22 +394,11 @@ class Analyzer:
         if not isinstance(dtype, ArraySyntax):
             return dtype
         element = self.resolve_type(dtype.element)
-        if contains_parameter(element):
-            raise UnsupportedGo(dtype.token, 'go.unsupported.generic-boundaries',
-                                'dependent array layouts require generic data checking')
-        if isinstance(underlying(element), PointerType):
-            raise UnsupportedGo(dtype.token, 'go.unsupported.pointer-storage',
-                                "pointer-bearing arrays require aggregate lifetime/storage analysis")
-        if isinstance(underlying(element), ArrayType) or is_string(element):
-            raise UnsupportedGo(dtype.token, 'go.unsupported.array-element-types', "nested arrays and string-element arrays are not implemented")
-        if not is_integer(element) and not is_boolean(element):
-            raise UnsupportedGo(dtype.token, 'go.unsupported.array-element-types', "arrays of aggregate elements are not implemented")
+        checked_array_type(dtype.token, 0, element)
         if dtype.length is None:
             raise GoDiagnostic(dtype.token, "array length inference requires a composite literal")
         count = self.array_index_constant(dtype.length, "array length")
-        if count > 4096:
-            raise UnsupportedGo(dtype.token, 'go.unsupported.limit-array-elements', "array exceeds implementation limit (4096 elements)")
-        return ArrayType(count, element)
+        return checked_array_type(dtype.token, count, element)
 
     def static_initializer(self, expr):
         if expr.constant is not None:
@@ -700,6 +712,8 @@ class Analyzer:
                     or isinstance(underlying(selector.type), (PointerType, ArrayType, StructType))
                     or isinstance(selector.type, TypeParameter) and comparable(selector.type)):
                 raise GoDiagnostic(selector.token, "switch requires a comparable type")
+            if contains_parameter(selector.type) and not comparable(selector.type):
+                raise GoDiagnostic(selector.token, "switch requires a comparable type")
             statement.exprs = [selector]
             defaults, constants = 0, set()
             self.break_depth += 1
@@ -877,7 +891,7 @@ class Analyzer:
             syntax = expr.value
             if isinstance(syntax, ArraySyntax) and syntax.length is None:
                 element = self.resolve_type(syntax.element)
-                if not is_integer(element) and not is_boolean(element):
+                if not isinstance(element, TypeParameter) and not is_integer(element) and not is_boolean(element):
                     raise UnsupportedGo(syntax.token, 'go.unsupported.array-element-types', "nested arrays and non-scalar array elements are not implemented")
                 dtype = None
             else:
@@ -922,9 +936,7 @@ class Analyzer:
                     next_index = index + 1
                 if dtype is None:
                     count = max(indices, default=-1) + 1
-                    if count > 4096:
-                        raise UnsupportedGo(syntax.token, 'go.unsupported.limit-array-elements', "array exceeds implementation limit (4096 elements)")
-                    expr.type = dtype = ArrayType(count, element)
+                    expr.type = dtype = checked_array_type(syntax.token, count, element)
                 expr.indices = indices
                 for index, item in zip(indices, expr.args):
                     if index >= dtype.count:
@@ -1343,14 +1355,16 @@ class Analyzer:
                 isinstance(underlying(right.type), (ArrayType, StructType))):
             if op not in ("==", "!="):
                 raise GoDiagnostic(expr.token, "aggregates permit only equality and inequality operators")
+            if not comparable(left.type) or not comparable(right.type):
+                raise GoDiagnostic(expr.token, "operation is not permitted by the type parameter constraint")
             if left.type != right.type:
                 if same_underlying(left.type, right.type) and not (is_named(left.type) and is_named(right.type)):
                     coerce(right, left.type)
                 else:
                     raise GoDiagnostic(expr.token, "mismatched aggregate operand types")
-            # Every admitted aggregate leaf is an integer, bool or static-
-            # backed string. Pointer-bearing/interface/slice aggregates still
-            # fail during type resolution, not via a bytewise approximation.
+            # Abstract array elements must be comparable independently of
+            # concrete calls. Concrete storage still uses admitted leaves;
+            # pointer/interface/slice aggregates fail during type resolution.
             if self.function is not None:
                 self.function.temporaries.extend((left, right))
             expr.kind, expr.type = "aggregate_compare", "untyped bool"
