@@ -85,10 +85,14 @@ CASES = [
 GRADUATED_RECEIVER_CASE = ('pointer-receivers', original('type T int;func(t *T)f(){}'))
 GRADUATED_ARRAY_RANGE_CASE = ('non-array-range', original('func f(p *[2]int){for range p{}}'))
 GRADUATED_POINTER_SWITCH_CASE = ('pointer-switch', original(body='x:=1;p:=&x;switch p{case nil:}'))
+GRADUATED_AGGREGATE_CASES = (
+    ('aggregate-comparison', original(body='var a [1]int;_=a==a')),
+    ('aggregate-switch', original(body='var a [1]int;switch a{case a:}')),
+)
 # The original pointer-switch bytes move to positive/same-input obligations in
 # test_pointer_switches, not to a skip or a reclassified historical result.
 GRADUATED_CASES = (GRADUATED_RECEIVER_CASE, GRADUATED_ARRAY_RANGE_CASE,
-                  GRADUATED_POINTER_SWITCH_CASE)
+                  GRADUATED_POINTER_SWITCH_CASE, *GRADUATED_AGGREGATE_CASES)
 assert all(CASES.count(case) == 1 for case in GRADUATED_CASES)
 ACTIVE_CASES = [(i, name, text) for i, (name, text) in enumerate(CASES)
                 if (name, text) not in GRADUATED_CASES]

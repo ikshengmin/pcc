@@ -209,7 +209,7 @@ accept these types without converting them into variables or first-class tuples.
 
 This private PCC Go aggregate ABI is neither the official Go ABI nor an assertion
 of cross-language C compatibility. Local type declarations, struct tags, embedded
-fields, blank fields, pointer-bearing fields, recursive layouts, struct comparison and
+fields, blank fields, pointer-bearing fields, recursive layouts and
 arrays of records remain explicit boundaries. Array bounds still require the
 existing static proof; no abort replaces a missing recoverable panic. Types have
 32 declaration-expansion levels, 256 fields and 4096 expanded scalar slots as
@@ -262,8 +262,9 @@ the nearest loop. Missing-return checks follow the switch termination rule, not
 whether the optimizer can prove one particular selector constant.
 
 Integer/string/bool duplicate constant cases are rejected as an implementation
-restriction. Labels, type switches, interface equality and aggregate comparison
-remain explicit boundaries. This uses ordinary public-IR branches and the existing
+restriction. Labels, type switches and interface equality remain explicit
+boundaries. Admitted aggregate comparison/switch source support is described
+below with acceptance unrun. This uses ordinary public-IR branches and the existing
 string comparison loop, not C switch semantics or a shared-runtime substitute.
 See [expression switches](https://go.dev/ref/spec#Expression_switches),
 [termination](https://go.dev/ref/spec#Terminating_statements) and
@@ -544,7 +545,7 @@ qualification are not established here. Cross-object tests do not renew Mac
 execution evidence.
 
 Legacy **schema1** `status` rows retain their historical qualification meaning.
-The pointer-switch row uses the existing additive schema1 `implementation` and
+The pointer-switch and aggregate-comparison/switch rows use the existing additive schema1 `implementation` and
 `acceptance` objects: implemented source is distinct from acceptance, which is
 **unrun** for this change. No schema2 migration or ignored JSON fields are used.
 Historical evidence keeps its original revision and source hashes; it is not
@@ -574,8 +575,8 @@ rebound to a changed unit file or presented as a new execution.
 | `go.inventory.errors` | Not fully inventoried; existing admitted behavior is described above | Chapter-wide acceptance not inventoried; no feature-wide pass inferred | `missing` |
 | `go.inventory.panics` | Not fully inventoried; existing admitted behavior is described above | Chapter-wide acceptance not inventoried; no feature-wide pass inferred | `missing` |
 | `go.inventory.system` | Not fully inventoried; existing admitted behavior is described above | Chapter-wide acceptance not inventoried; no feature-wide pass inferred | `missing` |
-| `go.capability.aggregate-comparison` | Explicitly unimplemented boundary: aggregate comparison | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
-| `go.capability.aggregate-switch` | Explicitly unimplemented boundary: aggregate switch | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.aggregate-comparison` | Implemented: admitted value arrays/records, component equality | Authored CI obligations in `test_aggregate_equality.py`; acceptance **unrun** | Replaced by explicit implementation/acceptance |
+| `go.capability.aggregate-switch` | Implemented: captured value aggregate selectors and ordered cases | Authored CI obligations in `test_aggregate_equality.py`; acceptance **unrun** | Replaced by explicit implementation/acceptance |
 | `go.capability.array-bounds-panic` | Explicitly unimplemented boundary: array bounds panic | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.array-element-types` | Explicitly unimplemented boundary: array element types | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.blank-function-declarations` | Explicitly unimplemented boundary: blank function declarations | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
@@ -712,8 +713,8 @@ uv run python -m pytest -x --maxfail=0 -c pyproject.toml -m 'not integration' te
 uv run python -m pytest -x --maxfail=0 -c pyproject.toml -m integration tests/go
 ```
 
-The pointer-switch source change has **not** run either selection locally; the
-counts above remain historical and are not qualification of that change.
+The pointer-switch and aggregate-equality source changes have **not** run either
+selection locally; the counts above remain historical and do not qualify them.
 The second command requires explicit `PCC_GO_REFERENCE` and
 `PCC_GO_REFERENCE_CACHE`. It rebuilds final native/reference outputs; retained
 binaries or old process results are never substituted as a new gate. Raw logs,
@@ -765,4 +766,44 @@ interface dispatch, shared GC and native-pcc1 execution are not implied.
 
 Rules: [expression switches](https://go.dev/ref/spec#Expression_switches),
 [pointer comparison](https://go.dev/ref/spec#Comparison_operators), and
+[evaluation order](https://go.dev/ref/spec#Order_of_evaluation).
+
+### Aggregate equality and switches — source implementation, acceptance unrun
+
+`==` and `!=` now compare the values of currently admitted fixed arrays and
+records, including nested records, scalar arrays within records, and static-backed
+string fields. Named types retain declaration identity; a named aggregate and an
+unnamed value with identical underlying type may compare, but two distinct defined
+types require a source conversion. Aggregate ordering/arithmetic and comparison
+with nil remain invalid. Empty aggregates still evaluate both source operands.
+
+Lowering captures each operand once, then compares fields in declaration order
+and array elements in index order, stopping at the first unequal component.
+String fields use the existing bounded unsigned-byte loop, not descriptor identity.
+There is no `memcmp`, padding comparison, allocation, new runtime or backend path.
+Existing type/layout limits also bound the emitted component-comparison walk.
+Aggregate switches use the captured selector value, ordered case evaluation,
+first-match/default behavior and genuine fallthrough edges. Repeated aggregate
+case expressions are permitted because these values are not Go constants.
+
+`tests/go/test_aggregate_equality.py` supplies normative typing/IR obligations,
+15 full-width native observations, an original main, five same-input program
+raw pairs (the main plus four exact former frontiers), strict invalid-source
+rejections, valid-unsupported build-only controls and an imported-record raw
+pair including private fields. These are **authored CI tests, all execution
+UNRUN**, not observed acceptance. Old diagnostic test outcomes and every ledger
+evidence row keep their original source identity; none is relabeled as a pass
+for this implementation. No local imports, tests, compilers or probes ran.
+
+Array-of-record/string/nested-array storage, blank or embedded fields, tagged
+records, pointer-bearing aggregates and interface fields remain separate storage
+frontiers. Unproven nil/bounds operations remain rejected even when comparing
+empty aggregates. Existing locked `math/bits` inputs still have independent
+`error`/runtime/division frontiers; the five-source official adapter is not
+aggregate coverage. This rule is not a whole-project, full-Go, standard ABI,
+Mac, native-pcc1 or shared-GC claim.
+
+Rules: [comparison operators](https://go.dev/ref/spec#Comparison_operators),
+[assignability](https://go.dev/ref/spec#Assignability),
+[expression switches](https://go.dev/ref/spec#Expression_switches), and
 [evaluation order](https://go.dev/ref/spec#Order_of_evaluation).

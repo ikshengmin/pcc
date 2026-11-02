@@ -15,7 +15,7 @@ def source(body, declarations=""):
     return "package main; " + (declarations + "; " if declarations else "") + "func main(){" + body + "}"
 
 
-@pytest.mark.parametrize("body,declarations,message", [
+ARRAY_BOUNDARIES = [
     ("var a [-1]int;_ = a", "", "nonnegative"),
     ("var a [true]int;_ = a", "", "integer constant"),
     ("var a [n]int;_ = a", "var n=3", "integer constant"),
@@ -50,6 +50,16 @@ def source(body, declarations=""):
     ("", "var a=a", "initialization cycle"),
     ("", "var init int", "reserved"),
     ("", "var a int;func a(){}", "duplicate package declaration"),
+]
+# Preserve the exact old source; its new positive/native/reference identities
+# are in test_aggregate_equality, not a skip or a relabeled old result.
+GRADUATED_AGGREGATE_COMPARISON = (
+    "var a [2]int;_=a==a", "", "unsupported comparison",
+)
+
+
+@pytest.mark.parametrize("body,declarations,message", [
+    case for case in ARRAY_BOUNDARIES if case != GRADUATED_AGGREGATE_COMPARISON
 ])
 def test_array_or_initializer_boundaries_fail_as_go_diagnostics(body, declarations, message):
     with pytest.raises(GoDiagnostic, match=message):

@@ -6,8 +6,6 @@ classifier or a dispatch key. The canonical feature map owns each feature ID.
 
 
 UNIMPLEMENTED_FEATURES = {
-    'go.unsupported.aggregate-comparison': 'go.capability.aggregate-comparison',
-    'go.unsupported.aggregate-switch': 'go.capability.aggregate-switch',
     'go.unsupported.array-bounds-panic': 'go.capability.array-bounds-panic',
     'go.unsupported.array-element-types': 'go.capability.array-element-types',
     'go.unsupported.blank-function-declarations': 'go.capability.blank-function-declarations',

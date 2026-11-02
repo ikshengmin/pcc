@@ -421,6 +421,15 @@ class Lowerer:
             return self.string_value(expr.constant) if is_string(expr.type) else ir.Constant(ir_type(expr.type), int(expr.constant))
         if expr.kind == "string_compare":
             return self.string_compare(expr)
+        if expr.kind == "aggregate_compare":
+            # Capture both source values before examining any component.
+            # No operand is reloaded or re-evaluated by the comparison walk.
+            left, right = [self.expression(item) for item in expr.args]
+            left_copy, right_copy = [self.temps[id(item)] for item in expr.args]
+            self.builder.store(left, left_copy)
+            self.builder.store(right, right_copy)
+            equal = self.aggregate_equal(expr.args[0].type, left_copy, right_copy)
+            return self.builder.not_(equal) if expr.value == "!=" else equal
         if expr.kind == "string_len":
             return self.builder.extract_value(self.expression(expr.args[0]), 1)
         if expr.kind == "array_len":
@@ -550,13 +559,58 @@ class Lowerer:
         return result
 
 
+    def aggregate_equal(self, dtype, left, right):
+        """Compare declared components, never storage bytes or padding.
+
+        Layout/type limits already bound this walk. The captured aggregate
+        copies may be call results or switch temporaries, not just lvalues.
+        Stop at the first unequal component in field/index order, including
+        nested records and strings. Empty aggregates compare equal.
+        """
+        dtype = underlying(dtype)
+        if isinstance(dtype, ArrayType):
+            components = [dtype.element] * dtype.count
+        elif isinstance(dtype, StructType):
+            components = [field.type for field in dtype.fields]
+        elif is_string(dtype):
+            return self.string_compare_values("==", self.builder.load(left), self.builder.load(right))
+        else:
+            return self.builder.icmp_unsigned("==", self.builder.load(left), self.builder.load(right))
+        if not components:
+            return ir.Constant(ir.IntType(1), 1)
+        unequal = self.function.append_basic_block("aggregate.unequal")
+        done = self.function.append_basic_block("aggregate.done")
+        for index, element in enumerate(components):
+            # Use the same typed GEP/load path as existing aggregate fields
+            # and array indexing; no shared extractvalue type inference needed.
+            indices = [ir.Constant(ir.IntType(32), 0),
+                       ir.Constant(ir.IntType(64 if isinstance(dtype, ArrayType) else 32), index)]
+            a = self.builder.gep(left, indices)
+            b = self.builder.gep(right, indices)
+            equal = self.aggregate_equal(element, a, b)
+            following = self.function.append_basic_block("aggregate.next")
+            self.builder.cbranch(equal, following, unequal)
+            self.builder.position_at_end(following)
+        equal_block = self.builder.block
+        self.builder.branch(done)
+        self.builder.position_at_end(unequal)
+        self.builder.branch(done)
+        self.builder.position_at_end(done)
+        result = self.builder.phi(ir.IntType(1))
+        result.add_incoming(ir.Constant(ir.IntType(1), 1), equal_block)
+        result.add_incoming(ir.Constant(ir.IntType(1), 0), unequal)
+        return result
+
     def string_compare(self, expr):
+        left, right = [self.expression(item) for item in expr.args]
+        return self.string_compare_values(expr.value, left, right)
+
+    def string_compare_values(self, op, left, right):
         """Lexicographic unsigned bytes, bounded by both live descriptor lengths.
 
         This ordinary public-IR loop needs no allocator, runtime call, or panic:
         every byte load is dominated by the two explicit length comparisons.
         """
-        left, right = [self.expression(item) for item in expr.args]
         left_pointer = self.builder.extract_value(left, 0)
         right_pointer = self.builder.extract_value(right, 0)
         left_length = self.builder.extract_value(left, 1)
@@ -584,10 +638,10 @@ class Lowerer:
         index.add_incoming(following, advance)
         self.builder.branch(check)
         self.builder.position_at_end(difference)
-        byte_result = self.builder.icmp_unsigned(expr.value, a, b)
+        byte_result = self.builder.icmp_unsigned(op, a, b)
         self.builder.branch(done)
         self.builder.position_at_end(length)
-        length_result = self.builder.icmp_unsigned(expr.value, left_length, right_length)
+        length_result = self.builder.icmp_unsigned(op, left_length, right_length)
         self.builder.branch(done)
         self.builder.position_at_end(done)
         result = self.builder.phi(ir.IntType(1))

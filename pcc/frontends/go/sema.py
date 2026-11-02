@@ -666,14 +666,11 @@ class Analyzer:
             selector = statement.exprs[0] if statement.exprs else Expr("name", statement.token, "true")
             self.expression(selector)
             coerce(selector, default_type(selector.type))
-            # A pointer switch compares identities, never pointee values. The
-            # ordinary equality checker owns nil conversion and named-pointer
-            # assignability; lowering already captures this selector once.
+            # The equality checker owns assignability, pointer identity and
+            # aggregate value comparison. Lowering captures the selector once.
             if not (is_integer(selector.type) or is_boolean(selector.type) or is_string(selector.type)
-                    or isinstance(underlying(selector.type), PointerType)):
-                if isinstance(underlying(selector.type), (ArrayType, StructType)):
-                    raise UnsupportedGo(selector.token, "go.unsupported.aggregate-switch", "switch currently requires integer, boolean or string comparison support")
-                raise GoDiagnostic(selector.token, "switch currently requires integer, boolean or string comparison support")
+                    or isinstance(underlying(selector.type), (PointerType, ArrayType, StructType))):
+                raise GoDiagnostic(selector.token, "switch requires a comparable type")
             statement.exprs = [selector]
             defaults, constants = 0, set()
             self.break_depth += 1
@@ -1256,6 +1253,22 @@ class Analyzer:
     def binary(self, expr):
         left, right = expr.args
         op = expr.value
+        if (isinstance(underlying(left.type), (ArrayType, StructType)) or
+                isinstance(underlying(right.type), (ArrayType, StructType))):
+            if op not in ("==", "!="):
+                raise GoDiagnostic(expr.token, "aggregates permit only equality and inequality operators")
+            if left.type != right.type:
+                if same_underlying(left.type, right.type) and not (is_named(left.type) and is_named(right.type)):
+                    coerce(right, left.type)
+                else:
+                    raise GoDiagnostic(expr.token, "mismatched aggregate operand types")
+            # Every admitted aggregate leaf is an integer, bool or static-
+            # backed string. Pointer-bearing/interface/slice aggregates still
+            # fail during type resolution, not via a bytewise approximation.
+            if self.function is not None:
+                self.function.temporaries.extend((left, right))
+            expr.kind, expr.type = "aggregate_compare", "untyped bool"
+            return
         if isinstance(underlying(left.type), PointerType) or isinstance(underlying(right.type), PointerType):
             if op not in ("==", "!="):
                 raise GoDiagnostic(expr.token, "pointers permit only equality and inequality operators")
@@ -1326,8 +1339,6 @@ class Analyzer:
                     raise GoDiagnostic(expr.token, "logical operators require bool")
             elif op in ("==", "!="):
                 if not is_integer(left.type) and not is_boolean(left.type):
-                    if isinstance(underlying(left.type), (ArrayType, StructType)):
-                        raise UnsupportedGo(expr.token, "go.unsupported.aggregate-comparison", "unsupported comparison operands")
                     raise GoDiagnostic(expr.token, "unsupported comparison operands")
                 expr.type = "untyped bool"
             elif op in ("<", "<=", ">", ">="):

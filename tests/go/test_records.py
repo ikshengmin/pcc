@@ -54,7 +54,17 @@ INVALID = [
 ]
 
 
-@pytest.mark.parametrize("declarations,body,message", INVALID)
+# Keep the historical bytes and all unrelated parameter identities. This
+# valid former frontier now has positive/native/reference obligations in
+# test_aggregate_equality; old diagnostic receipts remain historical.
+GRADUATED_AGGREGATE_COMPARISON = (
+    "type A struct{X uint64}", "var a A;_=a==a", "unsupported comparison",
+)
+
+
+@pytest.mark.parametrize("declarations,body,message", [
+    case for case in INVALID if case != GRADUATED_AGGREGATE_COMPARISON
+])
 def test_nominal_and_record_boundaries_are_source_diagnostics(declarations, body, message, monkeypatch):
     from pcc.frontends.go.lowering import Lowerer
     monkeypatch.setattr(Lowerer, "lower", lambda *args: pytest.fail("invalid record reached IR"))
