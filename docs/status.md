@@ -101,6 +101,26 @@ performance and compatibility should README gain the requested "Why PCC?"
 claims. All five collectors, arbitrary-precision integers, identity, exceptions,
 finalizers, weakrefs and resurrection remain required.
 
+The maintainer's revised priority is: (1) remove reference counting from
+GC1-4, starting with the switch-controlled GC4 tracing prototype; (2) cut
+GC0's per-operation root, pin, lease, provenance and container-lock costs;
+(3) close the self-backend code-quality gap against LLVM on identical IR;
+(4) improve four-worker scheduler and lock scaling. Compatibility expansion,
+release statistics, dead-code cleanup and pyperformance are deferred behind
+these four. The interrupted historical pyperformance run is not being resumed.
+The acceptance target remains exceeding CPython 3.15.0 asyncio at both one
+and four workers; intermediate code changes and small gains do not satisfy it.
+
+`9da3787f5` removes temporary roots and leases for proven permanent dictionary,
+subscript/slice and integer-tree inputs. Its 68 focused ordinary checks pass.
+The changed object-operand program matches CPython under GC0-4; the existing
+frame-operation program also passes all five collectors. These are host
+pcc0/self checks, not native-pcc1, whole-language or throughput qualification.
+The initial native test also exposed an unrelated direct scalar `sink(+True)`
+result of -1, reproduced on pre-change `f2a5c3753`; packed `sink(*(+True,))`
+correctly returns 1 and exercises the changed object-operand path. The direct
+scalar defect is recorded and left unchanged.
+
 ### Measured P0 batch: `02acaa2f5` -> `0fbc8d977`
 
 Seven rotated paired runs on Darwin arm64, host pcc0/self/no-libpython,
@@ -287,7 +307,7 @@ host/model/IR checks do not qualify the pending native GC0-4 execution. The
 takeover started from this clean source identity. No new native execution,
 whole-language gate, bootstrap or QPS result is established by this entry.
 
-The remaining scope is the handoff's items 2-21, in order: native validation
+The retained scope is the handoff's items 2-21, reprioritized above: native validation
 of the existing batch; release statistics and paired performance; scheduler
 local queues/stealing and a separately designed CAS state machine; rooted
 comparison operands and leaf-call effects; GC0 pins/leases and tagged-int

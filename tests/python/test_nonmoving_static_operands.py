@@ -176,7 +176,10 @@ def main():
     print(sink({1: None, "key": True, 1267650600228229401496703205376: 7}))
     print(sink(receiver[1:7:2]), sink(receiver[:]), sink(receiver["key"]))
     print(sink([0, 1, 2, 3, 4][1:4:2]))
-    print(sink((1 << 100) + 7), sink(+True), sink(+1267650600228229401496703205376))
+    # Unpacking selects the object operand producer under test; direct scalar
+    # argument projection is a separate lowering path.
+    print(sink(*((1 << 100) + 7,)), sink(*(+True,)),
+          sink(*(+1267650600228229401496703205376,)))
     key = Key()
     values = sink({key: Value(), "static": None})
     print(len(values), len(events))
