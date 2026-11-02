@@ -21,6 +21,7 @@ class IntervalMemory:
         self.namespace = {
             "i64": int, "ptr_add": lambda base, offset: base + offset,
             "ptr_is_null": lambda pointer: pointer == 0, "ptr_to_int": int,
+            "null": lambda: 0,
             "load_i64": self.load, "load_ptr": self.load,
             "store_i64": self.store, "store_ptr": self.store,
             "pcc_gc_object_node_is_active": lambda node: int(node in self.active),
@@ -96,6 +97,127 @@ def test_invalid_extents_abort_without_publishing_an_entry(base, size):
     assert memory.words == {}
 
 
+class FrozenWordMemory(IntervalMemory):
+    def __init__(self, snapshots):
+        super().__init__()
+        self.snapshots = snapshots
+        self.visits = 0
+        self.allocations = []
+        self.freed = []
+        self.next_address = 0x800000
+        self.head = 0
+        self.namespace.update(
+            stack_alloc=lambda size: 0x700000,
+            malloc=self.allocate,
+            free=self.freed.append,
+            global_load_ptr=lambda name: self.head,
+            pcc_thread_world_stop_epoch_held=lambda: 1,
+            pcc_thread_visit_conservative_words=self.visit,
+        )
+
+    def allocate(self, size):
+        address = self.next_address
+        self.next_address += size + 256
+        self.allocations.append((address, size))
+        return address
+
+    def visit(self, callback, context):
+        snapshot = self.snapshots[min(self.visits, len(self.snapshots) - 1)]
+        self.visits += 1
+        if snapshot is None:
+            return -1
+        for word in snapshot:
+            callback(word, context)
+        return len(snapshot)
+
+    def heap(self, extents):
+        """Install collector-owned metadata, never memory at candidate addresses."""
+        for index, (base, size, payloads, active) in enumerate(extents):
+            node = 0x30000 + index * 128
+            self.words.update({node: base, node + 8: size, node + 16: 0,
+                               node + 48: 0, node + 56: 0})
+            if index:
+                self.words[node - 128 + 16] = node
+            else:
+                self.head = node
+            if active:
+                self.active.add(node)
+            if payloads:
+                owner = 0x100000 + index * 128
+                self.words[node + 48] = owner
+                self.words[owner + 64] = 0x200000 + index * 1024
+                for position, (start, length) in enumerate(payloads):
+                    span = 0x200000 + index * 1024 + position * 64
+                    self.words.update({span + 8: start, span + 16: length,
+                                       span + 40: span + 64 if position + 1 < len(payloads) else 0})
+
+    def scan(self):
+        self.namespace["pcc_gc_gray_conservative_thread_roots"]()
+
+
+@pytest.mark.parametrize("word_count", (0, 1, 2, 3, 8, 51, 256))
+@pytest.mark.parametrize("owner_count", (0, 1, 19, 257))
+def test_frozen_word_index_matches_independent_heap_membership(word_count, owner_count):
+    rng = random.Random(8723 + word_count + owner_count)
+    words = [rng.randrange(950, 1750) for _ in range(word_count)]
+    words += words[:5] + [0, -1, 9223372036854775807]
+    extents = [
+        (rng.randrange(1000, 1500), rng.randrange(1, 100),
+         [(rng.randrange(1000, 1500), rng.randrange(1, 200)) for _ in range(index % 3)],
+         index % 7 != 3)
+        for index in range(owner_count)
+    ]
+    memory = FrozenWordMemory([words])
+    memory.heap(extents)
+    memory.scan()
+    expected = {
+        base for base, size, payloads, active in extents if active
+        and any(start <= word < start + length
+                for start, length in [(base, size), *payloads] for word in words)
+    }
+    assert memory.marked == expected
+    for index, (base, size, payloads, active) in enumerate(extents):
+        rooted = active and any(start <= word < start + length
+                                for start, length in [(base, size), *payloads] for word in words)
+        assert memory.words[0x30000 + index * 128 + 56] == int(rooted)
+    # Scratch capacity follows the frozen words, regardless of heap population.
+    positive_words = sum(0 < word < 9223372036854775807 for word in words)
+    assert memory.allocations[0][1] == max(8, 8 * positive_words)
+    assert memory.freed == [memory.allocations[0][0]]
+
+
+def test_word_index_retains_all_overlapping_owners_and_unaligned_interior_roots():
+    memory = FrozenWordMemory([[0x5009, 0x5020, 9223372036854775806]])
+    memory.heap([
+        (0x1000, 16, [(0x5000, 16)], True),
+        (0x2000, 16, [(0x5008, 24)], True),
+        (0x3000, 16, [(0x5010, 16)], True),
+        (9223372036854775800, 7, [], True),
+        (0x4000, 16, [(0x5000, 64)], False),
+    ])
+    memory.scan()
+    assert memory.marked == {0x1000, 0x2000, 9223372036854775800}
+
+
+@pytest.mark.parametrize("snapshots", ([None], [[1000], None], [[1000], []], [[1000], [1000, 1001]]))
+def test_missing_or_changing_snapshots_fail_before_marking(snapshots):
+    memory = FrozenWordMemory(snapshots)
+    memory.heap([(1000, 16, [], True)])
+    with pytest.raises(RuntimeError, match="invalid extent"):
+        memory.scan()
+    assert memory.marked == set()
+
+
+@pytest.mark.parametrize("base,size", ((0, 16), (-1, 16), (1000, 0), (1000, -1),
+                                      (9223372036854775800, 16)))
+def test_word_scan_rejects_invalid_owned_extents_even_without_candidates(base, size):
+    memory = FrozenWordMemory([[]])
+    memory.heap([(base, size, [], True)])
+    with pytest.raises(RuntimeError, match="invalid extent"):
+        memory.scan()
+    assert memory.marked == set()
+
+
 NATIVE_DRIVER = r'''
 extern void pcc_gc_gray_conservative_thread_roots(void);
 void *pcc_gc_object_head;
@@ -135,7 +257,8 @@ int main(void) {
         pcc_gc_gray_conservative_thread_roots();
         if (marked != expected[i]) return i + 1;
     }
-    return visits == 6 ? 0 : 7;
+    /* Each stopped snapshot is visited once to size and once to fill words. */
+    return visits == 12 ? 0 : 7;
 }
 '''
 

@@ -111,6 +111,27 @@ these four. The interrupted historical pyperformance run is not being resumed.
 The acceptance target remains exceeding CPython 3.15.0 asyncio at both one
 and four workers; intermediate code changes and small gains do not satisfy it.
 
+Local Mac work over `ba51f3a58` replaces the GC4 tracing-only mark's heap-wide
+interval sort with a sorted, deduplicated index of frozen mutator words.
+Collector-owned object/payload extents query that index; overlapping owners,
+unaligned interior addresses, cycle-local pins and fail-closed snapshot checks
+are preserved. Four focused files pass 78 tests with six workers and the
+90-second/1-GiB guards: `test_gc_conservative_root_intervals.py` (53, including
+an owned native scan), `test_gc4_conservative_root_seeding.py` (15),
+`test_gc_thread_root_snapshots.py` (9) and `test_gc4_tracing_weakref_batch.py` (1).
+These are host-pcc0/self and local Mac results, not native-pcc1 qualification.
+
+On frozen pre-change `a8ae5e3f`, both GC4 value/lifecycle integration tests pass.
+The same revision's tracing-only synchronous profile attributes 7.18% self
+samples to interval sorting and 1.70% to its scan entry; both off/on programs
+return the exact expected output. These shares are diagnostic, not throughput
+gains. Runtime construction and five-GC synchronous checks complete, but the
+request-program build exceeds its 1-GiB process-tree cap and is stopped.
+The new index's full-runtime execution, paired 1/4-worker throughput and
+five-GC qualification are pending. GC4 remains default-off; C-API export
+ownership, class reclamation and GC1-3 count removal remain open. Full-suite
+and bootstrap runs await the maintainer's explicit permission.
+
 `9da3787f5` removes temporary roots and leases for proven permanent dictionary,
 subscript/slice and integer-tree inputs. Its 68 focused ordinary checks pass.
 The changed object-operand program matches CPython under GC0-4; the existing

@@ -1,9 +1,10 @@
 """GC4 prototype roots from frozen mutator words and proven object extents.
 
-The interval index contains only collector-owned nodes and payload descriptors.
-An arbitrary stack word is compared as an integer; it is never dereferenced.
-Overlapping payload extents retain every possible owner. The collector holds
-the world and object graph throughout index construction and visitation.
+Index the stopped mutators' words, then query collector-owned extents. Sorting
+the whole heap at every mark made tracing-only collection pay O(heap log heap)
+even when the stacks contained very few distinct roots. An arbitrary word is
+compared as an integer, never dereferenced. Overlapping payload extents retain
+every possible owner. The world and graph stay stopped throughout the scan.
 """
 from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
@@ -13,6 +14,7 @@ from pcc.unsafe import (
     load_i64,
     load_ptr,
     malloc,
+    null,
     ptr_add,
     ptr_is_null,
     ptr_to_int,
@@ -39,6 +41,14 @@ _INTERVAL_BYTES: i64 = 32
 _SCAN_ENTRIES: i64 = 0
 _SCAN_COUNT: i64 = 8
 _SCAN_BYTES: i64 = 16
+
+# Frozen-word capture record. A NULL data pointer selects the counting pass;
+# the second pass must fit exactly the capacity counted from the same snapshots.
+_WORDS_DATA: i64 = 0
+_WORDS_COUNT: i64 = 8
+_WORDS_CAPACITY: i64 = 16
+_WORDS_CONTEXT_BYTES: i64 = 24
+_WORD_BYTES: i64 = 8
 
 
 @c_abi_export("pcc_gc_conservative_interval_swap")
@@ -137,47 +147,131 @@ def _append_interval(entries, index: i64, node, base, size: i64) -> i64:
     return index + 1
 
 
+@c_abi_export("pcc_gc_conservative_record_word")
+def _record_word(word, context) -> None:
+    value: i64 = ptr_to_int(word)
+    # No valid positive extent can include INT64_MAX: its exclusive end
+    # must also fit in i64. Keep unaligned interior addresses and tagged words.
+    if value <= 0 or value == 9223372036854775807:
+        return
+    count: i64 = load_i64(context, _WORDS_COUNT)
+    words = load_ptr(context, _WORDS_DATA)
+    if ptr_is_null(words) == 0:
+        if count >= load_i64(context, _WORDS_CAPACITY):
+            pcc_platform_abort()
+            return
+        store_i64(words, count * _WORD_BYTES, value)
+    if count >= 9223372036854775807 // _WORD_BYTES:
+        pcc_platform_abort()
+        return
+    store_i64(context, _WORDS_COUNT, count + 1)
+
+
+@c_abi_export("pcc_gc_conservative_word_sift")
+def _word_sift(words, root: i64, count: i64) -> None:
+    value: i64 = load_i64(words, root * _WORD_BYTES)
+    while root < count // 2:
+        child: i64 = root * 2 + 1
+        if child + 1 < count and load_i64(words, child * _WORD_BYTES) < load_i64(
+            words, (child + 1) * _WORD_BYTES
+        ):
+            child = child + 1
+        child_value: i64 = load_i64(words, child * _WORD_BYTES)
+        if value >= child_value:
+            break
+        store_i64(words, root * _WORD_BYTES, child_value)
+        root = child
+    store_i64(words, root * _WORD_BYTES, value)
+
+
+@c_abi_export("pcc_gc_conservative_sort_words")
+def _sort_words(words, count: i64) -> i64:
+    if count <= 1:
+        return count
+    root: i64 = count // 2
+    while root > 0:
+        root = root - 1
+        _word_sift(words, root, count)
+    remaining: i64 = count
+    while remaining > 1:
+        remaining = remaining - 1
+        largest: i64 = load_i64(words, 0)
+        store_i64(words, 0, load_i64(words, remaining * _WORD_BYTES))
+        store_i64(words, remaining * _WORD_BYTES, largest)
+        _word_sift(words, 0, remaining)
+    unique: i64 = 1
+    previous: i64 = load_i64(words, 0)
+    index: i64 = 1
+    while index < count:
+        value: i64 = load_i64(words, index * _WORD_BYTES)
+        if value != previous:
+            store_i64(words, unique * _WORD_BYTES, value)
+            unique = unique + 1
+            previous = value
+        index = index + 1
+    return unique
+
+
+@c_abi_export("pcc_gc_conservative_extent_has_word")
+def _extent_has_word(words, count: i64, base, size: i64) -> i64:
+    start: i64 = ptr_to_int(base)
+    if start <= 0 or size <= 0 or size > 9223372036854775807 - start:
+        pcc_platform_abort()
+        return 0
+    low: i64 = 0
+    high: i64 = count
+    while low < high:
+        middle: i64 = low + (high - low) // 2
+        if load_i64(words, middle * _WORD_BYTES) < start:
+            low = middle + 1
+        else:
+            high = middle
+    if low < count and load_i64(words, low * _WORD_BYTES) < start + size:
+        return 1
+    return 0
+
+
 @c_abi_export("pcc_gc_gray_conservative_thread_roots")
 def pcc_gc_gray_conservative_thread_roots() -> None:
     if pcc_thread_world_stop_epoch_held() < 0:
         pcc_platform_abort()
         return
-    count: i64 = 0
-    node = global_load_ptr("pcc_gc_object_head")
-    while ptr_is_null(node) == 0:
-        if pcc_gc_object_node_is_active(node) != 0:
-            count = count + 1
-            owner = load_ptr(node, 48)
-            if ptr_is_null(owner) == 0:
-                span = load_ptr(owner, 64)
-                while ptr_is_null(span) == 0:
-                    count = count + 1
-                    span = load_ptr(span, 40)
-        node = load_ptr(node, 16)
-    if count > 9223372036854775807 // _INTERVAL_BYTES:
-        pcc_platform_abort()
-        return
-    entries = malloc(count * _INTERVAL_BYTES if count > 0 else _INTERVAL_BYTES)
-    if ptr_is_null(entries):
-        pcc_platform_abort()
-        return
-    index: i64 = 0
-    node = global_load_ptr("pcc_gc_object_head")
-    while ptr_is_null(node) == 0:
-        if pcc_gc_object_node_is_active(node) != 0:
-            index = _append_interval(entries, index, node, load_ptr(node, 0), load_i64(node, 8))
-            owner = load_ptr(node, 48)
-            if ptr_is_null(owner) == 0:
-                span = load_ptr(owner, 64)
-                while ptr_is_null(span) == 0:
-                    index = _append_interval(entries, index, node, load_ptr(span, 8), load_i64(span, 16))
-                    span = load_ptr(span, 40)
-        node = load_ptr(node, 16)
-    pcc_gc_conservative_sort_intervals(entries, count)
-    context = stack_alloc(_SCAN_BYTES)
-    store_ptr(context, _SCAN_ENTRIES, entries)
-    store_i64(context, _SCAN_COUNT, count)
-    visited: i64 = pcc_thread_visit_conservative_words(pcc_gc_conservative_mark_word, context)
-    free(entries)
+    context = stack_alloc(_WORDS_CONTEXT_BYTES)
+    store_ptr(context, _WORDS_DATA, null())
+    store_i64(context, _WORDS_COUNT, 0)
+    store_i64(context, _WORDS_CAPACITY, 0)
+    visited: i64 = pcc_thread_visit_conservative_words(_record_word, context)
     if visited < 0:
         pcc_platform_abort()
+        return
+    capacity: i64 = load_i64(context, _WORDS_COUNT)
+    words = malloc(capacity * _WORD_BYTES if capacity > 0 else _WORD_BYTES)
+    if ptr_is_null(words):
+        pcc_platform_abort()
+        return
+    store_ptr(context, _WORDS_DATA, words)
+    store_i64(context, _WORDS_COUNT, 0)
+    store_i64(context, _WORDS_CAPACITY, capacity)
+    captured: i64 = pcc_thread_visit_conservative_words(_record_word, context)
+    if captured != visited or load_i64(context, _WORDS_COUNT) != capacity:
+        free(words)
+        pcc_platform_abort()
+        return
+    count: i64 = _sort_words(words, capacity)
+    node = global_load_ptr("pcc_gc_object_head")
+    while ptr_is_null(node) == 0:
+        if pcc_gc_object_node_is_active(node) != 0:
+            rooted: i64 = _extent_has_word(words, count, load_ptr(node, 0), load_i64(node, 8))
+            owner = load_ptr(node, 48)
+            if ptr_is_null(owner) == 0:
+                span = load_ptr(owner, 64)
+                while ptr_is_null(span) == 0:
+                    if _extent_has_word(words, count, load_ptr(span, 8), load_i64(span, 16)) != 0:
+                        rooted = 1
+                    span = load_ptr(span, 40)
+            if rooted != 0:
+                # The same cycle-local pin prevents relocation of raw roots.
+                store_i64(node, 56, 1)
+                pcc_gc_mark_root_gray_if_known(load_ptr(node, 0))
+        node = load_ptr(node, 16)
+    free(words)
