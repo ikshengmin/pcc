@@ -53,6 +53,7 @@ from pcc.frontends.python.codegen.cpy_import_state import (
     live_import_name_slot,
 )
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
+from pcc.frontends.python.codegen.runtime_call_effects import NO_SAFEPOINT_RUNTIME_FUNCTIONS
 
 
 _I1 = ir.IntType(1)
@@ -1647,8 +1648,9 @@ class CallObjectLoweringMixin:
         saved_cpy = self._cpy_operand_cleanup_block
         leases = []
         result = None
+        no_safepoint = runtime_name in NO_SAFEPOINT_RUNTIME_FUNCTIONS
         try:
-            for slot in roots:
+            for slot in (() if no_safepoint else roots):
                 self._try_err_block = self._slot_call_cleanup_block((), target, tuple(leases))
                 self._cpy_operand_cleanup_block = self._try_err_block
                 borrowed = getattr(self, "_slot_call_borrowed_operands", {})
@@ -1663,7 +1665,16 @@ class CallObjectLoweringMixin:
                 leases.append((slot, token))
             self._try_err_block = self._slot_call_cleanup_block((), target, tuple(leases))
             self._cpy_operand_cleanup_block = self._try_err_block
-            values = [self.builder.load(slot, name=self._fresh("call.slot.argument")) for slot in roots]
+            if no_safepoint:
+                # Root healing is still required. Once loaded, these raw
+                # values cross only the verified bounded leaf call.
+                values = [self.builder.call(
+                    self.runtime["pcc_gc_load_borrowed_ptr"],
+                    [ir.Constant(_CSTR, None), self._as_gc_ptr(slot)],
+                    name=self._fresh("call.slot.leaf.argument"),
+                ) for slot in roots]
+            else:
+                values = [self.builder.load(slot, name=self._fresh("call.slot.argument")) for slot in roots]
             arguments = values + list(suffix_args)
             if argument_order:
                 arguments = [arguments[index] for index in argument_order]

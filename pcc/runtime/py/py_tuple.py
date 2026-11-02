@@ -766,6 +766,7 @@ def py_tuple_getitem(tuple_ptr, i: int):
 
 @c_abi_export("py_tuple_len")
 def py_tuple_len(tuple_ptr) -> int:
+    """Bounded scalar leaf, verified by codegen.runtime_call_effects."""
     if ptr_is_null(tuple_ptr) != 0:
         return 0
     return load_i64(tuple_ptr, PYTUPLEOBJECT_LEN_OFFSET)

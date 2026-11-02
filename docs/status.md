@@ -156,10 +156,19 @@ between comparisons, membership and arithmetic. General membership preserves
 its container-specific dispatch and source-order input checks. Non-tagged
 binary slot calls reuse eligible inputs while publishing results to a separate
 empty root; only staged operands enter temporary cleanup. Existing tagged-int
-in-place arithmetic remains in place. Sixty-one focused ordinary checks pass;
-the new membership/arithmetic CPython/five-GC probe has not yet run. Statically
-typed string membership and leaf-call effects remain open, as do whole-language
-and native-pcc1 gates.
+in-place arithmetic remains in place. Sixty-one focused ordinary checks pass.
+Frozen `39e111e94` also passes both unchanged-source CPython/five-GC programs
+for comparisons and membership/arithmetic, including callbacks that collect,
+exceptions, zero division and input preservation after the operation.
+
+The leaf-effect increment admits only `py_tuple_len`: definitions omit the
+implicit poll and must pass a scalar, call-free, acyclic IR check. Unproved
+operations and dynamic/aggregate allocas are rejected. Slot callers retain
+root healing and omit only the admitted call's address leases. Sixty-seven
+distinct focused ordinary checks pass, including the real valueclass-tuple
+iteration path and negative leaf-admission cases. Its actual runtime build
+and native execution remain pending. Statically typed string membership,
+whole-language and native-pcc1 gates remain open.
 Static-method generation also exposes the pre-existing `_call_user` and
 `_emit_post_call_err_check` signature drift; this batch preserves those entries
 and adds only its two new method schemas.

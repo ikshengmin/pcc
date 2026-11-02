@@ -8,6 +8,10 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 from pcc.frontends.python.symbol_names import identifier_symbol
+from pcc.frontends.python.codegen.runtime_call_effects import (
+    NO_SAFEPOINT_RUNTIME_FUNCTIONS,
+    verify_no_safepoint_runtime_function,
+)
 
 from pcc.frontends.python import low_ir as pcc_low_ir
 from pcc.frontends.python.py_ast import (
@@ -1045,13 +1049,15 @@ class UserFunctionLoweringMixin:
                     self,
                     "_thread_safepoints_enabled",
                     False,
-                ),
+                ) and fn.name not in NO_SAFEPOINT_RUNTIME_FUNCTIONS,
             )
         finally:
             self.builder = old_builder
             self.current_function = old_current_function
             self.current_func_def = old_current_func_def
             self._current_global_names = old_global_names
+
+        verify_no_safepoint_runtime_function(fn)
 
         if os.environ.get("PCC_DEBUG_LOW_IR", "").strip():
             sys.stderr.write(
@@ -1805,6 +1811,8 @@ class UserFunctionLoweringMixin:
                 self._codegen_current_stmt_index = saved_trace_stmt_index
                 self._codegen_current_stmt_kind = saved_trace_stmt_kind
                 self._codegen_current_expr_kind = saved_trace_expr_kind
+
+        verify_no_safepoint_runtime_function(fn)
 
     def _emit_hoist_adapter(
         self,

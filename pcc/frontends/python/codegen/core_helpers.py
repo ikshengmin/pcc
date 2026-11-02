@@ -5,6 +5,7 @@ from __future__ import annotations
 from pcc.ir.compat import ir
 
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
+from pcc.frontends.python.codegen.runtime_call_effects import NO_SAFEPOINT_RUNTIME_FUNCTIONS
 from pcc.frontends.python.symbol_names import identifier_symbol
 
 _I1 = ir.IntType(1)
@@ -133,6 +134,10 @@ class CoreHelperMixin:
     def _emit_thread_safepoint(self) -> None:
         """Emit the cheap thread safepoint poll used by loop/function gates."""
         if not getattr(self, "_thread_safepoints_enabled", False):
+            return
+        if (self.current_function is not None
+                and self.current_function.name in NO_SAFEPOINT_RUNTIME_FUNCTIONS):
+            # The completed definition is checked for calls and cycles.
             return
         if self._builder_block_is_terminated():
             return
