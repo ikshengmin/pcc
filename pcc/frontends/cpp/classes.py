@@ -86,6 +86,10 @@ def require_complete(dtype, coord):
     """Require an object type to be complete, without completing pointees."""
     dtype = unqualified(dtype)
     if isinstance(dtype, ClassType) and not dtype.complete:
+        complete_layout = getattr(dtype, "complete_layout", None)
+        if complete_layout is not None:
+            complete_layout(coord)
+    if isinstance(dtype, ClassType) and not dtype.complete:
         raise CppDiagnostic(
             "cpp.incomplete-class", "incomplete class '" + dtype.name + "'", coord
         )

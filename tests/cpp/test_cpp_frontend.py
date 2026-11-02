@@ -121,10 +121,12 @@ class CppParserTests(unittest.TestCase):
         self.diagnostic("int f(int x){return x;} int main(){return f();}", "cpp.no-viable-overload")
         self.diagnostic("int f(){return 1;} int f(){return 2;}", "cpp.redefinition")
 
-    def test_arity_overloads_and_unimplemented_class_templates(self):
+    def test_arity_overloads_and_typed_class_template_declaration(self):
         ast = self.parse("int f(int); int f(int,int); int main(){return f(1,2);}")
         self.assertEqual(ast.ext[2].body.block_items[0].expr.name.name, "_Z1fii")
-        self.diagnostic("template<class T> struct Box {};", "cpp.unsupported.classes")
+        self.assertEqual(self.parse("template<class T> struct Box {};").ext, [])
+        self.diagnostic("template<class T> struct Box { T f(){return 0;} };",
+                        "cpp.unsupported.class-templates")
 
     def test_lifetimes_and_exceptions_are_never_dropped(self):
         ast = self.parse("struct Guard { ~Guard(); };")

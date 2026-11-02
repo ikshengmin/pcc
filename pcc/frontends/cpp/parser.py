@@ -166,6 +166,7 @@ class CppParser:
         self.instantiating_template = False
         self.unevaluated_depth = 0
         self.instance_registry = InstanceRegistry()
+        self.class_template_declarations = []
         self.loop_depth = 0
         self.switch_contexts = []
         from pcc.frontends.cpp.lifetimes import AutomaticLifetimes
@@ -183,9 +184,13 @@ class CppParser:
             if symbol.internal_linkage and not symbol.defined:
                 raise CppDiagnostic("cpp.unsupported.internal-object-declaration",
                                     "undefined internal objects need ODR-use tracking", symbol.coord)
+        from pcc.frontends.cpp.class_templates import ClassTemplatePattern, emit_instance
         instances = self.instance_registry.drain(
-            lambda entry: self._instantiate_body(entry.value, entry.context),
+            lambda entry: emit_instance(self, entry) if isinstance(entry.context, ClassTemplatePattern)
+            else self._instantiate_body(entry.value, entry.context),
         )
+        instances = [item for item in instances if item is not None]
+        declarations = self.class_template_declarations + declarations
         if instances:
             # Instances may call declarations appearing anywhere earlier in
             # the source definition context. Publish ordinary C prototypes,
@@ -376,7 +381,7 @@ class CppParser:
             return True
         if token.kind == "ID" and token.value not in _KEYWORDS or token.value in (":", "::"):
             symbol = self._type_symbol()
-            return symbol is not None and symbol.kind in ("type", "template-type")
+            return symbol is not None and symbol.kind in ("type", "template-type", "class-template")
         return False
 
     def _check_value_type(self, dtype, token):
@@ -435,7 +440,13 @@ class CppParser:
                 from pcc.frontends.cpp.type_queries import parse_decltype
                 dtype = parse_decltype(self)
             elif not words and dtype is None and self._is_type(self._peek()):
-                dtype = self.scope.resolve_name(self._name()).dtype
+                name = self._name()
+                symbol = self.scope.resolve_name(name)
+                if symbol.kind == "class-template":
+                    from pcc.frontends.cpp.class_templates import specialize
+                    dtype = specialize(self, symbol, name.coord)
+                else:
+                    dtype = symbol.dtype
             else:
                 break
         if dtype is None:
@@ -775,9 +786,6 @@ class CppParser:
         if self.language_linkage == "C":
             raise CppDiagnostic("cpp.template-c-linkage",
                                 "templates cannot have C language linkage", keyword.coord)
-        if self.scope.namespace_path():
-            raise CppDiagnostic("cpp.unsupported.namespace-templates",
-                                "namespace templates require qualified template ABI and lookup", keyword.coord)
         self._expect("<")
         parent = self.scope
         self.scope = Scope(parent)
@@ -820,7 +828,14 @@ class CppParser:
                 if self._accept(">"):
                     break
                 self._expect(",")
-            self._function(template_parameters=tuple(parameters), declaration_scope=parent)
+            if self._peek().value in ("class", "struct"):
+                from pcc.frontends.cpp.class_templates import parse_declaration
+                parse_declaration(self, tuple(parameters), parent)
+            else:
+                if parent.namespace_path():
+                    raise CppDiagnostic("cpp.unsupported.namespace-templates",
+                                        "namespace function templates require qualified template ABI and lookup", keyword.coord)
+                self._function(template_parameters=tuple(parameters), declaration_scope=parent)
         finally:
             self.scope = parent
             self.parsing_template = False
@@ -2291,7 +2306,7 @@ class CppParser:
                                           c_ast.ExprList(converted, coord), coord), dtype,
                           constant_fact=not_constant(dtype, "call to a non-constexpr function", coord))
 
-    def _explicit_template_arguments(self):
+    def _explicit_template_arguments(self, allow_class_types=False):
         """Parse type-ids or typed expressions, never re-lex or replace tokens.
 
         The expression parser itself owns nested parentheses and function calls.
@@ -2325,9 +2340,10 @@ class CppParser:
                                                 "function/grouped template type arguments are not implemented", coord)
             if is_type_argument:
                 dtype = self._abstract_pointer_type(self._type(check_lowering=False))
-                if (not isinstance(dtype, TypeParameter)
+                if (not allow_class_types and (
+                        not isinstance(dtype, TypeParameter)
                         and not self.types.arithmetic_operand(dtype) and dtype != "void"
-                        or isinstance(dtype, ConstType) or is_enum_type(dtype)):
+                        or isinstance(dtype, ConstType) or is_enum_type(dtype))):
                     raise CppDiagnostic("cpp.unsupported.template-type-arguments",
                                         "explicit template type arguments require arithmetic types", coord)
                 argument = TemplateArgument("type", dtype, coord)
@@ -2431,7 +2447,7 @@ class CppParser:
                 raise CppDiagnostic("cpp.unsupported.template-static-assert",
                                     "dependent static assertions require instantiation-time assertion checking", token.coord)
             self._unsupported(token)
-        if token.value in TYPE_WORDS or symbol is not None and symbol.kind in ("type", "template-type"):
+        if token.value in TYPE_WORDS or symbol is not None and symbol.kind in ("type", "template-type", "class-template"):
             dtype = canonical_type([token.value]) if token.value in TYPE_WORDS else symbol.dtype
             if isinstance(dtype, ReferenceType):
                 raise CppDiagnostic("cpp.unsupported.references", "reference casts require value-category/lifetime semantics", token.coord)

@@ -170,7 +170,9 @@ class OverloadSemaTests(unittest.TestCase):
         self.diagnostic("double main(){}", "cpp.main-return-type")
         self.diagnostic("int f(volatile int x);", "cpp.unsupported.volatile")
         self.diagnostic("int f(int&& x);", "cpp.unsupported.references")
-        self.diagnostic("template<class T> struct Box {};", "cpp.unsupported.classes")
+        self.assertEqual(self.parse("template<class T> struct Box {};").ext, [])
+        self.diagnostic("template<class T> struct Box { T f(){return 0;} };",
+                        "cpp.unsupported.class-templates")
         for raw in ("0x1.0", "0x.p1", "1e+", "1.e"):
             self.diagnostic("double f(){return " + raw + ";}", "cpp.invalid-literal")
 

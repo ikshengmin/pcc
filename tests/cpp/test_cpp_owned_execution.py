@@ -167,7 +167,7 @@ def test_cpp_project_link_does_not_synthesize_missing_definitions(owned_only):
 @pytest.mark.parametrize(
     "source,code",
     (
-        ("template<class T> struct Box {};", "cpp.unsupported.classes"),
+        ("template<class T> struct Box { T f(){return 0;} };", "cpp.unsupported.class-templates"),
         ("int cpp_test_entry(){throw 1;}", "cpp.unsupported.exceptions"),
         ("int cpp_test_entry(){return missing;}", "cpp.undeclared"),
         (

@@ -252,10 +252,30 @@ def _mangle_class(dtype, substitutions):
         if enclosing_class is not None and count == len(namespaces):
             return enclosing_class
         return ("namespace-prefix", namespaces[:count])
+    template_origin = getattr(dtype, "template_origin", None)
+    template_prefix = ("class-template-prefix", template_origin)
+    def encode_arguments():
+        from pcc.frontends.cpp.templates import IntegralArgument, mangle_argument
+        return "".join(mangle_argument(arg) if isinstance(arg, IntegralArgument)
+                       else _mangle_type(arg, substitutions)
+                       for arg in dtype.template_arguments)
+    if template_origin is not None and template_prefix in substitutions:
+        encoded = _substitution(substitutions.index(template_prefix)) + "I" + encode_arguments() + "E"
+        # Namespace template members keep nested-name framing even when the
+        # entire template prefix is substituted (Itanium ABI 5.1.2). std is
+        # the ABI's explicit unscoped-name exception, just like global scope.
+        return "N" + encoded + "E" if namespaces and namespaces != ("std",) else encoded
+    def template_name():
+        if template_origin is None:
+            return name
+        key = ("class-template-prefix", template_origin)
+        if key not in substitutions:
+            substitutions.append(key)
+        return name + "I" + encode_arguments() + "E"
     if not namespaces:
-        return name
+        return template_name()
     if namespaces == ("std",) and enclosing_class is None:
-        return "St" + name
+        return "St" + template_name()
     prefix, start = "", 0
     for count in range(len(namespaces), 0, -1):
         key = prefix_key(count)
@@ -270,7 +290,7 @@ def _mangle_class(dtype, substitutions):
         key = prefix_key(index + 1)
         if key not in substitutions:
             substitutions.append(key)
-    return "N" + prefix + name + "E"
+    return "N" + prefix + template_name() + "E"
 
 
 def _mangle_type(dtype, substitutions):

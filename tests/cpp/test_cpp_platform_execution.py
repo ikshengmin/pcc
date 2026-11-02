@@ -39,6 +39,7 @@ from tests.cpp.test_cpp_pointer_additive import CASES as POINTER_OFFSET_PROGRAMS
 from tests.cpp.test_cpp_default_arguments import CASES as DEFAULT_ARGUMENT_PROGRAMS
 from tests.cpp.test_cpp_lvalue_references import CASES as LVALUE_REFERENCE_PROGRAMS
 from tests.cpp.test_cpp_const_casts import CASES as CONST_CAST_PROGRAMS
+from tests.cpp.test_cpp_class_templates import CASES as CLASS_TEMPLATE_PROGRAMS
 
 
 CASES = tuple(
@@ -90,6 +91,13 @@ CONST_CAST_CASES = tuple(
                  'pointer-to-array-shape', 'typed-null-pointer')
 )
 CASES += CONST_CAST_CASES
+
+CLASS_TEMPLATE_CASES = tuple(
+    ('class-template-' + name, dict(CLASS_TEMPLATE_PROGRAMS)[name], 42)
+    for name in ('namespace-qualified-aggregate', 'injected-pointer-to-self',
+                 'mixed-parameter-identity', 'pointer-only-does-not-instantiate-void')
+)
+CASES += CLASS_TEMPLATE_CASES
 
 
 def _forbidden_process(*args, **kwargs):

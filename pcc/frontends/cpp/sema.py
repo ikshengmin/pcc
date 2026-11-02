@@ -205,7 +205,11 @@ class Scope:
                                         "dependent qualified lookup requires template/class semantics", name.coord)
                 if (symbol is not None and symbol.kind == "type"
                         and getattr(unqualified(symbol.dtype), "cpp_class_type", False)):
-                    definition = unqualified(symbol.dtype).definition
+                    owner = unqualified(symbol.dtype)
+                    complete_layout = getattr(owner, "complete_layout", None)
+                    if complete_layout is not None and not owner.complete:
+                        complete_layout(name.coord)
+                    definition = owner.definition
                     if definition is None:
                         raise CppDiagnostic("cpp.incomplete-class",
                                             "class-qualified lookup requires a class definition", name.coord)
@@ -500,28 +504,47 @@ class Scope:
 
 
 def argument_dependent_lookup(name, arguments, ordinary, coord):
-    """ADL for the admitted non-template, non-nested, base-free class types.
+    """ADL for base-free classes and their type template arguments.
 
-    The class parser rejects bases, nested classes, friends and class templates
-    rather than pretending their associated entities are empty. Fundamental
-    types add nothing; aliases do not add the alias's declaring namespace.
+    N4659 [basic.lookup.argdep]/2: aliases add no namespace; non-type
+    arguments add no associated entities. Follow type structure without
+    requesting layout, including function types appearing as type arguments.
+    Bases, friends, member templates and template-template arguments remain
+    rejected by their declaration/type owners.
     """
     if ordinary is not None and ordinary.kind != "function":
         return ordinary
+    from pcc.frontends.cpp.templates import IntegralArgument
+    from pcc.frontends.cpp.types import FunctionType
     namespaces = []
-    for dtype in arguments:
-        dtype = unqualified(dtype)
-        while pointer_type(dtype) or array_type(dtype):
-            dtype = unqualified(dtype.element if array_type(dtype) else dtype.pointee)
+    pending = list(arguments)
+    seen_types = set()
+    while pending:
+        dtype = unqualified(pending.pop())
+        if dtype in seen_types:
+            continue
+        seen_types.add(dtype)
+        if isinstance(dtype, ReferenceType):
+            pending.append(dtype.referent)
+            continue
+        if pointer_type(dtype) or array_type(dtype):
+            pending.append(dtype.element if array_type(dtype) else dtype.pointee)
+            continue
+        if isinstance(dtype, FunctionType):
+            pending.extend(dtype.parameters)
+            pending.append(dtype.result)
+            continue
         if getattr(dtype, "cpp_class_type", False) or is_enum_type(dtype):
             namespace = dtype.declaration_scope
             if namespace is None:
                 raise CppDiagnostic("cpp.unsupported.associated-lookup",
                                     "nominal type has no recorded declaring namespace for ADL", coord)
-            # Member enums associate the enclosing class and its namespace.
-            # No hidden friends, bases or class templates are admitted, so
-            # there are no additional associated class candidates to inspect.
             namespaces.append(namespace.namespace())
+            pending.extend(argument for argument in getattr(dtype, "template_arguments", ())
+                           if not isinstance(argument, IntegralArgument))
+            enclosing = getattr(dtype, "enclosing_class", None)
+            if enclosing is not None:
+                pending.append(enclosing)
     candidates = [] if ordinary is None else [ordinary]
     visited = set()
     while namespaces:
