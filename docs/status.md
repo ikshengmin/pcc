@@ -255,10 +255,39 @@ Follow-up review catches a consumer of the new frame sequence: the optional
 text frame-address fold recognized only a separate SUB, so a later temporary
 call-stack adjustment could be mistaken for the entire frame. It now models
 the pre-indexed save and ordinary post-indexed release, and invalidates its
-model on other SP writebacks. All 184 selected fold/liveness/stack-map emission
+model on other SP writebacks (`631188d13`). All 184 selected fold/liveness/stack-map emission
 checks pass, including a native program that distinguishes a frame local (42)
-from a temporary call-stack word (99). The default-pipeline throughput packet
-on frozen `9c763b08d` is still in progress and does not qualify this follow-up.
+from a temporary call-stack word (99).
+
+The default-GC0 packet on frozen `9c763b08d` completes all seven rotations and
+three synchronous pairs. Against `34b484058`, one-worker median QPS changes
+35,116 -> 35,483, but paired change is -0.26% (3/7 positive), with cycles flat
+(-0.02%) and instructions -2.69%. Four-worker medians are 72,758 -> 75,398;
+paired QPS is +5.02% (4/7), cycles -1.04% (6/7 lower), instructions -2.57%.
+Same-packet asyncio medians are 81,414/221,242, with wide four-worker ranges;
+this is not strong evidence of a stable 5% throughput gain. Source, runtime,
+binary and all 28 measurement-input hashes remain unchanged. The synchronous
+instruction count falls 146,639 -> 142,980 while cycles are effectively flat.
+This batch does not close either throughput target or qualify the optional
+text-pass follow-up's whole-language/native-pcc1 boundaries.
+
+The follow-up's fresh owned runtime is built on frozen `631188d13`. All 189
+runtime object text sections match `9c763b08d`; 126 objects differ in const/data
+sections, so the archives are not claimed byte-identical. The C-linked ready
+pool reference probe passes GC0-4 plus tracing-only GC4 (one test, six runs);
+both owned native GC4 integration programs also pass their CPython reference
+comparisons, covering values, weakrefs, finalizers and resurrection.
+
+Complete ordinary enumeration on `631188d13`, with six workers and the
+unchanged 90-second/1-GiB guards, reports C++ 3187 PASS/37 FAIL (plus 49 passing
+subtests), Go 974/3, Java 1155/1 and Rust 1460/3. Exact node outcomes match a
+separate complete run on pre-change `1e689b07d`: all 44 failures are reproduced
+there and are left unchanged. Initial missing fixture failures are superseded
+after sealing the same revision's feature ledgers and TinyXML2 inputs; all
+source and additional-input hashes are verified. These are ordinary lanes,
+not whole-language green results. Their integration/reference lanes, the
+complete Python/C suites and native pcc1/bootstrap qualification remain open.
+The backend commits remain local pending the full affected-language gate.
 
 ### Measured P0 batch: `02acaa2f5` -> `0fbc8d977`
 
