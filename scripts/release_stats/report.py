@@ -144,6 +144,12 @@ def speed_rows(results: dict) -> tuple[list, float | None, dict]:
     return rows, mean, counts
 
 
+def _package_language_hints(packages: dict) -> dict:
+    # Older retained summaries called suffix counts "native_languages". They
+    # remain filename hints, not verified native build language classifications.
+    return packages.get("source_language_hints", packages.get("native_languages", {}))
+
+
 def section(results: dict, image_prefix: str) -> str:
     lines = [BEGIN, "## Compatibility and speed, measured", ""]
     lines.append(f"Measured with `scripts/release_stats/run.py` ({_identity_line(results)}). "
@@ -166,14 +172,30 @@ def section(results: dict, image_prefix: str) -> str:
     if "packages" in results:
         p = results["packages"]
         languages = ", ".join(f"{name} {count}" for name, count in
-                              sorted(p["native_languages"].items(), key=lambda item: -item[1]))
+                              sorted(_package_language_hints(p).items(),
+                                     key=lambda item: -item[1]))
+        ranking = p["top_list"]
+        period = (f"calendar-month downloads, {ranking['month']}"
+                  if ranking.get("period") == "previous-calendar-month" and ranking.get("month")
+                  else "download window unknown")
+        universal = p.get("universal_wheel_projects", p.get("pure_python_wheels", "unknown"))
+        platform = p.get("platform_wheel_projects", "unknown")
+        unknown_shapes = p.get("wheel_shape_unknown_projects", "not recorded")
+        verified = p.get("sha256_verified_sdists", "not recorded")
         lines.append(
-            f"- **Top {p['projects']} PyPI projects** (downloads, {p['top_list']['last_update'][:10]}): "
+            f"- **Top {p['projects']} PyPI projects** ({period}; "
+            f"snapshot {str(ranking.get('last_update', 'unknown'))[:10]}): "
             f"`import` compiles and runs natively for {p['pcc_import_ok']} "
             f"({_pct(p['pcc_import_ok'], p['projects'])}); {p['with_baseline']} install from "
-            f"wheels and import under CPython. {p['pure_python_wheels']} ship a pure-Python "
-            f"wheel; {p['needs_native_build']} have native parts pcc would have to build "
-            f"itself ({languages or 'none'}). Package test suites are not run yet.")
+            f"wheels and import under CPython. Wheel shapes (overlapping project counts): "
+            f"{universal} publish universal `none-any` wheels; {platform} publish platform "
+            f"wheels; wheel shape unknown: {unknown_shapes}. Source SHA-256 verified: "
+            f"{verified}. Unverified source-language "
+            f"filename hints: {languages or 'none recorded'}; docs, tests, headers and "
+            "vendored examples can match, and generated sources can be absent. "
+            "Extension/CLI roles and actual native-build languages are unknown to this "
+            "scanner; a universal wheel does not rule out optional native builds. "
+            "Package test suites are not run yet.")
     if "languages" in results:
         suites = results["languages"]["c_suites"]
         parts = [f"{data['passed']:,} of {data['cases']:,} {suite} cases"
@@ -198,7 +220,7 @@ def section(results: dict, image_prefix: str) -> str:
     if compatibility_rows(results):
         lines += ["", f"![Compatibility]({image_prefix}/compatibility.svg)", ""]
     if "packages" in results:
-        lines += [f"![Native languages of the top PyPI projects]({image_prefix}/native-languages.svg)", ""]
+        lines += [f"![Unverified source-language filename hints]({image_prefix}/native-languages.svg)", ""]
     lines.append("### Speed against CPython")
     lines.append("")
     rows, mean, counts = speed_rows(results)
@@ -237,10 +259,12 @@ def write_charts(results: dict, directory: Path) -> None:
     if "packages" in results:
         packages = results["packages"]
         (directory / "native-languages.svg").write_text(
-            charts.count_chart(f"Native parts of the top {packages['projects']} PyPI projects",
-                               sorted(packages["native_languages"].items(),
+            charts.count_chart(f"Unverified filename hints: {packages['projects']} PyPI projects",
+                               sorted(_package_language_hints(packages).items(),
                                       key=lambda item: -item[1]),
-                               packages["projects"], note), encoding="utf-8")
+                               packages["projects"],
+                               note + "; actual native-build languages unknown; memberships overlap"),
+            encoding="utf-8")
     speed, mean, _counts = speed_rows(results)
     if speed:
         (directory / "performance.svg").write_text(
@@ -259,6 +283,18 @@ def run(options, out: Path) -> dict:
     summary = {stage: {key: value for key, value in result.items()
                        if key not in ("results", "programs")}
                for stage, result in results.items()}
+    if "packages" in summary:
+        packages = summary["packages"]
+        # Normalize the output copy, never the retained stage input. The old
+        # "needs_native_build" count was also based only on filename matches.
+        for current, legacy in (("source_language_hints", "native_languages"),
+                                ("source_hint_projects", "needs_native_build"),
+                                ("universal_wheel_projects", "pure_python_wheels")):
+            if legacy in packages:
+                packages.setdefault(current, packages.pop(legacy))
+        packages["source_language_evidence"] = "unverified-filename-hints"
+        packages["native_build_unknown_projects"] = packages["projects"]
+        packages["native_artifact_kind"] = "unknown"
     write_json(report_dir / "summary.json", summary)
     if options.update_readme:
         images = REPO / IMAGES

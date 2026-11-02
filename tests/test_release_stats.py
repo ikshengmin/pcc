@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 import subprocess
 import sys
+import tarfile
 import xml.etree.ElementTree as ElementTree
+import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,6 +22,7 @@ sys.path.insert(0, str(STATS))
 import charts  # noqa: E402
 import common  # noqa: E402
 import cpython_stage  # noqa: E402
+import packages_stage  # noqa: E402
 import pyperformance_stage  # noqa: E402
 import report  # noqa: E402
 
@@ -206,3 +212,246 @@ def test_imported_conformance_without_source_identity_is_not_relabelled(tmp_path
     (tmp_path / "identity.json").write_text(json.dumps({"pcc_head": ""}))
     with pytest.raises(ValueError, match="no measured pcc revision"):
         cpython_stage._summary(tmp_path, _stage("cpython")["identity"])
+
+
+def _sdist_bytes(kind, names):
+    """Synthetic data only: never install, import or execute an archived file."""
+    content = b"raise RuntimeError('archive contents must not execute')\n"
+    buffer = io.BytesIO()
+    if kind == "zip":
+        with zipfile.ZipFile(buffer, "w") as bundle:
+            for name in names:
+                bundle.writestr(name, content)
+    else:
+        with tarfile.open(fileobj=buffer, mode="w:gz") as bundle:
+            for name in names:
+                member = tarfile.TarInfo(name)
+                member.size = len(content)
+                bundle.addfile(member, io.BytesIO(content))
+    return buffer.getvalue()
+
+
+def _sdist_entry(data, kind="tar.gz"):
+    return {"filename": "synthetic-1.0." + kind, "size": len(data),
+            "url": "https://files.example.invalid/synthetic-1.0." + kind,
+            "packagetype": "sdist", "digests": {"sha256": hashlib.sha256(data).hexdigest()}}
+
+
+def _forbid_action(*args, **kwargs):
+    raise AssertionError("unexpected network, archive inspection or package execution")
+
+
+@pytest.mark.parametrize("kind", ["tar.gz", "zip"])
+def test_package_cached_digest_verified_but_filename_languages_are_only_hints(tmp_path, monkeypatch, kind):
+    # PyPI JSON API digests establish bytes, not build dependencies or roles.
+    # https://docs.pypi.org/api/json/
+    data = _sdist_bytes(kind, ["synthetic/docs/verify.go", "synthetic/tests/Test.java",
+                              "synthetic/vendor/example/Cargo.toml", "synthetic/include/api.h",
+                              "synthetic/setup.py"])
+    entry = _sdist_entry(data, kind)
+    (tmp_path / entry["filename"]).write_bytes(data)
+    monkeypatch.setattr(packages_stage.urllib.request, "urlopen", _forbid_action)
+    scan = packages_stage.scan_sdist(entry, tmp_path)
+    assert scan["integrity"] == "verified-sha256" and scan["scanned"]
+    assert scan["actual_sha256"] == entry["digests"]["sha256"]
+    assert scan["language_hints"] == ["C", "Go", "Java", "Rust"]
+    result = packages_stage.package_evidence({"source_scan": scan, "platform_wheels": True})
+    assert result["native_build"] == {"status": "unknown", "languages": None}
+    assert result["native_artifact_kind"] == "unknown"
+    assert "languages" not in scan and "native" not in result
+
+
+def test_package_cached_digest_mismatch_retains_bytes_without_scan_or_redownload(tmp_path, monkeypatch):
+    good = _sdist_bytes("tar.gz", ["synthetic/runtime.c"])
+    entry = _sdist_entry(good)
+    path = tmp_path / entry["filename"]
+    path.write_bytes(b"corrupt retained evidence")
+    monkeypatch.setattr(packages_stage.urllib.request, "urlopen", _forbid_action)
+    monkeypatch.setattr(packages_stage.tarfile, "open", _forbid_action)
+    scan = packages_stage.scan_sdist(entry, tmp_path)
+    assert scan["integrity"] == "sha256-mismatch" and not scan["scanned"]
+    assert path.read_bytes() == b"corrupt retained evidence"
+    assert "language_hints" not in scan
+
+
+@pytest.mark.parametrize("matches", [True, False])
+def test_package_download_verifies_digest_and_retains_mismatch(tmp_path, monkeypatch, matches):
+    data = _sdist_bytes("tar.gz", ["synthetic/runtime.c"])
+    entry = _sdist_entry(data)
+    if not matches:
+        entry["digests"]["sha256"] = "0" * 64
+    calls = []
+
+    def download(url, timeout):
+        calls.append((url, timeout))
+        return io.BytesIO(data)
+
+    monkeypatch.setattr(packages_stage.urllib.request, "urlopen", download)
+    scan = packages_stage.scan_sdist(entry, tmp_path)
+    assert calls == [(entry["url"], 300)]
+    assert scan["scanned"] is matches
+    assert scan["integrity"] == ("verified-sha256" if matches else "sha256-mismatch")
+    assert (tmp_path / entry["filename"]).read_bytes() == data
+
+
+@pytest.mark.parametrize("digest", [None, "", "not-a-digest", "g" * 64])
+def test_package_missing_or_invalid_digest_is_not_downloaded(tmp_path, monkeypatch, digest):
+    entry = _sdist_entry(b"unused")
+    entry["digests"] = {} if digest is None else {"sha256": digest}
+    monkeypatch.setattr(packages_stage.urllib.request, "urlopen", _forbid_action)
+    scan = packages_stage.scan_sdist(entry, tmp_path)
+    assert scan["integrity"] == "missing-or-invalid-sha256"
+    assert not scan["scanned"] and not list(tmp_path.iterdir())
+
+
+def test_package_download_bound_and_unreadable_archive_preserve_unknown(tmp_path, monkeypatch):
+    monkeypatch.setattr(packages_stage, "SDIST_SCAN_LIMIT", 8)
+    entry = _sdist_entry(b"small")
+    monkeypatch.setattr(packages_stage.urllib.request, "urlopen",
+                        lambda *args, **kwargs: io.BytesIO(b"x" * 100))
+    scan = packages_stage.scan_sdist(entry, tmp_path)
+    assert not scan["scanned"] and scan["integrity"] == "unverified"
+    assert (tmp_path / entry["filename"]).stat().st_size == 9
+    other = tmp_path / "other"
+    other.mkdir()
+    entry = _sdist_entry(b"bad-tar")
+    (other / entry["filename"]).write_bytes(b"bad-tar")
+    scan = packages_stage.scan_sdist(entry, other)
+    assert not scan["scanned"] and scan["integrity"] == "verified-sha256"
+    assert "unreadable" in scan["detail"] and "language_hints" not in scan
+
+
+def test_package_no_matching_suffix_does_not_prove_no_native_build(tmp_path, monkeypatch):
+    data = _sdist_bytes("tar.gz", ["synthetic/build.py", "synthetic/annotated.py"])
+    entry = _sdist_entry(data)
+    (tmp_path / entry["filename"]).write_bytes(data)
+    monkeypatch.setattr(packages_stage.urllib.request, "urlopen", _forbid_action)
+    scan = packages_stage.scan_sdist(entry, tmp_path)
+    assert scan["language_hints"] == []
+    result = packages_stage.package_evidence({"source_scan": scan, "universal_wheel": True})
+    assert result["native_build"]["languages"] is None
+    assert result["native_artifact_kind"] == "unknown"
+
+
+def test_package_integrity_failure_precedes_any_install(tmp_path, monkeypatch):
+    data = _sdist_bytes("tar.gz", ["synthetic/runtime.c"])
+    entry = _sdist_entry(data)
+    cache = tmp_path / "sdists"
+    cache.mkdir()
+    (cache / entry["filename"]).write_bytes(b"mismatched")
+    monkeypatch.setattr(packages_stage, "_get_json",
+                        lambda url: {"info": {"version": "1.0"}, "urls": [entry]})
+    monkeypatch.setattr(packages_stage.shutil, "which", _forbid_action)
+    monkeypatch.setattr(packages_stage, "run_bounded", _forbid_action)
+    result = packages_stage.check_project("synthetic", tmp_path, SimpleNamespace())
+    assert result["status"] == "source-integrity-failed"
+    assert result["source_scan"]["integrity"] == "sha256-mismatch"
+
+
+@pytest.mark.parametrize("wheel_names", [
+    ["synthetic-1.0-py3-none-any.whl"],
+    ["synthetic-1.0-py3-none-linux_x86_64.whl"],
+    ["synthetic-1.0-py3-none-any.whl", "synthetic-1.0-cp315-cp315-linux_x86_64.whl"],
+])
+def test_package_wheel_shapes_do_not_classify_extension_cli_or_optional_build(tmp_path, monkeypatch, wheel_names):
+    # Wheel platform/ABI tags are artifact compatibility metadata, not roles.
+    # https://packaging.python.org/en/latest/specifications/binary-distribution-format/
+    monkeypatch.setattr(packages_stage, "_get_json", lambda url: {
+        "info": {"version": "1.0"}, "urls": [
+            {"packagetype": "bdist_wheel", "filename": name} for name in wheel_names]})
+    monkeypatch.setattr(packages_stage.shutil, "which", lambda name: "not-executed-uv")
+    monkeypatch.setattr(packages_stage, "run_bounded", lambda *args, **kwargs: {
+        "killed": None, "returncode": 1, "stderr": "synthetic install not run", "stdout": ""})
+    options = SimpleNamespace(rss_limit_gb=1, python=sys.executable)
+    result = packages_stage.check_project("synthetic", tmp_path, options)
+    assert result["status"] == "reference-install-failed"
+    assert result["universal_wheel"] == any(name.endswith("-none-any.whl") for name in wheel_names)
+    assert result["platform_wheels"] == any(not name.endswith("-none-any.whl") for name in wheel_names)
+    assert result["native_build"] == {"status": "unknown", "languages": None}
+    assert result["native_artifact_kind"] == "unknown"
+    assert result["source_scan"]["detail"] == "no source distribution"
+
+
+@pytest.mark.parametrize(("provider", "updated", "month"), [
+    ("ClickHouse", "2026-11-01 06:41:05", "2026-10"),
+    ("ClickHouse", "2026-01-01 06:41:05", "2025-12"),
+    ("historical-provider", "2026-01-01", None),
+    ("ClickHouse", "invalid-date", None),
+])
+def test_package_ranking_previous_calendar_month_or_unknown(tmp_path, monkeypatch, provider, updated, month):
+    # Provider query: pypi_downloads_per_month WHERE month = last_month.
+    # https://github.com/hugovk/top-pypi-packages/blob/main/clickhouse.py
+    snapshot = tmp_path / "top-pypi-packages.json"
+    snapshot.write_text(json.dumps({"source": provider, "last_update": updated,
+                                   "rows": [{"project": "alpha"}, {"project": "beta"}]}))
+    monkeypatch.setattr(packages_stage, "_get_json", _forbid_action)
+    ranking, names = packages_stage.top_projects(tmp_path, 1)
+    assert names == ["alpha"] and ranking["month"] == month
+    assert ranking["period"] == ("previous-calendar-month" if month else "unknown")
+    assert ranking["snapshot_sha256"] == hashlib.sha256(snapshot.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize("scan", [
+    {"scanned": True, "languages": ["Go"]},
+    {"scanned": False, "detail": "no source distribution"},
+    {"scanned": False, "detail": "source distribution over 80 MiB"},
+])
+def test_package_resume_keeps_legacy_hints_unverified_and_never_infers_build_counts(tmp_path, monkeypatch, scan):
+    record = tmp_path / "packages" / "results" / "synthetic.json"
+    record.parent.mkdir(parents=True)
+    original = {"project": "synthetic", "status": "pcc-import-ok", "pure_python_wheel": True,
+                "platform_wheels": True, "native": scan}
+    record.write_text(json.dumps(original))
+    monkeypatch.setattr(packages_stage, "top_projects",
+                        lambda *args: ({"last_update": "old", "period": "unknown"}, ["synthetic"]))
+    monkeypatch.setattr(packages_stage, "check_project", _forbid_action)
+    result = packages_stage.run(SimpleNamespace(packages=1, projects=None, resume=True), tmp_path, {})
+    assert result["source_language_hints"] == ({"Go": 1} if scan.get("languages") else {})
+    assert result["sha256_verified_sdists"] == 0
+    assert result["native_build_unknown_projects"] == 1
+    assert result["universal_wheel_projects"] == result["platform_wheel_projects"] == 1
+    assert result["results"][0]["source_scan"]["integrity"] == "unverified-legacy"
+    assert result["results"][0]["source_scan"]["legacy_detail"] == scan.get("detail")
+    assert "needs_native_build" not in result and "native_languages" not in result
+    assert json.loads(record.read_text()) == original  # retain original evidence
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_package_report_and_chart_label_hints_not_native_requirements(tmp_path, legacy):
+    fields = ({"native_languages": {"Go": 1}, "needs_native_build": 1, "pure_python_wheels": 1}
+              if legacy else {"source_language_hints": {"Go": 1}, "source_hint_projects": 1,
+                              "universal_wheel_projects": 1, "platform_wheel_projects": 1,
+                              "wheel_shape_unknown_projects": 0, "sha256_verified_sdists": 1})
+    ranking = ({"last_update": "2026-01-01"} if legacy else {
+        "last_update": "2026-01-01", "period": "previous-calendar-month", "month": "2025-12"})
+    results = {"packages": _stage("packages", projects=1, pcc_import_ok=0, with_baseline=0,
+                                  top_list=ranking, **fields)}
+    record = tmp_path / "packages.json"
+    original = json.dumps(results["packages"])
+    record.write_text(original)
+    summary = report.run(SimpleNamespace(update_readme=False), tmp_path)
+    assert record.read_text() == original
+    assert json.loads((tmp_path / "report" / "summary.json").read_text()) == summary
+    packages = summary["packages"]
+    assert packages["source_language_hints"] == {"Go": 1}
+    assert packages["source_hint_projects"] == packages["universal_wheel_projects"] == 1
+    assert packages["source_language_evidence"] == "unverified-filename-hints"
+    assert packages["native_build_unknown_projects"] == 1
+    assert packages["native_artifact_kind"] == "unknown"
+    assert not {"native_languages", "needs_native_build", "pure_python_wheels"} & packages.keys()
+    if legacy:
+        assert "platform_wheel_projects" not in packages  # missing is not zero
+        assert "sha256_verified_sdists" not in packages
+    else:
+        assert packages["platform_wheel_projects"] == packages["sha256_verified_sdists"] == 1
+    text = (tmp_path / "report" / "README-section.md").read_text()
+    assert "Unverified source-language filename hints: Go 1" in text
+    assert "actual native-build languages are unknown" in text
+    assert "does not rule out optional native builds" in text
+    assert ("wheel shape unknown: not recorded" if legacy else "wheel shape unknown: 0") in text
+    assert ("download window unknown" if legacy else "calendar-month downloads, 2025-12") in text
+    assert "would have to build" not in text and "have native parts" not in text
+    svg = (tmp_path / "report" / "native-languages.svg").read_text()
+    ElementTree.fromstring(svg)
+    assert "Unverified filename hints" in svg and "actual native-build languages unknown" in svg
+    assert "Native parts" not in svg

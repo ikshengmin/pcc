@@ -22,7 +22,7 @@ exported without Git metadata names its commit with `--pcc-revision`.
 | `cpython` | CPython v3.15.0 `Lib/test`, each module compiled by pcc (`scripts/cpython_conformance`) | a case CPython passes also passes natively | ~2 h |
 | `pyperformance` | pyperformance 1.14.0 (pinned SHA-256), programs unchanged, `pyperf_shim.py` as `pyperf` on both sides | exit 0, same benchmarks and result hashes as CPython; speedup = CPython s / pcc s | ~2 h |
 | `micro` | `tests/benchmarks/threading/programs` single-thread programs | same printed fields as CPython | minutes |
-| `packages` | top 100 PyPI projects (hugovk.dev 30-day list, kept with the results): wheels-only install, CPython import baseline, `import <module>` compiled and run by pcc; native languages from the source distribution | the native program prints `import ok` | ~1-3 h |
+| `packages` | top 100 PyPI projects (hugovk.dev previous-calendar-month list, snapshot/hash retained): wheels-only install, CPython import baseline, `import <module>` compiled and run by pcc; wheel shapes and unverified source-language filename hints reported separately | the native program prints `import ok` | ~1-3 h |
 | `languages` | existing C suites; ordinary/integration pytest checks; separately selected official-source adapter results | C expectations; junit outcomes separately; official raw reference streams/exit and upstream assertions | selected lanes |
 | `report` | README section, `docs/images/release-stats/*.svg` | | seconds |
 
@@ -39,6 +39,39 @@ Rules the numbers keep:
 - Package test suites are not run yet. The official Go adapter covers a tiny
   pinned shard, not the entire Go suite. Official C++/Rust/Java adapters remain
   explicitly missing; authored tests never become official-suite counts.
+
+## Package evidence boundaries
+
+The ranking provider's [ClickHouse query](https://github.com/hugovk/top-pypi-packages/blob/main/clickhouse.py)
+uses the previous calendar month, not a rolling 30-day window. Results retain
+the snapshot date, source, month and SHA-256 of the saved snapshot. A historical
+snapshot without that provider/date evidence keeps its ranking window unknown.
+
+`universal_wheel_projects` and `platform_wheel_projects` describe published
+wheel filename tags; their memberships can overlap. Platform wheels do not
+establish whether an artifact is a Python extension or a standalone CLI. A
+universal wheel does not rule out an optional native build or native dependencies.
+
+`source_language_hints` counts filename indicators only, not actual native
+build requirements. Documentation, tests, headers and vendored examples can
+match; generated C/C++ and Cython's annotated `.py` inputs can be missed. No
+package-name rules or manually researched counts are encoded. `native_build`
+and `native_artifact_kind` stay unknown, including when no suffix matches.
+Independent, pinned source/build-configuration research is separate evidence,
+not a rule that promotes future filenames into verified build languages.
+
+Before inspecting an sdist, the scanner verifies both downloaded and cached
+bytes against PyPI's SHA-256. Missing/invalid hashes and mismatches produce an
+explicit `source-integrity-failed` result; mismatched bytes are retained, not
+deleted or silently downloaded again. Downloads and eligible archive file
+sizes are bounded by the source-size cap (not expanded archive size). A
+verified digest establishes artifact identity, **not** the
+truth of a language inference. Legacy resumed scans remain unverified, and
+legacy report fields are normalized to filename hints in Markdown, SVG and
+`report/summary.json`; original stage inputs are not rewritten. Neither scanning
+nor these statistics proves a package's native build or transitive dependency
+closure. The historical chart filename `native-languages.svg` is retained for
+compatibility; its title and labels now state the unverified-hint boundary.
 
 ## Bounded official-language lane
 

@@ -1,12 +1,13 @@
 """The most downloaded PyPI projects: does ``import`` compile and run natively?
 
-For each of the top ``--packages`` projects of the last 30 days
+For each of the top ``--packages`` projects of the previous calendar month
 (hugovk.dev/top-pypi-packages, the snapshot is kept with the results):
 
-1. The latest release's files on PyPI tell whether a pure-Python wheel
-   exists. Its source distribution's file list names the languages of any
-   native part (C, C++, Rust, Cython, Fortran, Go): what pcc would have to
-   build itself, without cc/c++/rustc, to support the project from source.
+1. PyPI wheel tags describe artifact shapes, not extension/CLI roles or
+   mandatory native dependencies. SHA-256-verified source archive filenames
+   provide unverified language hints only: docs, tests, headers and vendored
+   examples can match, while generated sources can be absent. Actual native
+   build languages and artifact roles remain unknown to this scanner.
 2. The release and its dependencies are installed from wheels only
    (``uv pip install --target --only-binary :all:``), so no compiler runs.
    CPython must import the project's module from that directory; otherwise
@@ -20,6 +21,7 @@ Package test suites are not run yet; the report says so.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -27,6 +29,7 @@ import sys
 import tarfile
 import urllib.request
 import zipfile
+from datetime import date, timedelta
 from pathlib import Path
 
 from common import (
@@ -47,6 +50,7 @@ LANGUAGE_SUFFIXES = {
     "Cython": (".pyx", ".pxd"),
     "Fortran": (".f", ".f90", ".f95", ".for"),
     "Go": (".go",),
+    "Java": (".java",),
 }
 PROBE = "release_stats_import_probe.py"
 
@@ -56,15 +60,32 @@ def _get_json(url: str):
         return json.load(response)
 
 
-def top_projects(stage_dir: Path, count: int) -> tuple[str, list[str]]:
+def top_projects(stage_dir: Path, count: int) -> tuple[dict, list[str]]:
     snapshot = stage_dir / "top-pypi-packages.json"
     if not snapshot.is_file():
         write_json(snapshot, _get_json(TOP_URL))
     data = read_json(snapshot)
-    return data.get("last_update", ""), [row["project"] for row in data["rows"][:count]]
+    last_update = data.get("last_update", "")
+    month = None
+    # Do not relabel historical snapshots from a different/unknown provider.
+    if data.get("source") == "ClickHouse":
+        try:
+            updated = date.fromisoformat(last_update[:10])
+            month = (updated.replace(day=1) - timedelta(days=1)).isoformat()[:7]
+        except (TypeError, ValueError):
+            pass
+    return {
+        "url": TOP_URL,
+        "last_update": last_update,
+        "source": data.get("source", "unknown"),
+        "period": "previous-calendar-month" if month else "unknown",
+        "month": month,
+        "snapshot_sha256": hashlib.sha256(snapshot.read_bytes()).hexdigest(),
+    }, [row["project"] for row in data["rows"][:count]]
 
 
-def _languages(names: list[str]) -> list[str]:
+def _language_hints(names: list[str]) -> list[str]:
+    """Filename indicators only; never evidence that a language is built."""
     found = set()
     for name in names:
         lower = name.lower()
@@ -77,20 +98,65 @@ def _languages(names: list[str]) -> list[str]:
 
 
 def scan_sdist(entry: dict, cache: Path) -> dict:
+    result = {"scanned": False, "integrity": "unverified",
+              "language_evidence": "unverified-filename-hints",
+              "filename": entry["filename"], "url": entry["url"]}
     if entry["size"] > SDIST_SCAN_LIMIT:
-        return {"scanned": False, "detail": f"source distribution over {SDIST_SCAN_LIMIT >> 20} MiB"}
+        return {**result, "detail": f"source distribution over {SDIST_SCAN_LIMIT >> 20} MiB"}
+    digests = entry.get("digests")
+    expected = digests.get("sha256") if isinstance(digests, dict) else None
+    if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", expected):
+        return {**result, "integrity": "missing-or-invalid-sha256",
+                "detail": "PyPI source SHA-256 is missing or invalid; archive not read"}
+    if Path(entry["filename"]).name != entry["filename"]:
+        return {**result, "detail": "source filename is not a basename"}
     path = cache / entry["filename"]
     if not path.is_file():
         cache.mkdir(parents=True, exist_ok=True)
         with urllib.request.urlopen(entry["url"], timeout=300) as response:
-            path.write_bytes(response.read())
-    if path.name.endswith(".zip"):
-        with zipfile.ZipFile(path) as bundle:
-            names = bundle.namelist()
-    else:
-        with tarfile.open(path) as bundle:
-            names = bundle.getnames()
-    return {"scanned": True, "languages": _languages(names)}
+            path.write_bytes(response.read(SDIST_SCAN_LIMIT + 1))
+    if path.stat().st_size > SDIST_SCAN_LIMIT:
+        return {**result, "detail": "cached/downloaded source exceeds scan limit; "
+                "retained without scanning (download may be incomplete)"}
+    # Verify cached bytes too. Retain a mismatch for diagnosis; never silently
+    # delete it, retry the download, or inspect an unverified archive.
+    with path.open("rb") as source:
+        actual = hashlib.file_digest(source, "sha256").hexdigest()
+    result.update(expected_sha256=expected.lower(), actual_sha256=actual)
+    if actual != expected.lower():
+        return {**result, "integrity": "sha256-mismatch",
+                "detail": "source SHA-256 mismatch; bytes retained without scanning"}
+    result["integrity"] = "verified-sha256"
+    try:
+        if path.name.endswith(".zip"):
+            with zipfile.ZipFile(path) as bundle:
+                names = [item.filename for item in bundle.infolist() if not item.is_dir()]
+        else:
+            with tarfile.open(path) as bundle:
+                names = [item.name for item in bundle.getmembers() if item.isfile()]
+    except (tarfile.TarError, zipfile.BadZipFile, EOFError) as error:
+        return {**result, "detail": f"source archive unreadable: {error}"}
+    return {**result, "scanned": True, "language_hints": _language_hints(names)}
+
+
+def package_evidence(result: dict) -> dict:
+    """Normalize retained results without promoting legacy suffix guesses."""
+    result = dict(result)
+    legacy = result.pop("native", None)
+    if "source_scan" not in result and legacy is not None:
+        result["source_scan"] = {
+            "scanned": legacy.get("scanned", False),
+            "integrity": "unverified-legacy",
+            "language_evidence": "unverified-filename-hints",
+            "language_hints": legacy.get("languages", []),
+            "detail": "legacy filename scan; source SHA-256 verification not recorded",
+            "legacy_detail": legacy.get("detail"),
+        }
+    if "pure_python_wheel" in result:
+        result["universal_wheel"] = result.pop("pure_python_wheel")
+    result["native_build"] = {"status": "unknown", "languages": None}
+    result["native_artifact_kind"] = "unknown"
+    return result
 
 
 _MODULE_PROBE = r"""
@@ -142,17 +208,23 @@ def check_project(project: str, stage_dir: Path, options) -> dict:
     release = _get_json(f"https://pypi.org/pypi/{project}/json")
     version = release["info"]["version"]
     files = release["urls"]
-    pure = any(item["packagetype"] == "bdist_wheel" and item["filename"].endswith("-none-any.whl")
-               for item in files)
+    universal = any(item["packagetype"] == "bdist_wheel"
+                    and item["filename"].endswith("-none-any.whl") for item in files)
     platform_wheels = any(item["packagetype"] == "bdist_wheel"
                           and not item["filename"].endswith("-none-any.whl") for item in files)
-    result = {"project": project, "version": version, "pure_python_wheel": pure,
-              "platform_wheels": platform_wheels}
+    result = package_evidence({"project": project, "version": version,
+                               "universal_wheel": universal, "platform_wheels": platform_wheels})
     sdist = next((item for item in files if item["packagetype"] == "sdist"), None)
     if sdist is None:
-        result["native"] = {"scanned": False, "detail": "no source distribution"}
+        result["source_scan"] = {"scanned": False, "integrity": "unverified",
+                                 "detail": "no source distribution"}
     else:
-        result["native"] = scan_sdist(sdist, stage_dir / "sdists")
+        result["source_scan"] = scan_sdist(sdist, stage_dir / "sdists")
+        if result["source_scan"]["integrity"] in {
+            "sha256-mismatch", "missing-or-invalid-sha256",
+        }:
+            result.update(status="source-integrity-failed", detail=result["source_scan"]["detail"])
+            return result
     rss = int(options.rss_limit_gb * (1 << 30))
     site = work / "site"
     uv = shutil.which("uv")
@@ -208,27 +280,27 @@ def check_project(project: str, stage_dir: Path, options) -> dict:
 
 def run(options, out: Path, identity: dict) -> dict:
     stage_dir = out / "packages"
-    last_update, projects = top_projects(stage_dir, options.packages)
+    top_list, projects = top_projects(stage_dir, options.packages)
     if options.projects:
         projects = list(options.projects)
     results = []
     for project in projects:
         record = stage_dir / "results" / f"{project}.json"
         if options.resume and record.is_file():
-            results.append(read_json(record))
+            results.append(package_evidence(read_json(record)))
             continue
         try:
             result = check_project(project, stage_dir, options)
         except OSError as error:
             result = {"project": project, "status": "reference-unavailable", "detail": str(error)}
         write_json(record, result)
-        results.append(result)
+        results.append(package_evidence(result))
         print(f"package {project}: {result['status']}", flush=True)
     counts: dict[str, int] = {}
     languages: dict[str, int] = {}
     for result in results:
         counts[result["status"]] = counts.get(result["status"], 0) + 1
-        for language in result.get("native", {}).get("languages", []):
+        for language in result.get("source_scan", {}).get("language_hints", []):
             languages[language] = languages.get(language, 0) + 1
     with_baseline = [result for result in results if result["status"].startswith("pcc-")]
     categories: dict[str, int] = {}
@@ -239,14 +311,21 @@ def run(options, out: Path, identity: dict) -> dict:
     return {
         "stage": "packages",
         "identity": identity,
-        "top_list": {"url": TOP_URL, "last_update": last_update, "count": len(projects)},
+        "top_list": {**top_list, "count": len(projects)},
         "method": "latest release; wheels only into a private target; CPython import "
                   "baseline; pcc compiles and runs 'import <module>'",
         "projects": len(results),
-        "pure_python_wheels": sum(1 for result in results if result.get("pure_python_wheel")),
-        "needs_native_build": sum(1 for result in results
-                                  if result.get("native", {}).get("languages")),
-        "native_languages": languages,
+        "universal_wheel_projects": sum(1 for result in results if result.get("universal_wheel")),
+        "platform_wheel_projects": sum(1 for result in results if result.get("platform_wheels")),
+        "wheel_shape_unknown_projects": sum(1 for result in results
+                                            if "platform_wheels" not in result),
+        "source_language_hints": languages,
+        "source_hint_projects": sum(1 for result in results
+                                    if result.get("source_scan", {}).get("language_hints")),
+        "sha256_verified_sdists": sum(1 for result in results
+                                      if result.get("source_scan", {}).get("integrity")
+                                      == "verified-sha256"),
+        "native_build_unknown_projects": len(results),
         "with_baseline": len(with_baseline),
         "pcc_import_ok": counts.get("pcc-import-ok", 0),
         "status_counts": counts,
