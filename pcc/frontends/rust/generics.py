@@ -67,6 +67,15 @@ class GenericDeclarations:
         self.parameters = {}
         self.instances = InstanceRegistry()
 
+    def canonical_name(self, name, token, scope=None):
+        scope = self.checker.type_scope if scope is None else scope
+        if name in scope or name in PRIMITIVES or name in self.definitions:
+            return name
+        if isinstance(name, str) and '::' in name and name.split('::', 1)[0] in scope:
+            raise token.error('associated types on generic parameters are not implemented')
+        resolution = self.checker.module_resolution
+        return resolution.type_name(name, self.checker.current_module, token) if resolution is not None else name
+
     def normalize(self, ty, token, scope=None):
         scope = self.checker.type_scope if scope is None else scope
         bounded_type(ty, token)
@@ -78,6 +87,7 @@ class GenericDeclarations:
         if isinstance(ty, SharedReference):
             return SharedReference(self.normalize(ty.referent, token, scope), ty.mutable, ty.lifetime)
         if isinstance(ty, TypeApplication):
+            ty = TypeApplication(self.canonical_name(ty.name, token, scope), ty.arguments)
             if ty.name in scope or ty.name in PRIMITIVES:
                 raise token.error("generic arguments require a named generic data declaration")
             declaration = self.definitions.get(ty.name)
@@ -85,13 +95,17 @@ class GenericDeclarations:
                 raise token.error(f"unsupported Rust type {ty.name!r}")
             if len(ty.arguments) != len(declaration.type_parameters):
                 raise token.error(f"generic argument count mismatch for {ty.name}")
-            return TypeApplication(ty.name, tuple(self.normalize(t, token, scope) for t in ty.arguments))
+            arguments = tuple(self.normalize(t, token, scope) for t in ty.arguments)
+            for argument in arguments:
+                self.checker.standard_markers.require_sized(argument, token)
+            return TypeApplication(ty.name, arguments)
         if isinstance(ty, TypeParameter):
             return ty
         if ty in scope:
             return scope[ty]
         if ty in PRIMITIVES:
             return ty
+        ty = self.canonical_name(ty, token, scope)
         declaration = self.definitions.get(ty)
         if declaration is None:
             raise token.error(f"unsupported Rust type {ty!r}")
@@ -101,6 +115,8 @@ class GenericDeclarations:
 
     def prepare(self):
         for name, declaration in self.definitions.items():
+            if declaration.item_identity is not None:
+                self.checker.current_module = declaration.item_identity.module
             scope = {}
             for index, parameter in enumerate(declaration.type_parameters):
                 if parameter.text in scope:
@@ -210,6 +226,8 @@ class GenericDeclarations:
         return instance
 
     def path_type(self, path, token, expected=None):
+        if isinstance(path, str):
+            path = self.canonical_name(path, token)
         # A match already has the scrutinee's nominal type; resolving E::V in
         # that context is not constructor/type-argument inference from values.
         if (isinstance(expected, TypeApplication) and path == expected.name

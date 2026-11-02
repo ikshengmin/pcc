@@ -31,6 +31,7 @@ class RustCompilation:
     externally_checked: bool = False
     target_triple: str = DEFAULT_TARGET
     data_layout: str = LINUX_LAYOUT
+    standard_marker_contract: object = None
 
     @property
     def ir_text(self) -> str:
@@ -82,22 +83,32 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
         rustc_check.validate(source, target_triple=target.triple, overflow_checks=overflow_checks)
     parser = Parser(source)
     functions = parser.parse()
+    resolution = None
+    records, enums = parser.records, parser.enums
+    if parser.modules or parser.crate_aliases:
+        from .module_resolution import ModuleResolution, inline_crate
+        resolution = ModuleResolution(inline_crate(parser, functions))
+        functions, records, enums = resolution.functions, resolution.records, resolution.enums
     if rustc_check is None:
-        _reject_uncertified_references(functions, parser.records, parser.enums, parser.implementations, parser.traits)
-    checker = Checker(functions, parser.records, parser.enums, parser.implementations, parser.traits, externally_checked=rustc_check is not None, pointer_bits=target.pointer_bits)
+        _reject_uncertified_references(functions, records, enums, parser.implementations, parser.traits)
+    checker = Checker(functions, records, enums, parser.implementations, parser.traits,
+                      externally_checked=rustc_check is not None, pointer_bits=target.pointer_bits,
+                      module_resolution=resolution, crate_policy=parser.crate_policy)
     checker.check()
+    marker_context = checker.standard_markers.checked_context(rustc_check, source, target.triple, overflow_checks)
     if rustc_check is None:
         # Fail closed if a future semantic transformation synthesizes a
         # reference not represented in the original syntax. This is presence
         # checking only; actual checked input never uses partial borrow legality.
-        _reject_uncertified_references(functions, parser.records, parser.enums, parser.implementations, parser.traits)
+        _reject_uncertified_references(functions, records, enums, parser.implementations, parser.traits)
         MoveChecker(checker).check()
     from .lowering import Lowerer
 
     lowerer = Lowerer(functions, checker, module_name, target)
     module = lowerer.lower()
     return RustCompilation(module, dict(lowerer.symbols), externally_checked=rustc_check is not None,
-                           target_triple=target.triple, data_layout=target.data_layout)
+                           target_triple=target.triple, data_layout=target.data_layout,
+                           standard_marker_contract=marker_context)
 
 
 __all__ = ["ExternalRustcCheck", "CheckedRustSource", "RustcToolchain",

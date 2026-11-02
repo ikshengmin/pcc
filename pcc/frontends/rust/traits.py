@@ -17,6 +17,7 @@ class StaticTraits:
         self.implementations = implementations
         self.traits = {}
         self.impls = {}
+        self.method_parameters = {}
 
     def restricted_signature(self, function):
         if function.lifetime_parameters:
@@ -30,6 +31,18 @@ class StaticTraits:
 
     def prepare(self):
         checker = self.checker
+        declarations = {}
+        for trait in self.declarations:
+            if trait.token.text in declarations:
+                raise trait.token.error('duplicate or reserved trait type name')
+            declarations[trait.token.text] = trait
+        from .trait_hierarchy import TraitHierarchy
+        def parent(identity, path, token):
+            if path not in declarations:
+                raise token.error('supertraits require declared local traits; external/builtin trait loading is not implemented')
+            return path
+        self.hierarchy = TraitHierarchy(declarations, parent)
+        impl_tokens = {}
         for trait in self.declarations:
             name = trait.token.text
             if name in self.traits or name in checker.generics.definitions or name in PRIMITIVES or name == 'Self':
@@ -45,6 +58,12 @@ class StaticTraits:
                     if parameter.text in scope or parameter.text in PRIMITIVES:
                         raise parameter.error('duplicate or reserved trait method type parameter')
                     scope[parameter.text] = TypeParameter('trait ' + name + '::' + function.token.text, index, parameter.text)
+                # Method parameters share the ordinary marker model. Trait
+                # Self is intentionally NOT a method type parameter and must
+                # not acquire the implicit Sized default from prepare().
+                method_scope = {p.text: scope[p.text] for p in function.type_parameters}
+                checker.standard_markers.prepare(function, method_scope)
+                self.method_parameters[name, function.token.text] = tuple(method_scope.values())
                 checker.type_scope, checker.abstract_function = scope, True
                 # Unlike ordinary type parameters, trait Self is not implicitly
                 # Sized. Direct Self / &Self signatures are admitted, but a
@@ -110,6 +129,8 @@ class StaticTraits:
             if missing:
                 raise implementation.token.error('missing required trait methods: ' + ', '.join(sorted(missing)))
             self.impls[key] = members
+            impl_tokens[key] = implementation.token
+        self.hierarchy.require_concrete_impls(self.impls, impl_tokens)
 
     def validate_signatures(self):
         checker = self.checker
@@ -119,6 +140,20 @@ class StaticTraits:
                 if function.receiver != required.receiver or len(function.type_parameters) != len(required.type_parameters):
                     raise function.token.error('trait method receiver or generic parameter count mismatch')
                 parameters = checker.function_generics.parameters[function.declaration_name]
+                required_parameters = self.method_parameters[trait, name]
+                constraints = checker.standard_markers.constraints
+                contracts = [(constraints[required_parameter], constraints[parameter])
+                             for required_parameter, parameter in zip(required_parameters, parameters)]
+                if any(not actual <= expected for expected, actual in contracts):
+                    raise function.token.error('trait implementation method bounds are stricter than the trait contract')
+                # Selection always produces the implementation function, but
+                # a call through dot/type/trait-qualified syntax must retain
+                # the trait declaration's obligations. Keep the impl's own
+                # declared constraints for its unused abstract body; do not
+                # inject stronger trait assumptions into that body.
+                checker.standard_markers.call_constraints.update(
+                    (parameter, constraints[required_parameter])
+                    for required_parameter, parameter in zip(required_parameters, parameters))
                 scope = {p.text: value for p, value in zip(required.type_parameters, parameters)}
                 scope['Self'] = owner
                 expected = tuple(checker.generics.normalize(ty, token, scope) for token, ty, _ in required.params)

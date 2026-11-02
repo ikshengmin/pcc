@@ -164,6 +164,8 @@ def test_complete_pinned_core_sources_are_dependencies_not_replacement_success(n
     original = path.read_bytes()
     assert hashlib.sha256(original).hexdigest() == sha
     assert declaration in original.decode()
-    with pytest.raises(RustError, match='documentation attributes'):
+    frontier = {"core_option.rs": "654:44: unsupported Rust token '~'",
+                "core_result.rs": "1295:12: unsupported Rust token '~'"}[name]
+    with pytest.raises(RustError, match=frontier):
         compile_source(original.decode())
     assert path.read_bytes() == original

@@ -94,7 +94,7 @@ def test_diverging_match_arm_does_not_poison_live_move_state():
 
 
 @pytest.mark.parametrize("name,sha,message", [
-    ("core_cmp.rs","c48745bb89c4d3ef361923ac72346133f81a64c112f7bfc625f4beced52016c1","documentation attributes"),
+    ("core_cmp.rs","c48745bb89c4d3ef361923ac72346133f81a64c112f7bfc625f4beced52016c1",r"unsupported Rust token '\$'"),
     ("exhaustive-bool-match-sanity.rs","43a9442c59cf2640ef85947545c0a01954bcd5697f993183d688501fb57f80fb","expected ';'"),
 ])
 def test_whole_official_sources_remain_explicit_frontiers(name,sha,message):

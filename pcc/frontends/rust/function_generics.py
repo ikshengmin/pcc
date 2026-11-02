@@ -1,9 +1,10 @@
 """Abstractly checked Rust generic functions, with shared instance scheduling.
 
-A body is checked once using declaration-bound, non-Copy type parameters before
+A body is checked once using declaration-bound type parameters and their finite
+standard marker obligations before
 any concrete body is materialized. Concrete substitution is not a substitute
 for that obligation. Explicit or argument-constrained type arguments feed the
-same scheduler; trait bounds, unconstrained result inference, lifetimes and
+same scheduler; arbitrary trait bounds, lifetimes and
 foreign generic ABI remain gates.
 """
 from copy import deepcopy
@@ -46,6 +47,7 @@ class GenericFunctions:
                 raise parameter.error('generic parameters shadowing primitive names are not implemented')
             scope[parameter.text] = TypeParameter('function ' + function.declaration_name,
                                                   index, parameter.text)
+        self.checker.standard_markers.prepare(function, scope)
         self.parameters[function.declaration_name] = tuple(scope.values())
         if function.type_parameters:
             self.raw_bodies[function.declaration_name] = deepcopy(function.body)
@@ -85,7 +87,8 @@ class GenericFunctions:
                 if isinstance(ty, SharedReference):
                     raise token.error('generic function reference arguments require lifetime/escape analysis, which is not implemented')
                 pending.extend(children(ty))
-            self.checker.valid_type(argument, token, allow_reference=False)
+            self.checker.valid_type(argument, token, allow_reference=False, require_sized=False)
+        self.checker.standard_markers.check_call(self.parameters[function.declaration_name], arguments, token)
         bindings = dict(zip(self.parameters[function.declaration_name], arguments))
         params = [(name, substitute(ty, bindings), mutable) for name, ty, mutable in function.params]
         result = substitute(function.result, bindings)

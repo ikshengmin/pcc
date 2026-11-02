@@ -122,7 +122,7 @@ def test_complete_pinned_core_array_remains_an_explicit_upstream_frontier():
     path = Path(__file__).parent / 'upstream/rust-1.90.0/core_array.rs'
     original = path.read_bytes()
     assert hashlib.sha256(original).hexdigest() == '29adca8337dddeddf9d43ec943767bf9ffb917e43e234b91630573b5484f991e'
-    with pytest.raises(RustError, match='documentation attributes'):
+    with pytest.raises(RustError, match="381:10: unsupported Rust token '~'"):
         compile_source(original.decode())
     assert path.read_bytes() == original
 

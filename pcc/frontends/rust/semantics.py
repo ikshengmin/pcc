@@ -132,24 +132,27 @@ def cast_constant(value: int, ty: str, pointer_bits=None) -> int:
 
 
 class Checker:
-    def __init__(self, functions: list[Function], records: list[Record] = (), enums: list[Enumeration] = (), implementations=(), traits=(), *, externally_checked=False, pointer_bits=None):
+    def __init__(self, functions: list[Function], records: list[Record] = (), enums: list[Enumeration] = (), implementations=(), traits=(), *, externally_checked=False, pointer_bits=None, module_resolution=None, crate_policy=None):
         if pointer_bits is None:
             from .targets import DEFAULT_TARGET, resolve_target
             pointer_bits = resolve_target(DEFAULT_TARGET).pointer_bits
         if pointer_bits != 64:
             raise RustError('Rust pointer data model is not yet qualified')
+        self.module_resolution = module_resolution
+        self.current_module = module_resolution.root if module_resolution is not None else None
+        self.replaying_instance = False
         self.pointer_bits = pointer_bits
         self.externally_checked = externally_checked
         self.functions = functions
         self.records: dict[str, Record] = {}
         for record in records:
-            if record.token.text in self.records or record.token.text in INTEGERS | {"bool"}:
+            if record.declaration_name in self.records or record.token.text in INTEGERS | {"bool"}:
                 raise record.token.error("duplicate or reserved struct type")
-            self.records[record.token.text] = record
+            self.records[record.declaration_name] = record
         self.enums: dict[str, Enumeration] = {}
         for enum in enums:
-            name = enum.token.text
-            if name in self.records or name in self.enums or name in INTEGERS | {"bool"}:
+            name = enum.declaration_name
+            if name in self.records or name in self.enums or enum.token.text in INTEGERS | {"bool"}:
                 raise enum.token.error("duplicate or reserved enum type")
             self.enums[name] = enum
         self.names: dict[str, Function] = {}
@@ -170,8 +173,20 @@ class Checker:
         self.methods = InherentMethods(self, implementations)
         from .traits import StaticTraits
         self.traits = StaticTraits(self, traits, implementations)
+        from .standard_markers import StandardMarkers
+        self.standard_markers = StandardMarkers(self, crate_policy)
+
+    def source_type_access(self, ty, token):
+        # Privacy of source-written types/expressions is checked in the unused
+        # abstract body before any concrete instance is scheduled. A caller's
+        # private nominal type can legally flow through an opaque T in that
+        # body. Replaying T=b::Private in a must not reclassify it as the source
+        # spelling a::b::Private. Lexical path/field lookup still uses a.
+        if self.module_resolution is not None and not self.replaying_instance:
+            self.module_resolution.type_access(ty, self.current_module, token)
 
     def bind(self, token: Token, ty: object, mutable: bool, *, parameter=False) -> Binding:
+        self.source_type_access(ty, token)
         self.serial += 1
         binding = Binding(token.text, ty, mutable, self.serial, parameter)
         self.scopes[-1][token.text] = binding
@@ -200,7 +215,9 @@ class Checker:
         ty = partial(ty)
         if isinstance(ty, InferredInteger):
             return True
-        if isinstance(ty, (TypeApplication, TypeParameter)):
+        if isinstance(ty, TypeParameter):
+            return self.standard_markers.copy_parameter(ty)
+        if isinstance(ty, TypeApplication):
             return False
         if isinstance(ty, SharedReference):
             return not ty.mutable
@@ -211,11 +228,13 @@ class Checker:
         # Named Rust structs do NOT become Copy just because their fields are.
         return ty in INTEGERS | {"bool", "()"}
 
-    def valid_type(self, ty: object, token: Token, stack: tuple[str, ...] = (), *, allow_reference=True) -> None:
+    def valid_type(self, ty: object, token: Token, stack: tuple[str, ...] = (), *, allow_reference=True, require_sized=True) -> None:
         if isinstance(ty, (InferredInteger, InferredType)):
             return  # Local borrow inference resolves after all call constraints.
         if isinstance(ty, TypeParameter):
             if self.abstract_function and ty in self.type_scope.values():
+                if require_sized:
+                    self.standard_markers.require_sized(ty, token)
                 return
             raise token.error("unbound generic type parameter")
         if isinstance(ty, TypeApplication):
@@ -235,7 +254,7 @@ class Checker:
                 raise token.error("reference returns and aggregate reference storage require lifetime analysis, which is not implemented")
             if ty.referent == "()" or isinstance(ty.referent, SharedReference):
                 raise token.error("unit and nested references require additional reference layout/lifetime support")
-            self.valid_type(ty.referent, token, stack, allow_reference=False)
+            self.valid_type(ty.referent, token, stack, allow_reference=False, require_sized=False)
             return
         if isinstance(ty, FixedArrayType):
             from .arrays import length_value, storage_units
@@ -328,6 +347,8 @@ class Checker:
         self.methods.prepare()
         declarations = tuple(self.functions)
         for fn in declarations:
+            if fn.item_identity is not None:
+                self.current_module = fn.item_identity.module
             if fn.explicit_receiver and not self.externally_checked:
                 raise fn.token.error("explicit receiver types require a matching external rustc check record")
             if fn.lifetime_parameters and not self.externally_checked:
@@ -383,6 +404,10 @@ class Checker:
         if fn.body is None:
             return
         previous_scope, previous_abstract = self.type_scope, self.abstract_function
+        previous_module, previous_replay = self.current_module, self.replaying_instance
+        self.replaying_instance = fn.instance_arguments is not None
+        if fn.item_identity is not None:
+            self.current_module = fn.item_identity.module
         previous_calls, self.inferred_calls = self.inferred_calls, []
         self.type_scope, self.abstract_function = type_scope, abstract
         try:
@@ -402,6 +427,7 @@ class Checker:
             self.validate(fn.body)
         finally:
             self.type_scope, self.abstract_function = previous_scope, previous_abstract
+            self.current_module, self.replaying_instance = previous_module, previous_replay
             self.inferred_calls = previous_calls
 
     def expression(self, expr: Expr, *, allow_borrow=False, place_context=False) -> object:
@@ -435,7 +461,7 @@ class Checker:
             ty = "bool"
         elif kind == "variant":
             enum_name, variant = expr.value
-            if isinstance(enum_name, TypeApplication) or enum_name in self.generics.definitions or enum_name == "Self":
+            if isinstance(enum_name, TypeApplication) or enum_name in self.generics.definitions or enum_name == "Self" or self.module_resolution is not None:
                 enum_name = self.generics.path_type(enum_name, expr.token)
                 self.valid_type(enum_name, expr.token)
             enum = self.enums.get(enum_name)
@@ -514,6 +540,8 @@ class Checker:
                     raise field.error("duplicate field initializer")
                 provided.add(field.text)
                 index = names.index(field.text)
+                if self.module_resolution is not None:
+                    self.module_resolution.field_access(record, index, self.current_module, field)
                 indices.append(index)
                 unify(record.fields[index][1], self.expression(child), field)
             if provided != set(names):
@@ -542,7 +570,11 @@ class Checker:
                 if expr.value not in names:
                     raise expr.token.error("unknown struct field")
                 index = names.index(expr.value)
+                if self.module_resolution is not None:
+                    record = declaration if isinstance(base_ty, TypeApplication) else self.records[base_ty]
+                    self.module_resolution.field_access(record, index, self.current_module, expr.token)
                 ty = fields[index][1]
+                self.source_type_access(ty, expr.token)
             else:
                 raise expr.token.error("field access requires a struct or tuple")
             expr.value = index
@@ -616,14 +648,20 @@ class Checker:
                 fn, fixed_arguments = self.traits.qualified(owner, trait, associated_name, callee.token)
             elif callee.kind == "variant":
                 owner, associated_name = callee.value
-                selected = self.methods.lookup(owner, associated_name, callee.token)
-                if selected is not None:
-                    fn, fixed_arguments = selected
+                if (self.module_resolution is not None and isinstance(owner, str)
+                        and owner.split('::', 1)[0] in self.type_scope):
+                    raise callee.token.error('associated items on generic parameters are not implemented')
+                if self.module_resolution is not None:
+                    fn = self.module_resolution.associated_function(owner, associated_name, self.current_module, callee.token)
+                if fn is None:
+                    selected = self.methods.lookup(owner, associated_name, callee.token)
+                    if selected is not None:
+                        fn, fixed_arguments = selected
             if fn is None and callee.kind == "variant":
                 if explicit_arguments is not None:
                     raise callee.token.error("type arguments on enum constructor segments are not implemented; supply them on the enum owner")
                 enum_name, variant = callee.value
-                if isinstance(enum_name, TypeApplication) or enum_name in self.generics.definitions or enum_name == "Self":
+                if isinstance(enum_name, TypeApplication) or enum_name in self.generics.definitions or enum_name == "Self" or self.module_resolution is not None:
                     enum_name = self.generics.path_type(enum_name, callee.token)
                     self.valid_type(enum_name, callee.token)
                 enum = self.enums.get(enum_name)
@@ -644,10 +682,14 @@ class Checker:
                 name = path.name if isinstance(path, TypeApplication) else str(path)
                 if callee.kind != "name" or self.local(name) is not None:
                     raise callee.token.error("only unshadowed direct function calls are supported")
-                fn = self.names.get(name)
+                fn = (self.module_resolution.function(name, self.current_module, callee.token)
+                      if self.module_resolution is not None else self.names.get(name))
                 if fn is None:
                     raise callee.token.error(f"unknown function {callee.value!r}")
                 explicit_arguments = path.arguments if isinstance(path, TypeApplication) else None
+            self.source_type_access(fn.result, callee.token)
+            for _, parameter_type, _ in fn.params:
+                self.source_type_access(parameter_type, callee.token)
             if fn.unsafe and not self.unsafe_depth:
                 raise expr.token.error(f"call to unsafe function {fn.token.text!r} requires an unsafe context")
             if len(children) - 1 != len(fn.params):

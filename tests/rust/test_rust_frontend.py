@@ -233,16 +233,23 @@ def test_parentheses_do_not_inherit_block_statement_semicolon_exemption(source):
 
 
 @pytest.mark.parametrize("source", [
-    "fn f(){ /// dangling doc\n }",
     "/// doc\nfn f(){}",
     "//! crate doc\nfn f(){}",
     "/** outer doc */ fn f(){}",
     "/*! inner doc */ fn f(){}",
     "/*!*/ fn f(){}",
 ])
-def test_doc_attributes_fail_closed_instead_of_being_stripped(source):
+def test_original_doc_attribute_inputs_now_attach_without_source_rewriting(source):
+    from pcc.frontends.rust.syntax import Parser
+    parser = Parser(source)
+    functions = parser.parse()
+    assert parser.crate_documentation or functions[0].documentation
+    assert "define" in compile_source(source).ir_text
+
+
+def test_original_dangling_statement_documentation_remains_rejected():
     with pytest.raises(RustError, match="documentation attributes"):
-        compile_source(source)
+        compile_source("fn f(){ /// dangling doc\n }")
 
 
 @pytest.mark.parametrize("separator", list("\t\n\v\f\r \u0085\u200e\u200f\u2028\u2029"))

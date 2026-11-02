@@ -43,7 +43,7 @@ INVALID = [
     ('fn id<T>(x:T)->T{x} fn answer()->i64{id::<bool>(true)}', 'type mismatch'),
     ('fn id<T>(x:T)->T{x} fn answer()->i64{id::<i64>()}', 'expects 1 arguments'),
     ('fn id<T>(x:T)->T{x} fn answer(){let id=1;id::<i64>(2);}', 'unshadowed'),
-    ('fn bad<T:Copy>(x:T)->T{x}', 'bounds and default'),
+    ('fn bad<T:Copy>(x:T)->T{x}', 'standard marker bounds require an actual'),
     ('fn bad<T=i64>(x:T)->T{x}', 'bounds and default'),
     ('fn bad<T>(x:T)->T where T:Copy{x}', 'where constraints'),
     ('fn bad<const N:u64>(){}', 'const generic'),

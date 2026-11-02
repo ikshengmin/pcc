@@ -103,7 +103,9 @@ def test_complete_official_generic_sources_still_fail_at_real_frontier(name,sha)
     path=Path(__file__).parent/'upstream/rust-1.90.0'/name
     original=path.read_bytes()
     assert hashlib.sha256(original).hexdigest()==sha
-    with pytest.raises(RustError,match='documentation attributes'):
+    frontier = {"core_option.rs": "654:44: unsupported Rust token '~'",
+                "core_result.rs": "1295:12: unsupported Rust token '~'"}[name]
+    with pytest.raises(RustError, match=frontier):
         compile_source(original.decode())
     assert path.read_bytes()==original
 

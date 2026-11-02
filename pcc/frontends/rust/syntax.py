@@ -1,8 +1,9 @@
 """A Rust token stream and recursive-descent/Pratt parser, not a translator."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
+from .crate_policy import CratePolicy
 from .types import ArrayLength, FixedArrayType, SharedReference, TupleType, TypeApplication
 
 
@@ -16,9 +17,14 @@ class Token:
     kind: str
     line: int
     column: int
+    source_start: int | None = None
+    source_end: int | None = None
+    literal_value: str | None = None
+    source_path: str | None = None
 
     def error(self, message: str) -> RustError:
-        return RustError(f"{self.line}:{self.column}: {message}")
+        prefix = self.source_path + ": " if self.source_path is not None else ""
+        return RustError(f"{prefix}{self.line}:{self.column}: {message}")
 
 
 # Rust uses Unicode Pattern_White_Space, not Python str.isspace().
@@ -45,17 +51,24 @@ def lex(source: str) -> list[Token]:
         if char in _WHITESPACE:
             advance(i + 1)
             continue
-        # Documentation comments are attributes, not whitespace. Until the
-        # attribute grammar lands, reject them rather than silently accepting
-        # invalid attachment positions. Four slashes and /***/ remain comments.
-        if (source.startswith("//!", i)
-                or (source.startswith("///", i) and not source.startswith("////", i))
-                or source.startswith("/*!", i)
-                or (source.startswith("/**", i)
-                    and i + 3 < len(source) and source[i + 3] not in "*/")):
-            raise Token(source[i:i + 3], "", ln, column).error(
-                "Rust documentation attributes are not implemented"
-            )
+        # Retain documentation as tokens, never ordinary comment whitespace.
+        # Payload normalization follows Rust CRLF processing; spans refer to
+        # codepoint offsets in the untouched original source.
+        line_doc = source.startswith("//!", i) or (source.startswith("///", i) and not source.startswith("////", i))
+        block_doc = source.startswith("/*!", i) or (source.startswith("/**", i) and i + 3 < len(source) and source[i + 3] not in "*/")
+        if line_doc:
+            end = source.find("\n", i)
+            if end < 0:
+                end = len(source)
+            value = source[i + 3:end]
+            if end < len(source) and value.endswith("\r"):
+                value = value[:-1]
+            if "\r" in value:
+                raise Token(source[i:i + 3], "", ln, column).error("bare carriage return in documentation comment")
+            kind = "doc_inner" if source[i + 2] == "!" else "doc_outer"
+            tokens.append(Token(source[start:end], kind, ln, column, start, end, value))
+            advance(end)
+            continue
         if source.startswith("//", i):
             end = source.find("\n", i)
             advance(len(source) if end < 0 else end)
@@ -73,6 +86,12 @@ def lex(source: str) -> list[Token]:
                     end += 1
             if depth:
                 raise Token("/*", "", ln, column).error("unterminated block comment")
+            if block_doc:
+                value = source[i + 3:end - 2].replace("\r\n", "\n")
+                if "\r" in value:
+                    raise Token(source[i:i + 3], "", ln, column).error("bare carriage return in documentation comment")
+                kind = "doc_inner" if source[i + 2] == "!" else "doc_outer"
+                tokens.append(Token(source[start:end], kind, ln, column, start, end, value))
             advance(end)
             continue
         if char == "'":
@@ -85,6 +104,14 @@ def lex(source: str) -> list[Token]:
             tokens.append(Token(source[i:end], "lifetime", ln, column))
             advance(end)
             continue
+        if char == '"' or char == 'r' and i + 1 < len(source) and source[i + 1] in '#"':
+            from .attribute_strings import scan_string
+            scanned = scan_string(source, i, Token(char, "", ln, column))
+            if scanned is not None:
+                value, end = scanned
+                tokens.append(Token(source[start:end], "string", ln, column, start, end, value))
+                advance(end)
+                continue
         if char.isascii() and (char.isalpha() or char == "_"):
             end = i + 1
             while end < len(source) and source[end].isascii() and (source[end].isalnum() or source[end] == "_"):
@@ -100,15 +127,8 @@ def lex(source: str) -> list[Token]:
             tokens.append(Token(source[i:end], "integer", ln, column))
             advance(end)
             continue
-        if char == '"':
-            end = source.find('"', i + 1)
-            if end < 0:
-                raise Token(char, "", ln, column).error("unterminated string")
-            tokens.append(Token(source[i + 1:end], "string", ln, column))
-            advance(end + 1)
-            continue
         op = next((op for op in _OPERATORS if source.startswith(op, i)), None)
-        if op is None and char in "{}()[];,:.+-*/%!=<>&|^#":
+        if op is None and char in "{}()[];,:.+-*/%!=<>&|^#?":
             op = char
         if op is None:
             raise Token(char, "", ln, column).error(f"unsupported Rust token {char!r}")
@@ -116,6 +136,17 @@ def lex(source: str) -> list[Token]:
         advance(start + len(op))
     tokens.append(Token("<eof>", "eof", line, col))
     return tokens
+
+
+@dataclass(frozen=True)
+class Documentation:
+    token: Token
+    text: str | None
+    inner: bool
+    # Half-open Unicode-codepoint offsets in the original source, not bytes.
+    source_span: tuple[int, int]
+    syntax: str
+    options: tuple = ()
 
 
 @dataclass
@@ -137,12 +168,25 @@ class Implementation:
     owner: object
     type_parameters: tuple[Token, ...] = ()
     trait: str | None = None
+    documentation: tuple[Documentation, ...] = ()
 
 
 @dataclass
 class Trait:
     token: Token
     methods: list[Function] = field(default_factory=list)
+    documentation: tuple[Documentation, ...] = ()
+    public: bool = False
+    language_item: object = None
+    type_parameters: tuple[Token, ...] = ()
+    supertraits: tuple = ()
+
+
+@dataclass(frozen=True)
+class TypeBound:
+    token: Token
+    path: str
+    relaxed: bool = False
 
 
 @dataclass
@@ -162,6 +206,9 @@ class Function:
     receiver: bool = False
     lifetime_parameters: tuple[Token, ...] = ()
     explicit_receiver: bool = False
+    documentation: tuple[Documentation, ...] = ()
+    item_identity: object = None
+    parameter_bounds: tuple[tuple[Token, tuple[TypeBound, ...]], ...] = ()
 
     @property
     def owner_parameter_count(self):
@@ -170,7 +217,7 @@ class Function:
     @property
     def declaration_name(self):
         if self.implementation is None:
-            return self.token.text
+            return self.item_identity.binding_key if self.item_identity is not None else self.token.text
         owner = self.implementation.owner
         if self.implementation.trait is not None:
             return "<" + str(owner) + " as " + self.implementation.trait + ">::" + self.token.text
@@ -182,10 +229,17 @@ class Function:
             return self.instance_name
         if self.implementation is not None:
             return "__pcc_rust_method_" + self.declaration_name.encode('utf-8').hex()
-        return self.token.text
+        if self.item_identity is not None:
+            return "__pcc_rust_item_" + self.declaration_name.encode('utf-8').hex()
+        return self.declaration_name
 
     @property
     def export_name(self):
+        if self.item_identity is not None:
+            name = '::'.join((*self.item_identity.module.components, self.token.text))
+            if self.instance_arguments is not None:
+                name += "::<" + ", ".join(map(str, self.instance_arguments)) + ">"
+            return name
         if self.instance_arguments is None:
             return self.declaration_name
         return self.declaration_name + "::<" + ", ".join(map(str, self.instance_arguments)) + ">"
@@ -197,6 +251,15 @@ class Record:
     fields: list[tuple[Token, object]]
     repr_c: bool = False
     type_parameters: tuple[Token, ...] = ()
+    documentation: tuple[Documentation, ...] = ()
+    field_documentation: tuple[tuple[Documentation, ...], ...] = ()
+    public: bool = False
+    field_public: tuple[bool, ...] = ()
+    item_identity: object = None
+
+    @property
+    def declaration_name(self):
+        return self.item_identity.binding_key if self.item_identity is not None else self.token.text
 
 
 @dataclass
@@ -207,6 +270,45 @@ class Enumeration:
     discriminants: dict[str, int] = field(default_factory=dict)
     payloads: dict[str, tuple[object, ...]] = field(default_factory=dict)
     type_parameters: tuple[Token, ...] = ()
+    documentation: tuple[Documentation, ...] = ()
+    variant_documentation: tuple[tuple[Documentation, ...], ...] = ()
+    payload_documentation: dict[str, tuple[tuple[Documentation, ...], ...]] = field(default_factory=dict)
+    public: bool = False
+    item_identity: object = None
+
+    @property
+    def declaration_name(self):
+        return self.item_identity.binding_key if self.item_identity is not None else self.token.text
+
+
+@dataclass
+class Module:
+    """A lexical module boundary, never a flattened translation unit."""
+    token: Token
+    public: bool
+    documentation: tuple[Documentation, ...]
+    path: str | None
+    body: object = None  # ModuleBody for inline modules; None for `mod name;`.
+
+
+@dataclass
+class CrateSelfAlias:
+    token: Token
+    public: bool = False
+    documentation: tuple[Documentation, ...] = ()
+
+
+@dataclass
+class ModuleBody:
+    functions: list[Function]
+    records: list[Record]
+    enums: list[Enumeration]
+    implementations: list[Implementation]
+    traits: list[Trait]
+    modules: list[Module]
+    documentation: tuple[Documentation, ...]
+    crate_aliases: list[CrateSelfAlias] = field(default_factory=list)
+    crate_policy: CratePolicy = field(default_factory=CratePolicy)
 
 
 @dataclass
@@ -226,14 +328,30 @@ _COMPARISONS = {"==", "!=", "<", "<=", ">", ">="}
 
 
 class Parser:
-    def __init__(self, source: str):
+    def __init__(self, source: str, *, source_path=None, edition=2021):
+        if type(edition) is not int or edition not in {2015, 2018, 2021, 2024}:
+            raise RustError('Rust parser crate policy requires an explicit recognized edition')
+        self.source = source
+        self.crate_policy = CratePolicy(edition)
+        self.crate_aliases = []
+        self.line_offsets = [0]
+        for index, char in enumerate(source):
+            if char == "\n":
+                self.line_offsets.append(index + 1)
         self.tokens = lex(source)
+        if source_path is not None:
+            self.tokens = [replace(token, source_path=source_path) for token in self.tokens]
+        self.crate_documentation: tuple[Documentation, ...] = ()
+        self.crate_stability = None
+        self.attribute_requirements = []
         self.pos = 0
         self.records: list[Record] = []
         self.enums: list[Enumeration] = []
         self.implementations: list[Implementation] = []
         self.traits: list[Trait] = []
         self.type_argument_depth = 0
+        self.modules: list[Module] = []
+        self.module_depth = 0
 
     @property
     def token(self) -> Token:
@@ -291,7 +409,12 @@ class Parser:
                     break
                 self.expect(",")
             return TupleType(tuple(elements))
-        if text in _TYPES or text == "Self" or (token.kind == "name" and text != "_"):
+        if text in _TYPES or text in {"Self", "self", "super", "crate"} or (token.kind == "name" and text != "_"):
+            while self.accept("::"):
+                segment = self.take()
+                if segment.kind != "name" and segment.text != "super":
+                    raise segment.error("expected a type path segment")
+                text += "::" + segment.text
             if self.token.text == "<":
                 return TypeApplication(text, self.type_arguments())
             return text
@@ -305,8 +428,8 @@ class Parser:
             self.take()
             return True
         if token.text in {">>", ">=", ">>="}:
-            self.tokens[self.pos] = Token(token.text[1:], token.kind,
-                                          token.line, token.column + 1)
+            self.tokens[self.pos] = replace(token, text=token.text[1:], column=token.column + 1,
+                                            source_start=None if token.source_start is None else token.source_start + 1)
             return True
         return False
 
@@ -331,8 +454,9 @@ class Parser:
         finally:
             self.type_argument_depth -= 1
 
-    def generic_parameters(self, *, allow_lifetimes=False) -> tuple[Token, ...]:
+    def generic_parameters(self, *, allow_lifetimes=False, allow_bounds=False) -> tuple[Token, ...]:
         self.last_lifetime_parameters = []
+        self.last_parameter_bounds = []
         if not self.accept("<"):
             return ()
         if self.token.text == ">":
@@ -341,7 +465,8 @@ class Parser:
         while True:
             if self.token.text == "const":
                 raise self.token.error("const generic parameters are not implemented")
-            if self.token.kind == "lifetime":
+            lifetime_parameter = self.token.kind == "lifetime"
+            if lifetime_parameter:
                 if not allow_lifetimes:
                     raise self.token.error("lifetime parameters on data/impl declarations are not implemented")
                 self.last_lifetime_parameters.append(self.take())
@@ -349,6 +474,21 @@ class Parser:
                 parameters.append(self.name())
             if len(parameters) + len(self.last_lifetime_parameters) > 16:
                 raise self.token.error("generic parameter count exceeds implementation limit (16)")
+            if self.token.text == ":" and allow_bounds and not lifetime_parameter:
+                self.take()
+                bounds = []
+                while True:
+                    bound_token = self.token
+                    relaxed = self.accept("?")
+                    path = self.name().text
+                    while self.accept("::"):
+                        path += "::" + self.name().text
+                    bounds.append(TypeBound(bound_token, path, relaxed))
+                    if len(bounds) > 16:
+                        raise bound_token.error("type parameter bounds exceed implementation limit (16)")
+                    if not self.accept("+"):
+                        break
+                self.last_parameter_bounds.append((parameters[-1], tuple(bounds)))
             if self.token.text in {":", "="}:
                 raise self.token.error("generic bounds and default arguments require trait/constraint checking, which is not implemented")
             if self.accept(">"):
@@ -359,47 +499,162 @@ class Parser:
         return tuple(parameters)
 
     def expression_path(self, token: Token) -> tuple[object, str | None]:
-        owner = token.text
-        if not self.accept("::"):
-            return owner, None
-        if self.token.text == "<":
-            owner = TypeApplication(owner, self.type_arguments())
-            if not self.accept("::"):
-                return owner, None
-        return owner, self.name().text
+        parts = [token.text]
+        self.last_path_type_arguments = None
+        while self.accept("::"):
+            if self.token.text == "<":
+                arguments = self.type_arguments()
+                owner = TypeApplication("::".join(parts), arguments)
+                if not self.accept("::"):
+                    if len(parts) == 1 or self.token.text == "{":
+                        return owner, None
+                    self.last_path_type_arguments = arguments
+                    return "::".join(parts[:-1]), parts[-1]
+                return owner, self.name().text
+            segment = self.take()
+            if segment.kind != "name" and segment.text != "super":
+                raise segment.error("expected an expression path segment")
+            parts.append(segment.text)
+        if len(parts) == 1:
+            return parts[0], None
+        return "::".join(parts[:-1]), parts[-1]
 
-    def record(self, repr_c: bool) -> None:
+    def documentation(self, *, inner=False, crate=False):
+        result = []
+        while True:
+            token = self.token
+            if token.kind in {"doc_inner", "doc_outer"}:
+                actual_inner = token.kind == "doc_inner"
+                if actual_inner != inner:
+                    if inner:
+                        break
+                    raise token.error("inner documentation attribute is not allowed at this item position")
+                self.take()
+                syntax = "block" if self.source[token.source_start:token.source_start + 2] == "/*" else "line"
+                result.append(Documentation(token, token.literal_value, inner, (token.source_start, token.source_end), syntax))
+                continue
+            if token.text != "#":
+                break
+            actual_inner = self.tokens[self.pos + 1].text == "!"
+            if actual_inner != inner:
+                if inner:
+                    break
+                raise token.error("inner attribute is not allowed at this item position")
+            name_index = self.pos + (3 if inner else 2)
+            if name_index >= len(self.tokens) or self.tokens[name_index - 1].text != "[" or self.tokens[name_index].text != "doc":
+                break
+            self.take()
+            if inner:
+                self.expect("!")
+            self.expect("[")
+            self.expect("doc")
+            options, value = (), None
+            if self.token.text == "(":
+                from .attribute_metadata import meta_list, validate_doc_options
+                options = meta_list(self)
+                self.attribute_requirements.extend(validate_doc_options(options, crate=crate))
+            elif self.accept("=") and self.token.kind == "string":
+                value = self.take().literal_value
+            else:
+                raise token.error("documentation attributes require literal string payloads or structured doc options; macro expansion is not implemented")
+            end = self.expect("]")
+            start_offset = self.line_offsets[token.line - 1] + token.column - 1
+            end_offset = self.line_offsets[end.line - 1] + end.column
+            result.append(Documentation(token, value, inner, (start_offset, end_offset), "attribute", options))
+        return tuple(result)
+
+    def record(self, repr_c: bool, documentation=(), public=False) -> None:
         name = self.name()
         parameters = self.generic_parameters()
         if self.token.text == "where":
             raise self.token.error("generic where constraints and traits are not implemented")
         self.expect("{")
-        fields = []
+        fields, field_docs, field_public = [], [], []
         while not self.accept("}"):
-            self.accept("pub")
+            field_docs.append(self.documentation())
+            field_public.append(self.accept("pub"))
             field = self.name()
             self.expect(":")
             fields.append((field, self.type()))
             if self.accept("}"):
                 break
             self.expect(",")
-        self.records.append(Record(name, fields, repr_c, parameters))
+        self.records.append(Record(name, fields, repr_c, parameters, documentation, tuple(field_docs), public, tuple(field_public)))
 
-    def parse(self) -> list[Function]:
+    def module_body(self):
+        # Reuse the exact token/source coordinate space. No slicing, rewriting,
+        # or re-lexing an inline module; declaration collections remain separate.
+        if self.module_depth >= 32:
+            raise self.token.error("inline module nesting exceeds implementation limit (32)")
+        child = object.__new__(type(self))
+        child.__dict__ = self.__dict__.copy()
+        child.module_depth += 1
+        child.records, child.enums, child.implementations, child.traits = [], [], [], []
+        child.modules, child.attribute_requirements, child.crate_aliases = [], [], []
+        child.crate_stability = None
+        child.crate_documentation = ()
+        functions = child.parse(_module=True, _inline=True)
+        self.pos = child.pos
+        return ModuleBody(functions, child.records, child.enums, child.implementations,
+                          child.traits, child.modules, child.crate_documentation,
+                          child.crate_aliases, child.crate_policy)
+
+    def parse(self, *, _module=False, _inline=False) -> list[Function]:
         functions: list[Function] = []
-        while self.token.text == "#" and self.tokens[self.pos + 1].text == "!":
-            self.take()
-            self.expect("!")
-            self.expect("[")
-            self.expect("no_std")
+        crate_docs = []
+        while True:
+            crate_docs.extend(self.documentation(inner=True, crate=not _module))
+            if self.token.text != "#" or self.tokens[self.pos + 1].text != "!":
+                break
+            start = self.take(); self.expect("!"); self.expect("[")
+            attribute = self.take()
+            if _module:
+                raise attribute.error("semantic inner module attributes require module context; this form is not implemented")
+            if attribute.text == "stable":
+                from .attribute_metadata import stable_metadata
+                if self.crate_stability is not None:
+                    raise attribute.error("multiple stability levels on the same crate")
+                self.crate_stability = stable_metadata(self, attribute, start)
+                self.attribute_requirements.append((attribute, "staged_api"))
+                continue
+            if attribute.text == "no_core":
+                self.crate_documentation = tuple(crate_docs)
+                self.expect("]")
+                self.crate_policy = self.crate_policy.with_no_core(attribute)
+                self.validate_crate_policy()
+                continue
+            if self.compiler_context_attribute(attribute, start):
+                continue
+            if attribute.text != "no_std":
+                self.crate_documentation = tuple(crate_docs)
+                raise attribute.error(f"unsupported semantic crate attribute {attribute.text!r}; no attribute is silently ignored")
             self.expect("]")
-        while self.token.kind != "eof":
+            self.crate_policy = self.crate_policy.with_no_std(attribute)
+        self.crate_documentation = tuple(crate_docs)
+        self.validate_attribute_context()
+        while self.token.kind != "eof" and not (_inline and self.token.text == "}"):
             repr_c = no_mangle = False
+            module_path = None
             enum_repr = None
-            while self.accept("#"):
+            language_item = None
+            docs = []
+            while True:
+                docs.extend(self.documentation())
+                if not self.accept("#"):
+                    break
                 self.expect("[")
                 attribute = self.take()
-                if attribute.text == "repr" and not repr_c and enum_repr is None:
+                if attribute.text == "lang":
+                    if language_item is not None:
+                        raise attribute.error("multiple lang attributes on one item are not implemented")
+                    language_item = self.language_item_attribute(attribute)
+                elif attribute.text == "path" and module_path is None:
+                    self.expect("=")
+                    literal = self.take()
+                    if literal.kind != "string":
+                        raise literal.error("module path requires a literal string; macro paths are not implemented")
+                    module_path = literal.literal_value
+                elif attribute.text == "repr" and not repr_c and enum_repr is None:
                     self.expect("(")
                     representation = self.take()
                     if representation.text == "C":
@@ -414,21 +669,60 @@ class Parser:
                 else:
                     raise attribute.error("unsupported Rust attribute; only repr(C) records and no_mangle functions are admitted")
                 self.expect("]")
+            if docs and self.token.kind == "eof":
+                raise docs[-1].token.error("outer documentation attribute has no following item")
             public = self.accept("pub")
+            if language_item is not None and self.token.text != "trait":
+                raise language_item.token.error("language item requires a trait target")
+            if self.accept("mod"):
+                if repr_c or enum_repr or no_mangle:
+                    raise self.token.error("representation/no_mangle attributes do not apply to modules")
+                name = self.name()
+                if self.accept(";"):
+                    body = None
+                else:
+                    if module_path is not None:
+                        raise name.error("path attributes on inline modules are not implemented")
+                    self.expect("{")
+                    body = self.module_body()
+                self.modules.append(Module(name, public, tuple(docs), module_path, body))
+                continue
+            if module_path is not None:
+                raise self.token.error("path attribute is implemented only for outlined modules")
             if self.accept("trait"):
                 if repr_c or enum_repr or no_mangle:
                     raise self.token.error("attributes on traits are not implemented")
                 name = self.name()
+                parameters = self.generic_parameters(allow_lifetimes=True) if language_item is not None else ()
+                if language_item is not None and (parameters or self.last_lifetime_parameters):
+                    raise language_item.token.error("language item trait requires exactly zero generic parameters")
+                supertraits = []
+                if self.accept(":"):
+                    while self.token.text != "{":
+                        bound = self.token
+                        if bound.kind == "lifetime" or bound.text in {"?", "for"}:
+                            raise bound.error("lifetime, relaxed and higher-ranked supertraits are not implemented")
+                        name_path = self.type()
+                        if not isinstance(name_path, str):
+                            raise bound.error("generic supertraits are not implemented")
+                        supertraits.append((bound, name_path))
+                        if len(supertraits) > 128:
+                            raise bound.error("supertrait list exceeds implementation limit (128)")
+                        if not self.accept("+"):
+                            break
                 if self.token.text != "{":
-                    raise self.token.error("generic traits, supertraits and trait constraints are not implemented")
+                    raise self.token.error("generic traits and where constraints are not implemented")
                 self.expect("{")
-                trait = Trait(name)
+                trait = Trait(name, documentation=tuple(docs), public=public,
+                              language_item=language_item, type_parameters=parameters,
+                              supertraits=tuple(supertraits))
                 while not self.accept("}"):
+                    method_docs = self.documentation()
                     if self.token.text != "fn":
                         raise self.token.error("only safe required trait methods are implemented; associated types/constants and unsafe methods are not implemented")
                     trait.methods.append(self.function("Rust", False, False, False,
                         declaration=True, implementation=Implementation(name, "Self", trait=name.text),
-                        trait_declaration=True))
+                        trait_declaration=True, documentation=method_docs))
                 self.traits.append(trait)
                 continue
             if self.accept("impl"):
@@ -444,10 +738,12 @@ class Parser:
                     trait_name, owner = owner, self.type()
                 if self.token.text == "where":
                     raise self.token.error("impl constraints are not implemented")
-                implementation = Implementation(token, owner, parameters, trait_name)
-                self.implementations.append(implementation)
                 self.expect("{")
+                docs.extend(self.documentation(inner=True))
+                implementation = Implementation(token, owner, parameters, trait_name, tuple(docs))
+                self.implementations.append(implementation)
                 while not self.accept("}"):
+                    method_docs = self.documentation()
                     visible = self.accept("pub")
                     unsafe = self.accept("unsafe")
                     if trait_name is not None and (visible or unsafe):
@@ -455,46 +751,82 @@ class Parser:
                     if trait_name is not None and self.token.text != "fn":
                         raise self.token.error("trait associated types/constants are not implemented")
                     functions.append(self.function("Rust", visible, False, unsafe,
-                                                   implementation=implementation))
+                                                   implementation=implementation, documentation=method_docs))
                 continue
             if self.accept("enum"):
                 if repr_c or no_mangle:
                     raise self.token.error("enum repr(C) and no_mangle are not supported")
-                self.enumeration(enum_repr)
+                self.enumeration(enum_repr, tuple(docs), public=public)
                 continue
             if enum_repr is not None:
                 raise self.token.error("integer repr applies only to an enum")
             if self.accept("struct"):
                 if no_mangle:
                     raise self.token.error("no_mangle is supported only on extern C function definitions")
-                self.record(repr_c)
+                self.record(repr_c, tuple(docs), public=public)
                 continue
             if repr_c:
                 raise self.token.error("repr(C) applies only to a struct")
             unsafe = self.accept("unsafe")
             abi = "Rust"
             if self.accept("extern"):
+                if self.accept("crate"):
+                    if unsafe or no_mangle or repr_c or enum_repr is not None:
+                        raise self.token.error("attributes/unsafe on crate aliases are not implemented")
+                    if not self.accept("self"):
+                        raise self.token.error("external crate dependency loading is not implemented; only an explicit crate-self alias is supported")
+                    self.expect("as")
+                    if self.token.text == "_":
+                        raise self.token.error("anonymous crate aliases are not implemented")
+                    name = self.name()
+                    self.expect(";")
+                    self.crate_aliases.append(CrateSelfAlias(name, public, tuple(docs)))
+                    continue
                 if self.token.kind == "string":
                     token = self.take()
-                    if token.text == "C-unwind":
+                    if token.literal_value == "C-unwind":
                         raise token.error("C-unwind requires owned cross-language unwinding, which is not implemented")
-                    if token.text != "C":
+                    if token.literal_value != "C":
                         raise token.error('only the non-unwinding extern "C" ABI is supported')
                 abi = "C"
                 if self.accept("{"):
-                    if no_mangle or public:
+                    if no_mangle or public or docs:
                         raise self.token.error("attributes and visibility on extern blocks are not supported")
                     while not self.accept("}"):
+                        declaration_docs = self.documentation()
                         visible = self.accept("pub")
-                        functions.append(self.function("C", visible, False, True, declaration=True))
+                        functions.append(self.function("C", visible, False, True, declaration=True, documentation=declaration_docs))
                     continue
-            functions.append(self.function(abi, public, no_mangle, unsafe))
+            functions.append(self.function(abi, public, no_mangle, unsafe, documentation=tuple(docs)))
+        if _inline:
+            self.expect("}")
+        self.validate_attribute_context()
         return functions
 
-    def function(self, abi, public, no_mangle, unsafe, declaration=False, implementation=None, trait_declaration=False) -> Function:
+    def validate_crate_policy(self):
+        self.crate_policy.require_owned_lang_item_context()
+
+    def compiler_context_attribute(self, attribute, start):
+        return False
+
+    def language_item_attribute(self, attribute):
+        raise attribute.error("unsupported Rust attribute; language items require an owned compiler context")
+
+    def validate_attribute_context(self):
+        # Retained metadata is not permission to discard staging/feature rules.
+        # No public override exists; feature/lang/cfg and no_core semantics remain unsupported.
+        if self.attribute_requirements:
+            token, feature = self.attribute_requirements[0]
+            raise token.error(f"attribute metadata requires {feature} compiler context; this context is not implemented")
+
+    def function(self, abi, public, no_mangle, unsafe, declaration=False, implementation=None, trait_declaration=False, documentation=()) -> Function:
         self.expect("fn")
         name = self.name()
-        parameters = self.generic_parameters(allow_lifetimes=True)
+        # Bound spelling belongs to the function/method suffix. StaticTraits
+        # separately validates the canonical contract of required/impl methods;
+        # an impl prefix still has its own implicit Sized obligations.
+        parameters = self.generic_parameters(allow_lifetimes=True, allow_bounds=True)
+        parameter_bounds = tuple(self.last_parameter_bounds)
         lifetime_parameters = tuple(self.last_lifetime_parameters)
         if implementation is not None:
             # Keep one declaration-bound parameter vector for the shared
@@ -563,13 +895,16 @@ class Parser:
             self.expect(";")
             body = None
         else:
-            body = self.block()
+            body = self.block(function_inner_docs=True)
+            documentation += self.last_function_documentation
         return Function(name, params, result, body, abi, public, no_mangle, unsafe,
                         type_parameters=parameters, implementation=implementation, receiver=receiver,
-                        lifetime_parameters=lifetime_parameters, explicit_receiver=explicit_receiver)
+                        lifetime_parameters=lifetime_parameters, explicit_receiver=explicit_receiver, documentation=documentation,
+                        parameter_bounds=parameter_bounds)
 
-    def block(self) -> Expr:
+    def block(self, *, function_inner_docs=False) -> Expr:
         token = self.expect("{")
+        inner_docs = self.documentation(inner=True) if function_inner_docs else ()
         statements: list[Expr] = []
         tail = None
         while self.token.text != "}":
@@ -599,6 +934,8 @@ class Parser:
             else:
                 raise self.token.error("expected ';' or end of block")
         self.expect("}")
+        if function_inner_docs:
+            self.last_function_documentation = inner_docs
         return Expr("block", token, len(statements), statements + ([tail] if tail else []))
 
     def if_expression(self, token: Token) -> Expr:
@@ -614,6 +951,10 @@ class Parser:
     def expression(self, minimum: int = 1, allow_struct: bool = True, *, complete_block: bool = False) -> Expr:
         token = self.take()
         text = token.text
+        if token.kind == "string":
+            raise token.error("runtime string values are not implemented; strings are admitted only as attribute payloads and ABI names")
+        if token.kind in {"doc_inner", "doc_outer"}:
+            raise token.error("documentation attributes on statements and nested block expressions are not implemented")
         if token.kind == "integer":
             expr = Expr("integer", token, text)
         elif text in {"true", "false"}:
@@ -705,10 +1046,13 @@ class Parser:
             self.expect("::")
             method = self.name()
             expr = Expr("trait_path", token, (owner, trait.text, method.text))
-        elif (token.kind == "name" and text != "_") or text in {"self", "Self"}:
+        elif (token.kind == "name" and text != "_") or text in {"self", "Self", "super", "crate"}:
             owner, variant = self.expression_path(token)
             if variant is not None:
-                expr = Expr("variant", token, (owner, variant))
+                if self.last_path_type_arguments is not None and self.token.text != "(":
+                    raise token.error("generic associated items require a direct call; stored function values are not implemented")
+                expr = Expr("variant", token, (owner, variant),
+                            type_arguments=self.last_path_type_arguments)
             else:
                 expr = Expr("name", token, owner)
         else:
@@ -732,7 +1076,7 @@ class Parser:
                 if self.token.text != "(":
                     raise separator.error("generic associated items require a direct call; stored function values are not implemented")
                 continue
-            if self.token.text == "{" and expr.kind == "name" and allow_struct:
+            if self.token.text == "{" and expr.kind in {"name", "variant"} and allow_struct:
                 self.take()
                 fields, values = [], []
                 while not self.accept("}"):
@@ -742,7 +1086,13 @@ class Parser:
                     if self.accept("}"):
                         break
                     self.expect(",")
-                expr = Expr("construct", expr.token, fields, values, binding=expr.value)
+                path = expr.value
+                if expr.kind == "variant":
+                    owner, member = path
+                    if not isinstance(owner, str):
+                        raise expr.token.error("named-field associated constructors are not implemented")
+                    path = owner + "::" + member
+                expr = Expr("construct", expr.token, fields, values, binding=path)
                 continue
             if self.token.text == "[":
                 index_token = self.take()
@@ -786,18 +1136,20 @@ class Parser:
             raise expr.token.error("qualified trait items require a direct call; stored function values are not implemented")
         return expr
 
-    def enumeration(self, representation) -> None:
+    def enumeration(self, representation, documentation=(), public=False) -> None:
         name = self.name()
         parameters = self.generic_parameters()
         if self.token.text == "where":
             raise self.token.error("generic where constraints and traits are not implemented")
         self.expect("{")
-        variants, payloads = [], {}
+        variants, payloads, variant_docs, payload_docs = [], {}, [], {}
         while not self.accept("}"):
+            variant_docs.append(self.documentation())
             variant = self.name()
             if self.accept("("):
-                fields = []
+                fields, field_docs = [], []
                 while not self.accept(")"):
+                    field_docs.append(self.documentation())
                     fields.append(self.type())
                     if self.accept(")"):
                         break
@@ -805,6 +1157,7 @@ class Parser:
                 if not fields:
                     raise variant.error("empty tuple variants are not implemented; use a unit variant")
                 payloads[variant.text] = tuple(fields)
+                payload_docs[variant.text] = tuple(field_docs)
             if self.token.text == "{":
                 raise self.token.error("named enum payload fields are not implemented")
             value = self.expression() if self.accept("=") else None
@@ -816,8 +1169,9 @@ class Parser:
             raise name.error("empty enums require uninhabited-type analysis, which is not implemented")
         if payloads and representation is None and any(value is not None for _, value in variants):
             raise name.error("explicit discriminants on an enum with payloads require an integer repr")
-        self.enums.append(Enumeration(name, variants, representation, payloads=payloads,
-                                      type_parameters=parameters))
+        self.enums.append(Enumeration(name, variants, representation, payloads=payloads, public=public,
+                                      type_parameters=parameters, documentation=documentation,
+                                      variant_documentation=tuple(variant_docs), payload_documentation=payload_docs))
 
     def pattern(self, *, alternatives=True) -> Pattern:
         if alternatives:
@@ -859,8 +1213,10 @@ class Parser:
                 self.take()
                 value = Expr("bool", token, token.text == "true")
             result = Pattern("literal", token, value)
-        elif (token.kind == "name" or token.text == "Self") and self.token.text == "::":
+        elif (token.kind == "name" or token.text in {"Self", "self", "super", "crate"}) and self.token.text == "::":
             owner, variant = self.expression_path(token)
+            if self.last_path_type_arguments is not None:
+                raise token.error("type arguments on enum variant pattern segments are not implemented; supply them on the enum owner")
             if variant is None:
                 raise token.error("generic type path is not a value binding pattern")
             result = Pattern("variant", token, (owner, variant))
