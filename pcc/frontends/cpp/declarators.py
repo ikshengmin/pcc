@@ -119,7 +119,7 @@ def parse_cv_qualifiers(cursor):
 
 class DeclaratorChunk:
     def __init__(self, kind, token, qualifiers=(), parameters=None, bound=None,
-                 ref_qualifier=None):
+                 ref_qualifier=None, exception_specification=None):
         self.kind = kind
         self.token = token
         self.coord = token.coord
@@ -127,6 +127,7 @@ class DeclaratorChunk:
         self.parameters = parameters
         self.bound = bound
         self.ref_qualifier = ref_qualifier
+        self.exception_specification = exception_specification
 
 
 class Declarator:
@@ -151,13 +152,14 @@ class DeclaratorParser:
     """
 
     def __init__(self, cursor, parse_identifier, parse_parameters=None,
-                 parse_array_bound=None, parse_functions=True, on_name=None):
+                 parse_array_bound=None, parse_functions=True, on_name=None, parse_noexcept=None):
         self.cursor = cursor
         self.parse_identifier = parse_identifier
         self.parse_parameters = parse_parameters
         self.parse_array_bound = parse_array_bound
         self.parse_functions = parse_functions
         self.on_name = on_name
+        self.parse_noexcept = parse_noexcept
 
     def _expect(self, value):
         token = self.cursor.peek()
@@ -254,6 +256,8 @@ class DeclaratorParser:
                     "function", token, qualifiers, parameters=parameters,
                     ref_qualifier=ref_qualifier,
                 ))
+                if self.cursor.peek().value == "noexcept" and self.parse_noexcept is not None:
+                    chunks[-1].exception_specification = self.parse_noexcept()
                 if self.cursor.peek().value in ("noexcept", "throw"):
                     _unsupported("exceptions", self.cursor.peek())
                 if self.cursor.peek().value == "->":

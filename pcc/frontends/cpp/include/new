@@ -1,0 +1,47 @@
+// PCC-owned declaration surface following N4659 [new.syn].
+// This is not a complete allocation/exception runtime. The real explicit,
+// defaulted, reference, constexpr and inline requirements are not rewritten
+// into weaker declarations merely to make this header parse. Unsupported
+// forms must remain frontend diagnostics until their semantics are supplied.
+// bad_alloc/bad_array_new_length definitions and target interference constants
+// still require their exception and target-policy owners; no fake definitions
+// or invented cache-line sizes are supplied here.
+#ifndef _PCC_CXX_NEW
+#define _PCC_CXX_NEW
+namespace std {
+using size_t = __SIZE_TYPE__;
+class bad_alloc;
+class bad_array_new_length;
+enum class align_val_t : size_t {};
+struct nothrow_t { explicit nothrow_t() = default; };
+extern const nothrow_t nothrow;
+using new_handler = void (*)();
+new_handler get_new_handler() noexcept;
+new_handler set_new_handler(new_handler) noexcept;
+template<class T> constexpr T* launder(T*) noexcept;
+}
+void* operator new(std::size_t);
+void* operator new(std::size_t, std::align_val_t);
+void* operator new(std::size_t, const std::nothrow_t&) noexcept;
+void* operator new(std::size_t, std::align_val_t, const std::nothrow_t&) noexcept;
+void operator delete(void*) noexcept;
+void operator delete(void*, std::size_t) noexcept;
+void operator delete(void*, std::align_val_t) noexcept;
+void operator delete(void*, std::size_t, std::align_val_t) noexcept;
+void operator delete(void*, const std::nothrow_t&) noexcept;
+void operator delete(void*, std::align_val_t, const std::nothrow_t&) noexcept;
+void* operator new[](std::size_t);
+void* operator new[](std::size_t, std::align_val_t);
+void* operator new[](std::size_t, const std::nothrow_t&) noexcept;
+void* operator new[](std::size_t, std::align_val_t, const std::nothrow_t&) noexcept;
+void operator delete[](void*) noexcept;
+void operator delete[](void*, std::size_t) noexcept;
+void operator delete[](void*, std::align_val_t) noexcept;
+void operator delete[](void*, std::size_t, std::align_val_t) noexcept;
+void operator delete[](void*, const std::nothrow_t&) noexcept;
+void operator delete[](void*, std::align_val_t, const std::nothrow_t&) noexcept;
+void* operator new(std::size_t, void*) noexcept;
+void* operator new[](std::size_t, void*) noexcept;
+void operator delete(void*, void*) noexcept;
+void operator delete[](void*, void*) noexcept;
+#endif

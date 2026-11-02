@@ -76,7 +76,7 @@ INVALID = (
 )
 
 UNSUPPORTED = (
-    'extern "C" double f(double);',
+    'extern "C" long double f(long double x){return x;}',
     'extern "Fortran" int f();',
     'extern "C" {static int f(){return 1;}}',
     'namespace {extern "C" int f();}',
@@ -214,3 +214,18 @@ def test_original_c_object_declaration_is_now_supported_without_source_rewrite()
 def test_original_arithmetic_static_cast_source_is_now_supported():
     # Original capability source is retained without editing its operand/type.
     CppParser().parse("int f(){return static_cast<int>(1.5);}")
+
+
+def test_original_deferred_floating_c_prototype_is_preserved_as_positive():
+    # This exact duplicate original has the native/reference obligation in
+    # test_cpp_c_scalar_float_linkage::test_c_floating_originals_execute_against_real_cpp17_reference[original-declaration-units0].
+    from tests.cpp.test_cpp_c_scalar_float_linkage import ORIGINAL, ORIGINAL_UNITS
+    original = 'extern "C" double f(double);'
+    assert original == ORIGINAL == ORIGINAL_UNITS[0][1]
+    parser = CppParser()
+    parser.parse(original, 'original-linkage.cpp')
+    symbol = parser.scope.names['f'].overloads[0]
+    assert symbol.c_name == 'f' and symbol.dtype == 'double'
+    assert symbol.parameters == ('double',) and symbol.language_linkage == 'C'
+    first = compile_host_cpp(ORIGINAL_UNITS)
+    assert first == compile_host_cpp(ORIGINAL_UNITS)

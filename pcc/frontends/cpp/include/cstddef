@@ -1,0 +1,25 @@
+// PCC-owned C++17 common definitions, N4659 [cstddef.syn].
+// Target integer identities come from the same owned C ABI as stdint.h.
+// This is a bounded header, not complete C++17 library acceptance:
+// max_align_t stays incomplete until the shared maximum-scalar alignment
+// contract is owned; offsetof requires a real standard-layout offset query.
+// std::byte's scoped type is real; its operator templates/to_integer are not
+// replaced with integer aliases or unchecked casts.
+#ifndef _PCC_CXX_CSTDDEF
+#define _PCC_CXX_CSTDDEF
+using size_t = __SIZE_TYPE__;
+using ptrdiff_t = __PTRDIFF_TYPE__;
+#ifndef NULL
+#define NULL 0
+#endif
+struct __pcc_max_align_unimplemented;
+using max_align_t = __pcc_max_align_unimplemented;
+#define offsetof(type, member) __pcc_offsetof_unimplemented(type, member)
+namespace std {
+using ::size_t;
+using ::ptrdiff_t;
+using ::max_align_t;
+using nullptr_t = decltype(nullptr);
+enum class byte : unsigned char {};
+}
+#endif

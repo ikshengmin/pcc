@@ -131,7 +131,6 @@ UNSUPPORTED_CONSTRUCTORS = (
     'struct S{S(int);};int f(){S s(int(a[1]));return 0;}',
     'struct S{S(int);};int f(){S s(int(a[1+1]));return 0;}',
     'struct S{S();};S::S():S(){}',
-    'struct S{int x=1;S();};',
     'struct B{};struct S:B{S();};',
     'struct A{int x;};struct S{A a;S();};',
     'struct S{S();};S::S(){}int f(){S s{};return 0;}',

@@ -728,35 +728,6 @@
     },
     {
       "suite_id": "pcc-regression-cpp",
-      "suite_version": "original-input-sha256:982715a3a132f74dde8c3d0012fa4089b92275e2379ee56b9dc15380a6c80ddc",
-      "suite_source_sha256": "982715a3a132f74dde8c3d0012fa4089b92275e2379ee56b9dc15380a6c80ddc",
-      "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
-      "mode": "pcc0",
-      "platform": "linux-x86_64",
-      "backend": "self",
-      "gc": "not_applicable",
-      "test_id": "tests/cpp/test_cpp_constructor_execution.py::test_constructor_complete_object_matches_reference[scalar-direct]",
-      "input_sha256": "982715a3a132f74dde8c3d0012fa4089b92275e2379ee56b9dc15380a6c80ddc",
-      "expectation": "run",
-      "reference": {
-        "name": "G++",
-        "version": "14.2.0",
-        "platform": "linux-x86_64",
-        "role": "external_reference",
-        "kind": "native_execution"
-      },
-      "outcome": "passed",
-      "verification": {
-        "level": "retained_process_artifacts",
-        "case_binding": "audited_private_receipt_index",
-        "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
-        "actual_receipt_sha256": "36ad616eab3740f54850b567d30c268eb35933cdfef43b3c6a2bfde6b3cf06fb",
-        "reference_receipt_sha256": "afd221eef3173670f1e7bccf77701b019328b62964fc7af776eee9c7fabf968a",
-        "test_source_sha256": "6d9fd6a4e55e356b0c62099ad87e152d2bef5d61ef1645afb0c753eda0b600be"
-      }
-    },
-    {
-      "suite_id": "pcc-regression-cpp",
       "suite_version": "original-input-sha256:6bfc26fcfca29a86c5458bd0b2e03e675ea8b2302d69660538620770d5a1e845",
       "suite_source_sha256": "6bfc26fcfca29a86c5458bd0b2e03e675ea8b2302d69660538620770d5a1e845",
       "compiler_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
@@ -782,6 +753,238 @@
         "actual_receipt_sha256": "e327919b44b96709fa8c97f556543940a05591b86be55335920c40283f178b3c",
         "reference_receipt_sha256": "2b90cd296d2fe4442cd17ebae2c9a4f999c4914d3175d8fca1b6bdce57c8225a",
         "test_source_sha256": "0bb81470d01b09fed4e86ac917f3c80b8c5d716af30e0f72a4da58160463fb62"
+      }
+    },
+    {
+      "suite_id": "pcc-regression-cpp",
+      "suite_version": "original-input-sha256:982715a3a132f74dde8c3d0012fa4089b92275e2379ee56b9dc15380a6c80ddc",
+      "suite_source_sha256": "982715a3a132f74dde8c3d0012fa4089b92275e2379ee56b9dc15380a6c80ddc",
+      "compiler_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "test_id": "tests/cpp/test_cpp_constructor_execution.py::test_constructor_complete_object_matches_reference[scalar-direct]",
+      "input_sha256": "982715a3a132f74dde8c3d0012fa4089b92275e2379ee56b9dc15380a6c80ddc",
+      "expectation": "run",
+      "reference": {
+        "name": "G++",
+        "version": "14.2.0",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution"
+      },
+      "outcome": "passed",
+      "verification": {
+        "level": "retained_process_artifacts",
+        "case_binding": "audited_private_receipt_index",
+        "compiler_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3",
+        "actual_receipt_sha256": "3918d32539c58b5ba82304d08155b0ca9714c0906babebabf25027c384a1b34f",
+        "reference_receipt_sha256": "d1f75c13e61d298eb43166b9acba9524b472077c5a82ccd2a95316e5efd8250f",
+        "test_source_sha256": "6d9fd6a4e55e356b0c62099ad87e152d2bef5d61ef1645afb0c753eda0b600be"
+      }
+    },
+    {
+      "suite_id": "pcc-regression-cpp",
+      "suite_version": "original-input-sha256:642417c7806aa541592c4ffd4680108e3e168800c776af2755f540b0e6ad66c5",
+      "suite_source_sha256": "642417c7806aa541592c4ffd4680108e3e168800c776af2755f540b0e6ad66c5",
+      "compiler_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "test_id": "tests/cpp/test_cpp_cstdarg.py::test_cstdarg_originals_execute_against_explicit_cpp17_reference[effectful-copy-operands]",
+      "input_sha256": "642417c7806aa541592c4ffd4680108e3e168800c776af2755f540b0e6ad66c5",
+      "expectation": "run",
+      "reference": {
+        "name": "G++",
+        "version": "14.2.0",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution"
+      },
+      "outcome": "passed",
+      "verification": {
+        "level": "retained_process_artifacts",
+        "case_binding": "audited_private_receipt_index",
+        "compiler_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3",
+        "actual_receipt_sha256": "9b8c11d4d506ad88d0413a4299974b29a4b68226444638166cf08b7eb1e3f788",
+        "reference_receipt_sha256": "be2fc585393d6d1f9c267a4f065e150a3652bd16612a4bb8c9d772886b6ffac4",
+        "test_source_sha256": "6ee4982180b5f359bec6f445aa54e934df79f0733de757723902d9e4f7b64624"
+      }
+    },
+    {
+      "suite_id": "pcc-regression-cpp",
+      "suite_version": "original-input-sha256:7b572c8315f644f03b56575a0c7c0a0ca1dbdd2a49a3f1c2b04bdfaa576918cd",
+      "suite_source_sha256": "7b572c8315f644f03b56575a0c7c0a0ca1dbdd2a49a3f1c2b04bdfaa576918cd",
+      "compiler_revision": "7982c153f470fcd6f6525607119192c256665ac3",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "test_id": "tests/cpp/test_cpp_cstddef_header.py::test_decltype_nullptr_originals_execute_against_explicit_cpp17_reference[unevaluated-call]",
+      "input_sha256": "7b572c8315f644f03b56575a0c7c0a0ca1dbdd2a49a3f1c2b04bdfaa576918cd",
+      "expectation": "run",
+      "reference": {
+        "name": "G++",
+        "version": "14.2.0",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution"
+      },
+      "outcome": "passed",
+      "verification": {
+        "level": "retained_process_artifacts",
+        "case_binding": "audited_private_receipt_index",
+        "compiler_revision": "7982c153f470fcd6f6525607119192c256665ac3",
+        "actual_receipt_sha256": "2947e64ba00ec9510aca59a09458f34c02aa4550e158c88a196b7b09245139a5",
+        "reference_receipt_sha256": "b799542364043553d15e3d02c551a5e96072fccc1a093f91282585527bb8cb8b",
+        "test_source_sha256": "aac3c596a5fb1aca814bf6c9db7045798780e07b81b31c1e4b4f926daf739334"
+      }
+    },
+    {
+      "suite_id": "pcc-regression-cpp",
+      "suite_version": "original-input-sha256:6068c9836d029aa06d1a38d3002af6bf1b2ea3b8685aeb0a8f78b951554b15fc",
+      "suite_source_sha256": "6068c9836d029aa06d1a38d3002af6bf1b2ea3b8685aeb0a8f78b951554b15fc",
+      "compiler_revision": "7982c153f470fcd6f6525607119192c256665ac3",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "test_id": "tests/cpp/test_cpp_cstddef_header.py::test_nullptr_no_fetch_originals_match_explicit_cpp17_reference[uninitialized-copy-argument-return]",
+      "input_sha256": "6068c9836d029aa06d1a38d3002af6bf1b2ea3b8685aeb0a8f78b951554b15fc",
+      "expectation": "run",
+      "reference": {
+        "name": "G++",
+        "version": "14.2.0",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution"
+      },
+      "outcome": "passed",
+      "verification": {
+        "level": "retained_process_artifacts",
+        "case_binding": "audited_private_receipt_index",
+        "compiler_revision": "7982c153f470fcd6f6525607119192c256665ac3",
+        "actual_receipt_sha256": "7a8e8628c580b551fc21e5c90c0747afd5b6acac6efa6ab9cee8acc3630ec79b",
+        "reference_receipt_sha256": "a046b7dcaa2c4f4546228bd9e37968ea924c3bc2faf92163c3d315724c7b89b5",
+        "test_source_sha256": "aac3c596a5fb1aca814bf6c9db7045798780e07b81b31c1e4b4f926daf739334"
+      }
+    },
+    {
+      "suite_id": "pcc-regression-cpp",
+      "suite_version": "original-input-sha256:037c8f657db357752ed9fea2b15614de1a9371046dd957ed459ff277b9e3eaae",
+      "suite_source_sha256": "037c8f657db357752ed9fea2b15614de1a9371046dd957ed459ff277b9e3eaae",
+      "compiler_revision": "7982c153f470fcd6f6525607119192c256665ac3",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "test_id": "tests/cpp/test_cpp_cstddef_header.py::test_real_cstddef_original_executes_with_separate_system_header_reference",
+      "input_sha256": "037c8f657db357752ed9fea2b15614de1a9371046dd957ed459ff277b9e3eaae",
+      "expectation": "run",
+      "reference": {
+        "name": "G++",
+        "version": "14.2.0",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution"
+      },
+      "outcome": "passed",
+      "verification": {
+        "level": "retained_process_artifacts",
+        "case_binding": "audited_private_receipt_index",
+        "compiler_revision": "7982c153f470fcd6f6525607119192c256665ac3",
+        "actual_receipt_sha256": "04f26f6711eade250025e1dc4bb334045475557544c09129fb3c2ac82ee41063",
+        "reference_receipt_sha256": "d642541dc4fb5885ab505f20a0546c4aecd66d2b9f7f4b784ee3958f74224e23",
+        "test_source_sha256": "aac3c596a5fb1aca814bf6c9db7045798780e07b81b31c1e4b4f926daf739334"
+      }
+    },
+    {
+      "suite_id": "pcc-regression-cpp",
+      "suite_version": "original-input-sha256:0d2076afc071ce14a034b27151657e560fe6bd14f8bc5801b53f362a791280b0",
+      "suite_source_sha256": "0d2076afc071ce14a034b27151657e560fe6bd14f8bc5801b53f362a791280b0",
+      "compiler_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "test_id": "tests/cpp/test_cpp_default_member_initializer_execution.py::test_default_member_initializer_originals_match_reference[declaration-order]",
+      "input_sha256": "0d2076afc071ce14a034b27151657e560fe6bd14f8bc5801b53f362a791280b0",
+      "expectation": "run",
+      "reference": {
+        "name": "G++",
+        "version": "14.2.0",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution"
+      },
+      "outcome": "passed",
+      "verification": {
+        "level": "retained_process_artifacts",
+        "case_binding": "audited_private_receipt_index",
+        "compiler_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3",
+        "actual_receipt_sha256": "7aa6540d5fba155597656283ab8df53a80b445be3dfc99536b44080b2951ff7d",
+        "reference_receipt_sha256": "5f7b155a32dffe8be1232ae531a21ee3e1ee58e0c24c3cbd6737c3d642ff9589",
+        "test_source_sha256": "9dd19f67f66c6b44a10e367a37d04e196e2daa434c9af5b172e096968a28c9af"
+      }
+    },
+    {
+      "suite_id": "pcc-regression-cpp",
+      "suite_version": "original-input-sha256:0ceba0a303b42ef510b81912d997ddaf799c98c72172fc1a679b481e11d6a10f",
+      "suite_source_sha256": "0ceba0a303b42ef510b81912d997ddaf799c98c72172fc1a679b481e11d6a10f",
+      "compiler_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "test_id": "tests/cpp/test_cpp_placement_new.py::test_placement_originals_execute_against_genuine_cpp17_reference[placement-address-and-value]",
+      "input_sha256": "0ceba0a303b42ef510b81912d997ddaf799c98c72172fc1a679b481e11d6a10f",
+      "expectation": "run",
+      "reference": {
+        "name": "G++",
+        "version": "14.2.0",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution"
+      },
+      "outcome": "passed",
+      "verification": {
+        "level": "retained_process_artifacts",
+        "case_binding": "audited_private_receipt_index",
+        "compiler_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3",
+        "actual_receipt_sha256": "d839f668dfd83fd20b56473a8508b8f411f620c550f72b4a1d8fa344d6903766",
+        "reference_receipt_sha256": "75ca3437465b2150295f89ced2d0498dffc4a096dbcd4bb65ac943e9d9dbb4eb",
+        "test_source_sha256": "a12b69e165f8e56ec62a9c344fe66da7a536ba69f31ddc1eeb2c9cb3121efd9b"
+      }
+    },
+    {
+      "suite_id": "pcc-regression-cpp",
+      "suite_version": "original-input-sha256:398bb32a01ca528591a6b9936d7e86e8f0117b153d0714d56cfeb9316f0baa08",
+      "suite_source_sha256": "398bb32a01ca528591a6b9936d7e86e8f0117b153d0714d56cfeb9316f0baa08",
+      "compiler_revision": "73e9efe62d04551501f8d0337399bb43b786e7df",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "test_id": "tests/cpp/test_cpp_postfix_projection.py::test_postfix_originals_match_same_cpp17_reference[reported-formal-row-stride]",
+      "input_sha256": "398bb32a01ca528591a6b9936d7e86e8f0117b153d0714d56cfeb9316f0baa08",
+      "expectation": "run",
+      "reference": {
+        "name": "G++",
+        "version": "14.2.0",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution"
+      },
+      "outcome": "passed",
+      "verification": {
+        "level": "retained_process_artifacts",
+        "case_binding": "audited_private_receipt_index",
+        "compiler_revision": "73e9efe62d04551501f8d0337399bb43b786e7df",
+        "actual_receipt_sha256": "43dd3074b7e65a6f845cbc8ffd916c29cae8f260c285562b969ef0442bd7a23f",
+        "reference_receipt_sha256": "f1b42e8b748ed90af593f6ec8451df6650eba0446677f461bce89c67ebc3f232",
+        "test_source_sha256": "2f5c31ea744b27be2a85b05acc28f81fe65434f3c7a07ac01b25315fbeca2fd7"
       }
     }
   ]

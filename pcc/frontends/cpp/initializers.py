@@ -187,6 +187,9 @@ def lower_aggregate_initializer(dtype, initializer, types, convert):
     if not isinstance(initializer, ListInitializer):
         raise TypeError("aggregate initializer lowering requires a braced initializer tree")
     require_complete(dtype, initializer.coord)
+    from pcc.frontends.cpp.default_member_initializers import has_initializers, unsupported
+    if has_initializers(unqualified(dtype).definition):
+        unsupported(initializer.coord)
     if not initializer.clauses:
         return empty_list_initialize(dtype, initializer.coord)
     definition = unqualified(dtype).definition

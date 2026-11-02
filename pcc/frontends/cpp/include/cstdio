@@ -1,0 +1,134 @@
+// PCC-owned declaration surface, N4659 [cstdio.syn]; no external header route.
+// FILE is generated from the owned runtime ABI. Declarations do not implement
+// absent runtime exports. fpos_t and buffering/filename-capacity contracts are
+// explicitly incomplete until their owned runtime semantics exist; never use
+// fake-libc int fpos_t, char FILE or invented numeric guarantees here.
+#ifndef _PCC_CXX_CSTDIO
+#define _PCC_CXX_CSTDIO
+#include "__pcc_stdio_file.h"
+#include "__pcc_va_list.h"
+using size_t = __SIZE_TYPE__;
+struct __pcc_stdio_position_unimplemented;
+using fpos_t = __pcc_stdio_position_unimplemented;
+struct __pcc_stdio_limits_unimplemented;
+#ifndef NULL
+#define NULL 0
+#endif
+#define EOF (-1)
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
+#define _IOFBF 0
+#define _IOLBF 1
+#define _IONBF 2
+// Deliberate capability errors when these unimplemented policies are used,
+// including in preprocessor conditions; no zero/default numeric substitute.
+#define BUFSIZ sizeof(__pcc_stdio_limits_unimplemented)
+#define FOPEN_MAX sizeof(__pcc_stdio_limits_unimplemented)
+#define FILENAME_MAX sizeof(__pcc_stdio_limits_unimplemented)
+#define L_tmpnam sizeof(__pcc_stdio_limits_unimplemented)
+#define TMP_MAX sizeof(__pcc_stdio_limits_unimplemented)
+extern "C" {
+extern FILE *stdin;
+extern FILE *stdout;
+extern FILE *stderr;
+int remove(const char*);
+int rename(const char*, const char*);
+FILE* tmpfile();
+char* tmpnam(char*);
+int fclose(FILE*);
+int fflush(FILE*);
+FILE* fopen(const char*, const char*);
+FILE* freopen(const char*, const char*, FILE*);
+void setbuf(FILE*, char*);
+int setvbuf(FILE*, char*, int, size_t);
+int fprintf(FILE*, const char*, ...);
+int fscanf(FILE*, const char*, ...);
+int printf(const char*, ...);
+int scanf(const char*, ...);
+int snprintf(char*, size_t, const char*, ...);
+int sprintf(char*, const char*, ...);
+int sscanf(const char*, const char*, ...);
+int vfprintf(FILE*, const char*, va_list);
+int vfscanf(FILE*, const char*, va_list);
+int vprintf(const char*, va_list);
+int vscanf(const char*, va_list);
+int vsnprintf(char*, size_t, const char*, va_list);
+int vsprintf(char*, const char*, va_list);
+int vsscanf(const char*, const char*, va_list);
+int fgetc(FILE*);
+char* fgets(char*, int, FILE*);
+int fputc(int, FILE*);
+int fputs(const char*, FILE*);
+int getc(FILE*);
+int getchar();
+int putc(int, FILE*);
+int putchar(int);
+int puts(const char*);
+int ungetc(int, FILE*);
+size_t fread(void*, size_t, size_t, FILE*);
+size_t fwrite(const void*, size_t, size_t, FILE*);
+int fgetpos(FILE*, fpos_t*);
+int fseek(FILE*, long, int);
+int fsetpos(FILE*, const fpos_t*);
+long ftell(FILE*);
+void rewind(FILE*);
+void clearerr(FILE*);
+int feof(FILE*);
+int ferror(FILE*);
+void perror(const char*);
+}
+#define stdin stdin
+#define stdout stdout
+#define stderr stderr
+namespace std {
+using ::size_t;
+using ::FILE;
+using ::fpos_t;
+using ::remove;
+using ::rename;
+using ::tmpfile;
+using ::tmpnam;
+using ::fclose;
+using ::fflush;
+using ::fopen;
+using ::freopen;
+using ::setbuf;
+using ::setvbuf;
+using ::fprintf;
+using ::fscanf;
+using ::printf;
+using ::scanf;
+using ::snprintf;
+using ::sprintf;
+using ::sscanf;
+using ::vfprintf;
+using ::vfscanf;
+using ::vprintf;
+using ::vscanf;
+using ::vsnprintf;
+using ::vsprintf;
+using ::vsscanf;
+using ::fgetc;
+using ::fgets;
+using ::fputc;
+using ::fputs;
+using ::getc;
+using ::getchar;
+using ::putc;
+using ::putchar;
+using ::puts;
+using ::ungetc;
+using ::fread;
+using ::fwrite;
+using ::fgetpos;
+using ::fseek;
+using ::fsetpos;
+using ::ftell;
+using ::rewind;
+using ::clearerr;
+using ::feof;
+using ::ferror;
+using ::perror;
+}
+#endif

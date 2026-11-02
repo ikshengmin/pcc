@@ -95,7 +95,7 @@ def compile_host_cpp(
     )
     from pcc.backend.owned_object_emit import emit_owned_object
     from pcc.backend.x86_64_asm_driver import assemble_file
-    from pcc.frontends.c.codegen.c_codegen import CCodeGenerator
+    from pcc.frontends.c.codegen.c_codegen import CCodeGenerator, postprocess_ir_text
     from pcc.frontends.c.passes.context import PassContext
     from pcc.frontends.cpp import CppParser
 
@@ -119,7 +119,10 @@ def compile_host_cpp(
             pass_ctx=PassContext(opt_level=0, target_triple=TARGET),
         )
         generator.generate_code(ast)
-        ir_text = str(generator.module)
+        # Match the public C/C++ evaluator's required intrinsic finalization.
+        # The shared owner replaces its internal va_arg placeholders with IR
+        # instructions; these are never runtime/external helper symbols.
+        ir_text = postprocess_ir_text(str(generator.module))
         ir_texts.append(ir_text)
         object_bytes.append(emit_owned_object(ir_text, TARGET))
     if entry_symbol is None:

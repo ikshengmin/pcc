@@ -115,4 +115,6 @@ def parse_destructor(parser, definition=None):
     finally:
         parser.scope = parent
         parser.member_function, parser.this_symbol, parser.return_type = previous_member, previous_this, previous_return
+    from pcc.frontends.cpp.constructors import call_free_body
+    symbol.closed_normal_body = call_free_body(body)
     return c_ast.FuncDef(declaration, None, body, name.coord)

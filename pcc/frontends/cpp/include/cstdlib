@@ -1,0 +1,126 @@
+// PCC-owned C++17 declarations; N4659 [cstdlib.syn].
+// This is not a runtime implementation or admission of unsupported function
+// types, exception specifications, attributes, wchar_t or aggregate-result ABI.
+// Those source forms are deliberately retained for ordinary frontend diagnosis.
+#ifndef _PCC_CXX_CSTDLIB
+#define _PCC_CXX_CSTDLIB
+using size_t = __SIZE_TYPE__;
+struct __pcc_div_result { int quot; int rem; };
+struct __pcc_ldiv_result { long quot; long rem; };
+struct __pcc_lldiv_result { long long quot; long long rem; };
+using div_t = __pcc_div_result;
+using ldiv_t = __pcc_ldiv_result;
+using lldiv_t = __pcc_lldiv_result;
+#ifndef NULL
+#define NULL 0
+#endif
+#define EXIT_SUCCESS 0
+#define EXIT_FAILURE 1
+struct __pcc_random_range_unimplemented;
+struct __pcc_locale_width_unimplemented;
+// No random-range or locale-width guarantee is borrowed from fake libc.
+#define RAND_MAX sizeof(__pcc_random_range_unimplemented)
+#define MB_CUR_MAX sizeof(__pcc_locale_width_unimplemented)
+extern "C" {
+using __pcc_c_exit_handler = void();
+using __pcc_c_compare_predicate = int(const void*, const void*);
+[[noreturn]] void abort() noexcept;
+int atexit(__pcc_c_exit_handler*) noexcept;
+int at_quick_exit(__pcc_c_exit_handler*) noexcept;
+[[noreturn]] void exit(int);
+[[noreturn]] void _Exit(int) noexcept;
+[[noreturn]] void quick_exit(int) noexcept;
+char* getenv(const char*);
+int system(const char*);
+void* aligned_alloc(size_t, size_t);
+void* calloc(size_t, size_t);
+void free(void*);
+void* malloc(size_t);
+void* realloc(void*, size_t);
+double atof(const char*);
+int atoi(const char*);
+long atol(const char*);
+long long atoll(const char*);
+double strtod(const char*, char**);
+float strtof(const char*, char**);
+long double strtold(const char*, char**);
+long strtol(const char*, char**, int);
+long long strtoll(const char*, char**, int);
+unsigned long strtoul(const char*, char**, int);
+unsigned long long strtoull(const char*, char**, int);
+int mblen(const char*, size_t);
+int mbtowc(wchar_t*, const char*, size_t);
+int wctomb(char*, wchar_t);
+size_t mbstowcs(wchar_t*, const char*, size_t);
+size_t wcstombs(char*, const wchar_t*, size_t);
+void* bsearch(const void*, const void*, size_t, size_t, __pcc_c_compare_predicate*);
+void qsort(void*, size_t, size_t, __pcc_c_compare_predicate*);
+int rand();
+void srand(unsigned int);
+int abs(int);
+long labs(long);
+long long llabs(long long);
+div_t div(int, int);
+ldiv_t ldiv(long, long);
+lldiv_t lldiv(long long, long long);
+}
+using __pcc_cpp_exit_handler = void();
+using __pcc_cpp_compare_predicate = int(const void*, const void*);
+namespace std {
+using ::size_t;
+using ::div_t;
+using ::ldiv_t;
+using ::lldiv_t;
+using ::abort;
+using ::atexit;
+using ::at_quick_exit;
+using ::exit;
+using ::_Exit;
+using ::quick_exit;
+using ::getenv;
+using ::system;
+using ::aligned_alloc;
+using ::calloc;
+using ::free;
+using ::malloc;
+using ::realloc;
+using ::atof;
+using ::atoi;
+using ::atol;
+using ::atoll;
+using ::strtod;
+using ::strtof;
+using ::strtold;
+using ::strtol;
+using ::strtoll;
+using ::strtoul;
+using ::strtoull;
+using ::mblen;
+using ::mbtowc;
+using ::wctomb;
+using ::mbstowcs;
+using ::wcstombs;
+using ::bsearch;
+using ::qsort;
+using ::rand;
+using ::srand;
+using ::abs;
+using ::labs;
+using ::llabs;
+using ::div;
+using ::ldiv;
+using ::lldiv;
+// Keep C++ callback linkage and overloads, not a void* callback substitute.
+int atexit(__pcc_cpp_exit_handler*) noexcept;
+int at_quick_exit(__pcc_cpp_exit_handler*) noexcept;
+void* bsearch(const void*, const void*, size_t, size_t, __pcc_cpp_compare_predicate*);
+void qsort(void*, size_t, size_t, __pcc_cpp_compare_predicate*);
+long abs(long);
+long long abs(long long);
+float abs(float);
+double abs(double);
+long double abs(long double);
+ldiv_t div(long, long);
+lldiv_t div(long long, long long);
+}
+#endif

@@ -194,7 +194,6 @@ CLASS_UNIMPLEMENTED_CASES = (
     "struct Base{};struct S:Base{};",
     "struct S{virtual int method();};",
     "struct S{static int value;};",
-    "struct S{int value=7;};",
     "struct S{int value:3;};",
     "struct S{struct Nested{};};",
     "namespace n{using T=int;}struct S{using n::T;};",

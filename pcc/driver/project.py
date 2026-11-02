@@ -266,6 +266,11 @@ def _collect_translation_units_with_dependencies(
         dep_units, _ = _collect_input_units(
             dep.path, sources_from_make=dep.sources_from_make
         )
+        from pcc.frontends.cpp.driver import is_cpp_path
+        primary_cpp = any(is_cpp_path(unit.path) for unit in primary_units)
+        dependency_cpp = any(is_cpp_path(unit.path) for unit in dep_units)
+        if primary_cpp != dependency_cpp:
+            raise ValueError("mixed C/C++ project dependency discovery is not implemented")
         dep_main_units, dep_other_units = _split_main_units(dep_units, cpp_args=cpp_args, target_triple=target_triple)
         if dep_main_units:
             names = ", ".join(unit.name for unit in dep_main_units)
@@ -286,7 +291,7 @@ def _collect_translation_units_with_dependencies(
             )
     else:
         if not primary_main_units:
-            raise ValueError(f"No main() function found in {path}/*.c")
+            raise ValueError(f"No main() function found in project {path}")
         if len(primary_main_units) > 1:
             names = ", ".join(unit.name for unit in primary_main_units)
             raise ValueError(f"Multiple main() definitions found in {path}: {names}")
@@ -296,6 +301,8 @@ def _collect_translation_units_with_dependencies(
 
 def _collect_directory(dirpath, sources_from_make=None, cpp_args=None):
     """Merge all .c files in a directory into one source string."""
+    if _directory_cpp_files(dirpath):
+        raise ValueError("C++ directory projects require --separate-tus; source merging is not permitted")
     c_files = _project_c_files(dirpath, sources_from_make=sources_from_make)
 
     if not c_files:
@@ -335,7 +342,7 @@ def _collect_directory_units(dirpath, sources_from_make=None, cpp_args=None, tar
     main_files, other_units = _split_main_units(units, cpp_args=cpp_args, target_triple=target_triple)
 
     if not main_files:
-        raise ValueError(f"No main() function found in {dirpath}/*.c")
+        raise ValueError(f"No main() function found in project {dirpath}")
     if len(main_files) > 1:
         names = ", ".join(unit.name for unit in main_files)
         raise ValueError(f"Multiple main() definitions found in {dirpath}: {names}")
@@ -352,7 +359,7 @@ def _collect_input_units(path, sources_from_make=None):
             return [TranslationUnit(os.path.basename(path), path, f.read())], base_dir
 
     if os.path.isdir(path):
-        c_files = _project_c_files(path, sources_from_make=sources_from_make)
+        c_files = _project_translation_unit_files(path, sources_from_make=sources_from_make)
         if not c_files:
             raise FileNotFoundError(f"No .c files found in {path}")
 
@@ -396,6 +403,24 @@ def _split_main_units(units, cpp_args=None, target_triple=None):
         else:
             other_units.append(unit)
     return main_units, other_units
+
+
+def _directory_cpp_files(dirpath):
+    from pcc.frontends.cpp.driver import is_cpp_path
+    return sorted(name for name in os.listdir(dirpath)
+                  if is_cpp_path(name) and os.path.isfile(os.path.join(dirpath, name)))
+
+
+def _project_translation_unit_files(dirpath, sources_from_make=None):
+    """Keep homogeneous C++ source identities; never merge or relabel them C."""
+    cpp_files = _directory_cpp_files(dirpath)
+    if not cpp_files:
+        return _project_c_files(dirpath, sources_from_make=sources_from_make)
+    if sources_from_make:
+        raise ValueError("make-derived C++ translation-unit discovery is not implemented")
+    if any(os.path.isfile(os.path.join(dirpath, name)) for name in _directory_c_files(dirpath)):
+        raise ValueError("mixed C/C++ directory discovery is not implemented")
+    return cpp_files
 
 
 def _project_c_files(dirpath, sources_from_make=None):

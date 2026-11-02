@@ -11,14 +11,14 @@ from pcc.frontends.c.c_abi_layout import (
 from pcc.frontends.cpp.classes import is_class_type, require_complete
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.types import (
-    ArrayType, PointerType, c_type_names, is_enum_type, unqualified,
+    ArrayType, PointerType, c_type_names, function_type, is_enum_type, unqualified,
 )
 
 
 def sizeof_type(dtype, types, coord):
     plain = unqualified(dtype)
-    if plain == "void":
-        raise CppDiagnostic("cpp.invalid-sizeof", "sizeof requires a complete object type, not void", coord)
+    if plain == "void" or function_type(plain):
+        raise CppDiagnostic("cpp.invalid-sizeof", "sizeof requires a complete object type, not void or a function", coord)
     if is_class_type(plain):
         require_complete(plain, coord)
         raise CppDiagnostic("cpp.unsupported.sizeof-class-layout",

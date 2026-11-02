@@ -88,7 +88,7 @@ INVALID = (
 UNSUPPORTED = (
     'int f(){int a[]={1,2};return 0;}',
     'int f(){int a[2][2]={1,2,3,4};return 0;}',
-    'struct S{};int f(){S a[2];return 0;}',
+    'struct S{~S();};int f(){S a[2];return 0;}',
     'struct S{int a[2];};',
     'int a[2]={1,2};',
     'int f(){char a[2]="x";return 0;}',
@@ -207,3 +207,25 @@ def test_unnamed_definition_parameter_has_projection_name_but_no_source_binding(
     parameters = tree.ext[0].decl.type.args.params
     assert parameters[0].name == '__pcc_cpp_unnamed_0'
     assert parameters[1].name == 'named'
+
+
+ORIGINAL_TRIVIAL_RECORD_ARRAY='struct S{};int f(){S a[2];return 0;}'
+TRIVIAL_RECORD_ARRAY_UNITS=(('original.cpp',ORIGINAL_TRIVIAL_RECORD_ARRAY),
+                            ('entry.cpp','int f();int cpp_test_entry(){return f()+42;}'))
+
+
+def test_preserved_trivial_record_array_original_has_real_storage_and_stable_artifacts():
+    from pcc.frontends.c.ast import c_ast
+    parser=CppParser()
+    tree=parser.parse(ORIGINAL_TRIVIAL_RECORD_ARRAY)
+    function=next(node for node in tree.ext if isinstance(node,c_ast.FuncDef))
+    storage=function.body.block_items[0]
+    assert isinstance(storage,c_ast.Decl) and storage.name=='a' and storage.init is None
+    assert isinstance(storage.type,c_ast.ArrayDecl) and storage.type.dim.value=='2'
+    assert storage.type.type.type.name==parser.scope.names['S'].dtype.c_tag
+    assert compile_host_cpp(TRIVIAL_RECORD_ARRAY_UNITS)==compile_host_cpp(TRIVIAL_RECORD_ARRAY_UNITS)
+
+
+@pytest.mark.integration
+def test_preserved_trivial_record_array_original_executes_against_cpp17_reference(tmp_path,monkeypatch):
+    execute_and_record(tmp_path,monkeypatch,TRIVIAL_RECORD_ARRAY_UNITS,42)

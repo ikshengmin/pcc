@@ -59,7 +59,7 @@
 #define SIG_ATOMIC_MIN (-SIG_ATOMIC_MAX - 1)
 #define WCHAR_MAX __WCHAR_MAX__
 #if __WCHAR_MAX__ == __UINT16_MAX__ || __WCHAR_MAX__ == __UINT32_MAX__
-#define WCHAR_MIN 0
+#define WCHAR_MIN (WCHAR_MAX - WCHAR_MAX)
 #else
 #define WCHAR_MIN (-WCHAR_MAX - 1)
 #endif

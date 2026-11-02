@@ -118,13 +118,30 @@ def test_real_parser_conversion_owner_receives_scalar_braces_and_const_destinati
     dtype = define("S", (("value", ConstType("long")), ("pointer", PointerType("int"))))
     parser = parser_for_list("{{42},{nullptr}}")
     initializer = parse_initializer_list(parser)
-    lowered = lower_aggregate_initializer(dtype, initializer, parser.types, parser._convert)
+    conversions = []
+
+    def convert(expression, destination, coord):
+        conversions.append((expression, destination))
+        return parser._convert(expression, destination, coord)
+
+    lowered = lower_aggregate_initializer(dtype, initializer, parser.types, convert)
+    assert conversions == [(initializer.clauses[0].clauses[0], ConstType("long")),
+                           (initializer.clauses[1].clauses[0], PointerType("int"))]
     assert isinstance(lowered.exprs[0], c_ast.Cast)
     assert lowered.exprs[0].to_type.type.type.names == ["long"]
     assert lowered.exprs[0].expr is initializer.clauses[0].clauses[0].node
     assert isinstance(lowered.exprs[1], c_ast.Cast)
     assert isinstance(lowered.exprs[1].to_type.type, c_ast.PtrDecl)
-    assert lowered.exprs[1].expr is initializer.clauses[1].clauses[0].node
+    original = initializer.clauses[1].clauses[0]
+    assert original.dtype == "nullptr" and original.null_pointer
+    assert isinstance(original.node, c_ast.Constant) and original.node.value == "0"
+    # nullptr_t's value conversion owns a typed null, not a fetch from backing
+    # storage or a promise to reuse the source literal's untyped C AST node.
+    null = lowered.exprs[1].expr
+    assert isinstance(null, c_ast.Cast)
+    assert isinstance(null.to_type.type, c_ast.PtrDecl)
+    assert null.to_type.type.type.type.names == ["void"]
+    assert isinstance(null.expr, c_ast.Constant) and null.expr.value == "0"
 
 
 def test_nested_conversion_callbacks_follow_leaf_order_without_duplication():

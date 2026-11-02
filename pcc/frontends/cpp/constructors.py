@@ -12,7 +12,7 @@ from pcc.frontends.cpp.declarators import DeclaratorParser, QualifiedName, parse
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.members import mangle_member
 from pcc.frontends.cpp.sema import Scope, Symbol, resolve_overload
-from pcc.frontends.cpp.types import ConstType, PointerType, is_enum_type, unqualified
+from pcc.frontends.cpp.types import ConstType, PointerType, contains_function, is_enum_type, unqualified
 
 
 def constructor_ahead(parser):
@@ -83,10 +83,14 @@ def parse_constructor(parser, definition=None):
     if parser._peek().value in ("const", "volatile"):
         raise CppDiagnostic("cpp.constructor-cv", "constructors cannot have cv-qualifiers", parser._peek().coord)
     for _, dtype in params:
+        if contains_function(dtype):
+            raise CppDiagnostic("cpp.unsupported.function-pointers", "constructor callback parameters require function-value semantics", name.coord)
         if is_class_type(dtype):
             raise CppDiagnostic("cpp.unsupported.class-value-abi", "constructor class-by-value arguments require copy semantics", name.coord)
         plain = unqualified(dtype)
-        pointee = unqualified(plain.pointee) if isinstance(plain, PointerType) else plain
+        pointee = plain
+        while isinstance(pointee, PointerType):
+            pointee = unqualified(pointee.pointee)
         if is_class_type(pointee) and pointee.internal_linkage:
             raise CppDiagnostic("cpp.unsupported.class-linkage", "constructor signatures with internal-linkage class types require ABI support", name.coord)
         if is_enum_type(pointee) and pointee.internal_linkage:
@@ -150,14 +154,18 @@ def parse_constructor(parser, definition=None):
                     break
         stores = []
         for member in definition.members:
-            if member not in initializers:
+            if member not in initializers and getattr(member, 'default_initializer_tokens', None) is not None:
+                from pcc.frontends.cpp.default_member_initializers import value as default_value
+                value = default_value(member, c_ast.ID(this.c_name, member.coord))
+            elif member not in initializers:
                 if isinstance(member.dtype, ConstType):
                     raise CppDiagnostic("cpp.const-initializer", "const data member requires initialization", member.coord)
                 # Default initialization of a scalar leaves it indeterminate.
                 continue
-            expression = initializers[member]
-            value = (c_ast.Constant("int", "0", member.coord) if expression is None else
-                     parser._convert(expression, member.dtype, member.coord, contextual=True))
+            else:
+                expression = initializers[member]
+                value = (c_ast.Constant("int", "0", member.coord) if expression is None else
+                         parser._convert(expression, member.dtype, member.coord, contextual=True))
             field = c_ast.StructRef(c_ast.ID(this.c_name, member.coord), "->",
                                    c_ast.ID(member.c_name, member.coord), member.coord)
             # This is construction, not C++ assignment to a live const object.
@@ -167,6 +175,7 @@ def parse_constructor(parser, definition=None):
     finally:
         parser.scope = parent
         parser.member_function, parser.this_symbol, parser.return_type = previous_member, previous_this, previous_return
+    symbol.closed_normal_body = call_free_body(body)
     return c_ast.FuncDef(declaration, None, body, name.coord)
 
 
@@ -253,15 +262,35 @@ def construct_local(parser, symbol):
             parser._expect(",")
     elif parser._peek().value in ("=", "{"):
         raise CppDiagnostic("cpp.unsupported.constructor-list-initialization", "copy/list construction requires its separate overload and conversion rules", parser._peek().coord)
-    selected = resolve_overload(dtype.definition.constructors,
-                                [arg.dtype for arg in arguments], parser.types, symbol.coord,
-                                [arg.null_pointer for arg in arguments])
-    parser.scope.check_member_access(selected, symbol.coord)
-    converted = [c_ast.UnaryOp("&", c_ast.ID(symbol.c_name, symbol.coord), symbol.coord)]
-    converted += [parser._convert(arg, target, symbol.coord)
-                  for arg, target in zip(arguments, selected.parameters)]
+    address = c_ast.UnaryOp("&", c_ast.ID(symbol.c_name, symbol.coord), symbol.coord)
+    call = constructor_call(parser, dtype, arguments, address, symbol.coord)
     parser._expect(";")
     symbol.initialization_complete = True
     symbol.jump_entry = "initialized"
     return [parser._decl(symbol.c_name, symbol.dtype, symbol.coord),
-            c_ast.FuncCall(c_ast.ID(selected.c_name, symbol.coord), c_ast.ExprList(converted, symbol.coord), symbol.coord)]
+            call]
+
+
+def call_free_body(body):
+    """A bounded proof, not a noexcept inference for arbitrary external calls."""
+    pending = [body]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, c_ast.FuncCall):
+            return False
+        pending.extend(child for _name, child in node.children())
+    return True
+
+
+def constructor_call(parser, dtype, arguments, address, coord, require_closed=False):
+    """Select the existing C1 at an already-evaluated complete-object address."""
+    selected = resolve_overload(dtype.definition.constructors,
+                                [arg.dtype for arg in arguments], parser.types, coord,
+                                [arg.null_pointer for arg in arguments])
+    parser.scope.check_member_access(selected, coord)
+    if require_closed and not getattr(selected, 'closed_normal_body', False):
+        raise CppDiagnostic('cpp.unsupported.placement-constructor-effects',
+                            'unknown constructor effects need exception/cleanup integration', coord)
+    converted = [address] + [parser._convert(arg, target, coord)
+                             for arg, target in zip(arguments, selected.parameters)]
+    return c_ast.FuncCall(c_ast.ID(selected.c_name, coord), c_ast.ExprList(converted, coord), coord)

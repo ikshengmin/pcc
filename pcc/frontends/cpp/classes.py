@@ -23,7 +23,7 @@ from pcc.frontends.c.ast import c_ast
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.constants import NOT_CONSTANT, not_constant, unmodeled
 from pcc.frontends.cpp.sema import Scope, Symbol
-from pcc.frontends.cpp.types import ConstType, PointerType, array_type, qualify_const, unqualified
+from pcc.frontends.cpp.types import ConstType, PointerType, array_type, contains_function, qualify_const, unqualified
 
 
 class ClassType:
@@ -57,6 +57,29 @@ class ClassType:
 
 def is_class_type(dtype):
     return isinstance(unqualified(dtype), ClassType)
+
+
+def record_declaration_projection_supported(dtype, types):
+    """A nonempty trivial public record can retain its C declaration shape.
+
+    This is not admission of construction/copy/materialization at a call. Those
+    operations still have independent frontend guards. Restrict the projection
+    to records whose existing object layout is the ordinary shared C layout.
+    """
+    dtype = unqualified(dtype)
+    if not is_class_type(dtype) or not dtype.complete:
+        return False
+    definition = dtype.definition
+    if (not definition.members or definition.constructors.overloads
+            or definition.destructor is not None):
+        return False
+    for member in definition.members:
+        plain = unqualified(member.dtype)
+        if (member.access != "public" or getattr(member, "default_initializer_tokens", None) is not None
+                or not (isinstance(plain, PointerType)
+                        or isinstance(plain, str) and types.arithmetic_operand(plain))):
+            return False
+    return True
 
 
 def require_complete(dtype, coord):
@@ -110,6 +133,8 @@ class ClassDefinition:
         if self.complete:
             raise ValueError("cannot append a member to a completed class")
         dtype = unqualified(symbol.dtype)
+        if contains_function(dtype):
+            raise CppDiagnostic("cpp.unsupported.function-pointers", "callback members require function-value semantics", symbol.coord)
         if array_type(dtype):
             raise CppDiagnostic("cpp.unsupported.class-array-members",
                                 "array data members require special-member/lifetime integration", symbol.coord)
@@ -152,17 +177,20 @@ class ClassDefinition:
 
     @property
     def const_default_constructible(self):
-        # There are no bases, DMI or user-provided constructors at this boundary.
+        # Scalar DMI initializes its member; remaining subobjects recurse.
         # Empty classes satisfy this vacuously; scalar members do not.
         return all(
-            is_class_type(member.dtype)
-            and unqualified(member.dtype).definition.const_default_constructible
+            getattr(member, "default_initializer_tokens", None) is not None
+            or (is_class_type(member.dtype)
+                and unqualified(member.dtype).definition.const_default_constructible)
             for member in self.members
         )
 
     @property
     def default_constructor_deleted(self):
         for member in self.members:
+            if getattr(member, "default_initializer_tokens", None) is not None:
+                continue
             dtype = unqualified(member.dtype)
             if isinstance(dtype, ClassType):
                 definition = dtype.definition
@@ -349,10 +377,15 @@ def parse_class(parser):
                     parser.cursor.position = member_start
                     definition.method_declarations.append(parser._function(member_definition=definition))
                     break
-                if parser._peek().value in ("=", "{", ":"):
-                    _unsupported(parser._peek(),
-                                 "member functions, bit-fields and default member initializers are not implemented")
-                definition.add_member(Symbol(member.value, "member", member.coord, dtype=member_type), mutable)
+                if parser._peek().value in ("{", ":"):
+                    _unsupported(parser._peek(), "braced default member initializers and bit-fields are not implemented")
+                symbol = definition.add_member(Symbol(member.value, "member", member.coord, dtype=member_type), mutable)
+                if parser._accept("="):
+                    from pcc.frontends.cpp.default_member_initializers import collect, unsupported
+                    if is_class_type(member_type):
+                        unsupported(member.coord)
+                    symbol.default_initializer_tokens = collect(parser)
+                    break
                 prior_data = True
                 if not parser._accept(","):
                     break
@@ -362,6 +395,8 @@ def parse_class(parser):
         parser.scope = parent
     parser._expect(";")
     definition.finish()
+    from pcc.frontends.cpp.default_member_initializers import bind
+    bind(parser, definition)
     parser.last_class_definition = definition
     return definition.c_declaration(parser._scalar_type)
 
@@ -443,9 +478,9 @@ def member_access(parser, expression, operator, member):
     if isinstance(dtype, ConstType) and not symbol.mutable:
         result_type = qualify_const(result_type)
     node = c_ast.StructRef(expression.node, operator, c_ast.ID(symbol.c_name, member.coord), member.coord)
-    result = type(expression)(node, result_type, lvalue=True)
-    if is_class_type(result_type):
-        # Selecting a class subobject as a glvalue does not load that object.
+    result = type(expression)(node, result_type, lvalue=True, decltype_entity=symbol.dtype)
+    if is_class_type(result_type) or unqualified(result_type) == "nullptr":
+        # Selecting a class or nullptr_t subobject as a glvalue does not load that object.
         # Keep only evaluation required by its base, with the nominal/member
         # checks already performed above. No C-AST pattern guessing is needed.
         result.discarded_known = operator == "->" or expression.discarded_known
@@ -467,8 +502,12 @@ def default_initialize(dtype, coord):
         if current.constructors.overloads:
             raise CppDiagnostic("cpp.unsupported.constructor-subobjects",
                                 "implicit subobject construction requires lifetime integration", coord)
-        pending.extend(unqualified(member.dtype).definition for member in current.members
-                       if is_class_type(member.dtype))
+        children = [unqualified(member.dtype).definition for member in current.members
+                    if is_class_type(member.dtype)]
+        from pcc.frontends.cpp.default_member_initializers import has_initializers, unsupported
+        if any(has_initializers(child) for child in children):
+            unsupported(coord)
+        pending.extend(children)
     if owner.definition.default_constructor_deleted:
         raise CppDiagnostic("cpp.deleted-default-constructor", "default constructor of '" + owner.name + "' is deleted", coord)
     if isinstance(dtype, ConstType) and not owner.definition.const_default_constructible:
@@ -488,6 +527,9 @@ def empty_list_initialize(dtype, coord):
     if not isinstance(owner, ClassType):
         raise TypeError("empty_list_initialize requires a class type")
     definition = owner.definition
+    from pcc.frontends.cpp.default_member_initializers import has_initializers, unsupported
+    if has_initializers(definition):
+        unsupported(coord)
     if definition.constructors.overloads:
         raise CppDiagnostic("cpp.unsupported.constructor-list-initialization",
                             "constructor list initialization requires separate overload rules", coord)

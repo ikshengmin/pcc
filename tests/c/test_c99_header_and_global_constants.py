@@ -85,6 +85,25 @@ STDINT_SOURCE += r"""
 
 # Constant-construction suffixes must match target typedefs at compile time.
 STDINT_SOURCE = STDINT_SOURCE.replace("int main(void)", r"""
+/* N1570 7.20.3p2: the limits have the promoted corresponding type.
+ * AArch64 unsigned-32 wchar_t must not receive an int-valued zero minimum;
+ * Windows unsigned-16 wchar_t, in contrast, promotes to int. */
+#if __WCHAR_MAX__ == __UINT32_MAX__
+_Static_assert(_Generic(WCHAR_MIN, unsigned int: 1, default: 0), "unsigned wchar minimum type");
+_Static_assert(_Generic(WCHAR_MAX, unsigned int: 1, default: 0), "unsigned wchar maximum type");
+#else
+_Static_assert(_Generic(WCHAR_MIN, int: 1, default: 0), "promoted wchar minimum type");
+_Static_assert(_Generic(WCHAR_MAX, int: 1, default: 0), "promoted wchar maximum type");
+#endif
+#if __WCHAR_MAX__ == __UINT16_MAX__ || __WCHAR_MAX__ == __UINT32_MAX__
+#if WCHAR_MIN != 0
+#error unsigned wchar minimum is not zero
+#endif
+#else
+#if WCHAR_MIN != (-WCHAR_MAX - 1)
+#error signed wchar minimum is incorrect
+#endif
+#endif
 _Static_assert(_Generic(INT64_C(1), int64_t: 1, default: 0), "int64 constant type");
 _Static_assert(_Generic(UINT64_C(1), uint64_t: 1, default: 0), "uint64 constant type");
 _Static_assert(_Generic(INTMAX_C(1), intmax_t: 1, default: 0), "intmax constant type");

@@ -9,49 +9,84 @@
   "inventory": {
     "chapters_complete": false,
     "features_complete": false,
-    "notes": "Initial release map: one precisely qualified member-function slice, current explicit frontend capability diagnostics, and the actual cstdio frontier. This is not complete C++17 chapter or standard-library coverage. Existing supported domains without per-feature evidence rows are not reclassified as missing. Whole cb41: 2005 ordinary PASS; 655 integration PASS, four external-reference compilation FAIL, two missing-native-input ERROR. No combined green/TinyXML2 owned claim. New e816 qualification: whole ordinary 2237 passed plus 49 subtests; whole integration 814 passed, four external G++ reference compilation failures and two setup errors for absent PCC_PLATFORM_TEST_COMPILER; zero skipped or unfinished. All six nonpasses retained below. Historical cb41 rows remain in published Git history. Exactly 23 unchanged member originals were freshly requalified on e816 with 69 current evidence rows and 23 current passed entries; no historical artifact restoration is claimed. Four new bounded feature scopes only; not full C++17, native pcc1, full bootstrap, five-GC or NumPy qualification.",
+    "notes": "Incomplete source-oriented C++17 feature inventory, not an official run-pass suite denominator. Supported rows describe bounded capabilities and retain their actually executed historical compiler revisions; matching source bytes do not qualify execution on a later integrated master. Only the constructor scalar-direct evidence triplet and passed entry were renewed from retained bdb execution to replace a stale unit-file binding; all other published evidence remains historical. New DMI/placement/cstddef/decltype/nullptr/SysV-varargs/postfix scopes do not establish native pcc1, full bootstrap, five-GC, NumPy or complete C++17 acceptance. Known external-reference failures and missing native prerequisites remain explicit below. Current unchanged TinyXML2 frontier is the in-class StrPair constructor and external-inline ODR; no owned project executable exists.",
     "qualification_nonpasses": [
       {
         "nodeid": "tests/cpp/test_cpp_c_object_linkage.py::test_c_objects_execute_against_explicit_cpp17_reference[internal-const-does-not-share-c-name]",
         "when": "call",
         "outcome": "failed",
         "classification": "external G++ reference compilation FAIL",
-        "source_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5"
+        "source_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3"
       },
       {
         "nodeid": "tests/cpp/test_cpp_c_object_linkage.py::test_c_objects_execute_against_explicit_cpp17_reference[internal-prior-linkage-is-not-overridden]",
         "when": "call",
         "outcome": "failed",
         "classification": "external G++ reference compilation FAIL",
-        "source_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5"
+        "source_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3"
       },
       {
         "nodeid": "tests/cpp/test_cpp_class_execution.py::test_cpp_class_owned_execution_matches_explicit_cpp17_reference[const-empty-default-construction-cwg2394]",
         "when": "call",
         "outcome": "failed",
         "classification": "external G++ reference compilation FAIL",
-        "source_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5"
+        "source_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3"
+      },
+      {
+        "nodeid": "tests/cpp/test_cpp_cstddef_header.py::test_decltype_nullptr_originals_execute_against_explicit_cpp17_reference[const-equality]",
+        "when": "call",
+        "outcome": "failed",
+        "classification": "external G++ reference compilation FAIL",
+        "source_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3"
+      },
+      {
+        "nodeid": "tests/cpp/test_cpp_cstddef_header.py::test_nullptr_no_fetch_originals_match_explicit_cpp17_reference[assignment-result-conversion]",
+        "when": "call",
+        "outcome": "failed",
+        "classification": "external G++ reference compilation FAIL",
+        "source_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3"
+      },
+      {
+        "nodeid": "tests/cpp/test_cpp_cstddef_header.py::test_nullptr_no_fetch_originals_match_explicit_cpp17_reference[uninitialized-comparison-not]",
+        "when": "call",
+        "outcome": "failed",
+        "classification": "external G++ reference compilation FAIL",
+        "source_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3"
+      },
+      {
+        "nodeid": "tests/cpp/test_cpp_cstddef_header.py::test_nullptr_no_fetch_originals_match_explicit_cpp17_reference[assignment-effects]",
+        "when": "call",
+        "outcome": "failed",
+        "classification": "external G++ reference compilation FAIL",
+        "source_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3"
+      },
+      {
+        "nodeid": "tests/cpp/test_cpp_placement_new.py::test_placement_originals_execute_against_genuine_cpp17_reference[outer-alias-despite-different-class-alias]",
+        "when": "call",
+        "outcome": "failed",
+        "classification": "external G++ reference compilation FAIL",
+        "source_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3"
       },
       {
         "nodeid": "tests/cpp/test_cpp_platform_execution.py::test_cpp_platform_explicit_cpp17_reference[class-const-empty-default-construction-cwg2394]",
         "when": "call",
         "outcome": "failed",
         "classification": "external G++ reference compilation FAIL",
-        "source_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5"
+        "source_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3"
       },
       {
         "nodeid": "tests/cpp/test_cpp_projects.py::test_cpp_tinyxml2_native_linux_windows_project_exact_outcome",
         "when": "setup",
         "outcome": "failed",
         "classification": "missing PCC_PLATFORM_TEST_COMPILER prerequisite (setup ERROR)",
-        "source_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5"
+        "source_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3"
       },
       {
         "nodeid": "tests/cpp/test_cpp_projects.py::test_cpp_tinyxml2_upstream_tests_native_linux_windows_project",
         "when": "setup",
         "outcome": "failed",
         "classification": "missing PCC_PLATFORM_TEST_COMPILER prerequisite (setup ERROR)",
-        "source_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5"
+        "source_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3"
       }
     ]
   },
@@ -145,6 +180,76 @@
       "id": "cstdio.syn",
       "title": "30.11.1 Header <cstdio> synopsis",
       "url": "https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2017/n4659.pdf#page=1307"
+    },
+    {
+      "id": "cstddef.syn",
+      "title": "cstddef.syn",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/cstddef.syn"
+    },
+    {
+      "id": "dcl.type.simple",
+      "title": "dcl.type.simple",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/dcl.type.simple"
+    },
+    {
+      "id": "conv.lval",
+      "title": "conv.lval",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/conv.lval"
+    },
+    {
+      "id": "class.mem",
+      "title": "class.mem",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/class.mem"
+    },
+    {
+      "id": "expr.new",
+      "title": "expr.new",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/expr.new"
+    },
+    {
+      "id": "cstdarg.syn",
+      "title": "cstdarg.syn",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/cstdarg.syn"
+    },
+    {
+      "id": "expr.post.incr",
+      "title": "expr.post.incr",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/expr.post.incr"
+    },
+    {
+      "id": "basic.lookup.classref",
+      "title": "basic.lookup.classref",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/basic.lookup.classref"
+    },
+    {
+      "id": "class.base.init",
+      "title": "class.base.init",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/class.base.init"
+    },
+    {
+      "id": "class.temporary",
+      "title": "class.temporary",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/class.temporary"
+    },
+    {
+      "id": "dcl.fct",
+      "title": "dcl.fct",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/dcl.fct"
+    },
+    {
+      "id": "dcl.init",
+      "title": "dcl.init",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/dcl.init"
+    },
+    {
+      "id": "expr.call",
+      "title": "expr.call",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/expr.call"
+    },
+    {
+      "id": "expr.pseudo",
+      "title": "expr.pseudo",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/expr.pseudo"
     }
   ],
   "features": [
@@ -2212,22 +2317,21 @@
         "tests/cpp/test_cpp_constructors.py::test_constructor_unimplemented_lifetimes_fail_closed[struct S{S(int);};int f(){S s(int(a[1+1]));return 0;}]",
         "tests/cpp/test_cpp_constructors.py::test_constructor_unimplemented_lifetimes_fail_closed[struct S{S(int);};int f(){S s(int(a[1]));return 0;}]",
         "tests/cpp/test_cpp_constructors.py::test_constructor_unimplemented_lifetimes_fail_closed[struct S{S(int);};int f(){int x=42;S s(int(x));return 0;}]",
-        "tests/cpp/test_cpp_constructors.py::test_constructor_unimplemented_lifetimes_fail_closed[struct S{int x=1;S();};]",
+        "tests/cpp/test_cpp_default_member_initializers.py::test_original_default_member_initializer_declaration_is_retained",
         "tests/cpp/test_cpp_constructors.py::test_default_argument_after_parameter_declarator_remains_function_declaration",
         "tests/cpp/test_cpp_constructors.py::test_omitted_scalar_initialization_does_not_invent_zero_stores",
         "tests/cpp/test_cpp_constructors.py::test_original_constructor_declaration_is_preserved_as_positive"
       ],
       "diagnostics": [
         "cpp.unsupported.block-function-declarations",
-        "cpp.unsupported.constructor-arrays",
         "cpp.unsupported.constructor-list-initialization",
         "cpp.unsupported.constructor-subobjects",
         "cpp.unsupported.delegating-constructors"
       ],
       "evidence": [
-        "cpp.e816.constructors.complete-object.unit",
-        "cpp.e816.constructors.complete-object.program",
-        "cpp.e816.constructors.complete-object.differential"
+        "cpp.bdb.constructors.complete-object.unit",
+        "cpp.bdb.constructors.complete-object.program",
+        "cpp.bdb.constructors.complete-object.differential"
       ]
     },
     {
@@ -2350,6 +2454,534 @@
         "cpp.e816.destructors.normal-exit.program",
         "cpp.e816.destructors.normal-exit.differential"
       ]
+    },
+    {
+      "id": "cpp.target-declarations",
+      "title": "Owned cstddef target declarations",
+      "chapter_ids": [
+        "cstddef.syn"
+      ],
+      "scope": "Owned size_t/ptrdiff_t target aliases, distinct nullptr_t and repeated header acquisition. max_align_t is deliberately incomplete; offsetof and byte operations remain unavailable. Linux x86_64 runtime only; other target assertions are syntax/type checks, not native ABI qualification. Host pcc0/self only; no native pcc1, bootstrap, five-GC, TinyXML2 whole-project, NumPy or full C++17 acceptance.",
+      "status": "supported",
+      "tests": [
+        "tests/cpp/test_cpp_cstddef_header.py::test_real_cstddef_original_has_stable_public_owned_artifacts",
+        "tests/cpp/test_cpp_cstddef_header.py::test_real_cstddef_original_executes_with_separate_system_header_reference"
+      ],
+      "diagnostics": [],
+      "evidence": [
+        "cpp.7982.target-declarations.unit",
+        "cpp.7982.target-declarations.program",
+        "cpp.7982.target-declarations.differential"
+      ]
+    },
+    {
+      "id": "cpp.nondependent-decltype",
+      "title": "Nondependent decltype entity/prvalue typing",
+      "chapter_ids": [
+        "dcl.type.simple"
+      ],
+      "scope": "Entity type and supported prvalue deduction, completed-class member lookup and unevaluated operand effects; scalar functional-prvalue top-level cv removal. References, functions, decltype(auto), dependent templates remain explicit gaps. Host pcc0/self only; no native pcc1, bootstrap, five-GC, TinyXML2 whole-project, NumPy or full C++17 acceptance.",
+      "status": "supported",
+      "tests": [
+        "tests/cpp/test_cpp_cstddef_header.py::test_decltype_nullptr_original_artifacts_are_byte_stable[unevaluated-call]",
+        "tests/cpp/test_cpp_cstddef_header.py::test_decltype_nullptr_originals_execute_against_explicit_cpp17_reference[unevaluated-call]"
+      ],
+      "diagnostics": [],
+      "evidence": [
+        "cpp.7982.nondependent-decltype.unit",
+        "cpp.7982.nondependent-decltype.program",
+        "cpp.7982.nondependent-decltype.differential"
+      ]
+    },
+    {
+      "id": "cpp.nullptr-no-fetch",
+      "title": "Distinct nullptr_t and no-fetch lvalue conversion",
+      "chapter_ids": [
+        "conv.lval"
+      ],
+      "scope": "Dn semantic/ABI identity with void-pointer storage, no-fetch lvalue-to-rvalue conversion preserving once-only base/address effects, copy/parameter/result and null-pointer conversion. This is not a void* semantic alias. Four logical-not originals still have external G++ rejection differences; owned-only successful executions do not make those differential passes. Host pcc0/self only; no native pcc1, bootstrap, five-GC, TinyXML2 whole-project, NumPy or full C++17 acceptance.",
+      "status": "supported",
+      "tests": [
+        "tests/cpp/test_cpp_cstddef_header.py::test_nullptr_no_fetch_originals_are_stable[uninitialized-copy-argument-return]",
+        "tests/cpp/test_cpp_cstddef_header.py::test_nullptr_no_fetch_originals_match_explicit_cpp17_reference[uninitialized-copy-argument-return]"
+      ],
+      "diagnostics": [],
+      "evidence": [
+        "cpp.7982.nullptr-no-fetch.unit",
+        "cpp.7982.nullptr-no-fetch.program",
+        "cpp.7982.nullptr-no-fetch.differential"
+      ]
+    },
+    {
+      "id": "cpp.nullptr-glvalue-evaluation",
+      "title": "nullptr glvalue evaluation",
+      "chapter_ids": [
+        "conv.lval"
+      ],
+      "scope": "Explicit remaining capability boundary; not an implemented feature.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [
+        "cpp.unsupported.nullptr-glvalue-evaluation"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "cpp.decltype-auto",
+      "title": "decltype auto",
+      "chapter_ids": [
+        "dcl.type.simple"
+      ],
+      "scope": "Explicit remaining capability boundary; not an implemented feature.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [
+        "cpp.unsupported.decltype-auto"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "cpp.decltype-functions",
+      "title": "decltype functions",
+      "chapter_ids": [
+        "dcl.type.simple"
+      ],
+      "scope": "Explicit remaining capability boundary; not an implemented feature.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [
+        "cpp.unsupported.decltype-functions"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "cpp.decltype-templates",
+      "title": "decltype templates",
+      "chapter_ids": [
+        "dcl.type.simple"
+      ],
+      "scope": "Explicit remaining capability boundary; not an implemented feature.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [
+        "cpp.unsupported.decltype-templates"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "cpp.default-member-initializers.scalar",
+      "title": "Scalar/pointer default member initialization",
+      "scope": "Completed-class typed binding, constructor override and declaration-order once-only execution. No textual name substitution; no braced DMI/aggregate-list/copy/subobject/global/array or exception-unwind support. Host pcc0/self Linux x86_64 only; not native pcc1/full C++17/TinyXML2/NumPy/five-GC acceptance.",
+      "chapter_ids": [
+        "class.mem"
+      ],
+      "status": "supported",
+      "tests": [
+        "tests/cpp/test_cpp_default_member_initializers.py::test_default_member_initializer_originals_compile_stably[declaration-order]",
+        "tests/cpp/test_cpp_default_member_initializer_execution.py::test_default_member_initializer_originals_match_reference[declaration-order]"
+      ],
+      "diagnostics": [],
+      "evidence": [
+        "cpp.bdb.default-member-initializers.scalar.unit",
+        "cpp.bdb.default-member-initializers.scalar.program",
+        "cpp.bdb.default-member-initializers.scalar.differential"
+      ]
+    },
+    {
+      "id": "cpp.placement.complete-object",
+      "title": "Reserved nonallocating placement and complete-object lifetime",
+      "scope": "Exact standard nonallocating placement signature, once-only storage evaluation, C1 initialization, explicit D1/trivial destruction and transparent replacement. No allocating new/delete, general allocation overloads, throwing constructor cleanup, full new header or inline ODR support. Host pcc0/self Linux x86_64 only; not native pcc1/full C++17/TinyXML2/NumPy/five-GC acceptance.",
+      "chapter_ids": [
+        "expr.new"
+      ],
+      "status": "supported",
+      "tests": [
+        "tests/cpp/test_cpp_placement_new.py::test_placement_originals_have_stable_owned_artifacts[placement-address-and-value]",
+        "tests/cpp/test_cpp_placement_new.py::test_placement_originals_execute_against_genuine_cpp17_reference[placement-address-and-value]"
+      ],
+      "diagnostics": [],
+      "evidence": [
+        "cpp.bdb.placement.complete-object.unit",
+        "cpp.bdb.placement.complete-object.program",
+        "cpp.bdb.placement.complete-object.differential"
+      ]
+    },
+    {
+      "id": "cpp.varargs.sysv",
+      "title": "Owned SysV variadic definitions and cursor operations",
+      "scope": "Free-function variadic declarations/definitions and default promotions; real SysV record-array va_list, scalar va_arg, va_start/copy/end and effectful cursor operands. Reuses C intrinsic finalization; no external helper stubs. Member variadics, other va_list targets, callback and nontrivial record-array lifetimes remain explicit gaps. Host pcc0/self Linux x86_64 only; not native pcc1/full C++17/TinyXML2/NumPy/five-GC acceptance.",
+      "chapter_ids": [
+        "cstdarg.syn"
+      ],
+      "status": "supported",
+      "tests": [
+        "tests/cpp/test_cpp_cstdarg.py::test_cstdarg_originals_have_byte_stable_owned_artifacts[effectful-copy-operands]",
+        "tests/cpp/test_cpp_cstdarg.py::test_cstdarg_originals_execute_against_explicit_cpp17_reference[effectful-copy-operands]"
+      ],
+      "diagnostics": [],
+      "evidence": [
+        "cpp.bdb.varargs.sysv.unit",
+        "cpp.bdb.varargs.sysv.program",
+        "cpp.bdb.varargs.sysv.differential"
+      ]
+    },
+    {
+      "id": "cpp.expressions.typed-postfix",
+      "title": "Typed postfix old-value and row-stride projection",
+      "scope": "Builtin postfix increment/decrement captures the typed operand address once before update and returns the old value. Includes the unchanged confirmed pointer-to-array formal miscompile, row-width/const/nested cases and scalar behavior; not user-defined operator overloading. Host pcc0/self Linux x86_64 only; not native pcc1/full C++17/TinyXML2/NumPy/five-GC acceptance.",
+      "chapter_ids": [
+        "expr.post.incr"
+      ],
+      "status": "supported",
+      "tests": [
+        "tests/cpp/test_cpp_postfix_projection.py::test_postfix_original_artifacts_are_byte_stable[reported-formal-row-stride]",
+        "tests/cpp/test_cpp_postfix_projection.py::test_postfix_originals_match_same_cpp17_reference[reported-formal-row-stride]"
+      ],
+      "diagnostics": [],
+      "evidence": [
+        "cpp.73e.expressions.typed-postfix.unit",
+        "cpp.73e.expressions.typed-postfix.program",
+        "cpp.73e.expressions.typed-postfix.differential"
+      ]
+    },
+    {
+      "id": "cpp.allocation-function-definitions",
+      "title": "Allocation function definitions \u2014 remaining capability boundary",
+      "chapter_ids": [
+        "expr.new"
+      ],
+      "scope": "Only inputs routed to cpp.unsupported.allocation-function-definitions in the pinned frontend; not a claim that the entire corresponding language feature is absent or complete.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [
+        "cpp.unsupported.allocation-function-definitions"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "cpp.allocation-templates",
+      "title": "Allocation templates \u2014 remaining capability boundary",
+      "chapter_ids": [
+        "temp",
+        "expr.new"
+      ],
+      "scope": "Only inputs routed to cpp.unsupported.allocation-templates in the pinned frontend; not a claim that the entire corresponding language feature is absent or complete.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [
+        "cpp.unsupported.allocation-templates"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "cpp.array-new",
+      "title": "Array new \u2014 remaining capability boundary",
+      "chapter_ids": [
+        "expr.new"
+      ],
+      "scope": "Only inputs routed to cpp.unsupported.array-new in the pinned frontend; not a claim that the entire corresponding language feature is absent or complete.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [
+        "cpp.unsupported.array-new"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "cpp.class-allocation-functions",
+      "title": "Class allocation functions \u2014 remaining capability boundary",
+      "chapter_ids": [
+        "expr.new"
+      ],
+      "scope": "Only inputs routed to cpp.unsupported.class-allocation-functions in the pinned frontend; not a claim that the entire corresponding language feature is absent or complete.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [
+        "cpp.unsupported.class-allocation-functions"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "cpp.class-array-initialization",
+      "title": "Class array initialization \u2014 remaining capability boundary",
+      "chapter_ids": [
+        "dcl.init"
+      ],
+      "scope": "Only inputs routed to cpp.unsupported.class-array-initialization in the pinned frontend; not a claim that the entire corresponding language feature is absent or complete.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [
+        "cpp.unsupported.class-array-initialization"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "cpp.const-va-list",
+      "title": "Const va list \u2014 remaining capability boundary",
+      "chapter_ids": [
+        "cstdarg.syn"
+      ],
+      "scope": "Only inputs routed to cpp.unsupported.const-va-list in the pinned frontend; not a claim that the entire corresponding language feature is absent or complete.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [
+        "cpp.unsupported.const-va-list"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "cpp.default-member-initializer-path",
+      "title": "Default member initializer path \u2014 remaining capability boundary",
+      "chapter_ids": [
+        "class.mem"
+      ],
+      "scope": "Only inputs routed to cpp.unsupported.default-member-initializer-path in the pinned frontend; not a claim that the entire corresponding language feature is absent or complete.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [
+        "cpp.unsupported.default-member-initializer-path"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "cpp.dependent-destruction",
+      "title": "Dependent destruction \u2014 remaining capability boundary",
+      "chapter_ids": [
+        "temp"
+      ],
+      "scope": "Only inputs routed to cpp.unsupported.dependent-destruction in the pinned frontend; not a claim that the entire corresponding language feature is absent or complete.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [
+        "cpp.unsupported.dependent-destruction"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "cpp.destructor-alias-lookup",
+      "title": "Destructor alias lookup \u2014 remaining capability boundary",
+      "chapter_ids": [
+        "basic.lookup.classref"
+      ],
+      "scope": "Only inputs routed to cpp.unsupported.destructor-alias-lookup in the pinned frontend; not a claim that the entire corresponding language feature is absent or complete.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [
+        "cpp.unsupported.destructor-alias-lookup"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "cpp.destructor-hidden-name",
+      "title": "Destructor hidden name \u2014 remaining capability boundary",
+      "chapter_ids": [
+        "basic.lookup.classref"
+      ],
+      "scope": "Only inputs routed to cpp.unsupported.destructor-hidden-name in the pinned frontend; not a claim that the entire corresponding language feature is absent or complete.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [
+        "cpp.unsupported.destructor-hidden-name"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "cpp.new-type-id",
+      "title": "New type id \u2014 remaining capability boundary",
+      "chapter_ids": [
+        "expr.new"
+      ],
+      "scope": "Only inputs routed to cpp.unsupported.new-type-id in the pinned frontend; not a claim that the entire corresponding language feature is absent or complete.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [
+        "cpp.unsupported.new-type-id"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "cpp.placement-allocation-overload",
+      "title": "Placement allocation overload \u2014 remaining capability boundary",
+      "chapter_ids": [
+        "expr.new"
+      ],
+      "scope": "Only inputs routed to cpp.unsupported.placement-allocation-overload in the pinned frontend; not a claim that the entire corresponding language feature is absent or complete.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [
+        "cpp.unsupported.placement-allocation-overload"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "cpp.placement-constructor-effects",
+      "title": "Placement constructor effects \u2014 remaining capability boundary",
+      "chapter_ids": [
+        "expr.new",
+        "except"
+      ],
+      "scope": "Only inputs routed to cpp.unsupported.placement-constructor-effects in the pinned frontend; not a claim that the entire corresponding language feature is absent or complete.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [
+        "cpp.unsupported.placement-constructor-effects"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "cpp.placement-implicit-construction",
+      "title": "Placement implicit construction \u2014 remaining capability boundary",
+      "chapter_ids": [
+        "dcl.init"
+      ],
+      "scope": "Only inputs routed to cpp.unsupported.placement-implicit-construction in the pinned frontend; not a claim that the entire corresponding language feature is absent or complete.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [
+        "cpp.unsupported.placement-implicit-construction"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "cpp.placement-list-initialization",
+      "title": "Placement list initialization \u2014 remaining capability boundary",
+      "chapter_ids": [
+        "dcl.init"
+      ],
+      "scope": "Only inputs routed to cpp.unsupported.placement-list-initialization in the pinned frontend; not a claim that the entire corresponding language feature is absent or complete.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [
+        "cpp.unsupported.placement-list-initialization"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "cpp.placement-object-type",
+      "title": "Placement object type \u2014 remaining capability boundary",
+      "chapter_ids": [
+        "expr.new"
+      ],
+      "scope": "Only inputs routed to cpp.unsupported.placement-object-type in the pinned frontend; not a claim that the entire corresponding language feature is absent or complete.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [
+        "cpp.unsupported.placement-object-type"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "cpp.placement-subobjects",
+      "title": "Placement subobjects \u2014 remaining capability boundary",
+      "chapter_ids": [
+        "class.base.init"
+      ],
+      "scope": "Only inputs routed to cpp.unsupported.placement-subobjects in the pinned frontend; not a claim that the entire corresponding language feature is absent or complete.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [
+        "cpp.unsupported.placement-subobjects"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "cpp.pseudo-destructors",
+      "title": "Pseudo destructors \u2014 remaining capability boundary",
+      "chapter_ids": [
+        "expr.pseudo"
+      ],
+      "scope": "Only inputs routed to cpp.unsupported.pseudo-destructors in the pinned frontend; not a claim that the entire corresponding language feature is absent or complete.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [
+        "cpp.unsupported.pseudo-destructors"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "cpp.temporary-destruction",
+      "title": "Temporary destruction \u2014 remaining capability boundary",
+      "chapter_ids": [
+        "class.temporary"
+      ],
+      "scope": "Only inputs routed to cpp.unsupported.temporary-destruction in the pinned frontend; not a claim that the entire corresponding language feature is absent or complete.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [
+        "cpp.unsupported.temporary-destruction"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "cpp.va-arg-type",
+      "title": "Va arg type \u2014 remaining capability boundary",
+      "chapter_ids": [
+        "cstdarg.syn"
+      ],
+      "scope": "Only inputs routed to cpp.unsupported.va-arg-type in the pinned frontend; not a claim that the entire corresponding language feature is absent or complete.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [
+        "cpp.unsupported.va-arg-type"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "cpp.varargs-target",
+      "title": "Varargs target \u2014 remaining capability boundary",
+      "chapter_ids": [
+        "cstdarg.syn"
+      ],
+      "scope": "Only inputs routed to cpp.unsupported.varargs-target in the pinned frontend; not a claim that the entire corresponding language feature is absent or complete.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [
+        "cpp.unsupported.varargs-target"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "cpp.varargs-templates",
+      "title": "Varargs templates \u2014 remaining capability boundary",
+      "chapter_ids": [
+        "temp",
+        "cstdarg.syn"
+      ],
+      "scope": "Only inputs routed to cpp.unsupported.varargs-templates in the pinned frontend; not a claim that the entire corresponding language feature is absent or complete.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [
+        "cpp.unsupported.varargs-templates"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "cpp.variadic-argument",
+      "title": "Variadic argument \u2014 remaining capability boundary",
+      "chapter_ids": [
+        "expr.call"
+      ],
+      "scope": "Only inputs routed to cpp.unsupported.variadic-argument in the pinned frontend; not a claim that the entire corresponding language feature is absent or complete.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [
+        "cpp.unsupported.variadic-argument"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "cpp.variadic-functions",
+      "title": "Variadic functions \u2014 remaining capability boundary",
+      "chapter_ids": [
+        "dcl.fct"
+      ],
+      "scope": "Only inputs routed to cpp.unsupported.variadic-functions in the pinned frontend; not a claim that the entire corresponding language feature is absent or complete.",
+      "status": "explicitly_unimplemented",
+      "tests": [],
+      "diagnostics": [
+        "cpp.unsupported.variadic-functions"
+      ],
+      "evidence": []
     }
   ],
   "diagnostics": {
@@ -2360,7 +2992,7 @@
         "feature_id": "cpp.aggregate-brace-elision",
         "source": {
           "path": "pcc/frontends/cpp/initializers.py",
-          "sha256": "e130ac3d09d895ece8f8fa16fd0dd44182bcf2ef716282c242ba55b568e32f85"
+          "sha256": "dd4980999d3be96d53adb40161a024035609e2d4d81b891c99f7137a079ed77d"
         }
       },
       {
@@ -2368,7 +3000,23 @@
         "feature_id": "cpp.allocation",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
+        }
+      },
+      {
+        "code": "cpp.unsupported.allocation-function-definitions",
+        "feature_id": "cpp.allocation-function-definitions",
+        "source": {
+          "path": "pcc/frontends/cpp/allocation.py",
+          "sha256": "fb5a91d522972255c5c9512b8f6644b68f078fba4b585f0619955933b7c757f2"
+        }
+      },
+      {
+        "code": "cpp.unsupported.allocation-templates",
+        "feature_id": "cpp.allocation-templates",
+        "source": {
+          "path": "pcc/frontends/cpp/allocation.py",
+          "sha256": "fb5a91d522972255c5c9512b8f6644b68f078fba4b585f0619955933b7c757f2"
         }
       },
       {
@@ -2384,7 +3032,7 @@
         "feature_id": "cpp.array-bound-analysis",
         "source": {
           "path": "pcc/frontends/cpp/arrays.py",
-          "sha256": "476ec00bab88493aaab13d54242887617f989641af53241eeb3bf4d4e8c77eec"
+          "sha256": "3fe7a6f9c61b0d74e4ac2181cef2012f1e4ff342b072e60a32bf6a750b28d517"
         }
       },
       {
@@ -2392,7 +3040,7 @@
         "feature_id": "cpp.array-bound-deduction",
         "source": {
           "path": "pcc/frontends/cpp/arrays.py",
-          "sha256": "476ec00bab88493aaab13d54242887617f989641af53241eeb3bf4d4e8c77eec"
+          "sha256": "3fe7a6f9c61b0d74e4ac2181cef2012f1e4ff342b072e60a32bf6a750b28d517"
         }
       },
       {
@@ -2400,7 +3048,7 @@
         "feature_id": "cpp.array-bounds",
         "source": {
           "path": "pcc/frontends/cpp/declarators.py",
-          "sha256": "10e60aee1b9ac6a0d2628647ea3e25b673d8cea31cbc25ed389e43b7e466a2ee"
+          "sha256": "2c5c0540ab4a9082f1e22151630e91106c5d130e41439b694f2656b978abc05f"
         }
       },
       {
@@ -2408,7 +3056,15 @@
         "feature_id": "cpp.array-brace-elision",
         "source": {
           "path": "pcc/frontends/cpp/arrays.py",
-          "sha256": "476ec00bab88493aaab13d54242887617f989641af53241eeb3bf4d4e8c77eec"
+          "sha256": "3fe7a6f9c61b0d74e4ac2181cef2012f1e4ff342b072e60a32bf6a750b28d517"
+        }
+      },
+      {
+        "code": "cpp.unsupported.array-new",
+        "feature_id": "cpp.array-new",
+        "source": {
+          "path": "pcc/frontends/cpp/allocation.py",
+          "sha256": "fb5a91d522972255c5c9512b8f6644b68f078fba4b585f0619955933b7c757f2"
         }
       },
       {
@@ -2416,7 +3072,7 @@
         "feature_id": "cpp.array-templates",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2424,7 +3080,7 @@
         "feature_id": "cpp.arrays-or-lambdas",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2432,7 +3088,7 @@
         "feature_id": "cpp.associated-lookup",
         "source": {
           "path": "pcc/frontends/cpp/sema.py",
-          "sha256": "d1e12ba5168779d5e5103cce6b9fa4d7f3d6cff3f1a4886906a0983edb85d34a"
+          "sha256": "2294b4ec706047647c68474d38290d7089e04ca3115a5b3759d10929d977cfb5"
         }
       },
       {
@@ -2440,7 +3096,7 @@
         "feature_id": "cpp.attributes",
         "source": {
           "path": "pcc/frontends/cpp/declarators.py",
-          "sha256": "10e60aee1b9ac6a0d2628647ea3e25b673d8cea31cbc25ed389e43b7e466a2ee"
+          "sha256": "2c5c0540ab4a9082f1e22151630e91106c5d130e41439b694f2656b978abc05f"
         }
       },
       {
@@ -2448,7 +3104,7 @@
         "feature_id": "cpp.constructors.complete-object",
         "source": {
           "path": "pcc/frontends/cpp/constructors.py",
-          "sha256": "71cb0e3102c8b886124991a6d68fe0a5eb5941f9fc8d58bf995f98e7c04dd925"
+          "sha256": "b07663611a536e0174b65a5b8bb637371f72528d52e8a99c19bbdb68359e0d23"
         }
       },
       {
@@ -2456,7 +3112,7 @@
         "feature_id": "cpp.block-storage",
         "source": {
           "path": "pcc/frontends/cpp/sema.py",
-          "sha256": "d1e12ba5168779d5e5103cce6b9fa4d7f3d6cff3f1a4886906a0983edb85d34a"
+          "sha256": "2294b4ec706047647c68474d38290d7089e04ca3115a5b3759d10929d977cfb5"
         }
       },
       {
@@ -2464,7 +3120,7 @@
         "feature_id": "cpp.c-linkage-internal",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2472,7 +3128,7 @@
         "feature_id": "cpp.c-linkage-signature",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2480,7 +3136,7 @@
         "feature_id": "cpp.c-style-cast",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2492,11 +3148,27 @@
         }
       },
       {
+        "code": "cpp.unsupported.class-allocation-functions",
+        "feature_id": "cpp.class-allocation-functions",
+        "source": {
+          "path": "pcc/frontends/cpp/allocation.py",
+          "sha256": "fb5a91d522972255c5c9512b8f6644b68f078fba4b585f0619955933b7c757f2"
+        }
+      },
+      {
+        "code": "cpp.unsupported.class-array-initialization",
+        "feature_id": "cpp.class-array-initialization",
+        "source": {
+          "path": "pcc/frontends/cpp/parser.py",
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
+        }
+      },
+      {
         "code": "cpp.unsupported.class-array-lifetime",
         "feature_id": "cpp.class-array-lifetime",
         "source": {
           "path": "pcc/frontends/cpp/arrays.py",
-          "sha256": "476ec00bab88493aaab13d54242887617f989641af53241eeb3bf4d4e8c77eec"
+          "sha256": "3fe7a6f9c61b0d74e4ac2181cef2012f1e4ff342b072e60a32bf6a750b28d517"
         }
       },
       {
@@ -2504,7 +3176,7 @@
         "feature_id": "cpp.class-array-members",
         "source": {
           "path": "pcc/frontends/cpp/classes.py",
-          "sha256": "4cd4d0608aa8048af78d28abbd52f70ecfcf736215d0309be869d622ba881c8d"
+          "sha256": "255af7e454f9a679f6ee73a74a1b16e21157713cdf90db0a167ad7d84a2e5ca8"
         }
       },
       {
@@ -2512,7 +3184,7 @@
         "feature_id": "cpp.class-assignment",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2520,7 +3192,7 @@
         "feature_id": "cpp.class-constructors",
         "source": {
           "path": "pcc/frontends/cpp/initializers.py",
-          "sha256": "e130ac3d09d895ece8f8fa16fd0dd44182bcf2ef716282c242ba55b568e32f85"
+          "sha256": "dd4980999d3be96d53adb40161a024035609e2d4d81b891c99f7137a079ed77d"
         }
       },
       {
@@ -2528,7 +3200,7 @@
         "feature_id": "cpp.class-conversions",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2536,7 +3208,7 @@
         "feature_id": "cpp.class-initialization",
         "source": {
           "path": "pcc/frontends/cpp/initializers.py",
-          "sha256": "e130ac3d09d895ece8f8fa16fd0dd44182bcf2ef716282c242ba55b568e32f85"
+          "sha256": "dd4980999d3be96d53adb40161a024035609e2d4d81b891c99f7137a079ed77d"
         }
       },
       {
@@ -2544,7 +3216,7 @@
         "feature_id": "cpp.class-linkage",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2552,7 +3224,7 @@
         "feature_id": "cpp.class-operators",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2560,7 +3232,7 @@
         "feature_id": "cpp.class-templates",
         "source": {
           "path": "pcc/frontends/cpp/initializers.py",
-          "sha256": "e130ac3d09d895ece8f8fa16fd0dd44182bcf2ef716282c242ba55b568e32f85"
+          "sha256": "dd4980999d3be96d53adb40161a024035609e2d4d81b891c99f7137a079ed77d"
         }
       },
       {
@@ -2576,7 +3248,7 @@
         "feature_id": "cpp.class-values",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2584,7 +3256,7 @@
         "feature_id": "cpp.classes",
         "source": {
           "path": "pcc/frontends/cpp/classes.py",
-          "sha256": "4cd4d0608aa8048af78d28abbd52f70ecfcf736215d0309be869d622ba881c8d"
+          "sha256": "255af7e454f9a679f6ee73a74a1b16e21157713cdf90db0a167ad7d84a2e5ca8"
         }
       },
       {
@@ -2592,7 +3264,7 @@
         "feature_id": "cpp.condition-declaration",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2600,15 +3272,15 @@
         "feature_id": "cpp.const-class-initialization",
         "source": {
           "path": "pcc/frontends/cpp/classes.py",
-          "sha256": "4cd4d0608aa8048af78d28abbd52f70ecfcf736215d0309be869d622ba881c8d"
+          "sha256": "255af7e454f9a679f6ee73a74a1b16e21157713cdf90db0a167ad7d84a2e5ca8"
         }
       },
       {
-        "code": "cpp.unsupported.constructor-arrays",
-        "feature_id": "cpp.constructors.complete-object",
+        "code": "cpp.unsupported.const-va-list",
+        "feature_id": "cpp.const-va-list",
         "source": {
-          "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "path": "pcc/frontends/cpp/varargs.py",
+          "sha256": "0d9991b705d4da63380719ae0166e7dde01d45016f1e49cc5c1ddc155eefff60"
         }
       },
       {
@@ -2616,7 +3288,7 @@
         "feature_id": "cpp.constructors.complete-object",
         "source": {
           "path": "pcc/frontends/cpp/classes.py",
-          "sha256": "4cd4d0608aa8048af78d28abbd52f70ecfcf736215d0309be869d622ba881c8d"
+          "sha256": "255af7e454f9a679f6ee73a74a1b16e21157713cdf90db0a167ad7d84a2e5ca8"
         }
       },
       {
@@ -2624,7 +3296,39 @@
         "feature_id": "cpp.constructors.complete-object",
         "source": {
           "path": "pcc/frontends/cpp/classes.py",
-          "sha256": "4cd4d0608aa8048af78d28abbd52f70ecfcf736215d0309be869d622ba881c8d"
+          "sha256": "255af7e454f9a679f6ee73a74a1b16e21157713cdf90db0a167ad7d84a2e5ca8"
+        }
+      },
+      {
+        "code": "cpp.unsupported.decltype-auto",
+        "feature_id": "cpp.decltype-auto",
+        "source": {
+          "path": "pcc/frontends/cpp/type_queries.py",
+          "sha256": "15eda625516391dce3df7e9ea06daf08b207373a6622f1184e816e33914ce3b3"
+        }
+      },
+      {
+        "code": "cpp.unsupported.decltype-functions",
+        "feature_id": "cpp.decltype-functions",
+        "source": {
+          "path": "pcc/frontends/cpp/type_queries.py",
+          "sha256": "15eda625516391dce3df7e9ea06daf08b207373a6622f1184e816e33914ce3b3"
+        }
+      },
+      {
+        "code": "cpp.unsupported.decltype-templates",
+        "feature_id": "cpp.decltype-templates",
+        "source": {
+          "path": "pcc/frontends/cpp/type_queries.py",
+          "sha256": "15eda625516391dce3df7e9ea06daf08b207373a6622f1184e816e33914ce3b3"
+        }
+      },
+      {
+        "code": "cpp.unsupported.default-member-initializer-path",
+        "feature_id": "cpp.default-member-initializer-path",
+        "source": {
+          "path": "pcc/frontends/cpp/default_member_initializers.py",
+          "sha256": "da966d16ee1d5fbc918da488c7b1f0e2e04e486c0078825496c51acc7ec6ca10"
         }
       },
       {
@@ -2632,7 +3336,15 @@
         "feature_id": "cpp.constructors.complete-object",
         "source": {
           "path": "pcc/frontends/cpp/constructors.py",
-          "sha256": "71cb0e3102c8b886124991a6d68fe0a5eb5941f9fc8d58bf995f98e7c04dd925"
+          "sha256": "b07663611a536e0174b65a5b8bb637371f72528d52e8a99c19bbdb68359e0d23"
+        }
+      },
+      {
+        "code": "cpp.unsupported.dependent-destruction",
+        "feature_id": "cpp.dependent-destruction",
+        "source": {
+          "path": "pcc/frontends/cpp/allocation.py",
+          "sha256": "fb5a91d522972255c5c9512b8f6644b68f078fba4b585f0619955933b7c757f2"
         }
       },
       {
@@ -2640,7 +3352,7 @@
         "feature_id": "cpp.dependent-lookup",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2648,7 +3360,23 @@
         "feature_id": "cpp.dependent-template-names",
         "source": {
           "path": "pcc/frontends/cpp/declarators.py",
-          "sha256": "10e60aee1b9ac6a0d2628647ea3e25b673d8cea31cbc25ed389e43b7e466a2ee"
+          "sha256": "2c5c0540ab4a9082f1e22151630e91106c5d130e41439b694f2656b978abc05f"
+        }
+      },
+      {
+        "code": "cpp.unsupported.destructor-alias-lookup",
+        "feature_id": "cpp.destructor-alias-lookup",
+        "source": {
+          "path": "pcc/frontends/cpp/allocation.py",
+          "sha256": "fb5a91d522972255c5c9512b8f6644b68f078fba4b585f0619955933b7c757f2"
+        }
+      },
+      {
+        "code": "cpp.unsupported.destructor-hidden-name",
+        "feature_id": "cpp.destructor-hidden-name",
+        "source": {
+          "path": "pcc/frontends/cpp/allocation.py",
+          "sha256": "fb5a91d522972255c5c9512b8f6644b68f078fba4b585f0619955933b7c757f2"
         }
       },
       {
@@ -2656,7 +3384,7 @@
         "feature_id": "cpp.destructors.normal-exit",
         "source": {
           "path": "pcc/frontends/cpp/classes.py",
-          "sha256": "4cd4d0608aa8048af78d28abbd52f70ecfcf736215d0309be869d622ba881c8d"
+          "sha256": "255af7e454f9a679f6ee73a74a1b16e21157713cdf90db0a167ad7d84a2e5ca8"
         }
       },
       {
@@ -2664,7 +3392,7 @@
         "feature_id": "cpp.discarded-class-expression",
         "source": {
           "path": "pcc/frontends/cpp/classes.py",
-          "sha256": "4cd4d0608aa8048af78d28abbd52f70ecfcf736215d0309be869d622ba881c8d"
+          "sha256": "255af7e454f9a679f6ee73a74a1b16e21157713cdf90db0a167ad7d84a2e5ca8"
         }
       },
       {
@@ -2688,7 +3416,7 @@
         "feature_id": "cpp.enum-casts",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2720,7 +3448,7 @@
         "feature_id": "cpp.enum-linkage",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2728,7 +3456,7 @@
         "feature_id": "cpp.enum-list-initialization",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2736,7 +3464,7 @@
         "feature_id": "cpp.enum-local-scope",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2800,7 +3528,7 @@
         "feature_id": "cpp.exceptions",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2808,7 +3536,7 @@
         "feature_id": "cpp.extended-float",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2816,7 +3544,7 @@
         "feature_id": "cpp.for-declaration-list",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2824,7 +3552,7 @@
         "feature_id": "cpp.function-declarators",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2832,7 +3560,7 @@
         "feature_id": "cpp.function-parameters",
         "source": {
           "path": "pcc/frontends/cpp/declarators.py",
-          "sha256": "10e60aee1b9ac6a0d2628647ea3e25b673d8cea31cbc25ed389e43b7e466a2ee"
+          "sha256": "2c5c0540ab4a9082f1e22151630e91106c5d130e41439b694f2656b978abc05f"
         }
       },
       {
@@ -2840,7 +3568,7 @@
         "feature_id": "cpp.function-pointers",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2848,7 +3576,7 @@
         "feature_id": "cpp.function-storage",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2864,7 +3592,7 @@
         "feature_id": "cpp.inline-declarations",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2872,7 +3600,7 @@
         "feature_id": "cpp.inline-member-functions",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2880,7 +3608,7 @@
         "feature_id": "cpp.internal-object-declaration",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2888,7 +3616,7 @@
         "feature_id": "cpp.language-linkage",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2904,7 +3632,7 @@
         "feature_id": "cpp.member-pointers",
         "source": {
           "path": "pcc/frontends/cpp/classes.py",
-          "sha256": "4cd4d0608aa8048af78d28abbd52f70ecfcf736215d0309be869d622ba881c8d"
+          "sha256": "255af7e454f9a679f6ee73a74a1b16e21157713cdf90db0a167ad7d84a2e5ca8"
         }
       },
       {
@@ -2912,7 +3640,7 @@
         "feature_id": "cpp.member-qualifiers",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2928,7 +3656,7 @@
         "feature_id": "cpp.members",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2944,7 +3672,7 @@
         "feature_id": "cpp.multilevel-pointers",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2968,7 +3696,7 @@
         "feature_id": "cpp.namespace-object-templates",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2976,7 +3704,7 @@
         "feature_id": "cpp.namespace-templates",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2984,7 +3712,7 @@
         "feature_id": "cpp.namespaces",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -2992,7 +3720,15 @@
         "feature_id": "cpp.narrowing-analysis",
         "source": {
           "path": "pcc/frontends/cpp/initializers.py",
-          "sha256": "e130ac3d09d895ece8f8fa16fd0dd44182bcf2ef716282c242ba55b568e32f85"
+          "sha256": "dd4980999d3be96d53adb40161a024035609e2d4d81b891c99f7137a079ed77d"
+        }
+      },
+      {
+        "code": "cpp.unsupported.new-type-id",
+        "feature_id": "cpp.new-type-id",
+        "source": {
+          "path": "pcc/frontends/cpp/allocation.py",
+          "sha256": "fb5a91d522972255c5c9512b8f6644b68f078fba4b585f0619955933b7c757f2"
         }
       },
       {
@@ -3004,11 +3740,67 @@
         }
       },
       {
+        "code": "cpp.unsupported.nullptr-glvalue-evaluation",
+        "feature_id": "cpp.nullptr-glvalue-evaluation",
+        "source": {
+          "path": "pcc/frontends/cpp/parser.py",
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
+        }
+      },
+      {
         "code": "cpp.unsupported.overload",
         "feature_id": "cpp.overload",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
+        }
+      },
+      {
+        "code": "cpp.unsupported.placement-allocation-overload",
+        "feature_id": "cpp.placement-allocation-overload",
+        "source": {
+          "path": "pcc/frontends/cpp/allocation.py",
+          "sha256": "fb5a91d522972255c5c9512b8f6644b68f078fba4b585f0619955933b7c757f2"
+        }
+      },
+      {
+        "code": "cpp.unsupported.placement-constructor-effects",
+        "feature_id": "cpp.placement-constructor-effects",
+        "source": {
+          "path": "pcc/frontends/cpp/allocation.py",
+          "sha256": "fb5a91d522972255c5c9512b8f6644b68f078fba4b585f0619955933b7c757f2"
+        }
+      },
+      {
+        "code": "cpp.unsupported.placement-implicit-construction",
+        "feature_id": "cpp.placement-implicit-construction",
+        "source": {
+          "path": "pcc/frontends/cpp/allocation.py",
+          "sha256": "fb5a91d522972255c5c9512b8f6644b68f078fba4b585f0619955933b7c757f2"
+        }
+      },
+      {
+        "code": "cpp.unsupported.placement-list-initialization",
+        "feature_id": "cpp.placement-list-initialization",
+        "source": {
+          "path": "pcc/frontends/cpp/allocation.py",
+          "sha256": "fb5a91d522972255c5c9512b8f6644b68f078fba4b585f0619955933b7c757f2"
+        }
+      },
+      {
+        "code": "cpp.unsupported.placement-object-type",
+        "feature_id": "cpp.placement-object-type",
+        "source": {
+          "path": "pcc/frontends/cpp/allocation.py",
+          "sha256": "fb5a91d522972255c5c9512b8f6644b68f078fba4b585f0619955933b7c757f2"
+        }
+      },
+      {
+        "code": "cpp.unsupported.placement-subobjects",
+        "feature_id": "cpp.placement-subobjects",
+        "source": {
+          "path": "pcc/frontends/cpp/allocation.py",
+          "sha256": "fb5a91d522972255c5c9512b8f6644b68f078fba4b585f0619955933b7c757f2"
         }
       },
       {
@@ -3016,7 +3808,7 @@
         "feature_id": "cpp.pointer-operators",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -3024,7 +3816,7 @@
         "feature_id": "cpp.pointer-templates",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -3032,7 +3824,7 @@
         "feature_id": "cpp.pointers",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -3040,7 +3832,15 @@
         "feature_id": "cpp.preprocessor",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
+        }
+      },
+      {
+        "code": "cpp.unsupported.pseudo-destructors",
+        "feature_id": "cpp.pseudo-destructors",
+        "source": {
+          "path": "pcc/frontends/cpp/allocation.py",
+          "sha256": "fb5a91d522972255c5c9512b8f6644b68f078fba4b585f0619955933b7c757f2"
         }
       },
       {
@@ -3048,7 +3848,7 @@
         "feature_id": "cpp.qualified-names",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -3056,7 +3856,7 @@
         "feature_id": "cpp.range-for",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -3064,7 +3864,7 @@
         "feature_id": "cpp.references",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -3072,7 +3872,7 @@
         "feature_id": "cpp.sizeof.unevaluated",
         "source": {
           "path": "pcc/frontends/cpp/size_queries.py",
-          "sha256": "69c8a61b181cd4457d92a6245f4eba0a4e68f3b680d648b1dd117ff4c089666b"
+          "sha256": "fd3f4f13cdcf30b327c02acc61defd6337b1a87a0bd00a931264bda18f46454f"
         }
       },
       {
@@ -3080,7 +3880,7 @@
         "feature_id": "cpp.sizeof.unevaluated",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -3088,7 +3888,7 @@
         "feature_id": "cpp.sizeof.unevaluated",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -3096,7 +3896,7 @@
         "feature_id": "cpp.sizeof.unevaluated",
         "source": {
           "path": "pcc/frontends/cpp/size_queries.py",
-          "sha256": "69c8a61b181cd4457d92a6245f4eba0a4e68f3b680d648b1dd117ff4c089666b"
+          "sha256": "fd3f4f13cdcf30b327c02acc61defd6337b1a87a0bd00a931264bda18f46454f"
         }
       },
       {
@@ -3104,7 +3904,7 @@
         "feature_id": "cpp.static-cast",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -3120,7 +3920,7 @@
         "feature_id": "cpp.member-storage",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -3136,7 +3936,7 @@
         "feature_id": "cpp.string-array-initialization",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -3184,7 +3984,7 @@
         "feature_id": "cpp.syntax",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -3192,7 +3992,7 @@
         "feature_id": "cpp.tag-hiding",
         "source": {
           "path": "pcc/frontends/cpp/classes.py",
-          "sha256": "4cd4d0608aa8048af78d28abbd52f70ecfcf736215d0309be869d622ba881c8d"
+          "sha256": "255af7e454f9a679f6ee73a74a1b16e21157713cdf90db0a167ad7d84a2e5ca8"
         }
       },
       {
@@ -3200,7 +4000,7 @@
         "feature_id": "cpp.template-id-declarators",
         "source": {
           "path": "pcc/frontends/cpp/declarators.py",
-          "sha256": "10e60aee1b9ac6a0d2628647ea3e25b673d8cea31cbc25ed389e43b7e466a2ee"
+          "sha256": "2c5c0540ab4a9082f1e22151630e91106c5d130e41439b694f2656b978abc05f"
         }
       },
       {
@@ -3208,7 +4008,7 @@
         "feature_id": "cpp.template-ordering",
         "source": {
           "path": "pcc/frontends/cpp/sema.py",
-          "sha256": "d1e12ba5168779d5e5103cce6b9fa4d7f3d6cff3f1a4886906a0983edb85d34a"
+          "sha256": "2294b4ec706047647c68474d38290d7089e04ca3115a5b3759d10929d977cfb5"
         }
       },
       {
@@ -3216,7 +4016,15 @@
         "feature_id": "cpp.templates",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
+        }
+      },
+      {
+        "code": "cpp.unsupported.temporary-destruction",
+        "feature_id": "cpp.temporary-destruction",
+        "source": {
+          "path": "pcc/frontends/cpp/allocation.py",
+          "sha256": "fb5a91d522972255c5c9512b8f6644b68f078fba4b585f0619955933b7c757f2"
         }
       },
       {
@@ -3224,7 +4032,7 @@
         "feature_id": "cpp.trailing-return-types",
         "source": {
           "path": "pcc/frontends/cpp/declarators.py",
-          "sha256": "10e60aee1b9ac6a0d2628647ea3e25b673d8cea31cbc25ed389e43b7e466a2ee"
+          "sha256": "2c5c0540ab4a9082f1e22151630e91106c5d130e41439b694f2656b978abc05f"
         }
       },
       {
@@ -3232,7 +4040,31 @@
         "feature_id": "cpp.unknown-bound-array-pointers",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
+        }
+      },
+      {
+        "code": "cpp.unsupported.va-arg-type",
+        "feature_id": "cpp.va-arg-type",
+        "source": {
+          "path": "pcc/frontends/cpp/varargs.py",
+          "sha256": "0d9991b705d4da63380719ae0166e7dde01d45016f1e49cc5c1ddc155eefff60"
+        }
+      },
+      {
+        "code": "cpp.unsupported.varargs-target",
+        "feature_id": "cpp.varargs-target",
+        "source": {
+          "path": "pcc/frontends/cpp/varargs.py",
+          "sha256": "0d9991b705d4da63380719ae0166e7dde01d45016f1e49cc5c1ddc155eefff60"
+        }
+      },
+      {
+        "code": "cpp.unsupported.varargs-templates",
+        "feature_id": "cpp.varargs-templates",
+        "source": {
+          "path": "pcc/frontends/cpp/varargs.py",
+          "sha256": "0d9991b705d4da63380719ae0166e7dde01d45016f1e49cc5c1ddc155eefff60"
         }
       },
       {
@@ -3240,7 +4072,23 @@
         "feature_id": "cpp.variable-templates",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
+        }
+      },
+      {
+        "code": "cpp.unsupported.variadic-argument",
+        "feature_id": "cpp.variadic-argument",
+        "source": {
+          "path": "pcc/frontends/cpp/parser.py",
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
+        }
+      },
+      {
+        "code": "cpp.unsupported.variadic-functions",
+        "feature_id": "cpp.variadic-functions",
+        "source": {
+          "path": "pcc/frontends/cpp/parser.py",
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       },
       {
@@ -3248,12 +4096,12 @@
         "feature_id": "cpp.volatile",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "67c09d7d4b094507e8e71635b621fd8360c004e751832edbaf9efa0eb0af52b8"
+          "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
         }
       }
     ],
     "message_only": [],
-    "notes": "Pinned pcc/frontends/cpp/*.py at cb41: all exact cpp.unsupported.* literals and finite constructions (_FEATURES, _CHUNK_FEATURES, declarator helper arguments and explicit branch suffixes). Generic syntax gates are recorded, not a claim to exhaust all missing C++17 constructs. Only one representative emitting source per code is stored; checker should inventory all occurrences. Diagnostic-map completeness is not feature/specification completeness. Fresh unsupported-code inventory and owner file hashes from e816c4fcb982b79e11c96b27d4204f0a3f9c14d5; zero unresolved dynamic sites. Diagnostic coverage is not C++17 feature completeness."
+    "notes": "Current source-only stable capability-code inventory bound to the integrated frontend files. Updating these source hashes does not renew historical runtime evidence."
   },
   "evidence": [
     {
@@ -6681,131 +7529,6 @@
       }
     },
     {
-      "id": "cpp.e816.constructors.complete-object.unit",
-      "test_id": "tests/cpp/test_cpp_constructors.py::test_constructor_rules_lower_without_external_compiler[scalar-direct]",
-      "kind": "unit",
-      "purpose": "unit",
-      "outcome": "passed",
-      "source_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
-      "source": {
-        "path": "tests/cpp/test_cpp_constructors.py",
-        "sha256": "0a986c4f612d23527f7f2c085c687ff4c35f259b003c721f3b38ddc393331f9c"
-      },
-      "mode": "pcc0",
-      "platform": "linux-x86_64",
-      "backend": "self",
-      "gc": "not_applicable",
-      "command_kind": "reproduction",
-      "command": [
-        "uv",
-        "run",
-        "python",
-        "-m",
-        "pytest",
-        "-x",
-        "-vv",
-        "-n6",
-        "tests/cpp/test_cpp_constructors.py::test_constructor_rules_lower_without_external_compiler[scalar-direct]",
-        "-m",
-        "not integration"
-      ],
-      "actual": {
-        "stdout_sha256": "b8ad8175774d27edb07d15f09c9379b93974b20f65ad8db0ae37e53d216d8ee8",
-        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-        "exit_code": 0
-      },
-      "verification_note": "The unit passed call report is bound in the whole ordinary run. actual stdout is the aggregate pytest combined-stream log (stderr redirected to stdout), exit_code is that successful whole process; not a separately executed per-node command. command is reproduction only.",
-      "call_report_source_sha256": "4cfa7d84488837e9bb8f2433de871d22b286bcf201db7c97f4043147371a2a3f"
-    },
-    {
-      "id": "cpp.e816.constructors.complete-object.program",
-      "test_id": "tests/cpp/test_cpp_constructor_execution.py::test_constructor_complete_object_matches_reference[scalar-direct]",
-      "kind": "program",
-      "purpose": "runtime",
-      "outcome": "passed",
-      "source_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
-      "source": {
-        "path": "tests/cpp/test_cpp_constructor_execution.py",
-        "sha256": "6d9fd6a4e55e356b0c62099ad87e152d2bef5d61ef1645afb0c753eda0b600be"
-      },
-      "mode": "pcc0",
-      "platform": "linux-x86_64",
-      "backend": "self",
-      "gc": "not_applicable",
-      "command_kind": "reproduction",
-      "command": [
-        "uv",
-        "run",
-        "python",
-        "-m",
-        "pytest",
-        "-x",
-        "-vv",
-        "-n6",
-        "tests/cpp/test_cpp_constructor_execution.py::test_constructor_complete_object_matches_reference[scalar-direct]",
-        "-m",
-        "integration"
-      ],
-      "input_sha256": "982715a3a132f74dde8c3d0012fa4089b92275e2379ee56b9dc15380a6c80ddc",
-      "actual": {
-        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
-        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-        "exit_code": 42
-      }
-    },
-    {
-      "id": "cpp.e816.constructors.complete-object.differential",
-      "test_id": "tests/cpp/test_cpp_constructor_execution.py::test_constructor_complete_object_matches_reference[scalar-direct]",
-      "kind": "differential",
-      "purpose": "runtime",
-      "outcome": "passed",
-      "source_revision": "e816c4fcb982b79e11c96b27d4204f0a3f9c14d5",
-      "source": {
-        "path": "tests/cpp/test_cpp_constructor_execution.py",
-        "sha256": "6d9fd6a4e55e356b0c62099ad87e152d2bef5d61ef1645afb0c753eda0b600be"
-      },
-      "mode": "pcc0",
-      "platform": "linux-x86_64",
-      "backend": "self",
-      "gc": "not_applicable",
-      "command_kind": "reproduction",
-      "command": [
-        "uv",
-        "run",
-        "python",
-        "-m",
-        "pytest",
-        "-x",
-        "-vv",
-        "-n6",
-        "tests/cpp/test_cpp_constructor_execution.py::test_constructor_complete_object_matches_reference[scalar-direct]",
-        "-m",
-        "integration"
-      ],
-      "input_sha256": "982715a3a132f74dde8c3d0012fa4089b92275e2379ee56b9dc15380a6c80ddc",
-      "actual": {
-        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
-        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-        "exit_code": 42
-      },
-      "reference": {
-        "name": "G++",
-        "version": "14.2.0",
-        "platform": "linux-x86_64",
-        "role": "external_reference",
-        "kind": "native_execution",
-        "input_sha256": "982715a3a132f74dde8c3d0012fa4089b92275e2379ee56b9dc15380a6c80ddc"
-      },
-      "expected": {
-        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
-        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-        "exit_code": 42
-      },
-      "comparison": {
-        "kind": "raw_process_streams"
-      }
-    },
-    {
       "id": "cpp.e816.destructors.normal-exit.unit",
       "test_id": "tests/cpp/test_cpp_destructors.py::test_destructor_original_programs_compile_deterministically[reverse-declaration-order]",
       "kind": "unit",
@@ -6920,6 +7643,985 @@
         "role": "external_reference",
         "kind": "native_execution",
         "input_sha256": "6bfc26fcfca29a86c5458bd0b2e03e675ea8b2302d69660538620770d5a1e845"
+      },
+      "expected": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 42
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      }
+    },
+    {
+      "outcome": "passed",
+      "source_revision": "7982c153f470fcd6f6525607119192c256665ac3",
+      "source": {
+        "path": "tests/cpp/test_cpp_cstddef_header.py",
+        "sha256": "aac3c596a5fb1aca814bf6c9db7045798780e07b81b31c1e4b4f926daf739334"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "id": "cpp.7982.target-declarations.unit",
+      "test_id": "tests/cpp/test_cpp_cstddef_header.py::test_real_cstddef_original_has_stable_public_owned_artifacts",
+      "kind": "unit",
+      "purpose": "unit",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-vv",
+        "tests/cpp/test_cpp_cstddef_header.py::test_real_cstddef_original_has_stable_public_owned_artifacts",
+        "-m",
+        "not integration"
+      ],
+      "actual": {
+        "stdout_sha256": "b790a71bf461517d3ae6662c41ec0cdd0b10113d5de0ce80183f1edf4c7254c7",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "verification_note": "Passed call bound in whole ordinary run; actual stdout is its aggregate combined-stream pytest log, not a separate per-node execution. Command is reproduction only.",
+      "call_report_source_sha256": "7d016104651f8958f887458d3eae05651bcd6a17c83e09e67ed7f514a96bc3c9"
+    },
+    {
+      "outcome": "passed",
+      "source_revision": "7982c153f470fcd6f6525607119192c256665ac3",
+      "source": {
+        "path": "tests/cpp/test_cpp_cstddef_header.py",
+        "sha256": "aac3c596a5fb1aca814bf6c9db7045798780e07b81b31c1e4b4f926daf739334"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "id": "cpp.7982.target-declarations.program",
+      "test_id": "tests/cpp/test_cpp_cstddef_header.py::test_real_cstddef_original_executes_with_separate_system_header_reference",
+      "kind": "program",
+      "purpose": "runtime",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-vv",
+        "tests/cpp/test_cpp_cstddef_header.py::test_real_cstddef_original_executes_with_separate_system_header_reference",
+        "-m",
+        "integration"
+      ],
+      "input_sha256": "037c8f657db357752ed9fea2b15614de1a9371046dd957ed459ff277b9e3eaae",
+      "actual": {
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 42
+      }
+    },
+    {
+      "outcome": "passed",
+      "source_revision": "7982c153f470fcd6f6525607119192c256665ac3",
+      "source": {
+        "path": "tests/cpp/test_cpp_cstddef_header.py",
+        "sha256": "aac3c596a5fb1aca814bf6c9db7045798780e07b81b31c1e4b4f926daf739334"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "id": "cpp.7982.target-declarations.differential",
+      "test_id": "tests/cpp/test_cpp_cstddef_header.py::test_real_cstddef_original_executes_with_separate_system_header_reference",
+      "kind": "differential",
+      "purpose": "runtime",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-vv",
+        "tests/cpp/test_cpp_cstddef_header.py::test_real_cstddef_original_executes_with_separate_system_header_reference",
+        "-m",
+        "integration"
+      ],
+      "input_sha256": "037c8f657db357752ed9fea2b15614de1a9371046dd957ed459ff277b9e3eaae",
+      "actual": {
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 42
+      },
+      "reference": {
+        "name": "G++",
+        "version": "14.2.0",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "037c8f657db357752ed9fea2b15614de1a9371046dd957ed459ff277b9e3eaae"
+      },
+      "expected": {
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 42
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      },
+      "verification_note": "Identical program TU bytes; owned versus system cstddef providers differ. Not identical expanded-input qualification."
+    },
+    {
+      "outcome": "passed",
+      "source_revision": "7982c153f470fcd6f6525607119192c256665ac3",
+      "source": {
+        "path": "tests/cpp/test_cpp_cstddef_header.py",
+        "sha256": "aac3c596a5fb1aca814bf6c9db7045798780e07b81b31c1e4b4f926daf739334"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "id": "cpp.7982.nondependent-decltype.unit",
+      "test_id": "tests/cpp/test_cpp_cstddef_header.py::test_decltype_nullptr_original_artifacts_are_byte_stable[unevaluated-call]",
+      "kind": "unit",
+      "purpose": "unit",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-vv",
+        "tests/cpp/test_cpp_cstddef_header.py::test_decltype_nullptr_original_artifacts_are_byte_stable[unevaluated-call]",
+        "-m",
+        "not integration"
+      ],
+      "actual": {
+        "stdout_sha256": "b790a71bf461517d3ae6662c41ec0cdd0b10113d5de0ce80183f1edf4c7254c7",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "verification_note": "Passed call bound in whole ordinary run; actual stdout is its aggregate combined-stream pytest log, not a separate per-node execution. Command is reproduction only.",
+      "call_report_source_sha256": "7d016104651f8958f887458d3eae05651bcd6a17c83e09e67ed7f514a96bc3c9"
+    },
+    {
+      "outcome": "passed",
+      "source_revision": "7982c153f470fcd6f6525607119192c256665ac3",
+      "source": {
+        "path": "tests/cpp/test_cpp_cstddef_header.py",
+        "sha256": "aac3c596a5fb1aca814bf6c9db7045798780e07b81b31c1e4b4f926daf739334"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "id": "cpp.7982.nondependent-decltype.program",
+      "test_id": "tests/cpp/test_cpp_cstddef_header.py::test_decltype_nullptr_originals_execute_against_explicit_cpp17_reference[unevaluated-call]",
+      "kind": "program",
+      "purpose": "runtime",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-vv",
+        "tests/cpp/test_cpp_cstddef_header.py::test_decltype_nullptr_originals_execute_against_explicit_cpp17_reference[unevaluated-call]",
+        "-m",
+        "integration"
+      ],
+      "input_sha256": "7b572c8315f644f03b56575a0c7c0a0ca1dbdd2a49a3f1c2b04bdfaa576918cd",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 42
+      }
+    },
+    {
+      "outcome": "passed",
+      "source_revision": "7982c153f470fcd6f6525607119192c256665ac3",
+      "source": {
+        "path": "tests/cpp/test_cpp_cstddef_header.py",
+        "sha256": "aac3c596a5fb1aca814bf6c9db7045798780e07b81b31c1e4b4f926daf739334"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "id": "cpp.7982.nondependent-decltype.differential",
+      "test_id": "tests/cpp/test_cpp_cstddef_header.py::test_decltype_nullptr_originals_execute_against_explicit_cpp17_reference[unevaluated-call]",
+      "kind": "differential",
+      "purpose": "runtime",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-vv",
+        "tests/cpp/test_cpp_cstddef_header.py::test_decltype_nullptr_originals_execute_against_explicit_cpp17_reference[unevaluated-call]",
+        "-m",
+        "integration"
+      ],
+      "input_sha256": "7b572c8315f644f03b56575a0c7c0a0ca1dbdd2a49a3f1c2b04bdfaa576918cd",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 42
+      },
+      "reference": {
+        "name": "G++",
+        "version": "14.2.0",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "7b572c8315f644f03b56575a0c7c0a0ca1dbdd2a49a3f1c2b04bdfaa576918cd"
+      },
+      "expected": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 42
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      }
+    },
+    {
+      "outcome": "passed",
+      "source_revision": "7982c153f470fcd6f6525607119192c256665ac3",
+      "source": {
+        "path": "tests/cpp/test_cpp_cstddef_header.py",
+        "sha256": "aac3c596a5fb1aca814bf6c9db7045798780e07b81b31c1e4b4f926daf739334"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "id": "cpp.7982.nullptr-no-fetch.unit",
+      "test_id": "tests/cpp/test_cpp_cstddef_header.py::test_nullptr_no_fetch_originals_are_stable[uninitialized-copy-argument-return]",
+      "kind": "unit",
+      "purpose": "unit",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-vv",
+        "tests/cpp/test_cpp_cstddef_header.py::test_nullptr_no_fetch_originals_are_stable[uninitialized-copy-argument-return]",
+        "-m",
+        "not integration"
+      ],
+      "actual": {
+        "stdout_sha256": "b790a71bf461517d3ae6662c41ec0cdd0b10113d5de0ce80183f1edf4c7254c7",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 0
+      },
+      "verification_note": "Passed call bound in whole ordinary run; actual stdout is its aggregate combined-stream pytest log, not a separate per-node execution. Command is reproduction only.",
+      "call_report_source_sha256": "7d016104651f8958f887458d3eae05651bcd6a17c83e09e67ed7f514a96bc3c9"
+    },
+    {
+      "outcome": "passed",
+      "source_revision": "7982c153f470fcd6f6525607119192c256665ac3",
+      "source": {
+        "path": "tests/cpp/test_cpp_cstddef_header.py",
+        "sha256": "aac3c596a5fb1aca814bf6c9db7045798780e07b81b31c1e4b4f926daf739334"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "id": "cpp.7982.nullptr-no-fetch.program",
+      "test_id": "tests/cpp/test_cpp_cstddef_header.py::test_nullptr_no_fetch_originals_match_explicit_cpp17_reference[uninitialized-copy-argument-return]",
+      "kind": "program",
+      "purpose": "runtime",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-vv",
+        "tests/cpp/test_cpp_cstddef_header.py::test_nullptr_no_fetch_originals_match_explicit_cpp17_reference[uninitialized-copy-argument-return]",
+        "-m",
+        "integration"
+      ],
+      "input_sha256": "6068c9836d029aa06d1a38d3002af6bf1b2ea3b8685aeb0a8f78b951554b15fc",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 42
+      }
+    },
+    {
+      "outcome": "passed",
+      "source_revision": "7982c153f470fcd6f6525607119192c256665ac3",
+      "source": {
+        "path": "tests/cpp/test_cpp_cstddef_header.py",
+        "sha256": "aac3c596a5fb1aca814bf6c9db7045798780e07b81b31c1e4b4f926daf739334"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "id": "cpp.7982.nullptr-no-fetch.differential",
+      "test_id": "tests/cpp/test_cpp_cstddef_header.py::test_nullptr_no_fetch_originals_match_explicit_cpp17_reference[uninitialized-copy-argument-return]",
+      "kind": "differential",
+      "purpose": "runtime",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-vv",
+        "tests/cpp/test_cpp_cstddef_header.py::test_nullptr_no_fetch_originals_match_explicit_cpp17_reference[uninitialized-copy-argument-return]",
+        "-m",
+        "integration"
+      ],
+      "input_sha256": "6068c9836d029aa06d1a38d3002af6bf1b2ea3b8685aeb0a8f78b951554b15fc",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 42
+      },
+      "reference": {
+        "name": "G++",
+        "version": "14.2.0",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "6068c9836d029aa06d1a38d3002af6bf1b2ea3b8685aeb0a8f78b951554b15fc"
+      },
+      "expected": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 42
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      }
+    },
+    {
+      "outcome": "passed",
+      "source_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "id": "cpp.bdb.constructors.complete-object.unit",
+      "test_id": "tests/cpp/test_cpp_constructors.py::test_constructor_rules_lower_without_external_compiler[scalar-direct]",
+      "source": {
+        "path": "tests/cpp/test_cpp_constructors.py",
+        "sha256": "88da4084e860181a9472203ed2ed2d422b01050ac3bc61e9053e46654364136f"
+      },
+      "kind": "unit",
+      "purpose": "unit",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-vv",
+        "tests/cpp/test_cpp_constructors.py::test_constructor_rules_lower_without_external_compiler[scalar-direct]",
+        "-m",
+        "not integration"
+      ],
+      "actual": {
+        "exit_code": 0,
+        "stdout_sha256": "3f463e479bf5351328c352fee91095eb04a29f32953bfd6d9f202d29760babcd",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "verification_note": "Passed call bound in the recorded ordinary aggregate run; stdout hash is its combined-stream pytest log, not an individually executed node command. Command is reproduction only.",
+      "call_report_source_sha256": "bacd8b2794a23ca82793254785efe395b9f872f1b7afde1942b14619089d325f"
+    },
+    {
+      "outcome": "passed",
+      "source_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "id": "cpp.bdb.constructors.complete-object.program",
+      "test_id": "tests/cpp/test_cpp_constructor_execution.py::test_constructor_complete_object_matches_reference[scalar-direct]",
+      "source": {
+        "path": "tests/cpp/test_cpp_constructor_execution.py",
+        "sha256": "6d9fd6a4e55e356b0c62099ad87e152d2bef5d61ef1645afb0c753eda0b600be"
+      },
+      "kind": "program",
+      "purpose": "runtime",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-vv",
+        "tests/cpp/test_cpp_constructor_execution.py::test_constructor_complete_object_matches_reference[scalar-direct]",
+        "-m",
+        "integration"
+      ],
+      "input_sha256": "982715a3a132f74dde8c3d0012fa4089b92275e2379ee56b9dc15380a6c80ddc",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 42
+      }
+    },
+    {
+      "outcome": "passed",
+      "source_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "id": "cpp.bdb.constructors.complete-object.differential",
+      "test_id": "tests/cpp/test_cpp_constructor_execution.py::test_constructor_complete_object_matches_reference[scalar-direct]",
+      "source": {
+        "path": "tests/cpp/test_cpp_constructor_execution.py",
+        "sha256": "6d9fd6a4e55e356b0c62099ad87e152d2bef5d61ef1645afb0c753eda0b600be"
+      },
+      "kind": "differential",
+      "purpose": "runtime",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-vv",
+        "tests/cpp/test_cpp_constructor_execution.py::test_constructor_complete_object_matches_reference[scalar-direct]",
+        "-m",
+        "integration"
+      ],
+      "input_sha256": "982715a3a132f74dde8c3d0012fa4089b92275e2379ee56b9dc15380a6c80ddc",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 42
+      },
+      "reference": {
+        "name": "G++",
+        "version": "14.2.0",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "982715a3a132f74dde8c3d0012fa4089b92275e2379ee56b9dc15380a6c80ddc"
+      },
+      "expected": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 42
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      }
+    },
+    {
+      "outcome": "passed",
+      "source_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "id": "cpp.bdb.default-member-initializers.scalar.unit",
+      "test_id": "tests/cpp/test_cpp_default_member_initializers.py::test_default_member_initializer_originals_compile_stably[declaration-order]",
+      "source": {
+        "path": "tests/cpp/test_cpp_default_member_initializers.py",
+        "sha256": "06bb8363077e36196fe25968de41f5435e0a41b1088fc264156df7d38d256919"
+      },
+      "kind": "unit",
+      "purpose": "unit",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-vv",
+        "tests/cpp/test_cpp_default_member_initializers.py::test_default_member_initializer_originals_compile_stably[declaration-order]",
+        "-m",
+        "not integration"
+      ],
+      "actual": {
+        "exit_code": 0,
+        "stdout_sha256": "3f463e479bf5351328c352fee91095eb04a29f32953bfd6d9f202d29760babcd",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "verification_note": "Passed call bound in the recorded ordinary aggregate run; stdout hash is its combined-stream pytest log, not an individually executed node command. Command is reproduction only.",
+      "call_report_source_sha256": "bacd8b2794a23ca82793254785efe395b9f872f1b7afde1942b14619089d325f"
+    },
+    {
+      "outcome": "passed",
+      "source_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "id": "cpp.bdb.default-member-initializers.scalar.program",
+      "test_id": "tests/cpp/test_cpp_default_member_initializer_execution.py::test_default_member_initializer_originals_match_reference[declaration-order]",
+      "source": {
+        "path": "tests/cpp/test_cpp_default_member_initializer_execution.py",
+        "sha256": "9dd19f67f66c6b44a10e367a37d04e196e2daa434c9af5b172e096968a28c9af"
+      },
+      "kind": "program",
+      "purpose": "runtime",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-vv",
+        "tests/cpp/test_cpp_default_member_initializer_execution.py::test_default_member_initializer_originals_match_reference[declaration-order]",
+        "-m",
+        "integration"
+      ],
+      "input_sha256": "0d2076afc071ce14a034b27151657e560fe6bd14f8bc5801b53f362a791280b0",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 42
+      }
+    },
+    {
+      "outcome": "passed",
+      "source_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "id": "cpp.bdb.default-member-initializers.scalar.differential",
+      "test_id": "tests/cpp/test_cpp_default_member_initializer_execution.py::test_default_member_initializer_originals_match_reference[declaration-order]",
+      "source": {
+        "path": "tests/cpp/test_cpp_default_member_initializer_execution.py",
+        "sha256": "9dd19f67f66c6b44a10e367a37d04e196e2daa434c9af5b172e096968a28c9af"
+      },
+      "kind": "differential",
+      "purpose": "runtime",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-vv",
+        "tests/cpp/test_cpp_default_member_initializer_execution.py::test_default_member_initializer_originals_match_reference[declaration-order]",
+        "-m",
+        "integration"
+      ],
+      "input_sha256": "0d2076afc071ce14a034b27151657e560fe6bd14f8bc5801b53f362a791280b0",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 42
+      },
+      "reference": {
+        "name": "G++",
+        "version": "14.2.0",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "0d2076afc071ce14a034b27151657e560fe6bd14f8bc5801b53f362a791280b0"
+      },
+      "expected": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 42
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      }
+    },
+    {
+      "outcome": "passed",
+      "source_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "id": "cpp.bdb.placement.complete-object.unit",
+      "test_id": "tests/cpp/test_cpp_placement_new.py::test_placement_originals_have_stable_owned_artifacts[placement-address-and-value]",
+      "source": {
+        "path": "tests/cpp/test_cpp_placement_new.py",
+        "sha256": "a12b69e165f8e56ec62a9c344fe66da7a536ba69f31ddc1eeb2c9cb3121efd9b"
+      },
+      "kind": "unit",
+      "purpose": "unit",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-vv",
+        "tests/cpp/test_cpp_placement_new.py::test_placement_originals_have_stable_owned_artifacts[placement-address-and-value]",
+        "-m",
+        "not integration"
+      ],
+      "actual": {
+        "exit_code": 0,
+        "stdout_sha256": "3f463e479bf5351328c352fee91095eb04a29f32953bfd6d9f202d29760babcd",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "verification_note": "Passed call bound in the recorded ordinary aggregate run; stdout hash is its combined-stream pytest log, not an individually executed node command. Command is reproduction only.",
+      "call_report_source_sha256": "bacd8b2794a23ca82793254785efe395b9f872f1b7afde1942b14619089d325f"
+    },
+    {
+      "outcome": "passed",
+      "source_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "id": "cpp.bdb.placement.complete-object.program",
+      "test_id": "tests/cpp/test_cpp_placement_new.py::test_placement_originals_execute_against_genuine_cpp17_reference[placement-address-and-value]",
+      "source": {
+        "path": "tests/cpp/test_cpp_placement_new.py",
+        "sha256": "a12b69e165f8e56ec62a9c344fe66da7a536ba69f31ddc1eeb2c9cb3121efd9b"
+      },
+      "kind": "program",
+      "purpose": "runtime",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-vv",
+        "tests/cpp/test_cpp_placement_new.py::test_placement_originals_execute_against_genuine_cpp17_reference[placement-address-and-value]",
+        "-m",
+        "integration"
+      ],
+      "input_sha256": "0ceba0a303b42ef510b81912d997ddaf799c98c72172fc1a679b481e11d6a10f",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 42
+      }
+    },
+    {
+      "outcome": "passed",
+      "source_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "id": "cpp.bdb.placement.complete-object.differential",
+      "test_id": "tests/cpp/test_cpp_placement_new.py::test_placement_originals_execute_against_genuine_cpp17_reference[placement-address-and-value]",
+      "source": {
+        "path": "tests/cpp/test_cpp_placement_new.py",
+        "sha256": "a12b69e165f8e56ec62a9c344fe66da7a536ba69f31ddc1eeb2c9cb3121efd9b"
+      },
+      "kind": "differential",
+      "purpose": "runtime",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-vv",
+        "tests/cpp/test_cpp_placement_new.py::test_placement_originals_execute_against_genuine_cpp17_reference[placement-address-and-value]",
+        "-m",
+        "integration"
+      ],
+      "input_sha256": "0ceba0a303b42ef510b81912d997ddaf799c98c72172fc1a679b481e11d6a10f",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 42
+      },
+      "reference": {
+        "name": "G++",
+        "version": "14.2.0",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "0ceba0a303b42ef510b81912d997ddaf799c98c72172fc1a679b481e11d6a10f"
+      },
+      "expected": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 42
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      },
+      "verification_note": "Identical original program TU bytes; G++ explicitly force-includes its genuine new header to supply the standard definition. Different header environments, not identical preprocessed inputs or full owned-new qualification."
+    },
+    {
+      "outcome": "passed",
+      "source_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "id": "cpp.bdb.varargs.sysv.unit",
+      "test_id": "tests/cpp/test_cpp_cstdarg.py::test_cstdarg_originals_have_byte_stable_owned_artifacts[effectful-copy-operands]",
+      "source": {
+        "path": "tests/cpp/test_cpp_cstdarg.py",
+        "sha256": "6ee4982180b5f359bec6f445aa54e934df79f0733de757723902d9e4f7b64624"
+      },
+      "kind": "unit",
+      "purpose": "unit",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-vv",
+        "tests/cpp/test_cpp_cstdarg.py::test_cstdarg_originals_have_byte_stable_owned_artifacts[effectful-copy-operands]",
+        "-m",
+        "not integration"
+      ],
+      "actual": {
+        "exit_code": 0,
+        "stdout_sha256": "3f463e479bf5351328c352fee91095eb04a29f32953bfd6d9f202d29760babcd",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "verification_note": "Passed call bound in the recorded ordinary aggregate run; stdout hash is its combined-stream pytest log, not an individually executed node command. Command is reproduction only.",
+      "call_report_source_sha256": "bacd8b2794a23ca82793254785efe395b9f872f1b7afde1942b14619089d325f"
+    },
+    {
+      "outcome": "passed",
+      "source_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "id": "cpp.bdb.varargs.sysv.program",
+      "test_id": "tests/cpp/test_cpp_cstdarg.py::test_cstdarg_originals_execute_against_explicit_cpp17_reference[effectful-copy-operands]",
+      "source": {
+        "path": "tests/cpp/test_cpp_cstdarg.py",
+        "sha256": "6ee4982180b5f359bec6f445aa54e934df79f0733de757723902d9e4f7b64624"
+      },
+      "kind": "program",
+      "purpose": "runtime",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-vv",
+        "tests/cpp/test_cpp_cstdarg.py::test_cstdarg_originals_execute_against_explicit_cpp17_reference[effectful-copy-operands]",
+        "-m",
+        "integration"
+      ],
+      "input_sha256": "642417c7806aa541592c4ffd4680108e3e168800c776af2755f540b0e6ad66c5",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 42
+      }
+    },
+    {
+      "outcome": "passed",
+      "source_revision": "bdb9b24d66690cbb7a588c93f7786745586b86b3",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "id": "cpp.bdb.varargs.sysv.differential",
+      "test_id": "tests/cpp/test_cpp_cstdarg.py::test_cstdarg_originals_execute_against_explicit_cpp17_reference[effectful-copy-operands]",
+      "source": {
+        "path": "tests/cpp/test_cpp_cstdarg.py",
+        "sha256": "6ee4982180b5f359bec6f445aa54e934df79f0733de757723902d9e4f7b64624"
+      },
+      "kind": "differential",
+      "purpose": "runtime",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-vv",
+        "tests/cpp/test_cpp_cstdarg.py::test_cstdarg_originals_execute_against_explicit_cpp17_reference[effectful-copy-operands]",
+        "-m",
+        "integration"
+      ],
+      "input_sha256": "642417c7806aa541592c4ffd4680108e3e168800c776af2755f540b0e6ad66c5",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 42
+      },
+      "reference": {
+        "name": "G++",
+        "version": "14.2.0",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "642417c7806aa541592c4ffd4680108e3e168800c776af2755f540b0e6ad66c5"
+      },
+      "expected": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 42
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      },
+      "verification_note": "Identical original program TU bytes, respective owned/system cstdarg providers; not mixed-compiler va_list interoperability."
+    },
+    {
+      "outcome": "passed",
+      "source_revision": "73e9efe62d04551501f8d0337399bb43b786e7df",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "id": "cpp.73e.expressions.typed-postfix.unit",
+      "test_id": "tests/cpp/test_cpp_postfix_projection.py::test_postfix_original_artifacts_are_byte_stable[reported-formal-row-stride]",
+      "source": {
+        "path": "tests/cpp/test_cpp_postfix_projection.py",
+        "sha256": "2f5c31ea744b27be2a85b05acc28f81fe65434f3c7a07ac01b25315fbeca2fd7"
+      },
+      "kind": "unit",
+      "purpose": "unit",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-vv",
+        "tests/cpp/test_cpp_postfix_projection.py::test_postfix_original_artifacts_are_byte_stable[reported-formal-row-stride]",
+        "-m",
+        "not integration"
+      ],
+      "actual": {
+        "exit_code": 0,
+        "stdout_sha256": "a8c9bdcd945f6826345839ac0957641de4db354c1ec2a41b14a3918067b11af5",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "verification_note": "Passed call bound in the recorded ordinary aggregate run; stdout hash is its combined-stream pytest log, not an individually executed node command. Command is reproduction only.",
+      "call_report_source_sha256": "e1ed5a6df87c40e8a2c25db12306ac20cda01fe2996062545c6e4fbf28e61e2d"
+    },
+    {
+      "outcome": "passed",
+      "source_revision": "73e9efe62d04551501f8d0337399bb43b786e7df",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "id": "cpp.73e.expressions.typed-postfix.program",
+      "test_id": "tests/cpp/test_cpp_postfix_projection.py::test_postfix_originals_match_same_cpp17_reference[reported-formal-row-stride]",
+      "source": {
+        "path": "tests/cpp/test_cpp_postfix_projection.py",
+        "sha256": "2f5c31ea744b27be2a85b05acc28f81fe65434f3c7a07ac01b25315fbeca2fd7"
+      },
+      "kind": "program",
+      "purpose": "runtime",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-vv",
+        "tests/cpp/test_cpp_postfix_projection.py::test_postfix_originals_match_same_cpp17_reference[reported-formal-row-stride]",
+        "-m",
+        "integration"
+      ],
+      "input_sha256": "398bb32a01ca528591a6b9936d7e86e8f0117b153d0714d56cfeb9316f0baa08",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 42
+      }
+    },
+    {
+      "outcome": "passed",
+      "source_revision": "73e9efe62d04551501f8d0337399bb43b786e7df",
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "id": "cpp.73e.expressions.typed-postfix.differential",
+      "test_id": "tests/cpp/test_cpp_postfix_projection.py::test_postfix_originals_match_same_cpp17_reference[reported-formal-row-stride]",
+      "source": {
+        "path": "tests/cpp/test_cpp_postfix_projection.py",
+        "sha256": "2f5c31ea744b27be2a85b05acc28f81fe65434f3c7a07ac01b25315fbeca2fd7"
+      },
+      "kind": "differential",
+      "purpose": "runtime",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-x",
+        "-vv",
+        "tests/cpp/test_cpp_postfix_projection.py::test_postfix_originals_match_same_cpp17_reference[reported-formal-row-stride]",
+        "-m",
+        "integration"
+      ],
+      "input_sha256": "398bb32a01ca528591a6b9936d7e86e8f0117b153d0714d56cfeb9316f0baa08",
+      "actual": {
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_code": 42
+      },
+      "reference": {
+        "name": "G++",
+        "version": "14.2.0",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "398bb32a01ca528591a6b9936d7e86e8f0117b153d0714d56cfeb9316f0baa08"
       },
       "expected": {
         "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",

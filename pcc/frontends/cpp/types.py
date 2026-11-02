@@ -11,16 +11,16 @@ from pcc.frontends.c.c_abi_layout import (
 )
 
 
-TYPE_WORDS = frozenset("void bool char short int long signed unsigned float double".split())
+TYPE_WORDS = frozenset("void bool char wchar_t short int long signed unsigned float double".split())
 _CODES = {
     "void": "v",
-    "bool": "b", "char": "c", "signed char": "a", "unsigned char": "h",
+    "bool": "b", "char": "c", "wchar_t": "w", "signed char": "a", "unsigned char": "h",
     "short": "s", "unsigned short": "t", "int": "i", "unsigned int": "j",
     "long": "l", "unsigned long": "m", "long long": "x",
     "unsigned long long": "y", "float": "f", "double": "d", "long double": "e",
 }
 _RANKS = {"bool": 0, "char": 1, "signed char": 1, "unsigned char": 1,
-          "short": 2, "unsigned short": 2, "int": 3, "unsigned int": 3,
+          "short": 2, "unsigned short": 2, "int": 3, "unsigned int": 3, "wchar_t": 3,
           "long": 4, "unsigned long": 4, "long long": 5, "unsigned long long": 5}
 _FLOAT_RANKS = {"float": 1, "double": 2, "long double": 3}
 
@@ -87,6 +87,37 @@ def contains_array(dtype):
     return array_type(dtype) or isinstance(dtype, PointerType) and contains_array(dtype.pointee)
 
 
+class FunctionType:
+    """Function type identity, independent of an entity's name linkage.
+
+    N4659 [dcl.fct], [dcl.link]. Callback declarations retain this structure
+    through the C AST projection; it is never replaced by an object pointer.
+    """
+    def __init__(self, result, parameters, language_linkage="C++"):
+        self.result = result
+        self.parameters = tuple(unqualified(p) for p in parameters)
+        self.language_linkage = language_linkage
+
+    def __eq__(self, other):
+        return (isinstance(other, FunctionType) and self.result == other.result
+                and self.parameters == other.parameters
+                and self.language_linkage == other.language_linkage)
+
+    def __hash__(self):
+        return hash((FunctionType, self.result, self.parameters, self.language_linkage))
+
+
+def function_type(dtype):
+    return isinstance(unqualified(dtype), FunctionType)
+
+
+def contains_function(dtype):
+    dtype = unqualified(dtype)
+    if isinstance(dtype, (PointerType, ArrayType)):
+        return contains_function(dtype.pointee if isinstance(dtype, PointerType) else dtype.element)
+    return isinstance(dtype, FunctionType)
+
+
 class PointerType:
     def __init__(self, pointee):
         self.pointee = pointee
@@ -109,6 +140,8 @@ def unqualified(dtype):
 
 
 def qualify_const(dtype):
+    if function_type(dtype):
+        return dtype  # [dcl.fct]: cv added through a typedef-name is ignored.
     if array_type(dtype):
         return ArrayType(qualify_const(dtype.element), dtype.bound)
     return dtype if isinstance(dtype, ConstType) else ConstType(dtype)
@@ -116,6 +149,54 @@ def qualify_const(dtype):
 
 def pointer_type(dtype):
     return isinstance(unqualified(dtype), PointerType)
+
+
+def pointer_qualification_signature(dtype):
+    """[conv.qual] decomposition for ordinary pointers and const-only cv.
+
+    Arrays remain a leaf here; existing array-of-pointer capability gates stay
+    separate. The outermost pointer cv is not part of a value conversion.
+    """
+    qualifiers = []
+    while pointer_type(dtype):
+        qualifiers.append(const_qualified(dtype))
+        dtype = unqualified(dtype).pointee
+    qualifiers.append(const_qualified(dtype))
+    return unqualified(dtype), tuple(qualifiers)
+
+
+def pointer_qualification_conversion(source, destination):
+    if not pointer_type(source) or not pointer_type(destination):
+        return False
+    a, src = pointer_qualification_signature(source)
+    b, dst = pointer_qualification_signature(destination)
+    if a != b or len(src) != len(dst):
+        return False
+    for i in range(1, len(src)):
+        if src[i] and not dst[i]:
+            return False
+        if dst[i] and not src[i] and not all(dst[1:i]):
+            return False
+    return True
+
+
+def composite_qualified_pointer(first, second):
+    """[expr.type] qualification-combined type of two similar pointers."""
+    a, left = pointer_qualification_signature(first)
+    b, right = pointer_qualification_signature(second)
+    if a != b or len(left) != len(right):
+        return None
+    qualifiers = [x or y for x, y in zip(left, right)]
+    for i in range(1, len(left)):
+        if left[i] != right[i]:
+            for j in range(1, i):
+                qualifiers[j] = True
+    result = qualify_const(a) if qualifiers[-1] else a
+    for i in range(len(qualifiers) - 2, -1, -1):
+        result = PointerType(result)
+        if i and qualifiers[i]:
+            result = qualify_const(result)
+    return result
 
 
 def is_enum_type(dtype):
@@ -168,12 +249,18 @@ def _mangle_class(dtype, substitutions):
 
 
 def _mangle_type(dtype, substitutions):
+    if dtype == "nullptr":
+        return "Dn"
     if dtype in substitutions:
         return _substitution(substitutions.index(dtype))
     if isinstance(dtype, ConstType):
         encoded = "K" + _mangle_type(dtype.base, substitutions)
     elif isinstance(dtype, ArrayType):
         encoded = "A" + ("" if dtype.bound is None else str(dtype.bound)) + "_" + _mangle_type(dtype.element, substitutions)
+    elif isinstance(dtype, FunctionType):
+        encoded = ("F" + ("Y" if dtype.language_linkage == "C" else "")
+                   + _mangle_type(dtype.result, substitutions)
+                   + ("".join(_mangle_type(p, substitutions) for p in dtype.parameters) or "v") + "E")
     elif isinstance(dtype, PointerType):
         encoded = "P" + _mangle_type(dtype.pointee, substitutions)
     elif getattr(dtype, "cpp_class_type", False) or is_enum_type(dtype):
@@ -184,14 +271,18 @@ def _mangle_type(dtype, substitutions):
     return encoded
 
 
-def mangle_function(name, parameters, namespace_path=()):
+ALLOCATION_OPERATOR_CODES = {"operator new": "nw", "operator new[]": "na",
+                             "operator delete": "dl", "operator delete[]": "da"}
+
+
+def mangle_function(name, parameters, namespace_path=(), variadic=False):
     if name == "main" and not namespace_path:
         return name
     # Namespace prefixes participate in the ABI substitution table before
     # repeated pointer/cv types. Keep semantic path components, not "A::f".
     substitutions = [("namespace-prefix", namespace_path[:i + 1])
                      for i in range(len(namespace_path))]
-    encoded_name = str(len(name)) + name
+    encoded_name = ALLOCATION_OPERATOR_CODES.get(name, str(len(name)) + name)
     if namespace_path == ("std",):
         encoded_name = "St" + encoded_name
         substitutions = []
@@ -203,7 +294,8 @@ def mangle_function(name, parameters, namespace_path=()):
             substitutions = substitutions[1:]
         encoded_name = "N" + prefix + "".join(str(len(part)) + part for part in parts) + encoded_name + "E"
     return "_Z" + encoded_name + (
-        "".join(_mangle_type(unqualified(p), substitutions) for p in parameters) or "v")
+        "".join(_mangle_type(unqualified(p), substitutions) for p in parameters)
+        + ("z" if variadic else "") or "v")
 
 
 
@@ -266,6 +358,19 @@ class ArithmeticTypes:
         name = unqualified(name)
         if is_enum_type(name):
             return name.promotion_type(self)
+        if name == "wchar_t":
+            # [conv.prom]: the distinct wide-character type promotes to the
+            # first standard integer type covering its entire target range.
+            width, unsigned = self.width(name), self.unsigned(name)
+            low = 0 if unsigned else -(1 << (width - 1))
+            high = (1 << (width if unsigned else width - 1)) - 1
+            for candidate in ("int", "unsigned int", "long", "unsigned long", "long long", "unsigned long long"):
+                bits, signless = self.width(candidate), self.unsigned(candidate)
+                minimum = 0 if signless else -(1 << (bits - 1))
+                maximum = (1 << (bits if signless else bits - 1)) - 1
+                if minimum <= low and high <= maximum:
+                    return candidate
+            raise ValueError("target wchar_t range has no standard integer promotion")
         if self.integral(name) and _RANKS[name] < _RANKS["int"]:
             if self.width(name) < self.width("int") or not self.unsigned(name):
                 return "int"
@@ -286,14 +391,12 @@ class ArithmeticTypes:
             if null_pointer or source == "nullptr":
                 return 2
             if isinstance(source, PointerType):
-                # This boundary admits only one pointer level and const. A
-                # qualification conversion never removes pointee const.
-                if (const_qualified(source.pointee)
-                        and not const_qualified(destination.pointee)):
-                    return None
-                if unqualified(source.pointee) == unqualified(destination.pointee):
+                if pointer_qualification_conversion(source, destination):
                     return 0
-                if unqualified(destination.pointee) == "void":
+                if (unqualified(destination.pointee) == "void"
+                        and not function_type(source.pointee)
+                        and (not const_qualified(source.pointee)
+                             or const_qualified(destination.pointee))):
                     return 2
             return None
         if isinstance(source, PointerType):
@@ -333,11 +436,11 @@ class ArithmeticTypes:
         if isinstance(source, PointerType):
             if (first == "bool") != (second == "bool"):
                 return 1 if first == "bool" else -1
-            if (isinstance(first, PointerType) and isinstance(second, PointerType)
-                    and unqualified(first.pointee) == unqualified(second.pointee)):
-                a, b = const_qualified(first.pointee), const_qualified(second.pointee)
+            if isinstance(first, PointerType) and isinstance(second, PointerType):
+                a = pointer_qualification_conversion(first, second)
+                b = pointer_qualification_conversion(second, first)
                 if a != b:
-                    return 1 if a else -1
+                    return -1 if a else 1
         return 0
 
     def common(self, lhs, rhs):

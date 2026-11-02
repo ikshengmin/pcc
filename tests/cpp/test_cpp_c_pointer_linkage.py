@@ -71,23 +71,19 @@ INVALID = (
 )
 
 UNSUPPORTED = (
-    'extern "C" double f(double);',
-    'struct R{int value;};extern "C" R f(R);',
+    'extern "C" long double f(long double x){return x;}',
+    'struct R{int value;~R();};extern "C" R f(R);',
     'extern "C" int f(int (*callback)(int));',
     'extern "C" int f(int&);',
-    'extern "C" int f(int,...);',
+    'extern "C" int f(...);',
 )
 
 
-def test_original_multilevel_positive_intent_remains_an_explicit_deferred_gap():
-    # Retain the exact original positive source and its intent. The first gate
-    # failed here: C language linkage does not supply missing deep-pointer cv
-    # semantics or address-of-pointer lowering. Rejection is not acceptance.
+def test_original_multilevel_positive_intent_has_owned_stable_artifact():
     source = ('extern "C" int**same(int**p){return p;}'
               'int cpp_test_entry(){int value=42;int*p=&value;return **same(&p);}')
-    with pytest.raises(CppDiagnostic) as error:
-        CppParser().parse(source, 'pointer-to-pointer.cpp')
-    assert error.value.code == 'cpp.unsupported.multilevel-pointers'
+    first = compile_host_cpp((('pointer-to-pointer.cpp', source),))
+    assert first == compile_host_cpp((('pointer-to-pointer.cpp', source),))
 
 
 @pytest.mark.parametrize('name,source', CASES, ids=[case[0] for case in CASES])

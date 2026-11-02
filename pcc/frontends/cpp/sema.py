@@ -27,6 +27,9 @@ class Symbol:
         self.defined = False
         self.dtype = dtype
         self.parameters = parameters
+        self.variadic = False
+        self.nonthrowing = False
+        self.noreturn = False
         self.overloads = []
         self.template_parameters = ()
         self.template_origin = None
@@ -299,7 +302,8 @@ class Scope:
                 for imported in symbol.overloads:
                     if (own is not imported and (own.owner is self or self in own.declaration_scopes)
                             and not own.template_parameters and not imported.template_parameters
-                            and own.parameters == imported.parameters):
+                            and own.parameters == imported.parameters
+                            and own.variadic == imported.variadic):
                         raise CppDiagnostic("cpp.using-declaration-conflict",
                                             "imported function conflicts with a local declaration", coord)
         merged = self._merge([s for s in (previous, symbol) if s is not None], symbol.name, coord)
@@ -411,6 +415,13 @@ class Scope:
         symbol.declaration_scopes.append(self)
         return self.declare(symbol)
 
+    @staticmethod
+    def _check_function_contract(previous, symbol):
+        if previous.nonthrowing != symbol.nonthrowing:
+            raise CppDiagnostic("cpp.conflicting-exception-specification", "function declarations have different exception specifications", symbol.coord)
+        if symbol.noreturn and not previous.noreturn:
+            raise CppDiagnostic("cpp.invalid-noreturn", "the first declaration of a noreturn function must carry the attribute", symbol.coord)
+
     def declare_function(self, symbol, definition):
         previous = self.names.get(symbol.name)
         if previous is not None:
@@ -424,7 +435,8 @@ class Scope:
                 if symbol.template_parameters:
                     if signature_key(candidate) != signature_key(symbol):
                         continue
-                elif candidate.parameters != symbol.parameters:
+                elif (candidate.parameters != symbol.parameters
+                      or candidate.variadic != symbol.variadic):
                     continue
                 if (candidate.owner is not self and self not in candidate.declaration_scopes
                         and not (symbol.requested_language_linkage == "C"
@@ -435,6 +447,7 @@ class Scope:
                         and symbol.requested_language_linkage != candidate.language_linkage):
                     raise CppDiagnostic("cpp.conflicting-language-linkage",
                                         "function redeclared with different language linkage", symbol.coord)
+                self._check_function_contract(candidate, symbol)
                 if not symbol.template_parameters and candidate.dtype != symbol.dtype:
                     raise CppDiagnostic("cpp.return-type-overload",
                                         "functions cannot differ only in return type", symbol.coord)
@@ -457,7 +470,9 @@ class Scope:
             registry = self.global_scope().c_linkage_functions
             canonical = registry.get(symbol.name)
             if canonical is not None:
-                if canonical.parameters != symbol.parameters or canonical.dtype != symbol.dtype:
+                self._check_function_contract(canonical, symbol)
+                if (canonical.parameters != symbol.parameters or canonical.dtype != symbol.dtype
+                        or canonical.variadic != symbol.variadic):
                     raise CppDiagnostic("cpp.conflicting-c-linkage-type",
                                         "a C-linkage function cannot be overloaded across namespaces", symbol.coord)
                 if definition and canonical.defined:
@@ -468,7 +483,7 @@ class Scope:
                 registry[symbol.name] = symbol
             symbol.c_name = symbol.name
         elif not symbol.template_parameters:
-            symbol.c_name = mangle_function(symbol.name, symbol.parameters, self.namespace_path())
+            symbol.c_name = mangle_function(symbol.name, symbol.parameters, self.namespace_path(), symbol.variadic)
         if previous is None:
             previous = Symbol(symbol.name, "function", symbol.coord)
             self.names[symbol.name] = previous
@@ -542,7 +557,8 @@ def resolve_overload(group, arguments, types, coord, null_constants=None):
                             "pointer-involving template overload sets are not implemented", coord)
     viable = []
     for candidate in group.overloads:
-        if len(candidate.parameters) != len(arguments):
+        if (len(candidate.parameters) > len(arguments)
+                or not candidate.variadic and len(candidate.parameters) != len(arguments)):
             continue
         if candidate.template_parameters:
             bindings = deduce(candidate, arguments)
@@ -563,6 +579,8 @@ def resolve_overload(group, arguments, types, coord, null_constants=None):
             if rank is None:
                 break
             ranks.append(rank)
+        if len(ranks) == len(candidate.parameters) and candidate.variadic:
+            ranks.extend([3] * (len(arguments) - len(candidate.parameters)))
         if len(ranks) == len(arguments):
             viable.append((candidate, ranks))
     if not viable:
@@ -574,9 +592,15 @@ def resolve_overload(group, arguments, types, coord, null_constants=None):
         for other, other_ranks in viable:
             if other is candidate:
                 continue
-            comparisons = [types.compare_conversions(source, first, second, null)
-                           for source, first, second, null in zip(
-                               arguments, candidate.parameters, other.parameters, null_constants)]
+            comparisons = []
+            for index, (source, null) in enumerate(zip(arguments, null_constants)):
+                first_ellipsis = index >= len(candidate.parameters)
+                second_ellipsis = index >= len(other.parameters)
+                if first_ellipsis or second_ellipsis:
+                    comparisons.append(int(first_ellipsis) - int(second_ellipsis))
+                else:
+                    comparisons.append(types.compare_conversions(
+                        source, candidate.parameters[index], other.parameters[index], null))
             no_worse = all(value <= 0 for value in comparisons)
             better = any(value < 0 for value in comparisons)
             non_template_preferred = (candidate.template_origin is None
