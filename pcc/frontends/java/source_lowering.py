@@ -91,6 +91,8 @@ class SourceLowerer:
         if node.constant is not None:
             return ir.Constant(self.scalar_type(node.dtype), int(node.constant))
         kind = node.kind
+        if kind == "mutation":
+            return self.assignment(node, node.children[1:])
         if kind == "name":
             return self.builder.load(self.slots[node.symbol])
         if kind == "call":
@@ -157,6 +159,29 @@ class SourceLowerer:
             return emit_binary(self.builder, OPERATIONS[node.value], left, right)
         raise AssertionError("unlowered typed source expression " + kind)
 
+    def assignment(self, node, rhs):
+        slot = self.slots[node.symbol]
+        old = None
+        if node.value == "=":
+            value = self.coerce(self.expression(rhs[0]), node.symbol.dtype)
+        else:
+            # Save the value BEFORE evaluating the RHS, including RHS stores to
+            # this same local. No expression/variable evaluation is duplicated.
+            old = self.builder.load(slot)
+            left = self.coerce(old, node.operation_type)
+            if node.value in ("++", "--", "post++", "post--"):
+                right = ir.Constant(left.type, 1)
+                operation = "add" if node.value.endswith("++") else "sub"
+            else:
+                right, operation = self.expression(rhs[0]), OPERATIONS[node.value[:-1]]
+            if operation not in ("shl", "ashr", "lshr"):
+                right = self.coerce(right, node.operation_type)
+            value = (emit_nonzero_division(self.builder, operation, left, rhs[0].constant)
+                     if operation in ("sdiv", "srem") else emit_binary(self.builder, operation, left, right))
+            value = self.coerce(value, node.symbol.dtype)
+        self.builder.store(value, slot)
+        return old if node.value in ("post++", "post--") else value
+
     def statement(self, node):
         kind = node.kind
         if kind == "label":
@@ -170,7 +195,7 @@ class SourceLowerer:
             if not node.completes:
                 self.builder.unreachable()
             return
-        if kind == "block":
+        if kind in ("block", "sequence"):
             for child in node.children:
                 self.statement(child)
             return
@@ -181,21 +206,7 @@ class SourceLowerer:
                 self.builder.store(self.coerce(self.expression(node.children[0]), node.symbol.dtype), self.slots[node.symbol])
             return
         if kind == "assign":
-            slot = self.slots[node.symbol]
-            if node.value == "=":
-                value = self.coerce(self.expression(node.children[0]), node.symbol.dtype)
-            else:
-                left = self.coerce(self.builder.load(slot), node.operation_type)
-                if node.value in ("++", "--"):
-                    right, operation = ir.Constant(left.type, 1), "add" if node.value == "++" else "sub"
-                else:
-                    right, operation = self.expression(node.children[0]), OPERATIONS[node.value[:-1]]
-                if operation not in ("shl", "ashr", "lshr"):
-                    right = self.coerce(right, node.operation_type)
-                value = (emit_nonzero_division(self.builder, operation, left, node.children[0].constant)
-                         if operation in ("sdiv", "srem") else emit_binary(self.builder, operation, left, right))
-                value = self.coerce(value, node.symbol.dtype)
-            self.builder.store(value, slot)
+            self.assignment(node, node.children)
             return
         if kind == "expression":
             self.expression(node.children[0])

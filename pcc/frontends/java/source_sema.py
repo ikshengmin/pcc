@@ -1,8 +1,8 @@
 """Java source typing, lexical bindings, reachability and definite assignment.
 
 This pass creates typed source AST, not JVM instructions. The scalar
-subset has no assignment expressions, blank final locals or reference values; those
-boundaries keep its structured definite-assignment rules explicit.
+subset tracks scalar expression side effects and outcome-specific definite
+assignment. Blank final locals and native reference storage remain separate gaps.
 """
 from dataclasses import dataclass
 import re
@@ -161,19 +161,29 @@ class SourceAnalyzer:
         if not widening(node.dtype, target) and not narrow_constant:
             node.token.error("incompatible assignment conversion from " + node.dtype + " to " + target)
 
-    def condition(self, node, assigned):
+    def flow_expression(self, node, assigned):
+        # Class-model overrides own some leaf/equality expressions. Capture
+        # their actual post-state too before a sibling path is analyzed.
         self.expression(node, assigned)
+        outcomes = self.truth_states(node, assigned)
+        node.flow_outcomes = tuple(frozenset(state) for state in outcomes)
+        return outcomes
+
+    def condition(self, node, assigned):
+        outcomes = self.flow_expression(node, assigned)
         if node.dtype != "boolean":
             node.token.error("Java condition requires boolean, not integer truth conversion")
-        return self.truth_states(node, assigned)
+        return outcomes
 
     def truth_states(self, node, assigned):
-        """JLS 16.1 boolean DA, separate from JLS 14 syntactic reachability.
+        """JLS 16.1: analyzed expression outcomes, never runtime value guessing."""
+        if node.flow_outcomes is not None:
+            return tuple(set(state) for state in node.flow_outcomes)
+        return self.expression_outcomes(node, assigned)
 
-        Assignment expressions are not admitted, so ordinary expressions keep
-        their input state. Impossible outcomes vacuously assign only variables
-        already declared at this point; later block declarations stay unassigned.
-        """
+    def expression_outcomes(self, node, assigned):
+        # Only actual constant expressions get vacuous outcomes. Assignment,
+        # increment and method invocation are never constant expressions.
         if node.constant is True:
             return set(assigned), set(self.method.locals if self.method else ())
         if node.constant is False:
@@ -183,24 +193,86 @@ class SourceAnalyzer:
         if node.kind == "unary" and node.value == "!":
             yes, no = self.truth_states(node.children[0], assigned)
             return no, yes
-        if node.kind == "binary" and node.value == "&&":
+        if node.kind == "binary" and node.value in {"&&", "||"}:
             left_true, left_false = self.truth_states(node.children[0], assigned)
-            right_true, right_false = self.truth_states(node.children[1], left_true)
-            return right_true, left_false & right_false
-        if node.kind == "binary" and node.value == "||":
-            left_true, left_false = self.truth_states(node.children[0], assigned)
-            right_true, right_false = self.truth_states(node.children[1], left_false)
-            return left_true & right_true, right_false
+            right_true, right_false = self.truth_states(node.children[1], assigned)
+            return ((right_true, left_false & right_false) if node.value == "&&"
+                    else (left_true & right_true, right_false))
         if node.kind == "conditional":
-            condition, yes, no = node.children
-            when_true, when_false = self.truth_states(condition, assigned)
-            yes_true, yes_false = self.truth_states(yes, when_true)
-            no_true, no_false = self.truth_states(no, when_false)
+            yes_true, yes_false = self.truth_states(node.children[1], assigned)
+            no_true, no_false = self.truth_states(node.children[2], assigned)
             return yes_true & no_true, yes_false & no_false
+        # In particular boolean assignment does NOT preserve its RHS's
+        # true/false correlation (JLS 16.1.7, 16.1.8).
         return set(assigned), set(assigned)
 
     def expression(self, node, assigned):
+        self.type_expression(node, assigned)
+        yes, no = self.expression_outcomes(node, assigned)
+        node.flow_outcomes = (frozenset(yes), frozenset(no))
+        assigned.clear()
+        assigned.update(yes & no)
+
+    def mutation(self, node, assigned):
+        target = node.children[0]
+        target_nodes = [target]
+        while target.kind == "group":
+            target = target.children[0]
+            target_nodes.append(target)
+        if target.kind not in {"name", "receiver_field", "array_access", "array_length"}:
+            target.token.error("assignment or increment requires a variable")
+        binding = (next((scope[target.value] for scope in reversed(self.scopes)
+                         if target.value in scope), None) if target.kind == "name" else None)
+        if binding is None:
+            if target.kind == "name":
+                field = self.project.resolve_field(self, target)
+                if "final" in field.modifiers:
+                    target.token.error("cannot assign a final constant field " + target.value)
+            elif target.kind == "array_length":
+                target.token.error("array length is final and cannot be assigned")
+            node.token.error("field and array expression writes require the next variable-access domain",
+                             code="java.unsupported.assignment-expression-target")
+        if binding.dtype not in INTEGRAL | {"boolean"}:
+            node.token.error("reference expression writes require the next variable-access domain",
+                             code="java.unsupported.assignment-expression-target")
+        node.symbol, node.dtype = binding, binding.dtype
+        # Bind the variable access without reading its previous value. Keeping
+        # the full target typed matters for grouped, initially unassigned LHSs.
+        for access in target_nodes:
+            access.symbol, access.dtype = binding, binding.dtype
+        rhs = node.children[1:]  # target is a variable, not a value read for '='
+        self.check_assignment(node, assigned, rhs)
+
+    def check_assignment(self, node, assigned, rhs):
+        if node.symbol.is_final:
+            node.token.error("cannot assign an initialized final local or final parameter: " + node.symbol.name)
+        if node.value != "=" and node.symbol not in assigned:
+            node.token.error("local variable is not definitely assigned: " + node.symbol.name)
+        for child in rhs:
+            self.expression(child, assigned)
+        dtype = node.symbol.dtype
+        if node.value == "=":
+            self.assignment_value(rhs[0], dtype)
+        elif node.value in ("++", "--", "post++", "post--"):
+            if dtype not in INTEGRAL:
+                node.token.error("increment/decrement requires an integer variable")
+            node.operation_type = promoted(dtype)
+        elif node.value in ("&=", "|=", "^=") and dtype == rhs[0].dtype == "boolean":
+            node.operation_type = "boolean"
+        else:
+            if dtype not in INTEGRAL:
+                node.token.error("compound arithmetic requires an integer variable")
+            self.require_int(rhs[0])
+            node.operation_type = promoted(dtype, rhs[0].dtype, shift=node.value in ("<<=", ">>=", ">>>="))
+        if node.value in ("/=", "%="):
+            self.require_nonzero_constant_divisor(rhs[0])
+        assigned.add(node.symbol)
+
+    def type_expression(self, node, assigned):
         kind, op = node.kind, node.value
+        if kind == "mutation":
+            self.mutation(node, assigned)
+            return
         if kind == "integer":
             node.dtype, node.constant = integer_literal(node)
             return
@@ -241,8 +313,8 @@ class SourceAnalyzer:
         if kind == "conditional":
             condition, yes, no = node.children
             when_true, when_false = self.condition(condition, assigned)
-            self.expression(yes, when_true)
-            self.expression(no, when_false)
+            self.flow_expression(yes, when_true)
+            self.flow_expression(no, when_false)
             node.dtype = conditional_type(yes, no, node.token)
             # Both arms must be constant expressions, even when the condition
             # happens to choose a constant arm. This is not value propagation.
@@ -259,9 +331,8 @@ class SourceAnalyzer:
                 node.dtype, node.constant = child.dtype, -child.constant
                 return
         if kind == "binary" and op in ("&&", "||"):
-            self.expression(node.children[0], assigned)
-            states = self.truth_states(node.children[0], assigned)
-            self.expression(node.children[1], states[0 if op == "&&" else 1])
+            states = self.flow_expression(node.children[0], assigned)
+            self.flow_expression(node.children[1], states[0 if op == "&&" else 1])
         else:
             for child in node.children:
                 self.expression(child, assigned)
@@ -344,13 +415,15 @@ class SourceAnalyzer:
                 self.controls.pop()
             paths = context["break"] + ([outgoing] if outgoing is not None else [])
             assigned = set.intersection(*paths) if paths else None
-        elif kind == "block":
-            self.scopes.append({})
+        elif kind in ("block", "sequence"):
+            if kind == "block":
+                self.scopes.append({})
             for child in node.children:
                 if assigned is None:
                     child.token.error("unreachable statement")
                 assigned = self.statement(child, assigned)
-            self.scopes.pop()
+            if kind == "block":
+                self.scopes.pop()
         elif kind == "var":
             node.symbol = self.declare(node.token, node.value, node.is_final)
             if node.children:
@@ -361,29 +434,7 @@ class SourceAnalyzer:
                     self.constant_locals[node.symbol] = node.children[0].constant
         elif kind == "assign":
             node.symbol = self.lookup(node.token)
-            if node.symbol.is_final:
-                node.token.error("cannot assign an initialized final local or final parameter: " + node.symbol.name)
-            if node.value != "=" and node.symbol not in assigned:
-                node.token.error("local variable is not definitely assigned: " + node.symbol.name)
-            for child in node.children:
-                self.expression(child, assigned)
-            dtype = node.symbol.dtype
-            if node.value == "=":
-                self.assignment_value(node.children[0], dtype)
-            elif node.value in ("++", "--"):
-                if dtype not in INTEGRAL:
-                    node.token.error("increment/decrement requires an integer variable")
-                node.operation_type = promoted(dtype)
-            elif node.value in ("&=", "|=", "^=") and dtype == node.children[0].dtype == "boolean":
-                node.operation_type = "boolean"
-            else:
-                if dtype not in INTEGRAL:
-                    node.token.error("compound arithmetic requires an integer variable")
-                self.require_int(node.children[0])
-                node.operation_type = promoted(dtype, node.children[0].dtype, shift=node.value in ("<<=", ">>=", ">>>="))
-            if node.value in ("/=", "%="):
-                self.require_nonzero_constant_divisor(node.children[0])
-            assigned.add(node.symbol)
+            self.check_assignment(node, assigned, node.children)
         elif kind == "expression":
             self.expression(node.children[0], assigned)
         elif kind == "return":

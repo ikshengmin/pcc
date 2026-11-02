@@ -59,6 +59,7 @@ class Node:
     is_final: bool = False
     runtime_steps: tuple[str, ...] = ()
     control_target: object = field(default=None, repr=False, compare=False)
+    flow_outcomes: object = field(default=None, repr=False, compare=False)
 
 
 @dataclass
@@ -445,11 +446,11 @@ class SourceParser:
             return self.switch_statement(token)
         if self.accept("for"):
             self.expect("(")
-            initial = Node("empty", token) if self.peek().text == ";" else self.simple(allow_declaration=True)
+            initial = Node("empty", token) if self.peek().text == ";" else self.for_expressions(allow_declaration=True)
             self.expect(";")
             condition = Node("bool", token, True) if self.peek().text == ";" else self.expression()
             self.expect(";")
-            update = Node("empty", token) if self.peek().text == ")" else self.simple()
+            update = Node("empty", token) if self.peek().text == ")" else self.for_expressions()
             self.expect(")")
             return Node("for", token, children=[initial, condition, update, self.statement()])
         if self.accept("return"):
@@ -503,6 +504,21 @@ class SourceParser:
             groups.append(Node("switch_group", label_token, labels, statements))
         return Node("switch", token, style or "colon", [selector, *groups])
 
+    def for_expressions(self, *, allow_declaration=False):
+        """JLS 14.14.1: a statement-expression list is not a comma operator.
+
+        Each item has the same restricted grammar as an expression statement;
+        a sequence neither adds a lexical scope nor admits arbitrary values.
+        Local declarations remain a distinct alternative to the list.
+        """
+        first = self.simple(allow_declaration=allow_declaration)
+        if first.kind == "var" or self.peek().text != ",":
+            return first
+        expressions = [first]
+        while self.accept(","):
+            expressions.append(self.simple())
+        return Node("sequence", first.token, children=expressions)
+
     def simple(self, allow_declaration=False):
         token = self.peek()
         if self.class_model and token.text == "this" and self.peek(1).text == "." and self.peek(3).text in ASSIGNMENTS | {"++", "--"}:
@@ -545,20 +561,30 @@ class SourceParser:
             operation = self.take().text
             children = [] if operation in ("++", "--") else [self.expression()]
             return Node("assign", name, operation, children)
-        expression = self.expression()
+        expression = self.expression(1, statement_target=True) if self.class_model else self.expression()
         if self.class_model and self.peek().text in ASSIGNMENTS | {"++", "--"}:
             operation = self.take()
+            target = expression
+            while target.kind == "group":
+                target = target.children[0]
+            if target.kind == "name" and "." not in target.value:
+                # Same semantic local/field binding as a bare-name statement;
+                # parentheses must not turn a write into an array value read.
+                rhs = [] if operation.text in {"++", "--"} else [self.expression()]
+                return Node("assign", target.token, operation.text, rhs)
             if expression.kind not in {"array_access", "array_length", "group", "name"}:
                 operation.error("array assignment requires an array component variable")
             children = [expression] + ([] if operation.text in {"++", "--"} else [self.expression()])
             return Node("array_assign", operation, operation.text, children)
-        if expression.kind != "call" and not (self.class_model and expression.kind == "receiver_call"):
+        if expression.kind not in {"call", "mutation"} and not (self.class_model and expression.kind == "receiver_call"):
             expression.token.error("only assignment, increment or method invocation is an expression statement")
         return Node("expression", token, children=[expression])
 
-    def expression(self, minimum=1):
+    def expression(self, minimum=0, *, statement_target=False):
         token = self.take()
-        if token.text in ("+", "-", "~", "!"):
+        if token.text in ("++", "--"):
+            node = Node("mutation", token, token.text, [self.expression(11)])
+        elif token.text in ("+", "-", "~", "!"):
             node = Node("unary", token, token.text, [self.expression(11)])
         elif token.text == "(":
             if self.class_model and self.peek().text in ARRAY_COMPONENTS and self.peek(1).text == "[":
@@ -651,15 +677,21 @@ class SourceParser:
                     member.error("array members other than length require the next reference domain",
                                  code="java.unsupported.array-model-shape")
                 node = Node("array_length", member, children=[node])
-        while PRECEDENCE.get(self.peek().text, 0) >= minimum:
+        if not statement_target and self.peek().text in {"++", "--"}:
+            operator = self.take()
+            node = Node("mutation", operator, "post" + operator.text, [node])
+        while PRECEDENCE.get(self.peek().text, 0) >= max(minimum, 1):
             operator = self.take()
             node = Node("binary", operator, operator.text,
                         [node, self.expression(PRECEDENCE[operator.text] + 1)])
-        if minimum == 1 and self.peek().text == "?":
+        if minimum <= 1 and self.peek().text == "?":
             operator = self.take()
             yes = self.expression()
             self.expect(":")
-            node = Node("conditional", operator, children=[node, yes, self.expression()])
+            node = Node("conditional", operator, children=[node, yes, self.expression(1)])
+        if minimum == 0 and self.peek().text in ASSIGNMENTS:
+            operator = self.take()
+            node = Node("mutation", operator, operator.text, [node, self.expression()])
         return node
 
     def arguments(self):
