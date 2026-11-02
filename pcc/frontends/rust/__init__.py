@@ -94,6 +94,7 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
     checker = Checker(functions, records, enums, parser.implementations, parser.traits,
                       externally_checked=rustc_check is not None, pointer_bits=target.pointer_bits,
                       module_resolution=resolution, crate_policy=parser.crate_policy)
+    checker.traits.require_checked_context(rustc_check, source, target.triple, overflow_checks)
     checker.check()
     marker_context = checker.standard_markers.checked_context(rustc_check, source, target.triple, overflow_checks)
     if rustc_check is None:

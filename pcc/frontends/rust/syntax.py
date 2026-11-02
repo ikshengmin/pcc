@@ -160,6 +160,8 @@ class Expr:
     # Generic arguments on an associated/method path segment, distinct from
     # the owner's type arguments and from a value field's spelling.
     type_arguments: tuple[object, ...] | None = None
+    # Parser identity survives raw-template deepcopy and semantic rewriting.
+    source_call_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -209,6 +211,8 @@ class Function:
     documentation: tuple[Documentation, ...] = ()
     item_identity: object = None
     parameter_bounds: tuple[tuple[Token, tuple[TypeBound, ...]], ...] = ()
+    # Abstract trait signature only: never an emitted body or separate instance.
+    bound_trait: tuple[str, object] | None = None
 
     @property
     def owner_parameter_count(self):
@@ -345,6 +349,7 @@ class Parser:
         self.crate_stability = None
         self.attribute_requirements = []
         self.pos = 0
+        self.call_serial = 0
         self.records: list[Record] = []
         self.enums: list[Enumeration] = []
         self.implementations: list[Implementation] = []
@@ -1118,7 +1123,8 @@ class Parser:
                         self.expect(",")
                         if self.accept(")"):
                             break
-                expr = Expr("call", expr.token, children=[expr] + args)
+                self.call_serial += 1
+                expr = Expr("call", expr.token, children=[expr] + args, source_call_id=self.call_serial)
                 continue
             op = self.token.text
             level = _PRECEDENCE.get(op, 0)

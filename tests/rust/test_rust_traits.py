@@ -103,7 +103,8 @@ def test_invalid_trait_originals_reject_before_ir(name, text, message, code, mon
     ('trait T{fn f<U:Copy>(self,x:U);}', 'actual source/options-bound CheckedRustSource'),
     ('trait T{} struct R<U>{x:U} impl<U> T for R<U>{}', 'blanket/generic'),
     ('trait T{} impl T for u64{}', 'local nominal'),
-    ('trait T{} fn f<U:T>(x:U){}', 'bounds'),
+    # This exact prior capability control now lives among actual-certified
+    # positives in test_rust_local_trait_bounds, not among unsupported syntax.
     ('trait T{} fn f(x:&dyn T){}', 'reference-bearing|unsupported|expected'),
 ])
 def test_trait_capability_frontiers_are_not_silent_fallbacks(text, message, monkeypatch):

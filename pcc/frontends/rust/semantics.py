@@ -165,6 +165,7 @@ class Checker:
         self.type_scope = {}
         self.abstract_function = False
         self.inferred_calls = []
+        self.current_function = None
         from .generics import GenericDeclarations
         from .function_generics import GenericFunctions
         self.generics = GenericDeclarations(self)
@@ -404,6 +405,7 @@ class Checker:
         if fn.body is None:
             return
         previous_scope, previous_abstract = self.type_scope, self.abstract_function
+        previous_function, self.current_function = self.current_function, fn
         previous_module, previous_replay = self.current_module, self.replaying_instance
         self.replaying_instance = fn.instance_arguments is not None
         if fn.item_identity is not None:
@@ -429,6 +431,7 @@ class Checker:
             self.type_scope, self.abstract_function = previous_scope, previous_abstract
             self.current_module, self.replaying_instance = previous_module, previous_replay
             self.inferred_calls = previous_calls
+            self.current_function = previous_function
 
     def expression(self, expr: Expr, *, allow_borrow=False, place_context=False) -> object:
         kind, children = expr.kind, expr.children
@@ -609,6 +612,7 @@ class Checker:
                 callee = callee.children[0]
             fn = None
             fixed_arguments = ()
+            pinned_method = self.function_generics.replay_bound_call(expr, callee.token)
             explicit_arguments = callee.type_arguments
             receiver_checked = False
             arguments_checked = False
@@ -626,7 +630,7 @@ class Checker:
                     return "usize"
                 if pending_integer(receiver_type):
                     raise receiver.token.error("method selection on an unresolved inferred receiver requires later constraint solving, which is not implemented")
-                fn, fixed_arguments = self.methods.lookup(receiver_type, callee.value, callee.token, receiver=True)
+                fn, fixed_arguments = pinned_method or self.methods.lookup(receiver_type, callee.value, callee.token, receiver=True)
                 if isinstance(fn.params[0][1], SharedReference) and not isinstance(receiver_type, SharedReference):
                     if self.through_array_index(receiver) and not self.externally_checked:
                         raise receiver.token.error("indexed receiver borrowing requires an actual external rustc check; legacy partial loans do not prove array disjointness")
@@ -645,7 +649,7 @@ class Checker:
                 receiver_checked = True
             elif callee.kind == "trait_path":
                 owner, trait, associated_name = callee.value
-                fn, fixed_arguments = self.traits.qualified(owner, trait, associated_name, callee.token)
+                fn, fixed_arguments = pinned_method or self.traits.qualified(owner, trait, associated_name, callee.token)
             elif callee.kind == "variant":
                 owner, associated_name = callee.value
                 if (self.module_resolution is not None and isinstance(owner, str)
@@ -654,7 +658,7 @@ class Checker:
                 if self.module_resolution is not None:
                     fn = self.module_resolution.associated_function(owner, associated_name, self.current_module, callee.token)
                 if fn is None:
-                    selected = self.methods.lookup(owner, associated_name, callee.token)
+                    selected = pinned_method or self.methods.lookup(owner, associated_name, callee.token)
                     if selected is not None:
                         fn, fixed_arguments = selected
             if fn is None and callee.kind == "variant":
@@ -687,6 +691,7 @@ class Checker:
                 if fn is None:
                     raise callee.token.error(f"unknown function {callee.value!r}")
                 explicit_arguments = path.arguments if isinstance(path, TypeApplication) else None
+            self.function_generics.remember_bound_call(expr, fn)
             self.source_type_access(fn.result, callee.token)
             for _, parameter_type, _ in fn.params:
                 self.source_type_access(parameter_type, callee.token)

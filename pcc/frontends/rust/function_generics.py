@@ -36,6 +36,7 @@ class GenericFunctions:
         self.checker = checker
         self.parameters = {}
         self.raw_bodies = {}
+        self.bound_calls = {}
         self.instances = InstanceRegistry()
 
     def prepare(self, function):
@@ -47,7 +48,9 @@ class GenericFunctions:
                 raise parameter.error('generic parameters shadowing primitive names are not implemented')
             scope[parameter.text] = TypeParameter('function ' + function.declaration_name,
                                                   index, parameter.text)
-        self.checker.standard_markers.prepare(function, scope)
+        marker_bounds = self.checker.traits.prepare_function_bounds(function, scope)
+        self.checker.standard_markers.prepare(replace(function, parameter_bounds=marker_bounds), scope)
+        self.bound_calls[function.declaration_name] = {}
         self.parameters[function.declaration_name] = tuple(scope.values())
         if function.type_parameters:
             self.raw_bodies[function.declaration_name] = deepcopy(function.body)
@@ -66,6 +69,8 @@ class GenericFunctions:
         return scope
 
     def select(self, function, arguments, token, *, normalized=False):
+        if function.bound_trait is not None and not self.checker.abstract_function:
+            raise token.error('abstract trait selection requires its concrete implementation before materialization')
         if arguments is None:
             if function.type_parameters:
                 raise token.error('generic function requires explicit type arguments; argument inference is not implemented')
@@ -89,6 +94,7 @@ class GenericFunctions:
                 pending.extend(children(ty))
             self.checker.valid_type(argument, token, allow_reference=False, require_sized=False)
         self.checker.standard_markers.check_call(self.parameters[function.declaration_name], arguments, token)
+        self.checker.traits.check_function_call(self.parameters[function.declaration_name], arguments, token)
         bindings = dict(zip(self.parameters[function.declaration_name], arguments))
         params = [(name, substitute(ty, bindings), mutable) for name, ty, mutable in function.params]
         result = substitute(function.result, bindings)
@@ -114,6 +120,32 @@ class GenericFunctions:
         for name, ty, _ in params:
             self.checker.valid_type(ty, name)
         return self.instances.request(key, instance, token).value
+
+    def remember_bound_call(self, expression, function):
+        if function.bound_trait is None:
+            return
+        current = self.checker.current_function
+        if not self.checker.abstract_function or current is None or expression.source_call_id is None:
+            raise expression.token.error('abstract trait dispatch has no stable source-call identity')
+        trait, owner = function.bound_trait
+        selection = trait, owner, function.token.text
+        calls = self.bound_calls[current.declaration_name]
+        previous = calls.setdefault(expression.source_call_id, selection)
+        if previous != selection:
+            raise expression.token.error('inconsistent abstract trait selection at one source call')
+
+    def replay_bound_call(self, expression, token):
+        current = self.checker.current_function
+        if current is None or self.checker.abstract_function:
+            return None
+        selected = self.bound_calls.get(current.declaration_name, {}).get(expression.source_call_id)
+        if selected is None:
+            return None
+        trait, owner, method = selected
+        parameters = self.parameters[current.declaration_name]
+        bindings = dict(zip(parameters, current.instance_arguments or ()))
+        concrete = substitute(owner, bindings)
+        return self.checker.traits.qualified_canonical(concrete, trait, method, token)
 
     def materialize(self):
         def build(entry):

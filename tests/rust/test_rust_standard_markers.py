@@ -112,8 +112,8 @@ def test_abstract_body_and_forwarded_obligations_are_checked_without_lowering(na
 
 
 CAPABILITY = (
-    ('local-copy', 'trait Copy{}struct R{x:u64}impl Copy for R{}fn f<T:Copy>(x:T)->T{x}', 'local/user trait'),
-    ('local-sized', 'trait Sized{}fn f<T:Sized>(){}', 'local/user trait'),
+    # Exact former local-copy/local-sized controls are checked positives in
+    # test_rust_local_trait_bounds; neither spelling becomes a builtin marker.
     ('module-core', 'mod core{pub mod marker{pub struct Copy{pub x:u64}}}fn f<T:core::marker::Copy>(){}', 'local/user trait'),
     ('clone', 'fn f<T:Clone>(x:T)->T{x}', 'only canonical'),
     ('nostd-std', '#![no_std]fn f<T:std::marker::Copy>(x:T)->T{x}', 'unavailable'),
@@ -163,7 +163,7 @@ def test_actual_same_input_marker_check_precedes_owned_phase(name,tmp_path,monke
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 def test_valid_local_trait_and_dst_sources_remain_capability_gaps_not_rust_rejections(tmp_path):
     for name,text,message in CAPABILITY:
-        if name not in {'local-copy', 'local-sized', 'clone', 'data', 'impl', 'where', 'dst'}:
+        if name not in {'clone', 'data', 'impl', 'where', 'dst'}:
             continue
         checked = certify_source(text, tmp_path / name)
         with pytest.raises(RustError, match=message):
