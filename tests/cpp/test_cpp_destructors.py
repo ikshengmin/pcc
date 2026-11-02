@@ -133,7 +133,6 @@ UNSUPPORTED_DESTRUCTORS = (
     'struct S{~S()=default;};',
     'struct S{~S();};S::~S(){throw 1;}',
     'struct S{~S();};int f(){try{S s;}catch(...){return 1;}return 0;}',
-    'struct A{};struct S{A a;~S();};',
     'struct S{~S();};struct A{S s;};int f(){A a;return 0;}',
     'struct S{~S();};struct A{S s;};int f(){A a{};return 0;}',
     'struct S{~S();};int f(){S a[2];return 0;}',

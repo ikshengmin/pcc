@@ -2,7 +2,8 @@
 
 N4659 [class.ctor], [class.base.init], [dcl.init], [over.match.ctor].
 Out-of-class bodies and delayed in-class bodies share scalar/pointer member
-initialization. In-class definitions additionally require the shared external-ODR
+initialization and declared C1 calls for trivially destructible class members.
+In-class definitions additionally require the shared external-ODR
 linkage contract before emission. No base-object C2, unwind, copy, or dynamic
 initialization semantics are synthesized.
 """
@@ -174,7 +175,20 @@ def parse_member_initializers(parser, definition):
             if parser._peek().value != "(":
                 raise CppDiagnostic("cpp.unsupported.constructor-list-initialization", "braced member initialization requires direct-list conversion rules", parser._peek().coord)
             parser._expect("(")
-            expression = None if parser._peek().value == ")" else parser._expression()
+            if is_class_type(target.dtype):
+                if getattr(parser, 'class_template_method', None) is not None:
+                    raise CppDiagnostic("cpp.unsupported.class-templates",
+                                        "class member construction patterns require dependent lifetime semantics", member.coord)
+                from pcc.frontends.cpp.member_initialization import MemberArguments
+                arguments = []
+                if parser._peek().value != ")":
+                    while True:
+                        arguments.append(parse_constructor_argument(parser))
+                        if not parser._accept(","):
+                            break
+                expression = MemberArguments(arguments)
+            else:
+                expression = None if parser._peek().value == ")" else parser._expression()
             parser._expect(")")
             initializers[target] = expression
             if not parser._accept(","):
@@ -186,6 +200,10 @@ def lower_member_initializers(parser, definition, this, initializers):
     """Initialize concrete fields in declaration order, without zeroing omissions."""
     stores = []
     for member in definition.members:
+        if is_class_type(member.dtype):
+            from pcc.frontends.cpp.member_initialization import initialize
+            stores.append(initialize(parser, member, this, initializers.get(member)))
+            continue
         if member not in initializers and getattr(member, 'default_initializer_tokens', None) is not None:
             from pcc.frontends.cpp.default_member_initializers import value as default_value
             value = default_value(member, c_ast.ID(this.c_name, member.coord))
@@ -301,14 +319,7 @@ def construct_local(parser, symbol):
         if _function_declaration_ahead(parser):
             raise CppDiagnostic("cpp.unsupported.block-function-declarations", "function declaration ambiguity is not object construction", parser._peek().coord)
         while True:
-            expression = parser._expression()
-            # A class lvalue may bind a selected reference parameter without
-            # loading/copying its aggregate value. Only constructor selection
-            # opts into that address-only path; ordinary function calls retain
-            # their separate class-value/ADL capability boundary.
-            parser._require_value(expression, allow_class=True,
-                                  object_address=is_class_type(expression.dtype))
-            arguments.append(parser._decay_array(expression))
+            arguments.append(parse_constructor_argument(parser))
             if parser._accept(")"):
                 break
             parser._expect(",")
@@ -337,6 +348,15 @@ def construct_local(parser, symbol):
     symbol.jump_entry = "initialized"
     return [parser._decl(symbol.c_name, symbol.dtype, symbol.coord),
             call]
+
+
+def parse_constructor_argument(parser):
+    """A C1 reference slot may borrow a class glvalue without fetching it."""
+    expression = parser._expression()
+    # Ordinary function calls retain their separate class-value/ADL boundary.
+    parser._require_value(expression, allow_class=True,
+                          object_address=is_class_type(expression.dtype))
+    return parser._decay_array(expression)
 
 
 def call_free_body(body):

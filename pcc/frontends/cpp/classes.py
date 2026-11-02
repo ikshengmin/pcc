@@ -4,7 +4,8 @@ This layer owns class declaration/completeness, non-static data members and
 access. It does not erase class syntax or give a C struct C++ constructor
 semantics. Implicit trivial special members and bounded complete-object
 constructors use this layout; constructors.py owns explicit construction of
-scalar/pointer subobjects. destructors.py and lifetimes.py own bounded normal
+scalar/pointer subobjects and declared C1 class members with trivial destruction.
+destructors.py and lifetimes.py own bounded normal
 exits for complete automatic objects. Bases, virtual functions, unions,
 non-trivial subobject destruction and default member initializers remain gaps.
 
@@ -168,15 +169,17 @@ class ClassDefinition:
         return symbol
 
     def finish(self):
-        if self.destructor is not None and any(is_class_type(member.dtype) or array_type(member.dtype)
-                                               for member in self.members):
+        from pcc.frontends.cpp.member_initialization import require_declared_constructor, requires_destruction
+        if self.destructor is not None and any(requires_destruction(member.dtype) for member in self.members):
             raise CppDiagnostic("cpp.unsupported.destructor-subobjects",
-                                "explicit destructor subobjects currently require scalar or pointer fields", self.dtype.coord)
+                                "explicit destructor requires non-trivial member destruction support", self.dtype.coord)
         if self.constructors.overloads:
             for member in self.members:
-                if is_class_type(member.dtype) or array_type(member.dtype):
+                if array_type(member.dtype):
                     raise CppDiagnostic("cpp.unsupported.constructor-subobjects",
-                                        "constructor subobjects currently require scalar or pointer fields", member.coord)
+                                        "array constructor subobjects require element lifetime support", member.coord)
+                if is_class_type(member.dtype):
+                    require_declared_constructor(member)
                 if member.name == self.dtype.name:
                     raise CppDiagnostic("cpp.class-name-member",
                                         "a class with a constructor cannot have a same-named data member", member.coord)

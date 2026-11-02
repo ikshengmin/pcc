@@ -101,7 +101,6 @@ DEFERRED = (
     "struct S{~S()=delete;};",
     "struct S{~S()noexcept{}};",
     "struct S{~S(){throw 1;}};",
-    "struct T{};struct S{T value;~S(){}};",
     "struct T{~T(){}};struct S{T value;};int f(){S s;return 0;}",
     "struct S{~S(){}};int f(){S array[2];return 0;}",
     "namespace{struct S{~S(){}};}",
