@@ -13,6 +13,7 @@ original PCC inputs, not copied GCC or Clang test-suite sources.
 
 from pcc.frontends.c.ast import c_ast
 from pcc.frontends.cpp.classes import (
+    check_aggregate_destructor_access,
     empty_list_initialize,
     is_class_type,
     require_complete,
@@ -144,7 +145,10 @@ def check_list_conversion(expression, dtype, types, coord):
 
 def _zero_initializer(dtype, coord):
     if is_class_type(dtype):
-        return empty_list_initialize(dtype, coord)
+        raise CppDiagnostic(
+            "cpp.unsupported.class-initialization",
+            "class value-initialization requires the scoped aggregate owner", coord,
+        )
     # This is value-initialization, not a narrowing conversion from a user
     # clause. The existing C initializer owner performs target scalar zeroing.
     return c_ast.Constant("int", "0", coord)
@@ -174,7 +178,7 @@ def _lower_scalar(dtype, initializer, types, convert, coord):
     return convert(initializer, dtype, coord)
 
 
-def lower_aggregate_initializer(dtype, initializer, types, convert):
+def lower_aggregate_initializer(dtype, initializer, types, convert, *, scope):
     """Return ordered C InitList storage only after C++ list Sema succeeds.
 
     ``convert`` is the existing bound parser._convert callback. No other
@@ -191,7 +195,7 @@ def lower_aggregate_initializer(dtype, initializer, types, convert):
     if has_initializers(unqualified(dtype).definition):
         unsupported(initializer.coord)
     if not initializer.clauses:
-        return empty_list_initialize(dtype, initializer.coord)
+        return empty_list_initialize(dtype, initializer.coord, scope=scope)
     definition = unqualified(dtype).definition
     if not definition.aggregate:
         raise CppDiagnostic(
@@ -210,10 +214,13 @@ def lower_aggregate_initializer(dtype, initializer, types, convert):
             "class-expression initializer clauses require copy/conversion semantics",
             initializer.coord,
         )
+    check_aggregate_destructor_access(definition, scope)
     values = []
     for index, member in enumerate(definition.members):
         if index >= len(initializer.clauses):
-            values.append(_zero_initializer(member.dtype, initializer.coord))
+            values.append(empty_list_initialize(member.dtype, initializer.coord, scope=scope)
+                          if is_class_type(member.dtype)
+                          else _zero_initializer(member.dtype, initializer.coord))
             continue
         clause = initializer.clauses[index]
         if is_class_type(member.dtype):
@@ -225,7 +232,7 @@ def lower_aggregate_initializer(dtype, initializer, types, convert):
                     "a class subobject requires an explicit braced initializer at this boundary",
                     clause.node.coord,
                 )
-            values.append(lower_aggregate_initializer(member.dtype, clause, types, convert))
+            values.append(lower_aggregate_initializer(member.dtype, clause, types, convert, scope=scope))
         else:
             values.append(_lower_scalar(member.dtype, clause, types, convert, initializer.coord))
     # Do not check this before examining class members: a valid brace-elided

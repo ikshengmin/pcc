@@ -29,12 +29,16 @@ class AutomaticLifetimes:
     def pop_control(self):
         self.controls.pop()
 
-    def register(self, parser, symbol, initializer=None):
+    def register(self, parser, symbol, initializer=None, *, aggregate_initialization=False):
         owner = unqualified(symbol.dtype)
         if not is_class_type(owner):
             return
         from pcc.frontends.cpp.destructors import member_destructors
-        selected = member_destructors(owner.definition, owner.definition.scope)
+        # A real aggregate list potentially invokes its elements' D1s from
+        # the caller (CWG2227), not from a nonexistent enclosing constructor.
+        # Declared C1, DMI and implicit-default paths retain their own owner.
+        member_scope = parser.scope if aggregate_initialization else owner.definition.scope
+        selected = member_destructors(owner.definition, member_scope)
         destructor = owner.definition.destructor
         if destructor is None:
             if selected:

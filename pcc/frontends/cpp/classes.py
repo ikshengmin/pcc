@@ -580,7 +580,37 @@ def default_initialize(dtype, coord):
     return None
 
 
-def empty_list_initialize(dtype, coord):
+def check_aggregate_destructor_access(definition, scope):
+    """CWG2227: actual aggregate elements use their initializer's context.
+
+    This explicit-brace owner initializes every aggregate element, including
+    omissions. A nonaggregate instead invokes its constructor; do not borrow
+    the caller's privileges for that constructor's own subobjects.
+    """
+    pending = [definition]
+    while pending:
+        current = pending.pop()
+        if not current.aggregate:
+            continue
+        for member in current.members:
+            if not is_class_type(member.dtype):
+                continue
+            child = unqualified(member.dtype).definition
+            if child.destructor is not None:
+                scope.check_member_access(child.destructor, member.coord)
+            pending.append(child)
+
+
+def empty_list_initialize(dtype, coord, *, scope):
+    """Validate real list-initialization before projecting its zero storage."""
+    require_complete(dtype, coord)
+    if not is_class_type(dtype):
+        raise TypeError("empty_list_initialize requires a class type")
+    check_aggregate_destructor_access(unqualified(dtype).definition, scope)
+    return _empty_list_initialize(dtype, coord)
+
+
+def _empty_list_initialize(dtype, coord):
     """Empty-list initialization at the no-user-constructor boundary.
 
     An aggregate's omitted elements are value-initialized even if a const scalar
@@ -613,7 +643,9 @@ def empty_list_initialize(dtype, coord):
     values = []
     for member in definition.members:
         if is_class_type(member.dtype):
-            values.append(empty_list_initialize(member.dtype, coord))
+            # Under a nonaggregate this InitList is only zero-storage
+            # projection, not a new caller-context aggregate initialization.
+            values.append(_empty_list_initialize(member.dtype, coord))
         else:
             # All admitted scalar/pointer members have ordinary C zero-init
             # semantics; no class conversion or user constructor is bypassed.

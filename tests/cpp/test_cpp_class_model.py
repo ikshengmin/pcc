@@ -232,12 +232,12 @@ def test_default_and_empty_list_initialization_preserve_const_member_distinction
     assert dtype.definition.copy_assignment_deleted
     with pytest.raises(CppDiagnostic, match="cpp.deleted-default-constructor"):
         default_initialize(dtype, COORD)
-    init = empty_list_initialize(dtype, COORD)
+    init = empty_list_initialize(dtype, COORD, scope=Scope())
     assert isinstance(init, c_ast.InitList)
     assert init.exprs[0].value == "0"
     private = define("Private", key="class", fields=(("value", ConstType("int")),))
     with pytest.raises(CppDiagnostic, match="cpp.deleted-default-constructor"):
-        empty_list_initialize(private, COORD)
+        empty_list_initialize(private, COORD, scope=Scope())
 
 
 def test_recursive_special_member_properties_are_not_width_guesses():
@@ -253,12 +253,12 @@ def test_recursive_special_member_properties_are_not_width_guesses():
         default_initialize(ConstType(scalar), COORD)
     assert nested.definition.default_constructor_deleted
     assert nested.definition.copy_assignment_deleted
-    assert isinstance(empty_list_initialize(nested, COORD).exprs[0], c_ast.InitList)
+    assert isinstance(empty_list_initialize(nested, COORD, scope=Scope()).exprs[0], c_ast.InitList)
 
 
 def test_each_class_initialization_gets_an_independent_ast():
     dtype = define(fields=(("value", "int"),))
-    first = empty_list_initialize(dtype, COORD)
-    second = empty_list_initialize(dtype, COORD)
+    first = empty_list_initialize(dtype, COORD, scope=Scope())
+    second = empty_list_initialize(dtype, COORD, scope=Scope())
     assert first is not second
     assert first.exprs[0] is not second.exprs[0]

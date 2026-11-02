@@ -1408,11 +1408,13 @@ class CppParser:
                     self.lifetimes.register(self, symbol)
                     return statements
                 equals = self._accept("=")
+                aggregate_initialization = False
                 if self._peek().value == "{":
                     initializer_list = parse_initializer_list(self)
                     init = lower_aggregate_initializer(
-                        dtype, initializer_list, self.types, self._convert,
+                        dtype, initializer_list, self.types, self._convert, scope=self.scope,
                     )
+                    aggregate_initialization = unqualified(dtype).definition.aggregate
                 elif equals is not None or self._peek().value == "(":
                     coord = equals.coord if equals is not None else self._peek().coord
                     raise CppDiagnostic("cpp.unsupported.class-initialization", "class copy/direct initialization is not implemented", coord)
@@ -1421,7 +1423,7 @@ class CppParser:
                 self._expect(";")
                 symbol.jump_entry = "class-default" if init is None else "initialized"
                 declaration = self._decl(symbol.c_name, dtype, name.coord, init)
-                self.lifetimes.register(self, symbol, init)
+                self.lifetimes.register(self, symbol, init, aggregate_initialization=aggregate_initialization)
                 return declaration
             if self._accept("="):
                 if is_enum_type(dtype) and self._peek().value == "{":

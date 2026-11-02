@@ -89,7 +89,7 @@ def test_lowering_reuses_conversion_callback_in_source_field_order_once():
         calls.append((expr, destination))
         return expr.node
 
-    lowered = lower_aggregate_initializer(dtype, ListInitializer([first, second], COORD), TYPES, convert)
+    lowered = lower_aggregate_initializer(dtype, ListInitializer([first, second], COORD), TYPES, convert, scope=Scope())
     assert calls == [(first, "int"), (second, "long")]
     assert lowered.exprs[0] is first.node
     assert lowered.exprs[1] is second.node
@@ -107,7 +107,7 @@ def test_explicit_nested_list_preserves_const_aggregate_omissions():
         return expr.node
 
     lowered = lower_aggregate_initializer(
-        outer, ListInitializer([ListInitializer([], COORD), leaf], COORD), TYPES, convert,
+        outer, ListInitializer([ListInitializer([], COORD), leaf], COORD), TYPES, convert, scope=Scope(),
     )
     assert lowered.exprs[0].exprs[0].value == "0"
     assert lowered.exprs[1] is leaf.node
@@ -124,7 +124,7 @@ def test_real_parser_conversion_owner_receives_scalar_braces_and_const_destinati
         conversions.append((expression, destination))
         return parser._convert(expression, destination, coord)
 
-    lowered = lower_aggregate_initializer(dtype, initializer, parser.types, convert)
+    lowered = lower_aggregate_initializer(dtype, initializer, parser.types, convert, scope=parser.scope)
     assert conversions == [(initializer.clauses[0].clauses[0], ConstType("long")),
                            (initializer.clauses[1].clauses[0], PointerType("int"))]
     assert isinstance(lowered.exprs[0], c_ast.Cast)
@@ -158,7 +158,7 @@ def test_nested_conversion_callbacks_follow_leaf_order_without_duplication():
         calls.append(expr)
         return expr.node
 
-    lowered = lower_aggregate_initializer(outer, initializer, TYPES, convert)
+    lowered = lower_aggregate_initializer(outer, initializer, TYPES, convert, scope=Scope())
     assert calls == leaves
     assert lowered.exprs[0].exprs == [leaf.node for leaf in leaves[:2]]
     assert lowered.exprs[1] is leaves[2].node
@@ -232,7 +232,7 @@ def test_valid_brace_elision_does_not_receive_a_false_excess_elements_diagnostic
     with pytest.raises(CppDiagnostic) as error:
         lower_aggregate_initializer(
             outer, ListInitializer([expression(), expression(), expression()], COORD), TYPES,
-            lambda expr, destination, coord: expr.node,
+            lambda expr, destination, coord: expr.node, scope=Scope(),
         )
     assert error.value.code == "cpp.unsupported.aggregate-brace-elision"
 
@@ -242,7 +242,7 @@ def test_empty_aggregate_single_class_leaf_never_bypasses_copy_semantics():
     leaf = Expression(c_ast.ID("other", COORD), empty, lvalue=True)
     with pytest.raises(CppDiagnostic) as error:
         lower_aggregate_initializer(empty, ListInitializer([leaf], COORD), TYPES,
-                                    lambda expr, destination, coord: expr.node)
+                                    lambda expr, destination, coord: expr.node, scope=Scope())
     assert error.value.code == "cpp.unsupported.class-initialization"
 
 
@@ -250,7 +250,7 @@ def test_nonaggregate_nonempty_list_does_not_initialize_private_storage_directly
     private = define("P", (("value", "int"),), key="class")
     with pytest.raises(CppDiagnostic) as error:
         lower_aggregate_initializer(private, ListInitializer([expression()], COORD), TYPES,
-                                    lambda expr, destination, coord: expr.node)
+                                    lambda expr, destination, coord: expr.node, scope=Scope())
     assert error.value.code == "cpp.unsupported.class-constructors"
 
 
@@ -259,14 +259,14 @@ def test_omitted_nonaggregate_member_keeps_deleted_default_constructor_constrain
     outer = define("O", (("first", "int"), ("private", private)))
     with pytest.raises(CppDiagnostic, match="cpp.deleted-default-constructor"):
         lower_aggregate_initializer(outer, ListInitializer([expression()], COORD), TYPES,
-                                    lambda expr, destination, coord: expr.node)
+                                    lambda expr, destination, coord: expr.node, scope=Scope())
 
 
 def test_true_scalar_excess_elements_is_diagnosed():
     dtype = define("S", (("value", "int"),))
     initializer = ListInitializer([ListInitializer([expression(), expression()], COORD)], COORD)
     with pytest.raises(CppDiagnostic) as error:
-        lower_aggregate_initializer(dtype, initializer, TYPES, lambda expr, destination, coord: expr.node)
+        lower_aggregate_initializer(dtype, initializer, TYPES, lambda expr, destination, coord: expr.node, scope=Scope())
     assert error.value.code == "cpp.too-many-initializers"
 
 
@@ -278,5 +278,5 @@ def test_scalar_nested_list_is_not_recursively_unwrapped(member_type, innermost)
     scalar_list = ListInitializer([ListInitializer(innermost, COORD)], COORD)
     initializer = ListInitializer([scalar_list], COORD)
     with pytest.raises(CppDiagnostic) as error:
-        lower_aggregate_initializer(dtype, initializer, TYPES, lambda expr, destination, coord: expr.node)
+        lower_aggregate_initializer(dtype, initializer, TYPES, lambda expr, destination, coord: expr.node, scope=Scope())
     assert error.value.code == "cpp.invalid-scalar-initializer"
