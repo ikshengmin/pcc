@@ -1421,7 +1421,7 @@ class CppParser:
                 self._expect(";")
                 symbol.jump_entry = "class-default" if init is None else "initialized"
                 declaration = self._decl(symbol.c_name, dtype, name.coord, init)
-                self.lifetimes.register(self, symbol)
+                self.lifetimes.register(self, symbol, init)
                 return declaration
             if self._accept("="):
                 if is_enum_type(dtype) and self._peek().value == "{":

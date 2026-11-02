@@ -5,9 +5,9 @@ access. It does not erase class syntax or give a C struct C++ constructor
 semantics. Implicit trivial special members and bounded complete-object
 constructors use this layout; constructors.py owns explicit construction of
 scalar/pointer subobjects and declared C1 class members with trivial destruction.
-destructors.py and lifetimes.py own bounded normal
-exits for complete automatic objects. Bases, virtual functions, unions,
-non-trivial subobject destruction and default member initializers remain gaps.
+destructors.py and lifetimes.py own bounded normal exits and explicitly
+declared member destruction. Bases, virtual functions, unions, implicit
+non-trivial special members and exception unwinding remain gaps.
 
 The parser and this module share ``Scope``/``Symbol``. There is no second
 ordinary-name lookup implementation. Physical layout is performed by the
@@ -169,10 +169,10 @@ class ClassDefinition:
         return symbol
 
     def finish(self):
-        from pcc.frontends.cpp.member_initialization import require_declared_constructor, requires_destruction
-        if self.destructor is not None and any(requires_destruction(member.dtype) for member in self.members):
-            raise CppDiagnostic("cpp.unsupported.destructor-subobjects",
-                                "explicit destructor requires non-trivial member destruction support", self.dtype.coord)
+        from pcc.frontends.cpp.member_initialization import require_declared_constructor
+        if self.destructor is not None:
+            from pcc.frontends.cpp.destructors import member_destructors
+            member_destructors(self)
         if self.constructors.overloads:
             for member in self.members:
                 if array_type(member.dtype):

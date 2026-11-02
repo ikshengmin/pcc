@@ -2,8 +2,9 @@
 
 N4659 [class.dtor]; Itanium ABI D1 complete-object destructor encoding. There
 is no D0 delete, D2 base destruction, virtual dispatch or unwind claim.
-In-class bodies use the existing completed-class external-ODR method owner;
-scalar/pointer subobjects need no emitted destructor calls.
+In-class bodies use the existing completed-class external-ODR method owner.
+Explicit member D1 calls share the normal-exit cleanup owner; implicit D1
+synthesis, unknown effects and exception cleanup remain explicit boundaries.
 """
 
 from pcc.frontends.c.ast import c_ast
@@ -124,11 +125,62 @@ def parse_destructor(parser, definition=None):
     return bind_destructor_body(parser, definition, symbol, parameter_scope, declaration, this, name.coord)
 
 
+def member_destructors(definition, scope=None):
+    """Select declared member D1s in construction order, without synthesis."""
+    from pcc.frontends.cpp.member_initialization import requires_destruction
+    selected = []
+    for member in definition.members:
+        if not requires_destruction(member.dtype):
+            continue
+        owner = unqualified(member.dtype)
+        destructor = owner.definition.destructor if is_class_type(owner) else None
+        if destructor is None:
+            raise CppDiagnostic("cpp.unsupported.destructor-subobjects",
+                                "implicit member destruction requires special-member synthesis", member.coord)
+        if scope is not None:
+            scope.check_member_access(destructor, member.coord)
+        selected.append((member, destructor))
+    return selected
+
+
+def _closed_destruction_body(body, cleanup_destructors):
+    """Prove a finite chain of bound bodies, not merely absence of throw syntax.
+
+    Only exact cleanup-call nodes emitted by our lifetime owner may recurse
+    into a previously proven D1. A name, declaration, user call or unknown
+    function effect cannot establish this proof.
+    """
+    pending = [body]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, c_ast.FuncCall):
+            selected = cleanup_destructors.get(node)
+            if selected is None or not getattr(selected, "closed_destruction_body", False):
+                return False
+        pending.extend(child for _name, child in node.children())
+    return True
+
+
 def bind_destructor_body(parser, definition, symbol, parameter_scope, declaration, this, coord):
-    """Use the same member/return/lifetime context for both definition forms."""
-    function = parser._bind_function_body(
-        symbol, "void", parameter_scope, [], declaration, this, definition, coord,
-    )
+    """Body locals die before members on both fallthrough and early return."""
+    selected = member_destructors(definition, parameter_scope)
+    previous_calls = parser.lifetimes.cleanup_destructors
+    parser.lifetimes.cleanup_destructors = {}
+    parser.lifetimes.enter()
+    try:
+        parser.lifetimes.register_members(this, selected)
+        function = parser._bind_function_body(
+            symbol, "void", parameter_scope, [], declaration, this, definition, coord,
+        )
+        function.body.block_items.extend(parser.lifetimes.current_cleanup(coord))
+        closed = _closed_destruction_body(function.body, parser.lifetimes.cleanup_destructors)
+    finally:
+        parser.lifetimes.leave()
+        parser.lifetimes.cleanup_destructors = previous_calls
+    if selected and not closed:
+        raise CppDiagnostic("cpp.unsupported.destructor-subobjects",
+                            "unknown destruction effects require member exception cleanup", coord)
+    symbol.closed_destruction_body = closed
     from pcc.frontends.cpp.constructors import call_free_body
     symbol.closed_normal_body = call_free_body(function.body)
     return function

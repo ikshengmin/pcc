@@ -702,17 +702,25 @@ class Checker:
             if explicit_arguments is not None and fn.implementation is not None:
                 if len(explicit_arguments) != inferable_count:
                     raise callee.token.error("generic method argument count mismatch")
+            if explicit_arguments is not None:
+                if not fn.type_parameters:
+                    raise callee.token.error('type arguments supplied to a nongeneric function')
+                if len(explicit_arguments) != inferable_count:
+                    raise callee.token.error('generic function argument count mismatch')
+                # Each source `_` is fresh for this call (and for every replay
+                # of a generic body). Concrete slots remain fixed constraints.
+                # Nested placeholders retain their tuple/array/nominal shape.
+                explicit_arguments = tuple(
+                    self.generics.normalize(ty, callee.token, call_inference=True)
+                    for ty in explicit_arguments)
             from .call_inference import infer, pending_integer
-            pending_owner = any(pending_integer(argument) for argument in fixed_arguments)
-            if (inferable_count and explicit_arguments is None) or pending_owner:
-                # The selected nominal owner is known, but its argument slots
-                # may be constrained by this method's operands/result or later
-                # body context. Do not register an unresolved instance or
-                # default its integer variables before those constraints land.
-                fixed = fixed_arguments
-                if explicit_arguments is not None:
-                    fixed += tuple(self.generics.normalize(ty, callee.token)
-                                   for ty in explicit_arguments)
+            fixed = fixed_arguments + (explicit_arguments or ())
+            pending_arguments = any(pending_integer(argument) for argument in fixed)
+            if (inferable_count and explicit_arguments is None) or pending_arguments:
+                # Known owner slots and explicit placeholders may be constrained
+                # by operands/results or later body context. Do not register an
+                # unresolved instance or default its integer variables before
+                # those constraints land.
                 types = [arg.ty if receiver_checked and index == 0 else
                          self.expression(arg, allow_borrow=isinstance(param_ty, SharedReference))
                          for index, (arg, (_, param_ty, _)) in enumerate(zip(children[1:], fn.params))]
@@ -722,14 +730,9 @@ class Checker:
                 self.inferred_calls.append((expr, declaration, arguments, callee.token))
                 arguments_checked = True
             else:
-                if fn.implementation is not None and fn.type_parameters:
-                    method_arguments = tuple(self.generics.normalize(ty, callee.token)
-                                             for ty in explicit_arguments or ())
-                    arguments = fixed_arguments + method_arguments
-                else:
-                    arguments = explicit_arguments
+                arguments = fixed if fn.type_parameters else None
                 fn = self.function_generics.select(fn, arguments, callee.token,
-                                                   normalized=fn.implementation is not None)
+                                                   normalized=True)
             expr.binding = fn
             for index, (arg, (_, param_ty, _)) in enumerate(zip(children[1:], fn.params)):
                 arg_ty = arg.ty if arguments_checked or receiver_checked and index == 0 else self.expression(arg, allow_borrow=isinstance(param_ty, SharedReference))

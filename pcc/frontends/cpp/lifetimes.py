@@ -15,6 +15,7 @@ class AutomaticLifetimes:
     def __init__(self):
         self.frames = []
         self.controls = []
+        self.cleanup_destructors = None
 
     def enter(self):
         self.frames.append([])
@@ -28,38 +29,48 @@ class AutomaticLifetimes:
     def pop_control(self):
         self.controls.pop()
 
-    def register(self, parser, symbol):
+    def register(self, parser, symbol, initializer=None):
         owner = unqualified(symbol.dtype)
         if not is_class_type(owner):
             return
-        # An implicit destructor may have non-trivial member work even when
-        # the enclosing class has no destructor declaration of its own.
-        pending = [unqualified(member.dtype).definition for member in owner.definition.members
-                   if is_class_type(member.dtype)]
-        while pending:
-            definition = pending.pop()
-            if definition.destructor is not None:
-                raise CppDiagnostic("cpp.unsupported.destructor-subobjects",
-                                    "non-trivial member destruction requires subobject lifetime handling", symbol.coord)
-            pending.extend(unqualified(member.dtype).definition for member in definition.members
-                           if is_class_type(member.dtype))
+        from pcc.frontends.cpp.destructors import member_destructors
+        selected = member_destructors(owner.definition, owner.definition.scope)
         destructor = owner.definition.destructor
         if destructor is None:
+            if selected:
+                raise CppDiagnostic("cpp.unsupported.destructor-subobjects",
+                                    "implicit enclosing destruction requires special-member synthesis", symbol.coord)
             return
+        if selected and initializer is not None:
+            from pcc.frontends.cpp.constructors import call_free_body
+            if not call_free_body(initializer):
+                raise CppDiagnostic("cpp.unsupported.destructor-subobjects",
+                                    "aggregate initializer calls require partial member exception cleanup", symbol.coord)
         parser.scope.check_member_access(destructor, symbol.coord)
         # All supported declaration output completes initialization before the
         # next statement. No jump may enter after it, and no throwing path is
         # admitted. Register here only after that output has been constructed.
-        self.frames[-1].append((symbol, destructor))
+        self.frames[-1].append((symbol, destructor, None))
         symbol.jump_entry = "initialized"
+
+    def register_members(self, this, selected):
+        # An enclosing frame outlives the body block and every loop/switch
+        # boundary. Return consumes it; break/continue must not consume it.
+        self.frames[-1].extend((member, destructor, this) for member, destructor in selected)
 
     def cleanup(self, boundary, coord):
         calls = []
         for frame in reversed(self.frames[boundary:]):
-            for symbol, destructor in reversed(frame):
-                address = c_ast.UnaryOp("&", c_ast.ID(symbol.c_name, coord), coord)
-                calls.append(c_ast.FuncCall(c_ast.ID(destructor.c_name, coord),
-                                           c_ast.ExprList([address], coord), coord))
+            for symbol, destructor, this in reversed(frame):
+                object_node = c_ast.ID(symbol.c_name, coord)
+                if this is not None:
+                    object_node = c_ast.StructRef(c_ast.ID(this.c_name, coord), "->", object_node, coord)
+                address = c_ast.UnaryOp("&", object_node, coord)
+                call = c_ast.FuncCall(c_ast.ID(destructor.c_name, coord),
+                                     c_ast.ExprList([address], coord), coord)
+                if self.cleanup_destructors is not None:
+                    self.cleanup_destructors[call] = destructor
+                calls.append(call)
         return calls
 
     def current_cleanup(self, coord):
