@@ -149,6 +149,16 @@ remain open. Do not use this experimental mode as production/QPS evidence.
 The existing CMS harness also lacks the metric-shard owner symbols; that
 unrelated link failure is recorded without repairing its scheduler fixture.
 
+On `ceec3bd3e`, the native GC4 value/churn program passes with the switch
+off and on: one incref observes count 2 normally and count 1 in tracing-only
+mode, and both match CPython's container/bigint output through 20 collections.
+The lifecycle comparison fails: weak callbacks follow finalizers and a
+resurrected target keeps its weakref. The subsequent fix clears all candidate
+weak targets before queued callbacks, excludes unreachable weakrefs, leases
+queued refs across callbacks and rechecks resurrection before finalizers.
+Its 85 focused ordinary checks pass; the expanded native lifecycle rerun is
+pending. No new QPS result is established.
+
 ### Measured P0 batch: `02acaa2f5` -> `0fbc8d977`
 
 Seven rotated paired runs on Darwin arm64, host pcc0/self/no-libpython,

@@ -54,6 +54,9 @@ pcc_gc_forwarding_index_find = extern(
 pcc_refcount_forget = extern("pcc_refcount_forget", (c_ptr,), c_void)
 py_gc_untrack = extern("py_gc_untrack", (c_ptr,), c_void)
 py_user_del_dispatch = extern("py_user_del_dispatch", (c_ptr,), c_void)
+py_weakref_invalidate_tracing_candidates = extern(
+    "py_weakref_invalidate_tracing_candidates", (), c_int64
+)
 pcc_capi_is_cext_type_tag = extern(
     "pcc_capi_is_cext_type_tag", (c_int64,), c_int64
 )
@@ -276,6 +279,11 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
     held: i64 = pcc_thread_world_stop_epoch_held()
     if held < 0 or held != load_i64(global_addr("pcc_gc_tracing_finish_stop_epoch"), 0):
         pcc_gc_tracing_recheck_reachability_after_finalizers()
+    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
+        if py_weakref_invalidate_tracing_candidates() != 0:
+            # Weak callbacks can resurrect other candidates. Their new roots
+            # must be visible before any candidate's finalizer can run.
+            pcc_gc_tracing_recheck_reachability_after_finalizers()
     finalizer_runs: i64 = load_i64(global_addr("pcc_gc_user_finalizer_runs"), 0)
 
     # PASS 0: finalizers see intact fields.  C-extension tags are excluded

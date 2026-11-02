@@ -72,8 +72,10 @@ RAW_FUNCTION_IMPORTS = {
     "py_gc_untrack",
     "py_instance_dealloc",
     "py_user_del_dispatch",
+    "py_weakref_invalidate_tracing_candidates",
 }
 RAW_GLOBAL_IMPORTS = {
+    "pcc_gc_backend4_no_refcounts",
     "pcc_gc_backend_selected",
     "pcc_gc_object_head",
     "pcc_gc_tracing_finish_commits",

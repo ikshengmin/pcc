@@ -51,6 +51,7 @@ class Cycle:
         self.value = value
         self.resurrect = resurrect
         self.link = self
+        self.ref = None
     def __del__(self):
         events.append("final " + str(self.value))
         if self.resurrect:
@@ -67,6 +68,20 @@ def collect():
     for index in range(4):
         gc.collect()
 
+batch_refs = []
+def batch_callback(ref):
+    gc.collect()
+    print("batch", batch_refs[0]() is None, batch_refs[1]() is None)
+
+def create_batch():
+    item = Cycle(3, False)
+    batch_refs.append(weakref.ref(item, batch_callback))
+    batch_refs.append(weakref.ref(item, batch_callback))
+
+def create_dead_ref():
+    item = Cycle(4, False)
+    item.ref = weakref.ref(item, callback)
+
 def main():
     first = create(1, False)
     collect()
@@ -76,6 +91,14 @@ def main():
     collect()
     print(second() is None, events, rescued[0].value)
     rescued.clear()
+    collect()
+    print(events)
+    events.clear()
+    create_batch()
+    collect()
+    print(events)
+    events.clear()
+    create_dead_ref()
     collect()
     print(events)
 main()

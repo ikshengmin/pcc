@@ -21,7 +21,9 @@ from pcc.unsafe import (
     global_store_ptr,
     is_tagged_int,
     load_i32,
+    load_i64,
     load_ptr,
+    malloc,
     null,
     ptr_add,
     ptr_eq,
@@ -69,6 +71,15 @@ pcc_gc_free_object_memory = extern("pcc_gc_free_object_memory", (c_ptr,), c_void
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_capi_is_cext_type_tag = extern("pcc_capi_is_cext_type_tag", (c_int64,), c_int64)
+pcc_gc_tracing_is_sweep_candidate = extern("pcc_gc_tracing_is_sweep_candidate", (c_ptr,), c_int64)
+pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
+pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+
+_PENDING_WEAK_NEXT: int = 0
+_PENDING_WEAK_ROOT: int = 8
+_PENDING_WEAK_LEASE: int = 16
+_PENDING_WEAK_BYTES: int = 24
 
 
 def _weakref_target_is_base_object(target) -> int:
@@ -345,6 +356,75 @@ def py_weak_key_dict_len(d) -> int:
     return count
 
 
+def _weakref_run_callback(wr) -> None:
+    """The unraisable boundary releases both owned result and argument tuple."""
+    callback = pcc_gc_load_ptr(wr, ptr_add(wr, 24))
+    if ptr_is_null(callback) == 0:
+        args = py_tuple_new(1)
+        if ptr_is_null(args) == 0:
+            pcc_diagnostics_runtime_log_event_code(4, 3, 0, 0, wr)
+            py_tuple_set_item(args, 0, wr)
+            result = py_obj_call(callback, args, _py_none())
+            if ptr_is_null(result) == 0:
+                py_decref(result)
+            py_decref(args)
+        py_clear_exception()
+
+
+@c_abi_export("py_weakref_invalidate_tracing_candidates")
+def py_weakref_invalidate_tracing_candidates() -> int:
+    """Clear every unreachable target before callbacks, then run live refs.
+
+    The tracing collector owns the stopped world. A weakref which is itself
+    unreachable must not run its callback. Independent counted address leases
+    retain queued refs across callback allocation, collection and mutation.
+    """
+    pending = null()
+    tail = null()
+    count: int = 0
+    wr = global_load_ptr("py_weakref_head")
+    while ptr_is_null(wr) == 0:
+        nxt = load_ptr(wr, 40)
+        target = pcc_gc_note_relocation_read(load_ptr(wr, 16))
+        if (ptr_is_null(target) == 0 and is_tagged_int(target) == 0
+                and pcc_gc_tracing_is_sweep_candidate(target) != 0
+                and (load_i32(target, 12) & 16384) == 0
+                and pcc_capi_is_cext_type_tag(load_i32(target, 8)) == 0):
+            store_ptr(wr, 16, null())
+            pcc_diagnostics_runtime_log_event_code(4, 2, 0, load_i32(target, 8), target)
+            if ((load_i32(wr, 12) & (1024 | 524288)) == 0
+                    and ptr_is_null(load_ptr(wr, 24)) == 0):
+                entry = malloc(_PENDING_WEAK_BYTES)
+                if ptr_is_null(entry):
+                    pcc_platform_abort()
+                    return -1
+                store_ptr(entry, _PENDING_WEAK_NEXT, null())
+                store_ptr(entry, _PENDING_WEAK_ROOT, wr)
+                token: int = pcc_gc_foreign_lease_acquire(ptr_add(entry, _PENDING_WEAK_ROOT))
+                if token < 0:
+                    pcc_platform_abort()
+                    return -1
+                store_i64(entry, _PENDING_WEAK_LEASE, token)
+                if ptr_is_null(tail):
+                    pending = entry
+                else:
+                    store_ptr(tail, _PENDING_WEAK_NEXT, entry)
+                tail = entry
+                count = count + 1
+        wr = nxt
+    while ptr_is_null(pending) == 0:
+        entry = pending
+        pending = load_ptr(entry, _PENDING_WEAK_NEXT)
+        _weakref_run_callback(load_ptr(entry, _PENDING_WEAK_ROOT))
+        if pcc_gc_foreign_lease_release(
+            ptr_add(entry, _PENDING_WEAK_ROOT), load_i64(entry, _PENDING_WEAK_LEASE)
+        ) != 0:
+            pcc_platform_abort()
+            return -1
+        free(entry)
+    return count
+
+
 @c_abi_export("py_weakref_invalidate")
 def py_weakref_invalidate(target) -> None:
     if ptr_is_null(target) != 0:
@@ -359,21 +439,9 @@ def py_weakref_invalidate(target) -> None:
         if ptr_eq(wr_target, target) != 0 or ptr_eq(resolved, target) != 0:
             store_ptr(wr, 16, null())
             pcc_diagnostics_runtime_log_event_code(4, 2, 0, load_i32(target, 8), target)
-            callback = pcc_gc_load_ptr(wr, ptr_add(wr, 24))
-            if ptr_is_null(callback) == 0:
-                args = py_tuple_new(1)
-                if ptr_is_null(args) == 0:
-                    pcc_diagnostics_runtime_log_event_code(4, 3, 0, 0, wr)
-                    py_tuple_set_item(args, 0, wr)
-                    # Weakref callbacks are an unraisable boundary.  The
-                    # callback result is owned even though its value is
-                    # ignored; py_obj_call first classifies silent NULL, then
-                    # this boundary deliberately clears that exception.
-                    result = py_obj_call(callback, args, _py_none())
-                    if ptr_is_null(result) == 0:
-                        py_decref(result)
-                    py_decref(args)
-                py_clear_exception()
+            # Weakref callbacks are an unraisable boundary; the helper also
+            # releases the ignored owned result before clearing its exception.
+            _weakref_run_callback(wr)
         elif ptr_eq(resolved, wr_target) == 0:
             store_ptr(wr, 16, resolved)
         wr = nxt

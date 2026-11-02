@@ -861,6 +861,7 @@ def _runtime_signatures_part_18():
     "py_weakref_new": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_weakref_call": (_PYOBJ, [_PYOBJ], False),
     "py_weakref_invalidate": (_VOID, [_PYOBJ], False),
+    "py_weakref_invalidate_tracing_candidates": (_I64, [], False),
     "py_weak_value_dict_new": (_PYOBJ, [], False),
     "py_weak_value_dict_set": (_I64, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_weak_value_dict_contains": (_I64, [_PYOBJ, _PYOBJ], False),
@@ -2884,6 +2885,7 @@ def _cross_object_signatures_part_9():
     "py_gc_untrack": (("c_ptr",), "c_void"),
     "py_user_del_dispatch": (("c_ptr",), "c_void"),
     "py_weakref_invalidate": (("c_ptr",), "c_void"),
+    "py_weakref_invalidate_tracing_candidates": ((), "c_int64"),
     "py_dealloc_int": (("c_ptr",), "c_void"),
     }
 

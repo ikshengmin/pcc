@@ -16,6 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 from pcc.frontends.python.codegen.call_object_lowering import CallObjectLoweringMixin
+from pcc.frontends.python.codegen.ownership_lowering import OwnershipLoweringMixin
 from tests.python.owned_regression_support import (
     assert_owned_program,
     assert_reference_program,
@@ -25,6 +26,8 @@ from tests.python.test_foreign_address_leases import _functions
 
 
 class CleanupModel(CallObjectLoweringMixin):
+    _value_is_never_gc_object = OwnershipLoweringMixin._value_is_never_gc_object
+
     def __init__(self, owners, callback, move, pending=True):
         self.pending = 900 if pending else 0
         self.original = self.pending
@@ -71,7 +74,7 @@ class CleanupModel(CallObjectLoweringMixin):
             py_decref=lambda *_: None, py_clear_exception=self.clear,
         )
         _functions(Path(__file__).resolve().parents[2] / "pcc/runtime/py/py_weakref.py",
-                   {"py_weakref_invalidate"}, self.weakref_ns)
+                   {"py_weakref_invalidate", "_weakref_run_callback"}, self.weakref_ns)
         self.swap_ns = dict(
             global_load_ptr=lambda name: (
                 self.pending if name == "py_tls_current_exc_storage" else self.tls_handle
