@@ -93,6 +93,9 @@ class _Memory:
             "pcc_gc_index_py_rehash_capacity", "pcc_gc_index_py_find_slot",
             "pcc_gc_index_py_rehash_slots", "pcc_gc_index_py_insert",
             "pcc_gc_index_py_remove",
+            # Payload retargeting consults this separate production filter.
+            "pcc_gc_store_buffer_member_note", "pcc_gc_store_buffer_member_maybe",
+            "pcc_gc_store_buffer_member_taint",
             *("pcc_gc_remembered_member_" + suffix
               for suffix in ("note", "maybe", "require", "forget", "clear",
                              "exact", "taint", "head", "set_head")),
@@ -239,6 +242,40 @@ def test_nonmember_payload_retarget_does_not_read_remembered_nodes():
     assert memory.list_reads == 0
     assert memory.head_reads == 0
     assert len(memory.members()) == 64
+
+
+@pytest.mark.parametrize("state", ["empty", "member", "incomplete", "allocation-failure"])
+def test_payload_retarget_uses_production_store_buffer_membership_states(state):
+    memory = _Memory()
+    owner, absent = memory.owner(), memory.owner()
+    if state == "member":
+        memory.call("pcc_gc_store_buffer_member_note", owner)
+    elif state == "incomplete":
+        memory.call("pcc_gc_store_buffer_member_taint")
+    elif state == "allocation-failure":
+        memory.fail_calloc = True
+        memory.call("pcc_gc_store_buffer_member_note", owner)
+        memory.fail_calloc = False
+    expected = int(state != "empty")
+    assert memory.call("pcc_gc_store_buffer_member_maybe", owner) == expected
+    assert memory.call("pcc_gc_store_buffer_member_maybe", absent) == int(
+        state in ("incomplete", "allocation-failure"))
+    heads = []
+    for name in ("_store_buffer_medium_head", "_store_buffer_head"):
+        original = memory.namespace[name]
+
+        def read_head(name=name, original=original):
+            heads.append(name)
+            return original()
+
+        memory.namespace[name] = read_head
+    old_payload, new_payload = memory.allocate(32), memory.allocate(64)
+    assert memory.call("pcc_gc_backend4_retarget_mutator_payload_locked",
+                       owner, old_payload, 32, new_payload, 64, 0, 0) == 2
+    # Empty is an exact negative; positives and incomplete epochs retain both
+    # production queue walks even though this fixture's queues are empty.
+    assert heads == (["_store_buffer_medium_head", "_store_buffer_head"]
+                     if expected else [])
 
 
 def test_duplicate_multiple_slots_and_cleared_header_still_remove_real_member():
