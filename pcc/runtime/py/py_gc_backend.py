@@ -2872,7 +2872,10 @@ def pcc_gc_set_backend(backend: int) -> int:
     _init_config()
     if backend < 0 or backend > 4:
         return -1
-    if backend != 4 and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
+    if (
+        load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
+        and backend != load_i32(global_addr("pcc_gc_backend_selected"), 0)
+    ):
         return -1
     # The collector is selected before the first managed allocation, by
     # PCC_GC_BACKEND or by one call here, and never changes afterwards: code

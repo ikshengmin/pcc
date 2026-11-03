@@ -283,11 +283,20 @@ def pcc_gc_config_ensure() -> i64:
         pcc_platform_getenv(cstr("PCC_GC_BACKEND")),
         load_i32(global_addr("pcc_gc_backend_selected"), 0),
     )
-    tracing_only: i64 = pcc_gc_config_parse_env_i32(
+    legacy_tracing: i64 = pcc_gc_config_parse_env_i32(
         pcc_platform_getenv(cstr("PCC_GC4_TRACING_ONLY")), 0, 0, 1
     )
-    if tracing_only != 0 and backend != 4:
+    if legacy_tracing != 0 and backend != 4:
         pcc_platform_write(2, cstr("pcc runtime: PCC_GC4_TRACING_ONLY requires PCC_GC_BACKEND=4\n"), 60)
+        pcc_platform_abort()
+        return backend
+    tracing_only: i64 = pcc_gc_config_parse_env_i32(
+        pcc_platform_getenv(cstr("PCC_GC_TRACING_ONLY")), 0, 0, 1
+    )
+    if legacy_tracing != 0:
+        tracing_only = 1
+    if tracing_only != 0 and backend != 1 and backend != 2 and backend != 4:
+        pcc_platform_write(2, cstr("pcc runtime: tracing-only mode currently requires GC1, GC2 or GC4\n"), 66)
         pcc_platform_abort()
         return backend
     if tracing_only != 0:

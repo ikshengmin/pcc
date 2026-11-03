@@ -217,13 +217,13 @@ def class_graph_binary(tmp_path_factory, pcc_runtime_archive):
 
 @pytest.mark.integration
 @pytest.mark.xdist_group("class_graph_lifetime")
-@pytest.mark.parametrize("backend,tracing", ((0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (4, 1)))
+@pytest.mark.parametrize("backend,tracing", ((0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (1, 1), (2, 1), (4, 1)))
 def test_class_graph_is_reclaimed_by_each_collector(class_graph_binary, backend, tracing):
     binary, expected = class_graph_binary
     result = subprocess.run(
         [str(binary)], capture_output=True, text=True, timeout=30,
         env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend),
-                 PCC_GC4_TRACING_ONLY=str(tracing)),
+                 PCC_GC_TRACING_ONLY=str(tracing)),
     )
     assert (result.returncode, result.stdout, result.stderr) == (0, expected, ""), (backend, tracing)
 
@@ -332,10 +332,10 @@ main()
     binary = tmp_path / "immortal_owner"
     compile_python(str(source), str(binary), backend="self",
                    runtime_archive=str(pcc_runtime_archive), object_inputs=(str(helper),))
-    for backend, tracing in ((0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (4, 1)):
+    for backend, tracing in ((0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (1, 1), (2, 1), (4, 1)):
         result = subprocess.run(
             [str(binary)], capture_output=True, text=True, timeout=30,
             env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend),
-                     PCC_GC4_TRACING_ONLY=str(tracing)),
+                     PCC_GC_TRACING_ONLY=str(tracing)),
         )
         assert (result.returncode, result.stdout, result.stderr) == (0, "1 1\n", ""), (backend, tracing)

@@ -279,6 +279,16 @@ models pass for stable publication and cache reuse; a five-collector/native
 namespace-liveness regression is pending. Merely registering provenance or
 the raw cache slot cannot trace an owner absent from the object index.
 
+The experimental `PCC_GC_TRACING_ONLY=1` selector now admits GC1 and GC2 as
+well as GC4, reusing conservative roots, count-free updates and the common
+finalizer/weakref/class sweep. The original GC4-only selector remains valid
+and restricted to GC4. GC0 and not-yet-validated GC3 reject the new selector;
+the selected count-free collector cannot change. Production defaults remain
+counted while C-export ownership is incomplete. Thirty-three root/config/update
+model checks pass; native GC1/2 count, bigint/container, lifecycle and class
+cases are selected separately and remain pending. This is rollout machinery,
+not a completed RC removal or a throughput improvement.
+
 An additional exception-root probe exposes an existing builtin-exception
 limitation: `ValueError(shared_list, index).args[0] is shared_list` fails under
 GC0 on both the word-index arm and the pre-change control. This remains an

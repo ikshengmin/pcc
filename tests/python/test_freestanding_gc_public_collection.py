@@ -215,6 +215,7 @@ def test_public_collection_preserves_config_and_collection_order():
     for env_name in (
         "PCC_GC_BACKEND",
         "PCC_GC4_TRACING_ONLY",
+        "PCC_GC_TRACING_ONLY",
         "PCC_GC_PAUSE",
         "PCC_GC_STEPMUL",
         "PCC_GC_STEP_MUL",

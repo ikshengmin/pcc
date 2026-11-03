@@ -7,6 +7,83 @@ import pytest
 RUNTIME = Path(__file__).resolve().parents[2] / "pcc/runtime/py"
 
 
+class _ConfigAbort(Exception):
+    pass
+
+
+def _configured(backend, *, tracing=0, legacy=0):
+    cells = {}
+    events = []
+    options = {"PCC_GC_TRACING_ONLY": tracing, "PCC_GC4_TRACING_ONLY": legacy}
+
+    def abort():
+        raise _ConfigAbort
+
+    namespace = {
+        "global_addr": lambda name: name,
+        "load_i32": lambda name, offset: cells.get(name, 0),
+        "store_i32": lambda name, offset, value: cells.__setitem__(name, value),
+        "store_i64": lambda name, offset, value: cells.__setitem__(name, value),
+        "cstr": lambda name: name,
+        "pcc_platform_getenv": lambda name: name,
+        "_pcc_gc_config_parse_backend": lambda name, fallback: backend,
+        "pcc_gc_config_parse_env_i32": lambda name, default, low, high: options.get(name, default),
+        "pcc_platform_write": lambda fd, message, size: events.append(("error", message)),
+        "pcc_platform_abort": abort,
+        "pcc_thread_enable_conservative_roots": lambda: events.append("snapshots"),
+        "pcc_threads_enabled": lambda: 1,
+        "pcc_gc_maybe_start_cms_worker": lambda: events.append("worker"),
+    }
+    config = body("freestanding_gc_public_collection.py", "pcc_gc_config_ensure", namespace)
+    assert config() == backend
+    assert config() == backend
+    return cells, events, namespace
+
+
+@pytest.mark.parametrize("backend", [0, 1, 2, 3, 4])
+def test_counted_controls_remain_the_default_for_every_collector(backend):
+    cells, events, _ = _configured(backend)
+    assert cells["pcc_gc_backend4_no_refcounts"] == 0
+    assert cells["pcc_gc_refcount_atomic"] == int(backend == 0)
+    assert events == ["worker"]
+
+
+@pytest.mark.parametrize("backend", [1, 2, 4])
+@pytest.mark.parametrize("operation", ["py_incref", "py_decref"])
+def test_count_free_configuration_enables_machine_roots_and_suppresses_updates(backend, operation):
+    cells, events, namespace = _configured(backend, tracing=1)
+    assert cells["pcc_gc_backend4_no_refcounts"] == 1
+    assert cells["pcc_gc_refcount_atomic"] == 0
+    assert cells["pcc_gc_frame_registry_inactive"] == 0
+    assert events == ["snapshots", "worker"]
+    namespace.update(
+        ptr_is_null=lambda value: value == 0,
+        is_tagged_int=lambda value: value & 1,
+        _py_incref_checked_tail=lambda value: pytest.fail("ordinary retain"),
+        _py_decref_checked_tail=lambda value: pytest.fail("ordinary release"),
+    )
+    body("py_obj.py", operation, namespace)(4096)
+    assert events == ["snapshots", "worker"]
+
+
+@pytest.mark.parametrize("backend", [0, 3])
+def test_unadmitted_tracing_backends_fail_before_worker_start(backend):
+    with pytest.raises(_ConfigAbort):
+        _configured(backend, tracing=1)
+
+
+@pytest.mark.parametrize("backend", [0, 1, 2, 3])
+def test_legacy_gc4_option_keeps_its_original_backend_restriction(backend):
+    with pytest.raises(_ConfigAbort):
+        _configured(backend, legacy=1)
+
+
+def test_legacy_gc4_option_still_enables_the_same_count_free_kernel():
+    cells, events, _ = _configured(4, legacy=1)
+    assert cells["pcc_gc_backend4_no_refcounts"] == 1
+    assert events == ["snapshots", "worker"]
+
+
 def body(module, name, namespace):
     tree = ast.parse((RUNTIME / module).read_text())
     function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name)
