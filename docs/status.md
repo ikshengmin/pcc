@@ -93,6 +93,19 @@ dropped keyword); the stage 1 commit message lists them. Rerun with
 
 ## Native throughput versus CPython 3.15.0: active, acceptance unmet
 
+The concurrent marker now leaves object-list traversal as soon as counted
+gray work is empty, including an empty root seed. Previously a null cursor
+restarted at the heap head, and the last gray object left an otherwise useless
+tail scan. The existing completion claim, stopped-world final remark, root
+refresh, extension scanning and sweep are unchanged. New child work is checked
+after tracing/decrementing the parent; a pending extension scan still blocks
+completion. The old body fails the 4,096-black-node/no-gray regression.
+The correction passes 62 scan/body cases, 26 atomic-color cases and 29 moving
+gray-retirement cases (file shards; two stale fixture dependencies repaired),
+five owned-native tracing modes and both GC4 value/lifecycle integrations.
+The attempted old-native replay was blocked by archive/source provenance and
+is not an executed old-native failure. Throughput qualification is pending.
+
 GC4 count-free handle registration/unregistration now follows GC0's short
 scheduler-list lock path only for an initialized, frozen collector and a
 registered running thread. Cold callers retain graph admission; callers that

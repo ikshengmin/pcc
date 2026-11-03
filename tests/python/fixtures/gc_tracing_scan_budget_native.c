@@ -80,9 +80,15 @@ int main(void) {
         if (pcc_gc_gray_count_load_acquire() != 1) return fail(10, "gray_changed_before_target", i);
     }
     if (pcc_gc_tracing_step_cycle(1) != 1) return fail(11, "target_not_traced", 0);
-    if (pcc_gc_trace_cursor_load() != nodes[0]) return fail(12, "target_cursor", 0);
+    if (pcc_gc_trace_cursor_load() != NULL) return fail(12, "last_gray_kept_tail_cursor", 0);
     if (pcc_gc_gray_count_load_acquire() != 0) return fail(13, "target_gray_count", 1);
     if ((py_header_flags_load(py_header(objects[1])) & 56) != 32) return fail(19, "target_color", 0);
+
+    pcc_py_gc_minor_graph_lock();
+    pcc_gc_trace_cursor_store(nodes[PREFIX + 1]);
+    pcc_py_gc_minor_graph_unlock();
+    if (pcc_gc_tracing_step_cycle(1) != 0) return fail(20, "empty_work_received_credit", 0);
+    if (pcc_gc_trace_cursor_load() != NULL) return fail(21, "empty_work_scanned_black_list", 0);
 
     /* Explicit stopped-world draining must not hit the four-zero-progress
      * gc.collect backstop just because a gray node has a long black prefix. */
@@ -97,7 +103,7 @@ int main(void) {
         return fail(15, "missing_stw_owner", 0);
     }
     int64_t stopped_processed = pcc_gc_tracing_step_cycle(1);
-    int stopped_cursor_ok = pcc_gc_trace_cursor_load() == nodes[0];
+    int stopped_cursor_ok = pcc_gc_trace_cursor_load() == NULL;
     int64_t stopped_gray = pcc_gc_gray_count_load_acquire();
     if (pcc_resume_world() != 0) return fail(16, "resume_world", 0);
     if (stopped_processed != 1) return fail(17, "stw_no_progress", stopped_processed);

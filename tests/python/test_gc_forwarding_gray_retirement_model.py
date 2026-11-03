@@ -112,6 +112,9 @@ class RetirementState:
             "_object_node_release": noop,
         }
         self.ns = ns
+        _functions(ns, "freestanding_gc_forwarding_identity.py", {
+            "_graph_lock", "_graph_unlock", "pcc_gc_refresh_read_barrier",
+        })
         _functions(ns, "freestanding_gc_root_operations.py", {
             "pcc_gc_gray_count_load_acquire", "pcc_gc_gray_count_increment_acq_rel",
             "pcc_gc_gray_count_decrement_acq_rel", "pcc_gc_set_mark_color",

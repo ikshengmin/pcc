@@ -211,7 +211,7 @@ def test_mixed_nodes_preserve_gray_return_count_and_node_budget(backend, tracing
     assert state.visited_payloads == [state.objects[first], state.objects[second]]
     assert state.step(2) == 1
     assert state.visited_nodes == [cursor, third]
-    assert state.cursor == tail and state.gray == 0
+    assert state.cursor == 0 and state.gray == 0
 
 
 @pytest.mark.parametrize("backend,tracing", MODES)
@@ -229,7 +229,7 @@ def test_freeing_null_tagged_and_dying_nodes_each_spend_one_scan(backend, tracin
         assert state.gray == 1 and state.visited_payloads == []
     assert state.step(1) == 1
     assert state.visited_nodes == [target]
-    assert state.cursor == tail and state.gray == 0
+    assert state.cursor == 0 and state.gray == 0
 
 
 @pytest.mark.parametrize("backend,tracing", MODES)
@@ -243,18 +243,18 @@ def test_unlinked_next_cursor_is_repaired_before_following_slice(backend, tracin
     assert state.load(first, 16) == target and state.load(target, 40) == first
     assert state.step(1) == 1
     assert state.visited_nodes == [target]
-    assert state.cursor == tail and state.gray == 0
+    assert state.cursor == 0 and state.gray == 0
 
 
 @pytest.mark.parametrize("backend,tracing", MODES)
 def test_removed_tail_cursor_restarts_head_and_finds_new_gray(backend, tracing):
     state = TraceState(backend, tracing)
-    first, tail = state.node(), state.node()
-    assert state.step(1) == 0 and state.cursor == tail
+    first, tail = state.node(GRAY), state.node()
+    # A barrier can gray an earlier object after a preceding slice advanced
+    # past it. Removing the tail cursor must restart and find that work.
+    state.store("pcc_gc_trace_cursor", 0, tail)
     state.remove(tail)
     assert state.cursor == 0
-    state.store(state.objects[first], 12, GRAY)
-    state.store("pcc_gc_gray_count", 0, 1)
     assert state.step(1) == 1
     assert state.visited_nodes == [first]
     assert state.gray == 0 and state.completions == [(9, backend)]
@@ -267,7 +267,7 @@ def test_stopped_world_crosses_long_black_prefix_in_one_progress_call(backend, t
     target, tail = state.node(GRAY), state.node()
     assert state.step(1) == 1
     assert state.visited_nodes == prefix + [target]
-    assert state.cursor == tail and state.gray == 0
+    assert state.cursor == 0 and state.gray == 0
     assert state.visited_payloads == [state.objects[target]]
 
 
@@ -280,4 +280,58 @@ def test_nonpositive_budget_does_not_take_graph_lock_or_advance(budget):
     assert state.cursor == node and state.gray == 1
     assert state.visited_nodes == []
     assert state.lock_acquisitions == 0
+
+
+@pytest.mark.parametrize("backend,tracing", MODES)
+def test_empty_gray_work_finishes_without_visiting_black_object_list(backend, tracing):
+    state = TraceState(backend, tracing)
+    nodes = [state.node() for _ in range(4096)]
+    state.store("pcc_gc_trace_cursor", 0, nodes[0])
+    assert state.step(1) == 0
+    assert state.visited_nodes == []
+    assert state.cursor == 0 and state.gray == 0
+    assert state.completions == [(9, backend)]
+
+
+@pytest.mark.parametrize("backend,tracing", MODES)
+def test_last_gray_object_does_not_scan_the_unreachable_or_black_tail(backend, tracing):
+    state = TraceState(backend, tracing)
+    target = state.node(GRAY)
+    for index in range(4096):
+        state.node(BLACK if index % 2 else 8)
+    assert state.step(512) == 1
+    assert state.visited_nodes == [target]
+    assert state.visited_payloads == [state.objects[target]]
+    assert state.cursor == 0 and state.gray == 0
+    assert state.completions == [(9, backend)]
+
+
+@pytest.mark.parametrize("backend,tracing", MODES)
+def test_tracing_the_last_gray_parent_keeps_new_child_work(backend, tracing):
+    state = TraceState(backend, tracing)
+    parent, child = state.node(GRAY), state.node(8)
+
+    def visit(obj, callback, context):
+        state.visit_payload(obj, callback, context)
+        if obj == state.objects[parent]:
+            state.store(state.objects[child], 12, GRAY)
+            state.store("pcc_gc_gray_count", 0, state.gray + 1)
+
+    state.ns["pcc_gc_visit_object_slots"] = visit
+    assert state.step(1) == 1
+    assert state.cursor == child and state.gray == 1
+    assert state.completions == []
+    assert state.step(1) == 1
+    assert state.visited_payloads == [state.objects[parent], state.objects[child]]
+    assert state.cursor == 0 and state.gray == 0
+    assert state.completions == [(9, backend)]
+
+
+@pytest.mark.parametrize("backend,tracing", MODES)
+def test_pending_extension_scan_prevents_empty_work_completion(backend, tracing):
+    state = TraceState(backend, tracing)
+    state.node()
+    state.store("pcc_gc_trace_cext_pending_obj", 0, 0x9000)
+    assert state.step(1) == 0
+    assert state.visited_nodes == [] and state.completions == []
 

@@ -805,7 +805,13 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
         )
 
     node = global_load_ptr("pcc_gc_trace_cursor")
-    if ptr_is_null(node) != 0:
+    if pcc_gc_gray_count_load_acquire() == 0:
+        # An empty work count needs final remark, not another object-list
+        # pass. In particular seed deliberately leaves a null cursor when it
+        # found no gray roots. Mutator insertions after unlock are still
+        # covered by the existing stopped-world completion protocol below.
+        node = null()
+    elif ptr_is_null(node) != 0:
         node = global_load_ptr("pcc_gc_object_head")
     scanned: i64 = 0
     while (ptr_is_null(node) == 0 and local_processed < remaining_budget
@@ -847,6 +853,12 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
                 pcc_gc_gray_count_decrement_acq_rel()
                 pcc_gc_set_mark_color(obj, 32)
                 local_processed = local_processed + 1
+                if pcc_gc_gray_count_load_acquire() == 0:
+                    # Tracing the object can introduce gray children. Check
+                    # after that work and this object's decrement, while the
+                    # graph lock still protects all color transitions.
+                    node = null()
+                    break
         node = nxt
     global_store_ptr("pcc_gc_trace_cursor", node)
 

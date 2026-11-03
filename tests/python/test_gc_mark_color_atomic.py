@@ -161,6 +161,7 @@ def _scheduler_namespace(memory, operation):
         "global_store_ptr": lambda name, value: globals_.__setitem__(name, value),
         "pcc_py_gc_minor_graph_lock": lambda: locks.append("lock"),
         "pcc_py_gc_minor_graph_unlock": lambda: locks.append("unlock"),
+        "pcc_thread_owns_stopped_world": lambda: 0,
         "pcc_capi_is_cext_type_tag": lambda tag: 0,
         "pcc_gc_trace_referents": trace_referents,
         "pcc_gc_gray_count_decrement_acq_rel": lambda: counts.append(-1),
