@@ -104,7 +104,21 @@ The correction passes 62 scan/body cases, 26 atomic-color cases and 29 moving
 gray-retirement cases (file shards; two stale fixture dependencies repaired),
 five owned-native tracing modes and both GC4 value/lifecycle integrations.
 The attempted old-native replay was blocked by archive/source provenance and
-is not an executed old-native failure. Throughput qualification is pending.
+is not an executed old-native failure. The additional
+`test_empty_gray_late_roots_native.py` passes both positive-epoch entry shapes
+in GC4 count-free mode: after the real stop request, a no-park mutator inserts
+a white child into a black owner and registers a distinct white root. The
+actual final remark makes both black, preserves the epoch and commits once.
+
+A three-pair 40k-request one-worker screen of the empty-work fix has two
+matched successful pairs: old QPS 3,020/2,543, new 3,878/3,690; paired median
++36.74%, instructions/request -26.37%. The remaining old run reaches the
+unchanged 30-second limit; all three new runs succeed (3,690-3,878 QPS).
+This incomplete packet is not an acceptance pass. A three-pair 10k-request
+four-worker screen is effectively unchanged: 1,637 -> 1,641 QPS, paired
+-0.29% (1+/2-). A new four-worker capture places 36.13% of CPU samples in
+scheduler-list acquisition and 22.64% in graph waiting; root sharding is the
+next owner under investigation. Other-collector screening remains pending.
 
 GC4 count-free handle registration/unregistration now follows GC0's short
 scheduler-list lock path only for an initialized, frozen collector and a
