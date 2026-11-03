@@ -15,7 +15,10 @@ from pcc.frontends.cpp.declarators import DeclaratorParser, QualifiedName, parse
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.members import mangle_member
 from pcc.frontends.cpp.sema import Scope, Symbol, resolve_overload
-from pcc.frontends.cpp.types import ConstType, PointerType, ReferenceType, contains_function, is_enum_type, unqualified
+from pcc.frontends.cpp.types import (
+    ConstType, PointerType, ReferenceType, array_type, contains_function,
+    is_enum_type, unqualified,
+)
 
 
 def constructor_ahead(parser):
@@ -203,7 +206,19 @@ def parse_member_initializers(parser, definition):
             if parser._peek().value != "(":
                 raise CppDiagnostic("cpp.unsupported.constructor-list-initialization", "braced member initialization requires direct-list conversion rules", parser._peek().coord)
             parser._expect("(")
-            if is_class_type(target.dtype):
+            if array_type(target.dtype):
+                if parser._peek().value != ')':
+                    if parser._peek().kind == 'STRING_LITERAL':
+                        raise CppDiagnostic('cpp.unsupported.string-array-initialization',
+                                            'array member string encoding and terminator rules are not implemented', member.coord)
+                    # Consume the actual expression grammar first. An unowned
+                    # string/other expression must retain its capability error,
+                    # not be declared ill-formed by inspecting its first token.
+                    parser._expression()
+                    raise CppDiagnostic('cpp.invalid-array-initializer',
+                                        'C++17 array member initialization requires braces, a string literal or empty parentheses', member.coord)
+                expression = None
+            elif is_class_type(target.dtype):
                 if getattr(parser, 'class_template_method', None) is not None:
                     raise CppDiagnostic("cpp.unsupported.class-templates",
                                         "class member construction patterns require dependent lifetime semantics", member.coord)
@@ -228,6 +243,21 @@ def lower_member_initializers(parser, definition, this, initializers, *, constru
     """Initialize concrete fields in declaration order, without zeroing omissions."""
     stores = []
     for member in definition.members:
+        if array_type(member.dtype):
+            from pcc.frontends.cpp.arrays import const_array_elements, zero_array_member
+            if member not in initializers:
+                if const_array_elements(member.dtype):
+                    raise CppDiagnostic('cpp.const-initializer',
+                                        'const array elements require initialization', member.coord)
+                # Default-initialization of scalar elements emits no stores.
+                continue
+            if initializers[member] is not None:
+                raise CppDiagnostic('cpp.invalid-array-initializer',
+                                    'C++17 parenthesized array member initialization requires an empty list', member.coord)
+            field = c_ast.StructRef(c_ast.ID(this.c_name, member.coord), '->',
+                                   c_ast.ID(member.c_name, member.coord), member.coord)
+            stores.append(zero_array_member(parser, member.dtype, field, member.coord))
+            continue
         if is_class_type(member.dtype):
             from pcc.frontends.cpp.member_initialization import initialize
             stores.append(initialize(parser, member, this, initializers.get(member),

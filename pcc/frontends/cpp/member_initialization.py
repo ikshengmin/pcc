@@ -2,8 +2,8 @@
 
 N4659 [class.base.init]/7,9,13: initialize the actual member subobject in
 declaration order, before the enclosing constructor body. This is neither
-aggregate assignment nor synthesis of an implicit special member. Arrays,
-implicit special members and unknown construction effects remain explicit gaps.
+aggregate assignment nor synthesis of an implicit special member. Class-element
+arrays, implicit special members and unknown construction effects remain gaps.
 Members with declared D1s require the enclosing constructor's closed-path proof.
 """
 
@@ -23,7 +23,11 @@ class MemberArguments:
 def requires_destruction(dtype):
     """No emitted member D1 is needed only if the complete tree is trivial."""
     if array_type(dtype):
-        return True  # Arrays have their own, currently unavailable, owner.
+        # Scalar/pointer arrays have no element D1. Retain the conservative
+        # boundary for class-element arrays even if one reaches this query.
+        while array_type(dtype):
+            dtype = dtype.element
+        return is_class_type(dtype)
     if not is_class_type(dtype):
         return False
     definition = unqualified(dtype).definition

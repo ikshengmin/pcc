@@ -6,9 +6,9 @@ scheduling; this owner only checks C++ completeness and emits ordinary C
 records. No token replacement, alternate layout engine, or instance cache.
 Ordinary member bodies are typed once at definition time and instantiated on
 ODR-use. Complete-object D1s share the ordinary lifetime owner. Typed array
-bounds retain definition-point Patterns and substitute before layout; array
-data-member lifetime remains an explicit boundary. Bases and specializations
-remain explicit capability boundaries, never unparsed,
+bounds retain definition-point Patterns and substitute before layout.
+Class-element array lifetimes, bases and specializations remain explicit
+capability boundaries, never unparsed,
 supposedly validated bodies.
 """
 
@@ -198,7 +198,8 @@ def parse_declaration(parser, parameters, parent):
                     unsupported(member.coord, 'by-value class template subobjects are not implemented')
                 if unqualified(dtype) == 'void':
                     raise CppDiagnostic('cpp.invalid-object-type', 'a data member cannot have type void', member.coord)
-                if mutable and isinstance(dtype, ConstType):
+                from pcc.frontends.cpp.arrays import const_array_elements
+                if mutable and const_array_elements(dtype):
                     raise CppDiagnostic('cpp.invalid-mutable', 'a mutable member cannot be const-qualified', member.coord)
                 symbol = scope.declare(Symbol(member.value, 'member', member.coord, dtype=dtype))
                 symbol.class_owner, symbol.access, symbol.mutable = pattern.injected, access, mutable
@@ -315,11 +316,11 @@ def complete_layout(parser, dtype, pattern, arguments, coord):
         for name, member_type, at, access, mutable in pattern.members:
             member_type = substitute_member(member_type, arguments, dtype, at, parser)
             plain = unqualified(member_type)
-            if isinstance(plain, ReferenceType) or array_type(plain) or contains_function(member_type):
-                unsupported(at, 'substituted reference/array/function members are not implemented')
+            if isinstance(plain, ReferenceType) or contains_function(member_type):
+                unsupported(at, 'substituted reference/function members are not implemented')
             if is_enum_type(plain) and not plain.complete:
                 raise CppDiagnostic('cpp.incomplete-enum', 'a member requires a complete enum type', at)
-            if not (isinstance(plain, PointerType) or isinstance(plain, ClassType) or is_enum_type(plain)
+            if not (isinstance(plain, PointerType) or isinstance(plain, ClassType) or array_type(plain) or is_enum_type(plain)
                     or isinstance(plain, str) and (plain == 'nullptr' or parser.types.arithmetic_operand(plain))):
                 raise CppDiagnostic('cpp.invalid-object-type', 'class template member does not have an object type', at)
             if isinstance(plain, ClassType) and plain is not dtype:
@@ -330,9 +331,14 @@ def complete_layout(parser, dtype, pattern, arguments, coord):
         before = len(parser.class_template_declarations)
         declare_instances(parser, pattern, definition, arguments)
         definition.finish()
+        if any(array_type(member.dtype) for member in definition.members):
+            from pcc.frontends.cpp.size_queries import sizeof_type
+            sizeof_type(dtype, parser.types, coord)
         dtype.layout_state = 'complete'
         parser.class_template_declarations.insert(before, definition.c_declaration(parser._scalar_type))
     except BaseException as error:
+        if dtype.definition is not None:
+            dtype.definition.complete = False
         dtype.layout_failure, dtype.layout_state = error, 'failed'
         raise
 

@@ -2,7 +2,7 @@
 
 N4659 [dcl.fct.def.default], [class.ctor], [dcl.init], [dcl.init.aggr].
 This owner retains defaulting, deletion and triviality independently of the
-generated initialization body. Class/array subobjects, later defaulting and
+generated initialization body. Class subobjects, later defaulting and
 copy/move synthesis retain their separate special-member boundaries.
 """
 
@@ -10,7 +10,7 @@ from pcc.frontends.c.ast import c_ast
 from pcc.frontends.cpp.classes import is_class_type
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.inline_constructors import DeferredConstructor
-from pcc.frontends.cpp.types import ConstType, PointerType, array_type
+from pcc.frontends.cpp.types import ConstType, PointerType
 
 
 class DefaultedConstructorDefinition(DeferredConstructor):
@@ -35,7 +35,7 @@ def defer_definition(definition, symbol, parameter_scope, declaration, this):
 def bind_defaulted_definitions(parser, definition):
     if not definition.defaulted_constructors:
         return
-    if any(is_class_type(member.dtype) or array_type(member.dtype) for member in definition.members):
+    if any(is_class_type(member.dtype) for member in definition.members):
         raise CppDiagnostic('cpp.unsupported.constructor-subobjects',
                             'defaulted C1 subobjects require recursive special-member deletion and initialization',
                             definition.dtype.coord)

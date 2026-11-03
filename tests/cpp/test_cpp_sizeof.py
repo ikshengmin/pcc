@@ -97,7 +97,6 @@ INVALID = (
 )
 
 DEFERRED = (
-    ('struct S{int a[3];};int cpp_test_entry(){return int(sizeof(S::a))+30;}', 'cpp.unsupported.class-array-members'),
     ('struct S{int x;};int f(){return sizeof(&S::x);}', 'cpp.unsupported.member-pointers'),
     ('int f(){return sizeof(int(*)());}', 'cpp.unsupported.function-pointers'),
     ('struct S{};int f(){return sizeof(S[2]);}', 'cpp.unsupported.class-array-lifetime'),
@@ -309,8 +308,9 @@ def test_sizeof_public_full_width_raw_observer(name, source, value, opt, tmp_pat
     'struct S{int a[3];};int cpp_test_entry(){return int(sizeof(S::a))+30;}',
 ])
 def test_sizeof_valid_member_gaps_original_reference_only(source, tmp_path):
-    # Valid member-pointer and array-member queries remain PCC capability gaps.
-    # This is reference acceptance only, not a PCC runtime acceptance record.
+    # Member pointers remain a gap. The exact original array-member program
+    # also has new owned-native/reference obligations in the scalar-array corpus.
+    # This observer remains reference acceptance only, not a PCC runtime record.
     compiler = shutil.which(os.environ.get('PCC_CPP_ORACLE', 'g++'))
     assert compiler, 'explicit C++17 reference is required'
     original = tmp_path / 'member-pointer.cpp'

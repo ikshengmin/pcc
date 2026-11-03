@@ -144,6 +144,9 @@ def check_list_conversion(expression, dtype, types, coord):
 
 
 def _zero_initializer(dtype, coord):
+    if array_type(dtype):
+        from pcc.frontends.cpp.arrays import zero_array_initializer
+        return zero_array_initializer(dtype, coord)
     if is_class_type(dtype):
         raise CppDiagnostic(
             "cpp.unsupported.class-initialization",
@@ -223,7 +226,14 @@ def lower_aggregate_initializer(dtype, initializer, types, convert, *, scope):
                           else _zero_initializer(member.dtype, initializer.coord))
             continue
         clause = initializer.clauses[index]
-        if is_class_type(member.dtype):
+        if array_type(member.dtype):
+            if not isinstance(clause, ListInitializer):
+                raise CppDiagnostic('cpp.unsupported.aggregate-brace-elision',
+                                    'an array subobject requires an explicit braced initializer at this boundary',
+                                    clause.node.coord)
+            from pcc.frontends.cpp.arrays import lower_array_initializer
+            values.append(lower_array_initializer(member.dtype, clause, types, convert))
+        elif is_class_type(member.dtype):
             if not isinstance(clause, ListInitializer):
                 code = ("class-initialization" if is_class_type(clause.dtype)
                         else "aggregate-brace-elision")

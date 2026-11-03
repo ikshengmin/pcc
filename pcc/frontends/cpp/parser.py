@@ -707,7 +707,10 @@ class CppParser:
         if not array_type(expression.dtype):
             return expression
         if self.template_function is not None:
-            raise CppDiagnostic("cpp.unsupported.array-templates", "array decay in templates is not implemented", expression.node.coord)
+            if getattr(self, 'class_template_method', None) is None:
+                raise CppDiagnostic("cpp.unsupported.array-templates", "array decay in function templates is not implemented", expression.node.coord)
+            return Expression(Pattern('array-decay', expression.node.coord, children=[expression]),
+                              PointerType(expression.dtype.element))
         dtype = PointerType(expression.dtype.element)
         coord = expression.node.coord
         target = c_ast.Typename(None, [], self._scalar_type(None, dtype, coord), coord)
@@ -2131,6 +2134,7 @@ class CppParser:
 
     def _subscript_expression(self, left, right, coord):
         if self.template_function is not None:
+            left, right = self._decay_array(left), self._decay_array(right)
             first_pointer = pointer_type(left.dtype)
             pointer, index = (left, right) if first_pointer else (right, left)
             if not pointer_type(pointer.dtype):
@@ -2768,6 +2772,8 @@ class CppParser:
                      for child in pattern.children]
         if kind == 'subscript':
             return self._subscript_expression(arguments[0], arguments[1], coord)
+        if kind == 'array-decay':
+            return self._decay_array(arguments[0])
         if kind == 'delete':
             from pcc.frontends.cpp.allocation import lower_delete
             global_only, array = pattern.value

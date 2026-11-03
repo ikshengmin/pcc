@@ -818,6 +818,24 @@
         ]
       }
     },
+    "tests/cpp/test_cpp_scalar_array_member_execution.py": {
+      "test_invalid_scalar_array_member_originals_fail_reference": {
+        "activity": "external-reference",
+        "reason": ["Calls the explicit C++17 syntax_reference subprocess for the unchanged invalid source"]
+      },
+      "test_remaining_scalar_array_member_gaps_are_cpp17_valid": {
+        "activity": "external-reference",
+        "reason": ["Calls the explicit C++17 syntax_reference subprocess to distinguish valid unowned gaps"]
+      },
+      "test_scalar_array_member_originals_match_cpp17": {
+        "activity": "external-reference",
+        "reason": ["Calls tests.cpp.sizeof_execution.execute_row_pair, which calls compile_reference_cpp on unchanged translation units"]
+      },
+      "test_scalar_array_placement_originals_match_real_new_reference": {
+        "activity": "external-reference",
+        "reason": ["Calls compile_reference_with_new using real external <new>; original translation-unit bytes match but include closures differ"]
+      }
+    },
     "tests/cpp/test_cpp_template_array_bound_execution.py": {
       "test_invalid_template_array_bound_reference_rejection": {
         "activity": "external-reference",

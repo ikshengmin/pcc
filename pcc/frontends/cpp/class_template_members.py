@@ -151,6 +151,7 @@ def parse_signature(parser, owner, name, result_type, static=False, constructor=
 def bind_patterns(parser, owner):
     """Validate every definition at the primary definition point, even if unused."""
     from pcc.frontends.cpp.constructors import parse_member_initializers
+    from pcc.frontends.cpp.arrays import const_array_elements
     from pcc.frontends.cpp.parser import CppToken, TokenCursor
     fields = ('cursor', 'scope', 'template_function', 'return_type', 'member_function',
               'this_symbol', 'current_function')
@@ -179,7 +180,7 @@ def bind_patterns(parser, owner):
                     if expression is not None:
                         parser._convert(expression, field.dtype, field.coord, contextual=True)
                 for field in owner.member_symbols:
-                    if (field not in record.initializers and isinstance(field.dtype, ConstType)
+                    if (field not in record.initializers and const_array_elements(field.dtype)
                             and not dependent(field.dtype)):
                         raise CppDiagnostic('cpp.const-initializer', 'const data member requires initialization', field.coord)
             record.body = parser._block(new_scope=False)

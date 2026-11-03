@@ -155,7 +155,6 @@ DEFERRED = (
     ('defaulted-copy-constructor', 'struct S{S(const S&)=default;int n;};', 'cpp.unsupported.class-initialization'),
     ('defaulted-owner-class-subobject', 'struct M{M(){}};struct S{S()=default;M m;};',
      'cpp.unsupported.constructor-subobjects'),
-    ('defaulted-owner-array-subobject', 'struct S{S()=default;int a[2];};', 'cpp.unsupported.class-array-members'),
     ('defaulted-owner-reference-subobject', 'struct S{S()=default;int&n;};', 'cpp.unsupported.references'),
     ('defaulted-base-construction', 'struct B{};struct S:B{S()=default;};', 'cpp.unsupported.classes'),
     ('explicit-exception-specification', 'struct S{S()noexcept=default;};', 'cpp.unsupported.exceptions'),

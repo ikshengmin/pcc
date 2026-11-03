@@ -144,8 +144,10 @@ def parse_new(parser):
         raise CppDiagnostic('cpp.unsupported.placement-object-type', 'placement initialization currently requires a complete class constructor', coord)
     require_complete(dtype, coord)
     owner = unqualified(dtype)
-    if any(array_type(member.dtype) for member in owner.definition.members):
-        raise CppDiagnostic('cpp.unsupported.placement-subobjects', 'placement array subobject lifetime initialization is not implemented', coord)
+    from pcc.frontends.cpp.arrays import require_trivial_member_array
+    for member in owner.definition.members:
+        if array_type(member.dtype):
+            require_trivial_member_array(member.dtype, member.coord)
     if not global_only and 'operator new' in owner.definition.scope.names:
         raise CppDiagnostic('cpp.unsupported.class-allocation-functions', 'class-specific allocation lookup is not implemented', coord)
     group = parser.scope.global_scope().names.get('operator new')
@@ -252,7 +254,8 @@ def explicit_destructor(parser, expression, operator):
     parser._expect('(')
     parser._expect(')')
     destructor = owner.definition.destructor
-    if (any(array_type(member.dtype) for member in owner.definition.members)
+    from pcc.frontends.cpp.member_initialization import requires_destruction
+    if (any(array_type(member.dtype) and requires_destruction(member.dtype) for member in owner.definition.members)
             or (destructor is None and any(is_class_type(member.dtype) for member in owner.definition.members))):
         raise CppDiagnostic('cpp.unsupported.destructor-subobjects',
                             'explicit array or implicit member destruction requires its lifetime owner', coord)

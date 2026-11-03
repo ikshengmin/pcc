@@ -646,9 +646,9 @@
       "chapter_ids": [
         "class"
       ],
-      "scope": "Only inputs routed to cpp.unsupported.class-array-members in the pinned frontend; this is an explicit capability boundary, not a claim that the entire corresponding specification feature is absent or implemented.",
+      "scope": "Class-element array members still require element special-member and lifetime semantics. Scalar/pointer array members have separate authored, execution-unrun obligations; this boundary is not a claim of complete array support.",
       "status": "explicitly_unimplemented",
-      "tests": [],
+      "tests": ["tests/cpp/test_cpp_scalar_array_members.py"],
       "diagnostics": [
         "cpp.unsupported.class-array-members"
       ],
@@ -804,6 +804,20 @@
       "evidence": []
     },
     {
+      "id": "cpp.classes.trivial-array-members",
+      "title": "Scalar/pointer array member semantics, awaiting execution",
+      "chapter_ids": ["class", "class.base.init", "dcl.init", "expr", "special", "temp"],
+      "scope": "Authored, execution-unrun source/owned-native/reference obligations for complete scalar/pointer array data members, natural target record layout and sticky size-overflow failures, nested explicit aggregate initialization and omitted/empty zero initialization, const-element deletion/mutability, defaulted-C1 zero prefixes, omitted constructor no-store plans, bounded explicit-empty constructor zero loops, trivial destruction, class-template array decay/subscripts, placement and explicit D1 reuse. No uninitialized scalar is read in the native corpus. Exact formerly rejected originals and TinyXML2 constructor/field excerpts are retained unchanged. Class-element arrays, array DMIs, braced constructor-array initialization, brace elision, function-template arrays, copy/move synthesis, heap allocation runtime, native pcc1 frontend and unchanged TinyXML2 project acceptance remain unqualified boundaries. No local tests, PCC imports, compilers or collection were run; CI must establish the authored outcomes.",
+      "status": "missing",
+      "tests": [
+        "tests/cpp/test_cpp_scalar_array_members.py",
+        "tests/cpp/test_cpp_scalar_array_member_execution.py",
+        "tests/cpp/test_cpp_projects.py::test_cpp_tinyxml2_upstream_tests_explicit_host_pcc_project"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
       "id": "cpp.templates.typed-array-bounds",
       "title": "Typed class-template constant array bounds, awaiting execution",
       "chapter_ids": [
@@ -811,7 +825,7 @@
         "expr",
         "temp"
       ],
-      "scope": "Authored, execution-unrun obligations for definition-point typed fixed and value-dependent class-template array bounds, integral non-type parameter identities, nested pointer-to-array substitution, target constant proofs, lazy completeness and sticky diagnostics. Pointer-to-array member layout, row stride, cv and cross-TU nominal ABI reuse the existing C aggregate and pointer owners. The exact previously rejected fixed-array primary declaration is retained unchanged as a positive declaration-only input. Direct array data-member lifetime, template array decay, function-template array deduction/signatures, class-array lifetime, native pcc1 frontend and unchanged TinyXML2 project acceptance remain explicit unqualified boundaries. The TinyXML2 header field excerpt is not an executed DynArray or project result. No local tests, PCC imports, compiler runs or collection were performed; CI must establish these outcomes.",
+      "scope": "Authored, execution-unrun obligations for definition-point typed fixed and value-dependent class-template array bounds, integral non-type parameter identities, nested pointer-to-array substitution, target constant proofs, lazy completeness and sticky diagnostics. Pointer-to-array member layout, row stride, cv and cross-TU nominal ABI reuse the existing C aggregate and pointer owners. The exact previously rejected fixed-array primary declaration is retained unchanged as a positive declaration-only input. Class-element array data-member lifetime, function-template array decay, function-template array deduction/signatures, class-array lifetime, native pcc1 frontend and unchanged TinyXML2 project acceptance remain explicit unqualified boundaries. The TinyXML2 header field excerpt is not an executed DynArray or project result. No local tests, PCC imports, compiler runs or collection were performed; CI must establish these outcomes.",
       "status": "missing",
       "tests": [
         "tests/cpp/test_cpp_template_array_bounds.py",
@@ -830,7 +844,7 @@
         "over",
         "temp"
       ],
-      "scope": "Authored, execution-unrun obligations for direct scalar/object-pointer lvalue-reference return identity and pointer ABI, const-preserving call lvalues, C++17 non-static one-parameter operator[] declarations and member dispatch, and typed dependent builtin-subscript Patterns replayed through the existing once-only address owner. Temporary/class/array/function reference results, reference locals/data members, reference-parameter Patterns, dependent array members and allocating new/delete remain explicit boundaries. Exact TinyXML2 member excerpts are not original DynArray or whole-project acceptance.",
+      "scope": "Authored, execution-unrun obligations for direct scalar/object-pointer lvalue-reference return identity and pointer ABI, const-preserving call lvalues, C++17 non-static one-parameter operator[] declarations and member dispatch, and typed dependent builtin-subscript Patterns replayed through the existing once-only address owner. Temporary/class/array/function reference results, reference locals/data members, reference-parameter Patterns, class-element dependent array members and allocating new/delete remain explicit boundaries. Exact TinyXML2 member excerpts are not original DynArray or whole-project acceptance.",
       "status": "missing",
       "tests": [
         "tests/cpp/test_cpp_template_subscript_results.py",
@@ -848,7 +862,7 @@
         "expr",
         "temp"
       ],
-      "scope": "Authored, execution-unrun obligations for class storage queries using the same extracted natural-record calculation as C IR storage, target-owned scalar/alignment facts, one-byte empty-class projection, and typed dependent sizeof replay with no runtime operand or member-body use. The original defaulted-C1 interior/tail-padding program remains unchanged. This shared C layout-owner change requires wider C/C++ ABI/layout review and complete affected-language CI before publication; focused assertions do not qualify it. Bases, virtual state, bit-fields, dependent arrays, general allocation/deallocation and unchanged TinyXML2 acceptance remain unqualified.",
+      "scope": "Authored, execution-unrun obligations for class storage queries using the same extracted natural-record calculation as C IR storage, target-owned scalar/alignment facts, one-byte empty-class projection, and typed dependent sizeof replay with no runtime operand or member-body use. The original defaulted-C1 interior/tail-padding program remains unchanged. This shared C layout-owner change requires wider C/C++ ABI/layout review and complete affected-language CI before publication; focused assertions do not qualify it. Bases, virtual state, bit-fields, class-element arrays, general allocation/deallocation and unchanged TinyXML2 acceptance remain unqualified.",
       "status": "missing",
       "tests": [
         "tests/c/test_c_natural_record_layout.py",
@@ -2175,7 +2189,6 @@
         "tests/cpp/test_cpp_sizeof.py::test_sizeof_invalid_and_explicit_gaps_before_emission[int g();int f(){return sizeof(g);}-cpp.invalid-sizeof]",
         "tests/cpp/test_cpp_sizeof.py::test_sizeof_invalid_and_explicit_gaps_before_emission[struct S;int f(){return sizeof(S);}-cpp.incomplete-class]",
         "tests/cpp/test_cpp_sizeof.py::test_sizeof_invalid_and_explicit_gaps_before_emission[struct S;int f(S*p){return sizeof(*p);}-cpp.incomplete-class]",
-        "tests/cpp/test_cpp_sizeof.py::test_sizeof_invalid_and_explicit_gaps_before_emission[struct S{int a[3];};int cpp_test_entry(){return int(sizeof(S::a))+30;}-cpp.unsupported.class-array-members]",
         "tests/cpp/test_cpp_sizeof.py::test_sizeof_invalid_and_explicit_gaps_before_emission[struct S{int f();};int g(){S s{};return sizeof(s.f());}-cpp.unsupported.member-object-address]",
         "tests/cpp/test_cpp_sizeof.py::test_sizeof_invalid_and_explicit_gaps_before_emission[struct S{int x;int f()const;};int S::f()const{return sizeof(++x);}-cpp.const-assignment]",
         "tests/cpp/test_cpp_sizeof.py::test_sizeof_invalid_and_explicit_gaps_before_emission[struct S{int x;int f()const;};int S::f()const{return sizeof(S::x=1);}-cpp.const-assignment]",

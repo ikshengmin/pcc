@@ -87,6 +87,10 @@ def record_declaration_projection_supported(dtype, types):
 def require_complete(dtype, coord):
     """Require an object type to be complete, without completing pointees."""
     dtype = unqualified(dtype)
+    if isinstance(dtype, ClassType) and getattr(dtype, 'layout_state', None) == 'failed':
+        # A late layout/emission check can fail after a definition was marked
+        # complete. Never let that predicate erase the original sticky error.
+        raise dtype.layout_failure
     if isinstance(dtype, ClassType) and not dtype.complete:
         complete_layout = getattr(dtype, "complete_layout", None)
         if complete_layout is not None:
@@ -151,14 +155,15 @@ class ClassDefinition:
         if contains_function(dtype):
             raise CppDiagnostic("cpp.unsupported.function-pointers", "callback members require function-value semantics", symbol.coord)
         if array_type(dtype):
-            raise CppDiagnostic("cpp.unsupported.class-array-members",
-                                "array data members require special-member/lifetime integration", symbol.coord)
+            from pcc.frontends.cpp.arrays import require_trivial_member_array
+            require_trivial_member_array(dtype, symbol.coord)
         if dtype == "void":
             raise CppDiagnostic(
                 "cpp.invalid-object-type", "a data member cannot have type void", symbol.coord
             )
         require_complete(dtype, symbol.coord)
-        if mutable and isinstance(symbol.dtype, ConstType):
+        from pcc.frontends.cpp.arrays import const_array_elements
+        if mutable and const_array_elements(symbol.dtype):
             raise CppDiagnostic(
                 "cpp.invalid-mutable", "a mutable member cannot be const-qualified", symbol.coord
             )
@@ -177,9 +182,6 @@ class ClassDefinition:
             member_destructors(self)
         if self.constructors.overloads:
             for member in self.members:
-                if array_type(member.dtype):
-                    raise CppDiagnostic("cpp.unsupported.constructor-subobjects",
-                                        "array constructor subobjects require element lifetime support", member.coord)
                 if is_class_type(member.dtype):
                     require_declared_constructor(member)
                 if member.name == self.dtype.name:
@@ -211,6 +213,7 @@ class ClassDefinition:
 
     @property
     def default_constructor_deleted(self):
+        from pcc.frontends.cpp.arrays import const_array_elements
         for member in self.members:
             if getattr(member, "default_initializer_tokens", None) is not None:
                 continue
@@ -222,14 +225,15 @@ class ClassDefinition:
                 if (isinstance(member.dtype, ConstType)
                         and not definition.const_default_constructible):
                     return True
-            elif isinstance(member.dtype, ConstType):
+            elif const_array_elements(member.dtype):
                 return True
         return False
 
     @property
     def copy_assignment_deleted(self):
+        from pcc.frontends.cpp.arrays import const_array_elements
         return any(
-            isinstance(member.dtype, ConstType)
+            const_array_elements(member.dtype)
             or is_class_type(member.dtype)
             and unqualified(member.dtype).definition.copy_assignment_deleted
             for member in self.members
@@ -431,7 +435,7 @@ def parse_class(parser):
                 symbol = definition.add_member(Symbol(member.value, "member", member.coord, dtype=member_type), mutable)
                 if parser._accept("="):
                     from pcc.frontends.cpp.default_member_initializers import collect, unsupported
-                    if is_class_type(member_type):
+                    if is_class_type(member_type) or array_type(member_type):
                         unsupported(member.coord)
                     symbol.default_initializer_tokens = collect(parser)
                     break
@@ -446,6 +450,9 @@ def parse_class(parser):
         parser.scope = parent
     parser._expect(";")
     definition.finish()
+    if any(array_type(member.dtype) for member in definition.members):
+        from pcc.frontends.cpp.size_queries import sizeof_type
+        sizeof_type(dtype, parser.types, dtype.coord)
     from pcc.frontends.cpp.default_arguments import bind_class
     bind_class(parser, definition)
     from pcc.frontends.cpp.default_member_initializers import bind
@@ -663,6 +670,9 @@ def _empty_list_initialize(dtype, coord):
             # Under a nonaggregate this InitList is only zero-storage
             # projection, not a new caller-context aggregate initialization.
             values.append(_empty_list_initialize(member.dtype, coord))
+        elif array_type(member.dtype):
+            from pcc.frontends.cpp.arrays import zero_array_initializer
+            values.append(zero_array_initializer(member.dtype, coord))
         else:
             # All admitted scalar/pointer members have ordinary C zero-init
             # semantics; no class conversion or user constructor is bypassed.

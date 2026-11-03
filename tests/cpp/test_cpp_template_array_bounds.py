@@ -3,7 +3,7 @@
 N4659 [temp.param], [temp.dep.expr], [temp.res], [temp.inst], [dcl.array],
 [expr.const], [conv.array]. Bounds retain declaration identities and target
 constant proofs. Pointer-to-array members exercise concrete layout/stride via
-the existing pointer member owner. Direct array member lifetime remains gated.
+the existing pointer member owner. Class-element array member lifetime remains gated.
 """
 
 from pathlib import Path
@@ -127,11 +127,15 @@ def test_invalid_array_bounds_fail_before_c_projection(name, source, code):
     assert error.value.code == code and error.value.coord.file == name + '.cpp'
 
 
-def test_direct_array_member_lifetime_remains_an_explicit_boundary():
-    with pytest.raises(CppDiagnostic) as error:
-        CppParser(TARGET).parse('template<class T,int N>struct Buffer{T data[N];};'
-                                'int f(){return sizeof(Buffer<int,2>);}')
-    assert error.value.code == 'cpp.unsupported.class-templates'
+def test_direct_scalar_array_member_uses_the_shared_layout_owner():
+    # Keep the exact formerly rejected original; the separate scalar-array
+    # native/reference corpus executes f and validates its observed result.
+    parser = CppParser(TARGET)
+    parser.parse('template<class T,int N>struct Buffer{T data[N];};'
+                 'int f(){return sizeof(Buffer<int,2>);}')
+    instance = next(entry.value for entry in parser.instance_registry.entries.values()
+                    if getattr(entry.value, 'template_origin', None) is not None)
+    assert instance.complete and instance.definition.members[0].dtype == ArrayType('int', 2)
 
 
 CASES = (
