@@ -44,6 +44,13 @@ above passed its complete PCC build and upstream tests. Later source-reviewed
 changes remain execution-unrun. The earlier [bounded passed-test summary](../specs/conformance/summaries/ci-41550908488-passed.json)
 is tied only to its recorded revision, test IDs, versions, platform and hashes.
 
+Published CI-diagnostics checkpoint [`80526e2`](https://github.com/ikshengmin/pcc/commit/80526e2a8d58b16d6ebed98490d6ebfd0b50c96e)
+aligns the macOS timeout test with the existing 7200-second limit and supplies
+checkout imports and early output capture for temporary worker children. Its
+original workload, retry, concurrency and cleanup assertions remain intact.
+These source-reviewed repairs are execution-unrun; CI 41570071093 does not
+qualify them. The next validation must execute the changed source.
+
 NumPy source preprocessing stops at generated `_numpyconfig.h` and `stdarg.h`.
 orjson yyjson preprocessing/parsing passes; Rust build/import remains blocked.
 Their complete owned builds/imports, native pcc1 and full five-GC acceptance
