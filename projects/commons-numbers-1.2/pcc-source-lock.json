@@ -1,0 +1,295 @@
+{
+  "schema_version": 1,
+  "project": "commons-numbers-primes",
+  "version": "1.2",
+  "repository": "https://github.com/apache/commons-numbers",
+  "revision": "77f715769e4039acb4babd9add80b78a06ca7279",
+  "upstream_tree": "904ac4d8581186f5bbc4a1e93c600da00450e214",
+  "module_tree": "c49e45903a1c1155f2ba4c23657f362d6a926691",
+  "license": "Apache-2.0",
+  "java_source_level": "8",
+  "complete_module_source_closure": true,
+  "complete_upstream_test_source_closure": true,
+  "complete_build_closure": false,
+  "selection": "Every file in the pinned primes module plus root pom.xml, LICENSE, NOTICE, README.md and RELEASE-NOTES.txt. No original source or test is rewritten or removed.",
+  "production_units": [
+    "commons-numbers-primes/src/main/java/org/apache/commons/numbers/primes/Primes.java",
+    "commons-numbers-primes/src/main/java/org/apache/commons/numbers/primes/SmallPrimes.java",
+    "commons-numbers-primes/src/main/java/org/apache/commons/numbers/primes/package-info.java"
+  ],
+  "upstream_test_units": [
+    "commons-numbers-primes/src/test/java/org/apache/commons/numbers/primes/PrimesTest.java",
+    "commons-numbers-primes/src/test/java/org/apache/commons/numbers/primes/SmallPrimesTest.java",
+    "commons-numbers-primes/src/test/java/org/apache/commons/numbers/primes/UserGuideTest.java"
+  ],
+  "upstream_test_classes": [
+    "org.apache.commons.numbers.primes.PrimesTest",
+    "org.apache.commons.numbers.primes.SmallPrimesTest",
+    "org.apache.commons.numbers.primes.UserGuideTest"
+  ],
+  "total_bytes": 103782,
+  "dependencies": {
+    "state": "MISSING_SOURCE_AND_TOOL_CLOSURE",
+    "parent": {
+      "coordinate": "org.apache.commons:commons-parent:72",
+      "repository": "https://github.com/apache/commons-parent",
+      "revision": "5eb7ad71ec5db46c9e08527969c00bb3bfced5e3",
+      "path": "pom.xml",
+      "git_blob": "33bb604326e11616a618a631905b3dd061b1b20e",
+      "license": "Apache-2.0",
+      "inherited_parent": "org.apache:apache:33",
+      "junit_bom": "org.junit:junit-bom:5.11.0-M2",
+      "compiler_plugin": "3.13.0",
+      "surefire_plugin": "3.3.1",
+      "failsafe_plugin": "3.3.1"
+    },
+    "junit": {
+      "coordinate": "org.junit.jupiter:junit-jupiter:5.11.0-M2",
+      "platform_version": "1.11.0-M2",
+      "repository": "https://github.com/junit-team/junit-framework",
+      "revision": "659137a9dfeeea7c44abd87039710190abbfd02b",
+      "license": "EPL-2.0",
+      "license_path": "LICENSE.md",
+      "license_git_blob": "a32decd83d5bc83f257063b4cefa81e900def75e",
+      "version_evidence": [
+        {
+          "path": "gradle.properties",
+          "git_blob": "617c9a5c5a0a925021be7b83080a558dd1774510"
+        },
+        {
+          "path": "gradle/libs.versions.toml",
+          "git_blob": "8281124a42c838aaabd9f884f805d5016fe1fcb2"
+        },
+        {
+          "path": "junit-jupiter-api/junit-jupiter-api.gradle.kts",
+          "git_blob": "7dd03a78f4e95118a0cccdb949e1108638354ab7"
+        }
+      ],
+      "required_jupiter_modules": [
+        "junit-jupiter-api",
+        "junit-jupiter-params",
+        "junit-jupiter-engine"
+      ],
+      "reference_console_coordinate": "org.junit.platform:junit-platform-console-standalone:1.11.0-M2",
+      "reference_console_sha256": null,
+      "source_closure_present": false,
+      "binary_reference_closure_present": false
+    },
+    "transitives": [
+      {
+        "coordinate": "org.apiguardian:apiguardian-api:1.1.2",
+        "repository": "https://github.com/apiguardian-team/apiguardian",
+        "revision": "aa952a1b9d5b4e9cc0af853e2c140c2455b397be",
+        "license": "Apache-2.0",
+        "license_path": "LICENSE",
+        "license_git_blob": "8dada3edaf50dbc082c9a125058f25def75e625a"
+      },
+      {
+        "coordinate": "org.opentest4j:opentest4j:1.3.0",
+        "repository": "https://github.com/ota4j-team/opentest4j",
+        "revision": "214973bfa4e7e9be7d04e623202cc4147c7036d2",
+        "license": "Apache-2.0",
+        "license_path": "LICENSE",
+        "license_git_blob": "8f71f43fee3f78649d238238cbde51e6d7055c82"
+      }
+    ],
+    "missing": [
+      "PCC-owned Java standard-library/runtime source closure (String, collections, streams, BigInteger, exceptions and class initialization).",
+      "Complete JUnit/platform/transitive original source, build-tool and license closure; version/license metadata alone is not a source closure.",
+      "Owned JUnit discovery/assertion/execution path for all unchanged upstream test classes.",
+      "Verified reference JUnit console artifact and its complete bundled dependency/license inventory.",
+      "Pinned Maven parent/build plugin artifacts and full inherited build configuration; this runner is not a Maven build."
+    ]
+  },
+  "historical_frontiers": [
+    {
+      "owner": "retained actual production-only attempt",
+      "pcc_revision": "db5bfa9456008c72399f6ac4c73208f27f1390b2",
+      "location": "commons-numbers-primes/src/main/java/org/apache/commons/numbers/primes/Primes.java:31:44",
+      "code": "java.unsupported.string-literals",
+      "evidence_sha256": "dbe19b4b222a24836596709fac0948ab132f364e68a40eb29bd7874532b5ac07",
+      "project_execution": false
+    },
+    {
+      "owner": "source review only; no current execution",
+      "pcc_revision": "a49230d812d91678e9f4fcc33d01fd476698c7fd",
+      "implementation": "pcc/frontends/java/source_syntax.py",
+      "git_blob": "0be719f99f8ce8574c45366104aff29aeea1633d",
+      "location": "commons-numbers-primes/src/main/java/org/apache/commons/numbers/primes/Primes.java:31:44",
+      "code": "java.unsupported.string-literals",
+      "project_execution": false
+    }
+  ],
+  "files": [
+    {
+      "path": "commons-numbers-primes/README.md",
+      "role": "upstream-metadata",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "b2a7a17730af5345727b18b83672b391c5eb955cc7c5a5ad153e8946bf16c48c",
+      "size": 5673,
+      "git_blob": "8b15b3f556553af6eea627d490f4f8507578f62b",
+      "url": "https://raw.githubusercontent.com/apache/commons-numbers/77f715769e4039acb4babd9add80b78a06ca7279/commons-numbers-primes/README.md"
+    },
+    {
+      "path": "commons-numbers-primes/pom.xml",
+      "role": "upstream-metadata",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "00e72a9fc8f6a56c4f3bd7433ac0a81606e98985fa4f28e5b6eadbf4229cf3d1",
+      "size": 2115,
+      "git_blob": "4c1d3bee2ed19e6dd0e4d693f5e7e849b0d247bc",
+      "url": "https://raw.githubusercontent.com/apache/commons-numbers/77f715769e4039acb4babd9add80b78a06ca7279/commons-numbers-primes/pom.xml"
+    },
+    {
+      "path": "commons-numbers-primes/src/main/java/org/apache/commons/numbers/primes/Primes.java",
+      "role": "production-source",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "e1ca3408f0374a9100997fb884fa75fcc1ca640493b6da7f4743a7029cf484d3",
+      "size": 3598,
+      "git_blob": "9197aecfcd63c3b0d03d732b1e5255b01a4579ce",
+      "url": "https://raw.githubusercontent.com/apache/commons-numbers/77f715769e4039acb4babd9add80b78a06ca7279/commons-numbers-primes/src/main/java/org/apache/commons/numbers/primes/Primes.java"
+    },
+    {
+      "path": "commons-numbers-primes/src/main/java/org/apache/commons/numbers/primes/SmallPrimes.java",
+      "role": "production-source",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "a8771af04d9c7a0130ade64e0ef81b2d96d8c0bb458eb3ed00729f398bc8a638",
+      "size": 13271,
+      "git_blob": "aed4b8f5e7852938dc2ee7957e5429bb38756966",
+      "url": "https://raw.githubusercontent.com/apache/commons-numbers/77f715769e4039acb4babd9add80b78a06ca7279/commons-numbers-primes/src/main/java/org/apache/commons/numbers/primes/SmallPrimes.java"
+    },
+    {
+      "path": "commons-numbers-primes/src/main/java/org/apache/commons/numbers/primes/package-info.java",
+      "role": "production-source",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "51552b6164877761246fbd64831b857552711c5756483b237b37075318b43f3d",
+      "size": 933,
+      "git_blob": "9330b8341bd126f0e3800efa201dc0ec0905ef2d",
+      "url": "https://raw.githubusercontent.com/apache/commons-numbers/77f715769e4039acb4babd9add80b78a06ca7279/commons-numbers-primes/src/main/java/org/apache/commons/numbers/primes/package-info.java"
+    },
+    {
+      "path": "commons-numbers-primes/src/site/resources/profile.jacoco",
+      "role": "upstream-metadata",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "a73a9630c8741c67c7e010ed905f3cb61f626ddbd811921660546b9420dc31e9",
+      "size": 945,
+      "git_blob": "a12755f3ba4179cc011a410f84d8ba69bdabdf1f",
+      "url": "https://raw.githubusercontent.com/apache/commons-numbers/77f715769e4039acb4babd9add80b78a06ca7279/commons-numbers-primes/src/site/resources/profile.jacoco"
+    },
+    {
+      "path": "commons-numbers-primes/src/site/resources/profile.japicmp",
+      "role": "upstream-metadata",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "d6519687770d064885533b61cb4d3391379453f5e5c3c6b0360f9ad9c5b5f0b3",
+      "size": 938,
+      "git_blob": "6fe28ff34c5433f467526e5feecbed1bc4d62170",
+      "url": "https://raw.githubusercontent.com/apache/commons-numbers/77f715769e4039acb4babd9add80b78a06ca7279/commons-numbers-primes/src/site/resources/profile.japicmp"
+    },
+    {
+      "path": "commons-numbers-primes/src/site/site.xml",
+      "role": "upstream-metadata",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "239bf92a8f3c09ab051b9512eb18929b1fa06aa358844f48046a41bcb658ab79",
+      "size": 1813,
+      "git_blob": "10bc56c8060c99d6cbfa2d0a177837af5e5d15e6",
+      "url": "https://raw.githubusercontent.com/apache/commons-numbers/77f715769e4039acb4babd9add80b78a06ca7279/commons-numbers-primes/src/site/site.xml"
+    },
+    {
+      "path": "commons-numbers-primes/src/site/xdoc/index.xml",
+      "role": "upstream-metadata",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "a8dfd683688b48a48cb61e8468955124e4d0c3e507079d459adff895bbf928d5",
+      "size": 1220,
+      "git_blob": "397fd8b37c80ff277a95614b74eac36ce218f177",
+      "url": "https://raw.githubusercontent.com/apache/commons-numbers/77f715769e4039acb4babd9add80b78a06ca7279/commons-numbers-primes/src/site/xdoc/index.xml"
+    },
+    {
+      "path": "commons-numbers-primes/src/test/java/org/apache/commons/numbers/primes/PrimesTest.java",
+      "role": "original-upstream-test",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "43e00557b03fd1abc2404c8fbf21050eebd72434fedb27402154aeda1ed1b712",
+      "size": 6674,
+      "git_blob": "e8e3df880117a9e7fd5c4a632d140271fa902684",
+      "url": "https://raw.githubusercontent.com/apache/commons-numbers/77f715769e4039acb4babd9add80b78a06ca7279/commons-numbers-primes/src/test/java/org/apache/commons/numbers/primes/PrimesTest.java"
+    },
+    {
+      "path": "commons-numbers-primes/src/test/java/org/apache/commons/numbers/primes/SmallPrimesTest.java",
+      "role": "original-upstream-test",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "f52f604809fed6961ac4b085b11a4c720a5befd364d3d7260ee08289aa41128a",
+      "size": 5532,
+      "git_blob": "723b24cf94d69942489dace5dcf9f38fd3905f57",
+      "url": "https://raw.githubusercontent.com/apache/commons-numbers/77f715769e4039acb4babd9add80b78a06ca7279/commons-numbers-primes/src/test/java/org/apache/commons/numbers/primes/SmallPrimesTest.java"
+    },
+    {
+      "path": "commons-numbers-primes/src/test/java/org/apache/commons/numbers/primes/UserGuideTest.java",
+      "role": "original-upstream-test",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "cb0b1e609cd10edbea17e63409320d6380d86cb4c597c4574d41ff10835bda9e",
+      "size": 1654,
+      "git_blob": "43c2542081c5391c7ec788e1075f60c24a9e575e",
+      "url": "https://raw.githubusercontent.com/apache/commons-numbers/77f715769e4039acb4babd9add80b78a06ca7279/commons-numbers-primes/src/test/java/org/apache/commons/numbers/primes/UserGuideTest.java"
+    },
+    {
+      "path": "LICENSE",
+      "role": "license-notice",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "4d4b3a82608fb93fba1a42e825185f4315e07f2c59fc0e65cff765efaf0ce91a",
+      "size": 13621,
+      "git_blob": "f859d5755867d8e63f5d0cb8c26dca8391403086",
+      "url": "https://raw.githubusercontent.com/apache/commons-numbers/77f715769e4039acb4babd9add80b78a06ca7279/LICENSE"
+    },
+    {
+      "path": "NOTICE",
+      "role": "license-notice",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "eed42f42cad7284a79967f6f21243353cd4efa254a91bae5fff8528c93990d64",
+      "size": 884,
+      "git_blob": "45fc9620e8ce7597a438693043408f867b6d7c9b",
+      "url": "https://raw.githubusercontent.com/apache/commons-numbers/77f715769e4039acb4babd9add80b78a06ca7279/NOTICE"
+    },
+    {
+      "path": "README.md",
+      "role": "upstream-metadata",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "b9eb043d4e6b83c714fb0e5f1a8ec2bd3988f7220beeeb2220c70a92d6427d09",
+      "size": 7313,
+      "git_blob": "478337a8557684ec6fcbe62f5a47f8b933d35600",
+      "url": "https://raw.githubusercontent.com/apache/commons-numbers/77f715769e4039acb4babd9add80b78a06ca7279/README.md"
+    },
+    {
+      "path": "RELEASE-NOTES.txt",
+      "role": "upstream-metadata",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "a64091439401dbdbbad4afbf9a88111d8431a99a6e65b2ef8618ecf5044a37ef",
+      "size": 10946,
+      "git_blob": "da6844b96177a78cf0acb99e793371230de2c7c4",
+      "url": "https://raw.githubusercontent.com/apache/commons-numbers/77f715769e4039acb4babd9add80b78a06ca7279/RELEASE-NOTES.txt"
+    },
+    {
+      "path": "pom.xml",
+      "role": "upstream-metadata",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "8f9ed6b37884b441594306af1503647a3f070047df4faa4806c695be19fd6047",
+      "size": 26652,
+      "git_blob": "5f4b60182a0227b373d321bda469edf8314c5b03",
+      "url": "https://raw.githubusercontent.com/apache/commons-numbers/77f715769e4039acb4babd9add80b78a06ca7279/pom.xml"
+    }
+  ]
+}

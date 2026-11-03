@@ -1,0 +1,226 @@
+{
+  "schema_version": 1,
+  "project": "math/bits",
+  "version": "go1.27.3",
+  "repository": "https://github.com/golang/go",
+  "revision": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
+  "license": "BSD-3-Clause",
+  "license_file": "LICENSE",
+  "complete_build_closure": false,
+  "package_inventory_complete": true,
+  "package_directory": "src/math/bits",
+  "normal_go_files": [
+    "bits.go",
+    "bits_errors.go",
+    "bits_tables.go"
+  ],
+  "test_go_files": [
+    "export_test.go"
+  ],
+  "xtest_go_files": [
+    "bits_test.go",
+    "example_math_test.go",
+    "example_test.go"
+  ],
+  "excluded_go_files": {
+    "bits_errors_bootstrap.go": "compiler_bootstrap is not enabled",
+    "make_examples.go": "go:build ignore generator; generated source is retained",
+    "make_tables.go": "go:build ignore generator; generated source is retained"
+  },
+  "test_entry": {
+    "owner": "official cmd/go package test generation",
+    "command": [
+      "go",
+      "test",
+      "-json",
+      "-count=1",
+      "-timeout=60s",
+      "-p=2",
+      "math/bits"
+    ],
+    "tests_and_examples": [
+      "TestUintSize",
+      "TestLeadingZeros",
+      "TestTrailingZeros",
+      "TestOnesCount",
+      "TestRotateLeft",
+      "TestReverse",
+      "TestReverseBytes",
+      "TestLen",
+      "TestAddSubUint",
+      "TestAddSubUint32",
+      "TestAddSubUint64",
+      "TestAdd64OverflowPanic",
+      "TestSub64OverflowPanic",
+      "TestMulDiv",
+      "TestMulDiv32",
+      "TestMulDiv64",
+      "TestDivPanicOverflow",
+      "TestDiv32PanicOverflow",
+      "TestDiv64PanicOverflow",
+      "TestDivPanicZero",
+      "TestDiv32PanicZero",
+      "TestDiv64PanicZero",
+      "TestRem32",
+      "TestRem32Overflow",
+      "TestRem64",
+      "TestRem64Overflow",
+      "ExampleAdd32",
+      "ExampleAdd64",
+      "ExampleSub32",
+      "ExampleSub64",
+      "ExampleMul32",
+      "ExampleMul64",
+      "ExampleDiv32",
+      "ExampleDiv64",
+      "ExampleLeadingZeros8",
+      "ExampleLeadingZeros16",
+      "ExampleLeadingZeros32",
+      "ExampleLeadingZeros64",
+      "ExampleTrailingZeros8",
+      "ExampleTrailingZeros16",
+      "ExampleTrailingZeros32",
+      "ExampleTrailingZeros64",
+      "ExampleOnesCount",
+      "ExampleOnesCount8",
+      "ExampleOnesCount16",
+      "ExampleOnesCount32",
+      "ExampleOnesCount64",
+      "ExampleRotateLeft8",
+      "ExampleRotateLeft16",
+      "ExampleRotateLeft32",
+      "ExampleRotateLeft64",
+      "ExampleReverse8",
+      "ExampleReverse16",
+      "ExampleReverse32",
+      "ExampleReverse64",
+      "ExampleReverseBytes16",
+      "ExampleReverseBytes32",
+      "ExampleReverseBytes64",
+      "ExampleLen8",
+      "ExampleLen16",
+      "ExampleLen32",
+      "ExampleLen64"
+    ],
+    "benchmarks": "source retained and compiled; performance execution is not requested"
+  },
+  "required_dependencies": [
+    "unsafe",
+    "runtime",
+    "testing",
+    "fmt",
+    "os",
+    "testing/internal/testdeps"
+  ],
+  "total_bytes": 75520,
+  "files": [
+    {
+      "path": "LICENSE",
+      "size": 1453,
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+      "git_blob": "2a7cf70da6e498df9c11ab6a5eaa2ddd7af34da4",
+      "license": "BSD-3-Clause",
+      "license_evidence": "LICENSE",
+      "url": "https://raw.githubusercontent.com/golang/go/2aae1000ea1d4b28923b96db28acf4e3b99d6aff/LICENSE"
+    },
+    {
+      "path": "src/math/bits/bits_errors_bootstrap.go",
+      "size": 592,
+      "sha256": "58ee1b7363733f9167a40ca24b3a02b8b454db8a580424236df833140df1bf6b",
+      "git_blob": "6b14e41f83c4d86010812e171f540867d684437d",
+      "license": "BSD-3-Clause",
+      "license_evidence": "LICENSE; original Go Authors copyright header",
+      "url": "https://raw.githubusercontent.com/golang/go/2aae1000ea1d4b28923b96db28acf4e3b99d6aff/src/math/bits/bits_errors_bootstrap.go"
+    },
+    {
+      "path": "src/math/bits/bits_errors.go",
+      "size": 368,
+      "sha256": "1341283973609b16798176456337e3a0cbff9bfb32f79673a45197223471d7c6",
+      "git_blob": "353d2f6ad3a27d6610993506e42389e9ea2e79de",
+      "license": "BSD-3-Clause",
+      "license_evidence": "LICENSE; original Go Authors copyright header",
+      "url": "https://raw.githubusercontent.com/golang/go/2aae1000ea1d4b28923b96db28acf4e3b99d6aff/src/math/bits/bits_errors.go"
+    },
+    {
+      "path": "src/math/bits/bits_tables.go",
+      "size": 4791,
+      "sha256": "c4cb4a05dab6d395d9d51720893a42f0a9d1cdf8a0c2383d87268e49acb73f7f",
+      "git_blob": "f869b8d5c377d5540ec2208ba9321cf48bbcf316",
+      "license": "BSD-3-Clause",
+      "license_evidence": "LICENSE; original Go Authors copyright header",
+      "url": "https://raw.githubusercontent.com/golang/go/2aae1000ea1d4b28923b96db28acf4e3b99d6aff/src/math/bits/bits_tables.go"
+    },
+    {
+      "path": "src/math/bits/bits_test.go",
+      "size": 33258,
+      "sha256": "4cfd1b20f33a9c6a892c08d25d2af0cb2767d8fe410531c9988801a1682d166b",
+      "git_blob": "6f6e1c2202f42a4a22b366ca67975dc35d0fadac",
+      "license": "BSD-3-Clause",
+      "license_evidence": "LICENSE; original Go Authors copyright header",
+      "url": "https://raw.githubusercontent.com/golang/go/2aae1000ea1d4b28923b96db28acf4e3b99d6aff/src/math/bits/bits_test.go"
+    },
+    {
+      "path": "src/math/bits/bits.go",
+      "size": 18317,
+      "sha256": "694e0114bda396589e8c993a3d7880a0b461da23ee64c272929a3a5b69c2acf2",
+      "git_blob": "6f9142f91a38e30869d71cf8cca779c39cd39f82",
+      "license": "BSD-3-Clause",
+      "license_evidence": "LICENSE; original Go Authors copyright header",
+      "url": "https://raw.githubusercontent.com/golang/go/2aae1000ea1d4b28923b96db28acf4e3b99d6aff/src/math/bits/bits.go"
+    },
+    {
+      "path": "src/math/bits/example_math_test.go",
+      "size": 6410,
+      "sha256": "71265c9b709bc3e5deb6d0ea64d5f3d92e1185353c8caafe2ae2bb93373db66d",
+      "git_blob": "4bb466f85cd8f088b03474a009ff4ff80da54ae0",
+      "license": "BSD-3-Clause",
+      "license_evidence": "LICENSE; original Go Authors copyright header",
+      "url": "https://raw.githubusercontent.com/golang/go/2aae1000ea1d4b28923b96db28acf4e3b99d6aff/src/math/bits/example_math_test.go"
+    },
+    {
+      "path": "src/math/bits/example_test.go",
+      "size": 5401,
+      "sha256": "6f024308f9fc3de0cb64e92f2e409700a36efd55afb2640153b848b052705111",
+      "git_blob": "b2ed2cba4bfb72287dd1189382684baf41995e51",
+      "license": "BSD-3-Clause",
+      "license_evidence": "LICENSE; original Go Authors copyright header",
+      "url": "https://raw.githubusercontent.com/golang/go/2aae1000ea1d4b28923b96db28acf4e3b99d6aff/src/math/bits/example_test.go"
+    },
+    {
+      "path": "src/math/bits/export_test.go",
+      "size": 204,
+      "sha256": "40e377c07dd9c975b201cc99c6873abe75fb3b286127db8a84725d911b19c2f7",
+      "git_blob": "8c6f9332cca775d1639204ac0f2e45d1aa536f5e",
+      "license": "BSD-3-Clause",
+      "license_evidence": "LICENSE; original Go Authors copyright header",
+      "url": "https://raw.githubusercontent.com/golang/go/2aae1000ea1d4b28923b96db28acf4e3b99d6aff/src/math/bits/export_test.go"
+    },
+    {
+      "path": "src/math/bits/make_examples.go",
+      "size": 3120,
+      "sha256": "06736f7904112add1e3839c9899ec9a6e5029d4c1f42e3e576f8a5142adf195c",
+      "git_blob": "4bd7f581479d360e99e8788ebfec2074a3195d8c",
+      "license": "BSD-3-Clause",
+      "license_evidence": "LICENSE; original Go Authors copyright header",
+      "url": "https://raw.githubusercontent.com/golang/go/2aae1000ea1d4b28923b96db28acf4e3b99d6aff/src/math/bits/make_examples.go"
+    },
+    {
+      "path": "src/math/bits/make_tables.go",
+      "size": 1571,
+      "sha256": "dc21922114d16d59aa1fe303d5c6ba1e99229c06f3a56a3eff80e13616add2e4",
+      "git_blob": "d067361a12358226ae654b468a8bed1e4a290cac",
+      "license": "BSD-3-Clause",
+      "license_evidence": "LICENSE; original Go Authors copyright header",
+      "url": "https://raw.githubusercontent.com/golang/go/2aae1000ea1d4b28923b96db28acf4e3b99d6aff/src/math/bits/make_tables.go"
+    },
+    {
+      "path": "VERSION",
+      "size": 35,
+      "sha256": "49b1651ee92b70282766993b556905e9464050a811572e047a74f95534ee9ce6",
+      "git_blob": "de50f2a97cf6a24f8d5c1d9348ee0eb9c97b462f",
+      "license": "BSD-3-Clause",
+      "license_evidence": "LICENSE",
+      "url": "https://raw.githubusercontent.com/golang/go/2aae1000ea1d4b28923b96db28acf4e3b99d6aff/VERSION"
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-"""Pinned smoke/upstream fixtures; reference and native owners stay separate."""
+"""Pinned project fixtures; host PCC, native PCC and reference owners stay separate."""
 
 from __future__ import annotations
 
@@ -249,7 +249,7 @@ def run_project(
     qualification. It cannot select xmltest's alternate single-file mode.
     Each call retains raw streams and a failure/timeout-aware receipt.
     """
-    if owner not in ("external-reference", "native-pcc1"):
+    if owner not in ("external-reference", "native-pcc1", "host-pcc0"):
         raise ValueError("project execution owner must be explicit")
     root.mkdir()
     materialize_project(fixture, root / "source")
@@ -405,6 +405,116 @@ def native_project_environment(root: Path) -> dict[str, str]:
         }
     )
     return environment
+
+
+def compile_project_host(fixture: ProjectFixture, root: Path) -> Path:
+    """Explicit public host-PCC project attempt, never a native-gate fallback.
+
+    This runs the checkout's Python CLI, not the small-source test adapter.
+    Missing frontend/link/runtime support remains a failure. In particular it
+    must not provision a native compiler or runtime merely to discover the
+    next original-project diagnostic. An explicitly supplied runtime remains
+    subject to the production driver's provenance checks when it is needed.
+    """
+    from scripts.ci_source_frontier_support import source_identity
+    from scripts.platform_process_watchdog import run
+
+    assert sys.platform.startswith("linux") or sys.platform == "win32", (
+        "host C++ project watchdog covers Linux/Windows only"
+    )
+    root = root.resolve()
+    compiler = Path(sys.executable).absolute()
+    def compiler_source_identity():
+        headers = tuple(path.relative_to(ROOT).as_posix()
+                        for path in (ROOT / "pcc/frontends/cpp/include").rglob("*")
+                        if path.is_file())
+        return source_identity(ROOT, headers + (
+            "scripts/ci_source_frontier_support.py", "scripts/platform_process_watchdog.py",
+            "tests/cpp/project_cases.py", "tests/cpp/test_cpp_projects.py",
+        ))
+
+    runtime = environment_runtime = os.environ.get("PCC_RUNTIME_ARCHIVE", "")
+    runtime = Path(runtime).resolve(strict=True) if runtime else None
+    materialize_project(fixture, root / "source")
+    environment = native_project_environment(root)
+    # Select the host owner explicitly, even when another CI lane configured a
+    # native test route. This does not mutate that lane's process environment.
+    for name in ("PCC_TEST_COMPILER", "PCC_TEST_COMPILER_ROUTED", "PCC_TEST_COMPILER_LOG"):
+        environment.pop(name, None)
+    environment.update({
+        "PYTHONPATH": str(ROOT),
+        "PCC_SOURCE_ROOT": str(ROOT),
+        "PCC_REPO_ROOT": str(ROOT),
+        "PCC_HOST_PYTHON": str(compiler),
+        "PCC_TEST_NO_NATIVE_PROVISIONING": "1",
+    })
+    if runtime is not None:
+        environment["PCC_RUNTIME_ARCHIVE"] = str(runtime)
+    output = root / "host-project"
+    assert not output.exists(), "host project output must be fresh"
+    command = [
+        str(compiler), "-m", "pcc", "--backend", "self", "--separate-tus",
+        "--no-cache", "-O0", "--cpp-arg=-std=" + fixture.standard,
+        *("--cpp-arg=-D" + value for value in fixture.preprocessor_definitions),
+        str(root / "source"), "-o", str(output),
+    ]
+    receipt = {
+        **_fixture_receipt(fixture),
+        "owner": "host-pcc0",
+        "compiler": str(compiler),
+        "compiler_sha256": sha256(compiler),
+        "compiler_source_identity": compiler_source_identity(),
+        "compiler_source_root": str(ROOT),
+        # A CI-declared revision is provenance, not a substitute for source bytes.
+        "ci_declared_revision": os.environ.get("GITHUB_SHA"),
+        "runtime_archive_requested": environment_runtime or None,
+        "runtime_sha256": sha256(runtime) if runtime is not None else None,
+        "command": command,
+        "cwd": str(ROOT),
+        "status": "compile-not-completed",
+    }
+    try:
+        receipt["compile"] = run(
+            command, cwd=ROOT, env=environment, log_path=root / "host-compile.log",
+            timeout=90, rss_limit=1024**3, native=False,
+        )
+        receipt["returncode"] = 0
+        assert output.is_file(), "host PCC returned success without an executable"
+        assert output.read_bytes().startswith((b"\x7fELF", b"MZ")), (
+            "host PCC project output must be an ELF/PE executable, not a wrapper"
+        )
+        receipt["output_sha256"] = sha256(output)
+        receipt["status"] = "compiled-not-executed"
+    except Exception as error:
+        receipt["error"] = repr(error)
+        receipt["status"] = "compile-failed"
+        if isinstance(error, subprocess.CalledProcessError):
+            receipt["returncode"] = error.returncode
+        elif isinstance(error, TimeoutError):
+            receipt["status"] = "timeout"
+        raise
+    finally:
+        try:
+            receipt["compiler_unchanged"] = (
+                compiler.is_file() and sha256(compiler) == receipt["compiler_sha256"]
+                and compiler_source_identity() == receipt["compiler_source_identity"]
+            )
+            assert receipt["compiler_unchanged"], "host compiler source changed during build"
+            receipt["runtime_unchanged"] = (
+                runtime is None or runtime.is_file() and sha256(runtime) == receipt["runtime_sha256"]
+            )
+            assert receipt["runtime_unchanged"], "explicit runtime changed during build"
+            fixture.verify()
+            verify_materialized_project(fixture, root / "source")
+        except Exception as error:
+            receipt["status"] = "input-changed"
+            receipt["integrity_error"] = repr(error)
+            raise
+        finally:
+            (root / "host-compile-receipt.json").write_text(
+                json.dumps(receipt, indent=2) + "\n", encoding="utf-8"
+            )
+    return output
 
 
 def compile_project_native(compiler: Path, fixture: ProjectFixture, root: Path) -> Path:

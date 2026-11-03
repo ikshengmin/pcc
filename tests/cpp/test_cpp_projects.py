@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -12,6 +13,7 @@ from tests.cpp.owned_execution import Execution, assert_exact
 from tests.cpp.project_cases import (
     PROJECT,
     assert_project_outcome,
+    compile_project_host,
     compile_project_native,
     compile_project_oracle,
     load_project,
@@ -478,6 +480,121 @@ def test_cpp_project_native_upstream_command_keeps_owned_route(tmp_path, monkeyp
     assert receipt["compiler_unchanged"] and receipt["runtime_unchanged"]
 
 
+def test_cpp_project_host_upstream_command_and_execution_keep_explicit_owner(
+    tmp_path, monkeypatch
+):
+    # Contract-only mocks. Neither the host compiler nor xmltest is executed.
+    monkeypatch.setattr("tests.cpp.project_cases.sys.platform", "linux")
+    monkeypatch.setenv("PCC_TEST_COMPILER", "/a/separate/native-lane/pcc1")
+    monkeypatch.delenv("PCC_RUNTIME_ARCHIVE", raising=False)
+    compile_calls, execution_calls = [], []
+
+    def fake_compile(command, *, cwd, env, log_path, timeout, rss_limit, native):
+        compile_calls.append(command)
+        assert command[:8] == [str(Path(sys.executable).absolute()), "-m", "pcc",
+                               "--backend", "self", "--separate-tus", "--no-cache", "-O0"]
+        assert "--cpp-arg=-std=c++17" in command
+        assert "--cpp-arg=-D_FILE_OFFSET_BITS=64" in command
+        assert not native and timeout == 90 and rss_limit == 1024**3
+        assert (cwd / "pcc/__main__.py").is_file()
+        assert env["PCC_SOURCE_ROOT"] == env["PYTHONPATH"] == str(cwd)
+        assert env["PCC_TEST_NO_NATIVE_PROVISIONING"] == "1"
+        assert env["PCC_SELF_LINK"] == env["PCC_SELF_OBJ"] == "pcc"
+        assert "PCC_TEST_COMPILER" not in env
+        assert "PCC_RUNTIME_ARCHIVE" not in env
+        assert list(Path(env["PATH"]).iterdir()) == []
+        source = Path(command[-3])
+        assert source == tmp_path / "source"
+        assert (source / "tinyxml2.cpp").read_bytes() == (PROJECT / "tinyxml2.cpp").read_bytes()
+        assert (source / "xmltest.cpp").read_bytes() == (PROJECT / "xmltest.cpp").read_bytes()
+        assert (source / "resources/empty.xml").is_file()
+        assert not (source / "pcc_test_main.cpp").exists()
+        log_path.write_bytes(b"mock host compile\n")
+        Path(command[-1]).write_bytes(b"\x7fELFmock output")
+        return {"mock": True}
+
+    def fake_execute(command, *, cwd, capture_output, text, timeout):
+        execution_calls.append(command)
+        assert command == [str(tmp_path / "host-project")]
+        assert (cwd / "xmltest.cpp").is_file()
+        assert capture_output and not text and timeout == 60
+        return subprocess.CompletedProcess(command, 0, b"Pass 10, Fail 0\n", b"diagnostic\n")
+
+    monkeypatch.setattr("scripts.platform_process_watchdog.run", fake_compile)
+    monkeypatch.setattr("tests.cpp.project_cases.subprocess.run", fake_execute)
+    test_cpp_tinyxml2_upstream_tests_explicit_host_pcc_project(tmp_path)
+    assert len(compile_calls) == 1 and len(execution_calls) == 2
+    assert os.environ["PCC_TEST_COMPILER"] == "/a/separate/native-lane/pcc1"
+    receipt = json.loads((tmp_path / "host-compile-receipt.json").read_text())
+    assert receipt["owner"] == "host-pcc0" and receipt["compiler_unchanged"]
+    assert "pcc/frontends/cpp/parser.py" in receipt["compiler_source_identity"]
+    assert "pcc/frontends/cpp/include/cstdio" in receipt["compiler_source_identity"]
+    assert receipt["runtime_sha256"] is None and receipt["runtime_unchanged"]
+    assert receipt["status"] == "compiled-not-executed" and receipt["returncode"] == 0
+    for name in ("first-run", "second-run"):
+        execution = json.loads((tmp_path / name / "execution.json").read_text())
+        assert execution["owner"] == "host-pcc0"
+        assert execution["status"] == "passed-upstream-tests"
+        assert execution["outcome"] == {"matcher": "upstream-summary", "passed": "10", "failed": "0"}
+
+
+@pytest.mark.parametrize("failure", ["diagnostic", "timeout", "missing-output", "changed-input",
+                                    "changed-compiler", "changed-runtime"])
+def test_cpp_project_host_failure_preserves_evidence_and_never_runs_xmltest(
+    tmp_path, monkeypatch, failure
+):
+    monkeypatch.setattr("tests.cpp.project_cases.sys.platform", "linux")
+    monkeypatch.delenv("PCC_RUNTIME_ARCHIVE", raising=False)
+    runtime = tmp_path / "explicit-runtime.a"
+    if failure == "changed-runtime":
+        runtime.write_bytes(b"mock runtime, never linked")
+        monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(runtime))
+    if failure == "changed-compiler":
+        calls = []
+
+        def changing_source_identity(root, paths):
+            calls.append(None)
+            return {"pcc/frontends/cpp/parser.py": "before" if len(calls) == 1 else "after"}
+
+        monkeypatch.setattr("scripts.ci_source_frontier_support.source_identity", changing_source_identity)
+
+    def fake_compile(command, **kwargs):
+        kwargs["log_path"].write_bytes(b"original project diagnostic\n")
+        if failure == "diagnostic":
+            # Even a partial output cannot turn a failed compile into execution.
+            Path(command[-1]).write_bytes(b"\x7fELFpartial")
+            raise subprocess.CalledProcessError(1, command)
+        if failure == "timeout":
+            raise TimeoutError("stage deadline exceeded")
+        if failure == "changed-input":
+            (tmp_path / "source/tinyxml2.cpp").write_bytes(b"changed")
+        if failure == "changed-runtime":
+            runtime.write_bytes(b"changed runtime")
+        if failure.startswith("changed-"):
+            Path(command[-1]).write_bytes(b"\x7fELFmock output")
+        return {"mock": True}
+
+    def forbidden_execution(*args, **kwargs):
+        raise AssertionError("must not run xmltest after a failed compile")
+
+    monkeypatch.setattr("scripts.platform_process_watchdog.run", fake_compile)
+    monkeypatch.setattr("tests.cpp.project_cases.run_project", forbidden_execution)
+    # The test entry's imported alias is a separate binding.
+    monkeypatch.setitem(globals(), "run_project", forbidden_execution)
+    expected = (subprocess.CalledProcessError if failure == "diagnostic" else
+                TimeoutError if failure == "timeout" else AssertionError)
+    with pytest.raises(expected):
+        test_cpp_tinyxml2_upstream_tests_explicit_host_pcc_project(tmp_path)
+    receipt = json.loads((tmp_path / "host-compile-receipt.json").read_text())
+    assert receipt["owner"] == "host-pcc0"
+    assert receipt["status"] == ("input-changed" if failure.startswith("changed-") else
+                                 "timeout" if failure == "timeout" else "compile-failed")
+    assert (tmp_path / "host-compile.log").read_bytes() == b"original project diagnostic\n"
+    assert not (tmp_path / "first-run").exists()
+    if failure == "diagnostic":
+        assert receipt["returncode"] == 1
+
+
 @pytest.mark.integration
 def test_cpp_tinyxml2_explicit_cpp17_reference_oracle(tmp_path):
     compiler = shutil.which(os.environ.get("PCC_CPP_ORACLE", "g++"))
@@ -535,6 +652,18 @@ def test_cpp_tinyxml2_upstream_tests_explicit_cpp17_reference_oracle(tmp_path):
     assert assert_project_outcome(first, fixture) == assert_project_outcome(
         second, fixture
     )
+
+
+@pytest.mark.integration
+def test_cpp_tinyxml2_upstream_tests_explicit_host_pcc_project(tmp_path):
+    # Unchanged tinyxml2.cpp + xmltest.cpp and resources. A compiler diagnostic
+    # is a failing project attempt, not an expected/xfail feature-frontier pass.
+    # Native pcc1 qualification below remains an independent obligation.
+    fixture = load_project(variant="upstream-tests")
+    binary = compile_project_host(fixture, tmp_path)
+    first = run_project(fixture, binary, tmp_path / "first-run", owner="host-pcc0")
+    second = run_project(fixture, binary, tmp_path / "second-run", owner="host-pcc0")
+    assert assert_project_outcome(first, fixture) == assert_project_outcome(second, fixture)
 
 
 @pytest.mark.integration
