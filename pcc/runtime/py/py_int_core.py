@@ -14,8 +14,11 @@ from pcc.runtime.py.py_abi_constants import PYFLOATOBJECT_VALUE_OFFSET, PYINTOBJ
 pcc_gc_pointer_register = extern(
     "pcc_gc_pointer_register", (c_ptr,), c_int64
 )
+pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int64, c_int64), c_ptr)
+pcc_gc_config_ensure = extern("pcc_gc_config_ensure", (), c_int64)
 from pcc.unsafe import (
     free,
+    global_addr,
     global_load_ptr,
     is_tagged_int,
     load_f64,
@@ -310,6 +313,34 @@ def py_bigint_to_pyobject(b):
         v: int = _bigint_tagged_fit_value(b)
         free(b)
         return tag_int(v)
+    return _publish_heap_bigint(b)
+
+
+def _publish_heap_bigint(b):
+    # A raw C caller can publish the first managed object before any other
+    # constructor has selected the collector.
+    if load_i32(global_addr("pcc_gc_config_initialized"), 0) == 0:
+        pcc_gc_config_ensure()
+    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
+        # Arithmetic scratch buffers are explicitly freed and may have a
+        # larger capacity than their normalized digit count. Publish an exact
+        # managed allocation so tracing owns its debt, extent and reclamation.
+        # Keep the allocator's header: it carries the current mark color and
+        # allocation origin, neither of which belongs to the scratch buffer.
+        ndigits: int = load_i32(b, PYINTOBJECT_NDIGITS_OFFSET)
+        obj = pcc_gc_alloc(PYINTOBJECT_DIGITS_OFFSET + ndigits * 4, PY_TYPE_INT, 0)
+        if ptr_is_null(obj):
+            free(b)
+            return obj
+        store_i32(obj, PYINTOBJECT_SIGN_OFFSET, load_i32(b, PYINTOBJECT_SIGN_OFFSET))
+        store_i32(obj, PYINTOBJECT_NDIGITS_OFFSET, ndigits)
+        i: int = 0
+        while i < ndigits:
+            store_i32(obj, PYINTOBJECT_DIGITS_OFFSET + i * 4,
+                      load_i32(b, PYINTOBJECT_DIGITS_OFFSET + i * 4))
+            i = i + 1
+        free(b)
+        return obj
     store_i32(
         b,
         PYOBJECTHEADER_FLAGS_OFFSET,
@@ -344,15 +375,7 @@ def py_int_new_heap(v: int):
     b = py_bigint_from_i64(v)
     if ptr_is_null(b):
         return b
-    store_i32(
-        b,
-        PYOBJECTHEADER_FLAGS_OFFSET,
-        load_i32(b, PYOBJECTHEADER_FLAGS_OFFSET) | PY_FLAG_GC_MALLOC_ALLOC,
-    )
-    if pcc_gc_pointer_register(b) < 0:
-        free(b)
-        return null()
-    return b
+    return _publish_heap_bigint(b)
 
 
 @c_abi_export("py_int_value_i64")

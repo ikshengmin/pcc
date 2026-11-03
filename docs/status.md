@@ -207,8 +207,10 @@ class immediately loses its later finalizer. The native probe observes one
 finalizer in tracing-only GC4 versus two in counted GC4. The follow-up anchors
 active objects outside the fixed disposal set during the count-free verdict
 refresh, preserving their transitive referents until a later collection owns
-them. Twenty-one verdict checks and two object-closure reference probes pass;
-the permanent native regression and fresh-runtime rerun are pending.
+them. Twenty-one verdict checks and two object-closure reference probes pass.
+The fresh `29cb88cf3` runtime passes all seven native class cases, including
+both finalizers in the new-instance regression; the GC4 value/lifecycle file
+also passes both tests. These remain local Mac host-pcc0/self executions.
 
 Frozen `764d063` default-mode four-worker measurements complete seven rotations:
 GC0 repeated controls reach 77,141 / 78,242 QPS, with same-packet CPython at
@@ -223,7 +225,9 @@ baselines, not improvement claims. PCC's four carriers share one heap and C100 b
 barriers; the reference uses four processes, separate heaps and independent
 C25 batches. Both execute 40,000 timed requests and 200 warmups, and QPS uses
 the complete earliest-start/latest-finish interval. Further collector/worker
-packets remain in progress. A completed two-second four-carrier sample of
+packets remain in progress. The GC3 packet completes seven rotations at
+1,652 QPS, against same-packet GC0 80,357 and CPython 262,578; all seven
+GC3/GC0 pairs are negative. A completed two-second four-carrier sample of
 the same frozen executable attributes 65.54% of GC1 samples to graph-lock
 spinning, 5.69% to acquisition and 1.63% to release. GC0 root-store inclusive
 samples are 20.73%, including 10.74% in deallocation; the entire inclusive
@@ -235,10 +239,21 @@ result slots without a durable moving-address lease, and configured GC0-2
 root resolution skips object/forwarding indexes. Moving, pre-configuration
 and diagnostic paths retain their checks; GC0 pin roots remain unchanged.
 Forty actual-body model cases pass in `test_gc0_protocol_publication.py`;
-56 existing handoff/publication model checks also pass. Its new five-collector
-native rich-comparison check and frozen performance comparison are pending.
+56 existing handoff/publication model checks also pass. Its new native
+rich-comparison check passes under all five collectors with the fresh
+`29cb88cf3` runtime; the frozen performance comparison remains pending.
 These helpers have no samples in the request profile above; no request-QPS
 gain or five-percent acceptance is claimed for this candidate.
+
+Count-free bigint publication exposed another prerequisite: both raw bigint
+exports registered provenance without adding mark/sweep nodes or allocation
+debt. Numerical agreement therefore did not establish reclamation. The fix
+copies only normalized sign/digits into an exact managed allocation at the
+publication boundary, retaining its collector-owned header; private arithmetic
+scratch still has explicit free ownership, and counted paths remain raw.
+`test_tracing_bigint_publication.py` passes twelve body-model checks for value,
+header/origin, normalized extent, first configuration, tagged folding and
+failure cleanup. Its native index/debt/reclamation probe is pending.
 
 An additional exception-root probe exposes an existing builtin-exception
 limitation: `ValueError(shared_list, index).args[0] is shared_list` fails under
