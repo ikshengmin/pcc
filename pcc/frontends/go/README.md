@@ -52,8 +52,10 @@ external compiler fallback, independent collector, or scheduler.
   package-name/table-specific rule substitutes for that contract.
 
 Package defined/alias types, ordinary value structs and direct value-receiver
-methods are described below. Go predeclared-name shadowing, dynamic package
-initialization, floating/complex types, runtime interfaces/general type sets, generic
+methods are described below. Package/type-parameter bindings that shadow
+predeclared names, local shadowing of predeclared types/constants, dynamic
+package initialization, floating/complex types, runtime interfaces/general type
+sets, generic
 data types, escaping pointers, stored
 method values/closures, dynamically allocated strings, general I/O and panic unwind,
 defer/recover, goroutines/channels and standard-library dependencies remain
@@ -130,7 +132,8 @@ save/restore their own iota contexts during recursive constant resolution.
 
 Blank package constants are typechecked without creating a named object or
 runtime storage. Typed repetitions keep representability checks; local var
-groups execute initializers in specification order. Blank package variables,
+groups execute initializers in specification order. Local values may now shadow
+builtin-function names as described below. Blank package variables, other
 predeclared-name shadowing, dynamic package initialization and runtime allocation
 remain unsupported. See [constant declarations](https://go.dev/ref/spec#Constant_declarations)
 and [iota](https://go.dev/ref/spec#Iota). The complete `declarations.go` fixture
@@ -540,8 +543,9 @@ Linux `print`/`println` lower admitted integer/bool/string values through existi
 owned IR and syscall primitives. All argument values are captured before output;
 integer formatting handles full unsigned width and signed minima, and writes
 handle partial progress and EINTR. No allocator or shared runtime changes are
-introduced. Builtin shadowing retains the existing explicit capability boundary,
-rather than silently dispatching a shadowed name to the builtin.
+introduced. Local values may shadow builtin-function names; calls through
+scalar shadows fail as non-functions rather than dispatching to the builtin.
+Other predeclared-name shadowing retains the explicit boundaries described below.
 
 `panic` is implemented only as the genuine **terminal uncaught case** in the
 already restricted no-defer/no-recover/no-goroutine/no-foreign-callback domain:
@@ -581,7 +585,10 @@ The pointer-switch, aggregate-comparison/switch and direct-generic-function rows
 `acceptance` objects: implemented source is distinct from acceptance, which is
 **unrun** for this change. No schema2 migration or ignored JSON fields are used.
 Historical evidence keeps its original revision and source hashes; it is not
-rebound to a changed unit file or presented as a new execution.
+rebound to a changed unit file or presented as a new execution. The predeclared-
+shadowing row retains its historical status label and CAP-U evidence; the new
+local builtin-function name support has separate UNRUN obligations and does not
+renew that historical qualification.
 
 | Existing feature ID | Implementation status | Acceptance status / test binding | Legacy schema1 status |
 |---|---|---|---|
@@ -640,7 +647,7 @@ rebound to a changed unit file or presented as a new execution.
 | `go.string-range.utf8` | Source implementation: byte-offset/rune UTF-8 iteration on existing immutable strings | All new unit/native/same-source reference obligations UNRUN in CI | Implementation `supported`; acceptance `unrun` |
 | `go.capability.package-initialization` | Explicitly unimplemented boundary: package initialization | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.pointer-receivers` | Implemented: bounded direct non-retaining pointer-receiver methods | Qualified in L for PM-U / -P / -D and 23 full-width observations | `supported` |
-| `go.capability.predeclared-shadowing` | Explicitly unimplemented boundary: predeclared shadowing | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.predeclared-shadowing` | Partial source implementation: local values may shadow builtin-function names; package/type-parameter bindings and predeclared types/constants remain explicit gaps | Historical CAP-U rejection evidence unchanged; new native/reference obligations in `test_local_builtin_shadows.py` UNRUN | Historical `explicitly_unimplemented`; no renewed whole-feature qualification |
 | `go.capability.slice-storage` | Explicitly unimplemented boundary: slice storage | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.string-bounds-panic` | Explicitly unimplemented boundary: string bounds panic | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.struct-tags` | Explicitly unimplemented boundary: struct tags | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
@@ -856,9 +863,10 @@ Each generic body is checked unconditionally using declaration-bound opaque type
 parameters, including unused functions. `any` permits value transport and zero
 values, not arbitrary operators; `comparable` additionally permits equality and
 expression switches. Constraints resolve to predeclared identities only after
-checking signature/package/import shadowing. Existing predeclared-name shadowing
-frontiers remain explicit; a shadowed spelling is never silently treated as the
-builtin. Invalid generic bodies are not legalized by a favorable concrete call.
+checking signature/package/import shadowing. Package/type-parameter bindings
+and shadowing predeclared types/constants retain explicit frontiers; local
+builtin-function names are ordinary values, never silently treated as builtins.
+Invalid generic bodies are not legalized by a favorable concrete call.
 
 One package-graph `pcc.support.instantiation.InstanceRegistry` owns concrete
 identity, recursive placeholders, FIFO completion and sticky failures. Existing
@@ -954,3 +962,31 @@ and no runtime/backend changes are included. All new execution is **UNRUN**.
 
 Rules: [imports](https://go.dev/ref/spec#Import_declarations) and
 [declarations and scope](https://go.dev/ref/spec#Declarations_and_scope).
+
+
+## Local builtin-function name shadowing
+
+Function-local variables/constants, parameters (including receivers), named
+results and iteration bindings may use builtin-function spellings such as
+`len`, `cap` and `panic`. These are ordinary lexical values, not substitute
+builtin implementations. Their scope begins at the existing declaration
+boundary: `len := len("abc")` resolves the initializer to the builtin, then
+binds the local integer. Leaving the block restores the outer binding.
+Calls resolve local values before builtin dispatch, so a shadowed scalar
+`len("abc")` is an ordinary non-function error rather than a builtin call.
+Duplicate/unused bindings, value-as-type errors and shadowed bare returns keep
+normal checks. Package/type-parameter bindings and shadowing predeclared types
+or constants remain explicit unsupported boundaries.
+
+The complete unchanged upstream `bits_test.go` uses `len := 8 - tab[i].nlz` in
+`TestLen`. This removes that independent semantic obstacle; it does not admit
+the original test package, replace its dependencies, or supply `testing`,
+`unsafe`, runtime error/panic/linkname, slices or closures. The full original
+project gate and current normal-package error/interface frontier are unchanged.
+The authored `local_builtin_shadows.go` has native self-checks, full-width ABI
+observations and same-original official-Go obligations. These obligations are
+not a claim that validation has run.
+
+References: [declarations and scope](https://go.dev/ref/spec#Declarations_and_scope),
+[predeclared identifiers](https://go.dev/ref/spec#Predeclared_identifiers),
+[short declarations](https://go.dev/ref/spec#Short_variable_declarations).

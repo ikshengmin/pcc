@@ -1032,6 +1032,20 @@
         ]
       }
     },
+    "tests/go/test_local_builtin_shadows.py": {
+      "test_identical_complete_shadow_program_has_owned_and_official_native_self_checks": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.go.owned_execution.compile_reference on the identical complete authored program; native owned and official-Go self-checks retain all original source bytes"
+        ]
+      },
+      "test_official_go_rejects_each_identical_invalid_shadow_use": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.go.owned_execution.compile_reference_rejection on exact malformed/invalid originals, requiring normal source-attributed exit1 rejection; tool/resource/unknown failures are not agreements"
+        ]
+      }
+    },
     "tests/go/test_methods.py": {
       "test_official_go_receives_identical_imported_method_project": {
         "activity": "external-reference",

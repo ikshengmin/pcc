@@ -21,9 +21,12 @@ from pcc.frontends.go.types import (
 )
 
 
-PREDECLARED = frozenset(
-    "true false nil iota append cap clear close complex copy "
-    "delete imag len make max min new panic print println real recover error any comparable float32 float64 complex64 complex128".split()
+PREDECLARED_FUNCTIONS = frozenset(
+    "append cap clear close complex copy delete imag len make max min new "
+    "panic print println real recover".split()
+)
+PREDECLARED = PREDECLARED_FUNCTIONS | frozenset(
+    "true false nil iota error any comparable float32 float64 complex64 complex128".split()
 ) | frozenset(TYPE_NAMES)
 MAX_SHIFT_COUNT = (1 << 64) - 1
 MAX_CONSTANT_BITS = 4096
@@ -335,9 +338,12 @@ class Analyzer:
             binding.used = True
         return binding.analyzer
 
-    def check_name(self, token):
-        if token.text in PREDECLARED:
-            raise UnsupportedGo(token, "go.unsupported.predeclared-shadowing", "shadowing predeclared names is not implemented: " + token.text)
+    def check_name(self, token, *, local_value=False):
+        # A lexical value can hide a builtin function without changing type or
+        # predeclared-constant lookup. Package/type-parameter bindings retain
+        # their separate, explicit shadowing boundary.
+        if token.text in PREDECLARED and not (local_value and token.text in PREDECLARED_FUNCTIONS):
+            raise UnsupportedGo(token, "go.unsupported.predeclared-shadowing", "shadowing predeclared names is not implemented in this binding: " + token.text)
 
     def resolve_type_declaration(self, declaration):
         if declaration.resolved is not None:
@@ -513,7 +519,7 @@ class Analyzer:
         self.break_depth = 0
         self.allowed_fallthrough = None
         for token, dtype in function.params:
-            self.check_name(token)
+            self.check_name(token, local_value=True)
             if token.text in self.type_bindings:
                 raise GoDiagnostic(token, "parameter redeclares type parameter " + token.text)
             symbol = Symbol(token, dtype, parameter=True, depth=1)
@@ -526,7 +532,7 @@ class Analyzer:
         for token, dtype in zip(function.result_names, result_types(function.result)):
             if token is None:
                 continue
-            self.check_name(token)
+            self.check_name(token, local_value=True)
             if token.text in self.type_bindings:
                 raise GoDiagnostic(token, "result redeclares type parameter " + token.text)
             if token.text != "_" and token.text in self.scopes[-1]:
@@ -552,7 +558,7 @@ class Analyzer:
             self.scopes.pop()
 
     def declare(self, token, dtype, constant=None):
-        self.check_name(token)
+        self.check_name(token, local_value=True)
         if len(self.scopes) == 1 and token.text in self.type_bindings:
             raise GoDiagnostic(token, "redeclaration in this block: " + token.text)
         if token.text != "_" and token.text in self.scopes[-1]:
@@ -1185,6 +1191,11 @@ class Analyzer:
                 self.call(expr, method, receiver=None if method_expression else base,
                           pointer_receiver_type=pointer_receiver_type if not pointer_method else None)
                 return
+            # Values in a lexical scope shadow builtin and package type/function names.
+            owner = (self.dot_imported(expr.token) if name not in self.type_bindings
+                     and not any(name in scope for scope in self.scopes) else None) or self
+            if any(name in scope for scope in self.scopes) or name in owner.globals and name not in self.type_bindings:
+                raise GoDiagnostic(expr.token, "cannot call non-function " + name)
             if name in ("len", "cap"):
                 if len(expr.args) != 1:
                     raise GoDiagnostic(expr.token, name + " requires one argument")
@@ -1203,11 +1214,6 @@ class Analyzer:
                 else:
                     raise GoDiagnostic(expr.token, name + " requires an admitted array" + (" or string" if name == "len" else ""))
                 return
-            # Values in a lexical scope shadow package type/function names.
-            owner = (self.dot_imported(expr.token) if name not in self.type_bindings
-                     and not any(name in scope for scope in self.scopes) else None) or self
-            if any(name in scope for scope in self.scopes) or name in owner.globals and name not in self.type_bindings:
-                raise GoDiagnostic(expr.token, "cannot call non-function " + name)
             if name in ("print", "println", "panic"):
                 values = self.values(expr.args)
                 if name == "panic" and len(values) != 1:
