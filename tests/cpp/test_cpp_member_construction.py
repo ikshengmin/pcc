@@ -32,6 +32,9 @@ from tests.cpp.test_cpp_owned_execution import owned_only
 
 ORIGINAL_DECLARATION = 'struct A{};struct S{A a;~S();};'
 ORIGINAL_INLINE = 'struct T{};struct S{T value;~S(){}};'
+ORIGINAL_PLACEMENT = ('using Size=decltype(sizeof(0));'
+                      'void*operator new(Size,void*)noexcept;struct M{M(){}};struct O{M m;O(){}};'
+                      'void f(O*p){new(p) O;}')
 STRPAIR_CONSTRUCTOR = '    StrPair() : _flags( 0 ), _start( 0 ), _end( 0 ) {}\r\n'
 STRPAIR_SHA256 = 'fb420df68e33b9ef33c085d027744054eef9ddbe204b3a9bee38efbd2b0bcf6c'
 XMLNODE_CONSTRUCTOR = (
@@ -159,9 +162,6 @@ DEFERRED = (
     ('class-member-array', 'struct M{M(){}};struct O{M m[2];O(){}};', 'cpp.unsupported.class-array-members'),
     ('class-member-template-pattern', 'struct M{M(int){}};template<class T>struct O{M m;O(T n):m(n){}};', 'cpp.unsupported.class-templates'),
     ('implicit-member-copy-not-invented', 'struct M{M(int){}};struct O{M m;O(const O&other):m(other.m){}};', 'cpp.unsupported.class-initialization'),
-    ('placement-subobject-lifetimes-still-deferred', 'using Size=decltype(sizeof(0));'
-     'void*operator new(Size,void*)noexcept;struct M{M(){}};struct O{M m;O(){}};'
-     'void f(O*p){new(p) O;}', 'cpp.unsupported.placement-subobjects'),
 )
 
 

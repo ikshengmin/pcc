@@ -110,8 +110,8 @@ def parse_new(parser):
         raise CppDiagnostic('cpp.unsupported.placement-object-type', 'placement initialization currently requires a complete class constructor', coord)
     require_complete(dtype, coord)
     owner = unqualified(dtype)
-    if any(is_class_type(member.dtype) or array_type(member.dtype) for member in owner.definition.members):
-        raise CppDiagnostic('cpp.unsupported.placement-subobjects', 'placement subobject lifetime initialization is not implemented', coord)
+    if any(array_type(member.dtype) for member in owner.definition.members):
+        raise CppDiagnostic('cpp.unsupported.placement-subobjects', 'placement array subobject lifetime initialization is not implemented', coord)
     if not global_only and 'operator new' in owner.definition.scope.names:
         raise CppDiagnostic('cpp.unsupported.class-allocation-functions', 'class-specific allocation lookup is not implemented', coord)
     group = parser.scope.global_scope().names.get('operator new')
@@ -152,6 +152,9 @@ def parse_new(parser):
     # Initialization can write a const complete object; the returned pointer
     # retains const. This internal this conversion does not relax source casts.
     this_address = _cast(parser, address, PointerType(owner), coord) if isinstance(dtype, ConstType) else address
+    # A source-bound complete C1 proof may contain exact generated member C1
+    # calls. The constructor owner checks their complete argument/default
+    # effects and final member addresses; placement adds no automatic cleanup.
     call = constructor_call(parser, owner, arguments, this_address, coord, require_closed=True)
     node = c_ast.StmtExpr(c_ast.Compound([temporary, call, c_ast.ID(name, coord)], coord), coord)
     return Expression(node, pointer_type, constant_fact=not_constant(pointer_type, 'placement construction', coord))
@@ -207,12 +210,16 @@ def explicit_destructor(parser, expression, operator):
     parser.scope.check_member_access(named, coord)
     parser._expect('(')
     parser._expect(')')
-    if any(is_class_type(member.dtype) or array_type(member.dtype) for member in owner.definition.members):
-        raise CppDiagnostic('cpp.unsupported.destructor-subobjects', 'explicit subobject destruction is not implemented', coord)
     destructor = owner.definition.destructor
+    if (any(array_type(member.dtype) for member in owner.definition.members)
+            or (destructor is None and any(is_class_type(member.dtype) for member in owner.definition.members))):
+        raise CppDiagnostic('cpp.unsupported.destructor-subobjects',
+                            'explicit array or implicit member destruction requires its lifetime owner', coord)
     if destructor is not None:
         parser.scope.check_member_access(destructor, coord)
-        if not getattr(destructor, 'closed_normal_body', False):
+        # Only the destructor binder's exact generated cleanup-call chain is
+        # trusted. Unknown user calls and declarations alone are not proofs.
+        if not getattr(destructor, 'closed_destruction_body', False):
             raise CppDiagnostic('cpp.unsupported.placement-constructor-effects',
                                 'unknown destruction effects need exception/cleanup integration', coord)
     saved = parser._fresh_projection_name('__pcc_cpp_destroy_')

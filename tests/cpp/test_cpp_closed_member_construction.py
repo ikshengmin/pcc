@@ -10,8 +10,8 @@ https://timsong-cpp.github.io/cppwp/n4659/except.ctor
 Only exact generated member C1 calls may use already-bound construction proofs.
 Arguments/defaults, scalar stores and the completed body must be closed too.
 This is a bounded no-unknown-call proof, not a noexcept declaration, exception
-runtime or implicit special-member synthesis. Placement's call-free proof is
-unchanged. Unknown body-local C1/D1 calls remain conservative boundaries.
+runtime or implicit special-member synthesis. Reserved placement now consumes
+the same proof. Unknown body-local C1/D1 calls remain conservative boundaries.
 All compiler, test, native and reference execution is locally UNRUN.
 """
 
@@ -114,6 +114,10 @@ INVALID = (
 
 CLOSED_MEMBER = 'struct M{M(int n=1){}~M(){}};'
 CLOSED_OWNER = CLOSED_MEMBER + 'struct O{M member;O(int n):member(n){}~O(){}};'
+ORIGINAL_CLOSED_PLACEMENT = (
+    'using Size=decltype(sizeof(0));void*operator new(Size,void*)noexcept;' + CLOSED_OWNER +
+    'void f(O*p){new(p) O(1);}'
+)
 DEFERRED = (
     ('unknown-member-c1-body-effect', 'void effect();struct M{M(){effect();}~M(){}};struct O{M member;O(){}~O(){}};'),
     ('member-c1-body-not-bound', 'struct M{M();~M(){}};struct O{M member;O(){}~O(){}};'),
@@ -162,9 +166,6 @@ RETAINED_BOUNDARIES = (
      'struct O{M member;O():member{1}{}~O(){}};', 'cpp.unsupported.constructor-list-initialization'),
     ('member-array-keeps-element-lifetime-boundary', CLOSED_MEMBER +
      'struct O{M members[2];O(){}~O(){}};', 'cpp.unsupported.class-array-members'),
-    ('placement-keeps-subobject-boundary',
-     'using Size=decltype(sizeof(0));void*operator new(Size,void*)noexcept;' + CLOSED_OWNER +
-     'void f(O*p){new(p) O(1);}', 'cpp.unsupported.placement-subobjects'),
 )
 
 

@@ -390,7 +390,8 @@ def closed_construction_body(body, construction_calls):
     Expanded defaults, scalar stores and the completed body are all visited.
     A permitted C1 node never hides its address/argument descendants. Names,
     prototypes and ordinary user calls cannot establish this proof. This is
-    separate from placement's deliberately call-free closed_normal_body.
+    shared with reserved placement construction. The older call-free
+    closed_normal_body remains separate metadata, not a chain proof.
     """
     pending = [body]
     while pending:
@@ -431,7 +432,7 @@ def constructor_call(parser, dtype, arguments, address, coord, require_closed=Fa
     if member_cleanup and not getattr(selected, "closed_construction_body", False):
         raise CppDiagnostic("cpp.unsupported.destructor-subobjects",
                             "member-owning constructor call requires a bound closed-construction proof", coord)
-    if require_closed and not getattr(selected, 'closed_normal_body', False):
+    if require_closed and not getattr(selected, 'closed_construction_body', False):
         raise CppDiagnostic('cpp.unsupported.placement-constructor-effects',
                             'unknown constructor effects need exception/cleanup integration', coord)
     if direct_list:
