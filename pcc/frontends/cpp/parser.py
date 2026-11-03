@@ -572,13 +572,8 @@ class CppParser:
     def _reference(self, dtype, token):
         if token.value != '&' or self.parsing_template or self.template_function is not None:
             raise CppDiagnostic("cpp.unsupported.references", "rvalue/dependent references require additional semantics", token.coord)
-        if isinstance(dtype, ReferenceType):
-            raise CppDiagnostic("cpp.unsupported.references", "reference collapsing requires declaration provenance", token.coord)
-        if unqualified(dtype) == 'void':
-            raise CppDiagnostic("cpp.invalid-reference-type", "a reference cannot refer to void", token.coord)
-        if array_type(dtype) or function_type(dtype):
-            raise CppDiagnostic("cpp.unsupported.references", "array/function reference binding is not implemented", token.coord)
-        return ReferenceType(dtype)
+        from pcc.frontends.cpp.references import lvalue_reference
+        return lvalue_reference(dtype, token.coord)
 
     def _abstract_pointer_type(self, dtype):
         while self._peek().value in ("*", "&", "&&"):
@@ -1045,6 +1040,8 @@ class CppParser:
         access_scope = member_owner.scope if member_owner is not None else parent
         for accessed, access_coord in return_lookup.deferred_member_access:
             access_scope.check_member_access(accessed, access_coord)
+        if name.value == "operator[]" and any(default_arguments):
+            raise CppDiagnostic("cpp.invalid-subscript-operator", "operator[] parameters cannot have defaults", name.coord)
         if name.value == "operator=" and any(default_arguments):
             raise CppDiagnostic("cpp.invalid-assignment-operator", "assignment operator parameters cannot have defaults", name.coord)
         if any(default_arguments) and (not is_function or template_parameters or variadic
@@ -1052,7 +1049,10 @@ class CppParser:
             raise CppDiagnostic("cpp.unsupported.default-argument-context",
                                 "defaults require an ordinary non-variadic function with scalar/object-pointer parameters", name.coord)
         if isinstance(result_type, ReferenceType):
-            raise CppDiagnostic("cpp.unsupported.references", "reference results and namespace reference objects require lifetime/return semantics", name.coord)
+            if not is_function:
+                raise CppDiagnostic("cpp.unsupported.references", "namespace reference objects require lifetime semantics", name.coord)
+            from pcc.frontends.cpp.references import check_result
+            check_result(result_type, name.coord)
         if not is_function:
             if name.kind == "OPERATOR_FUNCTION_ID":
                 raise CppDiagnostic("cpp.invalid-allocation-function", "operator name must declare a function", name.coord)
@@ -1657,7 +1657,9 @@ class CppParser:
                                         "non-void function cannot return a void expression", coord)
         if self.template_function is not None:
             if expression is not None and expression.dtype != "void" and self.return_type != "void":
-                self._convert(expression, self.return_type, coord)
+                if (not isinstance(self.return_type, ReferenceType)
+                        or not dependent(self.return_type) and not dependent(expression.dtype)):
+                    self._convert(expression, self.return_type, coord)
             return Pattern("return", coord, children=[] if expression is None else [expression])
         if expression is None:
             return self.lifetimes.return_statement(self, None, coord)
@@ -2098,15 +2100,40 @@ class CppParser:
                 from pcc.frontends.cpp.allocation import explicit_destructor
                 expression = explicit_destructor(self, expression, operator)
                 continue
-            member = self._identifier()
+            from pcc.frontends.cpp.operators import declaration_name
+            member = declaration_name(self)
+            if member.kind == 'OPERATOR_FUNCTION_ID' and member.value != 'operator[]':
+                raise CppDiagnostic('cpp.unsupported.class-operators',
+                                    'explicit calls of other member operators require their semantic owner', member.coord)
             if self.template_function is not None and getattr(self, 'class_template_method', None) is None:
                 raise CppDiagnostic("cpp.unsupported.dependent-lookup", "template member lookup is not implemented", operator.coord)
             expression = member_access(self, expression, operator.value, member)
         return expression
 
     def _subscript_expression(self, left, right, coord):
-        if self.template_function is not None or self.instantiating_template:
-            raise CppDiagnostic("cpp.unsupported.array-templates", "dependent subscript lookup is not implemented", coord)
+        if self.template_function is not None:
+            first_pointer = pointer_type(left.dtype)
+            pointer, index = (left, right) if first_pointer else (right, left)
+            if not pointer_type(pointer.dtype):
+                raise CppDiagnostic("cpp.unsupported.array-templates", "dependent class/unknown subscript lookup is not implemented", coord)
+            if not dependent(index.dtype) and not self.types.integral_operand(index.dtype):
+                raise CppDiagnostic("cpp.invalid-subscript", "builtin subscript requires one object pointer and one integral operand", coord)
+            dtype = unqualified(pointer.dtype).pointee
+            if unqualified(dtype) == "void":
+                raise CppDiagnostic("cpp.invalid-subscript", "void pointer cannot be subscripted", coord)
+            if not dependent(dtype):
+                require_complete(dtype, coord)
+                require_complete_array(dtype, coord)
+            return Expression(Pattern('subscript', coord, children=[left, right]), dtype, True)
+        if is_class_type(left.dtype):
+            owner = unqualified(left.dtype)
+            require_complete(owner, coord)
+            group = owner.definition.scope.names.get('operator[]')
+            if group is None or group.kind != 'function':
+                raise CppDiagnostic("cpp.no-viable-overload", "class has no operator[]", coord)
+            receiver = self._unary_expression('&', left, coord)
+            from pcc.frontends.cpp.members import call_member
+            return call_member(self, group, receiver, [right], coord)
         left, right = self._decay_array(left), self._decay_array(right)
         if is_class_type(left.dtype) or is_class_type(right.dtype):
             raise CppDiagnostic("cpp.unsupported.class-operators", "subscript overload lookup is not implemented", coord)
@@ -2269,6 +2296,8 @@ class CppParser:
                           discarded_known=dtype == "nullptr")
 
     def _check_call_value_abi(self, selected, coord):
+        from pcc.frontends.cpp.references import check_result
+        check_result(selected.dtype, coord)
         for dtype in (selected.dtype,) + selected.parameters:
             if is_class_type(dtype):
                 raise CppDiagnostic("cpp.unsupported.class-value-abi", "record declaration projection does not implement copy/materialization at a call", coord)
@@ -2321,14 +2350,17 @@ class CppParser:
                     raise CppDiagnostic("cpp.unsupported.function-pointers", "template callback invocation is not implemented", coord)
                 dtype = selected.dtype
                 result = unqualified(dtype)
-                nominal = unqualified(result.pointee) if isinstance(result, PointerType) else result
+                nominal = unqualified(result.referent) if isinstance(result, ReferenceType) else result
+                nominal = unqualified(nominal.pointee) if isinstance(nominal, PointerType) else nominal
                 if contains_array(result):
                     raise CppDiagnostic("cpp.unsupported.array-templates", "array-related template call results are not implemented", coord)
                 if is_enum_type(nominal):
                     raise CppDiagnostic("cpp.unsupported.enum-templates",
                                         "enum results in template definitions require dependent lookup", coord)
             call = (snapshot, explicit_arguments) if explicit_arguments is not None else snapshot
-            return Expression(Pattern("call", coord, call, arguments), dtype)
+            return Expression(Pattern("call", coord, call, arguments),
+                              dtype.referent if isinstance(dtype, ReferenceType) else dtype,
+                              isinstance(dtype, ReferenceType))
         selected = resolve_overload(group, argument_types, self.types, coord, null_constants,
                                     [arg.lvalue or arg.assignment_result for arg in arguments], explicit_arguments)
         self._check_call_value_abi(selected, coord)
@@ -2363,15 +2395,16 @@ class CppParser:
                                self.types.promote(source) if self.types.integral_operand(source) else source)
                 converted.append(self._convert(argument, destination, coord))
         dtype = unqualified(selected.dtype)
-        nominal = unqualified(dtype.pointee) if isinstance(dtype, PointerType) else dtype
+        nominal = unqualified(dtype.referent) if isinstance(dtype, ReferenceType) else dtype
+        nominal = unqualified(nominal.pointee) if isinstance(nominal, PointerType) else nominal
         if self.instantiating_template and contains_array(dtype):
             raise CppDiagnostic("cpp.unsupported.array-templates", "array-related template call results are not implemented", coord)
         if self.instantiating_template and is_enum_type(nominal):
             raise CppDiagnostic("cpp.unsupported.enum-templates",
                                 "enum results in template instantiation require dependent lookup", coord)
-        return Expression(c_ast.FuncCall(c_ast.ID(selected.c_name, coord),
-                                          c_ast.ExprList(converted, coord), coord), dtype,
-                          constant_fact=not_constant(dtype, "call to a non-constexpr function", coord))
+        from pcc.frontends.cpp.references import call_result
+        return call_result(c_ast.FuncCall(c_ast.ID(selected.c_name, coord),
+                                          c_ast.ExprList(converted, coord), coord), selected.dtype, coord)
 
     def _explicit_template_arguments(self, allow_class_types=False):
         """Parse type-ids or typed expressions, never re-lex or replace tokens.
@@ -2698,6 +2731,8 @@ class CppParser:
             return member_access(self, base, operator, token)
         arguments = [self._instantiate_expression(child, bindings, environment)
                      for child in pattern.children]
+        if kind == 'subscript':
+            return self._subscript_expression(arguments[0], arguments[1], coord)
         if kind == 'delete':
             from pcc.frontends.cpp.allocation import lower_delete
             global_only, array = pattern.value

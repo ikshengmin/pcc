@@ -44,6 +44,8 @@ CASES = (
 )
 # Old valid unsupported inputs are retained byte-for-byte as separate TUs.
 FORMER_ORIGINALS = (
+    ('original-reference-result-prototype', 'int& f();',
+     'int value=42;int&f(){return value;}int cpp_test_entry(){return f();}'),
     ('original-reference-definition', 'int f(int &x){return x;}', 'int f(int&);int cpp_test_entry(){int n=42;return f(n);}'),
     ('original-reference-prototype', 'int f(int &p);', 'int f(int&n){return n;}int cpp_test_entry(){int n=42;return f(n);}'),
     ('original-grouped-reference-parameter', 'int function(int (&value));', 'int function(int&n){return n;}int cpp_test_entry(){int n=42;return function(n);}'),
@@ -119,7 +121,6 @@ def test_copy_declarations_have_real_identity_without_copy_execution(access):
     ('int f(int&n){n=42;return n;}int f(int);int g(){int n=0;return f(n);}','cpp.ambiguous-overload'),
     ('void f(const int&n){n=42;}','cpp.const-assignment'),
     ('using R=int&;int f(){int n=42;return R(n);}','cpp.unsupported.references'),
-    ('int& f();','cpp.unsupported.references'),
     ('int n;int&r=n;','cpp.unsupported.references'),
     ('int g(){int n=0;int&r=n;return r;}','cpp.unsupported.references'),
     ('struct S{int&r;};','cpp.unsupported.references'),

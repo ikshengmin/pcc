@@ -86,13 +86,18 @@ def parse_signature(parser, owner, name, result_type, static=False, constructor=
         raise CppDiagnostic('cpp.constructor-cv', 'constructors cannot have cv-qualifiers', name.coord)
     if parser._peek().value in ('volatile', '&', '&&', 'noexcept', 'throw', 'try', '=', '->'):
         unsupported(parser._peek().coord, 'member ref/exception/default/delete/trailing contracts are not implemented')
-    for dtype in (result_type,) + tuple(t for _, t in params):
+    from pcc.frontends.cpp.operators import validate_subscript
+    validate_subscript(name, params, member=True, static=static)
+    from pcc.frontends.cpp.references import check_result
+    check_result(result_type, name.coord)
+    for index, dtype in enumerate((result_type,) + tuple(t for _, t in params)):
         plain = unqualified(dtype)
-        if isinstance(plain, ReferenceType):
+        if isinstance(plain, ReferenceType) and index:
             raise CppDiagnostic('cpp.unsupported.references', 'class template member reference signatures require referent Pattern semantics', name.coord)
         if contains_array(dtype):
             raise CppDiagnostic('cpp.unsupported.array-templates', 'array member signatures require template array semantics', name.coord)
-        nominal = unqualified(plain.pointee) if isinstance(plain, PointerType) else plain
+        nominal = unqualified(plain.referent) if isinstance(plain, ReferenceType) else plain
+        nominal = unqualified(nominal.pointee) if isinstance(nominal, PointerType) else nominal
         if is_enum_type(nominal):
             raise CppDiagnostic('cpp.unsupported.enum-templates', 'enum member signatures need typed template support', name.coord)
         if contains_function(dtype):
@@ -194,12 +199,16 @@ def declare_instances(parser, owner, definition, arguments):
         result = substitute_member(origin.dtype, arguments, definition.dtype, origin.coord)
         params = tuple((token, substitute_member(dtype, arguments, definition.dtype, origin.coord))
                        for token, dtype in record.parameters)
-        for dtype in (result,) + tuple(dtype for _, dtype in params):
+        from pcc.frontends.cpp.references import check_result
+        check_result(result, origin.coord)
+        for index, dtype in enumerate((result,) + tuple(dtype for _, dtype in params)):
             plain = unqualified(dtype)
-            nominal = unqualified(plain.pointee) if isinstance(plain, PointerType) else plain
+            nominal = unqualified(plain.referent) if isinstance(plain, ReferenceType) else plain
+            nominal = unqualified(nominal.pointee) if isinstance(nominal, PointerType) else nominal
             if is_enum_type(nominal):
                 raise CppDiagnostic('cpp.unsupported.enum-templates', 'substituted enum member signatures need typed template support', origin.coord)
-            if is_class_type(dtype) or isinstance(dtype, ReferenceType) or contains_array(dtype) or contains_function(dtype):
+            if (is_class_type(dtype) or isinstance(dtype, ReferenceType) and index
+                    or contains_array(dtype) or contains_function(dtype)):
                 unsupported(origin.coord, 'substituted class-value/callback member signatures require further ABI/lifetime semantics')
             parser._check_extended_value_type(dtype, origin)
         if any(unqualified(dtype) == 'void' for _, dtype in params):
@@ -425,5 +434,7 @@ def pattern_call(parser, group, receiver, arguments, coord, static, address_avai
         parser.scope.check_member_access(selected, coord)
     dtype = selected.dtype if selected is not None else candidates[0].dtype if len(candidates) == 1 else None
     children = ([] if receiver is None else [receiver]) + list(arguments)
+    result = dtype.referent if isinstance(dtype, ReferenceType) else dtype
     return Expression(Pattern('member-call', coord,
-                              (group, static, receiver is not None, address_available), children), dtype)
+                              (group, static, receiver is not None, address_available), children), result,
+                      isinstance(dtype, ReferenceType))

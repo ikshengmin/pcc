@@ -12,30 +12,17 @@ from pcc.frontends.cpp.constants import not_constant
 from pcc.frontends.cpp.declarators import _scope_separator
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.sema import resolve_overload
+from pcc.frontends.cpp.operators import declaration_name
 from pcc.frontends.cpp.types import ALLOCATION_OPERATOR_CODES, ConstType, PointerType, array_type, unqualified
 
 
 OPERATOR_CODES = ALLOCATION_OPERATOR_CODES
 
-def declaration_name(parser):
-    if parser._peek().value != 'operator':
-        return parser._identifier()
-    from pcc.frontends.cpp.parser import CppToken
-    token = parser.cursor.take()
-    operation = parser.cursor.take()
-    if operation.value == '=':
-        return CppToken('OPERATOR_FUNCTION_ID', 'operator=', token.coord)
-    if operation.value not in ('new', 'delete'):
-        parser._unsupported(operation, 'operator-function semantics are not implemented')
-    name = 'operator ' + operation.value
-    if parser._accept('['):
-        parser._expect(']')
-        name += '[]'
-    return CppToken('OPERATOR_FUNCTION_ID', name, token.coord)
-
-
 def validate_declaration(parser, name, result, parameters, nonthrowing,
                          defining, member, storage, template_parameters, variadic):
+    from pcc.frontends.cpp.operators import validate_subscript
+    validate_subscript(name, parameters, member=member is not None,
+                       static=storage is not None, variadic=variadic)
     if name.value == 'operator=':
         if member is None or len(parameters) != 1 or variadic or storage is not None:
             raise CppDiagnostic('cpp.invalid-assignment-operator',

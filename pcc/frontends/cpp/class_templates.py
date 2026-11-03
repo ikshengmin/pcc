@@ -120,12 +120,23 @@ def parse_declaration(parser, parameters, parent):
             method = False
             prior_data = False
             while True:
-                declaration = DeclaratorParser(parser.cursor, parser._identifier,
+                from pcc.frontends.cpp.operators import declaration_name
+                declaration = DeclaratorParser(parser.cursor, lambda: declaration_name(parser),
                                                 parse_functions=False).parse()
                 if declaration.name.global_scope or len(declaration.name.parts) != 1:
                     unsupported(declaration.coord, 'qualified class template member declarators are not implemented')
+                member = declaration.name.identifier
+                if member.kind == 'OPERATOR_FUNCTION_ID' and member.value != 'operator[]':
+                    unsupported(member.coord, 'only class-template operator[] declarations have owned operator semantics')
+                if member.kind == 'OPERATOR_FUNCTION_ID' and parser._peek().value != '(':
+                    raise CppDiagnostic('cpp.invalid-subscript-operator',
+                                        'operator[] must declare a function', member.coord)
                 dtype = base
                 for chunk in reversed(declaration.chunks):
+                    if chunk.kind == 'lvalue-reference':
+                        from pcc.frontends.cpp.references import lvalue_reference
+                        dtype = lvalue_reference(dtype, chunk.coord)
+                        continue
                     if chunk.kind != 'pointer':
                         unsupported(chunk.coord, 'class template array/reference/function members are not implemented')
                     if 'volatile' in chunk.qualifiers:
@@ -135,7 +146,6 @@ def parse_declaration(parser, parameters, parent):
                     dtype = PointerType(dtype)
                     if 'const' in chunk.qualifiers:
                         dtype = qualify_const(dtype)
-                member = declaration.name.identifier
                 if parser._peek().value == '(':
                     if mutable:
                         raise CppDiagnostic('cpp.invalid-mutable', 'mutable applies only to data members', member.coord)
@@ -231,6 +241,9 @@ def substitute_member(dtype, arguments, instance, coord):
         return instance
     if isinstance(dtype, ConstType):
         return qualify_const(substitute_member(dtype.base, arguments, instance, coord))
+    if isinstance(dtype, ReferenceType):
+        from pcc.frontends.cpp.references import lvalue_reference
+        return lvalue_reference(substitute_member(dtype.referent, arguments, instance, coord), coord)
     if isinstance(dtype, PointerType):
         pointee = substitute_member(dtype.pointee, arguments, instance, coord)
         if isinstance(unqualified(pointee), ReferenceType):

@@ -2,12 +2,50 @@
 
 Reference identity survives overload selection and declaration matching. Only
 projection to C uses an address parameter; source names denote the referent.
-Selected constructor parameters may also borrow compatible class lvalues;
-temporary materialization, reference results and implicit class copies remain gaps.
+Selected constructor parameters may also borrow compatible class lvalues.
+Reference results borrow existing scalar/pointer lvalues. Temporary
+materialization, class-reference results and implicit class copies remain gaps.
 """
 from pcc.frontends.c.ast import c_ast
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
-from pcc.frontends.cpp.types import ConstType, ReferenceType, unqualified
+from pcc.frontends.cpp.types import (
+    ConstType, ReferenceType, array_type, function_type, unqualified,
+)
+
+
+def lvalue_reference(referent, coord):
+    """Construct reference identity, retaining unsupported collapsing provenance."""
+    if isinstance(referent, ReferenceType):
+        raise CppDiagnostic('cpp.unsupported.references', 'reference collapsing requires declaration provenance', coord)
+    if unqualified(referent) == 'void':
+        raise CppDiagnostic('cpp.invalid-reference-type', 'a reference cannot refer to void', coord)
+    if array_type(referent) or function_type(referent):
+        raise CppDiagnostic('cpp.unsupported.references', 'array/function reference binding is not implemented', coord)
+    return ReferenceType(referent)
+
+
+def check_result(dtype, coord):
+    """No temporary, class-value, callback or array-result ABI is implied."""
+    from pcc.frontends.cpp.classes import is_class_type
+    from pcc.frontends.cpp.types import contains_array, contains_function
+    if not isinstance(dtype, ReferenceType):
+        return
+    if is_class_type(dtype.referent) or contains_array(dtype.referent) or contains_function(dtype.referent):
+        raise CppDiagnostic('cpp.unsupported.references', 'reference results require scalar or object-pointer referents', coord)
+
+
+def call_result(node, dtype, coord):
+    """A reference call returns an address in C and a referent lvalue in C++."""
+    from pcc.frontends.cpp.constants import not_constant
+    from pcc.frontends.cpp.parser import Expression
+    if isinstance(dtype, ReferenceType):
+        check_result(dtype, coord)
+        null_glvalue = unqualified(dtype.referent) == 'nullptr'
+        return Expression(c_ast.UnaryOp('*', node, coord), dtype.referent, True,
+                          discarded_known=null_glvalue, discarded_node=node if null_glvalue else None,
+                          constant_fact=not_constant(unqualified(dtype.referent), 'reference call', coord))
+    dtype = unqualified(dtype)
+    return Expression(node, dtype, constant_fact=not_constant(dtype, 'call to a non-constexpr function', coord))
 
 
 def directly_compatible(source, destination, lvalue):

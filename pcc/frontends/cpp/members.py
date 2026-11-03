@@ -25,7 +25,7 @@ def mangle_member(owner, name, parameters, const=False):
     # Only nested-name framing is removed; template-argument E remains intact.
     if prefix.startswith("N") and prefix.endswith("E"):
         prefix = prefix[1:-1]
-    encoded_name = "aS" if name == "operator=" else str(len(name)) + name
+    encoded_name = {"operator=": "aS", "operator[]": "ix"}.get(name, str(len(name)) + name)
     encoded = "_ZN" + ("K" if const else "") + prefix + encoded_name + "E"
     return encoded + ("".join(_mangle_type(unqualified(t), substitutions)
                               for t in parameters) or "v")
@@ -141,9 +141,8 @@ def call_member(parser, group, object_expression, arguments, coord, address_avai
     # argument. Capture once before evaluating arguments; do not rely on C's
     # argument evaluation order, or repeat an effectful object expression.
     node = c_ast.StmtExpr(c_ast.Compound([temporary, call], coord), coord)
-    dtype = unqualified(selected.dtype)
-    return type(object_expression)(node, dtype,
-        constant_fact=not_constant(dtype, "call to a non-constexpr member function", coord))
+    from pcc.frontends.cpp.references import call_result
+    return call_result(node, selected.dtype, coord)
 
 
 def is_static_group(group):
@@ -182,6 +181,5 @@ def call_static_member(parser, group, arguments, coord, discarded_base=None):
     node = c_ast.FuncCall(c_ast.ID(selected.c_name, coord), c_ast.ExprList(converted, coord), coord)
     if discarded_base is not None:
         node = c_ast.ExprList([discarded_base, node], coord)
-    dtype = unqualified(selected.dtype)
-    return Expression(node, dtype,
-                      constant_fact=not_constant(dtype, "call to a non-constexpr static member function", coord))
+    from pcc.frontends.cpp.references import call_result
+    return call_result(node, selected.dtype, coord)
