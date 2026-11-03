@@ -1549,14 +1549,14 @@ class CompareMembershipLoweringMixin:
                 return True
             return isinstance(src, (IntLit, FloatLit, BoolLit))
 
-        lhs = self._emit_expr(expr.lhs)
-        rhs = self._emit_expr(expr.rhs)
-        lhs_obj = marshal.marshal_to_object(
-            self.builder, self.module, self.runtime, lhs, expr.lhs.ty
-        )
-        rhs_obj = marshal.marshal_to_object(
-            self.builder, self.module, self.runtime, rhs, expr.rhs.ty
-        )
+        # Identity consumes the object projection, even when a raw-int
+        # scaffold inferred an int-typed operand. Emitting a typed container
+        # load as a scalar first would narrow a bignum and rebox a different
+        # object. Keep the original getitem/attribute owner for cleanup.
+        lhs = self._emit_as_object(expr.lhs)
+        rhs = self._emit_as_object(expr.rhs)
+        lhs_obj = lhs
+        rhs_obj = rhs
         # Compare pointers as integers so the IR is independent of the
         # llvmlite version's pointer-compare support.
         lhs_i = self.builder.ptrtoint(lhs_obj, _I64, name=self._fresh("is.l"))

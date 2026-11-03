@@ -259,7 +259,11 @@ failure cleanup. Its native index/debt/reclamation probe is pending.
 The new integrated execution stops under GC0 at the subsequent bigint
 identity assertion (`keep[0] is first`), after printing the expected counted
 publication/reclamation observations. It reports an unwanted conversion to
-C int64; this failure remains open and is not a passing integer/identity gate.
+C int64. Its codegen cause is now isolated: raw-int scaffold identity emitted
+a scalar getitem result, then boxed it again for pointer comparison. Identity
+now consumes the existing object projection directly. Two focused IR cases
+(`is` and `is not`) pass with no narrowing/reboxing; the original six-mode
+native assertion remains unchanged and its rerun is pending.
 
 The count-free final remark now scans the current stopped mutator snapshots
 before draining gray objects and committing the verdict, inside the existing
