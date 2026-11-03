@@ -53,14 +53,34 @@ def retire_live_import_staging(host, name, unpin=True):
     )
 
 
+def live_import_name_binding(host, name):
+    """Recognize an executing import binding, including a lexical local.
+
+    Local imports already store their module object in the ordinary local
+    owner. They must not acquire a module-global staging slot just to disable
+    static export projection. A local shadow of a module alias likewise owns
+    its current receiver, not the provider recorded by that alias.
+    """
+    if live_import_global_slot(host, name) is not None:
+        return True
+    if (getattr(host, "_runtime_port_module", False)
+            or getattr(host, "_freestanding_module", False)
+            or getattr(host, "current_func_def", None) is None):
+        return False
+    if name not in getattr(host, "_native_module_aliases", {}):
+        return False
+    local = getattr(host, "env", {}).get(name)
+    if local is None:
+        return False
+    module_entry = getattr(host, "_module_globals", {}).get(name)
+    return module_entry is None or local[0] is not module_entry[0]
+
+
 def live_import_expr_binding(host, expr):
     """A real imported receiver cannot use historical provider metadata."""
     while isinstance(expr, Attr):
         expr = expr.obj
-    if not isinstance(expr, Name):
-        return False
-    # A lexical local shadow is also a real receiver, not the provider alias.
-    return live_import_global_slot(host, expr.ident) is not None
+    return isinstance(expr, Name) and live_import_name_binding(host, expr.ident)
 
 
 class CpyImportStateMixin:

@@ -17,7 +17,7 @@ from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.cpy_import_state import (
     live_import_expr_binding,
-    live_import_global_slot,
+    live_import_name_binding,
 )
 from pcc.frontends.python.codegen.native_os import native_os_descriptor_constant
 from pcc.frontends.python.codegen.generator_lowering import emit_generator_may_park_call
@@ -2570,7 +2570,7 @@ class NativeModuleAliasMixin:
         """Return ``(module_name, export_info)`` for ``alias.attr`` when
         ``alias`` names a native sibling submodule or a literal dynamic
         import of one."""
-        if not for_guard and live_import_global_slot(self, alias_name) is not None:
+        if not for_guard and live_import_name_binding(self, alias_name):
             return None
         module_name = self._native_module_aliases.get(alias_name)
         if module_name is None:

@@ -297,6 +297,14 @@
     "tests/multilanguage/test_record_pointer_c_abi.py",
     "tests/multilanguage/test_scalar_c_abi.py",
     "tests/c/test_c_address_only.py",
-    "tests/python/test_cli_multilanguage_extern.py"
+    "tests/python/test_cli_multilanguage_extern.py",
+    "tests/python/test_cli_bootstrap_observability.py",
+    "tests/python/test_live_module_direct_call.py",
+    "tests/python/test_native_local_from_import_values.py",
+    "tests/python/test_native_local_module_function_replacement.py",
+    "tests/python/test_native_module_attr_pointer_storage.py",
+    "tests/python/test_pcc1_python_smoke.py",
+    "tests/python/test_pipeline_profile.py",
+    "tests/python/test_roadmap_deepwire.py"
   ]
 }
