@@ -346,6 +346,20 @@ class ExternCrateItem:
     source_span: tuple[int, int]
 
 
+@dataclass(frozen=True)
+class UseDeclaration:
+    """One private module-scope use path; never a copied target declaration."""
+    token: Token
+    path: tuple[Token, ...]
+    alias: Token | None
+    documentation: tuple[Documentation, ...]
+    source_span: tuple[int, int]
+
+    @property
+    def binding(self):
+        return self.alias if self.alias is not None else self.path[-1]
+
+
 @dataclass
 class ModuleBody:
     functions: list[Function]
@@ -358,6 +372,7 @@ class ModuleBody:
     crate_aliases: list[CrateSelfAlias] = field(default_factory=list)
     crate_policy: CratePolicy = field(default_factory=CratePolicy)
     conditional_items: tuple = ()
+    uses: list[UseDeclaration] = field(default_factory=list)
 
 
 @dataclass
@@ -383,6 +398,7 @@ class Parser:
         self.source = source
         self.crate_policy = CratePolicy(edition)
         self.crate_aliases = []
+        self.uses = []
         self.line_offsets = [0]
         for index, char in enumerate(source):
             if char == "\n":
@@ -692,6 +708,7 @@ class Parser:
         child.module_depth += 1
         child.records, child.enums, child.implementations, child.traits = [], [], [], []
         child.modules, child.attribute_requirements, child.crate_aliases = [], [], []
+        child.uses = []
         child.crate_stability = None
         child.crate_documentation = ()
         child.crate_lint_attributes = ()
@@ -703,7 +720,40 @@ class Parser:
         self.pos = child.pos
         return ModuleBody(functions, child.records, child.enums, child.implementations,
                           child.traits, child.modules, child.crate_documentation,
-                          child.crate_aliases, child.crate_policy, child.conditional_items)
+                          child.crate_aliases, child.crate_policy, child.conditional_items,
+                          uses=child.uses)
+
+    def use_declaration(self, token, public, documentation):
+        """Retain a bounded SimplePath; resolution owns every actual binding."""
+        from .attribute_metadata import offset
+        if public:
+            raise token.error('public use/reexports require visibility-merge resolution, which is not implemented')
+        if self.token.text in {'::', '*', '{'}:
+            raise self.token.error('absolute, glob and grouped use declarations are not implemented')
+        path = []
+        while True:
+            if self.token.text in {'crate', 'self', 'super'}:
+                if path and not (self.token.text == 'super' and all(p.text == 'super' for p in path)):
+                    raise self.token.error('nonleading self/crate/super use segments are not implemented')
+                path.append(self.take())
+            else:
+                path.append(self.name())
+            if len(path) > 128:
+                raise token.error('use path exceeds implementation limit (128 segments)')
+            if not self.accept('::'):
+                break
+            if self.token.text in {'*', '{'}:
+                raise self.token.error('glob and grouped use declarations are not implemented')
+        alias = None
+        if self.accept('as'):
+            if self.token.text == '_':
+                raise self.token.error('anonymous use bindings are not implemented')
+            alias = self.name()
+        if path[-1].kind != 'name':
+            raise path[-1].error('use paths naming a module qualifier alone are not implemented')
+        end = self.expect(';')
+        self.uses.append(UseDeclaration(token, tuple(path), alias, documentation,
+            (offset(self, token), offset(self, end) + 1)))
 
     def extern_crate_item(self, token, start, public, documentation):
         """Parse the real extern-crate grammar, including inactive items."""
@@ -851,6 +901,12 @@ class Parser:
                 continue
             if module_path is not None:
                 raise self.token.error("path attribute is implemented only for outlined modules")
+            if self.accept('use'):
+                use_token = self.tokens[self.pos - 1]
+                if repr_c or enum_repr or no_mangle:
+                    raise use_token.error('representation/no_mangle attributes do not apply to use declarations')
+                self.use_declaration(use_token, public, tuple(docs))
+                continue
             if self.accept("trait"):
                 if repr_c or enum_repr or no_mangle:
                     raise self.token.error("attributes on traits are not implemented")
@@ -1106,6 +1162,8 @@ class Parser:
         while self.token.text != "}":
             if self.token.kind == "eof":
                 raise self.token.error("unterminated block")
+            if self.token.text == 'use':
+                raise self.token.error('block-scoped use declarations require lexical item scopes, which are not implemented')
             if self.accept(";"):
                 continue
             if self.accept("let"):

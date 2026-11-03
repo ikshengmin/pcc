@@ -149,7 +149,7 @@ class _Loader:
             body = ModuleBody(functions, parser.records, parser.enums,
                               parser.implementations, parser.traits, parser.modules,
                               parser.crate_documentation, parser.crate_aliases, parser.crate_policy,
-                              parser.conditional_items)
+                              parser.conditional_items, uses=parser.uses)
             return self.load_body(source, body, identity, directory, declaration,
                                   inline=False)
         except RustError as exc:

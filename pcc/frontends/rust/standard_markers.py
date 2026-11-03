@@ -67,8 +67,8 @@ class StandardMarkers:
         local = (first in checker.generics.definitions or
                  any(first == trait.token.text for trait in checker.traits.declarations))
         if resolution is not None:
-            module = resolution.modules[checker.current_module]
-            local = (('type', first) in module.items or first in resolution.extern_prelude)
+            local = (resolution.has_local_type_binding(first, checker.current_module)
+                     or first in resolution.extern_prelude)
         if local or first in {'crate', 'self', 'super'}:
             raise bound.token.error('local/user trait bounds are not implemented; a local name is not a standard marker')
         parts = bound.path.split('::')

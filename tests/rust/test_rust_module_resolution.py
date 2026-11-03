@@ -120,7 +120,7 @@ def test_outlined_reference_context_never_treats_root_as_complete_certification(
     ('mod a{pub trait T{fn f();}}', 'module-scoped trait'),
     ('mod a{struct R{x:u64} impl R{fn f(self){}}}', 'module-scoped trait'),
     ('mod a{pub extern "C" fn f(){}}', 'foreign/export ABI'),
-    ('mod a{} use a::f;', "expected 'fn'"),
+    ('mod a{} use a::f;', "unknown use target"),
     ('mod a;', 'module source missing'),
 ])
 def test_unimplemented_module_context_forms_fail_explicitly(text, message, monkeypatch):

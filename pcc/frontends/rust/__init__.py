@@ -95,7 +95,7 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
     functions = parser.parse()
     resolution = None
     records, enums = parser.records, parser.enums
-    if parser.modules or parser.crate_aliases:
+    if parser.modules or parser.crate_aliases or parser.uses:
         from .module_resolution import ModuleResolution, inline_crate
         resolution = ModuleResolution(inline_crate(parser, functions))
         functions, records, enums = resolution.functions, resolution.records, resolution.enums

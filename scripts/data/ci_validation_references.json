@@ -1930,6 +1930,55 @@
         ]
       }
     },
+    "tests/rust/test_rust_use_resolution.py": {
+      "test_actual_same_input_check_precedes_owned_import_lowering": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": [
+          "Calls tests.rust.certification_support.certify_source on each unchanged import original before owned compilation/object emission; reference input never uses a caller flag as certification"
+        ]
+      },
+      "test_original_project_keeps_both_use_items_before_the_next_parser_gap": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": [
+          "Calls actual check_rust_source with edition2015 on the complete unchanged original project before retaining both use ASTs and asserting the next unsupported parser boundary; never a project acceptance waiver"
+        ]
+      },
+      "test_unchanged_use_originals_match_actual_native_rustc": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.rust.test_rust_method_reference.test_unchanged_inherent_programs_match_actual_rustc_native_execution for the unchanged import fixtures; referenced input retains actual whole-source checking"
+        ]
+      },
+      "test_actual_rustc_rejects_the_exact_invalid_use_originals": {
+        "activity": "mandatory-same-input-certification",
+        "reason": [
+          "Calls actual compile_rust_checked on each exact invalid import original; only real rustc rejection is accepted before owned lowering"
+        ]
+      },
+      "test_actual_same_input_edition_check_is_not_replaced_by_a_resolution_guess": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": [
+          "Calls actual check_rust_source separately in each explicit2015/2018/2021/2024 source/options context before owned import lowering; namespace unit expectations are not a substitute for certification"
+        ]
+      },
+      "test_actual_valid_primitive_type_shadows_retain_the_owned_scope_gap": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": [
+          "Calls real certify_source on each well-typed primitive-shadowing record/module/crate/enum/dual-namespace/chain and language-prelude target original; owned lowering must retain the explicit scoped-primitive capability gap"
+        ]
+      },
+      "test_actual_value_alias_keeps_the_canonical_marker_type_namespace": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": [
+          "Calls actual certify_source before owned object emission for value-only Copy/Sized/core aliases alongside canonical type-namespace marker bounds; no imported type is relabeled as a canonical marker"
+        ]
+      }
+    },
     "tests/rust/test_rust_traits.py": {
       "test_actual_rustc_rejects_exact_invalid_trait_originals_before_owned_ir": {
         "activity": "mandatory-same-input-certification",
