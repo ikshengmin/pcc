@@ -132,7 +132,9 @@ INVALID_CALLS = [
     (IDENTITY+';func Empty(){}', '_=Identity(Empty())', 'void function call', 'no value'),
     # The exact a[0,] original is valid in official Go and now retained in
     # test_index_trailing_comma.py as a positive source/native/reference case.
-    ('', 'a:=[1]int{1};_=a[0,0]', 'multiple indices', 'not a generic|more than one index'),
+    # Go 1.24.13 rejects a[0,0] during parsing, before index type checking.
+    ('', 'a:=[1]int{1};_=a[0,0]', 'multiple indices',
+     r'not a generic|more than one index|^syntax error: unexpected literal 0, expected \]$'),
 ]
 
 
