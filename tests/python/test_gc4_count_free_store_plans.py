@@ -25,7 +25,7 @@ class Store:
     OLD = 0x6000
     SENTINEL = 0x7000
 
-    def __init__(self, backend=4, count_free=True, logging=False, forwarded=False):
+    def __init__(self, backend=4, count_free=True, logging=False, forwarded=False, marking=True):
         self.backend = backend
         self.count_free = count_free
         self.words = {self.SLOT: self.OLD}
@@ -37,6 +37,7 @@ class Store:
         self.globals = {
             'pcc_gc_backend4_no_refcounts': int(count_free),
             'pcc_diagnostics_runtime_log_fast_state': int(logging),
+            'pcc_gc_mark_active': int(marking),
         }
         self.ns = dict(
             i64=int, null=lambda: 0, ptr_is_null=lambda p: p == 0,
@@ -169,8 +170,8 @@ def test_count_free_publication_never_touches_rc_records_or_the_old_reference(ki
     # required even though the count-free transaction itself must not read or
     # populate the two unused RC records.
     assert all(model.words[model.PLAN + offset] == 0 for offset in range(8, 112, 4))
-    assert model.events == ['note', ('barrier', 0 if kind == 'root' else model.OWNER, value),
-                            ('publish', value)]
+    barrier = [('barrier', 0 if kind == 'root' else model.OWNER, value)] if value == model.VALUE else []
+    assert model.events == ['note', *barrier, ('publish', value)]
     before = list(model.events)
     assert model.commit(kind, value) == 0
     model.finish(kind)
@@ -224,6 +225,25 @@ def test_field_logging_stays_at_initialization_and_does_not_repeat_at_finish():
     model.finish('field')
     assert model.events == [('log', model.OWNER), 'note', ('barrier', model.OWNER, model.VALUE),
                             ('publish', model.VALUE)]
+
+
+@pytest.mark.parametrize('forwarded', [False, True])
+def test_idle_root_store_skips_barrier_but_keeps_forwarding_resolution(forwarded):
+    model = Store(marking=False, forwarded=forwarded)
+    model.init()
+    assert model.commit('root', model.VALUE) == 1
+    model.finish('root')
+    resolution = [('candidate', model.VALUE), ('resolve', model.VALUE)] if forwarded else []
+    assert model.events == ['note', *resolution, ('publish', model.COPY if forwarded else model.VALUE)]
+
+
+@pytest.mark.parametrize('kind', ['field', 'sentinel'])
+def test_idle_heap_field_keeps_its_generation_barrier(kind):
+    model = Store(marking=False)
+    model.init(owner=True)
+    assert model.commit(kind, model.VALUE) == 1
+    model.finish(kind)
+    assert model.events == ['note', ('barrier', model.OWNER, model.VALUE), ('publish', model.VALUE)]
 
 
 @pytest.mark.parametrize('backend', range(5))

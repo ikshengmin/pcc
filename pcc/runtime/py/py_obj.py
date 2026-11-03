@@ -850,7 +850,14 @@ def _pcc_gc_store_plan_commit_locked(plan, owner, slot, value) -> int:
         # Keep relocation and the insertion barrier, but do not initialize RC
         # records or inspect the old reference solely to release nothing.
         store_ptr(plan, _STORE_PLAN_VALUE, value)
-        pcc_gc_note_slot_write_barrier(owner, slot, value)
+        # This transaction already owns the graph lock. Immediate values have
+        # no edges; an idle root has no marking work. Keep the owner-aware
+        # barrier for heap fields because generation recording is independent
+        # of the major-mark flag. No nested lock or provenance probe is needed
+        # for the root case while this same outer lock keeps the phase stable.
+        if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+            if ptr_is_null(owner) == 0 or load_i32(global_addr("pcc_gc_mark_active"), 0) != 0:
+                pcc_gc_note_slot_write_barrier(owner, slot, value)
         store_ptr(slot, 0, value)
         store_i32(plan, _STORE_PLAN_STATE, 3)
         return 1
@@ -914,7 +921,14 @@ def _pcc_gc_store_plan_commit_sentinel_aware_locked(
             if _gc_forwarding_population() > 0 and _gc_relocation_candidate(value) != 0:
                 value = pcc_gc_note_relocation_read(value)
         store_ptr(plan, _STORE_PLAN_VALUE, value)
-        pcc_gc_note_slot_write_barrier(owner, slot, value)
+        # This transaction already owns the graph lock. Immediate values have
+        # no edges; an idle root has no marking work. Keep the owner-aware
+        # barrier for heap fields because generation recording is independent
+        # of the major-mark flag. No nested lock or provenance probe is needed
+        # for the root case while this same outer lock keeps the phase stable.
+        if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+            if ptr_is_null(owner) == 0 or load_i32(global_addr("pcc_gc_mark_active"), 0) != 0:
+                pcc_gc_note_slot_write_barrier(owner, slot, value)
         store_ptr(slot, 0, value)
         store_i32(plan, _STORE_PLAN_STATE, 3)
         return 1

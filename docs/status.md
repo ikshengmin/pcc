@@ -93,6 +93,14 @@ dropped keyword); the stage 1 commit message lists them. Rerun with
 
 ## Native throughput versus CPython 3.15.0: active, acceptance unmet
 
+Inside the already graph-locked GC4 count-free StorePlan commit, null/tagged
+values and inactive-mark roots now skip the no-op slot-barrier call. The outer
+lock still orders the phase check and publication; active roots and non-null
+heap owners retain their original marking/generation barriers. Thirty-five
+executed body checks and eight owned-native cases pass, including white-root
+shading and inactive old-to-young recording in counted/count-free GC4. Pin,
+lease and forwarding resolution are unchanged; throughput screening is pending.
+
 Generator finalizer accounting now increments only after the completed,
 unstarted and already-finalized guards, before weak callbacks or close/finally
 can execute. No-op generator dispatch no longer forces a post-finalizer heap
