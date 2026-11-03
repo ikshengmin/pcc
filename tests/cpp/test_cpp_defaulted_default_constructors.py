@@ -26,8 +26,17 @@ from tests.cpp.test_cpp_placement_new import DECLARATION
 
 
 ORIGINAL_NOTHROW_DECLARATION = 'struct nothrow_t { explicit nothrow_t() = default; };'
+UNUSED_EXTERN_DMI = ('extern int external_value; '
+                     'struct S { S()=default; int n=external_value; }; '
+                     'int cpp_test_entry(){return 42;}')
 
 CASES = (
+    ('unused-defaulted-c1-does-not-reference-undefined-extern', UNUSED_EXTERN_DMI),
+    ('used-defaulted-c1-retains-bound-extern-in-same-tu',
+     'extern int external_value;struct S{S()=default;int n=external_value;};'
+     'int external_value=21;int cpp_test_entry(){S first;S second;return first.n+second.n;}'),
+    ('unused-defaulted-c1-with-call-dmi-does-not-invent-a-call',
+     'int unknown();struct S{S()=default;int n=unknown();};int cpp_test_entry(){return 42;}'),
     ('empty-explicit-defaulted-tag', 'struct Tag{explicit Tag()=default;};'
      'int cpp_test_entry(){Tag tag;Tag other{};return 42;}'),
     ('nonexplicit-defaulted-remains-cpp17-aggregate', 'struct S{S()=default;int n;};'
@@ -72,6 +81,9 @@ CASES = (
 )
 
 PLACEMENT_CASES = (
+    ('unevaluated-placement-does-not-define-defaulted-c1',
+     'extern int external_value;struct S{S()=default;int n=external_value;};'
+     'int cpp_test_entry(){long raw[4];return sizeof(new(raw)S)==sizeof(S*)?42:1;}'),
     ('placement-default-init-then-explicit-write', 'struct S{explicit S()=default;int n;};'
      'int cpp_test_entry(){long raw[4];S*p=new(raw)S;p->n=42;return p->n;}'),
     ('placement-value-init-zeroes-interior-and-tail-padding',
@@ -89,6 +101,12 @@ PLACEMENT_CASES = (
 )
 
 PROGRAMS = tuple((name, ((name + '.cpp', source),)) for name, source in CASES) + (
+    ('used-defaulted-c1-retains-bound-extern-across-tus', (
+        ('provider.cpp', 'extern int external_value;struct S{S()=default;int n=external_value;};'
+         'int external_value=42;int read(){S s;return s.n;}'),
+        ('entry.cpp', 'extern int external_value;struct S{S()=default;int n=external_value;};'
+         'int read();int cpp_test_entry(){S s;return read()+s.n-42;}'),
+    )),
     ('cross-tu-defaulted-c1-external-odr', (
         ('provider.cpp', 'struct S{explicit S()=default;int n=42;};int read(){S s;return s.n;}'),
         ('entry.cpp', 'struct S{explicit S()=default;int n=42;};int read();'
@@ -99,6 +117,14 @@ PLACEMENT_PROGRAMS = tuple((name, ((name + '.cpp', DECLARATION + source),))
                            for name, source in PLACEMENT_CASES)
 
 INVALID = (
+    ('unused-defaulted-c1-still-binds-dmi-names',
+     'struct S{S()=default;int n=missing;};', 'cpp.undeclared'),
+    ('unevaluated-placement-still-checks-constructor-access',
+     DECLARATION + 'class S{S()=default;public:int n;};void f(void*p){sizeof(new(p)S);}',
+     'cpp.member-access'),
+    ('unevaluated-placement-still-checks-constructor-deletion',
+     DECLARATION + 'struct S{S()=default;const int n;};void f(void*p){sizeof(new(p)S);}',
+     'cpp.deleted-default-constructor'),
     ('defaulted-nonspecial-constructor', 'struct S{S(int)=default;};', 'cpp.invalid-defaulted-constructor'),
     ('default-arguments-are-not-defaultable', 'struct S{S(int n=0)=default;};', 'cpp.invalid-defaulted-constructor'),
     ('private-default-init', 'class S{S()=default;public:int n;};void f(){S s;}', 'cpp.member-access'),
@@ -161,6 +187,79 @@ def test_exact_nothrow_declaration_preserves_defaulted_identity():
     assert selected.constructor_defaulted_on_first_declaration
     assert selected.constructor_trivial and not selected.constructor_deleted
     assert selected.constructor_explicit and not owner.definition.aggregate
+
+
+def test_unused_defaulted_c1_checks_body_but_emits_no_definition_or_instance():
+    parser = CppParser()
+    ast = parser.parse(UNUSED_EXTERN_DMI)
+    pending = parser.scope.names['S'].dtype.definition.defaulted_constructors[0]
+    assert pending.function is not None
+    assert pending.symbol.closed_construction_body
+    assert pending.function.body.block_items[0].rvalue.name == parser.scope.names['external_value'].c_name
+    assert not any(isinstance(item, c_ast.FuncDef) and item.decl.name == pending.symbol.c_name
+                   for item in ast.ext)
+    assert not parser.instance_registry.entries
+
+
+def test_evaluated_calls_share_one_external_odr_definition_and_original_prototype():
+    from pcc.support.instantiation import InstanceState
+
+    parser = CppParser()
+    ast = parser.parse('int external_value=21;struct S{S()=default;int n=external_value;};'
+                       'int cpp_test_entry(){S first;S second;return first.n+second.n;}')
+    pending = parser.scope.names['S'].dtype.definition.defaulted_constructors[0]
+    definitions = [item for item in ast.ext
+                   if isinstance(item, c_ast.FuncDef) and item.decl.name == pending.symbol.c_name]
+    assert definitions == [pending.function]
+    assert definitions[0].decl is not pending.declaration
+    assert definitions[0].decl.definition_linkage == 'external_odr'
+    assert pending.declaration.definition_linkage == 'external'
+    entries = list(parser.instance_registry.entries.values())
+    assert len(entries) == 1
+    assert entries[0].context is pending and entries[0].state is InstanceState.COMPLETE
+
+
+def test_unevaluated_placement_checks_selected_c1_without_emitting_body():
+    parser = CppParser()
+    source = next(source for name, source in PLACEMENT_CASES
+                  if name == 'unevaluated-placement-does-not-define-defaulted-c1')
+    ast = parser.parse(DECLARATION + source)
+    selected = parser.scope.names['S'].dtype.definition.constructors.overloads[0]
+    assert not any(isinstance(item, c_ast.FuncDef) and item.decl.name == selected.c_name
+                   for item in ast.ext)
+    assert not parser.instance_registry.entries
+
+
+def test_defaulted_request_can_join_an_active_shared_worklist_once():
+    from pcc.frontends.cpp.default_constructors import emit_definition, request_definition
+
+    parser = CppParser()
+    parser.parse('struct S{S()=default;int n=42;};')
+    selected = parser.scope.names['S'].dtype.definition.constructors.overloads[0]
+    driver = object()
+    parser.instance_registry.request(driver, driver)
+
+    def emit(entry):
+        if entry.key is driver:
+            request_definition(parser, selected)
+            request_definition(parser, selected)
+            return None
+        return emit_definition(parser, entry.context)
+
+    emitted = parser.instance_registry.drain(emit)
+    assert emitted == [None, selected.defaulted_definition.function]
+    assert len(parser.instance_registry.entries) == 2
+
+
+def test_lazy_definition_still_requires_shared_external_odr_support(monkeypatch):
+    from pcc.backend import definition_linkage
+
+    monkeypatch.setattr(definition_linkage, 'supports_external_odr_function_definitions', lambda target: False)
+    source = 'struct S{S()=default;int n=42;};'
+    CppParser().parse(source)  # No definition is emitted merely for the class.
+    with pytest.raises(CppDiagnostic) as caught:
+        CppParser().parse(source + 'void f(){S s;}')
+    assert caught.value.code == 'cpp.unsupported.inline-member-functions'
 
 
 def test_defaulted_triviality_deletion_and_aggregate_metadata_are_independent():

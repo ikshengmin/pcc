@@ -9,22 +9,27 @@ copy/move synthesis retain their separate special-member boundaries.
 from pcc.frontends.c.ast import c_ast
 from pcc.frontends.cpp.classes import is_class_type
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
+from pcc.frontends.cpp.inline_constructors import DeferredConstructor
 from pcc.frontends.cpp.types import ConstType, PointerType, array_type
+
+
+class DefaultedConstructorDefinition(DeferredConstructor):
+    """A checked body plan, published only when selected in evaluated code."""
 
 
 def defer_definition(definition, symbol, parameter_scope, declaration, this):
     if symbol.internal_linkage:
         raise CppDiagnostic('cpp.unsupported.class-linkage',
                             'defaulted constructors require distinct internal-linkage definition ownership', symbol.coord)
-    from pcc.frontends.cpp.inline_constructors import DeferredConstructor
-
     symbol.defined = True
     symbol.constructor_deleted = False
     symbol.constructor_trivial = None  # Determined only after class completion.
     symbol.definition_linkage = 'external_odr'
-    definition.defaulted_constructors.append(DeferredConstructor(
+    pending = DefaultedConstructorDefinition(
         symbol, parameter_scope, declaration, this, (), symbol.coord,
-    ))
+    )
+    symbol.defaulted_definition = pending
+    definition.defaulted_constructors.append(pending)
 
 
 def bind_defaulted_definitions(parser, definition):
@@ -38,9 +43,6 @@ def bind_defaulted_definitions(parser, definition):
         closed_construction_body,
         lower_member_initializers,
     )
-    from pcc.frontends.cpp.inline_constructors import publish_definitions
-
-    emitted = []
     for pending in definition.defaulted_constructors:
         symbol = pending.symbol
         symbol.constructor_deleted = definition.default_constructor_deleted
@@ -62,8 +64,24 @@ def bind_defaulted_definitions(parser, definition):
             continue
         symbol.nonthrowing = True
         pending.function = c_ast.FuncDef(pending.declaration, None, body, pending.coord)
-        emitted.append(pending)
-    publish_definitions(parser, definition, emitted)
+    # DMI binding, conversion and deletion checks belong to class completion.
+    # [class.ctor]/7 does not, however, implicitly define an unused defaulted
+    # C1. An eager projected body could introduce an otherwise absent extern
+    # data relocation merely because its class was declared.
+
+
+def request_definition(parser, symbol):
+    context = getattr(symbol, 'defaulted_definition', None)
+    if context is None or parser.unevaluated_depth:
+        return
+    # The common call owner has already checked selection/access/deletion and
+    # all supported effects. Use the session's sole worklist, not a C1 queue.
+    parser.instance_registry.request((symbol, ()), symbol, context)
+
+
+def emit_definition(parser, context):
+    from pcc.frontends.cpp.inline_constructors import project_definition
+    return project_definition(parser, context)
 
 
 def require_usable(symbol, coord, *, object_type=None, initialization_kind='default'):

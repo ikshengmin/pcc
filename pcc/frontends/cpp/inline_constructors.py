@@ -95,8 +95,8 @@ def bind_definitions(parser, definition):
     publish_definitions(parser, definition, definition.inline_constructors)
 
 
-def publish_definitions(parser, definition, pending_definitions):
-    """Project only supported ODR definitions after all class prototypes."""
+def project_definition(parser, pending):
+    """Attach the shared ODR contract to one requested, already-bound body."""
     try:
         from pcc.backend.definition_linkage import supports_external_odr_function_definitions
     except ModuleNotFoundError as error:
@@ -107,14 +107,19 @@ def publish_definitions(parser, definition, pending_definitions):
         supported = supports_external_odr_function_definitions(parser.types.target_triple)
     # Never emit this definition as an ordinary strong global when the shared
     # AST/codegen contract has not landed. There is no semantic-only bypass flag.
+    if not supported or not hasattr(pending.declaration, 'definition_linkage'):
+        raise CppDiagnostic('cpp.unsupported.inline-member-functions',
+                            'in-class definition requires shared external-ODR definition linkage',
+                            pending.coord)
+    # All prototypes must precede every delayed body. The C future-type
+    # table alone cannot carry declaration metadata such as unsigned return
+    # semantics. Only the body declaration owns the ODR definition marker.
+    pending.function.decl = deepcopy(pending.declaration)
+    pending.function.decl.definition_linkage = pending.definition_linkage
+    return pending.function
+
+
+def publish_definitions(parser, definition, pending_definitions):
+    """Project ordinary inline definitions after all class prototypes."""
     for pending in pending_definitions:
-        if not supported or not hasattr(pending.declaration, 'definition_linkage'):
-            raise CppDiagnostic('cpp.unsupported.inline-member-functions',
-                                'in-class definition requires shared external-ODR definition linkage',
-                                pending.coord)
-        # All prototypes must precede every delayed body. The C future-type
-        # table alone cannot carry declaration metadata such as unsigned return
-        # semantics. Only the body declaration owns the ODR definition marker.
-        pending.function.decl = deepcopy(pending.declaration)
-        pending.function.decl.definition_linkage = pending.definition_linkage
-        definition.method_declarations.append(pending.function)
+        definition.method_declarations.append(project_definition(parser, pending))

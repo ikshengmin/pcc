@@ -499,6 +499,8 @@ def constructor_call(parser, dtype, arguments, address, coord, require_closed=Fa
                             "member-owning construction requires closed argument and default effects", coord)
     if construction_calls is not None:
         construction_calls[call] = selected
+    from pcc.frontends.cpp.default_constructors import request_definition
+    request_definition(parser, selected)
     return invocation
 
 

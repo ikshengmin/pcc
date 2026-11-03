@@ -186,9 +186,11 @@ class CppParser:
                                     "undefined internal objects need ODR-use tracking", symbol.coord)
         from pcc.frontends.cpp.class_templates import ClassTemplatePattern, emit_instance
         from pcc.frontends.cpp.class_template_members import MethodInstance, instantiate_body
+        from pcc.frontends.cpp.default_constructors import DefaultedConstructorDefinition, emit_definition
         instances = self.instance_registry.drain(
             lambda entry: emit_instance(self, entry) if isinstance(entry.context, ClassTemplatePattern)
             else instantiate_body(self, entry.context) if isinstance(entry.context, MethodInstance)
+            else emit_definition(self, entry.context) if isinstance(entry.context, DefaultedConstructorDefinition)
             else self._instantiate_body(entry.value, entry.context),
         )
         instances = [item for item in instances if item is not None]
