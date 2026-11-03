@@ -130,8 +130,29 @@ regressions. Counted handle operations now also bypass the tracing admission
 helper, retaining their direct backend path. The final source passes those
 181 checks, five new counted-path cases, all six native concurrency modes,
 and both GC4 value/lifecycle integrations (including big integers, weakrefs,
-finalizers and resurrection against CPython output). Final throughput
-screening is pending; full suites and bootstrap remain unrun.
+finalizers and resurrection against CPython output). The final `8ba28ef29`
+registry screen below uses the same frozen compiler, application objects and
+other runtime members, with the registry at `74acdd6de` as control. Each cell
+is QPS median A -> B, then median paired change and positive/negative pairs:
+
+| Mode | 1 worker | 4 workers |
+| --- | --- | --- |
+| GC0 counted | 37,345 -> 37,871; -0.32%, 1+/2- | 81,484 -> 84,120; +2.45%, 2+/1- |
+| GC1 counted | 8,936 -> 9,070; +1.81%, 2+/1- | 3,742 -> 3,864; +3.24%, 2+/1- |
+| GC2 counted | 8,856 -> 9,085; +3.48%, 3+/0- | 3,769 -> 3,856; +2.31%, 3+/0- |
+| GC3 counted | 5,552 -> 5,610; +2.31%, 3+/0- | 1,629 -> 1,591; -3.06%, 1+/2- |
+| GC4 counted | 4,448 -> 4,462; -0.06%, 1+/2- | 1,530 -> 1,577; +3.09%, 3+/0- |
+| GC4 count-free | 4,261 -> 3,562; -18.38%, 1+/2- | 1,415 -> 1,611; +11.25%, 3+/0- |
+
+These local Mac packets are three 10k-request pairs at C100/200 warmup,
+with unchanged 30-second child and 1-GiB guards and no CPython throughput run.
+They are direction screening, not acceptance; count-free GC4's one-worker
+regression remains unresolved. Identical control runs also alternate between
+about 2.7M/3.5M instructions per request and 173/215 MiB peak RSS. A fresh
+three-second sample during 40k-request runs attributes 36.04%/41.50% inclusive
+CPU samples to collection. These samples do not prove the cause of the full
+wall-time regression. Collection-count diagnosis is active; new p99/peak-heap
+qualification, full suites and bootstrap remain unrun.
 
 Concurrent tracing slices now charge every inspected object-list node against
 their scan bound, including black, dying and invalid nodes. The returned work
