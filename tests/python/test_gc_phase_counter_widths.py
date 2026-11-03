@@ -142,6 +142,12 @@ class _Memory:
             self.cells[name] = bytearray(width)
             self.store(name, 0, initial, width)
         self.cells["pcc_gc_metric_shards"] = bytearray(64 * 128)
+        # Pointer heads used by the extracted dispatcher are separate from the
+        # exact-width integer cells. Unknown pointer names must fail closed.
+        self.pointers = {
+            "pcc_gc_backend4_parked_head": None,
+            "pcc_gc_backend4_retained_page_head": None,
+        }
 
     def load(self, name, offset, width):
         cell = self.cells[name]
@@ -171,6 +177,8 @@ def _host_functions(*, other_mutators=()):
     namespace = {
         "i64": int,
         "global_addr": lambda name: name,
+        "global_load_ptr": memory.pointers.__getitem__,
+        "ptr_is_null": lambda value: int(value is None),
         "load_i32": lambda name, offset: memory.load(name, offset, 4),
         "load_i64": lambda name, offset: memory.load(name, offset, 8),
         "store_i32": lambda name, offset, value: memory.store(name, offset, value, 4),
@@ -262,6 +270,42 @@ def test_host_source_stack_diff_callback_has_declared_production_provider():
         and ast.literal_eval(decorator.args[0]) == symbol
         for decorator in provider.decorator_list
     )
+
+
+def test_host_source_dispatcher_pointer_providers_have_registered_null_defaults():
+    memory, functions = _host_functions()
+    declarations = {
+        ast.literal_eval(statement.value.args[0])
+        for statement in _tree(STATE).body
+        if isinstance(statement, ast.Expr)
+        and isinstance(statement.value, ast.Call)
+        and isinstance(statement.value.func, ast.Name)
+        and statement.value.func.id == "define_global_ptr_null"
+    }
+    assert set(memory.pointers) <= declarations
+    assert all(functions["ptr_is_null"](functions["global_load_ptr"](name)) == 1
+               for name in memory.pointers)
+    assert functions["ptr_is_null"](object()) == 0
+    with pytest.raises(KeyError):
+        functions["global_load_ptr"]("unregistered_test_pointer")
+
+
+@pytest.mark.parametrize("heads", [
+    (), ("pcc_gc_backend4_parked_head",), ("pcc_gc_backend4_retained_page_head",),
+    ("pcc_gc_backend4_parked_head", "pcc_gc_backend4_retained_page_head"),
+])
+@pytest.mark.parametrize("explicit_collect", [0, 1])
+def test_host_source_gc4_idle_step_observes_parked_and_retained_pointer_heads(heads, explicit_collect):
+    memory, functions = _host_functions()
+    memory.set("pcc_gc_backend_selected", 4)
+    memory.set("pcc_gc_explicit_collect_active", explicit_collect)
+    assert memory.get("pcc_gc_forwarding_population") == 0
+    for name in heads:
+        memory.pointers[name] = object()
+    calls = []
+    functions["pcc_gc_backend4_remap_and_retire_stopped_world"] = lambda: calls.append(1) or 1
+    assert functions["pcc_gc_step"](1) == int(bool(heads))
+    assert calls == ([1] if heads else [])
 
 
 @pytest.mark.parametrize("table_present", [False, True])
