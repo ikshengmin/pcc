@@ -458,7 +458,9 @@ INDEXED_SPLIT_NODES = {
         "tests/python/test_worker_resource_plan.py::"
         "test_failure_retires_running_peers_and_does_not_launch_tail",
         "tests/python/test_worker_resource_plan.py::"
-        "test_progressive_retry_drains_peers_then_restores_concurrency",
+        "test_progressive_retry_drains_peers_then_restores_concurrency[fresh-parent]",
+        "tests/python/test_worker_resource_plan.py::"
+        "test_progressive_retry_drains_peers_then_restores_concurrency[retired-parent-rss]",
         "tests/python/test_worker_resource_plan.py::"
         "test_ready_unknown_head_drains_peer_before_exclusive_calibration",
     ),
@@ -471,6 +473,25 @@ INDEXED_SPLIT_NODES = {
         "test_handoff_provider_closed_world_aarch64",
     ),
 }
+
+
+@pytest.mark.parametrize("change", ("none", "missing-fresh", "missing-retired", "reordered"))
+def test_indexed_lifetime_receipt_requires_both_progressive_variants(tmp_path, change):
+    expected = list(INDEXED_SPLIT_NODES["indexed-worker-lifetime"])
+    actual = list(expected)
+    if change == "missing-fresh":
+        del actual[1]
+    elif change == "missing-retired":
+        del actual[2]
+    elif change == "reordered":
+        actual[1], actual[2] = actual[2], actual[1]
+    path = tmp_path / "live.jsonl"
+    _write_reports(path, _reports(actual))
+    if change == "none":
+        assert gate.verify_execution_report(path, expected) == expected
+    else:
+        with pytest.raises(AssertionError, match="missing/reordered gates"):
+            gate.verify_execution_report(path, expected)
 
 
 def test_indexed_split_profile_runs_exact_real_nodes_without_runtime_build(tmp_path, monkeypatch):

@@ -100,7 +100,9 @@ GATES = (
         "tests/python/test_worker_resource_plan.py::"
         "test_failure_retires_running_peers_and_does_not_launch_tail",
         "tests/python/test_worker_resource_plan.py::"
-        "test_progressive_retry_drains_peers_then_restores_concurrency",
+        "test_progressive_retry_drains_peers_then_restores_concurrency[fresh-parent]",
+        "tests/python/test_worker_resource_plan.py::"
+        "test_progressive_retry_drains_peers_then_restores_concurrency[retired-parent-rss]",
         "tests/python/test_worker_resource_plan.py::"
         "test_ready_unknown_head_drains_peer_before_exclusive_calibration",
     )),
