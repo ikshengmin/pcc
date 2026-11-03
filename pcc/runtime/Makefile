@@ -13,6 +13,14 @@
 
 .DEFAULT_GOAL := all
 
+# Pressure instrumentation is owned-build source transformation with receipts.
+# The historical Make route must not silently produce an ordinary archive.
+ifneq ($(strip $(PCC_RUNTIME_GC_STRESS_EVERY)),)
+ifneq ($(strip $(PCC_RUNTIME_GC_STRESS_EVERY)),0)
+$(error GC pressure archives require the owned runtime builder)
+endif
+endif
+
 CC       ?= cc
 AR       ?= ar
 RANLIB   ?= ranlib

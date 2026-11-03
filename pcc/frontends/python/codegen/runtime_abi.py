@@ -1701,6 +1701,7 @@ RUNTIME_GLOBALS: dict[str, ir.Type] = {
 # extra live LLVM type objects while importing this module.
 FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
     {
+        "pcc_gc_pressure_active",
         'pcc_gc_backend4_remembered_page_incomplete',
         'pcc_builtin_function_cache_registered',
         'pcc_gc_backend0_frame_roots_enabled',
@@ -1832,6 +1833,12 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
 
 FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
     {
+        "pcc_gc_pressure_publications",
+        "pcc_gc_pressure_requests",
+        "pcc_gc_pressure_serviced",
+        "pcc_gc_pressure_completed",
+        "pcc_gc_pressure_deferred",
+        "pcc_gc_pressure_incomplete",
         'pcc_object_type_epoch',
         'pcc_gc_tracked_after_collect',
         'pcc_gc_backend0_subset_count',
@@ -1972,6 +1979,8 @@ FREESTANDING_GC_PTR_GLOBALS: frozenset[str] = frozenset(
 
 FREESTANDING_GC_THREAD_LOCAL_GLOBALS: frozenset[str] = frozenset(
     {
+        "pcc_gc_pressure_owner",
+        "pcc_gc_pressure_image_depth",
         "pcc_gc_cms_worker_current",
         'pcc_gc_frame_node_pool_counts',
         'pcc_gc_frame_node_pool_heads',
@@ -2214,6 +2223,16 @@ def _cross_object_signatures_part_1():
     "pcc_thread_visit_conservative_words": (("c_ptr", "c_ptr"), "c_int64"),
     "pcc_gc_gray_conservative_thread_roots": ((), "c_void"),
     "pcc_gc_pin_conservative_thread_roots": ((), "c_void"),
+    "pcc_gc_pressure_note_publication": ((), "c_void"),
+    "pcc_gc_pressure_image_enter": ((), "c_void"),
+    "pcc_gc_pressure_image_leave": ((), "c_void"),
+    "pcc_gc_pressure_poll": ((), "c_int64"),
+    "pcc_gc_pressure_collection_completed": ((), "c_void"),
+    "pcc_gc_pressure_tracing_completed": (("c_int64", "c_int64"), "c_void"),
+    "pcc_gc_pressure_counter": (("c_int64",), "c_int64"),
+    "pcc_thread_gc_pressure_safe": ((), "c_int64"),
+    "pcc_gc_collect": (("c_int32",), "c_int64"),
+    "pcc_gc_sweep_owed": ((), "c_int64"),
     "pcc_thread_blocking_enter": (("c_ptr",), "c_int64"),
     "pcc_thread_blocking_leave": (("c_int64",), "c_void"),
     "pcc_dealloc_trash_pending": ((), "c_int64"),

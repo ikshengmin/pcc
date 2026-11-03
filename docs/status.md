@@ -93,6 +93,19 @@ dropped keyword); the stage 1 commit message lists them. Rerun with
 
 ## Native throughput versus CPython 3.15.0: active, acceptance unmet
 
+The owned runtime builder now accepts `PCC_RUNTIME_GC_STRESS_EVERY=N` for a
+separate debug archive. Every N successful managed-object publications requests
+collection; existing application safepoints service requests only when GC,
+lock and reentrancy guards permit. Static images and private arithmetic scratch
+are excluded. Deferred and completed work have separate counters, and normal
+gate work still runs after pressure collection. Default source/member selection
+is unchanged; transformed sources and the interval are bound into provenance.
+Forty-six integrated checks pass in `test_gc_pressure_mode.py`. Full pressure
+archive construction, six-mode native execution and native-suite pressure
+qualification remain pending. The focused native command is
+`PCC_RUNTIME_GC_STRESS_EVERY=3 PCC_GC_PRESSURE_NATIVE=1 PCC_RUNTIME_ARCHIVE=<pressure-archive> uv run pytest -x -vv -m integration tests/python/test_gc_pressure_native.py`.
+This debug-mode checkpoint does not claim default machine-code or QPS equality.
+
 GC4 empty-page quarantine now advances at the completed sweep boundary and
 idle steps even after the last forwarding edge is gone. Previously the
 forwarding-population admission could strand parked/retained physical spans.

@@ -44,6 +44,10 @@ def runtime_build_config() -> dict:
     if any(character not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for character in refcount):
         raise ValueError("invalid refcount configuration for runtime cache")
     config = {"threads": threads, "refcount": refcount}
+    from pcc.frontends.python.runtime_gc_pressure import interval_from_environment
+    pressure_every = interval_from_environment()
+    if pressure_every:
+        config["gc_stress_every"] = pressure_every
     if boolean_register_lowering_enabled():
         config["boolean_register_lowering"] = True
     return config
@@ -57,6 +61,7 @@ _NO_IMPLICIT_POLL_MODULES = (
     _THREAD_KERNEL_MODULE, "py_runtime_log", "py_tempfile", "py_os_mkdir",
     "py_cleanup_runtime", "py_exc_traceback", "py_re_bridge_entry",
     "py_capi_method_entry",
+    "freestanding_gc_pressure",
 )
 
 
@@ -72,7 +77,8 @@ def runtime_ir_passes(runtime_dir: str) -> str:
     raise ValueError("runtime Makefile does not define PCC_RUNTIME_IR_PASSES")
 
 
-def runtime_modules(runtime_dir: str, target: str, threads: bool = True) -> list[str]:
+def runtime_modules(runtime_dir: str, target: str, threads: bool = True,
+                    gc_stress_every: int = 0) -> list[str]:
     names = []
     with open(os.path.join(runtime_dir, "Makefile"), encoding="utf-8") as stream:
         for line in stream:
@@ -99,10 +105,12 @@ def runtime_modules(runtime_dir: str, target: str, threads: bool = True) -> list
         names.extend(("freestanding_linux_libc", "freestanding_linux_time", "freestanding_time_format", "freestanding_posix_timezone", "freestanding_linux_directory", "freestanding_linux_signal", "freestanding_linux_static_loader", "freestanding_signal_set"))
         if target.startswith(("arm64-", "aarch64-")):
             names.append("freestanding_linux_aarch64")
+    if gc_stress_every:
+        names.append("freestanding_gc_pressure")
     return names
 
 
-def _compile_runtime_module(name, source, ir_path, target):
+def _compile_runtime_module(name, source, ir_path, target, *, runtime_dir=None):
     from pcc.driver.paths import module_name_from_src
     from pcc.frontends.python.codegen.debug_info_lowering import debug_info_requested
     from pcc.frontends.python.pipeline import compile_python
@@ -134,7 +142,10 @@ def _compile_runtime_module(name, source, ir_path, target):
         # copied outside the compiler checkout or named simply runtime/py.
         # Keep this scoped to the call so a previous runtime selection cannot
         # leak into a later build (and restore it on a failed compile too).
-        os.environ["PCC_RUNTIME_DIR"] = os.path.dirname(os.path.dirname(os.path.abspath(source)))
+        os.environ["PCC_RUNTIME_DIR"] = (
+            os.path.abspath(runtime_dir) if runtime_dir is not None else
+            os.path.dirname(os.path.dirname(os.path.abspath(source)))
+        )
         mode = runtime_python_ir_pass_mode()
         os.environ["PCC_PYTHON_IR_PASSES"] = mode
         # Only this exact owned tier can supply a prefix-elision proof below.
@@ -205,7 +216,32 @@ def _build_runtime_module(runtime_dir, name, target, output_dir, passes, config)
     source = os.path.join(runtime_dir, "py", name + ".py")
     ir_path = os.path.join(output_dir, name + ".ll")
     object_path = os.path.join(output_dir, name + ".o")
-    frontend_prefix = _compile_runtime_module(name, source, ir_path, target)
+    source_transform = None
+    pressure_every = config.get("gc_stress_every", 0)
+    if pressure_every:
+        from pcc.frontends.python.runtime_gc_pressure import instrument_source, KIND
+        import hashlib
+        with open(source, encoding="utf-8") as stream:
+            original = stream.read()
+        effective = instrument_source(original, name, pressure_every)
+        if effective != original:
+            generated_dir = os.path.join(output_dir, "gc-pressure-source")
+            os.makedirs(generated_dir, exist_ok=True)
+            generated = os.path.join(generated_dir, name + ".py")
+            with open(generated, "w", encoding="utf-8", newline="\n") as stream:
+                stream.write(effective)
+            source_transform = {
+                "kind": KIND,
+                "interval": pressure_every,
+                "effective_source_sha256": hashlib.sha256(effective.encode("utf-8")).hexdigest(),
+            }
+            frontend_prefix = _compile_runtime_module(
+                name, generated, ir_path, target, runtime_dir=runtime_dir
+            )
+        else:
+            frontend_prefix = _compile_runtime_module(name, source, ir_path, target)
+    else:
+        frontend_prefix = _compile_runtime_module(name, source, ir_path, target)
     with open(ir_path, encoding="utf-8") as stream:
         ir_text = stream.read()
     # As in the Makefile rule, the object and its receipt describe the
@@ -223,7 +259,7 @@ def _build_runtime_module(runtime_dir, name, target, output_dir, passes, config)
     write_pcc_python_receipt(object_path=Path(object_path), ir_path=Path(ir_path),
                              source_path=Path(source), runtime_root=Path(runtime_dir),
                              target_triple=target, object_emitter="pcc", object_bytes=data,
-                             runtime_build_config=config)
+                             runtime_build_config=config, source_transform=source_transform)
     return data
 
 
@@ -313,7 +349,7 @@ def build_runtime_archive(runtime_dir: str, archive: str, target: str) -> None:
         members = []
         objects = []
         capi = set()
-        names = runtime_modules(runtime_dir, target, threads)
+        names = runtime_modules(runtime_dir, target, threads, config.get("gc_stress_every", 0))
         jobs = runtime_build_jobs(len(names))
         if jobs > 1:
             _build_runtime_modules_in_workers(runtime_dir, names, target, output_dir, passes, jobs)
@@ -360,7 +396,9 @@ def _manifest_configuration_mismatch_reason(
     members = receipt.get("members")
     if not isinstance(members, list) or not members:
         return "member inventory is missing or invalid"
-    expected = {name + ".o" for name in runtime_modules(runtime_dir, target, config["threads"])}
+    expected = {name + ".o" for name in runtime_modules(
+        runtime_dir, target, config["threads"], config.get("gc_stress_every", 0)
+    )}
     if len(members) != len(expected):
         return "member inventory count differs"
     actual = set()
@@ -400,8 +438,11 @@ def ensure_target_runtime(runtime_dir: str, target: str, *, packaged_archive: st
     config = runtime_build_config()
     threads = config["threads"]
     refcount = config["refcount"]
+    configuration_name = ("threads-" if threads else "single-") + refcount
+    if config.get("gc_stress_every", 0):
+        configuration_name += "-gc-stress-" + str(config["gc_stress_every"])
     output = os.path.join(runtime_dir, "build_owned", target,
-                          ("threads-" if threads else "single-") + refcount,
+                          configuration_name,
                           "libpy_runtime_pcc_py.a")
     explicit = (str(os.environ.get("PCC_RUNTIME_ARCHIVE", "") or "").strip()
                 if explicit_archive is None else str(explicit_archive).strip())

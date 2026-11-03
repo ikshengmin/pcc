@@ -68,6 +68,7 @@ _RECEIPT_OPTIONAL_FIELDS = frozenset(
         # Owned non-Darwin builders bind semantic build options per member;
         # the wheel's manifest digest covers these automatically.
         "runtime_build_config",
+        "source_transform",
     }
 )
 _RECEIPT_FIELDS = _RECEIPT_REQUIRED_FIELDS | _RECEIPT_OPTIONAL_FIELDS
@@ -282,6 +283,7 @@ def write_pcc_python_receipt(
     output_path: Path | None = None,
     member: str | None = None,
     runtime_build_config: dict | None = None,
+    source_transform: dict | None = None,
 ) -> dict[str, object]:
     """Write the receipt for one object emitted from a pcc-Python module."""
 
@@ -319,6 +321,10 @@ def write_pcc_python_receipt(
     if runtime_build_config is not None:
         _validate_runtime_build_config(runtime_build_config)
         receipt["runtime_build_config"] = dict(runtime_build_config)
+    if source_transform is not None:
+        # The source hash remains the authoritative checked-in input; this
+        # binds the deterministic debug-build variant actually compiled.
+        receipt["source_transform"] = dict(source_transform)
     _write_json_atomic(output_path or receipt_path_for_object(object_path), receipt)
     return receipt
 
@@ -531,11 +537,15 @@ def _load_json_object(path: Path) -> dict[str, object]:
 
 def _validate_runtime_build_config(config: object) -> None:
     required = {"threads", "refcount"}
-    allowed = required | {"boolean_register_lowering"}
+    allowed = required | {"boolean_register_lowering", "gc_stress_every"}
     if not isinstance(config, dict) or not required.issubset(config) or not set(config).issubset(allowed):
         raise ProvenanceError("invalid runtime build configuration fields")
     if "boolean_register_lowering" in config and config["boolean_register_lowering"] is not True:
         raise ProvenanceError("runtime boolean lowering override must be true")
+    if "gc_stress_every" in config:
+        interval = config["gc_stress_every"]
+        if type(interval) is not int or interval < 1 or interval > 2147483647:
+            raise ProvenanceError("runtime GC pressure interval must be a positive bounded integer")
     if type(config["threads"]) is not bool:
         raise ProvenanceError("runtime build threads setting must be boolean")
     refcount = config["refcount"]
@@ -594,6 +604,24 @@ def _validate_member_record(
         )
     if record.get("source_sha256") != _sha256_bytes(source.read_bytes()):
         raise ProvenanceError(f"{member}: source does not match its receipt")
+    config = record.get("runtime_build_config", {})
+    interval = config.get("gc_stress_every", 0)
+    transformation = record.get("source_transform")
+    if interval:
+        from pcc.frontends.python.runtime_gc_pressure import instrument_source, KIND
+        original = source.read_text(encoding="utf-8")
+        effective = instrument_source(original, source.stem, interval)
+        expected_transform = None
+        if effective != original:
+            expected_transform = {
+                "kind": KIND, "interval": interval,
+                "effective_source_sha256": _sha256_bytes(effective.encode("utf-8")),
+            }
+        if (transformation != expected_transform
+                or (expected_transform is None and "source_transform" in record)):
+            raise ProvenanceError(f"{member}: GC pressure source transformation differs")
+    elif "source_transform" in record:
+        raise ProvenanceError(f"{member}: unexpected runtime source transformation")
     for field in ("object_sha256", "ir_sha256", "source_sha256"):
         value = record.get(field)
         if not _is_sha256(value):
