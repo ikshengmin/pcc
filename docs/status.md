@@ -112,8 +112,10 @@ repaired: a setter rechecks count-free mode after taking the graph lock, so
 configuration completing after its optimistic check cannot change the now
 fixed tracing backend. Sixteen production-body race/reset cases pass, plus
 33 conservative-root/configuration cases. The latter now executes the real
-read-barrier refresh dependency. Native verification of this small race fix
-is pending; it is not a bootstrap or whole-language qualification.
+read-barrier refresh dependency. Three owned-native ABI-caller cases also
+execute the real graph-lock race for late GC1/GC2/GC4 publication and verify
+rejection plus collector-pause restoration. This is correctness evidence,
+not a throughput gain, bootstrap or whole-language qualification.
 
 The concurrent marker now leaves object-list traversal as soon as counted
 gray work is empty, including an empty root seed. Previously a null cursor
