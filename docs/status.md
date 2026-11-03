@@ -93,6 +93,16 @@ dropped keyword); the stage 1 commit message lists them. Rerun with
 
 ## Native throughput versus CPython 3.15.0: active, acceptance unmet
 
+Generator finalizer accounting now increments only after the completed,
+unstarted and already-finalized guards, before weak callbacks or close/finally
+can execute. No-op generator dispatch no longer forces a post-finalizer heap
+recheck; weakref-callback and changed-stop-epoch rechecks remain independent.
+Forty-three production-body checks and all six owned-native modes pass,
+including pending exceptions and resurrection. A three-second steady capture
+of the preceding runtime placed post-finalizer rechecks at 14-17% inclusive
+CPU samples; this is a sampled owner share, not a measured speedup. This
+counter fix is now separate from the earlier unmerged sweep-edge experiment.
+
 GC4 count-free root/container StorePlans now skip RC prepare/finish records
 and old-reference provenance checks. The 128-byte opaque ABI, initial clearing
 for conservative scans, graph locks, relocation resolution, insertion barriers,

@@ -24,6 +24,7 @@ from pcc.runtime.py.py_abi_constants import (
 from pcc.extern import extern, c_abi_export, c_int32, c_ptr, c_int64, c_void
 from pcc.unsafe import (
     atomic_rmw_i32,
+    atomic_rmw_i64,
     define_global_i32,
     define_thread_local_ptr_null,
     memset,
@@ -526,6 +527,9 @@ def py_gen_finalize(gen) -> None:
     store_i32(gen, 12, flags | 4)
     py_incref(gen)
     pcc_gc_pin(gen)
+    # Weak callbacks and close/finally can change reachability. A completed,
+    # unstarted or already-finalized generator never reaches this boundary.
+    atomic_rmw_i64("add", global_addr("pcc_gc_user_finalizer_runs"), 0, 1, "relaxed")
     py_weakref_invalidate(gen)
     saved = py_current_exception()
     if ptr_is_null(saved) == 0:

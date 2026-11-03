@@ -621,9 +621,7 @@ def py_user_del_dispatch(o) -> None:
         return
     tag: int = load_i32(o, 8)
     if tag == PY_TYPE_GEN:
-        # Closing a generator runs its finally blocks: user code a tracing
-        # sweep must recheck reachability after.
-        atomic_rmw_i64("add", global_addr("pcc_gc_user_finalizer_runs"), 0, 1, "relaxed")
+        # The generator finalizer counts only work that passes its guards.
         py_gen_finalize(o)
         return
     if tag != PY_TYPE_INSTANCE and tag < PY_TYPE_USER_CLASS_START:
