@@ -250,6 +250,16 @@
       "id": "expr.pseudo",
       "title": "expr.pseudo",
       "url": "https://timsong-cpp.github.io/cppwp/n4659/expr.pseudo"
+    },
+    {
+      "id": "class.dtor",
+      "title": "class.dtor",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/class.dtor"
+    },
+    {
+      "id": "dcl.fct.def.default",
+      "title": "dcl.fct.def.default",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/dcl.fct.def.default"
     }
   ],
   "features": [
@@ -829,6 +839,72 @@
         "tests/cpp/test_cpp_template_local_pointers.py",
         "tests/cpp/test_cpp_template_local_pointer_execution.py",
         "tests/cpp/test_cpp_projects.py::test_cpp_tinyxml2_upstream_tests_explicit_host_pcc_project"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "cpp.destructors.first-defaulted",
+      "title": "First-declaration defaulted destructors, awaiting execution",
+      "chapter_ids": ["class.dtor", "dcl.fct.def.default", "class.base.init", "class", "expr.pseudo"],
+      "scope": "Authored, execution-unrun obligations for non-template first-declaration defaulted D1s, independent deletion/triviality/user-provided identity, recursive implicit-member deletion and access checks, and lazy emitted bodies through the existing exact member-cleanup proof and external-ODR worklist. Class completion classifies deletion before deferred default arguments and DMIs, including the unchanged deleted-D1 unevaluated default-argument counterexample. Unused declarations and valid unevaluated calls request no member body. Ordinary, placement, reverse-order, return, loop, nested-member, body-local and cross-TU original programs have authored owned-native/reference rows; no observed pass is claimed. The exact formerly rejected defaulted declaration is preserved unchanged as a positive original. Implicit nontrivial D1 synthesis, template/later defaulting, explicit exception specifications, class-array lifetimes, unknown destructor effects, unavailable evaluated-use bodies, bases/virtual dispatch, internal-linkage ownership and unwinding remain explicit boundaries. Native pcc1 frontend and unchanged TinyXML2 project acceptance remain unqualified. No local tests, imports, compilers or collection were run; CI must establish these outcomes.",
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:4e9094b5c465fd5a238ae60a9b710bd8ef2ff2476c945cd98c28e42b292ebaf3",
+        "sources": [
+          {"path": "pcc/frontends/cpp/allocation.py", "sha256": "2406106bd50fc7362417827a045edc510657b583b5738d426ff87b71769672b2"},
+          {"path": "pcc/frontends/cpp/classes.py", "sha256": "e684ae46a826026a4168783ffa83cb215bad0802a8ddd2a46f32559de34fd5b7"},
+          {"path": "pcc/frontends/cpp/default_destructors.py", "sha256": "82337ee218be25acd98c5de4611164c279e04696016b62f93f0a0c7478329b1a"},
+          {"path": "pcc/frontends/cpp/destructors.py", "sha256": "e951ace85830b32bcda4273c4f55fbecfa2beacebf5acd639d1d45bb3f3e82d8"},
+          {"path": "pcc/frontends/cpp/lifetimes.py", "sha256": "d93be00d3f30829feaca4851087db8997bc070bca95060726c775020e945e1de"},
+          {"path": "pcc/frontends/cpp/member_initialization.py", "sha256": "d7b2652a7638ffff2f2617cf9364a599fae71ddb164761a18493f02093ec966d"},
+          {"path": "pcc/frontends/cpp/parser.py", "sha256": "89ba5125977ea9ab3184639906f41773e3b6bc7766f710ff260d40d116cbc25d"}
+        ]
+      },
+      "tests": [
+        "tests/cpp/test_cpp_defaulted_destructors.py::test_defaulted_d1_original_artifacts_are_stable",
+        "tests/cpp/test_cpp_defaulted_destructors.py::test_defaulted_d1_invalid_or_unowned_stops_before_emission",
+        "tests/cpp/test_cpp_defaulted_destructors.py::test_original_defaulted_declaration_has_no_body_or_instance",
+        "tests/cpp/test_cpp_defaulted_destructors.py::test_unused_or_unevaluated_defaulted_d1_does_not_request_member_body",
+        "tests/cpp/test_cpp_defaulted_destructors.py::test_deletion_and_triviality_are_independent_through_implicit_members",
+        "tests/cpp/test_cpp_defaulted_destructors.py::test_defaulted_member_body_is_requested_once_with_external_odr",
+        "tests/cpp/test_cpp_defaulted_destructors.py::test_trivial_defaulted_member_needs_access_but_no_cleanup_body",
+        "tests/cpp/test_cpp_defaulted_destructors.py::test_defaulted_d1_request_can_join_active_worklist_once",
+        "tests/cpp/test_cpp_defaulted_destructors.py::test_lazy_defaulted_d1_still_requires_external_odr_contract",
+        "tests/cpp/test_cpp_defaulted_destructors_execution.py::test_defaulted_d1_originals_match_cpp17",
+        "tests/cpp/test_cpp_defaulted_destructors_execution.py::test_defaulted_d1_placement_matches_real_new_reference",
+        "tests/cpp/test_cpp_defaulted_destructors_execution.py::test_invalid_defaulted_d1_originals_fail_reference",
+        "tests/cpp/test_cpp_defaulted_destructors_execution.py::test_deferred_defaulted_d1_originals_are_reference_valid"
+      ],
+      "acceptance": [
+        {
+          "id": "cpp.destructors.first-defaulted.pcc0-linux-x86_64-self",
+          "kind": "full-feature",
+          "scope": "Complete bounded first-declaration defaulted-D1 corpus, including all parametrized unit, owned-native, reference and rejection obligations",
+          "status": "unrun",
+          "source_revision": "sha256:4e9094b5c465fd5a238ae60a9b710bd8ef2ff2476c945cd98c28e42b292ebaf3",
+          "mode": "pcc0",
+          "platform": "linux-x86_64",
+          "backend": "self",
+          "gc": "not_applicable",
+          "required_tests": [
+            "tests/cpp/test_cpp_defaulted_destructors.py::test_defaulted_d1_original_artifacts_are_stable",
+            "tests/cpp/test_cpp_defaulted_destructors.py::test_defaulted_d1_invalid_or_unowned_stops_before_emission",
+            "tests/cpp/test_cpp_defaulted_destructors.py::test_original_defaulted_declaration_has_no_body_or_instance",
+            "tests/cpp/test_cpp_defaulted_destructors.py::test_unused_or_unevaluated_defaulted_d1_does_not_request_member_body",
+            "tests/cpp/test_cpp_defaulted_destructors.py::test_deletion_and_triviality_are_independent_through_implicit_members",
+            "tests/cpp/test_cpp_defaulted_destructors.py::test_defaulted_member_body_is_requested_once_with_external_odr",
+            "tests/cpp/test_cpp_defaulted_destructors.py::test_trivial_defaulted_member_needs_access_but_no_cleanup_body",
+            "tests/cpp/test_cpp_defaulted_destructors.py::test_defaulted_d1_request_can_join_active_worklist_once",
+            "tests/cpp/test_cpp_defaulted_destructors.py::test_lazy_defaulted_d1_still_requires_external_odr_contract",
+            "tests/cpp/test_cpp_defaulted_destructors_execution.py::test_defaulted_d1_originals_match_cpp17",
+            "tests/cpp/test_cpp_defaulted_destructors_execution.py::test_defaulted_d1_placement_matches_real_new_reference",
+            "tests/cpp/test_cpp_defaulted_destructors_execution.py::test_invalid_defaulted_d1_originals_fail_reference",
+            "tests/cpp/test_cpp_defaulted_destructors_execution.py::test_deferred_defaulted_d1_originals_are_reference_valid"
+          ],
+          "evidence": [],
+          "reason": "Source-only implementation and authored obligations; user delegated execution to CI. No unit, native program, external reference, collection or validator execution was performed. The revision identifies the immutable corrected source/test patch, not an executed compiler. Native pcc1 and unchanged TinyXML2 project acceptance remain unqualified."
+        }
       ],
       "diagnostics": [],
       "evidence": []
@@ -2582,7 +2658,6 @@
         "tests/cpp/test_cpp_destructors.py::test_unimplemented_destructor_boundaries_are_not_silent[struct S{~S();};int f(){try{S s;}catch(...){return 1;}return 0;}]",
         "tests/cpp/test_cpp_destructors.py::test_unimplemented_destructor_boundaries_are_not_silent[struct S{~S();};struct A{S s;};int f(){A a;return 0;}]",
         "tests/cpp/test_cpp_destructors.py::test_unimplemented_destructor_boundaries_are_not_silent[struct S{~S();};struct A{S s;};int f(){A a{};return 0;}]",
-        "tests/cpp/test_cpp_destructors.py::test_unimplemented_destructor_boundaries_are_not_silent[struct S{~S()=default;};]",
         "tests/cpp/test_cpp_destructors.py::test_unimplemented_destructor_boundaries_are_not_silent[struct S{~S()noexcept;};]",
         "tests/cpp/test_cpp_destructors.py::test_unimplemented_destructor_boundaries_are_not_silent[struct S{~S(){}};]"
       ],

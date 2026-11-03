@@ -130,7 +130,6 @@ def test_destructor_invalid_rules_fail_before_owned_emission(owned_only, source,
 UNSUPPORTED_DESTRUCTORS = (
     'struct S{virtual ~S();};',
     'struct S{~S()noexcept;};',
-    'struct S{~S()=default;};',
     'struct S{~S();};S::~S(){throw 1;}',
     'struct S{~S();};int f(){try{S s;}catch(...){return 1;}return 0;}',
     'struct S{~S();};struct A{S s;};int f(){A a;return 0;}',

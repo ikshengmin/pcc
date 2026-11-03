@@ -308,6 +308,32 @@
         ]
       }
     },
+    "tests/cpp/test_cpp_defaulted_destructors_execution.py": {
+      "test_defaulted_d1_originals_match_cpp17": {
+        "activity": "external-reference",
+        "reason": [
+          "Same-original owned/native C++17 differential via tests.cpp.sizeof_execution.execute_row_pair"
+        ]
+      },
+      "test_defaulted_d1_placement_matches_real_new_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Same-original owned/native C++17 differential with real external <new> force-included via compile_reference_with_new"
+        ]
+      },
+      "test_deferred_defaulted_d1_originals_are_reference_valid": {
+        "activity": "external-reference",
+        "reason": [
+          "C++17 expected acceptance of unchanged deferred originals via syntax_reference"
+        ]
+      },
+      "test_invalid_defaulted_d1_originals_fail_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "C++17 expected rejection of unchanged invalid originals via syntax_reference"
+        ]
+      }
+    },
     "tests/cpp/test_cpp_destructor_execution.py": {
       "test_complete_object_destructor_links_across_translation_units": {
         "activity": "external-reference",

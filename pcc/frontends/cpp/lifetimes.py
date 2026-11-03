@@ -50,8 +50,8 @@ class AutomaticLifetimes:
             if not call_free_body(initializer):
                 raise CppDiagnostic("cpp.unsupported.destructor-subobjects",
                                     "aggregate initializer calls require partial member exception cleanup", symbol.coord)
-        parser.scope.check_member_access(destructor, symbol.coord)
-        from pcc.frontends.cpp.class_template_members import request_body
+        from pcc.frontends.cpp.destructors import check_usable, request_body
+        check_usable(parser.scope, destructor, symbol.coord)
         request_body(parser, destructor, symbol.coord)
         # All supported declaration output completes initialization before the
         # next statement. No jump may enter after it, and no throwing path is

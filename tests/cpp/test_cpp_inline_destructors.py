@@ -97,7 +97,6 @@ INVALID = (
 
 DEFERRED = (
     "struct S{virtual ~S(){}};",
-    "struct S{~S()=default;};",
     "struct S{~S()=delete;};",
     "struct S{~S()noexcept{}};",
     "struct S{~S(){throw 1;}};",

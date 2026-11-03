@@ -177,7 +177,7 @@ class ClassDefinition:
 
     def finish(self):
         from pcc.frontends.cpp.member_initialization import require_declared_constructor
-        if self.destructor is not None:
+        if self.destructor is not None and not getattr(self.destructor, 'destructor_defaulted', False):
             from pcc.frontends.cpp.destructors import member_destructors
             member_destructors(self)
         if self.constructors.overloads:
@@ -453,6 +453,10 @@ def parse_class(parser):
     if any(array_type(member.dtype) for member in definition.members):
         from pcc.frontends.cpp.size_queries import sizeof_type
         sizeof_type(dtype, parser.types, dtype.coord)
+    # Complete deletion/triviality before binding any deferred expression:
+    # even an unevaluated D1 call in a class default argument checks deletion.
+    from pcc.frontends.cpp.default_destructors import bind_definition
+    bind_definition(definition)
     from pcc.frontends.cpp.default_arguments import bind_class
     bind_class(parser, definition)
     from pcc.frontends.cpp.default_member_initializers import bind
@@ -574,7 +578,8 @@ def _check_implicit_default_destructor_access(definition):
             # [class.ctor]/5.8,7: a declared enclosing D1 does not supply
             # this constructor check. No destructor body proof is needed.
             if child.destructor is not None:
-                current.scope.check_member_access(child.destructor, member.coord)
+                from pcc.frontends.cpp.destructors import check_usable
+                check_usable(current.scope, child.destructor, member.coord)
             pending.append(child)
 
 
@@ -621,7 +626,8 @@ def check_aggregate_destructor_access(definition, scope):
                 continue
             child = unqualified(member.dtype).definition
             if child.destructor is not None:
-                scope.check_member_access(child.destructor, member.coord)
+                from pcc.frontends.cpp.destructors import check_usable
+                check_usable(scope, child.destructor, member.coord)
             pending.append(child)
 
 

@@ -67,6 +67,8 @@ def declare_destructor(definition, name, *, encode_name=True):
     symbol.class_owner, symbol.access = owner, definition.access
     symbol.owner = definition.scope
     symbol.destructor = True
+    symbol.destructor_user_provided = True
+    symbol.destructor_trivial = False
     symbol.method_static = symbol.method_const = False
     symbol.internal_linkage = owner.internal_linkage
     if encode_name:
@@ -111,8 +113,19 @@ def parse_destructor(parser, definition=None):
         name = parser._identifier()
         owner = definition.dtype
     parameter_scope = parse_parameters(parser, definition, name)
+    defaulted = parser._peek().value == "="
+    if defaulted:
+        if outside:
+            raise CppDiagnostic("cpp.unsupported.inline-member-functions",
+                                "later destructor defaulting requires user-provided special-member semantics", name.coord)
+        parser._expect("=")
+        if parser._peek().value != "default":
+            raise CppDiagnostic("cpp.unsupported.inline-member-functions",
+                                "deleted destructor declarations require special-member rules", parser._peek().coord)
+        parser._expect("default")
+        parser._expect(";")
     inline_definition = not outside and parser._peek().value == "{"
-    if not outside and not inline_definition and parser._peek().value != ";":
+    if not outside and not defaulted and not inline_definition and parser._peek().value != ";":
         raise CppDiagnostic("cpp.unsupported.inline-member-functions", "defaulted/deleted destructors require special-member rules", name.coord)
     if outside and parser._peek().value != "{":
         raise CppDiagnostic("cpp.member-definition-required", "out-of-class destructor requires a body", name.coord)
@@ -128,6 +141,10 @@ def parse_destructor(parser, definition=None):
         symbol = declare_destructor(definition, name)
     parser.function_projection_names.add(symbol.c_name)
     function_declaration, this = declaration(parser, symbol)
+    if defaulted:
+        from pcc.frontends.cpp.default_destructors import defer_definition
+        defer_definition(definition, symbol, parameter_scope, function_declaration, this)
+        return function_declaration
     if inline_definition:
         if owner.internal_linkage:
             raise CppDiagnostic("cpp.unsupported.class-linkage",
@@ -151,20 +168,37 @@ def member_destructors(definition, scope=None, *, parser=None):
     from pcc.frontends.cpp.member_initialization import requires_destruction
     selected = []
     for member in definition.members:
-        if not requires_destruction(member.dtype):
-            continue
         owner = unqualified(member.dtype)
         destructor = owner.definition.destructor if is_class_type(owner) else None
+        # Even a trivial declared D1 is potentially invoked, so its access
+        # and deletion constraints cannot disappear with an omitted call.
+        if destructor is not None and scope is not None:
+            check_usable(scope, destructor, member.coord)
+        elif is_class_type(owner) and scope is not None:
+            from pcc.frontends.cpp.default_destructors import require_implicit_usable
+            require_implicit_usable(owner.definition, member.coord)
+        if not requires_destruction(member.dtype):
+            continue
         if destructor is None:
             raise CppDiagnostic("cpp.unsupported.destructor-subobjects",
                                 "implicit member destruction requires special-member synthesis", member.coord)
-        if scope is not None:
-            scope.check_member_access(destructor, member.coord)
         if parser is not None:
-            from pcc.frontends.cpp.class_template_members import request_body
             request_body(parser, destructor, member.coord)
         selected.append((member, destructor))
     return selected
+
+
+def check_usable(scope, symbol, coord):
+    scope.check_member_access(symbol, coord)
+    from pcc.frontends.cpp.default_destructors import require_usable
+    require_usable(symbol, coord)
+
+
+def request_body(parser, symbol, coord):
+    from pcc.frontends.cpp.default_destructors import request_definition
+    request_definition(parser, symbol, coord)
+    from pcc.frontends.cpp.class_template_members import request_body as request_template_body
+    request_template_body(parser, symbol, coord)
 
 
 def _closed_destruction_body(body, cleanup_destructors):
