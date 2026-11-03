@@ -22,6 +22,7 @@ from pcc.package.schema import PCC_CAPI_HEADERS, pcc_native_extension_suffix
 from .build_plan import (
     BuildCommand,
     _compile_commands_path,
+    _language_for_file,
     load_compile_commands,
     build_plan_for_artifact,
     load_meson_introspection_commands,
@@ -851,11 +852,17 @@ def _cython_min_version(requires: tuple[str, ...]) -> str | None:
 
 
 def _owned_compile_argv(command: BuildCommand, root: Path, output: Path, abi_mode: str) -> list[str]:
-    """Translate a C compile action, never execute its recorded tool or shell."""
+    """Translate a C/C++ action, never execute its recorded tool or shell."""
+    from pcc.frontends.cpp.driver import is_cpp_path
+
     cwd = Path(command.directory).resolve() if command.directory else root
     source = Path(command.file)
     if not source.is_absolute():
         source = cwd / source
+    source = source.resolve()
+    if (command.language != _language_for_file(str(source))
+            or (command.language == "cxx") != is_cpp_path(str(source))):
+        raise ValueError("source language does not match owned C/C++ suffix dispatch: " + str(source))
     tokens = shlex.split(command.command)
     index = 1
     if tokens and Path(tokens[0]).name in {"ccache", "sccache"}:
@@ -887,6 +894,12 @@ def _owned_compile_argv(command: BuildCommand, root: Path, output: Path, abi_mod
             args.append(token)
             index += 1
             continue
+        elif token == "-std=c++17" and command.language == "cxx":
+            # Preserve the requested standard at the existing owned C++
+            # preprocessor boundary. Other dialects remain explicit failures.
+            args.append("--cpp-arg=" + token)
+            index += 1
+            continue
         elif not token.startswith("-"):
             candidate = Path(token)
             if not candidate.is_absolute():
@@ -896,7 +909,7 @@ def _owned_compile_argv(command: BuildCommand, root: Path, output: Path, abi_mod
             index += 1
             continue
         else:
-            raise ValueError("unsupported owned C compile option: " + token)
+            raise ValueError("unsupported owned C/C++ compile option: " + token)
         if token == "-I":
             directory = Path(value)
             if not directory.is_absolute():
@@ -910,13 +923,38 @@ def _owned_compile_argv(command: BuildCommand, root: Path, output: Path, abi_mod
     return args
 
 
+def _admit_owned_object_replacement(output: Path) -> None:
+    """Never replace a text/header input merely because its name ends in .o.
+
+    Existing artifacts may be replaced transactionally, but only after the
+    owned readers establish that the previous bytes are a relocatable object.
+    Failed compiler actions never reach publication or alter an old output.
+    """
+    if not output.exists():
+        return
+    try:
+        with output.open("rb") as stream:
+            prefix = stream.read(4)
+        if prefix[:2] == b"\x64\x86":
+            from pcc.backend.coff_x86_64 import parse_object
+
+            parse_object(output.read_bytes())
+        else:
+            from pcc.diagnostics.artifact_inspect import inspect_artifact
+
+            if inspect_artifact(output)["kind"] != "object":
+                raise ValueError("existing artifact is not a relocatable object")
+    except Exception as exc:
+        raise ValueError("refuse to replace a non-object source/header input: " + str(output)) from exc
+
+
 def _execute_owned_build_actions(
     name, path, *, include_dirs, execute, regenerate_cython, run_f2py,
     link_output, abi_mode, from_compile_commands, from_meson_introspection,
     meson_target, configure_meson, enforce_generated_c, jobs, timeout, owned_compiler,
     library_dirs, libraries,
 ):
-    """Compile supported source actions through the actual owned C driver.
+    """Compile supported source actions through the actual owned C/C++ driver.
 
     The source/graph readers are shared with the explicit host executor. Only
     the execution boundary differs; arbitrary recorded commands are never run.
@@ -931,6 +969,7 @@ def _execute_owned_build_actions(
     diagnostics = []
     replay = None
     replay_outputs = []
+    graph_sources = set()
     generated = generated_c_provenance(root)
 
     def diagnose(code, message):
@@ -939,7 +978,7 @@ def _execute_owned_build_actions(
     compiler_command = []
     if sys.implementation.name == "pcc":
         if owned_compiler:
-            compiler_command = [str(owned_compiler)]
+            compiler_command = [str(Path(owned_compiler).expanduser().resolve())]
         elif execute:
             diagnose("PCC-PKG-OWNED-COMPILER-REQUIRED", "native build replay requires its parent PCC compiler")
     else:
@@ -970,6 +1009,10 @@ def _execute_owned_build_actions(
             commands = list(load_compile_commands(compile_path)) if compile_path else []
         else:
             commands = list(plan.commands)
+        for command in commands:
+            base = Path(command.directory).resolve() if command.directory else root
+            graph_source = Path(command.file)
+            graph_sources.add((graph_source if graph_source.is_absolute() else base / graph_source).resolve())
         if not commands:
             diagnose("PCC-PKG-BUILD-COMMANDS-MISSING", "requested source graph has no compile actions")
         if meson_target:
@@ -1026,16 +1069,22 @@ def _execute_owned_build_actions(
         for source in _iter_source_files(root, _C_SUFFIXES | {".cc", ".cpp", ".cxx", ".c++"} | _FORTRAN_SUFFIXES):
             relative = source.relative_to(root)
             output = root / "build" / "pcc-package" / "owned" / (str(relative) + ".o")
-            language = "c" if source.suffix.lower() == ".c" else "fortran" if source.suffix.lower() in _FORTRAN_SUFFIXES else "cxx"
+            language = _language_for_file(str(source))
             commands.append(BuildCommand(str(source), "cc -c " + shlex.quote(str(source)), str(root), language, "cc", str(output), (), (), (), (), ()))
 
     capi_dir = None
     runtime_include = None
     if abi_mode == "pcc-native" and commands:
-        capi_dir = _materialize_pcc_capi_include(root / "build" / "pcc-package", execute=execute and not diagnostics)
+        capi_dir = _materialize_pcc_capi_include(root / "build" / "pcc-package", execute=False)
         runtime_include = _pcc_runtime_include_dir()
         if capi_dir is None or runtime_include is None:
             diagnose("PCC-PKG-CAPI-INCLUDE-MISSING", "owned C build requires PCC C-API headers")
+    for command in commands:
+        base = Path(command.directory).resolve() if command.directory else root
+        graph_source = Path(command.file)
+        graph_sources.add((graph_source if graph_source.is_absolute() else base / graph_source).resolve())
+    prepared_actions = []
+    output_paths = set()
     for index, command in enumerate(commands):
         cwd = Path(command.directory).resolve() if command.directory else root
         source = Path(command.file)
@@ -1046,10 +1095,10 @@ def _execute_owned_build_actions(
             output = cwd / output
         output = output.resolve()
         if replay_outputs:
-            output = root / "build" / "pcc-package" / "owned-target" / (str(index) + "-" + Path(replay_outputs[index]).name)
-        row = {"kind": "c_compile", "command": [], "source": str(source.resolve()), "output": str(output), "status": "planned", "returncode": None, "stdout": "", "stderr": "", "execution_owner": "pcc"}
+            output = (root / "build" / "pcc-package" / "owned-target" / (str(index) + "-" + Path(replay_outputs[index]).name)).resolve()
+        row = {"kind": "cxx_compile" if command.language == "cxx" else "c_compile", "language": command.language, "command": [], "source": str(source.resolve()), "output": str(output), "status": "planned", "returncode": None, "stdout": "", "stderr": "", "execution_owner": "pcc"}
         actions.append(row)
-        if command.language != "c":
+        if command.language not in {"c", "cxx"}:
             row["status"] = "blocked"
             diagnose("PCC-PKG-OWNED-LANGUAGE-UNAVAILABLE", "owned package compilation does not yet support " + command.language)
             continue
@@ -1065,14 +1114,39 @@ def _execute_owned_build_actions(
             if capi_dir is not None:
                 argv.insert(-1, "--cpp-arg=-I" + str(capi_dir))
                 argv.insert(-1, "--cpp-arg=-I" + str(runtime_include))
-            if source.resolve() == output:
-                raise ValueError("compile output aliases its source")
+            if output in graph_sources:
+                raise ValueError("compile output aliases a source input")
+            if output.suffix.lower() not in {".o", ".obj"}:
+                raise ValueError("owned compile output must be an object path, never a source/header path")
+            if output.exists() and not output.is_file():
+                raise ValueError("compile output is not a regular file path")
+            if output in output_paths:
+                raise ValueError("compile actions share an output path")
+            output_paths.add(output)
             row["command"] = (compiler_command or ["pcc"]) + argv
+            prepared_actions.append((row, argv, source, output))
         except ValueError as exc:
             row["status"] = "blocked"
             row["stderr"] = str(exc)
             diagnose("PCC-PKG-OWNED-COMPILE-OPTION-UNAVAILABLE", str(exc))
             continue
+    # Admit the whole batch before writing either copied headers or objects.
+    # In particular, a later graph row cannot overwrite an earlier source.
+    if capi_dir is not None:
+        capi_source = _pcc_capi_source_dir()
+        for header in PCC_CAPI_HEADERS:
+            destination = capi_dir / header
+            if (destination.resolve() in graph_sources or destination.resolve() in output_paths
+                    or any(path.is_symlink() for path in (destination, *destination.parents) if path != root)
+                    or (destination.exists() and (not destination.is_file() or destination.stat().st_nlink != 1))):
+                diagnose("PCC-PKG-OWNED-HEADER-OUTPUT-ALIASES-INPUT", "owned header destination aliases an input or is not a regular path: " + str(destination))
+            elif destination.is_file():
+                original = capi_source / header if capi_source is not None else None
+                if original is None or not original.is_file() or destination.read_bytes() != original.read_bytes():
+                    diagnose("PCC-PKG-OWNED-HEADER-OUTPUT-ALIASES-INPUT", "refuse to rewrite existing source/header bytes: " + str(destination))
+    if execute and not diagnostics and capi_dir is not None:
+        _materialize_pcc_capi_include(root / "build" / "pcc-package", execute=True)
+    for row, argv, source, output in prepared_actions:
         if not execute:
             continue
         if diagnostics:
@@ -1085,14 +1159,23 @@ def _execute_owned_build_actions(
                 compile_argv = list(argv)
                 compile_argv[compile_argv.index("--emit-obj") + 1] = staged
                 row["executed_command"] = compiler_command + compile_argv
+                # --backend=self still admits the explicit system-as oracle.
+                # Owned package mode must instead select the CLI's fail-closed
+                # owned object writer, without changing the caller's environment.
+                compiler_environment = os.environ.copy()
+                compiler_environment["PCC_SELF_OBJ"] = "pcc"
+                compiler_environment["PCC_SOURCE_ROOT"] = str(_repo_root())
+                compiler_environment["PCC_REPO_ROOT"] = str(_repo_root())
                 process = subprocess.run(
                     compiler_command + compile_argv, capture_output=True,
-                    text=True, timeout=timeout,
+                    text=True, timeout=timeout, env=compiler_environment, cwd=_repo_root(),
                 )
                 row["returncode"] = process.returncode
                 row["stdout"] = process.stdout or ""
                 row["stderr"] = process.stderr or ""
-                if process.returncode == 0 and os.path.isfile(staged):
+                if (process.returncode == 0 and os.path.isfile(staged)
+                        and not os.path.islink(staged) and os.path.getsize(staged) > 0):
+                    _admit_owned_object_replacement(output)
                     os.replace(staged, str(output))
                     row["status"] = "passed"
                 else:
@@ -1104,7 +1187,7 @@ def _execute_owned_build_actions(
             row["status"] = "failed"
             row["stderr"] = str(exc)
         if row["status"] != "passed":
-            diagnose("PCC-PKG-BUILD-ACTION-FAILED", "owned C object action did not complete: " + str(source))
+            diagnose("PCC-PKG-BUILD-ACTION-FAILED", "owned C/C++ object action did not complete: " + str(source))
     ok = not diagnostics and all(row["status"] in {"passed", "planned"} for row in actions)
     return {"ok": ok, "name": name, "path": str(root), "execute": execute,
             "build_backend": "pcc-self", "build_mode_requested": "owned", "build_ownership": "owned",

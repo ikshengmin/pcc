@@ -77,6 +77,10 @@ class BuildPlan:
 
 
 def _language_for_file(file_name: str) -> str:
+    # Keep the public frontend's case-sensitive .C selection: lowercasing it
+    # first silently relabels C++ translation units as C in package receipts.
+    if Path(file_name).suffix == ".C":
+        return "cxx"
     suffix = Path(file_name).suffix.lower()
     if suffix in _C_SUFFIXES:
         return "c"
@@ -100,7 +104,7 @@ def _consume_joined_flag(
     return None, index
 
 
-def _parse_build_command(entry: dict[str, object]) -> BuildCommand:
+def _parse_build_command(entry: dict[str, object], *, language: str | None = None) -> BuildCommand:
     file_name = str(entry.get("file") or "")
     raw_command = str(entry.get("command") or "")
     directory = str(entry.get("directory") or "") or None
@@ -159,7 +163,7 @@ def _parse_build_command(entry: dict[str, object]) -> BuildCommand:
         file=file_name,
         command=raw_command,
         directory=directory,
-        language=_language_for_file(file_name),
+        language=language or _language_for_file(file_name),
         compiler=compiler,
         output=output,
         include_dirs=tuple(include_dirs),
@@ -279,11 +283,11 @@ def load_meson_introspection_commands(
                 source_path = Path(raw_source)
                 if not source_path.is_absolute():
                     source_path = root / source_path
-                command_language = language or _language_for_file(str(source_path))
+                # Meson names C++ "cpp". An explicit graph language must
+                # survive parsing so the executor can reject suffix conflicts.
+                command_language = ("cxx" if language == "cpp" else language) or _language_for_file(str(source_path))
                 if command_language not in {"c", "cxx", "fortran"}:
-                    command_language = _language_for_file(str(source_path))
-                if command_language not in {"c", "cxx", "fortran"}:
-                    continue
+                    command_language = "unknown"
                 selected_compiler = compiler_values or [
                     _default_compiler_for_language(command_language)
                 ]
@@ -308,7 +312,7 @@ def load_meson_introspection_commands(
                             "file": str(source_path),
                             "command": " ".join(shlex.quote(part) for part in command),
                             "directory": str(root),
-                        }
+                        }, language=command_language,
                     )
                 )
                 index += 1

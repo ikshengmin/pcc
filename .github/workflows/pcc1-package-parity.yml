@@ -689,6 +689,92 @@ jobs:
             ${{ runner.temp }}/source-validation
             ${{ runner.temp }}/reference-tools
 
+  numpy-source-frontier:
+    name: NumPy C/C++ host-PCC source frontier (not native pcc1)
+    needs: validation-plan
+    if: ${{ needs.validation-plan.outputs.source == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      CI: "true"
+      PCC_NO_AUTO_PCC1: "1"
+      PCC_TEST_NO_NATIVE_PROVISIONING: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+      - uses: astral-sh/setup-uv@v7
+      - name: Install frozen host dependencies without building PCC
+        run: uv sync --frozen --dev --no-install-project
+      # The runner guards each compiler child at 90 seconds / 1 GiB.
+      # A recorded BLOCKED frontier exits nonzero; it is not project acceptance.
+      - name: Attempt unchanged NumPy translation units with host PCC only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          OUT="$RUNNER_TEMP/numpy-source-frontier-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir "$OUT"
+          uv run --frozen --no-sync python scripts/numpy_source_frontier.py \
+            --host-pcc-development --output-dir "$OUT/frontier" \
+            >"$OUT/runner.stdout" 2>"$OUT/runner.stderr"
+      - name: Retain NumPy blockers, untouched production stages and raw logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: numpy-source-frontier-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/numpy-source-frontier-${{ github.run_id }}-${{ github.run_attempt }}/
+
+  orjson-source-frontier:
+    name: orjson Rust/C host-PCC source frontier (not native pcc1)
+    needs: validation-plan
+    if: ${{ needs.validation-plan.outputs.source == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      CI: "true"
+      PCC_NO_AUTO_PCC1: "1"
+      PCC_TEST_NO_NATIVE_PROVISIONING: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+      - uses: astral-sh/setup-uv@v7
+      - name: Install frozen host dependencies without building PCC
+        run: uv sync --frozen --dev --no-install-project
+      # The CI-only runner owns the existing 90-second / 1-GiB process-tree guard.
+      # Cargo, build.rs, extension import and upstream tests remain visibly UNRUN.
+      - name: Attempt pinned original orjson Rust and yyjson source stages
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          OUT="$RUNNER_TEMP/orjson-source-frontier-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir "$OUT"
+          uv run --frozen --no-sync python scripts/ci_orjson_source_frontier.py \
+            --output "$OUT/frontier" \
+            >"$OUT/runner.stdout" 2>"$OUT/runner.stderr"
+      - name: Retain orjson blockers, UNRUN extension stages and raw guard logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: orjson-source-frontier-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/orjson-source-frontier-${{ github.run_id }}-${{ github.run_attempt }}/
+
   ci-plan:
     needs: validation-plan
     if: ${{ needs.validation-plan.outputs.legacy == 'true' }}

@@ -1,0 +1,27 @@
+{
+  "schema": "pcc.numpy-source-frontier-inputs.v1",
+  "name": "numpy",
+  "version": "2.4.4",
+  "directory": "projects/numpy-2.4.4",
+  "git_tree": "7ecab3aabe64431c219f35f3d65fb2d75edbe286",
+  "source_scope": "Complete repository-vendored source tree; not an independently verified upstream archive",
+  "upstream_archive_sha256": null,
+  "license_expression": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0",
+  "source_only_license_note": "Additional source-tool licenses apply, including Apache-2.0 for vendored Meson; retain all files in the pinned tree.",
+  "requirements": {"c": "c11", "cxx": "c++17", "meson": ">=1.8.3", "cython": ">=3.0.6", "meson-python": ">=0.18.0"},
+  "translation_units": {
+    "c": "numpy/_core/src/multiarray/alloc.c",
+    "cxx": "numpy/_core/src/npymath/halffloat.cpp"
+  },
+  "sha256": {
+    "PKG-INFO": "8f9e04338ffa930868a2d157ce44f6e4cb7ac524b968fb13d04187a6ac575282",
+    "LICENSE.txt": "1be1df33863f97a7bc1c4d67980bd6c69c9a6fef0a5ee76e6ad6cb91e56e8491",
+    "pyproject.toml": "8cc7e035ee4f512eb5833db405f16097d59bb01adc0c8c6fd239ce3baf05d655",
+    "meson.build": "fd3eb7272008ce2f55dc4cb61e627a4804f33d6ed4be744b25771a36d4093caa",
+    "numpy/_core/meson.build": "439a84eedc976de03dcaf5902d85bfa202a5f0238565ac44fc577435631a87bc",
+    "numpy/_core/src/multiarray/alloc.c": "9644d1e06904cea74dd388d4b60bb9187772aaf9b777e3e57eebb02c89f11823",
+    "numpy/_core/src/npymath/halffloat.cpp": "cef1d814273d196c52ed0f3ac840f2e172906beca56b6b9e3ecebdcf8658cd26",
+    "numpy/_core/include/numpy/numpyconfig.h": "163c41f9cc1c4bcc17da63186368044710e062fb1535a0e6ef582294c6cc6089",
+    "vendored-meson/meson/COPYING": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  }
+}

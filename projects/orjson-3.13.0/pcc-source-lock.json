@@ -1,0 +1,210 @@
+{
+  "schema_version": 1,
+  "project": "orjson",
+  "version": "3.13.0",
+  "repository": "https://github.com/ijl/orjson",
+  "release_url": "https://github.com/ijl/orjson/releases/tag/3.13.0",
+  "revision": "bd00937c5c46ab20eb5d7fe1cfc034b906c4578f",
+  "license": "MPL-2.0 AND (Apache-2.0 OR MIT)",
+  "edition": 2024,
+  "rust_version": "1.95",
+  "crate_type": "cdylib",
+  "build_backend": "maturin",
+  "build_backend_requirement": "maturin>=1,<2",
+  "complete_build_closure": false,
+  "selection": "complete original Rust library/build roots, C yyjson dependency pair, Python wrapper, selected original upstream tests and metadata/licenses; NOT complete Rust/dependency/test data closure",
+  "total_bytes": 810604,
+  "rust_roots": [
+    "src/lib.rs",
+    "build.rs"
+  ],
+  "c_unit": "include/yyjson/yyjson.c",
+  "c_headers": [
+    "include/yyjson/yyjson.h"
+  ],
+  "c_configuration": {
+    "source": "build.rs",
+    "executed": false,
+    "defines": [
+      [
+        "YYJSON_DISABLE_INCR_READER",
+        "1"
+      ],
+      [
+        "YYJSON_DISABLE_NON_STANDARD",
+        "1"
+      ],
+      [
+        "YYJSON_DISABLE_UTF8_VALIDATION",
+        "1"
+      ],
+      [
+        "YYJSON_DISABLE_UTILS",
+        "1"
+      ],
+      [
+        "YYJSON_DISABLE_WRITER",
+        "1"
+      ],
+      [
+        "YYJSON_READER_DEPTH_LIMIT",
+        "1024"
+      ]
+    ]
+  },
+  "pyo3_ffi_version": "0.29.3",
+  "pyo3_build_config_version": "0.29.3",
+  "vendored_yyjson_version": "0.12.0",
+  "files": [
+    {
+      "path": "Cargo.toml",
+      "role": "manifest",
+      "license": "MPL-2.0 AND (Apache-2.0 OR MIT)",
+      "license_evidence": "package.license",
+      "sha256": "76c6294273bb066631570a7ad2e6022883d15981bb45adde98437035fa23905c",
+      "size": 2110,
+      "git_blob": "7707fea954e55044d3970942d8d792047b43e762",
+      "url": "https://raw.githubusercontent.com/ijl/orjson/bd00937c5c46ab20eb5d7fe1cfc034b906c4578f/Cargo.toml"
+    },
+    {
+      "path": "Cargo.lock",
+      "role": "dependency-lock",
+      "license": "MPL-2.0 AND (Apache-2.0 OR MIT)",
+      "license_evidence": "project declaration; dependency licenses not qualified by this lock",
+      "sha256": "390b4f0b2c4cc36f64bb1dddc8ed1dde1fa4a1819c1dbda385d4db9f1e3d7b36",
+      "size": 4979,
+      "git_blob": "9470ec282bccf34b8608ad51a15da4242005b6f9",
+      "url": "https://raw.githubusercontent.com/ijl/orjson/bd00937c5c46ab20eb5d7fe1cfc034b906c4578f/Cargo.lock"
+    },
+    {
+      "path": "pyproject.toml",
+      "role": "build-manifest",
+      "license": "MPL-2.0 AND (Apache-2.0 OR MIT)",
+      "license_evidence": "project.license",
+      "sha256": "e96b7e2178356a1e34a6fef4072c50febf3777a991f624f07591fd4864189bc6",
+      "size": 2948,
+      "git_blob": "5ce1b77d005f95b65f5cb05757252aa7186e438b",
+      "url": "https://raw.githubusercontent.com/ijl/orjson/bd00937c5c46ab20eb5d7fe1cfc034b906c4578f/pyproject.toml"
+    },
+    {
+      "path": "build.rs",
+      "role": "rust-build-root",
+      "license": "MPL-2.0",
+      "license_evidence": "SPDX header",
+      "sha256": "0bb1ba0dcfc98605ef89cb3f1bdc1e0f509e6a8d2d7e03cae5229f96b4899a89",
+      "size": 3191,
+      "git_blob": "6568defd6904ea39c170980f6b0aed9952297492",
+      "url": "https://raw.githubusercontent.com/ijl/orjson/bd00937c5c46ab20eb5d7fe1cfc034b906c4578f/build.rs"
+    },
+    {
+      "path": "src/lib.rs",
+      "role": "rust-library-root",
+      "license": "MPL-2.0",
+      "license_evidence": "SPDX header",
+      "sha256": "015500d0b2ef06a4210620fd726342c97d40e54dd1b9e5a7772ef51443cc86d2",
+      "size": 11143,
+      "git_blob": "aa2d59713a335b08a3b02fd53e2f4a714b2acfc6",
+      "url": "https://raw.githubusercontent.com/ijl/orjson/bd00937c5c46ab20eb5d7fe1cfc034b906c4578f/src/lib.rs"
+    },
+    {
+      "path": "LICENSE-APACHE",
+      "role": "license-text",
+      "license": "Apache-2.0",
+      "license_evidence": "complete original license",
+      "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+      "size": 10847,
+      "git_blob": "16fe87b06e802f094b3fbb0894b137bca2b16ef1",
+      "url": "https://raw.githubusercontent.com/ijl/orjson/bd00937c5c46ab20eb5d7fe1cfc034b906c4578f/LICENSE-APACHE"
+    },
+    {
+      "path": "LICENSE-MIT",
+      "role": "license-text",
+      "license": "MIT",
+      "license_evidence": "complete original license",
+      "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+      "size": 1023,
+      "git_blob": "31aa79387f27e730e33d871925e152e35e428031",
+      "url": "https://raw.githubusercontent.com/ijl/orjson/bd00937c5c46ab20eb5d7fe1cfc034b906c4578f/LICENSE-MIT"
+    },
+    {
+      "path": "LICENSE-MPL-2.0",
+      "role": "license-text",
+      "license": "MPL-2.0",
+      "license_evidence": "complete original license",
+      "sha256": "66a3107d5ad6a058aab753eaac2047ccb2ed0e39465dd0fe5844da3e300d5172",
+      "size": 16727,
+      "git_blob": "ee6256cdb62a765749a71aae3abea32884301cd1",
+      "url": "https://raw.githubusercontent.com/ijl/orjson/bd00937c5c46ab20eb5d7fe1cfc034b906c4578f/LICENSE-MPL-2.0"
+    },
+    {
+      "path": "test/test_api.py",
+      "role": "upstream-test-input",
+      "license": "Apache-2.0 OR MIT",
+      "license_evidence": "SPDX header",
+      "sha256": "5216f535ba760f486c4d608bdd749f73df483fdb88bf6c1b70616a1072f7139f",
+      "size": 8639,
+      "git_blob": "097bc41dc4c53bbd6a2cf5cf215a322e8435a30b",
+      "url": "https://raw.githubusercontent.com/ijl/orjson/bd00937c5c46ab20eb5d7fe1cfc034b906c4578f/test/test_api.py"
+    },
+    {
+      "path": "test/test_roundtrip.py",
+      "role": "upstream-test-input",
+      "license": "MPL-2.0",
+      "license_evidence": "SPDX header",
+      "sha256": "ed441bca07f2853336026a424412714e70def5609475708c9194c0da7e60723a",
+      "size": 4198,
+      "git_blob": "69c2e95abc5fd6a55d409eb8ec9d6ce0cdbb0cab",
+      "url": "https://raw.githubusercontent.com/ijl/orjson/bd00937c5c46ab20eb5d7fe1cfc034b906c4578f/test/test_roundtrip.py"
+    },
+    {
+      "path": "test/requirements.txt",
+      "role": "test-dependency-input",
+      "license": "MPL-2.0 AND (Apache-2.0 OR MIT)",
+      "license_evidence": "project declaration",
+      "sha256": "8a24afd8efaf30da6b4e3a50dd2c3c37862bafc83cb2ad78d985d3ea6fa4269e",
+      "size": 528,
+      "git_blob": "e13241520ffcbcd061216048f3404f8bdde42078",
+      "url": "https://raw.githubusercontent.com/ijl/orjson/bd00937c5c46ab20eb5d7fe1cfc034b906c4578f/test/requirements.txt"
+    },
+    {
+      "path": "pysrc/orjson/__init__.py",
+      "role": "python-wrapper",
+      "license": "MPL-2.0",
+      "license_evidence": "SPDX header",
+      "sha256": "7a3a05b1281b65aa5054c35387fbe5bc99305bf94b9ec7774a6cd4a6f5b148f5",
+      "size": 693,
+      "git_blob": "c6a12ab65c6e434dbcf11a055cf271a946501250",
+      "url": "https://raw.githubusercontent.com/ijl/orjson/bd00937c5c46ab20eb5d7fe1cfc034b906c4578f/pysrc/orjson/__init__.py"
+    },
+    {
+      "path": "include/yyjson/yyjson.c",
+      "role": "c-dependency-source",
+      "license": "MIT",
+      "license_evidence": "complete copyright/license notice in header",
+      "sha256": "dfd1e59f5c3547bc64602ee73cfd9462d8ddb4f213f342d2f9c975c15e1bbbd7",
+      "size": 415221,
+      "git_blob": "efbcb6d347c48b4eea5510d4a121298a22be9125",
+      "url": "https://raw.githubusercontent.com/ijl/orjson/bd00937c5c46ab20eb5d7fe1cfc034b906c4578f/include/yyjson/yyjson.c"
+    },
+    {
+      "path": "include/yyjson/yyjson.h",
+      "role": "c-dependency-header",
+      "license": "MIT",
+      "license_evidence": "complete copyright/license notice in header",
+      "sha256": "7a12d9d921371b5cdb0d3b7480537267f388bc3c4edfddb2dd397f1b8bf8dcc6",
+      "size": 326732,
+      "git_blob": "c61483dc23f8f3ab216482b43a82ced294b6215c",
+      "url": "https://raw.githubusercontent.com/ijl/orjson/bd00937c5c46ab20eb5d7fe1cfc034b906c4578f/include/yyjson/yyjson.h"
+    },
+    {
+      "path": "test/util.py",
+      "role": "upstream-test-helper",
+      "license": "MPL-2.0",
+      "license_evidence": "SPDX header",
+      "sha256": "7ee4309d2831901dc904678f4374b53bad4d8d3fb84958e5deda58189e541fcf",
+      "size": 1625,
+      "git_blob": "65ede32b47f13ec849db72bfa6595aa7cdc044fa",
+      "url": "https://raw.githubusercontent.com/ijl/orjson/bd00937c5c46ab20eb5d7fe1cfc034b906c4578f/test/util.py"
+    }
+  ]
+}
