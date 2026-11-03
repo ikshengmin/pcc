@@ -96,7 +96,7 @@ PROGRAMS = tuple((name, ((name + '.cpp', source),)) for name, source in SINGLE_P
 
 DEFERRED = (
     ('class-array-lifetime', 'struct M{~M(){}};void f(){M values[2];}', 'cpp.unsupported.class-array-lifetime'),
-    ('class-array-member', 'struct M{~M(){}};struct O{M values[2];~O(){}};', 'cpp.unsupported.class-array-members'),
+    ('class-array-member', 'struct M{~M(){}};struct O{M values[2];~O(){}};', 'cpp.unsupported.class-array-lifetime'),
     ('implicit-enclosing-d1', 'struct M{~M(){}};struct O{M member;};void f(){O o{};}', 'cpp.unsupported.destructor-subobjects'),
     ('unknown-d1-effects', 'void effect();struct M{~M(){effect();}};struct O{M member;~O(){}};', 'cpp.unsupported.destructor-subobjects'),
 )

@@ -236,12 +236,19 @@ FULL_HEADER_ORIGINAL = '#include <new>\nint main(){return 42;}\n'
 def test_full_new_header_keeps_real_unsupported_syntax_visible():
     text = preprocess_cpp(FULL_HEADER_ORIGINAL)
     compact = ''.join(text.split())
-    assert 'explicitnothrow_t()=default;' in compact
+    assert 'structnothrow_t{explicitnothrow_t()=default;};' in compact
     assert 'conststd::nothrow_t&' in compact
     assert 'constexprT*launder' in compact
+    parser = CppParser()
     with pytest.raises(CppDiagnostic) as error:
-        CppParser().parse(text)
-    assert error.value.code == 'cpp.unsupported.classes'
+        parser.parse(text)
+    # Explicit C1 is recognized; defaulted C1 still has no implementation owner.
+    assert error.value.code == 'cpp.unsupported.syntax'
+    assert error.value.message == "C++ feature not implemented at '=' (expected '{')"
+    position = parser.cursor.position
+    assert [token.value for token in parser.cursor.tokens[position - 4:position + 3]] == [
+        'explicit', 'nothrow_t', '(', ')', '=', 'default', ';',
+    ]
 
 
 def test_extern_reserved_declaration_keeps_external_cpp_identity():

@@ -159,7 +159,7 @@ DEFERRED = (
     ('implicit-enclosing-constructor', 'struct M{M(){}};struct O{M m;};int f(){O o;return 0;}', 'cpp.unsupported.constructor-subobjects'),
     ('scalar-dmi-with-class-member', 'struct M{M(){}};struct O{M m;int n=42;O():m(){}};', 'cpp.unsupported.default-member-initializer-path'),
     ('braced-class-member-initializer', 'struct M{M(int){}};struct O{M m;O():m{42}{}};', 'cpp.unsupported.constructor-list-initialization'),
-    ('class-member-array', 'struct M{M(){}};struct O{M m[2];O(){}};', 'cpp.unsupported.class-array-members'),
+    ('class-member-array', 'struct M{M(){}};struct O{M m[2];O(){}};', 'cpp.unsupported.class-array-lifetime'),
     ('class-member-template-pattern', 'struct M{M(int){}};template<class T>struct O{M m;O(T n):m(n){}};', 'cpp.unsupported.class-templates'),
     ('implicit-member-copy-not-invented', 'struct M{M(int){}};struct O{M m;O(const O&other):m(other.m){}};', 'cpp.unsupported.class-initialization'),
 )

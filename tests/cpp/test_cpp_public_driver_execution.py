@@ -13,6 +13,7 @@ pytestmark = pytest.mark.integration
 
 CASES = [
     ("original-destructor-declaration", "namespace detail { struct Guard { ~Guard(); }; } int main(){return 0;}", 0),
+    ("original-inline-destructor-definition", "namespace detail { struct Guard { ~Guard(){} }; } int main(){return 0;}", 0),
     ("if-character", "#if U'a' < -1\nint main(){return 42;}\n#else\nint main(){return 9;}\n#endif", 42),
     ("if-unsigned", "#if -1 < 1U\nint main(){return 9;}\n#else\nint main(){return 42;}\n#endif", 42),
     ("if-ternary-type", "#if (true ? -1 : 1U) > 0\nint main(){return 42;}\n#else\nint main(){return 9;}\n#endif", 42),
@@ -73,11 +74,11 @@ def test_public_cli_emits_stable_owned_cpp_object_and_executes(tmp_path, monkeyp
 def test_public_cli_diagnostic_keeps_unsupported_cpp_unpublished(tmp_path, capsys):
     from pcc.driver.cli_core import cli_main
     unit = tmp_path / "unsupported.cpp"
-    unit.write_text("namespace detail { struct Guard { ~Guard(){} }; } int main(){return 0;}")
+    unit.write_text("int main(){throw 1;}")
     output = tmp_path / "unsupported.o"
     assert cli_main([str(unit), "--emit-obj", str(output), "--no-cache", "-O0"]) == 1
     assert not output.exists()
-    assert "cpp." in capsys.readouterr().err
+    assert "cpp.unsupported.exceptions" in capsys.readouterr().err
 
 
 def test_cpp_dependency_public_route_never_uses_system_cpp(tmp_path, monkeypatch):

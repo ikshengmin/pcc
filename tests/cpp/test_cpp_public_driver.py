@@ -149,9 +149,10 @@ def test_cpp_discovery_rejects_unsupported_semantics_without_regex_fallback(monk
     from pcc.driver.project import _has_main
     monkeypatch.setattr(c_evaluator.CEvaluator, '_system_cpp', lambda *a, **k: pytest.fail('external tool'))
     assert _has_main('namespace N{struct Guard{~Guard();};} int main(){return 0;}', '/tmp/unit.cpp')
+    assert _has_main('namespace N{struct Guard{~Guard(){}};} int main(){return 0;}', '/tmp/unit.cpp')
     with pytest.raises(CppDiagnostic) as error:
-        _has_main('namespace N{struct Guard{~Guard(){}};} int main(){return 0;}', '/tmp/unit.cpp')
-    assert error.value.code == 'cpp.unsupported.inline-member-functions'
+        _has_main('int main(){throw 1;}', '/tmp/unit.cpp')
+    assert error.value.code == 'cpp.unsupported.exceptions'
 
 
 @pytest.mark.parametrize('expression,expected', [

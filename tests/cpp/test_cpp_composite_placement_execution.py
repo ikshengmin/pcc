@@ -21,6 +21,11 @@ from tests.cpp.test_cpp_constructor_direct_list_execution import syntax_referenc
 from tests.cpp.test_cpp_placement_new import DECLARATION, compile_reference_with_new
 
 
+# Reference declaration scaffolding supplies both standard placement overloads;
+# every original deferred program remains byte-for-byte unchanged below it.
+PLACEMENT_DECLARATIONS = DECLARATION + 'void* operator new[](size_type,void*) noexcept;'
+
+
 @pytest.mark.integration
 @pytest.mark.parametrize('name,units', PROGRAMS, ids=[row[0] for row in PROGRAMS])
 def test_composite_placement_originals_execute_against_cpp17(name, units, tmp_path, monkeypatch):
@@ -48,7 +53,7 @@ def test_exact_formerly_deferred_placement_originals_remain_cpp17_valid(name, so
 @pytest.mark.integration
 @pytest.mark.parametrize('name,source,code', DEFERRED, ids=[row[0] for row in DEFERRED])
 def test_deferred_composite_placement_originals_are_reference_valid(name, source, code, tmp_path):
-    result = syntax_reference(tmp_path, name, DECLARATION + source)
+    result = syntax_reference(tmp_path, name, PLACEMENT_DECLARATIONS + source)
     assert result.returncode == 0, result.stderr
 
 

@@ -165,7 +165,7 @@ RETAINED_BOUNDARIES = (
     ('braced-member-c1-keeps-list-boundary', CLOSED_MEMBER +
      'struct O{M member;O():member{1}{}~O(){}};', 'cpp.unsupported.constructor-list-initialization'),
     ('member-array-keeps-element-lifetime-boundary', CLOSED_MEMBER +
-     'struct O{M members[2];O(){}~O(){}};', 'cpp.unsupported.class-array-members'),
+     'struct O{M members[2];O(){}~O(){}};', 'cpp.unsupported.class-array-lifetime'),
 )
 
 

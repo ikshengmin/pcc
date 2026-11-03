@@ -132,7 +132,7 @@ DEFERRED = (
      'cpp.unsupported.placement-implicit-construction'),
     ('array-member-lifetimes',
      'struct M{M(){}~M(){}};struct O{M members[2];O(){}~O(){}};',
-     'cpp.unsupported.class-array-members'),
+     'cpp.unsupported.class-array-lifetime'),
     ('placement-array-lifetimes',
      'struct M{M(){}~M(){}};struct O{M member;O(){}~O(){}};void f(void*p){new(p)O[2];}',
      'cpp.unsupported.array-new'),

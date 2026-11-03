@@ -126,7 +126,6 @@ def test_inline_method_original_artifacts_are_byte_stable(owned_only,name,units)
     ('struct S{int f(){static int n=0;return n;}};','cpp.unsupported.syntax'),
     ('struct S{int f(){thread_local int n=0;return n;}};','cpp.unsupported.syntax'),
     ('struct S{const char*f(){return "identity";}};','cpp.unsupported.syntax'),
-    ('struct S{~S(){}};','cpp.unsupported.inline-member-functions'),
     ('struct S{int f()noexcept{return 42;}};','cpp.unsupported.exceptions'),
     ('struct S{int f(int n,...){return n;}};','cpp.unsupported.variadic-functions'),
 ))
@@ -134,6 +133,21 @@ def test_inline_method_invalid_or_unimplemented_originals_remain_explicit(source
     with pytest.raises(CppDiagnostic) as error:
         CppParser().parse(source)
     assert error.value.code == code
+
+
+def test_original_inline_destructor_retains_definition_and_owned_artifact(owned_only):
+    source = 'struct S{~S(){}};'
+    parser = CppParser()
+    tree = parser.parse(source)
+    symbol = parser.scope.names['S'].dtype.definition.destructor
+    assert symbol.defined
+    destructor, = (item for item in tree.ext if isinstance(item, c_ast.FuncDef)
+                   and item.decl.name == symbol.c_name)
+    assert destructor.decl.definition_linkage == 'external_odr'
+    # Retain the exact original declaration and append the executable observer.
+    units = (('original-inline-destructor.cpp', source + 'int cpp_test_entry(){S s;return 42;}'),)
+    artifact = compile_host_cpp(units)
+    assert artifact and artifact == compile_host_cpp(units)
 
 
 @pytest.mark.parametrize('name,source,entry', ORIGINAL_METHOD_DECLARATIONS,

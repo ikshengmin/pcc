@@ -145,8 +145,10 @@ class CppParserTests(unittest.TestCase):
         self.diagnostic("#include <vector>\nint main(){}", "cpp.unsupported.preprocessor")
         ast = self.parse("int main(){return 0;} namespace n{struct Guard{~Guard();};}")
         self.assertEqual(ast.ext[-1].name, "_ZN1n5GuardD1Ev")
-        self.diagnostic("int main(){return 0;} namespace n{struct Guard{~Guard(){}};}",
-                        "cpp.unsupported.inline-member-functions")
+        ast = self.parse("int main(){return 0;} namespace n{struct Guard{~Guard(){}};}")
+        destructor, = (item for item in ast.ext if isinstance(item, c_ast.FuncDef)
+                       and item.decl.name == "_ZN1n5GuardD1Ev")
+        self.assertEqual(destructor.decl.definition_linkage, "external_odr")
 
     def test_reusing_parser_does_not_retain_prior_names(self):
         parser = CppParser()

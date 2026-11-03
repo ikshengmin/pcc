@@ -188,7 +188,7 @@ DEFERRED = (
     ('aggregate-initializer-default-argument-call', 'int effect();int use(int n=effect());'
      'struct M{~M(){}};struct O{M member;int n;~O(){}};void f(){O o{{},use()};}', 'cpp.unsupported.destructor-subobjects'),
     ('original-strpair-reset-effect', STRPAIR_BOUNDARY, 'cpp.unsupported.destructor-subobjects'),
-    ('member-array', 'struct M{~M(){}};struct O{M members[2];~O(){}};', 'cpp.unsupported.class-array-members'),
+    ('member-array', 'struct M{~M(){}};struct O{M members[2];~O(){}};', 'cpp.unsupported.class-array-lifetime'),
 )
 
 
