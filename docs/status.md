@@ -100,8 +100,13 @@ lock and reentrancy guards permit. Static images and private arithmetic scratch
 are excluded. Deferred and completed work have separate counters, and normal
 gate work still runs after pressure collection. Default source/member selection
 is unchanged; transformed sources and the interval are bound into provenance.
-Forty-six integrated checks pass in `test_gc_pressure_mode.py`. Full pressure
-archive construction, six-mode native execution and native-suite pressure
+Forty-six integrated checks pass in `test_gc_pressure_mode.py`. The first
+pressure archive built, but its GC0 native run exposed a builder defect:
+transformed `py_obj` lost runtime source identity, so implicit root lowering
+inserted recursive read-barrier calls and overflowed the stack. Generated
+sources now retain the existing staged-runtime directory identity; a real
+`py_obj` compilation verifies both read barriers have no recursive root loads.
+Six-mode native execution after this correction and native-suite pressure
 qualification remain pending. The focused native command is
 `PCC_RUNTIME_GC_STRESS_EVERY=3 PCC_GC_PRESSURE_NATIVE=1 PCC_RUNTIME_ARCHIVE=<pressure-archive> uv run pytest -x -vv -m integration tests/python/test_gc_pressure_native.py`.
 This debug-mode checkpoint does not claim default machine-code or QPS equality.

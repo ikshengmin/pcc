@@ -225,7 +225,11 @@ def _build_runtime_module(runtime_dir, name, target, output_dir, passes, config)
             original = stream.read()
         effective = instrument_source(original, name, pressure_every)
         if effective != original:
-            generated_dir = os.path.join(output_dir, "gc-pressure-source")
+            # Preserve the established staged-runtime source identity. A
+            # generic temporary directory makes py_obj an ordinary library:
+            # implicit root reads then make the read barrier call itself.
+            # PCC_RUNTIME_DIR below still selects the original ABI constants.
+            generated_dir = os.path.join(output_dir, "py_runtime_gc_pressure", "py")
             os.makedirs(generated_dir, exist_ok=True)
             generated = os.path.join(generated_dir, name + ".py")
             with open(generated, "w", encoding="utf-8", newline="\n") as stream:

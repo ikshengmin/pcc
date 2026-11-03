@@ -411,3 +411,31 @@ def test_pressure_receipt_binds_effective_source_and_rejects_missing_or_changed_
     del changed['runtime_build_config']['gc_stress_every']
     with pytest.raises(provenance.ProvenanceError, match='unexpected runtime source transformation'):
         check(changed)
+
+
+@pytest.mark.integration
+def test_transformed_runtime_read_barrier_has_no_recursive_implicit_root_loads(
+    tmp_path, monkeypatch,
+):
+    from pcc.frontends.python.pipeline_targets import host_target_triple
+
+    # Compile the actual pressure-transformed py_obj body through its builder,
+    # not a nearby ordinary library or a mocked frontend. This caught a native
+    # stack overflow before the first collection: a temporary source path lost
+    # the runtime ABI and inserted the read barrier into its own implementation.
+    monkeypatch.setenv(transform.ENV, '3')
+    config = owned.runtime_build_config()
+    payload = owned._build_runtime_module(
+        str(ROOT / 'pcc/runtime'), 'py_obj', host_target_triple(), str(tmp_path),
+        owned.runtime_ir_passes(str(ROOT / 'pcc/runtime')), config,
+    )
+    assert payload
+    text = (tmp_path / 'py_obj.ll').read_text()
+    definitions = text.split('\ndefine ')
+    for name in ('pcc_gc_load_ptr', 'pcc_gc_load_borrowed_ptr'):
+        bodies = [part.split('\n}', 1)[0] for part in definitions
+                  if '@' + name + '(' in part.split('\n', 1)[0]]
+        assert len(bodies) == 1, name
+        calls = [line for line in bodies[0].splitlines() if 'call ' in line]
+        assert not any('@' + name + '(' in line for line in calls), (name, calls)
+        assert not any('@pcc_gc_frame_enter' in line for line in calls), (name, calls)
