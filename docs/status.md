@@ -108,7 +108,17 @@ and four owned-native modes pass. The native test
 `test_root_handle_concurrency_native.py` checks 6,152 concurrent mutations,
 running/exited transitions, and stopped-world rewriting of four stack roots;
 it does not claim forwarding/remap or full pressure qualification. Paired
-throughput screening remains pending. Full suites and bootstrap remain unrun.
+throughput screening rejected the first form: three 10k-request pairs give
+GC4 count-free one-worker medians 4,075 -> 4,351 QPS (paired +2.98%, 2+/1-),
+but four-worker 1,389 -> 1,130 QPS (paired -17.87%, 0+/3-). A fresh
+three-second four-worker profile moves graph waiting from 61.61% to 15.83%
+of samples while the scheduler-list lock rises from 2.31% to 50.06%.
+Recycled handle registration and unregistration now combine pool and live-list
+changes, reducing the common pair from four list acquisitions to two. Empty
+pools still allocate outside the lock, and full pools free after unlocking.
+The follow-up passes 167 production-body cases and six owned-native modes
+(GC0-4 and count-free GC4); its throughput screening is pending. Full suites
+and bootstrap remain unrun.
 
 Concurrent tracing slices now charge every inspected object-list node against
 their scan bound, including black, dying and invalid nodes. The returned work

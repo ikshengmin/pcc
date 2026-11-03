@@ -249,6 +249,30 @@ def pcc_gc_scheduler_root_register_handle(slot) -> c_ptr:
     backend: i64 = gc_backend_current()
     if ptr_is_null(slot) != 0:
         return null()
+    if _scheduler_handle_needs_graph(backend) == 0:
+        # Reuse and publish under one list acquisition. Splitting these two
+        # tiny changes made the one global word bounce between carriers twice
+        # per registration even though no allocation was needed.
+        _scheduler_root_spin_acquire()
+        reused = global_load_ptr("pcc_py_gc_scheduler_root_free_head")
+        if ptr_is_null(reused) == 0:
+            global_store_ptr(
+                "pcc_py_gc_scheduler_root_free_head", load_ptr(reused, 8)
+            )
+            store_i32(
+                global_addr("pcc_py_gc_scheduler_root_free_count"),
+                0,
+                load_i32(global_addr("pcc_py_gc_scheduler_root_free_count"), 0) - 1,
+            )
+            store_ptr(reused, 0, slot)
+            # Linking initializes both remaining node words before unlock.
+            _scheduler_root_link(reused)
+            _scheduler_root_spin_release()
+            pcc_gc_cycle_requested_store_release(1)
+            return reused
+        _scheduler_root_spin_release()
+    # Empty pools allocate outside the list word. Recheck admission after
+    # allocation through the same path used by cold/counting callers.
     node = _scheduler_root_node_take(slot)
     if ptr_is_null(node) != 0:
         return null()
@@ -273,12 +297,25 @@ def pcc_gc_scheduler_root_unregister_handle(handle) -> None:
     if ptr_is_null(handle) != 0:
         return
     if _scheduler_handle_needs_graph(backend) == 0:
-        pcc_gc_scheduler_root_unlink_locked(handle)
+        # Detach and recycle in the same critical section. Neither operation
+        # allocates or polls; a full pool frees only after dropping the word.
+        _scheduler_root_spin_acquire()
+        _scheduler_root_unlink(handle)
+        count: i64 = load_i32(global_addr("pcc_py_gc_scheduler_root_free_count"), 0)
+        dead = handle
+        if count < 4096:
+            store_ptr(handle, 8, global_load_ptr("pcc_py_gc_scheduler_root_free_head"))
+            global_store_ptr("pcc_py_gc_scheduler_root_free_head", handle)
+            store_i32(global_addr("pcc_py_gc_scheduler_root_free_count"), 0, count + 1)
+            dead = null()
+        _scheduler_root_spin_release()
+        if ptr_is_null(dead) == 0:
+            free(dead)
     else:
         pcc_py_gc_minor_graph_lock()
         pcc_gc_scheduler_root_unlink_locked(handle)
         pcc_py_gc_minor_graph_unlock()
-    _scheduler_root_node_give(handle)
+        _scheduler_root_node_give(handle)
     pcc_gc_cycle_requested_store_release(1)
 
 

@@ -29,7 +29,7 @@ def root_handle_binary(tmp_path_factory, pcc_runtime_archive):
 
 @pytest.mark.integration
 @pytest.mark.xdist_group("root_handle_concurrency")
-@pytest.mark.parametrize("backend,tracing", [(0, 0), (3, 0), (4, 0), (4, 1)])
+@pytest.mark.parametrize("backend,tracing", [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (4, 1)])
 def test_native_handle_revision_running_state_and_stw_rewrite(root_handle_binary, backend, tracing):
     run = subprocess.run(
         [str(root_handle_binary)], capture_output=True, text=True, timeout=20,

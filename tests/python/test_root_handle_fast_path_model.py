@@ -48,6 +48,7 @@ class RootState:
         self.address = 1024
         self.graph_depth = 0
         self.graph_entries = 0
+        self.list_entries = 0
         self.allocations = []
         self.freed = []
         self.oom = False
@@ -74,7 +75,7 @@ class RootState:
             "atomic_cas_i32": self.cas32, "atomic_cas_i64": self.cas64,
             "null": lambda: 0, "ptr_is_null": lambda ptr: int(ptr == 0),
             "ptr_eq": lambda left, right: int(left == right),
-            "malloc": self.malloc, "free": self.freed.append, "memset": self.memset,
+            "malloc": self.malloc, "free": self.free, "memset": self.memset,
             "gc_backend_current": lambda: backend,
             "pcc_py_gc_minor_graph_lock": self.graph_lock,
             "pcc_py_gc_minor_graph_unlock": self.graph_unlock,
@@ -97,8 +98,13 @@ class RootState:
         return result
 
     def malloc(self, size):
+        assert self.read(SPIN, 0) == 0, "allocation must not hold the list word"
         self.allocations.append(size)
         return 0 if self.oom else self.allocate_raw(size)
+
+    def free(self, pointer):
+        assert self.read(SPIN, 0) == 0, "deallocation must not hold the list word"
+        self.freed.append(pointer)
 
     def memset(self, base, value, size):
         assert value == 0 and size == 24
@@ -124,6 +130,8 @@ class RootState:
     def cas32(self, base, offset, expected, desired, success, failure):
         actual = self.read(base, offset)
         if actual == expected:
+            if base == SPIN and desired == 1:
+                self.list_entries += 1
             self.store(base, offset, desired)
         return actual
 
@@ -252,6 +260,32 @@ def test_node_oom_does_not_link_but_recycled_node_does_not_need_malloc(backend, 
     assert reused == handle and len(state.allocations) == allocations
     state.unregister(reused)
     assert state.revision == 4 and state.linked() == []
+
+
+@pytest.mark.parametrize("backend,tracing", MODES)
+def test_recycled_handle_pair_needs_only_one_list_acquisition_per_change(backend, tracing):
+    state = RootState(backend, tracing)
+    initial = state.register(0x10000)
+    state.unregister(initial)
+    entries = state.list_entries
+    state.oom = True
+    handle = state.register(0x10008)
+    assert handle == initial and state.linked() == [handle]
+    assert state.read(handle, 0) == 0x10008
+    state.unregister(handle)
+    assert state.linked() == [] and state.revision == 4
+    assert state.list_entries - entries == (2 if backend == 0 or (backend == 4 and tracing) else 4)
+
+
+@pytest.mark.parametrize("backend,tracing", MODES)
+def test_full_free_pool_releases_detached_handle_outside_list_word(backend, tracing):
+    state = RootState(backend, tracing)
+    handle = state.register(0x10000)
+    state.store("pcc_py_gc_scheduler_root_free_count", 0, 4096)
+    state.unregister(handle)
+    assert state.freed == [handle] and state.linked() == []
+    assert state.read("pcc_py_gc_scheduler_root_free_count", 0) == 4096
+    assert state.revision == 2 and state.read(SPIN, 0) == 0
 
 
 @pytest.mark.parametrize("initial,interference,expected", [
