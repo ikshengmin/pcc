@@ -9,7 +9,7 @@
   "inventory": {
     "chapters_complete": false,
     "features_complete": false,
-    "notes": "Incomplete inventory, not a Go coverage denominator. Legacy schema1 status is qualification-only; the pointer-switch row separates explicit implementation from acceptance. The fixed original official shard measured panic in test/ken/for.go and print in test/helloworld.go as the first two frontend failures. Generic Linux scalar output and terminal uncaught panic are authored but UNRUN; full panic/recover/unwind remains missing. Existing evidence triplets retain the prior published a6e482 pointer-array snapshot and do not qualify these changes. No upstream source or oracle is rewritten. Pointer expression switches now have an explicit source-bound implementation and unrun acceptance record. All historical evidence rows retain their exact old identities; they do not qualify this changed source. UTF-8 string range now has an explicit source implementation and separate CI-only unrun acceptance record; its retired non-array-range diagnostic originals are preserved as positive same-input obligations. No old evidence was renewed."
+    "notes": "Incomplete inventory, not a Go coverage denominator. Legacy schema1 status is qualification-only; the pointer-switch row separates explicit implementation from acceptance. The fixed original official shard measured panic in test/ken/for.go and print in test/helloworld.go as the first two frontend failures. Generic Linux scalar output and terminal uncaught panic are authored but UNRUN; full panic/recover/unwind remains missing. Existing evidence triplets retain the prior published a6e482 pointer-array snapshot and do not qualify these changes. No upstream source or oracle is rewritten. Pointer expression switches now have an explicit source-bound implementation and unrun acceptance record. All historical evidence rows retain their exact old identities; they do not qualify this changed source. UTF-8 string range now has an explicit source implementation and separate CI-only unrun acceptance record; its retired non-array-range diagnostic originals are preserved as positive same-input obligations. No old evidence was renewed. Nil-only predeclared error local values now have a separate source-bound implementation and UNRUN acceptance record. General interface/runtime support and original math/bits acceptance remain unimplemented; no historical evidence is renewed."
   },
   "chapters": [
     {
@@ -875,7 +875,7 @@
       "chapter_ids": [
         "interfaces"
       ],
-      "scope": "Predeclared any and error interface types; no dynamic interface representation or dispatch.",
+      "scope": "General interface types, predeclared any, concrete interface values, dispatch and runtime-bearing interface storage remain unsupported. The bounded nil-only local error-value source implementation is recorded separately under go.interfaces.nil-error-values; this historical whole-capability status and evidence are not renewed.",
       "status": "explicitly_unimplemented",
       "tests": [
         "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
@@ -1682,6 +1682,104 @@
         "go.unsupported.limit-generic-instances"
       ],
       "evidence": []
+    },
+    {
+      "id": "go.interfaces.nil-error-values",
+      "title": "Nil-only predeclared error values",
+      "chapter_ids": [
+        "errors",
+        "interfaces",
+        "variables",
+        "assignment",
+        "comparison",
+        "function-types",
+        "type-declarations",
+        "methods"
+      ],
+      "scope": "Source implementation of canonical predeclared error identity and values with no dynamic type/value: local zero/nil initialization and conversion, aliases and defined interfaces with the same Error() string method set, copying, direct parameters/results including multiple and named results, equality and operand evaluation. Exact method signatures distinguish invalid assignment from unsupported concrete boxing. Concrete values, dispatch, general interfaces/any, interface switches, aggregates, pointers, generic type arguments and package interface storage remain closed. Private null-word transport is not the official Go interface ABI; unchanged math/bits still requires unsafe initialization, runtime/linkname ownership and genuine interface panic behavior. No project acceptance is claimed.",
+      "tests": [
+        "tests/go/test_error_nil_values.py::test_predeclared_error_is_canonical_and_not_a_semantic_pointer_or_string",
+        "tests/go/test_error_nil_values.py::test_zero_nil_copy_alias_and_direct_call_paths_keep_owned_ir",
+        "tests/go/test_error_nil_values.py::test_complete_program_and_cross_package_nil_error_transport_are_owned",
+        "tests/go/test_error_nil_values.py::test_invalid_error_assignment_signature_operation_and_constant_rules",
+        "tests/go/test_error_nil_values.py::test_concrete_dynamic_storage_and_runtime_boundaries_stay_closed",
+        "tests/go/test_error_nil_values.py::test_linknamed_package_error_cannot_become_a_fabricated_nil_global",
+        "tests/go/test_execution.py::test_go_unchanged_program_executes_owned_native_code",
+        "tests/go/test_execution.py::test_go_explicit_official_compiler_oracle_receives_identical_program",
+        "tests/go/test_local_builtin_shadows.py::test_original_math_bits_input_and_unrelated_runtime_frontier_are_preserved",
+        "tests/go/test_math_bits_project.py::test_only_source_admission_is_attempted_by_the_owned_stage",
+        "tests/go/test_string_tables.py::test_normal_original_math_bits_file_selection_keeps_error_runtime_dependency",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:f23b9037eb446f59d5d95126a255ae95c561aed85deb6d97f3938b9890d29c07",
+        "sources": [
+          {
+            "path": "pcc/frontends/go/types.py",
+            "sha256": "018996cd93512e4cdf84489da7103cda390688fcca2e9e01b2503a58fbee95b1"
+          },
+          {
+            "path": "pcc/frontends/go/sema.py",
+            "sha256": "35f57d4be91ccf6fdc397b80ec7e55eab123fe0828e028e683a82d4bedd7bb4c"
+          },
+          {
+            "path": "pcc/frontends/go/generics.py",
+            "sha256": "622a85968b4a7645f73aef7c66d6c13799b262033cbc5415f16c15f80dc3b883"
+          },
+          {
+            "path": "pcc/frontends/go/lowering.py",
+            "sha256": "dee88b3f772a0f6da6190d029c03a7bb13bb3939148930ec64fab57f201dd5fc"
+          },
+          {
+            "path": "pcc/frontends/go/syntax.py",
+            "sha256": "5e558b2af51b8972248140bdf098c0960c3af1188309734c119d465c312b897a"
+          },
+          {
+            "path": "pcc/frontends/go/records.py",
+            "sha256": "55b04fff9dd6d5c483120bcf7a082a6fff5b7ab95cae24b47faa7edd8902d359"
+          },
+          {
+            "path": "pcc/frontends/go/pointer_flow.py",
+            "sha256": "408a857ee31da2514c9abd75be0bfd2f170b7bef49085e6f7c199e9bc344b041"
+          },
+          {
+            "path": "pcc/frontends/go/packages.py",
+            "sha256": "6b3d1319cf430abc4e1628fd0f2a9b5c06b4ed19cc0de31aee8c40d05d671ff8"
+          }
+        ]
+      },
+      "acceptance": [
+        {
+          "id": "nil-error-values-linux-pcc0-self",
+          "kind": "full-feature",
+          "scope": "Complete declared nil-error source, native full-width/original-main and identical official-Go obligations, not complete interfaces or original math/bits acceptance",
+          "status": "unrun",
+          "source_revision": "sha256:f23b9037eb446f59d5d95126a255ae95c561aed85deb6d97f3938b9890d29c07",
+          "mode": "pcc0",
+          "platform": "linux-x86_64",
+          "backend": "self",
+          "gc": "not_applicable",
+          "required_tests": [
+            "tests/go/test_error_nil_values.py::test_predeclared_error_is_canonical_and_not_a_semantic_pointer_or_string",
+            "tests/go/test_error_nil_values.py::test_zero_nil_copy_alias_and_direct_call_paths_keep_owned_ir",
+            "tests/go/test_error_nil_values.py::test_complete_program_and_cross_package_nil_error_transport_are_owned",
+            "tests/go/test_error_nil_values.py::test_invalid_error_assignment_signature_operation_and_constant_rules",
+            "tests/go/test_error_nil_values.py::test_concrete_dynamic_storage_and_runtime_boundaries_stay_closed",
+            "tests/go/test_error_nil_values.py::test_linknamed_package_error_cannot_become_a_fabricated_nil_global",
+            "tests/go/test_execution.py::test_go_unchanged_program_executes_owned_native_code",
+            "tests/go/test_execution.py::test_go_explicit_official_compiler_oracle_receives_identical_program",
+            "tests/go/test_local_builtin_shadows.py::test_original_math_bits_input_and_unrelated_runtime_frontier_are_preserved",
+            "tests/go/test_math_bits_project.py::test_only_source_admission_is_attempted_by_the_owned_stage",
+            "tests/go/test_string_tables.py::test_normal_original_math_bits_file_selection_keeps_error_runtime_dependency",
+            "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+          ],
+          "evidence": [],
+          "reason": "Source and CI-only obligations authored and independently source-reviewed. No local project imports, collection, tests, compilers or programs executed. Native pcc1 and user-Mac execution are also UNRUN."
+        }
+      ]
     }
   ],
   "diagnostics": {
@@ -2077,7 +2175,7 @@
         "message": "'invalid or unsupported integer literal ' + repr(text)",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "f6e5e17f3bfec1fb9964cafcf41117f186cccf2592d97090c81d8d1b5dff03d5"
+          "sha256": "35f57d4be91ccf6fdc397b80ec7e55eab123fe0828e028e683a82d4bedd7bb4c"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2085,7 +2183,7 @@
         "message": "'unsupported statement ' + kind",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "f6e5e17f3bfec1fb9964cafcf41117f186cccf2592d97090c81d8d1b5dff03d5"
+          "sha256": "35f57d4be91ccf6fdc397b80ec7e55eab123fe0828e028e683a82d4bedd7bb4c"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2093,7 +2191,7 @@
         "message": "'unsupported expression ' + kind",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "f6e5e17f3bfec1fb9964cafcf41117f186cccf2592d97090c81d8d1b5dff03d5"
+          "sha256": "35f57d4be91ccf6fdc397b80ec7e55eab123fe0828e028e683a82d4bedd7bb4c"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2101,7 +2199,7 @@
         "message": "'switch requires a comparable type'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "f6e5e17f3bfec1fb9964cafcf41117f186cccf2592d97090c81d8d1b5dff03d5"
+          "sha256": "35f57d4be91ccf6fdc397b80ec7e55eab123fe0828e028e683a82d4bedd7bb4c"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2109,7 +2207,7 @@
         "message": "'range currently requires a fixed array or integer, a string, or a pointer to a fixed array; other iterator/runtime contracts are not implemented'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "f6e5e17f3bfec1fb9964cafcf41117f186cccf2592d97090c81d8d1b5dff03d5"
+          "sha256": "35f57d4be91ccf6fdc397b80ec7e55eab123fe0828e028e683a82d4bedd7bb4c"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2117,7 +2215,7 @@
         "message": "'indexing requires an array or string (slices/maps are not implemented)'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "f6e5e17f3bfec1fb9964cafcf41117f186cccf2592d97090c81d8d1b5dff03d5"
+          "sha256": "35f57d4be91ccf6fdc397b80ec7e55eab123fe0828e028e683a82d4bedd7bb4c"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2125,7 +2223,7 @@
         "message": "'first-class method expressions require function-value support'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "f6e5e17f3bfec1fb9964cafcf41117f186cccf2592d97090c81d8d1b5dff03d5"
+          "sha256": "35f57d4be91ccf6fdc397b80ec7e55eab123fe0828e028e683a82d4bedd7bb4c"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2133,7 +2231,7 @@
         "message": "'unsupported string operator ' + op",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "f6e5e17f3bfec1fb9964cafcf41117f186cccf2592d97090c81d8d1b5dff03d5"
+          "sha256": "35f57d4be91ccf6fdc397b80ec7e55eab123fe0828e028e683a82d4bedd7bb4c"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2141,7 +2239,7 @@
         "message": "'unsupported comparison operands'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "f6e5e17f3bfec1fb9964cafcf41117f186cccf2592d97090c81d8d1b5dff03d5"
+          "sha256": "35f57d4be91ccf6fdc397b80ec7e55eab123fe0828e028e683a82d4bedd7bb4c"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       }

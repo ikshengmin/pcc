@@ -108,7 +108,7 @@ def test_normal_original_math_bits_file_selection_keeps_error_runtime_dependency
     assert b"//go:build !compiler_bootstrap" in originals[-1][1]
     inputs={"main":[("main.go",'package main;import "math/bits";func main(){_=bits.LeadingZeros(1)}')],
             "math/bits":[(name,data.decode()) for name,data in originals]}
-    with pytest.raises(GoDiagnostic,match="unsupported type 'error'") as failure:
+    with pytest.raises(GoDiagnostic,match="blank imports require shared-runtime package initialization support") as failure:
         compile_go_packages(inputs)
     assert failure.value.filename=="bits_errors.go"
     assert all((directory/name).read_bytes()==data for name,data in originals)

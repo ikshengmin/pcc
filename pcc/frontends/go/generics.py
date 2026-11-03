@@ -11,7 +11,9 @@ import json
 from pcc.support.instantiation import InstanceRegistry
 from pcc.frontends.go.diagnostics import GoDiagnostic, UnsupportedGo
 from pcc.frontends.go.records import DefinedType, StructType, is_named, same_underlying, underlying
-from pcc.frontends.go.types import ArrayType, PointerType, Results, TYPE_NAMES, is_integer, is_string
+from pcc.frontends.go.types import (
+    ArrayType, PointerType, Results, TYPE_NAMES, is_error_interface, is_integer, is_string,
+)
 
 MAX_FUNCTION_INSTANCES = 128
 
@@ -214,6 +216,9 @@ class GenericSession:
                     raise GoDiagnostic(function.token, 'cannot infer type argument ' + parameter.name)
                 bindings[parameter] = default_type(next(iter(types)))
             argument = bindings[parameter]
+            if is_error_interface(argument):
+                raise UnsupportedGo(function.token, 'go.unsupported.generic-boundaries',
+                                    'interface type arguments require abstract dynamic-value checking')
             if isinstance(underlying(argument), PointerType):
                 raise UnsupportedGo(function.token, 'go.unsupported.generic-boundaries',
                                     'pointer type arguments require an abstract escape/result contract')

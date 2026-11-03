@@ -10,6 +10,7 @@ from pcc.ir.compat import ir
 from pcc.frontends.go.records import StructType, underlying
 from pcc.frontends.go.types import (
     ArrayType, PointerType, Results, result_types, integer_bits, integer_signed, is_string,
+    is_error_interface,
 )
 
 
@@ -24,6 +25,10 @@ GO_MAIN_SYMBOL = function_symbol("main")
 
 def ir_type(dtype):
     dtype = underlying(dtype)
+    if is_error_interface(dtype):
+        # Only nil values inhabit this private transport. This is neither a
+        # concrete interface box nor the official Go interface ABI.
+        return ir.IntType(8).as_pointer()
     if isinstance(dtype, PointerType):
         return ir_type(dtype.element).as_pointer()
     if isinstance(dtype, StructType):
@@ -90,7 +95,7 @@ class Lowerer:
         return self.builder.load(self.string_descriptors[data])
 
     def zero(self, dtype):
-        null_zero = isinstance(underlying(dtype), (ArrayType, StructType, PointerType))
+        null_zero = is_error_interface(dtype) or isinstance(underlying(dtype), (ArrayType, StructType, PointerType))
         return self.string_constant(b"") if is_string(dtype) else ir.Constant(ir_type(dtype), None if null_zero else 0)
 
     def static_initializer(self, dtype, value):
@@ -409,6 +414,9 @@ class Lowerer:
             return self.address(expr.args[0])
         if expr.kind == "nil":
             return ir.Constant(ir_type(expr.type), None)
+        if expr.kind == "error_nil_compare":
+            left, right = [self.expression(item) for item in expr.args]
+            return self.builder.icmp_unsigned(expr.value, left, right)
         if expr.kind == "dereference":
             return self.builder.load(self.address(expr))
         if expr.kind in ("array", "struct"):

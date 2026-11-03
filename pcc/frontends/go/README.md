@@ -955,7 +955,7 @@ unused import. It is not relabeled as positive execution evidence.
 The unchanged original Go 1.27.3 `math/bits/bits_test.go` dot import is retained by
 the real parser before a later syntax failure. This is a source-frontier
 obligation, not testing/runtime closure or upstream test execution. The original
-normal package still rejects `error` at `bits_errors.go:12:19`; interface values,
+normal package still rejects the blank `unsafe` import at `bits_errors.go:9:10`; concrete interface values,
 linkname/runtime globals, blank-import initialization and genuine error-payload
 panic support remain explicit missing contracts. No source or test is rewritten
 and no runtime/backend changes are included. All new execution is **UNRUN**.
@@ -982,7 +982,8 @@ The complete unchanged upstream `bits_test.go` uses `len := 8 - tab[i].nlz` in
 `TestLen`. This removes that independent semantic obstacle; it does not admit
 the original test package, replace its dependencies, or supply `testing`,
 `unsafe`, runtime error/panic/linkname, slices or closures. The full original
-project gate and current normal-package error/interface frontier are unchanged.
+project gate and runtime requirements remain unchanged; the nil-error-value
+prerequisite below exposes the earlier blank-import initialization boundary.
 The authored `local_builtin_shadows.go` has native self-checks, full-width ABI
 observations and same-original official-Go obligations. These obligations are
 not a claim that validation has run.
@@ -990,3 +991,39 @@ not a claim that validation has run.
 References: [declarations and scope](https://go.dev/ref/spec#Declarations_and_scope),
 [predeclared identifiers](https://go.dev/ref/spec#Predeclared_identifiers),
 [short declarations](https://go.dev/ref/spec#Short_variable_declarations).
+
+
+## Nil-only predeclared error values
+
+The canonical predeclared `error` interface has `Error() string` identity.
+Only values with no dynamic type or value are currently representable: local
+zero initialization, nil assignment/conversion, aliases and defined interfaces
+with that same method set, direct parameters/results (including multiple and
+named results), copying, and equality/inequality within this nil-only domain.
+Comparison operands still evaluate exactly once. The private null-word IR
+transport is not a pointer semantic type or the official Go interface ABI.
+
+Concrete values with the exact method set are recognized but boxing remains
+unsupported. A value with only a pointer-receiver Error method, a missing
+method, arguments, or a non-identical result type does not implement error.
+Addressability does not change that assignment rule. Concrete boxing, interface
+calls/method values/expressions, assertions, general interfaces/any, interface
+switches, aggregates, pointers, generic type arguments and package interface
+storage retain explicit boundaries before IR. Package storage is closed while
+runtime symbol ownership and initialization are unowned: ignored linkname
+comments must never turn runtime-owned errors into fabricated nil globals.
+
+The unchanged original normal math/bits package now reaches its blank unsafe
+import initialization boundary. Its runtime globals, panic payloads, original
+recover/type-assertion tests and bootstrap error formatting remain unresolved.
+No upstream source, shared runtime/backend or registry changes are included.
+The feature map records this bounded source implementation with separate UNRUN
+acceptance. Authored native/reference obligations are not execution evidence or
+project acceptance.
+
+Rules: [errors](https://go.dev/ref/spec#Errors),
+[zero values](https://go.dev/ref/spec#The_zero_value),
+[assignability](https://go.dev/ref/spec#Assignability),
+[method sets](https://go.dev/ref/spec#Method_sets),
+[method declarations](https://go.dev/ref/spec#Method_declarations), and
+[comparisons](https://go.dev/ref/spec#Comparison_operators).

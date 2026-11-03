@@ -18,6 +18,7 @@ from tests.go.owned_execution import (
 
 FIXTURES = Path(__file__).parent / "fixtures"
 CASES = [
+    (("error_nil_values.go",), 42),
     (("scalars.go",), -40499999856),
     (("integers.go",), -1),
     (("control.go",), 21440),
