@@ -2929,6 +2929,16 @@ def pcc_gc_set_backend(backend: int) -> int:
     # same-backend reset remains legal.
     _object_graph_lock()
     old_backend: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+    # Configuration may have completed after the optimistic check above.
+    # Once tracing-only mode is published, a racing setter must not change
+    # its collector (including before the first managed allocation).
+    if (
+        load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
+        and backend != old_backend
+    ):
+        _object_graph_unlock()
+        _release_cms_worker_pause_unless_kept(keeps_collector)
+        return -1
     if keeps_collector != 0 and old_backend != backend:
         # A concurrent switch won; this was a reset of the backend it left.
         _object_graph_unlock()

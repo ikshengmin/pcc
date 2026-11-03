@@ -23,6 +23,7 @@ def _configured(backend, *, tracing=0, legacy=0):
         "global_addr": lambda name: name,
         "load_i32": lambda name, offset: cells.get(name, 0),
         "store_i32": lambda name, offset, value: cells.__setitem__(name, value),
+        "atomic_store_i32": lambda name, offset, value, order: cells.__setitem__(name, value),
         "store_i64": lambda name, offset, value: cells.__setitem__(name, value),
         "cstr": lambda name: name,
         "pcc_platform_getenv": lambda name: name,
@@ -33,7 +34,12 @@ def _configured(backend, *, tracing=0, legacy=0):
         "pcc_thread_enable_conservative_roots": lambda: events.append("snapshots"),
         "pcc_threads_enabled": lambda: 1,
         "pcc_gc_maybe_start_cms_worker": lambda: events.append("worker"),
+        "_graph_lock": lambda: None,
+        "_graph_unlock": lambda: None,
+        "global_load_ptr": lambda name: cells.get(name, 0),
+        "ptr_is_null": lambda value: int(value == 0),
     }
+    body("freestanding_gc_forwarding_identity.py", "pcc_gc_refresh_read_barrier", namespace)
     config = body("freestanding_gc_public_collection.py", "pcc_gc_config_ensure", namespace)
     assert config() == backend
     assert config() == backend

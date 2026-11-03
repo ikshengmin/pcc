@@ -93,6 +93,28 @@ dropped keyword); the stage 1 commit message lists them. Rerun with
 
 ## Native throughput versus CPython 3.15.0: active, acceptance unmet
 
+The current user-directed milestone is scalability: each of GC1-4 must reach
+at least 3x its own one-worker throughput at four workers, before pursuing
+GC0 and then CPython. First inventory every tracing graph-lock callsite and
+rank actual invocation counts; sampled CPU share is not a call count. The
+structural plan is exact compiled-frame roots, thread-local native handle
+frames (including parked lifetimes), thread-local barrier buffers, local
+marking work with stealing, and carrier TLABs. Shared/persistent roots still
+need an explicit lifetime/scan owner. The unpublished global-root-sharding
+draft has been archived outside Git and is not the selected design.
+Acceptance requires at least seven rotated frozen A/B pairs on an idle
+machine, all five collectors, both worker counts, collection counts, outer
+pause p99 and peak heap. Earlier three-pair packets below remain diagnostic
+screening only. Existing correctness/resource limits are not relaxed.
+
+A backend-setter startup race found during that review is independently
+repaired: a setter rechecks count-free mode after taking the graph lock, so
+configuration completing after its optimistic check cannot change the now
+fixed tracing backend. Sixteen production-body race/reset cases pass, plus
+33 conservative-root/configuration cases. The latter now executes the real
+read-barrier refresh dependency. Native verification of this small race fix
+is pending; it is not a bootstrap or whole-language qualification.
+
 The concurrent marker now leaves object-list traversal as soon as counted
 gray work is empty, including an empty root seed. Previously a null cursor
 restarted at the heap head, and the last gray object left an otherwise useless
