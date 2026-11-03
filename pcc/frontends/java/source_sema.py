@@ -153,6 +153,17 @@ class SourceAnalyzer:
             # Preserve the old diagnostic substring for nonnumeric operands.
             node.token.error("integer value required, or a floating numeric value; got " + str(node.dtype))
 
+    def typed_binary_extension(self, node):
+        """Model-only extension after operands are checked exactly once."""
+        return False
+
+    def typed_assignment_extension(self, node):
+        return False
+
+    def require_switch_selector(self, node):
+        if node.dtype not in {"byte", "short", "char", "int"}:
+            node.token.error("switch selector requires byte, short, char or int")
+
     def arithmetic_domain(self, node, operator, dtype, divisor):
         if dtype in FLOATING:
             if operator == "%":
@@ -267,6 +278,8 @@ class SourceAnalyzer:
         for child in rhs:
             self.expression(child, assigned)
         dtype = node.symbol.dtype
+        if self.typed_assignment_extension(node):
+            return
         if node.value == "=":
             self.assignment_value(rhs[0], dtype)
         elif node.value in ("++", "--", "post++", "post--"):
@@ -393,6 +406,8 @@ class SourceAnalyzer:
             return
         if kind != "binary":
             raise AssertionError("untyped source expression " + kind)
+        if self.typed_binary_extension(node):
+            return
         second = node.children[1]
         if op in ("&&", "||"):
             if first.dtype != "boolean" or second.dtype != "boolean":
@@ -497,8 +512,7 @@ class SourceAnalyzer:
         elif kind == "switch":
             selector, *groups = node.children
             self.expression(selector, assigned)
-            if selector.dtype not in {"byte", "short", "char", "int"}:
-                selector.token.error("switch selector requires byte, short, char or int")
+            self.require_switch_selector(selector)
             self.scopes.append({})
             context = {"node": node, "break": []}
             self.controls.append(context)

@@ -1,10 +1,12 @@
-"""Java scalar conversion and overload rules, independent of bytecode.
+"""Java source conversion and overload rules, independent of bytecode.
 
 Declarations admit boolean and all seven numeric primitive types. Narrow
 values participate in Java numeric promotion and widening invocation.
-No boxing or varargs are approximated here.
+The nonlowering class model also carries source-owned nominal references,
+explicit unresolved bootstrap String identity and null conversion. No boxing,
+inheritance hierarchy, managed representation or varargs is approximated.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 INTEGRAL = frozenset(("byte", "short", "char", "int", "long"))
@@ -14,6 +16,33 @@ DECLARED = NUMERIC | {"boolean"}
 DESCRIPTORS = {"boolean": "Z", "byte": "B", "short": "S", "char": "C",
                "int": "I", "long": "J", "float": "F", "double": "D", "void": "V"}
 ARRAY_COMPONENTS = INTEGRAL | {"boolean"}
+
+
+@dataclass(frozen=True)
+class NamedType:
+    """Unresolved original type-name tokens, not a managed reference ABI."""
+    tokens: tuple
+
+    def __str__(self):
+        return ".".join(token.text for token in self.tokens)
+
+
+@dataclass(frozen=True)
+class ClassType:
+    """Canonical supplied source-class identity; no size, address or GC layout."""
+    class_name: str
+
+    def __str__(self):
+        return self.class_name.replace("/", ".")
+
+
+@dataclass(frozen=True)
+class BootstrapStringType:
+    """Expected JLS identity with an unresolved owned definition, never a class."""
+    class_name: str = field(default="java/lang/String", init=False)
+
+    def __str__(self):
+        return "java.lang.String (unresolved owned bootstrap)"
 
 
 @dataclass(frozen=True)
@@ -30,6 +59,8 @@ class ArrayType:
 
 
 def descriptor(dtype):
+    if isinstance(dtype, (ClassType, BootstrapStringType)):
+        return "L" + dtype.class_name + ";"
     return "[" + DESCRIPTORS[dtype.component] if isinstance(dtype, ArrayType) else DESCRIPTORS[dtype]
 
 
@@ -37,10 +68,14 @@ def array_reference(dtype):
     return isinstance(dtype, ArrayType) or dtype == "null"
 
 
+def model_reference(dtype):
+    return isinstance(dtype, (ArrayType, ClassType, BootstrapStringType)) or dtype == "null"
+
+
 def widening(source, target):
     if source == target:
         return True
-    if source == "null" and isinstance(target, ArrayType):
+    if source == "null" and isinstance(target, (ArrayType, ClassType, BootstrapStringType)):
         return True
     if source in NUMERIC and target in FLOATING:
         return source != "double"
@@ -62,9 +97,9 @@ def conditional_type(yes, no, token):
         token.error("conditional operands cannot have void type")
     if yes.dtype == no.dtype:
         return yes.dtype
-    if yes.dtype == "null" and isinstance(no.dtype, ArrayType):
+    if yes.dtype == "null" and isinstance(no.dtype, (ArrayType, ClassType, BootstrapStringType)):
         return no.dtype
-    if no.dtype == "null" and isinstance(yes.dtype, ArrayType):
+    if no.dtype == "null" and isinstance(yes.dtype, (ArrayType, ClassType, BootstrapStringType)):
         return yes.dtype
     if yes.dtype not in NUMERIC or no.dtype not in NUMERIC:
         token.error("reference/boxing conditional operands require the shared Java runtime", code="java.unsupported.reference-conditional")
@@ -79,7 +114,7 @@ def conditional_type(yes, no, token):
 
 
 def select_method(methods, node):
-    """JLS 15.12 strict invocation, for fixed-arity primitive-only methods."""
+    """JLS 15.12 strict invocation, for fixed-arity admitted source methods."""
     name = node.value.rsplit(".", 1)[-1]
     actual = tuple(argument.dtype for argument in node.children)
     candidates = [method for method in methods.values()
@@ -91,5 +126,7 @@ def select_method(methods, node):
         all(widening(source, target) for source, target in zip(method.parameter_types, other.parameter_types))
         for other in candidates)]
     if len(best) != 1:
-        node.token.error("ambiguous primitive method invocation " + node.value)
+        domain = "source-reference" if any(isinstance(dtype, (ClassType, BootstrapStringType))
+            for method in candidates for dtype in method.parameter_types) else "primitive"
+        node.token.error("ambiguous " + domain + " method invocation " + node.value)
     return best[0]

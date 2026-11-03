@@ -7,7 +7,7 @@ Object supertypes, clone/casts and multidimensional/reference arrays remain gate
 """
 from .source_syntax import Node, Token
 from .floating_semantics import converted_constant, floating_binary
-from .source_types import ArrayType, FLOATING, INTEGRAL, array_reference, promoted, widening
+from .source_types import ArrayType, BootstrapStringType, FLOATING, INTEGRAL, model_reference, promoted, widening
 
 
 class ArrayModelAnalyzer:
@@ -21,6 +21,9 @@ class ArrayModelAnalyzer:
         return super().assignment_value(node, target)
 
     def require_array(self, node):
+        if isinstance(node.dtype, BootstrapStringType):
+            node.token.error("String member/index operations require the owned String source/runtime domain",
+                             code="java.unsupported.string-literals")
         if not isinstance(node.dtype, ArrayType):
             node.token.error("array reference required, got " + str(node.dtype))
 
@@ -87,10 +90,16 @@ class ArrayModelAnalyzer:
             left, right = node.children
             self.expression(left, assigned)
             self.expression(right, assigned)
-            if array_reference(left.dtype) or array_reference(right.dtype):
-                if not (array_reference(left.dtype) and array_reference(right.dtype)
+            if any(isinstance(child.dtype, BootstrapStringType) for child in (left, right)):
+                if not (model_reference(left.dtype) and model_reference(right.dtype)
                         and (left.dtype == right.dtype or "null" in (left.dtype, right.dtype))):
-                    node.token.error("incomparable array reference types")
+                    node.token.error("incomparable String reference types")
+                node.token.error("String equality requires complete constant-expression/interned identity semantics",
+                                 code="java.unsupported.string-literals")
+            if model_reference(left.dtype) or model_reference(right.dtype):
+                if not (model_reference(left.dtype) and model_reference(right.dtype)
+                        and (left.dtype == right.dtype or "null" in (left.dtype, right.dtype))):
+                    node.token.error("incomparable array or source-class reference types")
                 node.dtype = "boolean"
                 return True
             if left.dtype != "boolean" or right.dtype != "boolean":

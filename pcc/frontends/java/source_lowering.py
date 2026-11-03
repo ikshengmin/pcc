@@ -6,6 +6,7 @@ interpreter or external compiler is on this lowering route.
 from pcc.ir.compat import ir
 
 from .artifact import JavaCompilation, method_symbol
+from .diagnostics import UnsupportedJava
 from .integer_semantics import emit_binary, emit_narrow, emit_nonzero_division
 from .source_types import FLOATING
 
@@ -32,6 +33,9 @@ class SourceLowerer:
             return ir.VoidType()
         if dtype in FLOATING:
             return ir.FloatType() if dtype == "float" else ir.DoubleType()
+        if dtype not in {"boolean", "byte", "short", "char", "int", "long"}:
+            raise UnsupportedJava("native scalar lowering has no representation for source type " + str(dtype),
+                                  code="java.unsupported.declared-result-type")
         return ir.IntType(1 if dtype == "boolean" else 64 if dtype == "long" else 32)
 
     @classmethod

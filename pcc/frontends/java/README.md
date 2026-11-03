@@ -127,6 +127,46 @@ are implemented. Blank-final-instance-field DU, inherited Object overrides,
 general references and inheritance remain explicit model boundaries. This API is not a
 separate runtime or evidence that a Java application can allocate objects.
 
+The class-model stage now retains named field, parameter, result and local type
+tokens and resolves simple type names to supplied source classes using the same
+own-class, single-type-import, same-package and supplied-public-java.lang lookup
+order. Canonical class identities and source descriptors support identity/null
+assignment, same-type/null equality, method/constructor arguments and returns,
+without a guessed reference representation. Reference fields have null default
+metadata and unknown offset, size and alignment; a mixed primitive/reference
+payload has no aggregate layout. These new obligations are execution-unrun.
+Native declarations and lowering remain closed. Missing ordinary class sources,
+qualified/member type metadata, generics, reference arrays, inherited conversions,
+reference casts and managed receiver dereferences remain explicit boundaries.
+
+In the unchanged Commons Numbers original, the reported result-type diagnostic
+at Primes.java:31 actually belongs to its static final String field. The model
+parser can now retain that declaration's original type tokens and UTF-16 literal
+AST, but this does not supply java.lang.String, a constant String object, literal
+interning or class initialization. The shared managed envelope is opt-in GC0
+infrastructure, not a String layout or language runtime. No native or complete
+Commons project acceptance follows, and its strict whole-project gate is unchanged.
+
+The partial class model additionally records the expected bootstrap String type
+as a distinct unresolved dependency, not as a supplied class. String literal and
+constant-name/group/String+String content may carry immutable UTF-16 source facts,
+including static-final and final-local constant variables. These facts are not
+numeric constants or runtime reference identities. Per-value and aggregate folding
+budgets are checked before concatenation. Normal String name shadowing still
+applies to declarations; a literal always has bootstrap String type.
+
+Models expose compiler-context obligations for the missing owned bootstrap
+definition, managed literal materialization/interning and shared owning-root ABI.
+They remain incomplete and unregistered. Project and class models keep
+semantic_context_complete false, while string_context_complete describes only
+whether String-specific obligations are absent. A constant static-field read
+does not imply initializing its declaring class. String equality is explicitly gated
+until constant-expression/identity behavior can preserve flow diagnostics;
+String methods/format, switches, mixed or runtime concatenation and casts remain
+unsupported. Native source admission remains closed, and the scalar lowerer
+rejects unknown/reference types rather than guessing an integer representation.
+This is another source-model prerequisite, with all execution still UNRUN.
+
 Heap objects/arrays, runtime fields and class initialization, exceptions,
 monitors, strings and library/runtime APIs remain explicit
 capability errors. They must use the shared pcc-Python GC/scheduler/exception

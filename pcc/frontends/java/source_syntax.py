@@ -5,6 +5,8 @@ structured control flow and scalar expressions. Unsupported grammar is never
 discarded. Unicode escapes are translated before comments and tokens, retaining
 raw-source diagnostic coordinates. Ordinary string literals retain UTF-16 code
 units in the source AST, without claiming managed String semantics or lowering.
+The nonlowering class model retains original named-reference declaration tokens;
+the native scalar declaration grammar remains closed to these types.
 Non-ASCII identifiers and text blocks remain explicit gaps.
 """
 from bisect import bisect_right
@@ -13,7 +15,7 @@ import re
 
 from .diagnostics import JavaError, UnsupportedJava
 from .floating_semantics import FLOAT_LITERAL
-from .source_types import ARRAY_COMPONENTS, ArrayType, DECLARED, descriptor
+from .source_types import ARRAY_COMPONENTS, ArrayType, DECLARED, NamedType, descriptor
 
 
 KEYWORDS = frozenset((
@@ -65,6 +67,7 @@ class Node:
     runtime_steps: tuple[str, ...] = ()
     control_target: object = field(default=None, repr=False, compare=False)
     flow_outcomes: object = field(default=None, repr=False, compare=False)
+    string_constant: object = None  # Source content only, never runtime identity.
 
 
 @dataclass
@@ -97,6 +100,7 @@ class SourceField:
     owner: str
     ordinal: int
     constant: int | float | bool | None = None
+    string_constant: object = None
 
 
 @dataclass
@@ -320,10 +324,61 @@ class SourceParser:
             if dtype == "void":
                 token.error("an array component cannot have void type")
             if dtype not in ARRAY_COMPONENTS:
-                token.error("floating array components require the next array semantic domain",
+                token.error(("reference array components" if isinstance(dtype, NamedType) else "floating array components")
+                            + " require the next array semantic domain",
                             code="java.unsupported.array-model-shape")
             dtype = ArrayType(dtype)
         return dtype
+
+    def declaration_type(self, token):
+        """Retain named reference declarations only in the nonlowering model."""
+        if token.text in DECLARED | {"void"}:
+            return token.text
+        if self.class_model and re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", token.text) and token.text not in KEYWORDS:
+            names = [token]
+            while self.accept("."):
+                names.append(self.identifier())
+            if self.peek().text == "<":
+                self.peek().error("generic reference declarations require the next source type domain",
+                                  code="java.unsupported.generic-declarations")
+            return NamedType(tuple(names))
+        self.type_boundary(token, "source method results require boolean, integral primitives or void",
+                           code="java.unsupported.declared-result-type")
+
+    def named_local_start(self):
+        """Recognize declaration prefixes without reclassifying value calls."""
+        index = 0
+        while True:
+            token = self.peek(index)
+            if token.text in KEYWORDS or not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", token.text):
+                return False
+            if self.peek(index + 1).text != ".":
+                break
+            index += 2
+        following = self.peek(index + 1)
+        return (following.text not in KEYWORDS
+                and re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", following.text) is not None
+                or following.text == "[" and self.peek(index + 2).text == "]"
+                or following.text == "<")
+
+    def reference_cast_start(self):
+        index = 0
+        while True:
+            token = self.peek(index)
+            if token.text in KEYWORDS or not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", token.text):
+                return False
+            if self.peek(index + 1).text != ".":
+                break
+            index += 2
+        if self.peek(index + 1).text != ")":
+            return False
+        operand = self.peek(index + 2)
+        # Reference casts use UnaryExpressionNotPlusMinus. Preserve ordinary
+        # grouped variables followed by +, -, *, comparisons and postfix ops.
+        return (operand.text in {"null", "this", "new", "!", "~", "("}
+                or operand.text not in KEYWORDS
+                and re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", operand.text) is not None
+                or operand.text[0:1].isdigit() or operand.text.startswith(('"', "'")))
 
     def array_initializer(self, dtype):
         token = self.expect("{")
@@ -427,10 +482,7 @@ class SourceParser:
                 self.peek().error("source method results require boolean, integral primitives or void",
                                   code="java.unsupported.member-types")
             result = self.take()
-            if result.text not in DECLARED | {"void", "byte", "short", "char"}:
-                self.type_boundary(result, "source method results require boolean, integral primitives or void",
-                                   code="java.unsupported.declared-result-type")
-            result_type = self.array_suffix(result.text)
+            result_type = self.array_suffix(self.declaration_type(result))
             method_name = self.identifier()
             if self.peek().text != "(":
                 common_type = result_type
@@ -471,7 +523,7 @@ class SourceParser:
                                    code="java.unsupported.declared-result-type")
             parameters, parameter_types, parameter_final = self.parameters(method_name, receiver="static" not in mods)
             result_type = self.array_suffix(result_type)
-            if result.text not in DECLARED | {"void"} and not isinstance(result_type, ArrayType):
+            if result.text not in DECLARED | {"void"} and not isinstance(result_type, (ArrayType, NamedType)):
                 self.type_boundary(result, "source method results require boolean, integral primitives or void",
                                    code="java.unsupported.declared-result-type")
             methods.append(SourceMethod(method_name, result_type, parameters, self.block(),
@@ -490,13 +542,15 @@ class SourceParser:
                 if self.peek().text == "final":
                     self.peek().error("duplicate final parameter modifier")
                 dtype = self.take()
-                if dtype.text not in DECLARED and not (self.class_model and dtype.text in ARRAY_COMPONENTS):
+                if dtype.text not in DECLARED and not self.class_model:
                     self.type_boundary(dtype, "source parameters require boolean or integral primitives",
                                        code="java.unsupported.declared-parameter-type")
-                parameter_type = self.array_suffix(dtype.text)
+                parameter_type = self.array_suffix(self.declaration_type(dtype))
+                if parameter_type == "void":
+                    dtype.error("a parameter cannot have void type")
                 parameters.append(self.identifier())
                 parameter_type = self.array_suffix(parameter_type)
-                if parameter_type not in DECLARED and not isinstance(parameter_type, ArrayType):
+                if parameter_type not in DECLARED and not isinstance(parameter_type, (ArrayType, NamedType)):
                     self.type_boundary(dtype, "source parameters require boolean or integral primitives",
                                        code="java.unsupported.declared-parameter-type")
                 types.append(parameter_type)
@@ -639,12 +693,12 @@ class SourceParser:
         node separate: Sema declares each binding immediately before checking
         its own initializer, then exposes it to subsequent declarators.
         """
-        common_type = self.array_suffix(type_token.text)
+        common_type = self.array_suffix(self.declaration_type(type_token))
         declarations = []
         while True:
             name = self.identifier()
             dtype = self.array_suffix(common_type)
-            if dtype not in DECLARED and not isinstance(dtype, ArrayType):
+            if dtype not in DECLARED and not isinstance(dtype, (ArrayType, NamedType)):
                 self.type_boundary(type_token, "source locals require boolean or integral primitives",
                                    code="java.unsupported.declared-local-type")
             if self.accept("="):
@@ -678,6 +732,13 @@ class SourceParser:
             if not allow_declaration:
                 token.error("a local declaration requires a block or for initializer")
             return self.local_declaration(type_token, is_final=is_final)
+        if self.named_local_start():
+            if not allow_declaration:
+                token.error("a local declaration requires a block or for initializer")
+            if not self.class_model:
+                self.type_boundary(self.peek(), "source locals require boolean or integral primitives",
+                                   code="java.unsupported.declared-local-type")
+            return self.local_declaration(self.take(), is_final=is_final)
         if is_final and self.peek().text == "var":
             token.error("final local declarations require boolean or integral primitives",
                         code="java.unsupported.declared-local-type")
@@ -721,6 +782,9 @@ class SourceParser:
             if self.class_model and self.peek().text in ARRAY_COMPONENTS and self.peek(1).text == "[":
                 token.error("array casts require the next reference conversion domain",
                             code="java.unsupported.array-model-shape")
+            if self.class_model and self.reference_cast_start():
+                token.error("reference casts require the next reference conversion domain",
+                            code="java.unsupported.object-expressions")
             if self.peek().text in DECLARED and self.peek(1).text == ")":
                 dtype = self.take().text
                 self.expect(")")
@@ -808,6 +872,9 @@ class SourceParser:
                 node = Node("array_access", postfix, children=[node, index])
             else:
                 member = self.identifier()
+                if self.peek().text == "(":
+                    member.error("reference method invocation requires the next managed receiver domain",
+                                 code="java.unsupported.object-expressions")
                 if member.text != "length":
                     member.error("array members other than length require the next reference domain",
                                  code="java.unsupported.array-model-shape")

@@ -4,7 +4,10 @@ The same source syntax and scalar/structured-flow sema are reused. Receiver
 fields and constructors remain typed nodes, never fabricated stack objects or
 raw-malloc payloads. Layout describes primitive payload fields only; runtime
 identity/GC roots, construction/publication and dispatch remain shared-runtime
-prerequisites. Classes containing array references have no payload layout yet.
+prerequisites. Classes containing array or nominal references have no payload
+layout yet. Named references resolve to supplied source classes. String source
+facts use an explicitly unresolved bootstrap dependency; no String or Object
+definition, inheritance graph, interned object or reference ABI is synthesized.
 No descriptor below is registered with a runtime.
 """
 from collections.abc import Mapping
@@ -14,13 +17,16 @@ from .diagnostics import JavaError, UnsupportedJava
 from .source_array_model import ArrayModelAnalyzer
 from .source_project import SourceProject
 from .source_sema import SourceAnalyzer
+from .source_string_model import (
+    MAX_STRING_FOLD_WORK, MAX_STRING_UNITS, StringContextObligation, StringModelAnalyzer,
+)
 from .source_syntax import Node, SourceMethod, SourceParser
-from .source_types import ArrayType, INTEGRAL, NUMERIC, promoted, select_method
+from .source_types import ArrayType, BootstrapStringType, ClassType, INTEGRAL, NUMERIC, NamedType, promoted, select_method, widening
 
 
-@dataclass(frozen=True)
-class ReceiverType:
-    class_name: str
+# Existing receiver API retains the same canonical source identity as named
+# declarations. Neither spelling supplies a reference representation.
+ReceiverType = ClassType
 
 
 @dataclass(frozen=True)
@@ -42,18 +48,30 @@ class ArrayReferenceFieldSlot:
 
 
 @dataclass(frozen=True)
+class ClassReferenceFieldSlot:
+    """Nominal reference source slot; all managed layout remains unknown."""
+    field: object
+    offset: None = None
+    size: None = None
+    alignment: None = None
+    default_value: None = None
+
+
+@dataclass(frozen=True)
 class SourceClassModel:
     source: object
     constructors: tuple
-    fields: tuple[PrimitiveFieldSlot | ArrayReferenceFieldSlot, ...]
+    fields: tuple[PrimitiveFieldSlot | ArrayReferenceFieldSlot | ClassReferenceFieldSlot, ...]
     payload_size: int | None
     payload_alignment: int | None
     initialization_steps: tuple = ()
     superclass: str = "java/lang/Object"
     runtime_registered: bool = False
+    compiler_context_obligations: tuple = ()
+    semantic_context_complete: bool = False
 
 
-class ClassAnalyzer(ArrayModelAnalyzer, SourceAnalyzer):
+class ClassAnalyzer(StringModelAnalyzer, ArrayModelAnalyzer, SourceAnalyzer):
     def __init__(self, program, project):
         super().__init__(program, project)
         self.constructor_edge = {}
@@ -61,8 +79,19 @@ class ClassAnalyzer(ArrayModelAnalyzer, SourceAnalyzer):
         self.active_constructor_call = None
         self.constant_locals = {}
         self.current_initializer = None
+        self.string_constant_locals = {}
+
+    def assignment_value(self, node, target):
+        if isinstance(target, (ClassType, BootstrapStringType)):
+            if not widening(node.dtype, target):
+                node.token.error("incompatible source reference assignment from " + str(node.dtype) + " to " + str(target))
+            return
+        return super().assignment_value(node, target)
 
     def declare_methods(self):
+        if self.program.name == "java/lang/String":
+            raise UnsupportedJava("bootstrap String requires the shared owned String definition and literal/interning contract",
+                                  code="java.unsupported.string-literals")
         if self.program.name == "java/lang/Object":
             raise UnsupportedJava("bootstrap Object requires the shared runtime definition", code="java.unsupported.bootstrap-object")
         for method in self.program.methods:
@@ -97,6 +126,8 @@ class ClassAnalyzer(ArrayModelAnalyzer, SourceAnalyzer):
             token.error("instance receiver cannot be used before constructor invocation")
 
     def evaluate_field(self, field):
+        if "static" in field.modifiers and isinstance(field.dtype, BootstrapStringType):
+            return self.evaluate_string_field(field)
         if "static" in field.modifiers:
             return super().evaluate_field(field)
         if self.field_states.get(field.token.text) == "complete":
@@ -132,9 +163,21 @@ class ClassAnalyzer(ArrayModelAnalyzer, SourceAnalyzer):
             # checked shape: its receiver must still be evaluated eventually.
             node.kind = "receiver_static_field" if explicit_receiver else "static_field"
             node.constant = None if explicit_receiver else constant
+            node.string_constant = None if explicit_receiver else field.string_constant
         node.symbol, node.dtype = field, field.dtype
+        if isinstance(field.dtype, BootstrapStringType):
+            self.project.require_string_context(self.program, node.token,
+                                                materialization=field.string_constant is not None)
 
     def expression(self, node, assigned):
+        if node.kind in {"name", "call"} and "." in str(node.value):
+            root = node.value.split(".", 1)[0]
+            binding = next((scope[root] for scope in reversed(self.scopes) if root in scope), None)
+            if binding is None:
+                binding = self.fields.get(root)
+            if binding is not None and isinstance(binding.dtype, (ClassType, BootstrapStringType)):
+                node.token.error("source reference member access requires the next managed receiver domain",
+                                 code="java.unsupported.object-expressions")
         if self.array_expression(node, assigned):
             return
         if node.kind == "this":
@@ -165,8 +208,11 @@ class ClassAnalyzer(ArrayModelAnalyzer, SourceAnalyzer):
             if method is None:
                 node.token.error("unresolved receiver method " + node.value)
             node.symbol, node.dtype = method, method.result
+            self.require_callable_string_context(method, node.token)
             return
         super().expression(node, assigned)
+        if node.kind == "call":
+            self.require_callable_string_context(node.symbol, node.token)
         if node.kind == "call" and "static" not in node.symbol.modifiers:
             if "." in node.value:
                 node.token.error("a class qualifier cannot select an instance method")
@@ -174,6 +220,8 @@ class ClassAnalyzer(ArrayModelAnalyzer, SourceAnalyzer):
             node.kind = "receiver_call"
 
     def statement(self, node, assigned):
+        if node.kind == "var" and isinstance(node.value, NamedType):
+            node.value = self.project.resolve_named_type(self.program, node.value)
         if node.kind == "array_assign":
             return self.array_assignment(node, assigned)
         if self.current_initializer is not None and node.kind == "return":
@@ -198,6 +246,7 @@ class ClassAnalyzer(ArrayModelAnalyzer, SourceAnalyzer):
                     node.token.error("no applicable same-class constructor")
                 node.symbol = constructor
                 self.constructor_edge[id(self.method)] = constructor
+                self.require_callable_string_context(constructor, node.token)
             return set(assigned)
         implicit_field = (node.kind == "assign" and not any(node.token.text in scope for scope in self.scopes)
                           and node.token.text in self.fields)
@@ -217,6 +266,11 @@ class ClassAnalyzer(ArrayModelAnalyzer, SourceAnalyzer):
             node.kind, node.symbol = "field_assign", field
             for child in node.children:
                 self.expression(child, assigned)
+            if isinstance(field.dtype, BootstrapStringType) and node.value == "+=":
+                if any(child.dtype == "void" for child in node.children):
+                    node.token.error("void value cannot participate in String concatenation")
+                node.token.error("String compound concatenation requires owned conversion/allocation semantics",
+                                 code="java.unsupported.string-literals")
             if node.value == "=":
                 self.assignment_value(node.children[0], field.dtype)
             elif node.value in ("&=", "|=", "^=") and field.dtype == node.children[0].dtype == "boolean":
@@ -275,9 +329,84 @@ class ClassAnalyzer(ArrayModelAnalyzer, SourceAnalyzer):
 
 
 class ClassModelProject(SourceProject):
+    semantic_context_complete = False
+
     def __init__(self, programs):
+        self._bootstrap_string_type = BootstrapStringType()
+        self._string_contexts = {}
+        self._string_fold_work = 0
         super().__init__(programs, analyzer_type=ClassAnalyzer)
         self.models = {}
+
+    @property
+    def compiler_context_obligations(self):
+        return tuple(StringContextObligation(owner, tuple(tokens), tuple(sorted(requirements)))
+                     for owner, (tokens, requirements) in sorted(self._string_contexts.items()))
+
+    @property
+    def string_context_complete(self):
+        """Absence of String-specific obligations, never compiler acceptance."""
+        return not self._string_contexts
+
+    def require_string_context(self, caller, token, *, materialization=False):
+        tokens, requirements = self._string_contexts.setdefault(caller.name, ({}, set()))
+        tokens[token] = None
+        requirements.update(("owned-bootstrap-type-definition", "shared-owning-root-and-safepoint-ABI"))
+        if materialization:
+            requirements.update(("managed-literal-materialization", "interned-reference-identity",
+                                 "shared-owning-root-and-safepoint-ABI"))
+        return self._bootstrap_string_type
+
+    def charge_string_work(self, count, token):
+        if count > MAX_STRING_UNITS or self._string_fold_work + count > MAX_STRING_FOLD_WORK:
+            token.error("String source constant exceeds the bounded UTF-16 value/folding budget",
+                        code="java.unsupported.string-literals")
+        self._string_fold_work += count
+
+    def external_type_dependency(self, caller, tokens):
+        if tuple(token.text for token in tokens) == ("java", "lang", "String"):
+            return self.require_string_context(caller, tokens[0])
+        return super().external_type_dependency(caller, tokens)
+
+    def resolve_named_type(self, caller, dtype):
+        if not isinstance(dtype, NamedType):
+            return dtype
+        token = dtype.tokens[0]
+        if len(dtype.tokens) != 1:
+            # As with qualified call owners, missing bootstrap public-type
+            # metadata cannot prove that a leading spelling names a package
+            # rather than a type with a member type.
+            token.error("qualified reference declarations require complete implicit-type/member-type metadata; use a resolved single-type import",
+                        code="java.unsupported.implicit-type-metadata")
+        target = self.visible_simple_type(caller, token.text)
+        if isinstance(target, BootstrapStringType):
+            return self.require_string_context(caller, token)
+        if target is None:
+            if token.text == "String":
+                return self.require_string_context(caller, token)
+            token.error("source reference declaration requires supplied class source for " + str(dtype),
+                        code="java.unsupported.source-dependency")
+        self.require_class_access(caller, target, token)
+        return ClassType(target.name)
+
+    def resolve_qualified_owner(self, analyzer, node):
+        first = node.value.split(".", 1)[0]
+        if (not any(first in scope for scope in analyzer.scopes) and first not in analyzer.fields
+                and first == "String"):
+            binding = self.visible_simple_type(analyzer.program, first)
+            if binding is None or isinstance(binding, BootstrapStringType):
+                self.require_string_context(analyzer.program, node.token)
+                node.token.error("String members require supplied owned bootstrap method/field definitions",
+                                 code="java.unsupported.source-dependency")
+        return super().resolve_qualified_owner(analyzer, node)
+
+    def resolve_declaration_types(self, program):
+        for field in program.fields:
+            field.dtype = self.resolve_named_type(program, field.dtype)
+        for method in (*program.methods, *program.constructors):
+            method.result = self.resolve_named_type(program, method.result)
+            method.parameter_types = tuple(self.resolve_named_type(program, dtype)
+                                           for dtype in method.parameter_types)
 
     def analyze(self):
         super().analyze()
@@ -285,13 +414,16 @@ class ClassModelProject(SourceProject):
                  "float": 4, "double": 8}
         for program in self.programs:
             slots, offset, alignment = [], 0, 1
-            reference_layout = any(isinstance(field.dtype, ArrayType) and "static" not in field.modifiers
+            reference_layout = any(isinstance(field.dtype, (ArrayType, ClassType, BootstrapStringType)) and "static" not in field.modifiers
                                    for field in program.fields)
             for field in program.fields:
                 if "static" in field.modifiers:
                     continue
                 if isinstance(field.dtype, ArrayType):
                     slots.append(ArrayReferenceFieldSlot(field))
+                    continue
+                if isinstance(field.dtype, (ClassType, BootstrapStringType)):
+                    slots.append(ClassReferenceFieldSlot(field))
                     continue
                 size = sizes[field.dtype]
                 alignment = max(alignment, size)
@@ -303,7 +435,9 @@ class ClassModelProject(SourceProject):
                 payload_size, alignment = None, None
             self.models[program.name] = SourceClassModel(program,
                 tuple(self.analyzers[program.name].constructors.values()), tuple(slots), payload_size, alignment,
-                program.initialization_steps)
+                program.initialization_steps,
+                compiler_context_obligations=tuple(item for item in self.compiler_context_obligations
+                                                   if item.owner == program.name))
         return self
 
 
@@ -314,6 +448,10 @@ def analyze_class_sources(sources):
     field initializer and instance/static body is checked. The resulting payload
     plan contains no Python header, tracing descriptor, object address or vtable.
     Native compile_source(s) keeps its existing explicit instance-feature gate.
+    Ordinary named field/result/parameter/local types resolve through supplied
+    source class identity, never host JDK metadata or a managed pointer.
+    String source constants additionally retain immutable missing-bootstrap and
+    materialization/root obligations, never complete dependency acceptance.
     """
     if not isinstance(sources, Mapping) or not sources or len(sources) > 256:
         raise JavaError("class source model requires between 1 and 256 supplied units")

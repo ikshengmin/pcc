@@ -32,19 +32,35 @@ class SourceProject:
                 name = "/".join(token.text for token in tokens)
                 target = self.classes.get(name)
                 if target is None:
-                    raise UnsupportedJava("source-project dependency resolution requires supplied source for "
-                                          + name.replace("/", "."), code="java.unsupported.source-dependency")
-                self.require_class_access(program, target, tokens[0])
+                    target = self.external_type_dependency(program, tokens)
+                    if target is None:
+                        raise UnsupportedJava("source-project dependency resolution requires supplied source for "
+                                              + name.replace("/", "."), code="java.unsupported.source-dependency")
+                else:
+                    self.require_class_access(program, target, tokens[0])
                 simple = tokens[-1].text
                 if (simple in imported and imported[simple] is not target or
                         simple == program.name.rsplit("/", 1)[-1] and target is not program):
                     tokens[-1].error("conflicting single-type import " + simple)
                 imported[simple] = target
             self.imports[program.name] = imported
+        # Resolve declaration identities before building overload tables. The
+        # native scalar owner has no extra declaration domain; model subclasses
+        # may bind retained source type names without granting lowering.
+        for program in self.programs:
+            self.resolve_declaration_types(program)
+        for program in self.programs:
             analyzer = analyzer_type(program, self)
             analyzer.declare_methods()
             analyzer.declare_fields()
             self.analyzers[program.name] = analyzer
+
+    def resolve_declaration_types(self, program):
+        pass
+
+    def external_type_dependency(self, program, tokens):
+        # Only a nonlowering semantic model may describe an unresolved type.
+        return None
 
     @staticmethod
     def require_class_access(caller, target, token):

@@ -1300,6 +1300,14 @@
         ]
       }
     },
+    "tests/java/test_source_named_reference_model.py": {
+      "test_same_named_reference_originals_have_independent_jdk_semantic_obligations": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls the existing exact-original JDK semantic-model helper on complete nominal-reference positives and invalid originals; no PCC managed native execution is claimed"
+        ]
+      }
+    },
     "tests/java/test_source_narrow_primitives.py": {
       "test_exact_narrow_originals_match_jdk_raw_processes_and_rejections": {
         "activity": "external-reference",
@@ -1313,6 +1321,14 @@
         "activity": "external-reference",
         "reason": [
           "Selected JDK compiler/runtime through recorded raw subprocesses"
+        ]
+      }
+    },
+    "tests/java/test_source_string_model.py": {
+      "test_exact_string_content_originals_match_independent_jdk_only": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls the existing exact-original JDK model reference helper with a separate String-content observer; PCC checks partial source facts and never executes managed String objects"
         ]
       }
     },

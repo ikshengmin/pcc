@@ -95,9 +95,9 @@ def test_same_valid_original_stops_at_managed_string_semantics(name, owner, text
     from pcc.frontends.java.source_lowering import SourceLowerer
     monkeypatch.setattr(SourceLowerer, "lower", lambda *args: pytest.fail("String reached IR lowering"))
     forbid_bytecode_or_external_owner(monkeypatch)
-    for invoke in (lambda: compile_source(text, filename=owner + ".java"),
-                   lambda: analyze_class_sources({owner + ".java": text})):
-        with pytest.raises(UnsupportedJava, match="shared managed String allocation") as caught:
+    for invoke, message in ((lambda: compile_source(text, filename=owner + ".java"), "shared managed String allocation"),
+                            (lambda: analyze_class_sources({owner + ".java": text}), "String equality requires")):
+        with pytest.raises(UnsupportedJava, match=message) as caught:
             invoke()
         assert caught.value.code == "java.unsupported.string-literals"
 
