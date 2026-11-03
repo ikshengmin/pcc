@@ -4081,38 +4081,44 @@ def pcc_gc_backend4_retarget_mutator_payload_locked(
         previous_offset = old_offset
         i = i + 1
 
-    entry = _store_buffer_medium_head()
-    while ptr_is_null(entry) == 0:
-        if ptr_eq(load_ptr(entry, 0), owner) != 0:
-            mapped = _backend4_map_mutator_payload_slot(
-                load_ptr(entry, 8),
-                old_base,
-                old_size_bytes,
-                new_base,
-                new_size_bytes,
-                slot_pairs,
-                pair_count,
-                pairs_ascending,
-            )
-            pcc_gc_store_buffer_slot_move(load_ptr(entry, 8), mapped)
-            store_ptr(entry, 8, mapped)
-        entry = load_ptr(entry, 24)
-    entry = _store_buffer_head()
-    while ptr_is_null(entry) == 0:
-        if ptr_eq(load_ptr(entry, 0), owner) != 0:
-            mapped = _backend4_map_mutator_payload_slot(
-                load_ptr(entry, 8),
-                old_base,
-                old_size_bytes,
-                new_base,
-                new_size_bytes,
-                slot_pairs,
-                pair_count,
-                pairs_ascending,
-            )
-            pcc_gc_store_buffer_slot_move(load_ptr(entry, 8), mapped)
-            store_ptr(entry, 8, mapped)
-        entry = load_ptr(entry, 24)
+    # The graph lock keeps owner membership stable across both queues. A
+    # complete negative answer proves that unrelated buffered owners need no
+    # examination when this payload grows. An incomplete index returns 1 and
+    # retains the original walks; remembered slots and span updates below are
+    # separate obligations even when no buffered entry names this owner.
+    if pcc_gc_store_buffer_member_maybe(owner) != 0:
+        entry = _store_buffer_medium_head()
+        while ptr_is_null(entry) == 0:
+            if ptr_eq(load_ptr(entry, 0), owner) != 0:
+                mapped = _backend4_map_mutator_payload_slot(
+                    load_ptr(entry, 8),
+                    old_base,
+                    old_size_bytes,
+                    new_base,
+                    new_size_bytes,
+                    slot_pairs,
+                    pair_count,
+                    pairs_ascending,
+                )
+                pcc_gc_store_buffer_slot_move(load_ptr(entry, 8), mapped)
+                store_ptr(entry, 8, mapped)
+            entry = load_ptr(entry, 24)
+        entry = _store_buffer_head()
+        while ptr_is_null(entry) == 0:
+            if ptr_eq(load_ptr(entry, 0), owner) != 0:
+                mapped = _backend4_map_mutator_payload_slot(
+                    load_ptr(entry, 8),
+                    old_base,
+                    old_size_bytes,
+                    new_base,
+                    new_size_bytes,
+                    slot_pairs,
+                    pair_count,
+                    pairs_ascending,
+                )
+                pcc_gc_store_buffer_slot_move(load_ptr(entry, 8), mapped)
+                store_ptr(entry, 8, mapped)
+            entry = load_ptr(entry, 24)
 
     # Remembered slots inside the moving payload leave their old remembered
     # page (and, for a registered payload span, their old ZPage card) before

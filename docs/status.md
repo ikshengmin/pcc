@@ -93,6 +93,18 @@ dropped keyword); the stage 1 commit message lists them. Rerun with
 
 ## Native throughput versus CPython 3.15.0: active, acceptance unmet
 
+GC4 payload growth now consults the existing buffered-owner membership index
+before traversing the medium and global store-buffer queues. A complete
+negative answer skips both unrelated queues; an incomplete index keeps the
+original walks. Remembered-slot and payload-span updates remain unconditional.
+Thirteen production-body regressions pass, including zero buffer-node reads
+with 4,096 unrelated entries. All three owned-native payload-growth nodes pass
+their nine scenarios when run separately under the unchanged six-worker,
+90-second/1-GiB guard; their parallel compile attempt exceeded the cap. The
+runtime experiment reuses 188 verified object members and rebuilds only
+`py_gc_backend.o` with the same frozen compiler. Throughput gain is not yet
+qualified; short paired screening precedes another full matrix.
+
 The owned runtime builder now accepts `PCC_RUNTIME_GC_STRESS_EVERY=N` for a
 separate debug archive. Every N successful managed-object publications requests
 collection; existing application safepoints service requests only when GC,
