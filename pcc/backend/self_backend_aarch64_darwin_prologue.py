@@ -19,6 +19,7 @@ from .self_backend_aarch64_darwin_mem import (
     emitted_fixed_instruction_line,
     emitted_frame_pair_line,
     emitted_move_register_line,
+    emitted_memory_instruction_line,
 )
 from .self_backend_aarch64_darwin_regalloc import (
     allocate_aarch64_block_registers,
@@ -32,6 +33,7 @@ from .self_backend_aarch64_darwin_slots import (
     store_scalar_reg_to_value_slot_indexed,
     store_value_regs_to_value_slot,
 )
+from .self_backend_aarch64_darwin_regs import emit_add_offset
 from .self_backend_aarch64_darwin_symbols import asm_symbol
 from .self_backend_dynamic_alloca import DYNAMIC_ALLOCA_INTRINSIC
 from .self_backend_ir import (
@@ -80,13 +82,16 @@ def function_uses_darwin_tls(func: ParsedFunction, module_symbols: PreparedModul
 def emit_function_prologue(
     func: ParsedFunction,
     module_symbols: PreparedModuleSymbols,
+    *,
+    registers_prepared: bool = False,
+    padding=(),
 ) -> list[str]:
     from .definition_linkage import checked_function_definition_linkage
     linkage = checked_function_definition_linkage(func, module_symbols.target_triple)
-    # Target-specific preparation belongs immediately before target emission.
-    # The allocator is conservative and leaves every preassigned stack slot in
-    # place, so an unsupported shape remains byte-for-byte on the spill path.
-    allocate_aarch64_block_registers(func)
+    # Normal emission finalizes registers, physical slots and stackmaps as
+    # one transaction before this prologue. Direct callers retain preparation.
+    if not registers_prepared:
+        allocate_aarch64_block_registers(func)
     # Darwin TLS materialization calls the TLV resolver and temporarily saves
     # LR. Even an otherwise frameless IR leaf therefore needs a protected
     # caller return address in its normal frame. Linux initial-exec TLS does
@@ -147,6 +152,31 @@ def emit_function_prologue(
         )
         # Save before any argument is committed into a callee-saved register.
         lines.extend(emit_callee_saved_frame(func, False))
+        # Reserved alignment bytes contain no program storage. Clear them
+        # before the first body poll so raw stack capture cannot retain a
+        # prior activation's object through an uninitialized frame hole.
+        for low, high in padding:
+            offset = high
+            while offset > low:
+                wide = offset % 8 == 0 and offset - low >= 8
+                width = 8 if wide else 1
+                register = "xzr" if wide else "wzr"
+                operation = "stur" if wide else "sturb"
+                if offset <= 255:
+                    lines.append(emitted_memory_instruction_line(
+                        operation, register, "x29", -offset,
+                    ))
+                else:
+                    lines.extend(emit_add_offset("x9", "x29", -offset))
+                    lines.append(emitted_memory_instruction_line(
+                        "str" if wide else "strb", register, "x9",
+                    ))
+                offset -= width
+        count = len(func.aarch64_callee_saved)
+        if count % 2 != 0:
+            lines.append(emitted_memory_instruction_line(
+                "str", "xzr", "sp", func.platform_frame_extra + count * 8,
+            ))
     if func.platform_frame_extra:
         # Preserve incoming variadic registers before normal argument lowering.
         for index in range(8):

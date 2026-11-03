@@ -77,8 +77,10 @@ from .self_backend_aarch64_darwin_tail_calls import (
     aarch64_tail_call_id_for_block,
     plan_aarch64_tail_calls,
 )
+from .self_backend_aarch64_frame import compact_aarch64_frame
 from .self_backend_aarch64_darwin_regalloc import (
     note_aarch64_reload_destinations,
+    allocate_aarch64_block_registers,
 )
 from .self_backend_aarch64_darwin_terminators import (
     emit_branch_terminator as _terms_emit_branch_terminator,
@@ -780,30 +782,46 @@ def _emit_prepared_aarch64_darwin_lines_active(
                         _block_label(func.name, success_block),
                     )
                 )
-            if phase_timing is not None:
-                phase_start = phase_timing.start()
-            debug_plan = None
-            source_info = function_debug(func)
-            if source_info is not None:
-                debug_plan = DebugFunctionPlan(
-                    func.type_context.debug_info, source_info,
-                    _function_symbol(func.name), stack_map_plans[func.name].end_label,
-                )
-                debug_plans.append(debug_plan)
-            if native_sink is None:
-                lines.extend(_emit_function(
-                    func, stack_map_plans[func.name], debug_plan=debug_plan, phase_timing=phase_timing,
-                ))
-            else:
-                _emit_function(
-                    func, stack_map_plans[func.name], native_sink=native_sink,
-                    debug_plan=debug_plan, phase_timing=phase_timing,
-                )
-                native_sink.release_captured_function()
-                if close_native_tables:
-                    # Final words and deferred error stubs are published. Plans
-                    # own their scalar tables; unwind only needs function names.
-                    get_indexed_function_kernel(func).close_native_tables()
+            note_aarch64_reload_destinations(func, stack_map_plans[func.name])
+            allocate_aarch64_block_registers(func)
+            frame_layout = compact_aarch64_frame(func, stack_map_plans[func.name])
+            try:
+                if frame_layout.moved:
+                    previous_plan = stack_map_plans[func.name]
+                    stack_map_plans[func.name] = build_function_stack_map_plan(
+                        func, globals_, target="aarch64-darwin",
+                        identity_name=_function_symbol(func.name),
+                    )
+                    if previous_plan.packed_records is not None:
+                        previous_plan.packed_records.close()
+                note_aarch64_reload_destinations(func, stack_map_plans[func.name])
+                if phase_timing is not None:
+                    phase_start = phase_timing.start()
+                debug_plan = None
+                source_info = function_debug(func)
+                if source_info is not None:
+                    debug_plan = DebugFunctionPlan(
+                        func.type_context.debug_info, source_info,
+                        _function_symbol(func.name), stack_map_plans[func.name].end_label,
+                    )
+                    debug_plans.append(debug_plan)
+                if native_sink is None:
+                    lines.extend(_emit_function(
+                        func, stack_map_plans[func.name], debug_plan=debug_plan, phase_timing=phase_timing,
+                        frame_padding=frame_layout.padding,
+                    ))
+                else:
+                    _emit_function(
+                        func, stack_map_plans[func.name], native_sink=native_sink,
+                        debug_plan=debug_plan, phase_timing=phase_timing,
+                        frame_padding=frame_layout.padding,
+                    )
+                    native_sink.release_captured_function()
+            finally:
+                frame_layout.restore(func)
+            if native_sink is not None and close_native_tables:
+                # Final machine words and stackmap records own their offsets.
+                get_indexed_function_kernel(func).close_native_tables()
             if phase_timing is not None:
                 phase_timing.add(6, phase_start)
     if phase_timing is not None:
@@ -2397,11 +2415,13 @@ def _emit_function(
     *,
     debug_plan: DebugFunctionPlan | None = None,
     phase_timing=None,
+    frame_padding=(),
 ) -> list[str]:
     if phase_timing is not None:
         phase_start = phase_timing.start()
-    note_aarch64_reload_destinations(func, stack_map_plan)
-    lines = _prologue_emit_function_prologue(func, _MODULE_SYMBOLS)
+    lines = _prologue_emit_function_prologue(
+        func, _MODULE_SYMBOLS, registers_prepared=True, padding=frame_padding,
+    )
     if native_sink is not None:
         native_sink.extend(lines)
         lines = []

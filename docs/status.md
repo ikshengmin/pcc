@@ -107,6 +107,32 @@ machine, all five collectors, both worker counts, collection counts, outer
 pause p99 and peak heap. Earlier three-pair packets below remain diagnostic
 screening only. Existing correctness/resource limits are not relaxed.
 
+The AArch64 physical-frame correction based on `eaf9c895c` fixes a reproduced
+count-free retention defect: an overwritten list element survived explicit
+collection because a never-written `pcc_gc_collect` stack slot still held its
+address. Debugger-only observation identified the conservative scan as its
+retaining root, with no pin bit or foreign lease. Target-neutral stack slots
+had been reserved before register allocation and never removed afterward.
+The emitter now compacts the physical spans still needed after register
+allocation, preserves addressable allocas and root/reload cells, rebuilds the
+stackmaps, and initializes alignment padding. The executed collector frame
+shrinks from 192 to 80 bytes; its slot area shrinks from 144 to 32 bytes.
+
+Local Mac host-pcc0/self/no-libpython evidence uses runtime SHA256
+`aaf14dad0d35f2de4b3b09bd9758df168314912c3e8423e463e8fa0af9acb942`.
+`test_aarch64_physical_frame.py`, the related TLV and stackmap cases, and the
+three separately guarded `test_native_root_frames.py` nodes pass 18 checks.
+The unchanged list replacement/finalizer scenario passes GC0-4 with both
+provenance settings (10 executions). The extra count-free run now clears the
+weak target and runs its callbacks; its counted-order assertion still differs
+from tracing order. The existing `test_gc4_tracing_only.py` lifecycle program
+also executes and exactly matches CPython for tracing weakrefs, finalizers,
+resurrection and callback batches. Program construction uses the authorized
+8-GiB build guard; test/execution guards remain 90 seconds and 1 GiB.
+Seven-pair throughput qualification, whole suites and bootstrap remain unrun.
+Dead-but-written slots, saved register aliases and foreign frames still need
+their existing root protection; full precise-frame exclusion is unfinished.
+
 The frozen `04e718f0a` graph-lock inventory now contains 349 semantic runtime
 acquisition sites and six direct codegen templates. A separate diagnostic
 runtime records caller-PC events in per-thread tables; its native calibration
