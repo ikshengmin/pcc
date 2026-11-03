@@ -255,6 +255,254 @@ def test_program_fallback_macro_overrides_feature_operator():
     assert "int program_macro;" in preprocess(source)
 
 
+# Unmodified excerpts from orjson bd00937c5c46ab20eb5d7fe1cfc034b906c4578f,
+# include/yyjson/yyjson.h (blob c61483dc23f8f3ab216482b43a82ced294b6215c).
+# Keep the original wrapper and failing #elif, rather than replacing the
+# upstream operator or claiming always_inline support to avoid its fallback.
+YYJSON_ATTRIBUTE_WRAPPER = """/** compiler attribute check (since gcc 5.0, clang 2.9, icc 17) */
+#ifndef yyjson_has_attribute
+#   ifdef __has_attribute
+#       define yyjson_has_attribute(x) __has_attribute(x)
+#   else
+#       define yyjson_has_attribute(x) 0
+#   endif
+#endif
+"""
+YYJSON_INLINE_CONDITIONAL = """/** inline for compiler */
+#ifndef yyjson_inline
+#   if YYJSON_MSC_VER >= 1200
+#       define yyjson_inline __forceinline
+#   elif defined(_MSC_VER)
+#       define yyjson_inline __inline
+#   elif yyjson_has_attribute(always_inline) || YYJSON_GCC_VER >= 4
+#       define yyjson_inline __inline__ __attribute__((always_inline))
+#   elif defined(__clang__) || defined(__GNUC__)
+#       define yyjson_inline __inline__
+#   elif defined(__cplusplus) || YYJSON_STDC_VER >= 199901L
+#       define yyjson_inline inline
+#   else
+#       define yyjson_inline
+#   endif
+#endif
+"""
+
+
+def test_yyjson_original_attribute_wrapper_keeps_owned_fallback():
+    result = preprocess(
+        YYJSON_ATTRIBUTE_WRAPPER + YYJSON_INLINE_CONDITIONAL
+        + "yyjson_inline int original_inline;\n",
+        cpp_args=["-std=c11", "-DYYJSON_MSC_VER=0", "-DYYJSON_GCC_VER=0",
+                  "-DYYJSON_STDC_VER=201112L"],
+    )
+    assert "inline int original_inline;" in result
+    assert "__attribute__" not in result
+    assert "__inline__" not in result
+
+
+@pytest.mark.parametrize("operator, operand, expected", [
+    ("__has_feature", "c_static_assert", True),
+    ("__has_extension", "c_static_assert", True),
+    ("__has_feature", "unknown_feature", False),
+    ("__has_builtin", "__builtin_expect", False),
+    ("__has_attribute", "always_inline", False),
+    ("__has_c_attribute", "noreturn", False),
+    ("__has_cpp_attribute", "gnu::always_inline", False),
+    ("__has_declspec_attribute", "noinline", False),
+    ("__has_warning", '"-Wunknown-warning"', False),
+    ("__is_identifier", "plain_name", True),
+    ("__is_identifier", "int", False),
+])
+@pytest.mark.parametrize("invocation", [
+    "ALIAS(OPERAND)", "WRAP(OPERAND)", "OUTER(OPERAND)",
+    "IDENTITY(ALIAS)(OPERAND)", "IDENTITY(WRAP(OPERAND))",
+    "JOIN(__, SUFFIX)(OPERAND)",
+])
+def test_feature_operators_follow_macro_rescan(operator, operand, expected, invocation):
+    # C11 6.10.3.4: rescan the replacement with the remaining source tokens.
+    # Use a literal operand here; the separate test below distinguishes raw
+    # builtin operands from ordinary wrapper-argument prescan.
+    source = (
+        "#define ALIAS " + operator + "\n"
+        "#define WRAP(x) ALIAS(x)\n"
+        "#define OUTER(x) WRAP(x)\n"
+        "#define IDENTITY(x) x\n"
+        "#define JOIN_RAW(a, b) a ## b\n"
+        "#define JOIN(a, b) JOIN_RAW(a, b)\n"
+        "#if " + invocation.replace("OPERAND", operand).replace("SUFFIX", operator[2:])
+        + "\nint selected;\n#else\nint fallback;\n#endif\n"
+    )
+    result = preprocess(source)
+    assert ("int selected;" in result) is expected
+    assert ("int fallback;" in result) is not expected
+
+
+def test_feature_rescan_preserves_raw_operands_and_argument_prescan():
+    source = (
+        "#define FEATURE c_static_assert\n"
+        "#define NAME int\n"
+        "#define QUERY __has_feature\n"
+        "#define IDENTIFIER __is_identifier\n"
+        "#define WRAP(x) QUERY(x)\n"
+        "#define WRAP_IDENTIFIER(x) IDENTIFIER(x)\n"
+        "#define IDENTITY(x) x\n"
+        "#define DROP(x) 1\n"
+        "#if !QUERY(FEATURE) && WRAP(FEATURE) && IDENTITY(WRAP(FEATURE))\n"
+        "int prescan_ok;\n#endif\n"
+        "#if IDENTIFIER(NAME) && !WRAP_IDENTIFIER(NAME)\n"
+        "int raw_identifier_ok;\n#endif\n"
+        "#if DROP(__has_feature)\nint discarded_ok;\n#endif\n"
+    )
+    result = preprocess(source)
+    for marker in ("prescan_ok", "raw_identifier_ok", "discarded_ok"):
+        assert "int " + marker + ";" in result
+
+
+@pytest.mark.parametrize("operator", [
+    "__has_feature", "__has_extension", "__has_builtin", "__is_identifier",
+])
+def test_identifier_feature_operands_do_not_run_macro_expansion(operator):
+    source = (
+        "#define QUERY " + operator + "\n"
+        "#define OPERAND _Pragma(123)\n"
+        "#if QUERY(OPERAND)\nint identifier;\n#else\nint unclaimed;\n#endif\n"
+    )
+    result = preprocess(source)
+    assert ("int identifier;" in result) is (operator == "__is_identifier")
+    assert ("int unclaimed;" in result) is (operator != "__is_identifier")
+
+
+def test_feature_rescan_keeps_defined_operands_unexpanded_and_tokens_separate():
+    source = (
+        "#define EXISTS missing_name\n"
+        "#define QUERY __has_feature\n"
+        "#define PLUS +\n"
+        "#if defined(EXISTS) && defined EXISTS && !defined(missing_name)\n"
+        "int defined_ok;\n#endif\n"
+        "#if defined(__has_feature) && QUERY(c_static_assert) PLUS+1 == 2\n"
+        "int boundaries_ok;\n#endif\n"
+        "#if QUERY(c_static_assert) && 'A' == 65 && '\\n' == 10\n"
+        "int literals_ok;\n#endif\n"
+    )
+    result = preprocess(source)
+    for marker in ("defined_ok", "boundaries_ok", "literals_ok"):
+        assert "int " + marker + ";" in result
+
+
+@pytest.mark.parametrize("operator", [
+    "__has_attribute", "__has_c_attribute", "__has_cpp_attribute",
+    "__has_declspec_attribute",
+])
+def test_attribute_query_operands_expand_without_claiming_support(operator):
+    # Clang-compatible attribute operators expand arguments, unlike
+    # __has_feature/__has_builtin. Expansion errors must not be hidden by 0.
+    source = (
+        "#define QUERY " + operator + "\n"
+        "#define ATTRIBUTE always_inline\n"
+        "#if !QUERY(ATTRIBUTE)\nint unclaimed;\n#endif\n"
+    )
+    assert "int unclaimed;" in preprocess(source)
+    with pytest.raises(RuntimeError, match="wrong number of arguments for macro: TWO"):
+        preprocess(
+            "#define QUERY " + operator + "\n#define TWO(x, y) x\n"
+            "#if QUERY(TWO(one))\n#endif\n"
+        )
+
+
+def test_feature_rescan_observes_macro_state_in_token_order():
+    source = r'''
+#define QUERY(x) 0
+#pragma push_macro("QUERY")
+#undef QUERY
+#define QUERY __has_feature
+#if QUERY(c_static_assert) && (_Pragma("pop_macro(\"QUERY\")") QUERY(c_static_assert) == 0)
+int ordered_ok;
+#endif
+'''
+    assert "int ordered_ok;" in preprocess(source)
+
+
+def test_feature_rescan_preserves_user_override_and_recursive_hide_sets():
+    source = (
+        "#define __has_attribute(x) ((x) + 1)\n"
+        "#define QUERY(x) __has_attribute(x)\n"
+        "#define LEFT RIGHT\n"
+        "#define RIGHT LEFT\n"
+        "#if QUERY(2) == 3 && __has_feature(c_static_assert) && LEFT == 0\n"
+        "int override_ok;\n#endif\n"
+        "#undef __has_attribute\n"
+        "#if !QUERY(always_inline)\nint restored_ok;\n#endif\n"
+    )
+    result = preprocess(source)
+    assert "int override_ok;" in result
+    assert "int restored_ok;" in result
+
+
+@pytest.mark.parametrize("operator", ["__has_include", "__has_include_next"])
+def test_feature_rescan_include_alias_and_literal_header_operand(tmp_path, operator):
+    (tmp_path / "present.h").write_text("int present;\n")
+    source = (
+        "#define QUERY " + operator + "\n"
+        "#define WRAP(x) QUERY(x)\n"
+        '#define HEADER "present.h"\n'
+        "#define present absent\n"
+        '#if WRAP(HEADER) && QUERY(<present.h>) && QUERY("present.h")\n'
+        "int header_ok;\n#endif\n"
+        '#if WRAP("absent.h")\nint bad_header;\n#endif\n'
+    )
+    result = preprocess(source, base_dir=str(tmp_path), include_dirs=[str(tmp_path)])
+    assert "int header_ok;" in result
+    assert "int bad_header;" not in result
+
+
+@pytest.mark.parametrize("operator", ["__has_include", "__has_include_next"])
+def test_header_queries_preserve_literal_and_macro_parent_directory_spelling(tmp_path, operator):
+    headers = tmp_path / "headers"
+    headers.mkdir()
+    (tmp_path / "present.h").write_text("int present;\n")
+    source = (
+        "#define QUERY " + operator + "\n"
+        "#define HEADER <../present.h>\n"
+        "#if QUERY(<../present.h>) && QUERY(HEADER)\n"
+        "int parent_header_ok;\n#endif\n"
+    )
+    result = preprocess(source, base_dir=str(headers), include_dirs=[str(headers)])
+    assert "int parent_header_ok;" in result
+
+
+@pytest.mark.parametrize("operator", ["__has_include", "__has_include_next"])
+def test_header_query_preserves_unavailable_tokens_from_wrapper_prescan(tmp_path, operator):
+    (tmp_path / "present.h").write_text("int present;\n")
+    source = '''
+#define F(x) x
+#define Q(x) __has_include(x)
+#if Q(F(F)("present.h"))
+int falsely_present;
+#endif
+'''.replace("__has_include", operator)
+    # C11 6.10.3.4: the F left by F(F) is unavailable on further rescan.
+    # Relexing the header operand must not turn it back into F("present.h")
+    # with an empty hide set and then incorrectly report a matching header.
+    with pytest.raises(RuntimeError, match="malformed __has_include operand"):
+        preprocess(source, base_dir=str(tmp_path))
+
+
+@pytest.mark.parametrize("expression, diagnostic", [
+    ("QUERY", "requires a parenthesized operand"),
+    ("QUERY(always_inline", "unterminated __has_attribute operand"),
+    ("unknown_query(always_inline)", "failed to evaluate #if expression"),
+])
+def test_feature_rescan_does_not_swallow_malformed_or_unknown_operators(expression, diagnostic):
+    with pytest.raises(RuntimeError, match=diagnostic):
+        preprocess("#define QUERY __has_attribute\n#if " + expression + "\n#endif\n")
+
+
+def test_feature_operators_are_not_expanded_in_ordinary_source():
+    result = preprocess(
+        "#define QUERY __has_feature\nint value = QUERY(c_static_assert);\n"
+    )
+    assert "int value = __has_feature(c_static_assert);" in result
+
+
 def test_block_storage_class_follows_target_and_blocks_options():
     source = "__block int counter;\n"
     darwin, linux = "arm64-apple-darwin", "x86_64-unknown-linux-gnu"

@@ -129,13 +129,17 @@ SYSTEM_HEADERS = {
     "sys/stat.h",
 }
 
-# Clang-compatible feature-test operators. They are evaluated in #if before
-# macro expansion (a header name or identifier operand must not expand) and
-# answer from pcc's own capabilities: only keyword-backed C11 features and
-# compat-erased nullability qualifiers are claimed; no attributes, builtins or
-# warnings are, so portable fallbacks stay selected. Like clang,
+# Clang-compatible feature-test operators. Conditional token rescan recognizes
+# them even when a macro supplies the operator. Each operator owns its operand's
+# expansion rules. Answers come from pcc's capabilities: keyword-backed C11
+# features and compat-erased nullability qualifiers are claimed; no attributes,
+# builtins or warnings are, so portable fallbacks stay selected. Like clang,
 # ``defined(__has_include)`` and ``#ifdef __has_feature`` hold.
 _INCLUDE_TEST_OPERATORS = frozenset(("__has_include", "__has_include_next"))
+_EXPANDED_FEATURE_OPERATORS = frozenset((
+    "__has_attribute", "__has_c_attribute", "__has_cpp_attribute",
+    "__has_declspec_attribute",
+))
 _UNCLAIMED_FEATURE_OPERATORS = frozenset((
     "__has_feature", "__has_extension", "__has_builtin", "__has_attribute",
     "__has_c_attribute", "__has_cpp_attribute", "__has_declspec_attribute",
@@ -1126,16 +1130,15 @@ class Preprocessor:
                 end += 1
             tokens[index:end] = [_MacroToken(tokens[index].leading, value)]
             index += 1
-        tokens = self._evaluate_feature_tests(tokens)
-        expanded = self._serialize_macro_fragments(
-            [token.leading + token.text for token in tokens]
-        )
-        # Now expand macros
-        expanded = self._expand_line(expanded)
+        # Feature operators participate in the same token rescan as macros.
+        # A wrapper can produce an operator, and an alias can meet parentheses
+        # in the remaining input. A separate text pass would lose hide sets
+        # and expand operands which the feature operator must consume raw.
+        tokens = self._expand_tokens(tokens, feature_tests=True)
         # Replace identifier tokens only: letters and escapes inside character
         # constants have already survived macro expansion and must stay intact.
         pieces = []
-        for token in self._macro_tokens(expanded):
+        for token in tokens:
             spelling = token.text
             if self.language == "c++17":
                 # C++ boolean literals and alternative operator tokens retain
@@ -1150,7 +1153,7 @@ class Preprocessor:
             if IDENTIFIER_RE.fullmatch(spelling):
                 spelling = "0"
             pieces.append(token.leading + spelling)
-        expanded = "".join(pieces)
+        expanded = self._serialize_macro_fragments(pieces)
         # Evaluate using a narrow integer-only expression evaluator.
         # eval() is out of scope for the self-host target (see
         # scripts/audit_selfhost.py banned-builtin list).
@@ -1168,57 +1171,60 @@ class Preprocessor:
     def _is_defined(self, name):
         return name in self.macros or name in _FEATURE_TEST_OPERATORS
 
-    def _evaluate_feature_tests(self, tokens):
-        """Replace feature-test operator calls with 0/1 before macro expansion."""
-        index = 0
-        while index < len(tokens):
-            name = tokens[index].text
-            # A program may supply its own fallback macro under the same name.
-            if name not in _FEATURE_TEST_OPERATORS or name in self.macros:
-                index += 1
-                continue
-            open_index = index + 1
-            if open_index >= len(tokens) or tokens[open_index].text != "(":
-                raise RuntimeError("owned preprocessor: " + name + " requires a parenthesized operand")
-            depth = 0
-            close_index = open_index
-            while close_index < len(tokens):
-                if tokens[close_index].text == "(":
-                    depth += 1
-                elif tokens[close_index].text == ")":
-                    depth -= 1
-                    if depth == 0:
-                        break
-                close_index += 1
-            if close_index >= len(tokens):
-                raise RuntimeError("owned preprocessor: unterminated " + name + " operand")
-            operand = tokens[open_index + 1:close_index]
-            if name in _INCLUDE_TEST_OPERATORS:
-                found = self._header_exists(operand, name == "__has_include_next")
-                value = "1" if found else "0"
-            elif name == "__is_identifier":
-                from pcc.frontends.c.parse.c_lex import KEYWORD_MAP
+    def _evaluate_feature_test(self, tokens, index):
+        """Consume one operator at the current rescan position, not future tokens."""
+        name = tokens[index].text
+        open_index = index + 1
+        if open_index >= len(tokens) or tokens[open_index].text != "(":
+            raise RuntimeError("owned preprocessor: " + name + " requires a parenthesized operand")
+        depth = 0
+        close_index = open_index
+        while close_index < len(tokens):
+            if tokens[close_index].text == "(":
+                depth += 1
+            elif tokens[close_index].text == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            close_index += 1
+        if close_index >= len(tokens):
+            raise RuntimeError("owned preprocessor: unterminated " + name + " operand")
+        operand = tokens[open_index + 1:close_index]
+        # Clang's attribute queries expand their arguments; feature/builtin
+        # queries and __is_identifier consume identifiers without expansion.
+        # Header queries retain their distinct quoted/angled operand rules.
+        if name in _EXPANDED_FEATURE_OPERATORS:
+            operand = self._expand_tokens(operand, feature_tests=True)
+        if name in _INCLUDE_TEST_OPERATORS:
+            found = self._header_exists(operand, name == "__has_include_next")
+            value = "1" if found else "0"
+        elif name == "__is_identifier":
+            from pcc.frontends.c.parse.c_lex import KEYWORD_MAP
 
-                text = "".join(token.text for token in operand).strip()
-                value = "1" if IDENTIFIER_RE.fullmatch(text) and text not in KEYWORD_MAP else "0"
-            elif name in ("__has_feature", "__has_extension"):
-                feature = "".join(token.text for token in operand).strip()
-                # Nullability qualifiers are accepted when the compile path
-                # erases them (the C compat defines); otherwise not claimed.
-                claimed = feature in _KEYWORD_BACKED_FEATURES or (
-                    feature == "nullability" and "_Nonnull" in self.macros
-                )
-                value = "1" if claimed else "0"
-            else:
-                value = "0"
-            tokens[index:close_index + 1] = [_MacroToken(tokens[index].leading, value)]
-            index += 1
-        return tokens
+            text = "".join(token.text for token in operand).strip()
+            value = "1" if IDENTIFIER_RE.fullmatch(text) and text not in KEYWORD_MAP else "0"
+        elif name in ("__has_feature", "__has_extension"):
+            feature = "".join(token.text for token in operand).strip()
+            # Nullability qualifiers are accepted when the compile path
+            # erases them (the C compat defines); otherwise not claimed.
+            claimed = feature in _KEYWORD_BACKED_FEATURES or (
+                feature == "nullability" and "_Nonnull" in self.macros
+            )
+            value = "1" if claimed else "0"
+        else:
+            value = "0"
+        return [_MacroToken("", value)], close_index + 1
 
     def _header_exists(self, operand, include_next):
+        # Header-name characters retain their spelling: the ordinary macro
+        # serializer's protective separators would turn ../ into . ./.
         spelling = "".join(token.leading + token.text for token in operand).strip()
         if not spelling.startswith(('"', '<')):
-            spelling = self._expand_line(spelling).strip()
+            # Wrapper argument prescan may have made a macro unavailable.
+            # Do not relex its spelling: that would discard hide sets and
+            # incorrectly expand it again when looking for a header name.
+            operand = self._expand_tokens(operand, feature_tests=True)
+            spelling = "".join(token.leading + token.text for token in operand).strip()
         quoted = len(spelling) > 1 and spelling.startswith('"') and spelling.endswith('"')
         angled = len(spelling) > 1 and spelling.startswith('<') and spelling.endswith('>')
         if not (quoted or angled):
@@ -1279,7 +1285,7 @@ class Preprocessor:
             self._expand_cache[line] = result
         return result
 
-    def _expand_tokens(self, tokens, defer_pragma=False):
+    def _expand_tokens(self, tokens, defer_pragma=False, feature_tests=False):
         tokens = list(tokens)
         index = 0
         while index < len(tokens):
@@ -1287,7 +1293,15 @@ class Preprocessor:
             name = token.text
             macro = self.macros.get(name)
             end = index + 1
-            if name == "_Pragma":
+            if feature_tests and name in _FEATURE_TEST_OPERATORS and macro is None:
+                if defer_pragma and (end == len(tokens) or tokens[end].text != "("):
+                    # As with _Pragma, argument prescan can supply only the
+                    # operator name; its operand belongs to surrounding rescan.
+                    index += 1
+                    continue
+                replacement, end = self._evaluate_feature_test(tokens, index)
+                hidden = token.hide_set
+            elif name == "_Pragma":
                 if defer_pragma and (end == len(tokens) or tokens[end].text != "("):
                     # Argument prescan may supply the operator name while the
                     # surrounding macro/source supplies its operand on rescan.
@@ -1298,7 +1312,10 @@ class Preprocessor:
                 if tokens[end].text != "(":
                     raise RuntimeError("malformed _Pragma: expected '(' and one string literal")
                 args, end = self._macro_arguments(tokens, end + 1, name)
-                argument = self._expand_tokens(args[0]) if len(args) == 1 else []
+                argument = (
+                    self._expand_tokens(args[0], feature_tests=feature_tests)
+                    if len(args) == 1 else []
+                )
                 literal = (re.fullmatch(r'(?:u8|u|U|L)?"((?:\\.|[^"\\])*)"', argument[0].text)
                            if len(argument) == 1 else None)
                 if literal is None:
@@ -1328,7 +1345,7 @@ class Preprocessor:
                 index += 1
                 continue
             elif not macro.is_function:
-                replacement = self._substitute_params(macro, [])
+                replacement = self._substitute_params(macro, [], feature_tests=feature_tests)
                 hidden = token.hide_set | {name}
             else:
                 if end == len(tokens) or tokens[end].text != "(":
@@ -1339,7 +1356,7 @@ class Preprocessor:
                 # An alias can provide the name while the original source
                 # provides its parentheses, or vice versa.
                 hidden = (token.hide_set & tokens[end - 1].hide_set) | {name}
-                replacement = self._substitute_params(macro, args)
+                replacement = self._substitute_params(macro, args, feature_tests=feature_tests)
             replacement = self._copy_macro_tokens(
                 replacement, leading=token.leading, hide_set=hidden,
             )
@@ -1423,7 +1440,7 @@ class Preprocessor:
         spelling = "".join(pieces).replace("\\", "\\\\").replace('"', '\\"')
         return '"' + spelling + '"'
 
-    def _substitute_params(self, macro, args):
+    def _substitute_params(self, macro, args, feature_tests=False):
         """Prescan ordinary arguments, stringify raw tokens, and then paste."""
         variadic = macro.variadic_parameter is not None
         parameters = macro.params[:-1] if variadic else (macro.params or [])
@@ -1467,7 +1484,9 @@ class Preprocessor:
                     replacement = raw[parameter]
                 else:
                     if parameter not in expanded:
-                        expanded[parameter] = self._expand_tokens(raw[parameter], defer_pragma=True)
+                        expanded[parameter] = self._expand_tokens(
+                            raw[parameter], defer_pragma=True, feature_tests=feature_tests,
+                        )
                     replacement = expanded[parameter]
                 replacement = self._copy_macro_tokens(replacement, leading=token.leading)
             else:
