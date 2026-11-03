@@ -3,7 +3,9 @@
 Initial grammar: one ordinary class, static primitive/void methods and scalar locals,
 structured control flow and scalar expressions. Unsupported grammar is never
 discarded. Unicode escapes are translated before comments and tokens, retaining
-raw-source diagnostic coordinates. Non-ASCII identifiers remain explicit gaps.
+raw-source diagnostic coordinates. Ordinary string literals retain UTF-16 code
+units in the source AST, without claiming managed String semantics or lowering.
+Non-ASCII identifiers and text blocks remain explicit gaps.
 """
 from bisect import bisect_right
 from dataclasses import dataclass, field
@@ -39,6 +41,7 @@ class Token:
     filename: str
     line: int
     column: int
+    string_units: tuple[int, ...] | None = None
 
     def error(self, message, *, code=None):
         diagnostic = f"{self.filename}:{self.line}:{self.column}: {message}"
@@ -113,9 +116,9 @@ class SourceClass:
         return self.name.rpartition("/")[0]
 
 
-def _raw_token(text, filename, offset, line_starts):
+def _raw_token(text, filename, offset, line_starts, *, string_units=None):
     line = bisect_right(line_starts, offset)
-    return Token(text, filename, line, offset - line_starts[line - 1] + 1)
+    return Token(text, filename, line, offset - line_starts[line - 1] + 1, string_units)
 
 
 def _translate_unicode_escapes(source, filename, line_starts):
@@ -157,6 +160,51 @@ def _translate_unicode_escapes(source, filename, line_starts):
     return "".join(result), ends, contractions
 
 
+def _scan_string_literal(source, start, token_at):
+    """JLS 3.1/3.10.5/3.10.7: scan once, retaining immutable UTF-16 units.
+
+    Consume octal escapes maximally without regex backtracking on malformed
+    long input. This source data is never a pointer, allocated String,
+    constant-expression value or proof of literal identity. Supplementary
+    characters become surrogate pairs; lone surrogates stay individual units.
+    Unicode escapes have already been translated and are never recursive here.
+    """
+    escapes = {"b": 8, "t": 9, "n": 10, "f": 12, "r": 13, "s": 32,
+               '"': 34, "'": 39, "\\": 92}
+    units, position = [], start + 1
+    while position < len(source):
+        character = source[position]
+        position += 1
+        if character == '"':
+            return position, tuple(units)
+        if character in "\r\n":
+            break
+        value = ord(character)
+        if character == "\\":
+            if position == len(source):
+                break
+            escape = source[position]
+            position += 1
+            if escape in "01234567":
+                digits = escape
+                limit = 3 if escape in "0123" else 2
+                while (len(digits) < limit and position < len(source)
+                       and source[position] in "01234567"):
+                    digits += source[position]
+                    position += 1
+                value = int(digits, 8)
+            elif escape in escapes:
+                value = escapes[escape]
+            else:
+                break
+        if value > 0xffff:
+            value -= 0x10000
+            units.extend((0xd800 + (value >> 10), 0xdc00 + (value & 0x3ff)))
+        else:
+            units.append(value)
+    token_at('"', start).error("invalid Java string literal")
+
+
 def tokenize(source, filename):
     if not isinstance(source, str):
         raise JavaError("Java source input must be text")
@@ -168,10 +216,10 @@ def tokenize(source, filename):
     line_starts = [0, *(match.end() for match in re.finditer(r"\r\n|\r|\n", source))]
     source, escape_ends, contractions = _translate_unicode_escapes(source, filename, line_starts)
 
-    def token_at(text, position):
+    def token_at(text, position, *, string_units=None):
         escape = bisect_right(escape_ends, position) - 1
         raw = position + (contractions[escape] if escape >= 0 else 0)
-        return _raw_token(text, filename, raw, line_starts)
+        return _raw_token(text, filename, raw, line_starts, string_units=string_units)
 
     tokens, pos = [], 0
     while pos < len(source):
@@ -189,21 +237,30 @@ def tokenize(source, filename):
                 token_at("/*", pos).error("unterminated comment")
             pos = end + 2
         else:
-            match = (CHAR_LITERAL.match(source, pos) if source[pos] == "'" else
-                     FLOAT_LITERAL.match(source, pos) or LEXEME.match(source, pos))
-            if not match:
-                if source[pos] == "'":
-                    token_at("'", pos).error("invalid Java character literal")
-                token = token_at(source[pos], pos)
-                if source[pos] == '"':
-                    token.error("unsupported Java source token", code="java.unsupported.string-literals")
-                if source[pos] == "@":
-                    token.error("unsupported Java source token", code="java.unsupported.annotations")
-                if not source[pos].isascii():
-                    token.error("unsupported Java source token", code="java.unsupported.unicode-tokens")
-                token.error("unsupported Java source token")
-            pos = match.end()
-            tokens.append(token_at(match.group(), start))
+            if source.startswith('"""', pos):
+                # A text block is not three ordinary string delimiters. Reject
+                # a malformed opening before reporting the unavailable domain.
+                if not re.match(r'"""[ \t\f]*(?:\r\n|\r|\n)', source[pos:]):
+                    token_at('"""', pos).error("invalid Java text block opening delimiter")
+                token_at('"""', pos).error("text blocks require the next Java string lexical domain",
+                                              code="java.unsupported.string-literals")
+            if source[pos] == '"':
+                pos, units = _scan_string_literal(source, pos, token_at)
+                tokens.append(token_at(source[start:pos], start, string_units=units))
+            else:
+                match = (CHAR_LITERAL.match(source, pos) if source[pos] == "'" else
+                         FLOAT_LITERAL.match(source, pos) or LEXEME.match(source, pos))
+                if not match:
+                    if source[pos] == "'":
+                        token_at("'", pos).error("invalid Java character literal")
+                    token = token_at(source[pos], pos)
+                    if source[pos] == "@":
+                        token.error("unsupported Java source token", code="java.unsupported.annotations")
+                    if not source[pos].isascii():
+                        token.error("unsupported Java source token", code="java.unsupported.unicode-tokens")
+                    token.error("unsupported Java source token")
+                pos = match.end()
+                tokens.append(token_at(match.group(), start))
             if len(tokens) > 100_000:
                 raise UnsupportedJava("Java source exceeds the initial token budget", code="java.unsupported.token-limit")
     tokens.append(token_at("<eof>", pos))
@@ -702,6 +759,8 @@ class SourceParser:
             node = Node("bool", token, token.text == "true")
         elif token.text.startswith("'"):
             node = Node("char", token, token.text)
+        elif token.text.startswith('"'):
+            node = Node("string", token, token.string_units)
         elif FLOAT_LITERAL.fullmatch(token.text):
             node = Node("floating", token, token.text)
         elif token.text[0:1].isdigit():

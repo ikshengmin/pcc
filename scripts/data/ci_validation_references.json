@@ -1260,6 +1260,20 @@
         ]
       }
     },
+    "tests/java/test_source_string_literals.py": {
+      "test_same_invalid_original_literals_are_rejected_by_jdk": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.java.test_source_unicode_escapes.compile_reference_batch with unchanged invalid literal originals; actual JDK rejection only"
+        ]
+      },
+      "test_same_valid_original_literals_match_jdk": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.java.test_source_unicode_escapes.compile_reference_batch with unchanged valid literal originals and executes their separate JDK observer; no PCC String runtime acceptance"
+        ]
+      }
+    },
     "tests/rust/test_fallible_streaming_iterator_project.py": {
       "test_actual_same_original_certification_then_pcc_object": {
         "activity": "mandatory-same-input-certification-and-owned-contract",

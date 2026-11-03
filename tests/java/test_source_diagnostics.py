@@ -29,9 +29,9 @@ def original(body):
     return "class Diagnostic{static int run(){" + body + "}}"
 
 
-# Exact input and old diagnostic prose are retained separately from the code.
+# Exact inputs are retained; diagnostic prose follows the implemented boundary.
 CAPABILITIES = [
-    (original('return "text";'), "string-literals", "unsupported Java source token"),
+    (original('return "text";'), "string-literals", "shared managed String allocation"),
     ("@Deprecated class Diagnostic{}", "annotations", "unsupported Java source token"),
     (original("int π=1;return π;"), "unicode-tokens", "unsupported Java source token"),
     ("abstract class Diagnostic{}", "abstract-classes", "unsupported top-level class modifiers"),

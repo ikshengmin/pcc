@@ -288,6 +288,9 @@ class SourceAnalyzer:
 
     def type_expression(self, node, assigned):
         kind, op = node.kind, node.value
+        if kind == "string":
+            node.token.error("String literals require shared managed String allocation, interning and class initialization",
+                             code="java.unsupported.string-literals")
         if kind == "mutation":
             self.mutation(node, assigned)
             return
