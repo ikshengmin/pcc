@@ -98,8 +98,8 @@ scheduler-list lock path only for an initialized, frozen collector and a
 registered running thread. Cold callers retain graph admission; callers that
 left managed execution must restore their blocking state. Persistent queue
 transactions and GC3's incremental root cursor retain their graph protocol.
-Root revisions use CAS updates and atomic cursor reads so independent frame
-and handle writers cannot lose invalidations. On the preceding frozen local
+Root revisions use CAS updates for independent frame/handle writers and atomic
+cursor reads; graph-serialized modes retain their serial update. On the preceding frozen local
 Mac executable, four-worker graph-lock waits occupied 60.93% of CPU samples
 (GC0: 5.45%); handle register/unregister callers accounted for 28.20% of all
 samples. This is an owner profile, not a throughput gain. Over `74acdd6de`,
@@ -116,9 +116,16 @@ of samples while the scheduler-list lock rises from 2.31% to 50.06%.
 Recycled handle registration and unregistration now combine pool and live-list
 changes, reducing the common pair from four list acquisitions to two. Empty
 pools still allocate outside the lock, and full pools free after unlocking.
-The follow-up passes 167 production-body cases and six owned-native modes
-(GC0-4 and count-free GC4); its throughput screening is pending. Full suites
-and bootstrap remain unrun.
+The combined-lock follow-up passes 167 production-body cases and six
+owned-native modes (GC0-4 and count-free GC4). Its three-pair count-free GC4
+screen gives one-worker 3,450 -> 3,538 QPS (+2.54%, 2+/1-) and four-worker
+1,939 -> 2,241 (+16.75%, 3+/0-), relative to the original registry. This is
+direction screening only. Other modes show regressions, including GC1
+four-worker -9.36% and GC3 one-worker -6.07%, so batch acceptance is unmet.
+A follow-up restores serial revision updates where all writers already hold
+the graph lock; GC0 and count-free GC4 retain CAS for independent writers.
+It passes 181 body/closure checks and all six native modes. Its complete
+throughput check is pending; full suites and bootstrap remain unrun.
 
 Concurrent tracing slices now charge every inspected object-list node against
 their scan bound, including black, dying and invalid nodes. The returned work

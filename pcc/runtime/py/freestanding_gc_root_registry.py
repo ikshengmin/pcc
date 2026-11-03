@@ -117,9 +117,24 @@ def pcc_gc_cycle_requested_store_release(value: i64) -> None:
 
 @c_abi_export("pcc_gc_root_registry_note_mutation_locked")
 def pcc_gc_root_registry_note_mutation_locked() -> None:
-    # Scheduler handles and frame/continuation roots need not share a lock.
-    # Preserve every invalidation when their respective writers overlap.
     slot = global_addr("pcc_gc_root_registry_revision")
+    backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+    if (
+        backend == 1 or backend == 2 or backend == 3
+        or (backend == 4 and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0)
+    ):
+        # Every root writer in these modes already holds the graph lock.
+        # Preserve their original serial increment instead of introducing an
+        # unnecessary atomic transaction inside that contended critical path.
+        serial_revision: i64 = load_i64(slot, 0)
+        if serial_revision == 9223372036854775807:
+            serial_revision = 1
+        else:
+            serial_revision = serial_revision + 1
+        store_i64(slot, 0, serial_revision)
+        return
+    # GC0 and count-free GC4 scheduler handles can overlap graph-protected
+    # frame/continuation writers. Preserve all of their invalidations.
     revision: i64 = atomic_load_i64(slot, 0, "acquire")
     while True:
         replacement: i64 = 1

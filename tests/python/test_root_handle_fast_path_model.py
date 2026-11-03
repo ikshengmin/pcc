@@ -56,6 +56,7 @@ class RootState:
         self.revision_attempts = []
         self.atomic_revision_reads = []
         self.store("pcc_gc_config_initialized", 0, initialized)
+        self.store("pcc_gc_backend_selected", 0, backend)
         self.store("pcc_gc_backend_frozen", 0, frozen)
         self.store("pcc_gc_backend4_no_refcounts", 0, tracing)
         self.store("pcc_tls_thread_state_py", 0, 0 if running == "cold" else REGISTERED)
@@ -115,7 +116,12 @@ class RootState:
         return self.memory.get((base, offset), 0)
 
     def plain_i64(self, base, offset):
-        assert base != REVISION, "revision readers must participate in the atomic protocol"
+        if base == REVISION:
+            backend = self.read("pcc_gc_backend_selected", 0)
+            tracing = self.read("pcc_gc_backend4_no_refcounts", 0)
+            assert self.graph_depth > 0 and (backend in (1, 2, 3) or (backend == 4 and not tracing)), (
+                "only graph-serialized writers may use the plain revision path"
+            )
         return self.read(base, offset)
 
     def atomic_i64(self, base, offset, order):
@@ -302,6 +308,20 @@ def test_revision_cas_retries_competing_writer_and_wraps_to_one(initial, interfe
     assert state.revision == expected
     assert len(state.revision_attempts) == len(interference) + 1
     assert state.atomic_revision_reads == [(initial, "acquire")]
+
+
+@pytest.mark.parametrize("backend,tracing", MODES)
+@pytest.mark.parametrize("initial,expected", [(0, 1), (MAX_REVISION, 1)])
+def test_revision_uses_atomics_only_when_writers_have_independent_locks(backend, tracing, initial, expected):
+    state = RootState(backend, tracing)
+    state.store(REVISION, 0, initial)
+    state.graph_lock()
+    state.ns["pcc_gc_root_registry_note_mutation_locked"]()
+    state.graph_unlock()
+    assert state.revision == expected
+    independent_locks = backend == 0 or (backend == 4 and tracing)
+    assert len(state.revision_attempts) == int(independent_locks)
+    assert state.atomic_revision_reads == ([(initial, "acquire")] if independent_locks else [])
 
 
 @pytest.mark.parametrize("kind", ["frame", "continuation", "scheduler", "builtin"])

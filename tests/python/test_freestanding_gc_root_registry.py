@@ -62,6 +62,7 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_py_gc_minor_graph_unlock",
 }
 RAW_GLOBAL_IMPORTS = {
+    "pcc_gc_backend_selected",
     "pcc_gc_config_initialized",
     "pcc_gc_backend_frozen",
     "pcc_gc_backend4_no_refcounts",
