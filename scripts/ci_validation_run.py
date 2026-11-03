@@ -408,6 +408,7 @@ def run(args):
     tool_receipt_path = None
     tool_receipt_sha = None
     consumed_rust_receipt = None
+    native_inputs = None
     receipt = {"status": "RUNNING", "domain": args.domain, "lane": args.lane,
                "claim": "host-PCC bounded source tests; not native pcc1 or whole-project qualification",
                "workers": 6, "dist": "loadgroup", "timeout_s": TIMEOUT, "rss_bytes": RSS,
@@ -421,6 +422,19 @@ def run(args):
         if original["sha"] != os.environ.get("GITHUB_SHA"):
             raise ValueError("source SHA differs from workflow revision")
         save(args.out / "source-before.json", original)
+        native_updates = {}
+        native_bundle = getattr(args, "stage1_bundle", None)
+        if args.domain == "shared" or native_bundle is not None:
+            try:
+                from . import ci_validation_native_inputs
+            except ImportError:
+                import ci_validation_native_inputs
+            native_inputs, native_updates = ci_validation_native_inputs.admit(
+                ROOT, native_bundle, domain=args.domain)
+            receipt["native_inputs"] = native_inputs
+            receipt["claim"] = ("bounded source tests retain explicit host-PCC/native-pcc1 ownership; "
+                                "admitted Stage1 inputs are not fixed-point or whole-project qualification")
+            save(args.out / "native-inputs-before.json", native_inputs)
         tool_receipt_path = Path(os.environ["PCC_CI_TOOL_RECEIPT"])
         tool_receipt_bytes = tool_receipt_path.read_bytes()
         tool_receipt_sha = hashlib.sha256(tool_receipt_bytes).hexdigest()
@@ -444,6 +458,7 @@ def run(args):
                    PCC_VALIDATION_REFERENCES=str(REFERENCES),
                    PCC_VALIDATION_SOURCE_MANIFEST=str(args.out / "source-before.json"))
         env.pop("PCC_VALIDATION_SELECTION", None)
+        env.update(native_updates)
         shards = collection_plan(files)
         save(args.out / "collection-plan.json", shards)
         receipt["collection_pending_modules"] = [path for shard in shards for path in shard]
@@ -508,6 +523,13 @@ def run(args):
     except Exception as error:
         receipt.update(status="INFRASTRUCTURE_OR_RESOURCE_FAILURE", error=type(error).__name__ + ": " + str(error))
     finally:
+        if native_inputs is not None:
+            try:
+                save(args.out / "native-inputs-after.json",
+                     ci_validation_native_inputs.verify_after(ROOT, native_inputs))
+            except Exception as error:
+                receipt.update(status="INFRASTRUCTURE_OR_RESOURCE_FAILURE",
+                               native_inputs_error=type(error).__name__ + ": " + str(error))
         if tool_receipt is not None:
             try:
                 if hashlib.sha256(tool_receipt_path.read_bytes()).hexdigest() != tool_receipt_sha:
@@ -536,6 +558,8 @@ def main():
     parser.add_argument("--domain", required=True, choices=("cpp", "rust", "java", "go", "shared", "ci-contracts"))
     parser.add_argument("--lane", required=True, choices=LANES)
     parser.add_argument("--out", required=True, type=Path)
+    parser.add_argument("--stage1-bundle", type=Path,
+                        help="Same-run Linux x86-64 Stage1 bundle required by the shared source domain")
     return run(parser.parse_args())
 
 

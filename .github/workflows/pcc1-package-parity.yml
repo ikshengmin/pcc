@@ -610,6 +610,10 @@ jobs:
       source: ${{ steps.select.outputs.source }}
       cpp_platform: ${{ steps.select.outputs.cpp_platform }}
       matrix: ${{ steps.select.outputs.matrix }}
+      source_independent: ${{ steps.select.outputs.source_independent }}
+      matrix_independent: ${{ steps.select.outputs.matrix_independent }}
+      source_shared: ${{ steps.select.outputs.source_shared }}
+      matrix_shared: ${{ steps.select.outputs.matrix_shared }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -635,12 +639,12 @@ jobs:
   source-validation:
     name: Source / ${{ matrix.domain }} / ${{ matrix.lane }}
     needs: validation-plan
-    if: ${{ needs.validation-plan.outputs.source == 'true' }}
+    if: ${{ needs.validation-plan.outputs.source_independent == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.validation-plan.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.validation-plan.outputs.matrix_independent) }}
     env:
       PCC_NO_AUTO_PCC1: "1"
       PCC_TEST_NO_NATIVE_PROVISIONING: "1"
@@ -666,7 +670,7 @@ jobs:
       - name: Install frozen host test dependencies only
         run: uv sync --frozen --dev --no-install-project
       - name: Install the pinned official Rust compiler and both checked targets
-        if: ${{ matrix.domain == 'rust' || matrix.domain == 'shared' }}
+        if: ${{ matrix.domain == 'rust' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -678,6 +682,69 @@ jobs:
         run: uv run --frozen --no-sync python scripts/ci_validation_tools.py --domain "${{ matrix.domain }}" --out "$RUNNER_TEMP/reference-tools"
       - name: Complete ordinary, integration or external-reference partition
         run: uv run --frozen --no-sync python scripts/ci_validation_run.py --domain "${{ matrix.domain }}" --lane "${{ matrix.lane }}" --out "$RUNNER_TEMP/source-validation"
+      - name: Retain raw inventory, prerequisite UNRUN, failures and resource receipts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: source-${{ matrix.domain }}-${{ matrix.lane }}-${{ github.sha }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/source-validation
+            ${{ runner.temp }}/reference-tools
+
+  shared-source-validation:
+    name: Source / ${{ matrix.domain }} / ${{ matrix.lane }}
+    needs: [validation-plan, other-platform-native-wheel]
+    # Only shared consumers wait for native inputs. A completed Stage1 export
+    # remains valid if an unrelated later producer gate fails.
+    if: ${{ !cancelled() && needs.validation-plan.result == 'success' && needs.validation-plan.outputs.source_shared == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.validation-plan.outputs.matrix_shared) }}
+    env:
+      PCC_NO_AUTO_PCC1: "1"
+      PCC_TEST_NO_NATIVE_PROVISIONING: "1"
+      PCC_PYTEST_AUTO_CLEAN: "0"
+      PYTEST_ADDOPTS: ""
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/projects/nginx-1.28.3/
+      - uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+      - uses: astral-sh/setup-uv@v7
+      - name: Install frozen host test dependencies only
+        run: uv sync --frozen --dev --no-install-project
+      - name: Install the pinned official Rust compiler and both checked targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v rustup
+          rustup toolchain install 1.91.1 --profile minimal \
+            --target x86_64-unknown-linux-gnu --target aarch64-apple-darwin
+          echo "PCC_CI_RUST_TOOLCHAIN=1.91.1" >> "$GITHUB_ENV"
+      - name: Bind actual available reference tools and Rust target sysroot
+        run: uv run --frozen --no-sync python scripts/ci_validation_tools.py --domain "${{ matrix.domain }}" --out "$RUNNER_TEMP/reference-tools"
+      - name: Download this run attempt's existing shared-source native inputs
+        uses: actions/download-artifact@v7
+        with:
+          name: stage1-native-linux-x86_64-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/source-native-input
+      - name: Complete ordinary, integration or external-reference partition
+        run: uv run --frozen --no-sync python scripts/ci_validation_run.py --domain "${{ matrix.domain }}" --lane "${{ matrix.lane }}" --stage1-bundle "$RUNNER_TEMP/source-native-input" --out "$RUNNER_TEMP/source-validation"
       - name: Retain raw inventory, prerequisite UNRUN, failures and resource receipts
         if: always()
         uses: actions/upload-artifact@v6

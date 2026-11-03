@@ -68,9 +68,13 @@ def select(changes, *, scope="auto", before=None, after=None):
         domains.update((*LANGUAGES, "shared", "ci-contracts"))
     # Explicit manual selection may add obligations, never subtract changes.
     matrix = [{"domain": domain, "lane": lane} for domain in sorted(domains) for lane in LANES]
+    independent = [row for row in matrix if row["domain"] != "shared"]
+    shared = [row for row in matrix if row["domain"] == "shared"]
     return {"schema": 1, "before": before, "after": after, "scope": scope,
             "changes": reasons, "domains": sorted(domains), "legacy": legacy,
-            "cpp_platform": "cpp" in domains, "source": bool(matrix), "matrix": {"include": matrix}}
+            "cpp_platform": "cpp" in domains, "source": bool(matrix), "matrix": {"include": matrix},
+            "source_independent": bool(independent), "matrix_independent": {"include": independent},
+            "source_shared": bool(shared), "matrix_shared": {"include": shared}}
 
 
 def git(*args):
@@ -180,7 +184,8 @@ def main():
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n")
     with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-        for key in ("legacy", "source", "cpp_platform", "matrix"):
+        for key in ("legacy", "source", "cpp_platform", "matrix",
+                    "source_independent", "matrix_independent", "source_shared", "matrix_shared"):
             output.write(key + "=" + json.dumps(plan[key], separators=(",", ":")) + "\n")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:

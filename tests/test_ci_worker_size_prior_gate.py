@@ -1217,12 +1217,12 @@ def workflow_job(text, name):
 
 
 def assert_workflow_marker_permissions(text):
-    # Global scope is contents-read only. The planner and same-run artifact
-    # consumer alone add Actions read; no original producer gains permissions.
+    # Global scope is contents-read only. The planner and two same-run artifact
+    # consumers alone add Actions read; no original producer gains permissions.
     global_block = re.search(r"(?m)^permissions:\n((?:  [^\n]*\n)+)", text)
     assert global_block is not None and global_block.group(1) == "  contents: read\n"
-    assert len(re.findall(r"(?m)^\s*permissions:[^\n]*", text)) == 3
-    for name in ("validation-plan", "pytest-markers"):
+    assert len(re.findall(r"(?m)^\s*permissions:[^\n]*", text)) == 4
+    for name in ("validation-plan", "shared-source-validation", "pytest-markers"):
         body = workflow_job(text, name)
         permission_block = re.search(r"(?m)^    permissions:\n((?:      [^\n]*\n)+)", body)
         assert permission_block is not None
@@ -1234,6 +1234,9 @@ def assert_workflow_job_budgets(text):
     expected = {
         "validation-plan": 5,
         "source-validation": 15,
+        "shared-source-validation": 15,
+        "numpy-source-frontier": 5,
+        "orjson-source-frontier": 5,
         "ci-plan": 5,
         "macos-pcc0-regressions": 25,
         "macos-pcc0-float-doc-regressions": 25,
@@ -1477,10 +1480,11 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
         ("      actions: read\n", "      actions: read\n      id-token: write\n"),
         ("\njobs:\n", "\npermissions: read-all\n\njobs:\n"),
         ("  ci-plan:\n", "  ci-plan:\n    permissions: read-all\n"),
+        ("  source-validation:\n", "  source-validation:\n    permissions: read-all\n"),
         ("  other-platform-native-wheel:\n", "  other-platform-native-wheel:\n    permissions: read-all\n"),
     ):
         assert text.count(before) >= 1
-        # Check every occurrence: either read-only consumer is a hard boundary.
+        # Check every occurrence: each read-only owner is a hard boundary.
         for index in range(text.count(before)):
             prefix, suffix = text.split(before, index + 1)[:-1], text.split(before, index + 1)[-1]
             mutated = before.join(prefix) + after + suffix
@@ -1613,7 +1617,7 @@ def test_stage1_extension_preserves_other_job_budgets_and_hosted_ceiling():
     text = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
     job_minutes = assert_workflow_job_budgets(text)
     assert max(job_minutes.values()) <= 360
-    # Every original producer and both added jobs retain their exact cap.
+    # Every exact job, including source consumers and frontiers, keeps its cap.
     for name in job_minutes:
         body = workflow_job(text, name)
         for delta in (-1, 1):

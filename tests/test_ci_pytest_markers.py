@@ -247,7 +247,10 @@ def test_unified_workflow_covers_both_groups_on_four_native_platforms(tmp_path, 
         'windows-rss-publication', 'other-platform-native-wheel', 'pcc1-package-parity',
     }
     job_ids = set(re.findall(r'^  ([a-z][a-z0-9-]*):$', workflow.split('jobs:\n', 1)[1], re.M))
-    assert job_ids == expected_jobs | {'ci-plan', 'pytest-markers', 'validation-plan', 'source-validation', 'cpp17'}
+    assert job_ids == expected_jobs | {
+        'ci-plan', 'pytest-markers', 'validation-plan', 'source-validation',
+        'shared-source-validation', 'numpy-source-frontier', 'orjson-source-frontier', 'cpp17',
+    }
     predicate = "    if: ${{ needs.validation-plan.outputs.legacy == 'true' && (!inputs.full_chain || inputs.pytest_selection == 'not integration') }}"
     for name in expected_jobs:
         # Job-level if is independent of ci-plan status and precedes all steps.
@@ -262,7 +265,9 @@ def test_unified_workflow_covers_both_groups_on_four_native_platforms(tmp_path, 
     mac = workflow.split('\n  pcc1-package-parity:', 1)[1].split('\n  pytest-markers:', 1)[0]
     assert mac.index('Preserve the existing native Stage1 bundle') < mac.index('Verify the new pcc1 on native prior worker shapes')
     assert '--platform macos-arm64' in mac
-    plan = textwrap.dedent(workflow.split('        run: |\n', 1)[1].split('\n  macos-pcc0-regressions:', 1)[0])
+    ci_plan = re.search(r"(?ms)^  ci-plan:\n(.*?)(?=^  [A-Za-z0-9_-]+:|\Z)", workflow)
+    assert ci_plan is not None and ci_plan.group(1).count('        run: |\n') == 1
+    plan = textwrap.dedent(ci_plan.group(1).split('        run: |\n', 1)[1])
     output = tmp_path / 'github-output'
     monkeypatch.setenv('GITHUB_OUTPUT', str(output))
     for full_chain, selection, expected in (

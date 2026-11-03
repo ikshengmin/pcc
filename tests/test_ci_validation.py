@@ -890,6 +890,10 @@ def test_campaign_saves_failed_batch_before_deciding_independent_continuation(tm
 @pytest.mark.parametrize("fault", ["resource", "missing-finish", "missing-module"])
 def test_collection_abort_keeps_completed_shards_and_never_admits_test_bodies(tmp_path, monkeypatch, fault):
     """Orchestration model only: guard and identities are not executed."""
+    from scripts import ci_validation_native_inputs as native
+    native_state = {"fixture": "transport admission is separately tested"}
+    monkeypatch.setattr(native, "admit", lambda *a, **k: (native_state, {}))
+    monkeypatch.setattr(native, "verify_after", lambda *a: native_state)
     root = tmp_path / "source"
     root.mkdir()
     (root / "pyproject.toml").write_text(
@@ -927,7 +931,8 @@ def test_collection_abort_keeps_completed_shards_and_never_admits_test_bodies(tm
 
     monkeypatch.setattr(run, "run_guard", guarded)
     out = tmp_path / "campaign"
-    assert run.run(SimpleNamespace(domain="shared", lane="ordinary", out=out)) == 1
+    assert run.run(SimpleNamespace(domain="shared", lane="ordinary", out=out,
+                                   stage1_bundle=tmp_path / "modeled-stage1-bundle")) == 1
     receipt = json.loads((out / "receipt.json").read_text())
     assert attempts == ["collection-000", "collection-001"]
     assert receipt["status"] == "INFRASTRUCTURE_OR_RESOURCE_FAILURE" and receipt["batches"] == []
