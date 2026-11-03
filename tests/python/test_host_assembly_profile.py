@@ -678,6 +678,25 @@ def _elf_argv(root):
     return [sys.executable, "-m", "pcc", "--backend", "self", "--ir-scaffold=on", str(root / "pcc/__main__.py"), "-o", str(root / "stage1")]
 
 
+def test_elf_command_keeps_exact_original_nine_argument_stage1_shape(tmp_path):
+    command = _elf_argv(tmp_path)
+    assert len(command) == 9
+    assert adapter._elf_command(command, tmp_path)
+    assert adapter._elf_command(tuple(command), tmp_path)
+    for rejected in (
+        None,
+        command[:-1],
+        command + ["--extra"],
+        command[:4] + ["foreign-backend"] + command[5:],
+        command[:5] + ["--ir-scaffold=off"] + command[6:],
+        command[:5] + ["--ir-scaffold", "on"] + command[6:],
+        command[:6] + ["foreign-main.py"] + command[7:],
+        command[:7] + ["--output"] + command[8:],
+        command[:-1] + [""],
+    ):
+        assert not adapter._elf_command(rejected, tmp_path)
+
+
 def _elf_owned_function(function, module, qualname):
     code = function.__code__.replace(co_filename=module.__file__,
                                      co_name=qualname.rsplit(".", 1)[-1], co_qualname=qualname)
@@ -904,8 +923,8 @@ def test_arm_prepare_requires_exclusive_mode_exact_command_environment_and_sourc
     rejected = [(dict(env, **{adapter.FLAG: "1"}), command, "PROFILE_MODE_CONFLICT"),
                 (env, None, "COORDINATOR_ADMISSION_CONFLICT"),
                 (env, command + ["--extra"], "COORDINATOR_ADMISSION_CONFLICT"),
-                (env, command[:6] + ["on"] + command[7:], "COORDINATOR_ADMISSION_CONFLICT"),
-                (env, command[:8] + ["foreign-main.py"] + command[9:], "COORDINATOR_ADMISSION_CONFLICT"),
+                (env, command[:5] + ["--ir-scaffold=off"] + command[6:], "COORDINATOR_ADMISSION_CONFLICT"),
+                (env, command[:6] + ["foreign-main.py"] + command[7:], "COORDINATOR_ADMISSION_CONFLICT"),
                 (env, command[:-1] + [""], "COORDINATOR_ADMISSION_CONFLICT"),
                 (env, command[:-1] + ["x" * 16385], "COORDINATOR_ADMISSION_CONFLICT")]
     for name in ("PCC_SELF_LINK", "PCC_SELF_OBJ", "PCC_DIRECT_INDEXED_KERNEL_CAPTURE",

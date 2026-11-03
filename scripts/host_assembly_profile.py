@@ -85,12 +85,12 @@ def _elf_environment(environment):
 
 
 def _elf_command(command, root):
-    return (type(command) in (list, tuple) and len(command) == 11
+    return (type(command) in (list, tuple) and len(command) == 9
             and all(type(item) is str for item in command)
-            and list(command[:8]) == [sys.executable, "-m", "pcc", "--backend", "self",
+            and list(command[:6]) == [sys.executable, "-m", "pcc", "--backend", "self",
                                       "--ir-scaffold=on"]
-            and command[8] == str(Path(root) / "pcc/__main__.py") and command[9] == "-o"
-            and bool(command[10]))
+            and command[6] == str(Path(root) / "pcc/__main__.py") and command[7] == "-o"
+            and bool(command[8]))
 
 
 def prepare_environment(root, directory, environment, source, runtime, compiler_sha256, target,

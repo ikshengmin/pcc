@@ -126,7 +126,7 @@ def test_explicit_runtime_override_is_preserved(monkeypatch, override):
 
 def test_strict_frontend_fallback_cannot_claim_applied_prefix():
     fallback = IR.replace("  ret i64 7", "  %r = call i64 @py_cpy_probe()\n  ret i64 %r")
-    assert run_owned_passes(fallback, ["mem2reg", "sroa"], True) == fallback
+    assert run_owned_passes(fallback, ["mem2reg", "sroa"]) == fallback
     assert owned._runtime_passes_after_frontend(PASSES, PREFIX, fallback) == PASSES
 
 
@@ -149,8 +149,8 @@ merge:
   ret i64 %r
 }
 """
-    first = run_owned_passes(text, ["mem2reg", "sroa"], True)
-    second = run_owned_passes(first, ["mem2reg", "sroa"], False)
+    first = run_owned_passes(text, ["mem2reg", "sroa"])
+    second = run_owned_passes(first, ["mem2reg", "sroa"])
     assert first != second and "alloca" in first and " phi " in second
     assert owned._runtime_passes_after_frontend(PASSES, PREFIX, first) == PASSES
 
