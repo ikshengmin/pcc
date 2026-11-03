@@ -29,3 +29,9 @@ def validate_subscript(name, parameters, *, member, static=False, variadic=False
     if not member or static or variadic or len(parameters) != 1 or any(defaults):
         raise CppDiagnostic('cpp.invalid-subscript-operator',
                             'C++17 operator[] requires a non-static member with one parameter and no defaults', name.coord)
+
+
+def validate_assignment(name, parameters, *, member, static=False, variadic=False):
+    if name.value == 'operator=' and (not member or static or variadic or len(parameters) != 1):
+        raise CppDiagnostic('cpp.invalid-assignment-operator',
+                            'assignment operator requires a non-static member with one parameter', name.coord)

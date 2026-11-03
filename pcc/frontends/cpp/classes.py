@@ -409,7 +409,14 @@ def parse_class(parser):
             prior_data = False
             function_member = False
             while True:
-                member, member_type = parser._declarator(base)
+                from pcc.frontends.cpp.operators import declaration_name
+                member, member_type = parser._declarator(
+                    base, parse_name=lambda: declaration_name(parser))
+                if member.kind == 'OPERATOR_FUNCTION_ID' and member.value != 'operator[]':
+                    _unsupported(member, 'this prefixed operator declarator requires separate operator semantics')
+                if member.kind == 'OPERATOR_FUNCTION_ID' and parser._peek().value != '(':
+                    raise CppDiagnostic('cpp.invalid-subscript-operator',
+                                        'operator[] must declare a function', member.coord)
                 if parser._peek().value == "(":
                     if prior_data:
                         _unsupported(member, "mixed data/function declarator lists are not implemented")

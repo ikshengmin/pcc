@@ -783,6 +783,27 @@
       "evidence": []
     },
     {
+      "id": "cpp.templates.self-reference-copy-declarations",
+      "title": "Class-template self-reference copy declarations, awaiting execution",
+      "chapter_ids": [
+        "class",
+        "special",
+        "over",
+        "temp"
+      ],
+      "scope": "Authored, execution-unrun obligations for declaration-only self lvalue-reference copy constructors and assignment members, injected-to-concrete referent identity, const and access preservation, per-specialization C1/assignment mangling and address ABI. No implicit copy overload or body is fabricated. Selected private constructors fail access before scheduling; public unavailable copy bodies fail explicitly. Copy definitions, assignment calls, generic reference-parameter Patterns and class-reference results remain boundaries. Also retains the exact CI-failed ordinary reference-returning operator[] and zero-argument dependent explicit-template-call programs through their existing semantic owners. Exact TinyXML2 private declaration excerpts do not establish original DynArray or project acceptance.",
+      "status": "missing",
+      "tests": [
+        "tests/cpp/test_cpp_template_copy_declarations.py",
+        "tests/cpp/test_cpp_template_copy_declaration_execution.py",
+        "tests/cpp/test_cpp_template_subscript_results.py",
+        "tests/cpp/test_cpp_class_size_queries.py",
+        "tests/cpp/test_cpp_projects.py::test_cpp_tinyxml2_upstream_tests_explicit_host_pcc_project"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
       "id": "cpp.templates.reference-subscript-results",
       "title": "Reference results and class-template subscript members, awaiting execution",
       "chapter_ids": [

@@ -571,7 +571,9 @@ class CppParser:
         return qualify_const(result) if "const" in qualifiers else result
 
     def _reference(self, dtype, token):
-        if token.value != '&' or self.parsing_template or self.template_function is not None:
+        if (token.value != '&'
+                or (self.parsing_template and not getattr(self, 'class_template_signature', False))
+                or self.template_function is not None):
             raise CppDiagnostic("cpp.unsupported.references", "rvalue/dependent references require additional semantics", token.coord)
         from pcc.frontends.cpp.references import lvalue_reference
         return lvalue_reference(dtype, token.coord)
@@ -624,8 +626,8 @@ class CppParser:
             raise CppDiagnostic("cpp.unsupported.array-templates", "dependent array bound analysis is not implemented", self._peek().coord)
         return self._expression()
 
-    def _declarator(self, dtype, parse_arrays=True, allow_class_element=False):
-        declaration = DeclaratorParser(self.cursor, self._identifier,
+    def _declarator(self, dtype, parse_arrays=True, allow_class_element=False, parse_name=None):
+        declaration = DeclaratorParser(self.cursor, parse_name or self._identifier,
                                        parse_array_bound=self._array_bound,
                                        parse_functions=False).parse(parse_suffixes=parse_arrays)
         return self._apply_declarator(declaration, dtype, allow_class_element=allow_class_element)
@@ -2620,9 +2622,12 @@ class CppParser:
             if not name.global_scope and len(name.parts) == 1:
                 if (getattr(self, 'class_template_method', None) is not None
                         and (any(dependent(arg.dtype) for arg in arguments)
-                             or any(argument_dependent(arg) for arg in explicit_arguments or ()))):
+                             or (arguments and any(argument_dependent(arg) for arg in explicit_arguments or ())))):
                     raise CppDiagnostic("cpp.unsupported.dependent-lookup",
                                         "unqualified dependent free calls require instantiation-time ADL", token.coord)
+                # No actual arguments means no associated argument types for
+                # ADL. A dependent explicit template argument still needs the
+                # existing definition-point snapshot and typed call replay.
                 symbol = argument_dependent_lookup(token.value, [arg.dtype for arg in arguments], symbol, token.coord)
             if symbol is None:
                 if self.template_function is not None and any(dependent(arg.dtype) for arg in arguments):

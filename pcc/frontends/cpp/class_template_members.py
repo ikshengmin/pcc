@@ -34,6 +34,11 @@ def unsupported(coord, message):
     raise CppDiagnostic('cpp.unsupported.member-templates', message, coord)
 
 
+def self_reference(dtype, owner):
+    """A borrow of this declaration's injected/concrete class, not any T&."""
+    return isinstance(dtype, ReferenceType) and unqualified(dtype.referent) is owner
+
+
 def parse_destructor_signature(parser, owner):
     """Retain a primary D1 declaration and typed body, without a concrete name."""
     from pcc.frontends.cpp.destructors import declare_destructor, parse_parameters
@@ -81,18 +86,26 @@ def parse_signature(parser, owner, name, result_type, static=False, constructor=
     # can meet the 'all other parameters have defaults' condition.
     if constructor and len(params) == 1 and unqualified(params[0][1]) is owner.injected:
         raise CppDiagnostic('cpp.invalid-constructor', 'a constructor cannot take its own class by value as its sole parameter', name.coord)
+    copy_declaration = ((constructor or name.value == 'operator=') and len(params) == 1
+                        and self_reference(params[0][1], owner.injected))
+    if name.value == 'operator=' and not copy_declaration:
+        from pcc.frontends.cpp.class_templates import unsupported as unsupported_class_template
+        unsupported_class_template(name.coord, 'only self-reference copy-assignment declarations are implemented')
     const = parser._accept('const') is not None
     if constructor and const:
         raise CppDiagnostic('cpp.constructor-cv', 'constructors cannot have cv-qualifiers', name.coord)
     if parser._peek().value in ('volatile', '&', '&&', 'noexcept', 'throw', 'try', '=', '->'):
         unsupported(parser._peek().coord, 'member ref/exception/default/delete/trailing contracts are not implemented')
-    from pcc.frontends.cpp.operators import validate_subscript
+    from pcc.frontends.cpp.operators import validate_assignment, validate_subscript
     validate_subscript(name, params, member=True, static=static)
+    validate_assignment(name, params, member=True, static=static)
+    if copy_declaration and parser._peek().value != ';':
+        unsupported(name.coord, 'copy-reference member definitions require explicit copy/lifetime semantics')
     from pcc.frontends.cpp.references import check_result
     check_result(result_type, name.coord)
     for index, dtype in enumerate((result_type,) + tuple(t for _, t in params)):
         plain = unqualified(dtype)
-        if isinstance(plain, ReferenceType) and index:
+        if isinstance(plain, ReferenceType) and index and not copy_declaration:
             raise CppDiagnostic('cpp.unsupported.references', 'class template member reference signatures require referent Pattern semantics', name.coord)
         if contains_array(dtype):
             raise CppDiagnostic('cpp.unsupported.array-templates', 'array member signatures require template array semantics', name.coord)
@@ -105,6 +118,7 @@ def parse_signature(parser, owner, name, result_type, static=False, constructor=
     symbol = Symbol(name.value, 'function', name.coord, dtype=result_type,
                     parameters=tuple(unqualified(dtype) for _, dtype in params))
     symbol.class_template_pattern = owner
+    symbol.template_copy_declaration = copy_declaration
     symbol.definition_linkage = 'external_odr'
     if constructor:
         if static:
@@ -207,7 +221,9 @@ def declare_instances(parser, owner, definition, arguments):
             nominal = unqualified(nominal.pointee) if isinstance(nominal, PointerType) else nominal
             if is_enum_type(nominal):
                 raise CppDiagnostic('cpp.unsupported.enum-templates', 'substituted enum member signatures need typed template support', origin.coord)
-            if (is_class_type(dtype) or isinstance(dtype, ReferenceType) and index
+            copy_parameter = (index and getattr(origin, 'template_copy_declaration', False)
+                              and self_reference(dtype, definition.dtype))
+            if (is_class_type(dtype) or (isinstance(dtype, ReferenceType) and index and not copy_parameter)
                     or contains_array(dtype) or contains_function(dtype)):
                 unsupported(origin.coord, 'substituted class-value/callback member signatures require further ABI/lifetime semantics')
             parser._check_extended_value_type(dtype, origin)
@@ -215,6 +231,7 @@ def declare_instances(parser, owner, definition, arguments):
             raise CppDiagnostic('cpp.invalid-parameter', 'substitution formed a void parameter', origin.coord)
         symbol = Symbol(origin.name, 'function', origin.coord, dtype=result,
                         parameters=tuple(unqualified(dtype) for _, dtype in params))
+        symbol.template_copy_declaration = getattr(origin, 'template_copy_declaration', False)
         definition.set_access(origin.access)
         if getattr(origin, 'destructor', False):
             # Destructors are not overload-set members and retain a separate

@@ -802,6 +802,14 @@
         ]
       }
     },
+    "tests/cpp/test_cpp_template_copy_declaration_execution.py": {
+      "test_copy_declaration_originals_match_cpp17": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.sizeof_execution.execute_row_pair for the exact original declaration and retained failure programs"
+        ]
+      }
+    },
     "tests/cpp/test_cpp_template_subscript_result_execution.py": {
       "test_invalid_reference_subscript_original_is_rejected_by_reference": {
         "activity": "external-reference",

@@ -126,11 +126,11 @@ def parse_declaration(parser, parameters, parent):
                 if declaration.name.global_scope or len(declaration.name.parts) != 1:
                     unsupported(declaration.coord, 'qualified class template member declarators are not implemented')
                 member = declaration.name.identifier
-                if member.kind == 'OPERATOR_FUNCTION_ID' and member.value != 'operator[]':
-                    unsupported(member.coord, 'only class-template operator[] declarations have owned operator semantics')
+                if member.kind == 'OPERATOR_FUNCTION_ID' and member.value not in ('operator[]', 'operator='):
+                    unsupported(member.coord, 'only class-template subscript and copy-assignment declarations have owned operator semantics')
                 if member.kind == 'OPERATOR_FUNCTION_ID' and parser._peek().value != '(':
-                    raise CppDiagnostic('cpp.invalid-subscript-operator',
-                                        'operator[] must declare a function', member.coord)
+                    code = 'cpp.invalid-subscript-operator' if member.value == 'operator[]' else 'cpp.invalid-assignment-operator'
+                    raise CppDiagnostic(code, 'operator name must declare a function', member.coord)
                 dtype = base
                 for chunk in reversed(declaration.chunks):
                     if chunk.kind == 'lvalue-reference':

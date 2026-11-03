@@ -20,13 +20,12 @@ OPERATOR_CODES = ALLOCATION_OPERATOR_CODES
 
 def validate_declaration(parser, name, result, parameters, nonthrowing,
                          defining, member, storage, template_parameters, variadic):
-    from pcc.frontends.cpp.operators import validate_subscript
+    from pcc.frontends.cpp.operators import validate_assignment, validate_subscript
     validate_subscript(name, parameters, member=member is not None,
                        static=storage is not None, variadic=variadic)
+    validate_assignment(name, parameters, member=member is not None,
+                        static=storage is not None, variadic=variadic)
     if name.value == 'operator=':
-        if member is None or len(parameters) != 1 or variadic or storage is not None:
-            raise CppDiagnostic('cpp.invalid-assignment-operator',
-                                'assignment operator requires a non-static member with one parameter', name.coord)
         if defining or template_parameters:
             raise CppDiagnostic('cpp.unsupported.assignment-operators',
                                 'assignment operator bodies and calls require overload/lifetime semantics', name.coord)
