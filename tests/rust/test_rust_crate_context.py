@@ -96,7 +96,7 @@ def test_literal_path_uses_source_directory_and_preserves_distinct_file_alias_sc
     ({'src/lib.rs': '#[path=include_str!("a")]mod a;'}, 'literal string'),
     ({'src/lib.rs': 'mod a{#![no_std]fn f(){}}'}, 'semantic inner module'),
     ({'src/lib.rs': 'mod a{#![doc(html_no_source)]fn f(){}}'}, 'requires crate placement'),
-    ({'src/lib.rs': '#[cfg(any())]mod a;'}, 'unsupported Rust attribute'),
+    ({'src/lib.rs': '#[cfg(any())]mod a;'}, r'^src/lib\.rs: 1:3: cfg requires an actual source/options-bound CheckedRustSource configuration$'),
 ])
 def test_loader_rejects_incomplete_or_unimplemented_context_instead_of_flattening(sources,message):
     with pytest.raises(RustError, match=message):
