@@ -124,6 +124,9 @@ def parse_new(parser):
     token = parser._expect('new')
     coord = token.coord
     if parser.template_function is not None or parser.parsing_template or parser.instantiating_template:
+        if getattr(parser, 'class_template_method', None) is not None and parser._peek().value != '(':
+            from pcc.frontends.cpp.allocation_patterns import parse_array_new
+            return parse_array_new(parser, global_only, coord)
         raise CppDiagnostic('cpp.unsupported.allocation-templates', 'dependent allocation is not implemented', coord)
     if not parser._accept('('):
         raise CppDiagnostic('cpp.unsupported.allocation', 'allocating new requires the owned allocation/failure runtime', coord)

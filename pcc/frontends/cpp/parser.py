@@ -2774,6 +2774,9 @@ class CppParser:
             member, operator, token = pattern.value
             base = self._instantiate_expression(pattern.children[0], bindings, environment)
             return member_access(self, base, operator, token)
+        if kind == 'new-array':
+            from pcc.frontends.cpp.allocation_patterns import instantiate_array_new
+            return instantiate_array_new(self, pattern, bindings, environment)
         arguments = [self._instantiate_expression(child, bindings, environment)
                      for child in pattern.children]
         if kind == 'subscript':

@@ -806,6 +806,20 @@
       "evidence": []
     },
     {
+      "id": "cpp.templates.dependent-array-new-patterns",
+      "title": "Dependent member array-new Patterns, awaiting validation",
+      "chapter_ids": ["expr", "dcl.init", "special", "temp"],
+      "scope": "Authored, execution-unrun obligations for one-dimensional uninitialized array-new Patterns in class-template member bodies when allocated type or bound is dependent. Allocated type identity, integral first-bound expressions, definition-point local bindings and global lookup syntax are retained without token replay. First bounds may be runtime values or zero; known constant negative lengths are rejected independently of fixed-array bound rules. Concrete void/reference/incomplete/const-scalar restrictions and class-element lifetime gates are checked before any allocation lowering. Every odr-used new[] still fails before IR at the owned allocation/lookup/size/failure/initialization/deallocation boundary; no default allocator or successful allocation value is fabricated. Native positive observers execute only unrelated supported members or separate entry units, not allocation. Both formerly rejected unused-body original inputs are preserved unchanged. Function-template, scalar, nondependent, initialized, multidimensional, converted nonintegral and unevaluated new forms retain explicit gaps. Native pcc1 frontend, allocation runtime and unchanged TinyXML2 acceptance remain unqualified. No local tests, imports, compilers or collection were run.",
+      "status": "missing",
+      "tests": [
+        "tests/cpp/test_cpp_dependent_array_new.py",
+        "tests/cpp/test_cpp_dependent_array_new_execution.py",
+        "tests/cpp/test_cpp_projects.py::test_cpp_tinyxml2_upstream_tests_explicit_host_pcc_project"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
       "id": "cpp.templates.member-local-pointers",
       "title": "Class-template body-local pointer/cv declarations, awaiting execution",
       "chapter_ids": ["dcl.decl", "dcl.init", "stmt", "temp"],

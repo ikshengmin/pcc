@@ -79,7 +79,6 @@ GAPS = (
     ('dependent-class-local', 'struct Tag{Tag(){}};template<class T>struct S{int f(){const T local;return 42;}};int g(S<Tag>*p){return p->f();}', 'cpp.unsupported.member-templates'),
     ('callback-local', 'using Callback=int(int);template<class T>struct S{int f(){Callback*local=nullptr;return 0;}};', 'cpp.unsupported.function-pointers'),
     ('volatile-local', 'template<class T>struct S{int f(){volatile int local=0;return local;}};', 'cpp.unsupported.volatile'),
-    ('allocating-new-remains-unowned', 'using size_t=unsigned long;template<class T>struct S{T*f(size_t cap){const size_t newAllocated=cap*2;T*newMem=new T[newAllocated];return newMem;}};', 'cpp.unsupported.allocation-templates'),
 )
 
 

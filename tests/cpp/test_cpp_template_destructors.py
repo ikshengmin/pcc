@@ -244,8 +244,6 @@ BOUNDARIES = (
      'int f(){Box<R>b;return 0;}', 'cpp.unsupported.member-templates'),
     ('defaulted-d1', 'template<class T>struct Box{~Box()=default;};', 'cpp.unsupported.member-templates'),
     ('exception-contract', 'template<class T>struct Box{~Box()noexcept{}};', 'cpp.unsupported.exceptions'),
-    ('unowned-new-array', 'template<class T>struct Box{T*p;~Box(){p=new T[2];}};',
-     'cpp.unsupported.allocation-templates'),
 )
 
 

@@ -850,6 +850,20 @@
         ]
       }
     },
+    "tests/cpp/test_cpp_dependent_array_new_execution.py": {
+      "test_invalid_array_new_originals_fail_reference": {
+        "activity": "external-reference",
+        "reason": ["Calls explicit C++17 syntax_reference on concretely instantiated invalid array-new originals"]
+      },
+      "test_unowned_array_new_originals_remain_cpp17_valid": {
+        "activity": "external-reference",
+        "reason": ["Calls explicit C++17 syntax_reference on valid used allocations and unowned syntax forms; no allocation execution claim"]
+      },
+      "test_unused_array_new_originals_match_cpp17": {
+        "activity": "external-reference",
+        "reason": ["Calls tests.cpp.sizeof_execution.execute_row_pair on unchanged programs executing only unrelated supported members, never new[]"]
+      }
+    },
     "tests/cpp/test_cpp_template_local_pointer_execution.py": {
       "test_invalid_template_local_pointer_originals_fail_reference": {
         "activity": "external-reference",
