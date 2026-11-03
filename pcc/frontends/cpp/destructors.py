@@ -36,6 +36,60 @@ def destructor_ahead(parser):
             return False
 
 
+def parse_parameters(parser, definition, name, *, check_lowering=True):
+    """The same destructor declaration rules apply to primary Patterns and D1s."""
+    if name.value != definition.dtype.name:
+        raise CppDiagnostic("cpp.invalid-destructor", "destructor name must match its class", name.coord)
+    parent = parser.scope
+    parameter_scope = Scope(definition.scope)
+    parser.scope = parameter_scope
+    try:
+        parser._expect("(")
+        params = parser._parameter_clause(check_lowering=check_lowering)
+        parser._expect(")")
+    finally:
+        parser.scope = parent
+    if params:
+        raise CppDiagnostic("cpp.destructor-parameters", "destructors take no arguments", name.coord)
+    if parser._peek().value in ("const", "volatile"):
+        raise CppDiagnostic("cpp.destructor-cv", "destructors cannot have cv-qualifiers", parser._peek().coord)
+    if parser._peek().value in ("noexcept", "throw"):
+        raise CppDiagnostic("cpp.unsupported.exceptions", "destructor exception specifications and unwinding are not implemented", parser._peek().coord)
+    return parameter_scope
+
+
+def declare_destructor(definition, name, *, encode_name=True):
+    """Retain one declaration identity; primary Patterns have no concrete ABI yet."""
+    if definition.destructor is not None:
+        raise CppDiagnostic("cpp.redeclaration", "destructor cannot be redeclared in its class", name.coord)
+    owner = definition.dtype
+    symbol = Symbol("~" + owner.name, "function", name.coord, dtype="void", parameters=())
+    symbol.class_owner, symbol.access = owner, definition.access
+    symbol.owner = definition.scope
+    symbol.destructor = True
+    symbol.method_static = symbol.method_const = False
+    symbol.internal_linkage = owner.internal_linkage
+    if encode_name:
+        # Empty member-name encoding is the fixed suffix 0Ev. Keep the same
+        # namespace/type prefix as other members but encode complete-object D1.
+        symbol.c_name = mangle_member(owner, "", ())[:-3] + "D1Ev"
+    definition.destructor = symbol
+    return symbol
+
+
+def declaration(parser, symbol):
+    """Project a concrete complete-object D1 and its non-const this parameter."""
+    coord = symbol.coord
+    this = Symbol("this", "value", coord, dtype=PointerType(symbol.class_owner),
+                  c_name=parser._local_projection_name("this"))
+    result = parser._decl(symbol.c_name, "void", coord)
+    result.type = c_ast.FuncDecl(c_ast.ParamList([
+        parser._decl(this.c_name, this.dtype, coord)], coord), result.type, coord)
+    if symbol.internal_linkage:
+        result.storage = ["static"]
+    return result, this
+
+
 def parse_destructor(parser, definition=None):
     parent = parser.scope
     outside = definition is None
@@ -56,22 +110,7 @@ def parse_destructor(parser, definition=None):
         parser._expect("~")
         name = parser._identifier()
         owner = definition.dtype
-    if name.value != owner.name:
-        raise CppDiagnostic("cpp.invalid-destructor", "destructor name must match its class", name.coord)
-    parameter_scope = Scope(definition.scope)
-    parser.scope = parameter_scope
-    try:
-        parser._expect("(")
-        params = parser._parameter_clause()
-        parser._expect(")")
-    finally:
-        parser.scope = parent
-    if params:
-        raise CppDiagnostic("cpp.destructor-parameters", "destructors take no arguments", name.coord)
-    if parser._peek().value in ("const", "volatile"):
-        raise CppDiagnostic("cpp.destructor-cv", "destructors cannot have cv-qualifiers", parser._peek().coord)
-    if parser._peek().value in ("noexcept", "throw"):
-        raise CppDiagnostic("cpp.unsupported.exceptions", "destructor exception specifications and unwinding are not implemented", parser._peek().coord)
+    parameter_scope = parse_parameters(parser, definition, name)
     inline_definition = not outside and parser._peek().value == "{"
     if not outside and not inline_definition and parser._peek().value != ";":
         raise CppDiagnostic("cpp.unsupported.inline-member-functions", "defaulted/deleted destructors require special-member rules", name.coord)
@@ -86,27 +125,9 @@ def parse_destructor(parser, definition=None):
         symbol = previous
         symbol.defined = True
     else:
-        if previous is not None:
-            raise CppDiagnostic("cpp.redeclaration", "destructor cannot be redeclared in its class", name.coord)
-        symbol = Symbol("~" + owner.name, "function", name.coord, dtype="void", parameters=())
-        symbol.class_owner, symbol.access = owner, definition.access
-        symbol.owner = definition.scope
-        symbol.destructor = True
-        symbol.method_static = False
-        symbol.method_const = False
-        symbol.internal_linkage = owner.internal_linkage
-        # Empty member-name encoding is the fixed suffix 0Ev. Keep the same
-        # namespace/type prefix as other members but encode complete-object D1.
-        symbol.c_name = mangle_member(owner, "", ())[:-3] + "D1Ev"
-        definition.destructor = symbol
+        symbol = declare_destructor(definition, name)
     parser.function_projection_names.add(symbol.c_name)
-    this = Symbol("this", "value", name.coord, dtype=PointerType(owner),
-                  c_name=parser._local_projection_name("this"))
-    declaration = parser._decl(symbol.c_name, "void", name.coord)
-    declaration.type = c_ast.FuncDecl(c_ast.ParamList([
-        parser._decl(this.c_name, this.dtype, name.coord)], name.coord), declaration.type, name.coord)
-    if symbol.internal_linkage:
-        declaration.storage = ["static"]
+    function_declaration, this = declaration(parser, symbol)
     if inline_definition:
         if owner.internal_linkage:
             raise CppDiagnostic("cpp.unsupported.class-linkage",
@@ -115,17 +136,17 @@ def parse_destructor(parser, definition=None):
         from pcc.frontends.cpp.inline_methods import DeferredMethod
         symbol.definition_linkage = "external_odr"
         definition.inline_methods.append(DeferredMethod(
-            symbol, "void", parameter_scope, [], declaration, this,
+            symbol, "void", parameter_scope, [], function_declaration, this,
             collect_body(parser), name.coord,
         ))
-        return declaration
+        return function_declaration
     if not outside:
         parser._expect(";")
-        return declaration
-    return bind_destructor_body(parser, definition, symbol, parameter_scope, declaration, this, name.coord)
+        return function_declaration
+    return bind_destructor_body(parser, definition, symbol, parameter_scope, function_declaration, this, name.coord)
 
 
-def member_destructors(definition, scope=None):
+def member_destructors(definition, scope=None, *, parser=None):
     """Select declared member D1s in construction order, without synthesis."""
     from pcc.frontends.cpp.member_initialization import requires_destruction
     selected = []
@@ -139,6 +160,9 @@ def member_destructors(definition, scope=None):
                                 "implicit member destruction requires special-member synthesis", member.coord)
         if scope is not None:
             scope.check_member_access(destructor, member.coord)
+        if parser is not None:
+            from pcc.frontends.cpp.class_template_members import request_body
+            request_body(parser, destructor, member.coord)
         selected.append((member, destructor))
     return selected
 
@@ -161,19 +185,17 @@ def _closed_destruction_body(body, cleanup_destructors):
     return True
 
 
-def bind_destructor_body(parser, definition, symbol, parameter_scope, declaration, this, coord):
-    """Body locals die before members on both fallthrough and early return."""
-    selected = member_destructors(definition, parameter_scope)
+def complete_body(parser, definition, symbol, scope, this, coord, bind_body):
+    """One cleanup/proof owner for parsed bodies and concretely replayed Patterns."""
+    selected = member_destructors(definition, scope, parser=parser)
     previous_calls = parser.lifetimes.cleanup_destructors
     parser.lifetimes.cleanup_destructors = {}
     parser.lifetimes.enter()
     try:
         parser.lifetimes.register_members(this, selected)
-        function = parser._bind_function_body(
-            symbol, "void", parameter_scope, [], declaration, this, definition, coord,
-        )
-        function.body.block_items.extend(parser.lifetimes.current_cleanup(coord))
-        closed = _closed_destruction_body(function.body, parser.lifetimes.cleanup_destructors)
+        body = bind_body()
+        body.block_items.extend(parser.lifetimes.current_cleanup(coord))
+        closed = _closed_destruction_body(body, parser.lifetimes.cleanup_destructors)
     finally:
         parser.lifetimes.leave()
         parser.lifetimes.cleanup_destructors = previous_calls
@@ -182,5 +204,16 @@ def bind_destructor_body(parser, definition, symbol, parameter_scope, declaratio
                             "unknown destruction effects require member exception cleanup", coord)
     symbol.closed_destruction_body = closed
     from pcc.frontends.cpp.constructors import call_free_body
-    symbol.closed_normal_body = call_free_body(function.body)
-    return function
+    symbol.closed_normal_body = call_free_body(body)
+    return body
+
+
+def bind_destructor_body(parser, definition, symbol, parameter_scope, declaration, this, coord):
+    """Body locals die before members on both fallthrough and early return."""
+    body = complete_body(
+        parser, definition, symbol, parameter_scope, this, coord,
+        lambda: parser._bind_function_body(
+            symbol, "void", parameter_scope, [], declaration, this, definition, coord,
+        ).body,
+    )
+    return c_ast.FuncDef(declaration, None, body, coord)

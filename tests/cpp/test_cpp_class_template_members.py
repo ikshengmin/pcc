@@ -164,7 +164,6 @@ def test_member_owner_encoding_and_substitution_order(namespace, expected):
     ('template<class T>struct Box{Box(Box);};', 'cpp.invalid-constructor'),
     ('template<class T>struct Box{Box(const Box);};', 'cpp.invalid-constructor'),
     ('namespace{struct Hidden{int n;};}template<class T>struct Box{Hidden*f(){return nullptr;}};int g(Box<int>*p){p->f();return 42;}', 'cpp.unsupported.member-templates'),
-    ('template<class T>struct Box{~Box(){}};', 'cpp.unsupported.class-templates'),
     ('template<class T>struct Box{T values[2];T f(){return 42;}};', 'cpp.unsupported.array-bounds'),
 ))
 def test_definition_and_instantiation_boundaries(source, code):

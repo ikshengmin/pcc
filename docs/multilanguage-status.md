@@ -1,6 +1,6 @@
 # Multi-language implementation status
 
-Current source inspected: `a49230d812d91678e9f4fcc33d01fd476698c7fd`.
+Latest executed project baseline: `1e0083ea7e5cbb41f462517714b619c70335b81d`.
 Implementation is driven by the first failure of each unchanged upstream project,
 not by feature-test counts. No target below has passed its complete PCC build and
 upstream tests. Mainlines compile source directly to PCC IR.
@@ -9,10 +9,10 @@ upstream tests. Mainlines compile source directly to PCC IR.
 
 | Language | Target | Current frontier | Next work |
 | --- | --- | --- | --- |
-| C++17 | TinyXML2 11.0.0, original `xmltest` | Owned `<cstdio>` exists. Current source rejects the template destructor in `DynArray`; this is source inspection, not a fresh project run. The last CI project nodes lacked the native compiler prerequisite. | Establish the current whole-project host-PCC failure, then fix that failure through the existing template/lifetime owners. |
-| Java | Commons Numbers Primes 1.2 | Current source rejects the string literal in `Primes.java:31`; a historical experimental frontend's deeper array failure does not qualify master. | Preserve all production and original test classes, pin test dependencies, and connect required objects/strings through the shared managed model. |
-| Go | Go 1.27.3 `math/bits`, whole package and tests | Retained CI confirms rejection of predeclared `error` in `bits_errors.go`. The table component is not a package pass. | Complete the unchanged package/test target, then implement its first interface/runtime requirement. Do not substitute the bootstrap variant or omit panic tests. |
-| Rust | `fallible-streaming-iterator` 0.1.9 | Selected dependency-free crate uses `Option`, `Result`, traits and references. Current-source inspection predicts the crate lint attribute as the first parser boundary; no PCC project run yet. | Pin the complete original crate and licenses, establish the first PCC failure, and retain its original tests plus a separate API consumer. |
+| C++17 | TinyXML2 11.0.0, original `xmltest` | CI rejects class-template members; source inspection locates the first unsupported declaration at `DynArray::~DynArray`. Owned `<cstdio>` exists. No executable or upstream test execution. | Template D1 source is reviewed but execution-unrun; retain the whole-project gate and continue through its next actual failure. |
+| Java | Commons Numbers Primes 1.2 | CI rejects the string literal in `Primes.java:31`. All 17 original inputs are intact; production and test dependency closure remains incomplete. | Connect objects/strings through the shared managed model, preserving all original test classes. |
+| Go | Go 1.27.3 `math/bits`, whole package and tests | CI rejects predeclared `error` in `bits_errors.go:12`. Whole test execution is unrun; matching reference toolchain is missing. | Implement the shared storage/interface requirements without substituting the bootstrap variant or omitting panic tests. |
+| Rust | `fallible-streaming-iterator` 0.1.9 | Actual same-input rustc certification passes; PCC rejects `warn(missing_docs)` at `lib.rs:16`. External reference builds the original crate and its two compile-only test functions; the separate API consumer passes. No PCC project object. | Certified lint transition is source-reviewed, execution-unrun; keep the original project gate strict. |
 
 Project inputs and tests belong with their runners and source locks. Detailed
 feature obligations belong in `specs/features/` and language tests, not this page.
@@ -28,22 +28,24 @@ feature obligations belong in `specs/features/` and language tests, not this pag
   Shared language exceptions/panics need one owned unwinding design; CFI tables
   alone do not establish that design or cross-platform exception support.
 - Existing scalar integration is C++ calling Java-source, Go and Rust in one
-  owned-linked process. The next gate is compiled Python calling all four via
-  `pcc.extern` in one executable, followed by buffers, GC handles, then C-API
-  extension modules. Java bytecode compatibility remains a separate frozen
+  owned-linked process. The compiled-Python four-source gate now exists: owned
+  provider object checks pass, but all four execution nodes stop at the missing
+  verified runtime archive. Same-executable execution remains unrun. Buffers,
+  GC handles and C-API extension modules follow this gate. Java bytecode compatibility remains a separate frozen
   experiment.
 - Shared runtime/backend changes retain the single-batch Mac/QPS review gate.
   Do not access the user's Mac or edit the separate Python IR/RC performance line.
 
 ## Validation
 
-[CI run 41550908488](https://github.com/ikshengmin/pcc/actions/runs/41550908488)
-tested `531f2b0b` and failed overall. Its
-[bounded passed-test summary](../specs/conformance/summaries/ci-41550908488-passed.json)
-records exact test IDs, versions, platform and evidence hashes; it does not
-qualify later commits. Subsequent source-reviewed changes remain execution-unrun.
+[CI run 41570071093](https://github.com/ikshengmin/pcc/actions/runs/41570071093)
+tested `1e0083ea` and completed with 13 successful and 31 failed jobs. No target
+above passed its complete PCC build and upstream tests. Later source-reviewed
+changes remain execution-unrun. The earlier [bounded passed-test summary](../specs/conformance/summaries/ci-41550908488-passed.json)
+is tied only to its recorded revision, test IDs, versions, platform and hashes.
 
-NumPy/orjson source-frontier jobs are wired into the existing unified workflow.
+NumPy source preprocessing stops at generated `_numpyconfig.h` and `stdarg.h`.
+orjson yyjson preprocessing/parsing passes; Rust build/import remains blocked.
 Their complete owned builds/imports, native pcc1 and full five-GC acceptance
 remain open. Latest user direction puts execution in CI, not local test runs.
 Keep original failures and reference disagreements; do not weaken assertions,

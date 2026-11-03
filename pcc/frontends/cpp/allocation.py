@@ -79,6 +79,54 @@ def global_new_ahead(parser):
         return _scope_separator(parser.cursor) is not None and parser._peek().value == 'new'
 
 
+def global_delete_ahead(parser):
+    with parser.cursor.tentative():
+        return _scope_separator(parser.cursor) is not None and parser._peek().value == 'delete'
+
+
+def _delete_operand(expression, coord):
+    """Check known operand constraints without pretending to own deallocation."""
+    from pcc.frontends.cpp.templates import dependent
+    from pcc.frontends.cpp.types import FunctionType
+    dtype = unqualified(expression.dtype)
+    if dependent(dtype):
+        return
+    if dtype == 'nullptr':
+        return
+    if is_class_type(dtype):
+        raise CppDiagnostic('cpp.unsupported.allocation',
+                            'delete class conversions and deallocation lookup are not implemented', coord)
+    if (not isinstance(dtype, PointerType) or unqualified(dtype.pointee) == 'void'
+            or isinstance(unqualified(dtype.pointee), FunctionType)):
+        raise CppDiagnostic('cpp.invalid-delete-operand', 'delete requires a pointer to an object', coord)
+
+
+def lower_delete(parser, expression, global_only, array, coord):
+    """A real instantiated use must retain the owned heap/deallocation boundary."""
+    _delete_operand(expression, coord)
+    operation = 'delete[]' if array else 'delete'
+    raise CppDiagnostic('cpp.unsupported.allocation',
+                        operation + ' requires owned deallocation, object lifetime and failure semantics', coord)
+
+
+def parse_delete(parser):
+    """Retain dependent delete syntax/operand identity, never replay source tokens."""
+    from pcc.frontends.cpp.parser import Expression
+    from pcc.frontends.cpp.templates import Pattern, dependent
+    global_only = _scope_separator(parser.cursor) is not None
+    token = parser._expect('delete')
+    array = parser._accept('[') is not None
+    if array:
+        parser._expect(']')
+    operand = parser._unary()
+    parser._require_value(operand, allow_class=True)
+    operand = parser._decay_array(operand)
+    _delete_operand(operand, token.coord)
+    if parser.template_function is not None and dependent(operand.dtype):
+        return Expression(Pattern('delete', token.coord, (global_only, array), [operand]), 'void')
+    return lower_delete(parser, operand, global_only, array, token.coord)
+
+
 def _cast(parser, node, dtype, coord):
     return c_ast.Cast(c_ast.Typename(None, [], parser._scalar_type(None, dtype, coord), coord), node, coord)
 
@@ -199,7 +247,9 @@ def explicit_destructor(parser, expression, operator):
     if class_name is None and name.identifier.value == owner.name:
         class_name = owner.declaration_scope.names.get(owner.name)
     def matches(candidate):
-        return candidate is not None and candidate.kind == 'type' and unqualified(candidate.dtype) == owner
+        return candidate is not None and (
+            candidate.kind == 'type' and unqualified(candidate.dtype) == owner
+            or candidate is getattr(owner, 'template_origin', None))
     if (matches(context_name) and matches(class_name) and context_name is not class_name
             and getattr(class_name, 'access', 'public') != 'public'):
         raise CppDiagnostic('cpp.unsupported.destructor-alias-lookup',
@@ -222,6 +272,10 @@ def explicit_destructor(parser, expression, operator):
                             'explicit array or implicit member destruction requires its lifetime owner', coord)
     if destructor is not None:
         parser.scope.check_member_access(destructor, coord)
+        if (getattr(destructor, 'class_template_instance', None) is not None
+                and not getattr(destructor, 'closed_destruction_body', False)):
+            raise CppDiagnostic('cpp.unsupported.dependent-destruction',
+                                'explicit template D1 requires a bound closed-destruction proof, not a queued body', coord)
         # Only the destructor binder's exact generated cleanup-call chain is
         # trusted. Unknown user calls and declarations alone are not proofs.
         if not getattr(destructor, 'closed_destruction_body', False):

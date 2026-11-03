@@ -366,7 +366,7 @@ _COMPARISONS = {"==", "!=", "<", "<=", ">", ">="}
 
 
 class Parser:
-    def __init__(self, source: str, *, source_path=None, edition=2021):
+    def __init__(self, source: str, *, source_path=None, edition=2021, rustc_check=None):
         if type(edition) is not int or edition not in {2015, 2018, 2021, 2024}:
             raise RustError('Rust parser crate policy requires an explicit recognized edition')
         self.source = source
@@ -380,6 +380,8 @@ class Parser:
         if source_path is not None:
             self.tokens = [replace(token, source_path=source_path) for token in self.tokens]
         self.crate_documentation: tuple[Documentation, ...] = ()
+        self.crate_lint_attributes: tuple = ()
+        self._rustc_check = rustc_check
         self.crate_stability = None
         self.attribute_requirements = []
         self.pos = 0
@@ -677,6 +679,7 @@ class Parser:
         child.modules, child.attribute_requirements, child.crate_aliases = [], [], []
         child.crate_stability = None
         child.crate_documentation = ()
+        child.crate_lint_attributes = ()
         functions = child.parse(_module=True, _inline=True)
         self.pos = child.pos
         return ModuleBody(functions, child.records, child.enums, child.implementations,
@@ -694,6 +697,13 @@ class Parser:
             attribute = self.take()
             if _module:
                 raise attribute.error("semantic inner module attributes require module context; this form is not implemented")
+            if attribute.text in {'allow', 'warn', 'deny', 'forbid'}:
+                from .attribute_metadata import crate_lint_attribute
+                lint = crate_lint_attribute(self, attribute, start)
+                self.crate_lint_attributes += (lint,)
+                self.crate_documentation = tuple(crate_docs)
+                self.require_checked_crate_lint(lint)
+                continue
             if attribute.text == "stable":
                 from .attribute_metadata import stable_metadata
                 if self.crate_stability is not None:
@@ -895,6 +905,22 @@ class Parser:
 
     def validate_crate_policy(self):
         self.crate_policy.require_owned_lang_item_context()
+
+    def require_checked_crate_lint(self, attribute):
+        # A successful check of the exact source owns all lint-level effects,
+        # including suppression, errors and forbidden overrides. Parsing this
+        # finite metadata family is not permission to ignore any other attribute.
+        from .external_check import CheckedRustSource
+        checked = self._rustc_check
+        if type(checked) is not CheckedRustSource:
+            raise attribute.token.error('missing_docs lint semantics require an actual source/options-bound CheckedRustSource; owned Rust lint checking is not implemented')
+        record = checked.provenance
+        try:
+            checked.validate(self.source, target_triple=record.target_triple,
+                             overflow_checks=record.overflow_checks,
+                             edition=self.crate_policy.edition)
+        except RustError as error:
+            raise attribute.token.error(str(error)) from error
 
     def compiler_context_attribute(self, attribute, start):
         return False

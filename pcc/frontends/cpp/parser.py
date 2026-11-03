@@ -2061,9 +2061,13 @@ class CppParser:
 
     def _unary(self):
         token = self._peek()
-        from pcc.frontends.cpp.allocation import global_new_ahead, parse_new
+        from pcc.frontends.cpp.allocation import (
+            global_delete_ahead, global_new_ahead, parse_delete, parse_new,
+        )
         if token.value == "new" or global_new_ahead(self):
             return parse_new(self)
+        if token.value == "delete" or global_delete_ahead(self):
+            return parse_delete(self)
         if token.value == "sizeof":
             self.cursor.take()
             return self._sizeof_expression(token)
@@ -2694,6 +2698,10 @@ class CppParser:
             return member_access(self, base, operator, token)
         arguments = [self._instantiate_expression(child, bindings, environment)
                      for child in pattern.children]
+        if kind == 'delete':
+            from pcc.frontends.cpp.allocation import lower_delete
+            global_only, array = pattern.value
+            return lower_delete(self, arguments[0], global_only, array, coord)
         if kind == 'member-call':
             from pcc.frontends.cpp.members import call_member, call_static_member
             group, static, has_receiver, address_available = pattern.value

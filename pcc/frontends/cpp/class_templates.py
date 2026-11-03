@@ -5,8 +5,9 @@ not instantiate its layout. The shared InstanceRegistry owns identity and
 scheduling; this owner only checks C++ completeness and emits ordinary C
 records. No token replacement, alternate layout engine, or instance cache.
 Ordinary member bodies are typed once at definition time and instantiated on
-ODR-use. Bases, arrays, destructor bodies and specializations remain explicit
-capability boundaries, never unparsed, supposedly validated bodies.
+ODR-use. Complete-object D1s share the ordinary lifetime owner. Bases, arrays
+and specializations remain explicit capability boundaries, never unparsed,
+supposedly validated bodies.
 """
 
 from pcc.frontends.c.ast import c_ast
@@ -101,11 +102,15 @@ def parse_declaration(parser, parameters, parent):
             if parser._accept(';'):
                 continue
             if token.value in ('using', 'typedef', 'enum', 'class', 'struct', 'union',
-                               'friend', 'virtual', 'template', '~', 'explicit',
+                               'friend', 'virtual', 'template', 'explicit',
                                'constexpr'):
                 unsupported(token.coord, 'class template members currently require scalar/pointer data declarations')
             from pcc.frontends.cpp.class_template_members import parse_signature
             pattern.method_definition.access = access
+            if token.value == '~':
+                from pcc.frontends.cpp.class_template_members import parse_destructor_signature
+                parse_destructor_signature(parser, pattern)
+                continue
             if token.value == name.value and parser.cursor.tokens[parser.cursor.position + 1].value == '(':
                 parse_signature(parser, pattern, parser._identifier(), 'void', constructor=True)
                 continue

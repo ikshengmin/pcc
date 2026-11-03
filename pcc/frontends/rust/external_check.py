@@ -7,7 +7,7 @@ minting seal is an API boundary, not a defence against Python reflection.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import json
 from pathlib import Path
@@ -45,26 +45,44 @@ class RustExternalCheckError(RustError):
     """Actual external checking failed; no checked-source token was minted."""
 
 
+@dataclass(frozen=True)
+class ExternalRustcLints:
+    """Result metadata only; never an admission capability or owned lint claim."""
+    attributes: tuple
+    stderr: bytes
+    provenance: ExternalRustcCheck
+    owner: str = field(default='external_rustc_lints', init=False)
+
+
 @dataclass(frozen=True, init=False)
 class CheckedRustSource:
     _source: str
     _record: ExternalRustcCheck
+    _stderr: bytes
     _seal: object
 
-    def __init__(self, source, record, *, _seal=None):
+    def __init__(self, source, record, *, stderr=b'', _seal=None):
         if _seal is not _SEAL:
             raise RustError('CheckedRustSource can only be created by check_rust_source after an actual successful check')
         object.__setattr__(self, '_source', source)
         object.__setattr__(self, '_record', record)
+        object.__setattr__(self, '_stderr', stderr)
         object.__setattr__(self, '_seal', _seal)
 
     @property
     def provenance(self):
         return self._record
 
+    @property
+    def stderr(self):
+        """Exact bytes from the actual successful metadata check, not a log path."""
+        return self._stderr
+
     def validate(self, source, *, target_triple, overflow_checks, edition=2021):
         if self._seal is not _SEAL or source != self._source:
             raise RustError('checked Rust source token does not match the unchanged Rust source bytes')
+        if type(self._stderr) is not bytes or _sha(self._stderr) != self._record.stderr_sha256:
+            raise RustError('checked Rust source diagnostic bytes do not match external rustc provenance')
         self._record.validate(source, target_triple=target_triple,
                               overflow_checks=overflow_checks, edition=edition)
 
@@ -150,7 +168,7 @@ def check_rust_source(source: str, *, toolchain: RustcToolchain,
     record.validate(source, target_triple=target.triple, overflow_checks=False, edition=edition)
     from dataclasses import asdict
     (directory / 'external-check.json').write_text(json.dumps(asdict(record), indent=2) + '\n')
-    return CheckedRustSource(source, record, _seal=_SEAL)
+    return CheckedRustSource(source, record, stderr=result.stderr, _seal=_SEAL)
 
 
 def compile_rust_checked(source: str, *, toolchain: RustcToolchain,

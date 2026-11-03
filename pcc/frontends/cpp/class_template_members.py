@@ -2,8 +2,8 @@
 
 Original tokens are parsed once after the primary class's member declarations
 are complete. Instances consume typed Patterns and declaration identities, not
-source text or tokens. Concrete initialization reuses the complete-object C1
-owner; projection and external-ODR linkage use the ordinary member machinery.
+source text or tokens. Concrete initialization and destruction reuse the C1/D1
+owners; projection and external-ODR linkage use the ordinary member machinery.
 """
 
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
@@ -27,10 +27,36 @@ class PatternDefinition:
     def __init__(self, owner):
         self.dtype, self.scope = owner.injected, owner.member_scope
         self.access = 'private' if owner.class_key == 'class' else 'public'
+        self.destructor = None
 
 
 def unsupported(coord, message):
     raise CppDiagnostic('cpp.unsupported.member-templates', message, coord)
+
+
+def parse_destructor_signature(parser, owner):
+    """Retain a primary D1 declaration and typed body, without a concrete name."""
+    from pcc.frontends.cpp.destructors import declare_destructor, parse_parameters
+    from pcc.frontends.cpp.inline_constructors import collect_body
+    parser._expect('~')
+    name = parser._identifier()
+    definition = owner.method_definition
+    parameter_scope = parse_parameters(parser, definition, name, check_lowering=False)
+    if parser._peek().value not in (';', '{'):
+        unsupported(name.coord, 'defaulted/deleted/ref-qualified template destructors require special-member rules')
+    symbol = declare_destructor(definition, name, encode_name=False)
+    symbol.class_template_pattern = owner
+    symbol.definition_linkage = 'external_odr'
+    if parser._accept(';'):
+        tokens = None
+    else:
+        if owner.scope.internal_linkage:
+            unsupported(name.coord, 'internal-linkage class template definitions require separate ownership')
+        tokens = collect_body(parser)
+    record = MethodPattern(owner, symbol, (), (), parameter_scope, tokens)
+    symbol.member_pattern = record
+    owner.methods.append(record)
+    return record
 
 
 def parse_signature(parser, owner, name, result_type, static=False, constructor=False):
@@ -159,6 +185,9 @@ def declare_instances(parser, owner, definition, arguments):
     from pcc.frontends.cpp.class_templates import substitute_member
     from pcc.frontends.cpp.classes import is_class_type
     from pcc.frontends.cpp.constructors import _complete_name, _declaration
+    from pcc.frontends.cpp.destructors import (
+        declare_destructor, declaration as destructor_declaration,
+    )
     from pcc.frontends.cpp.members import declare_member_function, object_pointer_type
     for record in owner.methods:
         origin = record.symbol
@@ -178,7 +207,11 @@ def declare_instances(parser, owner, definition, arguments):
         symbol = Symbol(origin.name, 'function', origin.coord, dtype=result,
                         parameters=tuple(unqualified(dtype) for _, dtype in params))
         definition.set_access(origin.access)
-        if getattr(origin, 'constructor', False):
+        if getattr(origin, 'destructor', False):
+            # Destructors are not overload-set members and retain a separate
+            # declaration identity, just as in the ordinary class owner.
+            symbol = declare_destructor(definition, origin)
+        elif getattr(origin, 'constructor', False):
             if any(item.parameters == symbol.parameters for item in definition.constructors.overloads):
                 raise CppDiagnostic('cpp.redeclaration', 'constructor signatures coincide after substitution', origin.coord)
             symbol.constructor = True
@@ -194,7 +227,9 @@ def declare_instances(parser, owner, definition, arguments):
         symbols = tuple(None if original is None else Symbol(
             original.name, 'value', original.coord, c_name=original.c_name, dtype=dtype)
             for original, (_, dtype) in zip(record.parameter_symbols, params))
-        if getattr(origin, 'constructor', False):
+        if getattr(origin, 'destructor', False):
+            declaration, this = destructor_declaration(parser, symbol)
+        elif getattr(origin, 'constructor', False):
             declaration, this = _declaration(parser, symbol, params, symbols, True)
         else:
             this = (None if symbol.method_static else Symbol(
@@ -275,9 +310,10 @@ def instantiate_body(parser, context):
     from pcc.frontends.c.ast import c_ast
     from pcc.frontends.cpp.parser import Expression
     from pcc.frontends.cpp.constructors import lower_member_initializers, call_free_body
+    from pcc.frontends.cpp.lifetimes import AutomaticLifetimes
     record, symbol = context.record, context.symbol
     fields = ('return_type', 'member_function', 'this_symbol', 'current_function', 'scope',
-              'instantiating_template')
+              'instantiating_template', 'lifetimes')
     saved = {field: getattr(parser, field) for field in fields}
     previous = getattr(parser, 'class_template_instance', None)
     environment = {}
@@ -290,6 +326,9 @@ def instantiate_body(parser, context):
     parser.return_type, parser.member_function, parser.this_symbol = symbol.dtype, symbol, context.this
     parser.current_function, parser.scope = symbol, symbol.class_owner.definition.scope
     parser.instantiating_template = True
+    # Replay is a separate function, never part of a requesting function's
+    # lifetime stack. Local class/reference/array Patterns remain rejected.
+    parser.lifetimes = AutomaticLifetimes()
     try:
         stores = []
         if getattr(symbol, 'constructor', False):
@@ -299,7 +338,15 @@ def instantiate_body(parser, context):
                 for member, expression in record.initializers.items()
             }
             stores = lower_member_initializers(parser, symbol.class_owner.definition, context.this, initializers)
-        body = parser._instantiate_statement(record.body, context.arguments, environment)
+        if getattr(symbol, 'destructor', False):
+            from pcc.frontends.cpp.destructors import complete_body
+            body = complete_body(
+                parser, symbol.class_owner.definition, symbol, parser.scope,
+                context.this, symbol.coord,
+                lambda: parser._instantiate_statement(record.body, context.arguments, environment),
+            )
+        else:
+            body = parser._instantiate_statement(record.body, context.arguments, environment)
         body.block_items = stores + body.block_items
     finally:
         parser.class_template_instance = previous

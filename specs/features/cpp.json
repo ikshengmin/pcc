@@ -765,6 +765,24 @@
       "evidence": []
     },
     {
+      "id": "cpp.templates.complete-object-d1",
+      "title": "Class-template complete-object D1 ownership, awaiting execution",
+      "chapter_ids": [
+        "temp",
+        "special",
+        "stmt"
+      ],
+      "scope": "Authored, execution-unrun obligations for primary destructor MethodPatterns, concrete D1 declarations, access-checked automatic destruction-use requests, FIFO external-ODR emission and the shared normal-exit cleanup/proof owner. Dependent delete retains typed syntax and fails at actual use without owned deallocation. Explicit D1 without a bound proof, nested unbound template cleanup, local class/reference/array replay, allocating new/delete and original DynArray/TinyXML2 acceptance remain unqualified.",
+      "status": "missing",
+      "tests": [
+        "tests/cpp/test_cpp_template_destructors.py",
+        "tests/cpp/test_cpp_template_destructor_execution.py",
+        "tests/cpp/test_cpp_projects.py::test_cpp_tinyxml2_upstream_tests_explicit_host_pcc_project"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
       "id": "cpp.class-value-abi",
       "title": "Class value abi \u2014 remaining capability boundary",
       "chapter_ids": [

@@ -48,6 +48,28 @@ The owned phase uses only PCC parsing, semantics, IR and backend. It consumes no
 MIR and launches no rustc process. A caller-created provenance dataclass or the
 legacy boolean cannot substitute for the adapter-minted token.
 
+### Certified crate lint transition
+
+Only crate-root `allow`, `warn`, `deny` and `forbid` lists naming
+`missing_docs` can use the actual checked-source route. PCC retains their
+immutable syntax, source spans and order. The successful same-source rustc
+check owns suppression, warnings, errors and forbidden overrides; this is not
+an owned lint implementation. The value-only flag does not authorize it.
+`RustCompilation.external_rustc_lints` records the literal owner
+`external_rustc_lints`, original attributes, provenance and exact metadata-check
+stderr bytes. Those bytes are retained in memory and hash-checked against the
+original provenance, not reconstructed from a digest or filtered into invented
+PCC warnings. This remains the trusted audited-checker boundary, not signed
+attestation.
+
+Other lints/groups, reasons, `expect`, and module/item/member lint attributes
+remain explicit unsupported boundaries. `cfg`/`cfg_attr`, macros and compiler
+context attributes are not enabled by the token. The unchanged real-project
+object gate remains strict; its next `cfg_attr` boundary is only a source
+prediction until CI executes this revision. The authored lint-bearing native
+program, real rustc checks and complete affected Rust lanes are **UNRUN pending
+CI**. No original-project, owned-lint or native pcc1 acceptance is claimed.
+
 Supported shared/mutable references lower to target pointers, preserving
 mutability, field addressing, receiver/argument evaluation and reference-slot
 rebinding. On the checked route the old partial loan/move model is **not** an
@@ -96,8 +118,8 @@ prerequisite, not permission to reuse a Linux token; unrun tests are not support
   tuples are Copy exactly when all their elements are. Named structs are NOT
   implicitly Copy. User-defined Copy, derive and Drop remain unsupported.
 - Nested ordinary comments and located syntax/type errors, including unreachable
-  code. Documentation comments are attributes and are explicitly unsupported,
-  never discarded as ordinary whitespace.
+  code. Documentation comments and admitted doc metadata retain their original
+  attachment and spans; unsupported semantic forms are never discarded.
 
 Arithmetic explicitly matches Rust with overflow checks disabled: dynamic
 add/subtract/multiply/negation wrap at the declared width. Out-of-range literals and overflow in foldable literal/operator expressions

@@ -752,6 +752,20 @@
         ]
       }
     },
+    "tests/cpp/test_cpp_template_destructor_execution.py": {
+      "test_invalid_template_d1_original_is_rejected_by_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct C++17 negative reference compiler subprocess with -pedantic-errors and -fsyntax-only"
+        ]
+      },
+      "test_template_d1_originals_match_cpp17": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.sizeof_execution.execute_row_pair, which calls tests.cpp.owned_execution.compile_reference_cpp"
+        ]
+      }
+    },
     "tests/cpp/test_cpp_template_execution.py": {
       "test_cpp_template_host_owned_matches_explicit_cpp17_oracle": {
         "activity": "external-reference",
@@ -1259,6 +1273,50 @@
         "activity": "external-reference",
         "reason": [
           "Calls tests.rust.test_rust_method_reference.test_unchanged_inherent_programs_match_actual_rustc_native_execution"
+        ]
+      }
+    },
+    "tests/rust/test_rust_certified_lints.py": {
+      "test_actual_check_cannot_admit_other_lints_or_semantic_attributes": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": [
+          "Calls tests.rust.test_rust_certified_lints.certify and pcc.frontends.rust.check_rust_source before asserting owned rejection of unsupported attributes"
+        ]
+      },
+      "test_actual_lint_errors_never_mint_a_token_or_reach_owned_lowering": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": [
+          "Calls pcc.frontends.rust.compile_rust_checked and its actual check_rust_source prerequisite; asserts rejected original lint semantics never reach owned lowering"
+        ]
+      },
+      "test_actual_lint_levels_preserve_order_metadata_and_exact_diagnostic_bytes": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": [
+          "Calls tests.rust.test_rust_certified_lints.certify and pcc.frontends.rust.check_rust_source before owned parsing, object emission and exact diagnostic-byte retention"
+        ]
+      },
+      "test_lint_capability_rejects_changed_source_edition_options_and_diagnostic_bytes": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": [
+          "Calls tests.rust.test_rust_certified_lints.certify and pcc.frontends.rust.check_rust_source before enforcing owned source/options/diagnostic identity guards"
+        ]
+      },
+      "test_unchanged_lint_program_has_owned_native_and_actual_rustc_reference_results": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": [
+          "Calls pcc.frontends.rust.check_rust_source, then owned compile/link/run and separate actual rustc reference processes via tests.rust.test_fallible_streaming_iterator_project.reference_process"
+        ]
+      },
+      "test_unchanged_project_retains_lint_before_the_next_source_boundary": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": [
+          "Calls tests.rust.test_fallible_streaming_iterator_project.certify_original and its actual check_rust_source prerequisite before owned syntax retention at the next unsupported boundary"
         ]
       }
     },

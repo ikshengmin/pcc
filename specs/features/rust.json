@@ -610,6 +610,25 @@
   ],
   "features": [
     {
+      "id": "rust.attributes.external-certified-missing-docs",
+      "title": "Actual externally checked crate missing_docs lint transition",
+      "chapter_ids": [
+        "rust.ref.7.3"
+      ],
+      "scope": "Source implementation retains immutable crate-root allow/warn/deny/forbid missing_docs attributes and exact successful metadata-check stderr bytes, hash-bound to adapter-minted same-source/edition/target/options provenance. Literal result owner is external_rustc_lints; rustc owns all lint-level semantics and PCC retains owned parsing/lowering. Unknown lint names/groups, reasons, expect and non-crate placement remain unsupported. No new boolean grants admission. New actual-check and unchanged authored-program owned-native/reference obligations are UNRUN pending CI, so this transition is not qualified. Owned lint checking, cfg/cfg_attr, macros, original-project acceptance and native pcc1 remain open. Historical evidence is unchanged; no raw diagnostic logs are stored here.",
+      "status": "missing",
+      "tests": [
+        "tests/rust/test_rust_certified_lints.py::test_uncertified_lints_retain_original_syntax_but_cannot_authorize_lowering",
+        "tests/rust/test_rust_certified_lints.py::test_actual_lint_levels_preserve_order_metadata_and_exact_diagnostic_bytes@rust-native-reference",
+        "tests/rust/test_rust_certified_lints.py::test_actual_lint_errors_never_mint_a_token_or_reach_owned_lowering@rust-native-reference",
+        "tests/rust/test_rust_certified_lints.py::test_lint_capability_rejects_changed_source_edition_options_and_diagnostic_bytes@rust-native-reference",
+        "tests/rust/test_rust_certified_lints.py::test_unchanged_project_retains_lint_before_the_next_source_boundary@rust-native-reference",
+        "tests/rust/test_rust_certified_lints.py::test_unchanged_lint_program_has_owned_native_and_actual_rustc_reference_results@rust-native-reference"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
       "id": "rust.chapter.1.coverage",
       "title": "Notation — full chapter qualification",
       "chapter_ids": [

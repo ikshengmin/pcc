@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from .certification import ExternalRustcCheck
 from .editions import require_edition
 from .external_check import (
-    CheckedRustSource, RustcToolchain, RustExternalCheckError,
+    CheckedRustSource, ExternalRustcLints, RustcToolchain, RustExternalCheckError,
     check_rust_source, compile_rust_checked,
 )
 from .moves import MoveChecker
@@ -34,6 +34,7 @@ class RustCompilation:
     data_layout: str = LINUX_LAYOUT
     standard_marker_contract: object = None
     edition: int = 2021
+    external_rustc_lints: ExternalRustcLints | None = None
 
     @property
     def ir_text(self) -> str:
@@ -88,7 +89,7 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
     if rustc_check is not None:
         rustc_check.validate(source, target_triple=target.triple,
                              overflow_checks=overflow_checks, edition=edition)
-    parser = Parser(source, edition=edition)
+    parser = Parser(source, edition=edition, rustc_check=rustc_check)
     functions = parser.parse()
     resolution = None
     records, enums = parser.records, parser.enums
@@ -116,9 +117,13 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
     module = lowerer.lower()
     return RustCompilation(module, dict(lowerer.symbols), externally_checked=rustc_check is not None,
                            target_triple=target.triple, data_layout=target.data_layout,
-                           standard_marker_contract=marker_context, edition=edition)
+                           standard_marker_contract=marker_context, edition=edition,
+                           external_rustc_lints=(ExternalRustcLints(
+                               parser.crate_lint_attributes, rustc_check.stderr,
+                               rustc_check.provenance) if rustc_check is not None else None))
 
 
 __all__ = ["ExternalRustcCheck", "CheckedRustSource", "RustcToolchain",
+           "ExternalRustcLints",
            "RustExternalCheckError", "check_rust_source", "compile_rust_checked",
            "RustCompilation", "RustError", "compile_rust"]

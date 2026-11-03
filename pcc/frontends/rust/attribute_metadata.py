@@ -20,6 +20,27 @@ class MetaItem:
 
 
 @dataclass(frozen=True)
+class CrateLintAttribute:
+    """Original syntax, not an owned implementation of the named lint."""
+    token: object
+    level: str
+    lints: tuple[MetaItem, ...]
+    source_span: tuple[int, int]
+
+
+def crate_lint_attribute(parser, token, start):
+    values = meta_list(parser)
+    if not values:
+        raise token.error('crate lint transition requires missing_docs; empty lint lists are not implemented')
+    for item in values:
+        if item.name != 'missing_docs' or item.form != 'word':
+            raise item.token.error('crate lint transition implements only missing_docs word metadata; other lints, groups and reasons are not implemented')
+    end = parser.expect(']')
+    return CrateLintAttribute(token, token.text, values,
+                              (offset(parser, start), offset(parser, end) + 1))
+
+
+@dataclass(frozen=True)
 class StableMetadata:
     token: object
     feature: str
