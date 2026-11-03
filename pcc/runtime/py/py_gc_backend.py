@@ -161,6 +161,8 @@ pcc_gc_managed_pointer_index_remove = extern(
 pcc_capi_is_type_object_value = extern(
     "pcc_capi_is_type_object_value", (c_ptr,), c_int64
 )
+pcc_gc_refresh_read_barrier = extern("pcc_gc_refresh_read_barrier", (), c_void)
+
 pcc_gc_forwarding_index_find = extern("pcc_gc_forwarding_index_find", (c_ptr,), c_ptr)
 pcc_gc_backend4_forwarding_entries = extern(
     "pcc_gc_backend4_forwarding_entries", (), c_int64
@@ -1092,6 +1094,8 @@ def _relocation_set_head():
 
 
 def _set_relocation_set_head(head) -> None:
+    if ptr_is_null(head) == 0 and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4:
+        atomic_store_i32(global_addr("pcc_gc_read_barrier_enabled"), 0, 1, "release")
     global_store_ptr("pcc_gc_relocation_set_head", head)
 
 
@@ -1251,6 +1255,8 @@ def _relocation_set_remove(obj) -> None:
                 flags: int = load_i32(obj, 12)
                 store_i32(obj, 12, flags & ~2048)
             free(node)
+            if ptr_is_null(prev) != 0 and ptr_is_null(nxt) != 0:
+                pcc_gc_refresh_read_barrier()
             return
         prev = node
         node = nxt
@@ -3014,13 +3020,9 @@ def pcc_gc_set_backend(backend: int) -> int:
     # Keep the reserved transition across unlocked worker/teardown operations.
     # Acquisition refuses the sentinel; no raw pointer can race list reset.
     _object_graph_unlock()
-    if backend == 3 or backend == 4:
-        store_i32(global_addr("pcc_gc_read_barrier_enabled"), 0, 1)
     if backend == 0:
         store_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0, 1)
         _publish_frame_registry_inactive()
-    if backend != 3 and backend != 4:
-        store_i32(global_addr("pcc_gc_read_barrier_enabled"), 0, 0)
     refcount_fast: int = 0
     if (
         backend == 0
@@ -3055,6 +3057,7 @@ def pcc_gc_set_backend(backend: int) -> int:
         pcc_gc_reset_relocation_set()
         _backend4_store_buffer_clear()
     _object_graph_lock()
+    pcc_gc_refresh_read_barrier()
     _mode_leases_thaw()
     atomic_store_i64(global_addr("pcc_gc_foreign_lease_active"), 0, 0, "release")
     _object_graph_unlock()
@@ -5492,6 +5495,7 @@ def pcc_gc_reset_relocation_set() -> None:
             store_i64(
                 global_addr("pcc_gc_backend4_relocation_reset_owner"), 0, 0
             )
+            pcc_gc_refresh_read_barrier()
             _object_graph_unlock()
             return
         _object_graph_unlock()

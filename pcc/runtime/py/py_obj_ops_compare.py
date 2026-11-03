@@ -951,6 +951,11 @@ def py_obj_hash(o) -> int:
         read_barrier_enabled: int = load_i32(
             global_addr("pcc_gc_read_barrier_enabled"), 0
         )
+        # A member hash may run user code and start relocation. Moving
+        # backends must recheck each slot; GC0 keeps its fixed plain-load loop.
+        barrier_backend: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+        if barrier_backend == 3 or barrier_backend == 4:
+            read_barrier_enabled = 1
         i: int = 0
         while i < n:
             slot = ptr_add(o, PYTUPLEOBJECT_ITEMS_OFFSET + i * 8)

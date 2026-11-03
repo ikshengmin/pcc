@@ -9,6 +9,7 @@ from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     atomic_load_i64,
+    atomic_store_i32,
     atomic_store_i64,
     abi_constant,
     calloc,
@@ -114,6 +115,26 @@ def _graph_lock() -> None:
 @c_abi_export("pcc_gc_forwarding_identity_graph_unlock")
 def _graph_unlock() -> None:
     pcc_py_gc_minor_graph_unlock()
+
+
+@c_abi_export("pcc_gc_refresh_read_barrier")
+def pcc_gc_refresh_read_barrier() -> None:
+    # Recompute only under the same lock as forwarding/set publication.
+    # A nonempty forwarding head is conservatively active even while a
+    # publication/rollback has not yet updated its population counter.
+    _graph_lock()
+    enabled: i64 = 1
+    if load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0:
+        backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+        if backend == 0 or backend == 1 or backend == 2:
+            enabled = 0
+        elif backend == 3 or backend == 4:
+            if (load_i32(global_addr("pcc_gc_forwarding_population"), 0) == 0
+                    and ptr_is_null(global_load_ptr("pcc_gc_forwarding_head")) != 0):
+                if backend == 3 or ptr_is_null(global_load_ptr("pcc_gc_relocation_set_head")) != 0:
+                    enabled = 0
+    atomic_store_i32(global_addr("pcc_gc_read_barrier_enabled"), 0, enabled, "release")
+    _graph_unlock()
 
 
 @c_abi_export("pcc_gc_forwarding_set_head")
@@ -285,6 +306,7 @@ def pcc_gc_forwarding_clear_all() -> None:
         free(node)
         node = nxt
     store_i32(global_addr("pcc_gc_forwarding_population"), 0, 0)
+    pcc_gc_refresh_read_barrier()
 
 
 @c_abi_export("pcc_gc_identity_list_head")
@@ -579,6 +601,8 @@ def pcc_gc_install_forwarding_preallocated_unlocked(
     store_ptr(node, 32, null())
     store_ptr(node, 40, null())
     store_ptr(node, 48, null())
+    # Enable before the first source index can expose the forwarding.
+    atomic_store_i32(global_addr("pcc_gc_read_barrier_enabled"), 0, 1, "release")
     if pcc_gc_forwarding_plan_index_insert(0, from_obj, node) != 1:
         return -1
     if pcc_gc_forwarding_plan_index_insert(1, to_obj, node) != 1:
@@ -656,6 +680,8 @@ def pcc_gc_install_forwarding_unlocked(from_obj: c_ptr, to_obj: c_ptr) -> i64:
         node = malloc(56)
         if ptr_is_null(node) != 0:
             return -1
+        # Enable before linking the first edge, including public installs.
+        atomic_store_i32(global_addr("pcc_gc_read_barrier_enabled"), 0, 1, "release")
         py_incref(to_obj)
         store_ptr(node, 0, from_obj)
         store_ptr(node, 8, to_obj)

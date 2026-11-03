@@ -134,6 +134,8 @@ define_global_i32("pcc_gc_refcount_atomic", 0)
 # control. GC3 admission still awaits its minor-copy ownership validation.
 define_global_i32("pcc_gc_backend4_no_refcounts", 0)
 define_global_i32("pcc_gc_config_initialized", 0)
+# Conservative before configuration; moving work publishers enable before
+# exposing an edge/set entry and refresh after retirement under the graph lock.
 define_global_i32("pcc_gc_read_barrier_enabled", 1)
 define_global_i32("pcc_gc_backend0_frame_roots_enabled", 0)
 # 1 while compiled frames register nothing: the configuration is parsed,

@@ -26,6 +26,8 @@ from pcc.unsafe import (
 __pcc_freestanding__ = True
 
 
+pcc_gc_refresh_read_barrier = extern("pcc_gc_refresh_read_barrier", (), c_void)
+
 py_decref = extern("py_decref", (c_ptr,), c_void)
 py_incref = extern("py_incref", (c_ptr,), c_void)
 pcc_dealloc_cascade_active = extern(
@@ -264,6 +266,8 @@ def pcc_gc_forwarding_detach(from_obj):
         pcc_gc_backend4_note_forwarding_removed_on_page(from_page)
     else:
         pcc_gc_backend4_zpage_note_forwarding_removed(from_obj)
+    if population == 1:
+        pcc_gc_refresh_read_barrier()
     return node
 
 
@@ -416,6 +420,8 @@ def pcc_gc_forwarding_remove_target(target, finish) -> None:
     # live for healing; preparation failure is unconditional fail-stop, not a
     # recoverable rollback of the whole forwarding transaction.
     node = pcc_gc_forwarding_target_index_remove(target)
+    if ptr_is_null(node) != 0:
+        return
     while ptr_is_null(node) == 0:
         nxt = load_ptr(node, 32)
         from_obj = load_ptr(node, 0)
@@ -462,6 +468,8 @@ def pcc_gc_forwarding_remove_target(target, finish) -> None:
         else:
             pcc_gc_backend4_zpage_note_forwarding_removed(from_obj)
         node = nxt
+    if population == 1:
+        pcc_gc_refresh_read_barrier()
 
 
 @c_abi_export("pcc_gc_backend4_remap_and_retire_stopped_world")
@@ -677,6 +685,8 @@ def pcc_gc_backend4_remap_and_retire_unlocked(finish) -> None:
                     0,
                     population - 1,
                 )
+            if population == 1:
+                pcc_gc_refresh_read_barrier()
             fwd = nxt
             continue
         old_flags: i64 = load_i32(old, 12)

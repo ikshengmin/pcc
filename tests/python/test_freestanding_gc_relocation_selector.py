@@ -65,6 +65,7 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_threads_enabled",
 }
 RAW_GLOBAL_IMPORTS = {
+    "pcc_gc_read_barrier_enabled",
     "pcc_gc_backend4_evacuation_candidate_bytes_count",
     "pcc_gc_backend4_evacuation_candidate_zpage_bytes_count",
     "pcc_gc_backend4_evacuation_candidates",

@@ -2333,6 +2333,7 @@ def _cross_object_signatures_part_4():
     "pcc_gc_forwarding_find": (("c_ptr",), "c_ptr"),
     "pcc_gc_relocation_member_note": (("c_ptr",), "c_void"),
     "pcc_gc_forwarding_target_exists": (("c_ptr",), "c_int64"),
+    "pcc_gc_refresh_read_barrier": ((), "c_void"),
     "pcc_gc_install_forwarding_unlocked": (("c_ptr", "c_ptr"), "c_int64"),
     "pcc_gc_forwarding_install_plan_prepare": (
         ("c_ptr", "c_ptr"),

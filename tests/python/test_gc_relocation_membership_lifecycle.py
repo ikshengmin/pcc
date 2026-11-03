@@ -80,6 +80,8 @@ class _MembershipMemory:
             "store_i64": self.write,
             "free": self.free,
             "_init_config": lambda: 4,
+            "pcc_gc_refresh_read_barrier": lambda: None,
+            "atomic_store_i32": lambda base, offset, value, order: self.write(base, offset, value),
             "_object_head": lambda: 0,
             "_forwarding_find": self.forwarding_find,
             "pcc_current_thread_id": lambda: 7,

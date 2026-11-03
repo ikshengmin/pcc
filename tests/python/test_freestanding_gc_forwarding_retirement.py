@@ -51,6 +51,7 @@ LOCAL_HELPER_SYMBOLS = {
 }
 DEFINED_SYMBOLS = OWNED_SYMBOLS | LOCAL_HELPER_SYMBOLS
 RAW_FUNCTION_IMPORTS = {
+    "pcc_gc_refresh_read_barrier",
     "free",
     "pcc_gc_gray_count_decrement_acq_rel",
     "pcc_dealloc_cascade_active",

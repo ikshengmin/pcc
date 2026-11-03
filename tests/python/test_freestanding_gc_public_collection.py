@@ -33,6 +33,7 @@ OWNED_SYMBOLS = {
 }
 OWNED_TLS_GLOBALS = {"pcc_gc_cms_worker_current"}
 RAW_FUNCTION_IMPORTS = {
+    "pcc_gc_refresh_read_barrier",
     # The collector thread begins a cycle once debt reaches the threshold
     # and marks in fixed batches.
     "pcc_gc_tracing_debt_threshold",
@@ -88,7 +89,6 @@ RAW_GLOBAL_IMPORTS = {
     "pcc_gc_minor_alloc_max",
     "pcc_gc_minor_heap_size",
     "pcc_gc_pause",
-    "pcc_gc_read_barrier_enabled",
     "pcc_gc_refcount_provenance_probe",
     "pcc_gc_stepmul",
 }

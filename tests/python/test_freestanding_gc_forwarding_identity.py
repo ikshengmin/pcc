@@ -19,6 +19,7 @@ MANAGED_SOURCE = RUNTIME_DIR / "py" / "py_gc_backend.py"
 MAKEFILE = RUNTIME_DIR / "Makefile"
 
 OWNED_SYMBOLS = {
+    "pcc_gc_refresh_read_barrier",
     "pcc_gc_backend4_forwarding_entries",
     "pcc_gc_backend4_slot_needs_resolve",
     "pcc_gc_backend4_stable_id_entries",
@@ -86,6 +87,9 @@ RAW_FUNCTION_IMPORTS = {
     "py_incref",
 }
 RAW_GLOBAL_IMPORTS = {
+    "pcc_gc_config_initialized",
+    "pcc_gc_read_barrier_enabled",
+    "pcc_gc_relocation_set_head",
     "pcc_gc_backend4_relocation_reset_owner",
     "pcc_gc_backend4_reseed_commit_owner",
     "pcc_gc_backend_selected",

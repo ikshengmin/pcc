@@ -93,6 +93,41 @@ dropped keyword); the stage 1 commit message lists them. Rerun with
 
 ## Native throughput versus CPython 3.15.0: active, acceptance unmet
 
+The latest acceptance order is to bring GC1-4 close to GC0 first, then improve
+all five against asyncio. Further count-free GC1/2 rollout is paused while
+GC4 is diagnosed. New throughput packets compare PCC arms without co-running
+CPython. Every batch must report all five collectors at one/four workers,
+collection counts, p99 pauses and heap scope; observed regressions are not
+accepted. Full native-suite/pressure and bootstrap qualification remain
+separate from the focused evidence below.
+
+An independent read-barrier increment publishes the existing fast-path word
+from actual forwarding/relocation work. GC3 may be idle only when both the
+forwarding count and head are empty; GC4 also requires an empty relocation
+set. Publishers enable before exposing work, and the final removal refreshes
+under the graph lock. No-work removals add no lock calls. Moving tuple hashes
+recheck after a user's hash callback; GC0 retains its plain-load loop. The
+unchanged owned AArch64 short path still polls a pending stop before its
+inline load. Ninety-nine production-body checks pass. The native
+`test_moving_read_barrier_native.py` program executes install/load-heal/retire
+and a user-hash transition under GC0-4. Its GC3 fixture uses a supported float
+in the minor heap; GC4 uses tuples. These are local Mac host-pcc0/self results,
+not a full suite, bootstrap, or measured throughput improvement.
+
+Frozen a49230d81 GC4 diagnostics do not support the initial COUNT-trigger
+hypothesis: tracked counts remain zero and recorded admissions are DEBT-only.
+For 40,000 one-worker requests, counted/tracing-only modes complete 29/11 mark
+epochs; mark wall medians are 4.16/185.60 ms and outer-pause p99 is
+16.56/554.75 ms. Phase wall intervals overlap and are not CPU totals. The
+separate two-second CPU sample attributes 3.3%/29.3% to collection; count-free
+conservative scanning is 3.0%, with sorting only 0.06%. Indexed-object peak
+bytes are 0.54/15.23 MB; that counter excludes external payloads and is not a
+full heap peak. A separate unmerged finalizer/edge-clearing candidate improves
+tracing-only GC4 one-worker paired QPS by 8.06% (7 positive/0 negative), but
+GC0 one/four-worker results are -1.03%/-3.75%, and tracing-only GC4's
+four-worker packet is incomplete. That
+candidate is not part of the read-barrier increment or an accepted speedup.
+
 The maintainer requires Python compatibility and native performance together:
 PCC must beat CPython 3.15.0 asyncio at one worker and four workers, using at
 most four workers. Four-worker asyncio was previously reported at about 268k

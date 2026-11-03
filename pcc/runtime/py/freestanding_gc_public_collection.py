@@ -53,6 +53,8 @@ pcc_gc_tracing_has_sweep_candidate = extern(
 pcc_gc_tracing_sweep_unreachable = extern(
     "pcc_gc_tracing_sweep_unreachable", (c_int64,), c_int64
 )
+pcc_gc_refresh_read_barrier = extern("pcc_gc_refresh_read_barrier", (), c_void)
+
 pcc_gc_tracing_discharge_debt = extern(
     "pcc_gc_tracing_discharge_debt", (c_int64,), c_void
 )
@@ -338,10 +340,7 @@ def pcc_gc_config_ensure() -> i64:
     if backend == 0 and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0:
         registry_inactive = 1
     store_i32(global_addr("pcc_gc_frame_registry_inactive"), 0, registry_inactive)
-    if backend == 3 or backend == 4:
-        store_i32(global_addr("pcc_gc_read_barrier_enabled"), 0, 1)
-    else:
-        store_i32(global_addr("pcc_gc_read_barrier_enabled"), 0, 0)
+    pcc_gc_refresh_read_barrier()
     store_i32(global_addr("pcc_gc_pause"), 0, pause)
     store_i32(global_addr("pcc_gc_stepmul"), 0, stepmul)
     store_i64(global_addr("pcc_gc_debt_threshold_override"), 0, threshold)

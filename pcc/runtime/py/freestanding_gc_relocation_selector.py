@@ -5,6 +5,7 @@ from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     abi_constant,
     atomic_rmw_i32,
+    atomic_store_i32,
     define_global_i64,
     free,
     global_addr,
@@ -392,6 +393,8 @@ def _backend4_add_candidate_node(node, allow_large_pages: i64, plan) -> i64:
         8,
         global_load_ptr("pcc_gc_relocation_set_head"),
     )
+    # Pending relocation work requires the existing GC4 slow path, too.
+    atomic_store_i32(global_addr("pcc_gc_read_barrier_enabled"), 0, 1, "release")
     global_store_ptr("pcc_gc_relocation_set_head", relocation_node)
     pcc_gc_relocation_member_note(obj)
     relocation_revision: i64 = load_i64(
