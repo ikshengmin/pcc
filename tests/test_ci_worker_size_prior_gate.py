@@ -50,7 +50,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS[:72] == (106, 3, 291, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 60, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 4, 85, 11, 111, 177, 9, 12, 26, 54, 30, 9, 76, 39, 31, 17)
+    assert gate.HOST_COUNTS[:72] == (106, 3, 291, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 4, 85, 11, 111, 177, 9, 12, 26, 54, 30, 9, 76, 39, 31, 17)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
@@ -117,39 +117,39 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text().count(
         '      - "tests/python/test_runtime_abi_chunking.py"') == 2
     assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 84
-    assert sum(gate.HOST_COUNTS) == 3557 and sum(gate.HOST_COUNTS[:72]) == 3258
-    assert sum(gate.HOST_COUNTS[:70]) == 3210
-    assert sum(gate.HOST_COUNTS[:65]) == 3002
-    assert sum(gate.HOST_COUNTS[:63]) == 2964
-    assert sum(gate.HOST_COUNTS[:62]) == 2955
-    assert sum(gate.HOST_COUNTS[:61]) == 2778
-    assert sum(gate.HOST_COUNTS[:60]) == 2667
-    assert sum(gate.HOST_COUNTS[:59]) == 2656
-    assert sum(gate.HOST_COUNTS[:58]) == 2571
-    assert sum(gate.HOST_COUNTS[:57]) == 2567
-    assert sum(gate.HOST_COUNTS[:53]) == 2454
-    assert sum(gate.HOST_COUNTS[:52]) == 2429
-    assert sum(gate.HOST_COUNTS[:51]) == 2398
-    assert sum(gate.HOST_COUNTS[:50]) == 2356 and sum(gate.HOST_COUNTS[:49]) == 2310
-    assert sum(gate.HOST_COUNTS[:48]) == 2269
-    assert sum(gate.HOST_COUNTS[:47]) == 2226
-    assert sum(gate.HOST_COUNTS[:43]) == 2134
-    assert sum(gate.HOST_COUNTS[:42]) == 2018
-    assert sum(gate.HOST_COUNTS[:40]) == 2009
-    assert sum(gate.HOST_COUNTS[:38]) == 1999
-    assert sum(gate.HOST_COUNTS[:36]) == 1990
-    assert sum(gate.HOST_COUNTS[:34]) == 1972
-    assert sum(gate.HOST_COUNTS[:32]) == 1937
-    assert sum(gate.HOST_COUNTS[:30]) == 1777
-    assert sum(gate.HOST_COUNTS[:28]) == 1681
-    assert sum(gate.HOST_COUNTS[:27]) == 1626
-    assert sum(gate.HOST_COUNTS[:25]) == 1486
-    assert sum(gate.HOST_COUNTS[:23]) == 1331
-    assert sum(gate.HOST_COUNTS[:22]) == 1315
-    assert sum(gate.HOST_COUNTS[:21]) == 1260
-    assert sum(gate.HOST_COUNTS[:20]) == 1171
-    assert sum(gate.HOST_COUNTS[:18]) == 1134
-    assert sum(gate.HOST_COUNTS[:17]) == 1067 and sum(gate.HOST_COUNTS[:16]) == 1007
+    assert sum(gate.HOST_COUNTS) == 3558 and sum(gate.HOST_COUNTS[:72]) == 3259
+    assert sum(gate.HOST_COUNTS[:70]) == 3211
+    assert sum(gate.HOST_COUNTS[:65]) == 3003
+    assert sum(gate.HOST_COUNTS[:63]) == 2965
+    assert sum(gate.HOST_COUNTS[:62]) == 2956
+    assert sum(gate.HOST_COUNTS[:61]) == 2779
+    assert sum(gate.HOST_COUNTS[:60]) == 2668
+    assert sum(gate.HOST_COUNTS[:59]) == 2657
+    assert sum(gate.HOST_COUNTS[:58]) == 2572
+    assert sum(gate.HOST_COUNTS[:57]) == 2568
+    assert sum(gate.HOST_COUNTS[:53]) == 2455
+    assert sum(gate.HOST_COUNTS[:52]) == 2430
+    assert sum(gate.HOST_COUNTS[:51]) == 2399
+    assert sum(gate.HOST_COUNTS[:50]) == 2357 and sum(gate.HOST_COUNTS[:49]) == 2311
+    assert sum(gate.HOST_COUNTS[:48]) == 2270
+    assert sum(gate.HOST_COUNTS[:47]) == 2227
+    assert sum(gate.HOST_COUNTS[:43]) == 2135
+    assert sum(gate.HOST_COUNTS[:42]) == 2019
+    assert sum(gate.HOST_COUNTS[:40]) == 2010
+    assert sum(gate.HOST_COUNTS[:38]) == 2000
+    assert sum(gate.HOST_COUNTS[:36]) == 1991
+    assert sum(gate.HOST_COUNTS[:34]) == 1973
+    assert sum(gate.HOST_COUNTS[:32]) == 1938
+    assert sum(gate.HOST_COUNTS[:30]) == 1778
+    assert sum(gate.HOST_COUNTS[:28]) == 1682
+    assert sum(gate.HOST_COUNTS[:27]) == 1627
+    assert sum(gate.HOST_COUNTS[:25]) == 1487
+    assert sum(gate.HOST_COUNTS[:23]) == 1332
+    assert sum(gate.HOST_COUNTS[:22]) == 1316
+    assert sum(gate.HOST_COUNTS[:21]) == 1261
+    assert sum(gate.HOST_COUNTS[:20]) == 1172
+    assert sum(gate.HOST_COUNTS[:18]) == 1135
+    assert sum(gate.HOST_COUNTS[:17]) == 1068 and sum(gate.HOST_COUNTS[:16]) == 1007
     assert sum(gate.HOST_COUNTS[:14]) == 998
     for filename, expected_count in ((gate.MANAGED_SCRATCH_TEST, 34), (gate.MANAGED_MEMORY_TEST, 1),
                                      (gate.GC_RELOCATION_PAGE_CURSOR_MODEL_TEST, 85),
@@ -209,12 +209,13 @@ def test_default_command_retains_project_xdist(tmp_path):
         assert len(nodes) == count and all(not node.decorator_list for node in nodes)
     profiles = [node for node in ast.parse((ROOT / gate.ASSEMBLY_PROFILE_TEST).read_text()).body
                 if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")]
-    assert len(profiles) == 50 and all(not node.decorator_list for node in profiles[:48])
-    assert [node.name for node in profiles[48:]] == [
+    assert len(profiles) == 51 and all(not node.decorator_list for node in profiles[:49])
+    assert profiles[24].name == "test_elf_command_keeps_exact_original_nine_argument_stage1_shape"
+    assert [node.name for node in profiles[49:]] == [
         "test_arm_facts_hook_is_local_restored_and_business_exception_wins",
         "test_facts_pop_edge_requires_unique_raw_parent_and_child_identity",
     ]
-    assert tuple(len(node.decorator_list[0].args[1].elts) for node in profiles[48:]) == (5, 7)
+    assert tuple(len(node.decorator_list[0].args[1].elts) for node in profiles[49:]) == (5, 7)
     for filename, expected_count in ((gate.FACTS_STRUCTURE_TEST, 43),
                                      (gate.FACTS_NATIVE_BOUNDARY_TEST, 10)):
         count = 0
