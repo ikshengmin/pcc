@@ -7,7 +7,7 @@ Object supertypes, clone/casts and multidimensional/reference arrays remain gate
 """
 from .source_syntax import Node, Token
 from .floating_semantics import converted_constant, floating_binary
-from .source_types import ArrayType, BootstrapStringType, FLOATING, INTEGRAL, model_reference, promoted, widening
+from .source_types import ArrayType, BootstrapStringType, ClassType, FLOATING, INTEGRAL, model_reference, promoted, widening
 
 
 class ArrayModelAnalyzer:
@@ -71,6 +71,9 @@ class ArrayModelAnalyzer:
             return True
         if kind == "array_length":
             self.expression(node.children[0], assigned)
+            if isinstance(node.children[0].dtype, ClassType):
+                node.token.error("source-class length member access requires the next managed receiver domain",
+                                 code="java.unsupported.object-expressions")
             self.require_array(node.children[0])
             node.dtype = "int"
             node.runtime_steps = ("array-reference", "null-check", "read-length")

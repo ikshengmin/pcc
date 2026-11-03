@@ -1326,6 +1326,20 @@
         ]
       }
     },
+    "tests/java/test_source_construction_model.py": {
+      "test_same_creation_originals_have_independent_jdk_only_obligations": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls check_originals_reference on exact complete originals; only the selected JDK executes objects, and invalid inputs additionally require source-attributed compiler exit1 and case diagnostics"
+        ]
+      },
+      "test_exact_project_creation_inputs_match_independent_jdk_access_checks": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls the selected actual JDK compiler module on unchanged supplied project units, verifies tool/source identities and source-attributed exit0/exit1 access results; no PCC allocation or external compiler fallback"
+        ]
+      }
+    },
     "tests/java/test_source_named_reference_model.py": {
       "test_same_named_reference_originals_have_independent_jdk_semantic_obligations": {
         "activity": "external-reference",

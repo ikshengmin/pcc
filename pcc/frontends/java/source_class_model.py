@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 from .diagnostics import JavaError, UnsupportedJava
 from .source_array_model import ArrayModelAnalyzer
+from .source_construction_model import ClassConstructionAnalyzer, ClassConstructionObligation
 from .source_project import SourceProject
 from .source_sema import SourceAnalyzer
 from .source_string_model import (
@@ -71,7 +72,7 @@ class SourceClassModel:
     semantic_context_complete: bool = False
 
 
-class ClassAnalyzer(StringModelAnalyzer, ArrayModelAnalyzer, SourceAnalyzer):
+class ClassAnalyzer(ClassConstructionAnalyzer, StringModelAnalyzer, ArrayModelAnalyzer, SourceAnalyzer):
     def __init__(self, program, project):
         super().__init__(program, project)
         self.constructor_edge = {}
@@ -80,6 +81,7 @@ class ClassAnalyzer(StringModelAnalyzer, ArrayModelAnalyzer, SourceAnalyzer):
         self.constant_locals = {}
         self.current_initializer = None
         self.string_constant_locals = {}
+        self._class_members_declared = False
 
     def assignment_value(self, node, target):
         if isinstance(target, (ClassType, BootstrapStringType)):
@@ -89,6 +91,10 @@ class ClassAnalyzer(StringModelAnalyzer, ArrayModelAnalyzer, SourceAnalyzer):
         return super().assignment_value(node, target)
 
     def declare_methods(self):
+        # SourceAnalyzer may request an empty ordinary-method table again.
+        # Constructor bindings must retain the one actual declaration object.
+        if self._class_members_declared:
+            return
         if self.program.name == "java/lang/String":
             raise UnsupportedJava("bootstrap String requires the shared owned String definition and literal/interning contract",
                                   code="java.unsupported.string-literals")
@@ -116,6 +122,7 @@ class ClassAnalyzer(StringModelAnalyzer, ArrayModelAnalyzer, SourceAnalyzer):
             if key in self.constructors:
                 constructor.token.error("duplicate constructor signature")
             self.constructors[key] = constructor
+        self._class_members_declared = True
 
     def require_receiver(self, token):
         static = ("static" in self.current_field.modifiers if self.current_field is not None else
@@ -170,6 +177,8 @@ class ClassAnalyzer(StringModelAnalyzer, ArrayModelAnalyzer, SourceAnalyzer):
                                                 materialization=field.string_constant is not None)
 
     def expression(self, node, assigned):
+        if self.class_creation_expression(node, assigned):
+            return
         if node.kind in {"name", "call"} and "." in str(node.value):
             root = node.value.split(".", 1)[0]
             binding = next((scope[root] for scope in reversed(self.scopes) if root in scope), None)
@@ -335,13 +344,27 @@ class ClassModelProject(SourceProject):
         self._bootstrap_string_type = BootstrapStringType()
         self._string_contexts = {}
         self._string_fold_work = 0
+        self._class_constructions = {}
         super().__init__(programs, analyzer_type=ClassAnalyzer)
         self.models = {}
 
     @property
     def compiler_context_obligations(self):
-        return tuple(StringContextObligation(owner, tuple(tokens), tuple(sorted(requirements)))
-                     for owner, (tokens, requirements) in sorted(self._string_contexts.items()))
+        strings = tuple(StringContextObligation(owner, tuple(tokens), tuple(sorted(requirements)))
+                        for owner, (tokens, requirements) in sorted(self._string_contexts.items()))
+        constructions = tuple(obligation for _, obligation in sorted(self._class_constructions.items()))
+        return strings + constructions
+
+    @property
+    def class_creation_context_complete(self):
+        """No construction obligations, never evidence of allocation acceptance."""
+        return not self._class_constructions
+
+    def record_class_construction(self, caller, node, constructor):
+        token = node.token
+        key = (caller.name, token.filename, token.line, token.column)
+        self._class_constructions[key] = ClassConstructionObligation(
+            caller.name, node.dtype.class_name, constructor.descriptor, (token,))
 
     @property
     def string_context_complete(self):

@@ -264,3 +264,45 @@ objects/arrays need managed execution, and `System.arraycopy`, exceptions,
 dynamic remainder, enhanced-for, strings and collections remain further gaps.
 This change does not compile or qualify ZXing, nor establish Java-as-Python
 extension support. The bytecode/JAR compatibility experiment is unchanged.
+
+
+## Supplied-source class creation bindings
+
+The nonlowering class API now checks simple-type `new Target(args)` expressions
+against the actual supplied class and constructor declarations. Type-name lookup
+is independent of local value names. Public/package/private/protected access,
+default constructor identity, strict fixed-arity widening/null applicability and
+unique overload selection remain source rules. Calls bind the same constructor
+object that owns the checked initialization/delegation metadata, including when
+an earlier class refers to an empty-method class's implicit constructor.
+Original argument nodes are retained in order, and a selected String formal
+adds the caller's unresolved String ABI obligations even for a null argument.
+
+Every creation site instead of creating an object records an immutable missing
+runtime contract: class initialization, allocation/default initialization and
+allocation failure before argument evaluation, left-to-right arguments and
+abrupt completion, selected constructor/super construction, fresh identity,
+managed layout, publication and owning-root/safepoint integration. No reference
+constant, object address, managed layout, runtime registration or native lowering
+is supplied. Argument source typing is not argument execution. Primitive payload
+metadata still does not define a managed object header or allocation ABI.
+
+Qualified, generic/diamond, anonymous and created-reference member operations
+remain explicit wider domains. Bootstrap String construction and other missing
+classes require actual owned definitions. Boxing/unboxing, inherited conversion,
+varargs, exception handling and native class allocation are not implemented by
+this strict-invocation subset. Static nonconstant reference initialization is
+still rejected. All new source/native-boundary and separate same-original JDK
+obligations in `test_source_construction_model.py` are UNRUN; JDK object execution
+is never counted as PCC object execution.
+
+Commons Numbers' unchanged Primes source uses class creation inside `throw` at
+line 70. This is a downstream prerequisite: the basic-for parser treats the
+final iteration binder as a blank final local at 53:24, before consuming the
+enhanced-for colon at 53:26. Throw/format, List/Integer and
+other generic/library/bootstrap/runtime dependencies remain unresolved. The
+full original production/test closure and strict project gate are unchanged.
+
+Rules: [class creation](https://docs.oracle.com/javase/specs/jls/se21/html/jls-15.html#jls-15.9),
+[constructor selection](https://docs.oracle.com/javase/specs/jls/se21/html/jls-15.html#jls-15.9.3),
+and [creation order](https://docs.oracle.com/javase/specs/jls/se21/html/jls-15.html#jls-15.9.4).

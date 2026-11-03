@@ -768,7 +768,7 @@ class SourceParser:
                 operation.error("array assignment requires an array component variable")
             children = [expression] + ([] if operation.text in {"++", "--"} else [self.expression()])
             return Node("array_assign", operation, operation.text, children)
-        if expression.kind not in {"call", "mutation"} and not (self.class_model and expression.kind == "receiver_call"):
+        if expression.kind not in {"call", "mutation"} and not (self.class_model and expression.kind in {"receiver_call", "class_new"}):
             expression.token.error("only assignment, increment or method invocation is an expression statement")
         return Node("expression", token, children=[expression])
 
@@ -819,6 +819,27 @@ class SourceParser:
                     self.peek().error("multidimensional arrays require the next array semantic domain",
                                       code="java.unsupported.array-model-shape")
                 node = Node("array_new", token, dtype, [dimension])
+        elif (self.class_model and token.text == "new" and
+              re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", self.peek().text) and
+              self.peek().text not in KEYWORDS):
+            name = self.identifier()
+            if self.peek().text == ".":
+                self.peek().error("qualified class creation requires complete implicit/member-type metadata; use a resolved single-type import",
+                                  code="java.unsupported.implicit-type-metadata")
+            if self.peek().text == "<":
+                self.peek().error("generic/diamond class creation requires the next source type domain",
+                                  code="java.unsupported.generic-declarations")
+            if self.peek().text == "[":
+                self.peek().error("reference array creation requires the next array semantic domain",
+                                  code="java.unsupported.array-model-shape")
+            self.expect("(")
+            node = Node("class_new", token, NamedType((name,)), self.arguments())
+            if self.peek().text == "{":
+                self.peek().error("anonymous class creation requires the nested-class source domain",
+                                  code="java.unsupported.member-types")
+            if self.peek().text == ".":
+                self.peek().error("created-reference member access requires the next managed receiver domain",
+                                  code="java.unsupported.object-expressions")
         elif token.text in ("true", "false"):
             node = Node("bool", token, token.text == "true")
         elif token.text.startswith("'"):
