@@ -106,8 +106,12 @@ transformed `py_obj` lost runtime source identity, so implicit root lowering
 inserted recursive read-barrier calls and overflowed the stack. Generated
 sources now retain the existing staged-runtime directory identity; a real
 `py_obj` compilation verifies both read barriers have no recursive root loads.
-Six-mode native execution after this correction and native-suite pressure
-qualification remain pending. The focused native command is
+After the `09fb6e4d9` correction, the rebuilt pressure archive passes all six
+owned-native modes (GC0-4 and count-free GC4) in 22.48 seconds, with the
+unchanged six-worker, 90-second/1-GiB test guard. This exercises bigint identity,
+actual completed collections, no-park refusal, private scratch exclusion and
+disable/threshold-zero deferral followed by service. Full native-suite pressure
+qualification remains pending. The focused native command is
 `PCC_RUNTIME_GC_STRESS_EVERY=3 PCC_GC_PRESSURE_NATIVE=1 PCC_RUNTIME_ARCHIVE=<pressure-archive> uv run pytest -x -vv -m integration tests/python/test_gc_pressure_native.py`.
 This debug-mode checkpoint does not claim default machine-code or QPS equality.
 
