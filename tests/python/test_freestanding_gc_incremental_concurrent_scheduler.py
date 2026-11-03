@@ -59,6 +59,7 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_finish_tracing_cycle",
     "pcc_gc_drain_all_gray_locked_slice",
     "pcc_gc_gray_current_roots",
+    "pcc_gc_gray_conservative_thread_roots",
     "pcc_gc_gray_count_decrement_acq_rel",
     "pcc_gc_gray_count_load_acquire",
     "pcc_gc_maybe_start_cms_worker",
@@ -82,6 +83,7 @@ RAW_FUNCTION_IMPORTS = {
     "py_incref",
 }
 RAW_GLOBAL_IMPORTS = {
+    "pcc_gc_backend4_no_refcounts",
     "pcc_gc_live_bytes",
     "pcc_gc_cms_sweep_pending",
     # pcc_gc_backend4_maybe_auto_step's admission and reseed ownership.

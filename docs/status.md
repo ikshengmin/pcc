@@ -227,7 +227,9 @@ C25 batches. Both execute 40,000 timed requests and 200 warmups, and QPS uses
 the complete earliest-start/latest-finish interval. Further collector/worker
 packets remain in progress. The GC3 packet completes seven rotations at
 1,652 QPS, against same-packet GC0 80,357 and CPython 262,578; all seven
-GC3/GC0 pairs are negative. A completed two-second four-carrier sample of
+GC3/GC0 pairs are negative. GC4's seven complete default-mode rotations reach
+1,506 QPS, with same-packet GC0 83,467 and CPython 268,986; GC4/GC0 also has
+zero positive/seven negative pairs. A completed two-second four-carrier sample of
 the same frozen executable attributes 65.54% of GC1 samples to graph-lock
 spinning, 5.69% to acquisition and 1.63% to release. GC0 root-store inclusive
 samples are 20.73%, including 10.74% in deallocation; the entire inclusive
@@ -254,6 +256,15 @@ scratch still has explicit free ownership, and counted paths remain raw.
 `test_tracing_bigint_publication.py` passes twelve body-model checks for value,
 header/origin, normalized extent, first configuration, tagged folding and
 failure cleanup. Its native index/debt/reclamation probe is pending.
+
+The count-free final remark now scans the current stopped mutator snapshots
+before draining gray objects and committing the verdict, inside the existing
+validated epoch/backend transaction. Initial seeding alone cannot cover raw
+roots acquired during concurrent marking; a same-stop-epoch sweep can reuse
+the committed verdict without another root seed. Six actual-body tests pass
+for scan order, stop failure, nested world ownership and a stale callback
+epoch, plus seven scheduler checks including two external-assembler object
+closure references. The controlled native final-mark regression is pending.
 
 An additional exception-root probe exposes an existing builtin-exception
 limitation: `ValueError(shared_list, index).args[0] is shared_list` fails under
