@@ -107,6 +107,31 @@ machine, all five collectors, both worker counts, collection counts, outer
 pause p99 and peak heap. Earlier three-pair packets below remain diagnostic
 screening only. Existing correctness/resource limits are not relaxed.
 
+The frozen `04e718f0a` graph-lock inventory now contains 349 semantic runtime
+acquisition sites and six direct codegen templates. A separate diagnostic
+runtime records caller-PC events in per-thread tables; its native calibration
+matches five attempts, four outer acquisitions and one reentrant acquisition,
+with correct caller/role attribution. Twelve 10k-request windows (GC0-4 plus
+count-free GC4, one/four workers) complete with zero cold/table/PC loss. Actual
+ordinary-mutator attempts per request are:
+
+| Mode | 1 worker | 4 workers |
+| --- | ---: | ---: |
+| GC0 counted | 36.11 | 36.11 |
+| GC1 counted | 1,948.96 | 2,250.11 |
+| GC2 counted | 1,948.96 | 2,249.06 |
+| GC3 counted | 3,926.08 | 4,695.20 |
+| GC4 counted | 4,233.83 | 4,977.61 |
+| GC4 count-free | 2,129.79 | 2,410.30 |
+
+For count-free GC4 at four workers, the leading ordinary-mutator owners are
+root stores (496.78/request), list-set transactions (285.39), frame leave
+(192.04), list get/finish (143.18 each), and slot-lease acquire/release
+(138.21 each). These are invocation counts, not sampled stacks or throughput
+gains. The remaining scheduler-root-list spin lock is a separate protocol,
+not included in this graph-entry counter. Raw packets, exact identities and
+rankings remain outside Git. The new seven-pair scaling acceptance is unrun.
+
 A backend-setter startup race found during that review is independently
 repaired: a setter rechecks count-free mode after taking the graph lock, so
 configuration completing after its optimistic check cannot change the now
