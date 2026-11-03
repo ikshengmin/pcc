@@ -1,6 +1,6 @@
 # PCC current status
 
-Updated 2026-11-02. Source: `ikshengmin/pcc` master (`shenming` remote).
+Updated 2026-11-03. Source: `ikshengmin/pcc` master (`shenming` remote).
 Durable receipts for this period (patches, profiles, A/B scripts, repros):
 `/Users/jiamo/pcc-recovery-archive/2026-10-13/README.md`; the 2026-10-21
 handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10-07 status
@@ -193,9 +193,34 @@ Local focused checks pass: 20 sweep-verdict tests, 22 free-watch tests and
 9 selected sweep-kernel checks (including two labeled external-assembler
 object-closure probes). The model fixtures now explicitly initialize the
 existing tracing-only flag, and the phase assertion includes the previously
-added weak-callback reachability refresh. Actual class-reclamation execution
-and the fresh-runtime lifecycle rerun remain pending; this is not yet a
-completed count-free collector or a five-GC qualification.
+added weak-callback reachability refresh. The fresh runtime passes the native
+class-graph test under GC0-4 and tracing-only GC4 (6 executions), plus both
+GC4 value/lifecycle integrations. The observer checks weak targets in every
+mode and first proves that both live classes are visible to the tracing
+index in GC1-4. The preceding runtime leaves two class objects after weak
+targets are cleared; this runtime leaves zero. This is not a completed
+count-free collector or a five-GC qualification.
+
+Independent review then exposed a new boundary: a finalizer can allocate a
+self-cyclic instance outside the completed mark's disposal set. Reclaiming its
+class immediately loses its later finalizer. The native probe observes one
+finalizer in tracing-only GC4 versus two in counted GC4. The follow-up anchors
+active objects outside the fixed disposal set during the count-free verdict
+refresh, preserving their transitive referents until a later collection owns
+them. Twenty-one verdict checks and two object-closure reference probes pass;
+the permanent native regression and fresh-runtime rerun are pending.
+
+Frozen `764d063` default-mode four-worker measurements complete seven rotations:
+GC0 repeated controls reach 77,141 / 78,242 QPS, with same-packet CPython at
+232,092. In the separate GC1 packet, GC0 reaches 72,142, GC1 reaches 4,438 and
+CPython reaches 196,753; all seven runs complete. GC1 versus GC0 has zero
+positive and seven negative pairs, with median paired QPS -93.86% and whole-
+process instructions/request 23.949 times GC0. These are pre-removal baselines,
+not improvement claims. PCC's four carriers share one heap and C100 batch
+barriers; the reference uses four processes, separate heaps and independent
+C25 batches. Both execute 40,000 timed requests and 200 warmups, and QPS uses
+the complete earliest-start/latest-finish interval. Further collector/worker
+packets and caller attribution remain in progress.
 
 An additional exception-root probe exposes an existing builtin-exception
 limitation: `ValueError(shared_list, index).args[0] is shared_list` fails under

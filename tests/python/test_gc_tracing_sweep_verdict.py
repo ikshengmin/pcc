@@ -25,7 +25,7 @@ ABI_CONSTANTS = {
                 for target in node.targets)
     )
 }
-WHITE, BLACK, FINALIZED, CANDIDATE = 8, 32, 4, 1024
+WHITE, GRAY, BLACK, FINALIZED, CANDIDATE = 8, 16, 32, 4, 1024
 
 
 class _SweepBoundary:
@@ -61,6 +61,7 @@ class _SweepBoundary:
             "pcc_gc_object_is_address_pinned": lambda obj: int(obj["pinned"]),
             "pcc_capi_is_cext_type_tag": lambda tag: int(tag == 10001),
             "pcc_gc_seed_roots": self.seed_roots,
+            "pcc_gc_mark_root_gray_if_known": self.mark_root,
             "pcc_gc_drain_all_gray_unlocked": self.drain_roots,
             "py_user_del_dispatch": self.dispatch,
             "pcc_thread_world_stop_epoch_held": lambda: self.held_epoch,
@@ -138,7 +139,7 @@ class _SweepBoundary:
         self.events.append("drain")
         pending = list(self.roots)
         pending += [node[0] for node in self.nodes
-                    if node["active"] and node[0]["pinned"]]
+                    if node["active"] and (node[0]["pinned"] or node[0][12] & GRAY)]
         seen = set()
         while pending:
             obj = pending.pop()
@@ -152,6 +153,12 @@ class _SweepBoundary:
             obj[12] = (obj[12] & ~56) | BLACK
             pending.extend(value for value in obj["edges"] + obj["layout"] if value is not None)
         return len(seen)
+
+    def mark_root(self, obj):
+        forwarding = self.forwardings.get(id(obj))
+        if forwarding is not None:
+            obj = forwarding[8]
+        obj[12] = (obj[12] & ~56) | GRAY
 
     def dispatch(self, obj):
         if obj[8] == ABI_CONSTANTS["object.type.class"]:
@@ -180,6 +187,8 @@ class _SweepBoundary:
                 assert not obj["edges"] and not any(value is not None for value in obj["layout"])
                 assert not any(node["active"] and node[0][8] != ABI_CONSTANTS["object.type.class"]
                                and node[0][12] & CANDIDATE for node in self.nodes)
+                assert not any(node["active"] and any(owner is obj for owner in node[0]["layout"])
+                               for node in self.nodes)
             else:
                 for owner in obj["layout"]:
                     if owner is not None:
@@ -270,6 +279,37 @@ def test_count_free_resurrection_keeps_instance_and_class_graph_intact():
     assert all(node["active"] for node in boundary.nodes)
     assert not any(event.startswith("clear:") or event.startswith("free:")
                    for event in boundary.events)
+
+
+def test_finalizer_new_unreachable_instance_preserves_its_class_until_next_disposal_set():
+    boundary = _SweepBoundary(backend=4, count_free=True)
+    cls = boundary.object("class", is_class=True)
+    namespace = boundary.object("namespace")
+    old = boundary.object("old")
+    cls["edges"] = [namespace]
+    old["layout"] = [cls]
+    born = []
+
+    def allocate_after_mark(_old):
+        new = boundary.object("new", candidate=False)
+        new["layout"] = [cls]
+        new["edges"] = [new]
+        born.append(new)
+
+    boundary.callbacks["old"] = allocate_after_mark
+    assert boundary.sweep(10) == 1
+    assert boundary.events.count("free:old") == 1
+    assert "clear:class" not in boundary.events
+    assert "free:namespace" not in boundary.events
+    assert born[0]["layout"] == [cls]
+    assert cls["edges"] == [namespace]
+    assert all(node["active"] for node in boundary.nodes if node[0] is not old)
+    # A later completed mark may select the entire remaining component.
+    for node in boundary.nodes:
+        if node["active"]:
+            node[0][12] = (node[0][12] & ~56) | WHITE | CANDIDATE
+    assert boundary.sweep(10) == 3
+    assert not any(node["active"] for node in boundary.nodes)
 
 
 def test_counted_class_lifetime_policy_is_preserved():

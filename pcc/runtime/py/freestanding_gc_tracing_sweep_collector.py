@@ -35,6 +35,9 @@ pcc_gc_object_node_is_active = extern(
     "pcc_gc_object_node_is_active", (c_ptr,), c_int64
 )
 pcc_gc_seed_roots = extern("pcc_gc_seed_roots", (), c_void)
+pcc_gc_mark_root_gray_if_known = extern(
+    "pcc_gc_mark_root_gray_if_known", (c_ptr,), c_void
+)
 pcc_gc_drain_all_gray_unlocked = extern(
     "pcc_gc_drain_all_gray_unlocked", (), c_int64
 )
@@ -255,6 +258,19 @@ def pcc_gc_tracing_recheck_reachability_after_finalizers() -> None:
     # After PASS-0, PEP 442 requires the same refresh to rescue resurrection
     # before any referent is cleared.
     pcc_gc_seed_roots()
+    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
+        # This sweep owns a fixed disposal set. A finalizer can allocate an
+        # object outside it, then leave that object temporarily unreachable.
+        # It will survive this sweep, so its referents and class layout must
+        # survive too. Ordinary RC used to hide this physical-lifetime edge.
+        node = global_load_ptr("pcc_gc_object_head")
+        while ptr_is_null(node) == 0:
+            nxt = load_ptr(node, 16)
+            if pcc_gc_object_node_is_active(node) != 0:
+                obj = load_ptr(node, 0)
+                if (load_i32(obj, 12) & 1024) == 0:
+                    pcc_gc_mark_root_gray_if_known(obj)
+            node = nxt
     pcc_gc_drain_all_gray_unlocked()
     backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
     node = global_load_ptr("pcc_gc_object_head")

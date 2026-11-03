@@ -39,6 +39,7 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_note_object_freeing",
     "pcc_gc_object_node_is_active",
     "pcc_gc_seed_roots",
+    "pcc_gc_mark_root_gray_if_known",
     "pcc_gc_tracing_clear_unreachable",
     "pcc_gc_visit_object_slots",
     "pcc_py_gc_minor_graph_lock",
