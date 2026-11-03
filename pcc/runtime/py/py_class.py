@@ -180,6 +180,7 @@ pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_p
 pcc_gc_root_move = extern("pcc_gc_root_move", (c_ptr, c_ptr), c_int64)
 pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
 pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
+pcc_gc_publish_owned_root = extern("pcc_gc_publish_owned_root", (c_ptr,), c_int64)
 pcc_gc_root_copy_lease_prepare_locked = extern("pcc_gc_root_copy_lease_prepare_locked", (c_ptr, c_ptr, c_int64, c_ptr), c_int64)
 pcc_gc_root_copy_lease_finish = extern("pcc_gc_root_copy_lease_finish", (c_ptr,), c_void)
 pcc_gc_resolve_root_slot_unlocked = extern("pcc_gc_resolve_root_slot_unlocked", (c_ptr, c_int64), c_ptr)
@@ -6999,6 +7000,18 @@ def _special_adopt(slots, tokens, index: int) -> int:
     # The producer must have stored its owned result directly into this
     # already registered empty slot, with no intervening call or poll.
     slot = ptr_add(slots, index * C_POINTER_SIZE)
+    if (
+        load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+        and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+        and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
+        and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
+    ):
+        # GC0's already published owner needs neither an address lease nor
+        # a root barrier. Other collectors keep the durable lease below.
+        if pcc_gc_publish_owned_root(slot) < 0:
+            return _special_error(cstr("special-call result lease acquisition failed"))
+        store_i64(tokens, index * C_POINTER_SIZE, 0)
+        return 0
     token: int = pcc_gc_foreign_lease_acquire(slot)
     if token < 0:
         return _special_error(cstr("special-call result lease acquisition failed"))

@@ -215,12 +215,30 @@ GC0 repeated controls reach 77,141 / 78,242 QPS, with same-packet CPython at
 232,092. In the separate GC1 packet, GC0 reaches 72,142, GC1 reaches 4,438 and
 CPython reaches 196,753; all seven runs complete. GC1 versus GC0 has zero
 positive and seven negative pairs, with median paired QPS -93.86% and whole-
-process instructions/request 23.949 times GC0. These are pre-removal baselines,
-not improvement claims. PCC's four carriers share one heap and C100 batch
+process instructions/request 23.949 times GC0. The GC2 packet also completes
+all seven rotations: GC0 108,067, GC2 5,578 and CPython 298,433 QPS;
+GC2 versus GC0 has zero positive/seven negative pairs and paired median
+QPS -94.75%, with instructions/request 21.047 times GC0. These are pre-removal
+baselines, not improvement claims. PCC's four carriers share one heap and C100 batch
 barriers; the reference uses four processes, separate heaps and independent
 C25 batches. Both execute 40,000 timed requests and 200 warmups, and QPS uses
 the complete earliest-start/latest-finish interval. Further collector/worker
-packets and caller attribution remain in progress.
+packets remain in progress. A completed two-second four-carrier sample of
+the same frozen executable attributes 65.54% of GC1 samples to graph-lock
+spinning, 5.69% to acquisition and 1.63% to release. GC0 root-store inclusive
+samples are 20.73%, including 10.74% in deallocation; the entire inclusive
+share is not removable protocol overhead. Profiles are diagnostic evidence,
+not timing results.
+
+The GC0 special/named-protocol candidate publishes already-owned registered
+result slots without a durable moving-address lease, and configured GC0-2
+root resolution skips object/forwarding indexes. Moving, pre-configuration
+and diagnostic paths retain their checks; GC0 pin roots remain unchanged.
+Forty actual-body model cases pass in `test_gc0_protocol_publication.py`;
+56 existing handoff/publication model checks also pass. Its new five-collector
+native rich-comparison check and frozen performance comparison are pending.
+These helpers have no samples in the request profile above; no request-QPS
+gain or five-percent acceptance is claimed for this candidate.
 
 An additional exception-root probe exposes an existing builtin-exception
 limitation: `ValueError(shared_list, index).args[0] is shared_list` fails under

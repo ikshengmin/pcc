@@ -413,6 +413,18 @@ def pcc_gc_resolve_root_slot_unlocked(slot_base, slot_offset: i64):
     value = load_ptr(slot_base, slot_offset)
     if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
         return value
+    if (
+        load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+        and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
+        and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
+    ):
+        # As in pcc_gc_note_relocation_read, only GC3/4 can forward a
+        # managed object. A configured nonmoving collector is already the
+        # identity here; no object/forwarding-index probe can change it.
+        # Keep pre-configuration and diagnostic paths on the checked walk.
+        selected: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+        if selected != 3 and selected != 4:
+            return value
     if pcc_gc_object_is_known_no_lock(value) == 0:
         forwarding_unknown = pcc_gc_forwarding_index_find(value)
         if ptr_is_null(forwarding_unknown) == 0:

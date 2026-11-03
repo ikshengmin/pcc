@@ -106,6 +106,7 @@ pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
 pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
+pcc_gc_publish_owned_root = extern("pcc_gc_publish_owned_root", (c_ptr,), c_int64)
 pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
 pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
@@ -2581,6 +2582,19 @@ define_global_i32("pcc_named_protocol_owned_map", 7)
 
 def _named_adopt(slots, tokens, index: int) -> int:
     slot = ptr_add(slots, index * C_POINTER_SIZE)
+    if (
+        load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+        and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+        and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
+        and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
+    ):
+        # The producer already owns the result in this mapped slot. Only
+        # GC0 may publish without retaining a durable address-lease token.
+        if pcc_gc_publish_owned_root(slot) < 0:
+            py_runtime_error_if_unset(cstr("named protocol"), cstr("result owner lease failed"))
+            return -1
+        store_i64(tokens, index * C_POINTER_SIZE, 0)
+        return 0
     token: int = pcc_gc_foreign_lease_acquire(slot)
     if token < 0:
         py_runtime_error_if_unset(cstr("named protocol"), cstr("result owner lease failed"))
