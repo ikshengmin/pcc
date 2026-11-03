@@ -1162,6 +1162,21 @@
         ]
       }
     },
+    "tests/rust/test_fallible_streaming_iterator_project.py": {
+      "test_actual_same_original_certification_then_pcc_object": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": [
+          "Actual check_rust_source on the complete unchanged upstream library is a prerequisite for strict PCC object emission."
+        ]
+      },
+      "test_original_package_self_checks_and_real_api_native_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Audited rustc compiles the complete unchanged upstream library and original cfg(test) checks, then links and runs the separately identified API consumer."
+        ]
+      }
+    },
     "tests/rust/test_rust_aggregates.py": {
       "test_development_only_rustc_aggregate_reference": {
         "activity": "external-reference",

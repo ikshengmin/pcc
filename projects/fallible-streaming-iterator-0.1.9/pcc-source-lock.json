@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "project": "fallible-streaming-iterator",
+  "version": "0.1.9",
+  "repository": "https://github.com/sfackler/fallible-streaming-iterator",
+  "revision": "9217bc5e381b54b4ef4c38959488a5dc993b7b81",
+  "tag": "v0.1.9",
+  "upstream_tree": "3f6d3f57dc5cbbb0b8c94c14e71537063782ab78",
+  "edition": 2015,
+  "edition_evidence": "Cargo.toml has no edition field; Cargo's default is 2015.",
+  "rust_roots": [
+    "src/lib.rs"
+  ],
+  "features": [],
+  "dependencies": [],
+  "complete_upstream_tree": true,
+  "complete_build_closure": false,
+  "build_closure_reason": "The complete upstream crate is retained; owned core/prelude and cross-crate compilation/linking are not qualified.",
+  "total_bytes": 35597,
+  "files": [
+    {
+      "path": ".circleci/config.yml",
+      "git_blob": "f64c742f27432c2bc07f1bcaac727462c967e380",
+      "sha256": "a060043ede0fb01f382c0fbf92a5599813de005dc567efb66e8a2f9c33b158e9",
+      "size": 884,
+      "license": "MIT OR Apache-2.0",
+      "license_evidence": "README.md license grant and unchanged LICENSE-MIT / LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/sfackler/fallible-streaming-iterator/9217bc5e381b54b4ef4c38959488a5dc993b7b81/.circleci/config.yml"
+    },
+    {
+      "path": ".gitignore",
+      "git_blob": "3b874ca574de0550d0ee2608988aeb9655940377",
+      "sha256": "4cc6445feac7e9a1f8f1e1c51cc3afd0cf7bb931e3c5a6f18c41258401652702",
+      "size": 30,
+      "license": "MIT OR Apache-2.0",
+      "license_evidence": "README.md license grant and unchanged LICENSE-MIT / LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/sfackler/fallible-streaming-iterator/9217bc5e381b54b4ef4c38959488a5dc993b7b81/.gitignore"
+    },
+    {
+      "path": "Cargo.toml",
+      "git_blob": "4675edbbf1bfd182503d4ad2a58402c3dcf1d69b",
+      "sha256": "0f78e385096df587025ccdfda1fa65f4602c5c82583af2d2242625083e3acb40",
+      "size": 316,
+      "license": "MIT OR Apache-2.0",
+      "license_evidence": "README.md license grant and unchanged LICENSE-MIT / LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/sfackler/fallible-streaming-iterator/9217bc5e381b54b4ef4c38959488a5dc993b7b81/Cargo.toml"
+    },
+    {
+      "path": "LICENSE-APACHE",
+      "git_blob": "8f71f43fee3f78649d238238cbde51e6d7055c82",
+      "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08",
+      "size": 11358,
+      "license": "MIT OR Apache-2.0",
+      "license_evidence": "README.md license grant and unchanged LICENSE-MIT / LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/sfackler/fallible-streaming-iterator/9217bc5e381b54b4ef4c38959488a5dc993b7b81/LICENSE-APACHE"
+    },
+    {
+      "path": "LICENSE-MIT",
+      "git_blob": "41aaea31af00cd0e50050ada7122022bfdb7177f",
+      "sha256": "8dcec5569a9be5b0e086c80faed6f1aefa670af0ec29cecc2f714303096887e0",
+      "size": 1086,
+      "license": "MIT OR Apache-2.0",
+      "license_evidence": "README.md license grant and unchanged LICENSE-MIT / LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/sfackler/fallible-streaming-iterator/9217bc5e381b54b4ef4c38959488a5dc993b7b81/LICENSE-MIT"
+    },
+    {
+      "path": "README.md",
+      "git_blob": "f0854028e031828df8ea46cfe5d2b4a9ac80c035",
+      "sha256": "73f5daabf0443f5253c00dfc3b1d2f9cb057f12b0160de27b95da7312df8aa34",
+      "size": 777,
+      "license": "MIT OR Apache-2.0",
+      "license_evidence": "README.md license grant and unchanged LICENSE-MIT / LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/sfackler/fallible-streaming-iterator/9217bc5e381b54b4ef4c38959488a5dc993b7b81/README.md"
+    },
+    {
+      "path": "src/lib.rs",
+      "git_blob": "69262d6aefd59e2a11c0bca73c7b28a79e589a54",
+      "sha256": "7fb7428997bdd89c3ee0818ecee642f8d93882c9c66171c9c6194b732f337089",
+      "size": 21146,
+      "license": "MIT OR Apache-2.0",
+      "license_evidence": "README.md license grant and unchanged LICENSE-MIT / LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/sfackler/fallible-streaming-iterator/9217bc5e381b54b4ef4c38959488a5dc993b7b81/src/lib.rs"
+    }
+  ]
+}

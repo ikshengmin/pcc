@@ -58,12 +58,24 @@ These are required outcomes, not assertions that migration is complete. See
   compile and run unmodified real projects. Java class-file/JAR compatibility
   is frozen historical work, excluded from source-language acceptance. The
   owned NumPy extension chain is second priority, Linux first.
+  Drive implementation from unchanged upstream projects and their own tests:
+  TinyXML2, Commons Numbers Primes, the complete Go math/bits package, and
+  fallible-streaming-iterator. Fix each project's first observed blocker;
+  feature counts and component fixtures are not project acceptance. Go/Java
+  managed objects share allocator/header/type-descriptor design with the
+  count-free collectors. Reuse existing scheduling owners and develop the
+  shared owned unwinding design.
+  Python interoperability starts with same-executable pcc.extern scalar calls,
+  then buffers, GC handles and extension modules. Keep status pages to current
+  facts; tests and ledgers carry detailed obligations and results.
   Native self-host, all five GC backends and public CLI parity remain mandatory
   non-regression contracts, but legacy bootstrap/CI cleanup must not displace
   this frontend work. Small source/code/test work continues independently;
   serialize only heavy gates and shared runtime/backend publication. Each
-  change includes focused tests and whole affected-language validation before
-  push. Never weaken correctness or resource limits to obtain a pass.
+  change includes focused tests and whole affected-language validation. When
+  the user selects CI-only execution, do not run local tests or compilers;
+  preserve source-reviewed checkpoints and label their execution as unrun.
+  Never weaken correctness or resource limits to obtain a pass.
 - Remote or cloud agents must not access or run on the user's Mac; for them,
   user-reported Mac results are external evidence, and after a shared
   runtime/backend batch they wait for the user's relayed Mac QPS assessment.
@@ -96,12 +108,12 @@ These are required outcomes, not assertions that migration is complete. See
   pull/rebase/integration. Trust conflict-free peers' committed validation;
   check our changes and actual conflict resolutions without repeating their
   suites merely because upstream changed.
-- Commit local source/test batches promptly, then test and commit fixes.
-  Latest user direction supersedes the older push-before-suite procedure:
-  before every future push, finish all tests for each affected language on
-  the final candidate, separating ordinary, integration and reference lanes.
-  Focused/new tests alone do not authorize a push. Record failures, missing
-  prerequisites and unfinished nodes; never summarize a mixed result as green.
+- Save authorized source-reviewed batches promptly with `[skip ci]`. The
+  current CI-only instruction supersedes local pre-push test requirements.
+  Deliberate CI validation covers each affected language, with ordinary,
+  integration and reference lanes recorded separately. Source review and
+  focused/new tests do not establish execution acceptance. Record failures,
+  missing prerequisites and unfinished nodes; never call a mixed result green.
   One designated publisher integrates complete remote trees and exact path
   preimages/modes, preserves peers' work, and publishes reviewed batches.
 - Preserve other work. Re-read targets before narrow edits; no destructive
