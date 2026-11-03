@@ -678,6 +678,17 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
     if remaining_budget <= 0:
         return 0
 
+    # A concurrent slice must also bound skipped object-list nodes: a sparse
+    # gray set otherwise walks the whole heap while every mutator waits for
+    # this graph lock. Keep the return value as completed gray objects, since
+    # callers use it to discharge allocation debt, not as a scan-work count.
+    # Stopped-world drains retain their existing progress contract: explicit
+    # gc.collect() has a bounded zero-progress backstop and must cross long
+    # black prefixes before it can finish its gray work.
+    scan_budget: i64 = remaining_budget
+    if pcc_thread_owns_stopped_world() != 0:
+        scan_budget = 9223372036854775807
+
     claim_epoch: i64 = 0
     claim_backend: i64 = -1
     extension_ctx = stack_alloc(16)
@@ -796,7 +807,10 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
     node = global_load_ptr("pcc_gc_trace_cursor")
     if ptr_is_null(node) != 0:
         node = global_load_ptr("pcc_gc_object_head")
-    while ptr_is_null(node) == 0 and local_processed < remaining_budget:
+    scanned: i64 = 0
+    while (ptr_is_null(node) == 0 and local_processed < remaining_budget
+           and scanned < scan_budget):
+        scanned = scanned + 1
         nxt = load_ptr(node, 16)
         if load_i64(node, 32) != 0:
             node = nxt

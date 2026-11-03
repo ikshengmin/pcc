@@ -93,6 +93,15 @@ dropped keyword); the stage 1 commit message lists them. Rerun with
 
 ## Native throughput versus CPython 3.15.0: active, acceptance unmet
 
+Concurrent tracing slices now charge every inspected object-list node against
+their scan bound, including black, dying and invalid nodes. The returned work
+count still includes only completed gray objects, so scanning does not falsely
+pay allocation debt. Stopped-world drains retain their prior progress behavior
+for explicit collection. The old body fails the sparse-gray budget-1 regression;
+42 production-body cases and five owned-native modes (GC1-4, count-free GC4)
+pass with the correction. This bounds node traversal only: one large object's
+reference traversal remains unsliced and is still open.
+
 Inside the already graph-locked GC4 count-free StorePlan commit, null/tagged
 values and inactive-mark roots now skip the no-op slot-barrier call. The outer
 lock still orders the phase check and publication; active roots and non-null
