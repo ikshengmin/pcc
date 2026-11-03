@@ -2,6 +2,7 @@
 import ast
 import os
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -252,3 +253,29 @@ def test_eligible_and_live_pages_can_share_quarantine_list():
     assert runtime.freed == [empty_span, empty]
     assert runtime.get('pcc_gc_backend4_retained_page_head') == live
     assert runtime.load(live, 72) == live_span
+
+
+@pytest.mark.integration
+def test_owned_native_empty_pages_are_reclaimed_without_forwarding(
+    tmp_path, threaded_pcc_runtime_archive,
+):
+    from tests.owned_c_execution import compile_owned_c_with_runtime
+
+    source = Path(__file__).with_name('fixtures') / 'gc4_retained_no_forwarding.c'
+    binary = tmp_path / 'retained_pages'
+    compile_owned_c_with_runtime(
+        source, binary, runtime_archive=threaded_pcc_runtime_archive,
+    )
+    for tracing_only in ('0', '1'):
+        result = subprocess.run(
+            [str(binary)], capture_output=True, text=True, timeout=25,
+            env=dict(
+                os.environ, PATH='/nonexistent', PCC_GC_BACKEND='4',
+                PCC_GC4_TRACING_ONLY='0', PCC_GC_TRACING_ONLY=tracing_only,
+            ),
+        )
+        assert result.returncode == 0, (tracing_only, result)
+        assert result.stderr == '', (tracing_only, result)
+        assert result.stdout.startswith(
+            'retained-no-forwarding-ok rounds=32 objects=16384 ',
+        ), (tracing_only, result)

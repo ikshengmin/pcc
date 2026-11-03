@@ -100,9 +100,15 @@ The application-gate, active-deallocator, live/pending/forwarded-page checks
 and two-stage quarantine order remain intact; page housekeeping does not
 claim a forwarding retirement or request another mark. Nineteen integrated
 production-body checks pass in `test_gc4_retained_pages_without_forwarding.py`.
-The bounded native fixture `gc4_retained_no_forwarding.c`, five-GC throughput
-matrix and heap/pause acceptance are pending; this checkpoint is not a
-performance-qualified result.
+Its owned native test runs `gc4_retained_no_forwarding.c` against `13436ef91`
+in counted and count-free GC4 modes: both complete 32 rounds/16,384 objects,
+with empty quarantine queues and allocator requested bytes after collection
+stable at 474,945/482,945. The same fixture against the pre-fix read-barrier
+runtime fails in round zero with 504 retained pages in both modes. Pins and
+foreign leases remain live across the fixture's initial collection. These
+are local Mac host-pcc0/self results and post-collection allocator gauges,
+not full heap peaks. Five-GC throughput and heap/pause acceptance remain
+pending; this checkpoint is not a performance-qualified result.
 
 The latest acceptance order is to bring GC1-4 close to GC0 first, then improve
 all five against asyncio. Further count-free GC1/2 rollout is paused while
