@@ -224,7 +224,11 @@ def test_windows_ci_checks_real_reader_contention_independently_of_bootstrap():
     assert "--phase stage1" not in publication
     assert "Verify Windows RSS publication" not in bootstrap
     assert "--phase stage1" in bootstrap
-    assert "needs:" not in bootstrap + publication
+    # Both jobs may wait for planning, but neither may depend on the other's
+    # bootstrap outcome or any other job. Keep this an exact dependency check.
+    for job in (publication, bootstrap):
+        assert [line for line in job.splitlines()
+                if line.lstrip().startswith("needs:")] == ["    needs: validation-plan"]
     assert text.count('      - "tests/python/test_worker_resource_publication.py"') == 2
     assert text.count('      - "tests/python/test_worker_resource_publisher.py"') == 2
 

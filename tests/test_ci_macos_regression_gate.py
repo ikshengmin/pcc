@@ -607,6 +607,17 @@ def _handoff_xdist_reports(directory, nodes):
     return rows, xml
 
 
+def test_handoff_census_includes_both_production_v4_regressions():
+    nodes = gate._handoff_expected_nodes()
+    assert len(nodes) == len(set(nodes)) == 31
+    assert nodes == sorted(nodes)
+    prefix = gate.HANDOFF_TEST + "::HandoffContractTests::"
+    assert {
+        prefix + "test_production_v4_writer_is_accepted_with_both_scaffold_modes",
+        prefix + "test_obsolete_libpython_field_is_rejected_even_with_matching_digest",
+    }.issubset(nodes)
+
+
 def test_handoff_default_xdist_keeps_project_options_and_collects_real_evidence(tmp_path, monkeypatch):
     _mock_macos(monkeypatch)
     monkeypatch.setenv("PYTEST_ADDOPTS", "-n0 -o addopts=")
@@ -633,7 +644,7 @@ def test_handoff_default_xdist_keeps_project_options_and_collects_real_evidence(
                    or arg.startswith(("-n", "--numprocesses", "--dist=", "addopts=")) for arg in args)
     receipt = json.loads((tmp_path / "work/handoff-xdist/result.json").read_text())
     assert receipt["status"] == "PASS" and receipt["worker_count"] == 6
-    assert receipt["scheduler"] == "loadgroup" and len(receipt["executed_nodes"]) == 29
+    assert receipt["scheduler"] == "loadgroup" and len(receipt["executed_nodes"]) == 31
     assert receipt["extra_successful_call_reports"] == 1
     assert receipt["test_sha256"] == gate._sha256(ROOT / gate.HANDOFF_TEST)
     assert receipt["uv_lock_sha256"] == gate._sha256(ROOT / "uv.lock")

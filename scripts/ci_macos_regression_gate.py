@@ -242,7 +242,7 @@ def _handoff_expected_nodes():
               if isinstance(node, ast.ClassDef) and node.name == "HandoffContractTests"]
     names = sorted(node.name for node in owner.body
                    if isinstance(node, ast.FunctionDef) and node.name.startswith("test_"))
-    assert len(names) == 29, "update the explicit handoff xdist gate census"
+    assert len(names) == 31, "update the explicit handoff xdist gate census"
     return [HANDOFF_TEST + "::HandoffContractTests::" + name for name in names]
 
 
