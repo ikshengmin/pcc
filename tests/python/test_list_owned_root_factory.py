@@ -32,9 +32,10 @@ class OwnedListFactoryModel(ListFactoryModel):
             self.memory[self.sources + index * 8] = slot
         self.initial_frames = dict(self.frames)
         self.memory[3] = int(container)
+        self.global_words['pcc_gc_backend_selected'] = 4 if relocate else 0
         self.ns.update({
             'global_addr': lambda name: {'pcc_list_construction_error_map': 1,
-                                         'pcc_gc_list_container_mode': 3}.get(name, 2),
+                                         'pcc_gc_list_container_mode': 3}.get(name, self.global_address(name)),
             'pcc_py_gc_minor_graph_lock': self.lock,
             'pcc_py_gc_minor_graph_unlock': self.unlock,
             'pcc_gc_resolve_root_slot_unlocked': self.resolve,
@@ -47,9 +48,11 @@ class OwnedListFactoryModel(ListFactoryModel):
         })
         _functions(
             RUNTIME / 'py_list.py',
-            {'_list_allocate_unpublished', '_list_owned_construction_failed', 'py_list_from_owned_roots'},
+            {'_list_allocate_unpublished', '_list_owned_construction_failed', '_native_body_py_list_from_owned_roots'},
             self.ns,
         )
+        self.ns['pcc_list_body_py_list_from_owned_roots'] = self.ns['_native_body_py_list_from_owned_roots']
+        _functions(RUNTIME / 'py_list_native_entry.py', {'py_list_from_owned_roots'}, self.ns)
 
     def check_shape(self, obj):
         length = self.memory.get(obj + 16)

@@ -54,6 +54,8 @@ OWNED_SYMBOLS = PIN_SYMBOLS | TRANSFER_SYMBOLS | LEASE_SYMBOLS | HANDLED_SYMBOLS
     "pcc_gc_set_mark_color",
     "pcc_gc_object_is_known_no_lock",
     "pcc_gc_resolve_root_slot_unlocked",
+    "pcc_gc_resolve_root_slot_mode",
+    "pcc_gc_resolve_borrowed_root_slot_unlocked",
     "pcc_gc_metric_shard",
     "pcc_gc_metric_shard_sum",
     "pcc_gc_metric_shard_reset",
@@ -151,6 +153,11 @@ def test_root_operations_have_one_strict_source_owner():
             caller = strict
         elif symbol in ("pcc_gc_set_mark_color", "pcc_gc_slot_lease_acquire", "pcc_gc_metric_shard_sum"):
             caller = strict
+        elif symbol == "pcc_gc_resolve_root_slot_mode":
+            assert len(re.findall(r"\b_resolve_root_slot_mode\(", strict)) == 3
+            caller = strict
+        elif symbol == "pcc_gc_resolve_borrowed_root_slot_unlocked":
+            caller = (RUNTIME_DIR / "py/freestanding_gc_mapped_roots.py").read_text()
         elif symbol in ("pcc_gc_static_literal_probe", "pcc_gc_static_literal_contains"):
             caller = strict
         elif symbol in ("pcc_gc_metric_pin_balance", "pcc_gc_metric_allocation_count"):

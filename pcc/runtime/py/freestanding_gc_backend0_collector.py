@@ -92,6 +92,9 @@ pcc_gc_default_table_unlock = extern(
 pcc_gc_backend0_visit_subtract = extern(
     "pcc_gc_backend0_visit_subtract", (c_ptr,), c_void
 )
+pcc_gc_visit_native_root_frames = extern(
+    "pcc_gc_visit_native_root_frames", (c_int64, c_int64), c_int64
+)
 pcc_gc_visit_walked_stack_roots = extern("pcc_gc_visit_walked_stack_roots", (c_int64, c_int64), c_int64)
 pcc_gc_backend0_mark_reachable = extern(
     "pcc_gc_backend0_mark_reachable", (c_ptr,), c_void
@@ -289,6 +292,11 @@ def _mark_runtime_roots() -> None:
     # register nothing, so it does not walk.
     if load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) != 0:
         pcc_gc_visit_walked_stack_roots(6, 0)
+    else:
+        # Native handles replace scheduler roots and remain roots even when
+        # optional compiled frame roots are disabled. Optional native frame
+        # groups are omitted at binding, preserving the GC0 policy.
+        pcc_gc_visit_native_root_frames(6, 0)
     frame = global_load_ptr("pcc_gc_frame_head")
     while ptr_is_null(frame) == 0:
         frame_map = load_ptr(frame, 0)

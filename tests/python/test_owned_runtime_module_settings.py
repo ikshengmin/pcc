@@ -17,6 +17,7 @@ from pcc.frontends.python.thread_runtime_config import implicit_thread_safepoint
 NO_POLL_MODULES = (
     "freestanding_thread_kernel_pthread", "py_runtime_log", "py_tempfile",
     "py_os_mkdir", "py_cleanup_runtime", "py_exc_traceback", "py_re_bridge_entry",
+    "py_list_native_entry",
 )
 ORDINARY_MODULES = ("py_threading", "freestanding_platform_rss")
 POLL_ENV = "PCC_IMPLICIT_THREAD_SAFEPOINTS"

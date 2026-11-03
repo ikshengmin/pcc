@@ -90,6 +90,11 @@ pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern(
     "pcc_py_gc_minor_graph_unlock", (), c_void
 )
+pcc_thread_owns_stopped_world = extern("pcc_thread_owns_stopped_world", (), c_int64)
+pcc_thread_all_stopped_at_gates = extern("pcc_thread_all_stopped_at_gates", (), c_int64)
+pcc_stop_the_world = extern("pcc_stop_the_world", (), c_int64)
+pcc_resume_world = extern("pcc_resume_world", (), c_int64)
+pcc_gc_pin_conservative_thread_roots = extern("pcc_gc_pin_conservative_thread_roots", (), c_void)
 pcc_thread_safepoint = extern("pcc_thread_safepoint", (), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
 py_incref = extern("py_incref", (c_ptr,), c_void)
@@ -408,6 +413,19 @@ def pcc_gc_generational_step(
 ) -> i64:
     if remaining_budget <= 0:
         return 0
+    # One admission covers every moving source: legacy/native/stackmap
+    # frames, scheduler/TLS roots, remembered owners, worklist and extensions.
+    # Nursery refill enters here directly, outside pcc_gc_step's dispatcher.
+    stopped_here: i64 = 0
+    if pcc_thread_owns_stopped_world() == 0:
+        if pcc_stop_the_world() != 0:
+            return 0
+        stopped_here = 1
+    oldify_suspended: i64 = load_i32(global_addr("pcc_gc_backend3_oldify_suspended"), 0)
+    if pcc_thread_all_stopped_at_gates() == 0:
+        store_i32(global_addr("pcc_gc_backend3_oldify_suspended"), 0, 1)
+    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
+        pcc_gc_pin_conservative_thread_roots()
     batch_budget: i64 = remaining_budget
     if batch_budget > 16:
         batch_budget = 16
@@ -465,6 +483,9 @@ def pcc_gc_generational_step(
         function_addr("pcc_gc_generational_promote_extension_module_state_root"),
         null(),
     )
+    store_i32(global_addr("pcc_gc_backend3_oldify_suspended"), 0, oldify_suspended)
+    if stopped_here != 0:
+        pcc_resume_world()
     if local_processed > 0:
         pcc_thread_safepoint()
     return local_processed

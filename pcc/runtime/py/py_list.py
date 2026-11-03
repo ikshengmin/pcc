@@ -57,6 +57,39 @@ from pcc.unsafe import (
     untag_int,
 )
 
+# No-poll public entries own each native temporary-root frame.
+pcc_list_grow_for_mutation = extern("pcc_list_grow_for_mutation", (c_ptr, c_int64), c_ptr)
+py_list_new = extern("py_list_new", (c_int64,), c_ptr)
+py_list_from_static_items = extern("py_list_from_static_items", (c_ptr, c_int64), c_ptr)
+py_list_from_owned_roots = extern("py_list_from_owned_roots", (c_ptr, c_int64, c_ptr), c_int64)
+py_list_append_from_slots = extern("py_list_append_from_slots", (c_ptr, c_ptr, c_int64), c_void)
+py_list_append = extern("py_list_append", (c_ptr, c_ptr), c_void)
+py_list_append_fresh_native_instance = extern("py_list_append_fresh_native_instance", (c_ptr, c_ptr), c_void)
+py_list_get = extern("py_list_get", (c_ptr, c_int64), c_ptr)
+py_list_getitem = extern("py_list_getitem", (c_ptr, c_int64), c_ptr)
+py_list_get_i64 = extern("py_list_get_i64", (c_ptr, c_int64), c_int64)
+py_list_get_i64_nonnegative = extern("py_list_get_i64_nonnegative", (c_ptr, c_int64), c_int64)
+py_list_set = extern("py_list_set", (c_ptr, c_int64, c_ptr), c_void)
+py_list_get_for_frame = extern("py_list_get_for_frame", (c_ptr, c_int64), c_ptr)
+py_list_set_from_owned_root = extern("py_list_set_from_owned_root", (c_ptr, c_int64, c_ptr, c_ptr), c_void)
+py_list_setitem = extern("py_list_setitem", (c_ptr, c_int64, c_ptr), c_int64)
+py_list_len = extern("py_list_len", (c_ptr,), c_int64)
+py_list_concat = extern("py_list_concat", (c_ptr, c_ptr), c_ptr)
+py_list_copy = extern("py_list_copy", (c_ptr,), c_ptr)
+py_list_repeat = extern("py_list_repeat", (c_ptr, c_int64), c_ptr)
+py_list_contains = extern("py_list_contains", (c_ptr, c_ptr), c_int64)
+py_list_slice = extern("py_list_slice", (c_ptr, c_ptr, c_ptr, c_ptr), c_ptr)
+py_list_del_slice = extern("py_list_del_slice", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64)
+py_list_extend = extern("py_list_extend", (c_ptr, c_ptr), c_void)
+py_list_insert = extern("py_list_insert", (c_ptr, c_int64, c_ptr), c_void)
+py_list_pop = extern("py_list_pop", (c_ptr, c_int64), c_ptr)
+py_list_remove = extern("py_list_remove", (c_ptr, c_ptr), c_void)
+py_list_clear = extern("py_list_clear", (c_ptr,), c_void)
+py_list_index = extern("py_list_index", (c_ptr, c_ptr), c_int64)
+py_list_index_range = extern("py_list_index_range", (c_ptr, c_ptr, c_int64, c_int64), c_int64)
+py_list_count = extern("py_list_count", (c_ptr, c_ptr), c_int64)
+py_list_reverse = extern("py_list_reverse", (c_ptr,), c_void)
+
 py_incref = extern("py_incref", (c_ptr,), c_void)
 pcc_gc_try_init_ptr_locked = extern("pcc_gc_try_init_ptr_locked", (c_ptr, c_ptr), c_int64)
 py_decref = extern("py_decref", (c_ptr,), c_void)
@@ -105,11 +138,11 @@ pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
 pcc_gc_publish_initialized = extern(
     "pcc_gc_publish_initialized", (c_ptr,), c_void
 )
-pcc_gc_scheduler_root_register_handle = extern(
-    "pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr
+pcc_gc_native_root_bind_range = extern(
+    "pcc_gc_native_root_bind_range", (c_ptr, c_int64), c_ptr
 )
-pcc_gc_scheduler_root_unregister_handle = extern(
-    "pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void
+pcc_gc_native_root_unbind = extern(
+    "pcc_gc_native_root_unbind", (c_ptr,), c_void
 )
 pcc_py_gc_minor_graph_lock = extern(
     "pcc_py_gc_minor_graph_lock", (), c_void
@@ -316,25 +349,11 @@ def _int_to_i64_or_zero(o) -> int:
     return py_int_value_i64(o)
 
 
-def _prepare_moving_root(slot, handle_slot) -> int:
-    store_ptr(handle_slot, 0, null())
-    value = load_ptr(slot, 0)
-    if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
-        return 0
-    backend: int = pcc_gc_backend()
-    if backend != 3 and backend != 4:
-        return 0
-    handle = pcc_gc_scheduler_root_register_handle(slot)
-    if ptr_is_null(handle) != 0:
-        return -1
-    store_ptr(handle_slot, 0, handle)
-    value = pcc_gc_load_ptr(null(), slot)
-    store_ptr(slot, 0, value)
-    if ptr_is_null(value) != 0:
-        pcc_gc_scheduler_root_unregister_handle(handle)
-        store_ptr(handle_slot, 0, null())
-        return -1
-    return 0
+# This is an actual no-poll entry, not a normal-poll Python shim. Every
+# caller supplies the owning/borrowed role explicitly before publication.
+_prepare_moving_root = extern(
+    "pcc_list_native_prepare_root", (c_ptr, c_ptr, c_int64), c_int64
+)
 
 
 def _reload_moving_root(slot, handle_slot):
@@ -348,7 +367,7 @@ def _reload_moving_root(slot, handle_slot):
 def _finish_moving_root(handle_slot) -> None:
     handle = load_ptr(handle_slot, 0)
     if ptr_is_null(handle) == 0:
-        pcc_gc_scheduler_root_unregister_handle(handle)
+        pcc_gc_native_root_unbind(handle)
         store_ptr(handle_slot, 0, null())
 
 
@@ -365,7 +384,7 @@ def _grow_if_needed(l, want: int):
     store_ptr(owner_slot, 0, l)
     owner_handle = null()
     if initial_backend == 3 or initial_backend == 4:
-        owner_handle = pcc_gc_scheduler_root_register_handle(owner_slot)
+        owner_handle = pcc_gc_native_root_bind_range(owner_slot, -1)
         if ptr_is_null(owner_handle) != 0:
             return null()
 
@@ -391,7 +410,7 @@ def _grow_if_needed(l, want: int):
             break
         if old_capacity >= want:
             if ptr_is_null(owner_handle) == 0:
-                pcc_gc_scheduler_root_unregister_handle(owner_handle)
+                pcc_gc_native_root_unbind(owner_handle)
             return l
         cap: int = old_capacity
         while cap < want:
@@ -434,7 +453,7 @@ def _grow_if_needed(l, want: int):
             free(slot_pairs)
             free(new_items)
             if ptr_is_null(owner_handle) == 0:
-                pcc_gc_scheduler_root_unregister_handle(owner_handle)
+                pcc_gc_native_root_unbind(owner_handle)
             return l
         current_length: int = load_i64(l, PYLISTOBJECT_LENGTH_OFFSET)
         if (
@@ -496,16 +515,17 @@ def _grow_if_needed(l, want: int):
         free(old_items)
         free(slot_pairs)
         if ptr_is_null(owner_handle) == 0:
-            pcc_gc_scheduler_root_unregister_handle(owner_handle)
+            pcc_gc_native_root_unbind(owner_handle)
         return l
 
     if ptr_is_null(owner_handle) == 0:
-        pcc_gc_scheduler_root_unregister_handle(owner_handle)
+        pcc_gc_native_root_unbind(owner_handle)
     return null()
 
 
-@c_abi_export("pcc_list_grow_for_mutation")
-def pcc_list_grow_for_mutation(l, want: int):
+@c_abi_export("pcc_list_body_pcc_list_grow_for_mutation")
+def _native_body_pcc_list_grow_for_mutation(_native_inputs, want: int):
+    l = load_ptr(_native_inputs, 0 * 8)
     return _grow_if_needed(l, want)
 
 
@@ -544,7 +564,7 @@ def _list_factory_finish(slots, token: int, success: int):
         pcc_gc_store_root(slots, null())
         py_clear_exception()
         py_tls_exc_swap_slot(error)
-        pcc_gc_frame_leave(slots)
+        pcc_gc_native_frame_unbind_map(slots)
         return null()
     # Successful construction still owns its address lease and this private
     # root. The collector cannot relocate the value while that lease lives;
@@ -557,7 +577,7 @@ def _list_factory_finish(slots, token: int, success: int):
         if pcc_gc_foreign_lease_release(slots, token) < 0:
             pcc_platform_abort()
             return null()
-    pcc_gc_frame_leave(slots)
+    pcc_gc_native_frame_unbind_map(slots)
     return pcc_gc_take_pinned_slot(slots, prior)
 
 
@@ -595,14 +615,14 @@ def _list_allocate_unpublished(output, requested: i64, lease_state) -> i64:
     return 0
 
 
-@c_abi_export("py_list_new")
-def py_list_new(initial_capacity: int):
+@c_abi_export("pcc_list_body_py_list_new")
+def _native_body_py_list_new(initial_capacity: int):
     if initial_capacity > 134217728:
         _debug_bad_container(null(), -100)
         return null()
     slots = stack_alloc(16)
     memset(slots, 0, 16)
-    pcc_gc_frame_enter(global_addr("pcc_list_factory_owned_map"), slots)
+    pcc_gc_native_frame_bind_map(global_addr("pcc_list_factory_owned_map"), slots)
     lease_state = stack_alloc(C_POINTER_SIZE)
     status: i64 = _list_allocate_unpublished(slots, i64(initial_capacity), lease_state)
     token: int = load_i64(lease_state, 0)
@@ -614,8 +634,8 @@ def py_list_new(initial_capacity: int):
     return _list_factory_finish(slots, token, 1)
 
 
-@c_abi_export("py_list_from_static_items")
-def py_list_from_static_items(items, count: int):
+@c_abi_export("pcc_list_body_py_list_from_static_items")
+def _native_body_py_list_from_static_items(items, count: int):
     """Build a list from a static ``[i0, i1, ...]`` pointer array.
 
     Same contract as py_dict_from_static_pairs / py_tuple_from_static_items:
@@ -628,11 +648,18 @@ def py_list_from_static_items(items, count: int):
     l = py_list_new(count)
     if ptr_is_null(l):
         return null()
+    list_slot = stack_alloc(8)
+    list_handle_slot = stack_alloc(8)
+    store_ptr(list_slot, 0, l)
+    if _prepare_moving_root(list_slot, list_handle_slot, 1) != 0:
+        py_decref(load_ptr(list_slot, 0))
+        return null()
     index: int = 0
     while index < count:
-        py_list_append(l, load_ptr(items, index * 8))
+        py_list_append(load_ptr(list_slot, 0), load_ptr(items, index * 8))
         index = index + 1
-    return l
+    _finish_moving_root(list_handle_slot)
+    return load_ptr(list_slot, 0)
 
 
 define_global_i32("pcc_list_construction_error_map", 1)
@@ -641,7 +668,7 @@ define_global_i32("pcc_list_construction_error_map", 1)
 def _list_owned_construction_failed(output, token: i64) -> i64:
     error = stack_alloc(C_POINTER_SIZE)
     store_ptr(error, 0, null())
-    pcc_gc_frame_enter(global_addr("pcc_list_construction_error_map"), error)
+    pcc_gc_native_frame_bind_map(global_addr("pcc_list_construction_error_map"), error)
     if py_err_occurred() == 0:
         py_raise_owned(py_exc_new(19, cstr("list: out of memory")))
     py_tls_exc_swap_slot(error)
@@ -652,12 +679,12 @@ def _list_owned_construction_failed(output, token: i64) -> i64:
     pcc_gc_store_root(output, null())
     py_clear_exception()
     py_tls_exc_swap_slot(error)
-    pcc_gc_frame_leave(error)
+    pcc_gc_native_frame_unbind_map(error)
     return -1
 
 
-@c_abi_export("py_list_from_owned_roots")
-def py_list_from_owned_roots(sources, count: i64, output) -> i64:
+@c_abi_export("pcc_list_body_py_list_from_owned_roots")
+def _native_body_py_list_from_owned_roots(sources, count: i64, output) -> i64:
     """Consume distinct owning operand roots into a newly allocated list.
 
     Sources is a stable array of addresses of registered, unleased owning
@@ -730,9 +757,9 @@ def _append_rooted(lst, item) -> int:
     item_handle_slot = stack_alloc(8)
     store_ptr(list_slot, 0, lst)
     store_ptr(item_slot, 0, item)
-    if _prepare_moving_root(list_slot, list_handle_slot) != 0:
+    if _prepare_moving_root(list_slot, list_handle_slot, 0) != 0:
         return -1
-    if _prepare_moving_root(item_slot, item_handle_slot) != 0:
+    if _prepare_moving_root(item_slot, item_handle_slot, 0) != 0:
         _finish_moving_root(list_handle_slot)
         return -1
     result: int = _append_rooted_slots(
@@ -892,8 +919,8 @@ def _append_grow_gc0(list_slot, item_slot, old_items, old_capacity: int) -> int:
     return result
 
 
-@c_abi_export("py_list_append_from_slots")
-def py_list_append_from_slots(list_slot, item_slot, borrowed_mask: int) -> None:
+@c_abi_export("pcc_list_body_py_list_append_from_slots")
+def _native_body_py_list_append_from_slots(list_slot, item_slot, borrowed_mask: int) -> None:
     """Borrow stable source slots without adding another root or item lease.
 
     Both source addresses stay valid for the call. They are traced owning or
@@ -921,8 +948,10 @@ def py_list_append_from_slots(list_slot, item_slot, borrowed_mask: int) -> None:
         py_raise_owned(py_exc_new(19, cstr("list append: out of memory")))
 
 
-@c_abi_export("py_list_append")
-def py_list_append(lst, item) -> None:
+@c_abi_export("pcc_list_body_py_list_append")
+def _native_body_py_list_append(_native_inputs) -> None:
+    lst = load_ptr(_native_inputs, 0 * 8)
+    item = load_ptr(_native_inputs, 1 * 8)
     if ptr_is_null(lst) != 0:
         return
     # GC0's container-lock transaction, the one compiled appends take. (The
@@ -940,16 +969,16 @@ def py_list_append(lst, item) -> None:
         py_raise_owned(py_exc_new(19, cstr("list append: out of memory")))
 
 
-@c_abi_export("py_list_append_fresh_native_instance")
-def py_list_append_fresh_native_instance(lst, item) -> None:
-    # Compiled ``lst.append(Cls(...))``. The list retains the new instance as
-    # any append does, so it takes py_list_append's transactions, GC0's
-    # container-lock append first.
+@c_abi_export("pcc_list_body_py_list_append_fresh_native_instance")
+def _native_body_py_list_append_fresh_native_instance(_native_inputs) -> None:
+    lst = load_ptr(_native_inputs, 0 * 8)
+    item = load_ptr(_native_inputs, 1 * 8)
     py_list_append(lst, item)
 
 
-@c_abi_export("py_list_get")
-def py_list_get(lst, i: int):
+@c_abi_export("pcc_list_body_py_list_get")
+def _native_body_py_list_get(_native_inputs, i: int):
+    lst = load_ptr(_native_inputs, 0 * 8)
     if not _list_type_ok(lst, -103):
         return null()
     taken = stack_alloc(8)
@@ -959,11 +988,9 @@ def py_list_get(lst, i: int):
     return _list_get_owned_rooted(lst, i, 0)
 
 
-@c_abi_export("py_list_getitem")
-def py_list_getitem(lst, i: int):
-    # a[i] subscript: like py_list_get but raises IndexError on out-of-range so
-    # try/except can catch it. Mirrors py_list_getitem in py_list.c; py_list_get
-    # stays non-raising for other callers. Negative indices normalize.
+@c_abi_export("pcc_list_body_py_list_getitem")
+def _native_body_py_list_getitem(_native_inputs, i: int):
+    lst = load_ptr(_native_inputs, 0 * 8)
     if not _list_type_ok(lst, -103):
         return null()
     taken = stack_alloc(8)
@@ -1013,16 +1040,16 @@ def _list_get_owned_rooted(lst, i: int, raising: int):
     list_slot = stack_alloc(8)
     list_handle_slot = stack_alloc(8)
     store_ptr(list_slot, 0, lst)
-    if _prepare_moving_root(list_slot, list_handle_slot) != 0:
+    if _prepare_moving_root(list_slot, list_handle_slot, 0) != 0:
         return null()
     result_slot = stack_alloc(8)
     store_ptr(result_slot, 0, null())
     result_handle = null()
     backend: int = pcc_gc_backend()
-    if backend == 3 or backend == 4:
-        # Register an empty slot before reading the NEW element. Registration
-        # itself can park; the first object store happens under the graph lease.
-        result_handle = pcc_gc_scheduler_root_register_handle(result_slot)
+    if backend == 3 or backend == 4 or load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
+        # Bind an empty owning slot before reading the NEW element. Binding
+        # cannot park; the first object store happens under the graph lease.
+        result_handle = pcc_gc_native_root_bind_range(result_slot, 1)
         if ptr_is_null(result_handle) != 0:
             _finish_moving_root(list_handle_slot)
             return null()
@@ -1033,7 +1060,7 @@ def _list_get_owned_rooted(lst, i: int, raising: int):
     if not _list_shape_ok(lst, -103):
         _list_unlock(locked)
         if ptr_is_null(result_handle) == 0:
-            pcc_gc_scheduler_root_unregister_handle(result_handle)
+            pcc_gc_native_root_unbind(result_handle)
         _finish_moving_root(list_handle_slot)
         return null()
     length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
@@ -1041,7 +1068,7 @@ def _list_get_owned_rooted(lst, i: int, raising: int):
     if idx < 0:
         _list_unlock(locked)
         if ptr_is_null(result_handle) == 0:
-            pcc_gc_scheduler_root_unregister_handle(result_handle)
+            pcc_gc_native_root_unbind(result_handle)
         _finish_moving_root(list_handle_slot)
         if raising != 0:
             py_raise_owned(py_exc_new(5, cstr("list index out of range")))
@@ -1069,15 +1096,16 @@ def _list_get_finish(result_slot, result_handle, list_handle_slot):
         prior_pin = load_i32(result, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
         pcc_gc_pin(result)
     pcc_py_gc_minor_graph_unlock()
-    pcc_gc_scheduler_root_unregister_handle(result_handle)
+    pcc_gc_native_root_unbind(result_handle)
     _finish_moving_root(list_handle_slot)
     # No callback/park/refcount change after removing the last result root;
     # the existing primitive also restores a pin held before this getter.
     return pcc_gc_take_pinned_slot(result_slot, prior_pin)
 
 
-@c_abi_export("py_list_get_i64")
-def py_list_get_i64(lst, i: int) -> int:
+@c_abi_export("pcc_list_body_py_list_get_i64")
+def _native_body_py_list_get_i64(_native_inputs, i: int) -> int:
+    lst = load_ptr(_native_inputs, 0 * 8)
     if ptr_is_null(lst) != 0:
         return 0
     # The owning field and its boxed integer can be retired by replacement;
@@ -1086,7 +1114,7 @@ def py_list_get_i64(lst, i: int) -> int:
     list_slot = stack_alloc(8)
     list_handle_slot = stack_alloc(8)
     store_ptr(list_slot, 0, lst)
-    if _prepare_moving_root(list_slot, list_handle_slot) != 0:
+    if _prepare_moving_root(list_slot, list_handle_slot, 0) != 0:
         return 0
     locked = load_ptr(list_slot, 0)
     _list_lock(locked)
@@ -1105,14 +1133,15 @@ def py_list_get_i64(lst, i: int) -> int:
     return result
 
 
-@c_abi_export("py_list_get_i64_nonnegative")
-def py_list_get_i64_nonnegative(lst, i: int) -> int:
+@c_abi_export("pcc_list_body_py_list_get_i64_nonnegative")
+def _native_body_py_list_get_i64_nonnegative(_native_inputs, i: int) -> int:
+    lst = load_ptr(_native_inputs, 0 * 8)
     if ptr_is_null(lst) != 0:
         return 0
     list_slot = stack_alloc(8)
     list_handle_slot = stack_alloc(8)
     store_ptr(list_slot, 0, lst)
-    if _prepare_moving_root(list_slot, list_handle_slot) != 0:
+    if _prepare_moving_root(list_slot, list_handle_slot, 0) != 0:
         return 0
     locked = load_ptr(list_slot, 0)
     _list_lock(locked)
@@ -1142,9 +1171,9 @@ def _list_set_item_transaction(lst, i: int, item) -> int:
     item_handle_slot = stack_alloc(8)
     store_ptr(list_slot, 0, lst)
     store_ptr(item_slot, 0, item)
-    if _prepare_moving_root(list_slot, list_handle_slot) != 0:
+    if _prepare_moving_root(list_slot, list_handle_slot, 0) != 0:
         return -1
-    if _prepare_moving_root(item_slot, item_handle_slot) != 0:
+    if _prepare_moving_root(item_slot, item_handle_slot, 0) != 0:
         _finish_moving_root(list_handle_slot)
         return -1
     backend: int = pcc_gc_backend()
@@ -1179,16 +1208,16 @@ def _list_set_item_transaction(lst, i: int, item) -> int:
     return 0
 
 
-@c_abi_export("py_list_set")
-def py_list_set(lst, i: int, item) -> None:
-    # Internal non-raising setter: callers (sort/insert shifts, generator
-    # frames) index within bounds by construction. User-visible subscript
-    # stores go through py_list_setitem below.
+@c_abi_export("pcc_list_body_py_list_set")
+def _native_body_py_list_set(_native_inputs, i: int) -> None:
+    lst = load_ptr(_native_inputs, 0 * 8)
+    item = load_ptr(_native_inputs, 1 * 8)
     _list_set_item_transaction(lst, i, item)
 
 
-@c_abi_export("py_list_get_for_frame")
-def py_list_get_for_frame(lst, i: int):
+@c_abi_export("pcc_list_body_py_list_get_for_frame")
+def _native_body_py_list_get_for_frame(_native_inputs, i: int):
+    lst = load_ptr(_native_inputs, 0 * 8)
     if pcc_gc_backend() == 0:
         if not _list_is_sane(lst, -103):
             return null()
@@ -1200,8 +1229,9 @@ def py_list_get_for_frame(lst, i: int):
     return py_list_get(lst, i)
 
 
-@c_abi_export("py_list_set_from_owned_root")
-def py_list_set_from_owned_root(lst, i: int, source_slot, owned_flag) -> None:
+@c_abi_export("pcc_list_body_py_list_set_from_owned_root")
+def _native_body_py_list_set_from_owned_root(_native_inputs, i: int, source_slot, owned_flag) -> None:
+    lst = load_ptr(_native_inputs, 0 * 8)
     if ptr_is_null(source_slot) or ptr_is_null(owned_flag):
         return
     if pcc_gc_backend() == 0:
@@ -1218,20 +1248,19 @@ def py_list_set_from_owned_root(lst, i: int, source_slot, owned_flag) -> None:
     py_list_set(lst, i, pcc_gc_load_ptr(null(), source_slot))
 
 
-@c_abi_export("py_list_setitem")
-def py_list_setitem(lst, i: int, item) -> int:
-    # items[i] = v subscript store: like py_list_set but raises IndexError on
-    # out-of-range so try/except can catch it (CPython: "list assignment index
-    # out of range"). Mirrors py_list_setitem in py_list.c; py_list_set stays
-    # non-raising for internal callers. Negative indices normalize.
+@c_abi_export("pcc_list_body_py_list_setitem")
+def _native_body_py_list_setitem(_native_inputs, i: int) -> int:
+    lst = load_ptr(_native_inputs, 0 * 8)
+    item = load_ptr(_native_inputs, 1 * 8)
     if _list_set_item_transaction(lst, i, item) != 0:
         py_raise_owned(py_exc_new(5, cstr("list assignment index out of range")))  # PY_EXC_INDEXERROR
         return -1
     return 0
 
 
-@c_abi_export("py_list_len")
-def py_list_len(lst) -> int:
+@c_abi_export("pcc_list_body_py_list_len")
+def _native_body_py_list_len(_native_inputs) -> int:
+    lst = load_ptr(_native_inputs, 0 * 8)
     if ptr_is_null(lst) != 0:
         return 0
     if pcc_gc_backend() == 0:
@@ -1239,7 +1268,7 @@ def py_list_len(lst) -> int:
     list_slot = stack_alloc(8)
     list_handle_slot = stack_alloc(8)
     store_ptr(list_slot, 0, lst)
-    if _prepare_moving_root(list_slot, list_handle_slot) != 0:
+    if _prepare_moving_root(list_slot, list_handle_slot, 0) != 0:
         return 0
     pcc_py_gc_minor_graph_lock()
     lst = _reload_moving_root(list_slot, list_handle_slot)
@@ -1250,19 +1279,16 @@ def py_list_len(lst) -> int:
 
 
 def _append_snapshot_items(
-    out_slot, source, source_length: int, repeat_count: int
+    out_slot, out_handle_slot, source, source_length: int, repeat_count: int
 ) -> int:
     if ptr_is_null(out_slot) != 0:
         return -1
     if ptr_is_null(load_ptr(out_slot, 0)) != 0 or ptr_is_null(source) != 0:
         return -1
-    out_handle_slot = stack_alloc(8)
     source_slot = stack_alloc(8)
     source_handle_slot = stack_alloc(8)
     store_ptr(source_slot, 0, source)
-    if _prepare_moving_root(out_slot, out_handle_slot) != 0:
-        return -1
-    if _prepare_moving_root(source_slot, source_handle_slot) != 0:
+    if _prepare_moving_root(source_slot, source_handle_slot, 0) != 0:
         _finish_moving_root(out_handle_slot)
         return -1
     repeat: int = 0
@@ -1422,8 +1448,10 @@ def _list_concat_gc0(a, b):
     return out
 
 
-@c_abi_export("py_list_concat")
-def py_list_concat(a, b):
+@c_abi_export("pcc_list_body_py_list_concat")
+def _native_body_py_list_concat(_native_inputs):
+    a = load_ptr(_native_inputs, 0 * 8)
+    b = load_ptr(_native_inputs, 1 * 8)
     if not _list_type_ok(a, -106) or not _list_type_ok(b, -106):
         return null()
     if pcc_gc_backend() == 0:
@@ -1449,11 +1477,13 @@ def py_list_concat(a, b):
         right_pin = left_pin
     count: int = 0
     while count < _LIST_CONCAT_SLOT_COUNT:
-        handle = pcc_gc_scheduler_root_register_handle(ptr_add(slots, count * C_POINTER_SIZE))
+        # Inputs borrow a/b; result, item and error hold NEW/retained owners.
+        role: int = -1 if count < _LIST_CONCAT_RESULT else 1
+        handle = pcc_gc_native_root_bind_range(ptr_add(slots, count * C_POINTER_SIZE), role)
         if ptr_is_null(handle):
             while count > 0:
                 count = count - 1
-                pcc_gc_scheduler_root_unregister_handle(load_ptr(handles, count * C_POINTER_SIZE))
+                pcc_gc_native_root_unbind(load_ptr(handles, count * C_POINTER_SIZE))
             _list_concat_restore_slot(left_slot, left_pin)
             _list_concat_restore_slot(right_slot, right_pin)
             py_raise_owned(py_exc_new(19, cstr("list concat: root allocation failed")))
@@ -1476,7 +1506,7 @@ def py_list_concat(a, b):
     result_pin: int = _list_concat_pin_slot(result_slot)
     while count > 0:
         count = count - 1
-        pcc_gc_scheduler_root_unregister_handle(load_ptr(handles, count * C_POINTER_SIZE))
+        pcc_gc_native_root_unbind(load_ptr(handles, count * C_POINTER_SIZE))
     result = pcc_gc_take_pinned_slot(result_slot, result_pin)
     if success == 0:
         if ptr_is_null(result) == 0:
@@ -1543,11 +1573,9 @@ def _list_snapshot_gc0(src, repeat_count: int, code: int):
     return out
 
 
-@c_abi_export("py_list_copy")
-def py_list_copy(src):
-    # list.copy() — shallow copy: fresh list, same elements (element refs
-    # shared with the source, incref'd once each). Mirrors py_list_copy in
-    # py_list.c. Empty source -> fresh empty list.
+@c_abi_export("pcc_list_body_py_list_copy")
+def _native_body_py_list_copy(_native_inputs):
+    src = load_ptr(_native_inputs, 0 * 8)
     if not _list_type_ok(src, -106):
         return null()
     if pcc_gc_backend() == 0:
@@ -1563,14 +1591,20 @@ def py_list_copy(src):
         return null()
     out_slot = stack_alloc(8)
     store_ptr(out_slot, 0, out)
-    if _append_snapshot_items(out_slot, src, n, 1) != 0:
+    out_handle_slot = stack_alloc(8)
+    if _prepare_moving_root(out_slot, out_handle_slot, 1) != 0:
+        py_decref(load_ptr(out_slot, 0))
+        return null()
+    src = load_ptr(_native_inputs, 0)
+    if _append_snapshot_items(out_slot, out_handle_slot, src, n, 1) != 0:
         py_decref(load_ptr(out_slot, 0))
         return null()
     return load_ptr(out_slot, 0)
 
 
-@c_abi_export("py_list_repeat")
-def py_list_repeat(src, count: int):
+@c_abi_export("pcc_list_body_py_list_repeat")
+def _native_body_py_list_repeat(_native_inputs, count: int):
+    src = load_ptr(_native_inputs, 0 * 8)
     if not _list_type_ok(src, -107):
         return null()
     real_count: int = count
@@ -1590,8 +1624,13 @@ def py_list_repeat(src, count: int):
         return null()
     out_slot = stack_alloc(8)
     store_ptr(out_slot, 0, out)
+    out_handle_slot = stack_alloc(8)
+    if _prepare_moving_root(out_slot, out_handle_slot, 1) != 0:
+        py_decref(load_ptr(out_slot, 0))
+        return null()
+    src = load_ptr(_native_inputs, 0)
     if _append_snapshot_items(
-        out_slot, src, sl, real_count
+        out_slot, out_handle_slot, src, sl, real_count
     ) != 0:
         py_decref(load_ptr(out_slot, 0))
         return null()
@@ -1695,12 +1734,12 @@ def _list_equality_scan(
     store_ptr(list_slot, 0, lst)
     store_ptr(query_slot, 0, item)
     store_ptr(candidate_slot, 0, null())
-    if _prepare_moving_root(list_slot, list_handle_slot) != 0:
+    if _prepare_moving_root(list_slot, list_handle_slot, 0) != 0:
         return -1 if mode == 1 else 0
-    if _prepare_moving_root(query_slot, query_handle_slot) != 0:
+    if _prepare_moving_root(query_slot, query_handle_slot, 0) != 0:
         _finish_moving_root(list_handle_slot)
         return -1 if mode == 1 else 0
-    candidate_handle = pcc_gc_scheduler_root_register_handle(candidate_slot)
+    candidate_handle = pcc_gc_native_root_bind_range(candidate_slot, 1)
     if ptr_is_null(candidate_handle) != 0:
         _finish_moving_root(query_handle_slot)
         _finish_moving_root(list_handle_slot)
@@ -1730,7 +1769,7 @@ def _list_equality_scan(
                 index,
             )
         if compared < 0:
-            pcc_gc_scheduler_root_unregister_handle(candidate_handle)
+            pcc_gc_native_root_unbind(candidate_handle)
             _finish_moving_root(query_handle_slot)
             _finish_moving_root(list_handle_slot)
             return -1 if mode == 1 else 0
@@ -1738,18 +1777,18 @@ def _list_equality_scan(
             break
         if compared == 1:
             if mode == 0:
-                pcc_gc_scheduler_root_unregister_handle(candidate_handle)
+                pcc_gc_native_root_unbind(candidate_handle)
                 _finish_moving_root(query_handle_slot)
                 _finish_moving_root(list_handle_slot)
                 return 1
             if mode == 1:
-                pcc_gc_scheduler_root_unregister_handle(candidate_handle)
+                pcc_gc_native_root_unbind(candidate_handle)
                 _finish_moving_root(query_handle_slot)
                 _finish_moving_root(list_handle_slot)
                 return index
             total = total + 1
         index = index + 1
-    pcc_gc_scheduler_root_unregister_handle(candidate_handle)
+    pcc_gc_native_root_unbind(candidate_handle)
     _finish_moving_root(query_handle_slot)
     _finish_moving_root(list_handle_slot)
     if mode == 1:
@@ -1757,14 +1796,18 @@ def _list_equality_scan(
     return total
 
 
-@c_abi_export("py_list_contains")
-def py_list_contains(lst, item) -> int:
+@c_abi_export("pcc_list_body_py_list_contains")
+def _native_body_py_list_contains(_native_inputs) -> int:
+    lst = load_ptr(_native_inputs, 0 * 8)
+    item = load_ptr(_native_inputs, 1 * 8)
     if not _list_type_ok(lst, -108):
         return 0
     return _list_equality_scan(lst, item, 0, -1, 0)
 
 
-def _push_to_list(out, v):
+def _push_to_list(out_slot, value_slot, out_handle_slot, value_handle_slot):
+    out = load_ptr(out_slot, 0)
+    v = load_ptr(value_slot, 0)
     # Helper: append v to out with grow-check; return canonical out or NULL.
     if not _list_type_ok(out, -109):
         return null()
@@ -1782,23 +1825,10 @@ def _push_to_list(out, v):
             fast_grown, PYLISTOBJECT_LENGTH_OFFSET, fast_length + 1
         )
         return fast_grown
-    out_slot = stack_alloc(8)
-    out_handle_slot = stack_alloc(8)
-    value_slot = stack_alloc(8)
-    value_handle_slot = stack_alloc(8)
-    store_ptr(out_slot, 0, out)
-    store_ptr(value_slot, 0, v)
-    if _prepare_moving_root(out_slot, out_handle_slot) != 0:
-        return null()
-    if _prepare_moving_root(value_slot, value_handle_slot) != 0:
-        _finish_moving_root(out_handle_slot)
-        return null()
     out = _reload_moving_root(out_slot, out_handle_slot)
     out_len: int = load_i64(out, PYLISTOBJECT_LENGTH_OFFSET)
     grown = _grow_if_needed(out, out_len + 1)
     if ptr_is_null(grown) != 0:
-        _finish_moving_root(value_handle_slot)
-        _finish_moving_root(out_handle_slot)
         return null()
     store_ptr(out_slot, 0, grown)
     store_plan = stack_alloc(128)
@@ -1812,8 +1842,6 @@ def _push_to_list(out, v):
     if not _list_shape_ok(out, -109):
         _list_unlock(locked)
         pcc_gc_store_ptr_plan_finish(store_plan)
-        _finish_moving_root(value_handle_slot)
-        _finish_moving_root(out_handle_slot)
         return null()
     out_items = load_ptr(out, PYLISTOBJECT_ITEMS_OFFSET)
     store_ptr(out_items, out_len * 8, null())
@@ -1824,8 +1852,6 @@ def _push_to_list(out, v):
         store_i64(out, PYLISTOBJECT_LENGTH_OFFSET, out_len + 1)
     _list_unlock(locked)
     pcc_gc_store_ptr_plan_finish(store_plan)
-    _finish_moving_root(value_handle_slot)
-    _finish_moving_root(out_handle_slot)
     return out
 
 
@@ -2007,8 +2033,12 @@ def _list_slice_gc0(lst, lo, hi, step):
     return out
 
 
-@c_abi_export("py_list_slice")
-def py_list_slice(lst, lo, hi, step):
+@c_abi_export("pcc_list_body_py_list_slice")
+def _native_body_py_list_slice(_native_inputs):
+    lst = load_ptr(_native_inputs, 0 * 8)
+    lo = load_ptr(_native_inputs, 1 * 8)
+    hi = load_ptr(_native_inputs, 2 * 8)
+    step = load_ptr(_native_inputs, 3 * 8)
     if not _list_type_ok(lst, -110):
         return null()
     if pcc_gc_backend() == 0:
@@ -2018,7 +2048,7 @@ def py_list_slice(lst, lo, hi, step):
     source_slot = stack_alloc(8)
     source_handle_slot = stack_alloc(8)
     store_ptr(source_slot, 0, lst)
-    if _prepare_moving_root(source_slot, source_handle_slot) != 0:
+    if _prepare_moving_root(source_slot, source_handle_slot, 0) != 0:
         return null()
     lst = _reload_moving_root(source_slot, source_handle_slot)
     length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
@@ -2101,6 +2131,21 @@ def py_list_slice(lst, lo, hi, step):
     if ptr_is_null(out):
         _finish_moving_root(source_handle_slot)
         return null()
+    out_slot = stack_alloc(8)
+    out_handle_slot = stack_alloc(8)
+    value_slot = stack_alloc(8)
+    value_handle_slot = stack_alloc(8)
+    store_ptr(out_slot, 0, out)
+    store_ptr(value_slot, 0, null())
+    store_ptr(value_handle_slot, 0, null())
+    if _prepare_moving_root(out_slot, out_handle_slot, 1) != 0:
+        py_decref(load_ptr(out_slot, 0))
+        _finish_moving_root(source_handle_slot)
+        return null()
+    if (load_i32(global_addr("pcc_gc_backend_selected"), 0) == 3
+            or load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4
+            or load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0):
+        store_ptr(value_handle_slot, 0, pcc_gc_native_root_bind_range(value_slot, -1))
 
     if step_v > 0:
         i: int = lo_v
@@ -2108,10 +2153,14 @@ def py_list_slice(lst, lo, hi, step):
             lst = _reload_moving_root(source_slot, source_handle_slot)
             items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
             v = pcc_gc_load_ptr(lst, ptr_add(items, i * 8))
-            grown_out = _push_to_list(out, v)
+            store_ptr(value_slot, 0, v)
+            grown_out = _push_to_list(out_slot, value_slot, out_handle_slot, value_handle_slot)
             if ptr_is_null(grown_out) != 0:
-                py_decref(out)
+                py_decref(load_ptr(out_slot, 0))
+                store_ptr(out_slot, 0, null())
+                _finish_moving_root(value_handle_slot)
                 _finish_moving_root(source_handle_slot)
+                _finish_moving_root(out_handle_slot)
                 return null()
             out = grown_out
             i = i + step_v
@@ -2125,19 +2174,29 @@ def py_list_slice(lst, lo, hi, step):
                 lst = _reload_moving_root(source_slot, source_handle_slot)
                 items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
                 v = pcc_gc_load_ptr(lst, ptr_add(items, i * 8))
-                grown_out = _push_to_list(out, v)
+                store_ptr(value_slot, 0, v)
+                grown_out = _push_to_list(out_slot, value_slot, out_handle_slot, value_handle_slot)
                 if ptr_is_null(grown_out) != 0:
-                    py_decref(out)
+                    py_decref(load_ptr(out_slot, 0))
+                    store_ptr(out_slot, 0, null())
+                    _finish_moving_root(value_handle_slot)
                     _finish_moving_root(source_handle_slot)
+                    _finish_moving_root(out_handle_slot)
                     return null()
                 out = grown_out
                 i = i + step_v
+    _finish_moving_root(value_handle_slot)
     _finish_moving_root(source_handle_slot)
-    return out
+    _finish_moving_root(out_handle_slot)
+    return load_ptr(out_slot, 0)
 
 
-@c_abi_export("py_list_del_slice")
-def py_list_del_slice(lst, lo, hi, step) -> int:
+@c_abi_export("pcc_list_body_py_list_del_slice")
+def _native_body_py_list_del_slice(_native_inputs) -> int:
+    lst = load_ptr(_native_inputs, 0 * 8)
+    lo = load_ptr(_native_inputs, 1 * 8)
+    hi = load_ptr(_native_inputs, 2 * 8)
+    step = load_ptr(_native_inputs, 3 * 8)
     if not _list_type_ok(lst, -112):
         return -1
     list_slot = stack_alloc(8)
@@ -2152,16 +2211,16 @@ def py_list_del_slice(lst, lo, hi, step) -> int:
     store_ptr(lo_slot, 0, lo)
     store_ptr(hi_slot, 0, hi)
     store_ptr(step_slot, 0, step)
-    if _prepare_moving_root(list_slot, list_handle_slot) != 0:
+    if _prepare_moving_root(list_slot, list_handle_slot, 0) != 0:
         return -1
-    if _prepare_moving_root(lo_slot, lo_handle_slot) != 0:
+    if _prepare_moving_root(lo_slot, lo_handle_slot, 0) != 0:
         _finish_moving_root(list_handle_slot)
         return -1
-    if _prepare_moving_root(hi_slot, hi_handle_slot) != 0:
+    if _prepare_moving_root(hi_slot, hi_handle_slot, 0) != 0:
         _finish_moving_root(lo_handle_slot)
         _finish_moving_root(list_handle_slot)
         return -1
-    if _prepare_moving_root(step_slot, step_handle_slot) != 0:
+    if _prepare_moving_root(step_slot, step_handle_slot, 0) != 0:
         _finish_moving_root(hi_handle_slot)
         _finish_moving_root(lo_handle_slot)
         _finish_moving_root(list_handle_slot)
@@ -2385,8 +2444,8 @@ _LIST_EXTEND_SLOT_BYTES = 8
 
 define_global_i32("pcc_list_extend_borrowed_map", -2)
 define_global_i32("pcc_list_extend_owned_map", 5)
-pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
-pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
+pcc_gc_native_frame_bind_map = extern("pcc_gc_native_frame_bind_map", (c_ptr, c_ptr), c_void)
+pcc_gc_native_frame_unbind_map = extern("pcc_gc_native_frame_unbind_map", (c_ptr,), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_gc_root_copy_borrowed_lease = extern(
     "pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64,
@@ -2423,7 +2482,7 @@ def _list_extend_iterable(destination, source) -> None:
     borrowed = stack_alloc(2 * _LIST_EXTEND_SLOT_BYTES)
     store_ptr(borrowed, 0, destination)
     store_ptr(borrowed, _LIST_EXTEND_SLOT_BYTES, source)
-    pcc_gc_frame_enter(global_addr("pcc_list_extend_borrowed_map"), borrowed)
+    pcc_gc_native_frame_bind_map(global_addr("pcc_list_extend_borrowed_map"), borrowed)
     slots = stack_alloc(_LIST_EXTEND_SLOT_COUNT * _LIST_EXTEND_SLOT_BYTES)
     tokens = stack_alloc(_LIST_EXTEND_SLOT_COUNT * _LIST_EXTEND_SLOT_BYTES)
     memset(slots, 0, _LIST_EXTEND_SLOT_COUNT * _LIST_EXTEND_SLOT_BYTES)
@@ -2431,7 +2490,7 @@ def _list_extend_iterable(destination, source) -> None:
     while index < _LIST_EXTEND_SLOT_COUNT:
         store_i64(tokens, index * _LIST_EXTEND_SLOT_BYTES, -1)
         index = index + 1
-    pcc_gc_frame_enter(global_addr("pcc_list_extend_owned_map"), slots)
+    pcc_gc_native_frame_bind_map(global_addr("pcc_list_extend_owned_map"), slots)
     destination_slot = ptr_add(slots, _LIST_EXTEND_DESTINATION * _LIST_EXTEND_SLOT_BYTES)
     source_slot = ptr_add(slots, _LIST_EXTEND_SOURCE * _LIST_EXTEND_SLOT_BYTES)
     iterator_slot = ptr_add(slots, _LIST_EXTEND_ITERATOR * _LIST_EXTEND_SLOT_BYTES)
@@ -2504,8 +2563,8 @@ def _list_extend_iterable(destination, source) -> None:
             pcc_platform_abort()
             return
     py_tls_exc_swap_slot(error_slot)
-    pcc_gc_frame_leave(slots)
-    pcc_gc_frame_leave(borrowed)
+    pcc_gc_native_frame_unbind_map(slots)
+    pcc_gc_native_frame_unbind_map(borrowed)
 
 
 def _list_extend_source_length(source, tag: int) -> int:
@@ -2627,8 +2686,10 @@ def _list_extend_locked(list_slot, list_handle_slot, source_slot, source_handle_
     return status
 
 
-@c_abi_export("py_list_extend")
-def py_list_extend(a, b) -> None:
+@c_abi_export("pcc_list_body_py_list_extend")
+def _native_body_py_list_extend(_native_inputs) -> None:
+    a = load_ptr(_native_inputs, 0 * 8)
+    b = load_ptr(_native_inputs, 1 * 8)
     if not _list_type_ok(a, -113):
         return
     if ptr_is_null(b):
@@ -2640,10 +2701,10 @@ def py_list_extend(a, b) -> None:
     source_handle_slot = stack_alloc(8)
     store_ptr(list_slot, 0, a)
     store_ptr(source_slot, 0, b)
-    if _prepare_moving_root(list_slot, list_handle_slot) != 0:
+    if _prepare_moving_root(list_slot, list_handle_slot, 0) != 0:
         py_raise_owned(py_exc_new(19, cstr("list extend: out of memory")))
         return
-    if _prepare_moving_root(source_slot, source_handle_slot) != 0:
+    if _prepare_moving_root(source_slot, source_handle_slot, 0) != 0:
         _finish_moving_root(list_handle_slot)
         py_raise_owned(py_exc_new(19, cstr("list extend: out of memory")))
         return
@@ -2677,8 +2738,10 @@ def py_list_extend(a, b) -> None:
     _finish_moving_root(list_handle_slot)
 
 
-@c_abi_export("py_list_insert")
-def py_list_insert(lst, i: int, item) -> None:
+@c_abi_export("pcc_list_body_py_list_insert")
+def _native_body_py_list_insert(_native_inputs, i: int) -> None:
+    lst = load_ptr(_native_inputs, 0 * 8)
+    item = load_ptr(_native_inputs, 1 * 8)
     if not _list_type_ok(lst, -119):
         return
     list_slot = stack_alloc(8)
@@ -2687,10 +2750,10 @@ def py_list_insert(lst, i: int, item) -> None:
     item_handle_slot = stack_alloc(8)
     store_ptr(list_slot, 0, lst)
     store_ptr(item_slot, 0, item)
-    if _prepare_moving_root(list_slot, list_handle_slot) != 0:
+    if _prepare_moving_root(list_slot, list_handle_slot, 0) != 0:
         py_raise_owned(py_exc_new(19, cstr("list insert: out of memory")))
         return
-    if _prepare_moving_root(item_slot, item_handle_slot) != 0:
+    if _prepare_moving_root(item_slot, item_handle_slot, 0) != 0:
         _finish_moving_root(list_handle_slot)
         py_raise_owned(py_exc_new(19, cstr("list insert: out of memory")))
         return
@@ -2752,18 +2815,19 @@ def py_list_insert(lst, i: int, item) -> None:
     _finish_moving_root(list_handle_slot)
 
 
-@c_abi_export("py_list_pop")
-def py_list_pop(lst, i: int):
+@c_abi_export("pcc_list_body_py_list_pop")
+def _native_body_py_list_pop(_native_inputs, i: int):
+    lst = load_ptr(_native_inputs, 0 * 8)
     if not _list_type_ok(lst, -120):
         return null()
     list_slot = stack_alloc(8)
     list_handle_slot = stack_alloc(8)
     store_ptr(list_slot, 0, lst)
-    if _prepare_moving_root(list_slot, list_handle_slot) != 0:
+    if _prepare_moving_root(list_slot, list_handle_slot, 0) != 0:
         return null()
     result_slot = stack_alloc(8)
     store_ptr(result_slot, 0, null())
-    result_handle = pcc_gc_scheduler_root_register_handle(result_slot)
+    result_handle = pcc_gc_native_root_bind_range(result_slot, 1)
     if ptr_is_null(result_handle) != 0:
         _finish_moving_root(list_handle_slot)
         return null()
@@ -2772,13 +2836,13 @@ def py_list_pop(lst, i: int):
     lst = _reload_moving_root(list_slot, list_handle_slot)
     if not _list_shape_ok(lst, -120):
         _list_unlock(locked)
-        pcc_gc_scheduler_root_unregister_handle(result_handle)
+        pcc_gc_native_root_unbind(result_handle)
         _finish_moving_root(list_handle_slot)
         return null()
     length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
     if length == 0:
         _list_unlock(locked)
-        pcc_gc_scheduler_root_unregister_handle(result_handle)
+        pcc_gc_native_root_unbind(result_handle)
         _finish_moving_root(list_handle_slot)
         py_raise_owned(py_exc_new(5, cstr("pop from empty list")))  # PY_EXC_INDEXERROR
         return null()
@@ -2789,7 +2853,7 @@ def py_list_pop(lst, i: int):
         idx = _normalize_index(i, length, 0)
         if idx < 0:
             _list_unlock(locked)
-            pcc_gc_scheduler_root_unregister_handle(result_handle)
+            pcc_gc_native_root_unbind(result_handle)
             _finish_moving_root(list_handle_slot)
             py_raise_owned(py_exc_new(5, cstr("pop index out of range")))  # PY_EXC_INDEXERROR
             return null()
@@ -2803,7 +2867,7 @@ def py_list_pop(lst, i: int):
     store_i64(lst, PYLISTOBJECT_LENGTH_OFFSET, length - 1)
     _list_unlock(locked)
     _finish_moving_root(list_handle_slot)
-    pcc_gc_scheduler_root_unregister_handle(result_handle)
+    pcc_gc_native_root_unbind(result_handle)
     return load_ptr(result_slot, 0)
 
 
@@ -2876,8 +2940,10 @@ def _list_remove_simple_locked(list_slot, list_handle_slot, query_slot, query_ha
     return result
 
 
-@c_abi_export("py_list_remove")
-def py_list_remove(lst, item) -> None:
+@c_abi_export("pcc_list_body_py_list_remove")
+def _native_body_py_list_remove(_native_inputs) -> None:
+    lst = load_ptr(_native_inputs, 0 * 8)
+    item = load_ptr(_native_inputs, 1 * 8)
     if not _list_type_ok(lst, -121):
         return
     list_slot = stack_alloc(8)
@@ -2888,12 +2954,12 @@ def py_list_remove(lst, item) -> None:
     store_ptr(list_slot, 0, lst)
     store_ptr(query_slot, 0, item)
     store_ptr(candidate_slot, 0, null())
-    if _prepare_moving_root(list_slot, list_handle_slot) != 0:
+    if _prepare_moving_root(list_slot, list_handle_slot, 0) != 0:
         return
-    if _prepare_moving_root(query_slot, query_handle_slot) != 0:
+    if _prepare_moving_root(query_slot, query_handle_slot, 0) != 0:
         _finish_moving_root(list_handle_slot)
         return
-    candidate_handle = pcc_gc_scheduler_root_register_handle(candidate_slot)
+    candidate_handle = pcc_gc_native_root_bind_range(candidate_slot, 1)
     if ptr_is_null(candidate_handle) != 0:
         _finish_moving_root(query_handle_slot)
         _finish_moving_root(list_handle_slot)
@@ -2904,14 +2970,14 @@ def py_list_remove(lst, item) -> None:
         list_slot, list_handle_slot, query_slot, query_handle_slot, candidate_slot
     )
     if simple < 0:
-        pcc_gc_scheduler_root_unregister_handle(candidate_handle)
+        pcc_gc_native_root_unbind(candidate_handle)
         _finish_moving_root(query_handle_slot)
         _finish_moving_root(list_handle_slot)
         return
     if simple == 1:
         _finish_moving_root(query_handle_slot)
         _finish_moving_root(list_handle_slot)
-        pcc_gc_scheduler_root_unregister_handle(candidate_handle)
+        pcc_gc_native_root_unbind(candidate_handle)
         removed = load_ptr(candidate_slot, 0)
         if ptr_is_null(removed) == 0:
             py_decref(removed)
@@ -2932,7 +2998,7 @@ def py_list_remove(lst, item) -> None:
             1,
         )
         if compared < 0:
-            pcc_gc_scheduler_root_unregister_handle(candidate_handle)
+            pcc_gc_native_root_unbind(candidate_handle)
             _finish_moving_root(query_handle_slot)
             _finish_moving_root(list_handle_slot)
             return
@@ -2971,13 +3037,13 @@ def py_list_remove(lst, item) -> None:
         if matched != 0:
             _finish_moving_root(query_handle_slot)
             _finish_moving_root(list_handle_slot)
-            pcc_gc_scheduler_root_unregister_handle(candidate_handle)
+            pcc_gc_native_root_unbind(candidate_handle)
             removed = load_ptr(candidate_slot, 0)
             if ptr_is_null(removed) == 0:
                 py_decref(removed)
             return
         index = 0
-    pcc_gc_scheduler_root_unregister_handle(candidate_handle)
+    pcc_gc_native_root_unbind(candidate_handle)
     _finish_moving_root(query_handle_slot)
     _finish_moving_root(list_handle_slot)
     # Not found: raise ValueError (private exception-table tag 2; 12 is
@@ -2985,15 +3051,16 @@ def py_list_remove(lst, item) -> None:
     py_raise_owned(py_exc_new(2, cstr("list.remove(x): x not in list")))
 
 
-@c_abi_export("py_list_clear")
-def py_list_clear(lst) -> None:
+@c_abi_export("pcc_list_body_py_list_clear")
+def _native_body_py_list_clear(_native_inputs) -> None:
+    lst = load_ptr(_native_inputs, 0 * 8)
     if not _list_type_ok(lst, -122):
         return
 
     list_slot = stack_alloc(8)
     list_handle_slot = stack_alloc(8)
     store_ptr(list_slot, 0, lst)
-    if _prepare_moving_root(list_slot, list_handle_slot) != 0:
+    if _prepare_moving_root(list_slot, list_handle_slot, 0) != 0:
         return
     backend: int = pcc_gc_backend()
     attempt: int = 0
@@ -3102,20 +3169,19 @@ def py_obj_clear(obj) -> None:
         py_decref(result)
 
 
-@c_abi_export("py_list_index")
-def py_list_index(lst, item) -> int:
+@c_abi_export("pcc_list_body_py_list_index")
+def _native_body_py_list_index(_native_inputs) -> int:
+    lst = load_ptr(_native_inputs, 0 * 8)
+    item = load_ptr(_native_inputs, 1 * 8)
     if not _list_type_ok(lst, -123):
         return -1
     return _list_equality_scan(lst, item, 0, -1, 1)
 
 
-@c_abi_export("py_list_index_range")
-def py_list_index_range(lst, item, start: int, end: int) -> int:
-    # Range-aware list.index(item, start, end). Negative bounds offset by the
-    # length once, then both clamp into [0, length]; the half-open window
-    # [start, end) is scanned. Raise ValueError (PY_EXC_VALUEERROR == 2) and
-    # return -1 when absent, matching CPython list.index. The frontend checks
-    # py_err_occurred() after the call.
+@c_abi_export("pcc_list_body_py_list_index_range")
+def _native_body_py_list_index_range(_native_inputs, start: int, end: int) -> int:
+    lst = load_ptr(_native_inputs, 0 * 8)
+    item = load_ptr(_native_inputs, 1 * 8)
     length: int = 0
     if _list_type_ok(lst, -126):
         length = py_list_len(lst)
@@ -3141,21 +3207,24 @@ def py_list_index_range(lst, item, start: int, end: int) -> int:
     return -1
 
 
-@c_abi_export("py_list_count")
-def py_list_count(lst, item) -> int:
+@c_abi_export("pcc_list_body_py_list_count")
+def _native_body_py_list_count(_native_inputs) -> int:
+    lst = load_ptr(_native_inputs, 0 * 8)
+    item = load_ptr(_native_inputs, 1 * 8)
     if not _list_type_ok(lst, -124):
         return 0
     return _list_equality_scan(lst, item, 0, -1, 2)
 
 
-@c_abi_export("py_list_reverse")
-def py_list_reverse(lst) -> None:
+@c_abi_export("pcc_list_body_py_list_reverse")
+def _native_body_py_list_reverse(_native_inputs) -> None:
+    lst = load_ptr(_native_inputs, 0 * 8)
     if not _list_type_ok(lst, -125):
         return
     list_slot = stack_alloc(8)
     list_handle_slot = stack_alloc(8)
     store_ptr(list_slot, 0, lst)
-    if _prepare_moving_root(list_slot, list_handle_slot) != 0:
+    if _prepare_moving_root(list_slot, list_handle_slot, 0) != 0:
         return
     # Reversal permutes the owners already in the array: no count changes,
     # and one graph transaction, so a concurrent pop or insert sees the

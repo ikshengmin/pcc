@@ -42,7 +42,8 @@ class _ExtensionModel:
             'store_ptr': self.store, 'store_i64': self.store,
             'global_addr': lambda name: -2 if 'borrowed' in name else 5,
             'cstr': lambda value: value,
-            'pcc_gc_frame_enter': self.enter, 'pcc_gc_frame_leave': self.leave,
+            'pcc_gc_native_frame_bind_map': self.enter,
+            'pcc_gc_native_frame_unbind_map': self.leave,
             'pcc_gc_root_copy_borrowed_lease': self.copy,
             'pcc_gc_foreign_lease_acquire': self.acquire,
             'pcc_gc_foreign_lease_release': self.release,
@@ -119,10 +120,8 @@ class _ExtensionModel:
         if count > 0:
             assert all(self.load(base, index * 8) is None for index in range(count))
         self.frames[base] = count
-        self.boundary()
 
     def leave(self, base):
-        self.boundary()
         assert all(self.load(base, index * 8) is None for index in range(abs(self.frames[base])))
         self.frames.pop(base)
 

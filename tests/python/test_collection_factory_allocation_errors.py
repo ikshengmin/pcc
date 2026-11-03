@@ -10,6 +10,13 @@ class ListFactoryModel:
     def __init__(self, failure, pending, relocate):
         self.failure, self.pending, self.relocate = failure, pending, relocate
         self.memory, self.frames, self.leases, self.refs = {}, {}, {}, {}
+        self.native_frames, self.native_owners = [], {}
+        self.no_park_depth = 0
+        self.global_words = {
+            'pcc_gc_config_initialized': 1,
+            'pcc_gc_backend_selected': 4,
+            'pcc_gc_backend0_frame_roots_enabled': 0,
+        }
         self.pins, self.objects = set(), set()
         self.fresh = None
         self.next_address = 10000
@@ -22,10 +29,15 @@ class ListFactoryModel:
             'PY_FLAG_GC_PINNED': 64,
             'null': lambda: None, 'ptr_is_null': lambda value: value is None,
             'stack_alloc': self.stack, 'memset': self.zero,
-            'global_addr': lambda name: 2, 'ptr_add': lambda base, offset: base + offset,
+            'global_addr': self.global_address, 'ptr_add': lambda base, offset: base + offset,
             'store_ptr': self.store, 'store_i64': self.store,
             'load_ptr': self.load, 'load_i64': self.load, 'load_i32': self.load,
-            'pcc_gc_frame_enter': self.enter, 'pcc_gc_frame_leave': self.leave,
+            'pcc_thread_no_park_enter': self.no_park_enter,
+            'pcc_thread_no_park_exit': self.no_park_exit,
+            'pcc_gc_native_frame_enter': self.native_enter,
+            'pcc_gc_native_frame_leave': self.native_leave,
+            'pcc_gc_native_frame_bind_map': self.native_bind_map,
+            'pcc_gc_native_frame_unbind_map': self.native_unbind_map,
             'pcc_gc_alloc': self.allocate, 'malloc': self.malloc,
             'pcc_gc_foreign_lease_acquire': self.acquire,
             'pcc_gc_foreign_lease_release': self.release,
@@ -46,9 +58,50 @@ class ListFactoryModel:
         }
         _functions(
             RUNTIME / 'py_list.py',
-            {'py_list_new', '_list_allocate_unpublished', '_list_factory_finish'},
+            {'_native_body_py_list_new', '_list_allocate_unpublished', '_list_factory_finish'},
             self.ns,
         )
+        # Execute the actual public no-poll entry, explicitly wired to its
+        # exported body. The model does not rename/bypass the wrapper.
+        self.ns['pcc_list_body_py_list_new'] = self.ns['_native_body_py_list_new']
+        _functions(RUNTIME / 'py_list_native_entry.py', {'py_list_new'}, self.ns)
+
+    def global_address(self, name):
+        return {'pcc_list_factory_owned_map': 2,
+                'pcc_list_construction_error_map': 1}.get(name, name)
+
+    def no_park_enter(self):
+        self.no_park_depth += 1
+
+    def no_park_exit(self):
+        assert self.no_park_depth > 0
+        self.no_park_depth -= 1
+        if self.no_park_depth == 0:
+            self.boundary()
+
+    def native_enter(self, frame, ranges, capacity):
+        assert self.no_park_depth > 0 and capacity == 8
+        self.native_frames.append(frame)
+        return 0
+
+    def native_leave(self, frame):
+        assert self.native_frames[-1] == frame
+        assert frame not in self.native_owners.values()
+        self.native_frames.pop()
+        return 0
+
+    def native_bind_map(self, count, base):
+        if self.global_words['pcc_gc_backend_selected'] == 0:
+            return  # These models keep GC0's optional frame roots disabled.
+        assert self.native_frames and base not in self.native_owners
+        self.frames[base] = count
+        self.native_owners[base] = self.native_frames[-1]
+
+    def native_unbind_map(self, base):
+        if self.global_words['pcc_gc_backend_selected'] == 0:
+            return
+        self.frames.pop(base)
+        self.native_owners.pop(base)
 
     def stack(self, size):
         self.next_address += 1000
@@ -59,6 +112,7 @@ class ListFactoryModel:
             self.memory[ptr + offset] = None
 
     def boundary(self):
+        assert self.no_park_depth == 0, 'native publication must not poll'
         assert self.fresh is None, 'NEW header crossed runtime boundary before root publication'
         for obj in self.objects:
             self.check_shape(obj)
@@ -83,6 +137,8 @@ class ListFactoryModel:
         assert obj + 32 in self.memory, 'collector-visible shape is uninitialized'
 
     def load(self, ptr, offset):
+        if isinstance(ptr, str):
+            return self.global_words.get(ptr, 0)
         return self.memory.get(ptr + offset)
 
     def store(self, ptr, offset, value):

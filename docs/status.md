@@ -132,6 +132,39 @@ gains. The remaining scheduler-root-list spin lock is a separate protocol,
 not included in this graph-entry counter. Raw packets, exact identities and
 rankings remain outside Git. The new seven-pair scaling acceptance is unrun.
 
+The native-handle batch on `6d8e9979e` replaces list-operation temporary root
+registration with caller-owned frames linked from the current thread record.
+Thirty-one public list entries capture borrowed inputs before their first
+possible poll; local binding/removal does not allocate registry nodes, acquire
+the graph/root-list locks, update the global root revision or request a cycle.
+Collectors visit these ranges within a stopped-world cut, including parked
+threads; compiled stackmaps remain a separate root source. Owned and borrowed
+slots use distinct healing semantics. GC3 admits its complete promotion step
+under the same stop, and preserves the nongated-thread movement restriction.
+GC0 retains RC and the existing disabled-frame-root bypass where applicable.
+This is the first structural root-registration batch; other root users,
+buffered barriers, local mark work and carrier allocation remain unfinished.
+
+Local Mac focused evidence uses the owned runtime archive SHA256
+`9d04886ba540015e0c3da80aef45c7aa215ccec007ac229e2f2442fed9619b0a`.
+`tests/python/test_native_root_frames.py` executes local-range lifetime/abort
+checks, another thread's parked-stack rewrites, and GC3 owned/borrowed healing.
+Run its three nodes separately under the original 90-second/1-GiB guard;
+compiling all three concurrently exceeded that cap. Source/body file shards
+pass 335 getter cases, 57 iterator-extension cases, 48 allocation/ownership
+cases, plus store/growth, raw-symbol closure and no-poll module checks.
+`test_gc0_list_scalar_reads.py` and the fresh-instance append regression execute
+the changed list paths on all five collectors. The GC4 count-free value and
+weakref/finalizer/resurrection integrations pass, as does the five-GC owned
+list-construction integration through host pcc0 and the owned native backend.
+The original request objects
+also relink to the new runtime; this is not new-source application compilation.
+No new throughput acceptance, whole suite or bootstrap is claimed. Optional
+stackmap-diff diagnostics still inventory only legacy registered ranges and
+must not be used as complete native-frame coverage evidence. The existing
+four-bucket GC slice histogram is not outer-STW p99, and RSS is not peak heap;
+the required seven-pair packet still needs those correctly scoped metrics.
+
 A backend-setter startup race found during that review is independently
 repaired: a setter rechecks count-free mode after taking the graph lock, so
 configuration completing after its optimistic check cannot change the now

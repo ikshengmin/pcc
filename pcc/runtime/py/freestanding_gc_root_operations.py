@@ -408,8 +408,8 @@ def pcc_gc_mark_root_gray_if_known(obj) -> None:
     pcc_gc_set_mark_color(obj, 16)
 
 
-@c_abi_export("pcc_gc_resolve_root_slot_unlocked")
-def pcc_gc_resolve_root_slot_unlocked(slot_base, slot_offset: i64):
+@c_abi_export("pcc_gc_resolve_root_slot_mode")
+def _resolve_root_slot_mode(slot_base, slot_offset: i64, borrowed: i64):
     value = load_ptr(slot_base, slot_offset)
     if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
         return value
@@ -433,7 +433,7 @@ def pcc_gc_resolve_root_slot_unlocked(slot_base, slot_offset: i64):
                 ptr_is_null(resolved_unknown) == 0
                 and ptr_eq(resolved_unknown, value) == 0
             ):
-                if load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4:
+                if borrowed != 0 or load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4:
                     store_ptr(slot_base, slot_offset, resolved_unknown)
                     return resolved_unknown
                 py_incref(resolved_unknown)
@@ -452,13 +452,25 @@ def pcc_gc_resolve_root_slot_unlocked(slot_base, slot_offset: i64):
     if ptr_is_null(resolved) != 0 or ptr_eq(resolved, value) != 0:
         store_i32(value, 12, flags & ~2048)
         return value
-    if load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4:
+    if borrowed != 0 or load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4:
         store_ptr(slot_base, slot_offset, resolved)
         return resolved
     py_incref(resolved)
     store_ptr(slot_base, slot_offset, resolved)
     py_decref(value)
     return resolved
+
+
+@c_abi_export("pcc_gc_resolve_root_slot_unlocked")
+def pcc_gc_resolve_root_slot_unlocked(slot_base, slot_offset: i64):
+    return _resolve_root_slot_mode(slot_base, slot_offset, 0)
+
+
+@c_abi_export("pcc_gc_resolve_borrowed_root_slot_unlocked")
+def pcc_gc_resolve_borrowed_root_slot_unlocked(slot_base, slot_offset: i64):
+    # Resolve only an existing forwarding edge. A borrowed alias does not
+    # own a reference to transfer, and a gray/rewrite visit must not oldify.
+    return _resolve_root_slot_mode(slot_base, slot_offset, 1)
 
 
 # Foreign-address leases are separate from legacy Boolean pin/unpin. The slot

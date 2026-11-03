@@ -1,6 +1,7 @@
 """Execute runtime getter producers with relocation at their actual park gates."""
 
 import ast
+from functools import cache
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,21 @@ from test_exception_constructor_roots import _Object, _Slots
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+@cache
+def _production_body_code(relative):
+    """Share immutable production code, keeping each case's memory independent."""
+    path = ROOT / relative
+    parsed = ast.parse(path.read_text(), filename=str(path))
+    functions = [
+        node for node in parsed.body
+        if isinstance(node, ast.FunctionDef)
+        or (isinstance(node, ast.Assign) and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name) and node.targets[0].id.isupper()
+            and isinstance(node.value, (ast.Constant, ast.UnaryOp, ast.BinOp)))
+    ]
+    return compile(ast.Module(body=functions, type_ignores=[]), str(path), "exec")
 
 
 class _FieldWord:
@@ -34,6 +50,8 @@ class _GetterMemory:
         self.backend, self.phase, self.fail_register = backend, phase, fail_register
         self.objects, self.payloads, self.handles, self.forward = [], [], {}, {}
         self.depth = self.moves = self.pins = self.registrations = 0
+        self.no_park_depth = 0
+        self.native_frames, self.native_ranges = [], {}
         self.error = None
         self.globals = {}
         self.item = self.make(abi.PY_TYPE_STR, abi.PY_FLAG_GC_PINNED if prior_pin else 0)
@@ -46,20 +64,17 @@ class _GetterMemory:
                                 abi.PYLISTOBJECT_ITEMS_OFFSET: self.items})
         self.namespace = self._namespace()
         self.load("pcc/runtime/py/py_list.py")
+        for name in ("py_list_get", "py_list_getitem", "py_list_get_for_frame"):
+            self.namespace["pcc_list_body_" + name] = self.namespace["_native_body_" + name]
+        self.load("pcc/runtime/py/py_list_native_entry.py")
+        self.namespace["_prepare_moving_root"] = self.namespace["pcc_list_native_prepare_root"]
+        self.global_cell("pcc_gc_config_initialized").fields[0] = 1
+        self.global_cell("pcc_gc_backend_selected").fields[0] = backend
 
     def load(self, relative):
-        path = ROOT / relative
-        parsed = ast.parse(path.read_text(), filename=str(path))
         # Functions plus the module's constant assignments they read (for
         # example py_class's _INSTANCE_LOOKUP_VARS); nothing else executes.
-        functions = [
-            node for node in parsed.body
-            if isinstance(node, ast.FunctionDef)
-            or (isinstance(node, ast.Assign) and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name) and node.targets[0].id.isupper()
-                and isinstance(node.value, (ast.Constant, ast.UnaryOp, ast.BinOp)))
-        ]
-        exec(compile(ast.Module(body=functions, type_ignores=[]), str(path), "exec"), self.namespace)
+        exec(_production_body_code(relative), self.namespace)
 
     def global_cell(self, name):
         # A data-segment global starts zeroed: the backend is not yet
@@ -110,7 +125,7 @@ class _GetterMemory:
         value.fields[offset] = item
 
     def gc(self, phase):
-        if self.depth or phase != self.phase or self.backend not in (3, 4):
+        if self.depth or self.no_park_depth or phase != self.phase or self.backend not in (3, 4):
             return
         for old in list(self.objects):
             if not old.alive or old.flags & (abi.PY_FLAG_IMMORTAL | abi.PY_FLAG_GC_PINNED):
@@ -135,6 +150,52 @@ class _GetterMemory:
                 self.lst = new
             old.alive = False
             self.moves += 1
+
+    def no_park_enter(self):
+        self.no_park_depth += 1
+
+    def no_park_exit(self):
+        assert self.no_park_depth > 0
+        self.no_park_depth -= 1
+        if self.no_park_depth == 0:
+            self.gc("no_park_exit")
+
+    def native_enter(self, frame, ranges, capacity):
+        assert self.no_park_depth > 0 and capacity == 8
+        self.native_frames.append(frame)
+        return 0
+
+    def native_bind(self, slots, count):
+        # Local bindings cannot allocate/fail or introduce a parking edge.
+        assert self.native_frames and count != 0
+        token = object()
+        self.native_ranges[token] = (self.native_frames[-1], abs(count))
+        for index in range(abs(count)):
+            self.handles[(token, index)] = self.add(slots, index * 8)
+        return token
+
+    def native_unbind(self, token):
+        if token is None:
+            return
+        _frame, count = self.native_ranges.pop(token)
+        for index in range(count):
+            del self.handles[(token, index)]
+
+    def native_leave(self, frame):
+        assert self.native_frames[-1] is frame
+        for token, (owner, _count) in list(self.native_ranges.items()):
+            if owner is frame:
+                self.native_unbind(token)
+        self.native_frames.pop()
+        return 0
+
+    def root_read(self, owner, slot):
+        self.gc("read_barrier")
+        return self.read(*self.pointer(slot))
+
+    def zero(self, slots, value, size):
+        for offset in range(0, size, 8):
+            self.write(slots, offset, value)
 
     def register(self, slot):
         self.registrations += 1
@@ -202,13 +263,19 @@ class _GetterMemory:
             "ptr_is_null": lambda value: value is None,
             "is_tagged_int": lambda value: isinstance(value, int),
             "ptr_eq": lambda first, second: first is second,
-            "ptr_add": self.add, "stack_alloc": _Slots,
+            "ptr_add": self.add, "stack_alloc": _Slots, "memset": self.zero,
+            "pcc_thread_no_park_enter": self.no_park_enter,
+            "pcc_thread_no_park_exit": self.no_park_exit,
+            "pcc_gc_native_frame_enter": self.native_enter,
+            "pcc_gc_native_frame_leave": self.native_leave,
+            "pcc_gc_native_root_bind_range": self.native_bind,
+            "pcc_gc_native_root_unbind": self.native_unbind,
             "load_ptr": self.read, "load_i64": self.read, "load_i32": self.read,
             "global_addr": self.global_cell,
             "atomic_load_i64": lambda value, offset, _order: _FieldWord(self.read(value, offset)),
             "int_to_ptr": lambda word: word.value if isinstance(word, _FieldWord) else word,
-            "store_ptr": self.write,
-            "pcc_gc_load_ptr": lambda _owner, slot: self.read(*self.pointer(slot)),
+            "store_ptr": self.write, "store_i64": self.write,
+            "pcc_gc_load_ptr": self.root_read,
             "pcc_gc_pointer_is_managed": lambda value: isinstance(value, _Object) and value.alive,
             "pcc_gc_backend": lambda: self.backend,
             "pcc_gc_scheduler_root_register_handle": self.register,
@@ -231,13 +298,14 @@ class _GetterMemory:
 
 @pytest.mark.parametrize("name", ("py_list_get", "py_list_getitem", "py_list_get_for_frame"))
 @pytest.mark.parametrize("backend", (3, 4))
-@pytest.mark.parametrize("phase", ("graph_unlock", "retain_finish", "unregister"))
+@pytest.mark.parametrize("phase", ("graph_unlock", "retain_finish", "no_park_exit", "read_barrier"))
 def test_list_getter_returns_current_owned_element_after_actual_cleanup_park(name, backend, phase):
     memory = _GetterMemory(backend=backend, phase=phase)
     result = memory.namespace[name](memory.lst, 0)
     assert result is memory.item and result.alive
     assert result.references == 2
     assert memory.moves > 0
+    assert not memory.native_frames and not memory.native_ranges
     assert not memory.handles and memory.depth == 0 and memory.pins == 0
 
 
@@ -248,6 +316,7 @@ def test_list_getter_nonmoving_paths_keep_reference_contract(name, backend):
     result = memory.namespace[name](memory.lst, 0)
     assert result is memory.item
     assert result.references == (1 if backend == 0 and name == "py_list_get_for_frame" else 2)
+    assert not memory.native_frames and not memory.native_ranges
     assert not memory.handles and not memory.moves and not memory.pins
 
 
@@ -257,6 +326,7 @@ def test_list_getter_restores_existing_pin(name):
     result = memory.namespace[name](memory.lst, 0)
     assert result is memory.item and result.flags & abi.PY_FLAG_GC_PINNED
     assert result.references == 2
+    assert not memory.native_frames and not memory.native_ranges
     assert not memory.handles and not memory.pins
 
 
@@ -267,15 +337,18 @@ def test_list_getter_null_and_tagged_elements_need_no_pin(name, backend, value):
     memory = _GetterMemory(backend=backend)
     memory.items.fields[0] = value
     assert memory.namespace[name](memory.lst, -1) == value
+    assert not memory.native_frames and not memory.native_ranges
     assert not memory.handles and not memory.pins and memory.error is None
 
 
 @pytest.mark.parametrize("name", ("py_list_get", "py_list_getitem", "py_list_get_for_frame"))
 @pytest.mark.parametrize("failed_root", (1, 2))
-def test_list_getter_registration_failure_does_not_acquire_element_owner(name, failed_root):
+def test_list_getter_ignores_legacy_registry_allocation_failure(name, failed_root):
     memory = _GetterMemory(fail_register=failed_root)
-    assert memory.namespace[name](memory.lst, 0) is None
-    assert memory.item.references == 1
+    result = memory.namespace[name](memory.lst, 0)
+    assert result is memory.item and result.alive and result.references == 2
+    assert memory.registrations == 0, 'local frames must not allocate registry nodes'
+    assert not memory.native_frames and not memory.native_ranges
     assert not memory.handles and not memory.pins
 
 
@@ -284,6 +357,7 @@ def test_list_getter_out_of_range_balances_roots_and_keeps_raising_contract(name
     memory = _GetterMemory()
     assert memory.namespace[name](memory.lst, 1) is None
     assert memory.item.references == 1
+    assert not memory.native_frames and not memory.native_ranges
     assert not memory.handles and not memory.pins
     assert memory.error == ((5, "list index out of range") if name == "py_list_getitem" else None)
 

@@ -152,12 +152,6 @@ def pcc_gc_step(budget: i64) -> i64:
         if pcc_stop_the_world() != 0:
             return 0
         acquired_world = 1
-    if backend == 3 and load_i32(
-        global_addr("pcc_gc_backend4_no_refcounts"), 0
-    ) != 0:
-        # Young copying can precede a major mark. Refresh current raw roots
-        # without starting/restarting the marking state machine.
-        pcc_gc_pin_conservative_thread_roots()
     if load_i32(global_addr("pcc_gc_explicit_collect_active"), 0) == 0:
         # Stack-map step 3: automatic steps run where an allocation triggered
         # them; compare that stack's mapped roots with the registered ones
@@ -173,6 +167,7 @@ def pcc_gc_step(budget: i64) -> i64:
     processed: i64 = 0
 
     if backend == 3:
+        oldify_suspended: i64 = load_i32(global_addr("pcc_gc_backend3_oldify_suspended"), 0)
         # Oldification copies a young object to a new address. As for GC4
         # relocation, every other mutator must be parked at an application
         # gate: one parked inside runtime code may hold raw pointers no root
@@ -191,7 +186,7 @@ def pcc_gc_step(budget: i64) -> i64:
             and _tracing_work_pending() != 0
         ):
             processed = processed + pcc_gc_tracing_step_cycle(budget - processed)
-        store_i32(global_addr("pcc_gc_backend3_oldify_suspended"), 0, 0)
+        store_i32(global_addr("pcc_gc_backend3_oldify_suspended"), 0, oldify_suspended)
     elif backend == 4:
         if load_i32(global_addr("pcc_gc_explicit_collect_active"), 0) != 0:
             # Store-buffer entries own a reference to their recorded value. An

@@ -78,8 +78,8 @@ def _grow(backend):
         "_ptr_is_list": lambda pointer: True,
         "_debug_bad_container": lambda pointer, code: None,
         "stack_alloc": lambda size: 1 << 16,
-        "pcc_gc_scheduler_root_register_handle": lambda slot: 7,
-        "pcc_gc_scheduler_root_unregister_handle": lambda handle: None,
+        "pcc_gc_native_root_bind_range": lambda slot, count: 7 if count == -1 else pytest.fail("growth input must be borrowed"),
+        "pcc_gc_native_root_unbind": lambda handle: None,
         "pcc_py_gc_minor_graph_lock": lambda: memory.calls.append(("lock",)),
         "pcc_py_gc_minor_graph_unlock": lambda: memory.calls.append(("unlock",)),
         # The list's transaction lock (container or graph lock).

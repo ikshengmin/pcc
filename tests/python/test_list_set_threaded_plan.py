@@ -52,7 +52,8 @@ class StoreModel:
     def store(self, pointer, offset, value):
         self.memory[pointer + offset] = value
 
-    def prepare(self, slot, handle):
+    def prepare(self, slot, handle, owned):
+        assert owned == 0, "list replacement inputs are borrowed"
         self.store(handle, 0, 0)
         return 0
 

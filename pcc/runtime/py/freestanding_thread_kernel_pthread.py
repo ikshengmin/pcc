@@ -39,6 +39,7 @@ from pcc.unsafe import (
     load_ptr,
     malloc,
     memcpy,
+    memset,
     null,
     ptr_add,
     ptr_is_null,
@@ -105,7 +106,8 @@ _THREAD_ROOT_BYTES: int = 56
 _THREAD_ROOT_CAPACITY: int = 64
 _THREAD_ROOT_REGISTERS: int = 80
 _THREAD_ROOT_REGISTER_BYTES: int = 128
-_THREAD_RECORD_BYTES: int = 208
+_THREAD_NATIVE_FRAME_HEAD: int = 208
+_THREAD_RECORD_BYTES: int = 216
 
 # Only contended acquisitions use these cold structures. A context is keyed by
 # the actual lock-word address, not a hash bucket: unrelated lock critical
@@ -599,6 +601,7 @@ def _thread_record_link(thread_id: int) -> None:
     store_ptr(record, _THREAD_ROOT_DATA, null())
     store_i64(record, _THREAD_ROOT_BYTES, 0)
     store_i64(record, _THREAD_ROOT_CAPACITY, 0)
+    store_ptr(record, _THREAD_NATIVE_FRAME_HEAD, null())
     global_store_ptr("pcc_thread_records_head_py", record)
     global_store_ptr("pcc_tls_thread_record_py", record)
 
@@ -607,6 +610,9 @@ def _thread_record_unlink() -> None:
     # Caller holds the world lock and is leaving the live set.
     record = global_load_ptr("pcc_tls_thread_record_py")
     if ptr_is_null(record):
+        return
+    if ptr_is_null(load_ptr(record, _THREAD_NATIVE_FRAME_HEAD)) == 0:
+        pcc_platform_abort()
         return
     global_store_ptr("pcc_tls_thread_record_py", null())
     previous = null()
@@ -1583,7 +1589,19 @@ def pcc_thread_unregister_current() -> None:
         return
     if _tls_i64(global_addr("pcc_tls_thread_id_py")) == 0:
         return
-    # The owner must finish the active stop before leaving the live set.  This
+    # Exited threads are excluded from the stop's live-running set. They must
+    # complete their original blocking_leave token before cleanup or detach;
+    # otherwise a stopped-world visitor could read their disappearing stack.
+    # A running thread remains counted through cleanup and cannot disappear
+    # after the collector has completed its stop admission.
+    if pcc_thread_is_running() == 0:
+        pcc_platform_abort()
+        return
+    record = global_load_ptr("pcc_tls_thread_record_py")
+    if ptr_is_null(load_ptr(record, _THREAD_NATIVE_FRAME_HEAD)) == 0:
+        pcc_platform_abort()
+        return
+    # The owner must finish the active stop before leaving the live set. This
     # check precedes exception/buffer cleanup because either can decref and
     # reenter runtime code.
     if pcc_thread_owns_stopped_world() != 0:
@@ -1604,7 +1622,7 @@ def pcc_thread_unregister_current() -> None:
     self_id = _tls_i64(global_addr("pcc_tls_thread_id_py"))
     # Cleanup above can decref and reenter.  Revalidate depth and STW
     # ownership under the same lock that protects live/owner accounting.
-    if pcc_thread_no_park_depth() != 0 or (
+    if pcc_thread_no_park_depth() != 0 or pcc_thread_is_running() == 0 or (
         self_id != 0
         and load_i32(global_addr("pcc_thread_world_stop_py"), 0) != 0
         and _world_i64(global_addr("pcc_stop_owner_thread_id_py")) == self_id
@@ -1818,3 +1836,208 @@ def pcc_thread_detach(handle) -> None:
         pcc_cond_free(load_ptr(handle, 32))
         pcc_mutex_free(state_lock)
         free(handle)
+
+
+# Native root frames are caller-owned stack descriptors, never registry nodes.
+# Frame: previous@0, range storage@8, used@16, capacity@24, owner thread id@32.
+# Range: slot base@0, signed count@8 (negative = borrowed, positive = owned).
+# This kernel is built with implicit polls disabled. Only the current thread
+# mutates its head/ranges; collectors read them while holding the stopped world.
+_NATIVE_FRAME_PREVIOUS: int = 0
+_NATIVE_FRAME_RANGES: int = 8
+_NATIVE_FRAME_CAPACITY: int = 24
+_NATIVE_FRAME_USED: int = 16
+_NATIVE_FRAME_OWNER: int = 32
+_NATIVE_FRAME_BYTES: int = 40
+_NATIVE_RANGE_BYTES: int = 16
+
+
+@c_abi_export("pcc_gc_native_frame_enter")
+def pcc_gc_native_frame_enter(frame, ranges, capacity: int) -> int:
+    if (ptr_is_null(frame) or ptr_is_null(ranges) or capacity <= 0
+            or capacity > 576460752303423487 or pcc_thread_no_park_depth() <= 0
+            or pcc_thread_is_running() == 0):
+        pcc_platform_abort()
+        return -1
+    if load_i64(frame, _NATIVE_FRAME_OWNER) != 0:
+        pcc_platform_abort()
+        return -1
+    record = global_load_ptr("pcc_tls_thread_record_py")
+    memset(ranges, 0, capacity * _NATIVE_RANGE_BYTES)
+    store_ptr(frame, _NATIVE_FRAME_PREVIOUS, load_ptr(record, _THREAD_NATIVE_FRAME_HEAD))
+    store_ptr(frame, _NATIVE_FRAME_RANGES, ranges)
+    store_i64(frame, _NATIVE_FRAME_CAPACITY, capacity)
+    store_i64(frame, _NATIVE_FRAME_USED, 0)
+    store_i64(frame, _NATIVE_FRAME_OWNER, load_i64(record, 8))
+    store_ptr(record, _THREAD_NATIVE_FRAME_HEAD, frame)
+    return 0
+
+
+@c_abi_export("pcc_gc_native_frame_leave")
+def pcc_gc_native_frame_leave(frame) -> int:
+    # No poll, callback, allocation or deallocation after the last root leaves.
+    # A raw result is captured/transferred by the enclosing no-poll adapter.
+    if ptr_is_null(frame) or pcc_thread_is_running() == 0:
+        pcc_platform_abort()
+        return -1
+    record = global_load_ptr("pcc_tls_thread_record_py")
+    if (ptr_to_int(load_ptr(record, _THREAD_NATIVE_FRAME_HEAD)) != ptr_to_int(frame)
+            or load_i64(frame, _NATIVE_FRAME_OWNER) != load_i64(record, 8)):
+        pcc_platform_abort()
+        return -1
+    store_ptr(record, _THREAD_NATIVE_FRAME_HEAD, load_ptr(frame, _NATIVE_FRAME_PREVIOUS))
+    store_ptr(frame, _NATIVE_FRAME_PREVIOUS, null())
+    store_i64(frame, _NATIVE_FRAME_OWNER, 0)
+    return 0
+
+
+@c_abi_export("pcc_gc_native_root_bind_range")
+def pcc_gc_native_root_bind_range(slots, signed_count: int):
+    if (ptr_is_null(slots) or signed_count == 0 or signed_count < -1152921504606846975
+            or signed_count > 1152921504606846975 or pcc_thread_is_running() == 0):
+        pcc_platform_abort()
+        return null()
+    record = global_load_ptr("pcc_tls_thread_record_py")
+    frame = load_ptr(record, _THREAD_NATIVE_FRAME_HEAD)
+    if ptr_is_null(frame) or load_i64(frame, _NATIVE_FRAME_OWNER) != load_i64(record, 8):
+        pcc_platform_abort()
+        return null()
+    ranges = load_ptr(frame, _NATIVE_FRAME_RANGES)
+    used: int = load_i64(frame, _NATIVE_FRAME_USED)
+    index: int = 0
+    while index < used:
+        entry = ptr_add(ranges, index * _NATIVE_RANGE_BYTES)
+        if ptr_is_null(load_ptr(entry, 0)):
+            store_i64(entry, 8, signed_count)
+            store_ptr(entry, 0, slots)
+            return entry
+        index = index + 1
+    if used >= load_i64(frame, _NATIVE_FRAME_CAPACITY):
+        pcc_platform_abort()
+        return null()
+    entry = ptr_add(ranges, used * _NATIVE_RANGE_BYTES)
+    store_i64(entry, 8, signed_count)
+    store_ptr(entry, 0, slots)
+    store_i64(frame, _NATIVE_FRAME_USED, used + 1)
+    return entry
+
+
+@c_abi_export("pcc_gc_native_root_unbind")
+def pcc_gc_native_root_unbind(entry) -> None:
+    if ptr_is_null(entry):
+        return
+    if pcc_thread_is_running() == 0:
+        pcc_platform_abort()
+        return
+    record = global_load_ptr("pcc_tls_thread_record_py")
+    frame = load_ptr(record, _THREAD_NATIVE_FRAME_HEAD)
+    while ptr_is_null(frame) == 0:
+        ranges = load_ptr(frame, _NATIVE_FRAME_RANGES)
+        offset: int = ptr_to_int(entry) - ptr_to_int(ranges)
+        if offset >= 0 and offset < load_i64(frame, _NATIVE_FRAME_USED) * _NATIVE_RANGE_BYTES and (offset & 15) == 0:
+            if (load_i64(frame, _NATIVE_FRAME_OWNER) != load_i64(record, 8)
+                    or ptr_is_null(load_ptr(entry, 0))):
+                pcc_platform_abort()
+                return
+            store_ptr(entry, 0, null())
+            store_i64(entry, 8, 0)
+            return
+        frame = load_ptr(frame, _NATIVE_FRAME_PREVIOUS)
+    pcc_platform_abort()
+
+
+@c_abi_export("pcc_gc_native_root_unbind_slots")
+def pcc_gc_native_root_unbind_slots(slots) -> None:
+    if ptr_is_null(slots):
+        return
+    if pcc_thread_is_running() == 0:
+        pcc_platform_abort()
+        return
+    record = global_load_ptr("pcc_tls_thread_record_py")
+    frame = load_ptr(record, _THREAD_NATIVE_FRAME_HEAD)
+    while ptr_is_null(frame) == 0:
+        ranges = load_ptr(frame, _NATIVE_FRAME_RANGES)
+        index: int = load_i64(frame, _NATIVE_FRAME_USED)
+        while index > 0:
+            index = index - 1
+            entry = ptr_add(ranges, index * _NATIVE_RANGE_BYTES)
+            if ptr_to_int(load_ptr(entry, 0)) == ptr_to_int(slots):
+                store_ptr(entry, 0, null())
+                store_i64(entry, 8, 0)
+                return
+        frame = load_ptr(frame, _NATIVE_FRAME_PREVIOUS)
+    pcc_platform_abort()
+
+
+@c_abi_export("pcc_thread_native_root_contains")
+def pcc_thread_native_root_contains(slot) -> int:
+    if ptr_is_null(slot) or pcc_thread_is_running() == 0:
+        return 0
+    record = global_load_ptr("pcc_tls_thread_record_py")
+    frame = load_ptr(record, _THREAD_NATIVE_FRAME_HEAD)
+    while ptr_is_null(frame) == 0:
+        ranges = load_ptr(frame, _NATIVE_FRAME_RANGES)
+        index: int = 0
+        while index < load_i64(frame, _NATIVE_FRAME_USED):
+            entry = ptr_add(ranges, index * _NATIVE_RANGE_BYTES)
+            base = load_ptr(entry, 0)
+            count: int = load_i64(entry, 8)
+            if count < 0:
+                count = 0 - count
+            offset: int = ptr_to_int(slot) - ptr_to_int(base)
+            if ptr_is_null(base) == 0 and offset >= 0 and offset < count * 8 and (offset & 7) == 0:
+                return 1
+            index = index + 1
+        frame = load_ptr(frame, _NATIVE_FRAME_PREVIOUS)
+    return 0
+
+
+@c_abi_export("pcc_thread_visit_native_root_frames")
+def pcc_thread_visit_native_root_frames(visitor, context) -> int:
+    # Every thread record and every other thread's native stack remain live
+    # through this cut. No raw frame pointer escapes to a later GC3 slice.
+    if ptr_is_null(visitor) or pcc_thread_owns_stopped_world() == 0:
+        pcc_platform_abort()
+        return -1
+    count: int = 0
+    record = global_load_ptr("pcc_thread_records_head_py")
+    while ptr_is_null(record) == 0:
+        frame = load_ptr(record, _THREAD_NATIVE_FRAME_HEAD)
+        while ptr_is_null(frame) == 0:
+            if load_i64(frame, _NATIVE_FRAME_OWNER) != load_i64(record, 8):
+                pcc_platform_abort()
+                return -1
+            # Valid callbacks can push/pop nested frames, not pop their caller's
+            # enclosing frame. A leave requires both exact top and owner.
+            previous = load_ptr(frame, _NATIVE_FRAME_PREVIOUS)
+            call_void_ptr2(visitor, frame, context)
+            frame = previous
+            count = count + 1
+        record = load_ptr(record, 0)
+    return count
+
+
+@c_abi_export("pcc_gc_native_frame_bind_map")
+def pcc_gc_native_frame_bind_map(frame_map, slots) -> None:
+    # The signed homogeneous map is the same owned/borrowed contract used by
+    # compiled frames. Preserve GC0's optional frame-root policy; scheduler
+    # replacements bind directly and therefore remain unconditional roots.
+    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+            and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
+        return
+    if ptr_is_null(frame_map) or ptr_is_null(slots):
+        pcc_platform_abort()
+        return
+    count: int = load_i32(frame_map, 0)
+    if count != 0:
+        pcc_gc_native_root_bind_range(slots, count)
+
+
+@c_abi_export("pcc_gc_native_frame_unbind_map")
+def pcc_gc_native_frame_unbind_map(slots) -> None:
+    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+            and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
+        return
+    pcc_gc_native_root_unbind_slots(slots)

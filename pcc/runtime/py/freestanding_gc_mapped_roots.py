@@ -6,6 +6,7 @@ from pcc.unsafe import (
     abi_constant,
     cstr,
     frame_address,
+    function_addr,
     gc_backend_current,
     global_addr,
     global_load_ptr,
@@ -52,10 +53,19 @@ pcc_gc_promote_cached_frame_slot = extern("pcc_gc_promote_cached_frame_slot", (c
 pcc_gc_resolve_root_slot_unlocked = extern(
     "pcc_gc_resolve_root_slot_unlocked", (c_ptr, c_int64), c_ptr
 )
+pcc_gc_resolve_borrowed_root_slot_unlocked = extern(
+    "pcc_gc_resolve_borrowed_root_slot_unlocked", (c_ptr, c_int64), c_ptr
+)
 pcc_platform_getenv = extern("pcc_platform_getenv", (c_ptr,), c_ptr)
 pcc_gc_pointer_is_managed = extern("pcc_gc_pointer_is_managed", (c_ptr,), c_int64)
 pcc_thread_collect_stopped_frames = extern(
     "pcc_thread_collect_stopped_frames", (c_ptr, c_int64), c_int64
+)
+pcc_thread_visit_native_root_frames = extern(
+    "pcc_thread_visit_native_root_frames", (c_ptr, c_ptr), c_int64
+)
+pcc_thread_all_stopped_at_gates = extern(
+    "pcc_thread_all_stopped_at_gates", (), c_int64
 )
 pcc_thread_live_count = extern("pcc_thread_live_count", (), c_int64)
 pcc_thread_owns_stopped_world = extern("pcc_thread_owns_stopped_world", (), c_int64)
@@ -82,7 +92,10 @@ def pcc_gc_visit_mapped_root_slot(
     if mode == 1:  # gray
         root = load_ptr(slot_base, slot_offset)
         if resolve != 0:
-            root = pcc_gc_resolve_root_slot_unlocked(slot_base, slot_offset)
+            if borrowed != 0:
+                root = pcc_gc_resolve_borrowed_root_slot_unlocked(slot_base, slot_offset)
+            else:
+                root = pcc_gc_resolve_root_slot_unlocked(slot_base, slot_offset)
         pcc_gc_mark_root_gray_if_known(root)
         return 0
     if mode == 2:  # promote
@@ -95,7 +108,11 @@ def pcc_gc_visit_mapped_root_slot(
         return 0
     if mode == 3:  # rewrite
         before = load_ptr(slot_base, slot_offset)
-        after = pcc_gc_resolve_root_slot_unlocked(slot_base, slot_offset)
+        after = before
+        if borrowed != 0:
+            after = pcc_gc_resolve_borrowed_root_slot_unlocked(slot_base, slot_offset)
+        else:
+            after = pcc_gc_resolve_root_slot_unlocked(slot_base, slot_offset)
         if ptr_eq(before, after) == 0:
             return 1
     if mode == 5:  # verify: a mapped object that no registered root holds
@@ -334,6 +351,76 @@ def _pcc_stackmap_visit_frames_from(frame, mode: i64, resolve: i64, bounds) -> i
     return visited
 
 
+# Shared native frame layout: previous, ranges, used, capacity, owner id.
+# A range holds a slot base and signed count; negative counts are borrowed.
+_NATIVE_FRAME_RANGES: i64 = 8
+_NATIVE_FRAME_USED: i64 = 16
+_NATIVE_RANGE_BYTES: i64 = 16
+_NATIVE_VISIT_MODE: i64 = 0
+_NATIVE_VISIT_RESOLVE: i64 = 8
+_NATIVE_VISIT_RESULT: i64 = 16
+_NATIVE_VISIT_BYTES: i64 = 24
+
+
+@c_abi_export("pcc_gc_visit_one_native_root_frame")
+def pcc_gc_visit_one_native_root_frame(frame, context) -> None:
+    mode: i64 = load_i64(context, _NATIVE_VISIT_MODE)
+    resolve: i64 = load_i64(context, _NATIVE_VISIT_RESOLVE)
+    ranges = load_ptr(frame, _NATIVE_FRAME_RANGES)
+    index: i64 = 0
+    result: i64 = 0
+    while index < load_i64(frame, _NATIVE_FRAME_USED):
+        entry = ptr_add(ranges, index * _NATIVE_RANGE_BYTES)
+        slots = load_ptr(entry, 0)
+        count: i64 = load_i64(entry, 8)
+        borrowed: i64 = 0
+        if count < 0:
+            borrowed = 1
+            count = 0 - count
+        if ptr_is_null(slots) == 0 and count > 0:
+            result = result + pcc_gc_visit_mapped_root_slots(
+                count, slots, null(), borrowed, mode, resolve
+            )
+        index = index + 1
+    store_i64(context, _NATIVE_VISIT_RESULT,
+              load_i64(context, _NATIVE_VISIT_RESULT) + result)
+
+
+@c_abi_export("pcc_gc_visit_native_root_frames")
+def pcc_gc_visit_native_root_frames(mode: i64, resolve: i64) -> i64:
+    """Walk activation-local ranges within one stopped-world cut.
+
+    GC3 calls this at its existing stopped stack-walk boundary. No native
+    descriptor, slot cursor or address survives into a resumed minor slice.
+    This source is independent of whether an application stackmap exists.
+    """
+    stopped_here: i64 = 0
+    if pcc_thread_owns_stopped_world() == 0:
+        if pcc_stop_the_world() != 0:
+            pcc_platform_abort()
+            return 0
+        stopped_here = 1
+    # Nursery-refill promotion can reach this cut without the public step
+    # dispatcher's guard. Local handles do not make raw runtime aliases safe
+    # to move: preserve in-place promotion at nongated native parks.
+    oldify_suspended: i64 = load_i32(global_addr("pcc_gc_backend3_oldify_suspended"), 0)
+    if mode == 2 and pcc_thread_all_stopped_at_gates() == 0:
+        store_i32(global_addr("pcc_gc_backend3_oldify_suspended"), 0, 1)
+    context = stack_alloc(_NATIVE_VISIT_BYTES)
+    store_i64(context, _NATIVE_VISIT_MODE, mode)
+    store_i64(context, _NATIVE_VISIT_RESOLVE, resolve)
+    store_i64(context, _NATIVE_VISIT_RESULT, 0)
+    pcc_thread_visit_native_root_frames(
+        function_addr("pcc_gc_visit_one_native_root_frame"), context
+    )
+    result: i64 = load_i64(context, _NATIVE_VISIT_RESULT)
+    if mode == 2:
+        store_i32(global_addr("pcc_gc_backend3_oldify_suspended"), 0, oldify_suspended)
+    if stopped_here != 0:
+        pcc_resume_world()
+    return result
+
+
 @c_abi_export("pcc_gc_visit_walked_stack_roots")
 def pcc_gc_visit_walked_stack_roots(mode: i64, resolve: i64) -> i64:
     """Visit the mapped stack frames of every mutator thread with ``mode``.
@@ -344,7 +431,7 @@ def pcc_gc_visit_walked_stack_roots(mode: i64, resolve: i64) -> i64:
     the visit owns a stopped world, stopping it for the walk when needed.
     """
     if _pcc_stackmap_roots_mode() == 0:
-        return 0
+        return pcc_gc_visit_native_root_frames(mode, resolve)
     stopped_here: i64 = 0
     if pcc_thread_live_count() > 1 and pcc_thread_owns_stopped_world() == 0:
         if pcc_stop_the_world() != 0:
@@ -364,7 +451,8 @@ def pcc_gc_visit_walked_stack_roots(mode: i64, resolve: i64) -> i64:
             pcc_platform_abort()
             return 0
     bounds = stack_alloc(16)
-    mapped: i64 = _pcc_stackmap_visit_stack_roots(mode, resolve, bounds)
+    mapped: i64 = pcc_gc_visit_native_root_frames(mode, resolve)
+    mapped = mapped + _pcc_stackmap_visit_stack_roots(mode, resolve, bounds)
     other_index: i64 = 0
     while other_index < others:
         mapped = mapped + _pcc_stackmap_visit_frames_from(

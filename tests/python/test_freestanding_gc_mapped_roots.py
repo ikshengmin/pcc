@@ -53,6 +53,8 @@ PUBLIC_SYMBOLS = {
     "pcc_gc_visit_precise_frame",
 }
 INTERNAL_SYMBOLS = {
+    "pcc_gc_visit_native_root_frames",
+    "pcc_gc_visit_one_native_root_frame",
     "pcc_gc_visit_mapped_root_slot",
     "pcc_gc_visit_mapped_root_slots",
     "pcc_gc_visit_registered_root_slots",
@@ -89,6 +91,7 @@ STACKMAP_HELPER_SYMBOLS = {
 ROOT_OPS_PROVIDER_SYMBOLS = {
     "pcc_gc_mark_root_gray_if_known",
     "pcc_gc_resolve_root_slot_unlocked",
+    "pcc_gc_resolve_borrowed_root_slot_unlocked",
 }
 PROMOTION_PROVIDER_SYMBOLS = {"pcc_gc_promote_cached_frame_slot"}
 PROVIDER_SYMBOLS = ROOT_OPS_PROVIDER_SYMBOLS | PROMOTION_PROVIDER_SYMBOLS
@@ -109,12 +112,15 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_thread_live_count",
     "pcc_thread_owns_stopped_world",
     "pcc_thread_collect_stopped_frames",
+    "pcc_thread_visit_native_root_frames",
+    "pcc_thread_all_stopped_at_gates",
     "pcc_gc_backend0_mark_root_slot",
     "pcc_platform_abort",
     "pcc_gc_mark_root_gray_if_known",
     "pcc_gc_pointer_is_managed",
     "pcc_gc_promote_cached_frame_slot",
     "pcc_gc_resolve_root_slot_unlocked",
+    "pcc_gc_resolve_borrowed_root_slot_unlocked",
     "pcc_gc_root_map_is_borrowed",
     "pcc_gc_root_slot_count_from_map",
     "pcc_platform_getenv",
@@ -125,6 +131,7 @@ RAW_FUNCTION_IMPORTS = {
     "write",
 }
 RAW_GLOBAL_IMPORTS = {
+    "pcc_gc_backend3_oldify_suspended",
     "pcc_gc_continuation_root_head",
     "pcc_gc_frame_head",
     "pcc_gc_precise_stackmap_table",

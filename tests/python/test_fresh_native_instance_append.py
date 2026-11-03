@@ -226,9 +226,14 @@ def test_fresh_instance_append_shares_the_ordinary_append_transactions():
     # container-lock append first). The unlocked trusted slot store that
     # only a single-threaded runtime could use is gone.
     py_append = py_list.split(
-        'def py_list_append_fresh_native_instance(lst, item) -> None:', 1
-    )[1].split('@c_abi_export("py_list_get")', 1)[0]
+        'def _native_body_py_list_append_fresh_native_instance(_native_inputs) -> None:', 1
+    )[1].split('@c_abi_export("pcc_list_body_py_list_get")', 1)[0]
     assert "py_list_append(lst, item)" in py_append
+    entry = (REPO_ROOT / "pcc/runtime/py/py_list_native_entry.py").read_text()
+    adapter = entry.split(
+        'def py_list_append_fresh_native_instance(lst: c_ptr, item: c_ptr) -> None:', 1
+    )[1].split('\n@c_abi_export(', 1)[0]
+    assert "pcc_list_body_py_list_append_fresh_native_instance(inputs)" in adapter
     for source in (py_list, py_obj):
         assert "pcc_gc_store_ptr_fresh_native_instance" not in source
         assert "_gc_incref_fresh_native_instance" not in source

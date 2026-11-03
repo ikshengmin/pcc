@@ -1,7 +1,7 @@
 """Read-only root-registry introspection for the freestanding GC kernel."""
 
 from pcc import i64
-from pcc.extern import c_abi_export, c_void, extern
+from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     gc_backend_current,
     global_load_ptr,
@@ -16,6 +16,9 @@ from pcc.unsafe import (
 __pcc_freestanding__ = True
 
 
+pcc_thread_native_root_contains = extern(
+    "pcc_thread_native_root_contains", (c_ptr,), c_int64
+)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 # GC0 registrations change the scheduler-root list under its own word only.
@@ -94,6 +97,10 @@ def pcc_gc_slot_is_runtime_root(slot) -> i64:
     gc_backend_current()
     if ptr_is_null(slot) != 0:
         return 0
+    # Owner-local handles need no graph/root-list lock. This reads only the
+    # calling thread's chain; cross-thread walks remain stopped-world only.
+    if pcc_thread_native_root_contains(slot) != 0:
+        return 1
     pcc_py_gc_minor_graph_lock()
     node = global_load_ptr("pcc_gc_frame_head")
     while ptr_is_null(node) == 0:
