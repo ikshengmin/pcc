@@ -486,6 +486,13 @@ def codegen_chunks(src_paths, jobs: int):
         weighted.insert(insert_at, (weight, index))
         index += 1
 
+    if jobs >= len(src_paths):
+        # Singleton ownership is a cardinality contract, not a positive-cost
+        # assumption. Empty package markers have zero source weight and must
+        # not share the same still-zero bucket. Retain the weighted order used
+        # by nonempty singleton assignments; admission width is unchanged.
+        return [[source_index] for _weight, source_index in weighted]
+
     chunks = []
     totals = []
     index = 0

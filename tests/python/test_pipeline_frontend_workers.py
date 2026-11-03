@@ -170,6 +170,40 @@ def test_chunking_is_balanced_stable_and_native_workers_are_one_module_each(
     ) == 111
 
 
+@pytest.mark.parametrize('sizes', ((0, 0), (0, 0, 9), (9, 0, 0, 4), (0, 0, 0, 0)))
+@pytest.mark.parametrize('spare_chunks', (0, 3))
+def test_singleton_codegen_chunks_preserve_empty_sources_and_weighted_order(
+    tmp_path: Path, sizes, spare_chunks,
+):
+    # CI obligation for the unchanged Stage1 host indexed-split guard. This
+    # planner test executes no compiler or child; full Stage1 and the existing
+    # real split/unsplit parity gate remain independent, required CI evidence.
+    sources = []
+    for index, size in enumerate(sizes):
+        source = tmp_path / ('module_' + str(index) + '.py')
+        source.write_text('x' * size, encoding='utf-8')
+        sources.append(str(source))
+    singleton_count = pipeline_frontend_workers.codegen_chunk_count(
+        len(sources), 1, ['python3'], native_predicate=lambda _path: False,
+    )
+    assert singleton_count == len(sources)
+    chunks = pipeline_frontend_workers.codegen_chunks(sources, singleton_count + spare_chunks)
+    expected_order = sorted(range(len(sizes)), key=lambda index: (-sizes[index], index))
+    assert chunks == [[index] for index in expected_order]
+    assert sorted(index for chunk in chunks for index in chunk) == list(range(len(sources)))
+    assert all(len(chunk) == 1 for chunk in chunks)
+    assert chunks == pipeline_frontend_workers.codegen_chunks(sources, singleton_count + spare_chunks)
+
+
+def test_empty_sources_do_not_change_explicit_grouped_codegen_mode(tmp_path: Path):
+    sources = []
+    for index in range(3):
+        source = tmp_path / ('module_' + str(index) + '.py')
+        source.write_text('', encoding='utf-8')
+        sources.append(str(source))
+    assert pipeline_frontend_workers.codegen_chunks(sources, 1) == [[0, 1, 2]]
+
+
 def test_codegen_lanes_extract_oversized_sources_largest_first(tmp_path: Path):
     sizes = (20, 220_000, 210_000, 30)
     sources = []
