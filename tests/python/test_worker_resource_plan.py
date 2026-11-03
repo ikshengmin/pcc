@@ -424,6 +424,14 @@ import os
 from pathlib import Path
 import sys
 import time
+# Retain startup/import failures before the first resource or attempt marker.
+# A distinct PID file preserves both the cancelled attempt and its retry.
+for stream_name, descriptor in (("stdout", 1), ("stderr", 2)):
+    stream_path = Path(sys.argv[1]) / (
+        "child." + stream_name + "." + sys.argv[2] + "." + str(os.getpid())
+    )
+    with stream_path.open("wb") as stream:
+        os.dup2(stream.fileno(), descriptor)
 from pcc.frontends.python.worker_resource_plan import (
     RESOURCE_REPORT_ENV, RESOURCE_TOKEN_ENV, peak_reservation, publish_worker_resource,
 )
@@ -563,8 +571,15 @@ publish("complete." + str(index) + "." + str(attempt),
     tasks = [task(tmp_path / ("rss" + str(index)), estimate=8 * MIB,
                   inputs=(4 - index,), execution_class="host:progressive:" + str(index))
              for index in range(4)]
-    commands = [shlex.join([sys.executable, "-B", str(child), str(tmp_path),
-                           str(index)]) for index in range(4)]
+    # Executing a temporary script puts its directory, not the checkout, at
+    # sys.path[0]. CI installs dependencies with --no-install-project, so give
+    # each real worker the tested source explicitly and preserve caller paths.
+    pythonpath = str(Path(__file__).resolve().parents[2])
+    inherited_pythonpath = os.environ.get("PYTHONPATH")
+    if inherited_pythonpath:
+        pythonpath += os.pathsep + inherited_pythonpath
+    commands = [shlex.join(["PYTHONPATH=" + pythonpath, sys.executable, "-B",
+                           str(child), str(tmp_path), str(index)]) for index in range(4)]
     trace = tmp_path / "progressive.tsv"
     observations = []
     reaped = set()
@@ -624,8 +639,19 @@ publish("complete." + str(index) + "." + str(attempt),
     monkeypatch.setattr(pool, "_retire_resource_worker", record_retire)
     monkeypatch.setattr(os, "killpg", reject_signal_after_reap)
     monkeypatch.setattr(policy, "read_worker_resource", acknowledge_report)
-    pool.run_resource_worker_processes(commands, tasks, 2, budget,
-                                      observations=observations, trace_path=str(trace))
+    try:
+        pool.run_resource_worker_processes(commands, tasks, 2, budget,
+                                          observations=observations, trace_path=str(trace))
+    except subprocess.CalledProcessError as error:
+        child_output = "\n".join(
+            path.name + ":\n" + path.read_text(encoding="utf-8", errors="replace")
+            for stream_name in ("stdout", "stderr")
+            for path in sorted(tmp_path.glob("child." + stream_name + ".*"))
+        )
+        raise AssertionError(
+            str(error) + "\nFull child stdout/stderr (raw PID files retained):\n"
+            + (child_output or "No child stdout/stderr was retained.")
+        ) from error
     rows = [line.split("\t") for line in trace.read_text().splitlines()]
     cancelled = [row for row in rows if row[0] == "cancel"]
     assert len(cancelled) == 1 and cancelled[0][1] == "1"
