@@ -2250,6 +2250,11 @@ def _cross_object_signatures_part_1():
     "pcc_list_body_py_list_index_range": (("c_ptr", "c_int64", "c_int64"), "c_int64"),
     "pcc_list_body_py_list_count": (("c_ptr",), "c_int64"),
     "pcc_list_body_py_list_reverse": (("c_ptr",), "c_void"),
+    }
+
+
+def _cross_object_signatures_part_2():
+    return {
     "pcc_gc_native_frame_bind_map": (("c_ptr", "c_ptr"), "c_void"),
     "pcc_gc_native_frame_unbind_map": (("c_ptr",), "c_void"),
     "pcc_gc_native_frame_enter": (("c_ptr", "c_ptr", "c_int64"), "c_int64"),
@@ -2286,7 +2291,7 @@ def _cross_object_signatures_part_1():
     }
 
 
-def _cross_object_signatures_part_2():
+def _cross_object_signatures_part_3():
     return {
     "pcc_gc_forwarding_target_index_insert": (("c_ptr", "c_ptr"), "c_int64"),
     "pcc_list_grow_for_mutation": (("c_ptr", "c_int64"), "c_ptr"),
@@ -2361,7 +2366,7 @@ def _cross_object_signatures_part_2():
     }
 
 
-def _cross_object_signatures_part_3():
+def _cross_object_signatures_part_4():
     return {
     "pcc_gc_object_node_freeing": (("c_ptr",), "c_int64"),
     "pcc_gc_object_node_set_freeing": (("c_ptr", "c_int64"), "c_void"),
@@ -2379,7 +2384,7 @@ def _cross_object_signatures_part_3():
     }
 
 
-def _cross_object_signatures_part_4():
+def _cross_object_signatures_part_5():
     return {
     "pcc_gc_backend3_promotion_unlink": (("c_ptr",), "c_void"),
     "pcc_gc_object_node_alloc": ((), "c_ptr"),
@@ -2485,7 +2490,7 @@ def _cross_object_signatures_part_4():
     }
 
 
-def _cross_object_signatures_part_5():
+def _cross_object_signatures_part_6():
     return {
     "pcc_gc_relocation_member_count": (("c_ptr",), "c_int64"),
     "pcc_gc_relocation_member_forget": (("c_ptr",), "c_void"),
@@ -2514,7 +2519,7 @@ def _cross_object_signatures_part_5():
     }
 
 
-def _cross_object_signatures_part_6():
+def _cross_object_signatures_part_7():
     return {
     "pcc_gc_backend3_drain_promotion_worklist": (
         ("c_int64",),
@@ -2641,7 +2646,7 @@ def _cross_object_signatures_part_6():
     }
 
 
-def _cross_object_signatures_part_7():
+def _cross_object_signatures_part_8():
     return {
     "pcc_gc_backend4_zpage_set_page_head": (
         ("c_ptr", "c_ptr"),
@@ -2756,7 +2761,7 @@ def _cross_object_signatures_part_7():
     }
 
 
-def _cross_object_signatures_part_8():
+def _cross_object_signatures_part_9():
     return {
     "pcc_gc_relocation_payload_from_slot": (
         ("c_ptr", "c_int64", "c_ptr"),
@@ -2865,7 +2870,7 @@ def _cross_object_signatures_part_8():
     }
 
 
-def _cross_object_signatures_part_9():
+def _cross_object_signatures_part_10():
     return {
     "pcc_gc_trace_continuation_roots": ((), "c_int64"),
     "pcc_stop_the_world": ((), "c_int64"),
@@ -2954,7 +2959,7 @@ def _cross_object_signatures_part_9():
     }
 
 
-def _cross_object_signatures_part_10():
+def _cross_object_signatures_part_11():
     return {
     "py_dealloc_float": (("c_ptr",), "c_void"),
     "py_dealloc_str": (("c_ptr",), "c_void"),
@@ -3005,7 +3010,7 @@ def _cross_object_signatures_part_10():
     }
 
 
-def _cross_object_signatures_part_11():
+def _cross_object_signatures_part_12():
     # The frame-registry chunk is full. New raw ABIs start a new bounded
     # literal instead of exceeding the native compiler's 50-entry limit.
     return {
@@ -3037,6 +3042,7 @@ FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_8()
 FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_9())
 FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_10())
 FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_11())
+FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_12())
 
 
 def is_freestanding_gc_cross_object_runtime_import(

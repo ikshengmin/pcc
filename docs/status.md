@@ -142,6 +142,10 @@ threads; compiled stackmaps remain a separate root source. Owned and borrowed
 slots use distinct healing semantics. GC3 admits its complete promotion step
 under the same stop, and preserves the nongated-thread movement restriction.
 GC0 retains RC and the existing disabled-frame-root bypass where applicable.
+The added raw ABI declarations are split into native-compatible literals of
+at most 50 entries, preserving the complete ordered signature mapping;
+`test_runtime_abi_chunking.py` and `test_cross_object_signature_chunks.py`
+cover this boundary independently of host runtime compilation.
 This is the first structural root-registration batch; other root users,
 buffered barriers, local mark work and carrier allocation remain unfinished.
 

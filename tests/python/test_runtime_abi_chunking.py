@@ -83,7 +83,7 @@ def test_checked_frame_signature_starts_a_new_raw_chunk() -> None:
 
     assert keys.count(symbol) == 1
     assert symbol not in runtime_abi._cross_object_signatures_part_0()
-    assert runtime_abi._cross_object_signatures_part_11()[symbol] == expected
+    assert runtime_abi._cross_object_signatures_part_12()[symbol] == expected
     assert FREESTANDING_GC_CROSS_OBJECT_SIGNATURES[symbol] == expected
     assert symbol not in RUNTIME_SIGNATURES
 
