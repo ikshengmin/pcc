@@ -1395,7 +1395,13 @@ class CppParser:
             if is_class_type(dtype):
                 if self.template_function is not None:
                     raise CppDiagnostic("cpp.unsupported.class-templates", "class objects in templates are not implemented", name.coord)
-                if unqualified(dtype).definition.constructors.overloads:
+                definition = unqualified(dtype).definition
+                aggregate_list = definition.aggregate and (
+                    self._peek().value == "{"
+                    or self._peek().value == "="
+                    and self.cursor.tokens[self.cursor.position + 1].value == "{"
+                )
+                if definition.constructors.overloads and not aggregate_list:
                     from pcc.frontends.cpp.constructors import construct_local
                     statements = construct_local(self, symbol)
                     self.lifetimes.register(self, symbol)

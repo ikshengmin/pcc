@@ -128,8 +128,11 @@ def parse_new(parser):
     if len(placement) != 1:
         raise AssertionError('reserved placement overload has one placement argument')
     arguments = []
+    initialization_kind = 'default'
     if parser._accept('('):
-        if not parser._accept(')'):
+        if parser._accept(')'):
+            initialization_kind = 'value'
+        else:
             while True:
                 expression = parser._expression()
                 parser._require_value(expression)
@@ -139,8 +142,9 @@ def parse_new(parser):
                 parser._expect(',')
     elif parser._peek().value == '{':
         raise CppDiagnostic('cpp.unsupported.placement-list-initialization', 'placement list initialization requires its distinct rules', coord)
-    # Both no-initializer and () select the user-provided default constructor.
-    # In particular () must not invent zero stores before a user-provided C1.
+    # No initializer and () both select a default constructor but differ in
+    # default/value initialization. Only a non-user-provided selected C1 can
+    # require the preceding value-initialization zero phase.
     if not owner.definition.constructors.overloads:
         raise CppDiagnostic('cpp.unsupported.placement-implicit-construction',
                             'implicit placement default/value initialization is not implemented', coord)
@@ -155,7 +159,8 @@ def parse_new(parser):
     # A source-bound complete C1 proof may contain exact generated member C1
     # calls. The constructor owner checks their complete argument/default
     # effects and final member addresses; placement adds no automatic cleanup.
-    call = constructor_call(parser, owner, arguments, this_address, coord, require_closed=True)
+    call = constructor_call(parser, owner, arguments, this_address, coord, require_closed=True,
+                            initialization_kind=initialization_kind, object_type=dtype)
     node = c_ast.StmtExpr(c_ast.Compound([temporary, call, c_ast.ID(name, coord)], coord), coord)
     return Expression(node, pointer_type, constant_fact=not_constant(pointer_type, 'placement construction', coord))
 

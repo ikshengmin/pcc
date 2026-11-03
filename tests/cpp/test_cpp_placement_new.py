@@ -242,12 +242,13 @@ def test_full_new_header_keeps_real_unsupported_syntax_visible():
     parser = CppParser()
     with pytest.raises(CppDiagnostic) as error:
         parser.parse(text)
-    # Explicit C1 is recognized; defaulted C1 still has no implementation owner.
-    assert error.value.code == 'cpp.unsupported.syntax'
-    assert error.value.message == "C++ feature not implemented at '=' (expected '{')"
+    # The exact defaulted C1 is now owned. The next untouched declaration
+    # still requires namespace class-object declaration/lifetime semantics.
+    assert error.value.code == 'cpp.unsupported.static-class-lifetime'
+    assert error.value.message == 'namespace class objects require lifetime/static initialization semantics'
     position = parser.cursor.position
-    assert [token.value for token in parser.cursor.tokens[position - 4:position + 3]] == [
-        'explicit', 'nothrow_t', '(', ')', '=', 'default', ';',
+    assert [token.value for token in parser.cursor.tokens[position - 4:position + 1]] == [
+        'extern', 'const', 'nothrow_t', 'nothrow', ';',
     ]
 
 

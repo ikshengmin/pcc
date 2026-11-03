@@ -101,7 +101,25 @@ def parse_constructor(parser, definition=None, *, explicit=False):
             raise CppDiagnostic("cpp.unsupported.class-linkage", "constructor signatures with internal-linkage class types require ABI support", name.coord)
         if is_enum_type(pointee) and pointee.internal_linkage:
             raise CppDiagnostic("cpp.unsupported.enum-linkage", "constructor signatures with internal-linkage enum types require ABI support", name.coord)
-    inline_definition = not outside and parser._peek().value != ";"
+    defaulted = parser._peek().value == "="
+    if defaulted:
+        if outside:
+            raise CppDiagnostic("cpp.unsupported.inline-member-functions",
+                                "defaulting after the first declaration requires user-provided special-member semantics", name.coord)
+        parser._expect("=")
+        if parser._peek().value != "default":
+            raise CppDiagnostic("cpp.unsupported.inline-member-functions",
+                                "deleted constructor declarations require special-member rules", parser._peek().coord)
+        parser._expect("default")
+        if params:
+            if (len(params) == 1 and isinstance(params[0][1], ReferenceType)
+                    and unqualified(params[0][1].referent) is owner):
+                raise CppDiagnostic("cpp.unsupported.class-initialization",
+                                    "defaulted copy/move construction requires its own special-member owner", name.coord)
+            raise CppDiagnostic("cpp.invalid-defaulted-constructor",
+                                "a defaulted default constructor must have no parameters or default arguments", name.coord)
+        parser._expect(";")
+    inline_definition = not outside and not defaulted and parser._peek().value != ";"
     if outside and parser._peek().value not in (":", "{"):
         raise CppDiagnostic("cpp.member-definition-required", "out-of-class constructor declaration requires a body", name.coord)
     signature = tuple(unqualified(dtype) for _, dtype in params)
@@ -122,6 +140,11 @@ def parse_constructor(parser, definition=None, *, explicit=False):
         symbol.owner = definition.scope
         symbol.constructor = True
         symbol.constructor_explicit = explicit
+        symbol.constructor_user_provided = not defaulted
+        symbol.constructor_defaulted = defaulted
+        symbol.constructor_defaulted_on_first_declaration = defaulted
+        symbol.constructor_trivial = False
+        symbol.constructor_deleted = False
         symbol.method_static = False
         symbol.method_const = False
         symbol.internal_linkage = owner.internal_linkage
@@ -134,6 +157,10 @@ def parse_constructor(parser, definition=None, *, explicit=False):
         if parameter is not None:
             parameter.c_name = parser._local_projection_name(parameter.name)
     declaration, this = _declaration(parser, symbol, params, parameter_symbols, outside or inline_definition)
+    if defaulted:
+        from pcc.frontends.cpp.default_constructors import defer_definition
+        defer_definition(definition, symbol, parameter_scope, declaration, this)
+        return declaration
     if inline_definition:
         if owner.internal_linkage:
             raise CppDiagnostic("cpp.unsupported.class-linkage",
@@ -356,7 +383,9 @@ def construct_local(parser, symbol):
             arguments = [parser._decay_array(expression)]
     address = c_ast.UnaryOp("&", c_ast.ID(symbol.c_name, symbol.coord), symbol.coord)
     call = constructor_call(parser, dtype, arguments, address, symbol.coord,
-                            direct_list=direct_list, copy_initialization=copy_initialization)
+                            direct_list=direct_list, copy_initialization=copy_initialization,
+                            initialization_kind="value" if direct_list and not arguments else "default",
+                            object_type=symbol.dtype)
     parser._expect(";")
     symbol.initialization_complete = True
     symbol.jump_entry = "initialized"
@@ -405,7 +434,8 @@ def closed_construction_body(body, construction_calls):
 
 
 def constructor_call(parser, dtype, arguments, address, coord, require_closed=False, *,
-                     direct_list=False, copy_initialization=False, construction_calls=None):
+                     direct_list=False, copy_initialization=False, construction_calls=None,
+                     initialization_kind="default", object_type=None):
     """Select the existing C1 at an already-evaluated complete-object address."""
     group = dtype.definition.constructors
     if (len(arguments) == 1 and unqualified(arguments[0].dtype) is dtype
@@ -425,6 +455,8 @@ def constructor_call(parser, dtype, arguments, address, coord, require_closed=Fa
                                 [arg.dtype for arg in arguments], parser.types, coord,
                                 [arg.null_pointer for arg in arguments], [arg.lvalue or arg.assignment_result for arg in arguments])
     parser.scope.check_member_access(selected, coord)
+    from pcc.frontends.cpp.default_constructors import require_usable
+    require_usable(selected, coord, object_type=object_type, initialization_kind=initialization_kind)
     from pcc.frontends.cpp.class_template_members import request_body
     request_body(parser, selected, coord)
     from pcc.frontends.cpp.member_initialization import requires_destruction
@@ -456,6 +488,9 @@ def constructor_call(parser, dtype, arguments, address, coord, require_closed=Fa
     else:
         converted = [convert_constructor_argument(parser, arg, target, coord)
                      for arg, target in zip(arguments, selected.parameters)]
+    from pcc.frontends.cpp.default_constructors import value_initialization_prefix
+    zeroing, address = value_initialization_prefix(parser, selected, address, coord, initialization_kind)
+    preparation.extend(zeroing)
     call = c_ast.FuncCall(c_ast.ID(selected.c_name, coord), c_ast.ExprList([address] + converted, coord), coord)
     invocation = (c_ast.StmtExpr(c_ast.Compound(preparation + [call], coord), coord)
                   if preparation else call)

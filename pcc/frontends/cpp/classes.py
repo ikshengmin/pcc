@@ -123,6 +123,7 @@ class ClassDefinition:
         self.members = []
         self.method_declarations = []
         self.inline_constructors = []
+        self.defaulted_constructors = []
         self.inline_methods = []
         self.default_arguments = []
         # ABI lexical ordinal for unnamed class-scope types, including empty ones.
@@ -189,7 +190,13 @@ class ClassDefinition:
 
     @property
     def aggregate(self):
-        return not self.constructors.overloads and all(member.access == "public" for member in self.members)
+        # C++17 excludes user-provided/explicit constructors, not every
+        # user-declared constructor. A first-declaration, non-explicit defaulted
+        # C1 does not prevent aggregate initialization, even if private/deleted.
+        return (all(not getattr(constructor, "constructor_user_provided", True)
+                    and not getattr(constructor, "constructor_explicit", False)
+                    for constructor in self.constructors.overloads)
+                and all(member.access == "public" for member in self.members))
 
     @property
     def const_default_constructible(self):
@@ -436,6 +443,8 @@ def parse_class(parser):
     bind_class(parser, definition)
     from pcc.frontends.cpp.default_member_initializers import bind
     bind(parser, definition)
+    from pcc.frontends.cpp.default_constructors import bind_defaulted_definitions
+    bind_defaulted_definitions(parser, definition)
     from pcc.frontends.cpp.inline_constructors import bind_definitions
     bind_definitions(parser, definition)
     from pcc.frontends.cpp.inline_methods import bind_methods
@@ -626,7 +635,7 @@ def _empty_list_initialize(dtype, coord):
     from pcc.frontends.cpp.default_member_initializers import has_initializers, unsupported
     if has_initializers(definition):
         unsupported(coord)
-    if definition.constructors.overloads:
+    if definition.constructors.overloads and not definition.aggregate:
         raise CppDiagnostic("cpp.unsupported.constructor-list-initialization",
                             "constructor list initialization requires separate overload rules", coord)
     if not definition.aggregate:

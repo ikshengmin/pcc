@@ -52,8 +52,10 @@ def initialize(parser, member, this, initializer, *, construction_calls=None):
                            c_ast.ID(member.c_name, member.coord), member.coord)
     address = c_ast.UnaryOp("&", field, member.coord)
     arguments = [] if initializer is None else list(initializer.expressions)
-    # Every admitted declared C1 is user-provided (defaulted/deleted C1 forms
-    # remain gated). Both omitted/default initialization and explicit () value
-    # initialization therefore call it, with no preceding whole-object zeroing.
+    # Omission default-initializes; an explicit empty () value-initializes.
+    # The selected C1 owns whether value initialization first zeroes storage;
+    # this must not be guessed from the mere presence of a declaration.
     return constructor_call(parser, unqualified(member.dtype), arguments, address, member.coord,
-                            construction_calls=construction_calls)
+                            construction_calls=construction_calls,
+                            initialization_kind="value" if initializer is not None and not arguments else "default",
+                            object_type=member.dtype)
