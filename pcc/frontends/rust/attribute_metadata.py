@@ -53,13 +53,14 @@ def offset(parser, token):
     return parser.line_offsets[token.line - 1] + token.column - 1
 
 
-def meta_list(parser, depth=0):
+def meta_list(parser, depth=0, *, cfg_literals=False):
     if depth >= 32:
         raise parser.token.error('attribute metadata nesting exceeds implementation limit (32)')
     parser.expect('(')
     values = []
     while not parser.accept(')'):
-        token = parser.name()
+        token = (parser.take() if cfg_literals and parser.token.kind == 'keyword'
+                 and parser.token.text in {'true', 'false'} else parser.name())
         form, value, children = 'word', None, ()
         if parser.accept('='):
             literal = parser.take()
@@ -67,7 +68,7 @@ def meta_list(parser, depth=0):
                 raise literal.error('attribute metadata requires a literal string; expression/macro expansion is not implemented')
             form, value = 'value', literal.literal_value
         elif parser.token.text == '(':
-            form, children = 'list', meta_list(parser, depth + 1)
+            form, children = 'list', meta_list(parser, depth + 1, cfg_literals=cfg_literals)
         end = parser.tokens[parser.pos - 1]
         end_offset = end.source_end if end.source_end is not None else offset(parser, end) + len(end.text)
         values.append(MetaItem(token, token.text, form, value, children, (offset(parser, token), end_offset)))

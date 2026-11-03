@@ -63,12 +63,31 @@ PCC warnings. This remains the trusted audited-checker boundary, not signed
 attestation.
 
 Other lints/groups, reasons, `expect`, and module/item/member lint attributes
-remain explicit unsupported boundaries. `cfg`/`cfg_attr`, macros and compiler
+remain explicit unsupported boundaries. General `cfg`, macros and compiler
 context attributes are not enabled by the token. The unchanged real-project
-object gate remains strict; its next `cfg_attr` boundary is only a source
-prediction until CI executes this revision. The authored lint-bearing native
+object gate remains strict. The authored lint-bearing native
 program, real rustc checks and complete affected Rust lanes are **UNRUN pending
 CI**. No original-project, owned-lint or native pcc1 acceptance is claimed.
+
+### Authenticated crate cfg_attr policy
+
+The existing successful checker command admits no explicit `--cfg` flags or
+dependencies. A source/edition/target-bound `RustConfiguration` therefore has
+an empty feature set; Cargo feature defaults are never inferred from a name.
+For crate-root `cfg_attr`, PCC evaluates `feature = "..."`, `all`, `any`, `not`
+and literal predicates against that closed context, retaining the immutable
+original predicate/payload metadata and source spans. An enabled `no_std`
+payload uses the existing crate-injection policy; nested cfg_attr is evaluated
+in the same context. An inactive payload is retained and not applied. Unknown
+active attributes and built-in/target cfg predicates fail explicitly rather
+than being discarded or guessed from the host. Other cfg inputs require a
+later authenticated adapter; a caller flag or provenance record cannot supply
+this context.
+
+Actual CI 41592994473 reached the original crate's cfg_attr at line 17 after
+successful rustc certification and lint admission. This new policy and its
+original-crate, native/reference and rejection obligations are **UNRUN pending
+CI**. The next outer cfg at line 19 is a source prediction, not a project pass.
 
 Supported shared/mutable references lower to target pointers, preserving
 mutability, field addressing, receiver/argument evaluation and reference-slot

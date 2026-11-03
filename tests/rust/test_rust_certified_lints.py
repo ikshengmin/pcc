@@ -71,7 +71,7 @@ def test_uncertified_lints_retain_original_syntax_but_cannot_authorize_lowering(
     ('forbid(missing_docs(reason))', 'only missing_docs'),
     ('warn(missing_docs, reason="text")', 'only missing_docs'),
     ('expect(missing_docs)', 'unsupported semantic crate attribute'),
-    ('cfg_attr(any(), no_std)', 'unsupported semantic crate attribute'),
+    ('cfg_attr(any(), no_std)', 'cfg_attr requires an actual'),
 ])
 def test_other_semantic_attributes_and_lint_forms_are_not_stripped(attribute, message):
     with pytest.raises(RustError, match=message):
@@ -192,11 +192,18 @@ def test_actual_check_cannot_admit_other_lints_or_semantic_attributes(tmp_path, 
     for index, (prefix, message) in enumerate((
             ('#![allow(dead_code)]', 'only missing_docs'),
             ('#[allow(missing_docs)]', 'unsupported Rust attribute'),
-            ('#![cfg_attr(not(any()), no_std)]', 'unsupported semantic crate attribute'))):
+            ('#![cfg_attr(not(any()), no_std)]', None))):
         source = prefix + '\n' + BODY
         checked = certify(source, tmp_path / ('actual-check-' + str(index)))
-        with pytest.raises(RustError, match=message):
-            compile_rust(source, rustc_check=checked)
+        if message is None:
+            # Preserve this former unsupported original as a positive policy
+            # control; whole cfg_attr native execution has its own CI node.
+            parser = Parser(source, rustc_check=checked)
+            parser.parse()
+            assert parser.crate_policy.implicit_library_import == 'core'
+        else:
+            with pytest.raises(RustError, match=message):
+                compile_rust(source, rustc_check=checked)
 
 
 @pytest.mark.integration
@@ -208,11 +215,13 @@ def test_unchanged_project_retains_lint_before_the_next_source_boundary(tmp_path
     _, checked = certify_original(files, tmp_path / 'actual-check')
     source = files['src/lib.rs'].decode()
     parser = Parser(source, source_path='src/lib.rs', edition=2015, rustc_check=checked)
-    with pytest.raises(RustError, match="src/lib.rs: 17:4: unsupported semantic crate attribute 'cfg_attr'"):
+    with pytest.raises(RustError, match="src/lib.rs: 19:3: unsupported Rust attribute"):
         parser.parse()
     lint, = parser.crate_lint_attributes
     assert lint.level == 'warn' and lint.lints[0].name == 'missing_docs'
     assert source[slice(*lint.source_span)] == '#![warn(missing_docs)]'
+    assert parser.crate_cfg_attributes[0].enabled
+    assert parser.crate_policy.implicit_library_import == 'core'
     assert parser.crate_documentation[0].text == ' Fallible, streaming iteration.'
     assert load_inputs()[1] == files
     # This is syntax retention at a capability failure, never an object/package

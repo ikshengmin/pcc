@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 17893)
+Total output lines: 1773
+
 {
   "functions": {
     "tests/c/test_c_natural_record_layout.py": {
@@ -864,195 +867,7 @@
     },
     "tests/go/test_builtin_io.py": {
       "test_complete_original_and_output_programs_match_full_raw_streams": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference"
-        ]
-      },
-      "test_official_go_builds_exact_retained_rune_fixture_without_running_it": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference"
-        ]
-      },
-      "test_official_go_builds_unsupported_builtin_originals_without_execution": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference"
-        ]
-      },
-      "test_official_go_rejects_identical_invalid_builtin_inputs": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference_rejection"
-        ]
-      },
-      "test_official_terminal_panic_keeps_full_implementation_specific_streams": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference"
-        ]
-      },
-      "test_real_broken_stderr_matches_official_terminal_status": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference"
-        ]
-      }
-    },
-    "tests/go/test_declarations.py": {
-      "test_official_go_receives_identical_complete_declarations_program": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference"
-        ]
-      },
-      "test_official_go_rejects_identical_invalid_constant_inputs": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference_rejection"
-        ]
-      },
-      "test_official_go_rejects_same_nonterminating_empty_declaration_group": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference_rejection"
-        ]
-      }
-    },
-    "tests/go/test_diagnostics.py": {
-      "test_same_complete_control_program_matches_official_raw_process_streams": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference"
-        ]
-      }
-    },
-    "tests/go/test_execution.py": {
-      "test_go_explicit_official_compiler_oracle_receives_identical_program": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference"
-        ]
-      }
-    },
-    "tests/go/test_integer_range.py": {
-      "test_identical_integer_range_program_matches_official_raw_streams": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference"
-        ]
-      },
-      "test_official_go_rejects_identical_invalid_integer_ranges": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference_rejection"
-        ]
-      }
-    },
-    "tests/go/test_methods.py": {
-      "test_official_go_receives_identical_imported_method_project": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference_packages"
-        ]
-      },
-      "test_official_go_receives_identical_original_methods": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference"
-        ]
-      },
-      "test_official_go_rejects_identical_invalid_method_declarations": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference_rejection"
-        ]
-      }
-    },
-    "tests/go/test_nullable_pointers.py": {
-      "test_identical_graduated_frontiers_match_official_raw_streams": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference"
-        ]
-      },
-      "test_identical_imported_pointer_project_matches_official_raw_streams": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference_packages"
-        ]
-      },
-      "test_identical_invalid_pointer_parameter_sources_are_rejected_by_official_go": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference_rejection"
-        ]
-      },
-      "test_identical_nullable_pointer_program_matches_official_raw_streams": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference"
-        ]
-      },
-      "test_official_go_typechecks_identical_valid_unsupported_originals": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference"
-        ]
-      }
-    },
-    "tests/go/test_packages.py": {
-      "test_official_go_rejects_same_sibling_file_import_conflict": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference_packages_rejection"
-        ]
-      },
-      "test_original_package_sources_match_the_official_go_oracle": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference_packages"
-        ]
-      }
-    },
-    "tests/go/test_pointer_array_range.py": {
-      "test_identical_pointer_array_originals_match_official_raw_streams": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference"
-        ]
-      },
-      "test_official_go_builds_identical_unsupported_range_frontiers_without_execution": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference"
-        ]
-      },
-      "test_official_go_rejects_identical_invalid_pointer_array_ranges": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference_rejection"
-        ]
-      }
-    },
-    "tests/go/test_pointer_methods.py": {
-      "test_identical_imported_pointer_method_project_matches_official_raw_streams": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference_packages"
-        ]
-      },
-      "test_identical_pointer_method_originals_match_official_raw_streams": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference"
-        ]
-      },
-      "test_official_go_builds_identical_unsupported_receiver_frontiers_without_execution": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference"
+     …1893 tokens truncated…xternal reference via tests.go.owned_execution.compile_reference"
         ]
       },
       "test_official_go_rejects_identical_invalid_pointer_methods": {
@@ -1362,6 +1177,33 @@
         "reason": [
           "Calls tests.rust.test_fallible_streaming_iterator_project.certify_original and its actual check_rust_source prerequisite before owned syntax retention at the next unsupported boundary"
         ]
+      }
+    },
+    "tests/rust/test_rust_cfg_attributes.py": {
+      "test_actual_closed_configuration_applies_or_omits_no_std_without_rewriting": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": ["Calls tests.rust.test_rust_certified_lints.certify before owned cfg policy, original AST retention and object emission"]
+      },
+      "test_actual_nested_and_inactive_payloads_retain_the_original_metadata": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": ["Calls tests.rust.test_rust_certified_lints.certify before owned nested/inactive cfg_attr policy"]
+      },
+      "test_actual_check_never_waives_unknown_active_attributes_or_target_configuration": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": ["Calls tests.rust.test_rust_certified_lints.certify before asserting unsupported cfg contexts never reach owned lowering"]
+      },
+      "test_configuration_cannot_change_authenticated_source_edition_target_or_cfg": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": ["Calls tests.rust.test_rust_certified_lints.certify before source/edition/target/cfg identity rejection controls"]
+      },
+      "test_unchanged_cfg_attr_program_executes_owned_and_actual_rustc_reference": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": ["Calls tests.rust.test_rust_certified_lints.test_unchanged_lint_program_has_owned_native_and_actual_rustc_reference_results with the unchanged cfg_attr program"]
       }
     },
     "tests/rust/test_rust_certified_references.py": {

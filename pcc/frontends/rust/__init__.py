@@ -35,6 +35,7 @@ class RustCompilation:
     standard_marker_contract: object = None
     edition: int = 2021
     external_rustc_lints: ExternalRustcLints | None = None
+    crate_cfg_attributes: tuple = ()
 
     @property
     def ir_text(self) -> str:
@@ -120,7 +121,8 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
                            standard_marker_contract=marker_context, edition=edition,
                            external_rustc_lints=(ExternalRustcLints(
                                parser.crate_lint_attributes, rustc_check.stderr,
-                               rustc_check.provenance) if rustc_check is not None else None))
+                               rustc_check.provenance) if rustc_check is not None else None),
+                           crate_cfg_attributes=parser.crate_cfg_attributes)
 
 
 __all__ = ["ExternalRustcCheck", "CheckedRustSource", "RustcToolchain",

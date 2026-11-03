@@ -610,6 +610,23 @@
   ],
   "features": [
     {
+      "id": "rust.attributes.authenticated-cfg-attr-no-std",
+      "title": "Owned crate cfg_attr no_std policy in authenticated closed configuration",
+      "chapter_ids": ["rust.ref.5"],
+      "scope": "Retains original crate-root cfg_attr predicate/payload AST and spans; evaluates feature/all/any/not/literal predicates only in the genuine same-source/edition/target no-explicit-cfg checker context. Applies enabled no_std through existing CratePolicy, supports nested cfg_attr and retains inactive payload metadata. Built-in/target predicates, nonempty cfg inputs, other active payload semantics and outer/module cfg remain explicit boundaries. No source rewriting, unknown-active-attribute stripping, forged token, Cargo feature inference or project acceptance. Original-crate and authored native/reference obligations are UNRUN pending CI; no new qualification evidence is recorded.",
+      "status": "missing",
+      "tests": [
+        "tests/rust/test_rust_cfg_attributes.py::test_cfg_attr_requires_authenticated_inputs_and_retains_original_syntax",
+        "tests/rust/test_rust_cfg_attributes.py::test_actual_closed_configuration_applies_or_omits_no_std_without_rewriting@rust-native-reference",
+        "tests/rust/test_rust_cfg_attributes.py::test_actual_check_never_waives_unknown_active_attributes_or_target_configuration@rust-native-reference",
+        "tests/rust/test_rust_cfg_attributes.py::test_configuration_cannot_change_authenticated_source_edition_target_or_cfg@rust-native-reference",
+        "tests/rust/test_rust_certified_lints.py::test_unchanged_project_retains_lint_before_the_next_source_boundary@rust-native-reference",
+        "tests/rust/test_rust_cfg_attributes.py::test_unchanged_cfg_attr_program_executes_owned_and_actual_rustc_reference@rust-native-reference"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
       "id": "rust.attributes.external-certified-missing-docs",
       "title": "Actual externally checked crate missing_docs lint transition",
       "chapter_ids": [

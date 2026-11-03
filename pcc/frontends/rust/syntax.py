@@ -381,6 +381,8 @@ class Parser:
             self.tokens = [replace(token, source_path=source_path) for token in self.tokens]
         self.crate_documentation: tuple[Documentation, ...] = ()
         self.crate_lint_attributes: tuple = ()
+        self.crate_cfg_attributes: tuple = ()
+        self.crate_cfg_syntax: tuple = ()
         self._rustc_check = rustc_check
         self.crate_stability = None
         self.attribute_requirements = []
@@ -680,6 +682,8 @@ class Parser:
         child.crate_stability = None
         child.crate_documentation = ()
         child.crate_lint_attributes = ()
+        child.crate_cfg_attributes = ()
+        child.crate_cfg_syntax = ()
         functions = child.parse(_module=True, _inline=True)
         self.pos = child.pos
         return ModuleBody(functions, child.records, child.enums, child.implementations,
@@ -703,6 +707,18 @@ class Parser:
                 self.crate_lint_attributes += (lint,)
                 self.crate_documentation = tuple(crate_docs)
                 self.require_checked_crate_lint(lint)
+                continue
+            if attribute.text == 'cfg_attr':
+                from .configuration import crate_cfg_attribute, apply_crate_cfg
+                from .external_check import CheckedRustSource
+                syntax = crate_cfg_attribute(self, attribute, start)
+                self.crate_cfg_syntax += (syntax,)
+                self.crate_documentation = tuple(crate_docs)
+                if type(self._rustc_check) is not CheckedRustSource:
+                    raise attribute.error('cfg_attr requires an actual source/options-bound CheckedRustSource configuration')
+                context = self._rustc_check.configuration(self.source, edition=self.crate_policy.edition)
+                self.crate_policy, configured = apply_crate_cfg(syntax, context, self.crate_policy)
+                self.crate_cfg_attributes += (configured,)
                 continue
             if attribute.text == "stable":
                 from .attribute_metadata import stable_metadata

@@ -78,6 +78,14 @@ class CheckedRustSource:
         """Exact bytes from the actual successful metadata check, not a log path."""
         return self._stderr
 
+    def configuration(self, source, *, edition):
+        """Bind owned cfg evaluation to this actual unchanged-source command."""
+        self.validate(source, target_triple=self._record.target_triple,
+                      overflow_checks=self._record.overflow_checks, edition=edition)
+        from .configuration import RustConfiguration
+        return RustConfiguration(self._record.source_sha256, edition,
+                                 self._record.target_triple, self._record.cfg)
+
     def validate(self, source, *, target_triple, overflow_checks, edition=2021):
         if self._seal is not _SEAL or source != self._source:
             raise RustError('checked Rust source token does not match the unchanged Rust source bytes')
