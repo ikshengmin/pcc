@@ -662,7 +662,9 @@
       ],
       "scope": "Only inputs routed to cpp.unsupported.class-assignment in the pinned frontend; this is an explicit capability boundary, not a claim that the entire corresponding specification feature is absent or implemented.",
       "status": "explicitly_unimplemented",
-      "tests": [],
+      "tests": [
+        "tests/cpp/test_cpp_scalar_array_members.py::test_scalar_array_member_invalid_inputs_and_remaining_gaps[class-copy-assignment-separated-declarations]"
+      ],
       "diagnostics": [
         "cpp.unsupported.class-assignment"
       ],
@@ -1925,6 +1927,7 @@
       "scope": "Only inputs routed to cpp.unsupported.syntax in the pinned frontend; this is an explicit capability boundary, not a claim that the entire corresponding specification feature is absent or implemented.",
       "status": "explicitly_unimplemented",
       "tests": [
+        "tests/cpp/test_cpp_scalar_array_members.py::test_scalar_array_member_invalid_inputs_and_remaining_gaps[class-copy-assignment]",
         "tests/cpp/test_cpp_grouped_names.py",
         "tests/cpp/test_cpp_pointers.py",
         "tests/cpp/test_cpp_frontend.py",

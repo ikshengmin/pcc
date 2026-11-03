@@ -159,7 +159,11 @@ GAPS = (
     ('string-constructor-array', 'struct S{char data[2];S():data("x"){}};', 'cpp.unsupported.string-array-initialization'),
     ('array-dmi', 'struct S{int data[2]={17,25};};', 'cpp.unsupported.default-member-initializer-path'),
     ('aggregate-array-brace-elision', 'struct S{int data[2];};int f(){S s{17,25};return s.data[0];}', 'cpp.unsupported.aggregate-brace-elision'),
-    ('class-copy-assignment', 'struct S{int data[2];};int f(){S a{},b{};a=b;return 0;}', 'cpp.unsupported.class-assignment'),
+    # Retain the exact CI-failed original: the declaration-list comma meets
+    # the existing syntax boundary before class assignment can be examined.
+    ('class-copy-assignment', 'struct S{int data[2];};int f(){S a{},b{};a=b;return 0;}', 'cpp.unsupported.syntax'),
+    # This separate observer reaches the unchanged class-assignment owner.
+    ('class-copy-assignment-separated-declarations', 'struct S{int data[2];};int f(){S a{};S b{};a=b;return 0;}', 'cpp.unsupported.class-assignment'),
     ('function-template-array-decay', 'template<class T>T id(T x){return x;}int f(){int a[2]{};id(a);return 0;}', 'cpp.unsupported.array-templates'),
 )
 
