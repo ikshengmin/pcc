@@ -215,13 +215,20 @@ def test_unchanged_project_retains_lint_before_the_next_source_boundary(tmp_path
     _, checked = certify_original(files, tmp_path / 'actual-check')
     source = files['src/lib.rs'].decode()
     parser = Parser(source, source_path='src/lib.rs', edition=2015, rustc_check=checked)
-    with pytest.raises(RustError, match="src/lib.rs: 19:3: unsupported Rust attribute"):
+    # Source-predicted next boundary, not a newly observed project result.
+    # The exact former cfg failure is now a retained inactive declaration.
+    with pytest.raises(RustError, match="src/lib.rs: 22:1: expected 'fn', found 'use'"):
         parser.parse()
     lint, = parser.crate_lint_attributes
     assert lint.level == 'warn' and lint.lints[0].name == 'missing_docs'
     assert source[slice(*lint.source_span)] == '#![warn(missing_docs)]'
     assert parser.crate_cfg_attributes[0].enabled
     assert parser.crate_policy.implicit_library_import == 'core'
+    conditional, = parser.conditional_items
+    assert not conditional.enabled and not parser.crate_aliases
+    assert conditional.item.crate.text == 'core' and conditional.item.token.line == 20
+    assert conditional.attributes[0].syntax.token.line == 19
+    assert source[slice(*conditional.source_span)] == '#[cfg(feature = "std")]\nextern crate core;'
     assert parser.crate_documentation[0].text == ' Fallible, streaming iteration.'
     assert load_inputs()[1] == files
     # This is syntax retention at a capability failure, never an object/package

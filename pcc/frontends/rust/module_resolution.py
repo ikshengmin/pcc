@@ -170,7 +170,7 @@ def inline_crate(parser, functions):
     identity = CrateId('rust', path, edition, closure)
     body = ModuleBody(functions, parser.records, parser.enums, parser.implementations,
                       parser.traits, parser.modules, parser.crate_documentation,
-                      parser.crate_aliases, parser.crate_policy)
+                      parser.crate_aliases, parser.crate_policy, parser.conditional_items)
     graph = _Loader(files).load_body(file, body, ModuleId(identity, ()), PurePosixPath('.'), None, inline=False)
     return CrateSyntax(graph, edition, files)
 

@@ -1399,6 +1399,38 @@
         "reason": ["Calls tests.rust.test_rust_certified_lints.test_unchanged_lint_program_has_owned_native_and_actual_rustc_reference_results with the unchanged cfg_attr program"]
       }
     },
+    "tests/rust/test_rust_cfg_items.py": {
+      "test_actual_conditional_extern_items_preserve_tokens_spans_and_name_effects": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": ["Calls tests.rust.test_rust_certified_lints.certify before owned conditional-item parsing, registration and object emission"]
+      },
+      "test_actual_cfg_never_guesses_target_custom_or_short_circuited_context": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": ["Calls tests.rust.test_rust_certified_lints.certify before asserting unowned configuration cannot enter lowering"]
+      },
+      "test_actual_conditional_items_keep_active_dependency_and_other_item_boundaries": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": ["Calls tests.rust.test_rust_certified_lints.certify before asserting active dependencies and unsupported item families remain explicit boundaries"]
+      },
+      "test_actual_inline_module_retains_inactive_item_in_original_coordinate_space": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": ["Calls tests.rust.test_rust_certified_lints.certify before unchanged-source inline-module conditional declaration retention"]
+      },
+      "test_actual_item_context_rejects_source_edition_target_and_cfg_changes": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": ["Calls tests.rust.test_rust_certified_lints.certify before source/edition/target/explicit-cfg mismatch controls"]
+      },
+      "test_unchanged_conditional_item_program_executes_owned_and_actual_reference": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": ["Calls tests.rust.test_rust_certified_lints.test_unchanged_lint_program_has_owned_native_and_actual_rustc_reference_results with the unchanged conditional-item program"]
+      }
+    },
     "tests/rust/test_rust_certified_references.py": {
       "test_actual_external_check_removes_partial_owned_loan_barrier": {
         "activity": "mandatory-same-input-certification-and-owned-contract",

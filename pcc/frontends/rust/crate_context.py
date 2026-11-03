@@ -148,7 +148,8 @@ class _Loader:
             functions = parser.parse(_module=bool(identity.components))
             body = ModuleBody(functions, parser.records, parser.enums,
                               parser.implementations, parser.traits, parser.modules,
-                              parser.crate_documentation, parser.crate_aliases, parser.crate_policy)
+                              parser.crate_documentation, parser.crate_aliases, parser.crate_policy,
+                              parser.conditional_items)
             return self.load_body(source, body, identity, directory, declaration,
                                   inline=False)
         except RustError as exc:

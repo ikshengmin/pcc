@@ -1,4 +1,4 @@
-"""Owned cfg_attr evaluation in the authenticated no-explicit-cfg context.
+"""Owned conditional attributes in the authenticated no-explicit-cfg context.
 
 Rust Reference conditional-compilation.html, retrieved 2026-11-03. Cargo
 features are outside-source --cfg inputs. The existing checker admits no such
@@ -50,6 +50,42 @@ class ConfiguredCrateAttribute:
     syntax: ConditionalCrateAttribute
     configuration: RustConfiguration
     enabled: bool
+
+
+@dataclass(frozen=True)
+class ConditionalItemAttribute:
+    token: object
+    predicate: object
+    source_span: tuple[int, int]
+
+
+@dataclass(frozen=True)
+class ConfiguredItemAttribute:
+    syntax: ConditionalItemAttribute
+    configuration: RustConfiguration
+    enabled: bool
+
+
+@dataclass(frozen=True)
+class ConfiguredItem:
+    """Retained original syntax; only enabled items enter name/IR owners."""
+    attributes: tuple[ConfiguredItemAttribute, ...]
+    item: object
+    tokens: tuple
+    source_span: tuple[int, int]
+
+    @property
+    def enabled(self):
+        return all(attribute.enabled for attribute in self.attributes)
+
+
+def item_cfg_attribute(parser, token, start):
+    items = meta_list(parser, cfg_literals=True)
+    if len(items) != 1:
+        raise token.error('cfg requires exactly one configuration predicate')
+    end = parser.expect(']')
+    return ConditionalItemAttribute(token, items[0],
+                                    (offset(parser, start), offset(parser, end) + 1))
 
 
 def crate_cfg_attribute(parser, token, start):

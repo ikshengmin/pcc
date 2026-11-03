@@ -610,10 +610,30 @@
   ],
   "features": [
     {
+      "id": "rust.attributes.authenticated-cfg-extern-crate-items",
+      "title": "Authenticated conditional extern-crate items, awaiting CI execution",
+      "chapter_ids": ["rust.ref.5", "rust.ref.6.2"],
+      "scope": "Authored, execution-unrun obligations for outer cfg on grammar-parsed extern crate items in the genuine unchanged-source/edition/target empty-explicit-cfg context. Retains immutable predicates, complete item syntax, original token identities, spans and inactive declarations; validates every predicate before conjunction. Inactive items create no crate aliases or dependencies. Active crate-self aliases reuse existing registration; active external dependencies, other conditional item families, inner cfg, target/custom cfg, nonempty feature flags and general cfg_attr payloads remain explicit boundaries. Exact original fallible-streaming-iterator lines19-20 and its complete strict project success gate are preserved; advancing the former rejection does not establish a project object or executable. All authored actual-check and native/reference obligations remain UNRUN, with no new qualification evidence.",
+      "status": "missing",
+      "tests": [
+        "tests/rust/test_rust_cfg_items.py::test_cfg_items_require_genuine_configuration_and_retain_original_attribute",
+        "tests/rust/test_rust_cfg_items.py::test_actual_conditional_extern_items_preserve_tokens_spans_and_name_effects@rust-native-reference",
+        "tests/rust/test_rust_cfg_items.py::test_actual_cfg_never_guesses_target_custom_or_short_circuited_context@rust-native-reference",
+        "tests/rust/test_rust_cfg_items.py::test_actual_conditional_items_keep_active_dependency_and_other_item_boundaries@rust-native-reference",
+        "tests/rust/test_rust_cfg_items.py::test_actual_inline_module_retains_inactive_item_in_original_coordinate_space@rust-native-reference",
+        "tests/rust/test_rust_cfg_items.py::test_actual_item_context_rejects_source_edition_target_and_cfg_changes@rust-native-reference",
+        "tests/rust/test_rust_cfg_items.py::test_unchanged_conditional_item_program_executes_owned_and_actual_reference@rust-native-reference",
+        "tests/rust/test_rust_certified_lints.py::test_unchanged_project_retains_lint_before_the_next_source_boundary@rust-native-reference",
+        "tests/rust/test_fallible_streaming_iterator_project.py::test_actual_same_original_certification_then_pcc_object@rust-native-reference"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
       "id": "rust.attributes.authenticated-cfg-attr-no-std",
       "title": "Owned crate cfg_attr no_std policy in authenticated closed configuration",
       "chapter_ids": ["rust.ref.5"],
-      "scope": "Retains original crate-root cfg_attr predicate/payload AST and spans; evaluates feature/all/any/not/literal predicates only in the genuine same-source/edition/target no-explicit-cfg checker context. Applies enabled no_std through existing CratePolicy, supports nested cfg_attr and retains inactive payload metadata. Built-in/target predicates, nonempty cfg inputs, other active payload semantics and outer/module cfg remain explicit boundaries. No source rewriting, unknown-active-attribute stripping, forged token, Cargo feature inference or project acceptance. Original-crate and authored native/reference obligations are UNRUN pending CI; no new qualification evidence is recorded.",
+      "scope": "Retains original crate-root cfg_attr predicate/payload AST and spans; evaluates feature/all/any/not/literal predicates only in the genuine same-source/edition/target no-explicit-cfg checker context. Applies enabled no_std through existing CratePolicy, supports nested cfg_attr and retains inactive payload metadata. Built-in/target predicates, nonempty cfg inputs, other active payload semantics and cfg item families beyond extern crate remain explicit boundaries. No source rewriting, unknown-active-attribute stripping, forged token, Cargo feature inference or project acceptance. Original-crate and authored native/reference obligations are UNRUN pending CI; no new qualification evidence is recorded.",
       "status": "missing",
       "tests": [
         "tests/rust/test_rust_cfg_attributes.py::test_cfg_attr_requires_authenticated_inputs_and_retains_original_syntax",

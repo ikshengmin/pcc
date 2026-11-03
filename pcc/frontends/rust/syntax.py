@@ -336,6 +336,16 @@ class CrateSelfAlias:
     documentation: tuple[Documentation, ...] = ()
 
 
+@dataclass(frozen=True)
+class ExternCrateItem:
+    token: Token
+    crate: Token
+    alias: Token | None
+    public: bool
+    documentation: tuple[Documentation, ...]
+    source_span: tuple[int, int]
+
+
 @dataclass
 class ModuleBody:
     functions: list[Function]
@@ -347,6 +357,7 @@ class ModuleBody:
     documentation: tuple[Documentation, ...]
     crate_aliases: list[CrateSelfAlias] = field(default_factory=list)
     crate_policy: CratePolicy = field(default_factory=CratePolicy)
+    conditional_items: tuple = ()
 
 
 @dataclass
@@ -383,6 +394,8 @@ class Parser:
         self.crate_lint_attributes: tuple = ()
         self.crate_cfg_attributes: tuple = ()
         self.crate_cfg_syntax: tuple = ()
+        self.item_cfg_syntax: tuple = ()
+        self.conditional_items: tuple = ()
         self._rustc_check = rustc_check
         self.crate_stability = None
         self.attribute_requirements = []
@@ -684,11 +697,35 @@ class Parser:
         child.crate_lint_attributes = ()
         child.crate_cfg_attributes = ()
         child.crate_cfg_syntax = ()
+        child.item_cfg_syntax = ()
+        child.conditional_items = ()
         functions = child.parse(_module=True, _inline=True)
         self.pos = child.pos
         return ModuleBody(functions, child.records, child.enums, child.implementations,
                           child.traits, child.modules, child.crate_documentation,
-                          child.crate_aliases, child.crate_policy)
+                          child.crate_aliases, child.crate_policy, child.conditional_items)
+
+    def extern_crate_item(self, token, start, public, documentation):
+        """Parse the real extern-crate grammar, including inactive items."""
+        from .attribute_metadata import offset
+        crate = self.take() if self.token.text == 'self' else self.name()
+        alias = None
+        if self.accept('as'):
+            alias = self.take() if self.token.text == '_' else self.name()
+        end = self.expect(';')
+        return ExternCrateItem(token, crate, alias, public, documentation,
+                               (offset(self, start), offset(self, end) + 1))
+
+    def register_extern_crate(self, item):
+        # Inactive dependency declarations never enter this semantic owner.
+        # Active external dependencies retain their existing explicit boundary.
+        if item.crate.text != 'self':
+            raise item.crate.error('external crate dependency loading is not implemented; only an explicit crate-self alias is supported')
+        if item.alias is None:
+            raise item.crate.error("expected 'as' for an explicit crate-self alias")
+        if item.alias.text == '_':
+            raise item.alias.error('anonymous crate aliases are not implemented')
+        self.crate_aliases.append(CrateSelfAlias(item.alias, item.public, item.documentation))
 
     def parse(self, *, _module=False, _inline=False) -> list[Function]:
         functions: list[Function] = []
@@ -743,6 +780,8 @@ class Parser:
         self.crate_documentation = tuple(crate_docs)
         self.validate_attribute_context()
         while self.token.kind != "eof" and not (_inline and self.token.text == "}"):
+            item_start = self.pos
+            cfg_attributes = []
             repr_c = no_mangle = False
             module_path = None
             enum_repr = None
@@ -752,8 +791,19 @@ class Parser:
                 docs.extend(self.documentation())
                 if not self.accept("#"):
                     break
+                attribute_start = self.tokens[self.pos - 1]
                 self.expect("[")
                 attribute = self.take()
+                if attribute.text == 'cfg':
+                    from .configuration import item_cfg_attribute, ConfiguredItemAttribute
+                    from .external_check import CheckedRustSource
+                    syntax = item_cfg_attribute(self, attribute, attribute_start)
+                    self.item_cfg_syntax += (syntax,)
+                    if type(self._rustc_check) is not CheckedRustSource:
+                        raise attribute.error('cfg requires an actual source/options-bound CheckedRustSource configuration')
+                    context = self._rustc_check.configuration(self.source, edition=self.crate_policy.edition)
+                    cfg_attributes.append(ConfiguredItemAttribute(syntax, context, context.predicate(syntax.predicate)))
+                    continue
                 if attribute.text == "lang":
                     if language_item is not None:
                         raise attribute.error("multiple lang attributes on one item are not implemented")
@@ -782,6 +832,8 @@ class Parser:
             if docs and self.token.kind == "eof":
                 raise docs[-1].token.error("outer documentation attribute has no following item")
             public = self.accept("pub")
+            if cfg_attributes and not (self.token.text == 'extern' and self.tokens[self.pos + 1].text == 'crate'):
+                raise self.token.error('conditional item gating is implemented only for extern crate declarations; other item syntax requires its own configuration owner')
             if language_item is not None and self.token.text != "trait":
                 raise language_item.token.error("language item requires a trait target")
             if self.accept("mod"):
@@ -886,17 +938,19 @@ class Parser:
             unsafe = self.accept("unsafe")
             abi = "Rust"
             if self.accept("extern"):
+                extern_token = self.tokens[self.pos - 1]
                 if self.accept("crate"):
-                    if unsafe or no_mangle or repr_c or enum_repr is not None:
+                    if unsafe or no_mangle or repr_c or enum_repr is not None or language_item is not None:
                         raise self.token.error("attributes/unsafe on crate aliases are not implemented")
-                    if not self.accept("self"):
-                        raise self.token.error("external crate dependency loading is not implemented; only an explicit crate-self alias is supported")
-                    self.expect("as")
-                    if self.token.text == "_":
-                        raise self.token.error("anonymous crate aliases are not implemented")
-                    name = self.name()
-                    self.expect(";")
-                    self.crate_aliases.append(CrateSelfAlias(name, public, tuple(docs)))
+                    item = self.extern_crate_item(extern_token, self.tokens[item_start], public, tuple(docs))
+                    if cfg_attributes:
+                        from .configuration import ConfiguredItem
+                        configured = ConfiguredItem(tuple(cfg_attributes), item,
+                                                    tuple(self.tokens[item_start:self.pos]), item.source_span)
+                        self.conditional_items += (configured,)
+                        if not configured.enabled:
+                            continue
+                    self.register_extern_crate(item)
                     continue
                 if self.token.kind == "string":
                     token = self.take()
@@ -946,7 +1000,7 @@ class Parser:
 
     def validate_attribute_context(self):
         # Retained metadata is not permission to discard staging/feature rules.
-        # No public override exists; feature/lang/cfg and no_core semantics remain unsupported.
+        # No public override exists for unowned feature/lang/no_core semantics.
         if self.attribute_requirements:
             token, feature = self.attribute_requirements[0]
             raise token.error(f"attribute metadata requires {feature} compiler context; this context is not implemented")
