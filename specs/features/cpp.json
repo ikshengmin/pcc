@@ -804,6 +804,24 @@
       "evidence": []
     },
     {
+      "id": "cpp.templates.typed-array-bounds",
+      "title": "Typed class-template constant array bounds, awaiting execution",
+      "chapter_ids": [
+        "dcl.decl",
+        "expr",
+        "temp"
+      ],
+      "scope": "Authored, execution-unrun obligations for definition-point typed fixed and value-dependent class-template array bounds, integral non-type parameter identities, nested pointer-to-array substitution, target constant proofs, lazy completeness and sticky diagnostics. Pointer-to-array member layout, row stride, cv and cross-TU nominal ABI reuse the existing C aggregate and pointer owners. The exact previously rejected fixed-array primary declaration is retained unchanged as a positive declaration-only input. Direct array data-member lifetime, template array decay, function-template array deduction/signatures, class-array lifetime, native pcc1 frontend and unchanged TinyXML2 project acceptance remain explicit unqualified boundaries. The TinyXML2 header field excerpt is not an executed DynArray or project result. No local tests, PCC imports, compiler runs or collection were performed; CI must establish these outcomes.",
+      "status": "missing",
+      "tests": [
+        "tests/cpp/test_cpp_template_array_bounds.py",
+        "tests/cpp/test_cpp_template_array_bound_execution.py",
+        "tests/cpp/test_cpp_projects.py::test_cpp_tinyxml2_upstream_tests_explicit_host_pcc_project"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
       "id": "cpp.templates.reference-subscript-results",
       "title": "Reference results and class-template subscript members, awaiting execution",
       "chapter_ids": [

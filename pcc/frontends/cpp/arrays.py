@@ -14,7 +14,8 @@ from pcc.frontends.cpp.initializers import ListInitializer, _lower_scalar
 from pcc.frontends.cpp.types import ArrayType, ConstType, ReferenceType, array_type, function_type, unqualified
 
 
-def make_array_type(element, bound_expression, types, coord, allow_class_element=False):
+def check_array_element(element, coord, allow_class_element=False):
+    """Share element legality at definition time and after substitution."""
     if isinstance(element, ReferenceType):
         raise CppDiagnostic("cpp.invalid-array-element", "an array cannot have reference elements", coord)
     if unqualified(element) == "void" or function_type(element):
@@ -25,6 +26,10 @@ def make_array_type(element, bound_expression, types, coord, allow_class_element
         require_complete(element, coord)
     if array_type(element) and element.bound is None:
         raise CppDiagnostic("cpp.incomplete-array-element", "an array element cannot have unknown bound", coord)
+
+
+def make_array_type(element, bound_expression, types, coord, allow_class_element=False):
+    check_array_element(element, coord, allow_class_element)
     if bound_expression is None:
         return ArrayType(element, None)
     if not types.integral_operand(bound_expression.dtype):

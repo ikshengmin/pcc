@@ -210,8 +210,8 @@ def declare_instances(parser, owner, definition, arguments):
     from pcc.frontends.cpp.members import declare_member_function, object_pointer_type
     for record in owner.methods:
         origin = record.symbol
-        result = substitute_member(origin.dtype, arguments, definition.dtype, origin.coord)
-        params = tuple((token, substitute_member(dtype, arguments, definition.dtype, origin.coord))
+        result = substitute_member(origin.dtype, arguments, definition.dtype, origin.coord, parser)
+        params = tuple((token, substitute_member(dtype, arguments, definition.dtype, origin.coord, parser))
                        for token, dtype in record.parameters)
         from pcc.frontends.cpp.references import check_result
         check_result(result, origin.coord)

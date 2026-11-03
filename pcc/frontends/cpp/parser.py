@@ -2726,7 +2726,7 @@ class CppParser:
         if context is None:
             return substitute(dtype, bindings)
         from pcc.frontends.cpp.class_templates import substitute_member
-        return substitute_member(dtype, bindings, context.symbol.class_owner, coord)
+        return substitute_member(dtype, bindings, context.symbol.class_owner, coord, self)
 
     def _instantiate_expression(self, expression, bindings, environment):
         pattern = expression.node if isinstance(expression, Expression) else expression

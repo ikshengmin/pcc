@@ -103,7 +103,6 @@ def test_template_prefix_substitution_is_not_a_spelling_alias():
     ('int n=2;template<int N>struct Box{};Box<n>b;','cpp.nonconstant-template-argument'),
     ('template<class T>struct Box{T f(){return missing();}};','cpp.undeclared'),
     ('template<class T>struct Box{T value=42;};','cpp.unsupported.class-templates'),
-    ('template<class T>struct Box{T value[2];};','cpp.unsupported.array-bounds'),
     ('template<class T>struct Box{};template<>struct Box<int>{};','cpp.unsupported.templates'),
     ('template<class T>struct Box{};template<class T>struct Box{};','cpp.class-redefinition'),
     ('template<class T>struct Box{};Box b;','cpp.unsupported.class-templates'),

@@ -818,6 +818,20 @@
         ]
       }
     },
+    "tests/cpp/test_cpp_template_array_bound_execution.py": {
+      "test_invalid_template_array_bound_reference_rejection": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct C++17 negative reference compiler subprocess with -pedantic-errors and -fsyntax-only; unused universally invalid primary is labeled IFNDR"
+        ]
+      },
+      "test_template_array_bound_originals_match_cpp17": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.sizeof_execution.execute_row_pair, which calls tests.cpp.owned_execution.compile_reference_cpp"
+        ]
+      }
+    },
     "tests/cpp/test_cpp_template_subscript_result_execution.py": {
       "test_invalid_reference_subscript_original_is_rejected_by_reference": {
         "activity": "external-reference",

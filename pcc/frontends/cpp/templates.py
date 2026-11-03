@@ -56,6 +56,18 @@ class TemplateArgument:
         self.tokens = tuple(tokens)
 
 
+class ArrayBoundPattern:
+    """A typed definition-point expression, not a guessed concrete extent.
+
+    Only the class-template owner currently substitutes these bounds. Array
+    deduction and function-template array signatures remain separate gaps.
+    """
+
+    def __init__(self, expression):
+        self.expression = expression
+        self.coord = expression.node.coord
+
+
 def value_dependent(expression):
     if dependent(expression.dtype):
         return True
@@ -129,7 +141,7 @@ def dependent(dtype):
     if isinstance(dtype, PointerType):
         return dependent(dtype.pointee)
     if isinstance(dtype, ArrayType):
-        return dependent(dtype.element)
+        return dependent(dtype.element) or isinstance(dtype.bound, ArrayBoundPattern)
     return isinstance(dtype, ReferenceType) and dependent(dtype.referent)
 
 
@@ -161,6 +173,9 @@ def substitute(dtype, arguments):
             raise CppDiagnostic('cpp.invalid-reference-type', 'substitution cannot form a pointer to a reference', None)
         return PointerType(pointee)
     if isinstance(dtype, ArrayType):
+        if isinstance(dtype.bound, ArrayBoundPattern):
+            raise CppDiagnostic('cpp.unsupported.array-templates',
+                                'dependent array bounds require class-template substitution', dtype.bound.coord)
         return ArrayType(substitute(dtype.element, arguments), dtype.bound)
     return arguments[dtype.index] if isinstance(dtype, TypeParameter) else dtype
 

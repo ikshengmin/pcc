@@ -188,8 +188,6 @@ BOUNDARIES = (
      'int f(S<R>*p){return p->get();}', 'cpp.unsupported.references'),
     ('enum-reference-pattern', 'enum E{A};template<class T>struct S{E&get();};',
      'cpp.unsupported.enum-templates'),
-    ('dependent-array-member', 'template<class T,int N>struct S{T values[N];};',
-     'cpp.unsupported.array-bounds'),
     ('allocation-use', 'template<class T>struct S{T*p;T&get(){delete[]p;return*p;}};'
      'int f(S<int>*p){return p->get();}', 'cpp.unsupported.allocation'),
 )

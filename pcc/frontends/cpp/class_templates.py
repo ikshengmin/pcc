@@ -5,8 +5,10 @@ not instantiate its layout. The shared InstanceRegistry owns identity and
 scheduling; this owner only checks C++ completeness and emits ordinary C
 records. No token replacement, alternate layout engine, or instance cache.
 Ordinary member bodies are typed once at definition time and instantiated on
-ODR-use. Complete-object D1s share the ordinary lifetime owner. Bases, arrays
-and specializations remain explicit capability boundaries, never unparsed,
+ODR-use. Complete-object D1s share the ordinary lifetime owner. Typed array
+bounds retain definition-point Patterns and substitute before layout; array
+data-member lifetime remains an explicit boundary. Bases and specializations
+remain explicit capability boundaries, never unparsed,
 supposedly validated bodies.
 """
 
@@ -16,9 +18,13 @@ from pcc.frontends.cpp.declarators import DeclaratorParser
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.sema import Scope, Symbol
 from pcc.frontends.cpp.templates import (
-    TypeParameter, convert_integral_argument, substitute, type_key,
+    ArrayBoundPattern, TypeParameter, convert_integral_argument, dependent,
+    substitute, type_key, value_dependent,
 )
-from pcc.frontends.cpp.types import ConstType, PointerType, ReferenceType, array_type, contains_function, is_enum_type, qualify_const, unqualified
+from pcc.frontends.cpp.types import (
+    ArrayType, ConstType, PointerType, ReferenceType, array_type,
+    contains_function, is_enum_type, qualify_const, unqualified,
+)
 
 
 def unsupported(coord, message):
@@ -52,6 +58,27 @@ class ClassTemplatePattern:
 def parameter_key(parameters):
     return tuple(('type',) if isinstance(p, TypeParameter)
                  else ('value', type_key(p.dtype)) for p in parameters)
+
+
+def parse_array_bound(parser, pattern):
+    """Parse once using the same typed expression owner as member bodies."""
+    previous = parser.template_function
+    parser.template_function = pattern
+    try:
+        return parser._expression()
+    finally:
+        parser.template_function = previous
+
+
+def pattern_array_type(parser, element, expression, coord):
+    from pcc.frontends.cpp.arrays import check_array_element, make_array_type
+    check_array_element(element, coord)
+    if expression is not None and value_dependent(expression):
+        if not dependent(expression.dtype) and not parser.types.integral_operand(expression.dtype):
+            raise CppDiagnostic('cpp.invalid-array-bound',
+                                'array bound requires an integral converted constant expression', coord)
+        return ArrayType(element, ArrayBoundPattern(expression))
+    return make_array_type(element, expression, parser.types, coord)
 
 
 def parse_declaration(parser, parameters, parent):
@@ -122,6 +149,7 @@ def parse_declaration(parser, parameters, parent):
             while True:
                 from pcc.frontends.cpp.operators import declaration_name
                 declaration = DeclaratorParser(parser.cursor, lambda: declaration_name(parser),
+                                                parse_array_bound=lambda: parse_array_bound(parser, pattern),
                                                 parse_functions=False).parse()
                 if declaration.name.global_scope or len(declaration.name.parts) != 1:
                     unsupported(declaration.coord, 'qualified class template member declarators are not implemented')
@@ -133,6 +161,9 @@ def parse_declaration(parser, parameters, parent):
                     raise CppDiagnostic(code, 'operator name must declare a function', member.coord)
                 dtype = base
                 for chunk in reversed(declaration.chunks):
+                    if chunk.kind == 'array':
+                        dtype = pattern_array_type(parser, dtype, chunk.bound, chunk.coord)
+                        continue
                     if chunk.kind == 'lvalue-reference':
                         from pcc.frontends.cpp.references import lvalue_reference
                         dtype = lvalue_reference(dtype, chunk.coord)
@@ -158,6 +189,9 @@ def parse_declaration(parser, parameters, parent):
                     unsupported(parser._peek().coord, 'class template static data, member initializers and bit-fields are not implemented')
                 if member.value == name.value:
                     unsupported(member.coord, 'same-named class template data members are not implemented')
+                if array_type(dtype) and dtype.bound is None:
+                    raise CppDiagnostic('cpp.invalid-array-bound',
+                                        'an array data member requires a bound', member.coord)
                 if contains_function(dtype) or isinstance(unqualified(dtype), ReferenceType):
                     unsupported(member.coord, 'class template function/reference members are not implemented')
                 if isinstance(unqualified(dtype), ClassType):
@@ -234,21 +268,35 @@ def specialize(parser, symbol, coord):
     return dtype
 
 
-def substitute_member(dtype, arguments, instance, coord):
+def substitute_member(dtype, arguments, instance, coord, parser=None):
     if isinstance(dtype, TypeParameter):
         return arguments[dtype.index]
     if isinstance(dtype, InjectedClassPattern):
         return instance
     if isinstance(dtype, ConstType):
-        return qualify_const(substitute_member(dtype.base, arguments, instance, coord))
+        return qualify_const(substitute_member(dtype.base, arguments, instance, coord, parser))
     if isinstance(dtype, ReferenceType):
         from pcc.frontends.cpp.references import lvalue_reference
-        return lvalue_reference(substitute_member(dtype.referent, arguments, instance, coord), coord)
+        return lvalue_reference(substitute_member(dtype.referent, arguments, instance, coord, parser), coord)
     if isinstance(dtype, PointerType):
-        pointee = substitute_member(dtype.pointee, arguments, instance, coord)
+        pointee = substitute_member(dtype.pointee, arguments, instance, coord, parser)
         if isinstance(unqualified(pointee), ReferenceType):
             raise CppDiagnostic('cpp.invalid-reference-type', 'substitution cannot form a pointer to a reference', coord)
         return PointerType(pointee)
+    if isinstance(dtype, ArrayType):
+        from pcc.frontends.cpp.arrays import check_array_element, make_array_type
+        element = substitute_member(dtype.element, arguments, instance, coord, parser)
+        check_array_element(element, coord)
+        if isinstance(dtype.bound, ArrayBoundPattern):
+            if parser is None:
+                raise CppDiagnostic('cpp.unsupported.array-templates',
+                                    'dependent array bounds require a typed instantiation context', dtype.bound.coord)
+            # Instantiation consumes the retained expression and bindings,
+            # never tokens or use-site lookup. The ordinary bound owner checks
+            # positivity, target size_t representation and constant proof.
+            expression = parser._instantiate_expression(dtype.bound.expression, arguments, {})
+            return make_array_type(element, expression, parser.types, dtype.bound.coord)
+        return ArrayType(element, dtype.bound)
     return dtype
 
 
@@ -265,7 +313,7 @@ def complete_layout(parser, dtype, pattern, arguments, coord):
     try:
         definition = ClassDefinition(dtype, pattern.scope, pattern.class_key)
         for name, member_type, at, access, mutable in pattern.members:
-            member_type = substitute_member(member_type, arguments, dtype, at)
+            member_type = substitute_member(member_type, arguments, dtype, at, parser)
             plain = unqualified(member_type)
             if isinstance(plain, ReferenceType) or array_type(plain) or contains_function(member_type):
                 unsupported(at, 'substituted reference/array/function members are not implemented')
