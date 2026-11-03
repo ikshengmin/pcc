@@ -264,7 +264,11 @@ def pcc_gc_scheduler_root_register_handle(slot) -> c_ptr:
     backend: i64 = gc_backend_current()
     if ptr_is_null(slot) != 0:
         return null()
-    if _scheduler_handle_needs_graph(backend) == 0:
+    if (
+        backend == 0
+        or (load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
+            and _scheduler_handle_needs_graph(backend) == 0)
+    ):
         # Reuse and publish under one list acquisition. Splitting these two
         # tiny changes made the one global word bounce between carriers twice
         # per registration even though no allocation was needed.
@@ -291,7 +295,11 @@ def pcc_gc_scheduler_root_register_handle(slot) -> c_ptr:
     node = _scheduler_root_node_take(slot)
     if ptr_is_null(node) != 0:
         return null()
-    if _scheduler_handle_needs_graph(backend) == 0:
+    if (
+        backend == 0
+        or (load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
+            and _scheduler_handle_needs_graph(backend) == 0)
+    ):
         pcc_gc_scheduler_root_link_locked(node)
     else:
         pcc_py_gc_minor_graph_lock()
@@ -311,7 +319,11 @@ def pcc_gc_scheduler_root_unregister_handle(handle) -> None:
     backend: i64 = gc_backend_current()
     if ptr_is_null(handle) != 0:
         return
-    if _scheduler_handle_needs_graph(backend) == 0:
+    if (
+        backend == 0
+        or (load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
+            and _scheduler_handle_needs_graph(backend) == 0)
+    ):
         # Detach and recycle in the same critical section. Neither operation
         # allocates or polls; a full pool frees only after dropping the word.
         _scheduler_root_spin_acquire()

@@ -99,8 +99,8 @@ registered running thread. Cold callers retain graph admission; callers that
 left managed execution must restore their blocking state. Persistent queue
 transactions and GC3's incremental root cursor retain their graph protocol.
 Root revisions use CAS updates for independent frame/handle writers and atomic
-cursor reads; graph-serialized modes retain their serial update. On the preceding frozen local
-Mac executable, four-worker graph-lock waits occupied 60.93% of CPU samples
+cursor reads; graph-serialized modes retain their serial update. On the preceding
+frozen local Mac executable, four-worker graph-lock waits occupied 60.93% of CPU samples
 (GC0: 5.45%); handle register/unregister callers accounted for 28.20% of all
 samples. This is an owner profile, not a throughput gain. Over `74acdd6de`,
 155 production-body cases, three closure/IR checks, seven ABI chunk checks,
@@ -124,8 +124,14 @@ direction screening only. Other modes show regressions, including GC1
 four-worker -9.36% and GC3 one-worker -6.07%, so batch acceptance is unmet.
 A follow-up restores serial revision updates where all writers already hold
 the graph lock; GC0 and count-free GC4 retain CAS for independent writers.
-It passes 181 body/closure checks and all six native modes. Its complete
-throughput check is pending; full suites and bootstrap remain unrun.
+It passes 181 body/closure checks and all six native modes. Its short screen
+improves count-free GC4 four-worker QPS, but does not clear all other modes'
+regressions. Counted handle operations now also bypass the tracing admission
+helper, retaining their direct backend path. The final source passes those
+181 checks, five new counted-path cases, all six native concurrency modes,
+and both GC4 value/lifecycle integrations (including big integers, weakrefs,
+finalizers and resurrection against CPython output). Final throughput
+screening is pending; full suites and bootstrap remain unrun.
 
 Concurrent tracing slices now charge every inspected object-list node against
 their scan bound, including black, dying and invalid nodes. The returned work

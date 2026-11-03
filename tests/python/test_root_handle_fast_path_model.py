@@ -283,6 +283,20 @@ def test_recycled_handle_pair_needs_only_one_list_acquisition_per_change(backend
     assert state.list_entries - entries == (2 if backend == 0 or (backend == 4 and tracing) else 4)
 
 
+@pytest.mark.parametrize("backend", range(5))
+def test_counted_handle_operations_skip_tracing_admission_queries(backend):
+    state = RootState(backend, 0)
+    state.ns["_scheduler_handle_needs_graph"] = lambda unused: pytest.fail(
+        "counted handle operations must keep their direct backend path"
+    )
+    first = state.register(0x10000)
+    state.unregister(first)
+    reused = state.register(0x10008)
+    assert reused == first and state.linked() == [reused]
+    state.unregister(reused)
+    assert state.revision == 4 and state.linked() == []
+
+
 @pytest.mark.parametrize("backend,tracing", MODES)
 def test_full_free_pool_releases_detached_handle_outside_list_word(backend, tracing):
     state = RootState(backend, tracing)
