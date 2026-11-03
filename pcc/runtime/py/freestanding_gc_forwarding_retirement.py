@@ -53,6 +53,8 @@ pcc_py_gc_minor_graph_unlock = extern(
 pcc_thread_owns_stopped_world = extern(
     "pcc_thread_owns_stopped_world", (), c_int64
 )
+pcc_thread_live_count = extern("pcc_thread_live_count", (), c_int64)
+pcc_thread_all_stopped_at_gates = extern("pcc_thread_all_stopped_at_gates", (), c_int64)
 pcc_stop_the_world = extern("pcc_stop_the_world", (), c_int64)
 pcc_resume_world = extern("pcc_resume_world", (), c_int64)
 pcc_gc_backend4_zpage_clear_active_page = extern(
@@ -481,6 +483,22 @@ def pcc_gc_backend4_remap_and_retire_stopped_world() -> i64:
             return 0
         acquired_stopped_world = 1
 
+    # Empty-page quarantine must progress after the last forwarding edge is
+    # gone too. This newly admitted path uses the same application-gate cut
+    # as relocation, and may not release a page under a deallocator's frame.
+    # Keep the existing forwarding path's admission contract unchanged.
+    if load_i32(global_addr("pcc_gc_forwarding_population"), 0) == 0:
+        if (
+            pcc_dealloc_cascade_active() != 0
+            or (
+                pcc_thread_live_count() > 1
+                and pcc_thread_all_stopped_at_gates() == 0
+            )
+        ):
+            if acquired_stopped_world != 0:
+                pcc_resume_world()
+            return 0
+
     finish = stack_alloc(48)
     offset: i64 = 0
     while offset < 48:
@@ -498,7 +516,11 @@ def pcc_gc_backend4_remap_and_retire_stopped_world() -> i64:
     if (
         load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4
         and ptr_is_null(global_load_ptr("pcc_gc_relocation_set_head")) != 0
-        and load_i32(global_addr("pcc_gc_forwarding_population"), 0) > 0
+        and (
+            load_i32(global_addr("pcc_gc_forwarding_population"), 0) > 0
+            or ptr_is_null(global_load_ptr("pcc_gc_backend4_parked_head")) == 0
+            or ptr_is_null(global_load_ptr("pcc_gc_backend4_retained_page_head")) == 0
+        )
         and load_i32(global_addr("pcc_gc_backend4_remap_active"), 0) == 0
         and epoch < 9223372036854775807
     ):

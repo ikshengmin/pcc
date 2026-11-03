@@ -14,11 +14,17 @@ from pcc.unsafe import (
     atomic_store_i32,
     define_thread_local_i32,
     function_addr,
+    global_load_ptr,
     null,
 )
 
 
 __pcc_freestanding__ = True
+
+
+pcc_gc_backend4_remap_and_retire_stopped_world = extern(
+    "pcc_gc_backend4_remap_and_retire_stopped_world", (), c_int64
+)
 
 # Kept in this module so all accesses retain the TLS storage identity.
 define_thread_local_i32("pcc_gc_cms_worker_current", 0)
@@ -397,6 +403,19 @@ def pcc_gc_collect_tracing() -> i64:
     # transaction; give that transaction the complete signed-i64 budget so
     # finalizers run once and the returned count describes this collection.
     reclaimed: i64 = pcc_gc_tracing_sweep_unreachable(9223372036854775807)
+    # Automatic tracing sweeps run after their mark's step and need not be
+    # followed by an idle step. Advance empty-page quarantine here, only after
+    # all per-object deallocators returned. The entry preserves the gate,
+    # active-cascade and relocation-set exclusions and the two list epochs.
+    if (
+        backend == 4
+        and load_i32(global_addr("pcc_gc_forwarding_population"), 0) == 0
+        and (
+            ptr_is_null(global_load_ptr("pcc_gc_backend4_parked_head")) == 0
+            or ptr_is_null(global_load_ptr("pcc_gc_backend4_retained_page_head")) == 0
+        )
+    ):
+        pcc_gc_backend4_remap_and_retire_stopped_world()
     if stw == 0:
         pcc_resume_world()
     return reclaimed

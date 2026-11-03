@@ -222,7 +222,11 @@ def pcc_gc_step(budget: i64) -> i64:
             if (
                 processed == 0
                 and _tracing_work_pending() == 0
-                and load_i32(global_addr("pcc_gc_forwarding_population"), 0) > 0
+                and (
+                    load_i32(global_addr("pcc_gc_forwarding_population"), 0) > 0
+                    or ptr_is_null(global_load_ptr("pcc_gc_backend4_parked_head")) == 0
+                    or ptr_is_null(global_load_ptr("pcc_gc_backend4_retained_page_head")) == 0
+                )
                 and (
                     pcc_thread_live_count() <= 1
                     or pcc_thread_all_stopped_at_gates() != 0
@@ -313,10 +317,11 @@ def pcc_gc_step(budget: i64) -> i64:
                 if (
                     processed == 0
                     and may_relocate != 0
-                    and load_i32(
-                        global_addr("pcc_gc_forwarding_population"), 0
+                    and (
+                        load_i32(global_addr("pcc_gc_forwarding_population"), 0) > 0
+                        or ptr_is_null(global_load_ptr("pcc_gc_backend4_parked_head")) == 0
+                        or ptr_is_null(global_load_ptr("pcc_gc_backend4_retained_page_head")) == 0
                     )
-                    > 0
                 ):
                     processed = processed + (
                         pcc_gc_backend4_remap_and_retire_stopped_world()

@@ -93,6 +93,17 @@ dropped keyword); the stage 1 commit message lists them. Rerun with
 
 ## Native throughput versus CPython 3.15.0: active, acceptance unmet
 
+GC4 empty-page quarantine now advances at the completed sweep boundary and
+idle steps even after the last forwarding edge is gone. Previously the
+forwarding-population admission could strand parked/retained physical spans.
+The application-gate, active-deallocator, live/pending/forwarded-page checks
+and two-stage quarantine order remain intact; page housekeeping does not
+claim a forwarding retirement or request another mark. Nineteen integrated
+production-body checks pass in `test_gc4_retained_pages_without_forwarding.py`.
+The bounded native fixture `gc4_retained_no_forwarding.c`, five-GC throughput
+matrix and heap/pause acceptance are pending; this checkpoint is not a
+performance-qualified result.
+
 The latest acceptance order is to bring GC1-4 close to GC0 first, then improve
 all five against asyncio. Further count-free GC1/2 rollout is paused while
 GC4 is diagnosed. New throughput packets compare PCC arms without co-running
