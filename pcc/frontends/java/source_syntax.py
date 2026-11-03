@@ -68,6 +68,7 @@ class Node:
     control_target: object = field(default=None, repr=False, compare=False)
     flow_outcomes: object = field(default=None, repr=False, compare=False)
     string_constant: object = None  # Source content only, never runtime identity.
+    managed_value: object = None  # Compiler-only requirements, never a runtime reference.
 
 
 @dataclass

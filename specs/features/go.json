@@ -210,6 +210,91 @@
   ],
   "features": [
     {
+       "chapter_ids" : [
+          "types",
+          "properties",
+          "expressions"
+       ],
+       "title" : "Shared managed compiler contracts and language-owned storage plans",
+       "tests" : [
+          "tests/runtime_shared/test_managed_contracts.py::test_nominal_declaration_identity_is_not_underlying_or_spelling_identity",
+          "tests/runtime_shared/test_managed_contracts.py::test_precise_payload_maps_keep_scalar_and_all_reference_roles_distinct",
+          "tests/runtime_shared/test_managed_contracts.py::test_primitive_and_reference_array_element_maps_are_not_interchangeable",
+          "tests/runtime_shared/test_managed_contracts.py::test_unknown_overlapping_misaligned_and_out_of_extent_layouts_cannot_make_maps",
+          "tests/runtime_shared/test_managed_contracts.py::test_pointer_width_is_explicit_not_the_host_word_size",
+          "tests/runtime_shared/test_managed_contracts.py::test_repeated_extent_does_not_hide_unknown_or_nested_variable_size_elements",
+          "tests/runtime_shared/test_managed_contracts.py::test_repeated_extent_rejects_unresolved_or_overflow_count",
+          "tests/runtime_shared/test_managed_contracts.py::test_malformed_contracts_fail_before_any_consumer",
+          "tests/runtime_shared/test_managed_contracts.py::test_static_bytes_and_dynamic_owner_relative_spans_remain_distinct",
+          "tests/go/test_managed_contracts.py::test_shared_identity_preserves_defined_declarations_and_aliases",
+          "tests/go/test_managed_contracts.py::test_resolved_scalar_payload_is_not_a_registered_box_or_native_abi",
+          "tests/go/test_managed_contracts.py::test_error_plan_separates_immutable_metadata_from_a_dynamic_value_edge",
+          "tests/go/test_managed_contracts.py::test_pointer_and_aggregate_plans_do_not_claim_raw_pointer_traceability",
+          "tests/go/test_managed_contracts.py::test_static_bytes_are_not_managed_and_managed_spans_retain_the_base_owner",
+          "tests/go/test_managed_contracts.py::test_actual_static_string_lowering_consumes_common_span_and_retains_immutable_abi",
+          "tests/go/test_managed_contracts.py::test_shared_plan_does_not_open_dynamic_string_or_interface_native_paths",
+          "tests/go/test_managed_contracts.py::test_exact_static_backing_original_executes_owned_native",
+          "tests/go/test_managed_contracts.py::test_identical_static_backing_original_matches_official_go"
+       ],
+       "acceptance" : [
+          {
+             "status" : "unrun",
+             "reason" : "Authored source/model, unchanged-original and reference obligations only. User delegated all execution to CI. No local tests, imports, compiler or runtime validation performed; no historical evidence is renewed.",
+             "kind" : "full-feature",
+             "evidence" : [],
+             "source_revision" : "sha256:c197de111aed9cf2d23119f47c92549a9bf219d601b41e0a26ced00376be321c",
+             "backend" : "self",
+             "required_tests" : [
+                "tests/runtime_shared/test_managed_contracts.py::test_nominal_declaration_identity_is_not_underlying_or_spelling_identity",
+                "tests/runtime_shared/test_managed_contracts.py::test_precise_payload_maps_keep_scalar_and_all_reference_roles_distinct",
+                "tests/runtime_shared/test_managed_contracts.py::test_primitive_and_reference_array_element_maps_are_not_interchangeable",
+                "tests/runtime_shared/test_managed_contracts.py::test_unknown_overlapping_misaligned_and_out_of_extent_layouts_cannot_make_maps",
+                "tests/runtime_shared/test_managed_contracts.py::test_pointer_width_is_explicit_not_the_host_word_size",
+                "tests/runtime_shared/test_managed_contracts.py::test_repeated_extent_does_not_hide_unknown_or_nested_variable_size_elements",
+                "tests/runtime_shared/test_managed_contracts.py::test_repeated_extent_rejects_unresolved_or_overflow_count",
+                "tests/runtime_shared/test_managed_contracts.py::test_malformed_contracts_fail_before_any_consumer",
+                "tests/runtime_shared/test_managed_contracts.py::test_static_bytes_and_dynamic_owner_relative_spans_remain_distinct",
+                "tests/go/test_managed_contracts.py::test_shared_identity_preserves_defined_declarations_and_aliases",
+                "tests/go/test_managed_contracts.py::test_resolved_scalar_payload_is_not_a_registered_box_or_native_abi",
+                "tests/go/test_managed_contracts.py::test_error_plan_separates_immutable_metadata_from_a_dynamic_value_edge",
+                "tests/go/test_managed_contracts.py::test_pointer_and_aggregate_plans_do_not_claim_raw_pointer_traceability",
+                "tests/go/test_managed_contracts.py::test_static_bytes_are_not_managed_and_managed_spans_retain_the_base_owner",
+                "tests/go/test_managed_contracts.py::test_actual_static_string_lowering_consumes_common_span_and_retains_immutable_abi",
+                "tests/go/test_managed_contracts.py::test_shared_plan_does_not_open_dynamic_string_or_interface_native_paths",
+                "tests/go/test_managed_contracts.py::test_exact_static_backing_original_executes_owned_native",
+                "tests/go/test_managed_contracts.py::test_identical_static_backing_original_matches_official_go"
+             ],
+             "scope" : "Compiler-only shared managed storage contracts preserving Go nominal identities, scalar payload facts, unresolved pointer provenance/aggregate tracing/interface boxing obligations, and static versus owner-relative managed string spans. Current static-string lowering consumes the common immutable static span without changing its pointer/length ABI. Full interface/itable/typed-nil/equality, managed allocation, GC registration, roots and native managed lowering remain unavailable. The exact static-string native/reference original does not qualify managed runtime support.",
+             "id" : "compiler-contracts-ci-only",
+             "mode" : "pcc0",
+             "platform" : "linux-x86_64",
+             "gc" : "not_applicable"
+          }
+       ],
+       "diagnostics" : [],
+       "implementation" : {
+          "status" : "supported",
+          "source_revision" : "sha256:c197de111aed9cf2d23119f47c92549a9bf219d601b41e0a26ced00376be321c",
+          "sources" : [
+             {
+                "path" : "pcc/support/managed_objects.py",
+                "sha256" : "44478862083f495926f4031609b66115044dd18f6b98231807be90721e2f8d23"
+             },
+             {
+                "path" : "pcc/frontends/go/managed_objects.py",
+                "sha256" : "9256fdeac77a95fa175ade691e8d485d35a6380e72298eb7555ac1b524d30efd"
+             },
+             {
+                "path" : "pcc/frontends/go/lowering.py",
+                "sha256" : "ca9441e5c8928cad18651922d190d462a88aeacf9a5d39052e2fbb2c15898eeb"
+             }
+          ]
+       },
+       "id" : "go.shared-managed-compiler-contracts",
+       "scope" : "Compiler-only shared managed storage contracts preserving Go nominal identities, scalar payload facts, unresolved pointer provenance/aggregate tracing/interface boxing obligations, and static versus owner-relative managed string spans. Current static-string lowering consumes the common immutable static span without changing its pointer/length ABI. Full interface/itable/typed-nil/equality, managed allocation, GC registration, roots and native managed lowering remain unavailable. The exact static-string native/reference original does not qualify managed runtime support.",
+       "evidence" : []
+    },
+    {
       "id": "go.expression-switch.scalar",
       "title": "Scalar and static-string expression switches",
       "chapter_ids": [

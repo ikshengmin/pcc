@@ -7,6 +7,7 @@ ordinary public IR, handled by the existing optimizer and self backend.
 """
 
 from pcc.ir.compat import ir
+from pcc.frontends.go.managed_objects import static_string_plan
 from pcc.frontends.go.records import StructType, underlying
 from pcc.frontends.go.types import (
     ArrayType, PointerType, Results, result_types, integer_bits, integer_signed, is_string,
@@ -67,18 +68,19 @@ class Lowerer:
         self.builtin_io = BuiltinIO(self)
 
     def string_constant(self, data):
-        if not data:
+        span = static_string_plan(data)
+        if span.length == 0:
             pointer = ir.Constant(ir.IntType(8).as_pointer(), None)
         else:
             if data not in self.string_literals:
-                storage = ir.GlobalVariable(self.module, ir.ArrayType(ir.IntType(8), len(data)),
+                storage = ir.GlobalVariable(self.module, ir.ArrayType(ir.IntType(8), span.length),
                                             "__pcc_go_string_" + str(len(self.string_literals)))
                 storage.linkage = "private"
                 storage.global_constant = True
                 storage.initializer = ir.Constant(storage.value_type, bytearray(data))
                 self.string_literals[data] = storage
             pointer = self.string_literals[data].gep([ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0)])
-        return ir.Constant(ir_type("string"), [pointer, ir.Constant(ir.IntType(64), len(data))])
+        return ir.Constant(ir_type("string"), [pointer, ir.Constant(ir.IntType(64), span.length)])
 
     def string_value(self, data):
         # The shared backend supports pointer relocations in static aggregate

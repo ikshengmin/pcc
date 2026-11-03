@@ -110,6 +110,97 @@
   ],
   "features": [
     {
+       "evidence" : [],
+       "id" : "java.shared-managed-compiler-contracts",
+       "scope" : "Compiler-only shared managed storage contracts consumed by checked Java source class models and reference expressions. Existing primitive payload offsets are retained, mixed reference offsets and array headers stay unresolved, and String UTF-16 content remains separate from bootstrap definition/materialization/interning. Existing constructor identity/order and native managed rejection remain intact. The exact object/array/String original is observed by JDK only; no PCC managed execution, object ABI, GC registration or bootstrap runtime is claimed.",
+       "implementation" : {
+          "status" : "supported",
+          "source_revision" : "sha256:c197de111aed9cf2d23119f47c92549a9bf219d601b41e0a26ced00376be321c",
+          "sources" : [
+             {
+                "path" : "pcc/support/managed_objects.py",
+                "sha256" : "44478862083f495926f4031609b66115044dd18f6b98231807be90721e2f8d23"
+             },
+             {
+                "sha256" : "30a3225ff9edc781a56a00c3f4aab73c5f02d95b77e08dcd839d57c8f7196e42",
+                "path" : "pcc/frontends/java/managed_objects.py"
+             },
+             {
+                "sha256" : "12261024dca22f4510bfe951000055e4e712b4af5a42a05d102c87f17dcbf944",
+                "path" : "pcc/frontends/java/source_class_model.py"
+             },
+             {
+                "path" : "pcc/frontends/java/source_syntax.py",
+                "sha256" : "5fe52ad66392b1cd1ce2fc0bd0e9a55c40c92636d3b6c643089c8da2962006c4"
+             }
+          ]
+       },
+       "diagnostics" : [],
+       "acceptance" : [
+          {
+             "required_tests" : [
+                "tests/runtime_shared/test_managed_contracts.py::test_nominal_declaration_identity_is_not_underlying_or_spelling_identity",
+                "tests/runtime_shared/test_managed_contracts.py::test_precise_payload_maps_keep_scalar_and_all_reference_roles_distinct",
+                "tests/runtime_shared/test_managed_contracts.py::test_primitive_and_reference_array_element_maps_are_not_interchangeable",
+                "tests/runtime_shared/test_managed_contracts.py::test_unknown_overlapping_misaligned_and_out_of_extent_layouts_cannot_make_maps",
+                "tests/runtime_shared/test_managed_contracts.py::test_pointer_width_is_explicit_not_the_host_word_size",
+                "tests/runtime_shared/test_managed_contracts.py::test_repeated_extent_does_not_hide_unknown_or_nested_variable_size_elements",
+                "tests/runtime_shared/test_managed_contracts.py::test_repeated_extent_rejects_unresolved_or_overflow_count",
+                "tests/runtime_shared/test_managed_contracts.py::test_malformed_contracts_fail_before_any_consumer",
+                "tests/runtime_shared/test_managed_contracts.py::test_static_bytes_and_dynamic_owner_relative_spans_remain_distinct",
+                "tests/java/test_source_managed_contracts.py::test_checked_mixed_fields_produce_shared_edges_without_inventing_offsets",
+                "tests/java/test_source_managed_contracts.py::test_primitive_payload_map_does_not_claim_the_object_header_or_runtime_registration",
+                "tests/java/test_source_managed_contracts.py::test_common_identity_keeps_packages_and_unresolved_bootstrap_string_distinct",
+                "tests/java/test_source_managed_contracts.py::test_checked_array_expressions_keep_known_elements_and_unresolved_object_extent",
+                "tests/java/test_source_managed_contracts.py::test_string_utf16_facts_are_separate_from_managed_value_and_interned_identity",
+                "tests/java/test_source_managed_contracts.py::test_checked_reference_reads_calls_and_nulls_do_not_become_runtime_objects",
+                "tests/java/test_source_managed_contracts.py::test_construction_bindings_and_order_are_preserved_beneath_the_shared_plan",
+                "tests/java/test_source_managed_contracts.py::test_consumed_common_plans_never_admit_native_managed_lowering",
+                "tests/java/test_source_managed_contracts.py::test_exact_managed_field_array_and_utf16_original_against_independent_jdk_only"
+             ],
+             "backend" : "self",
+             "source_revision" : "sha256:c197de111aed9cf2d23119f47c92549a9bf219d601b41e0a26ced00376be321c",
+             "gc" : "not_applicable",
+             "platform" : "linux-x86_64",
+             "mode" : "pcc0",
+             "id" : "compiler-contracts-ci-only",
+             "scope" : "Compiler-only shared managed storage contracts consumed by checked Java source class models and reference expressions. Existing primitive payload offsets are retained, mixed reference offsets and array headers stay unresolved, and String UTF-16 content remains separate from bootstrap definition/materialization/interning. Existing constructor identity/order and native managed rejection remain intact. The exact object/array/String original is observed by JDK only; no PCC managed execution, object ABI, GC registration or bootstrap runtime is claimed.",
+             "status" : "unrun",
+             "kind" : "full-feature",
+             "evidence" : [],
+             "reason" : "Authored source/model, unchanged-original and reference obligations only. User delegated all execution to CI. No local tests, imports, compiler or runtime validation performed; no historical evidence is renewed."
+          }
+       ],
+       "tests" : [
+          "tests/runtime_shared/test_managed_contracts.py::test_nominal_declaration_identity_is_not_underlying_or_spelling_identity",
+          "tests/runtime_shared/test_managed_contracts.py::test_precise_payload_maps_keep_scalar_and_all_reference_roles_distinct",
+          "tests/runtime_shared/test_managed_contracts.py::test_primitive_and_reference_array_element_maps_are_not_interchangeable",
+          "tests/runtime_shared/test_managed_contracts.py::test_unknown_overlapping_misaligned_and_out_of_extent_layouts_cannot_make_maps",
+          "tests/runtime_shared/test_managed_contracts.py::test_pointer_width_is_explicit_not_the_host_word_size",
+          "tests/runtime_shared/test_managed_contracts.py::test_repeated_extent_does_not_hide_unknown_or_nested_variable_size_elements",
+          "tests/runtime_shared/test_managed_contracts.py::test_repeated_extent_rejects_unresolved_or_overflow_count",
+          "tests/runtime_shared/test_managed_contracts.py::test_malformed_contracts_fail_before_any_consumer",
+          "tests/runtime_shared/test_managed_contracts.py::test_static_bytes_and_dynamic_owner_relative_spans_remain_distinct",
+          "tests/java/test_source_managed_contracts.py::test_checked_mixed_fields_produce_shared_edges_without_inventing_offsets",
+          "tests/java/test_source_managed_contracts.py::test_primitive_payload_map_does_not_claim_the_object_header_or_runtime_registration",
+          "tests/java/test_source_managed_contracts.py::test_common_identity_keeps_packages_and_unresolved_bootstrap_string_distinct",
+          "tests/java/test_source_managed_contracts.py::test_checked_array_expressions_keep_known_elements_and_unresolved_object_extent",
+          "tests/java/test_source_managed_contracts.py::test_string_utf16_facts_are_separate_from_managed_value_and_interned_identity",
+          "tests/java/test_source_managed_contracts.py::test_checked_reference_reads_calls_and_nulls_do_not_become_runtime_objects",
+          "tests/java/test_source_managed_contracts.py::test_construction_bindings_and_order_are_preserved_beneath_the_shared_plan",
+          "tests/java/test_source_managed_contracts.py::test_consumed_common_plans_never_admit_native_managed_lowering",
+          "tests/java/test_source_managed_contracts.py::test_exact_managed_field_array_and_utf16_original_against_independent_jdk_only"
+       ],
+       "chapter_ids" : [
+          "JLS-3",
+          "JLS-4",
+          "JLS-8",
+          "JLS-10",
+          "JLS-15"
+       ],
+       "title" : "Shared managed compiler contracts and language-owned storage plans"
+    },
+    {
       "id": "java.supplied-class-creation-source-model",
       "title": "Supplied-source class creation and constructor binding without allocation",
       "chapter_ids": [

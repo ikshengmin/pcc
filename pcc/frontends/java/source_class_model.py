@@ -13,7 +13,10 @@ No descriptor below is registered with a runtime.
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from pcc.support.managed_objects import ManagedValuePlan, unmet_requirements
+
 from .diagnostics import JavaError, UnsupportedJava
+from .managed_objects import PRIMITIVE_SIZES, class_value_plan, reference_value_plan
 from .source_array_model import ArrayModelAnalyzer
 from .source_construction_model import ClassConstructionAnalyzer, ClassConstructionObligation
 from .source_project import SourceProject
@@ -70,6 +73,12 @@ class SourceClassModel:
     runtime_registered: bool = False
     compiler_context_obligations: tuple = ()
     semantic_context_complete: bool = False
+    managed_value: ManagedValuePlan | None = None
+
+    @property
+    def managed_requirements(self):
+        """A payload plan never discharges the shared runtime obligations."""
+        return unmet_requirements(self.managed_value)
 
 
 class ClassAnalyzer(ClassConstructionAnalyzer, StringModelAnalyzer, ArrayModelAnalyzer, SourceAnalyzer):
@@ -177,6 +186,13 @@ class ClassAnalyzer(ClassConstructionAnalyzer, StringModelAnalyzer, ArrayModelAn
                                                 materialization=field.string_constant is not None)
 
     def expression(self, node, assigned):
+        # Attach storage obligations only after the original semantic owner
+        # succeeds, including its early-return array/receiver/creation paths.
+        self.class_expression(node, assigned)
+        node.managed_value = reference_value_plan(
+            node.dtype, materialization=node.string_constant is not None)
+
+    def class_expression(self, node, assigned):
         if self.class_creation_expression(node, assigned):
             return
         if node.kind in {"name", "call"} and "." in str(node.value):
@@ -433,8 +449,6 @@ class ClassModelProject(SourceProject):
 
     def analyze(self):
         super().analyze()
-        sizes = {"boolean": 1, "byte": 1, "short": 2, "char": 2, "int": 4, "long": 8,
-                 "float": 4, "double": 8}
         for program in self.programs:
             slots, offset, alignment = [], 0, 1
             reference_layout = any(isinstance(field.dtype, (ArrayType, ClassType, BootstrapStringType)) and "static" not in field.modifiers
@@ -448,7 +462,7 @@ class ClassModelProject(SourceProject):
                 if isinstance(field.dtype, (ClassType, BootstrapStringType)):
                     slots.append(ClassReferenceFieldSlot(field))
                     continue
-                size = sizes[field.dtype]
+                size = PRIMITIVE_SIZES[field.dtype]
                 alignment = max(alignment, size)
                 offset = (offset + size - 1) // size * size
                 slots.append(PrimitiveFieldSlot(field, None if reference_layout else offset, size, size))
@@ -456,11 +470,14 @@ class ClassModelProject(SourceProject):
             payload_size = (offset + alignment - 1) // alignment * alignment
             if reference_layout:
                 payload_size, alignment = None, None
+            obligations = tuple(item for item in self.compiler_context_obligations
+                                if item.owner == program.name)
+            managed_value = class_value_plan(program, slots, payload_size, alignment,
+                requirements=tuple(requirement for item in obligations for requirement in item.requirements))
             self.models[program.name] = SourceClassModel(program,
                 tuple(self.analyzers[program.name].constructors.values()), tuple(slots), payload_size, alignment,
                 program.initialization_steps,
-                compiler_context_obligations=tuple(item for item in self.compiler_context_obligations
-                                                   if item.owner == program.name))
+                compiler_context_obligations=obligations, managed_value=managed_value)
         return self
 
 

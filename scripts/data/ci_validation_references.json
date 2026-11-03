@@ -1,5 +1,21 @@
 {
   "functions": {
+    "tests/go/test_managed_contracts.py": {
+      "test_identical_static_backing_original_matches_official_go": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference on the exact unchanged static-string program via compile_reference, compared with owned native stdout/stderr/exit; no managed runtime qualification"
+        ]
+      }
+    },
+    "tests/java/test_source_managed_contracts.py": {
+      "test_exact_managed_field_array_and_utf16_original_against_independent_jdk_only": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls check_originals_reference on the exact object/primitive-array/UTF-16 original and a separate observer; only the selected JDK executes managed objects, with no PCC managed runtime claim"
+        ]
+      }
+    },
     "tests/c/test_c_natural_record_layout.py": {
       "test_c_natural_record_original_owned_and_reference_execution": {
         "activity": "external-reference",
