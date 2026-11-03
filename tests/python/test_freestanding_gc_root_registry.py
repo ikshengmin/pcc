@@ -30,6 +30,7 @@ PUBLIC_SYMBOLS = {
     "pcc_gc_unregister_continuation_root_node",
 }
 INTERNAL_SYMBOLS = {
+    "pcc_gc_scheduler_handle_needs_graph",
     "pcc_gc_cycle_requested_store_release",
     "pcc_gc_root_registry_note_mutation_locked",
     "pcc_gc_scheduler_root_link_locked",
@@ -52,6 +53,7 @@ OWNED_GLOBALS = {
     "pcc_py_gc_scheduler_root_free_count",
 }
 RAW_FUNCTION_IMPORTS = {
+    "pcc_thread_is_running",
     "free",
     "malloc",
     "memset",
@@ -60,6 +62,9 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_py_gc_minor_graph_unlock",
 }
 RAW_GLOBAL_IMPORTS = {
+    "pcc_gc_config_initialized",
+    "pcc_gc_backend_frozen",
+    "pcc_gc_backend4_no_refcounts",
     "pcc_gc_backend3_continuation_root_scan_cursor",
     "pcc_gc_backend3_frame_root_scan_slot",
     "pcc_gc_backend3_scheduler_root_scan_cursor",

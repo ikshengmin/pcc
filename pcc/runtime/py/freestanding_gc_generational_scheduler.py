@@ -4,6 +4,7 @@ from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     atomic_load_i32,
+    atomic_load_i64,
     atomic_rmw_i32,
     free,
     function_addr,
@@ -172,8 +173,8 @@ def pcc_gc_generational_promote_frame_roots(remaining_budget: i64) -> None:
                     0,
                 )
                 continue
-            revision_before: i64 = load_i64(
-                global_addr("pcc_gc_root_registry_revision"), 0
+            revision_before: i64 = atomic_load_i64(
+                global_addr("pcc_gc_root_registry_revision"), 0, "acquire"
             )
             pcc_gc_visit_mapped_root_slot(
                 load_ptr(frame, 8),
@@ -184,8 +185,8 @@ def pcc_gc_generational_promote_frame_roots(remaining_budget: i64) -> None:
                 0,
             )
             examined = examined + 1
-            revision = load_i64(
-                global_addr("pcc_gc_root_registry_revision"), 0
+            revision = atomic_load_i64(
+                global_addr("pcc_gc_root_registry_revision"), 0, "acquire"
             )
             if revision != revision_before:
                 continue
@@ -235,8 +236,8 @@ def pcc_gc_generational_promote_frame_roots(remaining_budget: i64) -> None:
                 global_addr("pcc_gc_backend3_frame_root_scan_slot"), 0, 0
             )
             continue
-        revision_before = load_i64(
-            global_addr("pcc_gc_root_registry_revision"), 0
+        revision_before = atomic_load_i64(
+            global_addr("pcc_gc_root_registry_revision"), 0, "acquire"
         )
         pcc_gc_visit_mapped_root_slot(
             load_ptr(continuation, 8),
@@ -247,8 +248,8 @@ def pcc_gc_generational_promote_frame_roots(remaining_budget: i64) -> None:
             0,
         )
         examined = examined + 1
-        revision = load_i64(
-            global_addr("pcc_gc_root_registry_revision"), 0
+        revision = atomic_load_i64(
+            global_addr("pcc_gc_root_registry_revision"), 0, "acquire"
         )
         if revision != revision_before:
             continue
@@ -321,15 +322,15 @@ def pcc_gc_generational_promote_scheduler_roots(
                 )
                 continue
             next_node = load_ptr(node, 8)
-            revision_before: i64 = load_i64(
-                global_addr("pcc_gc_root_registry_revision"), 0
+            revision_before: i64 = atomic_load_i64(
+                global_addr("pcc_gc_root_registry_revision"), 0, "acquire"
             )
             slot = load_ptr(node, 0)
             if ptr_is_null(slot) == 0:
                 pcc_gc_visit_mapped_root_slot(slot, 0, null(), 0, 2, 0)
             examined = examined + 1
-            revision = load_i64(
-                global_addr("pcc_gc_root_registry_revision"), 0
+            revision = atomic_load_i64(
+                global_addr("pcc_gc_root_registry_revision"), 0, "acquire"
             )
             if revision != revision_before:
                 continue
@@ -346,14 +347,14 @@ def pcc_gc_generational_promote_scheduler_roots(
         if ptr_is_null(slot) != 0:
             _reset_scheduler_root_scan()
             break
-        revision_before = load_i64(
-            global_addr("pcc_gc_root_registry_revision"), 0
+        revision_before = atomic_load_i64(
+            global_addr("pcc_gc_root_registry_revision"), 0, "acquire"
         )
         if ptr_is_null(slot) == 0:
             pcc_gc_visit_mapped_root_slot(slot, 0, null(), 0, 2, 0)
         examined = examined + 1
-        revision = load_i64(
-            global_addr("pcc_gc_root_registry_revision"), 0
+        revision = atomic_load_i64(
+            global_addr("pcc_gc_root_registry_revision"), 0, "acquire"
         )
         if revision != revision_before:
             continue

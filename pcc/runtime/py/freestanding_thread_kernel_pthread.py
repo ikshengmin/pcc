@@ -551,6 +551,23 @@ def pcc_thread_registered() -> int:
     return 0
 
 
+@c_abi_export("pcc_thread_is_running")
+def pcc_thread_is_running() -> int:
+    """Whether this thread is admitted and currently participates as running.
+
+    An ID alone is insufficient: blocking/exited threads keep their ID while
+    stop-the-world excludes them. This predicate never consumes a blocking
+    token or implicitly readmits a callback; its caller keeps the cold path.
+    """
+    state: int = load_i64(global_addr("pcc_tls_thread_state_py"), 0)
+    if (state & 562949953421312) == 0:
+        return 0
+    record = global_load_ptr("pcc_tls_thread_record_py")
+    if ptr_is_null(record) != 0:
+        return 0
+    return 1 if load_i64(record, 16) == 0 else 0
+
+
 def _outermost_frame_pointer() -> int:
     frame = frame_address()
     outer: int = ptr_to_int(frame)

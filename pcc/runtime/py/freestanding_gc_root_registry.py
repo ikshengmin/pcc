@@ -6,10 +6,12 @@ collector resolver can move as one slot-contract slice.
 """
 
 from pcc import i64
-from pcc.extern import c_abi_export, c_ptr, c_void, extern
+from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     atomic_cas_i32,
+    atomic_cas_i64,
     atomic_load_i32,
+    atomic_load_i64,
     atomic_store_i32,
     define_global_i32,
     define_global_ptr_null,
@@ -40,15 +42,17 @@ pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern(
     "pcc_py_gc_minor_graph_unlock", (), c_void
 )
+pcc_thread_is_running = extern("pcc_thread_is_running", (), c_int64)
 
 
 # The scheduler-root list is changed only under this word, held for a few
 # loads and stores and never across a safepoint, so no holder parks. The
-# tracing collectors (GC1-GC4) also hold the graph lock around every change
-# and read the list under it. GC0 reads the list only with the world stopped,
-# when no mutator is inside a change, so a GC0 registration takes this word
-# alone: the graph lock's no-park, thread-local and poll protocol was most of
-# what a registration cost. Freed nodes ([0] slot, [8] next, [16] previous)
+# tracing collectors normally also hold the graph lock around each change.
+# GC0 and admitted fixed GC4 NoRC handle writers use this word alone: their
+# full GC walks stop the world, and introspection holds this word throughout.
+# GC3's incremental cursor retains its graph protocol. Cold/non-running GC4
+# callers do not gain fast admission from an existing thread ID. Freed nodes
+# ([0] slot, [8] next, [16] previous)
 # are kept for reuse, up to 4096.
 define_global_i32("pcc_py_gc_scheduler_root_spin", 0)
 define_global_ptr_null("pcc_py_gc_scheduler_root_free_head")
@@ -113,14 +117,40 @@ def pcc_gc_cycle_requested_store_release(value: i64) -> None:
 
 @c_abi_export("pcc_gc_root_registry_note_mutation_locked")
 def pcc_gc_root_registry_note_mutation_locked() -> None:
-    revision: i64 = load_i64(
-        global_addr("pcc_gc_root_registry_revision"), 0
-    )
-    if revision == 9223372036854775807:
-        revision = 1
-    else:
-        revision = revision + 1
-    store_i64(global_addr("pcc_gc_root_registry_revision"), 0, revision)
+    # Scheduler handles and frame/continuation roots need not share a lock.
+    # Preserve every invalidation when their respective writers overlap.
+    slot = global_addr("pcc_gc_root_registry_revision")
+    revision: i64 = atomic_load_i64(slot, 0, "acquire")
+    while True:
+        replacement: i64 = 1
+        if revision == 9223372036854775807:
+            replacement = 1
+        else:
+            replacement = revision + 1
+        observed: i64 = atomic_cas_i64(
+            slot, 0, revision, replacement, "acq_rel", "acquire"
+        )
+        if observed == revision:
+            return
+        revision = observed
+
+
+@c_abi_export("pcc_gc_scheduler_handle_needs_graph")
+def _scheduler_handle_needs_graph(backend: i64) -> i64:
+    if backend == 0:
+        return 0
+    if (backend == 4
+            and load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+            and load_i32(global_addr("pcc_gc_backend_frozen"), 0) != 0
+            and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
+            and pcc_thread_is_running() != 0):
+        # GC4's mark/remark/remap readers own STW; introspection holds the
+        # list word. This strict running-thread path cannot park while linking
+        # or unlinking. GC3's incremental root cursor keeps the graph protocol.
+        return 0
+    # A cold thread is admitted by graph acquire. Exited threads are never
+    # admitted by this fast path; their caller must restore its blocking state.
+    return 1
 
 
 @c_abi_export("pcc_gc_root_slot_count_from_map")
@@ -222,7 +252,7 @@ def pcc_gc_scheduler_root_register_handle(slot) -> c_ptr:
     node = _scheduler_root_node_take(slot)
     if ptr_is_null(node) != 0:
         return null()
-    if backend == 0:
+    if _scheduler_handle_needs_graph(backend) == 0:
         pcc_gc_scheduler_root_link_locked(node)
     else:
         pcc_py_gc_minor_graph_lock()
@@ -242,7 +272,7 @@ def pcc_gc_scheduler_root_unregister_handle(handle) -> None:
     backend: i64 = gc_backend_current()
     if ptr_is_null(handle) != 0:
         return
-    if backend == 0:
+    if _scheduler_handle_needs_graph(backend) == 0:
         pcc_gc_scheduler_root_unlink_locked(handle)
     else:
         pcc_py_gc_minor_graph_lock()

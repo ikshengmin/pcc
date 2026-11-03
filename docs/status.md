@@ -93,6 +93,23 @@ dropped keyword); the stage 1 commit message lists them. Rerun with
 
 ## Native throughput versus CPython 3.15.0: active, acceptance unmet
 
+GC4 count-free handle registration/unregistration now follows GC0's short
+scheduler-list lock path only for an initialized, frozen collector and a
+registered running thread. Cold callers retain graph admission; callers that
+left managed execution must restore their blocking state. Persistent queue
+transactions and GC3's incremental root cursor retain their graph protocol.
+Root revisions use CAS updates and atomic cursor reads so independent frame
+and handle writers cannot lose invalidations. On the preceding frozen local
+Mac executable, four-worker graph-lock waits occupied 60.93% of CPU samples
+(GC0: 5.45%); handle register/unregister callers accounted for 28.20% of all
+samples. This is an owner profile, not a throughput gain. Over `74acdd6de`,
+155 production-body cases, three closure/IR checks, seven ABI chunk checks,
+and four owned-native modes pass. The native test
+`test_root_handle_concurrency_native.py` checks 6,152 concurrent mutations,
+running/exited transitions, and stopped-world rewriting of four stack roots;
+it does not claim forwarding/remap or full pressure qualification. Paired
+throughput screening remains pending. Full suites and bootstrap remain unrun.
+
 Concurrent tracing slices now charge every inspected object-list node against
 their scan bound, including black, dying and invalid nodes. The returned work
 count still includes only completed gray objects, so scanning does not falsely

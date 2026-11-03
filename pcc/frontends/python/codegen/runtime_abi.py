@@ -194,8 +194,6 @@ def _runtime_signatures_part_2():
     "pcc_gc_backend4_page_policy_score": (_I64, [], False),
     "pcc_gc_backend4_large_object_defer_score": (_I64, [], False),
     "pcc_gc_backend4_large_object_deferred_bytes": (_I64, [], False),
-    "pcc_gc_backend4_small_page_candidate_score": (_I64, [], False),
-    "pcc_gc_backend4_medium_page_candidate_score": (_I64, [], False),
     }
 
 
@@ -898,7 +896,6 @@ def _runtime_signatures_part_18():
     "py_obj_setitem_i64": (_I64, [_PYOBJ, _I64, _PYOBJ], False),
     "py_obj_delitem": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_obj_assign_subscript": (_I64, [_PYOBJ, _PYOBJ, _PYOBJ], False),
-    "py_obj_delete_subscript": (_I64, [_PYOBJ, _PYOBJ], False),
     }
 
 
@@ -1580,6 +1577,9 @@ def _runtime_signatures_part_34():
 
 def _runtime_signatures_part_35():
     return {
+    "pcc_gc_backend4_medium_page_candidate_score": (_I64, [], False),
+    "pcc_gc_backend4_small_page_candidate_score": (_I64, [], False),
+    "py_obj_delete_subscript": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_cleanup_two_roots_preserving_exception": (_VOID, [_PTR, _PTR], False),
     "py_int_to_bytes": (_PYOBJ, [_PYOBJ, _I64, _PYOBJ], False),
     "py_int_to_bytes_args": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ, _PYOBJ], False),
@@ -2437,7 +2437,6 @@ def _cross_object_signatures_part_4():
     ),
     "pcc_gc_trace_referents_for_promotion": (("c_ptr",), "c_void"),
     "pcc_gc_backend3_promotion_worklist_unlink": (("c_ptr",), "c_void"),
-    "pcc_gc_backend3_enqueue_promotion_owner": (("c_ptr",), "c_void"),
     }
 
 
@@ -2907,7 +2906,6 @@ def _cross_object_signatures_part_9():
     "py_user_del_dispatch": (("c_ptr",), "c_void"),
     "py_weakref_invalidate": (("c_ptr",), "c_void"),
     "py_weakref_invalidate_tracing_candidates": ((), "c_int64"),
-    "py_dealloc_int": (("c_ptr",), "c_void"),
     }
 
 
@@ -2966,6 +2964,9 @@ def _cross_object_signatures_part_11():
     # The frame-registry chunk is full. New raw ABIs start a new bounded
     # literal instead of exceeding the native compiler's 50-entry limit.
     return {
+    "pcc_thread_is_running": ((), "c_int64"),
+    "pcc_gc_backend3_enqueue_promotion_owner": (("c_ptr",), "c_void"),
+    "py_dealloc_int": (("c_ptr",), "c_void"),
     "pcc_gc_note_frame_enter_checked": (("c_ptr", "c_ptr"), "c_int64"),
     "pcc_allocator_object_cells_enumerate": (("c_ptr", "c_int64", "c_int64"), "c_int64"),
     "pcc_gc_managed_pointer_index_enumerate": (("c_ptr", "c_int64", "c_int64"), "c_int64"),
