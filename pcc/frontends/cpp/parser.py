@@ -1956,6 +1956,9 @@ class CppParser:
                                 "explicit class conversions require constructor/conversion lookup", coord)
         if source == "void" and target != "void":
             self._require_value(expression)
+        if style == "static_cast" and pointer_type(target):
+            from pcc.frontends.cpp.static_casts import convert_void_pointer
+            return convert_void_pointer(self, target, expression, coord)
         same_enum = is_enum_type(target) and source is target
         if is_enum_type(target) and not same_enum:
             raise CppDiagnostic("cpp.unsupported.enum-casts",
@@ -2451,13 +2454,8 @@ class CppParser:
             from pcc.frontends.cpp.const_casts import parse
             return parse(self, token)
         if token.value == "static_cast":
-            self._expect("<")
-            dtype = self._abstract_pointer_type(self._type())
-            self._expect(">")
-            self._expect("(")
-            expression = self._expression()
-            self._expect(")")
-            return self._explicit_arithmetic_cast(dtype, expression, token.coord, "static_cast")
+            from pcc.frontends.cpp.static_casts import parse
+            return parse(self, token)
         if token.value == "nullptr":
             if self.parsing_template and getattr(self, 'class_template_method', None) is None:
                 raise CppDiagnostic("cpp.unsupported.pointer-templates", "nullptr template expressions are not implemented", token.coord)
