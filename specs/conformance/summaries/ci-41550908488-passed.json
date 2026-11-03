@@ -1,0 +1,1705 @@
+{
+  "schema_version": 1,
+  "kind": "bounded_ci_pass_summary",
+  "compiler_revision": "531f2b0b467575c990adb55cdbe9b7df1bcdabbf",
+  "ci": {
+    "run_id": 41550908488,
+    "status": "completed",
+    "conclusion": "failure",
+    "jobs": 44,
+    "successful_jobs": 12,
+    "failed_jobs": 32,
+    "terminal_evidence_sha256": "0744643300fa5695a3fd292a3d0c83e3eafe09c7b7bc72ca2673bca2db34794f"
+  },
+  "scope": {
+    "selection": "257 exact passing pytest nodes only: Go UTF-8 string range 31 ordinary + 42 integration; Java array-field source model 129 ordinary (including 43 grouped-field nodes) + 1 JDK-only integration; Rust call placeholders 52 ordinary + 2 integration.",
+    "summary_only": true,
+    "exporter_qualified_allowlist": false,
+    "execution_owner": "Host CPython/PCC source checks and bounded host-pcc0 native/reference tests, as distinguished per language and lane.",
+    "not_qualified": [
+      "whole-language suites",
+      "whole projects",
+      "NumPy",
+      "native pcc1",
+      "self-host fixed point",
+      "five GC backends",
+      "PCC native Java class-field execution"
+    ],
+    "outside_this_artifact": [
+      "failed, skipped and unrun nodes",
+      "all other cases",
+      "macOS execution",
+      "later source revisions, including all source-only repair heads"
+    ],
+    "method": "Read and hash retained CI artifacts and inspect matching source only; no new tests, imports, compilers or programs executed."
+  },
+  "execution": {
+    "mode": "pcc0/source-model-and-reference",
+    "platform": "linux-x86_64",
+    "host_python": "CPython 3.15.0",
+    "pytest": "9.0.3",
+    "pytest_xdist": "3.8.0",
+    "gc": "not_exercised"
+  },
+  "result_boundary": "Every listed node has a complete PASS call/setup/teardown record at the exact compiler revision. Passing negative/rejection and deferred-boundary tests do not mean their input programs are accepted. Selected passes do not change failed lane or overall CI outcomes. No result is transferred to later fixes.",
+  "test_id_digest_encoding": "SHA256 of UTF-8 exact node IDs sorted lexicographically, one per line including the final LF.",
+  "language_evidence": {
+    "go": {
+      "execution_owner": "Host PCC source checks and host-pcc0-generated native programs; official Go is external reference only.",
+      "platform": "linux-x86_64",
+      "reference": {
+        "name": "official Go gc toolchain",
+        "version": "go1.24.13",
+        "platform": "linux/amd64",
+        "role": "external_reference",
+        "compiler_sha256": "84a0e87421e4cc48036b48ee32374de17479b7f8592822dcc57c93aa3ff337a7"
+      },
+      "test_source_sha256": "5b8e0465daf403d6dc50246d5dffead5c78ebb1911a22e8de77e31bc80207970",
+      "fixture_source_sha256": "e18adaa3862c0c4f2c004aba9e14a6cda81dd42223b415ddafb9be246363a4c4",
+      "source_identity_sha256": "bd9300e15cbf345df60b361ab36c1efce02d6cbc6b64f50ec8292f96041f0d2d",
+      "tool_identity_sha256": "eaa8ae1ed755fbf4f8a43765ffc511fb5882b301e147014ebb2ff4c7c1803642",
+      "lanes": [
+        {
+          "lane": "ordinary",
+          "lane_outcome": "PASS",
+          "selected_outcome": "passed",
+          "selected_node_count": 31,
+          "exact_test_ids_sha256": "d4324317e8edbd31a59f146da69ca913aa9fc7be7d7d20090b52a4a6259d7e94",
+          "lane_evidence_sha256": "162d90d629aeb9babe6d0d6b5e51f90ed86c0d502a054a7525a86c3e91a26c1d"
+        },
+        {
+          "lane": "integration",
+          "lane_outcome": "FAIL",
+          "selected_outcome": "passed",
+          "selected_node_count": 42,
+          "exact_test_ids_sha256": "82fcbb4bd59ea78a382297df0a9e85130f0d5c0ba48ded7457e30000caacc6c3",
+          "lane_evidence_sha256": "c1e189b02d7ce572a41d15e10d43a0db86166d2778333d5b609ca3ec9035f971",
+          "native_observation_nodes": 27,
+          "owned_program_nodes": 3,
+          "same_input_official_pair_nodes": 3,
+          "official_rejection_nodes": 9,
+          "selected_raw_evidence_sha256": "b78018c22dd19f4a38ccb787b07678b78d01174760f56738a978ef70f08eaa5d"
+        }
+      ]
+    },
+    "java": {
+      "execution_owner": "Host PCC checked source-model tests; integration is selected-JDK-only compilation/runtime, not PCC native class-field execution.",
+      "platform": "linux-x86_64",
+      "reference": {
+        "name": "Eclipse Temurin JDK",
+        "version": "21.0.13+9",
+        "source_target": "21",
+        "role": "external_reference",
+        "kind": "JVM execution",
+        "java_sha256": "9cad3f2620d3ef2ed10b26f922af7e773d54fdaa05f615d6d6df014f3fec4155",
+        "javac_sha256": "2cc288a26beebc50ca7cd924847dffbfb38ef3314e105bba6d4ebce03a0bcb6b"
+      },
+      "test_source_sha256": "761bc5feebf1d0325c5ec68924522af27c12a3683deea3b0c88723759c1fdf71",
+      "source_identity_sha256": "bd9300e15cbf345df60b361ab36c1efce02d6cbc6b64f50ec8292f96041f0d2d",
+      "tool_identity_sha256": "40b22bae591366f2588867367c2c712ee696967e370db9595a1908286dc75566",
+      "lanes": [
+        {
+          "lane": "ordinary",
+          "lane_outcome": "FAIL",
+          "selected_outcome": "passed",
+          "selected_node_count": 129,
+          "exact_test_ids_sha256": "d3f7486aa2033b1e55e74757bba2d063347f0a393abcc9f0191286eca87a86b0",
+          "lane_evidence_sha256": "86ee65f4a38e3bd3a307098c52f397c8ee967e0faa4edec989a236a34af17c6f",
+          "grouped_field_subset": {
+            "node_count": 43,
+            "selector": "exact test_id contains grouped",
+            "exact_test_ids_sha256": "8ba8e88e1e462ece44bdb4d49bc59fb6f88fcb3fd9347875b2414934f97304ee",
+            "additional_to_selected_count": false
+          }
+        },
+        {
+          "lane": "integration",
+          "lane_outcome": "FAIL",
+          "selected_outcome": "passed",
+          "selected_node_count": 1,
+          "exact_test_ids_sha256": "8b5b14263c90ecb157cc49f202da608f9cf65e45e54c20c747e86a2e353092a6",
+          "lane_evidence_sha256": "c440d0ebdc8e2b24c628bb914f9d939373187556f0b28dd95445283a4a9078db"
+        }
+      ]
+    },
+    "rust": {
+      "execution_owner": "Host PCC source checks and host-pcc0-generated native programs; rustc is external reference only.",
+      "platform": "linux-x86_64",
+      "reference": {
+        "name": "rustc",
+        "version": "1.91.1",
+        "commit": "ed61e7d7e242494fb7057f2657300d9e77bb4fcb",
+        "edition": "2021",
+        "platform": "x86_64-unknown-linux-gnu",
+        "llvm_version": "21.1.2",
+        "role": "external_reference",
+        "compiler_sha256": "5eadaaf4fe086d76547b17dc3c1ba880d0082b93f7d8bc65612770da8e79fe8e"
+      },
+      "test_source_sha256": "d22380efc4332248c590e7e40081b8910913db2828966e1d290c15798a0b9406",
+      "source_identity_sha256": "bd9300e15cbf345df60b361ab36c1efce02d6cbc6b64f50ec8292f96041f0d2d",
+      "tool_identity_sha256": "98ecf8a720bbada3189218b8dc0609fa7dee5b406dd3ccb934d2c4bad153e656",
+      "lanes": [
+        {
+          "lane": "ordinary",
+          "lane_outcome": "FAIL",
+          "selected_outcome": "passed",
+          "selected_node_count": 52,
+          "exact_test_ids_sha256": "9a0e023e1282fdc62977ce8208686ee356d82c0f978bd7eaf8aa16bb677a9af6",
+          "lane_evidence_sha256": "aa5b727989dc6e9f2cb04b5e520f1dca0400a5bf81072c469f0c2ae5f5e4ce4b"
+        },
+        {
+          "lane": "integration",
+          "lane_outcome": "PASS",
+          "selected_outcome": "passed",
+          "selected_node_count": 2,
+          "exact_test_ids_sha256": "77af26b727cab09808160c7d7b3cf6f02b48ed27e0c4e30215f339ed593efeb2",
+          "lane_evidence_sha256": "de98e3051201f9b555425f1a0325b314c591f9b8d1ec0dc949113aa0fc2c71c2"
+        }
+      ]
+    }
+  },
+  "entries": [
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_complete_string_range_program_uses_owned_ir_only",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_former_string_range_frontiers_are_retained_as_positive_sources[package main;\\n\\nfunc main(){for range \"abc\"{}}\\n]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_former_string_range_frontiers_are_retained_as_positive_sources[package main;func main(){for range \"abc\"{}}]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_invalid_string_ranges_fail_before_ir[-func f()int{for range \"abc\"{return 1}}-missing return-missing return]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_invalid_string_ranges_fail_before_ir[for _,_:=range \"abc\"{}--at least one new-no new variables]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_invalid_string_ranges_fail_before_ir[for i,i:=range \"abc\"{_=i}--duplicate declaration-i redeclared in this block]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_invalid_string_ranges_fail_before_ir[for i,j,k:=range \"abc\"{_=i;_=j;_=k}--at most two-at most two iteration variables]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_invalid_string_ranges_fail_before_ir[for i:=range \"abc\"{_=i};_=i--undefined name-undefined]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_invalid_string_ranges_fail_before_ir[for i:=range \"abc\"{}--declared and not used-declared and not used]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_invalid_string_ranges_fail_before_ir[var i int64;for i=range \"abc\"{};_=i--cannot use int as int64-cannot use]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_invalid_string_ranges_fail_before_ir[var r Rune;for _,r=range \"abc\"{};_=r-type Rune int32-cannot use int32 as Rune-cannot use]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_invalid_string_ranges_fail_before_ir[var r int;for _,r=range \"abc\"{};_=r--cannot use int32 as int-cannot use]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_string_range_does_not_admit_new_storage_or_pointer_proofs[-for _,r:=range \"A\"{p:=&r;_=p}-pointer-iteration-identity]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_string_range_does_not_admit_new_storage_or_pointer_proofs[-for i:=range \"A\"{p:=&i;_=p}-pointer-iteration-identity]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_string_range_does_not_admit_new_storage_or_pointer_proofs[-var p *int;for range \"A\"{_=*p}-pointer-nil]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_string_range_does_not_admit_new_storage_or_pointer_proofs[func f(a,b string){for range a+b{}}--dynamic-string-concatenation]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_string_range_does_not_admit_new_storage_or_pointer_proofs[func f(s string){var p *int;for range s{_=*p}}--pointer-nil]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_string_range_does_not_admit_new_storage_or_pointer_proofs[func f(s string){var p *int;x:=1;for range s{p=&x};_=*p}--pointer-nil]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_string_range_does_not_admit_new_storage_or_pointer_proofs[func f(x int){for range string(x){}}--dynamic-string-conversion]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_string_range_types_scopes_and_empty_flow[for _,_=range \"\\xe9\"{}]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_string_range_types_scopes_and_empty_flow[for _,r:=range Text(\"\\xe9\"){acceptRune(r)}]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_string_range_types_scopes_and_empty_flow[for _=range \"\\xe9\"{}]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_string_range_types_scopes_and_empty_flow[for i,_:=range \"\\xe9\"{acceptIndex(i)}]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_string_range_types_scopes_and_empty_flow[for i,r:=range \"\\xe9\"{acceptIndex(i);acceptRune(r)}]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_string_range_types_scopes_and_empty_flow[for i,r:=range \"\\xe9\"{i:=i+1;r:=r+1;_=i;_=r}]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_string_range_types_scopes_and_empty_flow[for range \"\"{}]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_string_range_types_scopes_and_empty_flow[for range \"\\xe9\"{switch{default:break};continue}]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_string_range_types_scopes_and_empty_flow[for range \"abc\"{}]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_string_range_types_scopes_and_empty_flow[s:=\"\\xe9\";for s:=range s{acceptIndex(s)};_=s]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_string_range_types_scopes_and_empty_flow[var i int;var r rune;for i,r=range \"\\xe9\"{};_=i;_=r]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "ordinary",
+      "test_id": "tests/go/test_string_range.py::test_string_range_types_scopes_and_empty_flow[var p *int;for range \"\"{_=*p}]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_complete_and_graduated_string_range_programs_execute_owned[complete-program]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_complete_and_graduated_string_range_programs_execute_owned[graduated-0]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_complete_and_graduated_string_range_programs_execute_owned[graduated-1]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_identical_string_range_programs_match_official_raw_streams[complete-program]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_identical_string_range_programs_match_official_raw_streams[graduated-0]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_identical_string_range_programs_match_official_raw_streams[graduated-1]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_official_go_rejects_identical_invalid_string_ranges[-func f()int{for range \"abc\"{return 1}}-missing return-missing return]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_official_go_rejects_identical_invalid_string_ranges[for _,_:=range \"abc\"{}--at least one new-no new variables]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_official_go_rejects_identical_invalid_string_ranges[for i,i:=range \"abc\"{_=i}--duplicate declaration-i redeclared in this block]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_official_go_rejects_identical_invalid_string_ranges[for i,j,k:=range \"abc\"{_=i;_=j;_=k}--at most two-at most two iteration variables]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_official_go_rejects_identical_invalid_string_ranges[for i:=range \"abc\"{_=i};_=i--undefined name-undefined]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_official_go_rejects_identical_invalid_string_ranges[for i:=range \"abc\"{}--declared and not used-declared and not used]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_official_go_rejects_identical_invalid_string_ranges[var i int64;for i=range \"abc\"{};_=i--cannot use int as int64-cannot use]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_official_go_rejects_identical_invalid_string_ranges[var r Rune;for _,r=range \"abc\"{};_=r-type Rune int32-cannot use int32 as Rune-cannot use]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_official_go_rejects_identical_invalid_string_ranges[var r int;for _,r=range \"abc\"{};_=r--cannot use int32 as int-cannot use]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_original_string_range_helpers_have_full_width_native_observations[AssignmentOrder-16622]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_original_string_range_helpers_have_full_width_native_observations[Bare-4]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_original_string_range_helpers_have_full_width_native_observations[BareCaptureOnce-102]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_original_string_range_helpers_have_full_width_native_observations[BlankRune-137]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_original_string_range_helpers_have_full_width_native_observations[BothBlank-4]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_original_string_range_helpers_have_full_width_native_observations[CaptureOnce-1300]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_original_string_range_helpers_have_full_width_native_observations[ContinueSwitchBreak-37]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_original_string_range_helpers_have_full_width_native_observations[EarlyReturn-1114111]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_original_string_range_helpers_have_full_width_native_observations[EmptyCapture-1]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_original_string_range_helpers_have_full_width_native_observations[EmptyPointerFlow-7]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_original_string_range_helpers_have_full_width_native_observations[EmptyTargets-1719]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_original_string_range_helpers_have_full_width_native_observations[GuardedPointerFlow-7]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_original_string_range_helpers_have_full_width_native_observations[HiddenInduction-4]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_original_string_range_helpers_have_full_width_native_observations[IndexCaptureOnce-104]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_original_string_range_helpers_have_full_width_native_observations[IndexOnly-137]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_original_string_range_helpers_have_full_width_native_observations[InvalidLeads-10]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_original_string_range_helpers_have_full_width_native_observations[InvalidScalars-14]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_original_string_range_helpers_have_full_width_native_observations[InvalidThenValid-7]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_original_string_range_helpers_have_full_width_native_observations[LaterContinuations-7]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_original_string_range_helpers_have_full_width_native_observations[NamedString-300]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_original_string_range_helpers_have_full_width_native_observations[NestedBreak-2]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_original_string_range_helpers_have_full_width_native_observations[RawString-20246]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_original_string_range_helpers_have_full_width_native_observations[ShadowSource-302]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_original_string_range_helpers_have_full_width_native_observations[TargetOnce-2065]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_original_string_range_helpers_have_full_width_native_observations[Truncated-123]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_original_string_range_helpers_have_full_width_native_observations[ValidScalars-12]",
+      "outcome": "passed"
+    },
+    {
+      "language": "go",
+      "lane": "integration",
+      "test_id": "tests/go/test_string_range.py::test_original_string_range_helpers_have_full_width_native_observations[ZeroString-0]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_length_and_component_store_keep_runtime_check_order",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[array-initializer]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[array-overload]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[boolean-and-long]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[common-brackets]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[constructor-assignment]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[constructor-parameter-shadow]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[declarator-brackets]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[default-null]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[explicit-field-rebind]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[explicit-null]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[field-length]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[field-rebind]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[final-alias-components-mutable]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[final-components-mutable]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[final-null]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[forward-write-exception]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[fresh-array-is-not-equal]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[grouped-explicit-field-rebind]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[grouped-field-rebind]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[grouped-final-component-mutable]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[grouped-final-field-local-shadow]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[grouped-final-reference-component-mutable]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[grouped-receiver-constructor-shadow]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[grouped-receiver-forward-write]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[grouped-receiver-initializer-shadow]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[grouped-receiver-local-shadow]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[local-alias-is-reference]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[local-shadow]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[method-shadow]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[narrow-components]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[negative-size-not-folded]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[nested-grouped-explicit-field-rebind]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[null-dereference-not-folded]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[ordered-initializers]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[out-of-bounds-not-folded]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[qualified-forward-read-default]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[return-reference]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[simple-store-effects]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_have_checked_source_model_only[zeroed-creation]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[array-initializer]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[array-overload]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[boolean-and-long]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[common-brackets]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[constructor-assignment]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[constructor-parameter-shadow]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[declarator-brackets]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[default-null]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[explicit-field-rebind]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[explicit-null]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[field-length]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[field-rebind]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[final-alias-components-mutable]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[final-components-mutable]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[final-null]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[forward-write-exception]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[fresh-array-is-not-equal]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[grouped-boolean-receiver-compound]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[grouped-explicit-field-rebind]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[grouped-field-rebind]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[grouped-final-component-mutable]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[grouped-final-field-local-shadow]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[grouped-final-reference-component-mutable]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[grouped-receiver-constructor-shadow]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[grouped-receiver-forward-write]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[grouped-receiver-initializer-shadow]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[grouped-receiver-local-shadow]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[grouped-scalar-qualified-forward-compound]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[grouped-scalar-receiver-compound]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[grouped-scalar-receiver-increment]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[grouped-scalar-receiver-shadow]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[grouped-scalar-receiver-store]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[local-alias-is-reference]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[local-shadow]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[method-shadow]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[narrow-components]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[negative-size-not-folded]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[nested-grouped-explicit-field-rebind]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[null-dereference-not-folded]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[ordered-initializers]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[out-of-bounds-not-folded]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[qualified-forward-read-default]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[return-reference]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[simple-store-effects]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_array_field_originals_still_fail_before_native_ir[zeroed-creation]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_deferred_array_field_shapes_remain_explicit[final int[] values;ArrayExample(){values=new int[]{42};}-java.unsupported.final-instance-fields]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_deferred_array_field_shapes_remain_explicit[float[] values;-java.unsupported.array-model-shape]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_deferred_array_field_shapes_remain_explicit[int[][] values;-java.unsupported.array-model-shape]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_deferred_array_field_shapes_remain_explicit[static final int[] values={42};-java.unsupported.array-storage]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_field_types_reference_identity_and_initialization_plan_are_retained",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_grouped_field_statement_fix_does_not_admit_new_receiver_or_expression_forms[(this).values=new int[]{42};return values[0];-java.unsupported.array-model-shape]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_grouped_field_statement_fix_does_not_admit_new_receiver_or_expression_forms[int[] other=(this.values=new int[]{42});return other[0];-java.unsupported.assignment-expression-target]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_grouped_receiver_keeps_field_identity_and_component_store_distinct",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_grouped_scalar_receiver_originals_use_the_same_checked_field_path[grouped-boolean-receiver-compound]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_grouped_scalar_receiver_originals_use_the_same_checked_field_path[grouped-scalar-qualified-forward-compound]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_grouped_scalar_receiver_originals_use_the_same_checked_field_path[grouped-scalar-receiver-compound]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_grouped_scalar_receiver_originals_use_the_same_checked_field_path[grouped-scalar-receiver-increment]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_grouped_scalar_receiver_originals_use_the_same_checked_field_path[grouped-scalar-receiver-shadow]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_grouped_scalar_receiver_originals_use_the_same_checked_field_path[grouped-scalar-receiver-store]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[array-compound-assignment]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[assignment-component-mismatch]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[duplicate-field]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[explicit-assignment-mismatch]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[explicit-length-is-final]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[final-constructor-rebind]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[final-explicit-rebind]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[final-grouped-constructor-rebind]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[final-grouped-explicit-rebind]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[final-rebind]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[forward-component-write-reads-reference]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[forward-length-read]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[forward-simple-read]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[grouped-forward-component-reads-reference]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[grouped-length-is-final]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[grouped-receiver-assignment-mismatch]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[grouped-receiver-static-context]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[grouped-scalar-forward-compound]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[grouped-scalar-static-final-write]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[incompatible-reference-equality]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[initializer-component-mismatch]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[initializer-element-narrowing]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[initializer-scalar-mismatch]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[length-is-final]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[long-index]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[scalar-local-shadows-array]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[self-simple-read]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[static-context-read]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[static-context-write]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "ordinary",
+      "test_id": "tests/java/test_source_array_fields.py::test_invalid_array_field_originals_fail_as_java_errors[unassigned-local-shadows-array]",
+      "outcome": "passed"
+    },
+    {
+      "language": "java",
+      "lane": "integration",
+      "test_id": "tests/java/test_source_array_fields.py::test_exact_array_field_originals_against_selected_jdk_only",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_explicit_holes_accept_argument_result_and_later_constraints[fn empty<T>()->[T;0]{[]}fn f()->[u64;0]{empty::<_>()}]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_explicit_holes_accept_argument_result_and_later_constraints[fn id<T>(x:T)->T{x}fn f()->(u64,bool){id::<(_,_)>((1,true))}]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_explicit_holes_accept_argument_result_and_later_constraints[fn id<T>(x:T)->T{x}fn f()->[u64;2]{id::<[_;2]>([1,2])}]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_explicit_holes_accept_argument_result_and_later_constraints[fn id<T>(x:T)->T{x}fn f()->u64{id::<_>(4294967296)}]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_explicit_holes_accept_argument_result_and_later_constraints[fn id<T>(x:T)->T{x}fn f()->u64{id::<_>(id::<_>(4294967296))}]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_explicit_holes_accept_argument_result_and_later_constraints[fn id<T>(x:T)->T{x}fn f()->u64{let x=id::<_>(4294967296);x}]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_explicit_holes_accept_argument_result_and_later_constraints[fn pair<T,U>(x:T,y:U)->(T,U){(x,y)}fn f()->(u64,bool){pair::<_,bool>(1,true)}]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_explicit_holes_accept_argument_result_and_later_constraints[fn pair<T,U>(x:T,y:U)->(T,U){(x,y)}fn f()->(u64,bool){pair::<u64,_>(1,true)}]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_explicit_holes_accept_argument_result_and_later_constraints[struct R<T>{x:T}impl<T>R<T>{fn take<U>(self,u:U)->U{u}}fn f()->bool{R::<u64>::take::<_>(R::<u64>{x:1},true)}]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_explicit_holes_accept_argument_result_and_later_constraints[struct R{x:u64}impl R{fn take<U>(self,u:U)->U{u}}fn f()->u64{R{x:0}.take::<_>(1)}]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_genuine_check_precedes_owned_phase_without_partial_borrow_admission[call_placeholder_order]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_genuine_check_precedes_owned_phase_without_partial_borrow_admission[call_placeholder_references]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_holes_concrete_and_omitted_arguments_share_one_existing_registry",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_invalid_placeholder_constraints_fail_before_ir[fixed-conflict-fn pair<T,U>(a:T,b:U){}fn f(){pair::<_,bool>(1u64,2u64);}-type mismatch-E0308]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_invalid_placeholder_constraints_fail_before_ir[function-arity-fn pair<T,U>(a:T,b:U){}fn f(){pair::<_>(1u64,true);}-generic function argument count-E0107]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_invalid_placeholder_constraints_fail_before_ir[inconsistent-fn same<T>(a:T,b:T){}fn f(){same::<_>(1u32,2u64);}-type mismatch-E0308]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_invalid_placeholder_constraints_fail_before_ir[item-field-struct Invalid{x:_}-unsupported Rust type '_'-E0121]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_invalid_placeholder_constraints_fail_before_ir[item-parameter-fn invalid(x:_){}-unsupported Rust type '_'-E0121]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_invalid_placeholder_constraints_fail_before_ir[method-arity-struct R<T>{x:T}impl<T>R<T>{fn take<U>(self,u:U)->U{u}}fn f(){R::<u64>{x:1}.take::<_,_>(true);}-method argument count-E0107]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_invalid_placeholder_constraints_fail_before_ir[nested-unconstrained-fn id<T>(x:T)->T{x}fn f(){id::<[_;0]>([]);}-cannot infer-E0282]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_invalid_placeholder_constraints_fail_before_ir[noncopy-move-struct R{x:u64}fn id<T>(x:T)->T{x}fn f()->u64{let r=R{x:1};id::<_>(r);r.x}-moved-E0382]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_invalid_placeholder_constraints_fail_before_ir[nongeneric-fn take(x:u64){}fn f(){take::<_>(1);}-nongeneric function-E0107]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_invalid_placeholder_constraints_fail_before_ir[operand-arity-fn id<T>(x:T)->T{x}fn f(){id::<_>();}-expects 1 arguments-E0061]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_invalid_placeholder_constraints_fail_before_ir[range-fn id<T>(x:T)->T{x}fn f()->i32{id::<_>(4294967296)}-out of range-literal out of range]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_invalid_placeholder_constraints_fail_before_ir[result-conflict-fn id<T>(x:T)->T{x}fn f()->bool{id::<_>(1)}-type mismatch-E0308]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_invalid_placeholder_constraints_fail_before_ir[unconstrained-fn unused<T>(){}fn f(){unused::<_>();}-cannot infer-E0282]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_invalid_placeholder_constraints_fail_before_ir[unused-generic-body-fn id<T>(x:T)->T{x}fn bad<U>(x:U)->U{let y=id::<_>(x);x}-moved-E0382]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_method_holes_do_not_consume_or_renormalize_fixed_owner_slots",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_placeholder_inference_never_mints_reference_certification[call_placeholder_order]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_placeholder_inference_never_mints_reference_certification[call_placeholder_references]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_placeholder_originals_emit_real_owned_target_objects[arm64-apple-darwin-\\xcf\\xfa\\xed\\xfe-call_placeholder_composites]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_placeholder_originals_emit_real_owned_target_objects[arm64-apple-darwin-\\xcf\\xfa\\xed\\xfe-call_placeholder_methods]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_placeholder_originals_emit_real_owned_target_objects[arm64-apple-darwin-\\xcf\\xfa\\xed\\xfe-call_placeholder_replay]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_placeholder_originals_emit_real_owned_target_objects[arm64-apple-darwin-\\xcf\\xfa\\xed\\xfe-call_placeholder_values]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_placeholder_originals_emit_real_owned_target_objects[x86_64-unknown-linux-gnu-\\x7fELF-call_placeholder_composites]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_placeholder_originals_emit_real_owned_target_objects[x86_64-unknown-linux-gnu-\\x7fELF-call_placeholder_methods]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_placeholder_originals_emit_real_owned_target_objects[x86_64-unknown-linux-gnu-\\x7fELF-call_placeholder_replay]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_placeholder_originals_emit_real_owned_target_objects[x86_64-unknown-linux-gnu-\\x7fELF-call_placeholder_values]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_reference_placeholder_cross_object_requires_matching_target_check[call_placeholder_order]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_reference_placeholder_cross_object_requires_matching_target_check[call_placeholder_references]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_unchanged_placeholder_original_full_width_owned_execution[call_placeholder_composites]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_unchanged_placeholder_original_full_width_owned_execution[call_placeholder_methods]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_unchanged_placeholder_original_full_width_owned_execution[call_placeholder_order]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_unchanged_placeholder_original_full_width_owned_execution[call_placeholder_references]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_unchanged_placeholder_original_full_width_owned_execution[call_placeholder_replay]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_unchanged_placeholder_original_full_width_owned_execution[call_placeholder_values]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_valid_out_of_scope_placeholders_remain_capabilities_not_rust_rejections[constructor-struct R<T>{x:T}fn f()->u64{R::<_>{x:1u64}.x}-only in function/method call type arguments]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_valid_out_of_scope_placeholders_remain_capabilities_not_rust_rejections[local-annotation-fn f()->u64{let x:_=1u64;x}-only in function/method call type arguments]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_valid_out_of_scope_placeholders_remain_capabilities_not_rust_rejections[owner-struct R<T>{x:T}impl<T>R<T>{fn take(self)->T{self.x}}fn f()->u64{R::<_>::take(R::<u64>{x:1})}-only in function/method call type arguments]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_valid_out_of_scope_placeholders_remain_capabilities_not_rust_rejections[reference-argument-fn id<T>(x:T)->T{x}fn f(p:&u64){id::<_>(p);}-generic function reference arguments]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_valid_out_of_scope_placeholders_remain_capabilities_not_rust_rejections[reference-pattern-fn id<T>(x:T)->T{x}fn f(p:&u64){id::<&_>(p);}-generic function reference arguments]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "ordinary",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_valid_out_of_scope_placeholders_remain_capabilities_not_rust_rejections[standard-drop-struct R{x:u64}impl Drop for R{fn drop(&mut self){}}fn id<T>(x:T)->T{x}fn f(){id::<_>(R{x:1});}-external traits/lang items are not implemented]",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "integration",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_actual_rustc_rejects_exact_invalid_placeholder_originals",
+      "outcome": "passed"
+    },
+    {
+      "language": "rust",
+      "lane": "integration",
+      "test_id": "tests/rust/test_rust_call_placeholders.py::test_unchanged_placeholder_originals_match_native_rustc",
+      "outcome": "passed"
+    }
+  ]
+}
