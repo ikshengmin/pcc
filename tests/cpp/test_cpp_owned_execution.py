@@ -164,10 +164,20 @@ def test_cpp_project_link_does_not_synthesize_missing_definitions(owned_only):
         )
 
 
+def test_cpp_promoted_template_d1_original_compiles_with_separate_observer(owned_only):
+    # Exact former negative TU. The entry observer is a separate source file;
+    # native execution/reference obligations retain this pair in PROGRAMS in
+    # test_cpp_template_destructors.py, rather than rewriting the original.
+    units = (
+        ("original.cpp", "template<class T> struct Box { ~Box(){} };"),
+        ("entry.cpp", "int cpp_test_entry(){return 42;}"),
+    )
+    assert compile_host_cpp(units) == compile_host_cpp(units)
+
+
 @pytest.mark.parametrize(
     "source,code",
     (
-        ("template<class T> struct Box { ~Box(){} };", "cpp.unsupported.class-templates"),
         ("int cpp_test_entry(){throw 1;}", "cpp.unsupported.exceptions"),
         ("int cpp_test_entry(){return missing;}", "cpp.undeclared"),
         (

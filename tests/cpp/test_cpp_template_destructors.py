@@ -31,6 +31,7 @@ from tests.cpp.test_cpp_owned_execution import owned_only
 TRACE_CLASS = ('template<class T>struct Box{T*p;int digit;'
                '~Box(){*p=*p*10+digit;}};')
 ORIGINAL_EMPTY_D1 = 'template<class T>struct Box{~Box(){}};'
+ORIGINAL_SPACED_LEGACY_D1 = 'template<class T> struct Box { ~Box(){} };'
 
 
 def traced(body, expected):
@@ -72,6 +73,10 @@ SHARED_CLASS = 'template<class T>struct Box{T*p;int n;~Box(){*p+=n;}};'
 PROGRAMS = tuple((name, ((name+'.cpp', source),)) for name, source in SINGLE_PROGRAMS) + (
     ('retained-original-unused-template-d1', (
         ('original.cpp', ORIGINAL_EMPTY_D1),
+        ('entry.cpp', 'int cpp_test_entry(){return 42;}'),
+    )),
+    ('retained-spaced-legacy-template-d1', (
+        ('original.cpp', ORIGINAL_SPACED_LEGACY_D1),
         ('entry.cpp', 'int cpp_test_entry(){return 42;}'),
     )),
     ('two-tu-d1-odr', (

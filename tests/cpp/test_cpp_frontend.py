@@ -9,6 +9,7 @@ import unittest
 from pcc.frontends.c.ast import c_ast
 from pcc.frontends.c.parse.plyparser import Coord
 from pcc.frontends.cpp import CppDiagnostic, CppParser
+from pcc.frontends.cpp.class_template_members import MethodPattern
 from pcc.frontends.cpp.parser import CppToken, TokenCursor
 from pcc.frontends.cpp.sema import Scope, Symbol
 
@@ -126,8 +127,18 @@ class CppParserTests(unittest.TestCase):
         self.assertEqual(ast.ext[2].body.block_items[0].expr.name.name, "_Z1fii")
         self.assertEqual(self.parse("template<class T> struct Box {};").ext, [])
         self.assertEqual(self.parse("template<class T> struct Box { T f(){return 0;} };").ext, [])
-        self.diagnostic("template<class T> struct Box { ~Box(){} };",
-                        "cpp.unsupported.class-templates")
+        # Exact former negative original: an unused D1 is now a typed primary
+        # declaration/body, with no specialization or emitted definition.
+        parser = CppParser()
+        ast = parser.parse("template<class T> struct Box { ~Box(){} };", "test.cpp")
+        record, = parser.scope.names["Box"].dtype.methods
+        self.assertIsInstance(record, MethodPattern)
+        self.assertTrue(record.symbol.destructor)
+        self.assertEqual(record.body.kind, "block")
+        self.assertEqual(record.body.children, [])
+        self.assertTrue(record.symbol.defined)
+        self.assertEqual(parser.instance_registry.entries, {})
+        self.assertEqual(ast.ext, [])
 
     def test_lifetimes_and_exceptions_are_never_dropped(self):
         ast = self.parse("struct Guard { ~Guard(); };")

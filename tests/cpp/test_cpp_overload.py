@@ -8,6 +8,7 @@ import unittest
 
 from pcc.frontends.c.ast import c_ast
 from pcc.frontends.cpp import CppDiagnostic, CppParser
+from pcc.frontends.cpp.class_template_members import MethodPattern
 from pcc.frontends.cpp.types import ArithmeticTypes, canonical_type
 
 
@@ -172,8 +173,18 @@ class OverloadSemaTests(unittest.TestCase):
         self.diagnostic("int f(int&& x);", "cpp.unsupported.references")
         self.assertEqual(self.parse("template<class T> struct Box {};").ext, [])
         self.assertEqual(self.parse("template<class T> struct Box { T f(){return 0;} };").ext, [])
-        self.diagnostic("template<class T> struct Box { ~Box(){} };",
-                        "cpp.unsupported.class-templates")
+        # Preserve the exact original and check its now-owned unused D1
+        # semantics without manufacturing an instantiation or dropping a body.
+        parser = CppParser(LINUX)
+        ast = parser.parse("template<class T> struct Box { ~Box(){} };", "overload.cpp")
+        record, = parser.scope.names["Box"].dtype.methods
+        self.assertIsInstance(record, MethodPattern)
+        self.assertTrue(record.symbol.destructor)
+        self.assertEqual(record.body.kind, "block")
+        self.assertEqual(record.body.children, [])
+        self.assertTrue(record.symbol.defined)
+        self.assertEqual(parser.instance_registry.entries, {})
+        self.assertEqual(ast.ext, [])
         for raw in ("0x1.0", "0x.p1", "1e+", "1.e"):
             self.diagnostic("double f(){return " + raw + ";}", "cpp.invalid-literal")
 

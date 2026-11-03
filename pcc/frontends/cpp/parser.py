@@ -633,6 +633,12 @@ class CppParser:
         return self._apply_declarator(declaration, dtype, allow_class_element=allow_class_element)
 
     def _is_declaration(self, allow_range=False):
+        if self._peek().value in (":", "::"):
+            from pcc.frontends.cpp.allocation import global_delete_ahead, global_new_ahead
+            # A leading global allocation expression has no qualified type
+            # name. Leave its keyword/operand parsing to the unary owner.
+            if global_delete_ahead(self) or global_new_ahead(self):
+                return False
         if not self._is_type(self._peek()):
             return False
         with self.cursor.tentative():
