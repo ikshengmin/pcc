@@ -198,22 +198,30 @@ def test_array_containing_target_restores_shape_before_any_consumer_once():
 def test_discarded_array_cast_lowers_to_array_address_not_a_pointee_load(owned_only, monkeypatch):
     from pcc.frontends.c.codegen.c_codegen import CCodeGenerator, ir
 
-    original = CCodeGenerator.codegen_UnaryOp
+    name = 'discarded-array-glvalue-does-not-fetch-pointer-sized-data'
+    source = dict(CASES)[name]
+    units = ((name + '.cpp', source),)
+    # Warm the real per-class dispatch cache before installing the observer.
+    # Patching codegen_UnaryOp alone cannot replace its already cached callable.
+    unobserved = compile_host_cpp(units)
+    original = CCodeGenerator.codegen
     observed = []
 
     def observe_array_dereference(generator, node):
-        value, address = original(generator, node)
-        if node.op == '*' and isinstance(node.expr, c_ast.StmtExpr):
+        result = original(generator, node)
+        if (isinstance(node, c_ast.UnaryOp) and node.op == '*'
+                and isinstance(node.expr, c_ast.StmtExpr)):
             items = node.expr.stmt.block_items
             if (items and isinstance(items[0], c_ast.Decl)
                     and items[0].name.startswith('__pcc_cpp_static_cast_')):
+                value, address = result
                 observed.append((value, address))
-        return value, address
+        return result
 
-    monkeypatch.setattr(CCodeGenerator, 'codegen_UnaryOp', observe_array_dereference)
-    name = 'discarded-array-glvalue-does-not-fetch-pointer-sized-data'
-    source = dict(CASES)[name]
-    compile_host_cpp(((name + '.cpp', source),))
+    # Observe the actual dispatch entrypoint without changing the cache or the
+    # production handler; the complete emitted artifact must remain identical.
+    monkeypatch.setattr(CCodeGenerator, 'codegen', observe_array_dereference)
+    assert compile_host_cpp(units) == unobserved
     assert len(observed) == 1
     value, address = observed[0]
     # C's real array-dereference no-load branch returns the address twice.

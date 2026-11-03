@@ -29,6 +29,14 @@ ORIGINAL_NOTHROW_DECLARATION = 'struct nothrow_t { explicit nothrow_t() = defaul
 UNUSED_EXTERN_DMI = ('extern int external_value; '
                      'struct S { S()=default; int n=external_value; }; '
                      'int cpp_test_entry(){return 42;}')
+# This separate AST control avoids the unimplemented conditional-expression
+# owner. It does not replace the original ternary program or its execution
+# obligation below, and it still requires selection without defining the C1.
+UNEVALUATED_PLACEMENT_C1_CONTROL = (
+    'extern int external_value;struct S{S()=default;int n=external_value;};'
+    'int cpp_test_entry(){long raw[4];'
+    'if(sizeof(new(raw)S)!=sizeof(S*))return 1;return 42;}'
+)
 
 CASES = (
     ('unused-defaulted-c1-does-not-reference-undefined-extern', UNUSED_EXTERN_DMI),
@@ -81,11 +89,15 @@ CASES = (
 )
 
 PLACEMENT_CASES = (
+    # This unchanged positive obligation still needs conditional expressions;
+    # the separate AST control above must not turn its rejection into a pass.
     ('unevaluated-placement-does-not-define-defaulted-c1',
      'extern int external_value;struct S{S()=default;int n=external_value;};'
      'int cpp_test_entry(){long raw[4];return sizeof(new(raw)S)==sizeof(S*)?42:1;}'),
     ('placement-default-init-then-explicit-write', 'struct S{explicit S()=default;int n;};'
      'int cpp_test_entry(){long raw[4];S*p=new(raw)S;p->n=42;return p->n;}'),
+    # This unchanged positive obligation still needs class sizeof. A passing
+    # whole-aggregate-zero-store check does not prove its padding execution.
     ('placement-value-init-zeroes-interior-and-tail-padding',
      'struct S{explicit S()=default;char first;int middle;char last;};'
      'int cpp_test_entry(){long raw[8];void*storage=raw;unsigned char*bytes=static_cast<unsigned char*>(storage);'
@@ -221,9 +233,7 @@ def test_evaluated_calls_share_one_external_odr_definition_and_original_prototyp
 
 def test_unevaluated_placement_checks_selected_c1_without_emitting_body():
     parser = CppParser()
-    source = next(source for name, source in PLACEMENT_CASES
-                  if name == 'unevaluated-placement-does-not-define-defaulted-c1')
-    ast = parser.parse(DECLARATION + source)
+    ast = parser.parse(DECLARATION + UNEVALUATED_PLACEMENT_C1_CONTROL)
     selected = parser.scope.names['S'].dtype.definition.constructors.overloads[0]
     assert not any(isinstance(item, c_ast.FuncDef) and item.decl.name == selected.c_name
                    for item in ast.ext)
