@@ -779,13 +779,27 @@ def pcc_gc_store_field_ptr_if_empty(owner, slot, value) -> int:
     return stored
 
 
+# StorePlan keeps its 128-byte ABI: new/old RC records occupy 0..111, then
+# backend, mode and commit state. Count-free stores use only the published
+# value and this tail. Clear unused records once: conservative stack scanning
+# must not interpret old frame contents as additional live object addresses.
+# Local scalar layout names fold to immediates; module globals would add loads.
+
+
 @c_abi_export("pcc_gc_store_root_plan_init")
 def pcc_gc_store_root_plan_init(plan, backend: int) -> None:
+    _STORE_PLAN_BYTES: i64 = 128
+    _STORE_PLAN_BACKEND: i64 = 112
+    _STORE_PLAN_MODE: i64 = 120
+    _STORE_PLAN_COUNT_FREE: i64 = 1
     if ptr_is_null(plan) != 0:
         return
-    memset(plan, 0, 128)
-    store_i64(plan, 112, backend)
-    store_i32(plan, 120, 0)
+    memset(plan, 0, _STORE_PLAN_BYTES)
+    store_i64(plan, _STORE_PLAN_BACKEND, backend)
+    if backend == 4 and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
+        store_i32(plan, _STORE_PLAN_MODE, _STORE_PLAN_COUNT_FREE)
+        return
+    store_i32(plan, _STORE_PLAN_MODE, 0)
 
 
 @c_abi_export("pcc_gc_store_ptr_plan_init")
@@ -816,17 +830,31 @@ def _gc4_old_slot_is_releasable(value) -> int:
 
 
 def _pcc_gc_store_plan_commit_locked(plan, owner, slot, value) -> int:
+    _STORE_PLAN_VALUE: i64 = 0
+    _STORE_PLAN_BACKEND: i64 = 112
+    _STORE_PLAN_MODE: i64 = 120
+    _STORE_PLAN_STATE: i64 = 124
+    _STORE_PLAN_COUNT_FREE: i64 = 1
     if ptr_is_null(plan) != 0 or ptr_is_null(slot) != 0:
         return 0
-    if load_i32(plan, 124) != 0:
+    if load_i32(plan, _STORE_PLAN_STATE) != 0:
         return 0
-    store_i32(plan, 124, 1)
-    backend: int = load_i64(plan, 112)
+    store_i32(plan, _STORE_PLAN_STATE, 1)
+    backend: int = load_i64(plan, _STORE_PLAN_BACKEND)
     if backend == 1 or backend == 2 or backend == 3 or backend == 4:
         pcc_gc_note_store()
     if backend == 3 or backend == 4:
         if _gc_forwarding_population() > 0 and _gc_relocation_candidate(value) != 0:
             value = pcc_gc_note_relocation_read(value)
+    if i64(load_i32(plan, _STORE_PLAN_MODE)) == i64(_STORE_PLAN_COUNT_FREE):
+        # The existing no-RC prepare/finish routines have no ownership effect.
+        # Keep relocation and the insertion barrier, but do not initialize RC
+        # records or inspect the old reference solely to release nothing.
+        store_ptr(plan, _STORE_PLAN_VALUE, value)
+        pcc_gc_note_slot_write_barrier(owner, slot, value)
+        store_ptr(slot, 0, value)
+        store_i32(plan, _STORE_PLAN_STATE, 3)
+        return 1
     _py_incref_prepare(value, plan)
     if load_i64(plan, 48) != 0:
         # Debug-invalid value: the store note and the deferred diagnostic
@@ -842,7 +870,7 @@ def _pcc_gc_store_plan_commit_locked(plan, owner, slot, value) -> int:
         if backend == 4 and _gc4_old_slot_is_releasable(old) == 0:
             old = null()
     _py_decref_prepare(old, ptr_add(plan, 56))
-    store_i32(plan, 124, 3)
+    store_i32(plan, _STORE_PLAN_STATE, 3)
     return 1
 
 
@@ -870,14 +898,28 @@ def _pcc_gc_store_plan_commit_sentinel_aware_locked(
     barrier with today's arguments, the relocation read for a real value, the
     backend-4 known-object guard, and a real old value's release.
     """
+    _STORE_PLAN_VALUE: i64 = 0
+    _STORE_PLAN_BACKEND: i64 = 112
+    _STORE_PLAN_MODE: i64 = 120
+    _STORE_PLAN_STATE: i64 = 124
+    _STORE_PLAN_COUNT_FREE: i64 = 1
     if ptr_is_null(plan) != 0 or ptr_is_null(slot) != 0:
         return 0
-    if load_i32(plan, 124) != 0:
+    if load_i32(plan, _STORE_PLAN_STATE) != 0:
         return 0
-    store_i32(plan, 124, 1)
-    backend: int = load_i64(plan, 112)
+    store_i32(plan, _STORE_PLAN_STATE, 1)
+    backend: int = load_i64(plan, _STORE_PLAN_BACKEND)
     if backend == 1 or backend == 2 or backend == 3 or backend == 4:
         pcc_gc_note_store()
+    if i64(load_i32(plan, _STORE_PLAN_MODE)) == i64(_STORE_PLAN_COUNT_FREE):
+        if ptr_eq(value, sentinel) == 0:
+            if _gc_forwarding_population() > 0 and _gc_relocation_candidate(value) != 0:
+                value = pcc_gc_note_relocation_read(value)
+        store_ptr(plan, _STORE_PLAN_VALUE, value)
+        pcc_gc_note_slot_write_barrier(owner, slot, value)
+        store_ptr(slot, 0, value)
+        store_i32(plan, _STORE_PLAN_STATE, 3)
+        return 1
     if ptr_eq(value, sentinel) != 0:
         # A sentinel carries no forwarding entry and needs no incref.  The
         # reset keeps the plan's finish inert.
@@ -902,7 +944,7 @@ def _pcc_gc_store_plan_commit_sentinel_aware_locked(
         if backend == 4 and _gc4_old_slot_is_releasable(old) == 0:
             old = null()
     _py_decref_prepare(old, ptr_add(plan, 56))
-    store_i32(plan, 124, 3)
+    store_i32(plan, _STORE_PLAN_STATE, 3)
     return 1
 
 
@@ -926,19 +968,25 @@ def pcc_gc_store_ptr_plan_commit_locked(plan, owner, slot, value) -> int:
 
 
 def _pcc_gc_store_plan_finish(plan, emit_store_log: int) -> None:
+    _STORE_PLAN_BACKEND: i64 = 112
+    _STORE_PLAN_MODE: i64 = 120
+    _STORE_PLAN_STATE: i64 = 124
+    _STORE_PLAN_COUNT_FREE: i64 = 1
     if ptr_is_null(plan) != 0:
         return
-    state: int = load_i32(plan, 124)
+    state: int = load_i32(plan, _STORE_PLAN_STATE)
     if (state & 1) == 0 or (state & 4) != 0:
         return
-    store_i32(plan, 124, state | 4)
+    store_i32(plan, _STORE_PLAN_STATE, state | 4)
     if (
         emit_store_log != 0
         and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0
     ):
         pcc_diagnostics_runtime_log_event_code(
-            2, 3, load_i64(plan, 112), 0, null()
+            2, 3, load_i64(plan, _STORE_PLAN_BACKEND), 0, null()
         )
+    if i64(load_i32(plan, _STORE_PLAN_MODE)) == i64(_STORE_PLAN_COUNT_FREE):
+        return
     _py_incref_finish(plan)
     if (state & 2) != 0:
         _py_decref_finish(ptr_add(plan, 56))

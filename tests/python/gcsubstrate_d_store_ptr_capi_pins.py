@@ -103,11 +103,15 @@ def test_store_ptr_uses_owner_aware_prepare_commit_finish_transaction():
     py_commit_impl = py_src.split(
         "def _pcc_gc_store_plan_commit_locked(", 1
     )[1].split('@c_abi_export("pcc_gc_store_root_plan_commit_locked")', 1)[0]
-    assert py_commit_impl.index("_py_incref_prepare(") < py_commit_impl.index(
+    # The count-free arm performs the same barrier/publication without an RC
+    # record. Preserve the original prepare/publish/release ordering for every
+    # counted collector, separately from the executed count-free plan tests.
+    py_counted_commit = py_commit_impl[py_commit_impl.index("_py_incref_prepare("):]
+    assert py_counted_commit.index("_py_incref_prepare(") < py_counted_commit.index(
         "pcc_gc_note_slot_write_barrier("
-    ) < py_commit_impl.index("old = load_ptr(slot, 0)") < py_commit_impl.index(
+    ) < py_counted_commit.index("old = load_ptr(slot, 0)") < py_counted_commit.index(
         "store_ptr(slot, 0, load_ptr(plan, 0))"
-    ) < py_commit_impl.index("_py_decref_prepare(")
+    ) < py_counted_commit.index("_py_decref_prepare(")
     for forbidden in ("py_decref(", "_py_decref_finish(", "runtime_log_event"):
         assert forbidden not in py_commit_impl
 

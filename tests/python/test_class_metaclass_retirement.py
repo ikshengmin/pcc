@@ -20,7 +20,7 @@ def load_functions(path, names, environment):
     nodes = []
     for node in ast.parse(path.read_text()).body:
         if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            if node.target.id in LAYOUT_CONSTANTS:
+            if node.target.id in LAYOUT_CONSTANTS or node.target.id.startswith('_STORE_PLAN_'):
                 nodes.append(node)
         if (isinstance(node, ast.Assign) and len(node.targets) == 1
                 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in LAYOUT_CONSTANTS):
@@ -47,13 +47,15 @@ class Retirement:
         self.events = []
         self.globals = {'pcc_gc_backend_selected': 8192,
                         'pcc_gc_config_initialized': 8200,
-                        'pcc_diagnostics_runtime_log_fast_state': 8208}
-        self.words.update({8192: backend, 8200: 1, 8208: 0})
+                        'pcc_diagnostics_runtime_log_fast_state': 8208,
+                        'pcc_gc_backend4_no_refcounts': 8216}
+        self.words.update({8192: backend, 8200: 1, 8208: 0, 8216: 0})
         env = {name: value for name, value in vars(abi).items() if name.isupper()}
         env.update(
             i64=int, c_ptr=int, null=lambda: 0, ptr_is_null=lambda p: int(p == 0),
             is_tagged_int=lambda p: 0, ptr_eq=lambda a,b: int(a == b),
             ptr_add=lambda p,n: p+n, global_addr=self.globals.__getitem__,
+            global_load_ptr=lambda name: 1 if name == 'py_weakref_head' else 0,
             load_ptr=self.load, load_i32=self.load, load_i64=self.load,
             store_ptr=self.store, store_i32=self.store, store_i64=self.store,
             stack_alloc=self.allocate,

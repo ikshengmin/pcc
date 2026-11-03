@@ -255,9 +255,12 @@ def test_scheduler_queue_root_transfer_plans_finish_after_outer_graph_unlock():
     )[1].split(
         '@c_abi_export("pcc_gc_store_root_plan_commit_locked")', 1
     )[0]
-    assert "memset(plan, 0, 128)" in strict_init
-    assert "store_i64(plan, 112, backend)" in strict_init
-    assert "store_i32(plan, 120, 0)" in strict_init
+    assert "_STORE_PLAN_BYTES: i64 = 128" in strict_obj
+    assert "memset(plan, 0, _STORE_PLAN_BYTES)" in strict_init
+    assert "_STORE_PLAN_BACKEND: i64 = 112" in strict_obj
+    assert "_STORE_PLAN_MODE: i64 = 120" in strict_obj
+    assert "store_i64(plan, _STORE_PLAN_BACKEND, backend)" in strict_init
+    assert "store_i32(plan, _STORE_PLAN_MODE, 0)" in strict_init
     strict_commit = strict_obj.split(
         "def _pcc_gc_store_plan_commit_locked(", 1
     )[1].split(
@@ -274,12 +277,13 @@ def test_scheduler_queue_root_transfer_plans_finish_after_outer_graph_unlock():
         "pcc_gc_note_safepoint(",
     ]:
         assert forbidden not in strict_commit
+    counted_commit = strict_commit[strict_commit.index("_py_incref_prepare(value, plan)"):]
     assert (
-        strict_commit.index("_py_incref_prepare(value, plan)")
-        < strict_commit.index("pcc_gc_note_slot_write_barrier(")
-        < strict_commit.index("old = load_ptr(slot, 0)")
-        < strict_commit.index("store_ptr(slot, 0, load_ptr(plan, 0))")
-        < strict_commit.index(
+        counted_commit.index("_py_incref_prepare(value, plan)")
+        < counted_commit.index("pcc_gc_note_slot_write_barrier(")
+        < counted_commit.index("old = load_ptr(slot, 0)")
+        < counted_commit.index("store_ptr(slot, 0, load_ptr(plan, 0))")
+        < counted_commit.index(
             "_py_decref_prepare(old, ptr_add(plan, 56))"
         )
     )

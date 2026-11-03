@@ -93,6 +93,15 @@ dropped keyword); the stage 1 commit message lists them. Rerun with
 
 ## Native throughput versus CPython 3.15.0: active, acceptance unmet
 
+GC4 count-free root/container StorePlans now skip RC prepare/finish records
+and old-reference provenance checks. The 128-byte opaque ABI, initial clearing
+for conservative scans, graph locks, relocation resolution, insertion barriers,
+logging and commit-once state remain. Thirty-one executed body checks and the
+six owned-native modes (GC0-4 plus count-free GC4) pass, as do the native GC4
+value and weakref/finalizer/resurrection regressions. Named local layout values
+fold to immediates in emitted IR. This checkpoint has focused correctness
+evidence; its throughput screening and full qualification are pending.
+
 GC4 payload growth now consults the existing buffered-owner membership index
 before traversing the medium and global store-buffer queues. A complete
 negative answer skips both unrelated queues; an incomplete index keeps the
