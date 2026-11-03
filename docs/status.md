@@ -256,6 +256,10 @@ scratch still has explicit free ownership, and counted paths remain raw.
 `test_tracing_bigint_publication.py` passes twelve body-model checks for value,
 header/origin, normalized extent, first configuration, tagged folding and
 failure cleanup. Its native index/debt/reclamation probe is pending.
+The new integrated execution stops under GC0 at the subsequent bigint
+identity assertion (`keep[0] is first`), after printing the expected counted
+publication/reclamation observations. It reports an unwanted conversion to
+C int64; this failure remains open and is not a passing integer/identity gate.
 
 The count-free final remark now scans the current stopped mutator snapshots
 before draining gray objects and committing the verdict, inside the existing
@@ -264,7 +268,16 @@ roots acquired during concurrent marking; a same-stop-epoch sweep can reuse
 the committed verdict without another root seed. Six actual-body tests pass
 for scan order, stop failure, nested world ownership and a stale callback
 epoch, plus seven scheduler checks including two external-assembler object
-closure references. The controlled native final-mark regression is pending.
+closure references. The fresh `71f20ac4a` runtime passes the controlled native
+final-mark regression: a raw stack root absent from the initial seed is not
+included in the completed disposal set.
+
+The permanent raw `object` class also needs to trace its mutable namespace.
+In count-free mode its fully initialized class now enters the object index
+with a permanent address pin before the raw cache publishes it. Two body
+models pass for stable publication and cache reuse; a five-collector/native
+namespace-liveness regression is pending. Merely registering provenance or
+the raw cache slot cannot trace an owner absent from the object index.
 
 An additional exception-root probe exposes an existing builtin-exception
 limitation: `ValueError(shared_list, index).args[0] is shared_list` fails under

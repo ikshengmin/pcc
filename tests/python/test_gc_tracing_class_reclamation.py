@@ -8,6 +8,50 @@ from pathlib import Path
 import pytest
 
 
+@pytest.mark.parametrize("tracing", [0, 1])
+def test_permanent_raw_class_publishes_a_stable_traced_owner(tracing):
+    from pcc.runtime.py import py_abi_constants as abi
+    from test_gc4_conservative_root_seeding import body
+
+    memory = {}
+    globals_ = {"py_object_root_cache": 0, "pcc_gc_backend4_no_refcounts": tracing}
+    allocations = []
+    indexed = []
+
+    def malloc(size):
+        address = 4096 + len(allocations) * 4096
+        allocations.append((address, size))
+        return address
+
+    def store(base, offset, value):
+        memory[base + offset] = value
+
+    def indexed_owner(owner, size):
+        flags = memory[owner + abi.PYOBJECTHEADER_FLAGS_OFFSET]
+        assert flags & abi.PY_FLAG_IMMORTAL and flags & abi.PY_FLAG_GC_PINNED
+        mro = memory[owner + abi.PYCLASSOBJECT_MRO_OFFSET]
+        assert memory[mro] == owner
+        indexed.append((owner, size))
+
+    namespace = dict(vars(abi))
+    namespace.update(
+        global_load_ptr=lambda name: globals_[name],
+        global_store_ptr=lambda name, value: globals_.__setitem__(name, value),
+        global_addr=lambda name: name,
+        load_i32=lambda base, offset: globals_[base] if isinstance(base, str) else memory[base + offset],
+        store_ptr=store, store_i32=store, store_i64=store,
+        null=lambda: 0, ptr_is_null=lambda value: value == 0,
+        malloc=malloc, memset=lambda *args: None,
+        pcc_gc_pointer_register=lambda value: 0,
+        pcc_gc_note_object_allocated_sized=indexed_owner,
+    )
+    constructor = body("py_substrate.py", "py_subs_object_root", namespace)
+    root = constructor()
+    assert constructor() == root
+    assert len(allocations) == 2
+    assert indexed == ([(root, abi.PYCLASSOBJECT_SIZE)] if tracing else [])
+
+
 HARNESS = r'''
 extern void *py_class_new(const char *, void **, int, const char **, int);
 extern void *py_instance_new(void *);
@@ -255,3 +299,43 @@ def test_finalizer_created_instance_keeps_its_class_and_runs_its_own_finalizer(
                      PCC_GC4_TRACING_ONLY=tracing, PCC_GC_DEBT_THRESHOLD="1099511627776"),
         )
         assert (result.returncode, result.stdout, result.stderr) == (0, reference.stdout, ""), tracing
+
+
+@pytest.mark.integration
+@pytest.mark.xdist_group("class_graph_lifetime")
+def test_permanent_object_class_keeps_its_mutable_namespace(tmp_path, pcc_runtime_archive):
+    from pcc.backend.owned_object_emit import emit_owned_object
+    from pcc.frontends.python.pipeline import compile_python
+    from pcc.frontends.python.pipeline_targets import host_target_triple
+    from pcc.runtime.py import py_abi_constants as abi
+    from tests.python.test_owned_external_tls import _c_ir
+
+    fixture = Path(__file__).with_name("fixtures") / "gc_immortal_class_owner.c"
+    harness = fixture.read_text().replace("@ATTRS@", str(abi.PYCLASSOBJECT_ATTRS_OFFSET))
+    helper = tmp_path / "immortal_owner.o"
+    target = host_target_triple()
+    helper.write_bytes(emit_owned_object(_c_ir(harness, target), target))
+    source = tmp_path / "immortal_owner.py"
+    source.write_text('''import gc
+from pcc.extern import c_int64, extern
+make = extern("make_immortal_root_cache", (), c_int64)
+scrub = extern("clear_immortal_cache_old_stack", (), c_int64)
+live = extern("immortal_root_cache_is_live", (), c_int64)
+def main():
+    made = make()
+    for index in range(4):
+        scrub()
+        gc.collect()
+    print(made, live())
+main()
+''')
+    binary = tmp_path / "immortal_owner"
+    compile_python(str(source), str(binary), backend="self",
+                   runtime_archive=str(pcc_runtime_archive), object_inputs=(str(helper),))
+    for backend, tracing in ((0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (4, 1)):
+        result = subprocess.run(
+            [str(binary)], capture_output=True, text=True, timeout=30,
+            env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend),
+                     PCC_GC4_TRACING_ONLY=str(tracing)),
+        )
+        assert (result.returncode, result.stdout, result.stderr) == (0, "1 1\n", ""), (backend, tracing)
