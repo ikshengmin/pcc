@@ -99,8 +99,14 @@ for conservative scans, graph locks, relocation resolution, insertion barriers,
 logging and commit-once state remain. Thirty-one executed body checks and the
 six owned-native modes (GC0-4 plus count-free GC4) pass, as do the native GC4
 value and weakref/finalizer/resurrection regressions. Named local layout values
-fold to immediates in emitted IR. This checkpoint has focused correctness
-evidence; its throughput screening and full qualification are pending.
+fold to immediates in emitted IR. The first mode predicate in `ddc1b3114`
+boxed its two `i64(...)` call results and reached `py_obj_eq_value`; short
+screening rejected it at +7.88% instructions/request and three negative QPS
+pairs. Direct nonzero mode checks remove that detour. The corrected source
+passes the 31 body checks, six native modes, and a new actual-IR regression
+forbidding boxing/comparison/ownership calls in the three transaction helpers.
+The broader alias-call inference issue remains open. Corrected throughput
+screening and full qualification are pending.
 
 GC4 payload growth now consults the existing buffered-owner membership index
 before traversing the medium and global store-buffer queues. A complete

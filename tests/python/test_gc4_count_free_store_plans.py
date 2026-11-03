@@ -240,3 +240,26 @@ def test_five_counted_collectors_keep_prepare_and_finish(backend, kind):
     assert [('finish', 'retain', model.VALUE), ('finish', 'release', model.OLD)] == [
         event for event in model.events if isinstance(event, tuple) and event[0] == 'finish'
     ]
+
+
+@pytest.mark.integration
+def test_store_plan_mode_checks_emit_scalar_ir_without_boxed_comparison(tmp_path):
+    from pcc.frontends.python.owned_runtime_build import _compile_runtime_module
+    from pcc.frontends.python.pipeline_targets import host_target_triple
+
+    output = tmp_path / 'py_obj.ll'
+    _compile_runtime_module('py_obj', str(SOURCE), str(output), host_target_triple())
+    text = output.read_text()
+    for name in (
+        '_pcc_gc_store_plan_commit_locked',
+        '_pcc_gc_store_plan_commit_sentinel_aware_locked',
+        '_pcc_gc_store_plan_finish',
+    ):
+        definitions = [part.split('\n}', 1)[0] for part in text.split('\ndefine ')
+                       if '@user_py_obj_' + name + '(' in part.split('\n', 1)[0]]
+        assert len(definitions) == 1, name
+        body = definitions[0]
+        assert 'icmp ' in body
+        for symbol in ('py_obj_eq_value', 'py_int_from_i64', 'pcc_gc_pin', 'pcc_gc_retain'):
+            assert '@' + symbol + '(' not in body, (name, symbol)
+        assert '.modvar.py_obj._STORE_PLAN_' not in body

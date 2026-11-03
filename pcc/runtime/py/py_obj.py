@@ -834,7 +834,6 @@ def _pcc_gc_store_plan_commit_locked(plan, owner, slot, value) -> int:
     _STORE_PLAN_BACKEND: i64 = 112
     _STORE_PLAN_MODE: i64 = 120
     _STORE_PLAN_STATE: i64 = 124
-    _STORE_PLAN_COUNT_FREE: i64 = 1
     if ptr_is_null(plan) != 0 or ptr_is_null(slot) != 0:
         return 0
     if load_i32(plan, _STORE_PLAN_STATE) != 0:
@@ -846,7 +845,7 @@ def _pcc_gc_store_plan_commit_locked(plan, owner, slot, value) -> int:
     if backend == 3 or backend == 4:
         if _gc_forwarding_population() > 0 and _gc_relocation_candidate(value) != 0:
             value = pcc_gc_note_relocation_read(value)
-    if i64(load_i32(plan, _STORE_PLAN_MODE)) == i64(_STORE_PLAN_COUNT_FREE):
+    if load_i32(plan, _STORE_PLAN_MODE) != 0:
         # The existing no-RC prepare/finish routines have no ownership effect.
         # Keep relocation and the insertion barrier, but do not initialize RC
         # records or inspect the old reference solely to release nothing.
@@ -902,7 +901,6 @@ def _pcc_gc_store_plan_commit_sentinel_aware_locked(
     _STORE_PLAN_BACKEND: i64 = 112
     _STORE_PLAN_MODE: i64 = 120
     _STORE_PLAN_STATE: i64 = 124
-    _STORE_PLAN_COUNT_FREE: i64 = 1
     if ptr_is_null(plan) != 0 or ptr_is_null(slot) != 0:
         return 0
     if load_i32(plan, _STORE_PLAN_STATE) != 0:
@@ -911,7 +909,7 @@ def _pcc_gc_store_plan_commit_sentinel_aware_locked(
     backend: int = load_i64(plan, _STORE_PLAN_BACKEND)
     if backend == 1 or backend == 2 or backend == 3 or backend == 4:
         pcc_gc_note_store()
-    if i64(load_i32(plan, _STORE_PLAN_MODE)) == i64(_STORE_PLAN_COUNT_FREE):
+    if load_i32(plan, _STORE_PLAN_MODE) != 0:
         if ptr_eq(value, sentinel) == 0:
             if _gc_forwarding_population() > 0 and _gc_relocation_candidate(value) != 0:
                 value = pcc_gc_note_relocation_read(value)
@@ -971,7 +969,6 @@ def _pcc_gc_store_plan_finish(plan, emit_store_log: int) -> None:
     _STORE_PLAN_BACKEND: i64 = 112
     _STORE_PLAN_MODE: i64 = 120
     _STORE_PLAN_STATE: i64 = 124
-    _STORE_PLAN_COUNT_FREE: i64 = 1
     if ptr_is_null(plan) != 0:
         return
     state: int = load_i32(plan, _STORE_PLAN_STATE)
@@ -985,7 +982,7 @@ def _pcc_gc_store_plan_finish(plan, emit_store_log: int) -> None:
         pcc_diagnostics_runtime_log_event_code(
             2, 3, load_i64(plan, _STORE_PLAN_BACKEND), 0, null()
         )
-    if i64(load_i32(plan, _STORE_PLAN_MODE)) == i64(_STORE_PLAN_COUNT_FREE):
+    if load_i32(plan, _STORE_PLAN_MODE) != 0:
         return
     _py_incref_finish(plan)
     if (state & 2) != 0:
