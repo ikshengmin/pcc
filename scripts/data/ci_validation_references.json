@@ -850,6 +850,20 @@
         ]
       }
     },
+    "tests/cpp/test_cpp_template_local_pointer_execution.py": {
+      "test_invalid_template_local_pointer_originals_fail_reference": {
+        "activity": "external-reference",
+        "reason": ["Calls explicit C++17 syntax_reference on unchanged concretely-instantiated invalid source"]
+      },
+      "test_remaining_template_local_pointer_gaps_are_cpp17_valid": {
+        "activity": "external-reference",
+        "reason": ["Calls explicit C++17 syntax_reference to retain valid unowned local/lifetime/allocation boundaries"]
+      },
+      "test_template_local_pointer_originals_match_cpp17": {
+        "activity": "external-reference",
+        "reason": ["Calls tests.cpp.sizeof_execution.execute_row_pair on unchanged original translation units"]
+      }
+    },
     "tests/cpp/test_cpp_template_subscript_result_execution.py": {
       "test_invalid_reference_subscript_original_is_rejected_by_reference": {
         "activity": "external-reference",

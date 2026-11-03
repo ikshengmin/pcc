@@ -404,7 +404,8 @@ class CppParser:
         if self.parsing_template and is_enum_type(nominal):
             raise CppDiagnostic("cpp.unsupported.enum-templates",
                                 "enum-related template semantics are not implemented", token.coord)
-        if self.parsing_template and (pointer_type(dtype) or isinstance(dtype, ConstType)):
+        if (self.parsing_template and getattr(self, 'class_template_method', None) is None
+                and (pointer_type(dtype) or isinstance(dtype, ConstType))):
             raise CppDiagnostic("cpp.unsupported.pointer-templates",
                                 "pointer/cv template types are not implemented", token.coord)
         return self._check_extended_value_type(dtype, token)
@@ -563,6 +564,7 @@ class CppParser:
         if array_type(dtype) and dtype.bound is None:
             raise CppDiagnostic("cpp.unsupported.unknown-bound-array-pointers", "pointer to an unknown-bound array requires separate completeness rules", token.coord)
         if (self.parsing_template and not getattr(self, 'class_template_signature', False)
+                and getattr(self, 'class_template_method', None) is None
                 and not allow_template_type_id):
             raise CppDiagnostic("cpp.unsupported.pointer-templates", "pointer template types are not implemented", token.coord)
         if "volatile" in qualifiers:
@@ -1465,7 +1467,11 @@ class CppParser:
             elif is_enum_type(dtype) and self._peek().value == "{":
                 raise CppDiagnostic("cpp.unsupported.enum-list-initialization",
                                     "enum direct-list initialization requires context-sensitive rules", self._peek().coord)
-            if isinstance(dtype, ConstType) and initializer is None:
+            # A dependent const local can become a class object. Its lifetime
+            # gap or scalar initialization error belongs to typed substitution.
+            if (isinstance(dtype, ConstType) and initializer is None
+                    and not (getattr(self, 'class_template_method', None) is not None
+                             and dependent(dtype))):
                 raise CppDiagnostic("cpp.const-initializer", "const objects require an initializer", name.coord)
             if for_init and self._peek().value == ":":
                 raise CppDiagnostic("cpp.unsupported.range-for",
