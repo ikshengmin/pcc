@@ -25,13 +25,15 @@ from tests.rust.certification_support import (
     darwin_check_prerequisite,
 )
 
-PROGRAMS = (
+UNUSED_GENERIC_ORIGINAL = 'fn id<T>(x:T)->T{x}fn outer<U>(x:U)->U{id::<_>(x)}'
+
+VALUE_PROGRAMS = (
     'call_placeholder_values', 'call_placeholder_composites',
     'call_placeholder_methods', 'call_placeholder_replay',
-    'call_placeholder_references', 'call_placeholder_order',
+    'call_placeholder_unused_root',
 )
-VALUE_PROGRAMS = PROGRAMS[:4]
-REFERENCE_PROGRAMS = PROGRAMS[4:]
+REFERENCE_PROGRAMS = ('call_placeholder_references', 'call_placeholder_order')
+PROGRAMS = VALUE_PROGRAMS + REFERENCE_PROGRAMS
 
 
 def source(name):
@@ -46,14 +48,32 @@ def source(name):
     'fn id<T>(x:T)->T{x}fn f()->(u64,bool){id::<(_,_)>((1,true))}',
     'fn id<T>(x:T)->T{x}fn f()->[u64;2]{id::<[_;2]>([1,2])}',
     'fn empty<T>()->[T;0]{[]}fn f()->[u64;0]{empty::<_>()}',
-    'fn id<T>(x:T)->T{x}fn outer<U>(x:U)->U{id::<_>(x)}',
+    UNUSED_GENERIC_ORIGINAL,
+    UNUSED_GENERIC_ORIGINAL + 'fn f()->i32{outer::<i32>(42)}',
     'fn id<T>(x:T)->T{x}fn f()->u64{id::<_>(id::<_>(4294967296))}',
     'struct R{x:u64}impl R{fn take<U>(self,u:U)->U{u}}fn f()->u64{R{x:0}.take::<_>(1)}',
     'struct R<T>{x:T}impl<T>R<T>{fn take<U>(self,u:U)->U{u}}'
     'fn f()->bool{R::<u64>::take::<_>(R::<u64>{x:1},true)}',
 ])
 def test_explicit_holes_accept_argument_result_and_later_constraints(text):
-    assert 'define' in compile_rust(text, experimental_rustc_checked=True).ir_text
+    result = compile_rust(text, experimental_rustc_checked=True)
+    if text == UNUSED_GENERIC_ORIGINAL:
+        # Generic bodies are checked abstractly, not emitted without a concrete
+        # call. Keep this exact original and its parameter ID as a positive;
+        # demanding a definition here would invent a monomorphization root.
+        parser = Parser(text)
+        functions = parser.parse()
+        checker = Checker(functions, parser.records, parser.enums, parser.implementations)
+        checker.check()
+        assert len(functions) == 2 and all(fn.type_parameters for fn in functions)
+        assert not checker.function_generics.instances.entries
+        assert result.symbols == {} and 'define' not in result.ir_text
+    else:
+        assert 'define' in result.ir_text
+
+
+def test_rooted_unused_generic_fixture_preserves_the_exact_original_prefix():
+    assert source('call_placeholder_unused_root').startswith(UNUSED_GENERIC_ORIGINAL + '\n')
 
 
 def test_holes_concrete_and_omitted_arguments_share_one_existing_registry():
