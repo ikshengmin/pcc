@@ -86,8 +86,6 @@ def test_template_prefix_substitution_is_not_a_spelling_alias():
     ('template<class T>struct Box;int f(){Box<int>b;return 0;}','cpp.incomplete-class'),
     ('template<class T>struct Box{T* value;}; using R=int&; int f(){Box<R>b{nullptr};return 42;}','cpp.invalid-reference-type'),
     ('template<class T>struct Box{const T** value;};using R=int&;int f(){Box<R>b{nullptr};return 42;}','cpp.invalid-reference-type'),
-    ('template<class T>class Box{T value;};int cpp_test_entry(){if(sizeof(Box<int>)==sizeof(int))return 42;return 1;}','cpp.unsupported.sizeof-class-layout'),
-    ('template<class T>struct Box{};int cpp_test_entry(){if(sizeof(Box<int>)==1)return 42;return 1;}','cpp.unsupported.sizeof-class-layout'),
     ('template<class T>struct Box{void value;};','cpp.invalid-object-type'),
     ('template<class T>struct Box{Missing value;};','cpp.unsupported.syntax'),
     ('template<class T>struct Box{T value;};Box<void>b;','cpp.unsupported.static-class-lifetime'),

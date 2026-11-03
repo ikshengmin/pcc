@@ -43,6 +43,7 @@ from tests.cpp.test_cpp_class_templates import CASES as CLASS_TEMPLATE_PROGRAMS
 from tests.cpp.test_cpp_class_template_members import CASES as CLASS_TEMPLATE_MEMBER_PROGRAMS
 from tests.cpp.test_cpp_object_addresses import CASES as OBJECT_ADDRESS_PROGRAMS
 from tests.cpp.test_cpp_source_newlines import PROGRAMS as SOURCE_NEWLINE_PROGRAMS
+from tests.cpp.test_cpp_class_size_queries import SINGLE_PROGRAMS as CLASS_SIZE_PROGRAMS
 
 
 CLASS_TEMPLATE_MEMBER_CASES = tuple(
@@ -114,6 +115,11 @@ CLASS_TEMPLATE_CASES = tuple(
 )
 CASES += CLASS_TEMPLATE_CASES
 CASES += SOURCE_NEWLINE_PROGRAMS
+CASES += tuple(
+    ('class-size-' + name, dict(CLASS_SIZE_PROGRAMS)[name], 42)
+    for name in ('interior-tail-padding', 'nested-member-layout', 'empty-member-byte',
+                 'dependent-type-and-no-dereference', 'dependent-increment-unevaluated')
+)
 
 
 def _forbidden_process(*args, **kwargs):

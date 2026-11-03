@@ -1,5 +1,13 @@
 {
   "functions": {
+    "tests/c/test_c_natural_record_layout.py": {
+      "test_c_natural_record_original_owned_and_reference_execution": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct C11 reference compiler subprocess and execution, compared with the same original owned C source"
+        ]
+      }
+    },
     "tests/cpp/test_cpp_aggregate_initialization.py": {
       "test_cpp_aggregate_owned_execution_matches_cpp17_reference": {
         "activity": "external-reference",
@@ -147,6 +155,20 @@
         "activity": "external-reference",
         "reason": [
           "Calls tests.cpp.test_cpp_class_execution.execute_and_record"
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_class_size_query_execution.py": {
+      "test_class_size_originals_match_cpp17": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.sizeof_execution.execute_row_pair, which calls tests.cpp.owned_execution.compile_reference_cpp"
+        ]
+      },
+      "test_invalid_class_size_originals_fail_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct C++17 negative reference compiler subprocess with -pedantic-errors and -fsyntax-only"
         ]
       }
     },

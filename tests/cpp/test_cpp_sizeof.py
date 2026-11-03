@@ -99,12 +99,9 @@ INVALID = (
 DEFERRED = (
     ('struct S{int a[3];};int cpp_test_entry(){return int(sizeof(S::a))+30;}', 'cpp.unsupported.class-array-members'),
     ('struct S{int x;};int f(){return sizeof(&S::x);}', 'cpp.unsupported.member-pointers'),
-    ('struct S{int x;};int f(){return sizeof(S);}', 'cpp.unsupported.sizeof-class-layout'),
-    ('struct S{int x;};int f(S*p){return sizeof(*p);}', 'cpp.unsupported.sizeof-class-layout'),
     ('int f(){return sizeof(int(*)());}', 'cpp.unsupported.function-pointers'),
     ('struct S{};int f(){return sizeof(S[2]);}', 'cpp.unsupported.class-array-lifetime'),
     ('int f(){return sizeof(volatile int);}', 'cpp.unsupported.volatile'),
-    ('template<class T>int f(T x){return sizeof(x);}', 'cpp.unsupported.sizeof-templates'),
     ('int f(){return sizeof...(T);}', 'cpp.unsupported.sizeof-packs'),
 )
 

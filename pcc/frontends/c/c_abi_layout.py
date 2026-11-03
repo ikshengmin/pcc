@@ -118,6 +118,34 @@ class CAbiScalarLayout:
     alignment: int
 
 
+@dataclass(frozen=True)
+class CAbiRecordLayout:
+    size: int
+    alignment: int
+    offsets: tuple[int, ...]
+
+
+def natural_record_layout(fields, *, minimum_size=0, record_alignment=None) -> CAbiRecordLayout:
+    """The existing natural C record algorithm, shared before and after IR.
+
+    Consumers supply target-owned field storage facts. This does not model
+    packing, bit-fields, base classes, virtual state or over-alignment.
+    C keeps its existing zero-sized empty IR record; C++ supplies its existing
+    one-byte empty-class projection as the explicit minimum.
+    """
+    offset, alignment = 0, 1
+    offsets = []
+    for field in fields:
+        offset = (offset + field.alignment - 1) & ~(field.alignment - 1)
+        offsets.append(offset)
+        offset += field.size
+        alignment = max(alignment, field.alignment)
+    if record_alignment is not None:
+        alignment = record_alignment
+    size = (offset + alignment - 1) & ~(alignment - 1)
+    return CAbiRecordLayout(max(minimum_size, size), alignment, tuple(offsets))
+
+
 def integer_scalar_layout(bit_width: int) -> CAbiScalarLayout:
     if bit_width <= 0:
         raise ValueError(f"invalid integer width: {bit_width}")

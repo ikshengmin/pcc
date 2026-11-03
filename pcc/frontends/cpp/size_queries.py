@@ -1,12 +1,13 @@
-"""Typed, nondependent sizeof facts, before C AST projection.
+"""Typed sizeof storage facts, before C AST projection.
 
 N4659 [expr.sizeof]/1-4,6; [expr]/8; [basic.fundamental]/10.
-Reuse the actual target scalar ABI facts. Do not duplicate class layout or
-invoke codegen to obtain a semantic constant. Unsupported record layout,
-class reference layout and dependent types remain separate explicit capabilities.
+Reuse target scalar facts and the shared natural-record query used by C IR
+layout. No host sizeof, codegen invocation or alternate record calculation.
+Dependent syntax is retained by the parser until concrete semantic replay.
 """
 from pcc.frontends.c.c_abi_layout import (
-    builtin_scalar_layout, c_size_type_name, pointer_scalar_layout,
+    CAbiScalarLayout, builtin_scalar_layout, c_size_type_name,
+    natural_record_layout, pointer_scalar_layout,
 )
 from pcc.frontends.cpp.classes import is_class_type, require_complete
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
@@ -15,32 +16,43 @@ from pcc.frontends.cpp.types import (
 )
 
 
-def sizeof_type(dtype, types, coord):
+def object_layout(dtype, types, coord):
     if isinstance(dtype, ReferenceType):
-        return sizeof_type(dtype.referent, types, coord)
+        return object_layout(dtype.referent, types, coord)
     plain = unqualified(dtype)
     if plain == "void" or function_type(plain):
         raise CppDiagnostic("cpp.invalid-sizeof", "sizeof requires a complete object type, not void or a function", coord)
     if is_class_type(plain):
         require_complete(plain, coord)
-        raise CppDiagnostic("cpp.unsupported.sizeof-class-layout",
-                            "class sizeof requires a shared semantic layout query", coord)
+        # All admitted classes project to this natural record. Unsupported
+        # bases, virtual state, bit-fields and attributes never reach here.
+        # Match ClassDefinition.c_declaration's one-byte empty-class field.
+        record = natural_record_layout(
+            (object_layout(member.dtype, types, member.coord) for member in plain.definition.members),
+            minimum_size=1,
+        )
+        return CAbiScalarLayout(record.size, record.alignment)
     if isinstance(plain, ArrayType):
         if plain.bound is None:
             raise CppDiagnostic("cpp.invalid-sizeof", "sizeof cannot apply to an array of unknown bound", coord)
-        size = plain.bound * sizeof_type(plain.element, types, coord)
+        element = object_layout(plain.element, types, coord)
+        return CAbiScalarLayout(plain.bound * element.size, element.alignment)
     elif isinstance(plain, PointerType) or plain == "nullptr":
         # A pointer is complete independently of its pointee. nullptr_t has
         # the size of void* in C++17 [basic.fundamental]/10.
-        size = pointer_scalar_layout().size
+        return pointer_scalar_layout()
     elif is_enum_type(plain):
         if not plain.complete:
             raise CppDiagnostic("cpp.incomplete-enum", "sizeof requires a complete enum type", coord)
-        size = builtin_scalar_layout(c_type_names(plain.underlying), types.target_triple).size
+        return builtin_scalar_layout(c_type_names(plain.underlying), types.target_triple)
     elif isinstance(plain, str):
-        size = builtin_scalar_layout(c_type_names(plain), types.target_triple).size
+        return builtin_scalar_layout(c_type_names(plain), types.target_triple)
     else:
         raise CppDiagnostic("cpp.unsupported.sizeof-types", "sizeof type semantics are not implemented", coord)
+
+
+def sizeof_type(dtype, types, coord):
+    size = object_layout(dtype, types, coord).size
     size_type = c_size_type_name(types.target_triple)
     if not 0 < size < (1 << types.width(size_type)):
         raise CppDiagnostic("cpp.sizeof-overflow", "object size is not representable in target size_t", coord)

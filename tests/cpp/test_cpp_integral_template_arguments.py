@@ -198,7 +198,6 @@ NEGATIVE_CASES = (
     ("dependent-static-assert", "template<int N> int f(){static_assert(N>0);return N;}", "cpp.unsupported.template-static-assert"),
     ("dependent-array-bound", "template<int N> int f(){int values[N];return 1;}", "cpp.unsupported.array-templates"),
     ("dependent-case-label", "template<int N> int f(int x){switch(x){case N:return 1;default:return 0;}}", "cpp.unsupported.switch-templates"),
-    ("dependent-sizeof", "template<int N> int f(){return sizeof(N);}", "cpp.unsupported.sizeof-templates"),
     ("type-id-wins-empty-functional-cast", "template<int N> int f(){return N;} int run(){return f<int()>();}", "cpp.unsupported.template-type-arguments"),
     ("type-id-wins-function-parameter", "template<int N> int f(){return N;} int run(){return f<int(int)>();}", "cpp.unsupported.template-type-arguments"),
     ("array-type-argument", "template<class T> int f(){return 1;} int run(){return f<int[3]>();}", "cpp.unsupported.template-type-arguments"),

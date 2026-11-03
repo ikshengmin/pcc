@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pcc.frontends.c.c_abi_layout import floating_scalar_layout, integer_scalar_layout, pointer_scalar_layout
+from pcc.frontends.c.c_abi_layout import (
+    CAbiScalarLayout, floating_scalar_layout, integer_scalar_layout,
+    natural_record_layout, pointer_scalar_layout,
+)
 from pcc.ir.compat import ir_c as ir
 
 
@@ -106,11 +109,9 @@ def ir_type_size(ir_type):
     if isinstance(ir_type, ir.ArrayType):
         return int(ir_type.count) * ir_type_size(ir_type.element)
     if is_struct_ir_type(ir_type):
-        offset = 0
-        for element in ir_type.elements:
-            alignment = ir_type_align(element)
-            offset = (offset + alignment - 1) & ~(alignment - 1)
-            offset += ir_type_size(element)
-        struct_alignment = ir_type_align(ir_type)
-        return (offset + struct_alignment - 1) & ~(struct_alignment - 1)
+        return natural_record_layout(
+            (CAbiScalarLayout(ir_type_size(element), ir_type_align(element))
+             for element in ir_type.elements),
+            record_alignment=ir_type_align(ir_type),
+        ).size
     return 8

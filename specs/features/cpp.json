@@ -802,6 +802,26 @@
       "evidence": []
     },
     {
+      "id": "cpp.sizeof.natural-record-patterns",
+      "title": "Shared natural-record and dependent sizeof queries, awaiting execution",
+      "chapter_ids": [
+        "class",
+        "expr",
+        "temp"
+      ],
+      "scope": "Authored, execution-unrun obligations for class storage queries using the same extracted natural-record calculation as C IR storage, target-owned scalar/alignment facts, one-byte empty-class projection, and typed dependent sizeof replay with no runtime operand or member-body use. The original defaulted-C1 interior/tail-padding program remains unchanged. This shared C layout-owner change requires wider C/C++ ABI/layout review and complete affected-language CI before publication; focused assertions do not qualify it. Bases, virtual state, bit-fields, dependent arrays, general allocation/deallocation and unchanged TinyXML2 acceptance remain unqualified.",
+      "status": "missing",
+      "tests": [
+        "tests/c/test_c_natural_record_layout.py",
+        "tests/cpp/test_cpp_class_size_queries.py",
+        "tests/cpp/test_cpp_class_size_query_execution.py",
+        "tests/cpp/test_cpp_defaulted_default_constructors_execution.py",
+        "tests/cpp/test_cpp_platform_execution.py"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
       "id": "cpp.class-value-abi",
       "title": "Class value abi \u2014 remaining capability boundary",
       "chapter_ids": [

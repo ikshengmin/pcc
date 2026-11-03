@@ -63,6 +63,7 @@ def value_dependent(expression):
     if not isinstance(pattern, Pattern):
         return False
     return (pattern.kind == "template-value"
+            or pattern.kind == 'sizeof' and dependent(pattern.value)
             or any(value_dependent(child) for child in pattern.children))
 
 

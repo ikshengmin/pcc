@@ -552,7 +552,7 @@ class CppParser:
                 raise CppDiagnostic("cpp.unsupported.references", "reference alias semantics are not implemented", chunk.coord)
         return dtype
 
-    def _pointer(self, dtype, token, qualifiers=()):
+    def _pointer(self, dtype, token, qualifiers=(), *, allow_template_type_id=False):
         if isinstance(dtype, ReferenceType):
             raise CppDiagnostic("cpp.invalid-reference-type", "a pointer cannot point to a reference", token.coord)
         leaf = dtype
@@ -562,7 +562,8 @@ class CppParser:
             raise CppDiagnostic("cpp.unsupported.multilevel-pointers", "array-of-pointer pointee qualification requires deeper pointer rules", token.coord)
         if array_type(dtype) and dtype.bound is None:
             raise CppDiagnostic("cpp.unsupported.unknown-bound-array-pointers", "pointer to an unknown-bound array requires separate completeness rules", token.coord)
-        if self.parsing_template and not getattr(self, 'class_template_signature', False):
+        if (self.parsing_template and not getattr(self, 'class_template_signature', False)
+                and not allow_template_type_id):
             raise CppDiagnostic("cpp.unsupported.pointer-templates", "pointer template types are not implemented", token.coord)
         if "volatile" in qualifiers:
             raise CppDiagnostic("cpp.unsupported.volatile", "volatile access lowering is not implemented", token.coord)
@@ -2026,21 +2027,24 @@ class CppParser:
             if chunk.kind == "array":
                 dtype = make_array_type(dtype, chunk.bound, self.types, chunk.coord)
             elif chunk.kind == "pointer":
-                dtype = self._pointer(dtype, chunk.token, chunk.qualifiers)
+                dtype = self._pointer(dtype, chunk.token, chunk.qualifiers, allow_template_type_id=True)
             elif chunk.kind in ("lvalue-reference", "rvalue-reference"):
-                dtype = self._reference(dtype, chunk.token)
+                if chunk.kind == 'lvalue-reference' and self.parsing_template:
+                    from pcc.frontends.cpp.references import lvalue_reference
+                    dtype = lvalue_reference(dtype, chunk.coord)
+                else:
+                    dtype = self._reference(dtype, chunk.token)
             else:
                 raise CppDiagnostic("cpp.unsupported.references", "reference sizeof requires a reference-type model", chunk.coord)
         return dtype
 
     def _sizeof_expression(self, token):
         from pcc.frontends.cpp.size_queries import sizeof_type
-        if self.parsing_template or self.instantiating_template:
-            raise CppDiagnostic("cpp.unsupported.sizeof-templates", "dependent sizeof and template replay are not implemented", token.coord)
         if self._peek().value == "...":
             raise CppDiagnostic("cpp.unsupported.sizeof-packs", "sizeof... requires parameter pack semantics", token.coord)
         self.unevaluated_depth += 1
         try:
+            expression = None
             if self._sizeof_type_id_ahead():
                 self._expect("(")
                 dtype = self._sizeof_type_id()
@@ -2050,16 +2054,23 @@ class CppParser:
                 if expression.symbol is not None and expression.symbol.kind == "function":
                     raise CppDiagnostic("cpp.invalid-sizeof", "sizeof cannot apply to a function or overload set", token.coord)
                 dtype = expression.dtype
+            if self.template_function is not None and dependent(dtype):
+                result_type = c_size_type_name(self.types.target_triple)
+                return Expression(Pattern('sizeof', token.coord, dtype,
+                                          [] if expression is None else [expression]), result_type,
+                                  constant_fact=unmodeled(result_type, 'dependent sizeof', token.coord))
             size = sizeof_type(dtype, self.types, token.coord)
         finally:
             self.unevaluated_depth -= 1
         # Only a typed target-sized constant reaches C lowering. No operand
         # AST, object address, call, load, temporary or side effect is emitted.
+        return self._sizeof_result(size, token.coord)
+
+    def _sizeof_result(self, size, coord):
         result_type = c_size_type_name(self.types.target_triple)
-        return Expression(self._convert(
-            Expression(c_ast.Constant("int", str(size) + "ULL", token.coord), "unsigned long long"),
-            result_type, token.coord, force=True), result_type,
-            constant_fact=known(result_type, size, token.coord))
+        literal = self._literal('int', str(size) + 'ULL', 'unsigned long long', coord, size)
+        return Expression(self._convert(literal, result_type, coord, force=True), result_type,
+                          constant_fact=known(result_type, size, coord))
 
     def _unary(self):
         token = self._peek()
@@ -2709,6 +2720,19 @@ class CppParser:
     def _instantiate_expression(self, expression, bindings, environment):
         pattern = expression.node if isinstance(expression, Expression) else expression
         kind, coord = pattern.kind, pattern.coord
+        if kind == 'sizeof':
+            from pcc.frontends.cpp.size_queries import sizeof_type
+            self.unevaluated_depth += 1
+            try:
+                if pattern.children:
+                    operand = self._instantiate_expression(pattern.children[0], bindings, environment)
+                    dtype = operand.dtype
+                else:
+                    dtype = self._substitute_pattern_type(pattern.value, bindings, coord)
+                size = sizeof_type(dtype, self.types, coord)
+            finally:
+                self.unevaluated_depth -= 1
+            return self._sizeof_result(size, coord)
         if kind == "literal":
             literal_kind, value, dtype, integer_value = pattern.value
             return self._literal(literal_kind, value, dtype, coord, integer_value)
