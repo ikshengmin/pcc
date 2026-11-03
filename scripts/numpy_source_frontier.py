@@ -46,27 +46,110 @@ def source_path(root, name):
     return path
 
 
+CHECKOUT_ATTRIBUTES = ("text", "eol", "filter", "working-tree-encoding", "ident", "crlf")
+
+
+def git_source(root, arguments, **kwargs):
+    """Read objects/attributes only; never run a clean/smudge conversion filter."""
+    env = dict(os.environ)
+    env["GIT_ATTR_NOSYSTEM"] = "1"
+    return subprocess.check_output(
+        ["git", "--no-replace-objects", "-c", "core.attributesFile=" + os.devnull,
+         *arguments], cwd=root, env=env, timeout=30, **kwargs,
+    )
+
+
+def require_no_attribute_override(root):
+    info = Path(git_source(root, ["rev-parse", "--path-format=absolute", "--git-path",
+                                  "info/attributes"], text=True).strip())
+    # --source selects committed .gitattributes, but info/attributes still has
+    # higher precedence. Global/system attributes are disabled by git_source.
+    if info.exists() or info.is_symlink():
+        raise ValueError("untracked Git info/attributes cannot authorize source conversion")
+
+
+def checkout_attributes(root, commit, names):
+    """Let Git resolve pinned patterns/macros; require --source, with no fallback."""
+    require_no_attribute_override(root)
+    try:
+        output = git_source(
+            root, ["check-attr", "--source=" + commit, "-z", "--stdin", "--all"],
+            input=b"".join(os.fsencode(name) + b"\0" for name in names), stderr=subprocess.PIPE,
+        )
+    except subprocess.CalledProcessError as error:
+        raise ValueError("pinned Git attributes unavailable; git check-attr --source is required") from error
+    fields = output.split(b"\0")
+    if not fields or fields.pop() != b"" or len(fields) % 3:
+        raise ValueError("malformed pinned Git attribute response")
+    attributes = {name: {} for name in names}
+    for index in range(0, len(fields), 3):
+        name, attribute, value = (os.fsdecode(field) for field in fields[index:index + 3])
+        if name not in attributes or attribute in attributes[name]:
+            raise ValueError("unexpected or duplicate pinned Git attribute")
+        attributes[name][attribute] = value
+    for name, present in attributes.items():
+        # --all distinguishes absence from a literal value like
+        # filter=unspecified. Even explicit -filter/-ident remain outside this
+        # bounded owner; never mistake a named driver for an unset attribute.
+        if any(key in present for key in ("filter", "working-tree-encoding", "ident")):
+            raise ValueError("unsupported Git checkout filter/encoding/ident: " + name)
+        values = {key: present.get(key, "unspecified") for key in CHECKOUT_ATTRIBUTES}
+        if ("crlf" in present
+                or values["text"] not in ("unspecified", "unset", "set", "auto")
+                or values["eol"] not in ("unspecified", "unset", "lf", "crlf")):
+            raise ValueError("unsupported Git text/eol attributes: " + name)
+        attributes[name] = values
+    require_no_attribute_override(root)
+    return attributes
+
+
+def blob_identity(data):
+    return hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+
+
+def canonical_source_bytes(root, name, mode, expected, data, attributes):
+    if blob_identity(data) == expected:
+        return data
+    # Only an explicit pinned text/eol rule can explain different checkout
+    # bytes. Never normalize an arbitrary working file and then call it intact.
+    if (mode not in (b"100644", b"100755") or attributes["eol"] != "crlf"
+            or attributes["text"] not in ("set", "unspecified")):
+        raise ValueError("unchanged source check failed: " + name)
+    canonical = git_source(root, ["cat-file", "blob", expected])
+    if blob_identity(canonical) != expected:
+        raise ValueError("canonical Git blob identity mismatch: " + name)
+    # This is the bounded explicit-text LF -> CRLF checkout representation.
+    # Auto/binary detection, mixed canonical endings and other transformations
+    # stay unsupported rather than accepting a lossy reverse normalization.
+    if (b"\r" in canonical or b"\0" in canonical
+            or data != canonical.replace(b"\n", b"\r\n")):
+        raise ValueError("unchanged source check failed: " + name)
+    return canonical
+
+
 def verify_source(root, manifest):
-    """Check every tracked byte against the pinned Git tree, not just two TUs."""
+    """Verify every canonical blob and its explicit, unchanged checkout form."""
     directory = manifest["directory"]
     source = source_path(root, directory)
-    tree = subprocess.check_output(
-        ["git", "rev-parse", "HEAD:" + directory], cwd=root, text=True, timeout=30,
-    ).strip()
+    commit = git_source(root, ["rev-parse", "--verify", "HEAD^{commit}"], text=True).strip()
+    tree = git_source(root, ["rev-parse", commit + ":" + directory], text=True).strip()
     if tree != manifest["git_tree"]:
         raise ValueError("NumPy repository source tree drift")
-    entries = subprocess.check_output(
-        ["git", "ls-tree", "-r", "-z", "HEAD:" + directory], cwd=root, timeout=30,
-    )
+    entries = git_source(root, ["ls-tree", "-r", "-z", tree])
+    records = []
+    for entry in entries.split(b"\0"):
+        if entry:
+            metadata, raw_name = entry.split(b"\t", 1)
+            mode, kind, expected = metadata.split()
+            records.append((mode, kind, expected.decode(), raw_name, os.fsdecode(raw_name)))
+    attributes = checkout_attributes(root, commit, [directory + "/" + row[4] for row in records])
     closure = hashlib.sha256()
+    checkout_closure = hashlib.sha256()
+    canonical_digests = {}
+    transformations = []
     count = 0
     expected_names = set()
-    for entry in entries.split(b"\0"):
-        if not entry:
-            continue
-        metadata, raw_name = entry.split(b"\t", 1)
-        mode, kind, expected = metadata.split()
-        name = os.fsdecode(raw_name)
+    for mode, kind, expected, raw_name, name in records:
         expected_names.add(name)
         path = source_path(source, name)
         if kind != b"blob":
@@ -79,12 +162,17 @@ def verify_source(root, manifest):
             if path.is_symlink():
                 raise ValueError("source file replaced by symlink: " + name)
             data = path.read_bytes()
-        actual = hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
-        if actual != expected.decode():
-            raise ValueError("unchanged source check failed: " + name)
-        closure.update(len(raw_name).to_bytes(8, "big"))
-        closure.update(raw_name)
-        closure.update(hashlib.sha256(data).digest())
+        canonical = canonical_source_bytes(root, name, mode, expected, data,
+                                           attributes[directory + "/" + name])
+        canonical_digests[name] = hashlib.sha256(canonical).hexdigest()
+        for digest_state, payload in ((closure, canonical), (checkout_closure, data)):
+            digest_state.update(len(raw_name).to_bytes(8, "big"))
+            digest_state.update(raw_name)
+            digest_state.update(hashlib.sha256(payload).digest())
+        if canonical != data:
+            transformations.append({"path": name, "kind": "git-text-eol-crlf", "git_blob": expected,
+                                    "canonical_sha256": canonical_digests[name],
+                                    "checkout_sha256": hashlib.sha256(data).hexdigest()})
         count += 1
     actual_names = {
         path.relative_to(source).as_posix()
@@ -94,10 +182,13 @@ def verify_source(root, manifest):
     if extras:
         raise ValueError("unlocked source/generated inputs: " + repr(sorted(extras)[:5]))
     for name, expected in manifest["sha256"].items():
-        if digest(source_path(source, name)) != expected:
+        if canonical_digests.get(name) != expected:
             raise ValueError("source SHA256 mismatch: " + name)
+    require_no_attribute_override(root)
     return {"status": "PASS", "git_tree": tree, "file_count": count,
             "content_sha256": closure.hexdigest(), "manifest_sha256": digest(MANIFEST),
+            "attribute_source_commit": commit, "checkout_content_sha256": checkout_closure.hexdigest(),
+            "checkout_transformations": transformations,
             "upstream_archive_sha256": manifest["upstream_archive_sha256"],
             "scope": manifest["source_scope"]}
 
