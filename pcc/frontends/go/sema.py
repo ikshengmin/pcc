@@ -159,6 +159,7 @@ class Analyzer:
     def __init__(self, program, *, imports=None, require_main=True, package_path=None, generics=None):
         self.program = program
         self.imports = imports or {}
+        self.dot_imports = {}
         self.require_main = require_main
         self.package_path = package_path
         self.generics = generics if generics is not None else GenericSession()
@@ -230,6 +231,7 @@ class Analyzer:
             for alias, binding in file_imports.items():
                 if alias in package_names:
                     raise GoDiagnostic(binding.token, "import name conflicts with package declaration: " + alias)
+        self.prepare_dot_imports(package_names)
         for declaration in self.program.types:
             self.resolve_type_declaration(declaration)
         for declaration in self.program.constants:
@@ -300,6 +302,39 @@ class Analyzer:
         binding.used = True
         return binding.analyzer
 
+    def prepare_dot_imports(self, package_names):
+        """Build each file block without copying declarations into the package.
+
+        Entries point to the existing dependency owner. Nominal types, shared
+        globals and generic function instances therefore keep their identity.
+        """
+        for filename, imports in self.imports.items():
+            names = {}
+            for binding in imports.values():
+                if binding.alias != ".":
+                    continue
+                owner = binding.analyzer
+                exported = set(owner.types) | set(owner.functions) | set(owner.globals)
+                for name in sorted(exported):
+                    if not name or unicodedata.category(name[0]) != "Lu":
+                        continue
+                    if name in package_names:
+                        raise GoDiagnostic(binding.token, "dot-imported name conflicts with package declaration: " + name)
+                    if name in imports:
+                        raise GoDiagnostic(binding.token, "dot-imported name conflicts with import name: " + name)
+                    if name in names:
+                        raise GoDiagnostic(binding.token, "duplicate dot-imported name " + name)
+                    names[name] = binding
+            self.dot_imports[filename] = names
+
+    def dot_imported(self, token, *, use=True):
+        binding = self.dot_imports.get(token.filename, {}).get(token.text)
+        if binding is None:
+            return None
+        if use:
+            binding.used = True
+        return binding.analyzer
+
     def check_name(self, token):
         if token.text in PREDECLARED:
             raise UnsupportedGo(token, "go.unsupported.predeclared-shadowing", "shadowing predeclared names is not implemented: " + token.text)
@@ -357,7 +392,7 @@ class Analyzer:
                     raise GoDiagnostic(dtype.token, "identifier is not a type: " + dtype.token.text)
                 if dtype.token.text in self.type_bindings:
                     return self.type_bindings[dtype.token.text]
-                owner = self
+                owner = self.dot_imported(dtype.token) or self
             declaration = owner.types.get(dtype.token.text)
             if declaration is None:
                 raise GoDiagnostic(dtype.token, "undefined type " + dtype.token.text)
@@ -462,9 +497,10 @@ class Analyzer:
         for scope in reversed(self.scopes):
             if token.text in scope:
                 return scope[token.text]
-        if token.text in self.globals:
-            result = self.globals[token.text]
-            self.resolve_constant(result)
+        owner = self.dot_imported(token) or self
+        if token.text in owner.globals:
+            result = owner.globals[token.text]
+            owner.resolve_constant(result)
             return result
         raise GoDiagnostic(token, "undefined name " + token.text)
 
@@ -1008,7 +1044,8 @@ class Analyzer:
         if kind == "name":
             if expr.value in self.type_bindings and not any(expr.value in scope for scope in self.scopes):
                 raise GoDiagnostic(expr.token, "type parameter is not an expression: " + expr.value)
-            if expr.value in self.functions and self.functions[expr.value].type_parameters and not any(expr.value in scope for scope in self.scopes):
+            function = self.direct_function(expr)
+            if function is not None and function.type_parameters:
                 raise UnsupportedGo(expr.token, 'go.unsupported.generic-boundaries',
                                     'generic function values require direct instantiation calls')
             if expr.value == "iota":
@@ -1047,7 +1084,7 @@ class Analyzer:
                 expr.addressable = symbol.constant is None
                 return
             if (base.kind == "name" and not local and base.value not in self.globals
-                    and base.value not in self.types):
+                    and base.value not in self.types and self.dot_imported(base.token, use=False) is None):
                 raise GoDiagnostic(base.token, "undefined imported package " + base.value)
             type_operand = self.type_operand(base)
             if (isinstance(type_operand, PointerType) and isinstance(type_operand.element, DefinedType)
@@ -1167,7 +1204,9 @@ class Analyzer:
                     raise GoDiagnostic(expr.token, name + " requires an admitted array" + (" or string" if name == "len" else ""))
                 return
             # Values in a lexical scope shadow package type/function names.
-            if any(name in scope for scope in self.scopes) or name in self.globals and name not in self.type_bindings:
+            owner = (self.dot_imported(expr.token) if name not in self.type_bindings
+                     and not any(name in scope for scope in self.scopes) else None) or self
+            if any(name in scope for scope in self.scopes) or name in owner.globals and name not in self.type_bindings:
                 raise GoDiagnostic(expr.token, "cannot call non-function " + name)
             if name in ("print", "println", "panic"):
                 values = self.values(expr.args)
@@ -1192,12 +1231,12 @@ class Analyzer:
                     coerce(argument, default_type(argument.type))
                 expr.kind, expr.type = "builtin_io", "void"
                 return
-            if name in TYPE_NAMES or name in self.types or name in self.type_bindings:
+            if name in TYPE_NAMES or name in owner.types or name in self.type_bindings:
                 target = (self.type_bindings[name] if name in self.type_bindings else
-                          TYPE_NAMES[name] if name in TYPE_NAMES else self.resolve_type_declaration(self.types[name]))
+                          TYPE_NAMES[name] if name in TYPE_NAMES else owner.resolve_type_declaration(owner.types[name]))
                 self.conversion(expr, target)
                 return
-            function = self.functions.get(name)
+            function = owner.functions.get(name)
             if function is None:
                 label = "unsupported builtin " if name in PREDECLARED else "undefined function "
                 raise GoDiagnostic(expr.token, label + name)
@@ -1254,10 +1293,11 @@ class Analyzer:
                 return None
             if expr.value in self.type_bindings:
                 return self.type_bindings[expr.value]
-            if expr.value in self.globals:
+            owner = self.dot_imported(expr.token) or self
+            if expr.value in owner.globals:
                 return None
-            if expr.value in self.types:
-                return self.resolve_type_declaration(self.types[expr.value])
+            if expr.value in owner.types:
+                return owner.resolve_type_declaration(owner.types[expr.value])
             return TYPE_NAMES.get(expr.value)
         if expr.kind == "selector":
             base = expr.args[0]
@@ -1315,7 +1355,8 @@ class Analyzer:
             if (any(expression.value in scope for scope in self.scopes) or
                     expression.value in self.type_bindings or expression.value in self.globals):
                 return None
-            return self.functions.get(expression.value)
+            owner = self.dot_imported(expression.token) or self
+            return owner.functions.get(expression.value)
         if expression.kind == "selector" and expression.args[0].kind == "name":
             base = expression.args[0]
             if base.value in self.imports.get(expression.token.filename, {}) and not any(base.value in scope for scope in self.scopes):

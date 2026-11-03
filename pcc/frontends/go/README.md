@@ -621,7 +621,7 @@ rebound to a changed unit file or presented as a new execution.
 | `go.capability.blank-type-declarations` | Explicitly unimplemented boundary: blank type declarations | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.complex-types` | Explicitly unimplemented boundary: complex types | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.division-panic` | Explicitly unimplemented boundary: division panic | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
-| `go.capability.dot-imports` | Explicitly unimplemented boundary: dot imports | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.dot-imports` | File-scoped exported declaration lookup implemented | Authored source/native/reference obligations; all execution unrun | `missing` |
 | `go.capability.dynamic-string-concatenation` | Explicitly unimplemented boundary: dynamic string concatenation | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.dynamic-string-conversion` | Explicitly unimplemented boundary: dynamic string conversion | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.embedded-fields` | Explicitly unimplemented boundary: embedded fields | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
@@ -926,3 +926,31 @@ Rules: [arrays](https://go.dev/ref/spec#Array_types),
 [assignability](https://go.dev/ref/spec#Assignability),
 [comparisons](https://go.dev/ref/spec#Comparison_operators), and
 [evaluation order](https://go.dev/ref/spec#Order_of_evaluation).
+
+### Dot imports — source implementation, acceptance unrun
+
+An explicit dot import exposes the dependency's exported package declarations
+only in the importing file block. Lookup reuses the existing canonical type,
+variable, method and generic-function owners; declarations are not copied into
+the package block. Disjoint dot imports coexist. Export collisions with other
+file imports or any package declaration, including a sibling file, diagnose.
+Local variables/type parameters shadow file imports, private fields retain their
+original package ownership, and each actual import has independent use tracking.
+
+`tests/go/test_dot_imports.py` authors source/IR, full-width owned native and
+same-input official-Go package-graph comparisons for types, methods, shared
+storage, generics, Unicode exports, shadowing and file isolation, plus strict
+invalid graph controls. The old import-only diagnostic source is unchanged: it
+now requires supplied dependency source and, once supplied, still rejects its
+unused import. It is not relabeled as positive execution evidence.
+
+The unchanged original Go 1.27.3 `math/bits/bits_test.go` dot import is retained by
+the real parser before a later syntax failure. This is a source-frontier
+obligation, not testing/runtime closure or upstream test execution. The original
+normal package still rejects `error` at `bits_errors.go:12:19`; interface values,
+linkname/runtime globals, blank-import initialization and genuine error-payload
+panic support remain explicit missing contracts. No source or test is rewritten
+and no runtime/backend changes are included. All new execution is **UNRUN**.
+
+Rules: [imports](https://go.dev/ref/spec#Import_declarations) and
+[declarations and scope](https://go.dev/ref/spec#Declarations_and_scope).

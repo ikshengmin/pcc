@@ -149,6 +149,12 @@ class GenericSession:
         # interpret a shadowed spelling as a predeclared constraint identity.
         if token.text in declared_names:
             raise GoDiagnostic(token, 'type parameter cannot be used as a constraint')
+        imported = owner.dot_imported(token)
+        if imported is not None:
+            if token.text in imported.types:
+                raise UnsupportedGo(token, 'go.unsupported.generic-boundaries',
+                                    'named and exact-type constraints require general type-set resolution')
+            raise GoDiagnostic(token, 'constraint must denote a type')
         if token.text in owner.globals or token.text in owner.functions:
             raise GoDiagnostic(token, 'constraint must denote a type')
         if token.text in owner.types or token.text in TYPE_NAMES:

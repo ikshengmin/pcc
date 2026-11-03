@@ -70,9 +70,12 @@ def compile_packages(packages, *, main_package, target_triple):
             if alias in PREDECLARED:
                 raise UnsupportedGo(imported.token, "go.unsupported.predeclared-shadowing", "import alias shadows predeclared name " + alias)
             file_imports = imports.setdefault(imported.token.filename, {})
-            if alias in file_imports:
+            # Dot imports introduce exported declarations, not a package-name
+            # binding. Distinct packages may contribute disjoint file scopes.
+            key = (".", imported.path) if alias == "." else alias
+            if key in file_imports:
                 raise GoDiagnostic(imported.token, "duplicate import name " + alias)
-            file_imports[alias] = ImportBinding(imported.token, alias, dependency)
+            file_imports[key] = ImportBinding(imported.token, alias, dependency)
         analyzer = Analyzer(program, imports=imports, require_main=path == main_package,
                             package_path=None if path == main_package else path, generics=generics)
         analyzer.analyze()

@@ -37,7 +37,7 @@ def test_import_alias_default_package_name_and_transitive_calls_use_public_ir():
     ('package main; import "lib"; func main() {}', None, "imported and not used"),
     ('package main; import x "lib"; import x "lib"; func main(){_ = x.Base}', None, "duplicate import"),
     ('package main; import _ "lib"; func main(){}', None, "initialization support"),
-    ('package main; import . "lib"; func main(){}', None, "dot imports"),
+    ('package main; import . "lib"; func main(){}', None, "imported and not used"),
     ('package main; import "lib"; func main(){_ = arithmetic.hidden()}',
      'package arithmetic; func hidden() int{return 1}', "unexported"),
     ('package main; import "lib"; func main(){_ = arithmetic.Absent()}', None, "undefined imported function"),

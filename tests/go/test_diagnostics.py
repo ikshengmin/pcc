@@ -93,14 +93,19 @@ GRADUATED_AGGREGATE_CASES = (
     ('aggregate-comparison', original(body='var a [1]int;_=a==a')),
     ('aggregate-switch', original(body='var a [1]int;switch a{case a:}')),
 )
+RETIRED_DOT_IMPORT_CASE = ('dot-imports', 'package main;import . "local";func main(){}')
+# Exact historical input/index retained. It now reaches missing supplied source
+# (or unused import with that source), not positive program acceptance.
+RETIRED_CASES = (RETIRED_DOT_IMPORT_CASE,)
 # The original pointer-switch bytes move to positive/same-input obligations in
 # test_pointer_switches, not to a skip or a reclassified historical result.
 GRADUATED_CASES = (GRADUATED_RECEIVER_CASE, GRADUATED_ARRAY_RANGE_CASE,
                   GRADUATED_POINTER_SWITCH_CASE, GRADUATED_STRING_RANGE_CASE,
                   *GRADUATED_AGGREGATE_CASES)
 assert all(CASES.count(case) == 1 for case in GRADUATED_CASES)
+assert all(CASES.count(case) == 1 for case in RETIRED_CASES)
 ACTIVE_CASES = [(i, name, text) for i, (name, text) in enumerate(CASES)
-                if (name, text) not in GRADUATED_CASES]
+                if (name, text) not in GRADUATED_CASES + RETIRED_CASES]
 
 
 @pytest.mark.parametrize('suffix,source', [(name, text) for _, name, text in ACTIVE_CASES],

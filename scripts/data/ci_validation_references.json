@@ -968,6 +968,20 @@
         ]
       }
     },
+    "tests/go/test_dot_imports.py": {
+      "test_official_go_rejects_identical_invalid_dot_import_graphs": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls the explicit official Go compile_reference_packages_rejection helper with identical supplied source graphs"
+        ]
+      },
+      "test_same_dot_import_graphs_match_official_go": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls the explicit official Go compile_reference_packages helper and compares original graph process streams"
+        ]
+      }
+    },
     "tests/go/test_execution.py": {
       "test_go_explicit_official_compiler_oracle_receives_identical_program": {
         "activity": "external-reference",

@@ -332,9 +332,10 @@ class GoParser:
                 break
             if grouped and self.at(";"):
                 self.fail(self.current, "empty import specifications are not permitted")
-            alias = self.take("name").text if self.at("name") else None
-            if self.at("."):
-                self.unsupported(self.current, 'go.unsupported.dot-imports', "dot imports are not implemented")
+            if self.at("name"):
+                alias = self.take("name").text
+            else:
+                alias = "." if self.accept(".") else None
             token = self.take("string")
             path = token.text[1:-1]
             if (not path or "\\" in path or any(char.isspace() for char in path) or
