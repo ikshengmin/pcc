@@ -355,6 +355,9 @@ int64_t pcc_thread_join(void *raw, void *result_out) {
     return rc;
 }
 void pcc_thread_safepoint_gate(void) {}
+/* This fixture preconfigures the worker; configuration/forwarding have
+ * their own source-built native tests and must not run through this stub. */
+void pcc_gc_refresh_read_barrier(void) { abort(); }
 void pcc_thread_enable_conservative_roots(void) { abort(); }
 void pcc_gc_gray_conservative_thread_roots(void) { abort(); }
 /* This counted-mode scheduler fixture has one shared atomic statistics
