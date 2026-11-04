@@ -78,7 +78,38 @@ def scan(source, filename="<go>"):
             continue
         if source.startswith("//", pos):
             end = source.find("\n", pos)
-            advance(source[pos:len(source) if end < 0 else end])
+            comment = source[pos:len(source) if end < 0 else end]
+            # The Go compiler checks directive placement before interpreting
+            # its keyword or arguments. Only source whitespace can precede a
+            # //go: directive on this line; a preceding block comment is not
+            # whitespace for this check, even if it began on an earlier line.
+            if comment.startswith("//go:"):
+                line_start = source.rfind("\n", 0, pos) + 1
+                prefix = source[line_start:pos]
+                if line_start == 0 and prefix.startswith("\ufeff"):
+                    # scan() already consumed the sole permitted initial BOM.
+                    # It is an encoding marker, not a preceding source token.
+                    prefix = prefix[1:]
+                if prefix.strip(" \t\r"):
+                    raise GoDiagnostic(Token("comment", comment, filename, line, column),
+                                       "misplaced compiler directive")
+            # These are object-symbol ownership directives, not inert text.
+            # Follow the official compiler's exact keyword-plus-space form;
+            # block comments, literals and similarly spelled comments are
+            # unaffected. Do not emit an ordinary global for a linker alias.
+            if comment.startswith(("//go:linkname ", "//go:linknamestd ")):
+                # Go strings.Fields uses Unicode White_Space; Python's
+                # str.split additionally treats U+001C..U+001F as whitespace.
+                whitespace = (" \t\n\v\f\r\u0085\u00a0\u1680\u2000\u2001\u2002\u2003"
+                              "\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000")
+                normalized = "".join(" " if char in whitespace else char for char in comment[2:])
+                fields = [word for word in normalized.split(" ") if word]
+                token = Token("comment", comment, filename, line, column)
+                if len(fields) not in (2, 3):
+                    raise GoDiagnostic(token, "usage: //" + fields[0] + " localname [linkname]")
+                raise UnsupportedGo(token, 'go.unsupported.linkname-directives',
+                                    "linkname directives require owned object-symbol binding and runtime ownership")
+            advance(comment)
             continue
         if source.startswith("/*", pos):
             end = source.find("*/", pos + 2)
@@ -184,6 +215,7 @@ class TypeName:
 class StructSyntax:
     token: Token
     fields: list
+    tags: list = field(default_factory=list)
 
 
 @dataclass
@@ -241,6 +273,8 @@ class Stmt:
     range_declaration: bool = False
     range_index: object = None
     evaluate_range: bool = True
+    label: Token | None = None
+    control_target: object = None
 
 
 @dataclass
@@ -410,20 +444,20 @@ class GoParser:
         if self.at("struct"):
             token = self.take("struct")
             self.take("{")
-            fields = []
+            fields, tags = [], []
             while not self.at("}"):
                 names = [self.take("name")]
                 while self.accept(","):
                     names.append(self.take("name"))
-                if self.at(";") or self.at("}") or self.at("."):
+                if self.at(";") or self.at("}") or self.at(".") or self.at("string"):
                     self.unsupported(names[0], 'go.unsupported.embedded-fields', "embedded fields require method/promotion support")
                 dtype = self.datatype(signature=signature)
-                if self.at("string"):
-                    self.unsupported(self.current, 'go.unsupported.struct-tags', "struct tags are not implemented")
+                tag = self.accept("string")
                 fields.extend((name, dtype) for name in names)
+                tags.extend([tag] * len(names))
                 self.end_statement()
             self.take("}")
-            return StructSyntax(token, fields)
+            return StructSyntax(token, fields, tags)
         token = self.take("name")
         qualifier = token if self.accept(".") else None
         if qualifier is not None:
@@ -847,13 +881,24 @@ class GoParser:
 
     def statement(self):
         token = self.current
+        if self.at("name") and self.tokens[self.index + 1].kind == ":":
+            self.index += 2
+            if self.at(";") or self.at("}"):
+                body = [Stmt("empty", self.current)]
+            elif self.at("const") or self.at("var"):
+                body = self.declarations()
+            else:
+                body = [self.statement()]
+            return Stmt("label", token, body=body, label=token)
         if self.at("{"):
             return Stmt("block", token, body=self.block())
         if self.accept("return"):
             exprs = [] if self.at(";") or self.at("}") else self.expression_list()
             return Stmt("return", token, exprs=exprs)
         if self.accept("break") or self.accept("continue"):
-            return Stmt(token.kind, token)
+            return Stmt(token.kind, token, label=self.take("name") if self.at("name") else None)
+        if self.accept("goto"):
+            return Stmt("goto", token, label=self.take("name"))
         if self.accept("fallthrough"):
             return Stmt("fallthrough", token)
         if self.accept("switch"):
@@ -1003,6 +1048,8 @@ class GoParser:
             left = self.composite_literal(token, dtype) if self.at("{") else Expr("type", token, dtype)
         elif self.accept("integer"):
             left = Expr("integer", token, token.text)
+        elif self.accept("rune"):
+            left = Expr("rune", token, token.text)
         elif self.accept("string"):
             left = Expr("string", token, token.text)
         elif self.accept("name"):

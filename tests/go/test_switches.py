@@ -49,7 +49,10 @@ GRADUATED_AGGREGATE_SWITCHES = [
 ]
 
 
-@pytest.mark.parametrize('body,declarations,message', INVALID.values())
+@pytest.mark.parametrize('body,declarations,message', [
+    (body, declarations, 'undefined label' if key == 25 else message)
+    for key, (body, declarations, message) in INVALID.items()
+])
 def test_invalid_switch_source_fails_before_ir(body,declarations,message,monkeypatch):
     from pcc.frontends.go.lowering import Lowerer
     monkeypatch.setattr(Lowerer,'lower',lambda *args:pytest.fail('invalid switch reached IR'))

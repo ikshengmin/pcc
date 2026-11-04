@@ -9,7 +9,7 @@
   "inventory": {
     "chapters_complete": false,
     "features_complete": false,
-    "notes": "Incomplete inventory, not a Go coverage denominator. Legacy schema1 status is qualification-only; the pointer-switch row separates explicit implementation from acceptance. The fixed original official shard measured panic in test/ken/for.go and print in test/helloworld.go as the first two frontend failures. Generic Linux scalar output and terminal uncaught panic are authored but UNRUN; full panic/recover/unwind remains missing. Existing evidence triplets retain the prior published a6e482 pointer-array snapshot and do not qualify these changes. No upstream source or oracle is rewritten. Pointer expression switches now have an explicit source-bound implementation and unrun acceptance record. All historical evidence rows retain their exact old identities; they do not qualify this changed source. UTF-8 string range now has an explicit source implementation and separate CI-only unrun acceptance record; its retired non-array-range diagnostic originals are preserved as positive same-input obligations. No old evidence was renewed. Nil-only predeclared error local values now have a separate source-bound implementation and UNRUN acceptance record. General interface/runtime support and original math/bits acceptance remain unimplemented; no historical evidence is renewed. Basic-interface declarations and method-set/shared-value plans now have independent source-bound implementation rows and CI-only UNRUN acceptance. Declaration/native nil-only obligations are distinct from dynamic-interface reference-only originals; no runtime or project qualification is claimed."
+    "notes": "Incomplete inventory, not a Go coverage denominator. Legacy schema1 status is qualification-only; the pointer-switch row separates explicit implementation from acceptance. The fixed original official shard measured panic in test/ken/for.go and print in test/helloworld.go as the first two frontend failures. Generic Linux scalar output and terminal uncaught panic are authored but UNRUN; full panic/recover/unwind remains missing. Existing evidence triplets retain the prior published a6e482 pointer-array snapshot and do not qualify these changes. No upstream source or oracle is rewritten. Pointer expression switches now have an explicit source-bound implementation and unrun acceptance record. All historical evidence rows retain their exact old identities; they do not qualify this changed source. UTF-8 string range now has an explicit source implementation and separate CI-only unrun acceptance record; its retired non-array-range diagnostic originals are preserved as positive same-input obligations. No old evidence was renewed. Nil-only predeclared error local values now have a separate source-bound implementation and UNRUN acceptance record. General interface/runtime support and original math/bits acceptance remain unimplemented; no historical evidence is renewed. Basic-interface declarations and method-set/shared-value plans now have independent source-bound implementation rows and CI-only UNRUN acceptance. Declaration/native nil-only obligations are distinct from dynamic-interface reference-only originals; no runtime or project qualification is claimed. Struct tags on the admitted value-record domain now have explicit source implementation and CI-only UNRUN acceptance; historical diagnostic originals are retained as positive same-input obligations, not relabeled evidence. Labels/goto now have a separate source implementation and CI-only UNRUN acceptance; the full fixed official label.go is retained unchanged. No historical evidence or original math/bits result is renewed. Rune literals and untyped rune defaults now have a separate source-bound implementation and UNRUN acceptance. Exact upstream character literal inputs retain their os-dependency or invalid-Unicode boundary; no old evidence is renewed. Blank-function owners and ordered integer/string min/max have source-bound implementation and UNRUN acceptance. Complete issue61486 is checked without making its blank function callable; complete issue60582 retains missing fmt sources. The old blank-function diagnostic input graduates unchanged. No historical execution evidence or real math/bits acceptance is renewed. Blank package types now have complete checked declarations without name registration, with source-bound UNRUN acceptance. Complete official issue8079 stays unchanged; no historical execution or whole math/bits evidence is renewed. Static blank imports now check complete static source graphs without name binding. Linkname ownership remains explicitly unimplemented. All new source acceptance is UNRUN; whole math/bits inputs and its real project-acceptance gate remain unchanged."
   },
   "chapters": [
     {
@@ -206,6 +206,21 @@
       "id": "slices",
       "title": "Slice types",
       "url": "https://go.dev/ref/spec#Slice_types"
+    },
+    {
+      "id": "conversions",
+      "title": "Conversions",
+      "url": "https://go.dev/ref/spec#Conversions"
+    },
+    {
+      "id": "labels",
+      "title": "Label scopes and labeled statements",
+      "url": "https://go.dev/ref/spec#Labeled_statements"
+    },
+    {
+      "id": "goto",
+      "title": "Goto statements",
+      "url": "https://go.dev/ref/spec#Goto_statements"
     }
   ],
   "features": [
@@ -239,10 +254,10 @@
       "acceptance": [
         {
           "status": "unrun",
-          "reason": "Authored source/model, unchanged-original and reference obligations only. User delegated all execution to CI. No local tests, imports, compiler or runtime validation performed; no historical evidence is renewed.",
+          "reason": "Source bindings updated for blank-function owners and ordered min/max; the corrected label/rune source helpers and all JSON inputs are retained. Execution remains CI-only UNRUN and independent review is pending. The earlier label V3 no-blocker review was withdrawn. Historical evidence is not renewed.",
           "kind": "full-feature",
           "evidence": [],
-          "source_revision": "sha256:c197de111aed9cf2d23119f47c92549a9bf219d601b41e0a26ced00376be321c",
+          "source_revision": "sha256:c6fbd32fe09c1d10860dc7ae74fe587d27983e68d89efbb8bf368d57387e72d3",
           "backend": "self",
           "required_tests": [
             "tests/runtime_shared/test_managed_contracts.py::test_nominal_declaration_identity_is_not_underlying_or_spelling_identity",
@@ -274,7 +289,7 @@
       "diagnostics": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:c197de111aed9cf2d23119f47c92549a9bf219d601b41e0a26ced00376be321c",
+        "source_revision": "sha256:c6fbd32fe09c1d10860dc7ae74fe587d27983e68d89efbb8bf368d57387e72d3",
         "sources": [
           {
             "path": "pcc/support/managed_objects.py",
@@ -282,11 +297,11 @@
           },
           {
             "path": "pcc/frontends/go/managed_objects.py",
-            "sha256": "9256fdeac77a95fa175ade691e8d485d35a6380e72298eb7555ac1b524d30efd"
+            "sha256": "bfefe989d3d9b2abbac2364c2249cc445234ee7c0d40b3c878170e98fe9e1610"
           },
           {
             "path": "pcc/frontends/go/lowering.py",
-            "sha256": "ca9441e5c8928cad18651922d190d462a88aeacf9a5d39052e2fbb2c15898eeb"
+            "sha256": "19192653b38ea0dbe81b9018724aa5768be36342a5d15b1ae50901d757cda364"
           }
         ]
       },
@@ -305,7 +320,7 @@
         "termination",
         "blocks"
       ],
-      "scope": "Optional init and selector; integer/defined-integer/bool/static-string equality; left-to-right case evaluation; selector snapshot; delayed default; independent clause scopes; explicit fallthrough; loop continue versus switch break; syntactic return termination. No type switches, interfaces, aggregate equality, labels or goto. Complete original switches_valid.go is preserved; old invalid switches.go remains a same-source PCC/official negative.",
+      "scope": "Optional init and selector; integer/defined-integer/bool/static-string equality; left-to-right case evaluation; selector snapshot; delayed default; independent clause scopes; explicit fallthrough; loop continue versus switch break; syntactic return termination. This historical scalar-switch scope does not qualify type switches, interfaces, aggregate equality or labels/goto; separate feature rows track later source work. Complete original switches_valid.go is preserved; old invalid switches.go remains a same-source PCC/official negative.",
       "status": "supported",
       "tests": [
         "tests/go/test_switches.py::test_retained_original_unreachable_case_still_requires_matching_type",
@@ -598,19 +613,19 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
+        "source_revision": "sha256:fc92ec3e93c7691aa33b978dd27a8bb53291afe3267b9a40d5dd9f1acbd1dc33",
         "sources": [
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
+            "sha256": "fe4fcdc20525108aa90dee33d8ebaf908e7a16efd24c0a56c79dd26a8eba44e2"
           },
           {
             "path": "pcc/frontends/go/lowering.py",
-            "sha256": "ca9441e5c8928cad18651922d190d462a88aeacf9a5d39052e2fbb2c15898eeb"
+            "sha256": "19192653b38ea0dbe81b9018724aa5768be36342a5d15b1ae50901d757cda364"
           },
           {
             "path": "pcc/frontends/go/diagnostics.py",
-            "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
+            "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
           }
         ]
       },
@@ -620,7 +635,7 @@
           "kind": "full-feature",
           "scope": "Aggregate comparison declared CI obligations, not whole Go",
           "status": "unrun",
-          "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
+          "source_revision": "sha256:fc92ec3e93c7691aa33b978dd27a8bb53291afe3267b9a40d5dd9f1acbd1dc33",
           "mode": "pcc0",
           "platform": "linux-x86_64",
           "backend": "self",
@@ -641,7 +656,7 @@
             "tests/go/test_aggregate_equality.py::test_identical_imported_record_graph_matches_official_raw_streams"
           ],
           "evidence": [],
-          "reason": "Source bindings refreshed for the interface mechanism; execution remains CI-only UNRUN. No historical acceptance evidence is renewed."
+          "reason": "Source bindings updated for complete static blank-import graphs and an explicit unowned linkname boundary. Original source obligations and historical evidence are preserved. Every execution remains UNRUN; independent review is pending."
         }
       ]
     },
@@ -671,19 +686,19 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
+        "source_revision": "sha256:fc92ec3e93c7691aa33b978dd27a8bb53291afe3267b9a40d5dd9f1acbd1dc33",
         "sources": [
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
+            "sha256": "fe4fcdc20525108aa90dee33d8ebaf908e7a16efd24c0a56c79dd26a8eba44e2"
           },
           {
             "path": "pcc/frontends/go/lowering.py",
-            "sha256": "ca9441e5c8928cad18651922d190d462a88aeacf9a5d39052e2fbb2c15898eeb"
+            "sha256": "19192653b38ea0dbe81b9018724aa5768be36342a5d15b1ae50901d757cda364"
           },
           {
             "path": "pcc/frontends/go/diagnostics.py",
-            "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
+            "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
           }
         ]
       },
@@ -693,7 +708,7 @@
           "kind": "full-feature",
           "scope": "Aggregate switch declared CI obligations, not whole Go",
           "status": "unrun",
-          "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
+          "source_revision": "sha256:fc92ec3e93c7691aa33b978dd27a8bb53291afe3267b9a40d5dd9f1acbd1dc33",
           "mode": "pcc0",
           "platform": "linux-x86_64",
           "backend": "self",
@@ -714,7 +729,7 @@
             "tests/go/test_aggregate_equality.py::test_identical_imported_record_graph_matches_official_raw_streams"
           ],
           "evidence": [],
-          "reason": "Source bindings refreshed for the interface mechanism; execution remains CI-only UNRUN. No historical acceptance evidence is renewed."
+          "reason": "Source bindings updated for complete static blank-import graphs and an explicit unowned linkname boundary. Original source obligations and historical evidence are preserved. Every execution remains UNRUN; independent review is pending."
         }
       ]
     },
@@ -754,20 +769,152 @@
     },
     {
       "id": "go.capability.blank-function-declarations",
-      "title": "Blank function declarations",
+      "title": "Fully checked blank function declarations",
       "chapter_ids": [
-        "declarations"
+        "declarations",
+        "statements",
+        "expressions"
       ],
-      "scope": "Explicitly rejected capability: blank function declarations. No broader implementation or runtime support is claimed.",
-      "status": "explicitly_unimplemented",
+      "scope": "Blank function declarations create no source binding or initializer, but retain distinct private checking/IR identities and ordinary signature, generic body, label, termination and pointer checks. The complete official issue61486 source is preserved in package p, with an authored exported constant/main package companion for a closed compilation graph; its blank function is never rewritten or invoked. Blank methods and package variables retain their separate frontiers.",
       "tests": [
-        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
-        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+        "tests/go/test_minmax.py::test_complete_upstream_originals_keep_pinned_bytes_and_license",
+        "tests/go/test_minmax.py::test_complete_official_shift_original_checks_blank_body_and_defaults_min",
+        "tests/go/test_minmax.py::test_constant_kinds_do_not_overflow_an_invented_addition_or_default_early",
+        "tests/go/test_minmax.py::test_complete_range_original_keeps_pinned_bytes_and_owned_ir",
+        "tests/go/test_minmax.py::test_nonconstant_minmax_counts_for_range_even_without_user_calls",
+        "tests/go/test_minmax.py::test_complete_valid_and_former_boundary_originals_build_owned_ir",
+        "tests/go/test_minmax.py::test_distinct_blank_declarations_keep_private_checked_ir_owners",
+        "tests/go/test_minmax.py::test_complete_upstream_package_graph_has_owned_ir_without_rewriting_original",
+        "tests/go/test_minmax.py::test_invalid_originals_fail_before_ir_without_capability_reclassification",
+        "tests/go/test_minmax.py::test_unimplemented_runtime_and_type_domains_remain_explicit",
+        "tests/go/test_minmax.py::test_complete_fmt_original_retains_missing_original_dependency",
+        "tests/go/test_minmax.py::test_independent_native_results_keep_all_declared_bits",
+        "tests/go/test_minmax.py::test_complete_range_original_preserves_side_effects_once",
+        "tests/go/test_minmax.py::test_whole_fixture_and_original_package_companion_execute_owned_main",
+        "tests/go/test_minmax.py::test_identical_complete_and_graduated_originals_match_official_raw_execution",
+        "tests/go/test_minmax.py::test_identical_upstream_package_graph_has_official_source_and_raw_process_evidence",
+        "tests/go/test_minmax.py::test_identical_invalid_originals_have_attributed_official_rejections",
+        "tests/go/test_minmax.py::test_complete_fmt_original_has_reference_only_execution_without_pcc_stub"
       ],
-      "diagnostics": [
-        "go.unsupported.blank-function-declarations"
-      ],
-      "evidence": []
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:fc92ec3e93c7691aa33b978dd27a8bb53291afe3267b9a40d5dd9f1acbd1dc33",
+        "sources": [
+          {
+            "path": "pcc/frontends/go/sema.py",
+            "sha256": "fe4fcdc20525108aa90dee33d8ebaf908e7a16efd24c0a56c79dd26a8eba44e2"
+          },
+          {
+            "path": "pcc/frontends/go/lowering.py",
+            "sha256": "19192653b38ea0dbe81b9018724aa5768be36342a5d15b1ae50901d757cda364"
+          },
+          {
+            "path": "pcc/frontends/go/diagnostics.py",
+            "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+          },
+          {
+            "path": "pcc/frontends/go/types.py",
+            "sha256": "d0d5502aff4fafe8222f75214f24797149686b8a7170fc760f97afaffba91db8"
+          },
+          {
+            "path": "pcc/frontends/go/generics.py",
+            "sha256": "225befad1456eecdd58968f03cfebb7e4516fe0eb849a651a93d406744e111c5"
+          },
+          {
+            "path": "pcc/frontends/go/pointer_flow.py",
+            "sha256": "91030bab1479e7e7c88762718373d5efa2d7810e483a1669b0b1838f40472bbf"
+          },
+          {
+            "path": "pcc/frontends/go/branches.py",
+            "sha256": "1e53cf8318a849b69d7c61cdbe794bbad0c2c74ec3b675f5214927f285414fad"
+          },
+          {
+            "path": "pcc/frontends/go/packages.py",
+            "sha256": "9eb73296ef5d4d4a0bafff6f054d0f958be6ffdc998b72e75d586b96c06175ed"
+          },
+          {
+            "path": "tests/go/fixtures/minmax.go",
+            "sha256": "4d1981382134f505618f9e9d1083006ed7a4ae5220d58788bdca1de5844da073"
+          },
+          {
+            "path": "tests/go/fixtures/minmax_range.go",
+            "sha256": "e1223cd77891ac12e200b9f33ad6396c4b915c16a4ff48e84452a9d03327ee5b"
+          },
+          {
+            "path": "tests/go/test_minmax.py",
+            "sha256": "d0afb856ddbb6840b5871c4a8468d53ffa60a1be7fab1968931e1ced9ae2f38a"
+          },
+          {
+            "path": "tests/go/test_diagnostics.py",
+            "sha256": "1a1cb8389b6e65bb5c3333928162dfcf9812a65b19e738978966d8c0c0580127"
+          },
+          {
+            "path": "tests/go/test_labels.py",
+            "sha256": "5915e89ff2e495837166b7eaac24187d073f7f109bf0d1ab7b81287c7ef0c216"
+          },
+          {
+            "path": "tests/go/owned_execution.py",
+            "sha256": "8075f53be4cc2ac99622131262c0b093db3642f863dec1cd5cb85120423afa33"
+          },
+          {
+            "path": "tests/go/test_execution.py",
+            "sha256": "7a9aeb1e01e8da545a3272c5c128b8e1a4b55ddfddb9c1d378035bab02fa4e73"
+          },
+          {
+            "path": "tests/go/upstream/provenance.json",
+            "sha256": "bf8e929094ca523c12c5dc4e7b516d1e027044cc0b4064c58858c98771622240"
+          },
+          {
+            "path": "tests/go/upstream/go1.27.3/LICENSE",
+            "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+          },
+          {
+            "path": "tests/go/upstream/go1.27.3/test/fixedbugs/issue60582.go",
+            "sha256": "5560002195cb3d895aec27b0dd1f559ae2019af00bbdf1863d40f8ebdc181ce7"
+          },
+          {
+            "path": "tests/go/upstream/go1.27.3/src/internal/types/testdata/fixedbugs/issue61486.go",
+            "sha256": "a4397b17537cbf3d95d6d969a23b09db90992e6f1faf95fab754010adf45f242"
+          }
+        ]
+      },
+      "acceptance": [
+        {
+          "id": "go-capability-blank-function-declarations-linux-pcc0-self",
+          "kind": "full-feature",
+          "scope": "Blank function declarations create no source binding or initializer, but retain distinct private checking/IR identities and ordinary signature, generic body, label, termination and pointer checks. The complete official issue61486 source is preserved in package p, with an authored exported constant/main package companion for a closed compilation graph; its blank function is never rewritten or invoked. Blank methods and package variables retain their separate frontiers.",
+          "status": "unrun",
+          "source_revision": "sha256:fc92ec3e93c7691aa33b978dd27a8bb53291afe3267b9a40d5dd9f1acbd1dc33",
+          "mode": "pcc0",
+          "platform": "linux-x86_64",
+          "backend": "self",
+          "gc": "not_applicable",
+          "required_tests": [
+            "tests/go/test_minmax.py::test_complete_upstream_originals_keep_pinned_bytes_and_license",
+            "tests/go/test_minmax.py::test_complete_official_shift_original_checks_blank_body_and_defaults_min",
+            "tests/go/test_minmax.py::test_constant_kinds_do_not_overflow_an_invented_addition_or_default_early",
+            "tests/go/test_minmax.py::test_complete_range_original_keeps_pinned_bytes_and_owned_ir",
+            "tests/go/test_minmax.py::test_nonconstant_minmax_counts_for_range_even_without_user_calls",
+            "tests/go/test_minmax.py::test_complete_valid_and_former_boundary_originals_build_owned_ir",
+            "tests/go/test_minmax.py::test_distinct_blank_declarations_keep_private_checked_ir_owners",
+            "tests/go/test_minmax.py::test_complete_upstream_package_graph_has_owned_ir_without_rewriting_original",
+            "tests/go/test_minmax.py::test_invalid_originals_fail_before_ir_without_capability_reclassification",
+            "tests/go/test_minmax.py::test_unimplemented_runtime_and_type_domains_remain_explicit",
+            "tests/go/test_minmax.py::test_complete_fmt_original_retains_missing_original_dependency",
+            "tests/go/test_minmax.py::test_independent_native_results_keep_all_declared_bits",
+            "tests/go/test_minmax.py::test_complete_range_original_preserves_side_effects_once",
+            "tests/go/test_minmax.py::test_whole_fixture_and_original_package_companion_execute_owned_main",
+            "tests/go/test_minmax.py::test_identical_complete_and_graduated_originals_match_official_raw_execution",
+            "tests/go/test_minmax.py::test_identical_upstream_package_graph_has_official_source_and_raw_process_evidence",
+            "tests/go/test_minmax.py::test_identical_invalid_originals_have_attributed_official_rejections",
+            "tests/go/test_minmax.py::test_complete_fmt_original_has_reference_only_execution_without_pcc_stub"
+          ],
+          "evidence": [],
+          "reason": "Source bindings updated for complete static blank-import graphs and an explicit unowned linkname boundary. Original source obligations and historical evidence are preserved. Every execution remains UNRUN; independent review is pending."
+        }
+      ]
     },
     {
       "id": "go.capability.blank-method-declarations",
@@ -822,20 +969,141 @@
     },
     {
       "id": "go.capability.blank-type-declarations",
-      "title": "Blank type declarations",
+      "title": "Checked blank package type declarations",
       "chapter_ids": [
-        "declarations"
+        "declarations",
+        "types"
       ],
-      "scope": "Blank package type declarations only; package type named init is an invalid declaration and remains uncoded.",
-      "status": "explicitly_unimplemented",
+      "scope": "Blank package type definitions and aliases create no source name but retain full RHS/cycle/capability checking. Definitions have independent nominal identity; aliases keep canonical targets. Repeated blanks, forward references and file-scoped import usage preserve ordinary rules. The complete compile-only official issue8079 stays package p; an explicit authored constant/main companion supplies a closed graph. No interface value storage, generic/local types, blank fields/methods/variables, shared runtime, original whole math/bits or native pcc1 acceptance is claimed.",
       "tests": [
-        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
-        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+        "tests/go/test_blank_types.py::test_complete_official_original_and_authored_fixture_keep_pinned_bytes",
+        "tests/go/test_blank_types.py::test_complete_official_blank_type_has_no_binding_but_keeps_checked_identity",
+        "tests/go/test_blank_types.py::test_repeated_blank_definitions_are_distinct_and_aliases_keep_canonical_targets",
+        "tests/go/test_blank_types.py::test_complete_valid_and_graduated_originals_build_owned_ir",
+        "tests/go/test_blank_types.py::test_blank_type_rhs_errors_remain_invalid_before_ir",
+        "tests/go/test_blank_types.py::test_blank_types_do_not_open_unimplemented_rhs_or_local_storage",
+        "tests/go/test_blank_types.py::test_imported_rhs_is_used_and_whole_official_package_is_unchanged",
+        "tests/go/test_blank_types.py::test_blank_declarations_do_not_bypass_import_scope_or_visibility",
+        "tests/go/test_blank_types.py::test_complete_fixture_has_independent_full_width_native_result",
+        "tests/go/test_blank_types.py::test_complete_originals_and_package_graphs_execute_owned_main",
+        "tests/go/test_blank_types.py::test_identical_complete_and_graduated_originals_match_official_processes",
+        "tests/go/test_blank_types.py::test_identical_import_graphs_and_official_package_keep_raw_process_evidence",
+        "tests/go/test_blank_types.py::test_identical_invalid_type_originals_have_attributed_official_rejections",
+        "tests/go/test_blank_types.py::test_identical_invalid_import_graphs_have_attributed_official_rejections",
+        "tests/go/test_blank_types.py::test_valid_storage_frontiers_remain_reference_only"
       ],
-      "diagnostics": [
-        "go.unsupported.blank-type-declarations"
-      ],
-      "evidence": []
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:fc92ec3e93c7691aa33b978dd27a8bb53291afe3267b9a40d5dd9f1acbd1dc33",
+        "sources": [
+          {
+            "path": "pcc/frontends/go/sema.py",
+            "sha256": "fe4fcdc20525108aa90dee33d8ebaf908e7a16efd24c0a56c79dd26a8eba44e2"
+          },
+          {
+            "path": "pcc/frontends/go/diagnostics.py",
+            "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+          },
+          {
+            "path": "pcc/frontends/go/syntax.py",
+            "sha256": "62d24c3496bd5091da87064a977303729ed89e24c35c514f0d2783b6fdbbae78"
+          },
+          {
+            "path": "pcc/frontends/go/records.py",
+            "sha256": "1d85af82b4d390df13b14ad0b82cdbfc0425de2a8b5a64ba3beaf19bc4bfe3e9"
+          },
+          {
+            "path": "pcc/frontends/go/interface_methods.py",
+            "sha256": "3b9fd903091156f06b8ad102bf7b98fe4de9ecf7508f1d8dee5eaa7dfe05da90"
+          },
+          {
+            "path": "pcc/frontends/go/packages.py",
+            "sha256": "9eb73296ef5d4d4a0bafff6f054d0f958be6ffdc998b72e75d586b96c06175ed"
+          },
+          {
+            "path": "pcc/frontends/go/generics.py",
+            "sha256": "225befad1456eecdd58968f03cfebb7e4516fe0eb849a651a93d406744e111c5"
+          },
+          {
+            "path": "pcc/frontends/go/types.py",
+            "sha256": "d0d5502aff4fafe8222f75214f24797149686b8a7170fc760f97afaffba91db8"
+          },
+          {
+            "path": "tests/go/test_blank_types.py",
+            "sha256": "7f977f3b452cf24223376101df2cc163c58407df782f45674f84834914efccae"
+          },
+          {
+            "path": "tests/go/fixtures/blank_types.go",
+            "sha256": "f56b97960d4fbe7066c5b73a7443ff45afe17a75d181ff0e042743b072777116"
+          },
+          {
+            "path": "tests/go/test_diagnostics.py",
+            "sha256": "1a1cb8389b6e65bb5c3333928162dfcf9812a65b19e738978966d8c0c0580127"
+          },
+          {
+            "path": "tests/go/test_minmax.py",
+            "sha256": "d0afb856ddbb6840b5871c4a8468d53ffa60a1be7fab1968931e1ced9ae2f38a"
+          },
+          {
+            "path": "tests/go/test_labels.py",
+            "sha256": "5915e89ff2e495837166b7eaac24187d073f7f109bf0d1ab7b81287c7ef0c216"
+          },
+          {
+            "path": "tests/go/owned_execution.py",
+            "sha256": "8075f53be4cc2ac99622131262c0b093db3642f863dec1cd5cb85120423afa33"
+          },
+          {
+            "path": "tests/go/test_execution.py",
+            "sha256": "7a9aeb1e01e8da545a3272c5c128b8e1a4b55ddfddb9c1d378035bab02fa4e73"
+          },
+          {
+            "path": "tests/go/upstream/provenance.json",
+            "sha256": "bf8e929094ca523c12c5dc4e7b516d1e027044cc0b4064c58858c98771622240"
+          },
+          {
+            "path": "tests/go/upstream/go1.27.3/LICENSE",
+            "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+          },
+          {
+            "path": "tests/go/upstream/go1.27.3/test/fixedbugs/issue8079.go",
+            "sha256": "97e0601f3838cc934c1b5a9a04a18ea8e0e1a77ab8d57a75ae6123b466a5a1a7"
+          }
+        ]
+      },
+      "acceptance": [
+        {
+          "id": "blank-package-types-linux-pcc0-self",
+          "kind": "full-feature",
+          "scope": "Blank package type definitions and aliases create no source name but retain full RHS/cycle/capability checking. Definitions have independent nominal identity; aliases keep canonical targets. Repeated blanks, forward references and file-scoped import usage preserve ordinary rules. The complete compile-only official issue8079 stays package p; an explicit authored constant/main companion supplies a closed graph. No interface value storage, generic/local types, blank fields/methods/variables, shared runtime, original whole math/bits or native pcc1 acceptance is claimed.",
+          "status": "unrun",
+          "source_revision": "sha256:fc92ec3e93c7691aa33b978dd27a8bb53291afe3267b9a40d5dd9f1acbd1dc33",
+          "mode": "pcc0",
+          "platform": "linux-x86_64",
+          "backend": "self",
+          "gc": "not_applicable",
+          "required_tests": [
+            "tests/go/test_blank_types.py::test_complete_official_original_and_authored_fixture_keep_pinned_bytes",
+            "tests/go/test_blank_types.py::test_complete_official_blank_type_has_no_binding_but_keeps_checked_identity",
+            "tests/go/test_blank_types.py::test_repeated_blank_definitions_are_distinct_and_aliases_keep_canonical_targets",
+            "tests/go/test_blank_types.py::test_complete_valid_and_graduated_originals_build_owned_ir",
+            "tests/go/test_blank_types.py::test_blank_type_rhs_errors_remain_invalid_before_ir",
+            "tests/go/test_blank_types.py::test_blank_types_do_not_open_unimplemented_rhs_or_local_storage",
+            "tests/go/test_blank_types.py::test_imported_rhs_is_used_and_whole_official_package_is_unchanged",
+            "tests/go/test_blank_types.py::test_blank_declarations_do_not_bypass_import_scope_or_visibility",
+            "tests/go/test_blank_types.py::test_complete_fixture_has_independent_full_width_native_result",
+            "tests/go/test_blank_types.py::test_complete_originals_and_package_graphs_execute_owned_main",
+            "tests/go/test_blank_types.py::test_identical_complete_and_graduated_originals_match_official_processes",
+            "tests/go/test_blank_types.py::test_identical_import_graphs_and_official_package_keep_raw_process_evidence",
+            "tests/go/test_blank_types.py::test_identical_invalid_type_originals_have_attributed_official_rejections",
+            "tests/go/test_blank_types.py::test_identical_invalid_import_graphs_have_attributed_official_rejections",
+            "tests/go/test_blank_types.py::test_valid_storage_frontiers_remain_reference_only"
+          ],
+          "evidence": [],
+          "reason": "Source bindings updated for complete static blank-import graphs and an explicit unowned linkname boundary. Original source obligations and historical evidence are preserved. Every execution remains UNRUN; independent review is pending."
+        }
+      ]
     },
     {
       "id": "go.capability.complex-types",
@@ -877,7 +1145,7 @@
       "chapter_ids": [
         "imports"
       ],
-      "scope": "Source implementation with authored, execution-unrun obligations for file-block dot imports of exported declarations from supplied original source packages. Lookup retains dependency-owned types, symbols, methods and generic instances; disjoint imports, collisions, local shadowing, per-file use and isolation are checked without a package-block copy. The exact old import-only diagnostic source remains a missing-source or unused-import error, not a positive program. The unchanged math/bits test file reaches a later syntax boundary; runtime/interface/linkname/blank-import and whole-project acceptance remain unchanged. No historical evidence is renewed.",
+      "scope": "Source implementation with authored, execution-unrun obligations for file-block dot imports of exported declarations from supplied original source packages. Lookup retains dependency-owned types, symbols, methods and generic instances; disjoint imports, collisions, local shadowing, per-file use and isolation are checked without a package-block copy. The exact old import-only diagnostic source remains a missing-source or unused-import error, not a positive program. The unchanged math/bits test file reaches a later syntax boundary; runtime/interface/linkname/dynamic-initialization and whole-project acceptance remain open. No historical evidence is renewed.",
       "status": "missing",
       "tests": [
         "tests/go/test_dot_imports.py",
@@ -1171,23 +1439,23 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
+        "source_revision": "sha256:fc92ec3e93c7691aa33b978dd27a8bb53291afe3267b9a40d5dd9f1acbd1dc33",
         "sources": [
           {
             "path": "pcc/frontends/go/diagnostics.py",
-            "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
+            "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
           },
           {
             "path": "pcc/frontends/go/lowering.py",
-            "sha256": "ca9441e5c8928cad18651922d190d462a88aeacf9a5d39052e2fbb2c15898eeb"
+            "sha256": "19192653b38ea0dbe81b9018724aa5768be36342a5d15b1ae50901d757cda364"
           },
           {
             "path": "pcc/frontends/go/pointer_flow.py",
-            "sha256": "408a857ee31da2514c9abd75be0bfd2f170b7bef49085e6f7c199e9bc344b041"
+            "sha256": "91030bab1479e7e7c88762718373d5efa2d7810e483a1669b0b1838f40472bbf"
           },
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
+            "sha256": "fe4fcdc20525108aa90dee33d8ebaf908e7a16efd24c0a56c79dd26a8eba44e2"
           }
         ]
       },
@@ -1197,7 +1465,7 @@
           "kind": "full-feature",
           "scope": "Bounded string-range authored spec/native/official-Go same-input CI obligations, not whole Go",
           "status": "unrun",
-          "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
+          "source_revision": "sha256:fc92ec3e93c7691aa33b978dd27a8bb53291afe3267b9a40d5dd9f1acbd1dc33",
           "mode": "pcc0",
           "platform": "linux-x86_64",
           "backend": "self",
@@ -1214,7 +1482,7 @@
             "tests/go/test_string_range.py::test_official_go_rejects_identical_invalid_string_ranges"
           ],
           "evidence": [],
-          "reason": "Source bindings refreshed for the interface mechanism; execution remains CI-only UNRUN. No historical acceptance evidence is renewed."
+          "reason": "Source bindings updated for complete static blank-import graphs and an explicit unowned linkname boundary. Original source obligations and historical evidence are preserved. Every execution remains UNRUN; independent review is pending."
         }
       ]
     },
@@ -1224,11 +1492,12 @@
       "chapter_ids": [
         "initialization"
       ],
-      "scope": "Blank imports, init functions and package initializers requiring runtime execution; static package data remains admitted.",
+      "scope": "Init functions and package initializers requiring runtime execution remain unsupported. Blank imports of complete supplied graphs are admitted only when every visited package has already-admitted static initialization; dependencies are never skipped.",
       "status": "explicitly_unimplemented",
       "tests": [
         "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
-        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound",
+        "tests/go/test_blank_imports.py::test_dynamic_and_transitive_initialization_remain_explicit_frontiers"
       ],
       "diagnostics": [
         "go.unsupported.package-initialization"
@@ -1308,20 +1577,157 @@
     },
     {
       "id": "go.capability.struct-tags",
-      "title": "Struct tags",
+      "title": "Struct tags in value-record identity",
       "chapter_ids": [
-        "structs"
+        "structs",
+        "properties",
+        "conversions",
+        "assignment",
+        "methods",
+        "lexical"
       ],
-      "scope": "Explicitly rejected capability: struct tags. No broader implementation or runtime support is claimed.",
-      "status": "explicitly_unimplemented",
+      "scope": "Decoded raw/interpreted string tags on admitted named struct fields, including groups and empty/absent equivalence. Tags remain part of assignment, method signatures, generic cache/symbol and managed compiler identity. Explicit value conversion ignores tags recursively while retaining nested nominal types, field order, package-private identities and array lengths. Existing aggregate copy/storage and static initialization are reused. Pointer conversions, embedded and blank fields, unsupported storage, reflection and runtime ABI remain outside this scope. No original math/bits or complete Go acceptance is claimed.",
       "tests": [
-        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
-        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+        "tests/go/test_struct_tags.py::test_parser_keeps_one_tag_token_for_every_field_in_a_group",
+        "tests/go/test_struct_tags.py::test_decoded_tag_bytes_define_identity_not_source_spelling",
+        "tests/go/test_struct_tags.py::test_raw_cr_removal_is_not_interpreted_cr_or_unicode_normalization",
+        "tests/go/test_struct_tags.py::test_complete_spelling_original_preserves_literal_bytes_and_type_identity",
+        "tests/go/test_struct_tags.py::test_complete_distinct_spelling_originals_reject_assignment_before_ir",
+        "tests/go/test_struct_tags.py::test_tag_identity_reaches_generic_symbols_and_managed_compiler_plans",
+        "tests/go/test_struct_tags.py::test_conversion_relation_preserves_nested_nominal_and_private_field_identity",
+        "tests/go/test_struct_tags.py::test_method_signatures_keep_tag_identity_in_parameters_and_results",
+        "tests/go/test_struct_tags.py::test_complete_tagged_program_uses_owned_lowering_and_three_generic_identities",
+        "tests/go/test_struct_tags.py::test_both_exact_former_diagnostic_originals_are_positive_obligations",
+        "tests/go/test_struct_tags.py::test_invalid_tag_identity_or_literal_is_rejected_before_lowering",
+        "tests/go/test_struct_tags.py::test_tags_do_not_open_unowned_storage_or_pointer_conversions",
+        "tests/go/test_struct_tags.py::test_cross_package_tag_conversion_keeps_exported_and_private_field_identity",
+        "tests/go/test_struct_tags.py::test_tagged_record_helpers_execute_full_width_native_values",
+        "tests/go/test_struct_tags.py::test_complete_and_exact_former_originals_execute_owned_native",
+        "tests/go/test_struct_tags.py::test_complete_literal_spelling_original_executes_full_width_native_value",
+        "tests/go/test_struct_tags.py::test_identical_complete_and_former_originals_match_official_raw_execution",
+        "tests/go/test_struct_tags.py::test_identical_package_graph_matches_official_raw_execution",
+        "tests/go/test_struct_tags.py::test_identical_distinct_tag_spellings_have_attributed_official_rejections",
+        "tests/go/test_struct_tags.py::test_identical_invalid_originals_have_attributed_official_rejections",
+        "tests/go/test_struct_tags.py::test_valid_storage_frontiers_have_official_reference_only_execution"
       ],
-      "diagnostics": [
-        "go.unsupported.struct-tags"
-      ],
-      "evidence": []
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:fc92ec3e93c7691aa33b978dd27a8bb53291afe3267b9a40d5dd9f1acbd1dc33",
+        "sources": [
+          {
+            "path": "pcc/frontends/go/syntax.py",
+            "sha256": "62d24c3496bd5091da87064a977303729ed89e24c35c514f0d2783b6fdbbae78"
+          },
+          {
+            "path": "pcc/frontends/go/sema.py",
+            "sha256": "fe4fcdc20525108aa90dee33d8ebaf908e7a16efd24c0a56c79dd26a8eba44e2"
+          },
+          {
+            "path": "pcc/frontends/go/records.py",
+            "sha256": "1d85af82b4d390df13b14ad0b82cdbfc0425de2a8b5a64ba3beaf19bc4bfe3e9"
+          },
+          {
+            "path": "pcc/frontends/go/types.py",
+            "sha256": "d0d5502aff4fafe8222f75214f24797149686b8a7170fc760f97afaffba91db8"
+          },
+          {
+            "path": "pcc/frontends/go/generics.py",
+            "sha256": "225befad1456eecdd58968f03cfebb7e4516fe0eb849a651a93d406744e111c5"
+          },
+          {
+            "path": "pcc/frontends/go/managed_objects.py",
+            "sha256": "bfefe989d3d9b2abbac2364c2249cc445234ee7c0d40b3c878170e98fe9e1610"
+          },
+          {
+            "path": "pcc/frontends/go/strings.py",
+            "sha256": "2c7e0903f00bbcb0982a2cb4a199cdbde5d4de6f6f5877a31f9a691da21a050f"
+          },
+          {
+            "path": "pcc/frontends/go/lowering.py",
+            "sha256": "19192653b38ea0dbe81b9018724aa5768be36342a5d15b1ae50901d757cda364"
+          },
+          {
+            "path": "pcc/frontends/go/diagnostics.py",
+            "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+          },
+          {
+            "path": "tests/go/fixtures/struct_tags.go",
+            "sha256": "6a50c3793cc8e235a38bfe0823419f07435ea278e388e1148f9e52b9fa0c1180"
+          },
+          {
+            "path": "tests/go/test_struct_tags.py",
+            "sha256": "dcb161563d6ac3e7ea103fe664b92107e573a695f8de4fc07e8788c6fe10250c"
+          },
+          {
+            "path": "tests/go/test_diagnostics.py",
+            "sha256": "1a1cb8389b6e65bb5c3333928162dfcf9812a65b19e738978966d8c0c0580127"
+          },
+          {
+            "path": "tests/go/test_records.py",
+            "sha256": "f4ca72885e4a82742a4e53d550ed4138472959691893c166d0454b42d46ac7d9"
+          },
+          {
+            "path": "tests/go/fixtures/struct_tag_invalid/non_utf8_vs_unicode.go",
+            "sha256": "088379b9d9d56aeb97bc53f795fe769b4edfef7ea6303c6f94ef4340842d84db"
+          },
+          {
+            "path": "tests/go/fixtures/struct_tag_invalid/nul_vs_empty.go",
+            "sha256": "0acfae04c391a8ee17a155bb5db5400bc14d3197bdbe59166c97151ec62eb27b"
+          },
+          {
+            "path": "tests/go/fixtures/struct_tag_invalid/raw_cr_vs_interpreted.go",
+            "sha256": "7d800db92a666c085b76f5e9e85cc3f4eb8591aefa3fce4c576de2fdc07879dc"
+          },
+          {
+            "path": "tests/go/fixtures/struct_tag_invalid/unicode_not_normalized.go",
+            "sha256": "757eb7f4446dcffb69a5b2a7da0f9330bb6777189780d101f928472d761dc326"
+          },
+          {
+            "path": "tests/go/fixtures/struct_tag_spellings.go",
+            "sha256": "3c87040a16b5504654e6fd90e396542771b50c5c6cb5e2606a625ed2a9f6d0b0"
+          }
+        ]
+      },
+      "acceptance": [
+        {
+          "id": "struct-tags-linux-pcc0-self",
+          "kind": "full-feature",
+          "scope": "Decoded raw/interpreted string tags on admitted named struct fields, including groups and empty/absent equivalence. Tags remain part of assignment, method signatures, generic cache/symbol and managed compiler identity. Explicit value conversion ignores tags recursively while retaining nested nominal types, field order, package-private identities and array lengths. Existing aggregate copy/storage and static initialization are reused. Pointer conversions, embedded and blank fields, unsupported storage, reflection and runtime ABI remain outside this scope. No original math/bits or complete Go acceptance is claimed.",
+          "status": "unrun",
+          "source_revision": "sha256:fc92ec3e93c7691aa33b978dd27a8bb53291afe3267b9a40d5dd9f1acbd1dc33",
+          "mode": "pcc0",
+          "platform": "linux-x86_64",
+          "backend": "self",
+          "gc": "not_applicable",
+          "required_tests": [
+            "tests/go/test_struct_tags.py::test_parser_keeps_one_tag_token_for_every_field_in_a_group",
+            "tests/go/test_struct_tags.py::test_decoded_tag_bytes_define_identity_not_source_spelling",
+            "tests/go/test_struct_tags.py::test_raw_cr_removal_is_not_interpreted_cr_or_unicode_normalization",
+            "tests/go/test_struct_tags.py::test_complete_spelling_original_preserves_literal_bytes_and_type_identity",
+            "tests/go/test_struct_tags.py::test_complete_distinct_spelling_originals_reject_assignment_before_ir",
+            "tests/go/test_struct_tags.py::test_tag_identity_reaches_generic_symbols_and_managed_compiler_plans",
+            "tests/go/test_struct_tags.py::test_conversion_relation_preserves_nested_nominal_and_private_field_identity",
+            "tests/go/test_struct_tags.py::test_method_signatures_keep_tag_identity_in_parameters_and_results",
+            "tests/go/test_struct_tags.py::test_complete_tagged_program_uses_owned_lowering_and_three_generic_identities",
+            "tests/go/test_struct_tags.py::test_both_exact_former_diagnostic_originals_are_positive_obligations",
+            "tests/go/test_struct_tags.py::test_invalid_tag_identity_or_literal_is_rejected_before_lowering",
+            "tests/go/test_struct_tags.py::test_tags_do_not_open_unowned_storage_or_pointer_conversions",
+            "tests/go/test_struct_tags.py::test_cross_package_tag_conversion_keeps_exported_and_private_field_identity",
+            "tests/go/test_struct_tags.py::test_tagged_record_helpers_execute_full_width_native_values",
+            "tests/go/test_struct_tags.py::test_complete_and_exact_former_originals_execute_owned_native",
+            "tests/go/test_struct_tags.py::test_complete_literal_spelling_original_executes_full_width_native_value",
+            "tests/go/test_struct_tags.py::test_identical_complete_and_former_originals_match_official_raw_execution",
+            "tests/go/test_struct_tags.py::test_identical_package_graph_matches_official_raw_execution",
+            "tests/go/test_struct_tags.py::test_identical_distinct_tag_spellings_have_attributed_official_rejections",
+            "tests/go/test_struct_tags.py::test_identical_invalid_originals_have_attributed_official_rejections",
+            "tests/go/test_struct_tags.py::test_valid_storage_frontiers_have_official_reference_only_execution"
+          ],
+          "evidence": [],
+          "reason": "Source bindings updated for complete static blank-import graphs and an explicit unowned linkname boundary. Original source obligations and historical evidence are preserved. Every execution remains UNRUN; independent review is pending."
+        }
+      ]
     },
     {
       "id": "go.capability.pointer-escape",
@@ -1403,11 +1809,12 @@
         "statements",
         "variables"
       ],
-      "scope": "Taking addresses of declared for/range iteration bindings requires distinct per-iteration storage; entry-slot reuse is not accepted as Go identity.",
+      "scope": "Taking addresses of declared for/range iteration bindings requires distinct per-iteration storage; entry-slot reuse is not accepted as Go identity. The same boundary covers addressed local declarations reentered by a backward goto; no reused entry slot is an identity proof.",
       "status": "explicitly_unimplemented",
       "tests": [
         "tests/go/test_pointers.py::test_pointer_capabilities_are_explicit_and_fail_closed",
-        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir"
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_labels.py::test_goto_never_invents_pointer_nonnil_or_reentered_storage_proofs"
       ],
       "diagnostics": [
         "go.unsupported.pointer-iteration-identity"
@@ -1474,19 +1881,19 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
+        "source_revision": "sha256:fc92ec3e93c7691aa33b978dd27a8bb53291afe3267b9a40d5dd9f1acbd1dc33",
         "sources": [
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
+            "sha256": "fe4fcdc20525108aa90dee33d8ebaf908e7a16efd24c0a56c79dd26a8eba44e2"
           },
           {
             "path": "pcc/frontends/go/pointer_flow.py",
-            "sha256": "408a857ee31da2514c9abd75be0bfd2f170b7bef49085e6f7c199e9bc344b041"
+            "sha256": "91030bab1479e7e7c88762718373d5efa2d7810e483a1669b0b1838f40472bbf"
           },
           {
             "path": "pcc/frontends/go/diagnostics.py",
-            "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
+            "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
           }
         ]
       },
@@ -1496,7 +1903,7 @@
           "kind": "full-feature",
           "scope": "Declared complete pointer-switch test obligations, not whole Go",
           "status": "unrun",
-          "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
+          "source_revision": "sha256:fc92ec3e93c7691aa33b978dd27a8bb53291afe3267b9a40d5dd9f1acbd1dc33",
           "mode": "pcc0",
           "platform": "linux-x86_64",
           "backend": "self",
@@ -1514,7 +1921,7 @@
             "tests/go/test_pointer_switches.py::test_official_go_builds_identical_unsupported_switch_frontiers_without_execution"
           ],
           "evidence": [],
-          "reason": "Source bindings refreshed for the interface mechanism; execution remains CI-only UNRUN. No historical acceptance evidence is renewed."
+          "reason": "Source bindings updated for complete static blank-import graphs and an explicit unowned linkname boundary. Original source obligations and historical evidence are preserved. Every execution remains UNRUN; independent review is pending."
         }
       ]
     },
@@ -1670,27 +2077,27 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
+        "source_revision": "sha256:fc92ec3e93c7691aa33b978dd27a8bb53291afe3267b9a40d5dd9f1acbd1dc33",
         "sources": [
           {
             "path": "pcc/frontends/go/generics.py",
-            "sha256": "8e63f64ba21ae4e8fe204c62de0f5e5c7695ef81fab2c98e23160508c67cc0ae"
+            "sha256": "225befad1456eecdd58968f03cfebb7e4516fe0eb849a651a93d406744e111c5"
           },
           {
             "path": "pcc/frontends/go/syntax.py",
-            "sha256": "04e25aca94c499e72c38f166b92f5cb701402ffa70c80bec393204f0daa9777a"
+            "sha256": "62d24c3496bd5091da87064a977303729ed89e24c35c514f0d2783b6fdbbae78"
           },
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
+            "sha256": "fe4fcdc20525108aa90dee33d8ebaf908e7a16efd24c0a56c79dd26a8eba44e2"
           },
           {
             "path": "pcc/frontends/go/packages.py",
-            "sha256": "cb32cc02f1c04f400dbe46fb32c849cb999ff1e86cb0ad4a1002ed763c4d992c"
+            "sha256": "9eb73296ef5d4d4a0bafff6f054d0f958be6ffdc998b72e75d586b96c06175ed"
           },
           {
             "path": "pcc/frontends/go/diagnostics.py",
-            "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
+            "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
           },
           {
             "path": "pcc/support/instantiation.py",
@@ -1704,7 +2111,7 @@
           "kind": "full-feature",
           "scope": "Declared bounded generic value function CI obligations, not complete Go generics",
           "status": "unrun",
-          "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
+          "source_revision": "sha256:fc92ec3e93c7691aa33b978dd27a8bb53291afe3267b9a40d5dd9f1acbd1dc33",
           "mode": "pcc0",
           "platform": "linux-x86_64",
           "backend": "self",
@@ -1727,7 +2134,7 @@
             "tests/go/test_generic_functions.py::test_malformed_constraint_syntax_is_not_an_unsupported_capability"
           ],
           "evidence": [],
-          "reason": "Source bindings refreshed for the interface mechanism; execution remains CI-only UNRUN. No historical acceptance evidence is renewed."
+          "reason": "Source bindings updated for complete static blank-import graphs and an explicit unowned linkname boundary. Original source obligations and historical evidence are preserved. Every execution remains UNRUN; independent review is pending."
         }
       ]
     },
@@ -1800,39 +2207,39 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
+        "source_revision": "sha256:fc92ec3e93c7691aa33b978dd27a8bb53291afe3267b9a40d5dd9f1acbd1dc33",
         "sources": [
           {
             "path": "pcc/frontends/go/types.py",
-            "sha256": "813795bf7e42a265de4099ff1b0586cdf3811411a07e70497bbc2782e4568c06"
+            "sha256": "d0d5502aff4fafe8222f75214f24797149686b8a7170fc760f97afaffba91db8"
           },
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
+            "sha256": "fe4fcdc20525108aa90dee33d8ebaf908e7a16efd24c0a56c79dd26a8eba44e2"
           },
           {
             "path": "pcc/frontends/go/generics.py",
-            "sha256": "8e63f64ba21ae4e8fe204c62de0f5e5c7695ef81fab2c98e23160508c67cc0ae"
+            "sha256": "225befad1456eecdd58968f03cfebb7e4516fe0eb849a651a93d406744e111c5"
           },
           {
             "path": "pcc/frontends/go/lowering.py",
-            "sha256": "ca9441e5c8928cad18651922d190d462a88aeacf9a5d39052e2fbb2c15898eeb"
+            "sha256": "19192653b38ea0dbe81b9018724aa5768be36342a5d15b1ae50901d757cda364"
           },
           {
             "path": "pcc/frontends/go/syntax.py",
-            "sha256": "04e25aca94c499e72c38f166b92f5cb701402ffa70c80bec393204f0daa9777a"
+            "sha256": "62d24c3496bd5091da87064a977303729ed89e24c35c514f0d2783b6fdbbae78"
           },
           {
             "path": "pcc/frontends/go/records.py",
-            "sha256": "5a638741ed3738b9341f5ea585ae5bafa5113a69b4d184d293dcc72be495a406"
+            "sha256": "1d85af82b4d390df13b14ad0b82cdbfc0425de2a8b5a64ba3beaf19bc4bfe3e9"
           },
           {
             "path": "pcc/frontends/go/pointer_flow.py",
-            "sha256": "408a857ee31da2514c9abd75be0bfd2f170b7bef49085e6f7c199e9bc344b041"
+            "sha256": "91030bab1479e7e7c88762718373d5efa2d7810e483a1669b0b1838f40472bbf"
           },
           {
             "path": "pcc/frontends/go/packages.py",
-            "sha256": "cb32cc02f1c04f400dbe46fb32c849cb999ff1e86cb0ad4a1002ed763c4d992c"
+            "sha256": "9eb73296ef5d4d4a0bafff6f054d0f958be6ffdc998b72e75d586b96c06175ed"
           }
         ]
       },
@@ -1842,7 +2249,7 @@
           "kind": "full-feature",
           "scope": "Complete declared nil-error source, native full-width/original-main and identical official-Go obligations, not complete interfaces or original math/bits acceptance",
           "status": "unrun",
-          "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
+          "source_revision": "sha256:fc92ec3e93c7691aa33b978dd27a8bb53291afe3267b9a40d5dd9f1acbd1dc33",
           "mode": "pcc0",
           "platform": "linux-x86_64",
           "backend": "self",
@@ -1862,7 +2269,7 @@
             "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
           ],
           "evidence": [],
-          "reason": "Source bindings refreshed for the interface mechanism; execution remains CI-only UNRUN. No historical acceptance evidence is renewed."
+          "reason": "Source bindings updated for complete static blank-import graphs and an explicit unowned linkname boundary. Original source obligations and historical evidence are preserved. Every execution remains UNRUN; independent review is pending."
         }
       ]
     },
@@ -1900,7 +2307,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
+        "source_revision": "sha256:c2ffd215f06c741e7c5af0177242f28e401fe90c25d96eff8c01cfe3677b7b57",
         "sources": [
           {
             "path": "pcc/frontends/go/interface_methods.py",
@@ -1912,15 +2319,15 @@
           },
           {
             "path": "pcc/frontends/go/records.py",
-            "sha256": "5a638741ed3738b9341f5ea585ae5bafa5113a69b4d184d293dcc72be495a406"
+            "sha256": "1d85af82b4d390df13b14ad0b82cdbfc0425de2a8b5a64ba3beaf19bc4bfe3e9"
           },
           {
             "path": "pcc/frontends/go/types.py",
-            "sha256": "813795bf7e42a265de4099ff1b0586cdf3811411a07e70497bbc2782e4568c06"
+            "sha256": "d0d5502aff4fafe8222f75214f24797149686b8a7170fc760f97afaffba91db8"
           },
           {
             "path": "pcc/frontends/go/managed_objects.py",
-            "sha256": "9256fdeac77a95fa175ade691e8d485d35a6380e72298eb7555ac1b524d30efd"
+            "sha256": "bfefe989d3d9b2abbac2364c2249cc445234ee7c0d40b3c878170e98fe9e1610"
           },
           {
             "path": "pcc/support/managed_objects.py",
@@ -1946,7 +2353,7 @@
           "kind": "full-feature",
           "scope": "Compiler-only exact T/*T method sets, breadth-first field hiding and distinct-path ambiguity, import-path-private method identity, exact signatures and nominal types. Shared unresolved storage/box/transfer/itable/equality plans retain typed nil, dynamic identity, receiver projections, effects, copy/root and panic obligations. No physical ABI, allocation, GC registration, dispatch, assertions or equality lowering; embedded-field source storage remains unavailable.",
           "status": "unrun",
-          "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
+          "source_revision": "sha256:c2ffd215f06c741e7c5af0177242f28e401fe90c25d96eff8c01cfe3677b7b57",
           "mode": "pcc0",
           "platform": "linux-x86_64",
           "backend": "self",
@@ -1971,7 +2378,7 @@
             "tests/go/test_interface_value_plans.py::test_equality_rejects_mutable_or_fabricated_requirement_containers"
           ],
           "evidence": [],
-          "reason": "Authored source/model, native and same-input reference obligations only; all execution is delegated to CI. General interface originals are reference-only and do not qualify PCC runtime support."
+          "reason": "Source bindings updated for rune constants and the corrected label/rune original-source helpers, including all bound JSON inputs. Independent review is pending; execution remains CI-only UNRUN. The earlier label V3 no-blocker review was withdrawn. Historical evidence is not renewed."
         }
       ]
     },
@@ -2006,37 +2413,39 @@
         "tests/go/test_interface_source.py::test_qualified_generic_embedding_has_reference_only_execution",
         "tests/go/test_interface_source.py::test_preserved_valid_originals_keep_explicit_capability_boundary",
         "tests/go/test_interface_source.py::test_preserved_valid_frontiers_have_reference_only_execution",
-        "tests/go/test_interface_source.py::test_invalid_originals_have_attributed_official_rejections"
+        "tests/go/test_interface_source.py::test_invalid_originals_have_attributed_official_rejections",
+        "tests/go/test_interface_source.py::test_source_helper_preserves_complete_empty_declaration_runtime_original",
+        "tests/go/test_interface_source.py::test_corrected_empty_declaration_runtime_original_is_reference_only"
       ],
       "diagnostics": [],
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
+        "source_revision": "sha256:17fb872166a707074e42808017ba9991ff35cd044b4a5913cbaf3d0a1ce75fc7",
         "sources": [
           {
             "path": "pcc/frontends/go/syntax.py",
-            "sha256": "04e25aca94c499e72c38f166b92f5cb701402ffa70c80bec393204f0daa9777a"
+            "sha256": "62d24c3496bd5091da87064a977303729ed89e24c35c514f0d2783b6fdbbae78"
           },
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
+            "sha256": "fe4fcdc20525108aa90dee33d8ebaf908e7a16efd24c0a56c79dd26a8eba44e2"
           },
           {
             "path": "pcc/frontends/go/packages.py",
-            "sha256": "cb32cc02f1c04f400dbe46fb32c849cb999ff1e86cb0ad4a1002ed763c4d992c"
+            "sha256": "9eb73296ef5d4d4a0bafff6f054d0f958be6ffdc998b72e75d586b96c06175ed"
           },
           {
             "path": "pcc/frontends/go/generics.py",
-            "sha256": "8e63f64ba21ae4e8fe204c62de0f5e5c7695ef81fab2c98e23160508c67cc0ae"
+            "sha256": "225befad1456eecdd58968f03cfebb7e4516fe0eb849a651a93d406744e111c5"
           },
           {
             "path": "pcc/frontends/go/records.py",
-            "sha256": "5a638741ed3738b9341f5ea585ae5bafa5113a69b4d184d293dcc72be495a406"
+            "sha256": "1d85af82b4d390df13b14ad0b82cdbfc0425de2a8b5a64ba3beaf19bc4bfe3e9"
           },
           {
             "path": "pcc/frontends/go/types.py",
-            "sha256": "813795bf7e42a265de4099ff1b0586cdf3811411a07e70497bbc2782e4568c06"
+            "sha256": "d0d5502aff4fafe8222f75214f24797149686b8a7170fc760f97afaffba91db8"
           },
           {
             "path": "pcc/frontends/go/interface_methods.py",
@@ -2048,7 +2457,7 @@
           },
           {
             "path": "tests/go/test_interface_source.py",
-            "sha256": "21645862cc53818415ad65dba5f7d603f0f0ba4693914dd9eb97acde571adfd5"
+            "sha256": "2d311567a8b99d18e9548d95959475672ea697449b5c3e353d0e6cbefdec2e21"
           },
           {
             "path": "tests/go/fixtures/interface_source/declarations.go",
@@ -2082,7 +2491,7 @@
           "kind": "full-feature",
           "scope": "Source declarations and signature metadata: canonical named placeholders, aliases, exact method signatures and variadicness, compatible embedded-interface merging, package-private identities and named signature recursion. Invalid embedding/value-containment cycles remain errors; recursively expanded anonymous signatures, general type sets and generic applications remain explicit capability boundaries. General values are blocked before Lowerer, including unused signatures, zero arrays and ignored conversions. Only existing error-compatible nil transport is admitted. No original math/bits or general interface runtime acceptance.",
           "status": "unrun",
-          "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
+          "source_revision": "sha256:17fb872166a707074e42808017ba9991ff35cd044b4a5913cbaf3d0a1ce75fc7",
           "mode": "pcc0",
           "platform": "linux-x86_64",
           "backend": "self",
@@ -2107,12 +2516,638 @@
             "tests/go/test_interface_source.py::test_qualified_generic_embedding_has_reference_only_execution",
             "tests/go/test_interface_source.py::test_preserved_valid_originals_keep_explicit_capability_boundary",
             "tests/go/test_interface_source.py::test_preserved_valid_frontiers_have_reference_only_execution",
-            "tests/go/test_interface_source.py::test_invalid_originals_have_attributed_official_rejections"
+            "tests/go/test_interface_source.py::test_invalid_originals_have_attributed_official_rejections",
+            "tests/go/test_interface_source.py::test_source_helper_preserves_complete_empty_declaration_runtime_original",
+            "tests/go/test_interface_source.py::test_corrected_empty_declaration_runtime_original_is_reference_only"
           ],
           "evidence": [],
-          "reason": "Authored source/model, native and same-input reference obligations only; all execution is delegated to CI. General interface originals are reference-only and do not qualify PCC runtime support."
+          "reason": "Full cloud Go validation of checkpoint cef0a83b exposed four cross-module test obligations: the exact rune I/O input now graduates to owned/native/official full-stream comparison, the empty-declaration interface helper no longer inserts a package-level empty declaration, and two unchanged normal math/bits inputs retain the current linkname ownership frontier. All prior inputs and historical evidence remain preserved. This corrected source revision has not yet been executed or independently reviewed. A real official Go toolchain remains unavailable; no whole-feature, native pcc1 or whole-project acceptance is claimed."
         }
       ]
+    },
+    {
+      "id": "go.control.labels-goto",
+      "title": "Resolved labels and source control transfers",
+      "chapter_ids": [
+        "labels",
+        "goto",
+        "break",
+        "continue",
+        "fallthrough",
+        "termination",
+        "blocks",
+        "declarations"
+      ],
+      "scope": "Function-local label namespace, forward/backward goto, labeled break/continue for existing for/range/expression-switch forms, labeled fallthrough, explicit/implicit empty label bodies, block/declaration jump legality and syntactic termination. Resolved branch targets reach owned pointer CFG and public IR, including labels after return. Addressed reentered declarations retain the repeated-storage capability boundary. The entire unchanged official Go 1.27.3 test/ken/label.go and authored complete component inputs have separate UNRUN obligations. This is not full Go, select/type switch, allocation/closure, defer/unwind, native pcc1 or original math/bits acceptance.",
+      "tests": [
+        "tests/go/test_labels.py::test_complete_official_label_original_and_license_keep_pinned_bytes",
+        "tests/go/test_labels.py::test_owned_parser_keeps_labels_after_return_and_explicit_branch_names",
+        "tests/go/test_labels.py::test_complete_originals_build_owned_ir_without_external_compiler",
+        "tests/go/test_labels.py::test_goto_cfg_targets_are_real_edges_even_when_forward_and_after_return",
+        "tests/go/test_labels.py::test_labeled_branch_targets_preserve_enclosing_identity_not_innermost_loop",
+        "tests/go/test_labels.py::test_terminal_control_initializers_keep_dead_body_labels_and_all_terminators",
+        "tests/go/test_labels.py::test_valid_label_scope_and_termination_originals_compile",
+        "tests/go/test_labels.py::test_invalid_label_originals_fail_before_ir",
+        "tests/go/test_labels.py::test_goto_never_invents_pointer_nonnil_or_reentered_storage_proofs",
+        "tests/go/test_labels.py::test_goto_preserves_a_real_dominating_nonnil_proof",
+        "tests/go/test_labels.py::test_complete_label_fixture_executes_full_width_owned_results",
+        "tests/go/test_labels.py::test_complete_originals_execute_owned_main",
+        "tests/go/test_labels.py::test_identical_complete_and_scope_originals_match_official_raw_execution",
+        "tests/go/test_labels.py::test_identical_invalid_label_originals_have_attributed_official_rejections",
+        "tests/go/test_labels.py::test_reentered_address_original_is_reference_only_not_pcc_admission",
+        "tests/go/test_labels.py::test_source_helper_and_authored_originals_keep_pinned_bytes"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:fc92ec3e93c7691aa33b978dd27a8bb53291afe3267b9a40d5dd9f1acbd1dc33",
+        "sources": [
+          {
+            "path": "pcc/frontends/go/branches.py",
+            "sha256": "1e53cf8318a849b69d7c61cdbe794bbad0c2c74ec3b675f5214927f285414fad"
+          },
+          {
+            "path": "pcc/frontends/go/syntax.py",
+            "sha256": "62d24c3496bd5091da87064a977303729ed89e24c35c514f0d2783b6fdbbae78"
+          },
+          {
+            "path": "pcc/frontends/go/sema.py",
+            "sha256": "fe4fcdc20525108aa90dee33d8ebaf908e7a16efd24c0a56c79dd26a8eba44e2"
+          },
+          {
+            "path": "pcc/frontends/go/pointer_flow.py",
+            "sha256": "91030bab1479e7e7c88762718373d5efa2d7810e483a1669b0b1838f40472bbf"
+          },
+          {
+            "path": "pcc/frontends/go/lowering.py",
+            "sha256": "19192653b38ea0dbe81b9018724aa5768be36342a5d15b1ae50901d757cda364"
+          },
+          {
+            "path": "tests/go/fixtures/labels.go",
+            "sha256": "b70a888bba7cfc29b0060cd6c665bd5cdf8d603232e9d981238881a09ba59690"
+          },
+          {
+            "path": "tests/go/test_labels.py",
+            "sha256": "5915e89ff2e495837166b7eaac24187d073f7f109bf0d1ab7b81287c7ef0c216"
+          },
+          {
+            "path": "tests/go/test_switches.py",
+            "sha256": "a37c7c1f6f2ee20056bef3a856fb9b7ed4e34ccb6170146e13885c993d36c723"
+          },
+          {
+            "path": "tests/go/upstream/go1.27.3/test/ken/label.go",
+            "sha256": "60642b4daaae82b23dc7c9b68fef1de0caa16801e1fcb7e1fc03716edc373228"
+          },
+          {
+            "path": "tests/go/upstream/go1.27.3/LICENSE",
+            "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+          },
+          {
+            "path": "tests/go/upstream/provenance.json",
+            "sha256": "bf8e929094ca523c12c5dc4e7b516d1e027044cc0b4064c58858c98771622240"
+          },
+          {
+            "path": "tests/go/fixtures/labels_originals.json",
+            "sha256": "a5fcec63ec8a470df2abfed2701c763f36bdc5e1c285be06ba6839800d7cbfe7"
+          }
+        ]
+      },
+      "acceptance": [
+        {
+          "id": "labels-goto-linux-pcc0-self",
+          "kind": "full-feature",
+          "scope": "Function-local label namespace, forward/backward goto, labeled break/continue for existing for/range/expression-switch forms, labeled fallthrough, explicit/implicit empty label bodies, block/declaration jump legality and syntactic termination. Resolved branch targets reach owned pointer CFG and public IR, including labels after return. Addressed reentered declarations retain the repeated-storage capability boundary. The entire unchanged official Go 1.27.3 test/ken/label.go and authored complete component inputs have separate UNRUN obligations. This is not full Go, select/type switch, allocation/closure, defer/unwind, native pcc1 or original math/bits acceptance.",
+          "status": "unrun",
+          "source_revision": "sha256:fc92ec3e93c7691aa33b978dd27a8bb53291afe3267b9a40d5dd9f1acbd1dc33",
+          "mode": "pcc0",
+          "platform": "linux-x86_64",
+          "backend": "self",
+          "gc": "not_applicable",
+          "required_tests": [
+            "tests/go/test_labels.py::test_complete_official_label_original_and_license_keep_pinned_bytes",
+            "tests/go/test_labels.py::test_owned_parser_keeps_labels_after_return_and_explicit_branch_names",
+            "tests/go/test_labels.py::test_complete_originals_build_owned_ir_without_external_compiler",
+            "tests/go/test_labels.py::test_goto_cfg_targets_are_real_edges_even_when_forward_and_after_return",
+            "tests/go/test_labels.py::test_labeled_branch_targets_preserve_enclosing_identity_not_innermost_loop",
+            "tests/go/test_labels.py::test_terminal_control_initializers_keep_dead_body_labels_and_all_terminators",
+            "tests/go/test_labels.py::test_valid_label_scope_and_termination_originals_compile",
+            "tests/go/test_labels.py::test_invalid_label_originals_fail_before_ir",
+            "tests/go/test_labels.py::test_goto_never_invents_pointer_nonnil_or_reentered_storage_proofs",
+            "tests/go/test_labels.py::test_goto_preserves_a_real_dominating_nonnil_proof",
+            "tests/go/test_labels.py::test_complete_label_fixture_executes_full_width_owned_results",
+            "tests/go/test_labels.py::test_complete_originals_execute_owned_main",
+            "tests/go/test_labels.py::test_identical_complete_and_scope_originals_match_official_raw_execution",
+            "tests/go/test_labels.py::test_identical_invalid_label_originals_have_attributed_official_rejections",
+            "tests/go/test_labels.py::test_reentered_address_original_is_reference_only_not_pcc_admission",
+            "tests/go/test_labels.py::test_source_helper_and_authored_originals_keep_pinned_bytes"
+          ],
+          "evidence": [],
+          "reason": "Source bindings updated for complete static blank-import graphs and an explicit unowned linkname boundary. Original source obligations and historical evidence are preserved. Every execution remains UNRUN; independent review is pending."
+        }
+      ]
+    },
+    {
+      "id": "go.constants.rune-literals",
+      "title": "Rune literals and untyped rune constants",
+      "chapter_ids": [
+        "lexical",
+        "constants",
+        "types",
+        "expressions",
+        "conversions"
+      ],
+      "scope": "Rune literal scalar/byte/Unicode escape decoding with invalid-source rejection; untyped rune kind, int32 defaulting, exact constant arithmetic, mixed integer/rune kinds, contextual shifts, scalar conversions, switch and integer-range typing, and direct generic constant inference. Existing owned scalar IR and storage are reused. Whole official char_lit.go retains unavailable os package sources and has reference-only execution obligations; complete char_lit1.go remains an invalid-Unicode negative. No dynamic allocation, floating-point, runtime/GC change, standard library, whole math/bits, complete official suite or native pcc1 acceptance is claimed.",
+      "tests": [
+        "tests/go/test_rune_literals.py::test_rune_spelling_decodes_one_codepoint_not_string_bytes",
+        "tests/go/test_rune_literals.py::test_default_types_keep_rune_kind_and_shift_left_kind",
+        "tests/go/test_rune_literals.py::test_complete_spelling_originals_build_owned_ir",
+        "tests/go/test_rune_literals.py::test_complete_rune_fixture_uses_owned_ir_and_one_inferred_rune_instance",
+        "tests/go/test_rune_literals.py::test_full_official_inputs_and_license_keep_original_identities",
+        "tests/go/test_rune_literals.py::test_complete_valid_official_input_parses_but_keeps_missing_os_dependency",
+        "tests/go/test_rune_literals.py::test_complete_invalid_official_input_rejects_unicode_before_ir",
+        "tests/go/test_rune_literals.py::test_source_helper_and_authored_originals_keep_pinned_bytes",
+        "tests/go/test_rune_literals.py::test_invalid_rune_originals_fail_before_ir",
+        "tests/go/test_rune_literals.py::test_dynamic_rune_string_conversion_does_not_open_allocation",
+        "tests/go/test_rune_literals.py::test_complete_rune_fixture_executes_full_width_native_results",
+        "tests/go/test_rune_literals.py::test_complete_rune_fixture_executes_owned_main",
+        "tests/go/test_rune_literals.py::test_identical_complete_rune_originals_match_official_raw_execution",
+        "tests/go/test_rune_literals.py::test_identical_invalid_rune_originals_have_attributed_official_rejections",
+        "tests/go/test_rune_literals.py::test_complete_official_character_literals_remain_reference_only_without_os_sources",
+        "tests/go/test_rune_literals.py::test_complete_official_invalid_unicode_has_same_input_rejection",
+        "tests/go/test_builtin_io.py::test_original_rune_fixture_graduates_unchanged_to_owned_ir",
+        "tests/go/test_builtin_io.py::test_original_rune_fixture_executes_owned_native_with_complete_streams",
+        "tests/go/test_builtin_io.py::test_identical_retained_rune_fixture_matches_official_complete_streams"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:17fb872166a707074e42808017ba9991ff35cd044b4a5913cbaf3d0a1ce75fc7",
+        "sources": [
+          {
+            "path": "pcc/frontends/go/runes.py",
+            "sha256": "30a5dde3c3b6728e5d5fd19713a39deb52c2de5322b80bb34cce4b199f0ee8d0"
+          },
+          {
+            "path": "pcc/frontends/go/syntax.py",
+            "sha256": "62d24c3496bd5091da87064a977303729ed89e24c35c514f0d2783b6fdbbae78"
+          },
+          {
+            "path": "pcc/frontends/go/sema.py",
+            "sha256": "fe4fcdc20525108aa90dee33d8ebaf908e7a16efd24c0a56c79dd26a8eba44e2"
+          },
+          {
+            "path": "pcc/frontends/go/types.py",
+            "sha256": "d0d5502aff4fafe8222f75214f24797149686b8a7170fc760f97afaffba91db8"
+          },
+          {
+            "path": "pcc/frontends/go/generics.py",
+            "sha256": "225befad1456eecdd58968f03cfebb7e4516fe0eb849a651a93d406744e111c5"
+          },
+          {
+            "path": "pcc/frontends/go/lowering.py",
+            "sha256": "19192653b38ea0dbe81b9018724aa5768be36342a5d15b1ae50901d757cda364"
+          },
+          {
+            "path": "tests/go/fixtures/runes.go",
+            "sha256": "b1f2217d562a0e5cd459abbb3b1832af3b56b7fb156f5133ba3baf79a0f06ec0"
+          },
+          {
+            "path": "tests/go/test_rune_literals.py",
+            "sha256": "9866fe7e4809e98c70d0dcb8031e72be5c416fe07ac6f6f6b86252f8c6976335"
+          },
+          {
+            "path": "tests/go/test_labels.py",
+            "sha256": "5915e89ff2e495837166b7eaac24187d073f7f109bf0d1ab7b81287c7ef0c216"
+          },
+          {
+            "path": "tests/go/fixtures/rune_originals.json",
+            "sha256": "683a4d2e1bbc79a5d483630b71e35393e88b246962945de1c6951f1a5941699e"
+          },
+          {
+            "path": "tests/go/fixtures/labels_originals.json",
+            "sha256": "a5fcec63ec8a470df2abfed2701c763f36bdc5e1c285be06ba6839800d7cbfe7"
+          },
+          {
+            "path": "tests/go/owned_execution.py",
+            "sha256": "8075f53be4cc2ac99622131262c0b093db3642f863dec1cd5cb85120423afa33"
+          },
+          {
+            "path": "tests/go/upstream/provenance.json",
+            "sha256": "bf8e929094ca523c12c5dc4e7b516d1e027044cc0b4064c58858c98771622240"
+          },
+          {
+            "path": "tests/go/upstream/go1.27.3/test/char_lit.go",
+            "sha256": "a564a0a6031ae143fafa3b03b85214d69354cc5b7bb63baff20335a981dde053"
+          },
+          {
+            "path": "tests/go/upstream/go1.27.3/test/char_lit1.go",
+            "sha256": "da0e5854c860c2081cd0da3ddd3c2b59f9547daacd00a7bbd668a987d6246100"
+          },
+          {
+            "path": "tests/go/upstream/go1.27.3/LICENSE",
+            "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+          },
+          {
+            "path": "tests/go/test_builtin_io.py",
+            "sha256": "3be0289098a6383b091389159df0f8eb61a2b1d4215d892a67067eba40c00c12"
+          },
+          {
+            "path": "tests/go/fixtures/builtin_io_rune_frontier.go",
+            "sha256": "47df041a6b700a632c7caedba07fc5c3a7ca7ed35ce178d4e98d12ed793a3c1e"
+          }
+        ]
+      },
+      "acceptance": [
+        {
+          "id": "rune-literals-linux-pcc0-self",
+          "kind": "full-feature",
+          "scope": "Rune literal scalar/byte/Unicode escape decoding with invalid-source rejection; untyped rune kind, int32 defaulting, exact constant arithmetic, mixed integer/rune kinds, contextual shifts, scalar conversions, switch and integer-range typing, and direct generic constant inference. Existing owned scalar IR and storage are reused. Whole official char_lit.go retains unavailable os package sources and has reference-only execution obligations; complete char_lit1.go remains an invalid-Unicode negative. No dynamic allocation, floating-point, runtime/GC change, standard library, whole math/bits, complete official suite or native pcc1 acceptance is claimed.",
+          "status": "unrun",
+          "source_revision": "sha256:17fb872166a707074e42808017ba9991ff35cd044b4a5913cbaf3d0a1ce75fc7",
+          "mode": "pcc0",
+          "platform": "linux-x86_64",
+          "backend": "self",
+          "gc": "not_applicable",
+          "required_tests": [
+            "tests/go/test_rune_literals.py::test_rune_spelling_decodes_one_codepoint_not_string_bytes",
+            "tests/go/test_rune_literals.py::test_default_types_keep_rune_kind_and_shift_left_kind",
+            "tests/go/test_rune_literals.py::test_complete_spelling_originals_build_owned_ir",
+            "tests/go/test_rune_literals.py::test_complete_rune_fixture_uses_owned_ir_and_one_inferred_rune_instance",
+            "tests/go/test_rune_literals.py::test_full_official_inputs_and_license_keep_original_identities",
+            "tests/go/test_rune_literals.py::test_complete_valid_official_input_parses_but_keeps_missing_os_dependency",
+            "tests/go/test_rune_literals.py::test_complete_invalid_official_input_rejects_unicode_before_ir",
+            "tests/go/test_rune_literals.py::test_source_helper_and_authored_originals_keep_pinned_bytes",
+            "tests/go/test_rune_literals.py::test_invalid_rune_originals_fail_before_ir",
+            "tests/go/test_rune_literals.py::test_dynamic_rune_string_conversion_does_not_open_allocation",
+            "tests/go/test_rune_literals.py::test_complete_rune_fixture_executes_full_width_native_results",
+            "tests/go/test_rune_literals.py::test_complete_rune_fixture_executes_owned_main",
+            "tests/go/test_rune_literals.py::test_identical_complete_rune_originals_match_official_raw_execution",
+            "tests/go/test_rune_literals.py::test_identical_invalid_rune_originals_have_attributed_official_rejections",
+            "tests/go/test_rune_literals.py::test_complete_official_character_literals_remain_reference_only_without_os_sources",
+            "tests/go/test_rune_literals.py::test_complete_official_invalid_unicode_has_same_input_rejection",
+            "tests/go/test_builtin_io.py::test_original_rune_fixture_graduates_unchanged_to_owned_ir",
+            "tests/go/test_builtin_io.py::test_original_rune_fixture_executes_owned_native_with_complete_streams",
+            "tests/go/test_builtin_io.py::test_identical_retained_rune_fixture_matches_official_complete_streams"
+          ],
+          "evidence": [],
+          "reason": "Full cloud Go validation of checkpoint cef0a83b exposed four cross-module test obligations: the exact rune I/O input now graduates to owned/native/official full-stream comparison, the empty-declaration interface helper no longer inserts a package-level empty declaration, and two unchanged normal math/bits inputs retain the current linkname ownership frontier. All prior inputs and historical evidence remain preserved. This corrected source revision has not yet been executed or independently reviewed. A real official Go toolchain remains unavailable; no whole-feature, native pcc1 or whole-project acceptance is claimed."
+        }
+      ]
+    },
+    {
+      "id": "go.builtins.ordered-minmax",
+      "title": "Ordered integer and string min/max",
+      "chapter_ids": [
+        "builtins",
+        "expressions",
+        "constants",
+        "types"
+      ],
+      "scope": "Owned min/max for admitted integers and strings: common Go operand types, nominal distinctions, all-constant precision/rune kinds, nonconstant builtin defaulting, one-time argument evaluation and sole multi-result call expansion. Native selection uses signed/unsigned compares or existing bytewise string comparison and keeps the first equal descriptor. Nonconstant calls count in array len/cap/range rules. Floating types, general ordered type sets, unavailable fmt sources, standard-library closure, full math/bits and native pcc1 remain outside this admitted scope. No shared runtime or workflow changes and no execution acceptance are claimed.",
+      "tests": [
+        "tests/go/test_minmax.py::test_complete_upstream_originals_keep_pinned_bytes_and_license",
+        "tests/go/test_minmax.py::test_complete_official_shift_original_checks_blank_body_and_defaults_min",
+        "tests/go/test_minmax.py::test_constant_kinds_do_not_overflow_an_invented_addition_or_default_early",
+        "tests/go/test_minmax.py::test_complete_range_original_keeps_pinned_bytes_and_owned_ir",
+        "tests/go/test_minmax.py::test_nonconstant_minmax_counts_for_range_even_without_user_calls",
+        "tests/go/test_minmax.py::test_complete_valid_and_former_boundary_originals_build_owned_ir",
+        "tests/go/test_minmax.py::test_distinct_blank_declarations_keep_private_checked_ir_owners",
+        "tests/go/test_minmax.py::test_complete_upstream_package_graph_has_owned_ir_without_rewriting_original",
+        "tests/go/test_minmax.py::test_invalid_originals_fail_before_ir_without_capability_reclassification",
+        "tests/go/test_minmax.py::test_unimplemented_runtime_and_type_domains_remain_explicit",
+        "tests/go/test_minmax.py::test_complete_fmt_original_retains_missing_original_dependency",
+        "tests/go/test_minmax.py::test_independent_native_results_keep_all_declared_bits",
+        "tests/go/test_minmax.py::test_complete_range_original_preserves_side_effects_once",
+        "tests/go/test_minmax.py::test_whole_fixture_and_original_package_companion_execute_owned_main",
+        "tests/go/test_minmax.py::test_identical_complete_and_graduated_originals_match_official_raw_execution",
+        "tests/go/test_minmax.py::test_identical_upstream_package_graph_has_official_source_and_raw_process_evidence",
+        "tests/go/test_minmax.py::test_identical_invalid_originals_have_attributed_official_rejections",
+        "tests/go/test_minmax.py::test_complete_fmt_original_has_reference_only_execution_without_pcc_stub"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:fc92ec3e93c7691aa33b978dd27a8bb53291afe3267b9a40d5dd9f1acbd1dc33",
+        "sources": [
+          {
+            "path": "pcc/frontends/go/sema.py",
+            "sha256": "fe4fcdc20525108aa90dee33d8ebaf908e7a16efd24c0a56c79dd26a8eba44e2"
+          },
+          {
+            "path": "pcc/frontends/go/lowering.py",
+            "sha256": "19192653b38ea0dbe81b9018724aa5768be36342a5d15b1ae50901d757cda364"
+          },
+          {
+            "path": "pcc/frontends/go/diagnostics.py",
+            "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+          },
+          {
+            "path": "pcc/frontends/go/types.py",
+            "sha256": "d0d5502aff4fafe8222f75214f24797149686b8a7170fc760f97afaffba91db8"
+          },
+          {
+            "path": "pcc/frontends/go/generics.py",
+            "sha256": "225befad1456eecdd58968f03cfebb7e4516fe0eb849a651a93d406744e111c5"
+          },
+          {
+            "path": "pcc/frontends/go/pointer_flow.py",
+            "sha256": "91030bab1479e7e7c88762718373d5efa2d7810e483a1669b0b1838f40472bbf"
+          },
+          {
+            "path": "pcc/frontends/go/branches.py",
+            "sha256": "1e53cf8318a849b69d7c61cdbe794bbad0c2c74ec3b675f5214927f285414fad"
+          },
+          {
+            "path": "pcc/frontends/go/packages.py",
+            "sha256": "9eb73296ef5d4d4a0bafff6f054d0f958be6ffdc998b72e75d586b96c06175ed"
+          },
+          {
+            "path": "tests/go/fixtures/minmax.go",
+            "sha256": "4d1981382134f505618f9e9d1083006ed7a4ae5220d58788bdca1de5844da073"
+          },
+          {
+            "path": "tests/go/fixtures/minmax_range.go",
+            "sha256": "e1223cd77891ac12e200b9f33ad6396c4b915c16a4ff48e84452a9d03327ee5b"
+          },
+          {
+            "path": "tests/go/test_minmax.py",
+            "sha256": "d0afb856ddbb6840b5871c4a8468d53ffa60a1be7fab1968931e1ced9ae2f38a"
+          },
+          {
+            "path": "tests/go/test_diagnostics.py",
+            "sha256": "1a1cb8389b6e65bb5c3333928162dfcf9812a65b19e738978966d8c0c0580127"
+          },
+          {
+            "path": "tests/go/test_labels.py",
+            "sha256": "5915e89ff2e495837166b7eaac24187d073f7f109bf0d1ab7b81287c7ef0c216"
+          },
+          {
+            "path": "tests/go/owned_execution.py",
+            "sha256": "8075f53be4cc2ac99622131262c0b093db3642f863dec1cd5cb85120423afa33"
+          },
+          {
+            "path": "tests/go/test_execution.py",
+            "sha256": "7a9aeb1e01e8da545a3272c5c128b8e1a4b55ddfddb9c1d378035bab02fa4e73"
+          },
+          {
+            "path": "tests/go/upstream/provenance.json",
+            "sha256": "bf8e929094ca523c12c5dc4e7b516d1e027044cc0b4064c58858c98771622240"
+          },
+          {
+            "path": "tests/go/upstream/go1.27.3/LICENSE",
+            "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+          },
+          {
+            "path": "tests/go/upstream/go1.27.3/test/fixedbugs/issue60582.go",
+            "sha256": "5560002195cb3d895aec27b0dd1f559ae2019af00bbdf1863d40f8ebdc181ce7"
+          },
+          {
+            "path": "tests/go/upstream/go1.27.3/src/internal/types/testdata/fixedbugs/issue61486.go",
+            "sha256": "a4397b17537cbf3d95d6d969a23b09db90992e6f1faf95fab754010adf45f242"
+          }
+        ]
+      },
+      "acceptance": [
+        {
+          "id": "go-builtins-ordered-minmax-linux-pcc0-self",
+          "kind": "full-feature",
+          "scope": "Owned min/max for admitted integers and strings: common Go operand types, nominal distinctions, all-constant precision/rune kinds, nonconstant builtin defaulting, one-time argument evaluation and sole multi-result call expansion. Native selection uses signed/unsigned compares or existing bytewise string comparison and keeps the first equal descriptor. Nonconstant calls count in array len/cap/range rules. Floating types, general ordered type sets, unavailable fmt sources, standard-library closure, full math/bits and native pcc1 remain outside this admitted scope. No shared runtime or workflow changes and no execution acceptance are claimed.",
+          "status": "unrun",
+          "source_revision": "sha256:fc92ec3e93c7691aa33b978dd27a8bb53291afe3267b9a40d5dd9f1acbd1dc33",
+          "mode": "pcc0",
+          "platform": "linux-x86_64",
+          "backend": "self",
+          "gc": "not_applicable",
+          "required_tests": [
+            "tests/go/test_minmax.py::test_complete_upstream_originals_keep_pinned_bytes_and_license",
+            "tests/go/test_minmax.py::test_complete_official_shift_original_checks_blank_body_and_defaults_min",
+            "tests/go/test_minmax.py::test_constant_kinds_do_not_overflow_an_invented_addition_or_default_early",
+            "tests/go/test_minmax.py::test_complete_range_original_keeps_pinned_bytes_and_owned_ir",
+            "tests/go/test_minmax.py::test_nonconstant_minmax_counts_for_range_even_without_user_calls",
+            "tests/go/test_minmax.py::test_complete_valid_and_former_boundary_originals_build_owned_ir",
+            "tests/go/test_minmax.py::test_distinct_blank_declarations_keep_private_checked_ir_owners",
+            "tests/go/test_minmax.py::test_complete_upstream_package_graph_has_owned_ir_without_rewriting_original",
+            "tests/go/test_minmax.py::test_invalid_originals_fail_before_ir_without_capability_reclassification",
+            "tests/go/test_minmax.py::test_unimplemented_runtime_and_type_domains_remain_explicit",
+            "tests/go/test_minmax.py::test_complete_fmt_original_retains_missing_original_dependency",
+            "tests/go/test_minmax.py::test_independent_native_results_keep_all_declared_bits",
+            "tests/go/test_minmax.py::test_complete_range_original_preserves_side_effects_once",
+            "tests/go/test_minmax.py::test_whole_fixture_and_original_package_companion_execute_owned_main",
+            "tests/go/test_minmax.py::test_identical_complete_and_graduated_originals_match_official_raw_execution",
+            "tests/go/test_minmax.py::test_identical_upstream_package_graph_has_official_source_and_raw_process_evidence",
+            "tests/go/test_minmax.py::test_identical_invalid_originals_have_attributed_official_rejections",
+            "tests/go/test_minmax.py::test_complete_fmt_original_has_reference_only_execution_without_pcc_stub"
+          ],
+          "evidence": [],
+          "reason": "Source bindings updated for complete static blank-import graphs and an explicit unowned linkname boundary. Original source obligations and historical evidence are preserved. Every execution remains UNRUN; independent review is pending."
+        }
+      ]
+    },
+    {
+      "id": "go.packages.static-blank-imports",
+      "title": "Static blank imports in complete source graphs",
+      "chapter_ids": [
+        "packages",
+        "initialization"
+      ],
+      "scope": "Static blank imports traverse and check the complete caller-supplied dependency graph without introducing a file alias or unused-import obligation. Repeated imports and diamonds retain one dependency owner; named/dot imports keep their existing semantics. Missing source, cycles, invalid declarations, init functions, dynamic initialization and linkname-owned symbols remain explicit failures before IR. No unsafe/runtime replacement, object-symbol ABI, original whole math/bits, native pcc1 or execution acceptance is claimed.",
+      "tests": [
+        "tests/go/test_blank_imports.py::test_complete_graph_corpus_and_normal_math_bits_inputs_keep_exact_identities",
+        "tests/go/test_blank_imports.py::test_exact_previous_blank_import_boundaries_build_owned_ir",
+        "tests/go/test_blank_imports.py::test_blank_imports_visit_dependencies_without_introducing_names_or_duplicates",
+        "tests/go/test_blank_imports.py::test_blank_dependencies_keep_full_source_semantics_before_ir",
+        "tests/go/test_blank_imports.py::test_blank_imports_do_not_ignore_missing_sources_cycles_or_main_packages",
+        "tests/go/test_blank_imports.py::test_dynamic_and_transitive_initialization_remain_explicit_frontiers",
+        "tests/go/test_blank_imports.py::test_linkname_spelling_inside_inert_comments_or_literals_does_not_rewrite_source",
+        "tests/go/test_blank_imports.py::test_recognized_linker_aliases_cannot_manufacture_ordinary_scalar_globals",
+        "tests/go/test_blank_imports.py::test_malformed_linkname_arity_is_invalid_not_a_capability_result",
+        "tests/go/test_blank_imports.py::test_misplaced_directives_are_invalid_before_keyword_arity_or_capability",
+        "tests/go/test_blank_imports.py::test_standalone_directives_allow_only_source_whitespace_before_the_comment",
+        "tests/go/test_blank_imports.py::test_directive_placement_does_not_allow_a_noninitial_or_second_bom",
+        "tests/go/test_blank_imports.py::test_complete_normal_math_bits_stays_at_real_symbol_ownership_boundary",
+        "tests/go/test_blank_imports.py::test_static_blank_graphs_have_full_width_owned_native_results",
+        "tests/go/test_blank_imports.py::test_complete_graphs_and_exact_former_boundaries_execute_owned_main",
+        "tests/go/test_blank_imports.py::test_identical_complete_blank_import_graphs_match_official_processes",
+        "tests/go/test_blank_imports.py::test_identical_invalid_blank_dependencies_have_attributed_official_rejections",
+        "tests/go/test_blank_imports.py::test_actual_initialization_and_linkname_frontiers_remain_reference_only",
+        "tests/go/test_blank_imports.py::test_identical_inert_directive_spellings_match_official_processes",
+        "tests/go/test_blank_imports.py::test_identical_malformed_linkname_arity_has_official_source_rejection",
+        "tests/go/test_blank_imports.py::test_identical_misplaced_directives_have_official_source_rejections",
+        "tests/go/test_blank_imports.py::test_identical_noninitial_bom_originals_have_official_source_rejections",
+        "tests/go/test_local_builtin_shadows.py::test_original_math_bits_input_and_unrelated_runtime_frontier_are_preserved",
+        "tests/go/test_string_tables.py::test_normal_original_math_bits_file_selection_keeps_error_runtime_dependency"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:17fb872166a707074e42808017ba9991ff35cd044b4a5913cbaf3d0a1ce75fc7",
+        "sources": [
+          {
+            "path": "pcc/frontends/go/packages.py",
+            "sha256": "9eb73296ef5d4d4a0bafff6f054d0f958be6ffdc998b72e75d586b96c06175ed"
+          },
+          {
+            "path": "pcc/frontends/go/syntax.py",
+            "sha256": "62d24c3496bd5091da87064a977303729ed89e24c35c514f0d2783b6fdbbae78"
+          },
+          {
+            "path": "pcc/frontends/go/diagnostics.py",
+            "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+          },
+          {
+            "path": "pcc/frontends/go/sema.py",
+            "sha256": "fe4fcdc20525108aa90dee33d8ebaf908e7a16efd24c0a56c79dd26a8eba44e2"
+          },
+          {
+            "path": "pcc/frontends/go/lowering.py",
+            "sha256": "19192653b38ea0dbe81b9018724aa5768be36342a5d15b1ae50901d757cda364"
+          },
+          {
+            "path": "pcc/frontends/go/README.md",
+            "sha256": "63b124d64ecef27dc8bbaeebf550c061c6848fe27c78aa9145910ed8f292b781"
+          },
+          {
+            "path": "tests/go/test_blank_imports.py",
+            "sha256": "e15a227e062ab11d0666a28022c8d65aad6d1531003992f4c2a67a2b9be0d173"
+          },
+          {
+            "path": "tests/go/fixtures/blank_imports.json",
+            "sha256": "9b382ab6616faeb3487944b60772d05e17670fa5edd9ca356eb9de1f181f8481"
+          },
+          {
+            "path": "tests/go/fixtures/directive_placement.json",
+            "sha256": "315fbfcc2452c7b8d31abafbb4d2c0285559cf47eee9e8bc98de9f38e110c044"
+          },
+          {
+            "path": "tests/go/test_diagnostics.py",
+            "sha256": "1a1cb8389b6e65bb5c3333928162dfcf9812a65b19e738978966d8c0c0580127"
+          },
+          {
+            "path": "tests/go/test_packages.py",
+            "sha256": "16501e55857e0b92d1f27a0b2b2a29ed3fa46ec14c21940393d9b4e9584620e8"
+          },
+          {
+            "path": "tests/go/test_error_nil_values.py",
+            "sha256": "b093cc94a340f2659dd89ab4fa942640060af0108a0a8f16e04708ff73d4a153"
+          },
+          {
+            "path": "tests/go/test_math_bits_project.py",
+            "sha256": "7f12840e303bbbccd52eb5509b70c2b11e9aad553632ffe94d84c69e7dad0f22"
+          },
+          {
+            "path": "tests/go/test_labels.py",
+            "sha256": "5915e89ff2e495837166b7eaac24187d073f7f109bf0d1ab7b81287c7ef0c216"
+          },
+          {
+            "path": "tests/go/owned_execution.py",
+            "sha256": "8075f53be4cc2ac99622131262c0b093db3642f863dec1cd5cb85120423afa33"
+          },
+          {
+            "path": "tests/go/test_execution.py",
+            "sha256": "7a9aeb1e01e8da545a3272c5c128b8e1a4b55ddfddb9c1d378035bab02fa4e73"
+          },
+          {
+            "path": "scripts/ci_go_math_bits_project.py",
+            "sha256": "53d2d1b155e861febdb3c8fdfb41e28eca3235371c73875fb241fe4330315802"
+          },
+          {
+            "path": "tests/go/upstream/provenance.json",
+            "sha256": "bf8e929094ca523c12c5dc4e7b516d1e027044cc0b4064c58858c98771622240"
+          },
+          {
+            "path": "tests/go/upstream/go1.27.3/LICENSE",
+            "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+          },
+          {
+            "path": "tests/go/upstream/go1.27.3/src/math/bits/bits.go",
+            "sha256": "694e0114bda396589e8c993a3d7880a0b461da23ee64c272929a3a5b69c2acf2"
+          },
+          {
+            "path": "tests/go/upstream/go1.27.3/src/math/bits/bits_errors.go",
+            "sha256": "1341283973609b16798176456337e3a0cbff9bfb32f79673a45197223471d7c6"
+          },
+          {
+            "path": "tests/go/upstream/go1.27.3/src/math/bits/bits_tables.go",
+            "sha256": "c4cb4a05dab6d395d9d51720893a42f0a9d1cdf8a0c2383d87268e49acb73f7f"
+          },
+          {
+            "path": "tests/go/test_local_builtin_shadows.py",
+            "sha256": "47550e78fc078909a6b81180c59bc8e4138b9aa23a0d188733f10aac89903252"
+          },
+          {
+            "path": "tests/go/test_string_tables.py",
+            "sha256": "f4b6aa2e5b9c2850a75e61b6963b9bc714b12cb6c3c536645082efc43a90a4a2"
+          }
+        ]
+      },
+      "acceptance": [
+        {
+          "id": "static-blank-imports-linux-pcc0-self",
+          "kind": "full-feature",
+          "scope": "Static blank imports traverse and check the complete caller-supplied dependency graph without introducing a file alias or unused-import obligation. Repeated imports and diamonds retain one dependency owner; named/dot imports keep their existing semantics. Missing source, cycles, invalid declarations, init functions, dynamic initialization and linkname-owned symbols remain explicit failures before IR. No unsafe/runtime replacement, object-symbol ABI, original whole math/bits, native pcc1 or execution acceptance is claimed.",
+          "status": "unrun",
+          "source_revision": "sha256:17fb872166a707074e42808017ba9991ff35cd044b4a5913cbaf3d0a1ce75fc7",
+          "mode": "pcc0",
+          "platform": "linux-x86_64",
+          "backend": "self",
+          "gc": "not_applicable",
+          "required_tests": [
+            "tests/go/test_blank_imports.py::test_complete_graph_corpus_and_normal_math_bits_inputs_keep_exact_identities",
+            "tests/go/test_blank_imports.py::test_exact_previous_blank_import_boundaries_build_owned_ir",
+            "tests/go/test_blank_imports.py::test_blank_imports_visit_dependencies_without_introducing_names_or_duplicates",
+            "tests/go/test_blank_imports.py::test_blank_dependencies_keep_full_source_semantics_before_ir",
+            "tests/go/test_blank_imports.py::test_blank_imports_do_not_ignore_missing_sources_cycles_or_main_packages",
+            "tests/go/test_blank_imports.py::test_dynamic_and_transitive_initialization_remain_explicit_frontiers",
+            "tests/go/test_blank_imports.py::test_linkname_spelling_inside_inert_comments_or_literals_does_not_rewrite_source",
+            "tests/go/test_blank_imports.py::test_recognized_linker_aliases_cannot_manufacture_ordinary_scalar_globals",
+            "tests/go/test_blank_imports.py::test_malformed_linkname_arity_is_invalid_not_a_capability_result",
+            "tests/go/test_blank_imports.py::test_misplaced_directives_are_invalid_before_keyword_arity_or_capability",
+            "tests/go/test_blank_imports.py::test_standalone_directives_allow_only_source_whitespace_before_the_comment",
+            "tests/go/test_blank_imports.py::test_directive_placement_does_not_allow_a_noninitial_or_second_bom",
+            "tests/go/test_blank_imports.py::test_complete_normal_math_bits_stays_at_real_symbol_ownership_boundary",
+            "tests/go/test_blank_imports.py::test_static_blank_graphs_have_full_width_owned_native_results",
+            "tests/go/test_blank_imports.py::test_complete_graphs_and_exact_former_boundaries_execute_owned_main",
+            "tests/go/test_blank_imports.py::test_identical_complete_blank_import_graphs_match_official_processes",
+            "tests/go/test_blank_imports.py::test_identical_invalid_blank_dependencies_have_attributed_official_rejections",
+            "tests/go/test_blank_imports.py::test_actual_initialization_and_linkname_frontiers_remain_reference_only",
+            "tests/go/test_blank_imports.py::test_identical_inert_directive_spellings_match_official_processes",
+            "tests/go/test_blank_imports.py::test_identical_malformed_linkname_arity_has_official_source_rejection",
+            "tests/go/test_blank_imports.py::test_identical_misplaced_directives_have_official_source_rejections",
+            "tests/go/test_blank_imports.py::test_identical_noninitial_bom_originals_have_official_source_rejections",
+            "tests/go/test_local_builtin_shadows.py::test_original_math_bits_input_and_unrelated_runtime_frontier_are_preserved",
+            "tests/go/test_string_tables.py::test_normal_original_math_bits_file_selection_keeps_error_runtime_dependency"
+          ],
+          "evidence": [],
+          "reason": "Full cloud Go validation of checkpoint cef0a83b exposed four cross-module test obligations: the exact rune I/O input now graduates to owned/native/official full-stream comparison, the empty-declaration interface helper no longer inserts a package-level empty declaration, and two unchanged normal math/bits inputs retain the current linkname ownership frontier. All prior inputs and historical evidence remain preserved. This corrected source revision has not yet been executed or independently reviewed. A real official Go toolchain remains unavailable; no whole-feature, native pcc1 or whole-project acceptance is claimed."
+        }
+      ]
+    },
+    {
+      "id": "go.capability.linkname-directives",
+      "title": "Object-symbol linkname ownership",
+      "chapter_ids": [
+        "lexical",
+        "packages"
+      ],
+      "scope": "Recognized //go:linkname and //go:linknamestd directives require owned object-symbol binding and runtime ownership. Keyword-plus-ASCII-space recognition and Unicode White_Space argument splitting follow pinned Go 1.27.3 source. Nonblank line-prefix placement is checked first for every //go: directive, excluding only the already-consumed file-initial BOM. Misplacement and malformed arity are normal diagnostics; the capability boundary does not certify the validity of the remaining source.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound",
+        "tests/go/test_blank_imports.py::test_recognized_linker_aliases_cannot_manufacture_ordinary_scalar_globals",
+        "tests/go/test_blank_imports.py::test_misplaced_directives_are_invalid_before_keyword_arity_or_capability",
+        "tests/go/test_blank_imports.py::test_standalone_directives_allow_only_source_whitespace_before_the_comment",
+        "tests/go/test_blank_imports.py::test_complete_normal_math_bits_stays_at_real_symbol_ownership_boundary",
+        "tests/go/test_blank_imports.py::test_actual_initialization_and_linkname_frontiers_remain_reference_only"
+      ],
+      "diagnostics": [
+        "go.unsupported.linkname-directives"
+      ],
+      "evidence": []
     }
   ],
   "diagnostics": {
@@ -2123,7 +3158,7 @@
         "feature_id": "go.capability.array-bounds-panic",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
         }
       },
       {
@@ -2131,15 +3166,7 @@
         "feature_id": "go.capability.array-element-types",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.blank-function-declarations",
-        "feature_id": "go.capability.blank-function-declarations",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
         }
       },
       {
@@ -2147,7 +3174,7 @@
         "feature_id": "go.capability.blank-method-declarations",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
         }
       },
       {
@@ -2155,7 +3182,7 @@
         "feature_id": "go.capability.blank-package-variables",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
         }
       },
       {
@@ -2163,247 +3190,7 @@
         "feature_id": "go.capability.blank-struct-fields",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.blank-type-declarations",
-        "feature_id": "go.capability.blank-type-declarations",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.complex-types",
-        "feature_id": "go.capability.complex-types",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.division-panic",
-        "feature_id": "go.capability.division-panic",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.dynamic-string-concatenation",
-        "feature_id": "go.capability.dynamic-string-concatenation",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.dynamic-string-conversion",
-        "feature_id": "go.capability.dynamic-string-conversion",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.embedded-fields",
-        "feature_id": "go.capability.embedded-fields",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.floating-types",
-        "feature_id": "go.capability.floating-types",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.interface-types",
-        "feature_id": "go.capability.interface-types",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.limit-array-elements",
-        "feature_id": "go.capability.limit-array-elements",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.limit-constant-precision",
-        "feature_id": "go.capability.limit-constant-precision",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.limit-function-arity",
-        "feature_id": "go.capability.limit-function-arity",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.limit-record-layout",
-        "feature_id": "go.capability.limit-record-layout",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.limit-string-bytes",
-        "feature_id": "go.capability.limit-string-bytes",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.limit-struct-fields",
-        "feature_id": "go.capability.limit-struct-fields",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.limit-type-expansion",
-        "feature_id": "go.capability.limit-type-expansion",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.local-type-declarations",
-        "feature_id": "go.capability.local-type-declarations",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.method-values",
-        "feature_id": "go.capability.method-values",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.negative-shift-panic",
-        "feature_id": "go.capability.negative-shift-panic",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.package-initialization",
-        "feature_id": "go.capability.package-initialization",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.predeclared-shadowing",
-        "feature_id": "go.capability.predeclared-shadowing",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.slice-storage",
-        "feature_id": "go.capability.slice-storage",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.string-bounds-panic",
-        "feature_id": "go.capability.string-bounds-panic",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.struct-tags",
-        "feature_id": "go.capability.struct-tags",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.pointer-escape",
-        "feature_id": "go.capability.pointer-escape",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.pointer-signatures",
-        "feature_id": "go.capability.pointer-signatures",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.pointer-storage",
-        "feature_id": "go.capability.pointer-storage",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.pointer-nil",
-        "feature_id": "go.capability.pointer-nil",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.pointer-iteration-identity",
-        "feature_id": "go.capability.pointer-iteration-identity",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.pointer-composite-address",
-        "feature_id": "go.capability.pointer-composite-address",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
-        }
-      },
-      {
-        "code": "go.unsupported.pointer-conversions",
-        "feature_id": "go.capability.pointer-conversions",
-        "source": {
-          "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
         }
       },
       {
@@ -2411,7 +3198,55 @@
         "feature_id": "go.capability.builtin-io",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+        }
+      },
+      {
+        "code": "go.unsupported.complex-types",
+        "feature_id": "go.capability.complex-types",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+        }
+      },
+      {
+        "code": "go.unsupported.division-panic",
+        "feature_id": "go.capability.division-panic",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+        }
+      },
+      {
+        "code": "go.unsupported.dynamic-string-concatenation",
+        "feature_id": "go.capability.dynamic-string-concatenation",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+        }
+      },
+      {
+        "code": "go.unsupported.dynamic-string-conversion",
+        "feature_id": "go.capability.dynamic-string-conversion",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+        }
+      },
+      {
+        "code": "go.unsupported.embedded-fields",
+        "feature_id": "go.capability.embedded-fields",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+        }
+      },
+      {
+        "code": "go.unsupported.floating-types",
+        "feature_id": "go.capability.floating-types",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
         }
       },
       {
@@ -2419,7 +3254,39 @@
         "feature_id": "go.capability.generic-boundaries",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+        }
+      },
+      {
+        "code": "go.unsupported.interface-types",
+        "feature_id": "go.capability.interface-types",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+        }
+      },
+      {
+        "code": "go.unsupported.limit-array-elements",
+        "feature_id": "go.capability.limit-array-elements",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+        }
+      },
+      {
+        "code": "go.unsupported.limit-constant-precision",
+        "feature_id": "go.capability.limit-constant-precision",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+        }
+      },
+      {
+        "code": "go.unsupported.limit-function-arity",
+        "feature_id": "go.capability.limit-function-arity",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
         }
       },
       {
@@ -2427,7 +3294,159 @@
         "feature_id": "go.capability.limit-generic-instances",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+        }
+      },
+      {
+        "code": "go.unsupported.limit-record-layout",
+        "feature_id": "go.capability.limit-record-layout",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+        }
+      },
+      {
+        "code": "go.unsupported.limit-string-bytes",
+        "feature_id": "go.capability.limit-string-bytes",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+        }
+      },
+      {
+        "code": "go.unsupported.limit-struct-fields",
+        "feature_id": "go.capability.limit-struct-fields",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+        }
+      },
+      {
+        "code": "go.unsupported.limit-type-expansion",
+        "feature_id": "go.capability.limit-type-expansion",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+        }
+      },
+      {
+        "code": "go.unsupported.linkname-directives",
+        "feature_id": "go.capability.linkname-directives",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+        }
+      },
+      {
+        "code": "go.unsupported.local-type-declarations",
+        "feature_id": "go.capability.local-type-declarations",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+        }
+      },
+      {
+        "code": "go.unsupported.method-values",
+        "feature_id": "go.capability.method-values",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+        }
+      },
+      {
+        "code": "go.unsupported.negative-shift-panic",
+        "feature_id": "go.capability.negative-shift-panic",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+        }
+      },
+      {
+        "code": "go.unsupported.package-initialization",
+        "feature_id": "go.capability.package-initialization",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+        }
+      },
+      {
+        "code": "go.unsupported.pointer-composite-address",
+        "feature_id": "go.capability.pointer-composite-address",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+        }
+      },
+      {
+        "code": "go.unsupported.pointer-conversions",
+        "feature_id": "go.capability.pointer-conversions",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+        }
+      },
+      {
+        "code": "go.unsupported.pointer-escape",
+        "feature_id": "go.capability.pointer-escape",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+        }
+      },
+      {
+        "code": "go.unsupported.pointer-iteration-identity",
+        "feature_id": "go.capability.pointer-iteration-identity",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+        }
+      },
+      {
+        "code": "go.unsupported.pointer-nil",
+        "feature_id": "go.capability.pointer-nil",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+        }
+      },
+      {
+        "code": "go.unsupported.pointer-signatures",
+        "feature_id": "go.capability.pointer-signatures",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+        }
+      },
+      {
+        "code": "go.unsupported.pointer-storage",
+        "feature_id": "go.capability.pointer-storage",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+        }
+      },
+      {
+        "code": "go.unsupported.predeclared-shadowing",
+        "feature_id": "go.capability.predeclared-shadowing",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+        }
+      },
+      {
+        "code": "go.unsupported.slice-storage",
+        "feature_id": "go.capability.slice-storage",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
+        }
+      },
+      {
+        "code": "go.unsupported.string-bounds-panic",
+        "feature_id": "go.capability.string-bounds-panic",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "085d2e2e6ad111dc43494f87ff734a2403bfd864501696f807f052362e09523d"
         }
       }
     ],
@@ -2436,7 +3455,7 @@
         "message": "'Go scalar frontend requires a supported 64-bit target'",
         "source": {
           "path": "pcc/frontends/go/packages.py",
-          "sha256": "cb32cc02f1c04f400dbe46fb32c849cb999ff1e86cb0ad4a1002ed763c4d992c"
+          "sha256": "9eb73296ef5d4d4a0bafff6f054d0f958be6ffdc998b72e75d586b96c06175ed"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2444,7 +3463,7 @@
         "message": "f'unsupported character {char!r}'",
         "source": {
           "path": "pcc/frontends/go/syntax.py",
-          "sha256": "04e25aca94c499e72c38f166b92f5cb701402ffa70c80bec393204f0daa9777a"
+          "sha256": "62d24c3496bd5091da87064a977303729ed89e24c35c514f0d2783b6fdbbae78"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2452,7 +3471,7 @@
         "message": "'unsupported package: initial frontend requires package main'",
         "source": {
           "path": "pcc/frontends/go/syntax.py",
-          "sha256": "04e25aca94c499e72c38f166b92f5cb701402ffa70c80bec393204f0daa9777a"
+          "sha256": "62d24c3496bd5091da87064a977303729ed89e24c35c514f0d2783b6fdbbae78"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2460,7 +3479,7 @@
         "message": "f'unsupported statement {token.text!r}'",
         "source": {
           "path": "pcc/frontends/go/syntax.py",
-          "sha256": "04e25aca94c499e72c38f166b92f5cb701402ffa70c80bec393204f0daa9777a"
+          "sha256": "62d24c3496bd5091da87064a977303729ed89e24c35c514f0d2783b6fdbbae78"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2468,7 +3487,7 @@
         "message": "'unsupported or invalid import path'",
         "source": {
           "path": "pcc/frontends/go/syntax.py",
-          "sha256": "04e25aca94c499e72c38f166b92f5cb701402ffa70c80bec393204f0daa9777a"
+          "sha256": "62d24c3496bd5091da87064a977303729ed89e24c35c514f0d2783b6fdbbae78"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2476,7 +3495,7 @@
         "message": "'unsupported for clause'",
         "source": {
           "path": "pcc/frontends/go/syntax.py",
-          "sha256": "04e25aca94c499e72c38f166b92f5cb701402ffa70c80bec393204f0daa9777a"
+          "sha256": "62d24c3496bd5091da87064a977303729ed89e24c35c514f0d2783b6fdbbae78"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2484,7 +3503,7 @@
         "message": "'only named function calls/conversions are supported'",
         "source": {
           "path": "pcc/frontends/go/syntax.py",
-          "sha256": "04e25aca94c499e72c38f166b92f5cb701402ffa70c80bec393204f0daa9777a"
+          "sha256": "62d24c3496bd5091da87064a977303729ed89e24c35c514f0d2783b6fdbbae78"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2492,7 +3511,7 @@
         "message": "'unsupported package declaration; expected func, const or var'",
         "source": {
           "path": "pcc/frontends/go/syntax.py",
-          "sha256": "04e25aca94c499e72c38f166b92f5cb701402ffa70c80bec393204f0daa9777a"
+          "sha256": "62d24c3496bd5091da87064a977303729ed89e24c35c514f0d2783b6fdbbae78"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2500,7 +3519,7 @@
         "message": "f'unsupported expression token {token.text!r}'",
         "source": {
           "path": "pcc/frontends/go/syntax.py",
-          "sha256": "04e25aca94c499e72c38f166b92f5cb701402ffa70c80bec393204f0daa9777a"
+          "sha256": "62d24c3496bd5091da87064a977303729ed89e24c35c514f0d2783b6fdbbae78"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2508,7 +3527,7 @@
         "message": "'invalid or unsupported integer literal ' + repr(text)",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
+          "sha256": "fe4fcdc20525108aa90dee33d8ebaf908e7a16efd24c0a56c79dd26a8eba44e2"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2516,7 +3535,7 @@
         "message": "'unsupported statement ' + kind",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
+          "sha256": "fe4fcdc20525108aa90dee33d8ebaf908e7a16efd24c0a56c79dd26a8eba44e2"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2524,7 +3543,7 @@
         "message": "'unsupported expression ' + kind",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
+          "sha256": "fe4fcdc20525108aa90dee33d8ebaf908e7a16efd24c0a56c79dd26a8eba44e2"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2532,7 +3551,7 @@
         "message": "'switch requires a comparable type'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
+          "sha256": "fe4fcdc20525108aa90dee33d8ebaf908e7a16efd24c0a56c79dd26a8eba44e2"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2540,7 +3559,7 @@
         "message": "'range currently requires a fixed array or integer, a string, or a pointer to a fixed array; other iterator/runtime contracts are not implemented'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
+          "sha256": "fe4fcdc20525108aa90dee33d8ebaf908e7a16efd24c0a56c79dd26a8eba44e2"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2548,7 +3567,7 @@
         "message": "'indexing requires an array or string (slices/maps are not implemented)'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
+          "sha256": "fe4fcdc20525108aa90dee33d8ebaf908e7a16efd24c0a56c79dd26a8eba44e2"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2556,7 +3575,7 @@
         "message": "'first-class method expressions require function-value support'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
+          "sha256": "fe4fcdc20525108aa90dee33d8ebaf908e7a16efd24c0a56c79dd26a8eba44e2"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2564,7 +3583,7 @@
         "message": "'unsupported string operator ' + op",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
+          "sha256": "fe4fcdc20525108aa90dee33d8ebaf908e7a16efd24c0a56c79dd26a8eba44e2"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2572,7 +3591,7 @@
         "message": "'unsupported comparison operands'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
+          "sha256": "fe4fcdc20525108aa90dee33d8ebaf908e7a16efd24c0a56c79dd26a8eba44e2"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       }

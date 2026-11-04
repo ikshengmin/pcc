@@ -210,7 +210,8 @@ CAPABILITY = (
     ('compound', 'trait Ops{fn f<U>(u:U)where (U,):Copy;}', 'subjects must be declared'),
     ('projection', 'trait Ops{fn f<U:Iterator>(u:U)where U::Item:Copy;}', 'where projections'),
     ('lifetime', "trait Ops{fn f<'a,U>(u:&'a U)where U:'a;}", 'lifetime bounds'),
-    ('default-body', 'trait Ops{fn f<U>(u:U)->U where U:Copy{u}}', 'default trait method bodies'),
+    # Exact default-body original is retained as a noncertifying model and
+    # an actual-checked positive in test_rust_default_methods.
     ('generic-impl', 'trait Ops{fn f<U>(u:U)->U where U:Copy;}struct H<T>{x:T}impl<T>Ops for H<T>{fn f<V>(v:V)->V where V:Copy{v}}', 'generic trait impls'),
 )
 

@@ -247,21 +247,38 @@ def rune_frontier():
     return raw.decode()
 
 
-def test_original_rune_fixture_remains_an_explicit_parser_frontier():
-    with pytest.raises(GoDiagnostic, match='unsupported expression token'):
-        compile_go(rune_frontier())
+def test_original_rune_fixture_graduates_unchanged_to_owned_ir(monkeypatch):
+    forbid_external_compiler(monkeypatch)
+    compile_go(rune_frontier(), 'original.go')
+
+
+@pytest.mark.integration
+def test_original_rune_fixture_executes_owned_native_with_complete_streams(tmp_path, monkeypatch):
+    original = rune_frontier()
+    with monkeypatch.context() as denied:
+        forbid_external_compiler(denied)
+        artifact = compile_owned((('original.go', original),))
+    native = tmp_path / 'rune-native'
+    write_artifact(artifact, native)
+    digest = hashlib.sha256(original.encode()).hexdigest()
+    assert capture(tmp_path, 'pcc', native, digest) == Execution(0, b'', OUTPUT)
 
 
 @pytest.mark.integration
 @pytest.mark.pcc_gate(env='PCC_GO_REFERENCE')
 @pytest.mark.xdist_group(name='go-reference')
-def test_official_go_builds_exact_retained_rune_fixture_without_running_it(tmp_path):
+def test_identical_retained_rune_fixture_matches_official_complete_streams(tmp_path, monkeypatch):
     original = rune_frontier()
-    with pytest.raises(GoDiagnostic, match='unsupported expression token'):
-        compile_go(original)
+    with monkeypatch.context() as denied:
+        forbid_external_compiler(denied)
+        artifact = compile_owned((('original.go', original),))
+    native = tmp_path / 'rune-native'
+    write_artifact(artifact, native)
     reference = compile_reference((('original.go', original),), tmp_path/'reference',
                                   compiler=os.environ['PCC_GO_REFERENCE'], cache=os.environ['PCC_GO_REFERENCE_CACHE'])
-    assert reference.is_file() and (reference.parent/'original.go').read_bytes() == original.encode()
+    digest = hashlib.sha256(original.encode()).hexdigest()
+    assert capture(tmp_path, 'pcc', native, digest) == capture(tmp_path, 'reference', reference, digest) == Execution(0, b'', OUTPUT)
+    assert (reference.parent/'original.go').read_bytes() == original.encode()
 
 
 def capture_broken_stderr(directory, owner, binary, input_hash):

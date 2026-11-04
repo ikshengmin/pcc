@@ -29,7 +29,7 @@ def type_identity(dtype):
                                    declaration=(dtype.count, type_identity(dtype.element)))
     if isinstance(dtype, StructType):
         fields = tuple((item.name, item.package, getattr(item, 'embedded', False),
-                        type_identity(item.type)) for item in dtype.fields)
+                        type_identity(item.type), item.tag) for item in dtype.fields)
         return ManagedTypeIdentity('go', ('structural',), 'struct', declaration=fields)
     if is_error_interface(dtype):
         return ManagedTypeIdentity('go', ('structural-interface',), 'Error() string')

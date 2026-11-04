@@ -65,7 +65,88 @@ C-parity, or a shared-runtime/GC integration claim.
 The semantic reference is the [official Go specification](https://go.dev/ref/spec),
 particularly semicolons, scope, constant expressions and integer operators.
 
+## Labels and branches: source implementation, execution unrun
+
+Function-local labels, forward/backward `goto`, labeled `break`/`continue` and
+labeled fallthrough use owned source CFG edges. Label names do not shadow
+values. Duplicate, unused, missing and non-enclosing labels are errors; goto
+cannot enter a block or cross an actual variable declaration, including `var _`.
+An empty `var ()` group is not a jump barrier. A label after `return` remains an
+emitted branch target.
+If a control initializer terminates with panic, its dead body is still lowered
+into a disconnected CFG so preallocated labels have complete terminators; the
+panic path gains no successor. Identical if/for/switch originals with an earlier
+return have explicit IR and official-reference obligations, all unrun.
+Termination follows the Go syntactic rule and resolved break targets rather
+than a reachability guess.
+
+The pointer proof sees the same goto/backedge/exit edges as lowering; a jump
+never establishes nonnil provenance. Addressing a declaration crossed by a
+backward goto retains the repeated-storage identity frontier instead of
+reusing an observable address. This is not allocation, closure, defer/unwind,
+type-switch, select, or new runtime support.
+
+`tests/go/test_labels.py` pins the complete unchanged Go 1.27.3
+`test/ken/label.go` and original BSD license. It adds full-width native observers,
+same-source official positive and negative comparisons, raw stdout/stderr/exit
+and binary identity retention. All new ordinary, native, reference and
+whole-language validation is **UNRUN**. Neither this input nor the authored
+component fixture establishes the complete official suite or `math/bits` pass.
+
 ## Tests and real-source frontier
+
+### Ordered min/max and blank functions: source only
+
+`min` and `max` accept one or more admitted integer or string arguments,
+including a sole multiple-result source call. All operands must have a common
+Go type; defined types remain distinct. Untyped integer/rune kinds stay exact
+for constant calls, while nonconstant results (including `min(1 << s)`) default
+inside the builtin rather than acquiring an enclosing assignment's type.
+All operands are checked before constant selection, so a non-selected value
+cannot evade a later typed argument's representability requirement.
+
+Native lowering evaluates every argument once, then uses signed/unsigned
+comparison or the existing bytewise string comparator. String selection keeps
+the first equal descriptor and needs no allocation, new shared runtime helper
+or aggregate select instruction. Nonconstant calls count as calls in array
+`len`/`cap` and range evaluation rules. Floating-point and general ordered type
+sets remain explicit frontiers, not partially claimed builtin coverage.
+
+Blank function declarations have no source binding and are not initializers.
+Each has a distinct private IR/checking identity. Ordinary signature, body,
+generic declaration, label/termination and pointer checks still apply, including
+unused declarations. Blank methods and package variables retain their
+existing boundaries.
+
+`tests/go/test_minmax.py` pins the complete unchanged official Go 1.27.3
+`src/internal/types/testdata/fixedbugs/issue61486.go`: its blank function and
+nonconstant shift now have owned semantic/IR obligations. A separate authored
+package constant makes an accompanying main refer to package `p`; it never
+calls or rewrites the upstream blank function. Native observers exercise an
+independently authored callable shift and full scalar/string cases. The complete
+`test/fixedbugs/issue60582.go` still requires unavailable original `fmt` sources
+and therefore has reference-only execution obligations. Both original files,
+the license and historical blank-function boundary source keep their exact
+bytes. Ordinary, native, reference and whole-Go acceptance are all **UNRUN**.
+This does not establish a complete upstream-suite or `math/bits` pass.
+
+Rune literals now have a source implementation with CI-only **UNRUN**
+acceptance. The decoder keeps one Unicode scalar, distinguishes byte escapes
+from UTF-8 string bytes, rejects surrogates/out-of-range/invalid escapes, and
+does not normalize combining characters. Untyped rune constants retain their
+own kind, default to `rune`/`int32`, and remain exact until a typed context checks
+representability. Mixed integer/rune constants and generic constant inference
+choose rune kind; a shift retains its left operand's kind. Existing scalar,
+array, switch, integer-range and static string-conversion owners are reused.
+
+`tests/go/test_rune_literals.py` retains both complete official Go 1.27.3
+`test/char_lit.go` and `test/char_lit1.go`, with original source/license hashes.
+The former parses but still requires unavailable original `os` sources in the
+supplied package graph; its execution is reference-only, not PCC acceptance.
+The latter remains an invalid-Unicode negative original. Authored component
+programs add native full-result observations and identical-source positive and
+negative comparisons. No runtime allocation, floating-point, standard library,
+complete Go suite, `math/bits` or native pcc1 qualification is claimed.
 
 `tests/go` checks syntax, typing, IR, negative admission and real owned ELF
 execution. Its original complete Go fixtures retain their package declarations,
@@ -621,7 +702,8 @@ renew that historical qualification.
 | `go.capability.limit-generic-instances` | Explicit 128-instance session bound | Diagnostic and official build-only obligations authored, **UNRUN** | `explicitly_unimplemented` |
 | `go.capability.array-bounds-panic` | Explicitly unimplemented boundary: array bounds panic | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.array-element-types` | Explicitly unimplemented boundary: array element types | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
-| `go.capability.blank-function-declarations` | Explicitly unimplemented boundary: blank function declarations | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.blank-function-declarations` | Implemented: unbound declarations with distinct private owners and complete body checks | Original and authored obligations in `test_minmax.py`, all **UNRUN** | Explicit implementation/acceptance |
+| `go.builtins.ordered-minmax` | Implemented: admitted integer/string common types and one-time argument evaluation | Typed native observers and identical-source reference obligations, all **UNRUN** | Explicit implementation/acceptance |
 | `go.capability.blank-method-declarations` | Explicitly unimplemented boundary: blank method declarations | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.blank-package-variables` | Explicitly unimplemented boundary: blank package variables | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.blank-struct-fields` | Explicitly unimplemented boundary: blank struct fields | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
@@ -650,7 +732,7 @@ renew that historical qualification.
 | `go.capability.predeclared-shadowing` | Partial source implementation: local values may shadow builtin-function names; package/type-parameter bindings and predeclared types/constants remain explicit gaps | Historical CAP-U rejection evidence unchanged; new native/reference obligations in `test_local_builtin_shadows.py` UNRUN | Historical `explicitly_unimplemented`; no renewed whole-feature qualification |
 | `go.capability.slice-storage` | Explicitly unimplemented boundary: slice storage | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.string-bounds-panic` | Explicitly unimplemented boundary: string bounds panic | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
-| `go.capability.struct-tags` | Explicitly unimplemented boundary: struct tags | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.struct-tags` | Decoded field tags in value-record identity and explicit conversion | Source implementation; native/reference acceptance UNRUN | `supported` source only |
 | `go.capability.pointer-escape` | Explicitly unimplemented boundary: local pointer escape | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.pointer-signatures` | Explicitly unimplemented boundary: escaping pointer results and unchecked call contracts | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.pointer-storage` | Explicitly unimplemented boundary: pointer-bearing storage | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
@@ -955,8 +1037,9 @@ unused import. It is not relabeled as positive execution evidence.
 The unchanged original Go 1.27.3 `math/bits/bits_test.go` dot import is retained by
 the real parser before a later syntax failure. This is a source-frontier
 obligation, not testing/runtime closure or upstream test execution. The original
-normal package still rejects the blank `unsafe` import at `bits_errors.go:9:10`; concrete interface values,
-linkname/runtime globals, blank-import initialization and genuine error-payload
+normal package retains its real runtime dependencies. The later static blank-import
+change explicitly rejects its first linkname at `bits_errors.go:11:1`; concrete interface values,
+linkname/runtime globals, dynamic package initialization and genuine error-payload
 panic support remain explicit missing contracts. No source or test is rewritten
 and no runtime/backend changes are included. All new execution is **UNRUN**.
 
@@ -982,8 +1065,8 @@ The complete unchanged upstream `bits_test.go` uses `len := 8 - tab[i].nlz` in
 `TestLen`. This removes that independent semantic obstacle; it does not admit
 the original test package, replace its dependencies, or supply `testing`,
 `unsafe`, runtime error/panic/linkname, slices or closures. The full original
-project gate and runtime requirements remain unchanged; the nil-error-value
-prerequisite below exposes the earlier blank-import initialization boundary.
+project gate and runtime requirements remain unchanged; the static blank-import
+section below records its current unexecuted source boundary.
 The authored `local_builtin_shadows.go` has native self-checks, full-width ABI
 observations and same-original official-Go obligations. These obligations are
 not a claim that validation has run.
@@ -1010,11 +1093,12 @@ Addressability does not change that assignment rule. Concrete boxing, interface
 calls/method values/expressions, assertions, general interface/any values, interface
 switches, aggregates, pointers, generic type arguments and package interface
 storage retain explicit boundaries before IR. Package storage is closed while
-runtime symbol ownership and initialization are unowned: ignored linkname
-comments must never turn runtime-owned errors into fabricated nil globals.
+runtime symbol ownership and initialization are unowned. Recognized linkname
+directives are now rejected before semantic analysis; they must never turn
+runtime-owned errors into fabricated nil or ordinary scalar globals.
 
-The unchanged original normal math/bits package now reaches its blank unsafe
-import initialization boundary. Its runtime globals, panic payloads, original
+The unchanged original normal math/bits package retains its actual unsafe
+import and rejects its first linkname directive. Its runtime globals, panic payloads, original
 recover/type-assertion tests and bootstrap error formatting remain unresolved.
 No upstream source, shared runtime/backend or registry changes are included.
 The feature map records this bounded source implementation with separate UNRUN
@@ -1069,3 +1153,118 @@ Rules: [interface types](https://go.dev/ref/spec#Interface_types),
 [function types](https://go.dev/ref/spec#Function_types),
 [type identity](https://go.dev/ref/spec#Type_identity), and
 [selectors](https://go.dev/ref/spec#Selectors).
+
+## Struct tags in value-record types
+
+Named-field declarations retain an optional raw or interpreted string tag for
+every field in an identifier group. The existing string-literal decoder owns
+the exact bytes, including escapes and raw-literal carriage-return removal.
+Empty tags are identical to absent tags. Ordinary type identity, assignment,
+interface method signatures, generic instance keys and compiler-only managed
+identities retain tags; equal storage layout does not make different tagged
+types interchangeable. Unchanged untagged generic symbol spellings are retained.
+
+Explicit value conversions compare underlying types while ignoring nested
+tags. They still preserve field order/names, package-private identity, array
+lengths and nested named types. The existing value-copy lowering is reused,
+including static aggregate initializers; conversion does not repeat operand
+evaluation or alias the source record. Tag-only pointer conversions remain an
+explicit capability boundary, as do embedded/blank fields and unsupported
+storage. No reflection interface, managed allocation or runtime ABI is added.
+
+`test_struct_tags.py` retains both exact previous diagnostic originals as
+positive source/native/reference obligations. Its complete `struct_tags.go`
+program covers grouped tags, normalized spelling, methods, nested conversions,
+static initialization, generic identity, copy independence and evaluation count.
+Eight full-width native observers, identical original-process comparisons,
+cross-package graphs, invalid-source reference rejections and valid-frontier
+reference-only programs are authored. Exact-byte spelling fixtures additionally
+cover raw CR removal, distinct interpreted CR, non-UTF-8 byte escapes, NUL,
+equivalent Unicode encodings and deliberately non-normalized Unicode tags.
+Inputs are read without universal-newline conversion. Execution comparisons
+retain both raw streams, exit codes, source hashes and binary hashes before
+asserting results. Every new execution is **UNRUN** pending
+CI. This does not close original `math/bits` or runtime acceptance.
+
+Rules: [struct types](https://go.dev/ref/spec#Struct_types),
+[type identity](https://go.dev/ref/spec#Type_identity),
+[conversions](https://go.dev/ref/spec#Conversions), and
+[string literals](https://go.dev/ref/spec#String_literals).
+
+## Blank package types: source implementation, execution unrun
+
+Package-level `type _ T` and `type _ = T` create no source name. Repeated
+definitions retain distinct declaration identities; aliases resolve to their
+canonical target. Their right-hand sides still receive the ordinary type,
+cycle, imported-name visibility and admitted-storage checks. A type referenced
+only by a blank declaration still counts as using its file-scoped import.
+There is no lookup entry for `_` in a conversion, receiver or generic constraint.
+
+The complete official `test/fixedbugs/issue8079.go` remains an unchanged
+compile-only package p input with `type _ interface{}`. An explicitly authored
+constant/main companion provides an executable closed graph; it does not make
+the blank type nameable or add runtime interface storage. The exact previous
+blank-type diagnostic input and min/max frontier input now have ordinary,
+owned-native and same-source official-reference obligations.
+
+`test_blank_types.py` also retains invalid RHS/cycle cases, repeated definitions,
+aliases, named/dot imports, file boundaries and unchanged storage frontiers.
+Its complete authored fixture has a 64-bit native observation. All tests,
+compilers, native executions and reference comparisons remain **UNRUN**.
+Local types, generic type declarations, blank fields/methods/package variables,
+general interface storage and original full `math/bits` acceptance remain open.
+
+Rules: [declarations and scope](https://go.dev/ref/spec#Declarations_and_scope),
+[type declarations](https://go.dev/ref/spec#Type_declarations), and
+[imports](https://go.dev/ref/spec#Import_declarations).
+
+## Static blank imports and the linkname ownership boundary
+
+An explicitly supplied package graph may use blank imports when every visited
+package has only the already-admitted static initialization. Blank imports visit
+and check the entire dependency graph, including unused declarations, but create
+no file-scope alias or unused-import obligation. Repeated imports and diamonds
+retain one dependency owner. Missing source, cycles, invalid dependent source,
+`init` functions and dynamic initializers still fail before IR. No initialization
+is skipped, and no `unsafe` or runtime replacement is supplied.
+
+Recognized `//go:linkname ` and `//go:linknamestd ` directives remain explicit
+`go.unsupported.linkname-directives` failures. Recognition and argument splitting
+follow the pinned Go 1.27.3 compiler's exact keyword-plus-space and Unicode
+White_Space rules. Every `//go:` directive first requires a line prefix containing
+only source whitespace. A preceding declaration or same-line block comment is
+an ordinary `misplaced compiler directive` error before keyword or arity checks.
+The single permitted file-initial BOM is an encoding marker, not a preceding
+token; a later or second BOM remains a lexical error.
+Bad argument counts are ordinary source errors. Standalone similar comments,
+block comments and string literals remain inert. This guard does not
+implement object-symbol aliases, the official Go ABI or runtime-owned globals.
+
+`test_blank_imports.py` pins six complete authored package graphs and both exact
+former blank-import boundary graphs. It authors six full-width native observers,
+complete-main execution, same-input official-process comparisons, invalid-source
+rejection controls, initialization frontiers and directive spelling checks.
+Both process streams, exit status and source/compiler/binary identities are
+retained by the existing harness. All execution remains **UNRUN**.
+
+The original review counterexample `var X int //go:linkname X` is preserved in a
+separately pinned placement corpus with nine other invalid originals and five
+valid standalone controls. Same-source official rejection and build/run
+obligations preserve CRLF bytes and distinguish placement from unsupported
+symbol ownership. The U+001C regression also distinguishes Go's three Fields
+from Python's four split fields without claiming the remaining source is valid.
+Both exact BOM review originals are retained: bare first-line directives remain
+inert, recognized ones retain the ownership boundary. Two BOM-prefixed inert
+programs have owned/native/reference comparisons, while three noninitial or
+repeated-BOM programs have ordinary and same-source official rejection obligations.
+
+The complete normal `bits.go`, `bits_errors.go` and `bits_tables.go` inputs are
+unchanged. Source inspection predicts the first linkname at `bits_errors.go:11:1`
+as the current explicit boundary; this has not been executed. The original
+whole-project inventory, real tests/examples, dependency closure, CI resource
+guards and requirement that `project_accepted` be true are unchanged. A unit
+assertion about an honest rejection is not whole `math/bits` acceptance.
+
+Rules: [imports](https://go.dev/ref/spec#Import_declarations),
+[package initialization](https://go.dev/ref/spec#Package_initialization), and
+[pinned compiler directives](https://github.com/golang/go/blob/2aae1000ea1d4b28923b96db28acf4e3b99d6aff/src/cmd/compile/internal/noder/noder.go).

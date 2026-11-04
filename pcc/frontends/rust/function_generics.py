@@ -59,6 +59,8 @@ class GenericFunctions:
         if function.implementation is not None:
             owner_scope = {p.text: scope[p.text] for p in function.implementation.type_parameters}
             scope['Self'] = self.checker.generics.normalize(function.implementation.owner, function.token, owner_scope)
+            if function.implementation.trait is not None:
+                scope.update(self.checker.traits.associated.scope(function.implementation.trait, scope['Self']))
         return scope
 
     def scope(self, function, arguments=None):
@@ -68,6 +70,8 @@ class GenericFunctions:
         if function.implementation is not None:
             owner_scope = {p.text: scope[p.text] for p in function.implementation.type_parameters}
             scope['Self'] = self.checker.generics.normalize(function.implementation.owner, function.token, owner_scope)
+            if function.implementation.trait is not None:
+                scope.update(self.checker.traits.associated.scope(function.implementation.trait, scope['Self']))
         return scope
 
     def select(self, function, arguments, token, *, normalized=False):
@@ -138,8 +142,11 @@ class GenericFunctions:
 
     def replay_bound_call(self, expression, token):
         current = self.checker.current_function
-        if current is None or self.checker.abstract_function:
+        if current is None or self.checker.abstract_function and current.default_source is None:
             return None
+        # Inherited generic defaults were already checked in their declaring
+        # trait. Even their concrete-owner abstract replay must retain those
+        # selected trait calls, rather than capturing an inherent method.
         selected = self.bound_calls.get(current.declaration_name, {}).get(expression.source_call_id)
         if selected is None:
             return None

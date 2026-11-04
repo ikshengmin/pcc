@@ -188,17 +188,44 @@ class MoveChecker:
                 return None
             after_right = self.expression(children[1], clone(after_left))
             return join([after_left] + ([after_right] if after_right is not None else []))
-        if kind == "while":
+        if kind == "while_let":
+            visible = set(state)
+            scrutinee, body_node = children
+            place = self.checker.place(scrutinee)
+
+            def transfer(header):
+                # Inspect the pattern before consuming selected bindings.
+                # Failure exits retain the unbound scrutinee's move state.
+                condition = header if place is not None else self.expression(scrutinee, header)
+                if condition is None:
+                    return [], []
+                self.pattern_access(expr.value, condition, place)
+                selected = clone(condition)
+                self.pattern_access(expr.value, selected, place, bind=True)
+                edges = LoopEdges(visible)
+                self.loops.append(edges)
+                try:
+                    body = self.expression(body_node, selected)
+                finally:
+                    self.loops.pop()
+                backs = edges.continues + ([edges.outer(body)] if body is not None else [])
+                exits = edges.breaks + [edges.outer(condition)]
+                return backs, exits
+
+            return solve_loop(state, transfer)
+        if kind in {"while", "loop"}:
             visible = set(state)
 
             def transfer(header):
                 edges = LoopEdges(visible)
                 self.loops.append(edges)
-                condition = self.expression(children[0], header)
-                body = self.expression(children[1], clone(condition)) if condition is not None else None
+                condition = self.expression(children[0], header) if kind == "while" else header
+                body_node = children[1] if kind == "while" else children[0]
+                body = self.expression(body_node, clone(condition)) if condition is not None else None
                 self.loops.pop()
                 backs = edges.continues + ([edges.outer(body)] if body is not None else [])
-                exits = edges.breaks + ([edges.outer(condition)] if condition is not None else [])
+                exits = edges.breaks + ([edges.outer(condition)]
+                    if kind == "while" and condition is not None else [])
                 return backs, exits
 
             return solve_loop(state, transfer)

@@ -7,7 +7,7 @@ while int, int64 and uintptr remain distinct named Go types.
 
 from dataclasses import dataclass
 from pcc.frontends.go.records import (
-    DefinedType, InterfaceMethod, InterfaceType, MethodSignature, underlying,
+    DefinedType, InterfaceMethod, InterfaceType, MethodSignature, StructType, underlying,
 )
 
 
@@ -66,6 +66,47 @@ def result_types(dtype):
     return dtype.elements if isinstance(dtype, Results) else () if dtype == "void" else (dtype,)
 
 
+def identical_ignoring_tags(left, right):
+    """Conversion-only structural identity; nested named types stay nominal.
+
+    Assignment, method matching, inference and instance identity deliberately
+    keep ordinary equality, including every decoded struct tag. Only explicit
+    conversions use this recursive relation after stripping their outer names.
+    """
+    if left is right:
+        return True
+    if isinstance(left, DefinedType) or isinstance(right, DefinedType):
+        return False
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, StructType):
+        return len(left.fields) == len(right.fields) and all(
+            a.name == b.name and a.package == b.package and a.embedded == b.embedded
+            and identical_ignoring_tags(a.type, b.type)
+            for a, b in zip(left.fields, right.fields))
+    if isinstance(left, ArrayType):
+        return left.count == right.count and identical_ignoring_tags(left.element, right.element)
+    if isinstance(left, (PointerType, SliceType)):
+        return identical_ignoring_tags(left.element, right.element)
+    if isinstance(left, Results):
+        return len(left.elements) == len(right.elements) and all(
+            identical_ignoring_tags(a, b) for a, b in zip(left.elements, right.elements))
+    if isinstance(left, InterfaceType):
+        return len(left.methods) == len(right.methods) and all(
+            a.name == b.name and a.package == b.package
+            and a.signature.variadic == b.signature.variadic
+            and len(a.signature.parameters) == len(b.signature.parameters)
+            and all(identical_ignoring_tags(x, y)
+                    for x, y in zip(a.signature.parameters, b.signature.parameters))
+            and identical_ignoring_tags(a.signature.result, b.signature.result)
+            for a, b in zip(left.methods, right.methods))
+    return left == right
+
+
+def same_underlying_ignoring_tags(left, right):
+    return identical_ignoring_tags(underlying(left), underlying(right))
+
+
 INTEGER_TYPES = {
     "int8": (8, True), "int16": (16, True), "int32": (32, True), "int64": (64, True),
     "uint8": (8, False), "uint16": (16, False), "uint32": (32, False), "uint64": (64, False),
@@ -82,14 +123,20 @@ def is_string(dtype):
     return underlying(dtype) in ("string", "untyped string")
 
 
+def is_untyped_integer(dtype):
+    return dtype in ("untyped int", "untyped rune")
+
+
 def integer_bits(dtype):
     dtype = underlying(dtype)
-    return 64 if dtype == "untyped int" else INTEGER_TYPES[dtype][0]
+    if is_untyped_integer(dtype):
+        return 32 if dtype == "untyped rune" else 64
+    return INTEGER_TYPES[dtype][0]
 
 
 def integer_signed(dtype):
     dtype = underlying(dtype)
-    return True if dtype == "untyped int" else INTEGER_TYPES[dtype][1]
+    return True if is_untyped_integer(dtype) else INTEGER_TYPES[dtype][1]
 
 
 def integer_bounds(dtype):
@@ -99,7 +146,7 @@ def integer_bounds(dtype):
 
 def is_integer(dtype):
     dtype = underlying(dtype)
-    return isinstance(dtype, str) and (dtype == "untyped int" or dtype in INTEGER_TYPES)
+    return isinstance(dtype, str) and (is_untyped_integer(dtype) or dtype in INTEGER_TYPES)
 
 
 def supported_target(triple):

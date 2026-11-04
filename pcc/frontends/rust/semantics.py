@@ -158,7 +158,7 @@ class Checker:
         self.names: dict[str, Function] = {}
         self.scopes: list[dict[str, Binding]] = []
         self.serial = 0
-        self.loops = 0
+        self.loops = []
         self.result = "()"
         self.parameters: dict[str, list[Binding]] = {}
         self.unsafe_depth = 0
@@ -387,6 +387,10 @@ class Checker:
         self.type_scope = {}
         self.abstract_function = False
         self.inferred_calls = []
+        # Defaults have their own declaration environment, including abstract
+        # Self and its declared trait identities. Check even overridden/unused
+        # bodies, then pin inherited calls before concrete body replay.
+        self.traits.defaults.check()
         # Rust checks declarations, not only the bodies selected by concrete
         # calls. Generic parameters stay non-Copy even if every current call
         # happens to substitute a primitive Copy type.
@@ -414,7 +418,7 @@ class Checker:
         self.type_scope, self.abstract_function = type_scope, abstract
         try:
             self.scopes = [{}]
-            self.loops = 0
+            self.loops = []
             self.result = fn.result
             self.unsafe_depth = int(fn.unsafe)
             params: list[Binding] = []
@@ -781,11 +785,16 @@ class Checker:
             yes = self.expression(children[1])
             no = self.expression(children[2]) if len(children) == 3 else "()"
             ty = unify(yes, no, expr.token)
-        elif kind == "match":
+        elif kind in {"match", "if_let"}:
             from .patterns import check_pattern
 
+            if kind == "if_let":
+                from .conditional_patterns import normalize_if_let
+                normalize_if_let(expr)
             from .call_inference import partial, pending_integer
             scrutinee_ty = partial(self.expression(children[0]))
+            if kind == "if_let" and scrutinee_ty == NEVER:
+                raise expr.token.error("diverging if let scrutinees require additional never-type analysis, which is not implemented")
             if isinstance(scrutinee_ty, TypeApplication) and pending_integer(scrutinee_ty):
                 raise expr.token.error("matching an unresolved inferred generic type requires later pattern constraints, which is not implemented")
             ty = NEVER
@@ -805,26 +814,64 @@ class Checker:
             self.scopes.append({})
             if pattern.kind == "binding":
                 expr.binding = self.bind(pattern.token, source.element, pattern.value)
-            self.loops += 1
+            from .loops import LoopContext
+            self.loops.append(LoopContext('for'))
             try:
                 unify("()", self.expression(children[1]), children[1].token)
             finally:
-                self.loops -= 1
+                self.loops.pop()
                 self.scopes.pop()
             ty = "()"
         elif kind == "while":
             unify("bool", self.expression(children[0]), children[0].token)
-            self.loops += 1
-            body = self.expression(children[1])
-            self.loops -= 1
+            from .loops import LoopContext
+            self.loops.append(LoopContext('while'))
+            try:
+                body = self.expression(children[1])
+            finally:
+                self.loops.pop()
             unify("()", body, children[1].token)
             ty = "()"
+        elif kind == "while_let":
+            from .call_inference import partial, pending_integer
+            from .loops import LoopContext
+            from .patterns import check_pattern
+
+            scrutinee = partial(self.expression(children[0]))
+            if scrutinee == NEVER:
+                raise expr.token.error("diverging while let scrutinees require additional never-type analysis, which is not implemented")
+            if isinstance(scrutinee, TypeApplication) and pending_integer(scrutinee):
+                raise expr.token.error("matching an unresolved inferred generic type requires later pattern constraints, which is not implemented")
+            # The scrutinee is outside the pattern's binding scope. Bindings
+            # are visible only in the body, including across a continue edge.
+            self.scopes.append({})
+            self.loops.append(LoopContext('while_let'))
+            try:
+                check_pattern(self, expr.value, scrutinee)
+                unify("()", self.expression(children[1]), children[1].token)
+            finally:
+                self.loops.pop()
+                self.scopes.pop()
+            ty = "()"
+        elif kind == "loop":
+            from .loops import LoopContext
+            context = LoopContext('loop')
+            self.loops.append(context)
+            try:
+                unify("()", self.expression(children[0]), children[0].token)
+            finally:
+                self.loops.pop()
+            # A nested loop/while/for owns its own breaks. Only a break
+            # associated with this loop turns its never type into unit.
+            ty = "()" if context.has_break else NEVER
         elif kind == "return":
             unify(self.result, self.expression(children[0]) if children else "()", expr.token)
             ty = NEVER
         elif kind in {"break", "continue"}:
             if not self.loops:
                 raise expr.token.error(f"{kind} outside a loop")
+            if kind == "break":
+                self.loops[-1].has_break = True
             ty = NEVER
         else:
             raise expr.token.error(f"unsupported semantic node {kind}")
@@ -840,7 +887,17 @@ class Checker:
         values = [self.validate(child) for child in expr.children if not (expr.kind == "call" and child is expr.children[0])]
         if isinstance(expr.binding, Binding):
             expr.binding.ty = resolve(expr.binding.ty)
+            if expr.kind == "let":
+                self.standard_markers.require_sized(expr.binding.ty, expr.token)
         kind, op = expr.kind, expr.value
+        if kind == "call":
+            # Bodyless required signatures may mention unsized Self or an
+            # associated projection by value. An actual call still needs
+            # storage, even when its result is discarded. Do not impose this
+            # on a borrowed place's referent, which need not be Sized.
+            self.standard_markers.require_sized(expr.ty, expr.token)
+            for operand in expr.children[1:]:
+                self.standard_markers.require_sized(operand.ty, operand.token)
         if kind == "for":
             from .iteration import validate_iteration
             validate_iteration(self, expr)
@@ -848,6 +905,11 @@ class Checker:
             from .patterns import validate_match
 
             validate_match(self, expr)
+        if kind == "while_let":
+            from .patterns import validate_pattern, validate_pattern_scrutinee
+
+            validate_pattern_scrutinee(self, expr.children[0].ty, expr.token)
+            validate_pattern(self, expr.value)
         if kind == "array_repeat" and expr.value > 1 and not self.copy_type(expr.ty.element):
             raise expr.token.error("array repeat operands of length greater than one require Copy; const-item/block repetition and trait bounds are not implemented")
         if kind == "index":

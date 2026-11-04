@@ -10,6 +10,7 @@ import re
 import unicodedata
 
 from pcc.frontends.go.diagnostics import UnsupportedGo
+from pcc.frontends.go.branches import Branches, unlabeled
 from pcc.frontends.go.interface_methods import (
     basic_interface, interface_type, method_set, require_implements,
 )
@@ -28,7 +29,7 @@ from pcc.frontends.go.records import (
 from pcc.frontends.go.types import (
     ArrayType, PointerType, Results, SliceType, TYPE_NAMES, TYPES,
     result_types, integer_bits, integer_bounds, integer_signed, is_integer, is_string,
-    is_error_interface,
+    is_error_interface, is_untyped_integer, same_underlying_ignoring_tags,
 )
 
 
@@ -112,7 +113,8 @@ def checked_array_type(token, count, element):
 
 
 def default_type(dtype):
-    return {"untyped int": "int", "untyped bool": "bool", "untyped string": "string"}.get(dtype, dtype)
+    return {"untyped int": "int", "untyped rune": "int32",
+            "untyped bool": "bool", "untyped string": "string"}.get(dtype, dtype)
 
 
 def has_evaluated_call(expr):
@@ -125,6 +127,10 @@ def has_evaluated_call(expr):
         return False
     if expr.kind == "call" and expr.symbol is not None:
         return True
+    if expr.kind == "minmax":
+        # A nonconstant builtin invocation counts for the array len/cap
+        # unevaluated-operand rule, even when its inputs are only variables.
+        return True
     return (any(has_evaluated_call(arg) for arg in expr.args) or
             (expr.receiver is not None and has_evaluated_call(expr.receiver)))
 
@@ -135,7 +141,7 @@ def check_representable(expr):
     if is_integer(expr.type):
         if abs(expr.constant).bit_length() > MAX_CONSTANT_BITS:
             raise UnsupportedGo(expr.token, 'go.unsupported.limit-constant-precision', "constant exceeds implementation precision limit (4096 bits)")
-        if expr.type != "untyped int":
+        if not is_untyped_integer(expr.type):
             minimum, maximum = integer_bounds(expr.type)
             if not minimum <= expr.constant <= maximum:
                 raise GoDiagnostic(expr.token, f"constant overflows {expr.type}")
@@ -178,7 +184,7 @@ def coerce(expr, dtype):
     if expr.type == dtype:
         check_representable(expr)
         return
-    if ((expr.type == "untyped int" and is_integer(dtype)) or
+    if ((is_untyped_integer(expr.type) and is_integer(dtype)) or
             (expr.type == "untyped bool" and is_boolean(dtype)) or
             (expr.type == "untyped string" and is_string(dtype))):
         expr.type = dtype
@@ -187,7 +193,7 @@ def coerce(expr, dtype):
         if expr.constant is None and is_integer(dtype) and expr.kind in ("unary", "binary"):
             arguments = expr.args[:1] if expr.value in ("<<", ">>") else expr.args
             for argument in arguments:
-                if argument.type == "untyped int":
+                if is_untyped_integer(argument.type):
                     coerce(argument, dtype)
         check_representable(expr)
         return
@@ -356,23 +362,31 @@ class Analyzer:
         for declaration in self.program.types:
             self.check_name(declaration.token)
             name = declaration.token.text
-            if name == "_":
-                raise UnsupportedGo(declaration.token, "go.unsupported.blank-type-declarations", "blank package type declarations are not implemented")
             if name == "init":
                 raise GoDiagnostic(declaration.token, "init is reserved for package initialization function declarations")
-            if name in self.types:
+            if name != "_" and name in self.types:
                 raise GoDiagnostic(declaration.token, "duplicate package declaration " + name)
-            self.types[name] = declaration
+            # A blank type declares no source binding, but its RHS must still
+            # pass the same resolution, cycle and capability checks below.
+            # Distinct definition objects retain nominal identity; aliases
+            # instead keep their canonical target without reserving "_".
+            if name != "_":
+                self.types[name] = declaration
             if not declaration.alias:
                 declaration.identity = DefinedType(name, self.package_path or "")
-        for function in self.program.functions:
+        for index, function in enumerate(self.program.functions):
             if function.receiver is not None:
                 continue
             self.check_name(function.token)
             function.abi_symbol = function_symbol(function.token.text, self.package_path)
             name = function.token.text
             if name == "_":
-                raise UnsupportedGo(function.token, 'go.unsupported.blank-function-declarations', "blank function declarations are not supported")
+                # Blank functions have no source binding, but their signatures
+                # and bodies still pass every ordinary check below. Give each
+                # declaration a distinct owner for generics, pointer flow and
+                # IR; the suffix cannot collide with a hex-encoded Go name.
+                function.abi_symbol += "_blank_" + str(index)
+                continue
             if name in self.functions or name in self.types:
                 raise GoDiagnostic(function.token, "duplicate package declaration " + name)
             if name == "init":
@@ -656,10 +670,12 @@ class Analyzer:
                 raise GoDiagnostic(dtype.token, "undefined type " + dtype.token.text)
             return owner.resolve_type_declaration(declaration, signature=signature)
         if isinstance(dtype, StructSyntax):
+            from pcc.frontends.go.strings import literal_bytes
+
             if len(dtype.fields) > 256:
                 raise UnsupportedGo(dtype.token, 'go.unsupported.limit-struct-fields', "struct exceeds implementation limit (256 fields)")
             fields, names = [], set()
-            for token, field_type in dtype.fields:
+            for index, (token, field_type) in enumerate(dtype.fields):
                 if token.text == "_":
                     raise UnsupportedGo(token, 'go.unsupported.blank-struct-fields', "blank struct fields are not implemented")
                 if token.text in names:
@@ -676,7 +692,9 @@ class Analyzer:
                 if not signature and interface_type(field_type) is not None:
                     raise UnsupportedGo(token, 'go.unsupported.interface-types',
                                         "interface-bearing records require a runtime storage contract")
-                fields.append(Field(token.text, field_type, package))
+                tag = dtype.tags[index] if dtype.tags else None
+                fields.append(Field(token.text, field_type, package,
+                                    tag=literal_bytes(tag) if tag else b""))
             result = StructType(tuple(fields))
             pending, count = [result], 0
             while pending:
@@ -712,7 +730,7 @@ class Analyzer:
             for index, item in zip(expr.indices, expr.args):
                 values[index] = self.static_initializer(item)
             return tuple(values)
-        if expr.kind == "call" and expr.symbol is None and same_underlying(expr.type, expr.args[0].type):
+        if expr.kind == "call" and expr.symbol is None and same_underlying_ignoring_tags(expr.type, expr.args[0].type):
             return self.static_initializer(expr.args[0])
         raise UnsupportedGo(expr.token, 'go.unsupported.package-initialization', "nonconstant package initializer requires shared-runtime initialization support")
 
@@ -789,6 +807,7 @@ class Analyzer:
         self.loop_depth = 0
         self.break_depth = 0
         self.allowed_fallthrough = None
+        self.branches = Branches(function)
         require_value_type(function.result, function.token)
         for token, dtype in function.params:
             require_value_type(dtype, token)
@@ -816,6 +835,7 @@ class Analyzer:
             function.result_symbols.append(symbol)
             function.locals.append(symbol)
         self.statements(function.body, new_scope=False)
+        self.branches.validate()
         if function.result != "void" and not self.terminates(function.body):
             raise GoDiagnostic(function.token, "missing return at end of function")
         for symbol in function.locals:
@@ -838,7 +858,7 @@ class Analyzer:
         if token.text != "_" and token.text in self.scopes[-1]:
             raise GoDiagnostic(token, "redeclaration in this block: " + token.text)
         symbol = Symbol(token, dtype, constant=constant, depth=len(self.scopes),
-                        iteration_binding=self.iteration_binding)
+                        iteration_binding=self.iteration_binding or self.branches.reentered(token))
         if token.text != "_":
             self.scopes[-1][token.text] = symbol
         if constant is None:
@@ -886,7 +906,7 @@ class Analyzer:
                                 "addresses of interface values require a runtime storage contract")
         if arg.iteration_binding:
             raise UnsupportedGo(token, 'go.unsupported.pointer-iteration-identity',
-                                "addressed loop bindings require distinct per-iteration storage identity")
+                                "addressed repeated bindings require distinct storage identity")
         return Expr("address", token, args=[arg], type=PointerType(arg.type),
                     pointer_depth=arg.storage_depth, pointer_nonnull=True)
 
@@ -913,6 +933,16 @@ class Analyzer:
 
     def statement(self, statement):
         kind = statement.kind
+        if kind == "empty":
+            return
+        if kind in ("label", "goto"):
+            self.branches.capture(statement, self.scopes)
+            if kind == "label":
+                self.statements(statement.body, new_scope=False)
+                statement.terminates = self.terminates(statement.body)
+            else:
+                statement.terminates = True
+            return
         if kind == "=":
             for target in statement.targets:
                 self.assignment_target(target, read=False)
@@ -971,6 +1001,8 @@ class Analyzer:
                 statement.symbols.append(symbol)
             if kind == ":=" and not new_count:
                 raise GoDiagnostic(statement.token, "short declaration requires at least one new non-blank variable")
+            if kind == ":=" or (kind == "var" and statement.names):
+                self.branches.declaration(statement, self.scopes[-1])
             return
         if kind in ("++", "--", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "&^=", "<<=", ">>="):
             if len(statement.names) != 1 or (statement.exprs and len(statement.exprs) != 1):
@@ -1048,7 +1080,7 @@ class Analyzer:
                 comparisons = []
                 for expr in clause.exprs:
                     self.expression(expr)
-                    if expr.type in ("untyped int", "untyped bool", "untyped string"):
+                    if expr.type in ("untyped int", "untyped rune", "untyped bool", "untyped string"):
                         coerce(expr, selector.type)
                     comparison = Expr("binary", expr.token, "==", [selector, expr])
                     self.expression(comparison)
@@ -1060,13 +1092,14 @@ class Analyzer:
                     comparisons.append(comparison)
                 clause.exprs = comparisons
                 previous = self.allowed_fallthrough
-                self.allowed_fallthrough = (clause.body[-1] if clause.body and index + 1 < len(statement.cases)
-                                            and clause.body[-1].kind == "fallthrough" else None)
+                last = unlabeled(clause.body[-1]) if clause.body else None
+                self.allowed_fallthrough = (last if last is not None and index + 1 < len(statement.cases)
+                                            and last.kind == "fallthrough" else None)
                 self.statements(clause.body)
                 self.allowed_fallthrough = previous
             self.break_depth -= 1
-            statement.terminates = bool(defaults) and all(
-                self.terminates(clause.body) and not self.has_break(clause.body) for clause in statement.cases)
+            statement.terminates = (bool(defaults) and not self.branches.breaks(statement) and
+                                    all(self.terminates(clause.body) for clause in statement.cases))
             self.scopes.pop()
             return
         if kind == "block":
@@ -1087,7 +1120,7 @@ class Analyzer:
                 # Resolve target types here without evaluating their operands;
                 # ordinary assignment lowering evaluates them each iteration.
                 iteration_type = default_type(ranged.type)
-                if ranged.type == "untyped int" and statement.targets and not statement.range_declaration:
+                if is_untyped_integer(ranged.type) and statement.targets and not statement.range_declaration:
                     target = statement.targets[0]
                     self.assignment_target(target, read=False)
                     if not (target.kind == "name" and target.value == "_"):
@@ -1158,7 +1191,7 @@ class Analyzer:
             if kind == "for":
                 self.loop_depth -= 1
                 self.break_depth -= 1
-                statement.terminates = not statement.exprs and not self.has_break(statement.body)
+                statement.terminates = not statement.exprs and not self.branches.breaks(statement)
             elif statement.otherwise is not None:
                 self.statements(statement.otherwise)
                 statement.terminates = self.terminates(statement.body) and self.terminates(statement.otherwise)
@@ -1190,16 +1223,6 @@ class Analyzer:
                 maximum >>= min(expr.args[1].constant, integer_bits(expr.type))
             return maximum
         return None
-
-    def has_break(self, statements):
-        for statement in statements:
-            if statement.kind == "break":
-                return True
-            if statement.kind not in ("for", "range", "switch") and (
-                self.has_break(statement.body) or self.has_break(statement.otherwise or [])
-            ):
-                return True
-        return False
 
     def terminates(self, statements):
         return bool(statements and statements[-1].terminates)
@@ -1328,6 +1351,10 @@ class Analyzer:
             return
         if kind == "integer":
             expr.type, expr.constant = "untyped int", integer_literal(expr)
+            return
+        if kind == "rune":
+            from pcc.frontends.go.runes import literal_value
+            expr.type, expr.constant = "untyped rune", literal_value(expr.token)
             return
         if kind == "name":
             if expr.value in self.type_bindings and not any(expr.value in scope for scope in self.scopes):
@@ -1494,6 +1521,9 @@ class Analyzer:
                      and not any(name in scope for scope in self.scopes) else None) or self
             if any(name in scope for scope in self.scopes) or name in owner.globals and name not in self.type_bindings:
                 raise GoDiagnostic(expr.token, "cannot call non-function " + name)
+            if name in ("min", "max"):
+                self.minmax(expr)
+                return
             if name in ("len", "cap"):
                 if len(expr.args) != 1:
                     raise GoDiagnostic(expr.token, name + " requires one argument")
@@ -1621,6 +1651,51 @@ class Analyzer:
         if field.package and field.package != (self.package_path or "<main>"):
             raise GoDiagnostic(token, "cannot access unexported struct field " + field.name)
 
+    def minmax(self, expr):
+        """Ordered scalar builtins, with one common source type for all inputs.
+
+        Do not fold pairwise before checking every operand: a later typed
+        argument must still constrain an earlier, non-selected constant.
+        A sole multi-result call is expanded once by the ordinary value owner.
+        """
+        arguments = self.values(expr.args)
+        if not arguments:
+            raise GoDiagnostic(expr.token, expr.value + " requires at least one argument")
+        for argument in arguments:
+            if not (is_integer(argument.type) or is_string(argument.type)):
+                raise GoDiagnostic(argument.token, expr.value + " requires ordered integer or string arguments")
+        first = arguments[0]
+        numeric = is_integer(first.type)
+        common = first.type
+        untyped = ("untyped int", "untyped rune") if numeric else ("untyped string",)
+        for argument in arguments[1:]:
+            dtype = argument.type
+            if is_integer(dtype) != numeric:
+                raise GoDiagnostic(argument.token, "mismatched " + expr.value + " argument types")
+            if common == dtype:
+                continue
+            if common in untyped:
+                common = ("untyped rune" if numeric and dtype in untyped
+                          and "untyped rune" in (common, dtype) else dtype)
+            elif dtype not in untyped:
+                raise GoDiagnostic(argument.token, "mismatched " + expr.value + " argument types")
+        constant = all(argument.constant is not None for argument in arguments)
+        # Nonconstant min/max values are typed here, not by an enclosing
+        # assignment. This includes min(1 << s), the issue61486 original.
+        if not constant:
+            common = default_type(common)
+        for argument in arguments:
+            coerce(argument, common)
+        expr.kind, expr.type = "minmax", common
+        if constant:
+            operation = min if expr.value == "min" else max
+            expr.constant = operation(argument.constant for argument in arguments)
+            check_representable(expr)
+        elif is_string(common) and self.function is not None:
+            # Selection reuses immutable descriptors. No concatenation,
+            # allocation, aggregate select instruction or runtime helper.
+            self.function.temporaries.append(expr)
+
     def conversion(self, expr, target):
         if len(expr.args) != 1:
             raise GoDiagnostic(expr.token, "conversion requires one argument")
@@ -1635,8 +1710,9 @@ class Analyzer:
                 coerce(arg, target)
             elif not same_underlying(target, arg.type):
                 source = underlying(arg.type)
-                if (isinstance(source, PointerType) and not is_named(target) and not is_named(arg.type)
-                        and same_underlying(source.element, underlying(target).element)):
+                if (same_underlying_ignoring_tags(target, arg.type) or
+                        isinstance(source, PointerType) and not is_named(target) and not is_named(arg.type)
+                        and same_underlying_ignoring_tags(source.element, underlying(target).element)):
                     raise UnsupportedGo(expr.token, 'go.unsupported.pointer-conversions',
                                         "pointer conversions between distinct base types are not implemented")
                 raise GoDiagnostic(expr.token, f"invalid conversion from {arg.type} to {target}")
@@ -1651,12 +1727,12 @@ class Analyzer:
                 codepoint = 0xfffd
             expr.type, expr.constant = target, chr(codepoint).encode("utf-8")
             return
-        if not (same_underlying(target, arg.type) or
+        if not (same_underlying_ignoring_tags(target, arg.type) or
                 is_integer(target) and is_integer(arg.type) or
                 is_boolean(target) and is_boolean(arg.type) or
                 is_string(target) and is_string(arg.type)):
             raise GoDiagnostic(expr.token, f"invalid conversion from {arg.type} to {target}")
-        if arg.constant is None and arg.type == "untyped int":
+        if arg.constant is None and is_untyped_integer(arg.type):
             coerce(arg, target)
         expr.type, expr.constant = target, arg.constant
         check_representable(expr)
@@ -1792,17 +1868,25 @@ class Analyzer:
                 raise GoDiagnostic(expr.token, "shift count overflows uint64")
             expr.type = left.type
         else:
-            if left.type in ("untyped int", "untyped bool") and right.type not in ("untyped int", "untyped bool"):
+            untyped = ("untyped int", "untyped rune", "untyped bool")
+            if left.type in untyped and right.type not in untyped:
                 coerce(left, right.type)
-            elif right.type in ("untyped int", "untyped bool") and left.type not in ("untyped int", "untyped bool"):
+            elif right.type in untyped and left.type not in untyped:
                 coerce(right, left.type)
+            elif is_untyped_integer(left.type) and is_untyped_integer(right.type):
+                # Rune is the later constant kind. Shifts deliberately use
+                # only their left operand's kind and do not take this path.
+                common = "untyped rune" if "untyped rune" in (left.type, right.type) else "untyped int"
+                coerce(left, common)
+                coerce(right, common)
             if left.type != right.type:
                 raise GoDiagnostic(expr.token, f"mismatched operand types {left.type} and {right.type}")
             expr.type = left.type
             if op in ("==", "!=", "<", "<=", ">", ">=") and (left.constant is None or right.constant is None):
-                if left.type == "untyped int":
-                    coerce(left, "int")
-                    coerce(right, "int")
+                if is_untyped_integer(left.type):
+                    target = default_type(left.type)
+                    coerce(left, target)
+                    coerce(right, target)
             if op in ("&&", "||"):
                 if not is_boolean(left.type):
                     raise GoDiagnostic(expr.token, "logical operators require bool")

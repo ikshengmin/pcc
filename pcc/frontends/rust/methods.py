@@ -132,7 +132,10 @@ class InherentMethods:
             from .call_inference import pending_integer
             if pending_integer(owner):
                 self.check_inferred_receiver(owner, name, token)
-        self.checker.valid_type(owner, token)
+        # Looking up an associated item does not allocate its receiver. An
+        # abstract default body may refer to a genuinely unsized trait Self;
+        # signature/call checking still owns all by-value storage obligations.
+        self.checker.valid_type(owner, token, require_sized=False)
         base = owner.name if isinstance(owner, TypeApplication) else owner
         if not receiver:
             enum = self.checker.enums.get(owner)

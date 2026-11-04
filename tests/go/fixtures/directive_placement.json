@@ -1,0 +1,150 @@
+{
+  "invalid": [
+    {
+      "name": "review-original",
+      "source": "package main\nimport _ \"unsafe\"\nvar X int //go:linkname X\nfunc main(){}\n",
+      "line": 3,
+      "column": 11,
+      "sha256": "dfbd045c43f4ba6e11b2d011938578aae39b5f5205a68ef1b0b137dcb8bc2d42"
+    },
+    {
+      "name": "same-line-block-comment",
+      "source": "package main\nimport _ \"unsafe\"\n/* prefix */ //go:linkname X\nvar X int\nfunc main(){}\n",
+      "line": 3,
+      "column": 14,
+      "sha256": "75a7d3dd9c94386f856765305e0b96791116791b299a118149594dbe0a4728e2"
+    },
+    {
+      "name": "multiline-block-ending",
+      "source": "package main\nimport _ \"unsafe\"\n/* prefix\n */ //go:linkname X\nvar X int\nfunc main(){}\n",
+      "line": 4,
+      "column": 5,
+      "sha256": "cd2a93a285659517df57c2390d0678d0dd36643f7cc8c191d253598016db3a55"
+    },
+    {
+      "name": "linknamestd-placement",
+      "source": "package main\nimport _ \"unsafe\"\nvar X int //go:linknamestd X\nfunc main(){}\n",
+      "line": 3,
+      "column": 11,
+      "sha256": "716d78ae268cbfdd10161ad197f2c3b364ebfbb308854fe1d11a58a5d0e017e9"
+    },
+    {
+      "name": "placement-before-arity",
+      "source": "package main\nimport _ \"unsafe\"\nvar X int //go:linkname \nfunc main(){}\n",
+      "line": 3,
+      "column": 11,
+      "sha256": "ac9aed7f2f966e677b659145ec93cb614af42021b0e34d335ae26c0157d0d686"
+    },
+    {
+      "name": "bare-keyword-placement",
+      "source": "package main\nimport _ \"unsafe\"\nvar X int //go:linkname\nfunc main(){}\n",
+      "line": 3,
+      "column": 11,
+      "sha256": "201a97bc2d146e38821e04f8ce3722dec1657f8b458a676a435f0508673bfba3"
+    },
+    {
+      "name": "tab-after-keyword-placement",
+      "source": "package main\nimport _ \"unsafe\"\nvar X int //go:linkname\tX\nfunc main(){}\n",
+      "line": 3,
+      "column": 11,
+      "sha256": "d510fdd04295f6fae1b45f3e638404ea0cfdfb915594022773a0f88cbd24b505"
+    },
+    {
+      "name": "similar-keyword-placement",
+      "source": "package main\nimport _ \"unsafe\"\nvar X int //go:linknamed X\nfunc main(){}\n",
+      "line": 3,
+      "column": 11,
+      "sha256": "1eabdb59897c2b9145f1569f27e523e2bf565f4fd3697041b08d1befb697a907"
+    },
+    {
+      "name": "adjacent-block-comment",
+      "source": "package main\nimport _ \"unsafe\"\n/**///go:linkname X\nvar X int\nfunc main(){}\n",
+      "line": 3,
+      "column": 5,
+      "sha256": "3c27aa26a9d3a8dea269b5c322e75a48038beaa70850b4fe2342402e5103d019"
+    },
+    {
+      "name": "multiline-string-ending",
+      "source": "package main\nimport _ \"unsafe\"\nvar S = `prefix\nsuffix` //go:linkname X\nvar X int\nfunc main(){}\n",
+      "line": 4,
+      "column": 9,
+      "sha256": "645f2d03b4e4809bd09733cc167a5c2fdd35f086abbaeedebedcb4c7d163bcd9"
+    }
+  ],
+  "standalone": [
+    {
+      "name": "indented-directive",
+      "source": "package main\nimport _ \"unsafe\"\n \t\r//go:linkname X\nvar X int\nfunc main(){}\n",
+      "line": 3,
+      "column": 4,
+      "sha256": "3865759b7f06b951482c23a3d71cff2a3c16f721ca8399fa684e560e7708ddf1"
+    },
+    {
+      "name": "comment-on-previous-line",
+      "source": "package main\nimport _ \"unsafe\"\n/* prefix */\n\t//go:linkname X\nvar X int\nfunc main(){}\n",
+      "line": 4,
+      "column": 2,
+      "sha256": "29e68dfdd105f2975fa73f493f4e0982a0520f92521bd5241c1670e4c6a141a9"
+    },
+    {
+      "name": "crlf-directive",
+      "source": "package main\r\nimport _ \"unsafe\"\r\n\t//go:linkname X\r\nvar X int\r\nfunc main(){}\r\n",
+      "line": 3,
+      "column": 2,
+      "sha256": "d39dbfb37a77e2f929f7c856a18b1e8a482eef4919730754b5a2f6de999a09ca"
+    },
+    {
+      "name": "initial-bom-recognized-review",
+      "source": "﻿//go:linkname X\npackage main\nimport _ \"unsafe\"\nvar X int\nfunc main(){}\n",
+      "line": 1,
+      "column": 2,
+      "sha256": "8d759b90d26cc468444e6397d975b8d625df0d06c6bef244a4318697322028ef"
+    },
+    {
+      "name": "initial-bom-indented-recognized",
+      "source": "﻿ \t\r//go:linkname X\npackage main\nimport _ \"unsafe\"\nvar X int\nfunc main(){}\n",
+      "line": 1,
+      "column": 5,
+      "sha256": "01d77eeb37ccf9366c9901b82a1793abd5bdd2b522a5320bc5a6d6d63541995d"
+    }
+  ],
+  "inert": [
+    {
+      "name": "initial-bom-bare-review",
+      "source": "﻿//go:linkname\npackage main\nfunc main(){}\n",
+      "line": 1,
+      "column": 2,
+      "sha256": "56c57f982ec0c0c6e40dc55bbb42142c5be5234df20c702533fc80caa91495f0"
+    },
+    {
+      "name": "initial-bom-indented-bare",
+      "source": "﻿ \t\r//go:linkname\npackage main\nfunc main(){}\n",
+      "line": 1,
+      "column": 5,
+      "sha256": "af07bc5a715ce9a3c84f53bdc1136882db5b1024eaa3c9bc01f323780604a40e"
+    }
+  ],
+  "invalid_bom": [
+    {
+      "name": "bom-on-later-line",
+      "source": "package main\n﻿//go:linkname\nfunc main(){}\n",
+      "line": 2,
+      "column": 2,
+      "sha256": "d33e277895e5cc851ee80b56e431591bb84818a25c44e7088ef9c647b2a5d48c"
+    },
+    {
+      "name": "bom-after-leading-space",
+      "source": " ﻿//go:linkname\npackage main\nfunc main(){}\n",
+      "line": 1,
+      "column": 3,
+      "sha256": "f5c29b43665054141bbe879d367655b40fb6f6eff7d54732edf7b5ed81b9e396"
+    },
+    {
+      "name": "second-bom",
+      "source": "﻿﻿//go:linkname\npackage main\nfunc main(){}\n",
+      "line": 1,
+      "column": 3,
+      "sha256": "a2de0b01d60bbfeffe88ee7511873f00b96ce30f375ddc25bf05de6e21e7cf9e"
+    }
+  ]
+}

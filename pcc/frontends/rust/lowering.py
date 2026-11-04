@@ -154,9 +154,10 @@ class Lowerer:
                 self.allocate(expr.binding)
             self.temps[("for_array", id(expr))] = self.builder.alloca(self.type(expr.value.array_type), name="for.array")
             self.temps[("for_cursor", id(expr))] = self.builder.alloca(self.type("usize"), name="for.cursor")
-        if expr.kind == "match":
+        if expr.kind in {"match", "while_let"}:
             from .patterns import pattern_bindings
-            for pattern in expr.value:
+            patterns = expr.value if expr.kind == "match" else (expr.value,)
+            for pattern in patterns:
                 for binding in pattern_bindings(pattern):
                     self.allocate(binding)
         if (expr.kind in {"tuple", "construct", "enum_construct", "array", "array_repeat"}
@@ -333,6 +334,48 @@ class Lowerer:
             return self.conditional(expr)
         if kind == "for":
             return self.array_iteration(expr)
+        if kind == "loop":
+            body_block = self.function.append_basic_block("loop.body")
+            done = self.function.append_basic_block("loop.end")
+            self.builder.branch(body_block)
+            self.builder.position_at_end(body_block)
+            depth = len(self.iteration_scopes)
+            self.loops.append(LoopTargets(body_block, done, depth, depth))
+            self.expression(children[0])
+            self.loops.pop()
+            if not self.builder.block.is_terminated:
+                self.builder.branch(body_block)
+            self.builder.position_at_end(done)
+            if expr.ty == NEVER:
+                self.builder.unreachable()
+            return None
+        if kind == "while_let":
+            condition_block = self.function.append_basic_block("while.let.condition")
+            body_block = self.function.append_basic_block("while.let.body")
+            done = self.function.append_basic_block("while.let.end")
+            self.builder.branch(condition_block)
+            self.builder.position_at_end(condition_block)
+            value = self.expression(children[0])
+            if self.builder.block.is_terminated:
+                # Semantic admission rejects a directly diverging scrutinee.
+                # Keep composed divergent paths closed rather than extracting
+                # a payload from a value which was never produced.
+                self.builder.position_at_end(body_block)
+                self.builder.unreachable()
+                self.builder.position_at_end(done)
+                self.builder.unreachable()
+                return None
+            self.builder.cbranch(self.pattern_test(expr.value, value), body_block, done)
+            self.builder.position_at_end(body_block)
+            self.bind_pattern(expr.value, value)
+            depth = len(self.iteration_scopes)
+            self.loops.append(LoopTargets(condition_block, done, depth, depth))
+            self.expression(children[1])
+            self.loops.pop()
+            if not self.builder.block.is_terminated:
+                self.builder.branch(condition_block)
+            self.builder.position_at_end(done)
+            return None
         if kind == "while":
             condition_block = self.function.append_basic_block("while.cond")
             body_block = self.function.append_basic_block("while.body")

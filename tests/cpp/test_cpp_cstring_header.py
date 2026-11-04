@@ -1,9 +1,11 @@
-"""Original tests of N4659 [cstring.syn], [over.ics.rank], [dcl.link].
+"""Original tests of N4659 [cstring.syn], [over.ics.rank], [dcl.link], [expr.cond].
 
 https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2017/n4659.pdf
 These qualify declarations and their const-correct overloads, not a string
 runtime. Native/reference cases deliberately do not call unresolved routines.
 """
+import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -176,29 +178,53 @@ def test_public_cstring_declarations_execute_against_explicit_reference(source, 
     record_execution(oracle, expected)
 
 
-# Retain the exact original native input and its real frontend frontier.
-# This header change does not implement conditional-expression semantics.
+# Retain the exact original native input after conditional-expression support.
 CONDITIONAL_ORIGINAL = (
     '#include <cstring>\n#include <cstdio>\n#include <cstdlib>\n#include <cstring>\n'
     'namespace bytes=std;using bytes::strchr;int main(){void* p=NULL;return p==nullptr?42:0;}'
 )
 
 
-def test_original_header_program_retains_explicit_conditional_expression_gap():
-    with pytest.raises(CppDiagnostic) as error:
-        compile_public(CONDITIONAL_ORIGINAL)
-    assert error.value.code == 'cpp.unsupported.syntax'
-    assert '?' in str(error.value)
+def test_original_conditional_header_program_is_owned_and_stable(monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError('owned cstring compilation invoked an external process')
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    first = compile_public(CONDITIONAL_ORIGINAL)
+    assert first == compile_public(CONDITIONAL_ORIGINAL)
+    obj = emit_owned_object(first[0][1], TARGET)
+    assert obj == emit_owned_object(first[0][1], TARGET)
+    assert not _object_symbol_sets(parse_relocatable(obj))[1]
 
 
 @pytest.mark.integration
-def test_original_conditional_header_program_is_accepted_by_explicit_reference(tmp_path):
+def test_original_conditional_header_program_is_accepted_by_explicit_reference(tmp_path, monkeypatch):
     unit = tmp_path / 'cstring-conditional-original.cpp'
     unit.write_text(CONDITIONAL_ORIGINAL)
+    original = CONDITIONAL_ORIGINAL.encode('utf-8')
+    assert unit.read_bytes() == original
+    with monkeypatch.context() as guard:
+        def forbidden(*args, **kwargs):
+            raise AssertionError('owned cstring compilation invoked an external process')
+        guard.setattr(subprocess, 'Popen', forbidden)
+        compiled = compile_public(CONDITIONAL_ORIGINAL)
+        obj = emit_owned_object(compiled[0][1], TARGET)
+        assert not _object_symbol_sets(parse_relocatable(obj))[1]
+        executable = link_object(obj)
+    owned = tmp_path / 'owned'
+    owned.write_bytes(executable)
+    owned.chmod(0o700)
+    record_execution(owned, Execution(42, b'', b''))
     compiler = shutil.which(os.environ.get('PCC_CPP_ORACLE', 'g++'))
     assert compiler
     binary = tmp_path / 'reference'
     result = subprocess.run([compiler, '-std=c++17', '-pedantic-errors', '-O0', str(unit), '-o', str(binary)],
                             capture_output=True, timeout=20)
+    (tmp_path / 'reference-build.json').write_text(json.dumps({
+        'argv': result.args, 'returncode': result.returncode,
+        'source_sha256': hashlib.sha256(unit.read_bytes()).hexdigest(),
+        'expected_source_sha256': hashlib.sha256(original).hexdigest(),
+        'stdout_hex': result.stdout.hex(), 'stderr_hex': result.stderr.hex(),
+    }, indent=2))
+    assert unit.read_bytes() == original
     assert result.returncode == 0, result.stderr
     record_execution(binary, Execution(42, b'', b''))

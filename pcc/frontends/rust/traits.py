@@ -24,6 +24,10 @@ class StaticTraits:
         # Calls must retain the required contract without granting those
         # extra assumptions to the implementation's abstract body.
         self.call_bounds = {}
+        from .associated_types import AssociatedTypes
+        self.associated = AssociatedTypes(self)
+        from .default_methods import DefaultMethods
+        self.defaults = DefaultMethods(self)
 
     def restricted_signature(self, function):
         if function.lifetime_parameters:
@@ -60,12 +64,14 @@ class StaticTraits:
                     raise function.token.error('duplicate trait associated item')
                 methods[function.token.text] = function
             self.traits[name] = methods
+        self.associated.prepare()
         impl_tokens = {}
         for trait in self.declarations:
             name = trait.token.text
             for function in trait.methods:
                 self.restricted_signature(function)
                 scope = {'Self': TypeParameter('trait ' + name, 0, 'Self')}
+                scope.update(self.associated.scope(name))
                 for index, parameter in enumerate(function.type_parameters, 1):
                     if parameter.text in scope or parameter.text in PRIMITIVES:
                         raise parameter.error('duplicate or reserved trait method type parameter')
@@ -99,16 +105,23 @@ class StaticTraits:
                     if token.text in parameter_names:
                         raise token.error('duplicate trait method parameter')
                     parameter_names.add(token.text)
-                    if mutable:
+                    if mutable and function.body is None:
                         raise token.error('patterns in required trait method declarations are not supported')
-                    checker.valid_type(checker.generics.normalize(ty, token), token)
-                checker.valid_type(checker.generics.normalize(function.result, function.token), function.token, allow_reference=False)
+                    # Required methods have no body or by-value storage yet.
+                    # A direct ?Sized projection/parameter is legal here; its
+                    # concrete impl still passes ordinary Sized validation.
+                    # Nested aggregate/application members keep their own
+                    # Sized well-formedness checks in valid_type/normalize.
+                    checker.valid_type(checker.generics.normalize(ty, token), token, require_sized=False)
+                checker.valid_type(checker.generics.normalize(function.result, function.token),
+                                   function.token, allow_reference=False, require_sized=False)
                 signature = replace(function,
                     params=[(t, checker.generics.normalize(ty, t), mutable)
                             for t, ty, mutable in function.params],
                     result=checker.generics.normalize(function.result, function.token))
                 self.signatures[name, function.token.text] = scope['Self'], signature
                 checker.function_generics.parameters[signature.declaration_name] = tuple(method_scope.values())
+                self.defaults.remember(name, function, scope, signature)
         checker.type_scope, checker.abstract_function = {}, False
         for index, implementation in enumerate(self.implementations):
             if implementation.trait is None:
@@ -132,6 +145,7 @@ class StaticTraits:
             key = implementation.trait, owner
             if key in self.impls:
                 raise implementation.token.error('conflicting concrete trait implementations')
+            self.associated.register(implementation)
             members = {}
             for function in checker.functions:
                 if function.implementation is not implementation:
@@ -144,9 +158,11 @@ class StaticTraits:
                 if function.token.text not in methods:
                     raise function.token.error('method is not a member of the implemented trait')
                 members[function.token.text] = function
-            missing = methods.keys() - members.keys()
+            missing = {name for name in methods.keys() - members.keys()
+                       if methods[name].body is None}
             if missing:
                 raise implementation.token.error('missing required trait methods: ' + ', '.join(sorted(missing)))
+            self.defaults.inherit(implementation, members)
             self.impls[key] = members
             impl_tokens[key] = implementation.token
         self.hierarchy.require_concrete_impls(self.impls, impl_tokens)
@@ -184,6 +200,7 @@ class StaticTraits:
                 self_parameter, signature = self.signatures[trait, name]
                 bindings = dict(zip(required_parameters, parameters))
                 bindings[self_parameter] = owner
+                bindings.update(self.associated.bindings(trait, owner))
                 expected = tuple(substitute(ty, bindings) for _, ty, _ in signature.params)
                 result = substitute(signature.result, bindings)
                 if expected != tuple(ty for _, ty, _ in function.params) or result != function.result:
@@ -201,6 +218,8 @@ class StaticTraits:
                     continue
                 if bound.relaxed:
                     raise bound.token.error('local/user trait bounds cannot be relaxed; only canonical ?Sized is supported')
+                if self.associated.has_types(bound.path):
+                    raise bound.token.error('associated types through generic trait bounds require projection normalization, which is not implemented')
                 if self.checker.module_resolution is not None:
                     raise bound.token.error('module-scoped local trait bounds are not implemented')
                 local.add(bound.path)
@@ -219,7 +238,14 @@ class StaticTraits:
         functions = list(self.checker.functions)
         functions.extend(function for trait in self.declarations for function in trait.methods)
         functions.extend(self.implementations)  # Empty impl headers are still declarations.
-        first = next((bound.token for function in functions
+        first = next((item.token for declaration in self.declarations
+                      for item in declaration.associated_types), None)
+        if first is None:
+            first = next((item.token for implementation in self.implementations
+                          for item in implementation.associated_types), None)
+        associated = first is not None
+        if first is None:
+            first = next((bound.token for function in functions
                       for _, bounds in function.effective_parameter_bounds for bound in bounds
                       if bound.path in names and not bound.relaxed
                       and bound.path not in {p.text for p in function.type_parameters}), None)
@@ -227,7 +253,8 @@ class StaticTraits:
             return
         from .external_check import CheckedRustSource
         if type(checked) is not CheckedRustSource:
-            raise first.error('local trait bounds require an actual source/options-bound CheckedRustSource during this transition')
+            subject = 'associated types' if associated else 'local trait bounds'
+            raise first.error(subject + ' require an actual source/options-bound CheckedRustSource during this transition')
         checked.validate(source, target_triple=target, overflow_checks=overflow_checks,
                          edition=self.checker.standard_markers.policy.edition)
         if checked.provenance.edition != str(self.checker.standard_markers.policy.edition):
@@ -272,7 +299,7 @@ class StaticTraits:
         return self.qualified_canonical(owner, trait, name, token)
 
     def qualified_canonical(self, owner, trait, name, token):
-        self.checker.valid_type(owner, token)
+        self.checker.valid_type(owner, token, require_sized=False)
         if isinstance(owner, TypeParameter):
             return self.abstract_method(owner, trait, name, token), ()
         members = self.impls.get((trait, owner))

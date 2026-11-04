@@ -761,6 +761,9 @@ class CppParser:
                           constant_fact=expression.constant_fact)
 
     def _discarded_value_node(self, expression):
+        if expression.lvalue and expression.discarded_known:
+            return (expression.discarded_node if expression.discarded_node is not None
+                    else c_ast.Constant('int', '0', expression.node.coord))
         return self._nullptr_rvalue(expression).node
 
     def _convert(self, expression, dtype, coord, force=False, contextual=False):
@@ -782,7 +785,7 @@ class CppParser:
             if self.template_function is not None:
                 return Pattern("cast", coord, (dtype, force, contextual), [expression])
             typename = c_ast.Typename(None, [], self._scalar_type(None, dtype, coord), coord)
-            return c_ast.Cast(typename, expression.node, coord)
+            return c_ast.Cast(typename, self._discarded_value_node(expression), coord)
         self._require_value(expression)
         nullptr_bool = unqualified(expression.dtype) == "nullptr" and dtype == "bool" and (force or contextual)
         enum_explicit = (force and is_enum_type(expression.dtype)
@@ -1705,16 +1708,23 @@ class CppParser:
         if expression.symbol is not None and expression.symbol.kind == "function":
             self._unsupported(self._peek(), "function-to-pointer conversion")
 
-    def _expression(self):
-        lhs = self._binary(1)
+    def _expression(self, template_argument=False):
+        lhs = self._binary(1, template_argument=template_argument)
+        question = self._accept('?')
+        if question:
+            from pcc.frontends.cpp.conditional_expressions import conditional_expression, expression_sequence
+            consequent = expression_sequence(self, template_argument=template_argument)
+            self._expect(':')
+            alternative = self._expression(template_argument=template_argument)
+            return conditional_expression(self, lhs, consequent, alternative, question.coord)
         if self._peek().value in ("+=", "-=", "*=", "/=", "%=", "<<=", ">>=",
                                   "&=", "^=", "|="):
             assignment = self.cursor.take()
-            rhs = self._expression()
+            rhs = self._expression(template_argument=template_argument)
             return self._compound_assignment_expression(assignment.value[:-1], lhs, rhs, assignment.coord)
         assignment = self._accept("=")
         if assignment:
-            rhs = self._expression()
+            rhs = self._expression(template_argument=template_argument)
             return self._assignment_expression(lhs, rhs, assignment.coord)
         return lhs
 
@@ -2094,7 +2104,7 @@ class CppParser:
         return Expression(self._convert(literal, result_type, coord, force=True), result_type,
                           constant_fact=known(result_type, size, coord))
 
-    def _unary(self):
+    def _unary(self, address_operand=False):
         token = self._peek()
         from pcc.frontends.cpp.allocation import (
             global_delete_ahead, global_new_ahead, parse_delete, parse_new,
@@ -2116,9 +2126,9 @@ class CppParser:
             return self._increment_expression(token.value, self._unary(), token.coord)
         if token.value in ("+", "-", "~", "!", "&", "*"):
             self.cursor.take()
-            expression = self._unary()
+            expression = self._unary(address_operand=token.value == "&")
             return self._unary_expression(token.value, expression, token.coord)
-        expression = self._primary()
+        expression = self._primary(address_operand=address_operand)
         while self._peek().value in (".", "->", "++", "--", "["):
             operator = self.cursor.take()
             if operator.value == "[":
@@ -2482,7 +2492,7 @@ class CppParser:
                                         "explicit template type arguments require arithmetic types", coord)
                 argument = TemplateArgument("type", dtype, coord)
             else:
-                expression = self._binary(1, template_argument=True)
+                expression = self._expression(template_argument=True)
                 self._require_value(expression)
                 argument = TemplateArgument("value", expression, coord)
             argument.tokens = tuple(self.cursor.tokens[start:self.cursor.position])
@@ -2520,7 +2530,7 @@ class CppParser:
         return Expression(node, symbol.dtype,
                           constant_fact=not_constant(symbol.dtype, "implicit object parameter", coord))
 
-    def _primary(self):
+    def _primary(self, address_operand=False):
         token = self.cursor.take()
         from pcc.frontends.cpp.varargs import BUILTINS, parse_builtin
         if token.value in BUILTINS:
@@ -2540,7 +2550,8 @@ class CppParser:
                 raise CppDiagnostic("cpp.unsupported.pointer-templates", "nullptr template expressions are not implemented", token.coord)
             return self._literal("int", "0", "nullptr", token.coord)
         if token.value == "(":
-            expression = self._expression()
+            from pcc.frontends.cpp.conditional_expressions import expression_sequence
+            expression = expression_sequence(self)
             self._expect(")")
             expression.qualified_member = None
             expression.decltype_entity = None
@@ -2679,9 +2690,14 @@ class CppParser:
                                     "bare non-static members cannot be default values here; pointer-to-member defaults are not implemented", token.coord)
             object_available = (self.member_function is not None and self.this_symbol is not None
                                 and self.member_function.class_owner is symbol.class_owner)
-            if self.unevaluated_depth and not object_available:
+            qualified_address = (address_operand and (name.global_scope or len(name.parts) > 1)
+                                 and self._peek().value not in (".", "->", "[", "++", "--"))
+            if (self.unevaluated_depth or qualified_address) and not object_available:
                 # [expr.prim.id]/2.3 permits a no-object data member name in
                 # an unevaluated operand, with ordinary lookup/access intact.
+                # [expr.unary.op]/3 also permits the immediate qualified-id
+                # operand of &: preserve its descriptor for the existing
+                # pointer-to-member capability diagnostic, never emit it as T*.
                 result = Expression(c_ast.ID(symbol.c_name, token.coord), symbol.dtype,
                                     True, symbol)
             else:
@@ -2784,6 +2800,12 @@ class CppParser:
             return instantiate_array_new(self, pattern, bindings, environment)
         arguments = [self._instantiate_expression(child, bindings, environment)
                      for child in pattern.children]
+        if kind == 'conditional':
+            from pcc.frontends.cpp.conditional_expressions import conditional_expression
+            return conditional_expression(self, arguments[0], arguments[1], arguments[2], coord)
+        if kind == 'comma':
+            from pcc.frontends.cpp.conditional_expressions import comma_expression
+            return comma_expression(self, arguments[0], arguments[1], coord)
         if kind == 'subscript':
             return self._subscript_expression(arguments[0], arguments[1], coord)
         if kind == 'array-decay':

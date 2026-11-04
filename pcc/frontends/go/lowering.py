@@ -7,6 +7,7 @@ ordinary public IR, handled by the existing optimizer and self backend.
 """
 
 from pcc.ir.compat import ir
+from pcc.frontends.go.branches import walk
 from pcc.frontends.go.managed_objects import static_string_plan
 from pcc.frontends.go.records import StructType, underlying
 from pcc.frontends.go.types import (
@@ -122,10 +123,15 @@ class Lowerer:
         for source in self.program.functions:
             ftype = ir.FunctionType(ir_type(source.result), [ir_type(dtype) for _, dtype in source.params])
             self.functions[source.abi_symbol] = ir.Function(self.module, ftype, source.abi_symbol)
+            if source.token.text == "_":
+                self.functions[source.abi_symbol].linkage = "internal"
         for source in self.program.functions:
             self.function = self.functions[source.abi_symbol]
             entry = self.function.append_basic_block("entry")
             self.builder = ir.IRBuilder(entry)
+            self.labels = {id(statement): self.function.append_basic_block("source_label")
+                           for statement in walk(source.body) if statement.kind == "label"}
+            self.branch_targets = {}
             self.slots = dict(self.globals)
             self.temps = {}
             for index, expr in enumerate(source.temporaries):
@@ -151,13 +157,32 @@ class Lowerer:
 
     def statements(self, statements):
         for statement in statements:
-            if self.builder.block.is_terminated:
-                break
+            if statement.kind != "label":
+                self.continue_unreachable_source()
             self.statement(statement)
+
+    def continue_unreachable_source(self):
+        # A terminal source operation has no successor. Keep later source in
+        # a disconnected block, including a control body whose init panics,
+        # so every preallocated label receives its own complete CFG. Never
+        # attach this block to the terminal operation or invent a return edge.
+        if self.builder.block.is_terminated:
+            dead = self.function.append_basic_block("unreachable_source")
+            self.builder.position_at_end(dead)
 
     def statement(self, statement):
         kind = statement.kind
-        if kind == "const":
+        if kind in ("const", "empty"):
+            return
+        if kind == "label":
+            target = self.labels[id(statement)]
+            if not self.builder.block.is_terminated:
+                self.builder.branch(target)
+            self.builder.position_at_end(target)
+            self.statements(statement.body)
+            return
+        if kind == "goto":
+            self.builder.branch(self.labels[id(statement.control_target)])
             return
         if kind == "=":
             # Phase one evaluates LHS index operands and every RHS, left to
@@ -210,10 +235,10 @@ class Lowerer:
             self.statements(statement.body)
             return
         if kind == "break":
-            self.builder.branch(self.breaks[-1])
+            self.builder.branch(self.branch_targets[id(statement.control_target)][0])
             return
         if kind == "continue":
-            self.builder.branch(self.loops[-1][0])
+            self.builder.branch(self.branch_targets[id(statement.control_target)][1])
             return
         if kind == "fallthrough":
             self.builder.branch(self.fallthrough)
@@ -221,12 +246,12 @@ class Lowerer:
         if kind == "switch":
             if statement.init is not None:
                 self.statement(statement.init)
-                if self.builder.block.is_terminated:
-                    return
+                self.continue_unreachable_source()
             selector = statement.exprs[0]
             self.saved_values[id(selector)] = self.expression(selector)
             bodies = [self.function.append_basic_block("switch_case") for _ in statement.cases]
             done = self.function.append_basic_block("switch_done")
+            self.branch_targets[id(statement)] = done, None
             default = done
             # Only dispatch evaluates case expressions. Fallthrough goes
             # directly to the next clause body, including a middle default.
@@ -256,8 +281,7 @@ class Lowerer:
         if kind == "if":
             if statement.init is not None:
                 self.statement(statement.init)
-                if self.builder.block.is_terminated:
-                    return
+                self.continue_unreachable_source()
             condition = self.expression(statement.exprs[0])
             yes = self.function.append_basic_block("if_yes")
             no = self.function.append_basic_block("if_no")
@@ -304,6 +328,7 @@ class Lowerer:
             body = self.function.append_basic_block("range_body")
             post = self.function.append_basic_block("range_post")
             done = self.function.append_basic_block("range_done")
+            self.branch_targets[id(statement)] = done, post
             self.builder.branch(check)
             self.builder.position_at_end(check)
             index = self.builder.load(index_slot)
@@ -346,12 +371,12 @@ class Lowerer:
         if kind == "for":
             if statement.init is not None:
                 self.statement(statement.init)
-                if self.builder.block.is_terminated:
-                    return
+                self.continue_unreachable_source()
             check = self.function.append_basic_block("for_check")
             body = self.function.append_basic_block("for_body")
             post = self.function.append_basic_block("for_post")
             done = self.function.append_basic_block("for_done")
+            self.branch_targets[id(statement)] = done, post
             self.builder.branch(check)
             self.builder.position_at_end(check)
             if statement.exprs:
@@ -434,6 +459,8 @@ class Lowerer:
             return self.string_value(expr.constant) if is_string(expr.type) else ir.Constant(ir_type(expr.type), int(expr.constant))
         if expr.kind == "string_compare":
             return self.string_compare(expr)
+        if expr.kind == "minmax":
+            return self.minmax(expr)
         if expr.kind == "aggregate_compare":
             # Capture both source values before examining any component.
             # No operand is reloaded or re-evaluated by the comparison walk.
@@ -533,6 +560,32 @@ class Lowerer:
             return self.builder.trunc(value, ir_type(expr.type)) if narrow else value
         raise AssertionError("unlowered typed expression: " + expr.kind)
 
+    def minmax(self, expr):
+        # Evaluate every argument exactly once before comparison/selection.
+        # This also expands a sole multi-result call without calling it twice.
+        values = self.values(expr.args)
+        result = values[0]
+        operation = "<" if expr.value == "min" else ">"
+        if is_string(expr.type):
+            storage = self.temps[id(expr)]
+            self.builder.store(result, storage)
+            for value in values[1:]:
+                better = self.string_compare_values(operation, value, result)
+                choose = self.function.append_basic_block("minmax.choose")
+                done = self.function.append_basic_block("minmax.done")
+                self.builder.cbranch(better, choose, done)
+                self.builder.position_at_end(choose)
+                self.builder.store(value, storage)
+                self.builder.branch(done)
+                self.builder.position_at_end(done)
+                result = self.builder.load(storage)
+            # Strict comparison keeps the first equal string descriptor.
+            return result
+        compare = self.builder.icmp_signed if integer_signed(expr.type) else self.builder.icmp_unsigned
+        for value in values[1:]:
+            result = self.builder.select(compare(operation, value, result), value, result)
+        return result
+
     def shift(self, expr, left):
         width = integer_bits(expr.type)
         signed = integer_signed(expr.type)
@@ -630,6 +683,7 @@ class Lowerer:
         body = self.function.append_basic_block("string.range.body")
         post = self.function.append_basic_block("string.range.post")
         done = self.function.append_basic_block("string.range.done")
+        self.branch_targets[id(statement)] = done, post
         self.builder.branch(check)
         self.builder.position_at_end(check)
         offset = self.builder.load(offset_slot)

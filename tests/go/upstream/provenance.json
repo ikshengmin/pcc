@@ -8,12 +8,24 @@
     "src/math/bits/bits.go": "694e0114bda396589e8c993a3d7880a0b461da23ee64c272929a3a5b69c2acf2",
     "test/ken/for.go": "c7de70084214cdc33220b168d0d47f075c0d2a3dac641fd66b46394079f6400e",
     "src/math/bits/bits_tables.go": "c4cb4a05dab6d395d9d51720893a42f0a9d1cdf8a0c2383d87268e49acb73f7f",
-    "src/math/bits/bits_errors.go": "1341283973609b16798176456337e3a0cbff9bfb32f79673a45197223471d7c6"
+    "src/math/bits/bits_errors.go": "1341283973609b16798176456337e3a0cbff9bfb32f79673a45197223471d7c6",
+    "test/ken/label.go": "60642b4daaae82b23dc7c9b68fef1de0caa16801e1fcb7e1fc03716edc373228",
+    "test/char_lit.go": "a564a0a6031ae143fafa3b03b85214d69354cc5b7bb63baff20335a981dde053",
+    "test/char_lit1.go": "da0e5854c860c2081cd0da3ddd3c2b59f9547daacd00a7bbd668a987d6246100",
+    "test/fixedbugs/issue60582.go": "5560002195cb3d895aec27b0dd1f559ae2019af00bbdf1863d40f8ebdc181ce7",
+    "src/internal/types/testdata/fixedbugs/issue61486.go": "a4397b17537cbf3d95d6d969a23b09db90992e6f1faf95fab754010adf45f242",
+    "test/fixedbugs/issue8079.go": "97e0601f3838cc934c1b5a9a04a18ea8e0e1a77ab8d57a75ae6123b466a5a1a7"
   },
   "commit": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
   "git_blobs": {
     "src/math/bits/bits_tables.go": "f869b8d5c377d5540ec2208ba9321cf48bbcf316",
     "src/math/bits/bits_errors.go": "353d2f6ad3a27d6610993506e42389e9ea2e79de",
-    "LICENSE": "2a7cf70da6e498df9c11ab6a5eaa2ddd7af34da4"
+    "LICENSE": "2a7cf70da6e498df9c11ab6a5eaa2ddd7af34da4",
+    "test/ken/label.go": "fcb3e611d9d6a62ab3f9bb5fed3d7da035c4b3ca",
+    "test/char_lit.go": "836c3c1a2d0b0de309abe4b8a6ffa0aabc85668a",
+    "test/char_lit1.go": "8899aff83aba34a42e887f0faa48e2630fbfd686",
+    "test/fixedbugs/issue60582.go": "f698918098fa59bc20c1f50f36c8ae3e050a65ee",
+    "src/internal/types/testdata/fixedbugs/issue61486.go": "b12a800f0d9e84003e265fb158a432c08646d8e9",
+    "test/fixedbugs/issue8079.go": "994999bf6fbfb5d13c8942d3794fe03310f5f9b5"
   }
 }

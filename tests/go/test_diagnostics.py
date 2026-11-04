@@ -78,6 +78,7 @@ CASES = [
     ('generic-boundaries', original('func f[T ~int](x T)T{return x}')),
     ('limit-generic-instances', original('func f[T any](x T)T{return x}',
         ';'.join('_=f(['+str(n)+']int{})' for n in range(129)))),
+    ('linkname-directives', 'package main\nimport _ "unsafe"\n//go:linkname X\nvar X int\nfunc main(){}\n'),
 ]
 
 
@@ -89,6 +90,9 @@ GRADUATED_RECEIVER_CASE = ('pointer-receivers', original('type T int;func(t *T)f
 GRADUATED_ARRAY_RANGE_CASE = ('non-array-range', original('func f(p *[2]int){for range p{}}'))
 GRADUATED_STRING_RANGE_CASE = ('non-array-range', original(body='for range "abc"{}'))
 GRADUATED_POINTER_SWITCH_CASE = ('pointer-switch', original(body='x:=1;p:=&x;switch p{case nil:}'))
+GRADUATED_STRUCT_TAG_CASE = ('struct-tags', original('type T struct{x int `tag`}'))
+GRADUATED_BLANK_FUNCTION_CASE = ('blank-function-declarations', original('func _(){}'))
+GRADUATED_BLANK_TYPE_CASE = ('blank-type-declarations', original('type _ int'))
 GRADUATED_AGGREGATE_CASES = (
     ('aggregate-comparison', original(body='var a [1]int;_=a==a')),
     ('aggregate-switch', original(body='var a [1]int;switch a{case a:}')),
@@ -101,6 +105,7 @@ RETIRED_CASES = (RETIRED_DOT_IMPORT_CASE,)
 # test_pointer_switches, not to a skip or a reclassified historical result.
 GRADUATED_CASES = (GRADUATED_RECEIVER_CASE, GRADUATED_ARRAY_RANGE_CASE,
                   GRADUATED_POINTER_SWITCH_CASE, GRADUATED_STRING_RANGE_CASE,
+                  GRADUATED_STRUCT_TAG_CASE, GRADUATED_BLANK_FUNCTION_CASE, GRADUATED_BLANK_TYPE_CASE,
                   *GRADUATED_AGGREGATE_CASES)
 assert all(CASES.count(case) == 1 for case in GRADUATED_CASES)
 assert all(CASES.count(case) == 1 for case in RETIRED_CASES)
@@ -145,8 +150,14 @@ def test_uncoded_legacy_capability_is_not_misclassified_as_invalid_source():
     assert caught.value.code is None and caught.value.kind == 'unclassified'
 
 
+GRADUATED_STATIC_BLANK_IMPORT = {
+    'main': (('main.go', 'package main;import _ "local";func main(){}'),),
+    'local': (('lib.go', 'package local;const X=3'),),
+}
+
+
 def test_import_capability_codes_are_file_graph_boundaries():
-    for alias,suffix in [('_','package-initialization'),('int','predeclared-shadowing')]:
+    for alias,suffix in [('int','predeclared-shadowing')]:
         packages={'main':(('main.go','package main;import '+alias+' "local";func main(){}'),),
                   'local':(('lib.go','package local;const X=3'),)}
         with pytest.raises(UnsupportedGo) as caught:compile_go_packages(packages)

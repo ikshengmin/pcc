@@ -60,10 +60,13 @@ INVALID = [
 GRADUATED_AGGREGATE_COMPARISON = (
     "type A struct{X uint64}", "var a A;_=a==a", "unsupported comparison",
 )
+# Preserve this exact historical source and its list position. The source,
+# native and identical-reference obligations now live in test_struct_tags.
+GRADUATED_STRUCT_TAG = ('type A struct{X int `json:"x"`}', "", "struct tags")
 
 
 @pytest.mark.parametrize("declarations,body,message", [
-    case for case in INVALID if case != GRADUATED_AGGREGATE_COMPARISON
+    case for case in INVALID if case not in (GRADUATED_AGGREGATE_COMPARISON, GRADUATED_STRUCT_TAG)
 ])
 def test_nominal_and_record_boundaries_are_source_diagnostics(declarations, body, message, monkeypatch):
     from pcc.frontends.go.lowering import Lowerer

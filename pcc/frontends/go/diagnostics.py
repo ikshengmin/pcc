@@ -10,11 +10,9 @@ UNIMPLEMENTED_FEATURES = {
     'go.unsupported.limit-generic-instances': 'go.capability.limit-generic-instances',
     'go.unsupported.array-bounds-panic': 'go.capability.array-bounds-panic',
     'go.unsupported.array-element-types': 'go.capability.array-element-types',
-    'go.unsupported.blank-function-declarations': 'go.capability.blank-function-declarations',
     'go.unsupported.blank-method-declarations': 'go.capability.blank-method-declarations',
     'go.unsupported.blank-package-variables': 'go.capability.blank-package-variables',
     'go.unsupported.blank-struct-fields': 'go.capability.blank-struct-fields',
-    'go.unsupported.blank-type-declarations': 'go.capability.blank-type-declarations',
     'go.unsupported.builtin-io': 'go.capability.builtin-io',
     'go.unsupported.complex-types': 'go.capability.complex-types',
     'go.unsupported.division-panic': 'go.capability.division-panic',
@@ -31,6 +29,7 @@ UNIMPLEMENTED_FEATURES = {
     'go.unsupported.limit-struct-fields': 'go.capability.limit-struct-fields',
     'go.unsupported.limit-type-expansion': 'go.capability.limit-type-expansion',
     'go.unsupported.local-type-declarations': 'go.capability.local-type-declarations',
+    'go.unsupported.linkname-directives': 'go.capability.linkname-directives',
     'go.unsupported.method-values': 'go.capability.method-values',
     'go.unsupported.negative-shift-panic': 'go.capability.negative-shift-panic',
     'go.unsupported.package-initialization': 'go.capability.package-initialization',
@@ -44,7 +43,6 @@ UNIMPLEMENTED_FEATURES = {
     'go.unsupported.predeclared-shadowing': 'go.capability.predeclared-shadowing',
     'go.unsupported.slice-storage': 'go.capability.slice-storage',
     'go.unsupported.string-bounds-panic': 'go.capability.string-bounds-panic',
-    'go.unsupported.struct-tags': 'go.capability.struct-tags',
 }
 
 

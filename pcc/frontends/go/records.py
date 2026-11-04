@@ -27,6 +27,8 @@ class Field:
     type: object
     package: str = ""
     embedded: bool = False
+    # Decoded Go string bytes. An absent tag and an empty string are identical.
+    tag: bytes = b""
 
 
 @dataclass(frozen=True)
@@ -59,7 +61,10 @@ class StructType:
     fields: tuple
 
     def __str__(self):
-        return "struct{" + "; ".join(field.name + " " + str(field.type) for field in self.fields) + "}"
+        return "struct{" + "; ".join(
+            field.name + " " + str(field.type) +
+            (" " + repr(field.tag) if field.tag else "")
+            for field in self.fields) + "}"
 
 
 def underlying(dtype):

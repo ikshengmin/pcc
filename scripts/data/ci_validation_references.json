@@ -1195,12 +1195,6 @@
           "Official Go external reference via tests.go.owned_execution.compile_reference"
         ]
       },
-      "test_official_go_builds_exact_retained_rune_fixture_without_running_it": {
-        "activity": "external-reference",
-        "reason": [
-          "Official Go external reference via tests.go.owned_execution.compile_reference"
-        ]
-      },
       "test_official_go_builds_unsupported_builtin_originals_without_execution": {
         "activity": "external-reference",
         "reason": [
@@ -1223,6 +1217,12 @@
         "activity": "external-reference",
         "reason": [
           "Official Go external reference via tests.go.owned_execution.compile_reference"
+        ]
+      },
+      "test_identical_retained_rune_fixture_matches_official_complete_streams": {
+        "activity": "external-reference",
+        "reason": [
+          "The identical retained builtin_io_rune_frontier.go now has owned and official compilation/execution with full raw stdout/stderr/exit and binary/source identities; no reference execution is yet available."
         ]
       }
     },
@@ -2305,6 +2305,192 @@
         "activity": "external-reference",
         "reason": [
           "Official Go observes exact invalid originals through the source-attributed rc1/no-binary rejection protocol, retaining raw diagnostics."
+        ]
+      },
+      "test_corrected_empty_declaration_runtime_original_is_reference_only": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go builds the exact corrected complete any-variable source; owned interface storage stays explicitly unsupported. No external compiler is a production fallback."
+        ]
+      }
+    },
+    "tests/go/test_labels.py": {
+      "test_identical_complete_and_scope_originals_match_official_raw_execution": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses the complete unchanged pinned official Go label.go and identical authored originals with the selected official Go toolchain. Retains raw stdout/stderr/exit and binary/source identities, normal attributed compiler rejections and reference-only storage boundaries. No external compiler is a production owner; execution is UNRUN."
+        ]
+      },
+      "test_identical_invalid_label_originals_have_attributed_official_rejections": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses the complete unchanged pinned official Go label.go and identical authored originals with the selected official Go toolchain. Retains raw stdout/stderr/exit and binary/source identities, normal attributed compiler rejections and reference-only storage boundaries. No external compiler is a production owner; execution is UNRUN."
+        ]
+      },
+      "test_reentered_address_original_is_reference_only_not_pcc_admission": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses the complete unchanged pinned official Go label.go and identical authored originals with the selected official Go toolchain. Retains raw stdout/stderr/exit and binary/source identities, normal attributed compiler rejections and reference-only storage boundaries. No external compiler is a production owner; execution is UNRUN."
+        ]
+      }
+    },
+    "tests/go/test_struct_tags.py": {
+      "test_identical_complete_and_former_originals_match_official_raw_execution": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses original complete Go sources with the selected official Go toolchain; compares exact raw process results where PCC is admitted, records source-attributed invalid-source rejections, and labels valid storage/pointer frontiers reference-only. No external compiler is a production owner and all execution is CI-only UNRUN."
+        ]
+      },
+      "test_identical_package_graph_matches_official_raw_execution": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses original complete Go sources with the selected official Go toolchain; compares exact raw process results where PCC is admitted, records source-attributed invalid-source rejections, and labels valid storage/pointer frontiers reference-only. No external compiler is a production owner and all execution is CI-only UNRUN."
+        ]
+      },
+      "test_identical_distinct_tag_spellings_have_attributed_official_rejections": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses original complete Go sources with the selected official Go toolchain; compares exact raw process results where PCC is admitted, records source-attributed invalid-source rejections, and labels valid storage/pointer frontiers reference-only. No external compiler is a production owner and all execution is CI-only UNRUN."
+        ]
+      },
+      "test_identical_invalid_originals_have_attributed_official_rejections": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses original complete Go sources with the selected official Go toolchain; compares exact raw process results where PCC is admitted, records source-attributed invalid-source rejections, and labels valid storage/pointer frontiers reference-only. No external compiler is a production owner and all execution is CI-only UNRUN."
+        ]
+      },
+      "test_valid_storage_frontiers_have_official_reference_only_execution": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses original complete Go sources with the selected official Go toolchain; compares exact raw process results where PCC is admitted, records source-attributed invalid-source rejections, and labels valid storage/pointer frontiers reference-only. No external compiler is a production owner and all execution is CI-only UNRUN."
+        ]
+      }
+    },
+    "tests/go/test_rune_literals.py": {
+      "test_identical_complete_rune_originals_match_official_raw_execution": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses complete unchanged Go character-literal originals and identical authored sources with the selected official Go toolchain. Raw stdout/stderr/exit, source/binary identities and source-attributed rejections are retained. Missing original os sources remain a PCC boundary rather than a stub. No external compiler is a production owner."
+        ]
+      },
+      "test_identical_invalid_rune_originals_have_attributed_official_rejections": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses complete unchanged Go character-literal originals and identical authored sources with the selected official Go toolchain. Raw stdout/stderr/exit, source/binary identities and source-attributed rejections are retained. Missing original os sources remain a PCC boundary rather than a stub. No external compiler is a production owner."
+        ]
+      },
+      "test_complete_official_character_literals_remain_reference_only_without_os_sources": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses complete unchanged Go character-literal originals and identical authored sources with the selected official Go toolchain. Raw stdout/stderr/exit, source/binary identities and source-attributed rejections are retained. Missing original os sources remain a PCC boundary rather than a stub. No external compiler is a production owner."
+        ]
+      },
+      "test_complete_official_invalid_unicode_has_same_input_rejection": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses complete unchanged Go character-literal originals and identical authored sources with the selected official Go toolchain. Raw stdout/stderr/exit, source/binary identities and source-attributed rejections are retained. Missing original os sources remain a PCC boundary rather than a stub. No external compiler is a production owner."
+        ]
+      }
+    },
+    "tests/go/test_minmax.py": {
+      "test_identical_complete_and_graduated_originals_match_official_raw_execution": {
+        "activity": "external-reference",
+        "reason": [
+          "Complete unchanged official Go min/shift inputs and identical authored programs retain source identities, raw process streams/status and compiler/binary receipts. The original package-p blank function stays uncallable; its extra main is an explicit authored package companion. The fmt-dependent original remains reference-only, with no production external compiler or stub. All execution is UNRUN."
+        ]
+      },
+      "test_identical_upstream_package_graph_has_official_source_and_raw_process_evidence": {
+        "activity": "external-reference",
+        "reason": [
+          "Complete unchanged official Go min/shift inputs and identical authored programs retain source identities, raw process streams/status and compiler/binary receipts. The original package-p blank function stays uncallable; its extra main is an explicit authored package companion. The fmt-dependent original remains reference-only, with no production external compiler or stub. All execution is UNRUN."
+        ]
+      },
+      "test_identical_invalid_originals_have_attributed_official_rejections": {
+        "activity": "external-reference",
+        "reason": [
+          "Complete unchanged official Go min/shift inputs and identical authored programs retain source identities, raw process streams/status and compiler/binary receipts. The original package-p blank function stays uncallable; its extra main is an explicit authored package companion. The fmt-dependent original remains reference-only, with no production external compiler or stub. All execution is UNRUN."
+        ]
+      },
+      "test_complete_fmt_original_has_reference_only_execution_without_pcc_stub": {
+        "activity": "external-reference",
+        "reason": [
+          "Complete unchanged official Go min/shift inputs and identical authored programs retain source identities, raw process streams/status and compiler/binary receipts. The original package-p blank function stays uncallable; its extra main is an explicit authored package companion. The fmt-dependent original remains reference-only, with no production external compiler or stub. All execution is UNRUN."
+        ]
+      }
+    },
+    "tests/go/test_blank_types.py": {
+      "test_identical_complete_and_graduated_originals_match_official_processes": {
+        "activity": "external-reference",
+        "reason": [
+          "Complete unchanged issue8079 with an explicit authored package companion, identical authored blank-type programs, and original invalid-source/package graphs retain source/compiler/binary identities and raw process streams/status. Existing storage frontiers remain reference-only. No compiler is a production fallback. All execution is UNRUN."
+        ]
+      },
+      "test_identical_import_graphs_and_official_package_keep_raw_process_evidence": {
+        "activity": "external-reference",
+        "reason": [
+          "Complete unchanged issue8079 with an explicit authored package companion, identical authored blank-type programs, and original invalid-source/package graphs retain source/compiler/binary identities and raw process streams/status. Existing storage frontiers remain reference-only. No compiler is a production fallback. All execution is UNRUN."
+        ]
+      },
+      "test_identical_invalid_type_originals_have_attributed_official_rejections": {
+        "activity": "external-reference",
+        "reason": [
+          "Complete unchanged issue8079 with an explicit authored package companion, identical authored blank-type programs, and original invalid-source/package graphs retain source/compiler/binary identities and raw process streams/status. Existing storage frontiers remain reference-only. No compiler is a production fallback. All execution is UNRUN."
+        ]
+      },
+      "test_identical_invalid_import_graphs_have_attributed_official_rejections": {
+        "activity": "external-reference",
+        "reason": [
+          "Complete unchanged issue8079 with an explicit authored package companion, identical authored blank-type programs, and original invalid-source/package graphs retain source/compiler/binary identities and raw process streams/status. Existing storage frontiers remain reference-only. No compiler is a production fallback. All execution is UNRUN."
+        ]
+      },
+      "test_valid_storage_frontiers_remain_reference_only": {
+        "activity": "external-reference",
+        "reason": [
+          "Complete unchanged issue8079 with an explicit authored package companion, identical authored blank-type programs, and original invalid-source/package graphs retain source/compiler/binary identities and raw process streams/status. Existing storage frontiers remain reference-only. No compiler is a production fallback. All execution is UNRUN."
+        ]
+      }
+    },
+    "tests/go/test_blank_imports.py": {
+      "test_identical_complete_blank_import_graphs_match_official_processes": {
+        "activity": "external-reference",
+        "reason": [
+          "Identical complete authored source graphs, exact former blank-import inputs, ordinary invalid source, initial/noninitial BOM and inert/malformed/misplaced directive originals retain source/compiler/binary identities and raw process streams/status. Existing runtime initialization and valid linkname programs remain reference-only. No external compiler is a production fallback. All execution is UNRUN."
+        ]
+      },
+      "test_identical_invalid_blank_dependencies_have_attributed_official_rejections": {
+        "activity": "external-reference",
+        "reason": [
+          "Identical complete authored source graphs, exact former blank-import inputs, ordinary invalid source, initial/noninitial BOM and inert/malformed/misplaced directive originals retain source/compiler/binary identities and raw process streams/status. Existing runtime initialization and valid linkname programs remain reference-only. No external compiler is a production fallback. All execution is UNRUN."
+        ]
+      },
+      "test_actual_initialization_and_linkname_frontiers_remain_reference_only": {
+        "activity": "external-reference",
+        "reason": [
+          "Identical complete authored source graphs, exact former blank-import inputs, ordinary invalid source, initial/noninitial BOM and inert/malformed/misplaced directive originals retain source/compiler/binary identities and raw process streams/status. Existing runtime initialization and valid linkname programs remain reference-only. No external compiler is a production fallback. All execution is UNRUN."
+        ]
+      },
+      "test_identical_inert_directive_spellings_match_official_processes": {
+        "activity": "external-reference",
+        "reason": [
+          "Identical complete authored source graphs, exact former blank-import inputs, ordinary invalid source, initial/noninitial BOM and inert/malformed/misplaced directive originals retain source/compiler/binary identities and raw process streams/status. Existing runtime initialization and valid linkname programs remain reference-only. No external compiler is a production fallback. All execution is UNRUN."
+        ]
+      },
+      "test_identical_malformed_linkname_arity_has_official_source_rejection": {
+        "activity": "external-reference",
+        "reason": [
+          "Identical complete authored source graphs, exact former blank-import inputs, ordinary invalid source, initial/noninitial BOM and inert/malformed/misplaced directive originals retain source/compiler/binary identities and raw process streams/status. Existing runtime initialization and valid linkname programs remain reference-only. No external compiler is a production fallback. All execution is UNRUN."
+        ]
+      },
+      "test_identical_misplaced_directives_have_official_source_rejections": {
+        "activity": "external-reference",
+        "reason": [
+          "Identical complete authored source graphs, exact former blank-import inputs, ordinary invalid source, initial/noninitial BOM and inert/malformed/misplaced directive originals retain source/compiler/binary identities and raw process streams/status. Existing runtime initialization and valid linkname programs remain reference-only. No external compiler is a production fallback. All execution is UNRUN."
+        ]
+      },
+      "test_identical_noninitial_bom_originals_have_official_source_rejections": {
+        "activity": "external-reference",
+        "reason": [
+          "Identical complete authored source graphs, exact former blank-import inputs, ordinary invalid source, initial/noninitial BOM and inert/malformed/misplaced directive originals retain source/compiler/binary identities and raw process streams/status. Existing runtime initialization and valid linkname programs remain reference-only. No external compiler is a production fallback. All execution is UNRUN."
         ]
       }
     }

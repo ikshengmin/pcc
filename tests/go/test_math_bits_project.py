@@ -75,9 +75,9 @@ def test_only_source_admission_is_attempted_by_the_owned_stage(tmp_path):
     project.run_owned(report, files, tmp_path)
     row = report["owned"]["package_frontend"]
     assert row["status"] == "UNSUPPORTED"
-    assert row["code"] == "go.unsupported.package-initialization"
-    assert (row["filename"], row["line"], row["column"]) == ("bits_errors.go", 9, 10)
-    assert "blank imports require shared-runtime package initialization support" in row["diagnostic"]
+    assert row["code"] == "go.unsupported.linkname-directives"
+    assert (row["filename"], row["line"], row["column"]) == ("bits_errors.go", 11, 1)
+    assert "owned object-symbol binding and runtime ownership" in row["diagnostic"]
     assert not (tmp_path / "package.ll").exists()
     assert report["project_accepted"] is False
     assert all(report["owned"][name]["status"] == "UNRUN" for name in (

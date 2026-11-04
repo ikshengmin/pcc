@@ -1468,6 +1468,37 @@ def pcc_gc_root_copy_local(destination, source, source_borrowed: int) -> int:
         store_ptr(destination, 0, value)
         return 0
     plan = stack_alloc(128)
+    if (
+        atomic_load_i32(global_addr("pcc_gc_config_initialized"), 0, "acquire") != 0
+        and atomic_load_i32(global_addr("pcc_gc_backend_frozen"), 0, "acquire") != 0
+    ):
+        local_backend: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+        if (
+            (local_backend == 1 or local_backend == 2)
+            and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
+            and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
+            and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
+        ):
+            # Private bindings and a live actual owner make a nonmoving copy
+            # independent of the shared graph lock. Protect every raw load
+            # through publication, including the nested publisher's exit.
+            pcc_thread_no_park_enter()
+            # The fallback's fixed-frame scratch still exists on this path.
+            # Preserve its zeroing before any outer exit can admit a stop.
+            memset(plan, 0, 128)
+            local_status: int = -4
+            if ptr_is_null(load_ptr(destination, 0)) != 0:
+                local_value = load_ptr(source, 0)
+                local_valid: int = 1
+                if ptr_is_null(local_value) == 0 and is_tagged_int(local_value) == 0:
+                    if (atomic_load_i32(local_value, PYOBJECTHEADER_FLAGS_OFFSET, "acquire") & 524288) != 0:
+                        local_valid = 0
+                        local_status = -1
+                if local_valid != 0:
+                    _store_root_nonmoving_tracing(destination, local_value, local_backend)
+                    local_status = 0
+            pcc_thread_no_park_exit()
+            return local_status
     _gc_backend_fast()
     pcc_py_gc_minor_graph_lock()
     status: int = -4

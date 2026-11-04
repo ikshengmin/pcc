@@ -47,6 +47,7 @@ class ClassType:
         self.coord = coord
         self.internal_linkage = internal_linkage
         self.declaration_scope = declaration_scope
+        self.declaration_symbol = None
         self.c_tag = "__pcc_cpp_class_" + "".join(
             str(len(part)) + part for part in self.qualified_name
         )
@@ -130,6 +131,9 @@ class ClassDefinition:
         self.defaulted_constructors = []
         self.inline_methods = []
         self.default_arguments = []
+        # Nominal class identities, not copied declarations or access flags.
+        # Forward completion must not replace the nominated friend's identity.
+        self.friend_classes = []
         # ABI lexical ordinal for unnamed class-scope types, including empty ones.
         self.unnamed_type_count = 0
         self.constructors = Symbol(dtype.name, "function", dtype.coord)
@@ -300,6 +304,7 @@ def parse_class(parser):
     elif previous.owner is not parser.scope:
         _unsupported(name, "redeclaration of an imported class outside its declaring namespace is not implemented")
     dtype = previous.dtype
+    dtype.declaration_symbol = previous
     if parser._accept(";"):
         return c_ast.Decl(
             None, [], [], [], c_ast.Struct(dtype.c_tag, None, name.coord), None, None, name.coord
@@ -323,6 +328,10 @@ def parse_class(parser):
                 parser.cursor.take()
                 parser._expect(":")
                 definition.set_access(token.value)
+                continue
+            if token.value == "friend":
+                from pcc.frontends.cpp.friend_classes import parse_friend_class
+                parse_friend_class(parser, definition)
                 continue
             if token.value in ("using", "typedef"):
                 if (token.value == "using"
@@ -377,7 +386,7 @@ def parse_class(parser):
                 if next_token.value in ("operator", "inline", "constexpr", "("):
                     _unsupported(token, "conversion functions and combined/parenthesized constructor specifiers are not implemented")
                 raise CppDiagnostic("cpp.invalid-explicit", "explicit requires a constructor or conversion function", token.coord)
-            if token.value in ("class", "struct", "union", "friend", "virtual",
+            if token.value in ("class", "struct", "union", "virtual",
                                "template", "constexpr", "operator"):
                 _unsupported(token, "non-data class member semantics are not implemented")
             if token.value == "enum":

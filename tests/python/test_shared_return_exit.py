@@ -109,8 +109,10 @@ def test_returns_leave_root_frames_once_per_exit():
     codegen._strict_no_libpython = True
     codegen._prefer_native_callable_values = True
     body = _function(str(codegen.generate(module)), "user_exits_pick")
-    enters = len(re.findall(r"@pcc_gc_frame_enter\(", body))
-    leaves = len(re.findall(r"@pcc_gc_frame_leave\(", body))
+    # Proven private cells use the local ABI, optionally wrapped by precise
+    # stack maps. Count the same ordinary-frame protocol for every route.
+    enters = len(re.findall(r"@pcc_gc_frame_enter(?:_local)?(?:_mapped)?\(", body))
+    leaves = len(re.findall(r"@pcc_gc_frame_leave(?:_local)?(?:_mapped)?\(", body))
     returns = len(re.findall(r"^\s*ret ", body, re.M))
     assert enters >= 6, enters
     # One leave per slot on each shared return exit (rooted and unrooted
@@ -128,7 +130,7 @@ def test_returns_leave_root_frames_once_per_exit():
         if source in aliases:
             aliases.add(target)
     for line in body.splitlines():
-        if "@pcc_gc_frame_enter(" in line:
+        if re.search(r"@pcc_gc_frame_enter(?:_local)?(?:_mapped)?\(", line):
             assert not any(alias + ")" in line or alias + "," in line for alias in aliases), line
 
 

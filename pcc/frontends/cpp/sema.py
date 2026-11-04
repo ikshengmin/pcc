@@ -161,7 +161,7 @@ class Scope:
             second = second.parent
         return second
 
-    def lookup(self, name, coord=None, kinds=None):
+    def lookup(self, name, coord=None, kinds=None, stop_at=None):
         scope = self
         injected = {}
         while scope is not None:
@@ -185,13 +185,19 @@ class Scope:
                 found.append(direct)
             if found:
                 return self._merge(found, name, coord)
+            if scope is stop_at:
+                break
             scope = scope.parent
         return None
 
-    def resolve_name(self, name, namespace_only=False, qualifier_only=False):
+    def resolve_name(self, name, namespace_only=False, qualifier_only=False,
+                     elaborated_type=False):
         """Resolve a parsed path without replacing it by a flattened spelling."""
         qualifier_kinds = ("namespace", "namespace-alias", "type", "template-type")
-        final_kinds = (("namespace", "namespace-alias") if namespace_only else
+        if elaborated_type:
+            qualifier_kinds += ("class-template",)
+        final_kinds = (("type", "template-type", "class-template") if elaborated_type else
+                       ("namespace", "namespace-alias") if namespace_only else
                        qualifier_kinds if qualifier_only else None)
         scope = self.global_scope() if name.global_scope else self
         symbol = None
@@ -199,9 +205,15 @@ class Scope:
             kinds = final_kinds if index == len(name.parts) - 1 else qualifier_kinds
             symbol = (scope.lookup(part, name.coord, kinds) if index == 0 and not name.global_scope
                       else scope.lookup_qualified(part, name.coord, kinds))
+            if elaborated_type and symbol is None:
+                injected = getattr(scope, "class_type", None)
+                if injected is not None and part == injected.name:
+                    # [class.qual]/2 keeps an elaborated injected-class-name
+                    # a type, not a constructor. Reuse its canonical symbol.
+                    symbol = getattr(injected, "declaration_symbol", None)
             self.check_member_access(symbol, name.coord)
             if index != len(name.parts) - 1:
-                if symbol is not None and symbol.kind == "template-type":
+                if symbol is not None and symbol.kind in ("template-type", "class-template"):
                     raise CppDiagnostic("cpp.unsupported.dependent-lookup",
                                         "dependent qualified lookup requires template/class semantics", name.coord)
                 if (symbol is not None and symbol.kind == "type"
@@ -227,9 +239,10 @@ class Scope:
     def check_member_access(self, symbol, coord):
         """Check the selected declaration, not a nominal type's alias history.
 
-        Bases and friends are not admitted yet. A lexically
-        enclosing class grants access while its own declarations are parsed;
-        an unrelated scope may name only public declarations.
+        A lexically enclosing class or a directly nominated class friend
+        grants access while its own declarations are parsed. Friendship is
+        checked by identity and is not propagated through another friend.
+        Bases and friend functions retain their separate unsupported boundary.
         """
         if symbol is None or getattr(symbol, "access", "public") == "public":
             return
@@ -243,8 +256,10 @@ class Scope:
             deferred.append((symbol, coord))
             return
         context = self
+        friends = getattr(getattr(owner, "definition", None), "friend_classes", ())
         while context is not None:
-            if getattr(context, "class_type", None) is owner:
+            enclosing_class = getattr(context, "class_type", None)
+            if enclosing_class is owner or any(enclosing_class is friend for friend in friends):
                 return
             context = context.parent
         raise CppDiagnostic("cpp.member-access",

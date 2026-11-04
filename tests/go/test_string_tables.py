@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from pcc.frontends.go import GoDiagnostic, compile_go_packages, function_symbol
+from pcc.frontends.go import UnsupportedGo, compile_go_packages, function_symbol
 from tests.go.owned_execution import Artifact, Execution, compile_module, compile_reference_packages, run, write_artifact
 from tests.go.test_execution import forbid_external_compiler
 
@@ -108,7 +108,8 @@ def test_normal_original_math_bits_file_selection_keeps_error_runtime_dependency
     assert b"//go:build !compiler_bootstrap" in originals[-1][1]
     inputs={"main":[("main.go",'package main;import "math/bits";func main(){_=bits.LeadingZeros(1)}')],
             "math/bits":[(name,data.decode()) for name,data in originals]}
-    with pytest.raises(GoDiagnostic,match="blank imports require shared-runtime package initialization support") as failure:
+    with pytest.raises(UnsupportedGo,match="linkname directives require owned object-symbol binding and runtime ownership") as failure:
         compile_go_packages(inputs)
-    assert failure.value.filename=="bits_errors.go"
+    assert (failure.value.code,failure.value.filename,failure.value.line,failure.value.column)==(
+        "go.unsupported.linkname-directives","bits_errors.go",11,1)
     assert all((directory/name).read_bytes()==data for name,data in originals)

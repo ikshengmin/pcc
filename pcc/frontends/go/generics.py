@@ -104,7 +104,12 @@ def type_code(dtype):
     if isinstance(dtype, ArrayType):
         return ['array', dtype.count, type_code(dtype.element)]
     if isinstance(dtype, StructType):
-        return ['struct', [[field.name, field.package, type_code(field.type)] for field in dtype.fields]]
+        # Keep existing untagged symbol spellings stable. Tag bytes and
+        # embeddedness distinguish otherwise identical anonymous arguments.
+        return ['struct', [
+            [field.name, field.package, type_code(field.type)] +
+            ([field.embedded, field.tag.hex()] if field.embedded or field.tag else [])
+            for field in dtype.fields]]
     if isinstance(dtype, (TypeParameter, PointerType)):
         raise AssertionError('nonconcrete or pointer type argument reached Go symbol encoding')
     return ['scalar', dtype]
@@ -228,9 +233,13 @@ class GenericSession:
         for parameter in parameters:
             if parameter not in bindings:
                 types = {value.type for value in constants.get(parameter, []) if value.type != 'untyped nil'}
-                if len(types) != 1:
+                if types and types <= {'untyped int', 'untyped rune'}:
+                    kind = 'untyped rune' if 'untyped rune' in types else 'untyped int'
+                elif len(types) == 1:
+                    kind = next(iter(types))
+                else:
                     raise GoDiagnostic(function.token, 'cannot infer type argument ' + parameter.name)
-                bindings[parameter] = default_type(next(iter(types)))
+                bindings[parameter] = default_type(kind)
             argument = bindings[parameter]
             if interface_type(argument) is not None:
                 raise UnsupportedGo(function.token, 'go.unsupported.generic-boundaries',

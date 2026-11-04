@@ -72,6 +72,15 @@ class ReturnLoweringMixin:
         slot = None
         if not isinstance(ret_ty, ir.VoidType):
             slot = self._alloca_in_entry(ret_ty, name=self._fresh("ret.shared"), init_null=rooted)
+            if rooted:
+                # The shared tail is built before its incoming returns emit
+                # their enters. Establish this slot's exact LIFO ABI now so
+                # its early leave selects the same local/mapped entry. This
+                # only selects the protocol; each rooted return still emits
+                # its own enter, and unrooted/error exits never own this slot.
+                self._gc_frame_entry(
+                    "pcc_gc_frame_enter_lifo", slot, self._gc_one_slot_frame_map(),
+                )
         leave = fn.append_basic_block(name=self._fresh("ret.shared.leave"))
         tail = fn.append_basic_block(name=self._fresh("ret.shared.tail"))
         saved_block = self.builder._block

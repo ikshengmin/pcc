@@ -96,7 +96,8 @@ def test_invalid_trait_originals_reject_before_ir(name, text, message, code, mon
     ('struct R<X>{x:X} trait T{fn f()->R<Self>;}', 'Sized/bound'),
     ('trait T:Copy{}', 'supertraits'),
     ('trait T{fn f(self){}}', 'default trait'),
-    ('trait T{type Item;}', 'associated types'),
+    # Exact `trait T{type Item;}` control is retained as an actual-certified
+    # positive in test_rust_associated_types, not silently discarded.
     ('trait T{const N:u64;}', 'associated types'),
     ('unsafe trait T{}', "expected 'fn'"),
     ('trait T{unsafe fn f(self);}', 'safe required'),

@@ -7,6 +7,7 @@ Calls clone typed bound expressions, never reparse names in the caller scope.
 from copy import deepcopy
 
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
+from pcc.frontends.cpp.declarators import _scope_separator
 from pcc.frontends.cpp.sema import Scope
 from pcc.frontends.cpp.types import ReferenceType, unqualified
 
@@ -37,8 +38,16 @@ def collect(parser, dtype):
         raise CppDiagnostic('cpp.unsupported.default-argument-context',
                             'braced default arguments require list-initialization semantics', token.coord)
     tokens, closings = [], []
+    questions = 0
     pairs = {'(':')', '[':']', '{':'}'}
-    while closings or parser._peek().value not in (',', ')'):
+    while closings or questions or parser._peek().value not in (',', ')'):
+        # The middle of ?: is a full expression, so its commas do not end a
+        # parameter. Namespace :: is not a conditional delimiter; use the
+        # existing coordinate-aware token owner and retain both exact tokens.
+        start = parser.cursor.position
+        if not closings and questions and _scope_separator(parser.cursor):
+            tokens.extend(parser.cursor.tokens[start:parser.cursor.position])
+            continue
         current = parser.cursor.take()
         if current.kind == 'EOF' or current.value == ';' and not closings:
             raise CppDiagnostic('cpp.invalid-default-argument', 'unterminated default argument', current.coord)
@@ -47,6 +56,10 @@ def collect(parser, dtype):
         elif current.value in (')',']','}'):
             if not closings or closings.pop() != current.value:
                 raise CppDiagnostic('cpp.invalid-default-argument', 'unbalanced default argument', current.coord)
+        elif not closings and current.value == '?':
+            questions += 1
+        elif not closings and current.value == ':' and questions:
+            questions -= 1
         tokens.append(current)
     if not tokens:
         raise CppDiagnostic('cpp.invalid-default-argument', 'default argument needs an expression', token.coord)
@@ -123,7 +136,8 @@ def merge(parser, symbol, records, scope):
         if record is None and seen:
             raise CppDiagnostic('cpp.default-argument-trailing',
                                 'a parameter after a default argument requires a default', symbol.coord)
-        seen |= record is not None
+        if record is not None:
+            seen = True
     symbol.default_arguments = tuple(merged)
     symbol.default_argument_scope = scope
     if scope.kind == 'class' and not scope.class_type.definition.complete:

@@ -124,5 +124,8 @@ def test_linknamed_package_error_cannot_become_a_fabricated_nil_global(monkeypat
     monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('runtime-owned error became an ordinary global'))
     with pytest.raises(UnsupportedGo) as failure:
         compile_go(original, 'original.go')
-    assert failure.value.code == 'go.unsupported.interface-types'
-    assert (failure.value.filename, failure.value.line) == ('original.go', 3)
+    # Preserve the exact original. Its newly recognized compiler directive
+    # fails before the independent package-interface storage frontier.
+    # This early capability boundary does not certify the rest of the source.
+    assert failure.value.code == 'go.unsupported.linkname-directives'
+    assert (failure.value.filename, failure.value.line) == ('original.go', 2)

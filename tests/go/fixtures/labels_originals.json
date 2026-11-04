@@ -1,0 +1,170 @@
+{
+  "valid": [
+    {
+      "source": "package main;func main(){goto End; End:}",
+      "sha256": "9cb4a8a456cb6f738d1330d01c89c9fcc408ffcbcf8545a722e130fb5c216698"
+    },
+    {
+      "source": "package main;func main(){goto Start; Start: goto End; End:;}",
+      "sha256": "d2b8b83812e0c845b7c0d2527a1f19b00f97c31069f3f75ad6193bcc8b445bb3"
+    },
+    {
+      "source": "package main;func main(){x:=1;{x:=2;_=x;goto End};End:_=x}",
+      "sha256": "7fca876f05d64c23d7a34d163e7c9c1c3233b54cbbc593ef00516cd1941f9a9d"
+    },
+    {
+      "source": "package main;func main(){{goto End; x:=1;_=x};End:}",
+      "sha256": "b58e9c364963d1557bcce5d4bccd2677cd68e837edfe25178a207fbb519461e9"
+    },
+    {
+      "source": "package main;func main(){goto End;const x=1;End:_=x}",
+      "sha256": "391eac1e7a4fe5060eb46a7d0414819a2abc2cb4cc289581172557ff916e4bd0"
+    },
+    {
+      "source": "package main;func main(){goto L;var();L:}",
+      "sha256": "68946a95c6ffa1a08d2a3b86e4f47e8dfc13c5f04373eb7863c87204248d8d2f"
+    },
+    {
+      "source": "package main;func main(){goto V;V:var x=1;_=x}",
+      "sha256": "70445bc0df3500b635df28cda4639dec904ceddb76d2f3a007e45d66e11eaaa2"
+    },
+    {
+      "source": "package main;func main(){x:=0;Next:x++;if x<2{goto Next}}",
+      "sha256": "3af3bf0f96fd3c17e8ecfa70af8b03eeee84e285b3d21844e2b6d15297c124dc"
+    },
+    {
+      "source": "package main;func main(){_:;_:;}",
+      "sha256": "4c576789a843162ecb744ec7a14bd4f699bef472a080c0d35e2b042ef587fec3"
+    },
+    {
+      "source": "package main;func main(){goto true;true:return}",
+      "sha256": "a9eecf1c379b475dd0d6daefd08e78f029b5cae2d162c9993e4afe0734d28a7c"
+    },
+    {
+      "source": "package main;func f()int{goto End;End:return 1};func main(){f()}",
+      "sha256": "545251a917c4cd1824884fc411f71407da6439498951da3f08b438dc61f2ab5a"
+    },
+    {
+      "source": "package main;func main(){Outer:for{for{break};break Outer}}",
+      "sha256": "091ef704a2bc5108fbc4859c3aba6510d30d7c100d6514e5312755ce71948c11"
+    },
+    {
+      "source": "package main;func main(){Switch:switch{default:for{break Switch}}}",
+      "sha256": "bdef751bccdbeca631e7c2cd7e0dcaa2c22e64b019c2461e0d0b57323bc22c6f"
+    },
+    {
+      "source": "package main;func main(){goto 最後;最後:return}",
+      "sha256": "09efa8034287aaf783d5477019e66a9500b8cbce19971e8b669eb16bd043c02c"
+    },
+    {
+      "source": "package main;func main(){return;if panic(\"unreachable\");true{L:goto L}}",
+      "sha256": "26c243c95a50e68e55a85e7bc279dc98d5e6326211dd87958e6d6e1e5d240e84"
+    },
+    {
+      "source": "package main;func main(){return;for panic(\"unreachable\");true;{L:goto L}}",
+      "sha256": "12a0f411da4e4b7e44a0a64ac4575701c995e9ce1e1a7542d8a16315c6dfa29d"
+    },
+    {
+      "source": "package main;func main(){return;switch panic(\"unreachable\");{default:L:goto L}}",
+      "sha256": "f12fa2e23c82f42dd2f0474da2d56fd112594ef3bda345770139876d923b3268"
+    }
+  ],
+  "invalid": [
+    {
+      "source": "package main;func main(){goto Missing}",
+      "sha256": "6c7eca0e71d17f42eb56fa0fe9d2cbcf20f546cc37ddbfd1c6a48e034084ad2b"
+    },
+    {
+      "source": "package main;func main(){goto _}",
+      "sha256": "17cde0e9b56bd2993f41aede792d5514d4956c517689334fb4b7d512af3d5f02"
+    },
+    {
+      "source": "package main;func main(){Unused:return}",
+      "sha256": "7fb1b053fd36e393dd07fd4302c82530e167d583ff611a261fd0561f019e28c6"
+    },
+    {
+      "source": "package main;func main(){goto L;L:;L:}",
+      "sha256": "3160835d881d8b5b9ea1ef3266dd222e418276a3acfe45f05495d87bc32525bd"
+    },
+    {
+      "source": "package main;func main(){goto L;{L:return}}",
+      "sha256": "9b8340bd046d52e3c8290d523c31535dd02ec2ef0eb64bc7268cd5369ff498b6"
+    },
+    {
+      "source": "package main;func main(){{goto L};{L:return}}",
+      "sha256": "ff547ef52e1883baca4f44e8b6e76bc772f2041a5abcb60673dca0e4b890605c"
+    },
+    {
+      "source": "package main;func main(){goto L;x:=1;L:_=x}",
+      "sha256": "03c3956386fa98fd6c5f1b15b1cae2b09f7e906b02df0263903937cca5c93698"
+    },
+    {
+      "source": "package main;func main(){goto L;var _ int;L:}",
+      "sha256": "3be8545c9a06fa546c346207755035f77ca51cf1e88aa28e923778553c3111c7"
+    },
+    {
+      "source": "package main;func main(){Outer:for{break Outer};continue Outer}",
+      "sha256": "ce8e025d12d54cd302f43548a366f2c294b555713edade319efdda9c541a0e93"
+    },
+    {
+      "source": "package main;func main(){Block:{break Block}}",
+      "sha256": "e418930e4702676a9f536abc770214aee96acd432d79b10c4621a411e142e251"
+    },
+    {
+      "source": "package main;func main(){Switch:switch{default:continue Switch}}",
+      "sha256": "ad5106c3ac88bb1213b5a330c2a5b8e9f1bef158114d057d0e16618be811080e"
+    },
+    {
+      "source": "package main;func main(){A:B:for{break A;break B}}",
+      "sha256": "78649b6f87b9bdba48e66d1f9b52fbb5f3de4bc6dd7970379eeb815f89539623"
+    },
+    {
+      "source": "package main;func f()int{goto End;End:};func main(){f()}",
+      "sha256": "ad8c8fe4ee159a1077c5d6dffadc7aa70c993895e2d199587c0a118e9668f928"
+    },
+    {
+      "source": "package main;func f()int{Outer:for{for{break Outer}}};func main(){f()}",
+      "sha256": "638bb109b6339f4bcd5fe1edba157895b7ad597e43a781112fe4decce79000b2"
+    },
+    {
+      "source": "package main;func f(){L:return};func main(){goto L}",
+      "sha256": "94034b0e5e9befb523e5045764f87dbb956af6db2f5abfb024a23aff5776ce6d"
+    },
+    {
+      "source": "package main;func main(){switch 1{case 1:break Outer}}",
+      "sha256": "89e8150df1db8b8a3da10d680971b446cff9878fae901857cd83059a39a6f348"
+    }
+  ],
+  "pointer_frontiers": [
+    {
+      "source": "package main;func main(){var p *int;goto Use;Use:_=*p}",
+      "sha256": "2e61d5cc24d55226544866286e5138e19cbf9bd3a2535b2bdef0710cf5041cc9"
+    },
+    {
+      "source": "package main;func main(){x:=1;var p *int=&x;Again:if p==nil{goto Use};p=nil;goto Again;Use:_=*p}",
+      "sha256": "5b924714bf2e2b177e56bf4b9658324ca35b4850fd7ec2be8a78dad5bd2dee87"
+    },
+    {
+      "source": "package main;func main(){n:=0;var p *int;Again:x:=n;p=&x;_=p;n++;if n<2{goto Again}}",
+      "sha256": "9a57915083661c555bf442661298678213e0f38d396c70a6dd855911682abd04"
+    },
+    {
+      "source": "package main;func main(){x:=1;var p *int=&x;Outer:for i:=0;i<1;i++{p=nil;for{continue Outer}};_=*p}",
+      "sha256": "fdaf27351a40b4bca0b5bd92522cde92c30de8f19be45574301d4fd6d9938b72"
+    },
+    {
+      "source": "package main;func main(){x:=1;var p *int=&x;Outer:for{p=nil;for{break Outer}};_=*p}",
+      "sha256": "f5ac9155b7bbf42d757f575d9a0780e93116dfb69d4fedeb6719d5159eb0dce1"
+    }
+  ],
+  "pointer_valid": [
+    {
+      "source": "package main;func main(){x:=3;var p *int=&x;goto Read;Read:if p!=nil{_=*p}}",
+      "sha256": "da32aed8a7c5aa1c2be18c5f30bf3a6253573ec95ac3e7b7523ee140c59270c7"
+    },
+    {
+      "source": "package main;func main(){x:=3;var p *int=&x;n:=0;Again:if p!=nil{_=*p};n++;if n<2{goto Again}}",
+      "sha256": "0e74ce536a16b99337a6d3cbef3116427ba303ed06e7856f65c8bb7033e1250e"
+    }
+  ]
+}

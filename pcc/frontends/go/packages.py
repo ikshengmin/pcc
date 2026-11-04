@@ -63,9 +63,13 @@ def compile_packages(packages, *, main_package, target_triple):
         active.add(path)
         imports = {}
         for imported in program.imports:
-            if imported.alias == "_":
-                raise UnsupportedGo(imported.token, 'go.unsupported.package-initialization', "blank imports require shared-runtime package initialization support")
             dependency = visit(imported.path, imported.token)
+            if imported.alias == "_":
+                # Blank imports still visit/check the entire dependency graph,
+                # but introduce no file-scope name or unused-import obligation.
+                # Every visited package keeps the existing init-function and
+                # dynamic-initializer frontiers; no initialization is skipped.
+                continue
             alias = imported.alias or dependency.program.token.text
             if alias in PREDECLARED:
                 raise UnsupportedGo(imported.token, "go.unsupported.predeclared-shadowing", "import alias shadows predeclared name " + alias)

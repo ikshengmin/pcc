@@ -9,6 +9,7 @@ no source review constitutes execution acceptance.
 """
 from copy import deepcopy
 from pathlib import Path
+import hashlib
 import os
 
 import pytest
@@ -34,7 +35,20 @@ def units(fixture=FIXTURE):
 
 
 def source(declarations, body=''):
-    return 'package main;' + declarations + ';func main(){' + body + '}'
+    prefix = 'package main;' + (declarations + ';' if declarations else '')
+    return prefix + 'func main(){' + body + '}'
+
+
+def test_source_helper_preserves_complete_empty_declaration_runtime_original():
+    original = source('', 'var i any;_=i')
+    assert original == 'package main;func main(){var i any;_=i}'
+    assert hashlib.sha256(original.encode()).hexdigest() == '2bd427cb037ffd7d4342ef88d09d6939bf4c4f08db74edc3b3edb2c2669f23e5'
+    # Preserve the exact former malformed helper output as an ordinary syntax
+    # error, not evidence that the intended interface-runtime path was reached.
+    malformed = 'package main;;func main(){var i any;_=i}'
+    with pytest.raises(GoDiagnostic, match='empty package declarations') as failure:
+        compile_go(malformed)
+    assert not isinstance(failure.value, UnsupportedGo)
 
 
 def analyze(original):
@@ -158,6 +172,20 @@ def test_general_interface_storage_never_reaches_lowerer(original, monkeypatch):
     monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('runtime obligation erased'))
     with pytest.raises(UnsupportedGo):
         compile_go(original)
+
+
+@pytest.mark.integration
+@pytest.mark.pcc_gate(env='PCC_GO_REFERENCE')
+@pytest.mark.xdist_group(name='go-reference')
+def test_corrected_empty_declaration_runtime_original_is_reference_only(tmp_path):
+    original = source('', 'var i any;_=i')
+    with pytest.raises(UnsupportedGo) as failure:
+        compile_go(original)
+    assert failure.value.code == 'go.unsupported.interface-types'
+    reference = compile_reference((('original.go', original),), tmp_path / 'reference',
+        compiler=os.environ['PCC_GO_REFERENCE'], cache=os.environ['PCC_GO_REFERENCE_CACHE'])
+    assert reference.is_file()
+    assert (reference.parent / 'original.go').read_bytes() == original.encode()
 
 
 @pytest.mark.parametrize('signature', [

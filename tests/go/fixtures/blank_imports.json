@@ -1,0 +1,254 @@
+{
+  "programs": [
+    {
+      "name": "static-only",
+      "expected": 18364758544493064720,
+      "packages": {
+        "main": {
+          "main.go": "package main;import _ \"dep\";func Result()uint64{return 0xfedcba9876543210};func main(){if Result()!=0xfedcba9876543210{for{}}}"
+        },
+        "dep": {
+          "dep.go": "package dep;var Value uint64=0x8877665544332211;func Dormant()uint64{return Value}"
+        }
+      }
+    },
+    {
+      "name": "repeated-and-same-package-spelling",
+      "expected": 42,
+      "packages": {
+        "main": {
+          "main.go": "package main;import(_ \"dep\";_ \"dep\";_ \"other\");func Result()uint64{return 42};func main(){if Result()!=42{for{}}}"
+        },
+        "dep": {
+          "dep.go": "package library;var Shared uint64=17"
+        },
+        "other": {
+          "other.go": "package library;var Shared uint64=25"
+        }
+      }
+    },
+    {
+      "name": "named-and-blank-single-owner",
+      "expected": 42,
+      "packages": {
+        "main": {
+          "main.go": "package main;import(_ \"dep\";p \"dep\");func Result()uint64{p.Value++;p.Value++;return p.Value};func main(){if Result()!=42{for{}}}"
+        },
+        "dep": {
+          "dep.go": "package dep;var Value uint64=40"
+        }
+      }
+    },
+    {
+      "name": "transitive-diamond",
+      "expected": 42,
+      "packages": {
+        "main": {
+          "main.go": "package main;import(_ \"left\";_ \"right\";state \"shared\");func Result()uint64{return state.Value};func main(){if Result()!=42{for{}}}"
+        },
+        "left": {
+          "left.go": "package left;import _ \"shared\";const X=17"
+        },
+        "right": {
+          "right.go": "package right;import _ \"shared\";const X=25"
+        },
+        "shared": {
+          "shared.go": "package shared;var Value uint64=42"
+        }
+      }
+    },
+    {
+      "name": "no-package-name-binding",
+      "expected": 42,
+      "packages": {
+        "main": {
+          "main.go": "package main;import _ \"dep\";func dep()uint64{return 42};func Result()uint64{return dep()};func main(){if Result()!=42{for{}}}"
+        },
+        "dep": {
+          "dep.go": "package dep;const X=7"
+        }
+      }
+    },
+    {
+      "name": "independent-file-bindings",
+      "expected": 42,
+      "packages": {
+        "main": {
+          "main.go": "package main;import _ \"dep\";func main(){if Result()!=42{for{}}}",
+          "result.go": "package main;import d \"dep\";func Result()uint64{return d.Value}"
+        },
+        "dep": {
+          "dep.go": "package dep;var Value uint64=42"
+        }
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "unused-named-alongside-blank",
+      "pcc": "imported and not used",
+      "reference": "imported and not used",
+      "packages": {
+        "main": {
+          "main.go": "package main;import(_ \"dep\";unused \"other\");func main(){}"
+        },
+        "dep": {
+          "dep.go": "package dep;const X=7"
+        },
+        "other": {
+          "other.go": "package other;const X=7"
+        }
+      }
+    },
+    {
+      "name": "checked-unused-function-body",
+      "pcc": "cannot use.*bool.*int",
+      "reference": "cannot use.*true.*int",
+      "packages": {
+        "main": {
+          "main.go": "package main;import _ \"dep\";func main(){}"
+        },
+        "dep": {
+          "dep.go": "package dep;func Bad()int{return true}"
+        }
+      }
+    },
+    {
+      "name": "checked-global-initializer",
+      "pcc": "cannot use.*bool.*int",
+      "reference": "cannot use.*true.*int",
+      "packages": {
+        "main": {
+          "main.go": "package main;import _ \"dep\";func main(){}"
+        },
+        "dep": {
+          "dep.go": "package dep;var X int=true"
+        }
+      }
+    },
+    {
+      "name": "blank-is-not-a-selector-binding",
+      "pcc": "undefined.*_",
+      "reference": "cannot use _ as value or type",
+      "packages": {
+        "main": {
+          "main.go": "package main;import _ \"dep\";func main(){_=_.X}"
+        },
+        "dep": {
+          "dep.go": "package dep;const X=7"
+        }
+      }
+    },
+    {
+      "name": "package-spelling-is-not-bound",
+      "pcc": "undefined.*dep",
+      "reference": "undefined: dep",
+      "packages": {
+        "main": {
+          "main.go": "package main;import _ \"dep\";func main(){_=dep.X}"
+        },
+        "dep": {
+          "dep.go": "package dep;const X=7"
+        }
+      }
+    },
+    {
+      "name": "checked-unused-local",
+      "pcc": "declared and not used",
+      "reference": "declared and not used",
+      "packages": {
+        "main": {
+          "main.go": "package main;import _ \"dep\";func main(){}"
+        },
+        "dep": {
+          "dep.go": "package dep;func Bad(){var x int}"
+        }
+      }
+    }
+  ],
+  "frontiers": [
+    {
+      "name": "init-function",
+      "packages": {
+        "main": {
+          "main.go": "package main;import _ \"dep\";func main(){}"
+        },
+        "dep": {
+          "dep.go": "package dep;func init(){}"
+        }
+      }
+    },
+    {
+      "name": "dynamic-initializer",
+      "packages": {
+        "main": {
+          "main.go": "package main;import _ \"dep\";func main(){}"
+        },
+        "dep": {
+          "dep.go": "package dep;func f()int{return 7};var X=f()"
+        }
+      }
+    },
+    {
+      "name": "transitive-init",
+      "packages": {
+        "main": {
+          "main.go": "package main;import _ \"middle\";func main(){}"
+        },
+        "middle": {
+          "middle.go": "package middle;import _ \"dep\";const X=7"
+        },
+        "dep": {
+          "dep.go": "package dep;func init(){}"
+        }
+      }
+    }
+  ],
+  "structural_failures": [
+    {
+      "name": "missing-source",
+      "pcc": "import source unavailable: absent",
+      "packages": {
+        "main": {
+          "main.go": "package main;import _ \"absent\";func main(){}"
+        }
+      }
+    },
+    {
+      "name": "unsafe-source-not-fabricated",
+      "pcc": "import source unavailable: unsafe",
+      "packages": {
+        "main": {
+          "main.go": "package main;import _ \"unsafe\";func main(){}"
+        }
+      }
+    },
+    {
+      "name": "cycle",
+      "pcc": "import cycle",
+      "packages": {
+        "main": {
+          "main.go": "package main;import _ \"a\";func main(){}"
+        },
+        "a": {
+          "a.go": "package a;import _ \"b\""
+        },
+        "b": {
+          "b.go": "package b;import _ \"a\""
+        }
+      }
+    },
+    {
+      "name": "import-main",
+      "pcc": "cannot import a main package",
+      "packages": {
+        "main": {
+          "main.go": "package main;import _ \"dep\";func main(){}"
+        },
+        "dep": {
+          "dep.go": "package main;func main(){}"
+        }
+      }
+    }
+  ]
+}

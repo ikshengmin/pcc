@@ -114,15 +114,14 @@ def validate_pattern(checker, pattern):
         validate_pattern(checker, child)
 
 
-def validate_match(checker, expr):
-    from .syntax import Pattern
-
+def validate_pattern_scrutinee(checker, ty, token):
+    """Shared finite owned-value domain; no reference match ergonomics."""
     from .generics import children
-    pending = [expr.children[0].ty]
+    pending = [ty]
     while pending:
         item = pending.pop()
         if isinstance(item, FixedArrayType):
-            raise expr.token.error("array match coverage and destructuring are not implemented")
+            raise token.error("array match coverage and destructuring are not implemented")
         pending.extend(children(item))
 
     def admitted(ty):
@@ -133,8 +132,14 @@ def validate_match(checker, expr):
         if isinstance(ty, TupleType):
             return all(admitted(item) for item in ty.elements)
         return ty in INTEGERS | {"bool", "()"} or ty in checker.enums or ty in checker.records
-    if not admitted(expr.children[0].ty):
-        raise expr.token.error("match currently supports owned scalar/aggregate values, not reference matching")
+    if not admitted(ty):
+        raise token.error("match currently supports owned scalar/aggregate values, not reference matching")
+
+
+def validate_match(checker, expr):
+    from .syntax import Pattern
+
+    validate_pattern_scrutinee(checker, expr.children[0].ty, expr.token)
     for pattern in expr.value:
         validate_pattern(checker, pattern)
     budget = MAX_COVERAGE_STEPS

@@ -163,6 +163,15 @@ def _logical_fact(operator, lhs, rhs, lhs_type, rhs_type, result_type, types, co
     return _result(int(rhs.value != 0), result_type, types, coord)
 
 
+def conditional_fact(condition, consequent, alternative, result_type, types, coord=None):
+    """Prove only the selected integral arm, after both arms passed Sema."""
+    condition = converted_fact(condition, 'bool', types, coord)
+    if condition.status != KNOWN:
+        return _propagate(condition, result_type, coord)
+    selected = consequent if condition.value else alternative
+    return converted_fact(selected, result_type, types, coord)
+
+
 def binary_fact(operator, lhs, rhs, lhs_type, rhs_type, result_type, types, coord=None):
     """Evaluate integral operands using parser-selected conversion types.
 

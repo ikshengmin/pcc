@@ -4,7 +4,8 @@ https://doc.rust-lang.org/reference/items/associated-items.html#associated-funct
 https://doc.rust-lang.org/error_codes/E0276.html
 https://doc.rust-lang.org/reference/trait-bounds.html#sized
 Required canonical call contracts remain separate from impl body assumptions;
-default bodies, generic impls and DST remain gaps; where contracts have separate tests.
+Generic impls and DST remain gaps; default bodies and where contracts have
+separate tests.
 The analysis helper produces facts only. Every public marker/reference positive
 needs a genuine source/options-bound rustc token before owned code generation.
 """
@@ -193,7 +194,8 @@ CAPABILITY = (
     # Exact local Copy/Sized inputs are certified positives below.
     ('clone', 'trait T{fn f<U:Clone>(u:U)->U;}', 'only canonical'),
     # Exact trait-method where originals now checked in test_rust_trait_where_contracts.
-    ('default', 'trait T{fn f<U:Copy>(u:U)->U{u}}', 'default trait'),
+    # Exact default-body original is retained as a noncertifying model and
+    # an actual-checked positive in test_rust_default_methods.
     ('generic-impl', 'struct R<X>{x:X}trait T{fn f<U:Copy>(u:U)->U;}impl<X>T for R<X>{fn f<U:Copy>(u:U)->U{u}}', 'blanket/generic'),
     ('dst', 'struct R{x:u64}trait T{fn f<U:?Sized>(&self,u:&U);}impl T for R{fn f<U:?Sized>(&self,u:&U){}}fn f(s:&[u64]){R{x:0}.f(s)}', 'slice types'),
 )

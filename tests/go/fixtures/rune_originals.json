@@ -1,0 +1,186 @@
+{
+  "spelling": [
+    {
+      "source": "package main;func main(){var x uint64='a';if x!=97{for{}}}",
+      "sha256": "99cb1ba05f64a7b313765f8fb50c32865a72e2513cc0698b3f95622c17ebd2dd"
+    },
+    {
+      "source": "package main;func main(){var x uint64='ä';if x!=228{for{}}}",
+      "sha256": "371756db4f0704827f1dad14256473619160a381e15973b70b53fb5d6e37fb9f"
+    },
+    {
+      "source": "package main;func main(){var x uint64='本';if x!=26412{for{}}}",
+      "sha256": "9c79c9e914dac31dbf28748f97922f01f5f9d519ffdfe7d802d0d552b2ed69cf"
+    },
+    {
+      "source": "package main;func main(){var x uint64='😀';if x!=128512{for{}}}",
+      "sha256": "610ecaa381d4a0b18577bd5d2fe7a4d61ea1eb09577b4aef838df08b9dca017e"
+    },
+    {
+      "source": "package main;func main(){var x uint64='\\a';if x!=7{for{}}}",
+      "sha256": "60a401dd203c4829feb0647a7aca922836e9f1d7169334643ad11641a90127e1"
+    },
+    {
+      "source": "package main;func main(){var x uint64='\\b';if x!=8{for{}}}",
+      "sha256": "3aa64c4709a5d83a9001891e1dce42ca369bb7a843efb3dc92bfbd618c37158b"
+    },
+    {
+      "source": "package main;func main(){var x uint64='\\f';if x!=12{for{}}}",
+      "sha256": "05edd91c3843e7b7c75f701ce9050821d09ec48a5dad62f4d67701319e34eae9"
+    },
+    {
+      "source": "package main;func main(){var x uint64='\\n';if x!=10{for{}}}",
+      "sha256": "9a0423e4bba80c6d5a8e09dfd6105d4f824ac39cf31055487ae3dc7b3fa8d874"
+    },
+    {
+      "source": "package main;func main(){var x uint64='\\r';if x!=13{for{}}}",
+      "sha256": "cd579b6fd1682b53eadaba6eab03932c856fb7b21ca6b3e8d7aa957e7e2816bd"
+    },
+    {
+      "source": "package main;func main(){var x uint64='\\t';if x!=9{for{}}}",
+      "sha256": "0a9882bd9a0ae8a22bb60b4c29e91ac7dfc42e20d6ea6462dce0fda51f5aea4f"
+    },
+    {
+      "source": "package main;func main(){var x uint64='\\v';if x!=11{for{}}}",
+      "sha256": "7834407711b31121cf58fd382eb8cffd4fd71220c925c0c3494dfbe35786c792"
+    },
+    {
+      "source": "package main;func main(){var x uint64='\\\\';if x!=92{for{}}}",
+      "sha256": "17e8635ff0cd96226a95ef3f8078db200ebb70124f48233c67dc2f76afdb77fc"
+    },
+    {
+      "source": "package main;func main(){var x uint64='\\'';if x!=39{for{}}}",
+      "sha256": "5d1bbe457ec6557f508ab0dfffe61e5c7ca01b554ca97fb314ac35f5efe21ffc"
+    },
+    {
+      "source": "package main;func main(){var x uint64='\"';if x!=34{for{}}}",
+      "sha256": "299ea7378cdead632149a3c4052c661b0b63f80913c0e5d2a56e336667ffea47"
+    },
+    {
+      "source": "package main;func main(){var x uint64='\\000';if x!=0{for{}}}",
+      "sha256": "c8fec12c3cfce2655aabb586eec352ca9e161d43732e80b55cb54011551e289c"
+    },
+    {
+      "source": "package main;func main(){var x uint64='\\123';if x!=83{for{}}}",
+      "sha256": "87b3be484ff7548ffd192991a23c0f2e28b83df188bb699ab351aa35c9b20ff9"
+    },
+    {
+      "source": "package main;func main(){var x uint64='\\377';if x!=255{for{}}}",
+      "sha256": "99efad38ba2ff35516e0a9c4860498859c371da35246bddcec985371ac548cab"
+    },
+    {
+      "source": "package main;func main(){var x uint64='\\xff';if x!=255{for{}}}",
+      "sha256": "e81f9a806483843ddb5ddb419c456719259ef427f8389776363f66f52f56828d"
+    },
+    {
+      "source": "package main;func main(){var x uint64='\\u00FF';if x!=255{for{}}}",
+      "sha256": "ff84b9da97e9113a825f415ce5fff4cead9a96f18cce38e751179b69f944c215"
+    },
+    {
+      "source": "package main;func main(){var x uint64='\\uD7FF';if x!=55295{for{}}}",
+      "sha256": "3499cf288ce5588a0057197b60fde86d68c29ecff96a730e2fefaab594514c91"
+    },
+    {
+      "source": "package main;func main(){var x uint64='\\uE000';if x!=57344{for{}}}",
+      "sha256": "b8d693a050682349af140188fdf02483425b136f3a502d1a59124ff2d47248f0"
+    },
+    {
+      "source": "package main;func main(){var x uint64='\\U0010FFFF';if x!=1114111{for{}}}",
+      "sha256": "4db8d64f441b9d88098f327ea9ccd6453661d64ed4bb01391a06ac823e70dd38"
+    },
+    {
+      "source": "package main;func main(){var x uint64='\r';if x!=13{for{}}}",
+      "sha256": "af2d732cc08f76f71ddd78f5950225dada17de82cd93615bb8cb84d9e286d37a"
+    }
+  ],
+  "invalid": [
+    {
+      "source": "package main;func main(){_=''}",
+      "sha256": "e73a0031272ae47c8578b54bc622872b1690761bfe85e81d89554f3d7850871c"
+    },
+    {
+      "source": "package main;func main(){_='ab'}",
+      "sha256": "763e8b87d1f2f0d74368bef356a139eca4a2d898e7d489fa347f57629ade1e8d"
+    },
+    {
+      "source": "package main;func main(){_='é'}",
+      "sha256": "2850efc2a403a961b1af99cd0d1a94744635d5933fa83600d13919fe40289bbc"
+    },
+    {
+      "source": "package main;func main(){_='\\q'}",
+      "sha256": "8ae2f897c0d0c26d96ec438da11387a32c1eed200aa0ce06cf492e23fb20c2d9"
+    },
+    {
+      "source": "package main;func main(){_='\\\"'}",
+      "sha256": "903ca524c01238cb1ff4b69523c31cee5a47e968f192abee1cdc819a94a1a6d0"
+    },
+    {
+      "source": "package main;func main(){_='\\0'}",
+      "sha256": "4a95c4c4e6269065f9c7133f72eeb4f92a0bdb69b8f53e1831b26089e02dcfbe"
+    },
+    {
+      "source": "package main;func main(){_='\\x0'}",
+      "sha256": "5fb7a4cfd77d2ed930b194f4abba67f405446babae1b5c08dc572ab62dee0df1"
+    },
+    {
+      "source": "package main;func main(){_='\\xgg'}",
+      "sha256": "bfc0a5d9a3345eb40501217fd2eef42066476188e2367d0f4844d08d683739aa"
+    },
+    {
+      "source": "package main;func main(){_='\\400'}",
+      "sha256": "096d3ddb8d3c9006f1dab9ac21de69053ca57e731a2d10b8ec28474b22217a50"
+    },
+    {
+      "source": "package main;func main(){_='\\x001'}",
+      "sha256": "5281fc585c62d9b88cfb0a4dc502ebeccc8c7bcb75c9b0477542d36452414281"
+    },
+    {
+      "source": "package main;func main(){_='\\uD800'}",
+      "sha256": "2704d1959a3316147edc042cbfd300ff944b4e7b049345ebfa403dac54993b95"
+    },
+    {
+      "source": "package main;func main(){_='\\uDFFF'}",
+      "sha256": "63840db86494d5055a17bf230ead8911175b3a81522120a03d77504fa174c167"
+    },
+    {
+      "source": "package main;func main(){_='\\U00110000'}",
+      "sha256": "426f068cc4216f7fd88bce30ea1858c463804fdc3883be7e4ebafae194f02a5a"
+    },
+    {
+      "source": "package main;func main(){_='\\UFFFFFFFF'}",
+      "sha256": "2ad38fa1ac600ef093b3833462cf3824928060968c145088a024e4739c28b31b"
+    },
+    {
+      "source": "package main;func main(){_='\n'}",
+      "sha256": "e03c94302a850ae805406b3441ea8620d2e40bec50bf7f8259c13a1128ee232e"
+    },
+    {
+      "source": "package main;func main(){_='\u0000'}",
+      "sha256": "5150b9d1d496bdd7e6add203daca0ab8a1d36514bce33d518819429321f27a14"
+    },
+    {
+      "source": "package main;func main(){r:='a';var i int=r;_=i}",
+      "sha256": "338ac760f4cec9afcd29a649787299bb11ff67b1f9f12f74ba3d74a546bb60dd"
+    },
+    {
+      "source": "package main;func main(){r:='A'<<40;_=r}",
+      "sha256": "a63ccbc213bfdb1cd635ff80637617cc7d891a83f122234712800d324038d561"
+    },
+    {
+      "source": "package main;func main(){_=uint8('界')}",
+      "sha256": "806849cb9f9a1f84b7b6c4bc185dcfb107f7a37572c9c7183c195d23cbfabfd2"
+    },
+    {
+      "source": "package main;func main(){_='a'<<-'a'}",
+      "sha256": "f957cffb7a35da6013aecc6831257083c68eecd9d06937c46650ab06e95f19af"
+    },
+    {
+      "source": "package main;func f[T any](a,b T)T{return a};func main(){_=f('a',true)}",
+      "sha256": "380b6c0cfcdb36ebe58a20841bf5a1416c16637e356c995e9519b1e39f69d72c"
+    },
+    {
+      "source": "package main;func f[T any](a,b T)T{return a};func main(){_=f('a',1<<40)}",
+      "sha256": "ddd4c2f1d36d915d521b8cf5fd1a45bc6f55cca03ac7b46e15218ab4955baaf9"
+    }
+  ]
+}

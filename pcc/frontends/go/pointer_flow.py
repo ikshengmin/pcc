@@ -9,6 +9,7 @@ from collections import deque
 from dataclasses import dataclass, field
 
 from pcc.frontends.go.diagnostics import UnsupportedGo
+from pcc.frontends.go.branches import walk
 from pcc.frontends.go.records import underlying
 from pcc.frontends.go.types import (
     ArrayType, PointerType, Results, is_string, result_types,
@@ -79,9 +80,12 @@ class Node:
 
 
 class Graph:
-    """Go's existing structured control edges, including dispatch/fallthrough."""
+    """Go control edges, including labels, backedges and dispatch/fallthrough."""
     def __init__(self, function):
         self.nodes = []
+        self.labels = {id(statement): self.add('jump')
+                       for statement in walk(function.body) if statement.kind == 'label'}
+        self.branch_targets = {}
         done = self.add('exit')
         self.entry = self.sequence(function.body, done)
 
@@ -96,10 +100,20 @@ class Graph:
 
     def statement(self, statement, following, breaking, continuing, falling):
         kind = statement.kind
+        if kind == 'empty':
+            return following
+        if kind == 'label':
+            anchor = self.labels[id(statement)]
+            self.nodes[anchor].edges = [
+                self.sequence(statement.body, following, breaking, continuing, falling)]
+            return anchor
+        if kind == 'goto':
+            return self.add('jump', edges=[self.labels[id(statement.control_target)]])
         if kind == 'block':
             return self.sequence(statement.body, following, breaking, continuing, falling)
         if kind in ('break', 'continue', 'fallthrough'):
-            target = {'break': breaking, 'continue': continuing, 'fallthrough': falling}[kind]
+            target = (falling if kind == 'fallthrough' else
+                      self.branch_targets[id(statement.control_target)][kind == 'continue'])
             assert target is not None, 'Sema must resolve legal control targets'
             return self.add('jump', edges=[target])
         if (kind == 'return' or
@@ -118,6 +132,7 @@ class Graph:
             header = self.add('jump')
             post = (self.statement(statement.post, header, following, header, falling)
                     if statement.post is not None else header)
+            self.branch_targets[id(statement)] = following, post
             body = self.sequence(statement.body, post, following, post, falling)
             if statement.exprs:
                 self.nodes[header] = Node('condition', statement.exprs[0], [body, following])
@@ -141,6 +156,7 @@ class Graph:
             else:
                 has_body = ranged.constant is None or ranged.constant > 0
             header = self.add('range_check', has_body)
+            self.branch_targets[id(statement)] = following, header
             body = self.sequence(statement.body, header, following, header, falling)
             if statement.init is not None:
                 body = self.statement(statement.init, body, following, header, falling)
@@ -155,6 +171,7 @@ class Graph:
             return (self.add(entry_kind, ranged, [header])
                     if statement.evaluate_range else header)
         if kind == 'switch':
+            self.branch_targets[id(statement)] = following, None
             bodies = [self.add('jump') for _ in statement.cases]
             for index, clause in enumerate(statement.cases):
                 fall = bodies[index + 1] if index + 1 < len(bodies) else None

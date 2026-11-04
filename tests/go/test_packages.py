@@ -36,7 +36,6 @@ def test_import_alias_default_package_name_and_transitive_calls_use_public_ir():
     ('package main; import "absent"; func main() {}', None, "import source unavailable"),
     ('package main; import "lib"; func main() {}', None, "imported and not used"),
     ('package main; import x "lib"; import x "lib"; func main(){_ = x.Base}', None, "duplicate import"),
-    ('package main; import _ "lib"; func main(){}', None, "initialization support"),
     ('package main; import . "lib"; func main(){}', None, "imported and not used"),
     ('package main; import "lib"; func main(){_ = arithmetic.hidden()}',
      'package arithmetic; func hidden() int{return 1}', "unexported"),
@@ -56,6 +55,11 @@ def test_package_graph_rejects_missing_or_invalid_semantics(main, library, messa
     inputs = packages(main) if library is None else packages(main, library)
     with pytest.raises(GoDiagnostic, match=message):
         compile_go_packages(inputs)
+
+
+# Keep the exact former package-initialization boundary as a complete graph.
+# test_blank_imports supplies ordinary/native/same-input reference obligations.
+GRADUATED_STATIC_BLANK_IMPORT = packages('package main; import _ "lib"; func main(){}')
 
 
 def test_import_names_are_file_scoped_and_not_leaked_to_sibling_files():

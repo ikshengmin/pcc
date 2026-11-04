@@ -173,6 +173,7 @@ class Implementation:
     documentation: tuple[Documentation, ...] = ()
     parameter_bounds: tuple[tuple[Token, tuple[TypeBound, ...]], ...] = ()
     where_predicates: tuple[WherePredicate, ...] = ()
+    associated_types: tuple[AssociatedType, ...] = ()
 
     @property
     def effective_parameter_bounds(self):
@@ -188,6 +189,19 @@ class Trait:
     language_item: object = None
     type_parameters: tuple[Token, ...] = ()
     supertraits: tuple = ()
+    associated_types: list[AssociatedType] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class AssociatedType:
+    token: Token
+    bounds: tuple[TypeBound, ...] = ()
+    value: object = None
+    documentation: tuple[Documentation, ...] = ()
+
+    @property
+    def effective_parameter_bounds(self):
+        return ((self.token, self.bounds),)
 
 
 @dataclass(frozen=True)
@@ -240,6 +254,9 @@ class Function:
     bound_trait: tuple[str, object] | None = None
     where_token: Token | None = None
     where_predicates: tuple[WherePredicate, ...] = ()
+    inline_attributes: tuple[object, ...] = ()
+    # Synthesized concrete body inherited from this declaration-owned default.
+    default_source: tuple[str, str] | None = None
 
     @property
     def effective_parameter_bounds(self):
@@ -585,11 +602,35 @@ class Parser:
                 break
         return tuple(bounds)
 
+    def associated_type(self, *, declaration, documentation=()):
+        self.expect('type')
+        name = self.name()
+        if self.token.text == '<':
+            raise self.token.error('generic associated types are not implemented')
+        bounds = ()
+        if self.accept(':'):
+            if not declaration:
+                raise name.error('bounds on a trait implementation associated type are not allowed')
+            bounds = self.type_parameter_bounds({';', '=', 'where'})
+        if self.token.text == 'where':
+            raise self.token.error('associated type where constraints are not implemented')
+        value = None
+        if declaration:
+            if self.token.text == '=':
+                raise self.token.error('associated type defaults are not implemented')
+        else:
+            self.expect('=')
+            value = self.type()
+            if self.token.text == 'where':
+                raise self.token.error('associated type where constraints are not implemented')
+        self.expect(';')
+        return AssociatedType(name, bounds, value, tuple(documentation))
+
     def function_where_clause(self, parameters, *, owner_parameters=None, declaration=False):
         declared = {parameter.text for parameter in parameters}
         owners = {parameter.text for parameter in owner_parameters or ()}
-        # Required associated functions end in a semicolon, not a body. Keep
-        # the body delimiter too so default bodies retain their explicit gate.
+        # Required associated functions end in a semicolon; provided methods
+        # continue into a body after the same parameter-only where clause.
         terminators = {'{', ';'} if declaration else {'{'}
         predicates = []
         while self.token.text not in terminators:
@@ -837,6 +878,7 @@ class Parser:
             enum_repr = None
             language_item = None
             docs = []
+            inline_attributes = []
             while True:
                 docs.extend(self.documentation())
                 if not self.accept("#"):
@@ -844,6 +886,10 @@ class Parser:
                 attribute_start = self.tokens[self.pos - 1]
                 self.expect("[")
                 attribute = self.take()
+                if attribute.text == 'inline':
+                    from .inline_attributes import inline_attribute
+                    inline_attributes.append(inline_attribute(self, attribute, attribute_start))
+                    continue
                 if attribute.text == 'cfg':
                     from .configuration import item_cfg_attribute, ConfiguredItemAttribute
                     from .external_check import CheckedRustSource
@@ -882,6 +928,8 @@ class Parser:
             if docs and self.token.kind == "eof":
                 raise docs[-1].token.error("outer documentation attribute has no following item")
             public = self.accept("pub")
+            from .inline_attributes import require_function_target
+            require_function_target(self, inline_attributes)
             if cfg_attributes and not (self.token.text == 'extern' and self.tokens[self.pos + 1].text == 'crate'):
                 raise self.token.error('conditional item gating is implemented only for extern crate declarations; other item syntax requires its own configuration owner')
             if language_item is not None and self.token.text != "trait":
@@ -935,12 +983,20 @@ class Parser:
                               language_item=language_item, type_parameters=parameters,
                               supertraits=tuple(supertraits))
                 while not self.accept("}"):
-                    method_docs = self.documentation()
+                    from .inline_attributes import function_attributes
+                    method_docs, method_inline = function_attributes(self)
+                    require_function_target(self, method_inline)
+                    if self.token.text == 'type':
+                        if language_item is not None:
+                            raise self.token.error('associated types on inspected language-item traits are not implemented')
+                        trait.associated_types.append(self.associated_type(
+                            declaration=True, documentation=method_docs))
+                        continue
                     if self.token.text != "fn":
-                        raise self.token.error("only safe required trait methods are implemented; associated types/constants and unsafe methods are not implemented")
+                        raise self.token.error("only safe required or default trait methods and associated types are implemented; associated constants and unsafe methods are not implemented")
                     trait.methods.append(self.function("Rust", False, False, False,
                         declaration=True, implementation=Implementation(name, "Self", trait=name.text),
-                        trait_declaration=True, documentation=method_docs))
+                        trait_declaration=True, documentation=method_docs, inline_attributes=method_inline))
                 self.traits.append(trait)
                 continue
             if self.accept("impl"):
@@ -966,16 +1022,33 @@ class Parser:
                 implementation = Implementation(token, owner, parameters, trait_name, tuple(docs),
                                                 parameter_bounds, where_predicates)
                 self.implementations.append(implementation)
+                associated_types = []
                 while not self.accept("}"):
-                    method_docs = self.documentation()
+                    from .inline_attributes import function_attributes
+                    method_docs, method_inline = function_attributes(self)
                     visible = self.accept("pub")
+                    require_function_target(self, method_inline)
                     unsafe = self.accept("unsafe")
                     if trait_name is not None and (visible or unsafe):
                         raise self.token.error("trait impl methods must be safe and have no visibility qualifier in this slice")
+                    if self.token.text == 'type':
+                        if trait_name is None:
+                            raise self.token.error('inherent associated types are not implemented')
+                        associated_types.append(self.associated_type(
+                            declaration=False, documentation=method_docs))
+                        continue
                     if trait_name is not None and self.token.text != "fn":
-                        raise self.token.error("trait associated types/constants are not implemented")
+                        raise self.token.error("trait associated constants are not implemented")
                     functions.append(self.function("Rust", visible, False, unsafe,
-                                                   implementation=implementation, documentation=method_docs))
+                        implementation=implementation, documentation=method_docs,
+                        inline_attributes=method_inline))
+                if associated_types:
+                    original = implementation
+                    implementation = replace(original, associated_types=tuple(associated_types))
+                    self.implementations[-1] = implementation
+                    for function in functions:
+                        if function.implementation is original:
+                            function.implementation = implementation
                 continue
             if self.accept("enum"):
                 if repr_c or no_mangle:
@@ -1019,11 +1092,15 @@ class Parser:
                     if no_mangle or public or docs:
                         raise self.token.error("attributes and visibility on extern blocks are not supported")
                     while not self.accept("}"):
-                        declaration_docs = self.documentation()
+                        from .inline_attributes import function_attributes
+                        declaration_docs, declaration_inline = function_attributes(self)
                         visible = self.accept("pub")
-                        functions.append(self.function("C", visible, False, True, declaration=True, documentation=declaration_docs))
+                        require_function_target(self, declaration_inline)
+                        functions.append(self.function("C", visible, False, True, declaration=True,
+                            documentation=declaration_docs, inline_attributes=declaration_inline))
                     continue
-            functions.append(self.function(abi, public, no_mangle, unsafe, documentation=tuple(docs)))
+            functions.append(self.function(abi, public, no_mangle, unsafe, documentation=tuple(docs),
+                                           inline_attributes=tuple(inline_attributes)))
         if _inline:
             self.expect("}")
         self.validate_attribute_context()
@@ -1061,7 +1138,9 @@ class Parser:
             token, feature = self.attribute_requirements[0]
             raise token.error(f"attribute metadata requires {feature} compiler context; this context is not implemented")
 
-    def function(self, abi, public, no_mangle, unsafe, declaration=False, implementation=None, trait_declaration=False, documentation=()) -> Function:
+    def function(self, abi, public, no_mangle, unsafe, declaration=False,
+                 implementation=None, trait_declaration=False, documentation=(),
+                 inline_attributes=()) -> Function:
         self.expect("fn")
         name = self.name()
         # Bound spelling belongs to the function/method suffix. StaticTraits
@@ -1118,7 +1197,7 @@ class Parser:
                     if self.accept(")"):
                         break
                     continue
-                if declaration and mutable:
+                if declaration and not trait_declaration and mutable:
                     raise self.token.error("extern declarations cannot contain parameter patterns")
                 param = self.name()
                 self.expect(":")
@@ -1140,9 +1219,7 @@ class Parser:
             where_predicates = self.function_where_clause(parameters,
                 owner_parameters=implementation.type_parameters if implementation is not None else None,
                 declaration=trait_declaration)
-        if declaration:
-            if trait_declaration and self.token.text == "{":
-                raise self.token.error("default trait method bodies are not implemented")
+        if declaration and not (trait_declaration and self.token.text == "{"):
             self.expect(";")
             body = None
         else:
@@ -1152,7 +1229,8 @@ class Parser:
                         type_parameters=parameters, implementation=implementation, receiver=receiver,
                         lifetime_parameters=lifetime_parameters, explicit_receiver=explicit_receiver, documentation=documentation,
                         parameter_bounds=parameter_bounds,
-                        where_token=where_token, where_predicates=where_predicates)
+                        where_token=where_token, where_predicates=where_predicates,
+                        inline_attributes=inline_attributes)
 
     def block(self, *, function_inner_docs=False) -> Expr:
         token = self.expect("{")
@@ -1183,7 +1261,7 @@ class Parser:
             elif self.token.text == "}":
                 tail = expr
                 break
-            elif expr.kind in {"if", "block", "while", "for", "unsafe", "match"}:
+            elif expr.kind in {"if", "if_let", "block", "while", "while_let", "for", "loop", "unsafe", "match"}:
                 statements.append(Expr("statement", expr.token, children=[expr]))
             else:
                 raise self.token.error("expected ';' or end of block")
@@ -1193,14 +1271,25 @@ class Parser:
         return Expr("block", token, len(statements), statements + ([tail] if tail else []))
 
     def if_expression(self, token: Token) -> Expr:
+        pattern = None
+        if self.accept("let"):
+            pattern = self.pattern()
+            self.expect("=")
         condition = self.expression(allow_struct=False)
+        if pattern is not None and (
+                condition.kind == "assign"
+                or condition.kind == "binary" and condition.value in {"&&", "||"}):
+            raise condition.token.error(
+                "if let condition chains and ungrouped assignment scrutinees are not implemented; "
+                "group a boolean or assignment scrutinee explicitly")
         children = [condition, self.block()]
         if self.accept("else"):
             # An else-if is an IfExpression, not a fresh postfix expression.
             # Trailing indexing/field/call syntax belongs to the complete
             # outer chain in value context (or to its statement boundary).
             children.append(self.if_expression(self.take()) if self.token.text == "if" else self.block())
-        return Expr("if", token, children=children)
+        return Expr("if_let" if pattern is not None else "if", token,
+                    value=pattern, children=children)
 
     def expression(self, minimum: int = 1, allow_struct: bool = True, *, complete_block: bool = False) -> Expr:
         token = self.take()
@@ -1252,8 +1341,18 @@ class Parser:
         elif text == "if":
             expr = self.if_expression(token)
         elif text == "while":
-            condition = self.expression(allow_struct=False)
-            expr = Expr("while", token, children=[condition, self.block()])
+            if self.accept("let"):
+                pattern = self.pattern()
+                self.expect("=")
+                condition = self.expression(allow_struct=False)
+                if condition.kind == "binary" and condition.value in {"&&", "||"}:
+                    raise condition.token.error("while let condition chains are not implemented; group a boolean scrutinee explicitly")
+                expr = Expr("while_let", token, pattern, [condition, self.block()])
+            else:
+                condition = self.expression(allow_struct=False)
+                expr = Expr("while", token, children=[condition, self.block()])
+        elif text == "loop":
+            expr = Expr("loop", token, children=[self.block()])
         elif text == "for":
             pattern = self.pattern()
             if pattern.kind not in {"binding", "wildcard"}:
@@ -1276,7 +1375,7 @@ class Parser:
                 arms.append(arm)
                 if self.accept("}"):
                     break
-                if not self.accept(",") and arm.kind not in {"if", "block", "while", "for", "unsafe", "match"}:
+                if not self.accept(",") and arm.kind not in {"if", "if_let", "block", "while", "while_let", "for", "loop", "unsafe", "match"}:
                     raise self.token.error("expected ',' between match arms")
             expr = Expr("match", token, patterns, [scrutinee] + arms)
         elif text in {"return", "break", "continue"}:
@@ -1317,7 +1416,7 @@ class Parser:
             # access cannot begin a new expression and remains a continuation.
             # Grouped expressions and initializer/operand value contexts do
             # not have this restriction. Keep else-if under the same context.
-            if (complete_block and expr.kind in {"if", "block", "while", "for", "unsafe", "match"}
+            if (complete_block and expr.kind in {"if", "if_let", "block", "while", "while_let", "for", "loop", "unsafe", "match"}
                     and self.token.text != "."):
                 break
             if self.token.text == "::" and expr.kind in {"field", "variant", "trait_path"}:

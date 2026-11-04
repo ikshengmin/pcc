@@ -43,7 +43,8 @@ def _uncast(host, value):
 def private_frame_scope(host, symbol, value, frame_map=None):
     """Prove compiler-owned storage, map bounds and a paired native lifetime.
 
-    Only the three root-scope emitters supply frame_map. Allocation records
+    Root-scope emitters and shared-return ABI planning supply frame_map.
+    Allocation records
     carry capacity from the original allocation type, not pointer attributes
     or runtime address ranges. Ordinary scopes use all-exit cleanup; lexical
     scopes use their explicit enter/leave cleanup. This includes resume-body

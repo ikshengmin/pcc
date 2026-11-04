@@ -37,6 +37,8 @@ class RustCompilation:
     external_rustc_lints: ExternalRustcLints | None = None
     crate_cfg_attributes: tuple = ()
     conditional_items: tuple = ()
+    # Advisory source metadata only; owned codegen currently applies no hint.
+    function_inline_hints: tuple = ()
 
     @property
     def ir_text(self) -> str:
@@ -99,8 +101,20 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
         from .module_resolution import ModuleResolution, inline_crate
         resolution = ModuleResolution(inline_crate(parser, functions))
         functions, records, enums = resolution.functions, resolution.records, resolution.enums
+    from .inline_attributes import collect_inline_hints
+    inline_hints = collect_inline_hints(functions, parser.traits)
     if rustc_check is None:
         _reject_uncertified_references(functions, records, enums, parser.implementations, parser.traits)
+        from .default_methods import reject_uncertified_defaults
+        reject_uncertified_defaults(parser.traits)
+        from .loops import reject_uncertified_loops
+        reject_uncertified_loops(functions)
+        from .conditional_patterns import reject_uncertified_if_let
+        reject_uncertified_if_let(functions)
+        if inline_hints:
+            raise inline_hints[0].attributes[0].token.error(
+                'inline attribute admission requires an actual source/options-bound '
+                'CheckedRustSource; caller attestation is not certification')
     checker = Checker(functions, records, enums, parser.implementations, parser.traits,
                       externally_checked=rustc_check is not None, pointer_bits=target.pointer_bits,
                       module_resolution=resolution, crate_policy=parser.crate_policy)
@@ -124,7 +138,8 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
                                parser.crate_lint_attributes, rustc_check.stderr,
                                rustc_check.provenance) if rustc_check is not None else None),
                            crate_cfg_attributes=parser.crate_cfg_attributes,
-                           conditional_items=parser.conditional_items)
+                           conditional_items=parser.conditional_items,
+                           function_inline_hints=inline_hints)
 
 
 __all__ = ["ExternalRustcCheck", "CheckedRustSource", "RustcToolchain",
