@@ -72,8 +72,34 @@ unit, with ordinary/octal Java escapes; Unicode-escape translation remains gated
 Initialized `final` boolean/integral locals and `final` parameters preserve their
 lexical binding and prohibit reassignment. Only locals initialized by constant
 expressions become constant variables; a runtime call initializer is still
-evaluated exactly once and read from its local slot. Blank final locals remain an
-explicit definite-unassignment boundary, not an assumed value or dropped declaration.
+evaluated exactly once and read from its local slot.
+
+Native primitive blank-final locals now have a separate JLS 16 definite-unassignment
+pass after source binding and type/DA checks. A blank final is distinct from an
+initialized final or final parameter. Every simple assignment must still find it
+definitely unassigned after its right-hand side; compound assignments and increments
+remain errors. DU is not the complement of DA. The typed-source flow graph intersects
+branches and switch entries, preserves boolean outcome rules and abrupt targets,
+and computes a greatest fixed point through loop/continue backedges. Fresh lexical
+scope entries reset their own bindings, including switch dispatch that bypasses a
+declarator; case-label fallthrough and outer declarations do not reset them. Syntactically
+analyzed but runtime-unreachable for updates and do conditions retain their vacuous
+flow rules. No source expression is rebound, retyped or emitted by this pass.
+
+An uninitialized declaration emits no store; a later legal assignment uses the
+existing native primitive slot/store path. A later-assigned final never becomes a
+constant variable for narrowing, case labels or reachability. Class-model blank
+locals remain explicitly gated in methods, constructors, initializers and enhanced-for
+contexts until all those frames have a complete DU owner. Blank final fields and
+managed reference storage retain their separate boundaries.
+
+The new ordinary, owned-native and unchanged-source JDK obligations are execution-UNRUN.
+This mechanism occurs in the complete pinned Commons Numbers
+[Precision.java](https://github.com/apache/commons-numbers/blob/77f715769e4039acb4babd9add80b78a06ca7279/commons-numbers-core/src/main/java/org/apache/commons/numbers/core/Precision.java#L224-L243)
+and
+[Complex.java](https://github.com/apache/commons-numbers/blob/77f715769e4039acb4babd9add80b78a06ca7279/commons-numbers-complex/src/main/java/org/apache/commons/numbers/complex/Complex.java#L3572-L3593).
+That is source relevance, not native compilation of either complete class or project.
+The original Primes String31 frontier and shared managed-runtime/QPS gate are unchanged.
 
 Primitive local type inference now follows JLS 14.4/14.4.1 on the ordinary owned
 source-to-native route. A single `var` declarator in a block or basic-for initializer
@@ -363,8 +389,8 @@ elements remain live reads, not a snapshot copied at loop entry.
 Scope, label targets, reachability and definite assignment use the existing
 source owners. An empty-array exit preserves expression assignments but does
 not establish assignments made only in the body, even when an initializer is
-syntactically nonempty or the body always returns. Ordinary blank final locals
-remain gated. Iterable iteration, inferred `var`, boxing, reference/floating/
+syntactically nonempty or the body always returns. Blank final locals in this
+class-model path remain gated. Iterable iteration, inferred `var`, boxing, reference/floating/
 multidimensional arrays and native managed iteration remain unsupported.
 
 `test_source_enhanced_for_model.py` contains exact complete-source model and

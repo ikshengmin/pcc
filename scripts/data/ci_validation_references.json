@@ -1,5 +1,37 @@
 {
   "functions": {
+    "tests/java/test_source_blank_final_locals.py": {
+      "test_identical_blank_final_originals_match_jdk_raw_processes": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses unchanged complete blank-final local originals and selected JDK tools with independent observers, raw native/reference process comparisons where applicable, and source-attributed compiler rejections. Original inputs and tool identities remain pinned. No JDK is a production owner, and no complete Commons Numbers or managed-runtime execution is established."
+        ]
+      },
+      "test_identical_invalid_blank_final_originals_are_rejected_by_jdk": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses unchanged complete blank-final local originals and selected JDK tools with independent observers, raw native/reference process comparisons where applicable, and source-attributed compiler rejections. Original inputs and tool identities remain pinned. No JDK is a production owner, and no complete Commons Numbers or managed-runtime execution is established."
+        ]
+      },
+      "test_identical_blank_final_projects_match_jdk_raw_processes": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses unchanged complete blank-final local originals and selected JDK tools with independent observers, raw native/reference process comparisons where applicable, and source-attributed compiler rejections. Original inputs and tool identities remain pinned. No JDK is a production owner, and no complete Commons Numbers or managed-runtime execution is established."
+        ]
+      },
+      "test_identical_invalid_blank_final_projects_are_rejected_by_jdk": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses unchanged complete blank-final local originals and selected JDK tools with independent observers, raw native/reference process comparisons where applicable, and source-attributed compiler rejections. Original inputs and tool identities remain pinned. No JDK is a production owner, and no complete Commons Numbers or managed-runtime execution is established."
+        ]
+      },
+      "test_retained_model_boundary_originals_are_valid_jdk_source": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses unchanged complete blank-final local originals and selected JDK tools with independent observers, raw native/reference process comparisons where applicable, and source-attributed compiler rejections. Original inputs and tool identities remain pinned. No JDK is a production owner, and no complete Commons Numbers or managed-runtime execution is established."
+        ]
+      }
+    },
     "tests/java/test_source_local_inference.py": {
       "test_identical_inference_originals_match_jdk_raw_processes": {
         "activity": "external-reference",

@@ -746,8 +746,12 @@ class SourceParser:
                 children = [initializer]
             else:
                 children = []
-            if is_final and not children:
-                name.error("blank final locals require the definite-unassignment source domain", code="java.unsupported.blank-final-local")
+            if is_final and not children and self.class_model:
+                # Native scalar methods run a separate typed-AST DU pass.
+                # Model constructors/initializers/enhanced-for and reference
+                # storage retain their boundary until every frame is covered.
+                name.error("blank final locals require the class-model definite-unassignment domain",
+                           code="java.unsupported.blank-final-local")
             declarations.append(Node("var", name, dtype, children, is_final=is_final))
             if not self.accept(","):
                 break

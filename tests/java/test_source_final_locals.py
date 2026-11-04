@@ -1,7 +1,7 @@
-"""Initialized final source variables, not a substitute for blank-final DU rules."""
+"""Initialized final restrictions and retained native blank-local DU input."""
 import pytest
 
-from pcc.frontends.java import JavaError, UnsupportedJava, compile_source
+from pcc.frontends.java import JavaError, compile_source
 from pcc.frontends.java.artifact import method_symbol
 from tests.java.owned_execution import observe_scalar
 from tests.java.test_source_frontend import forbid_bytecode_or_external_owner
@@ -78,10 +78,9 @@ def test_invalid_final_source_fails_before_lowering(body, helpers, message, monk
         compile_source(original(body, helpers))
 
 
-def test_blank_final_local_remains_explicit_until_definite_unassignment_is_implemented():
+def test_former_blank_final_local_boundary_now_uses_owned_ir():
     text = original("final int x;if(true)x=42;else x=7;return x;")
-    with pytest.raises(UnsupportedJava, match="blank final locals"):
-        compile_source(text)
+    assert compile_source(text).emit_object().startswith(b"\x7fELF")
 
 
 def test_final_does_not_change_method_signature_or_create_overloads():

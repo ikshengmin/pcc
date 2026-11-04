@@ -2,7 +2,8 @@
 
 This pass creates typed source AST, not JVM instructions. The scalar
 subset tracks scalar expression side effects and outcome-specific definite
-assignment. Blank final locals and native reference storage remain separate gaps.
+assignment. Primitive blank-final DU is checked separately after binding;
+native reference storage remains outside this scalar source owner.
 """
 from dataclasses import dataclass
 import re
@@ -11,6 +12,7 @@ from .integer_semantics import evaluate_division, wrap_integer
 from .floating_semantics import converted_constant, floating_binary, floating_literal
 from .diagnostics import UnsupportedJava
 from .source_local_inference import LocalInferenceAnalyzer
+from .source_blank_final import check_blank_final_locals
 
 
 from .source_types import (
@@ -24,6 +26,7 @@ class Binding:
     slot: int
     dtype: str = "int"
     is_final: bool = False
+    is_blank_final: bool = False
 
 
 def character_literal(node):
@@ -125,12 +128,13 @@ class SourceAnalyzer(LocalInferenceAnalyzer):
             outgoing = self.statement(method.body, assigned)
             if method.result != "void" and outgoing is not None:
                 method.token.error("missing return in " + str(method.result) + " method")
+            check_blank_final_locals(method)
         return self.program
 
-    def declare(self, token, dtype="int", is_final=False):
+    def declare(self, token, dtype="int", is_final=False, *, is_blank_final=False):
         if any(token.text in scope for scope in self.scopes):
             token.error("local or parameter name is already in scope")
-        binding = Binding(token.text, len(self.method.locals), dtype, is_final)
+        binding = Binding(token.text, len(self.method.locals), dtype, is_final, is_blank_final)
         self.method.locals.append(binding)
         if len(self.method.locals) > 4096:
             token.error("source method exceeds the local-variable budget", code="java.unsupported.local-variable-limit")
@@ -279,7 +283,7 @@ class SourceAnalyzer(LocalInferenceAnalyzer):
         self.check_assignment(node, assigned, rhs)
 
     def check_assignment(self, node, assigned, rhs):
-        if node.symbol.is_final:
+        if node.symbol.is_final and not (node.symbol.is_blank_final and node.value == "="):
             node.token.error("cannot assign an initialized final local or final parameter: " + node.symbol.name)
         if node.value != "=" and node.symbol not in assigned:
             node.token.error("local variable is not definitely assigned: " + node.symbol.name)
@@ -492,7 +496,8 @@ class SourceAnalyzer(LocalInferenceAnalyzer):
             if node.inference_token is not None:
                 self.infer_local(node, assigned)
             else:
-                node.symbol = self.declare(node.token, node.value, node.is_final)
+                node.symbol = self.declare(node.token, node.value, node.is_final,
+                                           is_blank_final=node.is_final and not node.children)
             if node.children:
                 if node.inference_token is None:
                     self.expression(node.children[0], assigned)

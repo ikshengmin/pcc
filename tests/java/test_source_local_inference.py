@@ -65,6 +65,7 @@ CASES = [
     for dtype in PRIMITIVES
 ] + [
     ("literal-int", original("var value=42;return value;"), "I", (), 42),
+    ("former-blank-final-boundary", original("final int value;value=42;return value;"), "I", (), 42),
     ("literal-long", original("var value=9007199254740993L;return value;", "long"), "J", (), 9007199254740993),
     ("literal-char", original("var value='*';return value;", "char"), "C", (), 42),
     ("literal-float", original("var value=42.0f;return value;", "float"), "F", (), 0x42280000),
@@ -174,7 +175,6 @@ NATIVE_GAPS = [
     ("null-inequality", original("var value=null!=null;return value?0:42;"), "java.unsupported.object-expressions"),
     ("null-conditional-comparison", original("var value=(true?null:null)==null;return value?42:0;"), "java.unsupported.object-expressions"),
     ("null-outside-inference", original("return null==null?42:0;"), "java.unsupported.object-expressions"),
-    ("blank-final-unchanged", original("final int value;value=42;return value;"), "java.unsupported.blank-final-local"),
 ]
 MODEL_GAPS = NATIVE_GAPS[:2] + [
     ("array-inference", original("var value=new int[]{42};return 42;"), "java.unsupported.local-inference-domain"),
