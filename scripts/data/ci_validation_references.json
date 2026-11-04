@@ -1,5 +1,61 @@
 {
   "functions": {
+    "tests/java/test_source_integral_arithmetic_model.py": {
+      "test_exact_integral_originals_and_source_errors_against_selected_jdk_only": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses unchanged complete integral arithmetic originals and the selected JDK with separate observers for values, exception identity, operand side effects and failed stores. Source/tool identity and source-attributed compiler rejection remain required. No PCC dynamic arithmetic exception or managed runtime execution is established."
+        ]
+      },
+      "test_exact_receiver_integral_originals_against_selected_jdk_only": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses unchanged complete integral arithmetic originals and the selected JDK with separate observers for values, exception identity, operand side effects and failed stores. Source/tool identity and source-attributed compiler rejection remain required. No PCC dynamic arithmetic exception or managed runtime execution is established."
+        ]
+      },
+      "test_exact_zero_divisors_raise_real_jdk_arithmetic_exception": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses unchanged complete integral arithmetic originals and the selected JDK with separate observers for values, exception identity, operand side effects and failed stores. Source/tool identity and source-attributed compiler rejection remain required. No PCC dynamic arithmetic exception or managed runtime execution is established."
+        ]
+      },
+      "test_exact_effects_precede_jdk_zero_check_without_failed_store": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses unchanged complete integral arithmetic originals and the selected JDK with separate observers for values, exception identity, operand side effects and failed stores. Source/tool identity and source-attributed compiler rejection remain required. No PCC dynamic arithmetic exception or managed runtime execution is established."
+        ]
+      },
+      "test_exact_array_rhs_mutation_is_not_rolled_back_by_jdk_failed_remainder": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses unchanged complete integral arithmetic originals and the selected JDK with separate observers for values, exception identity, operand side effects and failed stores. Source/tool identity and source-attributed compiler rejection remain required. No PCC dynamic arithmetic exception or managed runtime execution is established."
+        ]
+      },
+      "test_exact_array_reference_index_checks_and_rhs_have_jdk_order": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses unchanged complete integral arithmetic originals and the selected JDK with separate observers for values, exception identity, operand side effects and failed stores. Source/tool identity and source-attributed compiler rejection remain required. No PCC dynamic arithmetic exception or managed runtime execution is established."
+        ]
+      },
+      "test_exact_abrupt_operands_keep_original_jdk_exception_identity": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses unchanged complete integral arithmetic originals and the selected JDK with separate observers for values, exception identity, operand side effects and failed stores. Source/tool identity and source-attributed compiler rejection remain required. No PCC dynamic arithmetic exception or managed runtime execution is established."
+        ]
+      },
+      "test_exact_receiver_rhs_mutation_survives_jdk_failed_compound_store": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses unchanged complete integral arithmetic originals and the selected JDK with separate observers for values, exception identity, operand side effects and failed stores. Source/tool identity and source-attributed compiler rejection remain required. No PCC dynamic arithmetic exception or managed runtime execution is established."
+        ]
+      },
+      "test_exact_abrupt_array_reference_or_index_skips_later_jdk_effects": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses unchanged complete integral arithmetic originals and the selected JDK with separate observers for values, exception identity, operand side effects and failed stores. Source/tool identity and source-attributed compiler rejection remain required. No PCC dynamic arithmetic exception or managed runtime execution is established."
+        ]
+      }
+    },
     "tests/java/test_source_throw_model.py": {
       "test_exact_throw_originals_against_selected_jdk_only": {
         "activity": "external-reference",

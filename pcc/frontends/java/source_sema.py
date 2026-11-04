@@ -427,6 +427,11 @@ class SourceAnalyzer:
             node.dtype = "boolean" if op in ("==", "!=", "<", "<=", ">", ">=") else node.operation_type
         if op in ("/", "%"):
             self.arithmetic_domain(node, op, node.operation_type, second)
+            # A class-model owner may retain integral zero division as a
+            # runtime exception obligation. It is legal Java source, but not
+            # a constant expression (JLS 15.29). Native Sema rejects it above.
+            if node.operation_type in INTEGRAL and second.constant == 0:
+                return
         if first.constant is not None and second.constant is not None:
             a, b = first.constant, second.constant
             if node.operation_type in FLOATING:

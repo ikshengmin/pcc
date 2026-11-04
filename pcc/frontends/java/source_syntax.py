@@ -69,6 +69,7 @@ class Node:
     flow_outcomes: object = field(default=None, repr=False, compare=False)
     string_constant: object = None  # Source content only, never runtime identity.
     managed_value: object = None  # Compiler-only requirements, never a runtime reference.
+    arithmetic_plan: object = None  # Nonlowering checked arithmetic, never exception code.
 
 
 @dataclass

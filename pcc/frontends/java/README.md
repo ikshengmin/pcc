@@ -108,9 +108,10 @@ remain separate unsupported runtime domains.
 Integral division/remainder and their compound assignments support nonzero
 constant-expression divisors, preserving truncation toward zero, dividend-signed
 remainders and int/long minimum divided by minus one. Neither float-based
-constant evaluation nor overflowing signed IR division is used. Zero or dynamic
-divisors remain unsupported until the shared ArithmeticException path exists;
-an initialized non-final variable is not assumed constant.
+constant evaluation nor overflowing signed IR division is used. Native zero or
+dynamic divisors remain unsupported until the shared ArithmeticException path
+exists; an initialized non-final variable is not assumed constant. The separate
+class model retains checked dynamic/zero source plans, described below.
 
 `analyze_class_sources(mapping)` is a separate **semantic-model stage**, not a
 native object capability: it reuses the source parser and scalar/control-flow
@@ -269,7 +270,7 @@ This prerequisite was selected by source-reading ZXing 3.5.3, release commit
 The inspected files carry Apache-2.0 notices; no upstream implementation was
 copied. Their blank-final fields still need definite-unassignment analysis;
 objects/arrays need managed execution, and `System.arraycopy`, exceptions,
-dynamic remainder, native array iteration, strings and collections remain further gaps.
+native dynamic remainder, native array iteration, strings and collections remain further gaps.
 This change does not compile or qualify ZXing, nor establish Java-as-Python
 extension support. The bytecode/JAR compatibility experiment is unchanged.
 
@@ -311,7 +312,7 @@ parser boundary is the generic `List<Integer>` return type at 108:23; the exact
 complete-original regression is authored but execution-unrun. Retaining that
 syntax does not typecheck or implement IllegalArgumentException or String.format.
 Production scalar compilation still rejects the static String field at line 31.
-Static arrays, dynamic remainder, throw/format, List/Integer and other generic,
+Static arrays, native dynamic remainder, throw/format, List/Integer and other generic,
 library, bootstrap and runtime dependencies remain unresolved. The full original
 production/test closure and strict project gate are unchanged.
 
@@ -396,3 +397,60 @@ The production String-field frontier and complete original-project gate remain.
 Rules: [throw](https://docs.oracle.com/javase/specs/jls/se21/html/jls-14.html#jls-14.18),
 [exception checking](https://docs.oracle.com/javase/specs/jls/se21/html/jls-11.html#jls-11.2),
 and [abrupt definite assignment](https://docs.oracle.com/javase/specs/jls/se21/html/jls-16.html#jls-16.2.13).
+
+### Dynamic integral arithmetic source semantics
+
+The nonlowering class model checks dynamic and zero integral `/`, `%`, `/=` and
+`%=` without requiring a fabricated constant divisor. Existing operand owners
+still check the complete original expressions exactly once, perform int/long
+numeric promotion and enforce variable, finality and definite-assignment rules.
+The separate `IntegralArithmeticPlan` preserves operation and compound-target
+facts without replacing original operators or children. Proven nonzero constant
+divisors keep their existing source/native owner. Floating division is unchanged;
+floating remainder retains its explicit capability boundary.
+
+The arithmetic check follows normal completion of both operands. Failure in an
+operand propagates its original exception, rather than becoming divide-by-zero.
+Compound assignment remembers both the variable and its old value before the
+RHS. Array component assignment checks reference/index/null/bounds and saves
+the old component before the RHS; receiver-field and local targets retain their
+own saved-variable plans. A normal nonzero operation truncates its quotient
+toward zero, preserves Java's MIN/-1 quotient and zero remainder, then performs
+compound conversion and storage. Neither operand failure nor division failure
+stores a result. No compound target is evaluated twice.
+
+An integral zero-divisor expression is valid source, but is not a constant
+expression. It cannot supply constant narrowing, a case label or constant-flow
+proof. It also does not make following statements syntactically unreachable:
+reachability and definite assignment remain with their existing source owners.
+Source constant folding never invokes host integer division on zero.
+
+Dynamic/zero sites carry immutable obligations for their actual method,
+constructor, instance initializer or field initializer. They contribute to the
+class's unmet managed requirements. `integral_arithmetic_context_complete` only
+states that no such sites were found. ArithmeticException identity is a required
+language fact, not an owned exception class or runtime registration. Allocation,
+owning roots, safepoints, handler matching, cleanup, unwinding and uncaught
+delivery remain unavailable. No native instruction, exception object or handler
+table is produced by this model.
+
+This addresses the source domain used by unchanged Primes' `n % p` at line 54
+and SmallPrimes' dynamic division/remainder and long-promoted remainder. It does
+not advance their observed project frontier: complete Primes model parsing still
+expects the generic return-type gap at 108:23, production compilation still
+stops at String31, and SmallPrimes model parsing still stops at static-array
+storage39. These complete-original guards retain the original source and are
+authored, execution-UNRUN expectations. The project inputs and whole-project
+gate are unchanged.
+
+`test_source_integral_arithmetic_model.py` has complete original source cases
+and separate selected-JDK observers for values, exception identity, operand
+effects and failed stores. Only the JDK executes dynamic/throwing arithmetic;
+the PCC scalar entrypoints still reject it before lowering. All new ordinary,
+native-rejection, reference, whole-Java and original-project execution is UNRUN.
+
+Rules: [operand order](https://docs.oracle.com/javase/specs/jls/se21/html/jls-15.html#jls-15.7),
+[division](https://docs.oracle.com/javase/specs/jls/se21/html/jls-15.html#jls-15.17.2),
+[remainder](https://docs.oracle.com/javase/specs/jls/se21/html/jls-15.html#jls-15.17.3),
+[compound assignment](https://docs.oracle.com/javase/specs/jls/se21/html/jls-15.html#jls-15.26.2),
+and [constant expressions](https://docs.oracle.com/javase/specs/jls/se21/html/jls-15.html#jls-15.29).

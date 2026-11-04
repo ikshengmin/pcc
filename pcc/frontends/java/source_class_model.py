@@ -19,6 +19,7 @@ from .diagnostics import JavaError, UnsupportedJava
 from .managed_objects import PRIMITIVE_SIZES, class_value_plan, reference_value_plan
 from .source_array_model import ArrayModelAnalyzer
 from .source_construction_model import ClassConstructionAnalyzer, ClassConstructionObligation
+from .source_integral_arithmetic_model import IntegralArithmeticModelAnalyzer, integral_arithmetic_context
 from .source_project import SourceProject
 from .source_sema import SourceAnalyzer
 from .source_string_model import (
@@ -82,7 +83,8 @@ class SourceClassModel:
         return unmet_requirements(self.managed_value)
 
 
-class ClassAnalyzer(ThrowModelAnalyzer, ClassConstructionAnalyzer, StringModelAnalyzer, ArrayModelAnalyzer, SourceAnalyzer):
+class ClassAnalyzer(IntegralArithmeticModelAnalyzer, ThrowModelAnalyzer, ClassConstructionAnalyzer,
+                    StringModelAnalyzer, ArrayModelAnalyzer, SourceAnalyzer):
     def __init__(self, program, project):
         super().__init__(program, project)
         self.constructor_edge = {}
@@ -367,6 +369,7 @@ class ClassModelProject(SourceProject):
         self._string_fold_work = 0
         self._class_constructions = {}
         self._throw_sites = {}
+        self._integral_arithmetic_sites = {}
         super().__init__(programs, analyzer_type=ClassAnalyzer)
         self.models = {}
 
@@ -376,7 +379,18 @@ class ClassModelProject(SourceProject):
                         for owner, (tokens, requirements) in sorted(self._string_contexts.items()))
         constructions = tuple(obligation for _, obligation in sorted(self._class_constructions.items()))
         throws = tuple(obligation for _, obligation in sorted(self._throw_sites.items()))
-        return strings + constructions + throws
+        arithmetic = tuple(obligation for _, obligation in sorted(self._integral_arithmetic_sites.items()))
+        return strings + constructions + throws + arithmetic
+
+    @property
+    def integral_arithmetic_context_complete(self):
+        """No dynamic/zero integral sites, never native exception acceptance."""
+        return not self._integral_arithmetic_sites
+
+    def record_integral_arithmetic(self, analyzer, node, divisor):
+        token = node.token
+        key = (analyzer.program.name, token.filename, token.line, token.column, node.kind)
+        self._integral_arithmetic_sites[key] = integral_arithmetic_context(analyzer, node, divisor)
 
     @property
     def throw_context_complete(self):
