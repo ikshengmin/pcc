@@ -3,7 +3,9 @@
 from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
+    abi_constant,
     atomic_rmw_i64,
+    atomic_store_i32,
     global_addr,
     global_load_ptr,
     global_store_ptr,
@@ -64,6 +66,11 @@ pcc_thread_world_stop_epoch_held = extern(
     "pcc_thread_world_stop_epoch_held", (), c_int64
 )
 pcc_gc_set_mark_color = extern("pcc_gc_set_mark_color", (c_ptr, c_int64), c_void)
+pcc_gc_shade_gray_atomic = extern(
+    "pcc_gc_shade_gray_atomic", (c_ptr, c_int64), c_void
+)
+pcc_container_lock = extern("pcc_container_lock", (c_ptr,), c_void)
+pcc_container_unlock = extern("pcc_container_unlock", (c_ptr,), c_void)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 
 
@@ -79,11 +86,7 @@ def pcc_gc_trace_mark_gray_if_known(obj) -> None:
                 obj = resolved
     if pcc_gc_object_is_known_no_lock(obj) == 0:
         return
-    flags: i64 = load_i32(obj, 12)
-    if (flags & 32) == 0:
-        if (flags & 16) == 0:
-            pcc_gc_gray_count_increment_acq_rel()
-        pcc_gc_set_mark_color(obj, 16)
+    pcc_gc_shade_gray_atomic(obj, 0)
 
 
 @c_abi_export("pcc_gc_trace_slot")
@@ -133,6 +136,27 @@ def pcc_gc_trace_referents(obj) -> None:
     # pass reads them; the releasing thread finishes the object.
     if (load_i32(obj, 12) & 524288) != 0:
         return
+    if load_i32(global_addr("pcc_gc_list_container_mode"), 0) != 0:
+        tag: i64 = load_i32(obj, abi_constant("object.header.type_tag_offset"))
+        if (
+            tag == abi_constant("object.type.list")
+            or tag == abi_constant("object.type.instance")
+            or (
+                tag >= abi_constant("object.type.user_class_start")
+                and pcc_capi_is_cext_type_tag(tag) == 0
+            )
+        ):
+            # In container mode a list's items and an instance's fields
+            # change under the object's own container lock, not the graph
+            # lock, and their barriers shade without the graph lock. Scan
+            # under that lock: a store either precedes this scan, which then
+            # sees it, or follows it and finds the cycle already active.
+            # A list's replaced item array is freed only after the writer
+            # unlocks, so the scan never reads a retired array.
+            pcc_container_lock(obj)
+            pcc_gc_visit_object_slots(obj, pcc_gc_trace_slot, null())
+            pcc_container_unlock(obj)
+            return
     pcc_gc_visit_object_slots(obj, pcc_gc_trace_slot, null())
 
 
@@ -339,7 +363,7 @@ def pcc_gc_finish_tracing_cycle(
     # The scheduler owns the release-store helper for this shared counter.
     # Its ABI is already part of the common tracing surface.
     pcc_gc_gray_count_store_release(0)
-    store_i32(global_addr("pcc_gc_mark_active"), 0, 0)
+    atomic_store_i32(global_addr("pcc_gc_mark_active"), 0, 0, "release")
     store_i32(
         global_addr("pcc_gc_trace_extension_roots_pending"), 0, 0
     )

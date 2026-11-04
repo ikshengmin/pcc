@@ -154,6 +154,8 @@ py_weakref_invalidate = extern("py_weakref_invalidate", (c_ptr,), c_void)
 pcc_gc_note_alloc = extern("pcc_gc_note_alloc", (c_int64,), c_void)
 pcc_gc_backend4_maybe_auto_step = extern("pcc_gc_backend4_maybe_auto_step", (), c_void)
 pcc_thread_no_park_depth = extern("pcc_thread_no_park_depth", (), c_int64)
+pcc_thread_no_park_enter = extern("pcc_thread_no_park_enter", (), c_void)
+pcc_thread_no_park_exit = extern("pcc_thread_no_park_exit", (), c_void)
 pcc_py_gc_minor_graph_lock_depth = extern("pcc_py_gc_minor_graph_lock_depth", (), c_int64)
 pcc_gc_note_object_allocated = extern(
     "pcc_gc_note_object_allocated",
@@ -198,6 +200,12 @@ pcc_gc_note_relocation_read = extern(
     c_ptr,
 )
 pcc_gc_note_store = extern("pcc_gc_note_store", (), c_void)
+pcc_gc_object_index_seen_stable = extern(
+    "pcc_gc_object_index_seen_stable", (c_ptr,), c_int64
+)
+pcc_gc_shade_gray_atomic = extern(
+    "pcc_gc_shade_gray_atomic", (c_ptr, c_int64), c_void
+)
 pcc_gc_note_safepoint = extern("pcc_gc_note_safepoint", (), c_void)
 pcc_gc_step = extern("pcc_gc_step", (c_int64,), c_int64)
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
@@ -796,7 +804,7 @@ def pcc_gc_store_root_plan_init(plan, backend: int) -> None:
         return
     memset(plan, 0, _STORE_PLAN_BYTES)
     store_i64(plan, _STORE_PLAN_BACKEND, backend)
-    if backend == 4 and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
+    if backend >= 1 and backend <= 4 and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
         store_i32(plan, _STORE_PLAN_MODE, _STORE_PLAN_COUNT_FREE)
         return
     store_i32(plan, _STORE_PLAN_MODE, 0)
@@ -1013,6 +1021,28 @@ def pcc_gc_store_ptr_plan_finish(plan) -> None:
     _pcc_gc_store_plan_finish(plan, 0)
 
 
+def _store_root_nonmoving_tracing(slot, value, backend: int) -> None:
+    # Initial seeding and the final root verdict stop the world. Keep the
+    # store and its insertion barrier in one no-park scope, so neither can
+    # be observed as a completed publication without the other.
+    pcc_thread_no_park_enter()
+    pcc_gc_note_store()
+    store_ptr(slot, 0, value)
+    if (
+        ptr_is_null(value) == 0
+        and is_tagged_int(value) == 0
+        and atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") != 0
+        and pcc_gc_object_index_seen_stable(value) != 0
+    ):
+        flags: i64 = i64(atomic_load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET, "acquire"))
+        if (flags & 524288) == 0:
+            if backend == 2:
+                pcc_gc_shade_gray_atomic(value, 1)
+            elif (flags & 8) != 0:
+                pcc_gc_shade_gray_atomic(value, 0)
+    pcc_thread_no_park_exit()
+
+
 @c_abi_export("pcc_gc_store_root")
 def pcc_gc_store_root(slot, value) -> None:
     if ptr_is_null(slot) != 0:
@@ -1093,6 +1123,14 @@ def pcc_gc_store_root(slot, value) -> None:
         if is_tagged_int(old) == 0 and ptr_is_null(old) == 0:
             py_decref(old)
         return
+    if (
+        (backend == 1 or backend == 2)
+        and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
+        and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
+        and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
+    ):
+        _store_root_nonmoving_tracing(slot, value, backend)
+        return
     plan = stack_alloc(128)
     pcc_gc_store_root_plan_init(plan, backend)
     pcc_py_gc_minor_graph_lock()
@@ -1118,6 +1156,14 @@ def pcc_gc_store_root_take(slot, value) -> None:
         store_ptr(slot, 0, value)
         if is_tagged_int(old) == 0 and ptr_is_null(old) == 0:
             py_decref(old)
+        return
+    if (
+        (backend == 1 or backend == 2)
+        and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
+        and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
+        and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
+    ):
+        _store_root_nonmoving_tracing(slot, value, backend)
         return
     # Moving/tracing backends: commit through the relocation-aware plan (which
     # retains the stored value), then release the caller's reference through

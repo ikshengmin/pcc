@@ -378,6 +378,35 @@ def pcc_gc_set_mark_color(obj, color: i64) -> None:
         old = observed
 
 
+@c_abi_export("pcc_gc_shade_gray_atomic")
+def pcc_gc_shade_gray_atomic(obj, allow_black: i64) -> None:
+    """Make ``obj`` gray once, counting only a real transition to gray.
+
+    A container write barrier shades without the graph lock while the marker
+    and graph-locked barriers shade under it, so the color test and the
+    gray-count increment must be one transition. The count is raised before
+    the color CAS and returned if another shader won: it may briefly exceed
+    the gray objects, never fall below them, so a drain cannot finish early
+    and a late decrement cannot strand an unmatched increment. Black stays
+    black unless ``allow_black`` asks for a re-scan.
+    """
+    old: i64 = atomic_load_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET, "acquire")
+    if (old & (16 | 524288)) != 0 or (allow_black == 0 and (old & 32) != 0):
+        return
+    pcc_gc_gray_count_increment_acq_rel()
+    while True:
+        if (old & (16 | 524288)) != 0 or (allow_black == 0 and (old & 32) != 0):
+            pcc_gc_gray_count_decrement_acq_rel()
+            return
+        desired: i64 = (old & ~56) | 16
+        observed: i64 = atomic_cas_i32(
+            obj, PYOBJECTHEADER_FLAGS_OFFSET, old, desired, "acq_rel", "acquire"
+        )
+        if observed == old:
+            return
+        old = observed
+
+
 @c_abi_export("pcc_gc_object_is_known_no_lock")
 def pcc_gc_object_is_known_no_lock(obj) -> i64:
     if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
@@ -402,10 +431,7 @@ def pcc_gc_mark_root_gray_if_known(obj) -> None:
             obj = resolved
     if pcc_gc_object_is_known_no_lock(obj) == 0:
         return
-    flags: i64 = load_i32(obj, 12)
-    if (flags & 16) == 0:
-        pcc_gc_gray_count_increment_acq_rel()
-    pcc_gc_set_mark_color(obj, 16)
+    pcc_gc_shade_gray_atomic(obj, 1)
 
 
 @c_abi_export("pcc_gc_resolve_root_slot_mode")
@@ -798,7 +824,8 @@ def pcc_gc_object_is_address_pinned(obj) -> i64:
 
 
 # Hot per-operation statistics: the pin balance at offset 0 and the
-# allocation count at offset 8 of one 128-byte stride per shard. A thread
+# allocation count at offset 8 and store count at offset 16 of one
+# 128-byte stride per shard. A thread
 # updates the shard of its own stack region, so cores do not share one
 # written word on every pin, unpin and allocation; readers sum the shards.
 define_global_i64_array(
@@ -896,6 +923,11 @@ def pcc_gc_metric_pin_balance() -> i64:
 @c_abi_export("pcc_gc_metric_allocation_count")
 def pcc_gc_metric_allocation_count() -> i64:
     return pcc_gc_metric_shard_sum(8)
+
+
+@c_abi_export("pcc_gc_metric_store_count")
+def pcc_gc_metric_store_count() -> i64:
+    return pcc_gc_metric_shard_sum(16)
 
 
 @c_abi_export("pcc_gc_metric_shard_reset")

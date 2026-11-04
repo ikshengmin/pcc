@@ -52,6 +52,7 @@ OWNED_SYMBOLS = PIN_SYMBOLS | TRANSFER_SYMBOLS | LEASE_SYMBOLS | HANDLED_SYMBOLS
     "pcc_gc_gray_count_store_release",
     "pcc_gc_mark_root_gray_if_known",
     "pcc_gc_set_mark_color",
+    "pcc_gc_shade_gray_atomic",
     "pcc_gc_object_is_known_no_lock",
     "pcc_gc_resolve_root_slot_unlocked",
     "pcc_gc_resolve_root_slot_mode",
@@ -61,6 +62,7 @@ OWNED_SYMBOLS = PIN_SYMBOLS | TRANSFER_SYMBOLS | LEASE_SYMBOLS | HANDLED_SYMBOLS
     "pcc_gc_metric_shard_reset",
     "pcc_gc_metric_pin_balance",
     "pcc_gc_metric_allocation_count",
+    "pcc_gc_metric_store_count",
     "pcc_gc_static_literal_probe", "pcc_gc_static_literal_contains",
     "pcc_gc_static_literal_record",
 }
@@ -151,7 +153,7 @@ def test_root_operations_have_one_strict_source_owner():
             python_name = "_" + symbol.removeprefix("pcc_gc_")
             assert len(re.findall(r"\b" + python_name + r"\(", strict)) > 1
             caller = strict
-        elif symbol in ("pcc_gc_set_mark_color", "pcc_gc_slot_lease_acquire", "pcc_gc_metric_shard_sum"):
+        elif symbol in ("pcc_gc_set_mark_color", "pcc_gc_shade_gray_atomic", "pcc_gc_slot_lease_acquire", "pcc_gc_metric_shard_sum"):
             caller = strict
         elif symbol == "pcc_gc_resolve_root_slot_mode":
             assert len(re.findall(r"\b_resolve_root_slot_mode\(", strict)) == 3
@@ -160,7 +162,7 @@ def test_root_operations_have_one_strict_source_owner():
             caller = (RUNTIME_DIR / "py/freestanding_gc_mapped_roots.py").read_text()
         elif symbol in ("pcc_gc_static_literal_probe", "pcc_gc_static_literal_contains"):
             caller = strict
-        elif symbol in ("pcc_gc_metric_pin_balance", "pcc_gc_metric_allocation_count"):
+        elif symbol in ("pcc_gc_metric_pin_balance", "pcc_gc_metric_allocation_count", "pcc_gc_metric_store_count"):
             caller = (RUNTIME_DIR / "py/py_gc_telemetry.py").read_text()
         elif symbol == "pcc_gc_release_nonterminal_tail":
             caller = (RUNTIME_DIR / "py/py_obj_dealloc.py").read_text()

@@ -165,7 +165,7 @@ def _differential_source() -> str:
         [
             "static int64_t pcc_gc_metric_load_oracle(int64_t metric) {",
             "  if (metric == 0) return pcc_gc_metric_allocation_count();",
-            "  if (metric == 1) return pcc_gc_metric_store;",
+            "  if (metric == 1) return pcc_gc_metric_store_count();",
             "  if (metric == 2) return pcc_gc_metric_load;",
             "  if (metric == 3) return pcc_gc_metric_safepoint;",
             "  if (metric == 4) return pcc_gc_metric_pin_balance();",

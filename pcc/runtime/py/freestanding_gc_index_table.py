@@ -25,8 +25,9 @@ separate lifetime guarantee. These functions do not acquire another lock.
 """
 
 from pcc import i64
-from pcc.extern import c_abi_export, c_int64, c_ptr, extern
+from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
+    atomic_fence,
     atomic_load_i64,
     atomic_store_i64,
     calloc,
@@ -75,6 +76,98 @@ define_global_ptr_null("pcc_py_gc_object_slots")
 define_global_i64("pcc_py_gc_object_cap", 0)
 define_global_i64("pcc_py_gc_object_count", 0)
 define_global_i64("pcc_py_gc_object_used", 0)
+# Sequence for exact negative membership reads; graph-serialized writers
+# publish odd before any key/topology change and even after all changes.
+define_global_i64("pcc_gc_object_index_generation", 0)
+
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+
+
+@c_abi_export("pcc_gc_object_index_write_begin")
+def _object_index_write_begin() -> i64:
+    slot = global_addr("pcc_gc_object_index_generation")
+    generation: i64 = atomic_load_i64(slot, 0, "relaxed")
+    # A nested raw rehash/publication belongs to the existing graph owner.
+    # These raw index operations never poll or invoke managed callbacks.
+    if generation < 0:
+        pcc_platform_abort()
+        return -1
+    if (generation & 1) != 0:
+        return 0
+    if generation > 9223372036854775804:
+        pcc_platform_abort()
+        return -1
+    atomic_store_i64(slot, 0, generation + 1, "relaxed")
+    # The odd publication must precede following key writes, not just prior
+    # operations. A release store alone would not provide that ordering.
+    atomic_fence("release")
+    return generation + 1
+
+
+@c_abi_export("pcc_gc_object_index_write_end")
+def _object_index_write_end(generation: i64) -> None:
+    if generation <= 0:
+        return
+    if (generation & 1) == 0:
+        pcc_platform_abort()
+        return
+    slot = global_addr("pcc_gc_object_index_generation")
+    if atomic_load_i64(slot, 0, "relaxed") != generation:
+        pcc_platform_abort()
+        return
+    atomic_store_i64(slot, 0, generation + 1, "release")
+
+
+@c_abi_export("pcc_gc_object_index_seen_stable")
+def pcc_gc_object_index_seen_stable(obj: c_ptr) -> i64:
+    """Exact membership, no returned node and no graph-lock acquisition.
+
+    The caller keeps the object alive and cannot park during this probe.
+    Positive-only membership is already exact, including during a shift.
+    For a miss, validate the authoritative table/capacity pair BEFORE using
+    it, and validate its version again after probing. This also handles an
+    OOM publishing the optional immutable reader record. Both acquire fences
+    order the preceding loads before their version check. Replaced tables
+    remain allocated under the existing no-park/STW retirement contract.
+    """
+    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+        return 0
+    if pcc_gc_object_index_seen(obj) != 0:
+        return 1
+    sequence = global_addr("pcc_gc_object_index_generation")
+    key_bits: i64 = ptr_diff(obj, null())
+    while True:
+        before: i64 = atomic_load_i64(sequence, 0, "acquire")
+        if before < 0:
+            pcc_platform_abort()
+            return 0
+        if (before & 1) != 0:
+            continue
+        slots = int_to_ptr(atomic_load_i64(global_addr("pcc_py_gc_object_slots"), 0, "relaxed"))
+        cap: i64 = atomic_load_i64(global_addr("pcc_py_gc_object_cap"), 0, "relaxed")
+        atomic_fence("acquire")
+        if atomic_load_i64(sequence, 0, "relaxed") != before:
+            continue
+        # Until the first version check the two fields can belong to
+        # different tables. Do not dereference slots or trust cap earlier.
+        found: i64 = 0
+        if ptr_is_null(slots) == 0 and cap > 0:
+            mask: i64 = cap - 1
+            index: i64 = pcc_gc_index_py_hash_ptr(obj) & mask
+            probes: i64 = 0
+            while probes < cap:
+                candidate: i64 = atomic_load_i64(slots, index * 16, "relaxed")
+                if candidate == key_bits:
+                    found = 1
+                    break
+                if candidate == 0:
+                    break
+                index = (index + 1) & mask
+                probes = probes + 1
+        atomic_fence("acquire")
+        if atomic_load_i64(sequence, 0, "relaxed") == before:
+            return found
+
 
 # Key-only provenance set for managed objects that deliberately have no GC
 # object node (backend 0, graph leaves, and explicitly registered runtime
@@ -242,10 +335,17 @@ def _index_table_publish(slots_cell: c_ptr, cap_cell: c_ptr, slots, cap: i64) ->
     The record it replaces is retired with the replaced table. Without a
     record (no memory) readers see no table and take the locked lookup.
     """
+    write_generation: i64 = 0
+    if ptr_eq(slots_cell, global_addr("pcc_py_gc_object_slots")) != 0:
+        write_generation = _object_index_write_begin()
+    if write_generation < 0:
+        return
     store_ptr(slots_cell, 0, slots)
     store_i64(cap_cell, 0, cap)
     published_cell = _index_published_cell(slots_cell)
     if ptr_is_null(published_cell) != 0:
+        if write_generation > 0:
+            _object_index_write_end(write_generation)
         return
     record = null()
     if ptr_is_null(slots) == 0 and cap > 0:
@@ -256,6 +356,8 @@ def _index_table_publish(slots_cell: c_ptr, cap_cell: c_ptr, slots, cap: i64) ->
     old_record = load_ptr(published_cell, 0)
     atomic_store_i64(published_cell, 0, ptr_diff(record, null()), "release")
     _index_retire(old_record)
+    if write_generation > 0:
+        _object_index_write_end(write_generation)
 
 
 @c_abi_export("pcc_gc_index_table_release")
@@ -421,9 +523,16 @@ def pcc_gc_index_py_rehash_slots(
     used_cell: c_ptr,
     requested_cap: i64,
 ) -> i64:
+    write_generation: i64 = 0
+    if ptr_eq(slots_cell, global_addr("pcc_py_gc_object_slots")) != 0:
+        write_generation = _object_index_write_begin()
+    if write_generation < 0:
+        return -1
     new_cap: i64 = pcc_gc_index_py_next_pow2(requested_cap)
     new_slots = calloc(new_cap, 16)
     if ptr_is_null(new_slots):
+        if write_generation > 0:
+            _object_index_write_end(write_generation)
         return -1
 
     old_slots = load_ptr(slots_cell, 0)
@@ -452,6 +561,8 @@ def pcc_gc_index_py_rehash_slots(
     _index_table_publish(slots_cell, cap_cell, new_slots, new_cap)
     store_i64(used_cell, 0, new_used)
     _index_table_release(slots_cell, old_slots)
+    if write_generation > 0:
+        _object_index_write_end(write_generation)
     return 0
 
 
@@ -485,11 +596,22 @@ def pcc_gc_index_py_insert(
     require_node: i64,
     initial_cap: i64,
 ) -> i64:
+    write_generation: i64 = 0
+    if ptr_eq(slots_cell, global_addr("pcc_py_gc_object_slots")) != 0:
+        write_generation = _object_index_write_begin()
+    if write_generation < 0:
+        return -1
     if ptr_is_null(key):
+        if write_generation > 0:
+            _object_index_write_end(write_generation)
         return -1
     if reject_tagged != 0 and is_tagged_int(key):
+        if write_generation > 0:
+            _object_index_write_end(write_generation)
         return -1
     if require_node != 0 and ptr_is_null(node):
+        if write_generation > 0:
+            _object_index_write_end(write_generation)
         return -1
 
     slots = load_ptr(slots_cell, 0)
@@ -500,12 +622,16 @@ def pcc_gc_index_py_insert(
             )
             != 0
         ):
+            if write_generation > 0:
+                _object_index_write_end(write_generation)
             return -1
         slots = load_ptr(slots_cell, 0)
 
     cap: i64 = load_i64(cap_cell, 0)
     result: i64 = pcc_gc_index_py_find_slot(slots, cap, key)
     if result >= 0:
+        if write_generation > 0:
+            _object_index_write_end(write_generation)
         return 0
 
     used: i64 = load_i64(used_cell, 0)
@@ -518,6 +644,8 @@ def pcc_gc_index_py_insert(
             )
             != 0
         ):
+            if write_generation > 0:
+                _object_index_write_end(write_generation)
             return -1
         slots = load_ptr(slots_cell, 0)
         cap = load_i64(cap_cell, 0)
@@ -531,6 +659,8 @@ def pcc_gc_index_py_insert(
     store_ptr(slots, offset, key)
     store_ptr(slots, offset + 8, node)
     store_i64(count_cell, 0, count + 1)
+    if write_generation > 0:
+        _object_index_write_end(write_generation)
     return 1
 
 
@@ -545,9 +675,18 @@ def pcc_gc_index_py_upsert(
     reject_tagged: i64,
     initial_cap: i64,
 ) -> i64:
+    write_generation: i64 = 0
+    if ptr_eq(slots_cell, global_addr("pcc_py_gc_object_slots")) != 0:
+        write_generation = _object_index_write_begin()
+    if write_generation < 0:
+        return -1
     if ptr_is_null(key) or ptr_is_null(node):
+        if write_generation > 0:
+            _object_index_write_end(write_generation)
         return -1
     if reject_tagged != 0 and is_tagged_int(key):
+        if write_generation > 0:
+            _object_index_write_end(write_generation)
         return -1
 
     slots = load_ptr(slots_cell, 0)
@@ -558,6 +697,8 @@ def pcc_gc_index_py_upsert(
             )
             != 0
         ):
+            if write_generation > 0:
+                _object_index_write_end(write_generation)
             return -1
         slots = load_ptr(slots_cell, 0)
 
@@ -569,6 +710,8 @@ def pcc_gc_index_py_upsert(
             result * 16 + 8,
             node,
         )
+        if write_generation > 0:
+            _object_index_write_end(write_generation)
         return 0
 
     used: i64 = load_i64(used_cell, 0)
@@ -581,6 +724,8 @@ def pcc_gc_index_py_upsert(
             )
             != 0
         ):
+            if write_generation > 0:
+                _object_index_write_end(write_generation)
             return -1
         slots = load_ptr(slots_cell, 0)
         cap = load_i64(cap_cell, 0)
@@ -594,6 +739,8 @@ def pcc_gc_index_py_upsert(
     store_ptr(slots, offset, key)
     store_ptr(slots, offset + 8, node)
     store_i64(count_cell, 0, count + 1)
+    if write_generation > 0:
+        _object_index_write_end(write_generation)
     return 1
 
 
@@ -607,7 +754,14 @@ def pcc_gc_index_py_replace_raw(
     node: c_ptr,
     initial_cap: i64,
 ) -> c_ptr:
+    write_generation: i64 = 0
+    if ptr_eq(slots_cell, global_addr("pcc_py_gc_object_slots")) != 0:
+        write_generation = _object_index_write_begin()
+    if write_generation < 0:
+        return null()
     if ptr_is_null(key) or ptr_is_null(node):
+        if write_generation > 0:
+            _object_index_write_end(write_generation)
         return node
 
     slots = load_ptr(slots_cell, 0)
@@ -618,6 +772,8 @@ def pcc_gc_index_py_replace_raw(
             )
             != 0
         ):
+            if write_generation > 0:
+                _object_index_write_end(write_generation)
             return node
         slots = load_ptr(slots_cell, 0)
 
@@ -627,6 +783,8 @@ def pcc_gc_index_py_replace_raw(
         offset: i64 = result * 16
         old = load_ptr(slots, offset + 8)
         store_ptr(slots, offset + 8, node)
+        if write_generation > 0:
+            _object_index_write_end(write_generation)
         return old
 
     used: i64 = load_i64(used_cell, 0)
@@ -639,6 +797,8 @@ def pcc_gc_index_py_replace_raw(
             )
             != 0
         ):
+            if write_generation > 0:
+                _object_index_write_end(write_generation)
             return node
         slots = load_ptr(slots_cell, 0)
         cap = load_i64(cap_cell, 0)
@@ -652,6 +812,8 @@ def pcc_gc_index_py_replace_raw(
     store_ptr(slots, offset, key)
     store_ptr(slots, offset + 8, node)
     store_i64(count_cell, 0, count + 1)
+    if write_generation > 0:
+        _object_index_write_end(write_generation)
     return null()
 
 
@@ -664,18 +826,31 @@ def pcc_gc_index_py_remove(
     key: c_ptr,
     reject_tagged: i64,
 ) -> c_ptr:
+    write_generation: i64 = 0
+    if ptr_eq(slots_cell, global_addr("pcc_py_gc_object_slots")) != 0:
+        write_generation = _object_index_write_begin()
+    if write_generation < 0:
+        return null()
     slots = load_ptr(slots_cell, 0)
     if ptr_is_null(slots) or ptr_is_null(key):
+        if write_generation > 0:
+            _object_index_write_end(write_generation)
         return null()
     if reject_tagged != 0 and is_tagged_int(key):
+        if write_generation > 0:
+            _object_index_write_end(write_generation)
         return null()
     # An empty index cannot hold the key; every object free probes the
     # identity index this way, and almost no program registers identities.
     if load_i64(count_cell, 0) <= 0:
+        if write_generation > 0:
+            _object_index_write_end(write_generation)
         return null()
     cap: i64 = load_i64(cap_cell, 0)
     result: i64 = pcc_gc_index_py_find_slot(slots, cap, key)
     if result < 0:
+        if write_generation > 0:
+            _object_index_write_end(write_generation)
         return null()
     node = load_ptr(slots, result * 16 + 8)
     # Backward-shift deletion: close the probe-chain gap instead of writing
@@ -711,6 +886,8 @@ def pcc_gc_index_py_remove(
     store_ptr(slots, clear_off + 8, null())
     store_i64(count_cell, 0, load_i64(count_cell, 0) - 1)
     store_i64(used_cell, 0, load_i64(used_cell, 0) - 1)
+    if write_generation > 0:
+        _object_index_write_end(write_generation)
     return node
 
 
@@ -721,11 +898,18 @@ def pcc_gc_index_py_clear(
     count_cell: c_ptr,
     used_cell: c_ptr,
 ) -> None:
+    write_generation: i64 = 0
+    if ptr_eq(slots_cell, global_addr("pcc_py_gc_object_slots")) != 0:
+        write_generation = _object_index_write_begin()
+    if write_generation < 0:
+        return
     old_slots = load_ptr(slots_cell, 0)
     _index_table_publish(slots_cell, cap_cell, null(), 0)
     store_i64(count_cell, 0, 0)
     store_i64(used_cell, 0, 0)
     _index_table_release(slots_cell, old_slots)
+    if write_generation > 0:
+        _object_index_write_end(write_generation)
 
 
 @c_abi_export("pcc_gc_managed_pointer_find_slot")
@@ -1003,15 +1187,27 @@ def pcc_gc_object_index_plan_capacity(extra: i64) -> i64:
 def pcc_gc_object_index_plan_commit(
     prepared_slots_io: c_ptr, prepared_cap: i64, extra: i64
 ) -> i64:
+    write_generation: i64 = 0
+    write_generation = _object_index_write_begin()
+    if write_generation < 0:
+        return -1
     if ptr_is_null(prepared_slots_io) != 0:
+        if write_generation > 0:
+            _object_index_write_end(write_generation)
         return -1
     required: i64 = pcc_gc_object_index_plan_capacity(extra)
     if required < 0:
+        if write_generation > 0:
+            _object_index_write_end(write_generation)
         return -1
     if required == 0:
+        if write_generation > 0:
+            _object_index_write_end(write_generation)
         return 0
     new_slots = load_ptr(prepared_slots_io, 0)
     if ptr_is_null(new_slots) != 0 or prepared_cap < required:
+        if write_generation > 0:
+            _object_index_write_end(write_generation)
         return -1
 
     old_slots = global_load_ptr("pcc_py_gc_object_slots")
@@ -1043,26 +1239,40 @@ def pcc_gc_object_index_plan_commit(
     # the caller, which frees what it gets back, gets nothing.
     _index_table_release(slots_cell, old_slots)
     store_ptr(prepared_slots_io, 0, null())
+    if write_generation > 0:
+        _object_index_write_end(write_generation)
     return 1
 
 
 @c_abi_export("pcc_gc_object_index_insert_preallocated")
 def pcc_gc_object_index_insert_preallocated(obj: c_ptr, node: c_ptr) -> i64:
+    write_generation: i64 = 0
+    write_generation = _object_index_write_begin()
+    if write_generation < 0:
+        return -1
     if (
         ptr_is_null(obj) != 0
         or is_tagged_int(obj) != 0
         or ptr_is_null(node) != 0
     ):
+        if write_generation > 0:
+            _object_index_write_end(write_generation)
         return -1
     slots = global_load_ptr("pcc_py_gc_object_slots")
     if ptr_is_null(slots) != 0:
+        if write_generation > 0:
+            _object_index_write_end(write_generation)
         return -1
     cap: i64 = load_i64(global_addr("pcc_py_gc_object_cap"), 0)
     result: i64 = pcc_gc_index_py_find_slot(slots, cap, obj)
     if result >= 0:
+        if write_generation > 0:
+            _object_index_write_end(write_generation)
         return 0
     used: i64 = load_i64(global_addr("pcc_py_gc_object_used"), 0)
     if used + 1 > logical_shift_right_i64(cap, 1):
+        if write_generation > 0:
+            _object_index_write_end(write_generation)
         return -1
     offset: i64 = (-result - 1) * 16
     store_ptr(slots, offset, obj)
@@ -1073,6 +1283,8 @@ def pcc_gc_object_index_insert_preallocated(obj: c_ptr, node: c_ptr) -> i64:
         load_i64(global_addr("pcc_py_gc_object_count"), 0) + 1,
     )
     store_i64(global_addr("pcc_py_gc_object_used"), 0, used + 1)
+    if write_generation > 0:
+        _object_index_write_end(write_generation)
     return 1
 
 

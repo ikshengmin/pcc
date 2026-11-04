@@ -242,7 +242,7 @@ def _pcc_gc_complete_mark_cycle_seed(
         and load_i32(global_addr("pcc_gc_mark_active"), 0) == 0
         and load_i32(global_addr("pcc_gc_cycle_requested"), 0) != 0
     ):
-        store_i32(global_addr("pcc_gc_mark_active"), 0, 1)
+        atomic_store_i32(global_addr("pcc_gc_mark_active"), 0, 1, "release")
         store_i32(global_addr("pcc_gc_cycle_requested"), 0, 0)
         store_i32(
             global_addr("pcc_gc_trace_extension_roots_pending"), 0, 1
@@ -559,7 +559,11 @@ def pcc_gc_tracing_debt_threshold() -> i64:
     override: i64 = load_i64(global_addr("pcc_gc_debt_threshold_override"), 0)
     if override > 0:
         return override
-    threshold: i64 = 65536
+    # A whole-heap cycle costs at least its fixed root/stop/sweep work, so a
+    # small live heap still allocates this much between cycles (Go's minimum
+    # heap target is the same 4 MiB); a 64 KiB floor ran several full cycles
+    # per few hundred requests.
+    threshold: i64 = 4194304
     # The pause applies to what the last completed mark found reachable,
     # not to the current heap: that includes the garbage awaiting a sweep,
     # and with the default pause of 1000 the threshold then grew faster

@@ -442,8 +442,12 @@ def py_gc_track(obj: c_ptr) -> None:
 @c_abi_export("pcc_gc_tracked_growth")
 def _tracked_growth(tracked: i64) -> None:
     # Phase 1 retains the exact shared count and the existing growth trigger.
+    # Only GC0's cycle collector is scheduled by tracked-object growth. The
+    # tracing collectors (GC3 included) run whole-heap marks paced by
+    # allocation debt on the shared mark worker; a full stopped-world mark
+    # every threshold0 tracked objects dominated GC3's run time.
     backend: i64 = gc_backend_current()
-    if backend != 0 and backend != 3:
+    if backend != 0:
         return
     threshold: i64 = load_i32(global_addr("py_gc_threshold0"), 0)
     if threshold <= 0 or load_i32(global_addr("py_gc_enabled"), 0) == 0:

@@ -28,7 +28,7 @@ STATICS = {"py_none_storage": 0x1000, "py_true_storage": 0x1020, "py_false_stora
 
 
 class Field:
-    def __init__(self, word, own_lock=0):
+    def __init__(self, word, own_lock=0, backend=0):
         self.word = word
         self.events = []
         tree = ast.parse(RUNTIME.read_text())
@@ -43,7 +43,7 @@ class Field:
             "global_addr": lambda name: STATICS[name],
             "atomic_load_i64": self.atomic_load,
             "load_ptr": self.load,
-            "_gc_backend_selected_fast": lambda: 0,
+            "_gc_backend_selected_fast": lambda: backend,
             "pcc_py_gc_minor_graph_lock": lambda: self.events.append("lock"),
             "pcc_py_gc_minor_graph_unlock": lambda: self.events.append("unlock"),
             "py_incref": lambda value: self.events.append(("incref", value)),
@@ -120,3 +120,14 @@ def test_a_heap_value_is_retained_under_the_instances_own_lock():
         "retain finish",
     ]
     assert field.out == 0x5000
+
+
+@pytest.mark.parametrize('backend', (1, 2))
+@pytest.mark.parametrize('word', (0, 17, 0x5000))
+def test_nonmoving_tracing_field_reader_uses_the_writers_container_lock(backend, word):
+    field = Field(word, own_lock=1, backend=backend)
+    assert field.run() == [
+        ("container lock", "inst"), "locked load", ("retain prepare", word),
+        ("container unlock", "inst"), "retain finish",
+    ]
+    assert field.out == word

@@ -30,6 +30,8 @@ extern int64_t pcc_gc_tracing_finish_stop_epoch;
 static PyObject *owner;
 static PyObject *child;
 static PyObject *late_root;
+static PyObject *stored_root;
+static PyObject *stored_value;
 static PyObject *target;
 static PyObject *tail[16];
 static int ready;
@@ -37,6 +39,8 @@ static int injected;
 static int resumed;
 static int release_worker;
 static int64_t expected_epoch;
+static int64_t selected_backend;
+static int take_root;
 
 static void fail(int code, const char *where, int64_t value) {
     fprintf(stderr, "EMPTY_GRAY_WINDOW_FAIL code=%d where=%s got=%lld\n",
@@ -74,7 +78,7 @@ static void *late_work(void *unused) {
 
     pcc_py_gc_minor_graph_lock();
     if (pcc_gc_tracing_finish_claim_epoch != expected_epoch ||
-        pcc_gc_tracing_finish_claim_backend != 4 ||
+        pcc_gc_tracing_finish_claim_backend != selected_backend ||
         pcc_gc_tracing_cycle_epoch != expected_epoch ||
         pcc_gc_mark_active != 1) fail(20, "stop_without_matching_claim", 0);
     if (pcc_gc_gray_count_load_acquire() != 0) fail(21, "claim_not_empty", 0);
@@ -92,6 +96,17 @@ static void *late_work(void *unused) {
         fail(24, "insertion_barrier_did_not_gray", 0);
     if (pcc_gc_gray_count_load_acquire() < 1) fail(25, "new_gray_count_missing", 0);
 
+    /* A pre-registered empty root exercises the actual root-store fast path
+     * after a completion claim, while the collector waits for this no-park
+     * mutator. Both retaining and transfer ABIs must finish their gray work
+     * before this original no-park scope allows the stopped-world verdict. */
+    if (take_root) pcc_gc_store_root_take(&stored_root, stored_value);
+    else pcc_gc_store_root(&stored_root, stored_value);
+    if (stored_root != stored_value ||
+        (py_header_flags_load(py_header(stored_value)) & 56) != PY_FLAG_GC_GRAY)
+        fail(28, "root_store_did_not_publish_and_gray", 0);
+    if (pcc_gc_gray_count_load_acquire() < 2) fail(29, "root_gray_count_missing", 0);
+
     /* A distinct newly registered white root tests the final root rescan. */
     void *handle = pcc_gc_scheduler_root_register_handle(&late_root);
     if (!handle) fail(26, "late_root_registration", 0);
@@ -107,17 +122,22 @@ static void *late_work(void *unused) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 2) fail(1, "entry_argument", argc);
+    if (argc != 3) fail(1, "entry_argument", argc);
     int last_gray = atoi(argv[1]);
+    take_root = atoi(argv[2]);
     if (last_gray != 0 && last_gray != 1) fail(2, "entry_mode", last_gray);
-    if (pcc_gc_backend() != 4 || pcc_gc_backend4_no_refcounts != 1)
-        fail(3, "requires_gc4_no_rc", 0);
+    if (take_root != 0 && take_root != 1) fail(2, "root_store_mode", take_root);
+    selected_backend = pcc_gc_backend();
+    if ((selected_backend != 1 && selected_backend != 2 && selected_backend != 4)
+        || pcc_gc_backend4_no_refcounts != 1)
+        fail(3, "requires_nonmoving_or_gc4_no_rc", 0);
     py_gc_disable();
     if (pcc_current_thread_id() <= 0) fail(4, "main_registration", 0);
     owner = py_list_new(1);
     child = py_list_new(0);
     late_root = py_list_new(0);
-    if (!owner || !child || !late_root) fail(5, "allocation", 0);
+    stored_value = py_list_new(0);
+    if (!owner || !child || !late_root || !stored_value) fail(5, "allocation", 0);
     py_list_append(owner, py_int_from_i64(0));
     for (int i = 0; i < 16; ++i) {
         tail[i] = py_list_new(0);
@@ -127,6 +147,8 @@ int main(int argc, char **argv) {
     if (!target) fail(7, "target", 0);
     void *owner_handle = pcc_gc_scheduler_root_register_handle(&owner);
     if (!owner_handle) fail(8, "owner_root", 0);
+    void *stored_handle = pcc_gc_scheduler_root_register_handle(&stored_root);
+    if (!stored_handle) fail(8, "store_root", 0);
 
     pcc_py_gc_minor_graph_lock();
     if (pcc_gc_mark_active != 0 || pcc_gc_tracing_finish_claim_epoch != 0)
@@ -134,6 +156,7 @@ int main(int argc, char **argv) {
     set_aged_color(owner, PY_FLAG_GC_BLACK);
     set_aged_color(child, PY_FLAG_GC_WHITE);
     set_aged_color(late_root, PY_FLAG_GC_WHITE);
+    set_aged_color(stored_value, PY_FLAG_GC_WHITE);
     for (int i = 0; i < 16; ++i) set_aged_color(tail[i], PY_FLAG_GC_BLACK);
     set_aged_color(target, last_gray ? PY_FLAG_GC_GRAY : PY_FLAG_GC_BLACK);
     void *target_node = pcc_gc_object_index_find(target);
@@ -143,7 +166,7 @@ int main(int argc, char **argv) {
     expected_epoch = pcc_gc_tracing_cycle_epoch + 1;
     if (expected_epoch <= 0) fail(11, "positive_epoch", expected_epoch);
     pcc_gc_tracing_cycle_epoch = expected_epoch;
-    pcc_gc_mark_active = 1;
+    __atomic_store_n(&pcc_gc_mark_active, 1, __ATOMIC_RELEASE);
     pcc_gc_gray_count_store_release(last_gray);
     pcc_gc_trace_cursor_store(target_node);
     int64_t commits_before = pcc_gc_tracing_finish_commits;
@@ -166,7 +189,8 @@ int main(int argc, char **argv) {
     if (pcc_gc_tracing_finish_stop_epoch <= 0 || pcc_gc_mark_active != 0 ||
         pcc_gc_gray_count_load_acquire() != 0 || pcc_gc_cycle_requested == 0)
         fail(16, "final_stw_state_or_request", pcc_gc_tracing_finish_stop_epoch);
-    if (!is_black_live(owner) || !is_black_live(child) || !is_black_live(late_root))
+    if (!is_black_live(owner) || !is_black_live(child) || !is_black_live(late_root)
+        || stored_root != stored_value || !is_black_live(stored_value))
         fail(17, "remark_lost_late_work", 0);
 
     wait_running(&resumed);
@@ -176,7 +200,9 @@ int main(int argc, char **argv) {
     if (pthread_join(worker, NULL) != 0) fail(19, "pthread_join", 0);
     pcc_thread_blocking_leave(token);
     pcc_gc_scheduler_root_unregister_handle(owner_handle);
-    printf("EMPTY_GRAY_WINDOW_OK entry=%d backend=4 tracing=1 commits=1 late_root=black child=black stw=1\n", last_gray);
+    pcc_gc_scheduler_root_unregister_handle(stored_handle);
+    printf("EMPTY_GRAY_WINDOW_OK entry=%d backend=%lld take=%d tracing=1 commits=1 late_root=black stored_root=black child=black stw=1\n",
+           last_gray, (long long)selected_backend, take_root);
     return 0;
 }
 

@@ -705,17 +705,20 @@ def _native_body_py_list_from_owned_roots(sources, count: i64, output) -> i64:
     if status != 0:
         return _list_owned_construction_failed(output, token)
     stride: i64 = i64(C_POINTER_SIZE)
+    backend: int = pcc_gc_backend()
+    private_gc0: int = 0
+    if backend == 0 and load_i32(global_addr("pcc_gc_list_container_mode"), 0) != 0:
+        private_gc0 = 1
     index: i64 = 0
     while index < count:
         # Reload authoritative roots after the lock's possible parking edge.
         # No raw element pointer crosses a lock release or loop safepoint.
-        private_gc0: int = 0
-        if load_i32(global_addr("pcc_gc_list_container_mode"), 0) != 0:
-            # Nothing else can reach the unpublished list, and GC0 neither
-            # moves nor forwards an owner: no lock, no resolution.
-            private_gc0 = 1
-        else:
-            pcc_py_gc_minor_graph_lock()
+        # GC0 cannot scan this private owner concurrently. GC1/GC2 can:
+        # their shape and source-root transfer use the marker's container
+        # transaction. Relocating collectors retain their graph transaction.
+        locked = load_ptr(output, 0)
+        if private_gc0 == 0:
+            _list_lock(locked)
         owner = load_ptr(output, 0)
         source = load_ptr(sources, index * stride)
         value = load_ptr(source, 0)
@@ -723,7 +726,7 @@ def _native_body_py_list_from_owned_roots(sources, count: i64, output) -> i64:
             value = pcc_gc_resolve_root_slot_unlocked(source, 0)
         items = load_ptr(owner, PYLISTOBJECT_ITEMS_OFFSET)
         destination = ptr_add(items, index * stride)
-        if pcc_gc_backend() != 0:
+        if backend != 0:
             pcc_gc_note_store()
         pcc_gc_note_slot_write_barrier(owner, destination, value)
         # Exactly one existing owner moves from source to the new field.
@@ -732,7 +735,7 @@ def _native_body_py_list_from_owned_roots(sources, count: i64, output) -> i64:
         store_ptr(source, 0, null())
         store_i64(owner, PYLISTOBJECT_LENGTH_OFFSET, index + 1)
         if private_gc0 == 0:
-            pcc_py_gc_minor_graph_unlock()
+            _list_unlock(locked)
         index += 1
     # The complete list becomes publicly tracked only after all input owners
     # have moved. Collector-safe partial shape alone is not a privacy proof.
@@ -1046,9 +1049,14 @@ def _list_get_owned_rooted(lst, i: int, raising: int):
     store_ptr(result_slot, 0, null())
     result_handle = null()
     backend: int = pcc_gc_backend()
-    if backend == 3 or backend == 4 or load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
-        # Bind an empty owning slot before reading the NEW element. Binding
-        # cannot park; the first object store happens under the graph lease.
+    if backend == 3 or backend == 4:
+        # The relocating collectors bind an empty owning slot before reading
+        # the NEW element, so it cannot move before the caller roots it.
+        # Binding cannot park; the first object store happens under the
+        # graph lease. The nonmoving count-free GC1/GC2 need no binding or
+        # pin: every final remark rescans each thread's registers and stack
+        # conservatively in the stopped world, which finds the returned
+        # value wherever it is held.
         result_handle = pcc_gc_native_root_bind_range(result_slot, 1)
         if ptr_is_null(result_handle) != 0:
             _finish_moving_root(list_handle_slot)

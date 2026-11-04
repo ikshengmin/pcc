@@ -3,6 +3,7 @@
 from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
+    atomic_load_i32,
     global_addr,
     global_load_ptr,
     is_tagged_int,
@@ -21,6 +22,11 @@ from pcc.unsafe import (
 __pcc_freestanding__ = True
 
 pcc_gc_set_mark_color = extern("pcc_gc_set_mark_color", (c_ptr, c_int64), c_void)
+pcc_gc_shade_gray_atomic = extern(
+    "pcc_gc_shade_gray_atomic", (c_ptr, c_int64), c_void
+)
+pcc_container_lock_held = extern("pcc_container_lock_held", (), c_int64)
+pcc_gc_object_index_seen_stable = extern("pcc_gc_object_index_seen_stable", (c_ptr,), c_int64)
 
 
 pcc_thread_live_count = extern("pcc_thread_live_count", (), c_int64)
@@ -357,11 +363,10 @@ def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
                 should_gray: i64 = 1
             if should_gray != 0:
                 # A root introduces marking work for every tracing backend.
-                # Count only the actual non-GRAY -> GRAY transition.
-                if (value_flags & 16) == 0:
-                    pcc_gc_gray_count_increment_acq_rel()
-                pcc_gc_set_mark_color(value, 16)
-                store_i32(global_addr("pcc_gc_mark_active"), 0, 1)
+                # Count only the actual non-GRAY -> GRAY transition; a
+                # container barrier may shade the same object without this
+                # lock.
+                pcc_gc_shade_gray_atomic(value, 1)
                 if backend == 2:
                     store_i32(
                         global_addr("pcc_gc_cms_wb_flushes"),
@@ -374,6 +379,26 @@ def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
     if is_tagged_int(owner) != 0:
         return
     if backend == 1 or backend == 2:
+        if pcc_container_lock_held() != 0:
+            # Container mode: the store holds the owner's container lock, and
+            # the marker scans that owner under the same lock
+            # (pcc_gc_trace_referents). Either the store precedes the scan,
+            # which then reads it, or it follows the scan, and the cycle's
+            # mark_active (published before any scan) is visible here. No
+            # graph lock is taken. The marker blackens an owner after its
+            # unlocked scan, so GC1 shades a white value whenever a cycle is
+            # active instead of only below a black owner.
+            if atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") == 0:
+                return
+            if pcc_gc_object_index_seen_stable(value) == 0:
+                return
+            if (load_i32(value, 12) & 524288) != 0:
+                return
+            if backend == 2:
+                pcc_gc_shade_gray_atomic(value, 1)
+            elif (load_i32(value, 12) & 8) != 0:
+                pcc_gc_shade_gray_atomic(value, 0)
+            return
         pcc_py_gc_minor_graph_lock()
         if (
             pcc_gc_object_is_known_no_lock(owner) != 0
@@ -408,10 +433,7 @@ def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
             if backend == 2 and (value_flags & 16) == 0:
                 should_gray_value: i64 = 1
             if should_shade != 0 and should_gray_value != 0:
-                if (value_flags & 16) == 0:
-                    pcc_gc_gray_count_increment_acq_rel()
-                pcc_gc_set_mark_color(value, 16)
-                store_i32(global_addr("pcc_gc_mark_active"), 0, 1)
+                pcc_gc_shade_gray_atomic(value, 1)
                 if backend == 2:
                     store_i32(
                         global_addr("pcc_gc_cms_wb_flushes"),
@@ -444,9 +466,7 @@ def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
             and (owner_flags & 32) != 0
             and (value_flags & 8) != 0
         ):
-            if (value_flags & 16) == 0:
-                pcc_gc_gray_count_increment_acq_rel()
-            pcc_gc_set_mark_color(value, 16)
+            pcc_gc_shade_gray_atomic(value, 0)
         if (owner_flags & 256) != 0 and (value_flags & 128) != 0:
             if backend == 4:
                 if pcc_gc_backend4_store_buffer_enqueue(owner, slot, value) != 0:

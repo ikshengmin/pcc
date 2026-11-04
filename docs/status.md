@@ -93,6 +93,29 @@ dropped keyword); the stage 1 commit message lists them. Rerun with
 
 ## Native throughput versus CPython 3.15.0: active, acceptance unmet
 
+The GC1/GC2 root-store batch based on `8429b6671` removes the RC plan and
+graph-lock acquisition from ordinary nonmoving, count-free root publication.
+The slot write and atomic insertion barrier share one no-park interval.
+Negative object-index membership is validated against serialized mutation
+versions, including backward-shift deletion, rehash and reader-record OOM;
+the reader never borrows an index node. Container-mode construction and field
+reads now use the marker's container lock. Store telemetry uses the existing
+shard table. Tracing cycles retain the user's heap-debt schedule and 4-MiB
+small-heap floor; GC0 retains tracked-object growth scheduling.
+
+Local Mac validation includes 232 component host cases, ABI checks, and 28
+successful native cases: all-five default ownership and value/identity/error
+checks, GC1/GC2 mixed rooted values, 12 late-root completion windows, and
+GC1-4 weakref/finalizer/resurrection scenarios. The owned runtime builds in
+80.08 seconds with a 570,769,408-byte tree-RSS peak, SHA256
+`f21d95cc156f7b0633357a4484358130b4cedeb31fc8f1e0cd9027b62e39655e`.
+The GC0 lifecycle scenario fails with weakref/finalizer ordering and dead-weakref
+callback differences; the earlier frozen runtime
+`bf5b53324cb6b027cbe755ffb3f17f9f3b168c0a5a29a799c1fe5509b46564d4`
+produces the identical assertion diff. This is an existing failure, not a green
+five-GC lifecycle result, and its repair is user-requested follow-up work.
+QPS A/B, full suites and bootstrap remain unrun for this batch.
+
 Collector selection now determines ownership: GC0 retains reference counting,
 and GC1-4 default to count-free tracing. The two experimental count-mode
 environment switches are removed. Startup configuration, first-allocation

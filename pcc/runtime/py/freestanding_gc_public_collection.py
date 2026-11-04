@@ -80,9 +80,8 @@ def pcc_gc_cms_worker_main_py(arg):
     remark/drain stop the world, briefly, inside the step itself. The
     batch size bounds how long one batch holds the graph lock.
 
-    Cycles are paced: one begins once allocation debt reaches the pacing
-    threshold or tracking has grown by max(threshold0, the survivors of the
-    last automatic collection). A completed mark is swept by a mutator at
+    Cycles are paced: one begins once allocation debt reaches the
+    heap-proportional pacing threshold. A completed mark is swept by a mutator at
     its next application gate (pcc_gc_safepoint), with the world stopped,
     before another cycle begins.
     """
@@ -123,23 +122,17 @@ def pcc_gc_cms_worker_main_py(arg):
             and (drains < pushes or marking != 0)
         ):
             # Every allocation requests a cycle. A new one begins only once
-            # allocation debt reaches the pacing threshold or tracking has
-            # grown by max(threshold0, the survivors of the last automatic
-            # collection), as GC0's collections are scheduled, and never
-            # while a completed mark waits for its sweep. A completed cycle
-            # pays the debt (pcc_gc_finish_tracing_cycle).
+            # allocation debt reaches the heap-proportional pacing threshold,
+            # and never while a completed mark waits for its sweep. Each
+            # cycle marks and sweeps the whole heap, so GC0's generational
+            # object-count schedule (threshold0 tracked objects) would run a
+            # full-heap cycle every few thousand allocations; here threshold0
+            # only pauses automatic collection. A completed cycle pays the
+            # debt (pcc_gc_finish_tracing_cycle).
             due: i64 = marking
             if due == 0 and atomic_load_i32(sweep_pending, 0, "acquire") == 0:
                 debt_slot = global_addr("pcc_gc_debt_bytes")
                 if atomic_load_i64(debt_slot, 0, "acquire") >= pcc_gc_tracing_debt_threshold():
-                    due = 1
-                survivors: i64 = atomic_load_i64(
-                    global_addr("pcc_gc_tracked_after_collect"), 0, "relaxed"
-                )
-                growth: i64 = threshold0
-                if survivors > growth:
-                    growth = survivors
-                if atomic_load_i32(global_addr("py_gc_tracked_count"), 0, "acquire") - survivors >= growth:
                     due = 1
             if due != 0:
                 # A dedicated thread marks at full speed; the batch bounds how

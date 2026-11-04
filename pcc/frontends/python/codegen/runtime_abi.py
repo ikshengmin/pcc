@@ -1603,6 +1603,7 @@ def _runtime_signatures_part_35():
     "pcc_gc_metric_shard": (_I64, [], False),
     "pcc_gc_metric_pin_balance": (_I64, [], False),
     "pcc_gc_metric_allocation_count": (_I64, [], False),
+    "pcc_gc_metric_store_count": (_I64, [], False),
     "pcc_gc_metric_shard_reset": (_VOID, [_I64], False),
     }
 
@@ -1847,6 +1848,7 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
 
 FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
     {
+        "pcc_gc_object_index_generation",
         "pcc_gc_pressure_publications",
         "pcc_gc_pressure_requests",
         "pcc_gc_pressure_serviced",
@@ -3044,6 +3046,14 @@ def _cross_object_signatures_part_12():
 
 def _cross_object_signatures_part_13():
     return {
+        'pcc_gc_shade_gray_atomic': (('c_ptr', 'c_int64'), 'c_void'),
+        'pcc_container_lock': (('c_ptr',), 'c_void'),
+        'pcc_container_unlock': (('c_ptr',), 'c_void'),
+        'pcc_container_lock_held': ((), 'c_int64'),
+        'pcc_gc_object_index_write_begin': ((), 'c_int64'),
+        'pcc_gc_object_index_write_end': (('c_int64',), 'c_void'),
+        'pcc_gc_object_index_seen_stable': (('c_ptr',), 'c_int64'),
+        'pcc_gc_metric_store_count': ((), 'c_int64'),
         'pcc_gc_backend3_promotion_cursor': (('c_ptr',), 'c_int64'),
         'pcc_gc_backend3_set_promotion_cursor': (('c_ptr', 'c_int64'), 'c_int64'),
         'pcc_gc_forwarding_retirement_backend_admitted': ((), 'c_int64'),

@@ -31,6 +31,9 @@ PUBLIC_SYMBOLS = {
     "pcc_gc_managed_pointer_index_remove",
     "pcc_gc_managed_pointer_index_seen",
     "pcc_gc_object_index_seen",
+    "pcc_gc_object_index_seen_stable",
+    "pcc_gc_object_index_write_begin",
+    "pcc_gc_object_index_write_end",
     "pcc_gc_index_py_seen",
     "pcc_gc_index_reclaim_retired",
     "pcc_gc_forwarding_index_find",
@@ -112,6 +115,8 @@ def _harness_source() -> str:
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+void pcc_platform_abort(void) { abort(); }
 
 int64_t pcc_gc_index_slot_size(void);
 int64_t pcc_gc_index_py_hash_ptr(void *key);
@@ -756,6 +761,7 @@ def test_freestanding_gc_index_table_ir_is_raw_and_exports_complete_abi(tmp_path
         "pcc_allocator_granule_object_slot",
         "pcc_allocator_object_side_slot",
         "pcc_gc_tracked_primary_index_cells",
+        "pcc_platform_abort",
     }
 
     symbols = subprocess.run(

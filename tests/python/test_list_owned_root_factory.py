@@ -9,8 +9,10 @@ from tests.python.test_foreign_address_leases import _functions
 
 
 class OwnedListFactoryModel(ListFactoryModel):
-    def __init__(self, values, failure=None, pending=None, relocate=False, container=False):
+    def __init__(self, values, failure=None, pending=None, relocate=False, container=False, backend=None):
         self.count = len(values)
+        self.backend = (4 if relocate else 0) if backend is None else backend
+        self.lock_events = []
         # GC0 lists use container locks: the unpublished list is private,
         # so the factory moves owners without the graph lock.
         self.container = container
@@ -32,14 +34,16 @@ class OwnedListFactoryModel(ListFactoryModel):
             self.memory[self.sources + index * 8] = slot
         self.initial_frames = dict(self.frames)
         self.memory[3] = int(container)
-        self.global_words['pcc_gc_backend_selected'] = 4 if relocate else 0
+        self.global_words['pcc_gc_backend_selected'] = self.backend
         self.ns.update({
             'global_addr': lambda name: {'pcc_list_construction_error_map': 1,
                                          'pcc_gc_list_container_mode': 3}.get(name, self.global_address(name)),
             'pcc_py_gc_minor_graph_lock': self.lock,
             'pcc_py_gc_minor_graph_unlock': self.unlock,
             'pcc_gc_resolve_root_slot_unlocked': self.resolve,
-            'pcc_gc_backend': lambda: 4 if self.relocate else 0,
+            'pcc_container_lock': self.container_lock,
+            'pcc_container_unlock': lambda owner: self.unlock(),
+            'pcc_gc_backend': lambda: self.backend,
             'pcc_gc_note_store': lambda: None,
             'pcc_gc_note_slot_write_barrier': self.barrier,
             'py_gc_track': self.publish,
@@ -48,7 +52,7 @@ class OwnedListFactoryModel(ListFactoryModel):
         })
         _functions(
             RUNTIME / 'py_list.py',
-            {'_list_allocate_unpublished', '_list_owned_construction_failed', '_native_body_py_list_from_owned_roots'},
+            {'_list_lock', '_list_unlock', '_list_allocate_unpublished', '_list_owned_construction_failed', '_native_body_py_list_from_owned_roots'},
             self.ns,
         )
         self.ns['pcc_list_body_py_list_from_owned_roots'] = self.ns['_native_body_py_list_from_owned_roots']
@@ -96,6 +100,11 @@ class OwnedListFactoryModel(ListFactoryModel):
             self.children = Counter({changed[value]: count for value, count in self.children.items()})
         assert self.owned_children() == self.children
 
+    def container_lock(self, owner):
+        assert owner in self.objects
+        self.lock_events.append('container')
+        self.lock()
+
     def lock(self):
         self.boundary()
         self.locked = True
@@ -114,7 +123,7 @@ class OwnedListFactoryModel(ListFactoryModel):
             self.boundary()
             assert destination == self.output and self.memory[destination] == value
         else:
-            assert (self.locked or self.container) and owner in self.objects and value in self.children
+            assert (self.locked or (self.backend == 0 and self.container)) and owner in self.objects and value in self.children
 
     def publish(self, obj):
         self.boundary()
@@ -153,4 +162,14 @@ def test_owned_list_factory_failure_preserves_sources_and_pending_error(failure,
     assert model.pending == (pending or 'list: out of memory')
     assert model.disposals == (0 if failure == 'header' else 1)
     assert model.publications == 0
+    assert model.frames == model.initial_frames and not model.leases and not model.pins
+
+
+@pytest.mark.parametrize('backend', (1, 2))
+def test_count_free_nonmoving_construction_uses_markers_container_transaction(backend):
+    model = OwnedListFactoryModel(('a', 'b', 'a'), container=True, backend=backend)
+    assert model.ns['py_list_from_owned_roots'](model.sources, 3, model.output) == 0
+    assert model.lock_events == ['container'] * 3
+    assert model.owned_children() == model.children
+    assert model.publications == 2
     assert model.frames == model.initial_frames and not model.leases and not model.pins

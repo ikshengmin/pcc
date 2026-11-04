@@ -1493,7 +1493,7 @@ def py_instance_copy_builtin_payload(source, destination) -> None:
         if ptr_is_null(source_slot) != 0:
             return
         plan = stack_alloc(128)
-        pcc_gc_store_ptr_plan_init(plan, destination, 0)
+        pcc_gc_store_ptr_plan_init(plan, destination, _gc_backend_selected_fast())
         pcc_container_lock_pair(source, destination)
         pcc_gc_store_ptr_plan_commit_locked(
             plan, destination, _instance_builtin_payload_slot(destination, cls),
@@ -1566,6 +1566,9 @@ def _copy_instance_reserved_owner(obj, dst, cls) -> None:
         )
         if ptr_is_null(value) == 0:
             store_ptr(destination, 0, value)
+            # GC0 has no slot barrier; the container-mode tracers shade the
+            # new referent without the graph lock under these locks.
+            pcc_gc_note_slot_write_barrier(dst, destination, value)
         pcc_container_unlock_pair(obj, dst)
         pcc_gc_retain_plan_finish(plan)
         return
@@ -2896,15 +2899,16 @@ def _instance_field_load(inst, offset: int, out) -> int:
         ):
             store_ptr(out, 0, immediate)
             return 0
-        if _fields_lock_themselves() != 0:
-            # The field's writers hold this instance's container lock.
-            owned_plan = stack_alloc(56)
-            pcc_container_lock(inst)
-            owned = pcc_gc_retain_plan_prepare_locked(owned_plan, load_ptr(inst, offset))
-            pcc_container_unlock(inst)
-            pcc_gc_retain_plan_finish(owned_plan)
-            store_ptr(out, 0, owned)
-            return 0
+    if _fields_lock_themselves() != 0:
+        # The field's writers and the concurrent marker hold this same lock.
+        owned_plan = stack_alloc(56)
+        pcc_container_lock(inst)
+        owned = pcc_gc_retain_plan_prepare_locked(owned_plan, load_ptr(inst, offset))
+        pcc_container_unlock(inst)
+        pcc_gc_retain_plan_finish(owned_plan)
+        store_ptr(out, 0, owned)
+        return 0
+    if _gc_backend_selected_fast() == 0:
         # GC0 never relocates: one transaction around the load and retain,
         # unless acquiring it parked through a backend switch.
         pcc_py_gc_minor_graph_lock()

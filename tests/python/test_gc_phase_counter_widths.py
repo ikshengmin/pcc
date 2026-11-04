@@ -45,14 +45,13 @@ WIDE_METRICS = {
     "pcc_gc_metric_pause_sum_us": (33, "PAUSE_SUM_US"),
 }
 NARROW_COUNTERS = (
-    "pcc_gc_metric_store",
     "pcc_gc_metric_load",
     "pcc_gc_metric_safepoint",
 )
-NARROW_METRIC_IDS = (1, 2, 3)
-# The allocation count (metric 0) and pin balance (metric 4) are i64 fields
+NARROW_METRIC_IDS = (2, 3)
+# Allocation (metric 0), stores (metric 1) and pin balance (metric 4) are i64 fields
 # of the root-operations shard table, summed over its 64 shards.
-SHARDED_METRICS = {0: 8, 4: 0}
+SHARDED_METRICS = {0: 8, 1: 16, 4: 0}
 HISTOGRAM = tuple(f"pcc_gc_metric_pause_hist{i}" for i in range(4))
 
 
@@ -160,6 +159,12 @@ class _Memory:
         encoded = (value & ((1 << (width * 8)) - 1)).to_bytes(width, "little")
         cell[offset:offset + width] = encoded
 
+    def rmw_i64(self, operation, name, offset, delta, order):
+        assert operation == "add" and order == "relaxed"
+        before = self.load(name, offset, 8)
+        self.store(name, offset, before + delta, 8)
+        return before
+
     def get(self, name):
         return self.load(name, 0, len(self.cells[name]))
 
@@ -217,6 +222,12 @@ def _host_functions(*, other_mutators=()):
         "_tracing_work_pending": lambda: 0,
         "pcc_gc_metric_allocation_count": lambda: sum(
             memory.load("pcc_gc_metric_shards", index * 128 + 8, 8)
+            for index in range(64)
+        ),
+        "pcc_gc_metric_shard": lambda: 3 * 128,
+        "atomic_rmw_i64": memory.rmw_i64,
+        "pcc_gc_metric_store_count": lambda: sum(
+            memory.load("pcc_gc_metric_shards", index * 128 + 16, 8)
             for index in range(64)
         ),
         "pcc_gc_metric_pin_balance": lambda: sum(
@@ -509,6 +520,9 @@ def test_host_source_generic_and_direct_step_writers_keep_high_bits():
         memory.set(name, 10 + metric)
         increment(metric, 7)
         assert memory.get(name) == telemetry(metric) == 17 + metric
+    increment(1, (1 << 32) + 7)
+    assert telemetry(1) == (1 << 32) + 7
+    assert memory.get("pcc_gc_metric_store") == 0
     memory.set("pcc_gc_metric_step", (1 << 31) - 1)
     increment(5, 1)
     assert telemetry(5) == 1 << 31
@@ -520,7 +534,7 @@ def test_host_source_generic_and_direct_step_writers_keep_high_bits():
         assert telemetry(5) == previous + (1 << 32) + 3
     increment(5, -2)
     assert telemetry(5) == (1 << 31) + 3 * (1 << 32) + 7
-    assert [memory.get(name) for name in NARROW_COUNTERS] == [18, 19, 20]
+    assert [memory.get(name) for name in NARROW_COUNTERS] == [19, 20]
 
     # Entire public functions run; work providers are intentionally idle.
     # Both direct writers execute, with no claim about collector work policy.
@@ -567,7 +581,8 @@ def _native_slice_source():
     shard_functions = [
         _function(ROOT_OPERATIONS, name) for name in (
             "pcc_gc_metric_shard_sum", "pcc_gc_metric_pin_balance",
-            "pcc_gc_metric_allocation_count", "pcc_gc_metric_shard_reset",
+            "pcc_gc_metric_allocation_count", "pcc_gc_metric_store_count",
+            "pcc_gc_metric_shard", "pcc_gc_metric_shard_reset",
         )
     ]
     functions = [
@@ -626,7 +641,8 @@ def _native_slice_source():
         "from pcc import i64\n"
         "from pcc.extern import c_abi_export\n"
         "from pcc.unsafe import (global_addr, load_i32, load_i64, store_i32, store_i64, "
-        "atomic_load_i64, atomic_store_i64, define_global_i64_array)\n"
+        "atomic_load_i64, atomic_store_i64, atomic_rmw_i64, define_global_i64_array, "
+        "frame_address, ptr_to_int, logical_shift_right_i64)\n"
         "__pcc_freestanding__ = True\n\n"
         + ast.unparse(module) + "\n\n" + _NATIVE_PROBE
     )

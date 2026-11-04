@@ -993,6 +993,10 @@ def _counter_global(metric: int):
 
 
 def _counter_inc(metric: int, delta: int) -> None:
+    if metric == 1:
+        atomic_rmw_i64("add", global_addr("pcc_gc_metric_shards"),
+                       pcc_gc_metric_shard() + 16, delta, "relaxed")
+        return
     slot = _counter_global(metric)
     if metric < 0 or metric >= 5:
         store_i64(slot, 0, load_i64(slot, 0) + delta)
@@ -2661,12 +2665,23 @@ def pcc_gc_fix_backend() -> None:
         _object_graph_unlock()
         return
     # GC0 lists and instance fields lock themselves (py_list, and
-    # pcc_gc_store_field_ptr with its readers); the tracing and moving
-    # collectors' markers and relocation take the graph lock, and the
-    # provenance probe's checked lease path takes it inside a list
-    # transaction.
+    # pcc_gc_store_field_ptr with its readers). So do the nonmoving
+    # count-free tracers GC1/GC2: their marker scans lists and instances
+    # under the same container lock (pcc_gc_trace_referents) and those
+    # stores shade without the graph lock (pcc_gc_note_slot_write_barrier),
+    # so carriers touching different containers no longer serialize on the
+    # graph lock. The relocating collectors GC3/GC4 keep the graph lock for
+    # their copies and remaps, and the provenance probe's checked lease path
+    # takes it inside a list transaction.
+    container_backend: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
     if (
-        load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+        (
+            container_backend == 0
+            or (
+                (container_backend == 1 or container_backend == 2)
+                and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
+            )
+        )
         and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
     ):
         store_i32(global_addr("pcc_gc_list_container_mode"), 0, 1)
@@ -3030,7 +3045,7 @@ def pcc_gc_set_backend(backend: int) -> int:
     store_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0, 1 if backend != 0 else 0)
     store_i32(global_addr("pcc_gc_backend_selected"), 0, backend)
     _publish_frame_registry_inactive()
-    store_i32(global_addr("pcc_gc_mark_active"), 0, 0)
+    atomic_store_i32(global_addr("pcc_gc_mark_active"), 0, 0, "release")
     store_i32(global_addr("pcc_gc_cycle_requested"), 0, 1)
     store_i32(
         global_addr("pcc_gc_trace_extension_roots_pending"), 0, 0
@@ -3107,6 +3122,7 @@ def pcc_gc_telemetry_reset() -> None:
         i = i + 1
     pcc_gc_metric_shard_reset(0)
     pcc_gc_metric_shard_reset(8)
+    pcc_gc_metric_shard_reset(16)
     store_i64(global_addr("pcc_gc_metric_step"), 0, 0)
     store_i64(global_addr("pcc_gc_unmanaged_refcount_ops"), 0, 0)
     store_i64(global_addr("pcc_gc_metric_max_pause_us"), 0, 0)
@@ -6258,9 +6274,10 @@ def pcc_gc_note_load() -> None:
 
 @c_abi_export("pcc_gc_note_store")
 def pcc_gc_note_store() -> None:
-    slot = global_addr("pcc_gc_metric_store")
-    v: int = load_i32(slot, 0)
-    store_i32(slot, 0, v + 1)
+    # Distinct container/root stores do not share the graph lock. Keep their
+    # count alongside the existing per-carrier allocation/pin counters.
+    atomic_rmw_i64("add", global_addr("pcc_gc_metric_shards"),
+                   pcc_gc_metric_shard() + 16, 1, "relaxed")
 
 
 @c_abi_export("pcc_gc_note_safepoint")
