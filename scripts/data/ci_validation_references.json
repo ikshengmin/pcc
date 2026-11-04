@@ -863,19 +863,27 @@
     "tests/cpp/test_cpp_scalar_array_member_execution.py": {
       "test_invalid_scalar_array_member_originals_fail_reference": {
         "activity": "external-reference",
-        "reason": ["Calls the explicit C++17 syntax_reference subprocess for the unchanged invalid source"]
+        "reason": [
+          "Calls the explicit C++17 syntax_reference subprocess for the unchanged invalid source"
+        ]
       },
       "test_remaining_scalar_array_member_gaps_are_cpp17_valid": {
         "activity": "external-reference",
-        "reason": ["Calls the explicit C++17 syntax_reference subprocess to distinguish valid unowned gaps"]
+        "reason": [
+          "Calls the explicit C++17 syntax_reference subprocess to distinguish valid unowned gaps"
+        ]
       },
       "test_scalar_array_member_originals_match_cpp17": {
         "activity": "external-reference",
-        "reason": ["Calls tests.cpp.sizeof_execution.execute_row_pair, which calls compile_reference_cpp on unchanged translation units"]
+        "reason": [
+          "Calls tests.cpp.sizeof_execution.execute_row_pair, which calls compile_reference_cpp on unchanged translation units"
+        ]
       },
       "test_scalar_array_placement_originals_match_real_new_reference": {
         "activity": "external-reference",
-        "reason": ["Calls compile_reference_with_new using real external <new>; original translation-unit bytes match but include closures differ"]
+        "reason": [
+          "Calls compile_reference_with_new using real external <new>; original translation-unit bytes match but include closures differ"
+        ]
       }
     },
     "tests/cpp/test_cpp_template_array_bound_execution.py": {
@@ -895,29 +903,41 @@
     "tests/cpp/test_cpp_dependent_array_new_execution.py": {
       "test_invalid_array_new_originals_fail_reference": {
         "activity": "external-reference",
-        "reason": ["Calls explicit C++17 syntax_reference on concretely instantiated invalid array-new originals"]
+        "reason": [
+          "Calls explicit C++17 syntax_reference on concretely instantiated invalid array-new originals"
+        ]
       },
       "test_unowned_array_new_originals_remain_cpp17_valid": {
         "activity": "external-reference",
-        "reason": ["Calls explicit C++17 syntax_reference on valid used allocations and unowned syntax forms; no allocation execution claim"]
+        "reason": [
+          "Calls explicit C++17 syntax_reference on valid used allocations and unowned syntax forms; no allocation execution claim"
+        ]
       },
       "test_unused_array_new_originals_match_cpp17": {
         "activity": "external-reference",
-        "reason": ["Calls tests.cpp.sizeof_execution.execute_row_pair on unchanged programs executing only unrelated supported members, never new[]"]
+        "reason": [
+          "Calls tests.cpp.sizeof_execution.execute_row_pair on unchanged programs executing only unrelated supported members, never new[]"
+        ]
       }
     },
     "tests/cpp/test_cpp_template_local_pointer_execution.py": {
       "test_invalid_template_local_pointer_originals_fail_reference": {
         "activity": "external-reference",
-        "reason": ["Calls explicit C++17 syntax_reference on unchanged concretely-instantiated invalid source"]
+        "reason": [
+          "Calls explicit C++17 syntax_reference on unchanged concretely-instantiated invalid source"
+        ]
       },
       "test_remaining_template_local_pointer_gaps_are_cpp17_valid": {
         "activity": "external-reference",
-        "reason": ["Calls explicit C++17 syntax_reference to retain valid unowned local/lifetime/allocation boundaries"]
+        "reason": [
+          "Calls explicit C++17 syntax_reference to retain valid unowned local/lifetime/allocation boundaries"
+        ]
       },
       "test_template_local_pointer_originals_match_cpp17": {
         "activity": "external-reference",
-        "reason": ["Calls tests.cpp.sizeof_execution.execute_row_pair on unchanged original translation units"]
+        "reason": [
+          "Calls tests.cpp.sizeof_execution.execute_row_pair on unchanged original translation units"
+        ]
       }
     },
     "tests/cpp/test_cpp_template_subscript_result_execution.py": {
@@ -1550,59 +1570,81 @@
       "test_actual_closed_configuration_applies_or_omits_no_std_without_rewriting": {
         "activity": "mandatory-same-input-certification-and-owned-contract",
         "conditional": true,
-        "reason": ["Calls tests.rust.test_rust_certified_lints.certify before owned cfg policy, original AST retention and object emission"]
+        "reason": [
+          "Calls tests.rust.test_rust_certified_lints.certify before owned cfg policy, original AST retention and object emission"
+        ]
       },
       "test_actual_nested_and_inactive_payloads_retain_the_original_metadata": {
         "activity": "mandatory-same-input-certification-and-owned-contract",
         "conditional": true,
-        "reason": ["Calls tests.rust.test_rust_certified_lints.certify before owned nested/inactive cfg_attr policy"]
+        "reason": [
+          "Calls tests.rust.test_rust_certified_lints.certify before owned nested/inactive cfg_attr policy"
+        ]
       },
       "test_actual_check_never_waives_unknown_active_attributes_or_target_configuration": {
         "activity": "mandatory-same-input-certification-and-owned-contract",
         "conditional": true,
-        "reason": ["Calls tests.rust.test_rust_certified_lints.certify before asserting unsupported cfg contexts never reach owned lowering"]
+        "reason": [
+          "Calls tests.rust.test_rust_certified_lints.certify before asserting unsupported cfg contexts never reach owned lowering"
+        ]
       },
       "test_configuration_cannot_change_authenticated_source_edition_target_or_cfg": {
         "activity": "mandatory-same-input-certification-and-owned-contract",
         "conditional": true,
-        "reason": ["Calls tests.rust.test_rust_certified_lints.certify before source/edition/target/cfg identity rejection controls"]
+        "reason": [
+          "Calls tests.rust.test_rust_certified_lints.certify before source/edition/target/cfg identity rejection controls"
+        ]
       },
       "test_unchanged_cfg_attr_program_executes_owned_and_actual_rustc_reference": {
         "activity": "mandatory-same-input-certification-and-owned-contract",
         "conditional": true,
-        "reason": ["Calls tests.rust.test_rust_certified_lints.test_unchanged_lint_program_has_owned_native_and_actual_rustc_reference_results with the unchanged cfg_attr program"]
+        "reason": [
+          "Calls tests.rust.test_rust_certified_lints.test_unchanged_lint_program_has_owned_native_and_actual_rustc_reference_results with the unchanged cfg_attr program"
+        ]
       }
     },
     "tests/rust/test_rust_cfg_items.py": {
       "test_actual_conditional_extern_items_preserve_tokens_spans_and_name_effects": {
         "activity": "mandatory-same-input-certification-and-owned-contract",
         "conditional": true,
-        "reason": ["Calls tests.rust.test_rust_certified_lints.certify before owned conditional-item parsing, registration and object emission"]
+        "reason": [
+          "Calls tests.rust.test_rust_certified_lints.certify before owned conditional-item parsing, registration and object emission"
+        ]
       },
       "test_actual_cfg_never_guesses_target_custom_or_short_circuited_context": {
         "activity": "mandatory-same-input-certification-and-owned-contract",
         "conditional": true,
-        "reason": ["Calls tests.rust.test_rust_certified_lints.certify before asserting unowned configuration cannot enter lowering"]
+        "reason": [
+          "Calls tests.rust.test_rust_certified_lints.certify before asserting unowned configuration cannot enter lowering"
+        ]
       },
       "test_actual_conditional_items_keep_active_dependency_and_other_item_boundaries": {
         "activity": "mandatory-same-input-certification-and-owned-contract",
         "conditional": true,
-        "reason": ["Calls tests.rust.test_rust_certified_lints.certify before asserting active dependencies and unsupported item families remain explicit boundaries"]
+        "reason": [
+          "Calls tests.rust.test_rust_certified_lints.certify before asserting active dependencies and unsupported item families remain explicit boundaries"
+        ]
       },
       "test_actual_inline_module_retains_inactive_item_in_original_coordinate_space": {
         "activity": "mandatory-same-input-certification-and-owned-contract",
         "conditional": true,
-        "reason": ["Calls tests.rust.test_rust_certified_lints.certify before unchanged-source inline-module conditional declaration retention"]
+        "reason": [
+          "Calls tests.rust.test_rust_certified_lints.certify before unchanged-source inline-module conditional declaration retention"
+        ]
       },
       "test_actual_item_context_rejects_source_edition_target_and_cfg_changes": {
         "activity": "mandatory-same-input-certification-and-owned-contract",
         "conditional": true,
-        "reason": ["Calls tests.rust.test_rust_certified_lints.certify before source/edition/target/explicit-cfg mismatch controls"]
+        "reason": [
+          "Calls tests.rust.test_rust_certified_lints.certify before source/edition/target/explicit-cfg mismatch controls"
+        ]
       },
       "test_unchanged_conditional_item_program_executes_owned_and_actual_reference": {
         "activity": "mandatory-same-input-certification-and-owned-contract",
         "conditional": true,
-        "reason": ["Calls tests.rust.test_rust_certified_lints.test_unchanged_lint_program_has_owned_native_and_actual_rustc_reference_results with the unchanged conditional-item program"]
+        "reason": [
+          "Calls tests.rust.test_rust_certified_lints.test_unchanged_lint_program_has_owned_native_and_actual_rustc_reference_results with the unchanged conditional-item program"
+        ]
       }
     },
     "tests/rust/test_rust_certified_references.py": {
@@ -2027,6 +2069,46 @@
         "activity": "external-reference",
         "reason": [
           "Calls tests.rust.test_rust_method_reference.test_unchanged_inherent_programs_match_actual_rustc_native_execution"
+        ]
+      }
+    },
+    "tests/go/test_interface_methods.py": {
+      "test_exact_dynamic_contract_has_official_reference_only_execution": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go executes the exact complete dynamic-interface original; PCC retains its explicit capability boundary and receives no runtime qualification."
+        ]
+      }
+    },
+    "tests/go/test_interface_source.py": {
+      "test_identical_declaration_original_has_real_reference_execution": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go compiles and executes both exact declaration/nil-only originals, compared with owned native raw process results."
+        ]
+      },
+      "test_original_package_declarations_have_reference_execution": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go executes the exact import-path-owned declaration graph, compared with its owned native program."
+        ]
+      },
+      "test_qualified_generic_embedding_has_reference_only_execution": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go executes unchanged qualified generic-interface originals that PCC explicitly leaves unimplemented."
+        ]
+      },
+      "test_preserved_valid_frontiers_have_reference_only_execution": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go executes preserved valid recursive-anonymous and generic-signature originals; no PCC runtime acceptance is claimed."
+        ]
+      },
+      "test_invalid_originals_have_attributed_official_rejections": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go observes exact invalid originals through the source-attributed rc1/no-binary rejection protocol, retaining raw diagnostics."
         ]
       }
     }

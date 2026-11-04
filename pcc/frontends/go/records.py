@@ -13,6 +13,10 @@ class DefinedType:
     underlying: object = None
     methods: dict = field(default_factory=dict)
 
+    def __deepcopy__(self, memo):
+        # Declarations are canonical owners, not mutable syntax snapshots.
+        return self
+
     def __str__(self):
         return self.package + "." + self.name if self.package else self.name
 
@@ -22,6 +26,32 @@ class Field:
     name: str
     type: object
     package: str = ""
+    embedded: bool = False
+
+
+@dataclass(frozen=True)
+class MethodSignature:
+    parameters: tuple
+    result: object
+    variadic: bool = False
+
+
+@dataclass(frozen=True)
+class InterfaceMethod:
+    name: str
+    package: str
+    signature: MethodSignature
+
+
+@dataclass(frozen=True)
+class InterfaceType:
+    """A complete basic-interface method set, without a value representation."""
+    methods: tuple
+
+    def __str__(self):
+        return "interface{" + "; ".join(method.name + "(" + ", ".join(
+            map(str, method.signature.parameters)) + ") " + str(method.signature.result)
+            for method in self.methods) + "}"
 
 
 @dataclass(frozen=True)

@@ -6,20 +6,9 @@ while int, int64 and uintptr remain distinct named Go types.
 """
 
 from dataclasses import dataclass
-from pcc.frontends.go.records import DefinedType, underlying
-
-
-@dataclass(frozen=True)
-class ErrorInterface:
-    """The underlying Error() string interface, not a pointer or string type.
-
-    Only values with no dynamic type/value are currently representable. The
-    opaque null IR word is a private transport, not the official Go ABI or a
-    representation for concrete interface values.
-    """
-
-    def __str__(self):
-        return "interface{Error() string}"
+from pcc.frontends.go.records import (
+    DefinedType, InterfaceMethod, InterfaceType, MethodSignature, underlying,
+)
 
 
 class PredeclaredError(DefinedType):
@@ -28,11 +17,14 @@ class PredeclaredError(DefinedType):
         return self
 
 
-ERROR_TYPE = PredeclaredError("error", "", ErrorInterface())
+ERROR_TYPE = PredeclaredError("error", "", InterfaceType((
+    InterfaceMethod("Error", "", MethodSignature((), "string")),
+)))
+ANY_TYPE = InterfaceType(())
 
 
 def is_error_interface(dtype):
-    return isinstance(underlying(dtype), ErrorInterface)
+    return underlying(dtype) == ERROR_TYPE.underlying
 
 
 @dataclass(frozen=True)
@@ -41,6 +33,15 @@ class PointerType:
 
     def __str__(self):
         return "*" + str(self.element)
+
+
+@dataclass(frozen=True)
+class SliceType:
+    """Signature identity only. No slice value or backing-store ABI is admitted."""
+    element: object
+
+    def __str__(self):
+        return "[]" + str(self.element)
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,7 @@ INTEGER_TYPES = {
 TYPE_NAMES = {name: name for name in INTEGER_TYPES}
 TYPE_NAMES.update({"bool": "bool", "byte": "uint8", "rune": "int32", "string": "string"})
 TYPE_NAMES["error"] = ERROR_TYPE
+TYPE_NAMES["any"] = ANY_TYPE
 TYPES = frozenset(TYPE_NAMES.values())
 
 

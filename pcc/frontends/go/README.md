@@ -633,7 +633,7 @@ renew that historical qualification.
 | `go.capability.dynamic-string-conversion` | Explicitly unimplemented boundary: dynamic string conversion | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.embedded-fields` | Explicitly unimplemented boundary: embedded fields | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.floating-types` | Explicitly unimplemented boundary: floating types | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
-| `go.capability.interface-types` | Explicitly unimplemented boundary: interface types | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.interface-types` | Explicitly unimplemented boundary: general interface values and runtime dispatch | No positive runtime acceptance; declaration and compiler-model support is separate | `explicitly_unimplemented` |
 | `go.capability.limit-array-elements` | Explicitly unimplemented boundary: limit array elements | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.limit-constant-precision` | Explicitly unimplemented boundary: limit constant precision | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.limit-function-arity` | Explicitly unimplemented boundary: limit function arity | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
@@ -1007,7 +1007,7 @@ Concrete values with the exact method set are recognized but boxing remains
 unsupported. A value with only a pointer-receiver Error method, a missing
 method, arguments, or a non-identical result type does not implement error.
 Addressability does not change that assignment rule. Concrete boxing, interface
-calls/method values/expressions, assertions, general interfaces/any, interface
+calls/method values/expressions, assertions, general interface/any values, interface
 switches, aggregates, pointers, generic type arguments and package interface
 storage retain explicit boundaries before IR. Package storage is closed while
 runtime symbol ownership and initialization are unowned: ignored linkname
@@ -1027,3 +1027,45 @@ Rules: [errors](https://go.dev/ref/spec#Errors),
 [method sets](https://go.dev/ref/spec#Method_sets),
 [method declarations](https://go.dev/ref/spec#Method_declarations), and
 [comparisons](https://go.dev/ref/spec#Comparison_operators).
+
+## Basic interface declarations and method-set plans
+
+The source resolver now retains basic-interface method signatures, embedded
+interface inclusion, exact named/alias identities and variadicness. It validates
+parameter/result names before discarding them from type identity. Canonical
+named identities are allocated before completion so
+recursive named method signatures do not duplicate declarations. Embedding and
+value-containment cycles remain errors. Recursively expanded anonymous
+signatures, general type sets and generic type applications remain explicit
+capability boundaries. Package-private method names use import-path identity,
+not package spelling. Predeclared `any` denotes the empty interface; generic
+`any` and `comparable` constraints retain their separate checking rules.
+
+The compiler-only method-set owner distinguishes `T` from `*T`, exact method
+signatures, breadth-first field hiding and distinct ambiguous promotion paths.
+Its record-model support does not admit embedded-field source storage. Interface
+storage, box, transfer, itable and equality plans consume the shared managed
+compiler contracts. They preserve concrete nominal identity, typed-nil versus
+nil-interface versus unknown dynamic identity, receiver adjustment, operand
+evaluation, copy/root obligations and dynamic-comparability panic requirements.
+They do not select a physical box/table layout or authorize allocation, tracing,
+root registration, dispatch, assertions or equality lowering.
+
+Only the existing exact `Error() string` nil-only value domain can reach IR.
+General interface values, unused interface-bearing function signatures, zero
+arrays and ignored conversions remain blocked before lowering. No fabricated
+runtime error global, private allocator, package exception or runtime fallback
+is introduced. Original `math/bits` acceptance is still unresolved.
+
+`test_interface_methods.py`, `test_interface_value_plans.py` and
+`test_interface_source.py` carry source/model obligations and complete authored
+programs. Admitted declaration programs have owned-native and identical-input
+official-Go obligations. General dynamic-interface and other valid unsupported
+originals have explicitly reference-only obligations. All execution is UNRUN
+pending CI; source review is not runtime or project qualification.
+
+Rules: [interface types](https://go.dev/ref/spec#Interface_types),
+[method sets](https://go.dev/ref/spec#Method_sets),
+[function types](https://go.dev/ref/spec#Function_types),
+[type identity](https://go.dev/ref/spec#Type_identity), and
+[selectors](https://go.dev/ref/spec#Selectors).

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pcc.frontends.go.diagnostics import UnsupportedGo
 from pcc.frontends.go.generics import GenericSession
 from pcc.frontends.go.lowering import Lowerer
-from pcc.frontends.go.sema import Analyzer, PREDECLARED
+from pcc.frontends.go.sema import Analyzer, PREDECLARED, validate_value_types
 from pcc.frontends.go.syntax import GoDiagnostic, GoParser, Program
 from pcc.frontends.go.types import supported_target
 
@@ -88,6 +88,8 @@ def compile_packages(packages, *, main_package, target_triple):
     if not supported_target(target_triple):
         raise GoDiagnostic(main.token, "Go scalar frontend requires a supported 64-bit target")
     generics.materialize()
+    for program in order:
+        validate_value_types(program)
     # One closed check includes every concrete function plus all independently
     # typed generic declarations/signature selections, including unused ones.
     # Filtering non-emitted declarations afterward does not weaken the proof.

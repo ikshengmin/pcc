@@ -10,9 +10,10 @@ import json
 
 from pcc.support.instantiation import InstanceRegistry
 from pcc.frontends.go.diagnostics import GoDiagnostic, UnsupportedGo
-from pcc.frontends.go.records import DefinedType, StructType, is_named, same_underlying, underlying
+from pcc.frontends.go.records import DefinedType, InterfaceType, StructType, is_named, same_underlying, underlying
+from pcc.frontends.go.interface_methods import interface_type
 from pcc.frontends.go.types import (
-    ArrayType, PointerType, Results, TYPE_NAMES, is_error_interface, is_integer, is_string,
+    ArrayType, PointerType, Results, SliceType, TYPE_NAMES, is_integer, is_string,
 )
 
 MAX_FUNCTION_INSTANCES = 128
@@ -42,12 +43,15 @@ class TypeParameter:
 def contains_parameter(dtype):
     if isinstance(dtype, TypeParameter):
         return True
-    if isinstance(dtype, (ArrayType, PointerType)):
+    if isinstance(dtype, (ArrayType, PointerType, SliceType)):
         return contains_parameter(dtype.element)
     if isinstance(dtype, Results):
         return any(contains_parameter(item) for item in dtype.elements)
     if isinstance(dtype, StructType):
         return any(contains_parameter(field.type) for field in dtype.fields)
+    if isinstance(dtype, InterfaceType):
+        return any(contains_parameter(item) for method in dtype.methods
+                   for item in method.signature.parameters + (method.signature.result,))
     return False
 
 
@@ -93,6 +97,8 @@ def infer_argument(formal, actual, token, parameters, explicit, bindings, *, exa
 
 
 def type_code(dtype):
+    if interface_type(dtype) is not None or isinstance(dtype, SliceType):
+        raise AssertionError('interface/signature-only type reached Go symbol encoding')
     if isinstance(dtype, DefinedType):
         return ['defined', dtype.package, dtype.name]
     if isinstance(dtype, ArrayType):
@@ -112,6 +118,10 @@ def comparable(dtype):
         return comparable(dtype.element)
     if isinstance(dtype, StructType):
         return all(comparable(field.type) for field in dtype.fields)
+    if isinstance(dtype, InterfaceType):
+        # Interface comparison is legal, but dynamic values may panic.
+        # Instantiation/value admission retains its separate capability gate.
+        return True
     return isinstance(dtype, PointerType) or is_integer(dtype) or is_string(dtype) or dtype == 'bool'
 
 
@@ -159,13 +169,16 @@ class GenericSession:
             raise GoDiagnostic(token, 'constraint must denote a type')
         if token.text in owner.globals or token.text in owner.functions:
             raise GoDiagnostic(token, 'constraint must denote a type')
-        if token.text in owner.types or token.text in TYPE_NAMES:
+        if token.text in owner.types:
             raise UnsupportedGo(token, 'go.unsupported.generic-boundaries',
                                 'named and exact-type constraints require general type-set resolution')
         if token.text in owner.imports.get(token.filename, {}):
             raise GoDiagnostic(token, 'package name is not a type constraint')
         constraint = PREDECLARED_CONSTRAINTS.get(token.text)
         if constraint is None:
+            if token.text in TYPE_NAMES:
+                raise UnsupportedGo(token, 'go.unsupported.generic-boundaries',
+                                    'exact-type constraints require general type-set resolution')
             raise GoDiagnostic(token, 'undefined type constraint ' + token.text)
         # Package/import/type-parameter declarations shadowing predeclared
         # names currently have their own explicit frontend frontier. Neither
@@ -183,6 +196,9 @@ class GenericSession:
         dtype = caller.type_operand(expression)
         if dtype is None:
             raise GoDiagnostic(expression.token, 'generic type argument must denote a type')
+        if interface_type(dtype) is not None:
+            raise UnsupportedGo(expression.token, 'go.unsupported.generic-boundaries',
+                                'interface type arguments require abstract dynamic-value checking')
         return dtype
 
     def select(self, caller, function, expressions, explicit=None):
@@ -216,7 +232,7 @@ class GenericSession:
                     raise GoDiagnostic(function.token, 'cannot infer type argument ' + parameter.name)
                 bindings[parameter] = default_type(next(iter(types)))
             argument = bindings[parameter]
-            if is_error_interface(argument):
+            if interface_type(argument) is not None:
                 raise UnsupportedGo(function.token, 'go.unsupported.generic-boundaries',
                                     'interface type arguments require abstract dynamic-value checking')
             if isinstance(underlying(argument), PointerType):

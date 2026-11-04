@@ -149,6 +149,32 @@ class ArraySyntax:
 
 
 @dataclass
+class SliceSyntax:
+    token: Token
+    element: object
+
+
+@dataclass
+class InterfaceMethodSyntax:
+    token: Token
+    parameters: tuple
+    result: object
+    variadic: bool = False
+
+
+@dataclass
+class InterfaceElementSyntax:
+    token: Token
+    terms: tuple
+
+
+@dataclass
+class InterfaceSyntax:
+    token: Token
+    elements: tuple
+
+
+@dataclass
 class TypeName:
     token: Token
     qualifier: str | None = None
@@ -168,6 +194,8 @@ class TypeDeclaration:
     resolved: object = None
     resolving: bool = False
     pointer_depth: int = 0
+    identity: object = None
+    signature_depth: int = 0
 
 
 @dataclass
@@ -348,13 +376,27 @@ class GoParser:
                 self.fail(self.current, "expected import separator")
         return imports
 
-    def datatype(self, *, literal=False):
+    def datatype(self, *, literal=False, signature=False, constraint=False):
+        if self.accept("("):
+            dtype = self.datatype(signature=signature, constraint=constraint)
+            self.take(")")
+            return dtype
+        if self.at("interface"):
+            return self.interface_type()
+        if signature and self.current.kind in ("map", "chan", "<-", "func"):
+            token = self.current
+            self.constraint_type()
+            self.unsupported(token, 'go.unsupported.interface-types',
+                             "this interface signature type constructor needs semantic metadata support")
         if self.at("*"):
             token = self.take("*")
-            return PointerSyntax(token, self.datatype())
+            return PointerSyntax(token, self.datatype(signature=signature))
         if self.at("["):
             token = self.take("[")
             if self.at("]"):
+                if signature:
+                    self.take("]")
+                    return SliceSyntax(token, self.datatype(signature=True))
                 self.unsupported(token, 'go.unsupported.slice-storage', "slice types require shared-runtime backing storage support")
             if self.accept("..."):
                 if not literal:
@@ -363,7 +405,7 @@ class GoParser:
             else:
                 length = self.expression()
             self.take("]")
-            element = self.datatype()
+            element = self.datatype(signature=signature)
             return ArraySyntax(token, length, element)
         if self.at("struct"):
             token = self.take("struct")
@@ -375,7 +417,7 @@ class GoParser:
                     names.append(self.take("name"))
                 if self.at(";") or self.at("}") or self.at("."):
                     self.unsupported(names[0], 'go.unsupported.embedded-fields', "embedded fields require method/promotion support")
-                dtype = self.datatype()
+                dtype = self.datatype(signature=signature)
                 if self.at("string"):
                     self.unsupported(self.current, 'go.unsupported.struct-tags', "struct tags are not implemented")
                 fields.extend((name, dtype) for name in names)
@@ -383,8 +425,22 @@ class GoParser:
             self.take("}")
             return StructSyntax(token, fields)
         token = self.take("name")
-        if self.accept("."):
-            return TypeName(self.take("name"), token.text)
+        qualifier = token if self.accept(".") else None
+        if qualifier is not None:
+            token = self.take("name")
+        if self.accept("["):
+            # An instantiated type is valid syntax even when this frontend
+            # cannot resolve its generic declaration. Consume its actual type
+            # arguments before reporting the capability frontier; malformed
+            # argument lists remain ordinary source syntax errors.
+            self.constraint_type()
+            while self.accept(",") and not self.at("]"):
+                self.constraint_type()
+            self.take("]")
+            self.unsupported(token, 'go.unsupported.generic-boundaries',
+                             "instantiated types require generic type resolution")
+        if qualifier is not None:
+            return TypeName(token, qualifier.text)
         if token.text in TYPE_NAMES:
             return TYPE_NAMES[token.text]
         capability = ({"error": "interface-types", "any": "interface-types",
@@ -394,8 +450,86 @@ class GoParser:
             self.unsupported(token, "go.unsupported." + capability,
                              f"unsupported type {token.text!r}; shared runtime or numeric support is missing")
         if token.text == "comparable":
+            if constraint:
+                return TypeName(token)
             self.fail(token, "comparable is only permitted as a type constraint")
         return TypeName(token)
+
+    def interface_type(self):
+        """Retain method signatures and ordered type elements, not value ABI."""
+        token = self.take("interface")
+        self.take("{")
+        elements = []
+        while not self.at("}"):
+            start = self.current
+            if self.at("name") and self.tokens[self.index + 1].kind == "[":
+                end = self.constraint_bracket_end(self.index + 1)
+                if end is not None and self.tokens[end].kind == "(":
+                    self.fail(start, "interface methods must not declare type parameters")
+                self.constraint_element()
+                self.unsupported(start, 'go.unsupported.generic-boundaries',
+                                 "instantiated interface elements require generic type resolution")
+            if self.at("name") and self.tokens[self.index + 1].kind == "(":
+                name = self.take("name")
+                self.take("(")
+                parameters, names, variadic = self.interface_parameters()
+                results, result_names = [], []
+                if self.accept("("):
+                    results, result_names, _ = self.interface_parameters(allow_variadic=False)
+                elif self.current.kind in ("name", "*", "[", "struct", "interface", "map", "chan", "<-", "func"):
+                    results = [self.datatype(signature=True)]
+                declared = set()
+                for item in names + result_names:
+                    if item is not None and item.text != "_":
+                        if item.text in declared:
+                            self.fail(item, "duplicate parameter or result name " + item.text)
+                        declared.add(item.text)
+                result = Results(tuple(results)) if len(results) > 1 else results[0] if results else "void"
+                elements.append(InterfaceMethodSyntax(name, tuple(parameters), result, variadic))
+            else:
+                terms = []
+                while True:
+                    approximate = bool(self.accept("~"))
+                    terms.append((approximate, self.datatype(signature=True, constraint=True)))
+                    if not self.accept("|"):
+                        break
+                elements.append(InterfaceElementSyntax(start, tuple(terms)))
+            self.end_statement()
+        self.take("}")
+        return InterfaceSyntax(token, tuple(elements))
+
+    def interface_parameters(self, *, allow_variadic=True):
+        types, names, naming, variadic = [], [], None, False
+        while not self.at(")"):
+            named = self.named_parameters()
+            if naming is not None and naming != named:
+                self.fail(self.current, "mixed named and unnamed parameters")
+            naming = named
+            group = [self.take("name")] if named else [None]
+            if named:
+                while self.accept(","):
+                    group.append(self.take("name"))
+            ellipsis = self.accept("...")
+            if ellipsis:
+                if not allow_variadic:
+                    self.fail(ellipsis, "variadic result is not permitted")
+                if len(group) != 1:
+                    self.fail(ellipsis, "variadic parameter must be exactly one parameter")
+                variadic = True
+            dtype = self.datatype(signature=True)
+            if ellipsis:
+                dtype = SliceSyntax(ellipsis, dtype)
+            types.extend([dtype] * len(group))
+            names.extend(group)
+            if len(types) > 256:
+                self.unsupported(self.current, 'go.unsupported.limit-function-arity',
+                                 "interface signature exceeds implementation limit (256 results/parameters)")
+            if not self.accept(","):
+                break
+            if variadic and not self.at(")"):
+                self.fail(self.current, "variadic parameter must be last")
+        self.take(")")
+        return types, names, variadic
 
     def type_declarations(self):
         self.take("type")
@@ -425,7 +559,12 @@ class GoParser:
         index = self.index
         while self.tokens[index].kind == "name":
             index += 1
-            if self.tokens[index].kind in ("name", "[", "struct", "*"):
+            if self.tokens[index].kind == "[":
+                end = self.constraint_bracket_end(index)
+                if end is not None and self.tokens[end].kind in (",", ")"):
+                    return False  # Box[T], not the named array parameter x [N]T.
+            if self.tokens[index].kind in ("name", "[", "struct", "*", "interface", "(",
+                                           "map", "chan", "<-", "func", "..."):
                 return True
             if self.tokens[index].kind != ",":
                 return False
@@ -649,7 +788,7 @@ class GoParser:
 
     def function_results(self):
         if not self.accept("("):
-            if self.at("name") or self.at("[") or self.at("struct") or self.at("*"):
+            if self.current.kind in ("name", "[", "struct", "*", "interface"):
                 return self.datatype(), [None]
             return "void", []
         types, names = self.parameter_list()
@@ -682,7 +821,7 @@ class GoParser:
             names = [self.take("name")]
             while self.accept(","):
                 names.append(self.take("name"))
-            dtype = self.datatype() if self.at("name") or self.at("[") or self.at("struct") or self.at("*") else None
+            dtype = self.datatype() if self.current.kind in ("name", "[", "struct", "*", "interface") else None
             exprs = self.expression_list() if self.accept("=") else []
             if token.kind == "const" and not exprs:
                 if not grouped or previous is None or dtype is not None:
@@ -859,7 +998,7 @@ class GoParser:
             self.take(")")
             self.named_literals = previous
             left.parenthesized = True
-        elif self.at("[") or self.at("struct"):
+        elif self.at("[") or self.at("struct") or self.at("interface"):
             dtype = self.datatype(literal=True)
             left = self.composite_literal(token, dtype) if self.at("{") else Expr("type", token, dtype)
         elif self.accept("integer"):

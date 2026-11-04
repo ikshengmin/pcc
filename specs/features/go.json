@@ -9,7 +9,7 @@
   "inventory": {
     "chapters_complete": false,
     "features_complete": false,
-    "notes": "Incomplete inventory, not a Go coverage denominator. Legacy schema1 status is qualification-only; the pointer-switch row separates explicit implementation from acceptance. The fixed original official shard measured panic in test/ken/for.go and print in test/helloworld.go as the first two frontend failures. Generic Linux scalar output and terminal uncaught panic are authored but UNRUN; full panic/recover/unwind remains missing. Existing evidence triplets retain the prior published a6e482 pointer-array snapshot and do not qualify these changes. No upstream source or oracle is rewritten. Pointer expression switches now have an explicit source-bound implementation and unrun acceptance record. All historical evidence rows retain their exact old identities; they do not qualify this changed source. UTF-8 string range now has an explicit source implementation and separate CI-only unrun acceptance record; its retired non-array-range diagnostic originals are preserved as positive same-input obligations. No old evidence was renewed. Nil-only predeclared error local values now have a separate source-bound implementation and UNRUN acceptance record. General interface/runtime support and original math/bits acceptance remain unimplemented; no historical evidence is renewed."
+    "notes": "Incomplete inventory, not a Go coverage denominator. Legacy schema1 status is qualification-only; the pointer-switch row separates explicit implementation from acceptance. The fixed original official shard measured panic in test/ken/for.go and print in test/helloworld.go as the first two frontend failures. Generic Linux scalar output and terminal uncaught panic are authored but UNRUN; full panic/recover/unwind remains missing. Existing evidence triplets retain the prior published a6e482 pointer-array snapshot and do not qualify these changes. No upstream source or oracle is rewritten. Pointer expression switches now have an explicit source-bound implementation and unrun acceptance record. All historical evidence rows retain their exact old identities; they do not qualify this changed source. UTF-8 string range now has an explicit source implementation and separate CI-only unrun acceptance record; its retired non-array-range diagnostic originals are preserved as positive same-input obligations. No old evidence was renewed. Nil-only predeclared error local values now have a separate source-bound implementation and UNRUN acceptance record. General interface/runtime support and original math/bits acceptance remain unimplemented; no historical evidence is renewed. Basic-interface declarations and method-set/shared-value plans now have independent source-bound implementation rows and CI-only UNRUN acceptance. Declaration/native nil-only obligations are distinct from dynamic-interface reference-only originals; no runtime or project qualification is claimed."
   },
   "chapters": [
     {
@@ -210,89 +210,89 @@
   ],
   "features": [
     {
-       "chapter_ids" : [
-          "types",
-          "properties",
-          "expressions"
-       ],
-       "title" : "Shared managed compiler contracts and language-owned storage plans",
-       "tests" : [
-          "tests/runtime_shared/test_managed_contracts.py::test_nominal_declaration_identity_is_not_underlying_or_spelling_identity",
-          "tests/runtime_shared/test_managed_contracts.py::test_precise_payload_maps_keep_scalar_and_all_reference_roles_distinct",
-          "tests/runtime_shared/test_managed_contracts.py::test_primitive_and_reference_array_element_maps_are_not_interchangeable",
-          "tests/runtime_shared/test_managed_contracts.py::test_unknown_overlapping_misaligned_and_out_of_extent_layouts_cannot_make_maps",
-          "tests/runtime_shared/test_managed_contracts.py::test_pointer_width_is_explicit_not_the_host_word_size",
-          "tests/runtime_shared/test_managed_contracts.py::test_repeated_extent_does_not_hide_unknown_or_nested_variable_size_elements",
-          "tests/runtime_shared/test_managed_contracts.py::test_repeated_extent_rejects_unresolved_or_overflow_count",
-          "tests/runtime_shared/test_managed_contracts.py::test_malformed_contracts_fail_before_any_consumer",
-          "tests/runtime_shared/test_managed_contracts.py::test_static_bytes_and_dynamic_owner_relative_spans_remain_distinct",
-          "tests/go/test_managed_contracts.py::test_shared_identity_preserves_defined_declarations_and_aliases",
-          "tests/go/test_managed_contracts.py::test_resolved_scalar_payload_is_not_a_registered_box_or_native_abi",
-          "tests/go/test_managed_contracts.py::test_error_plan_separates_immutable_metadata_from_a_dynamic_value_edge",
-          "tests/go/test_managed_contracts.py::test_pointer_and_aggregate_plans_do_not_claim_raw_pointer_traceability",
-          "tests/go/test_managed_contracts.py::test_static_bytes_are_not_managed_and_managed_spans_retain_the_base_owner",
-          "tests/go/test_managed_contracts.py::test_actual_static_string_lowering_consumes_common_span_and_retains_immutable_abi",
-          "tests/go/test_managed_contracts.py::test_shared_plan_does_not_open_dynamic_string_or_interface_native_paths",
-          "tests/go/test_managed_contracts.py::test_exact_static_backing_original_executes_owned_native",
-          "tests/go/test_managed_contracts.py::test_identical_static_backing_original_matches_official_go"
-       ],
-       "acceptance" : [
+      "chapter_ids": [
+        "types",
+        "properties",
+        "expressions"
+      ],
+      "title": "Shared managed compiler contracts and language-owned storage plans",
+      "tests": [
+        "tests/runtime_shared/test_managed_contracts.py::test_nominal_declaration_identity_is_not_underlying_or_spelling_identity",
+        "tests/runtime_shared/test_managed_contracts.py::test_precise_payload_maps_keep_scalar_and_all_reference_roles_distinct",
+        "tests/runtime_shared/test_managed_contracts.py::test_primitive_and_reference_array_element_maps_are_not_interchangeable",
+        "tests/runtime_shared/test_managed_contracts.py::test_unknown_overlapping_misaligned_and_out_of_extent_layouts_cannot_make_maps",
+        "tests/runtime_shared/test_managed_contracts.py::test_pointer_width_is_explicit_not_the_host_word_size",
+        "tests/runtime_shared/test_managed_contracts.py::test_repeated_extent_does_not_hide_unknown_or_nested_variable_size_elements",
+        "tests/runtime_shared/test_managed_contracts.py::test_repeated_extent_rejects_unresolved_or_overflow_count",
+        "tests/runtime_shared/test_managed_contracts.py::test_malformed_contracts_fail_before_any_consumer",
+        "tests/runtime_shared/test_managed_contracts.py::test_static_bytes_and_dynamic_owner_relative_spans_remain_distinct",
+        "tests/go/test_managed_contracts.py::test_shared_identity_preserves_defined_declarations_and_aliases",
+        "tests/go/test_managed_contracts.py::test_resolved_scalar_payload_is_not_a_registered_box_or_native_abi",
+        "tests/go/test_managed_contracts.py::test_error_plan_separates_immutable_metadata_from_a_dynamic_value_edge",
+        "tests/go/test_managed_contracts.py::test_pointer_and_aggregate_plans_do_not_claim_raw_pointer_traceability",
+        "tests/go/test_managed_contracts.py::test_static_bytes_are_not_managed_and_managed_spans_retain_the_base_owner",
+        "tests/go/test_managed_contracts.py::test_actual_static_string_lowering_consumes_common_span_and_retains_immutable_abi",
+        "tests/go/test_managed_contracts.py::test_shared_plan_does_not_open_dynamic_string_or_interface_native_paths",
+        "tests/go/test_managed_contracts.py::test_exact_static_backing_original_executes_owned_native",
+        "tests/go/test_managed_contracts.py::test_identical_static_backing_original_matches_official_go"
+      ],
+      "acceptance": [
+        {
+          "status": "unrun",
+          "reason": "Authored source/model, unchanged-original and reference obligations only. User delegated all execution to CI. No local tests, imports, compiler or runtime validation performed; no historical evidence is renewed.",
+          "kind": "full-feature",
+          "evidence": [],
+          "source_revision": "sha256:c197de111aed9cf2d23119f47c92549a9bf219d601b41e0a26ced00376be321c",
+          "backend": "self",
+          "required_tests": [
+            "tests/runtime_shared/test_managed_contracts.py::test_nominal_declaration_identity_is_not_underlying_or_spelling_identity",
+            "tests/runtime_shared/test_managed_contracts.py::test_precise_payload_maps_keep_scalar_and_all_reference_roles_distinct",
+            "tests/runtime_shared/test_managed_contracts.py::test_primitive_and_reference_array_element_maps_are_not_interchangeable",
+            "tests/runtime_shared/test_managed_contracts.py::test_unknown_overlapping_misaligned_and_out_of_extent_layouts_cannot_make_maps",
+            "tests/runtime_shared/test_managed_contracts.py::test_pointer_width_is_explicit_not_the_host_word_size",
+            "tests/runtime_shared/test_managed_contracts.py::test_repeated_extent_does_not_hide_unknown_or_nested_variable_size_elements",
+            "tests/runtime_shared/test_managed_contracts.py::test_repeated_extent_rejects_unresolved_or_overflow_count",
+            "tests/runtime_shared/test_managed_contracts.py::test_malformed_contracts_fail_before_any_consumer",
+            "tests/runtime_shared/test_managed_contracts.py::test_static_bytes_and_dynamic_owner_relative_spans_remain_distinct",
+            "tests/go/test_managed_contracts.py::test_shared_identity_preserves_defined_declarations_and_aliases",
+            "tests/go/test_managed_contracts.py::test_resolved_scalar_payload_is_not_a_registered_box_or_native_abi",
+            "tests/go/test_managed_contracts.py::test_error_plan_separates_immutable_metadata_from_a_dynamic_value_edge",
+            "tests/go/test_managed_contracts.py::test_pointer_and_aggregate_plans_do_not_claim_raw_pointer_traceability",
+            "tests/go/test_managed_contracts.py::test_static_bytes_are_not_managed_and_managed_spans_retain_the_base_owner",
+            "tests/go/test_managed_contracts.py::test_actual_static_string_lowering_consumes_common_span_and_retains_immutable_abi",
+            "tests/go/test_managed_contracts.py::test_shared_plan_does_not_open_dynamic_string_or_interface_native_paths",
+            "tests/go/test_managed_contracts.py::test_exact_static_backing_original_executes_owned_native",
+            "tests/go/test_managed_contracts.py::test_identical_static_backing_original_matches_official_go"
+          ],
+          "scope": "Compiler-only shared managed storage contracts preserving Go nominal identities, scalar payload facts, unresolved pointer provenance/aggregate tracing/interface boxing obligations, and static versus owner-relative managed string spans. Current static-string lowering consumes the common immutable static span without changing its pointer/length ABI. Full interface/itable/typed-nil/equality, managed allocation, GC registration, roots and native managed lowering remain unavailable. The exact static-string native/reference original does not qualify managed runtime support.",
+          "id": "compiler-contracts-ci-only",
+          "mode": "pcc0",
+          "platform": "linux-x86_64",
+          "gc": "not_applicable"
+        }
+      ],
+      "diagnostics": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:c197de111aed9cf2d23119f47c92549a9bf219d601b41e0a26ced00376be321c",
+        "sources": [
           {
-             "status" : "unrun",
-             "reason" : "Authored source/model, unchanged-original and reference obligations only. User delegated all execution to CI. No local tests, imports, compiler or runtime validation performed; no historical evidence is renewed.",
-             "kind" : "full-feature",
-             "evidence" : [],
-             "source_revision" : "sha256:c197de111aed9cf2d23119f47c92549a9bf219d601b41e0a26ced00376be321c",
-             "backend" : "self",
-             "required_tests" : [
-                "tests/runtime_shared/test_managed_contracts.py::test_nominal_declaration_identity_is_not_underlying_or_spelling_identity",
-                "tests/runtime_shared/test_managed_contracts.py::test_precise_payload_maps_keep_scalar_and_all_reference_roles_distinct",
-                "tests/runtime_shared/test_managed_contracts.py::test_primitive_and_reference_array_element_maps_are_not_interchangeable",
-                "tests/runtime_shared/test_managed_contracts.py::test_unknown_overlapping_misaligned_and_out_of_extent_layouts_cannot_make_maps",
-                "tests/runtime_shared/test_managed_contracts.py::test_pointer_width_is_explicit_not_the_host_word_size",
-                "tests/runtime_shared/test_managed_contracts.py::test_repeated_extent_does_not_hide_unknown_or_nested_variable_size_elements",
-                "tests/runtime_shared/test_managed_contracts.py::test_repeated_extent_rejects_unresolved_or_overflow_count",
-                "tests/runtime_shared/test_managed_contracts.py::test_malformed_contracts_fail_before_any_consumer",
-                "tests/runtime_shared/test_managed_contracts.py::test_static_bytes_and_dynamic_owner_relative_spans_remain_distinct",
-                "tests/go/test_managed_contracts.py::test_shared_identity_preserves_defined_declarations_and_aliases",
-                "tests/go/test_managed_contracts.py::test_resolved_scalar_payload_is_not_a_registered_box_or_native_abi",
-                "tests/go/test_managed_contracts.py::test_error_plan_separates_immutable_metadata_from_a_dynamic_value_edge",
-                "tests/go/test_managed_contracts.py::test_pointer_and_aggregate_plans_do_not_claim_raw_pointer_traceability",
-                "tests/go/test_managed_contracts.py::test_static_bytes_are_not_managed_and_managed_spans_retain_the_base_owner",
-                "tests/go/test_managed_contracts.py::test_actual_static_string_lowering_consumes_common_span_and_retains_immutable_abi",
-                "tests/go/test_managed_contracts.py::test_shared_plan_does_not_open_dynamic_string_or_interface_native_paths",
-                "tests/go/test_managed_contracts.py::test_exact_static_backing_original_executes_owned_native",
-                "tests/go/test_managed_contracts.py::test_identical_static_backing_original_matches_official_go"
-             ],
-             "scope" : "Compiler-only shared managed storage contracts preserving Go nominal identities, scalar payload facts, unresolved pointer provenance/aggregate tracing/interface boxing obligations, and static versus owner-relative managed string spans. Current static-string lowering consumes the common immutable static span without changing its pointer/length ABI. Full interface/itable/typed-nil/equality, managed allocation, GC registration, roots and native managed lowering remain unavailable. The exact static-string native/reference original does not qualify managed runtime support.",
-             "id" : "compiler-contracts-ci-only",
-             "mode" : "pcc0",
-             "platform" : "linux-x86_64",
-             "gc" : "not_applicable"
+            "path": "pcc/support/managed_objects.py",
+            "sha256": "44478862083f495926f4031609b66115044dd18f6b98231807be90721e2f8d23"
+          },
+          {
+            "path": "pcc/frontends/go/managed_objects.py",
+            "sha256": "9256fdeac77a95fa175ade691e8d485d35a6380e72298eb7555ac1b524d30efd"
+          },
+          {
+            "path": "pcc/frontends/go/lowering.py",
+            "sha256": "ca9441e5c8928cad18651922d190d462a88aeacf9a5d39052e2fbb2c15898eeb"
           }
-       ],
-       "diagnostics" : [],
-       "implementation" : {
-          "status" : "supported",
-          "source_revision" : "sha256:c197de111aed9cf2d23119f47c92549a9bf219d601b41e0a26ced00376be321c",
-          "sources" : [
-             {
-                "path" : "pcc/support/managed_objects.py",
-                "sha256" : "44478862083f495926f4031609b66115044dd18f6b98231807be90721e2f8d23"
-             },
-             {
-                "path" : "pcc/frontends/go/managed_objects.py",
-                "sha256" : "9256fdeac77a95fa175ade691e8d485d35a6380e72298eb7555ac1b524d30efd"
-             },
-             {
-                "path" : "pcc/frontends/go/lowering.py",
-                "sha256" : "ca9441e5c8928cad18651922d190d462a88aeacf9a5d39052e2fbb2c15898eeb"
-             }
-          ]
-       },
-       "id" : "go.shared-managed-compiler-contracts",
-       "scope" : "Compiler-only shared managed storage contracts preserving Go nominal identities, scalar payload facts, unresolved pointer provenance/aggregate tracing/interface boxing obligations, and static versus owner-relative managed string spans. Current static-string lowering consumes the common immutable static span without changing its pointer/length ABI. Full interface/itable/typed-nil/equality, managed allocation, GC registration, roots and native managed lowering remain unavailable. The exact static-string native/reference original does not qualify managed runtime support.",
-       "evidence" : []
+        ]
+      },
+      "id": "go.shared-managed-compiler-contracts",
+      "scope": "Compiler-only shared managed storage contracts preserving Go nominal identities, scalar payload facts, unresolved pointer provenance/aggregate tracing/interface boxing obligations, and static versus owner-relative managed string spans. Current static-string lowering consumes the common immutable static span without changing its pointer/length ABI. Full interface/itable/typed-nil/equality, managed allocation, GC registration, roots and native managed lowering remain unavailable. The exact static-string native/reference original does not qualify managed runtime support.",
+      "evidence": []
     },
     {
       "id": "go.expression-switch.scalar",
@@ -598,19 +598,19 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:83f39e865fc575db091b711af6c88ad9bfcfaacb5a394b7b2010bf04e2a81ceb",
+        "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
         "sources": [
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "065fa0df8c0185275970d33c8bdb751a5de83994aedbf5a29f3d7005ad92d738"
+            "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
           },
           {
             "path": "pcc/frontends/go/lowering.py",
-            "sha256": "d582159adbd9d1aba0690253f98f1a34e0746aa030841e8085ffc29e0c81b953"
+            "sha256": "ca9441e5c8928cad18651922d190d462a88aeacf9a5d39052e2fbb2c15898eeb"
           },
           {
             "path": "pcc/frontends/go/diagnostics.py",
-            "sha256": "2f2931db825891a38b2f6b63c0162a03904e67671804b43775781bbb02063054"
+            "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
           }
         ]
       },
@@ -620,7 +620,7 @@
           "kind": "full-feature",
           "scope": "Aggregate comparison declared CI obligations, not whole Go",
           "status": "unrun",
-          "source_revision": "sha256:83f39e865fc575db091b711af6c88ad9bfcfaacb5a394b7b2010bf04e2a81ceb",
+          "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
           "mode": "pcc0",
           "platform": "linux-x86_64",
           "backend": "self",
@@ -641,7 +641,7 @@
             "tests/go/test_aggregate_equality.py::test_identical_imported_record_graph_matches_official_raw_streams"
           ],
           "evidence": [],
-          "reason": "Source implementation and CI tests authored; no local imports, tests, compiler calls or execution probes were run for this change."
+          "reason": "Source bindings refreshed for the interface mechanism; execution remains CI-only UNRUN. No historical acceptance evidence is renewed."
         }
       ]
     },
@@ -671,19 +671,19 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:83f39e865fc575db091b711af6c88ad9bfcfaacb5a394b7b2010bf04e2a81ceb",
+        "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
         "sources": [
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "065fa0df8c0185275970d33c8bdb751a5de83994aedbf5a29f3d7005ad92d738"
+            "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
           },
           {
             "path": "pcc/frontends/go/lowering.py",
-            "sha256": "d582159adbd9d1aba0690253f98f1a34e0746aa030841e8085ffc29e0c81b953"
+            "sha256": "ca9441e5c8928cad18651922d190d462a88aeacf9a5d39052e2fbb2c15898eeb"
           },
           {
             "path": "pcc/frontends/go/diagnostics.py",
-            "sha256": "2f2931db825891a38b2f6b63c0162a03904e67671804b43775781bbb02063054"
+            "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
           }
         ]
       },
@@ -693,7 +693,7 @@
           "kind": "full-feature",
           "scope": "Aggregate switch declared CI obligations, not whole Go",
           "status": "unrun",
-          "source_revision": "sha256:83f39e865fc575db091b711af6c88ad9bfcfaacb5a394b7b2010bf04e2a81ceb",
+          "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
           "mode": "pcc0",
           "platform": "linux-x86_64",
           "backend": "self",
@@ -714,7 +714,7 @@
             "tests/go/test_aggregate_equality.py::test_identical_imported_record_graph_matches_official_raw_streams"
           ],
           "evidence": [],
-          "reason": "Source implementation and CI tests authored; no local imports, tests, compiler calls or execution probes were run for this change."
+          "reason": "Source bindings refreshed for the interface mechanism; execution remains CI-only UNRUN. No historical acceptance evidence is renewed."
         }
       ]
     },
@@ -960,7 +960,7 @@
       "chapter_ids": [
         "interfaces"
       ],
-      "scope": "General interface types, predeclared any, concrete interface values, dispatch and runtime-bearing interface storage remain unsupported. The bounded nil-only local error-value source implementation is recorded separately under go.interfaces.nil-error-values; this historical whole-capability status and evidence are not renewed.",
+      "scope": "General interface values, concrete boxing, dispatch, assertions, equality and runtime-bearing storage remain explicitly unimplemented. Basic declarations, canonical signatures, method sets and unresolved compiler plans are separately recorded; only existing exact Error() string nil-only transport reaches IR. This whole-runtime capability and its historical evidence are not renewed.",
       "status": "explicitly_unimplemented",
       "tests": [
         "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
@@ -1171,15 +1171,15 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:92a7e9063d6ae07fc9a49a9d4577550e64c397512db098232ff5d22ae27c4dde",
+        "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
         "sources": [
           {
             "path": "pcc/frontends/go/diagnostics.py",
-            "sha256": "da1fdba17084acebd913f89c44d6434f3320ba8107d7a6fba16e7879e3613350"
+            "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
           },
           {
             "path": "pcc/frontends/go/lowering.py",
-            "sha256": "37ea63a43edc23e5973e6bc78a7adebafe17e28931ee7db610fb7e1325bd6312"
+            "sha256": "ca9441e5c8928cad18651922d190d462a88aeacf9a5d39052e2fbb2c15898eeb"
           },
           {
             "path": "pcc/frontends/go/pointer_flow.py",
@@ -1187,7 +1187,7 @@
           },
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "163efd5688bbf9af61ebbdef7b1087ecb25e76210a632a4fa3e90b7154abb41f"
+            "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
           }
         ]
       },
@@ -1197,7 +1197,7 @@
           "kind": "full-feature",
           "scope": "Bounded string-range authored spec/native/official-Go same-input CI obligations, not whole Go",
           "status": "unrun",
-          "source_revision": "sha256:92a7e9063d6ae07fc9a49a9d4577550e64c397512db098232ff5d22ae27c4dde",
+          "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
           "mode": "pcc0",
           "platform": "linux-x86_64",
           "backend": "self",
@@ -1214,7 +1214,7 @@
             "tests/go/test_string_range.py::test_official_go_rejects_identical_invalid_string_ranges"
           ],
           "evidence": [],
-          "reason": "Source and CI obligations authored only; no local imports, tests, compiler invocations, probes or collection. Native pcc1 and Mac execution are also UNRUN."
+          "reason": "Source bindings refreshed for the interface mechanism; execution remains CI-only UNRUN. No historical acceptance evidence is renewed."
         }
       ]
     },
@@ -1474,19 +1474,19 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:3d3d7f59ceb97acbe36a6bf702dd8a0bf6cf602c1853d49407ea1bb874038af3",
+        "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
         "sources": [
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "305ef19b748855cd4892080037383da98573dce89949739ea5d7a244953fea3b"
+            "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
           },
           {
             "path": "pcc/frontends/go/pointer_flow.py",
-            "sha256": "7e631d54bc2f7591009244a2191b8099018194b70aec1fd586c5d84c21c5005c"
+            "sha256": "408a857ee31da2514c9abd75be0bfd2f170b7bef49085e6f7c199e9bc344b041"
           },
           {
             "path": "pcc/frontends/go/diagnostics.py",
-            "sha256": "8bd73dfdb4ab15e59669bf9e2dadef2b245f28da6817cefb44f2f8d57e99a132"
+            "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
           }
         ]
       },
@@ -1496,7 +1496,7 @@
           "kind": "full-feature",
           "scope": "Declared complete pointer-switch test obligations, not whole Go",
           "status": "unrun",
-          "source_revision": "sha256:3d3d7f59ceb97acbe36a6bf702dd8a0bf6cf602c1853d49407ea1bb874038af3",
+          "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
           "mode": "pcc0",
           "platform": "linux-x86_64",
           "backend": "self",
@@ -1514,7 +1514,7 @@
             "tests/go/test_pointer_switches.py::test_official_go_builds_identical_unsupported_switch_frontiers_without_execution"
           ],
           "evidence": [],
-          "reason": "Source and CI tests authored; no local tests, compiler calls or execution probes were run for this change."
+          "reason": "Source bindings refreshed for the interface mechanism; execution remains CI-only UNRUN. No historical acceptance evidence is renewed."
         }
       ]
     },
@@ -1670,27 +1670,27 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:43bc1c92e1cfd0a9a6459f7f9317300dc017919e3043b8ba6764161230ead862",
+        "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
         "sources": [
           {
             "path": "pcc/frontends/go/generics.py",
-            "sha256": "5bc31fbd4add7005319a3d2ebaa18d1d699bd84f1583360e44bb1004a7017ee5"
+            "sha256": "8e63f64ba21ae4e8fe204c62de0f5e5c7695ef81fab2c98e23160508c67cc0ae"
           },
           {
             "path": "pcc/frontends/go/syntax.py",
-            "sha256": "6f98a85d3a99e20a9952027fe0e45033042bf1d33138c744b60f8ce7d0c8ffe8"
+            "sha256": "04e25aca94c499e72c38f166b92f5cb701402ffa70c80bec393204f0daa9777a"
           },
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "aa732e77f2634feeefb84de439b187baf31b784402805ff05e97eeb6b2912ac5"
+            "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
           },
           {
             "path": "pcc/frontends/go/packages.py",
-            "sha256": "d405a56f7941a707d6885d0e9d3e470fd1272868c54121777fd5d4bb2821a395"
+            "sha256": "cb32cc02f1c04f400dbe46fb32c849cb999ff1e86cb0ad4a1002ed763c4d992c"
           },
           {
             "path": "pcc/frontends/go/diagnostics.py",
-            "sha256": "a75dffa6f4a5fb699fda2d88b7868c572b74cfb296c7dd72f5d3cf916ff4418b"
+            "sha256": "985c7c79956df8f5622d008b2013ad8c22f1ebbbb5cf7d106bfd61f7bb88e616"
           },
           {
             "path": "pcc/support/instantiation.py",
@@ -1704,7 +1704,7 @@
           "kind": "full-feature",
           "scope": "Declared bounded generic value function CI obligations, not complete Go generics",
           "status": "unrun",
-          "source_revision": "sha256:43bc1c92e1cfd0a9a6459f7f9317300dc017919e3043b8ba6764161230ead862",
+          "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
           "mode": "pcc0",
           "platform": "linux-x86_64",
           "backend": "self",
@@ -1727,7 +1727,7 @@
             "tests/go/test_generic_functions.py::test_malformed_constraint_syntax_is_not_an_unsupported_capability"
           ],
           "evidence": [],
-          "reason": "Source implementation and CI originals authored; no local imports, tests, compiler calls or execution probes were run."
+          "reason": "Source bindings refreshed for the interface mechanism; execution remains CI-only UNRUN. No historical acceptance evidence is renewed."
         }
       ]
     },
@@ -1781,7 +1781,7 @@
         "type-declarations",
         "methods"
       ],
-      "scope": "Source implementation of canonical predeclared error identity and values with no dynamic type/value: local zero/nil initialization and conversion, aliases and defined interfaces with the same Error() string method set, copying, direct parameters/results including multiple and named results, equality and operand evaluation. Exact method signatures distinguish invalid assignment from unsupported concrete boxing. Concrete values, dispatch, general interfaces/any, interface switches, aggregates, pointers, generic type arguments and package interface storage remain closed. Private null-word transport is not the official Go interface ABI; unchanged math/bits still requires unsafe initialization, runtime/linkname ownership and genuine interface panic behavior. No project acceptance is claimed.",
+      "scope": "Source implementation of canonical predeclared error identity and values with no dynamic type/value: local zero/nil initialization and conversion, aliases and defined interfaces with the same Error() string method set, copying, direct parameters/results including multiple and named results, equality and operand evaluation. Exact method signatures distinguish invalid assignment from unsupported concrete boxing. Concrete values, dispatch, general interface/any values, interface switches, aggregates, pointers, generic type arguments and package interface storage remain closed. Private null-word transport is not the official Go interface ABI; unchanged math/bits still requires unsafe initialization, runtime/linkname ownership and genuine interface panic behavior. No project acceptance is claimed.",
       "tests": [
         "tests/go/test_error_nil_values.py::test_predeclared_error_is_canonical_and_not_a_semantic_pointer_or_string",
         "tests/go/test_error_nil_values.py::test_zero_nil_copy_alias_and_direct_call_paths_keep_owned_ir",
@@ -1800,31 +1800,31 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:f23b9037eb446f59d5d95126a255ae95c561aed85deb6d97f3938b9890d29c07",
+        "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
         "sources": [
           {
             "path": "pcc/frontends/go/types.py",
-            "sha256": "018996cd93512e4cdf84489da7103cda390688fcca2e9e01b2503a58fbee95b1"
+            "sha256": "813795bf7e42a265de4099ff1b0586cdf3811411a07e70497bbc2782e4568c06"
           },
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "35f57d4be91ccf6fdc397b80ec7e55eab123fe0828e028e683a82d4bedd7bb4c"
+            "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
           },
           {
             "path": "pcc/frontends/go/generics.py",
-            "sha256": "622a85968b4a7645f73aef7c66d6c13799b262033cbc5415f16c15f80dc3b883"
+            "sha256": "8e63f64ba21ae4e8fe204c62de0f5e5c7695ef81fab2c98e23160508c67cc0ae"
           },
           {
             "path": "pcc/frontends/go/lowering.py",
-            "sha256": "dee88b3f772a0f6da6190d029c03a7bb13bb3939148930ec64fab57f201dd5fc"
+            "sha256": "ca9441e5c8928cad18651922d190d462a88aeacf9a5d39052e2fbb2c15898eeb"
           },
           {
             "path": "pcc/frontends/go/syntax.py",
-            "sha256": "5e558b2af51b8972248140bdf098c0960c3af1188309734c119d465c312b897a"
+            "sha256": "04e25aca94c499e72c38f166b92f5cb701402ffa70c80bec393204f0daa9777a"
           },
           {
             "path": "pcc/frontends/go/records.py",
-            "sha256": "55b04fff9dd6d5c483120bcf7a082a6fff5b7ab95cae24b47faa7edd8902d359"
+            "sha256": "5a638741ed3738b9341f5ea585ae5bafa5113a69b4d184d293dcc72be495a406"
           },
           {
             "path": "pcc/frontends/go/pointer_flow.py",
@@ -1832,7 +1832,7 @@
           },
           {
             "path": "pcc/frontends/go/packages.py",
-            "sha256": "6b3d1319cf430abc4e1628fd0f2a9b5c06b4ed19cc0de31aee8c40d05d671ff8"
+            "sha256": "cb32cc02f1c04f400dbe46fb32c849cb999ff1e86cb0ad4a1002ed763c4d992c"
           }
         ]
       },
@@ -1842,7 +1842,7 @@
           "kind": "full-feature",
           "scope": "Complete declared nil-error source, native full-width/original-main and identical official-Go obligations, not complete interfaces or original math/bits acceptance",
           "status": "unrun",
-          "source_revision": "sha256:f23b9037eb446f59d5d95126a255ae95c561aed85deb6d97f3938b9890d29c07",
+          "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
           "mode": "pcc0",
           "platform": "linux-x86_64",
           "backend": "self",
@@ -1862,7 +1862,255 @@
             "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
           ],
           "evidence": [],
-          "reason": "Source and CI-only obligations authored and independently source-reviewed. No local project imports, collection, tests, compilers or programs executed. Native pcc1 and user-Mac execution are also UNRUN."
+          "reason": "Source bindings refreshed for the interface mechanism; execution remains CI-only UNRUN. No historical acceptance evidence is renewed."
+        }
+      ]
+    },
+    {
+      "id": "go.interfaces.method-set-value-plans",
+      "title": "Basic interface method sets and unresolved value plans",
+      "chapter_ids": [
+        "interfaces",
+        "methods",
+        "properties",
+        "assignment",
+        "comparison"
+      ],
+      "scope": "Compiler-only exact T/*T method sets, breadth-first field hiding and distinct-path ambiguity, import-path-private method identity, exact signatures and nominal types. Shared unresolved storage/box/transfer/itable/equality plans retain typed nil, dynamic identity, receiver projections, effects, copy/root and panic obligations. No physical ABI, allocation, GC registration, dispatch, assertions or equality lowering; embedded-field source storage remains unavailable.",
+      "tests": [
+        "tests/go/test_interface_methods.py::test_pointer_membership_is_not_addressable_call_permission",
+        "tests/go/test_interface_methods.py::test_signatures_use_nominal_types_results_and_variadicness",
+        "tests/go/test_interface_methods.py::test_private_member_identity_uses_import_path_not_spelling",
+        "tests/go/test_interface_methods.py::test_embedding_preserves_distinct_paths_shallow_hiding_and_field_conflicts",
+        "tests/go/test_interface_methods.py::test_recursive_pointer_embedding_terminates_without_inventing_methods",
+        "tests/go/test_interface_methods.py::test_embedded_pointer_and_interface_methods_retain_adjustment_obligations",
+        "tests/go/test_interface_methods.py::test_interface_merge_preserves_explicit_uniqueness_and_embedded_compatibility",
+        "tests/go/test_interface_methods.py::test_complete_dynamic_original_remains_explicitly_unimplemented",
+        "tests/go/test_interface_methods.py::test_exact_dynamic_contract_has_official_reference_only_execution",
+        "tests/go/test_interface_value_plans.py::test_nil_typed_nil_and_unknown_identity_are_three_different_states",
+        "tests/go/test_interface_value_plans.py::test_nominal_identity_survives_boxing_instead_of_layout_equivalence",
+        "tests/go/test_interface_value_plans.py::test_boxing_does_not_erase_copy_root_or_dynamic_type_requirements",
+        "tests/go/test_interface_value_plans.py::test_itable_cannot_crosswire_implementation_or_receiver_projection",
+        "tests/go/test_interface_value_plans.py::test_transfer_checks_static_inclusion_without_boxing_the_interface_type",
+        "tests/go/test_interface_value_plans.py::test_equality_known_facts_never_discard_evaluation_or_runtime_obligations",
+        "tests/go/test_interface_value_plans.py::test_equality_rejects_incompatible_static_method_sets",
+        "tests/go/test_interface_value_plans.py::test_equality_rejects_mutable_or_fabricated_requirement_containers"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
+        "sources": [
+          {
+            "path": "pcc/frontends/go/interface_methods.py",
+            "sha256": "3b9fd903091156f06b8ad102bf7b98fe4de9ecf7508f1d8dee5eaa7dfe05da90"
+          },
+          {
+            "path": "pcc/frontends/go/interface_values.py",
+            "sha256": "c1d90a23505f6b1b8650a0b3ab78c0d6ebfc61cd7d2fd4eb86dc52e7fd48c8cd"
+          },
+          {
+            "path": "pcc/frontends/go/records.py",
+            "sha256": "5a638741ed3738b9341f5ea585ae5bafa5113a69b4d184d293dcc72be495a406"
+          },
+          {
+            "path": "pcc/frontends/go/types.py",
+            "sha256": "813795bf7e42a265de4099ff1b0586cdf3811411a07e70497bbc2782e4568c06"
+          },
+          {
+            "path": "pcc/frontends/go/managed_objects.py",
+            "sha256": "9256fdeac77a95fa175ade691e8d485d35a6380e72298eb7555ac1b524d30efd"
+          },
+          {
+            "path": "pcc/support/managed_objects.py",
+            "sha256": "44478862083f495926f4031609b66115044dd18f6b98231807be90721e2f8d23"
+          },
+          {
+            "path": "tests/go/test_interface_methods.py",
+            "sha256": "47dc876eceb9a5a019d28a3e5749cea36f9c6b5c6994755a843e13da283a5ced"
+          },
+          {
+            "path": "tests/go/test_interface_value_plans.py",
+            "sha256": "c9d3ecc7e18a0823ace42475aafb393ed56b3817a39dc7bdd03cfbc2d2e9f0db"
+          },
+          {
+            "path": "tests/go/fixtures/interface_source/dynamic_contract.go",
+            "sha256": "4272d993b5b4ad8b83348cc4aced9e28777fbb60f7cf81a28a144a06c9da50d2"
+          }
+        ]
+      },
+      "acceptance": [
+        {
+          "id": "ci-only",
+          "kind": "full-feature",
+          "scope": "Compiler-only exact T/*T method sets, breadth-first field hiding and distinct-path ambiguity, import-path-private method identity, exact signatures and nominal types. Shared unresolved storage/box/transfer/itable/equality plans retain typed nil, dynamic identity, receiver projections, effects, copy/root and panic obligations. No physical ABI, allocation, GC registration, dispatch, assertions or equality lowering; embedded-field source storage remains unavailable.",
+          "status": "unrun",
+          "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
+          "mode": "pcc0",
+          "platform": "linux-x86_64",
+          "backend": "self",
+          "gc": "not_applicable",
+          "required_tests": [
+            "tests/go/test_interface_methods.py::test_pointer_membership_is_not_addressable_call_permission",
+            "tests/go/test_interface_methods.py::test_signatures_use_nominal_types_results_and_variadicness",
+            "tests/go/test_interface_methods.py::test_private_member_identity_uses_import_path_not_spelling",
+            "tests/go/test_interface_methods.py::test_embedding_preserves_distinct_paths_shallow_hiding_and_field_conflicts",
+            "tests/go/test_interface_methods.py::test_recursive_pointer_embedding_terminates_without_inventing_methods",
+            "tests/go/test_interface_methods.py::test_embedded_pointer_and_interface_methods_retain_adjustment_obligations",
+            "tests/go/test_interface_methods.py::test_interface_merge_preserves_explicit_uniqueness_and_embedded_compatibility",
+            "tests/go/test_interface_methods.py::test_complete_dynamic_original_remains_explicitly_unimplemented",
+            "tests/go/test_interface_methods.py::test_exact_dynamic_contract_has_official_reference_only_execution",
+            "tests/go/test_interface_value_plans.py::test_nil_typed_nil_and_unknown_identity_are_three_different_states",
+            "tests/go/test_interface_value_plans.py::test_nominal_identity_survives_boxing_instead_of_layout_equivalence",
+            "tests/go/test_interface_value_plans.py::test_boxing_does_not_erase_copy_root_or_dynamic_type_requirements",
+            "tests/go/test_interface_value_plans.py::test_itable_cannot_crosswire_implementation_or_receiver_projection",
+            "tests/go/test_interface_value_plans.py::test_transfer_checks_static_inclusion_without_boxing_the_interface_type",
+            "tests/go/test_interface_value_plans.py::test_equality_known_facts_never_discard_evaluation_or_runtime_obligations",
+            "tests/go/test_interface_value_plans.py::test_equality_rejects_incompatible_static_method_sets",
+            "tests/go/test_interface_value_plans.py::test_equality_rejects_mutable_or_fabricated_requirement_containers"
+          ],
+          "evidence": [],
+          "reason": "Authored source/model, native and same-input reference obligations only; all execution is delegated to CI. General interface originals are reference-only and do not qualify PCC runtime support."
+        }
+      ]
+    },
+    {
+      "id": "go.interfaces.basic-source-resolution",
+      "title": "Basic interface source resolution and canonical signatures",
+      "chapter_ids": [
+        "interfaces",
+        "function-types",
+        "type-declarations",
+        "properties",
+        "packages"
+      ],
+      "scope": "Source declarations and signature metadata: canonical named placeholders, aliases, exact method signatures and variadicness, compatible embedded-interface merging, package-private identities and named signature recursion. Invalid embedding/value-containment cycles remain errors; recursively expanded anonymous signatures, general type sets and generic applications remain explicit capability boundaries. General values are blocked before Lowerer, including unused signatures, zero arrays and ignored conversions. Only existing error-compatible nil transport is admitted. No original math/bits or general interface runtime acceptance.",
+      "tests": [
+        "tests/go/test_interface_source.py::test_complete_declaration_original_has_owned_lowering",
+        "tests/go/test_interface_source.py::test_named_identity_and_aliases_survive_deepcopy_and_recursive_signatures",
+        "tests/go/test_interface_source.py::test_underlying_name_chains_do_not_copy_an_incomplete_placeholder",
+        "tests/go/test_interface_source.py::test_alias_signature_anchors_do_not_legalize_recursive_value_containment",
+        "tests/go/test_interface_source.py::test_recursive_anonymous_signature_is_capability_not_invalid_source",
+        "tests/go/test_interface_source.py::test_outer_signature_does_not_hide_independent_embedding_cycle",
+        "tests/go/test_interface_source.py::test_signature_only_declarations_do_not_require_runtime_storage",
+        "tests/go/test_interface_source.py::test_invalid_interface_originals_are_validity_errors_before_ir",
+        "tests/go/test_interface_source.py::test_general_interface_storage_never_reaches_lowerer",
+        "tests/go/test_interface_source.py::test_generic_signature_application_is_a_capability_boundary",
+        "tests/go/test_interface_source.py::test_malformed_type_arguments_remain_syntax_errors",
+        "tests/go/test_interface_source.py::test_import_path_not_package_spelling_owns_private_interface_names",
+        "tests/go/test_interface_source.py::test_qualified_generic_embedding_keeps_explicit_capability_boundary",
+        "tests/go/test_interface_source.py::test_complete_declaration_original_executes_owned_native",
+        "tests/go/test_interface_source.py::test_identical_declaration_original_has_real_reference_execution",
+        "tests/go/test_interface_source.py::test_original_package_declarations_have_reference_execution",
+        "tests/go/test_interface_source.py::test_qualified_generic_embedding_has_reference_only_execution",
+        "tests/go/test_interface_source.py::test_preserved_valid_originals_keep_explicit_capability_boundary",
+        "tests/go/test_interface_source.py::test_preserved_valid_frontiers_have_reference_only_execution",
+        "tests/go/test_interface_source.py::test_invalid_originals_have_attributed_official_rejections"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
+        "sources": [
+          {
+            "path": "pcc/frontends/go/syntax.py",
+            "sha256": "04e25aca94c499e72c38f166b92f5cb701402ffa70c80bec393204f0daa9777a"
+          },
+          {
+            "path": "pcc/frontends/go/sema.py",
+            "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
+          },
+          {
+            "path": "pcc/frontends/go/packages.py",
+            "sha256": "cb32cc02f1c04f400dbe46fb32c849cb999ff1e86cb0ad4a1002ed763c4d992c"
+          },
+          {
+            "path": "pcc/frontends/go/generics.py",
+            "sha256": "8e63f64ba21ae4e8fe204c62de0f5e5c7695ef81fab2c98e23160508c67cc0ae"
+          },
+          {
+            "path": "pcc/frontends/go/records.py",
+            "sha256": "5a638741ed3738b9341f5ea585ae5bafa5113a69b4d184d293dcc72be495a406"
+          },
+          {
+            "path": "pcc/frontends/go/types.py",
+            "sha256": "813795bf7e42a265de4099ff1b0586cdf3811411a07e70497bbc2782e4568c06"
+          },
+          {
+            "path": "pcc/frontends/go/interface_methods.py",
+            "sha256": "3b9fd903091156f06b8ad102bf7b98fe4de9ecf7508f1d8dee5eaa7dfe05da90"
+          },
+          {
+            "path": "pcc/frontends/go/interface_values.py",
+            "sha256": "c1d90a23505f6b1b8650a0b3ab78c0d6ebfc61cd7d2fd4eb86dc52e7fd48c8cd"
+          },
+          {
+            "path": "tests/go/test_interface_source.py",
+            "sha256": "21645862cc53818415ad65dba5f7d603f0f0ba4693914dd9eb97acde571adfd5"
+          },
+          {
+            "path": "tests/go/fixtures/interface_source/declarations.go",
+            "sha256": "5cbf582a6c6198e1860b2a76cc6b66437c5903cebbf72f2641c349d5e57fff5c"
+          },
+          {
+            "path": "tests/go/fixtures/interface_source/generic_packages/main.go",
+            "sha256": "efa94ccea8bbee43dc57b13ecb4a61b22d68d2b857d54c75a39a5263816462ac"
+          },
+          {
+            "path": "tests/go/fixtures/interface_source/generic_packages/p/types.go",
+            "sha256": "e563d626bf24bfe105c0767de931bca5ba5b8c6084579882b01b5c2a4c118b78"
+          },
+          {
+            "path": "tests/go/fixtures/interface_source/valid_but_unimplemented/generic_signature_instantiation.go",
+            "sha256": "360fad90db833f0c602d7463254929da7f9e53c20b021fd7d96c488ac56b7b03"
+          },
+          {
+            "path": "tests/go/fixtures/interface_source/valid_but_unimplemented/recursive_anonymous_signature.go",
+            "sha256": "2e167fe9521fd7914d01ecf9acdbef3609043357dc5bf4e0680bfba2eed74a91"
+          },
+          {
+            "path": "tests/go/fixtures/source_interface_declarations.go",
+            "sha256": "cf0b221c7cde10c081765a6dee12ffca08a2b6e5e488537e9197824fcd555487"
+          }
+        ]
+      },
+      "acceptance": [
+        {
+          "id": "ci-only",
+          "kind": "full-feature",
+          "scope": "Source declarations and signature metadata: canonical named placeholders, aliases, exact method signatures and variadicness, compatible embedded-interface merging, package-private identities and named signature recursion. Invalid embedding/value-containment cycles remain errors; recursively expanded anonymous signatures, general type sets and generic applications remain explicit capability boundaries. General values are blocked before Lowerer, including unused signatures, zero arrays and ignored conversions. Only existing error-compatible nil transport is admitted. No original math/bits or general interface runtime acceptance.",
+          "status": "unrun",
+          "source_revision": "sha256:d09cde4aed096b106238b46b8aeaab7545fae25c43b4e26784851110fffd30e9",
+          "mode": "pcc0",
+          "platform": "linux-x86_64",
+          "backend": "self",
+          "gc": "not_applicable",
+          "required_tests": [
+            "tests/go/test_interface_source.py::test_complete_declaration_original_has_owned_lowering",
+            "tests/go/test_interface_source.py::test_named_identity_and_aliases_survive_deepcopy_and_recursive_signatures",
+            "tests/go/test_interface_source.py::test_underlying_name_chains_do_not_copy_an_incomplete_placeholder",
+            "tests/go/test_interface_source.py::test_alias_signature_anchors_do_not_legalize_recursive_value_containment",
+            "tests/go/test_interface_source.py::test_recursive_anonymous_signature_is_capability_not_invalid_source",
+            "tests/go/test_interface_source.py::test_outer_signature_does_not_hide_independent_embedding_cycle",
+            "tests/go/test_interface_source.py::test_signature_only_declarations_do_not_require_runtime_storage",
+            "tests/go/test_interface_source.py::test_invalid_interface_originals_are_validity_errors_before_ir",
+            "tests/go/test_interface_source.py::test_general_interface_storage_never_reaches_lowerer",
+            "tests/go/test_interface_source.py::test_generic_signature_application_is_a_capability_boundary",
+            "tests/go/test_interface_source.py::test_malformed_type_arguments_remain_syntax_errors",
+            "tests/go/test_interface_source.py::test_import_path_not_package_spelling_owns_private_interface_names",
+            "tests/go/test_interface_source.py::test_qualified_generic_embedding_keeps_explicit_capability_boundary",
+            "tests/go/test_interface_source.py::test_complete_declaration_original_executes_owned_native",
+            "tests/go/test_interface_source.py::test_identical_declaration_original_has_real_reference_execution",
+            "tests/go/test_interface_source.py::test_original_package_declarations_have_reference_execution",
+            "tests/go/test_interface_source.py::test_qualified_generic_embedding_has_reference_only_execution",
+            "tests/go/test_interface_source.py::test_preserved_valid_originals_keep_explicit_capability_boundary",
+            "tests/go/test_interface_source.py::test_preserved_valid_frontiers_have_reference_only_execution",
+            "tests/go/test_interface_source.py::test_invalid_originals_have_attributed_official_rejections"
+          ],
+          "evidence": [],
+          "reason": "Authored source/model, native and same-input reference obligations only; all execution is delegated to CI. General interface originals are reference-only and do not qualify PCC runtime support."
         }
       ]
     }
@@ -2188,7 +2436,7 @@
         "message": "'Go scalar frontend requires a supported 64-bit target'",
         "source": {
           "path": "pcc/frontends/go/packages.py",
-          "sha256": "6b3d1319cf430abc4e1628fd0f2a9b5c06b4ed19cc0de31aee8c40d05d671ff8"
+          "sha256": "cb32cc02f1c04f400dbe46fb32c849cb999ff1e86cb0ad4a1002ed763c4d992c"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2196,7 +2444,7 @@
         "message": "f'unsupported character {char!r}'",
         "source": {
           "path": "pcc/frontends/go/syntax.py",
-          "sha256": "5e558b2af51b8972248140bdf098c0960c3af1188309734c119d465c312b897a"
+          "sha256": "04e25aca94c499e72c38f166b92f5cb701402ffa70c80bec393204f0daa9777a"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2204,7 +2452,7 @@
         "message": "'unsupported package: initial frontend requires package main'",
         "source": {
           "path": "pcc/frontends/go/syntax.py",
-          "sha256": "5e558b2af51b8972248140bdf098c0960c3af1188309734c119d465c312b897a"
+          "sha256": "04e25aca94c499e72c38f166b92f5cb701402ffa70c80bec393204f0daa9777a"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2212,7 +2460,7 @@
         "message": "f'unsupported statement {token.text!r}'",
         "source": {
           "path": "pcc/frontends/go/syntax.py",
-          "sha256": "5e558b2af51b8972248140bdf098c0960c3af1188309734c119d465c312b897a"
+          "sha256": "04e25aca94c499e72c38f166b92f5cb701402ffa70c80bec393204f0daa9777a"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2220,7 +2468,7 @@
         "message": "'unsupported or invalid import path'",
         "source": {
           "path": "pcc/frontends/go/syntax.py",
-          "sha256": "5e558b2af51b8972248140bdf098c0960c3af1188309734c119d465c312b897a"
+          "sha256": "04e25aca94c499e72c38f166b92f5cb701402ffa70c80bec393204f0daa9777a"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2228,7 +2476,7 @@
         "message": "'unsupported for clause'",
         "source": {
           "path": "pcc/frontends/go/syntax.py",
-          "sha256": "5e558b2af51b8972248140bdf098c0960c3af1188309734c119d465c312b897a"
+          "sha256": "04e25aca94c499e72c38f166b92f5cb701402ffa70c80bec393204f0daa9777a"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2236,7 +2484,7 @@
         "message": "'only named function calls/conversions are supported'",
         "source": {
           "path": "pcc/frontends/go/syntax.py",
-          "sha256": "5e558b2af51b8972248140bdf098c0960c3af1188309734c119d465c312b897a"
+          "sha256": "04e25aca94c499e72c38f166b92f5cb701402ffa70c80bec393204f0daa9777a"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2244,7 +2492,7 @@
         "message": "'unsupported package declaration; expected func, const or var'",
         "source": {
           "path": "pcc/frontends/go/syntax.py",
-          "sha256": "5e558b2af51b8972248140bdf098c0960c3af1188309734c119d465c312b897a"
+          "sha256": "04e25aca94c499e72c38f166b92f5cb701402ffa70c80bec393204f0daa9777a"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2252,7 +2500,7 @@
         "message": "f'unsupported expression token {token.text!r}'",
         "source": {
           "path": "pcc/frontends/go/syntax.py",
-          "sha256": "5e558b2af51b8972248140bdf098c0960c3af1188309734c119d465c312b897a"
+          "sha256": "04e25aca94c499e72c38f166b92f5cb701402ffa70c80bec393204f0daa9777a"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2260,7 +2508,7 @@
         "message": "'invalid or unsupported integer literal ' + repr(text)",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "35f57d4be91ccf6fdc397b80ec7e55eab123fe0828e028e683a82d4bedd7bb4c"
+          "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2268,7 +2516,7 @@
         "message": "'unsupported statement ' + kind",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "35f57d4be91ccf6fdc397b80ec7e55eab123fe0828e028e683a82d4bedd7bb4c"
+          "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2276,7 +2524,7 @@
         "message": "'unsupported expression ' + kind",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "35f57d4be91ccf6fdc397b80ec7e55eab123fe0828e028e683a82d4bedd7bb4c"
+          "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2284,7 +2532,7 @@
         "message": "'switch requires a comparable type'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "35f57d4be91ccf6fdc397b80ec7e55eab123fe0828e028e683a82d4bedd7bb4c"
+          "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2292,7 +2540,7 @@
         "message": "'range currently requires a fixed array or integer, a string, or a pointer to a fixed array; other iterator/runtime contracts are not implemented'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "35f57d4be91ccf6fdc397b80ec7e55eab123fe0828e028e683a82d4bedd7bb4c"
+          "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2300,7 +2548,7 @@
         "message": "'indexing requires an array or string (slices/maps are not implemented)'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "35f57d4be91ccf6fdc397b80ec7e55eab123fe0828e028e683a82d4bedd7bb4c"
+          "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2308,7 +2556,7 @@
         "message": "'first-class method expressions require function-value support'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "35f57d4be91ccf6fdc397b80ec7e55eab123fe0828e028e683a82d4bedd7bb4c"
+          "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2316,7 +2564,7 @@
         "message": "'unsupported string operator ' + op",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "35f57d4be91ccf6fdc397b80ec7e55eab123fe0828e028e683a82d4bedd7bb4c"
+          "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -2324,7 +2572,7 @@
         "message": "'unsupported comparison operands'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "35f57d4be91ccf6fdc397b80ec7e55eab123fe0828e028e683a82d4bedd7bb4c"
+          "sha256": "19abaa2003be1ca79240e5acf4fff00a911590f4ab4ca702ca61b21b93d5724a"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       }

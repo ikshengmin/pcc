@@ -10,13 +10,23 @@ import re
 import unicodedata
 
 from pcc.frontends.go.diagnostics import UnsupportedGo
+from pcc.frontends.go.interface_methods import (
+    basic_interface, interface_type, method_set, require_implements,
+)
+from pcc.frontends.go.interface_values import (
+    boxed_interface_plan, interface_storage_plan, nil_interface_plan, transferred_interface_plan,
+)
 from pcc.frontends.go.generics import GenericSession, TypeParameter, comparable, contains_parameter
 from pcc.frontends.go.syntax import (
-    ArraySyntax, Expr, GoDiagnostic, PointerSyntax, Stmt, StructSyntax, TypeName,
+    ArraySyntax, Expr, GoDiagnostic, InterfaceMethodSyntax, InterfaceSyntax,
+    PointerSyntax, SliceSyntax, Stmt, StructSyntax, TypeName,
 )
-from pcc.frontends.go.records import DefinedType, Field, StructType, underlying, is_named, same_underlying
+from pcc.frontends.go.records import (
+    DefinedType, Field, InterfaceMethod, MethodSignature, StructType,
+    underlying, is_named, same_underlying,
+)
 from pcc.frontends.go.types import (
-    ArrayType, PointerType, Results, TYPE_NAMES, TYPES,
+    ArrayType, PointerType, Results, SliceType, TYPE_NAMES, TYPES,
     result_types, integer_bits, integer_bounds, integer_signed, is_integer, is_string,
     is_error_interface,
 )
@@ -132,21 +142,34 @@ def check_representable(expr):
 
 
 def coerce(expr, dtype):
-    if is_error_interface(dtype):
-        if expr.type == "untyped nil" or is_error_interface(expr.type):
+    if interface_type(dtype) is not None:
+        # Only the existing exact Error() string domain has nil-only transport.
+        # An equivalent basic declaration does not admit any concrete payload.
+        if is_error_interface(dtype) and (expr.type == "untyped nil" or is_error_interface(expr.type)):
             expr.type = dtype
             return
-        # An addressable T does not acquire (*T)'s method set for interface
-        # satisfaction. Match the exact result type, not its representation.
-        source = expr.type
-        pointer = isinstance(source, PointerType)
-        owner = source.element if pointer else source
-        method = owner.methods.get("Error") if isinstance(owner, DefinedType) else None
-        if (method is None or len(method.params) != 1 or method.result != "string"
-                or (not pointer and isinstance(method.receiver[1], PointerType))):
-            raise GoDiagnostic(expr.token, f"cannot use {source} as {dtype}: does not implement error")
-        raise UnsupportedGo(expr.token, 'go.unsupported.interface-types',
-                            "concrete error values require interface boxing and runtime identity support")
+        if expr.type == "untyped nil":
+            plan = nil_interface_plan(dtype)
+            message = "general interface values require an owned runtime storage contract"
+        elif interface_type(expr.type) is not None:
+            plan = transferred_interface_plan(expr.type, dtype, expr.token)
+            message = "interface conversion requires preserved dynamic identity and runtime storage support"
+        else:
+            if expr.type == "void":
+                raise GoDiagnostic(expr.token, "void function call used as a value")
+            if contains_parameter(expr.type):
+                require_implements(expr.type, dtype, expr.token)
+                raise UnsupportedGo(expr.token, 'go.unsupported.generic-boundaries',
+                                    "type-parameter boxing requires abstract dynamic-value checking")
+            source_type = default_type(expr.type)
+            if source_type != expr.type:
+                coerce(expr, source_type)
+            plan = boxed_interface_plan(expr.type, dtype, expr.token)
+            label = "error" if is_error_interface(dtype) else "interface"
+            message = "concrete " + label + " values require interface boxing and runtime identity support"
+        failure = UnsupportedGo(expr.token, 'go.unsupported.interface-types', message)
+        failure.managed_plan = plan
+        raise failure
     if expr.type == "untyped nil":
         if not isinstance(underlying(dtype), PointerType):
             raise GoDiagnostic(expr.token, "cannot use untyped nil as " + str(dtype))
@@ -174,6 +197,134 @@ def coerce(expr, dtype):
     raise GoDiagnostic(expr.token, f"cannot use {expr.type} as {dtype}")
 
 
+def require_value_type(dtype, token, *, declaration=False):
+    """Separate complete semantic metadata from currently admitted storage.
+
+    Declaration-only basic interfaces have no allocation or IR representation.
+    Signature-only shapes must pass the same recursive storage checks before
+    entering an emitted signature, variable or temporary, including empty arrays.
+    """
+    if isinstance(dtype, Results):
+        for item in dtype.elements:
+            require_value_type(item, token)
+        return
+    if interface_type(dtype) is not None:
+        if not declaration and not is_error_interface(dtype):
+            failure = UnsupportedGo(token, 'go.unsupported.interface-types',
+                                    "general interface values require an owned runtime storage contract")
+            failure.managed_plan = interface_storage_plan(dtype)
+            raise failure
+        return
+    base = underlying(dtype)
+    if isinstance(base, SliceType):
+        raise UnsupportedGo(token, 'go.unsupported.slice-storage',
+                            "signature slice identity does not supply slice storage")
+    if isinstance(base, ArrayType):
+        checked_array_type(token, base.count, base.element)
+    elif isinstance(base, PointerType):
+        if interface_type(base.element) is not None:
+            raise UnsupportedGo(token, 'go.unsupported.interface-types',
+                                "pointers to interface storage require a runtime storage contract")
+        if isinstance(underlying(base.element), PointerType):
+            raise UnsupportedGo(token, 'go.unsupported.pointer-storage',
+                                "pointer-bearing pointees require a recursive lifetime/storage contract")
+        require_value_type(base.element, token)
+    elif isinstance(base, StructType):
+        for field in base.fields:
+            if isinstance(underlying(field.type), PointerType):
+                raise UnsupportedGo(token, 'go.unsupported.pointer-storage',
+                                    "pointer-bearing records require aggregate lifetime/storage analysis")
+            if interface_type(field.type) is not None:
+                raise UnsupportedGo(token, 'go.unsupported.interface-types',
+                                    "interface-bearing records require a runtime storage contract")
+            require_value_type(field.type, token)
+        pending, count = [base], 0
+        while pending:
+            item = underlying(pending.pop())
+            count += item.count if isinstance(item, ArrayType) else 1
+            if count > 4096:
+                raise UnsupportedGo(token, 'go.unsupported.limit-record-layout',
+                                    "record layout exceeds implementation limit (4096 scalar slots)")
+            if isinstance(item, StructType):
+                pending.extend(field.type for field in item.fields)
+
+
+def validate_value_types(program):
+    """Last semantic boundary over emitted carriers, excluding type declarations."""
+    seen = set()
+
+    def expression(expr):
+        if expr is None or id(expr) in seen:
+            return
+        seen.add(id(expr))
+        # A type operand denotes metadata, not an evaluated value.
+        if expr.kind != "type":
+            require_value_type(expr.type, expr.token)
+        for child in expr.args:
+            expression(child)
+        expression(expr.receiver)
+        expression(expr.callee)
+
+    def statement(stmt):
+        for symbol in stmt.symbols:
+            require_value_type(symbol.type, symbol.token)
+        for expr in stmt.exprs + stmt.targets:
+            expression(expr)
+        for child in stmt.body + (stmt.otherwise or []) + stmt.cases:
+            statement(child)
+        if stmt.init is not None:
+            statement(stmt.init)
+        if stmt.post is not None:
+            statement(stmt.post)
+
+    for function in program.functions:
+        for _, dtype in function.params:
+            require_value_type(dtype, function.token)
+        require_value_type(function.result, function.token)
+        for symbol in function.locals + function.result_symbols:
+            require_value_type(symbol.type, symbol.token)
+        for expr in function.temporaries:
+            expression(expr)
+        for stmt in function.body:
+            statement(stmt)
+    for declaration in program.variables:
+        statement(declaration)
+
+
+def validate_containment_cycles(declarations):
+    """Aliases may anchor signature names, never infinitely expand a value.
+
+    Pointers and interface method signatures break memory containment. Interface
+    embeddings have their own completion walk in resolve_interface; method
+    signatures must not be confused with those embedding edges.
+    """
+    complete, active = set(), set()
+
+    def visit(dtype, token):
+        if not isinstance(dtype, (DefinedType, ArrayType, StructType)):
+            return
+        identity = id(dtype)
+        if identity in active:
+            raise GoDiagnostic(token, "invalid recursive type or alias cycle")
+        if identity in complete:
+            return
+        active.add(identity)
+        if isinstance(dtype, DefinedType):
+            if dtype.underlying is None:
+                raise AssertionError("uncompleted Go declaration reached containment checking")
+            visit(dtype.underlying, token)
+        elif isinstance(dtype, ArrayType):
+            visit(dtype.element, token)
+        else:
+            for field in dtype.fields:
+                visit(field.type, token)
+        active.remove(identity)
+        complete.add(identity)
+
+    for declaration in declarations:
+        visit(declaration.resolved, declaration.token)
+
+
 class Analyzer:
     def __init__(self, program, *, imports=None, require_main=True, package_path=None, generics=None):
         self.program = program
@@ -195,6 +346,7 @@ class Analyzer:
         self.iota = None
         self.type_depth = 0
         self.pointer_type_depth = 0
+        self.interface_signature_depth = 0
         self.type_stack = []
         self.iteration_binding = False
 
@@ -211,6 +363,8 @@ class Analyzer:
             if name in self.types:
                 raise GoDiagnostic(declaration.token, "duplicate package declaration " + name)
             self.types[name] = declaration
+            if not declaration.alias:
+                declaration.identity = DefinedType(name, self.package_path or "")
         for function in self.program.functions:
             if function.receiver is not None:
                 continue
@@ -253,6 +407,9 @@ class Analyzer:
         self.prepare_dot_imports(package_names)
         for declaration in self.program.types:
             self.resolve_type_declaration(declaration)
+        validate_containment_cycles(self.program.types)
+        for declaration in self.program.types:
+            require_value_type(declaration.resolved, declaration.token, declaration=True)
         for declaration in self.program.constants:
             for symbol in declaration.symbols:
                 self.resolve_constant(symbol)
@@ -287,7 +444,7 @@ class Analyzer:
                 if name in dtype.methods:
                     raise GoDiagnostic(function.token, "duplicate method " + name)
                 base = underlying(dtype)
-                if is_error_interface(dtype):
+                if interface_type(dtype) is not None:
                     raise GoDiagnostic(token, "method receiver base cannot be an interface type")
                 if isinstance(base, StructType) and any(field.name == name for field in base.fields):
                     raise GoDiagnostic(function.token, "method name conflicts with struct field " + name)
@@ -295,6 +452,9 @@ class Analyzer:
                 function.receiver = (token, receiver_type)
                 function.params.insert(0, (token, receiver_type))
                 function.abi_symbol = function_symbol(dtype.name + "." + name, self.package_path)
+            for _, dtype in function.params:
+                require_value_type(dtype, function.token)
+            require_value_type(function.result, function.token)
         self.type_bindings = {}
         for symbol in self.globals.values():
             self.resolve_constant(symbol)
@@ -363,13 +523,33 @@ class Analyzer:
         if token.text in PREDECLARED and not (local_value and token.text in PREDECLARED_FUNCTIONS):
             raise UnsupportedGo(token, "go.unsupported.predeclared-shadowing", "shadowing predeclared names is not implemented in this binding: " + token.text)
 
-    def resolve_type_declaration(self, declaration):
+    def complete_named_identity(self, dtype):
+        if isinstance(dtype, DefinedType) and dtype.underlying is None:
+            declaration = self.types.get(dtype.name)
+            if declaration is None or declaration.identity is not dtype:
+                raise AssertionError("incomplete foreign Go declaration identity")
+            self.resolve_type_declaration(declaration)
+        return dtype
+
+    def resolve_type_declaration(self, declaration, *, signature=False):
+        # A named reference is a finite signature anchor, not proof that its
+        # underlying type or embedded method set has completed successfully.
+        if signature and not declaration.alias:
+            return declaration.identity
         if declaration.resolved is not None:
-            return declaration.resolved
+            return (declaration.resolved if signature else
+                    self.complete_named_identity(declaration.resolved))
         if declaration.resolving:
             start = next(index for index, item in enumerate(self.type_stack) if item is declaration)
             if all(item.alias for item in self.type_stack[start:]):
                 raise GoDiagnostic(declaration.token, "invalid recursive type or alias cycle")
+            if self.interface_signature_depth > declaration.signature_depth:
+                # A method signature breaks embedding containment, but a
+                # recursively expanded anonymous parameter interface needs a
+                # deferred structural-identity/completion owner. Do not expose
+                # a partial set or misdiagnose this valid shape as embedding.
+                raise UnsupportedGo(declaration.token, 'go.unsupported.interface-types',
+                                    "recursive anonymous interface signatures require deferred method-set completion")
             if self.pointer_type_depth > declaration.pointer_depth:
                 raise UnsupportedGo(declaration.token, 'go.unsupported.pointer-storage',
                                     "recursive pointer types require recursive lifetime/storage analysis")
@@ -378,31 +558,82 @@ class Analyzer:
             raise UnsupportedGo(declaration.token, 'go.unsupported.limit-type-expansion', "type declaration expansion exceeds implementation limit (32 levels)")
         declaration.resolving = True
         declaration.pointer_depth = self.pointer_type_depth
+        declaration.signature_depth = self.interface_signature_depth
         self.type_depth += 1
         self.type_stack.append(declaration)
         try:
-            dtype = self.resolve_type(declaration.type)
-            declaration.resolved = (dtype if declaration.alias else
-                                    DefinedType(declaration.token.text, self.package_path or "", underlying(dtype)))
+            # Aliases preserve a canonical target even through a named
+            # signature back-reference. Their value layouts are checked only
+            # after all package declarations have completed.
+            dtype = self.resolve_type(declaration.type, signature=declaration.alias)
+            if declaration.alias:
+                declaration.resolved = dtype
+            else:
+                self.complete_named_identity(dtype)
+                declaration.identity.underlying = underlying(dtype)
+                declaration.resolved = declaration.identity
         finally:
             declaration.resolving = False
             self.type_stack.pop()
             self.type_depth -= 1
-        return declaration.resolved
+        return (declaration.resolved if signature else
+                self.complete_named_identity(declaration.resolved))
 
-    def resolve_type(self, dtype):
+    def resolve_interface(self, syntax):
+        explicit, embedded = [], []
+        for element in syntax.elements:
+            if isinstance(element, InterfaceMethodSyntax):
+                self.interface_signature_depth += 1
+                try:
+                    parameters = tuple(self.resolve_type(item, signature=True) for item in element.parameters)
+                    result = self.resolve_type(element.result, signature=True)
+                finally:
+                    self.interface_signature_depth -= 1
+                if any(contains_parameter(item) for item in parameters + (result,)):
+                    raise UnsupportedGo(element.token, 'go.unsupported.generic-boundaries',
+                                        "dependent interface signatures require generic interface checking")
+                explicit.append(InterfaceMethod(element.token.text, self.package_path or "<main>",
+                                                MethodSignature(parameters, result, element.variadic)))
+                continue
+            resolved, general = [], len(element.terms) != 1
+            for approximate, item in element.terms:
+                if isinstance(item, TypeName) and item.qualifier is None and item.token.text == "comparable":
+                    general = True
+                    continue
+                dtype = self.resolve_type(item, signature=True)
+                self.complete_named_identity(dtype)
+                if contains_parameter(dtype):
+                    raise GoDiagnostic(element.token, "interface cannot embed a type parameter")
+                general = general or approximate or interface_type(dtype) is None
+                resolved.append(dtype)
+            if general:
+                raise UnsupportedGo(element.token, 'go.unsupported.generic-boundaries',
+                                    "general interface type sets require constraint resolution")
+            embedded.extend(resolved)
+        return basic_interface(explicit, embedded, syntax.token)
+
+    def resolve_type(self, dtype, *, signature=False):
+        if isinstance(dtype, InterfaceSyntax):
+            return self.resolve_interface(dtype)
+        if isinstance(dtype, SliceSyntax):
+            if not signature:
+                raise UnsupportedGo(dtype.token, 'go.unsupported.slice-storage',
+                                    "slice types require shared-runtime backing storage support")
+            return SliceType(self.resolve_type(dtype.element, signature=True))
         if isinstance(dtype, PointerSyntax):
             # Distinguish valid pointer recursion from invalid recursive value
             # layouts without constructing recursive/untraced storage.
             self.pointer_type_depth += 1
             try:
-                element = self.resolve_type(dtype.element)
+                element = self.resolve_type(dtype.element, signature=signature)
             finally:
                 self.pointer_type_depth -= 1
+            if signature:
+                return PointerType(element)
             if contains_parameter(element):
                 raise UnsupportedGo(dtype.token, 'go.unsupported.generic-boundaries',
                                     'dependent pointer layouts require abstract lifetime checking')
-            if is_error_interface(element):
+            if interface_type(element) is not None:
                 raise UnsupportedGo(dtype.token, 'go.unsupported.interface-types',
                                     "pointers to interface storage require a runtime storage contract")
             if isinstance(underlying(element), PointerType):
@@ -410,7 +641,7 @@ class Analyzer:
                                     "pointer-bearing pointees require a recursive lifetime/storage contract")
             return PointerType(element)
         if isinstance(dtype, Results):
-            return Results(tuple(self.resolve_type(item) for item in dtype.elements))
+            return Results(tuple(self.resolve_type(item, signature=signature) for item in dtype.elements))
         if isinstance(dtype, TypeName):
             if dtype.qualifier is not None:
                 owner = self.imported(dtype.qualifier, dtype.token)
@@ -423,7 +654,7 @@ class Analyzer:
             declaration = owner.types.get(dtype.token.text)
             if declaration is None:
                 raise GoDiagnostic(dtype.token, "undefined type " + dtype.token.text)
-            return owner.resolve_type_declaration(declaration)
+            return owner.resolve_type_declaration(declaration, signature=signature)
         if isinstance(dtype, StructSyntax):
             if len(dtype.fields) > 256:
                 raise UnsupportedGo(dtype.token, 'go.unsupported.limit-struct-fields', "struct exceeds implementation limit (256 fields)")
@@ -435,14 +666,14 @@ class Analyzer:
                     raise GoDiagnostic(token, "duplicate struct field " + token.text)
                 names.add(token.text)
                 package = "" if unicodedata.category(token.text[0]) == "Lu" else (self.package_path or "<main>")
-                field_type = self.resolve_type(field_type)
+                field_type = self.resolve_type(field_type, signature=signature)
                 if contains_parameter(field_type):
                     raise UnsupportedGo(token, 'go.unsupported.generic-boundaries',
                                         'dependent record layouts require generic data checking')
-                if isinstance(underlying(field_type), PointerType):
+                if not signature and isinstance(underlying(field_type), PointerType):
                     raise UnsupportedGo(token, 'go.unsupported.pointer-storage',
                                         "pointer-bearing records require aggregate lifetime/storage analysis")
-                if is_error_interface(field_type):
+                if not signature and interface_type(field_type) is not None:
                     raise UnsupportedGo(token, 'go.unsupported.interface-types',
                                         "interface-bearing records require a runtime storage contract")
                 fields.append(Field(token.text, field_type, package))
@@ -458,11 +689,17 @@ class Analyzer:
             return result
         if not isinstance(dtype, ArraySyntax):
             return dtype
-        element = self.resolve_type(dtype.element)
-        checked_array_type(dtype.token, 0, element)
+        element = self.resolve_type(dtype.element, signature=signature)
+        if not signature:
+            checked_array_type(dtype.token, 0, element)
         if dtype.length is None:
             raise GoDiagnostic(dtype.token, "array length inference requires a composite literal")
         count = self.array_index_constant(dtype.length, "array length")
+        if signature:
+            if count > 4096:
+                raise UnsupportedGo(dtype.token, 'go.unsupported.limit-array-elements',
+                                    "array exceeds implementation limit (4096 elements)")
+            return ArrayType(count, element)
         return checked_array_type(dtype.token, count, element)
 
     def static_initializer(self, expr):
@@ -502,7 +739,9 @@ class Analyzer:
             raise GoDiagnostic(symbol.token, "package initialization cycle" if symbol.package_variable else "constant initialization cycle")
         symbol.resolving = True
         symbol.type = self.resolve_type(symbol.type)
-        if symbol.package_variable and is_error_interface(symbol.type):
+        if not symbol.package_variable and interface_type(symbol.type) is not None:
+            raise GoDiagnostic(symbol.token, "interface-typed initializer is not a constant")
+        if symbol.package_variable and interface_type(symbol.type) is not None:
             # In particular, an ignored go:linkname must never manufacture an
             # ordinary nil global in place of a runtime-owned error value.
             raise UnsupportedGo(symbol.token, 'go.unsupported.interface-types',
@@ -517,7 +756,7 @@ class Analyzer:
             coerce(expr, dtype)
             symbol.type = dtype
             if symbol.package_variable:
-                if is_error_interface(dtype):
+                if interface_type(dtype) is not None:
                     raise UnsupportedGo(symbol.token, 'go.unsupported.interface-types',
                                         "package interface storage requires runtime initialization and symbol ownership")
                 if isinstance(underlying(dtype), PointerType):
@@ -550,7 +789,9 @@ class Analyzer:
         self.loop_depth = 0
         self.break_depth = 0
         self.allowed_fallthrough = None
+        require_value_type(function.result, function.token)
         for token, dtype in function.params:
+            require_value_type(dtype, token)
             self.check_name(token, local_value=True)
             if token.text in self.type_bindings:
                 raise GoDiagnostic(token, "parameter redeclares type parameter " + token.text)
@@ -590,6 +831,7 @@ class Analyzer:
             self.scopes.pop()
 
     def declare(self, token, dtype, constant=None):
+        require_value_type(dtype, token)
         self.check_name(token, local_value=True)
         if len(self.scopes) == 1 and token.text in self.type_bindings:
             raise GoDiagnostic(token, "redeclaration in this block: " + token.text)
@@ -639,7 +881,7 @@ class Analyzer:
         if isinstance(underlying(arg.type), PointerType):
             raise UnsupportedGo(token, 'go.unsupported.pointer-storage',
                                 "pointer-bearing pointees require a recursive lifetime/storage contract")
-        if is_error_interface(arg.type):
+        if interface_type(arg.type) is not None:
             raise UnsupportedGo(token, 'go.unsupported.interface-types',
                                 "addresses of interface values require a runtime storage contract")
         if arg.iteration_binding:
@@ -712,6 +954,8 @@ class Analyzer:
                         coerce(expr, symbol.type)
                 else:
                     dtype = statement.type or (expr.type if kind == "const" else default_type(expr.type)) if expr else statement.type
+                    if kind == "const" and interface_type(dtype) is not None:
+                        raise GoDiagnostic(token, "interface-typed initializer is not a constant")
                     if expr is not None:
                         coerce(expr, dtype)
                     constant = None
@@ -783,7 +1027,7 @@ class Analyzer:
             selector = statement.exprs[0] if statement.exprs else Expr("name", statement.token, "true")
             self.expression(selector)
             coerce(selector, default_type(selector.type))
-            if is_error_interface(selector.type):
+            if interface_type(selector.type) is not None:
                 raise UnsupportedGo(selector.token, 'go.unsupported.interface-types',
                                     "interface switches require dynamic-value comparison support")
             # The equality checker owns assignability, pointer identity and
@@ -1132,8 +1376,8 @@ class Analyzer:
                     and self.dot_imported(base.token, use=False) is None):
                 raise GoDiagnostic(base.token, "undefined imported package " + base.value)
             type_operand = self.type_operand(base)
-            if is_error_interface(type_operand):
-                if expr.value == "Error":
+            if interface_type(type_operand) is not None:
+                if method_set(type_operand).lookup(expr.value, self.package_path or "<main>") is not None:
                     raise UnsupportedGo(expr.token, 'go.unsupported.interface-types',
                                         "interface method expressions require dynamic dispatch support")
                 raise GoDiagnostic(expr.token, "no method " + expr.value + " on " + str(type_operand))
@@ -1146,8 +1390,8 @@ class Analyzer:
                     raise GoDiagnostic(expr.token, "invalid method expression: pointer receiver requires *" + str(type_operand))
                 raise GoDiagnostic(expr.token, "first-class method expressions require function-value support")
             self.expression(base)
-            if is_error_interface(base.type):
-                if expr.value == "Error":
+            if interface_type(base.type) is not None:
+                if method_set(base.type).lookup(expr.value, self.package_path or "<main>") is not None:
                     raise UnsupportedGo(expr.token, 'go.unsupported.interface-types',
                                         "interface method values require dynamic dispatch support")
                 raise GoDiagnostic(expr.token, "no method " + expr.value + " on " + str(base.type))
@@ -1216,8 +1460,8 @@ class Analyzer:
                 if not method_expression:
                     self.expression(base)
                     dtype = base.type
-                if is_error_interface(dtype):
-                    if name == "Error":
+                if interface_type(dtype) is not None:
+                    if method_set(dtype).lookup(name, self.package_path or "<main>") is not None:
                         raise UnsupportedGo(expr.token, 'go.unsupported.interface-types',
                                             "interface calls require dynamic dispatch and nil-panic support")
                     raise GoDiagnostic(expr.token, "no method " + name + " on " + str(dtype))
@@ -1344,7 +1588,7 @@ class Analyzer:
             if contains_parameter(element):
                 raise UnsupportedGo(expr.token, 'go.unsupported.generic-boundaries',
                                     'dependent pointer layouts require abstract lifetime checking')
-            if is_error_interface(element):
+            if interface_type(element) is not None:
                 raise UnsupportedGo(expr.token, 'go.unsupported.interface-types',
                                     "pointers to interface storage require a runtime storage contract")
             if isinstance(underlying(element), PointerType):
@@ -1382,7 +1626,7 @@ class Analyzer:
             raise GoDiagnostic(expr.token, "conversion requires one argument")
         arg = expr.args[0]
         self.expression(arg)
-        if is_error_interface(target):
+        if interface_type(target) is not None:
             coerce(arg, target)
             expr.type = target
             return
