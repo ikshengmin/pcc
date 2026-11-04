@@ -36,6 +36,12 @@ from pcc.unsafe import (
 
 py_incref = extern("py_incref", (c_ptr,), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
+py_gc_track = extern("py_gc_track", (c_ptr,), c_void)
+pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
+pcc_thread_owns_stopped_world = extern("pcc_thread_owns_stopped_world", (), c_int64)
+pcc_gc_backend0_is_weak_candidate = extern(
+    "pcc_gc_backend0_is_weak_candidate", (c_ptr,), c_int64
+)
 py_dict_del = extern("py_dict_del", (c_ptr, c_ptr), c_int64)
 py_dict_get = extern("py_dict_get", (c_ptr, c_ptr), c_ptr)
 py_dict_keys = extern("py_dict_keys", (c_ptr,), c_ptr)
@@ -170,6 +176,18 @@ def py_weakref_new(target, callback):
     if ptr_is_null(callback) == 0:
         pcc_gc_store_ptr(wr, ptr_add(wr, 24), callback)
 
+    if pcc_gc_backend() == 0:
+        # The weak target is not a strong edge, but the callback is. GC0
+        # must see this owner to distinguish a live callback from a weakref
+        # participating in the same unreachable cycle as its target.
+        py_gc_track(wr)
+        if (load_i32(wr, 12) & 2) == 0:
+            # Tracking can allocate while GC0's table is materialized. The
+            # object is still private: release its callback without ever
+            # leaving an untracked node in the weak-reference chain.
+            py_decref(wr)
+            py_raise_owned(py_exc_new(19, cstr("weak reference tracking failed")))
+            return null()
     head = global_load_ptr("py_weakref_head")
     store_ptr(wr, 40, head)
     if ptr_is_null(head) == 0:
@@ -369,6 +387,75 @@ def _weakref_run_callback(wr) -> None:
                 py_decref(result)
             py_decref(args)
         py_clear_exception()
+
+
+@c_abi_export("py_weakref_invalidate_gc0_candidates")
+def py_weakref_invalidate_gc0_candidates() -> int:
+    """GC0's fixed unreachable batch: clear all refs before live callbacks.
+
+    The collector owns the stopped world and the materialized tracking table.
+    Its node-only candidate bit is not changed by retaining queued weakrefs.
+    Prepare every callback hold before clearing any target: allocation failure
+    therefore has no partial weakref invalidation or callback side effects.
+    """
+    if pcc_gc_backend() != 0:
+        return 0
+    if pcc_thread_owns_stopped_world() == 0:
+        pcc_platform_abort()
+        return -1
+    pending = null()
+    tail = null()
+    count: int = 0
+    wr = global_load_ptr("py_weakref_head")
+    while ptr_is_null(wr) == 0:
+        target = load_ptr(wr, 16)
+        if (ptr_is_null(target) == 0 and is_tagged_int(target) == 0
+                and pcc_gc_backend0_is_weak_candidate(target) != 0
+                and pcc_gc_backend0_is_weak_candidate(wr) == 0
+                and (load_i32(wr, 12) & 524288) == 0
+                and load_i64(wr, 0) > 0
+                and ptr_is_null(load_ptr(wr, 24)) == 0):
+            entry = malloc(_PENDING_WEAK_BYTES)
+            if ptr_is_null(entry) != 0:
+                # No target has been cleared and every held ref was live
+                # before preparation. Dropping these holds cannot invoke its
+                # weak callback; ordinary weakref deallocation only unlinks.
+                while ptr_is_null(pending) == 0:
+                    cleanup = pending
+                    pending = load_ptr(cleanup, _PENDING_WEAK_NEXT)
+                    py_decref(load_ptr(cleanup, _PENDING_WEAK_ROOT))
+                    free(cleanup)
+                pcc_platform_abort()
+                return -1
+            store_ptr(entry, _PENDING_WEAK_NEXT, null())
+            store_ptr(entry, _PENDING_WEAK_ROOT, wr)
+            store_i64(entry, _PENDING_WEAK_LEASE, 0)
+            py_incref(wr)
+            if ptr_is_null(tail) != 0:
+                pending = entry
+            else:
+                store_ptr(tail, _PENDING_WEAK_NEXT, entry)
+            tail = entry
+            count += 1
+        wr = load_ptr(wr, 40)
+
+    wr = global_load_ptr("py_weakref_head")
+    while ptr_is_null(wr) == 0:
+        target = load_ptr(wr, 16)
+        if (ptr_is_null(target) == 0 and is_tagged_int(target) == 0
+                and pcc_gc_backend0_is_weak_candidate(target) != 0):
+            store_ptr(wr, 16, null())
+            pcc_diagnostics_runtime_log_event_code(4, 2, 0, load_i32(target, 8), target)
+        wr = load_ptr(wr, 40)
+
+    while ptr_is_null(pending) == 0:
+        entry = pending
+        pending = load_ptr(entry, _PENDING_WEAK_NEXT)
+        held = load_ptr(entry, _PENDING_WEAK_ROOT)
+        _weakref_run_callback(held)
+        py_decref(held)
+        free(entry)
+    return count
 
 
 @c_abi_export("py_weakref_invalidate_tracing_candidates")

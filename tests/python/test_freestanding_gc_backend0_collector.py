@@ -21,6 +21,7 @@ OWNED_SYMBOLS = {
     "pcc_gc_backend0_subset_recompute",
     "pcc_gc_backend0_collect_candidates",
     "pcc_gc_backend0_collect_impl",
+    "pcc_gc_backend0_is_weak_candidate",
     "pcc_gc_backend0_dealloc_unreachable",
     "pcc_gc_backend0_mapped_root_count",
     "pcc_gc_backend0_mark_root_slot",
@@ -95,6 +96,7 @@ RAW_IMPORTS = {
     "py_instance_dealloc",
     "py_user_del_dispatch",
     "py_weakref_invalidate",
+    "py_weakref_invalidate_gc0_candidates",
 }
 
 
@@ -164,6 +166,9 @@ def test_backend0_collector_preserves_ordering_and_graph_contract():
     assert "pcc_gc_backend0_visit_subtract(" in strict
     assert "pcc_gc_backend0_mark_reachable(" in strict
     assert "pcc_gc_backend0_clear_referents(obj)" in collect
+    assert collect.index("py_weakref_invalidate_gc0_candidates()") < collect.index(
+        "_maybe_finalize_unreachable("
+    )
     assert collect.index("_maybe_finalize_unreachable(") < collect.index(
         "py_weakref_invalidate(obj)"
     )

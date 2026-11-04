@@ -58,6 +58,9 @@ py_dealloc_weakref = extern("py_dealloc_weakref", (c_ptr,), c_void)
 py_dealloc_generic = extern("py_dealloc_generic", (c_ptr,), c_void)
 py_user_del_dispatch = extern("py_user_del_dispatch", (c_ptr,), c_void)
 py_weakref_invalidate = extern("py_weakref_invalidate", (c_ptr,), c_void)
+py_weakref_invalidate_gc0_candidates = extern(
+    "py_weakref_invalidate_gc0_candidates", (), c_int64
+)
 pcc_gc_note_object_freeing = extern(
     "pcc_gc_note_object_freeing", (c_ptr,), c_void
 )
@@ -115,6 +118,20 @@ _SUBSET_REACHABLE = 1
 # This cycle collector owns zeros produced by its own finalizers. They are
 # distinct from a mutator parked after a last decrement and before untrack.
 _COLLECTOR_FINALIZED_ZERO = 8
+# The fixed disposal set used only by the pre-finalizer weakref batch.
+_COLLECTOR_WEAK_CANDIDATE = 16
+
+
+@c_abi_export("pcc_gc_backend0_is_weak_candidate")
+def pcc_gc_backend0_is_weak_candidate(obj) -> i64:
+    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+        return 0
+    if load_i32(global_addr("py_gc_collecting"), 0) == 0:
+        return 0
+    node = py_gc_index_find(obj)
+    if ptr_is_null(node) != 0 or ptr_eq(load_ptr(node, 0), obj) == 0:
+        return 0
+    return 1 if (load_i32(node, 16) & _COLLECTOR_WEAK_CANDIDATE) != 0 else 0
 
 
 @c_abi_export("pcc_gc_backend0_subset_node")
@@ -537,7 +554,18 @@ def _collect(pairs, candidate_count: i64) -> i64:
                     store_ptr(unreachable, count * 8, node)
                     count = count + 1
             node = load_ptr(node, 32)
-    if _maybe_finalize_unreachable(unreachable, count) != 0:
+    i: i64 = 0
+    while i < count:
+        node = load_ptr(unreachable, i * 8)
+        if ptr_is_null(node) == 0 and ptr_is_null(load_ptr(node, 0)) == 0:
+            store_i32(node, 16, load_i32(node, 16) | _COLLECTOR_WEAK_CANDIDATE)
+        i = i + 1
+    # Clear the entire isolate's weak links before any weakref callback or
+    # finalizer can observe another still-live link. Callbacks on weakrefs
+    # which are themselves in this isolate are suppressed.
+    weak_callbacks: i64 = py_weakref_invalidate_gc0_candidates()
+    finalized: i64 = _maybe_finalize_unreachable(unreachable, count)
+    if weak_callbacks != 0 or finalized != 0:
         _recompute_reachability()
 
     i: i64 = 0
@@ -547,7 +575,8 @@ def _collect(pairs, candidate_count: i64) -> i64:
             # Revalidation is complete. Clear this collection-only distinction
             # even on resurrected survivors before callbacks can create new
             # terminal ownership; never carry it into a future collection.
-            store_i32(node, 16, load_i32(node, 16) & ~_COLLECTOR_FINALIZED_ZERO)
+            store_i32(node, 16, load_i32(node, 16)
+                      & ~(_COLLECTOR_FINALIZED_ZERO | _COLLECTOR_WEAK_CANDIDATE))
         if (
             ptr_is_null(node) == 0
             and ptr_is_null(load_ptr(node, 0)) == 0

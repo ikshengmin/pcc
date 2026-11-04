@@ -10,16 +10,26 @@ PROBE = r'''
 #include "py_internal.h"
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 extern int64_t pcc_gc_backend0_collect_candidates(void *, int64_t);
 extern int32_t pcc_gc_backend0_subset_active;
 extern int64_t pcc_gc_backend0_subset_count;
 extern void *pcc_gc_backend0_subset_pairs;
+extern int64_t pcc_gc_tracked_materialize(void);
 typedef struct Candidate { PyGcNode *node; PyObject *object; } Candidate;
 static int fail(int code) { fprintf(stderr, "candidate-check=%d\n", code); return code; }
 static Candidate record(PyObject *obj) {
     Candidate entry;
+    /* Flag-only GC0 deliberately keeps no nodes between collections.
+     * Discovery must materialize its actual stopped-world snapshot before
+     * taking identities; a completed collection invalidates that snapshot. */
+    if (pcc_stop_the_world() != 0) abort();
+    pcc_gc_default_table_lock();
+    if (pcc_gc_tracked_materialize() < 0) abort();
     entry.node = py_gc_index_find(obj);
     entry.object = obj;
+    pcc_gc_default_table_unlock();
+    pcc_resume_world();
     return entry;
 }
 static int clean_context(void) {
@@ -50,6 +60,7 @@ int main(void) {
     if (pcc_gc_backend0_collect_candidates(&single, 1) != 0) return fail(5);
     if (py_list_len(child) != 1 || !clean_context()) return fail(6);
     py_decref(parent);
+    single = record(child);
     if (pcc_gc_backend0_collect_candidates(&single, 1) != 1 || !clean_context()) return fail(7);
     /* A stale record cannot dereference a freed node or collect another object. */
     if (pcc_gc_backend0_collect_candidates(&single, 1) != 0 || !clean_context()) return fail(8);
@@ -62,6 +73,7 @@ int main(void) {
     py_decref(left); py_decref(right);
     if (pcc_gc_backend0_collect_candidates(both, 1) != 0) return fail(9);
     if (py_list_len(left) != 1 || py_list_len(right) != 1) return fail(10);
+    both[0] = record(left); both[1] = record(right); both[2] = record(left);
     if (pcc_gc_backend0_collect_candidates(both, 3) != 2 || !clean_context()) return fail(11);
 
     /* A registered borrowed root protects a cycle without adding a count. */
@@ -73,6 +85,7 @@ int main(void) {
     py_decref(rooted);
     if (pcc_gc_backend0_collect_candidates(&root_record, 1) != 0) return fail(13);
     pcc_gc_scheduler_root_unregister_handle(handle);
+    root_record = record(rooted);
     if (pcc_gc_backend0_collect_candidates(&root_record, 1) != 1) return fail(14);
 
     /* A zero-count parent parked before untrack still owns its children. */
@@ -87,9 +100,11 @@ int main(void) {
     __atomic_store_n(&py_header(parent)->refcount, 1, __ATOMIC_RELEASE);
     __atomic_fetch_and(&py_header(parent)->flags, ~524288u, __ATOMIC_RELEASE);
     py_decref(parent);
+    pending[1] = record(child);
     if (pcc_gc_backend0_collect_candidates(pending + 1, 1) != 1) return fail(17);
 
-    /* Finalizers may resurrect: weakrefs survive the first collection. */
+    /* Weakrefs are cleared before finalization. Resurrection preserves the
+     * instance, but must not revive an already cleared weak reference. */
     const char *fields[1] = { "self" };
     PyClassObject *cls = py_class_new("CandidateResurrection", 0, 0, fields, 1);
     if (cls == 0) return fail(18);
@@ -104,9 +119,10 @@ int main(void) {
     if (pcc_gc_backend0_collect_candidates(&resurrection, 1) != 0) return fail(21);
     if (finalized != 1 || saved != instance || !clean_context()) return fail(22);
     PyObject *seen = py_weakref_call(weak);
-    if (seen != instance) return fail(23);
+    if (seen != py_None) return fail(23);
     py_decref(seen);
     py_decref(saved); saved = 0;
+    resurrection = record(instance);
     if (pcc_gc_backend0_collect_candidates(&resurrection, 1) != 1) return fail(24);
     seen = py_weakref_call(weak);
     if (seen != py_None || finalized != 1 || !clean_context()) return fail(25);

@@ -93,6 +93,24 @@ dropped keyword); the stage 1 commit message lists them. Rerun with
 
 ## Native throughput versus CPython 3.15.0: active, acceptance unmet
 
+The GC0 weakref lifecycle failure recorded below is fixed by the batch based
+on `1493cc461`. GC0 now tracks weakref callback owners, clears the fixed
+unreachable set's weak links before any callback/finalizer, retains live queued
+weakrefs across callback mutation, and suppresses callbacks on unreachable
+weakrefs. Reachability is rechecked after callbacks and finalizers. A resurrected
+object remains usable, but its previously cleared weakref stays dead, following
+[PEP 442](https://peps.python.org/pep-0442/#disposal-of-cyclic-isolates).
+
+Local Mac host-pcc0/self validation: the previously failing lifecycle scenario
+now matches CPython for all five collectors; the native GC0 candidate-subset
+regression and the generator-finalization scenario across all five collectors
+also pass. Sixteen weakref batch/constructor/OOM host cases, collector-order
+and ABI checks pass. The subset fixture now materializes and refreshes actual
+GC0 node snapshots instead of reusing identities invalidated by flag-only
+tracking. The generator fixture forces collection while the exception handler
+is active, preserving the cleanup/error assertions for count-free collectors.
+No new QPS measurement, full suite or bootstrap qualification is claimed.
+
 The GC1/GC2 root-store batch based on `8429b6671` removes the RC plan and
 graph-lock acquisition from ordinary nonmoving, count-free root publication.
 The slot write and atomic insertion barrier share one no-park interval.
@@ -112,8 +130,8 @@ GC1-4 weakref/finalizer/resurrection scenarios. The owned runtime builds in
 The GC0 lifecycle scenario fails with weakref/finalizer ordering and dead-weakref
 callback differences; the earlier frozen runtime
 `bf5b53324cb6b027cbe755ffb3f17f9f3b168c0a5a29a799c1fe5509b46564d4`
-produces the identical assertion diff. This is an existing failure, not a green
-five-GC lifecycle result, and its repair is user-requested follow-up work.
+produced the identical assertion diff. That batch was not a green five-GC
+lifecycle result; the subsequent repair and execution evidence are above.
 QPS A/B, full suites and bootstrap remain unrun for this batch.
 
 Collector selection now determines ownership: GC0 retains reference counting,

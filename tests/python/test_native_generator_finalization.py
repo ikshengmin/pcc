@@ -53,6 +53,9 @@ def main():
     try:
         discard_with_error(original)
     except KeyError as found:
+        # Count-free collectors finalize at a collection boundary. Keep the
+        # original exception handler active while exercising that cleanup.
+        gc.collect()
         print(found is original)
     print(events)
     make_cycle(False)
