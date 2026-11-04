@@ -1,12 +1,22 @@
 """Closed-world Java source type/import and static-method identity resolution.
 
 Only supplied source classes are visible; there is no classpath, classfile,
-reflection lookup or host JDK fallback. Single-type imports and resolved type-qualified calls are resolved before lowering. Inheritance/member types and
-static/on-demand imports remain explicit unsupported domains.
+reflection lookup or host JDK fallback. Single-type and single-static imports
+resolve against supplied declarations before lowering. Inheritance/member
+types and on-demand imports remain explicit unsupported domains.
 """
 from .diagnostics import JavaError, UnsupportedJava
 from .source_sema import SourceAnalyzer
 from .source_types import select_method
+
+
+# Ordinary source classes inherit these method names from Object. The source
+# model does not supply their actual definitions, but may not bypass their
+# lexical scope by selecting an imported overload instead (JLS 6.3/6.4.1).
+OBJECT_INHERITED_METHOD_NAMES = frozenset((
+    "equals", "hashCode", "getClass", "toString", "clone", "finalize",
+    "notify", "notifyAll", "wait",
+))
 
 
 class SourceProject:
@@ -14,6 +24,8 @@ class SourceProject:
         self.programs = tuple(sorted(programs, key=lambda item: item.name))
         self.classes = {}
         self.imports = {}
+        self.static_fields = {}
+        self.static_methods = {}
         self.analyzers = {}
         for program in self.programs:
             if program.name in self.classes:
@@ -54,6 +66,53 @@ class SourceProject:
             analyzer.declare_methods()
             analyzer.declare_fields()
             self.analyzers[program.name] = analyzer
+        # Imports may name declarations in a later source unit. Build every
+        # member table first, then validate imports even when never used.
+        for program in self.programs:
+            self.resolve_static_imports(program)
+
+    def resolve_static_imports(self, program):
+        fields, methods = {}, {}
+        for tokens in program.static_imports:
+            owner = "/".join(token.text for token in tokens[:-1])
+            target = self.classes.get(owner)
+            if target is None:
+                tokens[0].error("static import requires supplied source for " + owner.replace("/", "."),
+                                code="java.unsupported.source-dependency")
+            self.require_class_access(program, target, tokens[0])
+            analyzer = self.analyzers[owner]
+            name = tokens[-1].text
+            # The import is outside all class bodies: even a private member
+            # of this compilation unit's own class cannot be imported here.
+            def accessible(member):
+                return ("static" in member.modifiers and "private" not in member.modifiers
+                        and (program.package == target.package or "public" in member.modifiers))
+
+            field = analyzer.fields.get(name)
+            imported_field = field is not None and accessible(field)
+            candidates = [method for method in analyzer.methods.values()
+                          if method.token.text == name and accessible(method)]
+            if not imported_field and not candidates:
+                tokens[-1].error("no accessible static member for single-static import "
+                                 + owner.replace("/", ".") + "." + name)
+            if imported_field:
+                fields.setdefault(name, {})[owner] = field
+            for method in candidates:
+                # Repeated imports of the same declaration are harmless, but
+                # same-signature declarations from different owners remain
+                # separate overload candidates and may be ambiguous at use.
+                methods.setdefault(name, {})[owner, method.parameter_types] = method
+        self.static_fields[program.name] = fields
+        self.static_methods[program.name] = methods
+
+    def simple_field(self, analyzer, name, token):
+        field = analyzer.fields.get(name)
+        if field is not None:
+            return field
+        imported = self.static_fields[analyzer.program.name].get(name, {})
+        if len(imported) > 1:
+            token.error("ambiguous single-static imported field " + name)
+        return next(iter(imported.values()), None)
 
     def resolve_declaration_types(self, program):
         pass
@@ -85,7 +144,16 @@ class SourceProject:
     def resolve_call(self, analyzer, node):
         pieces = node.value.split(".")
         if len(pieces) == 1:
-            return select_method(analyzer.methods, node)
+            # JLS 6.4.1/15.12.1: a member method shadows every imported method
+            # with the same name, including when no member overload applies.
+            own_name = any(method.token.text == node.value for method in analyzer.methods.values())
+            imported = self.static_methods[analyzer.program.name].get(node.value, {})
+            if not own_name and imported and node.value in OBJECT_INHERITED_METHOD_NAMES:
+                node.token.error("inherited Object method lookup cannot be replaced by a single-static import",
+                                 code="java.unsupported.object-inherited-methods")
+            methods = (analyzer.methods if own_name else
+                       imported)
+            return select_method(methods, node)
         target = self.resolve_qualified_owner(analyzer, node)
         caller = analyzer.program
         methods = self.analyzers[target.name].methods
@@ -104,8 +172,12 @@ class SourceProject:
 
     def resolve_field(self, analyzer, node):
         caller = analyzer.program
-        target = self.resolve_qualified_owner(analyzer, node) if "." in node.value else caller
-        field = self.analyzers[target.name].fields.get(node.value.rsplit(".", 1)[-1])
+        if "." not in node.value:
+            field = self.simple_field(analyzer, node.value, node.token)
+            target = self.classes[field.owner] if field is not None else caller
+        else:
+            target = self.resolve_qualified_owner(analyzer, node)
+            field = self.analyzers[target.name].fields.get(node.value.rsplit(".", 1)[-1])
         if field is None:
             node.token.error("undefined local variable or constant field " + node.value)
         if target is not caller and ("private" in field.modifiers or
@@ -118,7 +190,8 @@ class SourceProject:
         caller = analyzer.program
         # JLS 6.5.2 expression-name reclassification precedes package/type
         # lookup. An int local obscures an identically named class/package.
-        if any(pieces[0] in scope for scope in analyzer.scopes) or pieces[0] in analyzer.fields:
+        if (any(pieces[0] in scope for scope in analyzer.scopes)
+                or self.simple_field(analyzer, pieces[0], node.token) is not None):
             node.token.error("primitive local/parameter/field cannot be dereferenced as a source class")
         first = self.visible_simple_type(caller, pieces[0])
         qualifier = pieces[:-1]

@@ -1,5 +1,25 @@
 {
   "functions": {
+    "tests/java/test_source_static_imports.py": {
+      "test_exact_static_import_originals_match_jdk_raw_processes": {
+        "activity": "external-reference",
+        "reason": [
+          "Selected existing JDK compiler/runtime receives the exact unchanged multi-unit static-import originals; compares stdout/stderr/exit with owned native output and records tool/source/object/executable identities"
+        ]
+      },
+      "test_exact_invalid_static_imports_match_jdk_rejections": {
+        "activity": "external-reference",
+        "reason": [
+          "Selected existing JDK compiler receives complete unchanged invalid static-import originals and must return source-attributed exit1 plus the expected diagnostic"
+        ]
+      },
+      "test_inherited_name_import_originals_have_independent_jdk_rejections": {
+        "activity": "external-reference",
+        "reason": [
+          "Selected existing JDK compiler rejects exact imported-overload originals shadowed by inherited Object method names; PCC retains an explicit inherited-method capability boundary"
+        ]
+      }
+    },
     "tests/go/test_managed_contracts.py": {
       "test_identical_static_backing_original_matches_official_go": {
         "activity": "external-reference",

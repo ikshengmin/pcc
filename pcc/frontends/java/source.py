@@ -61,7 +61,7 @@ def compile_sources(sources: Mapping[str, str], *, entry_class: str, entry: str 
 
     Keys are diagnostic source names, never filesystem paths to open. Values
     are original source text. The entry class uses its Java qualified name.
-    Single-type imports and resolved class-qualified static calls are supported;
+    Single-type/single-static imports and resolved class-qualified static calls are supported;
     no dependency is synthesized, downloaded, ignored or resolved from JARs.
     Limits: 256 source units, 1 MiB each and 8 MiB aggregate source text.
     """

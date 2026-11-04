@@ -199,7 +199,7 @@ class ClassAnalyzer(ClassConstructionAnalyzer, StringModelAnalyzer, ArrayModelAn
             root = node.value.split(".", 1)[0]
             binding = next((scope[root] for scope in reversed(self.scopes) if root in scope), None)
             if binding is None:
-                binding = self.fields.get(root)
+                binding = self.project.simple_field(self, root, node.token)
             if binding is not None and isinstance(binding.dtype, (ClassType, BootstrapStringType)):
                 node.token.error("source reference member access requires the next managed receiver domain",
                                  code="java.unsupported.object-expressions")
@@ -430,7 +430,8 @@ class ClassModelProject(SourceProject):
 
     def resolve_qualified_owner(self, analyzer, node):
         first = node.value.split(".", 1)[0]
-        if (not any(first in scope for scope in analyzer.scopes) and first not in analyzer.fields
+        if (not any(first in scope for scope in analyzer.scopes)
+                and self.simple_field(analyzer, first, node.token) is None
                 and first == "String"):
             binding = self.visible_simple_type(analyzer.program, first)
             if binding is None or isinstance(binding, BootstrapStringType):

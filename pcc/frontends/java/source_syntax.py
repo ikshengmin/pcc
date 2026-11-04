@@ -115,6 +115,7 @@ class SourceClass:
     token: Token | None = None
     instance_initializers: tuple[Node, ...] = ()
     initialization_steps: tuple = ()
+    static_imports: tuple[tuple[Token, ...], ...] = ()
 
     @property
     def package(self):
@@ -411,19 +412,21 @@ class SourceParser:
             while self.accept("."):
                 package.append(self.identifier().text)
             self.expect(";")
-        imports = []
+        imports, static_imports = [], []
         while self.accept("import"):
-            if self.peek().text == "static":
-                self.peek().error("static imports require the next source-project lookup domain", code="java.unsupported.static-imports")
+            static = self.accept("static")
             imported = [self.identifier()]
             while self.accept("."):
                 if self.peek().text == "*":
+                    if static:
+                        self.peek().error("static on-demand imports require the next source-project lookup domain",
+                                          code="java.unsupported.static-imports")
                     self.peek().error("on-demand imports require the next source-project lookup domain", code="java.unsupported.on-demand-imports")
                 imported.append(self.identifier())
             self.expect(";")
-            if len(imported) < 2:
+            if len(imported) < (3 if static else 2):
                 imported[0].error("cannot import a type from the unnamed package")
-            imports.append(tuple(imported))
+            (static_imports if static else imports).append(tuple(imported))
         mods = self.modifiers()
         # JLS 8.1.1: unsupported abstract classes differ from illegal
         # top-level private/protected/static or method-only modifiers.
@@ -532,7 +535,7 @@ class SourceParser:
                                         parameter_final=parameter_final))
         self.expect("<eof>")
         return SourceClass(owner, tuple(methods), class_modifiers, tuple(imports), tuple(fields), tuple(constructors),
-                           class_token, tuple(initializers), tuple(initialization_steps))
+                           class_token, tuple(initializers), tuple(initialization_steps), tuple(static_imports))
 
     def parameters(self, token, *, receiver=False):
         self.expect("(")

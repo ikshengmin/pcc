@@ -140,7 +140,9 @@ class SourceAnalyzer:
         for scope in reversed(self.scopes):
             if token.text in scope:
                 return scope[token.text]
-        if token.text in self.fields:
+        field = (self.project.simple_field(self, token.text, token) if self.project is not None
+                 else self.fields.get(token.text))
+        if field is not None:
             token.error("cannot assign a final constant field " + token.text)
         token.error("undefined local variable " + token.text)
 

@@ -49,8 +49,16 @@ class-qualified calls enforce class/member access and name obscuring. Unknown
 roots of package-qualified calls fail explicitly until the shared bootstrap
 public java.lang type directory can rule out implicit-type obscuring. Literal
 fully qualified source fixtures are retained as capability rejections, not
-rewritten to imports and counted as successful originals. Static imports, on-demand
-imports, nested classes, generics and inheritance are not yet implemented.
+rewritten to imports and counted as successful originals. Single-static imports
+now bind accessible static fields and overloaded methods from supplied named-package
+classes. Imports are validated even when unused, repeated declarations retain one
+identity, and distinct owners stay distinct overload candidates. Own members and
+local values retain their separate Java shadowing rules; ambiguous imported fields
+are rejected at use. Imported fields also obscure expression-name qualifiers.
+On-demand imports, nested/member types, generics and inheritance remain unavailable.
+The new single-static-import ordinary, native-byte and exact-original JDK obligations
+are execution-UNRUN until CI validates this source. This lookup capability does not
+supply JUnit, String objects, class initialization or any managed-runtime acceptance.
 
 Primitive `static final` constant-variable fields are checked and inlined, including
 byte/short/char assignment-constant narrowing, field access, simple-name forward
