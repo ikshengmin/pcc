@@ -72,6 +72,12 @@ def test_explicit_holes_accept_argument_result_and_later_constraints(text):
         assert 'define' in result.ir_text
 
 
+def test_original_local_annotation_capability_input_now_compiles():
+    # Retain the exact former capability original. Broader constraint, native
+    # execution and oracle cases live in test_rust_local_placeholders.py.
+    compile_rust('fn f()->u64{let x:_=1u64;x}', experimental_rustc_checked=True)
+
+
 def test_rooted_unused_generic_fixture_preserves_the_exact_original_prefix():
     assert source('call_placeholder_unused_root').startswith(UNUSED_GENERIC_ORIGINAL + '\n')
 
@@ -149,7 +155,6 @@ def test_actual_rustc_rejects_exact_invalid_placeholder_originals(tmp_path, monk
 
 
 CAPABILITIES = (
-    ('local-annotation', 'fn f()->u64{let x:_=1u64;x}', 'only in function/method call type arguments'),
     ('constructor', 'struct R<T>{x:T}fn f()->u64{R::<_>{x:1u64}.x}', 'only in function/method call type arguments'),
     ('owner', 'struct R<T>{x:T}impl<T>R<T>{fn take(self)->T{self.x}}fn f()->u64{R::<_>::take(R::<u64>{x:1})}', 'only in function/method call type arguments'),
     ('reference-argument', 'fn id<T>(x:T)->T{x}fn f(p:&u64){id::<_>(p);}', 'generic function reference arguments'),

@@ -76,23 +76,23 @@ class GenericDeclarations:
         resolution = self.checker.module_resolution
         return resolution.type_name(name, self.checker.current_module, token) if resolution is not None else name
 
-    def normalize(self, ty, token, scope=None, *, call_inference=False):
+    def normalize(self, ty, token, scope=None, *, placeholder_context=None):
         scope = self.checker.type_scope if scope is None else scope
         bounded_type(ty, token)
         if ty == "_":
-            if not call_inference:
-                raise token.error("unsupported Rust type '_': inferred type placeholders are implemented only in function/method call type arguments")
+            if placeholder_context is None:
+                raise token.error("unsupported Rust type '_': inferred type placeholders are implemented only in function/method call type arguments and local annotations")
             from .semantics import InferredType
-            return InferredType(token, description="call type placeholder")
+            return InferredType(token, description=placeholder_context + " type placeholder")
         if isinstance(ty, FixedArrayType):
             from .arrays import length_value
-            return FixedArrayType(self.normalize(ty.element, token, scope, call_inference=call_inference),
+            return FixedArrayType(self.normalize(ty.element, token, scope, placeholder_context=placeholder_context),
                                   length_value(self.checker, ty.length, token))
         if isinstance(ty, TupleType):
-            return TupleType(tuple(self.normalize(t, token, scope, call_inference=call_inference)
+            return TupleType(tuple(self.normalize(t, token, scope, placeholder_context=placeholder_context)
                                    for t in ty.elements))
         if isinstance(ty, SharedReference):
-            return SharedReference(self.normalize(ty.referent, token, scope, call_inference=call_inference),
+            return SharedReference(self.normalize(ty.referent, token, scope, placeholder_context=placeholder_context),
                                    ty.mutable, ty.lifetime)
         if isinstance(ty, TypeApplication):
             ty = TypeApplication(self.canonical_name(ty.name, token, scope), ty.arguments)
@@ -103,7 +103,7 @@ class GenericDeclarations:
                 raise token.error(f"unsupported Rust type {ty.name!r}")
             if len(ty.arguments) != len(declaration.type_parameters):
                 raise token.error(f"generic argument count mismatch for {ty.name}")
-            arguments = tuple(self.normalize(t, token, scope, call_inference=call_inference)
+            arguments = tuple(self.normalize(t, token, scope, placeholder_context=placeholder_context)
                               for t in ty.arguments)
             for argument in arguments:
                 self.checker.standard_markers.require_sized(argument, token)

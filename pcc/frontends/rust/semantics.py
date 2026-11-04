@@ -487,10 +487,16 @@ class Checker:
                 if init_ty == NEVER:
                     raise expr.token.error("diverging let initializers are not implemented")
                 if annotation is not None:
-                    annotation = self.generics.normalize(annotation, expr.token)
+                    # Each annotation hole belongs to this local declaration and
+                    # body replay. Share it with the initializer and later uses;
+                    # resolving here would default integers before call/result
+                    # constraints have reached the same inference variables.
+                    annotation = self.generics.normalize(
+                        annotation, expr.token, placeholder_context="local")
                     self.valid_type(annotation, expr.token)
                     unify(annotation, init_ty, expr.token)
-                    init_ty = annotation
+                    from .call_inference import partial
+                    init_ty = partial(annotation)
                 expr.binding = self.bind(expr.token, init_ty, mutable)
             elif children:
                 child_ty = self.expression(children[0])
@@ -715,7 +721,7 @@ class Checker:
                 # of a generic body). Concrete slots remain fixed constraints.
                 # Nested placeholders retain their tuple/array/nominal shape.
                 explicit_arguments = tuple(
-                    self.generics.normalize(ty, callee.token, call_inference=True)
+                    self.generics.normalize(ty, callee.token, placeholder_context="call")
                     for ty in explicit_arguments)
             from .call_inference import infer, pending_integer
             fixed = fixed_arguments + (explicit_arguments or ())

@@ -472,7 +472,7 @@ class Parser:
         text = token.text
         if text == "_":
             # Preserve the source placeholder, not a shared inference variable.
-            # Only call-site normalization may mint a fresh variable for it.
+            # Only call-site/local normalization may mint a fresh variable for it.
             return text
         if text == "[":
             element = self.type()

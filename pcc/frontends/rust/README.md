@@ -621,6 +621,24 @@ Specification: [inferred types](https://doc.rust-lang.org/reference/types/inferr
 [generic parameters](https://doc.rust-lang.org/reference/items/generics.html),
 [call expressions](https://doc.rust-lang.org/reference/expressions/call-expr.html).
 
+### Local annotation placeholders
+
+Local annotations accept `_` at the root and inside existing tuple, fixed-array
+and nominal generic types. Every hole is fresh for that local declaration and
+each generic-body replay. Initializers, enclosing results, later arguments and
+assignments constrain the same variables before integer fallback; generic calls
+continue using the existing instance registry. Concrete annotation positions
+remain constraints, and unresolved holes, mismatches and non-Copy moves fail
+before lowering. Item signatures and constructor/qualified-owner placeholders
+retain their prior gates. Reference-bearing source still requires a genuine
+source/options-bound external check; an annotation hole cannot certify it.
+
+`tests/rust/test_rust_local_placeholders.py` retains the former local-annotation
+capability input and adds four authored complete runtime originals, target
+object checks and independently gated same-source rustc comparisons. These are
+not upstream project acceptance or native pcc1 qualification. Actual rustc
+reference execution remains unrun when its prerequisites are unavailable.
+
 ### Inherent method-local generic inference (qualified bounded slice)
 
 An inherent `impl<T> Cell<T>` may declare its own `fn method<U>`. The impl
