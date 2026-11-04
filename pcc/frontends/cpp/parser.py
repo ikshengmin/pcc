@@ -8,7 +8,7 @@ semantics. Unimplemented features remain explicit errors.
 """
 
 from pcc.frontends.c.ast import c_ast
-from pcc.frontends.c.c_abi_layout import c_size_type_name
+from pcc.frontends.c.c_abi_layout import c_ptrdiff_type_name, c_size_type_name
 from pcc.frontends.c.parse.c_lex import CLexer
 from pcc.frontends.c.parse.plyparser import Coord
 from pcc.support.instantiation import InstanceRegistry
@@ -1837,8 +1837,7 @@ class CppParser:
         left_pointer, right_pointer = pointer_type(left), pointer_type(right)
         if left_pointer and right_pointer:
             if operator == "-":
-                raise CppDiagnostic("cpp.unsupported.pointer-operators",
-                                    "pointer difference is not implemented", coord)
+                return self._pointer_difference_expression(lhs, rhs, coord)
             raise CppDiagnostic("cpp.invalid-operands", "two pointers cannot be added", coord)
         if left_pointer:
             dtype, offset = left, rhs
@@ -1878,6 +1877,39 @@ class CppParser:
         node = c_ast.StmtExpr(c_ast.Compound(declarations + [value], coord), coord)
         return Expression(node, dtype, constant_fact=unmodeled(
             dtype, "pointer offset constant-expression proof is not implemented", coord))
+
+    def _pointer_difference_expression(self, lhs, rhs, coord):
+        """[expr.add] signed element distance, with target ptrdiff_t identity."""
+        left, right = unqualified(lhs.dtype), unqualified(rhs.dtype)
+        pointee = unqualified(left.pointee)
+        if (pointee != unqualified(right.pointee)
+                or pointee == "void" or function_type(pointee)):
+            raise CppDiagnostic("cpp.invalid-operands",
+                                "pointer difference requires the same complete object pointee", coord)
+        require_complete_array(pointee, coord)
+        leaf = pointee
+        while array_type(leaf):
+            leaf = unqualified(leaf.element)
+        require_complete(leaf, coord)
+        if is_enum_type(leaf) and not leaf.complete:
+            raise CppDiagnostic("cpp.incomplete-enum", "pointer difference requires a complete enum", coord)
+        dtype = c_ptrdiff_type_name(self.types.target_triple)
+        if self.template_function is not None:
+            return Expression(Pattern("binary", coord, "-", [lhs, rhs]), dtype)
+        left_name = self._fresh_projection_name("__pcc_cpp_difference_l_")
+        right_name = self._fresh_projection_name("__pcc_cpp_difference_r_")
+        declarations = [
+            self._decl(left_name, left, coord, self._convert(lhs, left, coord)),
+            self._decl(right_name, right, coord, self._convert(rhs, right, coord)),
+        ]
+        # Preserve both typed pointees through formal/result array erasure.
+        # C lowering already owns signed byte subtraction and element stride.
+        # Additive operands may be evaluated in either order, exactly once.
+        value = c_ast.BinaryOp("-", c_ast.ID(left_name, coord),
+                              c_ast.ID(right_name, coord), coord)
+        node = c_ast.StmtExpr(c_ast.Compound(declarations + [value], coord), coord)
+        return Expression(node, dtype, constant_fact=unmodeled(
+            dtype, "pointer difference constant-expression proof is not implemented", coord))
 
     def _binary_expression(self, operator, lhs, rhs, coord):
         lhs, rhs = self._decay_array(lhs), self._decay_array(rhs)
