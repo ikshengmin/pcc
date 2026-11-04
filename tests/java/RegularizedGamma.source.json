@@ -1,0 +1,51 @@
+{
+  "repository": "apache/commons-numbers",
+  "revision": "77f715769e4039acb4babd9add80b78a06ca7279",
+  "purpose": "Complete unchanged source boundary control and static member-class relevance, not a replacement for the original Primes module/project gate.",
+  "complete_original_source": true,
+  "complete_module_source_closure": false,
+  "complete_build_closure": false,
+  "execution": "UNRUN",
+  "project_accepted": false,
+  "native_expected_boundary": {
+    "code": "java.unsupported.instance-methods",
+    "line": 36,
+    "reason": "Explicit private outer constructor remains outside native scalar source admission."
+  },
+  "model_expected_boundary": {
+    "code": "java.unsupported.member-types",
+    "line": 46,
+    "reason": "Class-model nested types retain their explicit capability boundary."
+  },
+  "unresolved_dependencies": [
+    "BoostGamma",
+    "Policy and managed object construction",
+    "complete gamma module and upstream tests"
+  ],
+  "files": [
+    {
+      "file": "RegularizedGamma.java",
+      "upstream_path": "commons-numbers-gamma/src/main/java/org/apache/commons/numbers/gamma/RegularizedGamma.java",
+      "url": "https://github.com/apache/commons-numbers/blob/77f715769e4039acb4babd9add80b78a06ca7279/commons-numbers-gamma/src/main/java/org/apache/commons/numbers/gamma/RegularizedGamma.java",
+      "git_blob": "e724a702aaebccaf3001186c8d5955e52f6e8207",
+      "sha256": "f144d0986938692a6ed89dc151da772b2836e8b7fd6b2146880f23db5c6dd230",
+      "size": 5855
+    },
+    {
+      "file": "RegularizedGamma.LICENSE",
+      "upstream_path": "LICENSE",
+      "url": "https://github.com/apache/commons-numbers/blob/77f715769e4039acb4babd9add80b78a06ca7279/LICENSE",
+      "git_blob": "f859d5755867d8e63f5d0cb8c26dca8391403086",
+      "sha256": "4d4b3a82608fb93fba1a42e825185f4315e07f2c59fc0e65cff765efaf0ce91a",
+      "size": 13621
+    },
+    {
+      "file": "RegularizedGamma.NOTICE",
+      "upstream_path": "NOTICE",
+      "url": "https://github.com/apache/commons-numbers/blob/77f715769e4039acb4babd9add80b78a06ca7279/NOTICE",
+      "git_blob": "45fc9620e8ce7597a438693043408f867b6d7c9b",
+      "sha256": "eed42f42cad7284a79967f6f21243353cd4efa254a91bae5fff8528c93990d64",
+      "size": 884
+    }
+  ]
+}

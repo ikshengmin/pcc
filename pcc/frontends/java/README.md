@@ -24,7 +24,8 @@ Input ordering does not affect IR. Existing `admitted_methods` describes the
 selected entry class; `emitted_class_methods` additionally records `(class, name,
 descriptor)` for the entire source closure.
 
-The current scalar domain is one ordinary class per source unit, static boolean/integral/void
+The current scalar domain is one ordinary top-level class and its static member
+classes per source unit, static boolean/integral/void
 methods with boolean/integral parameters/locals, lexical scopes/definite assignment,
 if/while/for/break/continue/return, recursive calls, int wrap/bitwise/masked shifts,
 and integral/boolean casts. Primitive overload selection uses parameter types,
@@ -55,10 +56,46 @@ classes. Imports are validated even when unused, repeated declarations retain on
 identity, and distinct owners stay distinct overload candidates. Own members and
 local values retain their separate Java shadowing rules; ambiguous imported fields
 are rejected at use. Imported fields also obscure expression-name qualifiers.
-On-demand imports, nested/member types, generics and inheritance remain unavailable.
+On-demand imports, static-imported member types, inner classes, generics and
+inheritance remain unavailable.
 The new single-static-import ordinary, native-byte and exact-original JDK obligations
 are execution-UNRUN until CI validates this source. This lookup capability does not
 supply JUnit, String objects, class initialization or any managed-runtime acceptance.
+
+Native static member classes retain every original declaration, method and constant
+field in one source closure. Canonical source names such as `p.Outer.Inner` are
+distinct from binary owners such as `p/Outer$Inner`; ordinary dollar signs in
+identifiers are not rewritten. All member methods, including uncalled ones, are
+checked and lowered through the existing native primitive function/call/ABI path.
+No constructor or enclosing receiver is synthesized, and no member body is skipped.
+
+Lexical lookup searches the nearest enclosing class for types and constants. An
+unqualified method name selects the nearest owner declaring that name, without
+mixing outer overloads or bypassing inherited Object method names. Qualified calls
+search only their explicit owner. Each intermediate qualifier retains Java's
+field/method obscuring rules. Private access crosses classes of the same top-level
+nest; every enclosing type must remain accessible. Imports are checked outside
+that nest privilege and cannot import from an unnamed package. Canonical single-type
+imports and single-static method/field imports may name nested owners; a static
+import of a member type remains an explicit boundary, even when a same-named field
+or method would otherwise be importable.
+
+The new ordinary, exact native-byte and unchanged-source selected-JDK obligations
+are execution-UNRUN. Complete pinned Commons Numbers `RegularizedGamma.java`, with
+LICENSE, NOTICE and provenance, is retained as an original boundary input. Its real
+static `P`/`Q` classes motivate this mechanism, but the unchanged native input still
+stops at its private outer constructor on line 36. The separate class model still
+rejects nested types at line 46. These are authored, unrun source predictions,
+not complete-class or project acceptance. No extracted method or fake BoostGamma/
+Policy dependency substitutes for that input. The original Primes String31 frontier
+and shared managed-runtime/QPS gate remain unchanged. Nonstatic inner classes,
+explicit constructors, instance state, model nesting and runtime initialization
+retain their separate capability boundaries.
+
+Rules: [member classes](https://docs.oracle.com/javase/specs/jls/se21/html/jls-8.html#jls-8.5),
+[name/access resolution](https://docs.oracle.com/javase/specs/jls/se21/html/jls-6.html),
+[imports](https://docs.oracle.com/javase/specs/jls/se21/html/jls-7.html#jls-7.5),
+and [binary names](https://docs.oracle.com/javase/specs/jls/se21/html/jls-13.html#jls-13.1).
 
 Primitive `static final` constant-variable fields are checked and inlined, including
 byte/short/char assignment-constant narrowing, field access, simple-name forward

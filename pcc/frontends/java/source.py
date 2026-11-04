@@ -30,7 +30,7 @@ def _admit_target(target):
 
 def _compile_programs(programs, entry_class, entry, descriptor, target):
     project = SourceProject(programs).analyze()
-    program = project.classes.get(entry_class)
+    program = project.canonical_classes.get(entry_class)
     if program is None:
         raise JavaError("source entry class not found: " + entry_class.replace("/", "."))
     key = (entry, descriptor)

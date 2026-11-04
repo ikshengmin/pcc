@@ -118,10 +118,21 @@ class SourceClass:
     instance_initializers: tuple[Node, ...] = ()
     initialization_steps: tuple = ()
     static_imports: tuple[tuple[Token, ...], ...] = ()
+    member_classes: tuple = ()
+    enclosing_name: str | None = None
+    canonical_name: str | None = None
 
     @property
     def package(self):
         return self.name.rpartition("/")[0]
+
+    @property
+    def simple_name(self):
+        return self.token.text if self.token is not None else self.name.rsplit("/", 1)[-1]
+
+    @property
+    def source_name(self):
+        return self.canonical_name or self.name
 
 
 def _raw_token(text, filename, offset, line_starts, *, string_units=None):
@@ -435,28 +446,50 @@ class SourceParser:
             if len(imported) < (3 if static else 2):
                 imported[0].error("cannot import a type from the unnamed package")
             (static_imports if static else imports).append(tuple(imported))
-        mods = self.modifiers()
+        program = self.class_declaration(self.modifiers(), "/".join(package),
+                                         tuple(imports), tuple(static_imports))
+        self.expect("<eof>")
+        return program
+
+    def class_declaration(self, mods, package, imports, static_imports, *, enclosing=None, enclosing_names=()):
         # JLS 8.1.1: unsupported abstract classes differ from illegal
         # top-level private/protected/static or method-only modifiers.
-        if mods - {"public", "final", "strictfp", "abstract"} or {"abstract", "final"} <= mods:
-            self.peek().error("unsupported top-level class modifiers")
+        allowed = {"public", "final", "strictfp", "abstract"}
+        if enclosing is not None:
+            allowed |= {"private", "protected", "static"}
+        if mods - allowed or {"abstract", "final"} <= mods:
+            self.peek().error("invalid member class modifiers" if enclosing is not None else
+                              "unsupported top-level class modifiers")
         if "abstract" in mods:
             self.peek().error("unsupported top-level class modifiers", code="java.unsupported.abstract-classes")
         self.expect("class")
         class_token = self.identifier(type_name=True)
         name = class_token.text
-        class_modifiers = frozenset(mods)
-        owner = "/".join(package + [name])
+        if name in enclosing_names:
+            class_token.error("member class cannot have the same simple name as an enclosing class")
+        owner = enclosing.name + "$" + name if enclosing is not None else (package + "/" if package else "") + name
+        canonical = enclosing.source_name + "/" + name if enclosing is not None else owner
+        program = SourceClass(owner, (), frozenset(mods), imports, token=class_token,
+                              static_imports=static_imports,
+                              enclosing_name=enclosing.name if enclosing is not None else None,
+                              canonical_name=canonical)
         if self.peek().text in {"extends", "implements", "<", "permits"}:
             self.peek().error("inheritance, generics and interfaces require the shared Java runtime", code="java.unsupported.class-supertypes-generics")
         if self.peek().text != "{":
             self.peek().error("inheritance, generics and interfaces require the shared Java runtime")
         self.expect("{")
-        methods, fields, constructors, initializers, initialization_steps = [], [], [], [], []
+        methods, fields, constructors, initializers, initialization_steps, members = [], [], [], [], [], []
         while not self.accept("}"):
             if self.accept(";"):
                 continue
             mods = self.modifiers()
+            if self.peek().text in {"class", "interface", "enum", "record"}:
+                if self.peek().text != "class" or self.class_model or "static" not in mods:
+                    self.peek().error("only native static member classes have an owned source domain",
+                                      code="java.unsupported.member-types")
+                members.append(self.class_declaration(mods, package, imports, static_imports,
+                                                      enclosing=program, enclosing_names=(*enclosing_names, name)))
+                continue
             if not self.class_model and mods == {"static"} and self.peek().text == "{":
                 self.peek().error("source method results require boolean, integral primitives or void",
                                   code="java.unsupported.static-initialization")
@@ -491,9 +524,6 @@ class SourceParser:
             if self.peek().text == "<":
                 self.peek().error("source method results require boolean, integral primitives or void",
                                   code="java.unsupported.generic-declarations")
-            if self.peek().text in {"class", "interface", "enum", "record"}:
-                self.peek().error("source method results require boolean, integral primitives or void",
-                                  code="java.unsupported.member-types")
             result = self.take()
             result_type = self.array_suffix(self.declaration_type(result))
             method_name = self.identifier()
@@ -543,9 +573,10 @@ class SourceParser:
             methods.append(SourceMethod(method_name, result_type, parameters, self.block(),
                                         owner=owner, modifiers=frozenset(mods), parameter_types=parameter_types,
                                         parameter_final=parameter_final))
-        self.expect("<eof>")
-        return SourceClass(owner, tuple(methods), class_modifiers, tuple(imports), tuple(fields), tuple(constructors),
-                           class_token, tuple(initializers), tuple(initialization_steps), tuple(static_imports))
+        program.methods, program.fields, program.constructors = tuple(methods), tuple(fields), tuple(constructors)
+        program.instance_initializers, program.initialization_steps = tuple(initializers), tuple(initialization_steps)
+        program.member_classes = tuple(members)
+        return program
 
     def throws_boundary(self):
         if self.peek().text == "throws":

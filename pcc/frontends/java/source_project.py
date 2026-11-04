@@ -2,12 +2,14 @@
 
 Only supplied source classes are visible; there is no classpath, classfile,
 reflection lookup or host JDK fallback. Single-type and single-static imports
-resolve against supplied declarations before lowering. Inheritance/member
-types and on-demand imports remain explicit unsupported domains.
+resolve against supplied declarations before lowering. Native static member
+classes retain their lexical type scope and distinct binary owners. Inheritance,
+inner classes and on-demand imports remain explicit unsupported domains.
 """
-from .diagnostics import JavaError, UnsupportedJava
+from .diagnostics import UnsupportedJava
 from .source_sema import SourceAnalyzer
 from .source_types import select_method
+from .source_member_types import StaticMemberTypes
 
 
 # Ordinary source classes inherit these method names from Object. The source
@@ -19,43 +21,38 @@ OBJECT_INHERITED_METHOD_NAMES = frozenset((
 ))
 
 
-class SourceProject:
+class SourceProject(StaticMemberTypes):
     def __init__(self, programs, *, analyzer_type=SourceAnalyzer):
-        self.programs = tuple(sorted(programs, key=lambda item: item.name))
-        self.classes = {}
+        self.initialize_member_types(programs)
         self.imports = {}
         self.static_fields = {}
         self.static_methods = {}
         self.analyzers = {}
-        for program in self.programs:
-            if program.name in self.classes:
-                raise JavaError("duplicate source class " + program.name.replace("/", "."))
-            self.classes[program.name] = program
-        # JLS 7.1: a package member cannot simultaneously name a top-level
-        # class and a subpackage. Check the entire supplied closure, not order.
-        for name in self.classes:
-            pieces = name.split("/")
-            for end in range(1, len(pieces)):
-                if "/".join(pieces[:end]) in self.classes:
-                    raise JavaError("source class/package name conflict: " + name.replace("/", "."))
-        for program in self.programs:
+        for program in self.top_levels:
             imported = {}
             for tokens in program.imports:
                 name = "/".join(token.text for token in tokens)
-                target = self.classes.get(name)
+                target = self.canonical_classes.get(name)
                 if target is None:
                     target = self.external_type_dependency(program, tokens)
                     if target is None:
                         raise UnsupportedJava("source-project dependency resolution requires supplied source for "
                                               + name.replace("/", "."), code="java.unsupported.source-dependency")
                 else:
-                    self.require_class_access(program, target, tokens[0])
+                    if not target.package:
+                        tokens[0].error("cannot import a type from the unnamed package")
+                    self.require_class_access(program, target, tokens[0], import_context=True)
                 simple = tokens[-1].text
                 if (simple in imported and imported[simple] is not target or
-                        simple == program.name.rsplit("/", 1)[-1] and target is not program):
+                        simple == program.simple_name and target is not program):
                     tokens[-1].error("conflicting single-type import " + simple)
                 imported[simple] = target
             self.imports[program.name] = imported
+        for program in self.programs:
+            # Imports belong to the compilation unit, outside every class body.
+            # A member type may shadow one without creating a top-level import
+            # conflict or gaining private access from its declaration's nest.
+            self.imports[program.name] = self.imports[self.nest_root(program).name]
         # Resolve declaration identities before building overload tables. The
         # native scalar owner has no extra declaration domain; model subclasses
         # may bind retained source type names without granting lowering.
@@ -75,18 +72,23 @@ class SourceProject:
         fields, methods = {}, {}
         for tokens in program.static_imports:
             owner = "/".join(token.text for token in tokens[:-1])
-            target = self.classes.get(owner)
+            target = self.canonical_classes.get(owner)
             if target is None:
                 tokens[0].error("static import requires supplied source for " + owner.replace("/", "."),
                                 code="java.unsupported.source-dependency")
-            self.require_class_access(program, target, tokens[0])
-            analyzer = self.analyzers[owner]
+            if not target.package:
+                tokens[0].error("cannot import a static member from the unnamed package")
+            self.require_class_access(program, target, tokens[0], import_context=True)
+            analyzer = self.analyzers[target.name]
             name = tokens[-1].text
+            if name in self.member_types[target.name]:
+                tokens[-1].error("single-static imported member types require the next source import domain",
+                                 code="java.unsupported.static-imports")
             # The import is outside all class bodies: even a private member
             # of this compilation unit's own class cannot be imported here.
             def accessible(member):
-                return ("static" in member.modifiers and "private" not in member.modifiers
-                        and (program.package == target.package or "public" in member.modifiers))
+                return ("static" in member.modifiers and
+                        self.member_accessible(program, target, member.modifiers, import_context=True))
 
             field = analyzer.fields.get(name)
             imported_field = field is not None and accessible(field)
@@ -96,19 +98,20 @@ class SourceProject:
                 tokens[-1].error("no accessible static member for single-static import "
                                  + owner.replace("/", ".") + "." + name)
             if imported_field:
-                fields.setdefault(name, {})[owner] = field
+                fields.setdefault(name, {})[target.name] = field
             for method in candidates:
                 # Repeated imports of the same declaration are harmless, but
                 # same-signature declarations from different owners remain
                 # separate overload candidates and may be ambiguous at use.
-                methods.setdefault(name, {})[owner, method.parameter_types] = method
+                methods.setdefault(name, {})[target.name, method.parameter_types] = method
         self.static_fields[program.name] = fields
         self.static_methods[program.name] = methods
 
     def simple_field(self, analyzer, name, token):
-        field = analyzer.fields.get(name)
-        if field is not None:
-            return field
+        for owner in self.lexical_classes(analyzer.program):
+            field = self.analyzers[owner.name].fields.get(name)
+            if field is not None:
+                return field
         imported = self.static_fields[analyzer.program.name].get(name, {})
         if len(imported) > 1:
             token.error("ambiguous single-static imported field " + name)
@@ -121,39 +124,20 @@ class SourceProject:
         # Only a nonlowering semantic model may describe an unresolved type.
         return None
 
-    @staticmethod
-    def require_class_access(caller, target, token):
-        if caller.package != target.package and "public" not in target.modifiers:
-            token.error("source class is not accessible: " + target.name.replace("/", "."))
-
-    def visible_simple_type(self, caller, name):
-        if caller.name.rsplit("/", 1)[-1] == name:
-            return caller
-        imported = self.imports[caller.name].get(name)
-        if imported is not None:
-            return imported
-        qualified = caller.package + "/" + name if caller.package else name
-        same_package = self.classes.get(qualified)
-        if same_package is not None:
-            return same_package
-        implicit = self.classes.get("java/lang/" + name)
-        # JLS 7.3 imports only public java.lang top-level types. A hidden
-        # type must not obscure an otherwise usable top-level package name.
-        return implicit if implicit is not None and "public" in implicit.modifiers else None
-
     def resolve_call(self, analyzer, node):
         pieces = node.value.split(".")
         if len(pieces) == 1:
             # JLS 6.4.1/15.12.1: a member method shadows every imported method
             # with the same name, including when no member overload applies.
-            own_name = any(method.token.text == node.value for method in analyzer.methods.values())
             imported = self.static_methods[analyzer.program.name].get(node.value, {})
-            if not own_name and imported and node.value in OBJECT_INHERITED_METHOD_NAMES:
-                node.token.error("inherited Object method lookup cannot be replaced by a single-static import",
-                                 code="java.unsupported.object-inherited-methods")
-            methods = (analyzer.methods if own_name else
-                       imported)
-            return select_method(methods, node)
+            for owner in self.lexical_classes(analyzer.program):
+                methods = self.analyzers[owner.name].methods
+                if any(method.token.text == node.value for method in methods.values()):
+                    return select_method(methods, node)
+                if node.value in OBJECT_INHERITED_METHOD_NAMES and (owner.enclosing_name is not None or imported):
+                    node.token.error("inherited Object method lookup cannot be replaced by an enclosing or imported method",
+                                     code="java.unsupported.object-inherited-methods")
+            return select_method(imported, node)
         target = self.resolve_qualified_owner(analyzer, node)
         caller = analyzer.program
         methods = self.analyzers[target.name].methods
@@ -161,8 +145,7 @@ class SourceProject:
         # An inaccessible narrower overload must not defeat a public widening
         # overload that is otherwise applicable to this call.
         accessible = {key: method for key, method in methods.items()
-                      if target is caller or "private" not in method.modifiers and
-                      (caller.package == target.package or "public" in method.modifiers)}
+                      if self.member_accessible(caller, target, method.modifiers)}
         method = select_method(accessible, node)
         if method is None:
             if select_method(methods, node) is not None:
@@ -180,8 +163,7 @@ class SourceProject:
             field = self.analyzers[target.name].fields.get(node.value.rsplit(".", 1)[-1])
         if field is None:
             node.token.error("undefined local variable or constant field " + node.value)
-        if target is not caller and ("private" in field.modifiers or
-                                    caller.package != target.package and "public" not in field.modifiers):
+        if not self.member_accessible(caller, target, field.modifiers):
             node.token.error("source constant field is not accessible: " + node.value)
         return field
 
@@ -196,9 +178,21 @@ class SourceProject:
         first = self.visible_simple_type(caller, pieces[0])
         qualifier = pieces[:-1]
         if first is not None:
-            if len(qualifier) != 1:
-                node.token.error("member types require the nested-class source domain", code="java.unsupported.member-types")
             target = first
+            self.require_class_access(caller, target, node.token)
+            for name in qualifier[1:]:
+                owner = self.analyzers[target.name]
+                # JLS 6.5.2 reclassifies every intermediate name, not just
+                # the first one. A member value/method obscures a type even
+                # when the member cannot be accessed from this caller.
+                if (name in owner.fields or any(method.token.text == name for method in owner.methods.values())
+                        or name in OBJECT_INHERITED_METHOD_NAMES):
+                    node.token.error("source field or method cannot be dereferenced as a member type")
+                member = self.member_types[target.name].get(name)
+                if member is None:
+                    node.token.error("unresolved source member type " + name)
+                target = member
+                self.require_class_access(caller, target, node.token)
         else:
             # The full bootstrap java.lang public-type directory is not yet
             # provided by the shared Java class metadata contract. A matching

@@ -38,10 +38,9 @@ CAPABILITIES = [
     ("class Diagnostic extends Object{}", "class-supertypes-generics", "inheritance, generics"),
     ("class Diagnostic<T>{}", "class-supertypes-generics", "inheritance, generics"),
     ("class Diagnostic{static <T> int run(){return 42;}}", "generic-declarations", "source method results"),
-    ("class Diagnostic{static class Nested{}}", "member-types", "source method results"),
-    ("class Diagnostic{static interface Nested{}}", "member-types", "source method results"),
-    ("class Diagnostic{static enum Nested{VALUE}}", "member-types", "source method results"),
-    ("class Diagnostic{static record Nested(){}}", "member-types", "source method results"),
+    ("class Diagnostic{static interface Nested{}}", "member-types", "only native static member classes"),
+    ("class Diagnostic{static enum Nested{VALUE}}", "member-types", "only native static member classes"),
+    ("class Diagnostic{static record Nested(){}}", "member-types", "only native static member classes"),
     ("import static p.C.f; class Diagnostic{}", "source-dependency", "requires supplied source for p.C"),
     ("import static p.C.*; class Diagnostic{}", "static-imports", "static on-demand imports"),
     ("import p.*; class Diagnostic{}", "on-demand-imports", "on-demand imports"),
@@ -64,7 +63,6 @@ CAPABILITIES = [
     (original("throw null;"), "runtime-statements", "unsupported Java expression"),
     (original("assert true;return 42;"), "assert-statements", "unsupported Java expression"),
     (original("class Local{}return 42;"), "local-types", "unsupported Java expression"),
-    (original("return Diagnostic.Member.f();"), "member-types", "member types require"),
     (original("return missing.Package.f();"), "implicit-type-metadata", "complete implicit-type metadata"),
     ("package java.lang; class Object{}", "bootstrap-object", "bootstrap Object"),
 ]
@@ -86,6 +84,24 @@ def test_former_final_var_boundary_now_reaches_owned_ir():
 
 def test_former_blank_final_boundary_now_reaches_owned_ir():
     assert compile_source(original("final int value;return 42;")).entry[1] == "()I"
+
+
+def test_exact_former_static_member_boundary_is_admitted_without_fabricating_an_entry():
+    from pcc.frontends.java.source_project import SourceProject
+    text = "class Diagnostic{static class Nested{}}"
+    project = SourceProject((SourceParser(text, "Original.java").parse(),)).analyze()
+    assert set(project.classes) == {"Diagnostic", "Diagnostic$Nested"}
+    assert set(project.canonical_classes) == {"Diagnostic", "Diagnostic/Nested"}
+    with pytest.raises(JavaError, match="entry method not found") as caught:
+        compile_source(text, filename="Original.java")
+    assert type(caught.value) is JavaError and caught.value.code is None
+
+
+def test_exact_former_unknown_member_boundary_is_now_an_ordinary_missing_declaration():
+    text = original("return Diagnostic.Member.f();")
+    with pytest.raises(JavaError, match="unresolved source member type Member") as caught:
+        compile_source(text, filename="Original.java")
+    assert type(caught.value) is JavaError and caught.value.code is None
 
 
 @pytest.mark.parametrize("source,suffix,message", CAPABILITIES, ids=[row[1] + str(i) for i, row in enumerate(CAPABILITIES)])

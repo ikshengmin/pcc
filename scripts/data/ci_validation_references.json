@@ -1,5 +1,19 @@
 {
   "functions": {
+    "tests/java/test_source_static_member_classes.py": {
+      "test_identical_complete_member_projects_match_selected_jdk_raw_processes": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses unchanged complete supplied static member-class source maps and selected JDK tools with independent observers, exact raw native/reference stdout/stderr/exit comparison, or source-attributed compiler rejection. Original source/observer/tool identities are retained. No host compiler is a production owner. Complete Commons Numbers RegularizedGamma is a separate unresolved original boundary; no Commons Numbers project, managed runtime or QPS acceptance is established."
+        ]
+      },
+      "test_identical_invalid_member_projects_have_selected_jdk_rejections": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses unchanged complete supplied static member-class source maps and selected JDK tools with independent observers, exact raw native/reference stdout/stderr/exit comparison, or source-attributed compiler rejection. Original source/observer/tool identities are retained. No host compiler is a production owner. Complete Commons Numbers RegularizedGamma is a separate unresolved original boundary; no Commons Numbers project, managed runtime or QPS acceptance is established."
+        ]
+      }
+    },
     "tests/java/test_source_blank_final_locals.py": {
       "test_identical_blank_final_originals_match_jdk_raw_processes": {
         "activity": "external-reference",

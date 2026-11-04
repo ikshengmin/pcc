@@ -143,9 +143,12 @@ def test_source_project_lookup_gaps_are_not_ignored(imports, message):
 
 
 def test_class_name_obscures_package_qualifier_without_guessing_a_fully_qualified_match():
-    with pytest.raises(UnsupportedJava, match="member types"):
+    # Preserve the exact original: the first p names local.p, whose missing
+    # Other member is malformed now that native member types are implemented.
+    with pytest.raises(JavaError, match="unresolved source member type Other") as caught:
         compile_sources({"A": unit("local", "p", "static int run(){return p.Other.f();}"),
                          "B": unit("p", "Other", "public static int f(){return 42;}")}, entry_class="local.p")
+    assert type(caught.value) is JavaError and caught.value.code is None
 
 
 def test_single_class_api_shares_qualified_source_call_resolution():
