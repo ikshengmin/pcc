@@ -10,13 +10,16 @@ from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     free,
+    global_addr,
     global_load_ptr,
+    load_i32,
     load_i64,
     load_ptr,
     malloc,
     null,
     ptr_add,
     ptr_is_null,
+    ptr_eq,
     ptr_to_int,
     stack_alloc,
     store_i64,
@@ -24,6 +27,10 @@ from pcc.unsafe import (
 )
 
 __pcc_freestanding__ = True
+
+pcc_gc_object_index_find = extern("pcc_gc_object_index_find", (c_ptr,), c_ptr)
+pcc_gc_forwarding_index_find = extern("pcc_gc_forwarding_index_find", (c_ptr,), c_ptr)
+pcc_gc_object_is_address_pinned = extern("pcc_gc_object_is_address_pinned", (c_ptr,), c_int64)
 
 pcc_gc_object_node_is_active = extern("pcc_gc_object_node_is_active", (c_ptr,), c_int64)
 pcc_gc_mark_root_gray_if_known = extern("pcc_gc_mark_root_gray_if_known", (c_ptr,), c_void)
@@ -101,6 +108,54 @@ def pcc_gc_conservative_sort_intervals(entries, count: i64) -> None:
         index = index + 1
 
 
+@c_abi_export("pcc_gc_conservative_node_has_live_extent")
+def _node_has_live_extent(node) -> i64:
+    if pcc_gc_object_node_is_active(node) != 0:
+        return 1
+    # GC3's source stops owning mark work at copy commit, but NoRC retains
+    # that indexed physical allocation until its canonical target retires.
+    if (load_i32(global_addr("pcc_gc_backend_selected"), 0) != 3
+            or load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0):
+        return 0
+    obj = load_ptr(node, 0)
+    if ptr_is_null(obj) != 0 or (load_i32(obj, 12) & (2048 | 524288)) != 2048:
+        return 0
+    return 1 if ptr_is_null(pcc_gc_forwarding_index_find(obj)) == 0 else 0
+
+
+@c_abi_export("pcc_gc_conservative_pin_owner_chain")
+def _pin_owner_chain(node, mark: i64) -> None:
+    owner = load_ptr(node, 0)
+    if (load_i32(global_addr("pcc_gc_backend_selected"), 0) != 3
+            or load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0):
+        if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
+            store_i64(node, 56, load_i64(node, 56) | 1)
+        else:
+            store_i64(node, 56, 1)
+        if mark != 0:
+            pcc_gc_mark_root_gray_if_known(owner)
+        return
+    remaining: i64 = load_i32(global_addr("pcc_gc_forwarding_population"), 0) + 1
+    while remaining > 0:
+        current = pcc_gc_object_index_find(owner)
+        if ptr_is_null(current) != 0:
+            pcc_platform_abort()
+            return
+        store_i64(current, 56, load_i64(current, 56) | 1)
+        edge = pcc_gc_forwarding_index_find(owner)
+        if ptr_is_null(edge) != 0:
+            if mark != 0:
+                pcc_gc_mark_root_gray_if_known(owner)
+            return
+        target = load_ptr(edge, 8)
+        if ptr_is_null(target) != 0 or ptr_eq(target, owner) != 0:
+            pcc_platform_abort()
+            return
+        owner = target
+        remaining -= 1
+    pcc_platform_abort()
+
+
 @c_abi_export("pcc_gc_conservative_mark_word")
 def pcc_gc_conservative_mark_word(word, context) -> None:
     candidate: i64 = ptr_to_int(word)
@@ -128,11 +183,8 @@ def pcc_gc_conservative_mark_word(word, context) -> None:
             return
         if load_i64(entry, _INTERVAL_END) > candidate:
             node = load_ptr(entry, _INTERVAL_OWNER)
-            if pcc_gc_object_node_is_active(node) != 0:
-                # Count-free GC4 no longer uses gc_refs for RC subtraction.
-                # It becomes the conservative pin for this mark/relocate cycle.
-                store_i64(node, 56, 1)
-                pcc_gc_mark_root_gray_if_known(load_ptr(node, 0))
+            if _node_has_live_extent(node) != 0:
+                _pin_owner_chain(node, 1)
 
 
 @c_abi_export("pcc_gc_conservative_append_interval")
@@ -260,15 +312,30 @@ def _scan_thread_roots(mark: i64) -> None:
         pcc_platform_abort()
         return
     count: i64 = _sort_words(words, capacity)
+    gc3_count_free: i64 = 1 if (load_i32(global_addr("pcc_gc_backend_selected"), 0) == 3
+                              and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0) else 0
+    if gc3_count_free != 0:
+        # Clear the old cut before any source can pin a later node in its
+        # forwarding chain. Inactive source pins are cycle-local as well.
+        reset = global_load_ptr("pcc_gc_object_head")
+        while ptr_is_null(reset) == 0:
+            if _node_has_live_extent(reset) != 0:
+                store_i64(reset, 56, load_i64(reset, 56) & ~1)
+            reset = load_ptr(reset, 16)
     node = global_load_ptr("pcc_gc_object_head")
     while ptr_is_null(node) == 0:
-        if pcc_gc_object_node_is_active(node) != 0:
+        if _node_has_live_extent(node) != 0:
             # A stopped-world relocation step needs CURRENT raw addresses,
             # including objects allocated since the last completed mark.
             # Retire old conservative pins without changing marking colors.
-            if mark == 0:
-                store_i64(node, 56, 0)
+            if mark == 0 and gc3_count_free == 0:
+                if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
+                    store_i64(node, 56, load_i64(node, 56) & ~1)
+                else:
+                    store_i64(node, 56, 0)
             rooted: i64 = _extent_has_word(words, count, load_ptr(node, 0), load_i64(node, 8))
+            if gc3_count_free != 0 and pcc_gc_object_is_address_pinned(load_ptr(node, 0)) != 0:
+                rooted = 1
             owner = load_ptr(node, 48)
             if ptr_is_null(owner) == 0:
                 span = load_ptr(owner, 64)
@@ -277,10 +344,9 @@ def _scan_thread_roots(mark: i64) -> None:
                         rooted = 1
                     span = load_ptr(span, 40)
             if rooted != 0:
-                # The same cycle-local pin prevents relocation of raw roots.
-                store_i64(node, 56, 1)
-                if mark != 0:
-                    pcc_gc_mark_root_gray_if_known(load_ptr(node, 0))
+                # A raw source address retains its bytes and shades the
+                # canonical target; source metadata itself is not a root.
+                _pin_owner_chain(node, mark)
         node = load_ptr(node, 16)
     free(words)
 

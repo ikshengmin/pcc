@@ -1,0 +1,475 @@
+"""GC3 copy/retirement bodies: count-independent bytes, aliases and nursery.
+
+Actual oldification, shared payload planning/slots, forwarding transactions,
+conservative scan, remap, root rewrite, typed release and MinorBlock release
+run over the existing finite retirement memory/index model. No READY/remap
+success stub supplies the collector boundary.
+"""
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+import pytest
+
+from pcc.frontends.python.codegen.freestanding_abi_constants import ABI_CONSTANTS
+from pcc.runtime.py import py_abi_constants as abi
+from tests.python.test_gc_forwarding_gray_retirement_model import RetirementState
+
+
+PY = Path(__file__).resolve().parents[2] / 'pcc/runtime/py'
+
+
+class GC3(RetirementState):
+    def __init__(self, counted=False):
+        self.raw = {}
+        self.freed = set()
+        self.managed = set()
+        self.identities = {}
+        self.fail_size = 0
+        self.fail_node = False
+        self.fail_index = False
+        self.fail_forward = False
+        self.stopped = True
+        self.gated = True
+        self.words = []
+        self.module_roots = []
+        self.root_cells = []
+        self.foreign_releases = []
+        self.cext_hook = None
+        super().__init__(3)
+        self.store('pcc_gc_backend4_no_refcounts', 0, int(not counted))
+        self.store('pcc_gc_mark_active', 0, 0)
+        self.store('pcc_gc_cycle_requested', 0, 0)
+        self.ns.update(vars(abi))
+        self.ns.update({
+            'abi_constant': ABI_CONSTANTS.__getitem__,
+            'ptr_to_int': lambda value: value,
+            'int_to_ptr': lambda value: value,
+            'is_tagged_int': lambda value: int(isinstance(value, int) and value & 1),
+            'ptr_add': self.add,
+            'ptr_diff': lambda a, b: a - b,
+            'malloc': self.malloc,
+            'free': self.free,
+            'memset': self.zero,
+            'stack_alloc': self.allocate,
+            'atomic_load_i64': lambda a, o, order: self.load(a, o),
+            'atomic_store_i64': lambda a, o, v, order: self.store(a, o, v),
+            'atomic_rmw_i64': self.rmw,
+            'atomic_cas_i64': self.cas,
+            'atomic_cas_i32': self.cas,
+            'pcc_current_thread_id': lambda: 1,
+            'pcc_py_gc_minor_current_get': lambda: self.load('model_minor_current', 0),
+            'pcc_py_gc_minor_current_set': lambda block: self.store('model_minor_current', 0, block),
+            'pcc_thread_live_count': lambda: 1,
+            'pcc_thread_all_stopped_at_gates': lambda: int(self.gated),
+            'pcc_thread_owns_stopped_world': lambda: int(self.stopped),
+            'pcc_thread_world_stop_epoch_held': lambda: 1 if self.stopped else -1,
+            'pcc_stop_the_world': self.stop,
+            'pcc_resume_world': self.resume,
+            'pcc_dealloc_cascade_active': lambda: 0,
+            'pcc_thread_visit_conservative_words': self.visit_words,
+            'pcc_capi_visit_extension_module_state_roots': self.visit_modules,
+            'pcc_gc_tracing_has_sweep_candidate': self.candidates,
+            'pcc_gc_object_index_insert': self.insert_index,
+            'pcc_gc_object_index_find': lambda obj: self.index.get(obj, 0),
+            'pcc_gc_pointer_is_managed': lambda obj: int(obj in self.index or obj in self.managed),
+            'pcc_gc_managed_pointer_index_insert': self.register_pointer,
+            'pcc_gc_managed_pointer_index_remove': lambda obj: self.managed.discard(obj),
+            'pcc_gc_pointer_unregister': self.unregister_pointer,
+            'pcc_gc_granule_is_object_start': lambda obj: -1,
+            'pcc_gc_granule_object_retire': lambda obj: 0,
+            'pcc_gc_static_literal_contains': lambda obj: 0,
+            'pcc_gc_forwarding_index_find': lambda obj: self.forwardings.get(obj, 0),
+            'pcc_gc_forwarding_index_insert': self.insert_forward,
+            'pcc_gc_forwarding_target_index_find': lambda obj: self.reverse.get(obj, 0),
+            'pcc_gc_forwarding_target_index_insert': self.insert_reverse,
+            'pcc_gc_forwarding_target_index_upsert': self.insert_reverse,
+            'pcc_gc_identity_index_find': lambda obj: self.identities.get(obj, 0),
+            'pcc_gc_identity_index_insert': self.insert_identity,
+            'pcc_gc_identity_index_remove': lambda obj: self.identities.pop(obj, 0),
+            'pcc_gc_object_is_known_no_lock': self.known,
+            'pcc_gc_object_node_is_active': lambda node: int(self.load(node, 32) == 0 and not self.load(self.load(node, 0), 12) & 524288),
+            'pcc_gc_backend4_zpage_payload_span_preflight_locked': lambda obj, size: int(size == 0),
+            'pcc_gc_retain_plan_finish': lambda plan: None,
+            'pcc_gc_retire_plan_prepare_locked': lambda *args: 0,
+            'pcc_gc_backend4_remembered_set_retarget_slot': lambda *args: None,
+            'py_gc_untrack': lambda obj: self.events.append(('untrack', obj)),
+            'pcc_refcount_forget': lambda obj: None,
+            'pcc_gc_note_load': lambda: None,
+            'pcc_gc_note_store': lambda: None,
+            'pcc_gc_fix_backend': lambda: None,
+            'pcc_diagnostics_runtime_log_event_code': lambda *args: None,
+            'pcc_capi_visit_cext_object_slots_i64': self.visit_cext,
+            'pcc_capi_is_cext_type_tag': lambda tag: int(tag == 9000),
+            'pcc_platform_abort': self.abort,
+            'pcc_py_gc_defer_tripwire': lambda *args: self.abort(),
+            'call_void_ptr1': lambda fn, value: fn(value),
+            'call_void_ptr_i64_ptr': lambda fn, slot, role, context: fn(slot, role, context),
+            'function_addr': lambda name: self.ns[name],
+            'pcc_gc_refresh_read_barrier': lambda: None,
+            'pcc_gc_free_watch_begin': lambda *args: None,
+            'pcc_gc_free_watch_end': lambda *args: 1,
+            '_gc0_terminal_free_has_no_metadata': lambda obj: 0,
+            '_cpy_handle_owner_tripwire': lambda *args: self.abort(),
+            '_cpy_handle_tripwire': lambda *args: self.abort(),
+            '_py_incref_checked_tail': self.counted_incref,
+            '_py_decref_checked_tail': self.counted_decref,
+        })
+        self.load_bodies('freestanding_gc_object_nodes.py')
+        self.load_bodies('freestanding_gc_forwarding_identity.py')
+        self.load_bodies('freestanding_gc_object_slots.py')
+        self.load_bodies('freestanding_gc_relocation_payload.py')
+        self.load_bodies('freestanding_gc_relocation_remap.py')
+        self.load_bodies('freestanding_gc_forwarding_retirement.py')
+        self.load_bodies('freestanding_gc_conservative_roots.py')
+        self.load_bodies('freestanding_gc_generational_oldification.py')
+        self.load_bodies('freestanding_gc_generational_promotion.py')
+        self.load_bodies('freestanding_gc_root_operations.py', {
+            'pcc_gc_object_is_address_pinned', '_resolve_root_slot_mode',
+            'pcc_gc_resolve_root_slot_unlocked', 'pcc_gc_resolve_borrowed_root_slot_unlocked',
+        })
+        self.load_bodies('freestanding_gc_mapped_roots.py', {
+            'pcc_gc_visit_mapped_root_slot', 'pcc_gc_visit_mapped_root_slots',
+        })
+        self.load_bodies('py_obj.py', {'py_incref', 'py_decref'})
+        self.load_bodies('py_gc_backend.py', {
+            '_gc3_forwarded_target_may_die', 'pcc_gc_backend3_finish_forwarded_source',
+            'pcc_gc_note_object_freeing', 'pcc_gc_free_object_memory',
+            '_minor_release_block', '_minor_block_containing', '_minor_find_reusable_block',
+            '_minor_blocks_head', '_set_minor_blocks_head', '_minor_current', '_set_minor_current',
+            '_minor_block_base', '_minor_block_size', '_minor_block_used', '_set_minor_block_used',
+            '_minor_block_next', '_minor_block_live', '_minor_block_owner',
+            '_atomic_i64_dec_if_positive', '_atomic_i64_load', '_atomic_i64_store', '_atomic_i32_store',
+        })
+        self.load_bodies('py_obj_dealloc.py', {
+            '_dealloc_dispatch', 'py_dealloc_int', 'py_dealloc_float', 'py_dealloc_str',
+            'py_dealloc_generic', 'py_dealloc_cpy_handle', 'pcc_cpy_handle_move_owned_ref',
+        })
+        self.ns.update({
+            '_object_graph_lock': self.lock, '_object_graph_unlock': self.unlock,
+            '_identity_remove': self.ns['pcc_gc_identity_remove'],
+            '_object_node_freeing': self.ns['pcc_gc_object_node_freeing'],
+            '_set_object_node_freeing': self.ns['pcc_gc_object_node_set_freeing'],
+            '_object_node_size': self.ns['pcc_gc_object_node_size'],
+            '_object_node_minor_block': self.ns['pcc_gc_object_node_minor_block'],
+            '_object_node_release': self.ns['pcc_gc_object_node_release'],
+            '_unlink_object_node': self.ns['pcc_gc_object_node_unlink'],
+            '_forwarding_detach_into_finish': self.ns['pcc_gc_forwarding_detach_into_finish'],
+            '_forwarding_remove_target': self.ns['pcc_gc_forwarding_remove_target'],
+            '_backend4_finish_remap_retirement': self.ns['pcc_gc_backend4_finish_remap_retirement'],
+            'pcc_gc_note_relocation_read': self.ns['_note_relocation_read_unlocked'],
+            'pcc_gc_visit_registered_root_slots': self.visit_roots,
+            'pcc_gc_mark_root_gray_if_known': self.shade,
+            'pcc_gc_load_ptr': lambda owner, slot: self.load(slot, 0),
+            'pcc_capi_dealloc_cext_object': lambda obj, tag: 0,
+            '_FREE_WATCH_OBJECT': 8, '_FREE_WATCH_NOTED': 16,
+        })
+        self.store('py_cpy_handle_release_fn', 0, self.foreign_releases.append)
+
+    def load_bodies(self, filename, names=None):
+        path = PY / filename
+        selected, aliases = [], []
+        for node in ast.parse(path.read_text()).body:
+            if isinstance(node, ast.AnnAssign):
+                selected.append(node)
+            elif isinstance(node, ast.FunctionDef) and (names is None or node.name in names):
+                for decorator in node.decorator_list:
+                    if isinstance(decorator, ast.Call) and decorator.args and isinstance(decorator.args[0], ast.Constant):
+                        aliases.append((decorator.args[0].value, node.name))
+                node.decorator_list = []
+                selected.append(node)
+        if names is not None:
+            assert {n.name for n in selected if isinstance(n, ast.FunctionDef)} == set(names)
+        exec(compile(ast.Module(selected, type_ignores=[]), str(path), 'exec'), self.ns)
+        for exported, name in aliases:
+            self.ns[exported] = self.ns[name]
+
+    def load(self, address, offset=0):
+        if isinstance(address, tuple):
+            address, extra = address
+            offset += extra
+        return self.memory.get((address + offset, 0) if isinstance(address, int) else (address, offset), 0)
+
+    def store(self, address, offset, value):
+        if isinstance(address, tuple):
+            address, extra = address
+            offset += extra
+        self.memory[(address + offset, 0) if isinstance(address, int) else (address, offset)] = value
+
+    def add(self, address, offset):
+        return address + offset if isinstance(address, int) else (address, offset)
+
+    def zero(self, address, value, size):
+        for offset in range(0, size, 8):
+            self.store(address, offset, value)
+
+    def memmove(self, target, source, size):
+        for offset in range(0, size, 4):
+            self.store(target, offset, self.load(source, offset))
+
+    def malloc(self, size):
+        if self.fail_size and size == self.fail_size:
+            return 0
+        address = self.allocate(size)
+        self.raw[address] = size
+        return address
+
+    def free(self, address):
+        if address:
+            assert address not in self.freed
+            self.freed.add(address)
+            self.events.append(('free', address))
+
+    def cas(self, address, offset, expected, desired, *orders):
+        before = self.load(address, offset)
+        if before == expected:
+            self.store(address, offset, desired)
+        return before
+
+    def rmw(self, operation, address, offset, value, order):
+        before = self.load(address, offset)
+        after = {'xchg': lambda: value, 'add': lambda: before + value, 'sub': lambda: before - value,
+                 'and': lambda: before & value, 'or': lambda: before | value}[operation]()
+        self.store(address, offset, after)
+        return before
+
+    def abort(self):
+        raise AssertionError('runtime invariant abort')
+
+    def stop(self):
+        self.stopped = True
+        return 0
+
+    def resume(self):
+        self.stopped = False
+        return 0
+
+    def known(self, obj):
+        node = self.index.get(obj, 0)
+        return int(bool(node) and self.load(node, 32) == 0 and not self.load(obj, 12) & 524288)
+
+    def insert_index(self, obj, node):
+        if self.fail_index:
+            return -1
+        self.index[obj] = node
+        return 0
+
+    def insert_forward(self, obj, edge):
+        if self.fail_forward:
+            return -1
+        self.forwardings[obj] = edge
+        return 0
+
+    def insert_reverse(self, obj, edge):
+        self.reverse[obj] = edge
+        return 0
+
+    def insert_identity(self, obj, node):
+        self.identities[obj] = node
+        return 0
+
+    def register_pointer(self, obj):
+        self.managed.add(obj)
+        return 0
+
+    def unregister_pointer(self, obj):
+        self.managed.discard(obj)
+        return 0
+
+    def counted_incref(self, obj):
+        self.events.append(('incref', obj))
+        self.store(obj, 0, self.load(obj, 0) + 1)
+
+    def counted_decref(self, obj):
+        self.events.append(('decref', obj))
+        self.store(obj, 0, self.load(obj, 0) - 1)
+
+    def shade(self, obj):
+        self.store(obj, 12, self.load(obj, 12) & ~56 | 16)
+        self.events.append(('shade', obj))
+
+    def visit_words(self, callback, context):
+        for word in self.words:
+            callback(word, context)
+        return len(self.words)
+
+    def visit_modules(self, callback, context):
+        for root in self.module_roots:
+            callback(root, context)
+
+    def visit_roots(self, mode, resolve):
+        for slot in self.root_cells:
+            self.ns['pcc_gc_visit_mapped_root_slot'](slot, 0, 0, 0, mode, resolve)
+        return len(self.root_cells)
+
+    def candidates(self):
+        return int(any(self.load(node, 32) == 0 and self.load(obj, 12) & 1024
+                       for obj, node in self.index.items()))
+
+    def visit_cext(self, obj, callback, context):
+        if self.load(obj, 8) != 9000:
+            return 0
+        if self.cext_hook:
+            self.cext_hook()
+        callback(obj + 24, 1, context)
+        return 1
+
+    def value(self, tag=abi.PY_TYPE_FLOAT, nursery=False):
+        size = 40 if tag in (abi.PY_TYPE_STR, abi.PY_TYPE_BYTES, abi.PY_TYPE_BYTEARRAY, abi.PY_TYPE_LIST) else 32
+        block = 0
+        if nursery:
+            block = self.allocate(48)
+            base = self.malloc(33554432)
+            obj = base
+            self.store(block, 0, base)
+            self.store(block, 8, size)
+            self.store(block, 16, 33554432)
+            self.store(block, 24, self.ns['_minor_blocks_head']())
+            self.store(block, 32, 1)
+            self.store(block, 40, 1)
+            self.ns['_set_minor_blocks_head'](block)
+        else:
+            obj = self.malloc(size)
+        node = self.ns['pcc_gc_object_node_alloc']()
+        self.zero(node, 0, 88)
+        self.store(obj, 0, 1)
+        self.store(obj, 8, tag)
+        self.store(obj, 12, 8 | 128 | (4096 if nursery else 262144))
+        self.store(obj, 16, 271828)
+        self.store(node, 0, obj)
+        self.store(node, 8, size)
+        self.store(node, 24, block)
+        old = self.load('pcc_gc_object_head', 0)
+        self.store(node, 16, old)
+        if old:
+            self.store(old, 40, node)
+        self.ns['pcc_gc_object_set_list_head'](node)
+        self.index[obj] = node
+        self.store('pcc_gc_live_bytes', 0, self.load('pcc_gc_live_bytes', 0) + size)
+        return obj, node, block
+
+    def copy(self, source):
+        with self.locked():
+            return self.ns['pcc_gc_generational_oldify_copy'](source)
+
+    def remap(self):
+        return self.ns['pcc_gc_backend4_remap_and_retire_stopped_world']()
+
+
+def test_source_target_death_consumes_nursery_occupancy_without_ordinary_decref():
+    m = GC3()
+    source, source_node, block = m.value(nursery=True)
+    target = m.copy(source)
+    assert target and m.load(source_node, 32) == 1 and m.load(block, 32) == 1
+    m.ns['pcc_gc_note_object_freeing'](target)
+    m.ns['pcc_gc_free_object_memory'](target)
+    assert source not in m.index and target not in m.index
+    assert m.load(block, 32) == 0 and m.load(block, 8) == 0
+    assert target in m.freed and source not in m.freed
+    assert not [event for event in m.events if event[0] in ('incref', 'decref')]
+    assert m.load('pcc_gc_forwarding_population', 0) == 0
+
+
+def test_live_target_major_remap_releases_old_nursery_and_heals_roots():
+    m = GC3()
+    source, source_node, block = m.value(nursery=True)
+    target = m.copy(source)
+    slot = m.allocate(8)
+    m.store(slot, 0, source)
+    m.root_cells.append(slot)
+    identity = m.load(m.identities[target], 8)
+    assert m.remap() > 0
+    assert m.load(slot, 0) == target and target in m.index
+    assert m.load(m.identities[target], 8) == identity
+    assert source not in m.index and m.load(block, 32) == 0
+    assert m.ns['_minor_find_reusable_block'](32) == block
+    assert m.load('pcc_gc_forwarding_population', 0) == 0
+
+
+@pytest.mark.parametrize('root_kind', ['raw', 'module'])
+def test_old_raw_or_byvalue_module_alias_defers_shell_retirement(root_kind):
+    m = GC3()
+    source, source_node, block = m.value(nursery=True)
+    target = m.copy(source)
+    if root_kind == 'raw':
+        m.words = [source + 16]
+    else:
+        m.module_roots = [source]
+    m.remap()
+    assert source in m.index and m.forwardings[source]
+    assert m.load(source_node, 56) == 1 and m.load(block, 32) == 1
+    m.ns['pcc_gc_note_object_freeing'](target)
+    m.ns['pcc_gc_free_object_memory'](target)
+    assert source in m.index and target in m.index
+    m.words.clear()
+    m.module_roots.clear()
+    assert m.remap() > 0
+    assert source not in m.index and target in m.index and m.load(block, 32) == 0
+
+
+def test_inactive_raw_source_is_a_conservative_liveness_root_for_canonical_target():
+    m = GC3()
+    source, source_node, block = m.value(nursery=True)
+    target = m.copy(source)
+    m.words = [source + 8]
+    m.ns['pcc_gc_gray_conservative_thread_roots']()
+    assert m.load(source_node, 56) == 1 and m.load(target, 12) & 16
+    m.words.clear()
+    m.ns['pcc_gc_pin_conservative_thread_roots']()
+    assert m.load(source_node, 56) == 0 and m.load(m.index[target], 56) == 0
+
+
+@pytest.mark.parametrize('tag', [abi.PY_TYPE_INT, abi.PY_TYPE_FLOAT, abi.PY_TYPE_STR,
+                                abi.PY_TYPE_COMPLEX, abi.PY_TYPE_BYTES,
+                                abi.PY_TYPE_BYTEARRAY, abi.PY_TYPE_CPY_HANDLE])
+@pytest.mark.parametrize('failure', ['plan', 'node', 'index', 'forward'])
+def test_every_oldify_failure_prefix_keeps_source_payload_and_discards_only_copy(tag, failure):
+    m = GC3()
+    source, node, block = m.value(tag)
+    before = m.load(source, 16)
+    raw_before = set(m.raw)
+    live_before = m.load('pcc_gc_live_bytes', 0)
+    if failure == 'plan':
+        m.fail_size = 416
+    elif failure == 'node':
+        m.fail_size = 88
+    elif failure == 'index':
+        m.fail_index = True
+    else:
+        m.fail_forward = True
+    assert m.copy(source) == 0
+    assert m.load(source, 16) == before and source in m.index and m.load(node, 32) == 0
+    assert not m.foreign_releases and not m.forwardings
+    assert m.load('pcc_gc_live_bytes', 0) == live_before
+    # All accepted GC3 kinds have inline native payload; CPY_HANDLE stays
+    # borrowed until the real move helper, and forward rollback moves it back.
+    copied = next(ptr for ptr in m.raw if ptr not in raw_before)
+    assert m.raw[copied] == m.load(node, 8) and copied in m.freed
+
+
+def test_cpy_handle_source_retirement_does_not_release_transferred_foreign_owner():
+    m = GC3()
+    source, node, block = m.value(abi.PY_TYPE_CPY_HANDLE, nursery=True)
+    foreign = m.load(source, 16)
+    target = m.copy(source)
+    assert m.load(source, 16) == 0 and m.load(target, 16) == foreign
+    assert m.remap() > 0
+    assert not m.foreign_releases and m.load(block, 32) == 0
+    m.ns['pcc_gc_dealloc_typed'](target, abi.PY_TYPE_CPY_HANDLE)
+    assert m.foreign_releases == [foreign]
+
+
+def test_unfinished_major_or_pending_disposal_never_retires_source():
+    m = GC3()
+    source, node, block = m.value(nursery=True)
+    target = m.copy(source)
+    for flag in ('pcc_gc_mark_active', 'pcc_gc_cycle_requested'):
+        m.store(flag, 0, 1)
+        assert m.remap() == 0 and source in m.index
+        m.store(flag, 0, 0)
+    m.store(target, 12, m.load(target, 12) | 1024)
+    assert m.remap() == 0 and m.load(block, 32) == 1
+    m.store(target, 12, m.load(target, 12) & ~1024)
+    m.gated = False
+    assert m.remap() == 0 and source in m.index

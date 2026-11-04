@@ -133,7 +133,8 @@ def pcc_gc_step(budget: i64) -> i64:
     if budget <= 0:
         return 0
     if (
-        backend == 4
+        (backend == 4 or (backend == 3
+                         and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0))
         and load_i32(global_addr("pcc_gc_backend4_remap_active"), 0) != 0
     ):
         return 0
@@ -187,6 +188,12 @@ def pcc_gc_step(budget: i64) -> i64:
         ):
             processed = processed + pcc_gc_tracing_step_cycle(budget - processed)
         store_i32(global_addr("pcc_gc_backend3_oldify_suspended"), 0, oldify_suspended)
+        if (load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
+                and processed == 0 and _tracing_work_pending() == 0
+                and load_i32(global_addr("pcc_gc_forwarding_population"), 0) > 0):
+            # All-live majors have no sweep candidates. Their real idle cut
+            # must still release healed nursery shells while targets live.
+            processed = processed + pcc_gc_backend4_remap_and_retire_stopped_world()
     elif backend == 4:
         if load_i32(global_addr("pcc_gc_explicit_collect_active"), 0) != 0:
             # Store-buffer entries own a reference to their recorded value. An

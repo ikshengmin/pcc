@@ -22,6 +22,9 @@ from pcc.unsafe import (
 __pcc_freestanding__ = True
 
 
+pcc_gc_dealloc_typed = extern("pcc_gc_dealloc_typed", (c_ptr, c_int64), c_void)
+
+
 pcc_gc_object_is_address_pinned = extern("pcc_gc_object_is_address_pinned", (c_ptr,), c_int64)
 
 
@@ -68,47 +71,7 @@ py_weakref_invalidate_tracing_candidates = extern(
 pcc_capi_is_cext_type_tag = extern(
     "pcc_capi_is_cext_type_tag", (c_int64,), c_int64
 )
-pcc_capi_dealloc_cext_object = extern(
-    "pcc_capi_dealloc_cext_object", (c_ptr, c_int64), c_int64
-)
 
-py_dealloc_int = extern("py_dealloc_int", (c_ptr,), c_void)
-py_dealloc_float = extern("py_dealloc_float", (c_ptr,), c_void)
-py_dealloc_str = extern("py_dealloc_str", (c_ptr,), c_void)
-py_dealloc_list = extern("py_dealloc_list", (c_ptr,), c_void)
-py_dealloc_tuple = extern("py_dealloc_tuple", (c_ptr,), c_void)
-py_dealloc_dict = extern("py_dealloc_dict", (c_ptr,), c_void)
-py_dealloc_set = extern("py_dealloc_set", (c_ptr,), c_void)
-py_dealloc_func = extern("py_dealloc_func", (c_ptr,), c_void)
-py_class_dealloc = extern("py_class_dealloc", (c_ptr,), c_void)
-py_instance_dealloc = extern("py_instance_dealloc", (c_ptr,), c_void)
-py_descriptor_dealloc = extern("py_descriptor_dealloc", (c_ptr,), c_void)
-py_dealloc_exc = extern("py_dealloc_exc", (c_ptr,), c_void)
-py_dealloc_file = extern("py_dealloc_file", (c_ptr,), c_void)
-py_dealloc_iter = extern("py_dealloc_iter", (c_ptr,), c_void)
-py_dealloc_gen = extern("py_dealloc_gen", (c_ptr,), c_void)
-py_dealloc_coroutine = extern("py_dealloc_coroutine", (c_ptr,), c_void)
-py_dealloc_continuation = extern("py_dealloc_continuation", (c_ptr,), c_void)
-py_dealloc_task = extern("py_dealloc_task", (c_ptr,), c_void)
-py_dealloc_memoryview = extern("py_dealloc_memoryview", (c_ptr,), c_void)
-py_dealloc_weakref = extern("py_dealloc_weakref", (c_ptr,), c_void)
-py_dealloc_thread_lock = extern("py_dealloc_thread_lock", (c_ptr,), c_void)
-py_dealloc_thread_rlock = extern("py_dealloc_thread_rlock", (c_ptr,), c_void)
-py_dealloc_thread_event = extern("py_dealloc_thread_event", (c_ptr,), c_void)
-py_dealloc_thread_condition = extern(
-    "py_dealloc_thread_condition", (c_ptr,), c_void
-)
-py_dealloc_thread_semaphore = extern(
-    "py_dealloc_thread_semaphore", (c_ptr,), c_void
-)
-py_dealloc_thread_thread = extern("py_dealloc_thread_thread", (c_ptr,), c_void)
-py_dealloc_virtual_thread = extern(
-    "py_dealloc_virtual_thread", (c_ptr,), c_void
-)
-py_dealloc_vthread_channel = extern(
-    "py_dealloc_vthread_channel", (c_ptr,), c_void
-)
-py_dealloc_generic = extern("py_dealloc_generic", (c_ptr,), c_void)
 pcc_thread_world_stop_epoch_held = extern(
     "pcc_thread_world_stop_epoch_held", (), c_int64
 )
@@ -175,75 +138,7 @@ def pcc_gc_tracing_finalize_unreachable(obj) -> None:
     if delay_zpage_freeing_note != 0:
         pcc_gc_free_watch_begin(watch, obj)
 
-    if tag == abi_constant("object.type.int"):
-        py_dealloc_int(obj)
-    elif tag == abi_constant("object.type.float"):
-        py_dealloc_float(obj)
-    elif tag == abi_constant("object.type.str"):
-        py_dealloc_str(obj)
-    elif tag == abi_constant("object.type.list"):
-        py_dealloc_list(obj)
-    elif tag == abi_constant("object.type.tuple"):
-        py_dealloc_tuple(obj)
-    elif tag == abi_constant("object.type.dict"):
-        py_dealloc_dict(obj)
-    elif tag == abi_constant("object.type.set"):
-        py_dealloc_set(obj)
-    elif tag == abi_constant("object.type.func"):
-        py_dealloc_func(obj)
-    elif tag == abi_constant("object.type.class"):
-        py_class_dealloc(obj)
-    elif (
-        tag == abi_constant("object.type.instance")
-        or tag == abi_constant("object.type.valuebox")
-    ):
-        py_instance_dealloc(obj)
-    elif tag == abi_constant("object.type.exc"):
-        py_dealloc_exc(obj)
-    elif tag == abi_constant("object.type.file"):
-        py_dealloc_file(obj)
-    elif tag == abi_constant("object.type.iter"):
-        py_dealloc_iter(obj)
-    elif tag == abi_constant("object.type.gen"):
-        py_dealloc_gen(obj)
-    elif tag == abi_constant("object.type.coroutine"):
-        py_dealloc_coroutine(obj)
-    elif tag == abi_constant("object.type.continuation"):
-        py_dealloc_continuation(obj)
-    elif tag == abi_constant("object.type.memoryview"):
-        py_dealloc_memoryview(obj)
-    elif tag == abi_constant("object.type.weakref"):
-        py_dealloc_weakref(obj)
-    elif (
-        tag == abi_constant("object.type.property")
-        or tag == abi_constant("object.type.classmethod")
-        or tag == abi_constant("object.type.staticmethod")
-    ):
-        py_descriptor_dealloc(obj)
-    elif tag == abi_constant("object.type.thread_lock"):
-        py_dealloc_thread_lock(obj)
-    elif tag == abi_constant("object.type.thread_rlock"):
-        py_dealloc_thread_rlock(obj)
-    elif tag == abi_constant("object.type.thread_event"):
-        py_dealloc_thread_event(obj)
-    elif tag == abi_constant("object.type.thread_condition"):
-        py_dealloc_thread_condition(obj)
-    elif tag == abi_constant("object.type.thread_semaphore"):
-        py_dealloc_thread_semaphore(obj)
-    elif tag == abi_constant("object.type.thread"):
-        py_dealloc_thread_thread(obj)
-    elif tag == abi_constant("object.type.task"):
-        py_dealloc_task(obj)
-    elif tag == abi_constant("object.type.virtual_thread"):
-        py_dealloc_virtual_thread(obj)
-    elif tag == abi_constant("object.type.vthread_channel"):
-        py_dealloc_vthread_channel(obj)
-    else:
-        if pcc_capi_dealloc_cext_object(obj, tag) == 0:
-            if tag >= abi_constant("object.type.user_class_start"):
-                py_instance_dealloc(obj)
-            else:
-                py_dealloc_generic(obj)
+    pcc_gc_dealloc_typed(obj, tag)
     if delay_zpage_freeing_note != 0:
         # The deallocator's free normally noted obj, and that note may have
         # handed its zpage bytes to another thread: note only when it did not.

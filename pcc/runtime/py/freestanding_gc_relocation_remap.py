@@ -19,6 +19,10 @@ from pcc.unsafe import (
 
 __pcc_freestanding__ = True
 
+pcc_gc_forwarding_retirement_backend_admitted = extern(
+    "pcc_gc_forwarding_retirement_backend_admitted", (), c_int64
+)
+
 
 pcc_capi_is_cext_type_tag = extern(
     "pcc_capi_is_cext_type_tag", (c_int64,), c_int64
@@ -127,7 +131,7 @@ def _pcc_gc_backend4_remap_cext_ctx_valid(context) -> i64:
         or ptr_eq(
             global_load_ptr("pcc_gc_backend4_remap_pending_obj"), obj
         ) == 0
-        or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 4
+        or pcc_gc_forwarding_retirement_backend_admitted() == 0
         or load_i64(global_addr("pcc_gc_object_list_revision"), 0)
         != load_i64(context, 16)
         or ptr_eq(global_load_ptr("pcc_gc_forwarding_head"), load_ptr(context, 24))

@@ -93,12 +93,34 @@ dropped keyword); the stage 1 commit message lists them. Rerun with
 
 ## Native throughput versus CPython 3.15.0: active, acceptance unmet
 
-The required default is reference counting only for GC0, and count-free
-tracing for GC1-4. This migration is not complete: the current configuration
-still defaults to counted operation, accepts opt-in `PCC_GC_TRACING_ONLY=1`
-for GC1/GC2/GC4, and rejects that setting for GC3. Experimental selection is
-not acceptance of the requested defaults. GC3's copied-source byte/payload
-retirement and nursery occupancy still need an owner independent of decref.
+Collector selection now determines ownership: GC0 retains reference counting,
+and GC1-4 default to count-free tracing. The two experimental count-mode
+environment switches are removed. Startup configuration, first-allocation
+freeze and preallocation backend selection share the graph lock; the reference
+count fast flags are committed with the selected ownership policy.
+
+The default-mode batch based on `c0f47b91b` gives GC3 copied sources a
+count-independent retirement path, including completed-major root/heap rewrites
+which release old nursery storage while targets remain alive. Conservative
+old-address aliases preserve both their physical sources and canonical targets.
+Pinned sources report zero retirement progress, allowing explicit collection
+to finish. A reproduced GC3/GC4 metadata collision is also corrected: the
+promotion cursor and conservative pin shared ObjectNode offset 56, so root
+scans reset large-owner progress and a nonzero cursor became a false root.
+Count-free mode now stores the pin in bit 0 and the bounded cursor separately
+in the remaining bits. Tracing destruction uses the same typed dispatcher as
+GC0, including release of owned foreign-handle payloads.
+
+This is an unfinished validation checkpoint, saved at the user's request.
+Component host checks total 122 passes (48 retirement/scan, 66 configuration,
+8 typed-destruction cases). The frozen local Mac host-pcc0/self runtime builds
+in 87.04 seconds with a 565,198,848-byte tree-RSS peak; archive SHA256 is
+`bf5b53324cb6b027cbe755ffb3f17f9f3b168c0a5a29a799c1fe5509b46564d4`.
+Native default-mode semantic execution, throughput A/B, full suites and
+bootstrap remain unrun for this batch. Existing counted/opt-in test expectations
+still need reconciliation; the old native configuration-race fixture is not
+evidence for the revised startup protocol. Do not treat the build or host
+checks as five-GC execution or performance acceptance.
 
 The current user-directed milestone is scalability: each of GC1-4 must reach
 at least 3x its own one-worker throughput at four workers, before pursuing

@@ -60,6 +60,8 @@ pcc_gc_tracing_sweep_unreachable = extern(
     "pcc_gc_tracing_sweep_unreachable", (c_int64,), c_int64
 )
 pcc_gc_refresh_read_barrier = extern("pcc_gc_refresh_read_barrier", (), c_void)
+pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
+pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 
 pcc_gc_tracing_discharge_debt = extern(
     "pcc_gc_tracing_discharge_debt", (c_int64,), c_void
@@ -284,29 +286,22 @@ def pcc_gc_maybe_start_cms_worker() -> None:
 
 @c_abi_export("pcc_gc_config_ensure")
 def pcc_gc_config_ensure() -> i64:
-    if load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0:
+    if atomic_load_i32(global_addr("pcc_gc_config_initialized"), 0, "acquire") != 0:
         return load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    store_i32(global_addr("pcc_gc_config_initialized"), 0, 1)
+    # The same cold-path lock orders configuration, explicit selection and
+    # first-allocation freeze. Readers never observe partially chosen policy.
+    pcc_py_gc_minor_graph_lock()
+    if atomic_load_i32(global_addr("pcc_gc_config_initialized"), 0, "acquire") != 0:
+        selected: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+        pcc_py_gc_minor_graph_unlock()
+        return selected
     backend: i64 = _pcc_gc_config_parse_backend(
         pcc_platform_getenv(cstr("PCC_GC_BACKEND")),
         load_i32(global_addr("pcc_gc_backend_selected"), 0),
     )
-    legacy_tracing: i64 = pcc_gc_config_parse_env_i32(
-        pcc_platform_getenv(cstr("PCC_GC4_TRACING_ONLY")), 0, 0, 1
-    )
-    if legacy_tracing != 0 and backend != 4:
-        pcc_platform_write(2, cstr("pcc runtime: PCC_GC4_TRACING_ONLY requires PCC_GC_BACKEND=4\n"), 60)
-        pcc_platform_abort()
-        return backend
-    tracing_only: i64 = pcc_gc_config_parse_env_i32(
-        pcc_platform_getenv(cstr("PCC_GC_TRACING_ONLY")), 0, 0, 1
-    )
-    if legacy_tracing != 0:
-        tracing_only = 1
-    if tracing_only != 0 and backend != 1 and backend != 2 and backend != 4:
-        pcc_platform_write(2, cstr("pcc runtime: tracing-only mode currently requires GC1, GC2 or GC4\n"), 66)
-        pcc_platform_abort()
-        return backend
+    # Collector identity determines ownership: only GC0 counts references.
+    # No independent mode switch may make a tracing collector pay both costs.
+    tracing_only: i64 = 1 if backend != 0 else 0
     if tracing_only != 0:
         pcc_thread_enable_conservative_roots()
     store_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0, tracing_only)
@@ -346,7 +341,6 @@ def pcc_gc_config_ensure() -> i64:
     if backend == 0 and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0:
         registry_inactive = 1
     store_i32(global_addr("pcc_gc_frame_registry_inactive"), 0, registry_inactive)
-    pcc_gc_refresh_read_barrier()
     store_i32(global_addr("pcc_gc_pause"), 0, pause)
     store_i32(global_addr("pcc_gc_stepmul"), 0, stepmul)
     store_i64(global_addr("pcc_gc_debt_threshold_override"), 0, threshold)
@@ -363,6 +357,9 @@ def pcc_gc_config_ensure() -> i64:
     store_i32(global_addr("pcc_gc_refcount_atomic"), 0, refcount_atomic)
     if backend != 0:
         store_i32(global_addr("pcc_gc_cycle_requested"), 0, 1)
+    atomic_store_i32(global_addr("pcc_gc_config_initialized"), 0, 1, "release")
+    pcc_gc_refresh_read_barrier()
+    pcc_py_gc_minor_graph_unlock()
     pcc_gc_maybe_start_cms_worker()
     return backend
 
@@ -390,8 +387,11 @@ def pcc_gc_collect_tracing() -> i64:
         backend = load_i32(global_addr("pcc_gc_backend_selected"), 0)
     if backend != 1 and backend != 2 and backend != 3 and backend != 4:
         return 0
+    gc3_count_free: i64 = 1 if (backend == 3
+                              and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0) else 0
     if pcc_gc_tracing_has_sweep_candidate() == 0:
-        return 0
+        if gc3_count_free == 0 or load_i32(global_addr("pcc_gc_forwarding_population"), 0) <= 0:
+            return 0
     stw: i64 = pcc_stop_the_world()
     if stw != 0:
         return 0
@@ -402,7 +402,17 @@ def pcc_gc_collect_tracing() -> i64:
     # PASS-0/PASS-1/PASS-2 already walk the candidate graph as one STW
     # transaction; give that transaction the complete signed-i64 budget so
     # finalizers run once and the returned count describes this collection.
-    reclaimed: i64 = pcc_gc_tracing_sweep_unreachable(9223372036854775807)
+    reclaimed: i64 = 0
+    if gc3_count_free == 0:
+        reclaimed = pcc_gc_tracing_sweep_unreachable(9223372036854775807)
+    elif (load_i32(global_addr("pcc_gc_mark_active"), 0) == 0
+            and pcc_gc_tracing_has_sweep_candidate() != 0):
+        reclaimed = pcc_gc_tracing_sweep_unreachable(9223372036854775807)
+    if (backend == 3 and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
+            and load_i32(global_addr("pcc_gc_mark_active"), 0) == 0
+            and pcc_gc_tracing_has_sweep_candidate() == 0
+            and load_i32(global_addr("pcc_gc_forwarding_population"), 0) > 0):
+        pcc_gc_backend4_remap_and_retire_stopped_world()
     # Automatic tracing sweeps run after their mark's step and need not be
     # followed by an idle step. Advance empty-page quarantine here, only after
     # all per-object deallocators returned. The entry preserves the gate,

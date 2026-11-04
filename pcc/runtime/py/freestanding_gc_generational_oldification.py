@@ -176,7 +176,13 @@ def pcc_gc_generational_oldify_copy(from_obj: c_ptr) -> c_ptr:
         | 262144,
     )
     if pcc_gc_relocate_copy_payload(from_obj, to_obj, tag, size) == 0:
-        py_decref(to_obj)
+        if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
+            # GC3 admits only inline scalar payloads here. The shared plan
+            # disposed its raw scratch, and CPY ownership has not moved yet.
+            # This unpublished malloc copy has no tracing-index owner.
+            free(to_obj)
+        else:
+            py_decref(to_obj)
         return null()
     store_i64(to_obj, 0, 0)
 

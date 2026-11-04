@@ -791,7 +791,7 @@ def pcc_gc_object_is_address_pinned(obj) -> i64:
     node = pcc_gc_object_index_find(obj)
     if ptr_is_null(node) == 0:
         if (load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
-                and load_i64(node, 56) != 0):
+                and (load_i64(node, 56) & 1) != 0):
             return 1
         return 1 if load_i64(node, 80) != 0 else 0
     return 0

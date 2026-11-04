@@ -432,7 +432,7 @@ def pcc_gc_alloc(size: int, type_tag: int, flags: int):
     if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
         pcc_diagnostics_runtime_log_event_code(1, 1, size, type_tag, null())
     # The first managed allocation fixes the collector before reading it.
-    if load_i32(global_addr("pcc_gc_backend_frozen"), 0) == 0:
+    if atomic_load_i32(global_addr("pcc_gc_backend_frozen"), 0, "acquire") == 0:
         pcc_gc_fix_backend()
     backend: int = _gc_backend_fast()
     obj = null()

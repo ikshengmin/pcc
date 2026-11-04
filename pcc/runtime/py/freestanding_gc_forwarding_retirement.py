@@ -6,6 +6,7 @@ from pcc.unsafe import (
     atomic_rmw_i32,
     cstr,
     free,
+    function_addr,
     global_addr,
     global_load_ptr,
     global_store_ptr,
@@ -26,7 +27,20 @@ from pcc.unsafe import (
 __pcc_freestanding__ = True
 
 
+pcc_gc_object_is_address_pinned = extern("pcc_gc_object_is_address_pinned", (c_ptr,), c_int64)
+pcc_gc_pin_conservative_thread_roots = extern("pcc_gc_pin_conservative_thread_roots", (), c_void)
+pcc_gc_conservative_pin_owner_chain = extern("pcc_gc_conservative_pin_owner_chain", (c_ptr, c_int64), c_void)
+pcc_capi_visit_extension_module_state_roots = extern("pcc_capi_visit_extension_module_state_roots", (c_ptr, c_ptr), c_void)
+pcc_gc_tracing_has_sweep_candidate = extern("pcc_gc_tracing_has_sweep_candidate", (), c_int64)
+
 pcc_gc_refresh_read_barrier = extern("pcc_gc_refresh_read_barrier", (), c_void)
+
+pcc_gc_backend3_forwarded_target_may_die = extern(
+    "pcc_gc_backend3_forwarded_target_may_die", (c_ptr,), c_int64
+)
+pcc_gc_backend3_finish_forwarded_source = extern(
+    "pcc_gc_backend3_finish_forwarded_source", (c_ptr,), c_void
+)
 
 py_decref = extern("py_decref", (c_ptr,), c_void)
 py_incref = extern("py_incref", (c_ptr,), c_void)
@@ -292,6 +306,14 @@ def pcc_gc_forwarding_finish_dead_targets(nodes) -> None:
         store_ptr(node, 16, null())
         # Target death already consumed the target's logical reference.
         store_ptr(node, 8, null())
+        if (load_i32(global_addr("pcc_gc_backend_selected"), 0) == 3
+                and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0):
+            # The existing forwarding node carries this deferred source.
+            # Its inactive index/node still prove the allocator/block owner
+            # until the graph-free physical cleanup consumes them exactly once.
+            source = load_ptr(node, 0)
+            store_ptr(node, 0, null())
+            pcc_gc_backend3_finish_forwarded_source(source)
         free(node)
 
 
@@ -417,6 +439,10 @@ def pcc_gc_forwarding_remove_target(target, finish) -> None:
         or ptr_is_null(finish) != 0
     ):
         return
+    if (load_i32(global_addr("pcc_gc_backend_selected"), 0) == 3
+            and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
+            and pcc_gc_backend3_forwarded_target_may_die(target) != 1):
+        return
     # Detach the reverse index before cleanup so a decref reentry cannot walk
     # the same dying target twice.  The source index/main edge and flags remain
     # live for healing; preparation failure is unconditional fail-stop, not a
@@ -449,7 +475,12 @@ def pcc_gc_forwarding_remove_target(target, finish) -> None:
         # A target can die before the usual two-epoch remap retirement.  Its
         # old shell must leave the object index immediately or stale pointers
         # remain classified as live managed objects.
-        _retire_forwarded_source_into_finish(from_obj, finish)
+        if (load_i32(global_addr("pcc_gc_backend_selected"), 0) != 3
+                or load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0):
+            _retire_forwarded_source_into_finish(from_obj, finish)
+        # NoRC GC3 keeps the source node/provenance until the deferred
+        # physical release. Merely freeing that node would lose MinorBlock
+        # ownership without reducing live, and no ordinary decref will follow.
         store_ptr(node, 32, null())
         store_ptr(node, 40, null())
         from_page = load_ptr(node, 48)
@@ -474,6 +505,24 @@ def pcc_gc_forwarding_remove_target(target, finish) -> None:
         pcc_gc_refresh_read_barrier()
 
 
+@c_abi_export("pcc_gc_forwarding_retirement_backend_admitted")
+def _retirement_backend_admitted() -> i64:
+    backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+    return 1 if (backend == 4 or (backend == 3
+                 and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0)) else 0
+
+
+@c_abi_export("pcc_gc_backend3_pin_external_remap_root")
+def _gc3_pin_external_remap_root(obj, context) -> None:
+    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+        return
+    node = pcc_gc_object_index_find(obj)
+    if ptr_is_null(node) == 0:
+        # Module-state traverse returns a value, not an updateable slot.
+        # Keep this exact old address (and its chain) until its owner changes.
+        pcc_gc_conservative_pin_owner_chain(node, 0)
+
+
 @c_abi_export("pcc_gc_backend4_remap_and_retire_stopped_world")
 def pcc_gc_backend4_remap_and_retire_stopped_world() -> i64:
     owns_stopped_world: i64 = pcc_thread_owns_stopped_world()
@@ -482,6 +531,24 @@ def pcc_gc_backend4_remap_and_retire_stopped_world() -> i64:
         if pcc_stop_the_world() != 0:
             return 0
         acquired_stopped_world = 1
+
+    gc3_count_free: i64 = 1 if (load_i32(global_addr("pcc_gc_backend_selected"), 0) == 3
+                              and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0) else 0
+    if gc3_count_free != 0:
+        # A major's dead owners may still be read by finalizers until sweep
+        # finishes. Only a complete disposal cut can retire their aliases.
+        if (load_i32(global_addr("pcc_gc_mark_active"), 0) != 0
+                or load_i32(global_addr("pcc_gc_cycle_requested"), 0) != 0
+                or pcc_gc_tracing_has_sweep_candidate() != 0
+                or pcc_thread_all_stopped_at_gates() == 0
+                or pcc_dealloc_cascade_active() != 0):
+            if acquired_stopped_world != 0:
+                pcc_resume_world()
+            return 0
+        pcc_gc_pin_conservative_thread_roots()
+        pcc_capi_visit_extension_module_state_roots(
+            function_addr("pcc_gc_backend3_pin_external_remap_root"), null()
+        )
 
     # Empty-page quarantine must progress after the last forwarding edge is
     # gone too. This newly admitted path uses the same application-gate cut
@@ -514,7 +581,7 @@ def pcc_gc_backend4_remap_and_retire_stopped_world() -> i64:
     pcc_py_gc_minor_graph_lock()
     epoch: i64 = load_i64(global_addr("pcc_gc_backend4_remap_epoch"), 0)
     if (
-        load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4
+        _retirement_backend_admitted() != 0
         and ptr_is_null(global_load_ptr("pcc_gc_relocation_set_head")) != 0
         and (
             load_i32(global_addr("pcc_gc_forwarding_population"), 0) > 0
@@ -573,7 +640,7 @@ def pcc_gc_backend4_remap_and_retire_stopped_world() -> i64:
             or ptr_is_null(
                 global_load_ptr("pcc_gc_backend4_remap_pending_obj")
             ) == 0
-            or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 4
+            or _retirement_backend_admitted() == 0
             or load_i64(global_addr("pcc_gc_object_list_revision"), 0)
             != load_i64(context, 16)
             or ptr_eq(
@@ -619,6 +686,12 @@ def pcc_gc_backend4_remap_and_retire_stopped_world() -> i64:
         py_decref(obj)
         store_ptr(context, 0, null())
 
+    if gc3_count_free != 0 and valid != 0:
+        # Traversal callbacks may change an existing module-state root without
+        # allocating. Revisit those by-value roots before the revision check.
+        pcc_capi_visit_extension_module_state_roots(
+            function_addr("pcc_gc_backend3_pin_external_remap_root"), null()
+        )
     pcc_py_gc_minor_graph_lock()
     before: i64 = load_i32(global_addr("pcc_gc_forwarding_population"), 0)
     if (
@@ -630,7 +703,7 @@ def pcc_gc_backend4_remap_and_retire_stopped_world() -> i64:
         and ptr_is_null(
             global_load_ptr("pcc_gc_backend4_remap_pending_obj")
         ) != 0
-        and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4
+        and _retirement_backend_admitted() != 0
         and ptr_is_null(global_load_ptr("pcc_gc_relocation_set_head")) != 0
         and load_i64(global_addr("pcc_gc_object_list_revision"), 0)
         == load_i64(context, 16)
@@ -655,15 +728,22 @@ def pcc_gc_backend4_remap_and_retire_stopped_world() -> i64:
     store_i32(global_addr("pcc_gc_backend4_remap_active"), 0, 0)
     pcc_py_gc_minor_graph_unlock()
 
+    if gc3_count_free != 0:
+        # GC3 nursery accounting and scalar payload teardown consume the
+        # still-indexed source while this exact root/alias cut remains held.
+        pcc_gc_backend4_finish_remap_retirement(finish)
     if acquired_stopped_world != 0:
         pcc_resume_world()
-    pcc_gc_backend4_finish_remap_retirement(finish)
+    if gc3_count_free == 0:
+        pcc_gc_backend4_finish_remap_retirement(finish)
     if valid == 0:
         return 0
     if before > after:
         return before - after
-    if before > 0:
+    if gc3_count_free == 0 and before > 0:
         return 1
+    # A pinned GC3 source is deferred, not progress. Explicit collection's
+    # idle-round bound must still terminate while a raw alias remains live.
     return 0
 
 
@@ -671,12 +751,14 @@ def pcc_gc_backend4_remap_and_retire_stopped_world() -> i64:
 def pcc_gc_backend4_remap_and_retire_unlocked(finish) -> None:
     if ptr_is_null(finish) != 0:
         return
-    if pcc_gc_backend() != 4:
+    if _retirement_backend_admitted() == 0:
         return
-    # Two-epoch quarantine: release the prior retained generation before
-    # parked pages from the immediately preceding remap enter that generation.
-    store_ptr(finish, 0, _release_retained_pages())
-    pcc_gc_backend4_drain_parked_pages()
+    gc3_count_free: i64 = 1 if load_i32(global_addr("pcc_gc_backend_selected"), 0) == 3 else 0
+    # GC4 keeps its existing page epochs. GC3 sources own individual scalar
+    # storage/MinorBlock occupancy and use the current complete rewrite cut.
+    if gc3_count_free == 0:
+        store_ptr(finish, 0, _release_retained_pages())
+        pcc_gc_backend4_drain_parked_pages()
     if ptr_is_null(pcc_gc_forwarding_list_head()) != 0:
         return
     node = pcc_gc_object_list_head()
@@ -688,6 +770,22 @@ def pcc_gc_backend4_remap_and_retire_unlocked(finish) -> None:
                 pcc_gc_backend4_remap_referents(obj)
         node = nxt
     pcc_gc_visit_registered_root_slots(3, 0)
+
+    if gc3_count_free != 0:
+        fwd = pcc_gc_forwarding_list_head()
+        while ptr_is_null(fwd) == 0:
+            nxt = load_ptr(fwd, 16)
+            source = load_ptr(fwd, 0)
+            if (ptr_is_null(source) == 0 and is_tagged_int(source) == 0
+                    and pcc_gc_object_is_address_pinned(source) == 0):
+                # No ordinary decref owns this source. Keep its allocator
+                # provenance/node until graph-free finish consumes it.
+                dead = pcc_gc_forwarding_detach(source)
+                if ptr_is_null(dead) == 0:
+                    store_ptr(dead, 16, load_ptr(finish, 40))
+                    store_ptr(finish, 40, dead)
+            fwd = nxt
+        return
 
     fwd = pcc_gc_forwarding_list_head()
     while ptr_is_null(fwd) == 0:

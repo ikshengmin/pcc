@@ -188,6 +188,34 @@ def pcc_gc_generational_promote_shallow_slot(slot, role: i64, context) -> None:
         pcc_gc_generational_promote_borrowed_slot_mode(slot, 0, 0)
 
 
+# ObjectNode@56 remains raw gc_refs/cursor for counted collectors. In NoRC
+# it packs one independent conservative pin in bit0 and the promotion cursor
+# in bits1..62. Every stored cursor is range-checked before multiplication.
+@c_abi_export("pcc_gc_backend3_promotion_cursor")
+def _promotion_cursor(node) -> i64:
+    value: i64 = load_i64(node, 56)
+    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0:
+        return value
+    if value < 0:
+        pcc_py_gc_defer_tripwire(cstr("negative packed promotion cursor"),
+                                cstr("pcc/runtime/py/freestanding_gc_generational_promotion.py"), 0)
+        return 0
+    return value // 2
+
+
+@c_abi_export("pcc_gc_backend3_set_promotion_cursor")
+def _set_promotion_cursor(node, cursor: i64) -> i64:
+    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0:
+        store_i64(node, 56, cursor)
+        return 1
+    if cursor < 0 or cursor > 4611686018427387903:
+        pcc_py_gc_defer_tripwire(cstr("packed promotion cursor overflow"),
+                                cstr("pcc/runtime/py/freestanding_gc_generational_promotion.py"), 0)
+        return 0
+    store_i64(node, 56, cursor * 2 + (load_i64(node, 56) & 1))
+    return 1
+
+
 @c_abi_export("pcc_gc_backend3_promotion_worklist_unlink")
 def _promotion_unlink(node) -> None:
     if ptr_is_null(node) != 0:
@@ -216,7 +244,7 @@ def _promotion_unlink(node) -> None:
         global_store_ptr("pcc_gc_backend3_promotion_tail", prev)
     store_ptr(node, 64, null())
     store_ptr(node, 72, null())
-    store_i64(node, 56, 0)
+    _set_promotion_cursor(node, 0)
 
 
 @c_abi_export("pcc_gc_backend3_enqueue_promotion_owner")
@@ -243,7 +271,7 @@ def _enqueue_promotion_owner(obj) -> None:
     tail = global_load_ptr("pcc_gc_backend3_promotion_tail")
     store_ptr(node, 64, null())
     store_ptr(node, 72, tail)
-    store_i64(node, 56, 0)
+    _set_promotion_cursor(node, 0)
     store_i64(
         global_addr("pcc_gc_backend3_promotion_revision"),
         0,
@@ -338,7 +366,7 @@ def pcc_gc_backend3_drain_promotion_worklist(budget: i64) -> i64:
             store_i64(state, 8, 0)
             handled: i64 = pcc_gc_visit_object_slots_slice(
                 obj,
-                load_i64(node, 56),
+                _promotion_cursor(node),
                 batch_limit - batch_examined,
                 pcc_gc_generational_promote_slot,
                 null(),
@@ -360,7 +388,9 @@ def pcc_gc_backend3_drain_promotion_worklist(budget: i64) -> i64:
             if next_cursor < 0:
                 _promotion_unlink(node)
             else:
-                store_i64(node, 56, next_cursor)
+                if _set_promotion_cursor(node, next_cursor) == 0:
+                    pcc_py_gc_minor_graph_unlock()
+                    return total_examined
                 store_i64(
                     global_addr("pcc_gc_backend3_promotion_revision"),
                     0,

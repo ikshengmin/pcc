@@ -47,9 +47,10 @@ def pcc_gc_prepare_object_list_mark(explicit_collect: i64) -> None:
             continue
         flags: i64 = load_i32(obj, 12)
         if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
-            # gc_refs is a cycle-local conservative pin in count-free GC4.
-            # Never retain last cycle's conservative candidates as roots.
-            store_i64(node, 56, 0)
+            # NoRC stores a cycle-local pin in bit0, independently of a
+            # generational cursor in the remaining bits. Starting a mark
+            # must not restart an unfinished large-owner promotion scan.
+            store_i64(node, 56, load_i64(node, 56) & ~1)
         if (flags & 16384) != 0 and explicit_collect == 0:
             store_i32(obj, 12, (flags & ~(56 | 16384)) | 32)
         else:

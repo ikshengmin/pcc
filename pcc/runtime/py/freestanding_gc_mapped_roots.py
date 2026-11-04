@@ -113,6 +113,13 @@ def pcc_gc_visit_mapped_root_slot(
             after = pcc_gc_resolve_borrowed_root_slot_unlocked(slot_base, slot_offset)
         else:
             after = pcc_gc_resolve_root_slot_unlocked(slot_base, slot_offset)
+        if (ptr_is_null(stable_base) == 0
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 3
+                and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0):
+            # A NoRC GC3 source may be physically reused after this complete
+            # remap. Its old address must not remain an equality-only cache
+            # hit which could skip promotion of a different future object.
+            store_ptr(stable_base, slot_offset, null())
         if ptr_eq(before, after) == 0:
             return 1
     if mode == 5:  # verify: a mapped object that no registered root holds
@@ -468,6 +475,9 @@ def pcc_gc_visit_walked_stack_roots(mode: i64, resolve: i64) -> i64:
 @c_abi_export("pcc_gc_visit_registered_root_slots")
 def pcc_gc_visit_registered_root_slots(mode: i64, resolve: i64) -> i64:
     """Visit every frame root: walked stack frames, then the registry."""
+    gc3_rewrite: i64 = 1 if (mode == 3
+                           and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 3
+                           and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0) else 0
     result: i64 = 0
     stack_mode: i64 = _pcc_stackmap_roots_mode()
     mapped: i64 = pcc_gc_visit_walked_stack_roots(mode, resolve)
@@ -479,7 +489,7 @@ def pcc_gc_visit_registered_root_slots(mode: i64, resolve: i64) -> i64:
     frame = global_load_ptr("pcc_gc_frame_head")
     while ptr_is_null(frame) == 0:
         stable_values = null()
-        if mode == 2:
+        if mode == 2 or gc3_rewrite != 0:
             stable_values = load_ptr(frame, 56)
         registered = registered + load_i64(frame, 40)
         result = result + pcc_gc_visit_mapped_root_slots(
@@ -503,7 +513,7 @@ def pcc_gc_visit_registered_root_slots(mode: i64, resolve: i64) -> i64:
     continuation = global_load_ptr("pcc_gc_continuation_root_head")
     while ptr_is_null(continuation) == 0:
         stable_values = null()
-        if mode == 2:
+        if mode == 2 or gc3_rewrite != 0:
             stable_values = load_ptr(continuation, 40)
         result = result + pcc_gc_visit_mapped_root_slots(
             load_i64(continuation, 24),

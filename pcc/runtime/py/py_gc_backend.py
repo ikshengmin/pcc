@@ -68,6 +68,8 @@ from pcc.unsafe import (
 # Shared ABI entry points used by backend-level finalization.
 py_incref = extern("py_incref", (c_ptr,), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
+py_gc_untrack = extern("py_gc_untrack", (c_ptr,), c_void)
+pcc_gc_dealloc_typed = extern("pcc_gc_dealloc_typed", (c_ptr, c_int64), c_void)
 pcc_gc_tracking_enter_flag_mode = extern("pcc_gc_tracking_enter_flag_mode", (), c_void)
 pcc_py_gc_defer_tripwire = extern(
     "pcc_py_gc_defer_tripwire", (c_ptr, c_ptr, c_int32), c_void
@@ -581,6 +583,7 @@ pcc_gc_visit_object_slots = extern(
     "pcc_gc_visit_object_slots", (c_ptr, c_ptr, c_ptr), c_int64
 )
 abort_extern = extern("pcc_platform_abort", (), c_void)
+pcc_thread_enable_conservative_roots = extern("pcc_thread_enable_conservative_roots", (), c_void)
 pcc_thread_live_count = extern("pcc_thread_live_count", (), c_int64)
 pcc_threads_enabled = extern("pcc_threads_enabled", (), c_int64)
 pcc_thread_no_park_depth = extern("pcc_thread_no_park_depth", (), c_int64)
@@ -2648,9 +2651,15 @@ def pcc_gc_fix_backend() -> None:
     it: no collector moves or frees them, and a C-ABI image's constructor
     registers its literals before main, ahead of a C program's own choice.
     """
-    if load_i32(global_addr("pcc_gc_backend_frozen"), 0) != 0:
+    if atomic_load_i32(global_addr("pcc_gc_backend_frozen"), 0, "acquire") != 0:
         return
     _init_config()
+    # Serialize the first allocation's freeze with the backend setter's
+    # commit. A frozen allocator must never race a collector switch.
+    _object_graph_lock()
+    if atomic_load_i32(global_addr("pcc_gc_backend_frozen"), 0, "acquire") != 0:
+        _object_graph_unlock()
+        return
     # GC0 lists and instance fields lock themselves (py_list, and
     # pcc_gc_store_field_ptr with its readers); the tracing and moving
     # collectors' markers and relocation take the graph lock, and the
@@ -2667,6 +2676,7 @@ def pcc_gc_fix_backend() -> None:
     if load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0:
         pcc_gc_tracking_enter_flag_mode()
     atomic_store_i32(global_addr("pcc_gc_backend_frozen"), 0, 1, "release")
+    _object_graph_unlock()
 
 
 @c_abi_export("pcc_gc_pointer_register")
@@ -2675,7 +2685,7 @@ def pcc_gc_pointer_register(o) -> int:
         return -1
     # 262144 = PY_FLAG_GC_MALLOC_ALLOC: a raw managed allocation.
     if (
-        load_i32(global_addr("pcc_gc_backend_frozen"), 0) == 0
+        atomic_load_i32(global_addr("pcc_gc_backend_frozen"), 0, "acquire") == 0
         and (load_i32(o, 12) & 262144) != 0
     ):
         pcc_gc_fix_backend()
@@ -2878,11 +2888,6 @@ def pcc_gc_set_backend(backend: int) -> int:
     _init_config()
     if backend < 0 or backend > 4:
         return -1
-    if (
-        load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
-        and backend != load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    ):
-        return -1
     # The collector is selected before the first managed allocation, by
     # PCC_GC_BACKEND or by one call here, and never changes afterwards: code
     # on a non-moving collector holds raw object pointers without pins or
@@ -2929,16 +2934,6 @@ def pcc_gc_set_backend(backend: int) -> int:
     # same-backend reset remains legal.
     _object_graph_lock()
     old_backend: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    # Configuration may have completed after the optimistic check above.
-    # Once tracing-only mode is published, a racing setter must not change
-    # its collector (including before the first managed allocation).
-    if (
-        load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
-        and backend != old_backend
-    ):
-        _object_graph_unlock()
-        _release_cms_worker_pause_unless_kept(keeps_collector)
-        return -1
     if keeps_collector != 0 and old_backend != backend:
         # A concurrent switch won; this was a reset of the backend it left.
         _object_graph_unlock()
@@ -3016,6 +3011,23 @@ def pcc_gc_set_backend(backend: int) -> int:
         _object_graph_unlock()
         _release_cms_worker_pause_unless_kept(keeps_collector)
         return -1
+    refcount_fast: int = 0
+    if (
+        backend == 0
+        and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
+        and pcc_threads_enabled() == 0
+    ):
+        refcount_fast = 1
+    store_i32(global_addr("pcc_gc_refcount_fast"), 0, refcount_fast)
+    refcount_atomic: int = 0
+    if backend == 0 and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0:
+        refcount_atomic = 1
+    store_i32(global_addr("pcc_gc_refcount_atomic"), 0, refcount_atomic)
+    # All admission checks above precede this single ownership-policy commit.
+    # Count-free roots are enabled before any tracing allocation can publish.
+    if backend != 0:
+        pcc_thread_enable_conservative_roots()
+    store_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0, 1 if backend != 0 else 0)
     store_i32(global_addr("pcc_gc_backend_selected"), 0, backend)
     _publish_frame_registry_inactive()
     store_i32(global_addr("pcc_gc_mark_active"), 0, 0)
@@ -3033,18 +3045,6 @@ def pcc_gc_set_backend(backend: int) -> int:
     if backend == 0:
         store_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0, 1)
         _publish_frame_registry_inactive()
-    refcount_fast: int = 0
-    if (
-        backend == 0
-        and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
-        and pcc_threads_enabled() == 0
-    ):
-        refcount_fast = 1
-    store_i32(global_addr("pcc_gc_refcount_fast"), 0, refcount_fast)
-    refcount_atomic: int = 0
-    if backend == 0 and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0:
-        refcount_atomic = 1
-    store_i32(global_addr("pcc_gc_refcount_atomic"), 0, refcount_atomic)
     store_i64(global_addr("pcc_gc_debt_bytes"), 0, 0)
     atomic_store_i32(global_addr("pcc_gc_backend4_auto_step_pending"), 0, 0, "release")
     atomic_store_i32(global_addr("pcc_gc_cms_sweep_pending"), 0, 0, "release")
@@ -4593,6 +4593,61 @@ def _gc0_terminal_free_has_no_metadata(o) -> int:
     return 1 if (atomic_load_i32(o, 12, "acquire") & 524288) != 0 else 0
 
 
+@c_abi_export("pcc_gc_backend3_forwarded_target_may_die")
+def _gc3_forwarded_target_may_die(target) -> int:
+    # Caller holds the graph owner. Inactive GC3 source nodes are physical
+    # ownership records, not dead storage: raw/conservative aliases can pin
+    # them even though the active tracing sweep visits only the replacement.
+    edge = pcc_gc_forwarding_target_index_find(target)
+    if ptr_is_null(edge) != 0:
+        return 1
+    if pcc_thread_owns_stopped_world() == 0 or pcc_gc_object_is_address_pinned(target) != 0:
+        return 0
+    population: int = load_i32(global_addr("pcc_gc_forwarding_population"), 0)
+    visited: int = 0
+    while ptr_is_null(edge) == 0:
+        if visited >= population or ptr_eq(load_ptr(edge, 8), target) == 0:
+            return 0
+        source = load_ptr(edge, 0)
+        if ptr_is_null(source) != 0 or is_tagged_int(source) != 0:
+            return 0
+        if ptr_is_null(pcc_gc_object_index_find(source)) != 0:
+            return 0
+        if pcc_gc_object_is_address_pinned(source) != 0:
+            return 0
+        visited += 1
+        edge = load_ptr(edge, 32)
+    return 1
+
+
+@c_abi_export("pcc_gc_backend3_finish_forwarded_source")
+def pcc_gc_backend3_finish_forwarded_source(source) -> None:
+    if ptr_is_null(source) != 0 or is_tagged_int(source) != 0:
+        return
+    if (load_i32(global_addr("pcc_gc_backend_selected"), 0) != 3
+            or load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0):
+        return
+    # Target-death preflight established this stop and rejected every pinned
+    # reverse source. Keep the inactive node until the existing free owner
+    # consumes its MinorBlock/live or OBJECT/malloc allocation origin.
+    if pcc_thread_owns_stopped_world() == 0:
+        pcc_py_gc_defer_tripwire(cstr("GC3 source retirement requires stopped world"),
+                                cstr("pcc/runtime/py/py_gc_backend.py"), 0)
+        return
+    if pcc_gc_object_is_address_pinned(source) != 0:
+        pcc_py_gc_defer_tripwire(cstr("GC3 source retirement retains an address pin"),
+                                cstr("pcc/runtime/py/py_gc_backend.py"), 0)
+        return
+    tag: int = load_i32(source, 8)
+    store_i32(source, 12, load_i32(source, 12) | 524288)
+    pcc_gc_note_object_freeing(source)
+    py_gc_untrack(source)
+    # Reuse the same typed payload owner as counted and tracing deallocation.
+    # A moved CPY_HANDLE has NULL foreign state; a raw forwarding source still
+    # owns that payload. The dispatcher invokes each real allocator once.
+    pcc_gc_dealloc_typed(source, tag)
+
+
 @c_abi_export("pcc_gc_free_object_memory")
 def pcc_gc_free_object_memory(o) -> None:
     if ptr_is_null(o) != 0:
@@ -4614,6 +4669,10 @@ def pcc_gc_free_object_memory(o) -> None:
     else:
         backend = load_i32(global_addr("pcc_gc_backend_selected"), 0)
     _object_graph_lock()
+    if (backend == 3 and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
+            and _gc3_forwarded_target_may_die(o) == 0):
+        _object_graph_unlock()
+        return
     lease_node = pcc_gc_object_index_find(o)
     leased: int = 0
     if ptr_is_null(lease_node) == 0 and load_i64(lease_node, 80) != 0:
@@ -5227,6 +5286,12 @@ def pcc_gc_note_object_freeing(o) -> None:
         backend = load_i32(global_addr("pcc_gc_backend_selected"), 0)
     if ptr_is_null(o) != 0:
         return
+    if backend == 3 and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
+        _object_graph_lock()
+        permitted: int = _gc3_forwarded_target_may_die(o)
+        _object_graph_unlock()
+        if permitted == 0:
+            return
     watch = global_load_ptr("pcc_gc_free_watch")
     if ptr_is_null(watch) == 0 and ptr_eq(load_ptr(watch, _FREE_WATCH_OBJECT), o) != 0:
         store_i64(watch, _FREE_WATCH_NOTED, 1)

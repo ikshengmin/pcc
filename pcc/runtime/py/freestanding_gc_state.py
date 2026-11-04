@@ -129,9 +129,9 @@ define_global_i32("pcc_gc_refcount_fast", 0)
 # atomic reference-count updates (any number of threads), and only a
 # count that would reach zero takes the full release path.
 define_global_i32("pcc_gc_refcount_atomic", 0)
-# Opt-in tracing prototype for GC1/2/4. Keep the original exported symbol
-# while extending its shared root/sweep protocol; zero preserves the counted
-# control. GC3 admission still awaits its minor-copy ownership validation.
+# Effective ownership mode, derived only from the selected collector:
+# GC0 counts references; GC1-4 trace. The exported ABI name is retained.
+# Configuration runs before the first managed allocation publishes a header.
 define_global_i32("pcc_gc_backend4_no_refcounts", 0)
 define_global_i32("pcc_gc_config_initialized", 0)
 # Conservative before configuration; moving work publishers enable before

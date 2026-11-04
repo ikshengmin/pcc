@@ -169,6 +169,7 @@ def _debug_check_dict_dealloc_slot(
         pcc_debug_bad_dict_slot(dict_obj, index, offset, obj, load_i32(obj, PYOBJECTHEADER_TYPE_TAG_OFFSET))
 
 
+@c_abi_export("pcc_gc_dealloc_typed")
 def _dealloc_dispatch(o, tag: int) -> None:
     if tag == PY_TYPE_INT:
         py_dealloc_int(o)

@@ -3044,6 +3044,15 @@ def _cross_object_signatures_part_12():
 
 def _cross_object_signatures_part_13():
     return {
+        'pcc_gc_backend3_promotion_cursor': (('c_ptr',), 'c_int64'),
+        'pcc_gc_backend3_set_promotion_cursor': (('c_ptr', 'c_int64'), 'c_int64'),
+        'pcc_gc_forwarding_retirement_backend_admitted': ((), 'c_int64'),
+        'pcc_gc_backend3_pin_external_remap_root': (('c_ptr', 'c_ptr'), 'c_void'),
+        'pcc_gc_conservative_node_has_live_extent': (('c_ptr',), 'c_int64'),
+        'pcc_gc_conservative_pin_owner_chain': (('c_ptr', 'c_int64'), 'c_void'),
+        'pcc_gc_backend3_forwarded_target_may_die': (('c_ptr',), 'c_int64'),
+        'pcc_gc_backend3_finish_forwarded_source': (('c_ptr',), 'c_void'),
+        "pcc_gc_dealloc_typed": (("c_ptr", "c_int64"), "c_void"),
     'pcc_gc_note_frame_leave_local': (("c_ptr",), "c_void"),
     'pcc_thread_local_root_arena_get': ((), 'c_ptr'),
     'pcc_thread_local_root_arena_set': (('c_ptr',), 'c_void'),
