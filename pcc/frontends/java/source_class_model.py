@@ -245,6 +245,8 @@ class ClassAnalyzer(ClassConstructionAnalyzer, StringModelAnalyzer, ArrayModelAn
             node.kind = "receiver_call"
 
     def statement(self, node, assigned):
+        if node.kind == "enhanced_for":
+            return self.array_iteration(node, assigned)
         if node.kind == "var" and isinstance(node.value, NamedType):
             node.value = self.project.resolve_named_type(self.program, node.value)
         if node.kind == "array_assign":

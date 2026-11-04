@@ -1,17 +1,111 @@
 """Primitive-array source semantics, deliberately without managed lowering.
 
-JLS 10, 15.10 and 15.26. The typed nodes retain distinct read/store check order;
+JLS 10, 14.14.2, 15.10 and 15.26. The typed nodes retain read/store check order
+and array iteration capture, conversion and control-flow obligations;
 these are semantic obligations, not an emitted exception, allocation or GC ABI.
 Only one-dimensional boolean/integral arrays are admitted here. Other reference fields,
 Object supertypes, clone/casts and multidimensional/reference arrays remain gated.
 """
+from dataclasses import dataclass
+
+from pcc.support.managed_objects import ManagedValuePlan, unmet_requirements
+
 from .source_syntax import Node, Token
 from .floating_semantics import converted_constant, floating_binary
-from .source_types import ArrayType, BootstrapStringType, ClassType, FLOATING, INTEGRAL, model_reference, promoted, widening
+from .source_types import (
+    ArrayType, BootstrapStringType, ClassType, FLOATING, INTEGRAL, NamedType,
+    model_reference, promoted, widening,
+)
+
+
+@dataclass(frozen=True)
+class ArrayIterationPlan:
+    """JLS array translation obligations, not temporary slots or native IR.
+
+    The source expression occurs once in the enhanced_for node. The retained
+    reference is independent of later writes to its source variable, and must
+    remain rooted/relocatable across every body call and continue backedge.
+    There is no array address, hidden source identifier or guessed root ABI.
+    """
+    array_type: ArrayType
+    variable_type: object
+    captured_array: ManagedValuePlan
+    entry_steps: tuple[str, ...] = (
+        "evaluate-array-expression-once", "retain-captured-array", "initialize-int-index-zero",
+    )
+    condition_steps: tuple[str, ...] = (
+        "captured-array", "null-check", "read-length", "compare-index-less-than-length",
+    )
+    iteration_steps: tuple[str, ...] = (
+        "captured-array", "index", "bounds-check", "read-component",
+        "assignment-conversion", "initialize-loop-variable", "body",
+    )
+    continue_steps: tuple[str, ...] = ("increment-int-index", "test-condition")
+
+    @property
+    def normal_completion_steps(self):
+        # Only normal body completion and continue targeting this loop update
+        # its index. Break, return and an outer-loop continue leave this loop.
+        return self.continue_steps
+
+    @property
+    def managed_requirements(self):
+        return (*unmet_requirements(self.captured_array),
+                "enhanced-for-captured-array-root-through-loop-exit",
+                "enhanced-for-captured-array-relocation-aware-access",
+                "enhanced-for-captured-array-root-retirement-on-every-exit")
+
+    @property
+    def runtime_registered(self):
+        return False
 
 
 class ArrayModelAnalyzer:
     """Mixin used only by ClassAnalyzer, never the native scalar analyzer."""
+
+    def array_iteration(self, node, assigned):
+        variable, expression, body = node.children
+        if isinstance(variable.value, NamedType):
+            variable.value = self.project.resolve_named_type(self.program, variable.value)
+        # Expression is checked exactly once in the enclosing scope. Its side
+        # effects precede even a zero-iteration exit; the binder is not visible.
+        after_expression = set(assigned)
+        self.expression(expression, after_expression)
+        if isinstance(expression.dtype, ClassType):
+            expression.token.error("Iterable enhanced for requires the owned iterable type/iterator domain",
+                                   code="java.unsupported.enhanced-for-iterable")
+        if isinstance(expression.dtype, BootstrapStringType):
+            expression.token.error("String iteration requires the owned bootstrap type definition",
+                                   code="java.unsupported.string-literals")
+        if not isinstance(expression.dtype, ArrayType):
+            expression.token.error("enhanced for requires an array or Iterable expression")
+        component = expression.dtype.component
+        if isinstance(variable.value, (ClassType, BootstrapStringType)):
+            # Assignment conversion can box an element and then widen its
+            # reference. Supplied names alone do not establish that hierarchy
+            # or the owned wrapper allocation needed to perform it.
+            variable.token.error("reference iteration variables require owned boxing/reference conversion",
+                                 code="java.unsupported.enhanced-for-boxing")
+        # A read component is not a constant expression, even for a final
+        # variable iterating a singleton literal. Do not narrow int to byte.
+        if not widening(component, variable.value):
+            variable.token.error("incompatible enhanced for element assignment conversion from " + component
+                                 + " to " + str(variable.value))
+        node.value = ArrayIterationPlan(expression.dtype, variable.value, expression.managed_value)
+        self.scopes.append({})
+        loop = {"node": node, "break": [], "continue": []}
+        self.controls.append(loop)
+        try:
+            variable.symbol = self.declare(variable.token, variable.value, variable.is_final)
+            self.statement(body, after_expression | {variable.symbol})
+        finally:
+            self.controls.pop()
+            self.scopes.pop()
+        # JLS 16.2.12: the generated length comparison may be false before
+        # the body executes. Body-only assignments never become definite here.
+        outgoing = set.intersection(after_expression, *loop["break"])
+        node.completes = True
+        return outgoing
 
     def assignment_value(self, node, target):
         if isinstance(target, ArrayType):

@@ -243,21 +243,34 @@ def test_exact_supplied_project_lookup_and_constructor_access(name, sources, mes
     assert sources == original_sources
 
 
-def test_complete_primes_original_keeps_its_actual_earlier_enhanced_for_frontier():
+def test_complete_primes_original_keeps_runtime_frontier_after_array_iteration():
     _, files = load_inputs()
     sources = original_sources(files, PRODUCTION)
     before = dict(sources)
     first = PRODUCTION[0]
     assert sources[first].splitlines()[69].strip() == 'throw new IllegalArgumentException(String.format(NUMBER_TOO_SMALL, n, 0));'
-    parser = SourceParser(sources[first], first, class_model=True)
-    with pytest.raises(UnsupportedJava, match='blank final locals require') as caught:
+    parsed_loops = []
+
+    class OriginalParser(SourceParser):
+        def statement(self, in_block=False):
+            node = super().statement(in_block=in_block)
+            if node.kind == 'enhanced_for':
+                parsed_loops.append(node)
+            return node
+
+    parser = OriginalParser(sources[first], first, class_model=True)
+    with pytest.raises(UnsupportedJava, match='unsupported Java expression or statement') as caught:
         parser.parse()
-    assert caught.value.code == 'java.unsupported.blank-final-local'
-    assert ':53:24:' in str(caught.value)
-    assert (parser.peek().text, parser.peek().line, parser.peek().column) == (':', 53, 26)
+    assert caught.value.code == 'java.unsupported.runtime-statements'
+    assert ':70:13:' in str(caught.value)
+    loop, = parsed_loops
+    variable, expression, _ = loop.children
+    assert (loop.token.line, variable.token.line, variable.token.column) == (53, 53, 24)
+    assert variable.kind == 'enhanced_var' and variable.value == 'int' and variable.is_final
+    assert variable.token.text == 'p' and expression.value == 'SmallPrimes.PRIMES'
     assert sources == before
-    # This source-owned constructor prerequisite is downstream of that syntax
-    # gap. No token removal, source slice, fake library, or project acceptance.
+    # Complete original parsing still fails before project Sema or lowering.
+    # No token removal, source slice, fake library, or project acceptance.
 
 
 @pytest.mark.integration

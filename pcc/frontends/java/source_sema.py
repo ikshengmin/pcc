@@ -603,7 +603,7 @@ class SourceAnalyzer:
                     node.token.error("undefined enclosing statement label: " + node.value)
                 if kind == "continue":
                     loop = target["node"].children[0]
-                    if loop.kind not in ("while", "do", "for"):
+                    if loop.kind not in ("while", "do", "for", "enhanced_for"):
                         node.token.error("continue label must directly label a loop: " + node.value)
                     target = next(context for context in reversed(self.controls) if context["node"] is loop)
             node.control_target = target["node"]

@@ -616,6 +616,11 @@ class SourceParser:
         if self.accept("for"):
             self.expect("(")
             initial = Node("empty", token) if self.peek().text == ";" else self.for_expressions(allow_declaration=True)
+            if initial.kind == "enhanced_var":
+                self.expect(":")
+                expression = self.expression()
+                self.expect(")")
+                return Node("enhanced_for", token, children=[initial, expression, self.statement()])
             self.expect(";")
             condition = Node("bool", token, True) if self.peek().text == ";" else self.expression()
             self.expect(";")
@@ -680,8 +685,8 @@ class SourceParser:
         a sequence neither adds a lexical scope nor admits arbitrary values.
         Local declarations remain a distinct alternative to the list.
         """
-        first = self.simple(allow_declaration=allow_declaration)
-        if (first.kind == "var" or first.kind == "sequence" and first.value == "local_declarations"
+        first = self.simple(allow_declaration=allow_declaration, allow_enhanced=allow_declaration)
+        if (first.kind in {"var", "enhanced_var"} or first.kind == "sequence" and first.value == "local_declarations"
                 or self.peek().text != ","):
             return first
         expressions = [first]
@@ -689,7 +694,7 @@ class SourceParser:
             expressions.append(self.simple())
         return Node("sequence", first.token, children=expressions)
 
-    def local_declaration(self, type_token, *, is_final):
+    def local_declaration(self, type_token, *, is_final, allow_enhanced=False):
         """JLS 14.4/6.3: ordered declarators in the enclosing lexical scope.
 
         Brackets after a name belong only to that declarator, while brackets
@@ -705,6 +710,15 @@ class SourceParser:
             if dtype not in DECLARED and not isinstance(dtype, (ArrayType, NamedType)):
                 self.type_boundary(type_token, "source locals require boolean or integral primitives",
                                    code="java.unsupported.declared-local-type")
+            if allow_enhanced and not declarations and self.peek().text == ":":
+                # The iteration variable has no source initializer, but is not
+                # a blank final local: each iteration initializes it (14.14.2).
+                # Retain the original expression separately from this binding;
+                # its scope starts only in the body, never in that expression.
+                if not self.class_model:
+                    self.peek().error("enhanced for requires shared managed-array or Iterable lowering",
+                                      code="java.unsupported.array-storage")
+                return Node("enhanced_var", name, dtype, is_final=is_final)
             if self.accept("="):
                 initializer = (self.array_initializer(dtype) if isinstance(dtype, ArrayType) and self.peek().text == "{"
                                else self.expression())
@@ -719,7 +733,7 @@ class SourceParser:
         return (declarations[0] if len(declarations) == 1 else
                 Node("sequence", type_token, "local_declarations", declarations))
 
-    def simple(self, allow_declaration=False):
+    def simple(self, allow_declaration=False, *, allow_enhanced=False):
         token = self.peek()
         if self.class_model and token.text == "this" and self.peek(1).text == "." and self.peek(3).text in ASSIGNMENTS | {"++", "--"}:
             self.take()
@@ -735,14 +749,14 @@ class SourceParser:
             type_token = self.take()
             if not allow_declaration:
                 token.error("a local declaration requires a block or for initializer")
-            return self.local_declaration(type_token, is_final=is_final)
+            return self.local_declaration(type_token, is_final=is_final, allow_enhanced=allow_enhanced)
         if self.named_local_start():
             if not allow_declaration:
                 token.error("a local declaration requires a block or for initializer")
             if not self.class_model:
                 self.type_boundary(self.peek(), "source locals require boolean or integral primitives",
                                    code="java.unsupported.declared-local-type")
-            return self.local_declaration(self.take(), is_final=is_final)
+            return self.local_declaration(self.take(), is_final=is_final, allow_enhanced=allow_enhanced)
         if is_final and self.peek().text == "var":
             token.error("final local declarations require boolean or integral primitives",
                         code="java.unsupported.declared-local-type")

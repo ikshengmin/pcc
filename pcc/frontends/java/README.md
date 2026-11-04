@@ -269,7 +269,7 @@ This prerequisite was selected by source-reading ZXing 3.5.3, release commit
 The inspected files carry Apache-2.0 notices; no upstream implementation was
 copied. Their blank-final fields still need definite-unassignment analysis;
 objects/arrays need managed execution, and `System.arraycopy`, exceptions,
-dynamic remainder, enhanced-for, strings and collections remain further gaps.
+dynamic remainder, native array iteration, strings and collections remain further gaps.
 This change does not compile or qualify ZXing, nor establish Java-as-Python
 extension support. The bytecode/JAR compatibility experiment is unchanged.
 
@@ -305,12 +305,50 @@ obligations in `test_source_construction_model.py` are UNRUN; JDK object executi
 is never counted as PCC object execution.
 
 Commons Numbers' unchanged Primes source uses class creation inside `throw` at
-line 70. This is a downstream prerequisite: the basic-for parser treats the
-final iteration binder as a blank final local at 53:24, before consuming the
-enhanced-for colon at 53:26. Throw/format, List/Integer and
-other generic/library/bootstrap/runtime dependencies remain unresolved. The
-full original production/test closure and strict project gate are unchanged.
+line 70. The nonlowering parser now retains its original `final int p` enhanced-for
+at line 53. The next expected parser boundary is the existing unsupported `throw`
+at 70:13; the exact complete-original regression is authored but execution-unrun.
+Production scalar compilation still rejects the static String field at line 31.
+Static arrays, dynamic remainder, throw/format, List/Integer and other generic,
+library, bootstrap and runtime dependencies remain unresolved. The full original
+production/test closure and strict project gate are unchanged.
 
 Rules: [class creation](https://docs.oracle.com/javase/specs/jls/se21/html/jls-15.html#jls-15.9),
 [constructor selection](https://docs.oracle.com/javase/specs/jls/se21/html/jls-15.html#jls-15.9.3),
 and [creation order](https://docs.oracle.com/javase/specs/jls/se21/html/jls-15.html#jls-15.9.4).
+
+### Primitive-array enhanced-for source model
+
+`analyze_class_sources` retains the original enhanced-for declaration, array
+expression and body without rewriting tokens or synthesizing Java locals. It
+checks the expression once in the enclosing scope, then introduces the iteration
+binding only for the body. Boolean/integral array components use assignment
+conversion to the declared variable, including numeric widening to float/double;
+an array read is never a constant expression eligible for narrowing. A final
+iteration binding is initialized each iteration and cannot be reassigned.
+
+The immutable `ArrayIterationPlan` reuses the expression's shared compiler-only
+managed value plan. It records a captured reference independent of later source
+variable rebinding, an int index, null/length/read order, per-iteration conversion,
+and increment/retest on normal body completion or continue targeting that loop.
+Break, return and outer-loop continue leave it. The captured reference needs a
+relocation-aware root across body calls/backedges and root retirement on every
+exit; these obligations remain unmet, not a root slot or allocation ABI. Array
+elements remain live reads, not a snapshot copied at loop entry.
+
+Scope, label targets, reachability and definite assignment use the existing
+source owners. An empty-array exit preserves expression assignments but does
+not establish assignments made only in the body, even when an initializer is
+syntactically nonempty or the body always returns. Ordinary blank final locals
+remain gated. Iterable iteration, inferred `var`, boxing, reference/floating/
+multidimensional arrays and native managed iteration remain unsupported.
+
+`test_source_enhanced_for_model.py` contains exact complete-source model and
+native-rejection obligations plus a separate selected-JDK reference observer.
+Only the JDK lane executes managed loops; no PCC native array execution is
+claimed. All new execution and complete-Java qualification are UNRUN, CI-only.
+
+Rules: [enhanced for](https://docs.oracle.com/javase/specs/jls/se21/html/jls-14.html#jls-14.14.2),
+[scope](https://docs.oracle.com/javase/specs/jls/se21/html/jls-6.html#jls-6.3),
+[assignment conversion](https://docs.oracle.com/javase/specs/jls/se21/html/jls-5.html#jls-5.2),
+and [definite assignment](https://docs.oracle.com/javase/specs/jls/se21/html/jls-16.html#jls-16.2.12).

@@ -1,5 +1,13 @@
 {
   "functions": {
+    "tests/java/test_source_enhanced_for_model.py": {
+      "test_exact_enhanced_for_originals_against_selected_jdk_only": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls check_originals_reference on complete unchanged enhanced-for source originals and a separate observer; only the selected JDK executes managed loops, with runtime values, source/tool identity and source-attributed compiler rejection evidence. PCC native managed iteration remains unavailable."
+        ]
+      }
+    },
     "tests/java/test_source_static_imports.py": {
       "test_exact_static_import_originals_match_jdk_raw_processes": {
         "activity": "external-reference",
