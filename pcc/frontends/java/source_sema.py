@@ -13,6 +13,7 @@ from .floating_semantics import converted_constant, floating_binary, floating_li
 from .diagnostics import UnsupportedJava
 from .source_local_inference import LocalInferenceAnalyzer
 from .source_blank_final import check_blank_final_locals
+from .source_static_constructors import check_static_constructor_declarations
 
 
 from .source_types import (
@@ -75,9 +76,13 @@ class SourceAnalyzer(LocalInferenceAnalyzer):
         self.scopes = []
         self.controls = []
 
+    def check_constructor_declarations(self):
+        check_static_constructor_declarations(self.program)
+
     def declare_methods(self):
         if self.program.name == "java/lang/Object":
             raise UnsupportedJava("bootstrap Object requires the shared runtime definition", code="java.unsupported.bootstrap-object")
+        self.check_constructor_declarations()
         for method in self.program.methods:
             key = (method.token.text, method.parameter_types)
             if not method.parameters and method.token.text in {

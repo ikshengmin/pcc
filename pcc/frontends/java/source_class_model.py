@@ -102,6 +102,12 @@ class ClassAnalyzer(IntegralArithmeticModelAnalyzer, ThrowModelAnalyzer, ClassCo
             return
         return super().assignment_value(node, target)
 
+    def check_constructor_declarations(self):
+        # This nonlowering owner validates all retained constructor bodies,
+        # delegation and initialization below. Native static-only admission
+        # must not replace or narrow those existing model semantics.
+        pass
+
     def declare_methods(self):
         # SourceAnalyzer may request an empty ordinary-method table again.
         # Constructor bindings must retain the one actual declaration object.

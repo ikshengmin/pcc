@@ -1,5 +1,25 @@
 {
   "functions": {
+    "tests/java/test_source_static_constructors.py": {
+      "test_identical_complete_utility_maps_match_selected_jdk_raw_processes": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses unchanged complete private-constructor utility source maps and selected JDK tools with independent observers, raw native/reference process comparisons, or source-attributed compiler acceptance/rejection. Reference execution is not native construction support. All original source/observer/tool identities are retained. Complete RegularizedGamma is a separate unresolved original input; no complete Commons Numbers or runtime acceptance."
+        ]
+      },
+      "test_identical_constructor_capability_originals_are_valid_selected_jdk_sources": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses unchanged complete private-constructor utility source maps and selected JDK tools with independent observers, raw native/reference process comparisons, or source-attributed compiler acceptance/rejection. Reference execution is not native construction support. All original source/observer/tool identities are retained. Complete RegularizedGamma is a separate unresolved original input; no complete Commons Numbers or runtime acceptance."
+        ]
+      },
+      "test_identical_invalid_constructor_originals_have_selected_jdk_rejections": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses unchanged complete private-constructor utility source maps and selected JDK tools with independent observers, raw native/reference process comparisons, or source-attributed compiler acceptance/rejection. Reference execution is not native construction support. All original source/observer/tool identities are retained. Complete RegularizedGamma is a separate unresolved original input; no complete Commons Numbers or runtime acceptance."
+        ]
+      }
+    },
     "tests/java/test_source_static_member_classes.py": {
       "test_identical_complete_member_projects_match_selected_jdk_raw_processes": {
         "activity": "external-reference",

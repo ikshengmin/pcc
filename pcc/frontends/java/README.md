@@ -83,19 +83,52 @@ or method would otherwise be importable.
 The new ordinary, exact native-byte and unchanged-source selected-JDK obligations
 are execution-UNRUN. Complete pinned Commons Numbers `RegularizedGamma.java`, with
 LICENSE, NOTICE and provenance, is retained as an original boundary input. Its real
-static `P`/`Q` classes motivate this mechanism, but the unchanged native input still
-stops at its private outer constructor on line 36. The separate class model still
+static `P`/`Q` classes motivate this mechanism. With the private empty-constructor
+declaration admission below, the unchanged native input is expected to stop at
+`new Policy` on line 77, column 44. The separate class model still
 rejects nested types at line 46. These are authored, unrun source predictions,
 not complete-class or project acceptance. No extracted method or fake BoostGamma/
 Policy dependency substitutes for that input. The original Primes String31 frontier
 and shared managed-runtime/QPS gate remain unchanged. Nonstatic inner classes,
-explicit constructors, instance state, model nesting and runtime initialization
+constructor execution, instance state, model nesting and runtime initialization
 retain their separate capability boundaries.
 
 Rules: [member classes](https://docs.oracle.com/javase/specs/jls/se21/html/jls-8.html#jls-8.5),
 [name/access resolution](https://docs.oracle.com/javase/specs/jls/se21/html/jls-6.html),
 [imports](https://docs.oracle.com/javase/specs/jls/se21/html/jls-7.html#jls-7.5),
 and [binary names](https://docs.oracle.com/javase/specs/jls/se21/html/jls-13.html#jls-13.1).
+
+Native static utility source may retain explicit `private C() {}` declarations
+without acquiring managed constructor execution. These declarations must be
+private, no-argument and syntactically empty: even an empty statement, a return
+or an empty nested block is outside this initial domain. The original constructor
+AST, owner, modifiers and tokens remain separate from ordinary methods, preserving
+default-constructor suppression and allowing a distinct ordinary method named `C`.
+Duplicate signatures and illegal constructor modifiers are rejected. Native sema
+checks every constructor, and lowering rechecks its current AST before creating
+any functions, so a later mutation cannot silently discard an executable body.
+
+All ordinary static methods still enter primitive native lowering, including
+uncalled methods. The constructors do not enter overload tables, static imports,
+native exports or emitted method lists. Private access is not a reachability
+proof: same-nest `new C()` is still rejected, including in uncalled methods or
+`if (false)` branches. Explicit `this`/`super` invocation, instance state and
+nonconstant class initialization retain their existing boundaries. An empty
+constructor would still invoke `Object` construction if called; no such target,
+receiver ABI, allocation, initialization or publication is implemented here.
+The richer separate class model keeps its existing constructor-body checks.
+
+Complete unchanged source maps exercise this static native path and independent
+selected-JDK references. Their ordinary, native-byte, reference and whole-language
+execution remains UNRUN. The original RegularizedGamma constructors at lines
+36 and 48 have the admitted declaration shape; Q's constructor at 106 has the
+same shape but parsing first stops at unsupported `new Policy` at 77:44.
+Its real BoostGamma dependencies remain unresolved.
+No complete original class/module/project acceptance follows from this admission.
+
+Rules: [constructors](https://docs.oracle.com/javase/specs/jls/se21/html/jls-8.html#jls-8.8),
+[preventing instantiation](https://docs.oracle.com/javase/specs/jls/se21/html/jls-8.html#jls-8.8.10),
+and [class initialization](https://docs.oracle.com/javase/specs/jls/se21/html/jls-12.html#jls-12.4).
 
 Primitive `static final` constant-variable fields are checked and inlined, including
 byte/short/char assignment-constant narrowing, field access, simple-name forward
@@ -214,9 +247,10 @@ simple `K` and type-qualified `Record.K` constant names remain distinct.
 It retains every body and initializer and rejects invalid receiver contexts,
 constructor cycles and unassigned locals. Primitive payload slots have a
 header-free layout plan; no object, tracing descriptor or vtable is registered.
-Native `compile_source(s)` still rejects explicit instance features before IR
-until shared managed allocation, roots, construction/publication and dispatch
-are implemented. Blank-final-instance-field DU, inherited Object overrides,
+Native `compile_source(s)` still rejects instance execution features before IR;
+retaining private empty constructor declarations does not implement managed
+allocation, roots, construction/publication or dispatch.
+Blank-final-instance-field DU, inherited Object overrides,
 general references and inheritance remain explicit model boundaries. This API is not a
 separate runtime or evidence that a Java application can allocate objects.
 

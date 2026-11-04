@@ -9,6 +9,7 @@ from .artifact import JavaCompilation, method_symbol
 from .diagnostics import UnsupportedJava
 from .integer_semantics import emit_binary, emit_narrow, emit_nonzero_division
 from .source_types import FLOATING
+from .source_static_constructors import check_static_constructor_declarations
 
 
 OPERATIONS = {"+": "add", "-": "sub", "*": "mul", "/": "sdiv", "%": "srem", "&": "and", "|": "or", "^": "xor",
@@ -91,6 +92,11 @@ class SourceLowerer:
         return self.builder.sext(value, target)
 
     def lower(self, entry):
+        # Constructors remain declarations, never functions with a fabricated
+        # receiver ABI. Recheck every owner before creating any IR function,
+        # so mutation after sema cannot silently discard a constructor body.
+        for program in self.programs:
+            check_static_constructor_declarations(program)
         methods = [method for program in self.programs for method in program.methods]
         for method in methods:
             key = (method.owner, method.token.text, method.descriptor)

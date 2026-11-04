@@ -72,6 +72,9 @@ def row(name, members, expected=42, *, entry="p.Outer", imports=""):
 
 
 CASES = [
+    # Exact former boundary inputs, including their original outer wrapper.
+    row("outer-constructor", "public static int run(){return 42;}private Outer(){}"),
+    row("nested-constructor", "public static int run(){return 42;}static class Inner{private Inner(){}}"),
     row("private-nest", "private static final int BASE=40;private static int add(int n){return BASE+n;}"
         "public static int run(){return Inner.read();}"
         "private static class Inner{private static final int TWO=2;private static int read(){return add(TWO);}}"),
@@ -406,8 +409,6 @@ BOUNDARIES = [
     ("member-record", "static record Inner(){}", "member-types"),
     ("generic-member", "static class Inner<T>{}", "class-supertypes-generics"),
     ("inherited-member", "static class Inner extends Outer{}", "class-supertypes-generics"),
-    ("outer-constructor", "private Outer(){}", "instance-methods"),
-    ("nested-constructor", "static class Inner{private Inner(){}}", "instance-methods"),
     ("nested-instance-method", "static class Inner{int f(){return 42;}}", "instance-methods"),
     ("nested-instance-field", "static class Inner{int value;}", "instance-methods"),
     ("nested-static-block", "static class Inner{static {int n=1;}}", "static-initialization"),
@@ -491,6 +492,7 @@ def test_complete_pinned_regularized_gamma_preserves_its_first_native_and_model_
     assert "private RegularizedGamma()" in source.splitlines()[35]
     assert "public static final class P" in source.splitlines()[45]
     assert "public static final class Q" in source.splitlines()[103]
+    assert source.splitlines()[76].index("new Policy") + 1 == 44
     lock = json.loads((root / "RegularizedGamma.source.json").read_text())
     assert lock["revision"] == "77f715769e4039acb4babd9add80b78a06ca7279"
     assert {item["file"] for item in lock["files"]} == {path.name for path in paths}
@@ -507,8 +509,12 @@ def test_complete_pinned_regularized_gamma_preserves_its_first_native_and_model_
     forbid_lowering(monkeypatch)
     with pytest.raises(UnsupportedJava) as native:
         compile_source(source, filename="RegularizedGamma.java", entry="value", descriptor="(DD)D")
-    assert native.value.code == "java.unsupported.instance-methods"
-    assert str(native.value).startswith("RegularizedGamma.java:36:13:")
+    assert native.value.code == "java.unsupported.object-expressions"
+    assert str(native.value).startswith("RegularizedGamma.java:77:44:")
+    assert lock["native_expected_boundary"]["code"] == native.value.code
+    assert lock["native_expected_boundary"]["line"] == 77
+    assert lock["native_expected_boundary"]["column"] == 44
+    assert "BoostGamma" in lock["unresolved_dependencies"]
     with pytest.raises(UnsupportedJava) as model:
         analyze_class_sources({"RegularizedGamma.java": source})
     assert model.value.code == "java.unsupported.member-types"

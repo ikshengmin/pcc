@@ -221,9 +221,21 @@ def test_original_array_field_boundary_now_has_a_source_model_only(monkeypatch):
 
 
 @pytest.mark.parametrize("text", [dict(VALID)[name] for name in (
-    "explicit-constructor", "uncalled-instance-body", "private-constructor")])
+    "explicit-constructor", "uncalled-instance-body")])
 def test_model_does_not_grant_native_object_compilation(text, monkeypatch):
     from pcc.frontends.java.source_lowering import SourceLowerer
     monkeypatch.setattr(SourceLowerer, "lower", lambda *a: pytest.fail("unqualified runtime-bearing class reached IR"))
     with pytest.raises(UnsupportedJava, match="static source methods"):
         compile_source(text)
+
+
+def test_original_private_constructor_is_static_native_admission_not_object_execution(monkeypatch):
+    forbid_bytecode_or_external_owner(monkeypatch)
+    text = dict(VALID)["private-constructor"]
+    compiled = compile_source(text, filename="Record.java")
+    assert text == "class Record{private Record(){}static int run(){return 42;}}"
+    assert compiled.emitted_class_methods == (("Record", "run", "()I"),)
+    assert "<init>" not in str(compiled.module)
+    model = analyze_class_sources({"Record.java": text}).models["Record"]
+    assert len(model.constructors) == 1 and not model.constructors[0].implicit
+    assert model.constructors[0].constructor_target == "java/lang/Object::<init>()V"

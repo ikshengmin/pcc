@@ -504,12 +504,16 @@ class SourceParser:
                 initializers.append(initializer)
                 initialization_steps.append(initializer)
                 continue
-            if self.class_model and self.peek().text == name and self.peek(1).text == "(":
+            if self.peek().text == name and self.peek(1).text == "(":
                 constructor = self.take()
                 if mods - {"public", "private", "protected"}:
                     constructor.error("invalid constructor modifier")
                 parameters, parameter_types, parameter_final = self.parameters(constructor, receiver=True)
                 self.throws_boundary()
+                # Keep the original constructor separate from ordinary
+                # methods. Native sema admits only private, no-argument,
+                # syntactically empty declarations; it never emits a
+                # constructor or treats its implicit super() as a no-op.
                 constructors.append(SourceMethod(constructor, "void", parameters, self.block(),
                                                  owner=owner, modifiers=frozenset(mods),
                                                  parameter_types=parameter_types, parameter_final=parameter_final,
