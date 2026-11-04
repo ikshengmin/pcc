@@ -45,6 +45,9 @@ def original(body, result="int", parameters="", helpers=""):
 
 
 CASES = [
+    # Complete former native-boundary input, also retained in the model guard
+    # below. Only the existing native/reference lanes may execute it.
+    ("original-mixed-blank-final", original("final int a=7,b;b=35;return a+b;"), "I", (), 42),
     ("int-pair", original("int a=7,b=35;return a+b;"), "I", (), 42),
     ("dependent-triple", original("int a=7,b=a*5,c=a+b;return c;"), "I", (), 42),
     ("initializer-effects", original("int n=0;int a=++n,b=n++,c=n+=40;return a==1&&b==1&&n==42?c:0;"), "I", (), 42),
@@ -150,10 +153,17 @@ def test_array_brackets_belong_to_their_declarator_model_only(body, types, monke
     assert caught.value.code == "java.unsupported.array-storage"
 
 
-def test_grouped_blank_final_retains_explicit_du_boundary():
+def test_original_grouped_blank_final_has_native_ir_but_keeps_model_boundary(monkeypatch):
     text = original("final int a=7,b;b=35;return a+b;")
+    forbid_bytecode_or_external_owner(monkeypatch)
+    result = compile_source(text, filename="Declared.java")
+    assert result.emitted_class_methods == (("Declared", "run", "()I"),)
+    assert "bc_" not in str(result.module)
+    assert text == dict((name, source) for name, source, *_ in CASES)["original-mixed-blank-final"]
+    # Native scalar DA/DU is implemented; the distinct class-model analyzer
+    # still rejects blank final locals. Do not erase that runtime/model split.
     with pytest.raises(UnsupportedJava) as caught:
-        compile_source(text)
+        analyze_class_sources({"Declared.java": text})
     assert caught.value.code == "java.unsupported.blank-final-local"
 
 

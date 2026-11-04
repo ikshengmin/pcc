@@ -159,7 +159,7 @@ INVALID = [
 ]
 INVALID += [
     ("final-import-write-" + str(index), project("import static provider.Values.VALUE;", body, FIELD),
-     "cannot assign a final", "cannot assign a value to final variable")
+     "cannot assign a final", r"cannot assign a value to (?:static )?final variable VALUE\b")
     for index, body in enumerate(("VALUE=1;return VALUE;", "VALUE+=1;return VALUE;",
                                   "VALUE++;return VALUE;", "return ++VALUE;", "return (VALUE=1);"))
 ]
@@ -231,17 +231,32 @@ def test_model_instance_members_are_not_static_import_candidates(member):
     assert type(caught.value) is JavaError
 
 
-def test_imported_model_string_calls_retain_callers_missing_runtime_contract():
+def test_imported_model_string_calls_retain_callers_missing_runtime_contract(monkeypatch):
+    from pcc.frontends.java.source_lowering import SourceLowerer
     sources = project("import static provider.Values.take;", "return take(null);",
                       {"provider.Values": "public static int take(String value){return 42;}"})
+    originals = dict(sources)
+    forbid_bytecode_or_external_owner(monkeypatch)
+    monkeypatch.setattr(SourceLowerer, "lower", lambda *a: pytest.fail("unresolved String contract reached native IR"))
     model = analyze_class_sources(sources)
     obligation, = model.models["app/Main"].compiler_context_obligations
     assert obligation.type_name == "java/lang/String"
     assert set(obligation.requirements) == {"owned-bootstrap-type-definition", "shared-owning-root-and-safepoint-ABI"}
     assert not model.models["app/Main"].runtime_registered and not model.semantic_context_complete
-    with pytest.raises(UnsupportedJava) as caught:
-        compile_sources(sources, entry_class="app.Main")
-    assert caught.value.code == "java.unsupported.declared-parameter-type"
+    # Native project parsing uses sorted diagnostic filenames, so the exact
+    # caller's null token is encountered before the provider's String type.
+    for inputs in (sources, dict(reversed(tuple(sources.items())))):
+        with pytest.raises(UnsupportedJava) as caught:
+            compile_sources(inputs, entry_class="app.Main")
+        assert caught.value.code == "java.unsupported.object-expressions"
+        assert str(caught.value).startswith("app/Main.java:1:" + str(sources["app/Main.java"].index("null") + 1) + ":")
+    # The unmodified provider has its own later boundary when checked alone;
+    # this is not substituted for the complete project's first diagnostic.
+    with pytest.raises(UnsupportedJava) as provider:
+        compile_source(sources["provider/Values.java"], filename="provider/Values.java")
+    assert provider.value.code == "java.unsupported.declared-parameter-type"
+    assert str(provider.value).startswith("provider/Values.java:1:" + str(sources["provider/Values.java"].index("String") + 1) + ":")
+    assert sources == originals
 
 
 @pytest.mark.parametrize("imports,code", [

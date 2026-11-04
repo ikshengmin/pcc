@@ -196,13 +196,32 @@ def test_invalid_original_class_model_is_not_accepted(text, message):
     ("class Record{final int value=42;}", "definite-unassignment"),
     ("class Record{static int value=42;}", "class initialization"),
     ("class Record{int hashCode(){return 42;}}", "inherited-method"),
-    ("class Record{int get(){return new Record();}}", "unsupported Java expression"),
     ("class Record extends Other{}", "inheritance"),
     ("class Record{static {}}", "static initializer execution"),
 ])
 def test_unimplemented_class_semantics_remain_explicit(text, message):
     with pytest.raises(UnsupportedJava, match=message):
         analyze_class_sources({"Record.java": text})
+
+
+def test_original_reference_return_is_invalid_not_a_missing_object_model(monkeypatch):
+    from pcc.frontends.java.source_lowering import SourceLowerer
+    # Preserve the complete former capability input. JLS 14.17 applies
+    # assignment conversion to an int result; a Record reference cannot fit.
+    text = "class Record{int get(){return new Record();}}"
+    sources = {"Record.java": text}
+    forbid_bytecode_or_external_owner(monkeypatch)
+    monkeypatch.setattr(SourceLowerer, "lower", lambda *a: pytest.fail("invalid reference return reached IR"))
+    with pytest.raises(JavaError, match="value required.*Record") as caught:
+        analyze_class_sources(sources)
+    assert type(caught.value) is JavaError and caught.value.code is None
+    assert str(caught.value).startswith("Record.java:1:31:")
+    assert sources == {"Record.java": text}
+    # The native parser's earlier instance-method boundary remains separate
+    # from the class model's actual invalid-return diagnosis.
+    with pytest.raises(UnsupportedJava) as native:
+        compile_source(text, filename="Record.java")
+    assert native.value.code == "java.unsupported.instance-methods"
 
 
 def test_original_array_field_boundary_now_has_a_source_model_only(monkeypatch):

@@ -257,8 +257,8 @@ BOUNDARIES = [
         "int[] values;for(int value:(values=new int[]{42})){}return values[0];")),
 ]
 BOUNDARY_CODES = {
-    "inferred-var-loop": "java.unsupported.declared-local-type",
-    "final-inferred-var-loop": "java.unsupported.declared-local-type",
+    "inferred-var-loop": "java.unsupported.local-inference-domain",
+    "final-inferred-var-loop": "java.unsupported.local-inference-domain",
     "boxed-loop-variable": "java.unsupported.source-dependency",
     "raw-iterable-loop": "java.unsupported.source-dependency",
     "reference-array-loop": "java.unsupported.array-model-shape",
