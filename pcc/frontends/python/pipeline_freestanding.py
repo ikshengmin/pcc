@@ -267,6 +267,7 @@ def freestanding_allowed_external_symbols(source: str) -> set[str]:
         "call_void_i32": ("__pcc_verified_indirect_call__",),
         "call_void_ptr0": ("__pcc_verified_indirect_call__",),
         "call_void_ptr1": ("__pcc_verified_indirect_call__",),
+        "call_void_ptr2": ("__pcc_verified_indirect_call__",),
         "call_void_ptr_i64_ptr": ("__pcc_verified_indirect_call__",),
         "call_ptr2": ("__pcc_verified_indirect_call__",),
         "call_ptr4": ("__pcc_verified_indirect_call__",),

@@ -104,6 +104,7 @@ define_global_i32("pcc_thread_conservative_roots_enabled", 0)
 _THREAD_ROOT_DATA: int = 48
 _THREAD_ROOT_BYTES: int = 56
 _THREAD_ROOT_CAPACITY: int = 64
+_THREAD_LOCAL_ROOT_ARENA: int = 72
 _THREAD_ROOT_REGISTERS: int = 80
 _THREAD_ROOT_REGISTER_BYTES: int = 128
 _THREAD_NATIVE_FRAME_HEAD: int = 208
@@ -601,6 +602,7 @@ def _thread_record_link(thread_id: int) -> None:
     store_ptr(record, _THREAD_ROOT_DATA, null())
     store_i64(record, _THREAD_ROOT_BYTES, 0)
     store_i64(record, _THREAD_ROOT_CAPACITY, 0)
+    store_ptr(record, _THREAD_LOCAL_ROOT_ARENA, null())
     store_ptr(record, _THREAD_NATIVE_FRAME_HEAD, null())
     global_store_ptr("pcc_thread_records_head_py", record)
     global_store_ptr("pcc_tls_thread_record_py", record)
@@ -614,6 +616,13 @@ def _thread_record_unlink() -> None:
     if ptr_is_null(load_ptr(record, _THREAD_NATIVE_FRAME_HEAD)) == 0:
         pcc_platform_abort()
         return
+    arena = load_ptr(record, _THREAD_LOCAL_ROOT_ARENA)
+    if ptr_is_null(arena) == 0:
+        if load_i64(arena, 24) != 0 or load_i64(arena, 32) != 0:
+            pcc_platform_abort()
+            return
+        pcc_gc_local_frame_destroy(arena)
+        store_ptr(record, _THREAD_LOCAL_ROOT_ARENA, null())
     global_store_ptr("pcc_tls_thread_record_py", null())
     previous = null()
     node = global_load_ptr("pcc_thread_records_head_py")
@@ -1601,6 +1610,10 @@ def pcc_thread_unregister_current() -> None:
     if ptr_is_null(load_ptr(record, _THREAD_NATIVE_FRAME_HEAD)) == 0:
         pcc_platform_abort()
         return
+    arena = load_ptr(record, _THREAD_LOCAL_ROOT_ARENA)
+    if ptr_is_null(arena) == 0 and (load_i64(arena, 24) != 0 or load_i64(arena, 32) != 0):
+        pcc_platform_abort()
+        return
     # The owner must finish the active stop before leaving the live set. This
     # check precedes exception/buffer cleanup because either can decref and
     # reenter runtime code.
@@ -1838,6 +1851,45 @@ def pcc_thread_detach(handle) -> None:
         free(handle)
 
 
+pcc_gc_local_frame_destroy = extern("pcc_gc_local_frame_destroy", (c_ptr,), c_void)
+pcc_gc_local_frame_contains = extern("pcc_gc_local_frame_contains", (c_ptr, c_ptr), c_int64)
+pcc_gc_local_frame_visit_stopped = extern("pcc_gc_local_frame_visit_stopped", (c_ptr, c_ptr, c_ptr, c_int64), c_int64)
+pcc_gc_local_frame_slot_count = extern("pcc_gc_local_frame_slot_count", (c_ptr,), c_int64)
+
+
+@c_abi_export("pcc_thread_local_root_arena_get")
+def pcc_thread_local_root_arena_get():
+    record = global_load_ptr("pcc_tls_thread_record_py")
+    if ptr_is_null(record):
+        return null()
+    return load_ptr(record, _THREAD_LOCAL_ROOT_ARENA)
+
+
+@c_abi_export("pcc_thread_local_root_arena_set")
+def pcc_thread_local_root_arena_set(arena) -> None:
+    if pcc_thread_is_running() == 0 or pcc_thread_no_park_depth() <= 0:
+        pcc_platform_abort()
+        return
+    record = global_load_ptr("pcc_tls_thread_record_py")
+    if ptr_is_null(arena) or ptr_is_null(load_ptr(record, _THREAD_LOCAL_ROOT_ARENA)) == 0 or load_i64(arena, 48) != load_i64(record, 8):
+        pcc_platform_abort()
+        return
+    store_ptr(record, _THREAD_LOCAL_ROOT_ARENA, arena)
+
+
+@c_abi_export("pcc_thread_local_root_slots_stopped")
+def pcc_thread_local_root_slots_stopped() -> int:
+    if pcc_thread_owns_stopped_world() == 0:
+        pcc_platform_abort()
+        return -1
+    total: int = 0
+    record = global_load_ptr("pcc_thread_records_head_py")
+    while ptr_is_null(record) == 0:
+        total = total + pcc_gc_local_frame_slot_count(load_ptr(record, _THREAD_LOCAL_ROOT_ARENA))
+        record = load_ptr(record, 0)
+    return total
+
+
 # Native root frames are caller-owned stack descriptors, never registry nodes.
 # Frame: previous@0, range storage@8, used@16, capacity@24, owner thread id@32.
 # Range: slot base@0, signed count@8 (negative = borrowed, positive = owned).
@@ -1989,7 +2041,7 @@ def pcc_thread_native_root_contains(slot) -> int:
                 return 1
             index = index + 1
         frame = load_ptr(frame, _NATIVE_FRAME_PREVIOUS)
-    return 0
+    return pcc_gc_local_frame_contains(load_ptr(record, _THREAD_LOCAL_ROOT_ARENA), slot)
 
 
 @c_abi_export("pcc_thread_visit_native_root_frames")
@@ -2002,6 +2054,14 @@ def pcc_thread_visit_native_root_frames(visitor, context) -> int:
     count: int = 0
     record = global_load_ptr("pcc_thread_records_head_py")
     while ptr_is_null(record) == 0:
+        arena = load_ptr(record, _THREAD_LOCAL_ROOT_ARENA)
+        if ptr_is_null(arena) == 0 and load_i64(arena, 48) != load_i64(record, 8):
+            pcc_platform_abort()
+            return -1
+        # Owned local ranges precede borrowed aliases, including aliases in
+        # explicit native frames. GC3 must transfer the physical slot owner
+        # before a borrowed visit heals that same cell.
+        count = count + pcc_gc_local_frame_visit_stopped(arena, visitor, context, 0)
         frame = load_ptr(record, _THREAD_NATIVE_FRAME_HEAD)
         while ptr_is_null(frame) == 0:
             if load_i64(frame, _NATIVE_FRAME_OWNER) != load_i64(record, 8):
@@ -2013,6 +2073,7 @@ def pcc_thread_visit_native_root_frames(visitor, context) -> int:
             call_void_ptr2(visitor, frame, context)
             frame = previous
             count = count + 1
+        count = count + pcc_gc_local_frame_visit_stopped(arena, visitor, context, 1)
         record = load_ptr(record, 0)
     return count
 

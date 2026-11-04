@@ -351,6 +351,9 @@ void pcc_gc_note_frame_enter(const void *frame_map, PyObject **slots);
 /* Requires a plain outer no-park guard and no graph/container/scheduler lock.
  * 1 success, 0 failure, -1 missing guard. Caller owns failure cleanup. */
 int64_t pcc_gc_note_frame_enter_checked(const void *frame_map, PyObject **slots);
+/* Activation-private slots only; same checked guard/result contract. */
+int64_t pcc_gc_note_frame_enter_local_checked(const void *frame_map, PyObject **slots);
+void pcc_gc_note_frame_leave_local(PyObject **slots);
 void pcc_gc_note_frame_leave(PyObject **slots);
 void pcc_gc_note_frame_enter_lifo(const void *frame_map, PyObject **slots);
 void pcc_gc_note_frame_leave_lifo(PyObject **slots);

@@ -22,9 +22,9 @@ pcc_thread_no_park_depth = extern("pcc_thread_no_park_depth", (), c_int64)
 pcc_thread_no_park_enter = extern("pcc_thread_no_park_enter", (), c_void)
 pcc_thread_no_park_exit = extern("pcc_thread_no_park_exit", (), c_void)
 pcc_gc_note_frame_enter_checked = extern(
-    "pcc_gc_note_frame_enter_checked", (c_ptr, c_ptr), c_int64
+    "pcc_gc_note_frame_enter_local_checked", (c_ptr, c_ptr), c_int64
 )
-pcc_gc_note_frame_leave = extern("pcc_gc_note_frame_leave", (c_ptr,), c_void)
+pcc_gc_note_frame_leave = extern("pcc_gc_note_frame_leave_local", (c_ptr,), c_void)
 pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 pcc_re_engine_fullmatch_into = extern(

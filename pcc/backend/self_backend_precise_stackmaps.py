@@ -148,10 +148,14 @@ _py_bytes_new: "extern" = extern("py_bytes_new", (c_ptr, c_int64), c_obj)
 _FRAME_ENTER = frozenset((
     "pcc_gc_frame_enter", "pcc_gc_frame_enter_lifo",
     "pcc_gc_frame_enter_mapped", "pcc_gc_frame_enter_lifo_mapped",
+    "pcc_gc_frame_enter_local", "pcc_gc_frame_enter_lifo_local",
+    "pcc_gc_frame_enter_local_mapped", "pcc_gc_frame_enter_lifo_local_mapped",
 ))
 _FRAME_LEAVE = frozenset((
     "pcc_gc_frame_leave", "pcc_gc_frame_leave_lifo",
     "pcc_gc_frame_leave_mapped", "pcc_gc_frame_leave_lifo_mapped",
+    "pcc_gc_frame_leave_local", "pcc_gc_frame_leave_lifo_local",
+    "pcc_gc_frame_leave_local_mapped", "pcc_gc_frame_leave_lifo_local_mapped",
 ))
 _FRAME_PROTOCOL = _FRAME_ENTER | _FRAME_LEAVE
 

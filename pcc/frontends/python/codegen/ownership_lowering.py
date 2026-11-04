@@ -1009,11 +1009,14 @@ class OwnershipLoweringMixin:
         cast_name = name
         if cast_name == "":
             cast_name = self._fresh("gc.ptr")
-        return self.builder.bitcast(
+        result = self.builder.bitcast(
             value,
             _CSTR,
             name=cast_name,
         )
+        from pcc.frontends.python.codegen.private_frame_scopes import record_root_pointer_alias
+        record_root_pointer_alias(self, result, value)
+        return result
 
     def _emit_entry_gc_frame_enter(
         self,
@@ -1046,20 +1049,27 @@ class OwnershipLoweringMixin:
                 name=self._fresh("gc.frame.slots.ptr"),
             )
         self.builder.call(
-            self.runtime[self._gc_frame_entry("pcc_gc_frame_enter", slots)],
+            self.runtime[self._gc_frame_entry("pcc_gc_frame_enter", slots, frame_map)],
             [frame_map_ptr, slots_ptr],
         )
         self.builder.position_at_end(saved_block)
 
-    def _gc_frame_entry(self, name: str, slots: ir.Value) -> str:
+    def _gc_frame_entry(self, name: str, slots: ir.Value, frame_map=None) -> str:
         """The runtime frame entry for ``slots``: ``name`` or its ``_mapped`` form.
 
         Code that carries precise stack-map tables registers a stack frame
         through the mapped entry, which the runtime skips while the stack
-        walk roots that frame. Module globals and generator/coroutine resume
-        frames are not stack frames of a walked activation: they always
-        register.
+        walk roots that frame. Persistent module and generator heap storage
+        keeps its explicit owner. Proven activation-private stack groups may
+        be mapped even when emitted inside a generator/async resume body.
         """
+        from pcc.frontends.python.codegen.private_frame_scopes import (
+            private_frame_scope, paired_private_frame_symbol,
+        )
+        original = name
+        local = private_frame_scope(self, name, slots, frame_map)
+        if local:
+            name = name + "_local"
         mapped = self._precise_stack_frames_mapped
         if mapped is None:
             from pcc.backend.precise_stackmap import precise_stackmap_tables_enabled
@@ -1070,16 +1080,16 @@ class OwnershipLoweringMixin:
             )
             self._precise_stack_frames_mapped = mapped
         if not mapped:
-            return name
+            return paired_private_frame_symbol(self, original, slots, name)
         if isinstance(slots, ir.GlobalVariable):
-            return name
+            return paired_private_frame_symbol(self, original, slots, name)
         generator_contexts = getattr(self, "_generator_ctx_stack", ())
-        if generator_contexts and (
+        if not local and generator_contexts and (
             generator_contexts[-1].get("resume_function") is self.current_function
         ):
-            return name
+            return paired_private_frame_symbol(self, original, slots, name)
         self._mark_walked_frames()
-        return name + "_mapped"
+        return paired_private_frame_symbol(self, original, slots, name + "_mapped")
 
     def _mark_walked_frames(self) -> None:
         """Let the self backend drop this module's mapped frame entries.
@@ -1130,7 +1140,7 @@ class OwnershipLoweringMixin:
                 name=self._fresh("gc.frame.slots.ptr"),
             )
         self.builder.call(
-            self.runtime[self._gc_frame_entry("pcc_gc_frame_enter", slots)],
+            self.runtime[self._gc_frame_entry("pcc_gc_frame_enter", slots, frame_map)],
             [frame_map_ptr, slots_ptr],
         )
 
@@ -1154,7 +1164,7 @@ class OwnershipLoweringMixin:
                 name=self._fresh("gc.frame.lifo.slots.ptr"),
             )
         self.builder.call(
-            self.runtime[self._gc_frame_entry("pcc_gc_frame_enter_lifo", slots)],
+            self.runtime[self._gc_frame_entry("pcc_gc_frame_enter_lifo", slots, frame_map)],
             [frame_map_ptr, slots_ptr],
         )
 

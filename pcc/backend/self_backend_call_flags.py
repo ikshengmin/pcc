@@ -19,10 +19,14 @@ CALL_FLAG_FRAME_PROTOCOL = CALL_FLAG_FRAME_ENTER | CALL_FLAG_FRAME_LEAVE
 _FRAME_ENTER_CALLEES = frozenset((
     "pcc_gc_frame_enter", "pcc_gc_frame_enter_lifo",
     "pcc_gc_frame_enter_mapped", "pcc_gc_frame_enter_lifo_mapped",
+    "pcc_gc_frame_enter_local", "pcc_gc_frame_enter_lifo_local",
+    "pcc_gc_frame_enter_local_mapped", "pcc_gc_frame_enter_lifo_local_mapped",
 ))
 _FRAME_LEAVE_CALLEES = frozenset((
     "pcc_gc_frame_leave", "pcc_gc_frame_leave_lifo",
     "pcc_gc_frame_leave_mapped", "pcc_gc_frame_leave_lifo_mapped",
+    "pcc_gc_frame_leave_local", "pcc_gc_frame_leave_lifo_local",
+    "pcc_gc_frame_leave_local_mapped", "pcc_gc_frame_leave_lifo_local_mapped",
 ))
 CALL_FLAG_STACKMAP_SKIP = CALL_FLAG_FRAME_PROTOCOL | CALL_FLAG_LLVM_INTRINSIC
 

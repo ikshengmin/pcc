@@ -30,6 +30,13 @@ pcc_gc_scheduler_root_list_release = extern(
 )
 
 
+pcc_thread_owns_stopped_world = extern("pcc_thread_owns_stopped_world", (), c_int64)
+pcc_stop_the_world = extern("pcc_stop_the_world", (), c_int64)
+pcc_resume_world = extern("pcc_resume_world", (), c_int64)
+pcc_thread_local_root_slots_stopped = extern("pcc_thread_local_root_slots_stopped", (), c_int64)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+
+
 @c_abi_export("pcc_gc_scheduler_root_count")
 def pcc_gc_scheduler_root_count() -> i64:
     gc_backend_current()
@@ -48,13 +55,21 @@ def pcc_gc_scheduler_root_count() -> i64:
 @c_abi_export("pcc_gc_frame_root_slot_count")
 def pcc_gc_frame_root_slot_count() -> i64:
     gc_backend_current()
+    stopped_here: i64 = 0
+    if pcc_thread_owns_stopped_world() == 0:
+        if pcc_stop_the_world() != 0:
+            pcc_platform_abort()
+            return 0
+        stopped_here = 1
     pcc_py_gc_minor_graph_lock()
     node = global_load_ptr("pcc_gc_frame_head")
-    count: i64 = 0
+    count: i64 = pcc_thread_local_root_slots_stopped()
     while ptr_is_null(node) == 0:
         count = count + load_i64(node, 40)
         node = load_ptr(node, 16)
     pcc_py_gc_minor_graph_unlock()
+    if stopped_here != 0:
+        pcc_resume_world()
     return count
 
 

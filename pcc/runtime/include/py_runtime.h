@@ -345,6 +345,15 @@ int64_t   pcc_gc_scheduler_queue_len(PccGcSchedulerQueue *queue);
  * Positive counts are owning roots; negative counts are borrowed roots.
  * slots points at a contiguous PyObject* local/root array. Future precise
  * maps can extend this block; a NULL frame_map means "no roots". */
+/* Compiler-proven activation-private roots; never shared/persistent. */
+void      pcc_gc_frame_enter_local(const void *frame_map, PyObject **slots);
+void      pcc_gc_frame_leave_local(PyObject **slots);
+void      pcc_gc_frame_enter_local_mapped(const void *frame_map, PyObject **slots);
+void      pcc_gc_frame_leave_local_mapped(PyObject **slots);
+void      pcc_gc_frame_enter_lifo_local(const void *frame_map, PyObject **slots);
+void      pcc_gc_frame_leave_lifo_local(PyObject **slots);
+void      pcc_gc_frame_enter_lifo_local_mapped(const void *frame_map, PyObject **slots);
+void      pcc_gc_frame_leave_lifo_local_mapped(PyObject **slots);
 void      pcc_gc_frame_enter(const void *frame_map, PyObject **slots);
 void      pcc_gc_frame_leave(PyObject **slots);
 void      pcc_gc_frame_enter_lifo(const void *frame_map, PyObject **slots);

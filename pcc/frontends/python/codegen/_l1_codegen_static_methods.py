@@ -320,7 +320,7 @@ def _part_24(out):
 
 
 def _part_25(out):
-    _append_method(out, '_gc_frame_entry', (('self', 'pos', False), ('name', 'pos', False), ('slots', 'pos', False)))
+    _append_method(out, '_gc_frame_entry', (('self', 'pos', False), ('name', 'pos', False), ('slots', 'pos', False), ('frame_map', 'pos', True)))
     _append_method(out, '_emit_slot_call_binary_in_place', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False), ('runtime_name', 'pos', False)))
     _append_method(out, '_slot_call_in_place_operand', (('self', 'pos', False), ('operand', 'pos', False)))
     _append_method(out, '_get_floor_intrinsic', (('self', 'pos', False),))

@@ -48,6 +48,27 @@ INTERNAL_SYMBOLS = {
     "pcc_gc_should_track_frame_roots",
     # Whether the precise stack walk roots a mapped frame's slots.
     "pcc_gc_frame_slots_walked",
+    # Explicit activation-private scopes are owned by the same raw module.
+    "pcc_gc_local_frame_find",
+    "pcc_gc_local_frame_take",
+    "pcc_gc_local_frame_enter",
+    "pcc_gc_local_frame_leave",
+    "pcc_gc_local_frame_contains",
+    "pcc_gc_local_frame_visit_stopped",
+    "pcc_gc_local_frame_slot_count",
+    "pcc_gc_local_frame_destroy",
+    "pcc_gc_note_frame_enter_local_checked",
+    "pcc_gc_note_frame_leave_local",
+    "pcc_gc_frame_enter_local_mode",
+    "pcc_gc_frame_leave_local_mode",
+    "pcc_gc_frame_enter_local",
+    "pcc_gc_frame_leave_local",
+    "pcc_gc_frame_enter_lifo_local",
+    "pcc_gc_frame_leave_lifo_local",
+    "pcc_gc_frame_enter_local_mapped",
+    "pcc_gc_frame_leave_local_mapped",
+    "pcc_gc_frame_enter_lifo_local_mapped",
+    "pcc_gc_frame_leave_lifo_local_mapped",
 }
 TLS_STORAGE_SYMBOLS = {
     "pcc_gc_frame_node_pool_counts",
@@ -65,6 +86,9 @@ RAW_ONLY_CROSS_OBJECT_SYMBOLS = {
     "pcc_gc_root_map_is_borrowed",
     "pcc_gc_root_registry_note_mutation_locked",
     "pcc_gc_root_slot_count_from_map",
+    "pcc_thread_local_root_arena_get",
+    "pcc_thread_local_root_arena_set",
+    "pcc_thread_is_running",
 }
 RAW_FUNCTION_IMPORTS = RAW_ONLY_CROSS_OBJECT_SYMBOLS | {
     "free",
@@ -79,6 +103,8 @@ RAW_FUNCTION_IMPORTS = RAW_ONLY_CROSS_OBJECT_SYMBOLS | {
     "pcc_thread_no_park_enter",
     "pcc_thread_no_park_exit",
     "pcc_thread_no_park_depth",
+    "pcc_current_thread_id",
+    "pcc_thread_owns_stopped_world",
     "pcc_platform_abort",
 }
 RAW_GLOBAL_IMPORTS = {
@@ -149,6 +175,18 @@ def test_frame_registry_has_one_strict_source_owner():
     assert FREESTANDING_GC_CROSS_OBJECT_SIGNATURES[
         "pcc_gc_frame_index_replace_preallocated"
     ] == (("c_ptr", "c_ptr"), "c_ptr")
+    # Checked raw adapter scopes have an explicit fallible entry and raw
+    # leave. They are not unconditional compiler frame-protocol declarations.
+    assert FREESTANDING_GC_CROSS_OBJECT_SIGNATURES[
+        "pcc_gc_note_frame_enter_local_checked"
+    ] == (("c_ptr", "c_ptr"), "c_int64")
+    assert FREESTANDING_GC_CROSS_OBJECT_SIGNATURES[
+        "pcc_gc_note_frame_leave_local"
+    ] == (("c_ptr",), "c_void")
+    assert {
+        "pcc_gc_note_frame_enter_local_checked",
+        "pcc_gc_note_frame_leave_local",
+    }.isdisjoint(RUNTIME_SIGNATURES)
     internal_header = (RUNTIME_DIR / "src" / "py_internal.h").read_text(
         encoding="utf-8"
     )
@@ -158,10 +196,9 @@ def test_frame_registry_has_one_strict_source_owner():
         "pcc_gc_frame_index_replace_preallocated",
     ):
         assert symbol in internal_header
-    # The one other freestanding thread-local is the collector thread's
-    # identity, which freestanding_gc_public_collection owns.
+    # Collector identity and GC pressure admission have independent TLS owners.
     assert FREESTANDING_GC_THREAD_LOCAL_GLOBALS - TLS_STORAGE_SYMBOLS == {
-        "pcc_gc_cms_worker_current"
+        "pcc_gc_cms_worker_current", "pcc_gc_pressure_image_depth", "pcc_gc_pressure_owner"
     }
     assert 'define_thread_local_ptr_null("pcc_gc_frame_node_pool_heads")' in strict
     assert 'define_thread_local_ptr_null("pcc_gc_frame_node_pool_counts")' in strict

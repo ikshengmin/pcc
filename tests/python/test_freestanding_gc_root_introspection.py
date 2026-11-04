@@ -33,6 +33,12 @@ RAW_FUNCTION_IMPORTS = {
     # The scheduler-root list word its walks hold.
     "pcc_gc_scheduler_root_list_acquire",
     "pcc_gc_scheduler_root_list_release",
+    "pcc_thread_native_root_contains",
+    "pcc_thread_owns_stopped_world",
+    "pcc_stop_the_world",
+    "pcc_resume_world",
+    "pcc_thread_local_root_slots_stopped",
+    "pcc_platform_abort",
 }
 RAW_GLOBAL_IMPORTS = {
     "pcc_gc_scheduler_root_head",
@@ -89,6 +95,24 @@ def test_root_introspection_has_one_strict_source_owner_and_shared_lock():
         strict_body = strict.split("def " + name, 1)[1].split("\n\n@", 1)[0]
         assert "pcc_py_gc_minor_graph_lock()" in strict_body
         assert "pcc_py_gc_minor_graph_unlock()" in strict_body
+
+    # Local carrier arenas require a stopped cut; acquire it before the graph
+    # lock, count both storage owners, and resume only a stop acquired here.
+    frame_body = strict.split("def pcc_gc_frame_root_slot_count", 1)[1].split(
+        "\n\n@", 1
+    )[0]
+    assert "if pcc_thread_owns_stopped_world() == 0:" in frame_body
+    assert frame_body.index("pcc_stop_the_world()") < frame_body.index(
+        "pcc_py_gc_minor_graph_lock()"
+    )
+    assert frame_body.index("pcc_py_gc_minor_graph_lock()") < frame_body.index(
+        "pcc_thread_local_root_slots_stopped()"
+    )
+    assert 'global_load_ptr("pcc_gc_frame_head")' in frame_body
+    assert "if stopped_here != 0:" in frame_body
+    assert frame_body.index("pcc_py_gc_minor_graph_unlock()") < frame_body.index(
+        "pcc_resume_world()"
+    )
 
 
 @pytest.mark.parametrize("emitter", ["llvm", "self"])

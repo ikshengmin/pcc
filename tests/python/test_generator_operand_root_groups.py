@@ -47,7 +47,7 @@ class Host(CallObjectLoweringMixin, OwnershipLoweringMixin, CoreHelperMixin):
         self._entry_inline_edge_anchor_record = None
         self._freestanding_module = False
         # Production initializes this lazily-decided frame-entry mode the same way.
-        self._precise_stack_frames_mapped = None
+        self._precise_stack_frames_mapped = False
         self._current_global_names = set()
         self._current_param_names = set()
         self._exact_int_env_flags = {}
@@ -68,6 +68,7 @@ class Host(CallObjectLoweringMixin, OwnershipLoweringMixin, CoreHelperMixin):
         self._fn_err_exit_blocks = {}
         self._fn_err_exit_finish_blocks = {}
         self._return_handoff_sites = []
+        self._function_root_groups = {}
         self._slot_call_root_records = []
         self._slot_call_root_record_index = {}
         self._slot_call_result_sinks = []
@@ -77,6 +78,10 @@ class Host(CallObjectLoweringMixin, OwnershipLoweringMixin, CoreHelperMixin):
             ("pcc_gc_frame_enter_lifo", VOID, [PTR, PTR]),
             ("pcc_gc_frame_leave", VOID, [PTR]),
             ("pcc_gc_frame_leave_lifo", VOID, [PTR]),
+            ("pcc_gc_frame_enter_local", VOID, [PTR, PTR]),
+            ("pcc_gc_frame_enter_lifo_local", VOID, [PTR, PTR]),
+            ("pcc_gc_frame_leave_local", VOID, [PTR]),
+            ("pcc_gc_frame_leave_lifo_local", VOID, [PTR]),
             ("pcc_gc_store_root", VOID, [PTR, PTR]),
             ("py_gen_frame_get", PTR, [PTR, I64]),
             ("py_gen_frame_take", PTR, [PTR, I64]),
@@ -172,9 +177,9 @@ def test_chunk_boundaries_keep_exact_members_and_fixed_empty_padding(count):
     # The map sees every padding cell. All 16 are explicitly NULL before
     # the registration; padding has no flag, heap-frame entry or release.
     assert len(re.findall(r"store ptr null, ptr %gen\.operand\.empty\.cell", entry)) == len(groups) * 16
-    assert call_count(entry, "pcc_gc_frame_enter") == len(groups)
+    assert call_count(entry, "pcc_gc_frame_enter_local") == len(groups)
     host.finish()
-    assert call_count(str(host.module), "pcc_gc_frame_leave") == len(groups)
+    assert call_count(str(host.module), "pcc_gc_frame_leave_local") == len(groups)
     assert [name for name, _ in host.releases] == sorted(host._owned_local_names)
     assert len(host.releases) == count
 
@@ -185,13 +190,13 @@ def test_late_registration_patches_early_exit_once_per_new_chunk(before, after):
     host.roots(before)
     host.finish()
     early = host._fn_gc_root_exit_sites["resume"][0]
-    early_leaves = call_count(body_text(early), "pcc_gc_frame_leave")
+    early_leaves = call_count(body_text(early), "pcc_gc_frame_leave_local")
     later = host.current_function.append_basic_block("later")
     host.builder.position_at_end(later)
     host.roots(after)
     expected = math.ceil((before + after) / 16)
     assert early_leaves == math.ceil(before / 16)
-    assert call_count(body_text(early), "pcc_gc_frame_leave") == expected
+    assert call_count(body_text(early), "pcc_gc_frame_leave_local") == expected
     host.finish()
     assert len(host._fn_gc_root_slot_registry["resume"]) == before + after
 
@@ -205,8 +210,8 @@ def test_error_path_keeps_every_owned_release_before_group_leaves(error_first):
     error = host._fn_err_exit_blocks["resume"]
     finish = host._fn_err_exit_finish_blocks["resume"]
     assert call_count(body_text(error), "pcc_gc_store_root") == 17
-    assert call_count(body_text(error), "pcc_gc_frame_leave") == 0
-    assert call_count(body_text(finish), "pcc_gc_frame_leave") == 2
+    assert call_count(body_text(error), "pcc_gc_frame_leave_local") == 0
+    assert call_count(body_text(finish), "pcc_gc_frame_leave_local") == 2
     entries = host._fn_err_exit_owned_slots["resume"]
     assert [entry[1] for entry in entries] == slots
     assert all(entry[3] for entry in entries)
@@ -214,7 +219,7 @@ def test_error_path_keeps_every_owned_release_before_group_leaves(error_first):
     for name, slot in host._fn_gc_root_slot_registry["resume"]:
         host._patch_fn_err_exit_gc_root_leave(name, slot)
     assert call_count(body_text(error), "pcc_gc_store_root") == 17
-    assert call_count(body_text(finish), "pcc_gc_frame_leave") == 2
+    assert call_count(body_text(finish), "pcc_gc_frame_leave_local") == 2
 
 
 def test_borrowed_special_and_lexical_roots_stay_outside_operand_groups():
@@ -229,8 +234,9 @@ def test_borrowed_special_and_lexical_roots_stay_outside_operand_groups():
     assert all(generator.generator_operand_root_group(host, slot) is None
                for slot in (lexical, borrowed, special))
     assert host._slot_call_root_record(lexical)[1:] == (None, True)
-    assert call_count(body_text(host.entry), "pcc_gc_frame_enter") == 3
-    assert call_count(body_text(host.body), "pcc_gc_frame_enter_lifo") == 1
+    assert call_count(body_text(host.entry), "pcc_gc_frame_enter") == 0
+    assert call_count(body_text(host.entry), "pcc_gc_frame_enter_local") == 3
+    assert call_count(body_text(host.body), "pcc_gc_frame_enter_lifo_local") == 1
     assert len(host.context["frame_slots"]) == 1
 
 
@@ -410,10 +416,10 @@ def test_reachable_error_and_early_exit_keep_late_chunk_ownership(error_first, b
     addresses.assert_frame_exits(groups)
     expected = math.ceil((before + after) / 16)
     for block in (early_exit, host._fn_err_exit_finish_blocks["resume"], normal_exit):
-        assert call_count(body_text(block), "pcc_gc_frame_leave") == expected
+        assert call_count(body_text(block), "pcc_gc_frame_leave_local") == expected
     error = host._fn_err_exit_blocks["resume"]
     assert call_count(body_text(error), "pcc_gc_store_root") == before + after
-    assert call_count(body_text(error), "pcc_gc_frame_leave") == 0
+    assert call_count(body_text(error), "pcc_gc_frame_leave_local") == 0
     assert all(entry[3] for entry in host._fn_err_exit_owned_slots.get("resume", ()))
     _assert_precise_roots(text)
 
@@ -664,7 +670,7 @@ def test_frame_exit_contract_rejects_leaks_outside_the_operand_group(owner):
     before = len(target.instructions)
     target.instructions = [ins for ins in target.instructions
                            if not (ins.kind == "call"
-                                   and ins.data[2] in ("pcc_gc_frame_leave", "pcc_gc_frame_leave_lifo")
+                                   and (RootSlotContract.called(ins, "pcc_gc_frame_leave") or RootSlotContract.called(ins, "pcc_gc_frame_leave_lifo"))
                                    and RootSlotContract.args(ins)[0] == owner)]
     assert len(target.instructions) == before - 1, "specific frame-leak mutation must apply"
     with pytest.raises(AssertionError, match="return reached with active root frames"):

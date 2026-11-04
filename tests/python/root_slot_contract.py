@@ -12,6 +12,14 @@ _MAPPED_FRAME_ENTRIES = frozenset((
     "pcc_gc_frame_leave_mapped",
     "pcc_gc_frame_enter_lifo_mapped",
     "pcc_gc_frame_leave_lifo_mapped",
+    "pcc_gc_frame_enter_local_mapped",
+    "pcc_gc_frame_leave_local_mapped",
+    "pcc_gc_frame_enter_lifo_local_mapped",
+    "pcc_gc_frame_leave_lifo_local_mapped",
+))
+_LOCAL_FRAME_ENTRIES = frozenset((
+    "pcc_gc_frame_enter_local", "pcc_gc_frame_leave_local",
+    "pcc_gc_frame_enter_lifo_local", "pcc_gc_frame_leave_lifo_local",
 ))
 
 
@@ -81,6 +89,8 @@ class RootSlotContract:
         callee = ins.data[2]
         if callee in _MAPPED_FRAME_ENTRIES:
             callee = callee[:-len("_mapped")]
+        if callee in _LOCAL_FRAME_ENTRIES:
+            callee = callee[:-len("_local")]
         return callee == name
 
     @staticmethod

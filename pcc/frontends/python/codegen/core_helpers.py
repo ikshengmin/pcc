@@ -309,4 +309,11 @@ class CoreHelperMixin:
                 self.builder._pos = saved_pos + emitted
             else:
                 self.builder._pos = saved_pos
+        from pcc.frontends.python.codegen.private_frame_scopes import record_private_root_address
+        root_capacity = 0
+        if isinstance(ir_ty, ir.PointerType):
+            root_capacity = 1
+        elif isinstance(ir_ty, ir.ArrayType) and isinstance(ir_ty.element, ir.PointerType):
+            root_capacity = ir_ty.count
+        record_private_root_address(self, alloca, root_capacity)
         return alloca

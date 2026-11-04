@@ -1609,6 +1609,19 @@ def _runtime_signatures_part_35():
 
 
 
+def _runtime_signatures_part_36():
+    return {
+    'pcc_gc_frame_enter_local': (_VOID, [_PTR, _PTR], False),
+    'pcc_gc_frame_leave_local': (_VOID, [_PTR], False),
+    'pcc_gc_frame_enter_local_mapped': (_VOID, [_PTR, _PTR], False),
+    'pcc_gc_frame_leave_local_mapped': (_VOID, [_PTR], False),
+    'pcc_gc_frame_enter_lifo_local': (_VOID, [_PTR, _PTR], False),
+    'pcc_gc_frame_leave_lifo_local': (_VOID, [_PTR], False),
+    'pcc_gc_frame_enter_lifo_local_mapped': (_VOID, [_PTR, _PTR], False),
+    'pcc_gc_frame_leave_lifo_local_mapped': (_VOID, [_PTR], False),
+    }
+
+
 RUNTIME_SIGNATURES: dict[str, tuple[ir.Type, list[ir.Type], bool]] = (
     _runtime_signatures_part_0()
 )
@@ -1648,6 +1661,7 @@ RUNTIME_SIGNATURES.update(_runtime_signatures_part_33())
 RUNTIME_SIGNATURES.update(_runtime_signatures_part_34())
 RUNTIME_SIGNATURES.update(_runtime_signatures_part_35())
 
+RUNTIME_SIGNATURES.update(_runtime_signatures_part_36())
 _PURE_RUNTIME_ATTRS = frozenset({"readnone", "willreturn", "nounwind"})
 _READONLY_RUNTIME_ATTRS = frozenset({"readonly", "willreturn", "nounwind"})
 RUNTIME_FUNCTION_ATTRS: dict[str, frozenset[str]] = {
@@ -3028,6 +3042,34 @@ def _cross_object_signatures_part_12():
 
 
 
+def _cross_object_signatures_part_13():
+    return {
+    'pcc_gc_note_frame_leave_local': (("c_ptr",), "c_void"),
+    'pcc_thread_local_root_arena_get': ((), 'c_ptr'),
+    'pcc_thread_local_root_arena_set': (('c_ptr',), 'c_void'),
+    'pcc_thread_local_root_slots_stopped': ((), 'c_int64'),
+    'pcc_gc_local_frame_find': (('c_ptr', 'c_ptr', 'c_int64'), 'c_ptr'),
+    'pcc_gc_local_frame_take': (('c_ptr',), 'c_ptr'),
+    'pcc_gc_local_frame_enter': (('c_ptr', 'c_ptr', 'c_int64', 'c_int64', 'c_int64'), 'c_int64'),
+    'pcc_gc_local_frame_leave': (('c_ptr', 'c_int64'), 'c_int64'),
+    'pcc_gc_local_frame_contains': (('c_ptr', 'c_ptr'), 'c_int64'),
+    'pcc_gc_local_frame_visit_stopped': (('c_ptr', 'c_ptr', 'c_ptr', 'c_int64'), 'c_int64'),
+    'pcc_gc_local_frame_slot_count': (('c_ptr',), 'c_int64'),
+    'pcc_gc_local_frame_destroy': (('c_ptr',), 'c_void'),
+    'pcc_gc_note_frame_enter_local_checked': (('c_ptr', 'c_ptr'), 'c_int64'),
+    'pcc_gc_frame_enter_local_mode': (('c_ptr', 'c_ptr', 'c_int64'), 'c_void'),
+    'pcc_gc_frame_leave_local_mode': (('c_ptr', 'c_int64'), 'c_void'),
+    'pcc_gc_frame_enter_local': (('c_ptr', 'c_ptr'), 'c_void'),
+    'pcc_gc_frame_leave_local': (('c_ptr',), 'c_void'),
+    'pcc_gc_frame_enter_local_mapped': (('c_ptr', 'c_ptr'), 'c_void'),
+    'pcc_gc_frame_leave_local_mapped': (('c_ptr',), 'c_void'),
+    'pcc_gc_frame_enter_lifo_local': (('c_ptr', 'c_ptr'), 'c_void'),
+    'pcc_gc_frame_leave_lifo_local': (('c_ptr',), 'c_void'),
+    'pcc_gc_frame_enter_lifo_local_mapped': (('c_ptr', 'c_ptr'), 'c_void'),
+    'pcc_gc_frame_leave_lifo_local_mapped': (('c_ptr',), 'c_void'),
+    }
+
+
 FREESTANDING_GC_CROSS_OBJECT_SIGNATURES: dict[
     str, tuple[tuple[str, ...], str]
 ] = _cross_object_signatures_part_0()
@@ -3045,6 +3087,7 @@ FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_11(
 FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_12())
 
 
+FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_13())
 def is_freestanding_gc_cross_object_runtime_import(
     symbol: str, parameters_source: str, return_source: str
 ) -> bool:

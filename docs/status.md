@@ -93,6 +93,13 @@ dropped keyword); the stage 1 commit message lists them. Rerun with
 
 ## Native throughput versus CPython 3.15.0: active, acceptance unmet
 
+The required default is reference counting only for GC0, and count-free
+tracing for GC1-4. This migration is not complete: the current configuration
+still defaults to counted operation, accepts opt-in `PCC_GC_TRACING_ONLY=1`
+for GC1/GC2/GC4, and rejects that setting for GC3. Experimental selection is
+not acceptance of the requested defaults. GC3's copied-source byte/payload
+retirement and nursery occupancy still need an owner independent of decref.
+
 The current user-directed milestone is scalability: each of GC1-4 must reach
 at least 3x its own one-worker throughput at four workers, before pursuing
 GC0 and then CPython. First inventory every tracing graph-lock callsite and
@@ -106,6 +113,30 @@ Acceptance requires at least seven rotated frozen A/B pairs on an idle
 machine, all five collectors, both worker counts, collection counts, outer
 pause p99 and peak heap. Earlier three-pair packets below remain diagnostic
 screening only. Existing correctness/resource limits are not relaxed.
+
+The private-frame batch based on `2d7454d6d` moves proven compiler-owned
+activation roots and checked native adapter frames to each carrier's arena.
+Enter/leave no longer change the global frame list, its index or root-registry
+revision. Allocation capacity, an exact constant root map and paired exit
+selection establish eligibility; shared, persistent and unproved storage keeps
+its existing owner. Generator resume stack cells use this path only for their
+activation lifetime, with suspended values saved into the heap frame.
+The collector visits local owned cells before borrowed aliases, preserves
+non-LIFO removal, delays descriptor reuse during a visit and rejects thread
+exit with live registrations. Precise mapped frames keep their stackmap path.
+
+Local Mac host-pcc0/self/no-libpython validation uses runtime SHA256
+`2145b1298d1c46b082987253844b674ed5c4c7162a2032e11f92116b3636df7f`:
+176 focused checks pass, followed by six separately guarded native test nodes.
+`test_local_frame_arena_native.py` executes single-thread lifetime and four
+carrier stopped-root rewrites in all five counted modes and count-free
+GC1/GC2/GC4. The three existing `test_native_root_frames.py` nodes preserve
+parked-frame lifetime and actual GC3 owned/borrowed relocation behavior.
+`test_native_generator_finalization.py` matches CPython on all five collectors
+for generator cleanup, pending exceptions and resurrection. Runtime construction
+takes 86.57 seconds with a 560,513,024-byte peak; tests retain 90-second/1-GiB
+guards and six pytest workers. Buffered barriers, count-free defaults, throughput
+acceptance, full suites and bootstrap are not established by this batch.
 
 The AArch64 physical-frame correction based on `eaf9c895c` fixes a reproduced
 count-free retention defect: an overwritten list element survived explicit

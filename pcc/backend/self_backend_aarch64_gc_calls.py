@@ -26,10 +26,14 @@ _LOADS = ("pcc_gc_load_ptr", "pcc_gc_load_borrowed_ptr")
 _FRAME_ENTERS = (
     "pcc_gc_frame_enter", "pcc_gc_frame_enter_lifo",
     "pcc_gc_frame_enter_mapped", "pcc_gc_frame_enter_lifo_mapped",
+    "pcc_gc_frame_enter_local", "pcc_gc_frame_enter_lifo_local",
+    "pcc_gc_frame_enter_local_mapped", "pcc_gc_frame_enter_lifo_local_mapped",
 )
 _FRAME_LEAVES = (
     "pcc_gc_frame_leave", "pcc_gc_frame_leave_lifo",
     "pcc_gc_frame_leave_mapped", "pcc_gc_frame_leave_lifo_mapped",
+    "pcc_gc_frame_leave_local", "pcc_gc_frame_leave_lifo_local",
+    "pcc_gc_frame_leave_local_mapped", "pcc_gc_frame_leave_lifo_local_mapped",
 )
 _BARRIERS = ("pcc_gc_note_slot_write_barrier", "pcc_gc_note_write_barrier")
 GC_SHORT_CALL_HELPERS = _LOADS + _FRAME_ENTERS + _FRAME_LEAVES + _BARRIERS
@@ -37,7 +41,9 @@ GC_SHORT_CALL_HELPERS = _LOADS + _FRAME_ENTERS + _FRAME_LEAVES + _BARRIERS
 # them on every collector, so their entries register nothing.
 _WALKED_FRAME_CALLS = (
     "pcc_gc_frame_enter_mapped", "pcc_gc_frame_enter_lifo_mapped",
+    "pcc_gc_frame_enter_local_mapped", "pcc_gc_frame_enter_lifo_local_mapped",
     "pcc_gc_frame_leave_mapped", "pcc_gc_frame_leave_lifo_mapped",
+    "pcc_gc_frame_leave_local_mapped", "pcc_gc_frame_leave_lifo_local_mapped",
 )
 
 
