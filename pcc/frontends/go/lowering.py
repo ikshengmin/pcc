@@ -25,6 +25,13 @@ def function_symbol(name, package_path=None):
 GO_MAIN_SYMBOL = function_symbol("main")
 
 
+def zero_sized(dtype):
+    dtype = underlying(dtype)
+    if isinstance(dtype, ArrayType):
+        return dtype.count == 0 or zero_sized(dtype.element)
+    return isinstance(dtype, StructType) and all(zero_sized(field.type) for field in dtype.fields)
+
+
 def ir_type(dtype):
     dtype = underlying(dtype)
     if is_error_interface(dtype):
@@ -345,7 +352,7 @@ class Lowerer:
                         storage = self.temps[id(ranged)]
                         if pointer_range:
                             storage = self.builder.load(storage)
-                        address = self.builder.gep(storage, [ir.Constant(ir.IntType(32), 0), index])
+                        address = self.array_element_address(storage, dtype.element, index)
                         values.append(self.builder.load(address))
                     else:
                         values.append(self.zero(dtype.element))
@@ -431,8 +438,17 @@ class Lowerer:
             if offset.type.width < 64:
                 extend = self.builder.sext if integer_signed(index.type) else self.builder.zext
                 offset = extend(offset, ir.IntType(64))
-            return self.builder.gep(storage, [ir.Constant(ir.IntType(32), 0), offset])
+            return self.array_element_address(storage, expr.type, offset)
         raise AssertionError("unlowered address: " + expr.kind)
+
+    def array_element_address(self, storage, element_type, index):
+        # The caller has already evaluated the index and Sema has proved its
+        # bounds. Zero-sized Go values have no byte displacement; distinct
+        # zero-sized variables may share an address. Preserve operand effects
+        # without asking the shared backend for a zero-stride dynamic GEP.
+        if zero_sized(element_type):
+            return self.builder.bitcast(storage, ir_type(element_type).as_pointer())
+        return self.builder.gep(storage, [ir.Constant(ir.IntType(32), 0), index])
 
     def expression(self, expr):
         if id(expr) in self.saved_values:

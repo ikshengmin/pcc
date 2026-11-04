@@ -93,6 +93,7 @@ GRADUATED_POINTER_SWITCH_CASE = ('pointer-switch', original(body='x:=1;p:=&x;swi
 GRADUATED_STRUCT_TAG_CASE = ('struct-tags', original('type T struct{x int `tag`}'))
 GRADUATED_BLANK_FUNCTION_CASE = ('blank-function-declarations', original('func _(){}'))
 GRADUATED_BLANK_TYPE_CASE = ('blank-type-declarations', original('type _ int'))
+GRADUATED_RECORD_ARRAY_CASE = ('array-element-types', original('type T struct{x int};var x [1]T'))
 GRADUATED_AGGREGATE_CASES = (
     ('aggregate-comparison', original(body='var a [1]int;_=a==a')),
     ('aggregate-switch', original(body='var a [1]int;switch a{case a:}')),
@@ -106,7 +107,7 @@ RETIRED_CASES = (RETIRED_DOT_IMPORT_CASE,)
 GRADUATED_CASES = (GRADUATED_RECEIVER_CASE, GRADUATED_ARRAY_RANGE_CASE,
                   GRADUATED_POINTER_SWITCH_CASE, GRADUATED_STRING_RANGE_CASE,
                   GRADUATED_STRUCT_TAG_CASE, GRADUATED_BLANK_FUNCTION_CASE, GRADUATED_BLANK_TYPE_CASE,
-                  *GRADUATED_AGGREGATE_CASES)
+                  GRADUATED_RECORD_ARRAY_CASE, *GRADUATED_AGGREGATE_CASES)
 assert all(CASES.count(case) == 1 for case in GRADUATED_CASES)
 assert all(CASES.count(case) == 1 for case in RETIRED_CASES)
 ACTIVE_CASES = [(i, name, text) for i, (name, text) in enumerate(CASES)

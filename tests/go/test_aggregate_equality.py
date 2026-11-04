@@ -127,8 +127,13 @@ UNSUPPORTED = [
     ('array-bounds-panic', source('func f(a [2]int,i int)bool{return [1]int{a[i]}==[1]int{}}')),
 ]
 
+# The exact original graduates unchanged in test_record_arrays with native
+# and same-source official-reference obligations. Other gaps stay explicit.
+GRADUATED_RECORD_ARRAY = ('array-element-types', source('type R struct{X int}', 'var a [1]R;_=a==a'))
+ACTIVE_UNSUPPORTED = [case for case in UNSUPPORTED if case != GRADUATED_RECORD_ARRAY]
 
-@pytest.mark.parametrize('code,original', UNSUPPORTED)
+
+@pytest.mark.parametrize('code,original', ACTIVE_UNSUPPORTED)
 def test_unimplemented_aggregate_storage_and_evaluation_stay_explicit(code, original, monkeypatch):
     from pcc.frontends.go.lowering import Lowerer
     monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('unsupported value reached IR'))
@@ -218,7 +223,7 @@ def test_official_go_rejects_identical_invalid_aggregate_sources(declarations, b
 @pytest.mark.integration
 @pytest.mark.pcc_gate(env='PCC_GO_REFERENCE')
 @pytest.mark.xdist_group(name='go-reference')
-@pytest.mark.parametrize('code,original', UNSUPPORTED)
+@pytest.mark.parametrize('code,original', ACTIVE_UNSUPPORTED)
 def test_official_go_builds_unsupported_aggregate_originals_without_execution(code, original, tmp_path):
     with pytest.raises(UnsupportedGo) as caught:
         compile_go(original)

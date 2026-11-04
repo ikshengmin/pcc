@@ -109,8 +109,14 @@ UNSUPPORTED = [
     ('generic-boundaries', source('func F[T any](x struct{Values [2]T}){}')),
 ]
 
+# Keep the old complete source as a positive/native/reference obligation in
+# test_record_arrays, rather than reporting an implementation as unsupported.
+GRADUATED_RECORD_ARRAY = ('array-element-types', source(
+    'func Zero[T any]() [0]T{var x [0]T;return x}', '_=Zero[struct{X int}]()'))
+ACTIVE_UNSUPPORTED = [case for case in UNSUPPORTED if case != GRADUATED_RECORD_ARRAY]
 
-@pytest.mark.parametrize('code,original', UNSUPPORTED)
+
+@pytest.mark.parametrize('code,original', ACTIVE_UNSUPPORTED)
 def test_array_generics_do_not_open_other_storage_contracts(code, original, monkeypatch):
     from pcc.frontends.go.lowering import Lowerer
     monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('unsupported layout reached IR'))
@@ -201,7 +207,7 @@ def test_official_go_rejects_identical_invalid_array_generic_sources(original, m
 @pytest.mark.integration
 @pytest.mark.pcc_gate(env='PCC_GO_REFERENCE')
 @pytest.mark.xdist_group(name='go-reference')
-@pytest.mark.parametrize('code,original', UNSUPPORTED)
+@pytest.mark.parametrize('code,original', ACTIVE_UNSUPPORTED)
 def test_official_go_builds_identical_array_storage_frontiers(code, original, tmp_path):
     with pytest.raises(UnsupportedGo) as caught:
         compile_go(original)

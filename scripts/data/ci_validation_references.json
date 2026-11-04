@@ -2493,6 +2493,20 @@
           "Identical complete authored source graphs, exact former blank-import inputs, ordinary invalid source, initial/noninitial BOM and inert/malformed/misplaced directive originals retain source/compiler/binary identities and raw process streams/status. Existing runtime initialization and valid linkname programs remain reference-only. No external compiler is a production fallback. All execution is UNRUN."
         ]
       }
+    },
+    "tests/go/test_record_arrays.py": {
+      "test_identical_record_array_programs_match_official": {
+        "activity": "external-reference",
+        "reason": [
+          "Compiles unchanged complete record-array programs using the explicitly selected official Go toolchain, comparing raw owned/reference processes or requiring source-attributed compiler rejection. Full math/bits and native pcc1 are not established."
+        ]
+      },
+      "test_identical_invalid_record_arrays_have_official_rejections": {
+        "activity": "external-reference",
+        "reason": [
+          "Compiles unchanged complete record-array programs using the explicitly selected official Go toolchain, comparing raw owned/reference processes or requiring source-attributed compiler rejection. Full math/bits and native pcc1 are not established."
+        ]
+      }
     }
   },
   "method": "AST/source-reviewed direct reference calls and helper edges; no test bodies or imports executed. Function registry is classification only, never a prerequisite waiver or certification token. Unknown functions remain selected in ordinary/integration.",

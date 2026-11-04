@@ -34,7 +34,7 @@ external compiler fallback, independent collector, or scheduler.
   before IR shifting; large shifts follow Go semantics rather than an instruction
   mask. Nonconstant untyped shift operands acquire the enclosing Go context type.
 
-- Fixed arrays of scalar integers/bools, explicit constant lengths and `[...]`
+- Fixed arrays of scalar integers/bools and admitted value records, explicit constant lengths and `[...]`
   composite literals, positional/keyed elements, zero-filled holes, ordinary
   indexing and mutable package/local storage. Arrays retain value-copy semantics
   in assignment, parameters and returns through the private PCC Go ABI (not a C
@@ -1268,3 +1268,33 @@ assertion about an honest rejection is not whole `math/bits` acceptance.
 Rules: [imports](https://go.dev/ref/spec#Import_declarations),
 [package initialization](https://go.dev/ref/spec#Package_initialization), and
 [pinned compiler directives](https://github.com/golang/go/blob/2aae1000ea1d4b28923b96db28acf4e3b99d6aff/src/cmd/compile/internal/noder/noder.go).
+
+## Arrays of admitted value records
+
+Fixed arrays can contain the already-admitted value-record types, including
+nested record fields, scalar-array fields and immutable string fields. Explicit
+record literals, keyed/inferred-length array literals, static package storage,
+value copies, arguments/results, field mutation, ranges, equality and expression
+switches reuse the existing private aggregate ABI. This is not the official Go
+ABI or dynamically allocated storage. Elided nested literal types remain a
+separate syntax gap.
+
+Every concrete generic substitution and emitted signature checks the complete
+record storage closure, even in a zero-length array. Pointer/interface/slice
+fields retain their existing explicit diagnostics. Direct arrays of arrays and
+strings remain unimplemented. The existing 4096-slot aggregate budget now counts
+all repeated record elements and their fields. Empty arrays charge their
+retained element type once, so branching zero-storage record types cannot
+expand without a bound during semantic checks or IR construction. Shared type
+costs are memoized without structural hashing. The budget is not relaxed to
+admit a larger table. Unproved dynamic bounds, dynamic package initialization
+and shared runtime/GC boundaries remain unchanged.
+
+The unchanged Go 1.27.3 math/bits test declarations `entry` and `tab [256]entry`
+are retained verbatim in an authored standalone observer. That observer is not
+the complete upstream package, init function or its own tests. The original
+whole-package linkname/runtime/dependency/test-entry gate remains unchanged.
+Four exact formerly rejected record-array programs are retained as positive
+source/native/reference obligations in `test_record_arrays.py`; no historical
+result is relabeled. Current candidate execution and official-reference results
+must be read separately from implementation availability.

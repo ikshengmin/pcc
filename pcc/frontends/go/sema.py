@@ -92,9 +92,9 @@ def is_boolean(dtype):
 def checked_array_type(token, count, element):
     """Abstract elements are opaque; every concrete instance rechecks layout.
 
-    Accepting [N]T does not introduce string, pointer or aggregate array
-    storage. Those existing boundaries also apply to substituted signatures,
-    including unused result values and zero-length arrays.
+    Value-record elements reuse the existing aggregate ABI. Their entire
+    storage closure is checked even for an empty array or an unused result;
+    an array cannot hide a pointer/interface/slice-bearing record.
     """
     if not isinstance(element, TypeParameter):
         if isinstance(underlying(element), PointerType):
@@ -103,13 +103,55 @@ def checked_array_type(token, count, element):
         if isinstance(underlying(element), ArrayType) or is_string(element):
             raise UnsupportedGo(token, 'go.unsupported.array-element-types',
                                 "nested arrays and string-element arrays are not implemented")
-        if not is_integer(element) and not is_boolean(element):
+        if (not isinstance(underlying(element), StructType) and
+                not is_integer(element) and not is_boolean(element)):
             raise UnsupportedGo(token, 'go.unsupported.array-element-types',
-                                "arrays of aggregate elements are not implemented")
+                                "arrays require scalar or admitted value-record elements")
     if count > 4096:
         raise UnsupportedGo(token, 'go.unsupported.limit-array-elements',
                             "array exceeds implementation limit (4096 elements)")
-    return ArrayType(count, element)
+    result = ArrayType(count, element)
+    require_bounded_value_layout(result, token)
+    if isinstance(underlying(element), StructType):
+        require_value_type(element, token)
+    return result
+
+
+def require_bounded_value_layout(dtype, token):
+    """Bound expanded values and retained element types without expanding them.
+
+    Keep the existing 4096-slot record budget (including record nodes), and
+    multiply it through arrays. Counting only the outer array length would
+    otherwise admit arbitrarily large arrays of records containing arrays.
+    Empty arrays still retain their element type in semantic checks and IR, so
+    charge it once even when they have no runtime storage. Memoize by identity
+    rather than structural hashing, which would itself expand a shared DAG.
+    Storage eligibility is checked separately, including zero-sized elements.
+    """
+    costs = {}
+
+    def slots(value):
+        value = underlying(value)
+        key = id(value)
+        if key in costs:
+            return costs[key]
+        if isinstance(value, ArrayType):
+            count = max(1, value.count) * slots(value.element)
+        elif isinstance(value, StructType):
+            count = 1
+            for field in value.fields:
+                count += slots(field.type)
+                if count > 4096:
+                    break
+        else:
+            count = 1
+        if count > 4096:
+            raise UnsupportedGo(token, 'go.unsupported.limit-record-layout',
+                                "record layout exceeds implementation limit (4096 scalar slots)")
+        costs[key] = count
+        return count
+
+    slots(dtype)
 
 
 def default_type(dtype):
@@ -236,6 +278,9 @@ def require_value_type(dtype, token, *, declaration=False):
                                 "pointer-bearing pointees require a recursive lifetime/storage contract")
         require_value_type(base.element, token)
     elif isinstance(base, StructType):
+        # Bound shared record/empty-array type graphs before recursively
+        # revisiting their storage closures or constructing expanded IR types.
+        require_bounded_value_layout(base, token)
         for field in base.fields:
             if isinstance(underlying(field.type), PointerType):
                 raise UnsupportedGo(token, 'go.unsupported.pointer-storage',
@@ -244,15 +289,6 @@ def require_value_type(dtype, token, *, declaration=False):
                 raise UnsupportedGo(token, 'go.unsupported.interface-types',
                                     "interface-bearing records require a runtime storage contract")
             require_value_type(field.type, token)
-        pending, count = [base], 0
-        while pending:
-            item = underlying(pending.pop())
-            count += item.count if isinstance(item, ArrayType) else 1
-            if count > 4096:
-                raise UnsupportedGo(token, 'go.unsupported.limit-record-layout',
-                                    "record layout exceeds implementation limit (4096 scalar slots)")
-            if isinstance(item, StructType):
-                pending.extend(field.type for field in item.fields)
 
 
 def validate_value_types(program):
@@ -696,14 +732,7 @@ class Analyzer:
                 fields.append(Field(token.text, field_type, package,
                                     tag=literal_bytes(tag) if tag else b""))
             result = StructType(tuple(fields))
-            pending, count = [result], 0
-            while pending:
-                item = underlying(pending.pop())
-                count += item.count if isinstance(item, ArrayType) else 1
-                if count > 4096:
-                    raise UnsupportedGo(dtype.token, 'go.unsupported.limit-record-layout', "record layout exceeds implementation limit (4096 scalar slots)")
-                if isinstance(item, StructType):
-                    pending.extend(field.type for field in item.fields)
+            require_bounded_value_layout(result, dtype.token)
             return result
         if not isinstance(dtype, ArraySyntax):
             return dtype
@@ -1243,8 +1272,11 @@ class Analyzer:
             syntax = expr.value
             if isinstance(syntax, ArraySyntax) and syntax.length is None:
                 element = self.resolve_type(syntax.element)
-                if not isinstance(element, TypeParameter) and not is_integer(element) and not is_boolean(element):
-                    raise UnsupportedGo(syntax.token, 'go.unsupported.array-element-types', "nested arrays and non-scalar array elements are not implemented")
+                if (not isinstance(element, TypeParameter) and not is_integer(element)
+                        and not is_boolean(element) and not isinstance(underlying(element), StructType)):
+                    raise UnsupportedGo(syntax.token, 'go.unsupported.array-element-types',
+                                        "nested arrays and non-scalar array elements are not implemented")
+                checked_array_type(syntax.token, 0, element)
                 dtype = None
             else:
                 expr.type = self.resolve_type(syntax)
