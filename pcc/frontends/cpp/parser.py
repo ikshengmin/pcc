@@ -1943,9 +1943,17 @@ class CppParser:
         if pointer_operands and not logical:
             if operator in ("+", "-"):
                 return self._pointer_additive_expression(operator, lhs, rhs, coord)
-            if operator not in ("==", "!="):
+            if operator not in _COMPARISONS:
                 raise CppDiagnostic("cpp.unsupported.pointer-operators",
-                                    "pointer ordering and this pointer operator are not implemented", coord)
+                                    "this pointer operator is not implemented", coord)
+            if operator not in ("==", "!="):
+                # [expr.rel] permits pointer/qualification conversions only
+                # when both operands are pointers. Equality's null pointer
+                # constant conversions do not apply to relational operators.
+                if any(not dependent(e.dtype) and not pointer_type(e.dtype)
+                       for e in (lhs, rhs)):
+                    raise CppDiagnostic("cpp.invalid-operands",
+                                        "pointer ordering requires two pointer operands", coord)
             if self.template_function is not None:
                 if not dependent(lhs.dtype) and not dependent(rhs.dtype):
                     self._composite_pointer_type(lhs, rhs, coord)
@@ -2002,7 +2010,7 @@ class CppParser:
                 if const_qualified(first.pointee) or const_qualified(second.pointee):
                     pointee = qualify_const(pointee)
                 return PointerType(pointee)
-        raise CppDiagnostic("cpp.invalid-operands", "incompatible operands for pointer equality", coord)
+        raise CppDiagnostic("cpp.invalid-operands", "incompatible operands for pointer comparison", coord)
 
     def _c_style_cast_ahead(self):
         if self._peek().value != "(":

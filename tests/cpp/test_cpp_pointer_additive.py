@@ -83,7 +83,6 @@ def test_dependent_offset_remains_pattern_until_replay_not_c_locals():
     ('enum class E{A};int f(){int*p=nullptr;p+E::A;return 0;}', 'cpp.invalid-operands'),
     ('int f(){int*p=nullptr;&(p+0);return 0;}', 'cpp.not-lvalue'),
     ('int f(){int*p=nullptr;(p+0)=p;return 0;}', 'cpp.not-lvalue'),
-    ('int f(){int*p=nullptr;p<p;return 0;}', 'cpp.unsupported.pointer-operators'),
     ('int value;int*p=&value+0;', 'cpp.unsupported.static-initialization-analysis'),
 ))
 def test_pointer_offset_invalid_or_unmodeled_semantics_fail_closed(source,code):
@@ -96,6 +95,12 @@ def test_original_typed_null_difference_now_parses():
     # Preserve the original gap input; full owned/reference execution lives in
     # test_cpp_pointer_difference_execution.py, including its zero result.
     CppParser().parse('int f(){int*p=nullptr;p-p;return 0;}')
+
+
+def test_original_typed_null_order_now_parses():
+    # Exact input retained as a positive owned/reference execution obligation
+    # in test_cpp_pointer_order_execution.py.
+    CppParser().parse('int f(){int*p=nullptr;p<p;return 0;}')
 
 
 def test_function_pointee_offset_is_invalid_before_c_projection():

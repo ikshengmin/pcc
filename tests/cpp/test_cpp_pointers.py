@@ -65,8 +65,7 @@ NEGATIVE_CASES = (
     ("int f(){int x=1;int *p=&x;return p;}", "cpp.invalid-conversion"),
     ("int f(){int x=1;int *p=&x;return p==1;}", "cpp.invalid-operands"),
     ("int f(){int x=1;long y=2;return &x==&y;}", "cpp.invalid-operands"),
-    # Exact p+1 original is positive in test_cpp_pointer_additive.
-    ("int f(){int x=1;int *p=&x;return p<p;}", "cpp.unsupported.pointer-operators"),
+    # Exact p+1 and p<p originals are positive in the additive/order modules.
     ("int f(){volatile int x=1;return x;}", "cpp.unsupported.volatile"),
     ("int f(int *volatile p);", "cpp.unsupported.volatile"),
     ("int (*fp)();", "cpp.unsupported.function-pointers"),
