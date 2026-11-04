@@ -57,7 +57,6 @@ CAPABILITIES = [
     ("class Diagnostic{static final int value=f();static int f(){return 42;}}", "static-initialization", "nonconstant static initialization"),
     ("class Diagnostic{static final int value=Diagnostic.value;}", "cyclic-initialization", "cyclic field initialization"),
     (original("final int value;return 42;"), "blank-final-local", "blank final locals"),
-    (original("final var value=42;return value;"), "declared-local-type", "final local declarations"),
     (original("return 1/0;"), "arithmetic-exception", "ArithmeticException"),
     (original("return true?true:1;"), "reference-conditional", "reference/boxing conditional"),
     (original("return new Object();"), "object-expressions", "unsupported Java expression"),
@@ -80,6 +79,10 @@ CAPABILITIES = [
 ])
 def test_former_floating_type_boundaries_now_reach_owned_ir(source, descriptor):
     assert compile_source(source, descriptor=descriptor).entry[1] == descriptor
+
+
+def test_former_final_var_boundary_now_reaches_owned_ir():
+    assert compile_source(original("final var value=42;return value;")).entry[1] == "()I"
 
 
 @pytest.mark.parametrize("source,suffix,message", CAPABILITIES, ids=[row[1] + str(i) for i, row in enumerate(CAPABILITIES)])

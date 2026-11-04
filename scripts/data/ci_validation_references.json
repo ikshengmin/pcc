@@ -1,5 +1,25 @@
 {
   "functions": {
+    "tests/java/test_source_local_inference.py": {
+      "test_identical_inference_originals_match_jdk_raw_processes": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses unchanged complete Java local-inference originals and selected JDK tools, with separate observers and raw stdout/stderr/exit comparisons against owned native scalar programs where applicable. Invalid source must have a source-attributed compiler diagnostic. Tool/source identity is retained. No host compiler is a production owner and no Commons Numbers or managed-runtime acceptance is established."
+        ]
+      },
+      "test_identical_invalid_inference_originals_are_rejected_by_jdk": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses unchanged complete Java local-inference originals and selected JDK tools, with separate observers and raw stdout/stderr/exit comparisons against owned native scalar programs where applicable. Invalid source must have a source-attributed compiler diagnostic. Tool/source identity is retained. No host compiler is a production owner and no Commons Numbers or managed-runtime acceptance is established."
+        ]
+      },
+      "test_identical_inference_projects_match_jdk_raw_processes": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses unchanged complete Java local-inference originals and selected JDK tools, with separate observers and raw stdout/stderr/exit comparisons against owned native scalar programs where applicable. Invalid source must have a source-attributed compiler diagnostic. Tool/source identity is retained. No host compiler is a production owner and no Commons Numbers or managed-runtime acceptance is established."
+        ]
+      }
+    },
     "tests/java/test_source_integral_arithmetic_model.py": {
       "test_exact_integral_originals_and_source_errors_against_selected_jdk_only": {
         "activity": "external-reference",

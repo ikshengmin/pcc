@@ -10,6 +10,7 @@ import re
 from .integer_semantics import evaluate_division, wrap_integer
 from .floating_semantics import converted_constant, floating_binary, floating_literal
 from .diagnostics import UnsupportedJava
+from .source_local_inference import LocalInferenceAnalyzer
 
 
 from .source_types import (
@@ -59,7 +60,7 @@ def integer_literal(node, allow_min=False):
     node.token.error("invalid " + dtype + " literal")
 
 
-class SourceAnalyzer:
+class SourceAnalyzer(LocalInferenceAnalyzer):
     def __init__(self, program, project=None):
         self.program = program
         self.project = project
@@ -139,7 +140,7 @@ class SourceAnalyzer:
     def lookup(self, token):
         for scope in reversed(self.scopes):
             if token.text in scope:
-                return scope[token.text]
+                return self.require_completed_local(scope[token.text], token)
         field = (self.project.simple_field(self, token.text, token) if self.project is not None
                  else self.fields.get(token.text))
         if field is not None:
@@ -157,6 +158,9 @@ class SourceAnalyzer:
 
     def typed_binary_extension(self, node):
         """Model-only extension after operands are checked exactly once."""
+        if node.value in {"==", "!="} and all(child.dtype == "null" for child in node.children):
+            node.token.error("native reference operations require the managed-object domain",
+                             code="java.unsupported.object-expressions")
         return False
 
     def typed_assignment_extension(self, node):
@@ -236,6 +240,7 @@ class SourceAnalyzer:
         return set(assigned), set(assigned)
 
     def expression(self, node, assigned):
+        self.check_inferred_reference(node)
         self.type_expression(node, assigned)
         yes, no = self.expression_outcomes(node, assigned)
         node.flow_outcomes = (frozenset(yes), frozenset(no))
@@ -252,6 +257,7 @@ class SourceAnalyzer:
             target.token.error("assignment or increment requires a variable")
         binding = (next((scope[target.value] for scope in reversed(self.scopes)
                          if target.value in scope), None) if target.kind == "name" else None)
+        self.require_completed_local(binding, target.token)
         if binding is None:
             if target.kind == "name":
                 field = self.project.resolve_field(self, target)
@@ -303,6 +309,11 @@ class SourceAnalyzer:
 
     def type_expression(self, node, assigned):
         kind, op = node.kind, node.value
+        if kind == "null":
+            # Native syntax retains null only inside an inferred initializer.
+            # It can diagnose null-type inference, never create native storage.
+            node.dtype = "null"
+            return
         if kind == "string":
             node.token.error("String literals require shared managed String allocation, interning and class initialization",
                              code="java.unsupported.string-literals")
@@ -478,9 +489,13 @@ class SourceAnalyzer:
             if kind == "block":
                 self.scopes.pop()
         elif kind == "var":
-            node.symbol = self.declare(node.token, node.value, node.is_final)
+            if node.inference_token is not None:
+                self.infer_local(node, assigned)
+            else:
+                node.symbol = self.declare(node.token, node.value, node.is_final)
             if node.children:
-                self.expression(node.children[0], assigned)
+                if node.inference_token is None:
+                    self.expression(node.children[0], assigned)
                 self.assignment_value(node.children[0], node.symbol.dtype)
                 assigned.add(node.symbol)
                 if node.is_final and node.children[0].constant is not None:

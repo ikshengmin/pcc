@@ -70,6 +70,7 @@ class Node:
     string_constant: object = None  # Source content only, never runtime identity.
     managed_value: object = None  # Compiler-only requirements, never a runtime reference.
     arithmetic_plan: object = None  # Nonlowering checked arithmetic, never exception code.
+    inference_token: Token | None = None  # Original local 'var', never a native type.
 
 
 @dataclass
@@ -279,6 +280,7 @@ class SourceParser:
         self.tokens = tokenize(source, filename)
         self.position = 0
         self.class_model = class_model
+        self.inferred_initializer_depth = 0
 
     def peek(self, distance=0):
         return self.tokens[min(self.position + distance, len(self.tokens) - 1)]
@@ -298,9 +300,10 @@ class SourceParser:
             self.peek().error(f"expected {text!r}, got {self.peek().text!r}")
         return self.take()
 
-    def identifier(self, *, label=False):
+    def identifier(self, *, label=False, type_name=False):
         token = self.take()
-        keywords = KEYWORDS - LABEL_CONTEXTUAL_NAMES if label else KEYWORDS
+        keywords = (KEYWORDS - LABEL_CONTEXTUAL_NAMES if label else
+                    KEYWORDS if type_name else KEYWORDS - {"var"})
         if not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", token.text) or token.text in keywords:
             token.error("expected a non-keyword Java identifier")
         return token
@@ -337,10 +340,12 @@ class SourceParser:
         """Retain named reference declarations only in the nonlowering model."""
         if token.text in DECLARED | {"void"}:
             return token.text
-        if self.class_model and re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", token.text) and token.text not in KEYWORDS:
+        if self.class_model and re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", token.text) and token.text not in KEYWORDS - {"var"}:
             names = [token]
             while self.accept("."):
                 names.append(self.identifier())
+            if names[-1].text == "var":
+                names[-1].error("var is not a declared reference type")
             if self.peek().text == "<":
                 self.peek().error("generic reference declarations require the next source type domain",
                                   code="java.unsupported.generic-declarations")
@@ -353,13 +358,13 @@ class SourceParser:
         index = 0
         while True:
             token = self.peek(index)
-            if token.text in KEYWORDS or not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", token.text):
+            if token.text in KEYWORDS - {"var"} or not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", token.text):
                 return False
             if self.peek(index + 1).text != ".":
                 break
             index += 2
         following = self.peek(index + 1)
-        return (following.text not in KEYWORDS
+        return (following.text not in KEYWORDS - {"var"}
                 and re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", following.text) is not None
                 or following.text == "[" and self.peek(index + 2).text == "]"
                 or following.text == "<")
@@ -368,18 +373,18 @@ class SourceParser:
         index = 0
         while True:
             token = self.peek(index)
-            if token.text in KEYWORDS or not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", token.text):
+            if token.text in KEYWORDS - {"var"} or not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", token.text):
                 return False
             if self.peek(index + 1).text != ".":
                 break
             index += 2
-        if self.peek(index + 1).text != ")":
+        if self.peek(index + 1).text != ")" or self.peek(index).text == "var":
             return False
         operand = self.peek(index + 2)
         # Reference casts use UnaryExpressionNotPlusMinus. Preserve ordinary
         # grouped variables followed by +, -, *, comparisons and postfix ops.
         return (operand.text in {"null", "this", "new", "!", "~", "("}
-                or operand.text not in KEYWORDS
+                or operand.text not in KEYWORDS - {"var"}
                 and re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", operand.text) is not None
                 or operand.text[0:1].isdigit() or operand.text.startswith(('"', "'")))
 
@@ -425,6 +430,8 @@ class SourceParser:
                     self.peek().error("on-demand imports require the next source-project lookup domain", code="java.unsupported.on-demand-imports")
                 imported.append(self.identifier())
             self.expect(";")
+            if not static and imported[-1].text == "var":
+                imported[-1].error("var cannot be imported as a type name")
             if len(imported) < (3 if static else 2):
                 imported[0].error("cannot import a type from the unnamed package")
             (static_imports if static else imports).append(tuple(imported))
@@ -436,7 +443,7 @@ class SourceParser:
         if "abstract" in mods:
             self.peek().error("unsupported top-level class modifiers", code="java.unsupported.abstract-classes")
         self.expect("class")
-        class_token = self.identifier()
+        class_token = self.identifier(type_name=True)
         name = class_token.text
         class_modifiers = frozenset(mods)
         owner = "/".join(package + [name])
@@ -759,6 +766,15 @@ class SourceParser:
         is_final = bool(self.accept("final"))
         if is_final and self.peek().text == "final":
             self.peek().error("duplicate final local modifier")
+        following = self.peek(1)
+        inferred = (self.peek().text == "var" and
+                    (following.text == "[" and self.peek(2).text == "]"
+                     or following.text not in KEYWORDS - {"var"}
+                     and re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", following.text)))
+        if inferred:
+            if not allow_declaration:
+                token.error("a local declaration requires a block or for initializer")
+            return self.inferred_local(is_final=is_final, allow_enhanced=allow_enhanced)
         if self.peek().text in DECLARED or (self.class_model and self.peek().text in ARRAY_COMPONENTS):
             type_token = self.take()
             if not allow_declaration:
@@ -768,12 +784,9 @@ class SourceParser:
             if not allow_declaration:
                 token.error("a local declaration requires a block or for initializer")
             if not self.class_model:
-                self.type_boundary(self.peek(), "source locals require boolean or integral primitives",
-                                   code="java.unsupported.declared-local-type")
+                self.peek().error("source locals require boolean or integral primitives",
+                                  code="java.unsupported.declared-local-type")
             return self.local_declaration(self.take(), is_final=is_final, allow_enhanced=allow_enhanced)
-        if is_final and self.peek().text == "var":
-            token.error("final local declarations require boolean or integral primitives",
-                        code="java.unsupported.declared-local-type")
         if is_final:
             self.type_boundary(self.peek(), "final local declarations require boolean or integral primitives",
                                code="java.unsupported.declared-local-type", location=token)
@@ -804,6 +817,29 @@ class SourceParser:
             expression.token.error("only assignment, increment or method invocation is an expression statement")
         return Node("expression", token, children=[expression])
 
+    def inferred_local(self, *, is_final, allow_enhanced):
+        token = self.expect("var")
+        if self.peek().text == "[":
+            self.peek().error("var local declarations cannot add array dimensions")
+        name = self.identifier()
+        if self.peek().text == "[":
+            self.peek().error("var local declarations cannot add array dimensions")
+        if allow_enhanced and self.peek().text == ":":
+            self.peek().error("enhanced for inference requires the next array or Iterable inference domain",
+                              code="java.unsupported.local-inference-domain")
+        if not self.accept("="):
+            name.error("an inferred local variable requires an initializer")
+        if self.peek().text == "{":
+            self.peek().error("an inferred local cannot use a bare array initializer")
+        self.inferred_initializer_depth += 1
+        try:
+            initializer = self.expression()
+        finally:
+            self.inferred_initializer_depth -= 1
+        if self.peek().text == ",":
+            self.peek().error("an inferred local declaration must have exactly one declarator")
+        return Node("var", name, "var", [initializer], is_final=is_final, inference_token=token)
+
     def expression(self, minimum=0, *, statement_target=False):
         token = self.take()
         if token.text in ("++", "--"):
@@ -833,7 +869,7 @@ class SourceParser:
                     node = Node("receiver_call", member, member.text, self.arguments())
                 else:
                     node = Node("receiver_field", member, member.text)
-        elif self.class_model and token.text == "null":
+        elif (self.class_model or self.inferred_initializer_depth) and token.text == "null":
             node = Node("null", token)
         elif self.class_model and token.text == "new" and self.peek().text in ARRAY_COMPONENTS:
             component = self.take()
@@ -882,7 +918,7 @@ class SourceParser:
             node = Node("floating", token, token.text)
         elif token.text[0:1].isdigit():
             node = Node("integer", token, token.text)
-        elif re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", token.text) and token.text not in KEYWORDS:
+        elif re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", token.text) and token.text not in KEYWORDS - {"var"}:
             parts = [token.text]
             while self.accept("."):
                 parts.append(self.identifier().text)
@@ -910,7 +946,7 @@ class SourceParser:
                 token.error("unsupported Java expression or statement", code="java.unsupported.runtime-statements")
             if token.text == "assert":
                 token.error("unsupported Java expression or statement", code="java.unsupported.assert-statements")
-            if token.text in {"byte", "short", "char", "float", "double", "var"}:
+            if token.text in {"byte", "short", "char", "float", "double"}:
                 token.error("unsupported Java expression or statement", code="java.unsupported.declared-local-type")
             if token.text in {"class", "interface", "enum", "record"}:
                 token.error("unsupported Java expression or statement", code="java.unsupported.local-types")

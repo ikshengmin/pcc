@@ -189,6 +189,7 @@ class ClassAnalyzer(IntegralArithmeticModelAnalyzer, ThrowModelAnalyzer, ClassCo
                                                 materialization=field.string_constant is not None)
 
     def expression(self, node, assigned):
+        self.check_inferred_reference(node)
         # Attach storage obligations only after the original semantic owner
         # succeeds, including its early-return array/receiver/creation paths.
         self.class_expression(node, assigned)

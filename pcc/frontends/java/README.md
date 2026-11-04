@@ -75,6 +75,27 @@ expressions become constant variables; a runtime call initializer is still
 evaluated exactly once and read from its local slot. Blank final locals remain an
 explicit definite-unassignment boundary, not an assumed value or dropped declaration.
 
+Primitive local type inference now follows JLS 14.4/14.4.1 on the ordinary owned
+source-to-native route. A single `var` declarator in a block or basic-for initializer
+is checked without an assignment target type. Its standalone boolean, byte, short,
+char, int, long, float or double result becomes an ordinary typed local binding;
+the existing native slot, conversion, store, load and ABI owners are unchanged.
+The initializer is checked and emitted once. `final var` retains constant-variable
+rules, while a non-final initializer does not become a constant variable. The name
+is in scope during inference, so self-dependencies fail even in a dead branch;
+an unqualified same-named method still belongs to the separate method namespace.
+The original `var` token and inferred concrete type are both retained. Ordinary
+variables, methods and package segments may be named `var`; declared type names
+may not. Missing/multiple initializers, appended array brackets, null and void
+inference remain ordinary source errors.
+
+These new primitive-inference ordinary, native-byte and unchanged-original JDK
+obligations are **execution-UNRUN**, not observed native acceptance. Reference,
+array and enhanced-for inference remain explicit separate capabilities. Native
+managed objects, strings, arrays and exceptions remain unavailable. Apache Commons
+Numbers targets Java 8 and does not use `var`, so this independent Java 10+ language
+capability does not move its original-project frontier or change the runtime/QPS gate.
+
 The primitive conditional operator `?:` is right-associative and uses standalone
 boolean/integral typing, including byte/short/char constant narrowing before
 ordinary numeric promotion. Its condition-sensitive definite-assignment states
