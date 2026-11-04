@@ -110,55 +110,59 @@
   ],
   "features": [
     {
-      "id": "java.primitive-array-enhanced-for-model",
-      "title": "Primitive-array enhanced-for source semantics without native iteration",
+      "id": "java.null-throw-source-model",
+      "title": "Null-typed throw source checking without exception execution",
       "chapter_ids": [
-        "JLS-5",
-        "JLS-6",
-        "JLS-10",
+        "JLS-4",
+        "JLS-11",
         "JLS-14",
         "JLS-16"
       ],
-      "scope": "JLS 5.2,6.3,6.4,14.14.2,14.15-16,14.22,16.2.12. Nonlowering primitive-array enhanced-for: original declaration/expression/body, one-time expression checking before binder scope, runtime-element assignment conversion, final/nonconstant iteration bindings, labeled control targets and zero-iteration definite-assignment exit. Immutable phase plans reuse the shared compiler-only array value contract and retain unmet captured-reference root/relocation/retirement obligations without native slots or layout. Boolean/integral array elements may widen to admitted numeric variables; reference variables/boxing, Iterable, var and wider arrays remain unavailable. The complete unchanged Primes parser regression expects progression from its line53 loop to the existing throw boundary at70:13, but is execution-unrun. Production scalar String first failure and original whole-project gate remain unchanged. Source-reviewed model only; no PCC managed execution, GC registration or project acceptance.",
+      "scope": "JLS 4.1,11.2,14.18,14.22,16.2.13. Nonlowering null-typed throw statement and switch-arrow throw rule: retain original operand, analyze it exactly once, classify static type, and preserve unconditional abrupt completion through existing scope/reachability/definite-assignment owners. Only null-typed operands have a successful checked plan. Primitive/void/array operands are type errors; class/String operands and throws clauses remain explicit Throwable-hierarchy/checked-exception capability gaps. Immutable plans distinguish operand failure propagation from normal-null NPE creation and retain unmet allocation, root, handler, cleanup, unwind and uncaught-delivery contracts. No fake bootstrap class, exception object, root slot, handler table or native lowering. The complete unchanged Primes parser guard predicts retained loop53/throw70 then generic List at108:23; it is authored and UNRUN, while production String31 remains first. No original-project acceptance.",
       "tests": [
-        "tests/java/test_source_enhanced_for_model.py::test_complete_originals_have_checked_enhanced_for_models_only",
-        "tests/java/test_source_enhanced_for_model.py::test_invalid_enhanced_for_originals_are_language_errors_not_capability_gaps",
-        "tests/java/test_source_enhanced_for_model.py::test_checked_array_iteration_never_grants_native_compilation",
-        "tests/java/test_source_enhanced_for_model.py::test_valid_wider_iteration_domains_keep_explicit_capability_boundaries",
-        "tests/java/test_source_enhanced_for_model.py::test_incomplete_owned_reference_domains_are_not_guessed",
-        "tests/java/test_source_enhanced_for_model.py::test_iteration_plan_preserves_original_expression_once_and_managed_requirements",
-        "tests/java/test_source_enhanced_for_model.py::test_iterable_expression_is_checked_once_before_iteration_binding",
-        "tests/java/test_source_enhanced_for_model.py::test_plan_retains_element_type_separately_from_iteration_variable_type",
-        "tests/java/test_source_enhanced_for_model.py::test_final_binding_is_assigned_but_never_a_constant_variable",
-        "tests/java/test_source_enhanced_for_model.py::test_iterable_field_lookup_precedes_shadowing_binding_scope",
-        "tests/java/test_source_enhanced_for_model.py::test_reused_iteration_names_have_distinct_lexical_bindings",
-        "tests/java/test_source_enhanced_for_model.py::test_labeled_jumps_retain_exact_outer_target_node",
-        "tests/java/test_source_enhanced_for_model.py::test_switch_break_does_not_steal_enhanced_loop_continue_target",
-        "tests/java/test_source_enhanced_for_model.py::test_abrupt_body_does_not_make_zero_iteration_exit_unreachable",
-        "tests/java/test_source_enhanced_for_model.py::test_exact_enhanced_for_originals_against_selected_jdk_only",
-        "tests/java/test_source_construction_model.py::test_complete_primes_original_keeps_runtime_frontier_after_array_iteration"
+        "tests/java/test_source_throw_model.py::test_exact_null_throw_originals_are_nonlowering_source_plans",
+        "tests/java/test_source_throw_model.py::test_invalid_throw_originals_are_ordinary_java_errors",
+        "tests/java/test_source_throw_model.py::test_reference_throw_types_require_owned_hierarchy_not_names_or_null_values",
+        "tests/java/test_source_throw_model.py::test_throws_declarations_keep_checked_exception_analysis_explicit",
+        "tests/java/test_source_throw_model.py::test_null_throw_plan_does_not_supply_bootstrap_exception_definitions",
+        "tests/java/test_source_throw_model.py::test_throw_plan_separates_operand_failure_from_null_exception_creation",
+        "tests/java/test_source_throw_model.py::test_throw_context_sites_keep_actual_method_constructor_and_initializer_identity",
+        "tests/java/test_source_throw_model.py::test_absence_of_throw_sites_does_not_claim_a_complete_runtime_context",
+        "tests/java/test_source_throw_model.py::test_original_operand_is_retained_and_checked_exactly_once",
+        "tests/java/test_source_throw_model.py::test_operand_boolean_assignment_is_checked_before_abrupt_completion",
+        "tests/java/test_source_throw_model.py::test_da_joins_keep_only_normal_paths",
+        "tests/java/test_source_throw_model.py::test_zero_iteration_enhanced_for_retains_normal_exit_after_throwing_body",
+        "tests/java/test_source_throw_model.py::test_throw_only_switch_rules_have_no_normal_completion",
+        "tests/java/test_source_throw_model.py::test_nested_throw_does_not_acquire_loop_or_label_jump_target",
+        "tests/java/test_source_throw_model.py::test_native_parser_and_public_entries_reject_throw_before_ir",
+        "tests/java/test_source_throw_model.py::test_native_throws_clause_keeps_explicit_hierarchy_boundary_before_ir",
+        "tests/java/test_source_throw_model.py::test_exact_throw_originals_against_selected_jdk_only",
+        "tests/java/test_source_throw_model.py::test_exact_null_throw_runtime_is_observed_only_by_selected_jdk",
+        "tests/java/test_source_throw_model.py::test_exact_operand_effects_precede_jdk_null_throw_or_abrupt_operand",
+        "tests/java/test_source_throw_model.py::test_exact_abrupt_operand_exception_is_not_replaced_by_jdk_null_conversion",
+        "tests/java/test_source_construction_model.py::test_complete_primes_original_retains_throw_before_generic_type_boundary"
       ],
       "diagnostics": [],
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:a4e5c78ac366721ddbb4bb3ddb526eab04c6859d863f183ae58c1d333548f0ef",
+        "source_revision": "sha256:74188a7800d38dd5e23045aa1aa45a28709f63125021c7cde2fab003c75f0d6d",
         "sources": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
+          },
+          {
+            "path": "pcc/frontends/java/source_throw_model.py",
+            "sha256": "9dc9deedfbcf4e89e170ccf47893e43b8cf0693888fe8ef51c6f6d7bae7f214a"
+          },
+          {
+            "path": "pcc/frontends/java/source_class_model.py",
+            "sha256": "eb709385bea47d4e2edd655377840d7269dffad0b583b3ef2d40151bfb374a02"
           },
           {
             "path": "pcc/frontends/java/source_sema.py",
             "sha256": "d079bb40c93a98895788f75a9cc4353e6156eb095bfb399706d369c483620992"
-          },
-          {
-            "path": "pcc/frontends/java/source_array_model.py",
-            "sha256": "ee20814c09fd86435efbcf23a139a6cbf53444e1170c5a26185e859ffce2d6ac"
-          },
-          {
-            "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "2880a15679a205ff1413f9f6115a62d7a86160ea376e055324e7fd2f021ca9e4"
           },
           {
             "path": "pcc/frontends/java/source_types.py",
@@ -176,11 +180,137 @@
       },
       "acceptance": [
         {
+          "id": "null-throw-model-ci-only",
+          "kind": "full-feature",
+          "scope": "JLS 4.1,11.2,14.18,14.22,16.2.13. Nonlowering null-typed throw statement and switch-arrow throw rule: retain original operand, analyze it exactly once, classify static type, and preserve unconditional abrupt completion through existing scope/reachability/definite-assignment owners. Only null-typed operands have a successful checked plan. Primitive/void/array operands are type errors; class/String operands and throws clauses remain explicit Throwable-hierarchy/checked-exception capability gaps. Immutable plans distinguish operand failure propagation from normal-null NPE creation and retain unmet allocation, root, handler, cleanup, unwind and uncaught-delivery contracts. No fake bootstrap class, exception object, root slot, handler table or native lowering. The complete unchanged Primes parser guard predicts retained loop53/throw70 then generic List at108:23; it is authored and UNRUN, while production String31 remains first. No original-project acceptance.",
+          "status": "unrun",
+          "source_revision": "sha256:74188a7800d38dd5e23045aa1aa45a28709f63125021c7cde2fab003c75f0d6d",
+          "mode": "pcc0",
+          "platform": "linux-x86_64",
+          "backend": "self",
+          "gc": "not_applicable",
+          "required_tests": [
+            "tests/java/test_source_throw_model.py::test_exact_null_throw_originals_are_nonlowering_source_plans",
+            "tests/java/test_source_throw_model.py::test_invalid_throw_originals_are_ordinary_java_errors",
+            "tests/java/test_source_throw_model.py::test_reference_throw_types_require_owned_hierarchy_not_names_or_null_values",
+            "tests/java/test_source_throw_model.py::test_throws_declarations_keep_checked_exception_analysis_explicit",
+            "tests/java/test_source_throw_model.py::test_null_throw_plan_does_not_supply_bootstrap_exception_definitions",
+            "tests/java/test_source_throw_model.py::test_throw_plan_separates_operand_failure_from_null_exception_creation",
+            "tests/java/test_source_throw_model.py::test_throw_context_sites_keep_actual_method_constructor_and_initializer_identity",
+            "tests/java/test_source_throw_model.py::test_absence_of_throw_sites_does_not_claim_a_complete_runtime_context",
+            "tests/java/test_source_throw_model.py::test_original_operand_is_retained_and_checked_exactly_once",
+            "tests/java/test_source_throw_model.py::test_operand_boolean_assignment_is_checked_before_abrupt_completion",
+            "tests/java/test_source_throw_model.py::test_da_joins_keep_only_normal_paths",
+            "tests/java/test_source_throw_model.py::test_zero_iteration_enhanced_for_retains_normal_exit_after_throwing_body",
+            "tests/java/test_source_throw_model.py::test_throw_only_switch_rules_have_no_normal_completion",
+            "tests/java/test_source_throw_model.py::test_nested_throw_does_not_acquire_loop_or_label_jump_target",
+            "tests/java/test_source_throw_model.py::test_native_parser_and_public_entries_reject_throw_before_ir",
+            "tests/java/test_source_throw_model.py::test_native_throws_clause_keeps_explicit_hierarchy_boundary_before_ir",
+            "tests/java/test_source_throw_model.py::test_exact_throw_originals_against_selected_jdk_only",
+            "tests/java/test_source_throw_model.py::test_exact_null_throw_runtime_is_observed_only_by_selected_jdk",
+            "tests/java/test_source_throw_model.py::test_exact_operand_effects_precede_jdk_null_throw_or_abrupt_operand",
+            "tests/java/test_source_throw_model.py::test_exact_abrupt_operand_exception_is_not_replaced_by_jdk_null_conversion",
+            "tests/java/test_source_construction_model.py::test_complete_primes_original_retains_throw_before_generic_type_boundary"
+          ],
+          "evidence": [],
+          "reason": "CI-only authored model/type/flow/native-rejection obligations and selected-JDK observers. No local imports, tests, compiler/JDK calls, target execution or current-project validation. Only JDK observers execute throwing paths; no PCC exception or managed runtime support is claimed."
+        }
+      ]
+    },
+    {
+      "id": "java.throwable-type-analysis",
+      "title": "Owned Throwable hierarchy and checked-exception analysis",
+      "chapter_ids": [
+        "JLS-8",
+        "JLS-11",
+        "JLS-14"
+      ],
+      "scope": "Reference throw operands and method/constructor throws clauses require a proven owned Throwable hierarchy plus exception propagation/declaration checking. Nominal names, apparent exception spellings and references initialized to null do not prove it. This source domain is explicitly unavailable; capability rejection does not certify surrounding Java validity or execution support.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/java/test_source_throw_model.py"
+      ],
+      "diagnostics": [
+        "java.unsupported.throwable-types"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "java.primitive-array-enhanced-for-model",
+      "title": "Primitive-array enhanced-for source semantics without native iteration",
+      "chapter_ids": [
+        "JLS-5",
+        "JLS-6",
+        "JLS-10",
+        "JLS-14",
+        "JLS-16"
+      ],
+      "scope": "JLS 5.2,6.3,6.4,14.14.2,14.15-16,14.22,16.2.12. Nonlowering primitive-array enhanced-for: original declaration/expression/body, one-time expression checking before binder scope, runtime-element assignment conversion, final/nonconstant iteration bindings, labeled control targets and zero-iteration definite-assignment exit. Immutable phase plans reuse the shared compiler-only array value contract and retain unmet captured-reference root/relocation/retirement obligations without native slots or layout. Boolean/integral array elements may widen to admitted numeric variables; reference variables/boxing, Iterable, var and wider arrays remain unavailable. The newer null-only throw source owner retains the original loop53/throw70 syntax; the complete-original parser guard expects the next generic type boundary at108:23, still execution-unrun. Production scalar String first failure and original whole-project gate remain unchanged. Source-reviewed model only; no PCC managed execution, GC registration or project acceptance.",
+      "tests": [
+        "tests/java/test_source_enhanced_for_model.py::test_complete_originals_have_checked_enhanced_for_models_only",
+        "tests/java/test_source_enhanced_for_model.py::test_invalid_enhanced_for_originals_are_language_errors_not_capability_gaps",
+        "tests/java/test_source_enhanced_for_model.py::test_checked_array_iteration_never_grants_native_compilation",
+        "tests/java/test_source_enhanced_for_model.py::test_valid_wider_iteration_domains_keep_explicit_capability_boundaries",
+        "tests/java/test_source_enhanced_for_model.py::test_incomplete_owned_reference_domains_are_not_guessed",
+        "tests/java/test_source_enhanced_for_model.py::test_iteration_plan_preserves_original_expression_once_and_managed_requirements",
+        "tests/java/test_source_enhanced_for_model.py::test_iterable_expression_is_checked_once_before_iteration_binding",
+        "tests/java/test_source_enhanced_for_model.py::test_plan_retains_element_type_separately_from_iteration_variable_type",
+        "tests/java/test_source_enhanced_for_model.py::test_final_binding_is_assigned_but_never_a_constant_variable",
+        "tests/java/test_source_enhanced_for_model.py::test_iterable_field_lookup_precedes_shadowing_binding_scope",
+        "tests/java/test_source_enhanced_for_model.py::test_reused_iteration_names_have_distinct_lexical_bindings",
+        "tests/java/test_source_enhanced_for_model.py::test_labeled_jumps_retain_exact_outer_target_node",
+        "tests/java/test_source_enhanced_for_model.py::test_switch_break_does_not_steal_enhanced_loop_continue_target",
+        "tests/java/test_source_enhanced_for_model.py::test_abrupt_body_does_not_make_zero_iteration_exit_unreachable",
+        "tests/java/test_source_enhanced_for_model.py::test_exact_enhanced_for_originals_against_selected_jdk_only",
+        "tests/java/test_source_construction_model.py::test_complete_primes_original_retains_throw_before_generic_type_boundary"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:bfcec0088129070e0f573e39db8c362ae58ef92e15f99d71748cde2027bbde9a",
+        "sources": [
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
+          },
+          {
+            "path": "pcc/frontends/java/source_sema.py",
+            "sha256": "d079bb40c93a98895788f75a9cc4353e6156eb095bfb399706d369c483620992"
+          },
+          {
+            "path": "pcc/frontends/java/source_array_model.py",
+            "sha256": "ee20814c09fd86435efbcf23a139a6cbf53444e1170c5a26185e859ffce2d6ac"
+          },
+          {
+            "path": "pcc/frontends/java/source_class_model.py",
+            "sha256": "eb709385bea47d4e2edd655377840d7269dffad0b583b3ef2d40151bfb374a02"
+          },
+          {
+            "path": "pcc/frontends/java/source_types.py",
+            "sha256": "21656b630e7e2ca5f5d4b3850de273c5ee675988413b2870f1f234bbc2f63d4d"
+          },
+          {
+            "path": "pcc/frontends/java/managed_objects.py",
+            "sha256": "30a3225ff9edc781a56a00c3f4aab73c5f02d95b77e08dcd839d57c8f7196e42"
+          },
+          {
+            "path": "pcc/support/managed_objects.py",
+            "sha256": "44478862083f495926f4031609b66115044dd18f6b98231807be90721e2f8d23"
+          },
+          {
+            "path": "pcc/frontends/java/source_throw_model.py",
+            "sha256": "9dc9deedfbcf4e89e170ccf47893e43b8cf0693888fe8ef51c6f6d7bae7f214a"
+          }
+        ]
+      },
+      "acceptance": [
+        {
           "id": "array-enhanced-for-model-ci-only",
           "kind": "full-feature",
-          "scope": "JLS 5.2,6.3,6.4,14.14.2,14.15-16,14.22,16.2.12. Nonlowering primitive-array enhanced-for: original declaration/expression/body, one-time expression checking before binder scope, runtime-element assignment conversion, final/nonconstant iteration bindings, labeled control targets and zero-iteration definite-assignment exit. Immutable phase plans reuse the shared compiler-only array value contract and retain unmet captured-reference root/relocation/retirement obligations without native slots or layout. Boolean/integral array elements may widen to admitted numeric variables; reference variables/boxing, Iterable, var and wider arrays remain unavailable. The complete unchanged Primes parser regression expects progression from its line53 loop to the existing throw boundary at70:13, but is execution-unrun. Production scalar String first failure and original whole-project gate remain unchanged. Source-reviewed model only; no PCC managed execution, GC registration or project acceptance.",
+          "scope": "JLS 5.2,6.3,6.4,14.14.2,14.15-16,14.22,16.2.12. Nonlowering primitive-array enhanced-for: original declaration/expression/body, one-time expression checking before binder scope, runtime-element assignment conversion, final/nonconstant iteration bindings, labeled control targets and zero-iteration definite-assignment exit. Immutable phase plans reuse the shared compiler-only array value contract and retain unmet captured-reference root/relocation/retirement obligations without native slots or layout. Boolean/integral array elements may widen to admitted numeric variables; reference variables/boxing, Iterable, var and wider arrays remain unavailable. The newer null-only throw source owner retains the original loop53/throw70 syntax; the complete-original parser guard expects the next generic type boundary at108:23, still execution-unrun. Production scalar String first failure and original whole-project gate remain unchanged. Source-reviewed model only; no PCC managed execution, GC registration or project acceptance.",
           "status": "unrun",
-          "source_revision": "sha256:a4e5c78ac366721ddbb4bb3ddb526eab04c6859d863f183ae58c1d333548f0ef",
+          "source_revision": "sha256:bfcec0088129070e0f573e39db8c362ae58ef92e15f99d71748cde2027bbde9a",
           "mode": "pcc0",
           "platform": "linux-x86_64",
           "backend": "self",
@@ -201,10 +331,10 @@
             "tests/java/test_source_enhanced_for_model.py::test_switch_break_does_not_steal_enhanced_loop_continue_target",
             "tests/java/test_source_enhanced_for_model.py::test_abrupt_body_does_not_make_zero_iteration_exit_unreachable",
             "tests/java/test_source_enhanced_for_model.py::test_exact_enhanced_for_originals_against_selected_jdk_only",
-            "tests/java/test_source_construction_model.py::test_complete_primes_original_keeps_runtime_frontier_after_array_iteration"
+            "tests/java/test_source_construction_model.py::test_complete_primes_original_retains_throw_before_generic_type_boundary"
           ],
           "evidence": [],
-          "reason": "User requires CI-only execution. No local PCC imports, tests, compiler/JDK calls or native programs ran. Authored model and native-rejection tests plus a separate exact-original JDK observer do not establish PCC managed runtime, native pcc1, whole-Java or unchanged-project acceptance."
+          "reason": "User requires CI-only execution. No local PCC imports, tests, compiler/JDK calls or native programs ran. Authored model and native-rejection tests plus a separate exact-original JDK observer do not establish PCC managed runtime, native pcc1, whole-Java or unchanged-project acceptance. Current identity is refreshed for the throw-preserving original parser guard; execution remains unrun."
         }
       ]
     },
@@ -331,7 +461,7 @@
         "JLS-15",
         "JLS-16"
       ],
-      "scope": "Nonlowering simple supplied-class creation expressions: canonical type/import namespace lookup, stable actual explicit/default constructor identity, access-filtered fixed-arity strict widening/null applicability, ordered original arguments, selected String context and immutable unresolved allocation/class-init/default-initialization/OOME/constructor/root/fresh-identity contracts. No object/address/GC layout/runtime registration, no executed arguments, no native allocation or project acceptance. Bootstrap/missing classes, generic/diamond/anonymous/qualified creation, wider receiver/conversion/exception and runtime domains stay unavailable. The newer array-iteration model parses the original line53 loop; an authored, execution-unrun complete-original test expects the next parser boundary at throw70:13. Production scalar String and full managed runtime/project acceptance remain blocked.",
+      "scope": "Nonlowering simple supplied-class creation expressions: canonical type/import namespace lookup, stable actual explicit/default constructor identity, access-filtered fixed-arity strict widening/null applicability, ordered original arguments, selected String context and immutable unresolved allocation/class-init/default-initialization/OOME/constructor/root/fresh-identity contracts. No object/address/GC layout/runtime registration, no executed arguments, no native allocation or project acceptance. Bootstrap/missing classes, generic/diamond/anonymous/qualified creation, wider receiver/conversion/exception and runtime domains stay unavailable. The newer null-only throw source owner retains the original loop53/throw70 syntax; the complete-original parser guard expects the next generic type boundary at108:23, still execution-unrun. Production scalar String and full managed runtime/project acceptance remain blocked.",
       "tests": [
         "tests/java/test_source_construction_model.py::test_exact_creation_originals_bind_real_constructors_without_runtime_values",
         "tests/java/test_source_construction_model.py::test_empty_target_default_constructor_identity_survives_later_owner_analysis",
@@ -341,7 +471,7 @@
         "tests/java/test_source_construction_model.py::test_wider_creation_and_execution_contracts_stay_explicit",
         "tests/java/test_source_construction_model.py::test_even_static_scalar_entry_cannot_advance_creation_into_native_lowering",
         "tests/java/test_source_construction_model.py::test_exact_supplied_project_lookup_and_constructor_access",
-        "tests/java/test_source_construction_model.py::test_complete_primes_original_keeps_runtime_frontier_after_array_iteration",
+        "tests/java/test_source_construction_model.py::test_complete_primes_original_retains_throw_before_generic_type_boundary",
         "tests/java/test_source_construction_model.py::test_same_creation_originals_have_independent_jdk_only_obligations",
         "tests/java/test_source_construction_model.py::test_exact_project_creation_inputs_match_independent_jdk_access_checks"
       ],
@@ -349,7 +479,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:22d1936055689e26e905486863b6fcc04396db5a5b16e4949f88c357849f6220",
+        "source_revision": "sha256:1ab52007801829254b9a7b5bcd2c2724fc392d6434f5bcb641c04a5967ce465b",
         "sources": [
           {
             "path": "pcc/frontends/java/source_construction_model.py",
@@ -357,11 +487,11 @@
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
           },
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "2880a15679a205ff1413f9f6115a62d7a86160ea376e055324e7fd2f021ca9e4"
+            "sha256": "eb709385bea47d4e2edd655377840d7269dffad0b583b3ef2d40151bfb374a02"
           },
           {
             "path": "pcc/frontends/java/source_array_model.py",
@@ -378,6 +508,10 @@
           {
             "path": "pcc/frontends/java/source_sema.py",
             "sha256": "d079bb40c93a98895788f75a9cc4353e6156eb095bfb399706d369c483620992"
+          },
+          {
+            "path": "pcc/frontends/java/source_throw_model.py",
+            "sha256": "9dc9deedfbcf4e89e170ccf47893e43b8cf0693888fe8ef51c6f6d7bae7f214a"
           }
         ]
       },
@@ -385,9 +519,9 @@
         {
           "id": "current-source-model-and-native-boundary",
           "kind": "full-feature",
-          "scope": "Nonlowering simple supplied-class creation expressions: canonical type/import namespace lookup, stable actual explicit/default constructor identity, access-filtered fixed-arity strict widening/null applicability, ordered original arguments, selected String context and immutable unresolved allocation/class-init/default-initialization/OOME/constructor/root/fresh-identity contracts. No object/address/GC layout/runtime registration, no executed arguments, no native allocation or project acceptance. Bootstrap/missing classes, generic/diamond/anonymous/qualified creation, wider receiver/conversion/exception and runtime domains stay unavailable. The newer array-iteration model parses the original line53 loop; an authored, execution-unrun complete-original test expects the next parser boundary at throw70:13. Production scalar String and full managed runtime/project acceptance remain blocked.",
+          "scope": "Nonlowering simple supplied-class creation expressions: canonical type/import namespace lookup, stable actual explicit/default constructor identity, access-filtered fixed-arity strict widening/null applicability, ordered original arguments, selected String context and immutable unresolved allocation/class-init/default-initialization/OOME/constructor/root/fresh-identity contracts. No object/address/GC layout/runtime registration, no executed arguments, no native allocation or project acceptance. Bootstrap/missing classes, generic/diamond/anonymous/qualified creation, wider receiver/conversion/exception and runtime domains stay unavailable. The newer null-only throw source owner retains the original loop53/throw70 syntax; the complete-original parser guard expects the next generic type boundary at108:23, still execution-unrun. Production scalar String and full managed runtime/project acceptance remain blocked.",
           "status": "unrun",
-          "source_revision": "sha256:22d1936055689e26e905486863b6fcc04396db5a5b16e4949f88c357849f6220",
+          "source_revision": "sha256:1ab52007801829254b9a7b5bcd2c2724fc392d6434f5bcb641c04a5967ce465b",
           "mode": "pcc0",
           "platform": "linux-x86_64",
           "backend": "self",
@@ -401,12 +535,12 @@
             "tests/java/test_source_construction_model.py::test_wider_creation_and_execution_contracts_stay_explicit",
             "tests/java/test_source_construction_model.py::test_even_static_scalar_entry_cannot_advance_creation_into_native_lowering",
             "tests/java/test_source_construction_model.py::test_exact_supplied_project_lookup_and_constructor_access",
-            "tests/java/test_source_construction_model.py::test_complete_primes_original_keeps_runtime_frontier_after_array_iteration",
+            "tests/java/test_source_construction_model.py::test_complete_primes_original_retains_throw_before_generic_type_boundary",
             "tests/java/test_source_construction_model.py::test_same_creation_originals_have_independent_jdk_only_obligations",
             "tests/java/test_source_construction_model.py::test_exact_project_creation_inputs_match_independent_jdk_access_checks"
           ],
           "evidence": [],
-          "reason": "User requires CI-only validation. No tests, PCC imports, compiler/JDK calls or programs were run. All source, native-rejection and exact-original JDK obligations remain UNRUN. JDK execution is not PCC managed execution or Commons Numbers acceptance. Current source identity is refreshed for the enhanced-for original-parser guard; execution remains unrun."
+          "reason": "User requires CI-only validation. No tests, PCC imports, compiler/JDK calls or programs were run. All source, native-rejection and exact-original JDK obligations remain UNRUN. JDK execution is not PCC managed execution or Commons Numbers acceptance. Current source identity is refreshed for the enhanced-for original-parser guard; execution remains unrun. Current identity is refreshed for the throw-preserving original parser guard; execution remains unrun."
         }
       ]
     },
@@ -1144,7 +1278,7 @@
       "chapter_ids": [
         "JLS-14"
       ],
-      "scope": "throw/try/synchronized statement prefixes require shared exception/monitor execution; whole-input validity is not certified by the first boundary.",
+      "scope": "Native throw and all try/synchronized statements require shared exception/monitor execution. The separate null-typed throw source model has no lowering or exception runtime. Whole-input validity is not certified by the first capability boundary.",
       "status": "explicitly_unimplemented",
       "tests": [
         "tests/java/test_source_diagnostics.py"
@@ -1427,12 +1561,12 @@
         "feature_id": "java.abstract-classes",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+          "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
           }
         ]
       },
@@ -1441,12 +1575,12 @@
         "feature_id": "java.interfaces-annotations",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+          "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
           }
         ]
       },
@@ -1478,7 +1612,7 @@
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
           }
         ]
       },
@@ -1487,12 +1621,12 @@
         "feature_id": "java.arrays-native",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+          "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
           }
         ]
       },
@@ -1501,12 +1635,12 @@
         "feature_id": "java.assert-statements",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+          "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
           }
         ]
       },
@@ -1529,12 +1663,12 @@
         "feature_id": "java.blank-final-local",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+          "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
           }
         ]
       },
@@ -1543,12 +1677,12 @@
         "feature_id": "java.objects-native",
         "source": {
           "path": "pcc/frontends/java/source_class_model.py",
-          "sha256": "2880a15679a205ff1413f9f6115a62d7a86160ea376e055324e7fd2f021ca9e4"
+          "sha256": "eb709385bea47d4e2edd655377840d7269dffad0b583b3ef2d40151bfb374a02"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "2880a15679a205ff1413f9f6115a62d7a86160ea376e055324e7fd2f021ca9e4"
+            "sha256": "eb709385bea47d4e2edd655377840d7269dffad0b583b3ef2d40151bfb374a02"
           },
           {
             "path": "pcc/frontends/java/source_sema.py",
@@ -1561,12 +1695,12 @@
         "feature_id": "java.inheritance-generics",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+          "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
           }
         ]
       },
@@ -1593,12 +1727,12 @@
         "feature_id": "java.other-declared-primitives",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+          "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
           }
         ]
       },
@@ -1607,12 +1741,12 @@
         "feature_id": "java.other-declared-primitives",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+          "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
           }
         ]
       },
@@ -1621,12 +1755,12 @@
         "feature_id": "java.other-declared-primitives",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+          "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
           },
           {
             "path": "pcc/frontends/java/source_lowering.py",
@@ -1695,12 +1829,12 @@
         "feature_id": "java.blank-final-instance-model",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+          "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
           }
         ]
       },
@@ -1723,12 +1857,12 @@
         "feature_id": "java.inheritance-generics",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+          "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
           }
         ]
       },
@@ -1746,11 +1880,11 @@
           },
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "2880a15679a205ff1413f9f6115a62d7a86160ea376e055324e7fd2f021ca9e4"
+            "sha256": "eb709385bea47d4e2edd655377840d7269dffad0b583b3ef2d40151bfb374a02"
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
           }
         ]
       },
@@ -1759,12 +1893,12 @@
         "feature_id": "java.objects-native",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+          "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
           }
         ]
       },
@@ -1773,12 +1907,12 @@
         "feature_id": "java.local-types",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+          "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
           }
         ]
       },
@@ -1810,7 +1944,7 @@
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
           }
         ]
       },
@@ -1828,7 +1962,7 @@
           },
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "2880a15679a205ff1413f9f6115a62d7a86160ea376e055324e7fd2f021ca9e4"
+            "sha256": "eb709385bea47d4e2edd655377840d7269dffad0b583b3ef2d40151bfb374a02"
           }
         ]
       },
@@ -1837,16 +1971,16 @@
         "feature_id": "java.objects-native",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+          "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
           },
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "2880a15679a205ff1413f9f6115a62d7a86160ea376e055324e7fd2f021ca9e4"
+            "sha256": "eb709385bea47d4e2edd655377840d7269dffad0b583b3ef2d40151bfb374a02"
           },
           {
             "path": "pcc/frontends/java/source_array_model.py",
@@ -1859,12 +1993,12 @@
         "feature_id": "java.object-inherited-methods",
         "source": {
           "path": "pcc/frontends/java/source_class_model.py",
-          "sha256": "2880a15679a205ff1413f9f6115a62d7a86160ea376e055324e7fd2f021ca9e4"
+          "sha256": "eb709385bea47d4e2edd655377840d7269dffad0b583b3ef2d40151bfb374a02"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "2880a15679a205ff1413f9f6115a62d7a86160ea376e055324e7fd2f021ca9e4"
+            "sha256": "eb709385bea47d4e2edd655377840d7269dffad0b583b3ef2d40151bfb374a02"
           },
           {
             "path": "pcc/frontends/java/source_project.py",
@@ -1877,12 +2011,12 @@
         "feature_id": "java.imports-expanded",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+          "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
           }
         ]
       },
@@ -1900,7 +2034,7 @@
           },
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "2880a15679a205ff1413f9f6115a62d7a86160ea376e055324e7fd2f021ca9e4"
+            "sha256": "eb709385bea47d4e2edd655377840d7269dffad0b583b3ef2d40151bfb374a02"
           }
         ]
       },
@@ -1923,12 +2057,12 @@
         "feature_id": "java.runtime-statements",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+          "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
           }
         ]
       },
@@ -1946,7 +2080,7 @@
           },
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "2880a15679a205ff1413f9f6115a62d7a86160ea376e055324e7fd2f021ca9e4"
+            "sha256": "eb709385bea47d4e2edd655377840d7269dffad0b583b3ef2d40151bfb374a02"
           }
         ]
       },
@@ -1955,12 +2089,12 @@
         "feature_id": "java.implementation-limits",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+          "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
           }
         ]
       },
@@ -1969,12 +2103,12 @@
         "feature_id": "java.special-methods",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+          "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
           }
         ]
       },
@@ -1983,12 +2117,12 @@
         "feature_id": "java.imports-expanded",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+          "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
           }
         ]
       },
@@ -2006,7 +2140,7 @@
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
           },
           {
             "path": "pcc/frontends/java/source_string_model.py",
@@ -2019,12 +2153,12 @@
         "feature_id": "java.string-runtime",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+          "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
           },
           {
             "path": "pcc/frontends/java/source_sema.py",
@@ -2032,7 +2166,7 @@
           },
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "2880a15679a205ff1413f9f6115a62d7a86160ea376e055324e7fd2f021ca9e4"
+            "sha256": "eb709385bea47d4e2edd655377840d7269dffad0b583b3ef2d40151bfb374a02"
           },
           {
             "path": "pcc/frontends/java/source_string_model.py",
@@ -2053,12 +2187,12 @@
         "feature_id": "java.switch-expressions",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+          "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
           }
         ]
       },
@@ -2077,16 +2211,34 @@
         ]
       },
       {
+        "code": "java.unsupported.throwable-types",
+        "feature_id": "java.throwable-type-analysis",
+        "source": {
+          "path": "pcc/frontends/java/source_throw_model.py",
+          "sha256": "9dc9deedfbcf4e89e170ccf47893e43b8cf0693888fe8ef51c6f6d7bae7f214a"
+        },
+        "source_sites": [
+          {
+            "path": "pcc/frontends/java/source_throw_model.py",
+            "sha256": "9dc9deedfbcf4e89e170ccf47893e43b8cf0693888fe8ef51c6f6d7bae7f214a"
+          },
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
+          }
+        ]
+      },
+      {
         "code": "java.unsupported.token-limit",
         "feature_id": "java.implementation-limits",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+          "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
           }
         ]
       },
@@ -2095,12 +2247,12 @@
         "feature_id": "java.unicode-tokens",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+          "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "8ea5f873b150d0e2e01f712a89d0efc4caad5cd6b4ea395ff7156388e61a1f62"
+            "sha256": "205f7a25c80627fe004d6a83c69f1a46ed225e922fbc84c123d29b3a94fd7c1f"
           }
         ]
       }

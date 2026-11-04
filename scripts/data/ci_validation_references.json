@@ -1,5 +1,31 @@
 {
   "functions": {
+    "tests/java/test_source_throw_model.py": {
+      "test_exact_throw_originals_against_selected_jdk_only": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses unchanged complete throw originals with the selected JDK and separate observers; records source/tool identity, source-attributed compile rejection, normal values, caught NPE or propagated operand exception as applicable. Only the JDK executes exceptions; PCC managed runtime remains unavailable."
+        ]
+      },
+      "test_exact_null_throw_runtime_is_observed_only_by_selected_jdk": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses unchanged complete throw originals with the selected JDK and separate observers; records source/tool identity, source-attributed compile rejection, normal values, caught NPE or propagated operand exception as applicable. Only the JDK executes exceptions; PCC managed runtime remains unavailable."
+        ]
+      },
+      "test_exact_operand_effects_precede_jdk_null_throw_or_abrupt_operand": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses unchanged complete throw originals with the selected JDK and separate observers; records source/tool identity, source-attributed compile rejection, normal values, caught NPE or propagated operand exception as applicable. Only the JDK executes exceptions; PCC managed runtime remains unavailable."
+        ]
+      },
+      "test_exact_abrupt_operand_exception_is_not_replaced_by_jdk_null_conversion": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses unchanged complete throw originals with the selected JDK and separate observers; records source/tool identity, source-attributed compile rejection, normal values, caught NPE or propagated operand exception as applicable. Only the JDK executes exceptions; PCC managed runtime remains unavailable."
+        ]
+      }
+    },
     "tests/java/test_source_enhanced_for_model.py": {
       "test_exact_enhanced_for_originals_against_selected_jdk_only": {
         "activity": "external-reference",

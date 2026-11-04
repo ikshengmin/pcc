@@ -176,7 +176,7 @@ GAPS = [
     ('grouped-created-length', 'class A{int length;int run(){return (new A()).length;}}', 'object-expressions'),
     ('conditional-created-length', 'class A{int length;int run(){return (true?new A():null).length;}}', 'object-expressions'),
     ('static-created-reference', 'class A{static final A VALUE=new A();}', 'static-initialization'),
-    ('throw-creation', 'class A{void run(){throw new IllegalArgumentException();}}', 'runtime-statements'),
+    ('throw-creation', 'class A{void run(){throw new IllegalArgumentException();}}', 'source-dependency'),
 ]
 
 
@@ -243,31 +243,46 @@ def test_exact_supplied_project_lookup_and_constructor_access(name, sources, mes
     assert sources == original_sources
 
 
-def test_complete_primes_original_keeps_runtime_frontier_after_array_iteration():
+def test_complete_primes_original_retains_throw_before_generic_type_boundary():
     _, files = load_inputs()
     sources = original_sources(files, PRODUCTION)
     before = dict(sources)
     first = PRODUCTION[0]
     assert sources[first].splitlines()[69].strip() == 'throw new IllegalArgumentException(String.format(NUMBER_TOO_SMALL, n, 0));'
-    parsed_loops = []
+    parsed_loops, parsed_throws = [], []
 
     class OriginalParser(SourceParser):
         def statement(self, in_block=False):
             node = super().statement(in_block=in_block)
             if node.kind == 'enhanced_for':
                 parsed_loops.append(node)
+            if node.kind == 'throw':
+                parsed_throws.append(node)
             return node
 
     parser = OriginalParser(sources[first], first, class_model=True)
-    with pytest.raises(UnsupportedJava, match='unsupported Java expression or statement') as caught:
+    with pytest.raises(UnsupportedJava, match='generic reference declarations') as caught:
         parser.parse()
-    assert caught.value.code == 'java.unsupported.runtime-statements'
-    assert ':70:13:' in str(caught.value)
+    assert caught.value.code == 'java.unsupported.generic-declarations'
+    assert ':108:23:' in str(caught.value)
     loop, = parsed_loops
     variable, expression, _ = loop.children
     assert (loop.token.line, variable.token.line, variable.token.column) == (53, 53, 24)
     assert variable.kind == 'enhanced_var' and variable.value == 'int' and variable.is_final
     assert variable.token.text == 'p' and expression.value == 'SmallPrimes.PRIMES'
+    statement, = parsed_throws
+    creation, = statement.children
+    assert (statement.token.line, statement.token.column) == (70, 13)
+    assert creation.kind == 'class_new' and creation.value.tokens[0].text == 'IllegalArgumentException'
+    call, = creation.children
+    assert call.kind == 'call' and call.value == 'String.format'
+    assert [child.value for child in call.children] == ['NUMBER_TOO_SMALL', 'n', '0']
+    # Production still rejects the original String declaration before either
+    # downstream syntax prerequisite. Do not turn parser reach into execution.
+    with pytest.raises(UnsupportedJava) as native:
+        compile_source(sources[first], filename=first)
+    assert native.value.code == 'java.unsupported.declared-result-type'
+    assert ':31:' in str(native.value)
     assert sources == before
     # Complete original parsing still fails before project Sema or lowering.
     # No token removal, source slice, fake library, or project acceptance.

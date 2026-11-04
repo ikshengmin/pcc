@@ -25,6 +25,7 @@ from .source_string_model import (
     MAX_STRING_FOLD_WORK, MAX_STRING_UNITS, StringContextObligation, StringModelAnalyzer,
 )
 from .source_syntax import Node, SourceMethod, SourceParser
+from .source_throw_model import ThrowContextObligation, ThrowModelAnalyzer
 from .source_types import ArrayType, BootstrapStringType, ClassType, INTEGRAL, NUMERIC, NamedType, promoted, select_method, widening
 
 
@@ -81,7 +82,7 @@ class SourceClassModel:
         return unmet_requirements(self.managed_value)
 
 
-class ClassAnalyzer(ClassConstructionAnalyzer, StringModelAnalyzer, ArrayModelAnalyzer, SourceAnalyzer):
+class ClassAnalyzer(ThrowModelAnalyzer, ClassConstructionAnalyzer, StringModelAnalyzer, ArrayModelAnalyzer, SourceAnalyzer):
     def __init__(self, program, project):
         super().__init__(program, project)
         self.constructor_edge = {}
@@ -245,6 +246,8 @@ class ClassAnalyzer(ClassConstructionAnalyzer, StringModelAnalyzer, ArrayModelAn
             node.kind = "receiver_call"
 
     def statement(self, node, assigned):
+        if node.kind == "throw":
+            return self.throw_statement(node, assigned)
         if node.kind == "enhanced_for":
             return self.array_iteration(node, assigned)
         if node.kind == "var" and isinstance(node.value, NamedType):
@@ -363,6 +366,7 @@ class ClassModelProject(SourceProject):
         self._string_contexts = {}
         self._string_fold_work = 0
         self._class_constructions = {}
+        self._throw_sites = {}
         super().__init__(programs, analyzer_type=ClassAnalyzer)
         self.models = {}
 
@@ -371,7 +375,19 @@ class ClassModelProject(SourceProject):
         strings = tuple(StringContextObligation(owner, tuple(tokens), tuple(sorted(requirements)))
                         for owner, (tokens, requirements) in sorted(self._string_contexts.items()))
         constructions = tuple(obligation for _, obligation in sorted(self._class_constructions.items()))
-        return strings + constructions
+        throws = tuple(obligation for _, obligation in sorted(self._throw_sites.items()))
+        return strings + constructions + throws
+
+    @property
+    def throw_context_complete(self):
+        """No explicit throw sites, never evidence of exception runtime support."""
+        return not self._throw_sites
+
+    def record_source_throw(self, caller, method, node):
+        token = node.token
+        key = (caller.name, token.filename, token.line, token.column)
+        self._throw_sites[key] = ThrowContextObligation(
+            caller.name, method.token.text, method.descriptor, (token, node.children[0].token))
 
     @property
     def class_creation_context_complete(self):

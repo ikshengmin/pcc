@@ -468,6 +468,7 @@ class SourceParser:
                 if mods - {"public", "private", "protected"}:
                     constructor.error("invalid constructor modifier")
                 parameters, parameter_types, parameter_final = self.parameters(constructor, receiver=True)
+                self.throws_boundary()
                 constructors.append(SourceMethod(constructor, "void", parameters, self.block(),
                                                  owner=owner, modifiers=frozenset(mods),
                                                  parameter_types=parameter_types, parameter_final=parameter_final,
@@ -527,6 +528,7 @@ class SourceParser:
                                    code="java.unsupported.declared-result-type")
             parameters, parameter_types, parameter_final = self.parameters(method_name, receiver="static" not in mods)
             result_type = self.array_suffix(result_type)
+            self.throws_boundary()
             if result.text not in DECLARED | {"void"} and not isinstance(result_type, (ArrayType, NamedType)):
                 self.type_boundary(result, "source method results require boolean, integral primitives or void",
                                    code="java.unsupported.declared-result-type")
@@ -536,6 +538,11 @@ class SourceParser:
         self.expect("<eof>")
         return SourceClass(owner, tuple(methods), class_modifiers, tuple(imports), tuple(fields), tuple(constructors),
                            class_token, tuple(initializers), tuple(initialization_steps), tuple(static_imports))
+
+    def throws_boundary(self):
+        if self.peek().text == "throws":
+            self.peek().error("throws clauses require the owned Throwable hierarchy and checked-exception analysis",
+                              code="java.unsupported.throwable-types")
 
     def parameters(self, token, *, receiver=False):
         self.expect("(")
@@ -627,6 +634,10 @@ class SourceParser:
             update = Node("empty", token) if self.peek().text == ")" else self.for_expressions()
             self.expect(")")
             return Node("for", token, children=[initial, condition, update, self.statement()])
+        if self.class_model and self.accept("throw"):
+            expression = self.expression()
+            self.expect(";")
+            return Node("throw", token, children=[expression])
         if self.accept("return"):
             children = [] if self.peek().text == ";" else [self.expression()]
             self.expect(";")
@@ -667,6 +678,8 @@ class SourceParser:
                 current = "arrow"
                 if self.peek().text == "{":
                     statements = [self.block()]
+                elif self.class_model and self.peek().text == "throw":
+                    statements = [self.statement()]
                 else:
                     statements = [self.simple()]
                     self.expect(";")
@@ -890,6 +903,8 @@ class SourceParser:
                 token.error("unsupported Java expression or statement", code="java.unsupported.object-expressions")
             if token.text == "switch":
                 token.error("unsupported Java expression or statement", code="java.unsupported.switch-expressions")
+            if self.class_model and token.text == "throw":
+                token.error("throw is a statement, not an expression")
             if token.text in {"throw", "try", "synchronized"}:
                 token.error("unsupported Java expression or statement", code="java.unsupported.runtime-statements")
             if token.text == "assert":

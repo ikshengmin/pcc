@@ -305,9 +305,11 @@ obligations in `test_source_construction_model.py` are UNRUN; JDK object executi
 is never counted as PCC object execution.
 
 Commons Numbers' unchanged Primes source uses class creation inside `throw` at
-line 70. The nonlowering parser now retains its original `final int p` enhanced-for
-at line 53. The next expected parser boundary is the existing unsupported `throw`
-at 70:13; the exact complete-original regression is authored but execution-unrun.
+line 70. The nonlowering parser retains its original `final int p` enhanced-for
+at line 53 and the throw/creation/format-call AST at line 70. The next expected
+parser boundary is the generic `List<Integer>` return type at 108:23; the exact
+complete-original regression is authored but execution-unrun. Retaining that
+syntax does not typecheck or implement IllegalArgumentException or String.format.
 Production scalar compilation still rejects the static String field at line 31.
 Static arrays, dynamic remainder, throw/format, List/Integer and other generic,
 library, bootstrap and runtime dependencies remain unresolved. The full original
@@ -352,3 +354,45 @@ Rules: [enhanced for](https://docs.oracle.com/javase/specs/jls/se21/html/jls-14.
 [scope](https://docs.oracle.com/javase/specs/jls/se21/html/jls-6.html#jls-6.3),
 [assignment conversion](https://docs.oracle.com/javase/specs/jls/se21/html/jls-5.html#jls-5.2),
 and [definite assignment](https://docs.oracle.com/javase/specs/jls/se21/html/jls-16.html#jls-16.2.12).
+
+### Null-typed throw source semantics
+
+The nonlowering class parser retains ordinary throw statements and throw rules
+in arrow switches. A dedicated source owner checks the original operand exactly
+once and then classifies its static type. Only null-typed operands currently
+have a successful checked model. Grouping and null/null conditional expressions
+remain null-typed; a class, String or array variable initialized to null does not.
+Primitive, void and array operands are ordinary type errors. Class and bootstrap
+String operands require the missing owned Throwable hierarchy and checked-
+exception analysis and fail with `java.unsupported.throwable-types`. Exception-
+looking class names never supply that proof. Method/constructor `throws` clauses
+also have that explicit capability boundary; their declaration/effect domain is
+not implemented by this change.
+
+A successful throw model has no normal successor. Existing reachability and
+definite-assignment joins therefore exclude its branch, without treating it as
+break or continue. A constructor may complete abruptly, but an instance
+initializer still must be able to complete normally. The source owner retains
+every method and statement, including uncalled methods and conditionally
+unselected throw branches.
+
+`ThrowSourcePlan` separates operand failure from successful null evaluation. An
+exception raised while evaluating the operand propagates unchanged; only normal
+null evaluation requires creation of NullPointerException. Its canonical name
+is a language-defined source fact, not a supplied class or registered type.
+Allocation/initialization failures, owning roots and safepoints, handler matching,
+cleanup, unwinding, cross-language policy and uncaught delivery remain unmet
+contracts. Throw sites join the class/project compiler-context obligations;
+`throw_context_complete` describes only absence of explicit sites, never runtime
+availability. No exception object, root slot, handler table or native code exists.
+
+The normal scalar entrypoints still reject throw statements before IR. The
+complete originals in `test_source_throw_model.py` have model/type/flow and native
+rejection obligations plus separate JDK catch-and-observe wrappers. Only those
+JDK observers execute exceptions; originals are not rewritten. All new execution,
+including the original Primes parser expectation, remains UNRUN and CI-only.
+The production String-field frontier and complete original-project gate remain.
+
+Rules: [throw](https://docs.oracle.com/javase/specs/jls/se21/html/jls-14.html#jls-14.18),
+[exception checking](https://docs.oracle.com/javase/specs/jls/se21/html/jls-11.html#jls-11.2),
+and [abrupt definite assignment](https://docs.oracle.com/javase/specs/jls/se21/html/jls-16.html#jls-16.2.13).
