@@ -1127,8 +1127,8 @@ class CppParser:
             raise CppDiagnostic("cpp.unsupported.references", "reference template parameter deduction is not implemented", name.coord)
         if any(isinstance(t, ReferenceType) and is_class_type(t.referent) for _, t in params) and definition:
             from pcc.frontends.cpp.references import ordinary_class_result_context
-            if name.value == 'operator=' or not ordinary_class_result_context(self):
-                raise CppDiagnostic("cpp.unsupported.class-reference-values", "class-reference operator/template bodies require separate semantics", name.coord)
+            if not ordinary_class_result_context(self):
+                raise CppDiagnostic("cpp.unsupported.class-reference-values", "class-reference template bodies require separate semantics", name.coord)
         if definition or member_owner is not None or template_parameters:
             for dtype in (result_type,) + tuple(t for _, t in params):
                 self._check_value_type(dtype, name)
@@ -2214,9 +2214,15 @@ class CppParser:
                 continue
             from pcc.frontends.cpp.operators import declaration_name
             member = declaration_name(self)
-            if member.kind == 'OPERATOR_FUNCTION_ID' and member.value != 'operator[]':
-                raise CppDiagnostic('cpp.unsupported.class-operators',
-                                    'explicit calls of other member operators require their semantic owner', member.coord)
+            if member.kind == 'OPERATOR_FUNCTION_ID':
+                from pcc.frontends.cpp.references import ordinary_class_result_context
+                if (member.value not in ('operator[]', 'operator=')
+                        or member.value == 'operator=' and not ordinary_class_result_context(self)):
+                    raise CppDiagnostic('cpp.unsupported.class-operators',
+                                        'explicit calls of other or template member operators require their semantic owner', member.coord)
+                # Explicit operator= syntax is an ordinary member call. Its
+                # receiver precedes its argument; infix assignment has a
+                # different ordering and retains its separate capability gate.
             if self.template_function is not None and getattr(self, 'class_template_method', None) is None:
                 raise CppDiagnostic("cpp.unsupported.dependent-lookup", "template member lookup is not implemented", operator.coord)
             expression = member_access(self, expression, operator.value, member)

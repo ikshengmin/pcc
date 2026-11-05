@@ -26,9 +26,10 @@ def validate_declaration(parser, name, result, parameters, nonthrowing,
     validate_assignment(name, parameters, member=member is not None,
                         static=storage is not None, variadic=variadic)
     if name.value == 'operator=':
-        if defining or template_parameters:
+        from pcc.frontends.cpp.references import ordinary_class_result_context
+        if template_parameters or (defining and not ordinary_class_result_context(parser)):
             raise CppDiagnostic('cpp.unsupported.assignment-operators',
-                                'assignment operator bodies and calls require overload/lifetime semantics', name.coord)
+                                'assignment operator template bodies require their own semantic owner', name.coord)
         return
     if name.value not in OPERATOR_CODES:
         return

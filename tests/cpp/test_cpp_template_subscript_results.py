@@ -176,8 +176,7 @@ BOUNDARIES = (
      'cpp.unsupported.class-templates'),
     ('unowned-template-deallocation-operator', 'template<class T>struct S{int operator delete();};',
      'cpp.unsupported.class-templates'),
-    ('unowned-explicit-assignment-call', 'struct S{void operator=(int);};'
-     'void f(S*p){p->operator=(1);}', 'cpp.unsupported.class-operators'),
+    # Exact former assignment original: test_cpp_explicit_assignment.PROGRAMS.
     ('reference-temporary', 'const int&f(){return 42;}', 'cpp.unsupported.reference-temporaries'),
     ('reference-member', 'struct S{int&r;};', 'cpp.unsupported.references'),
     ('reference-parameter-pattern', 'template<class T>struct S{T&f(T&n){return n;}};',

@@ -106,7 +106,7 @@ INVALID = (
 )
 DEFERRED = (
     ('class-copy-from-result', 'struct S{int n;};S&f(S*p){return *p;}void g(S*p){S copy=f(p);}', 'cpp.unsupported.class-initialization'),
-    ('assignment-operator-body', 'struct S{S&operator=(const S&other){return *this;}};', 'cpp.unsupported.class-reference-values'),
+    # Exact former assignment original: test_cpp_explicit_assignment.PROGRAMS.
     ('class-value-return', 'struct S{};S f(){S s;return s;}', 'cpp.unsupported.class-value-abi'),
     ('discarded-class-result-statement', 'struct S{};S&f(S*p){return *p;}void g(S*p){f(p);}', 'cpp.unsupported.class-values'),
     ('template-class-reference-result', 'struct S{};template<class T>struct Box{S&get();};', 'cpp.unsupported.references'),

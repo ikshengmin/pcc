@@ -425,11 +425,12 @@ def parse_class(parser):
                 from pcc.frontends.cpp.operators import declaration_name
                 member, member_type = parser._declarator(
                     base, parse_name=lambda: declaration_name(parser))
-                if member.kind == 'OPERATOR_FUNCTION_ID' and member.value != 'operator[]':
+                if member.kind == 'OPERATOR_FUNCTION_ID' and member.value not in ('operator[]', 'operator='):
                     _unsupported(member, 'this prefixed operator declarator requires separate operator semantics')
                 if member.kind == 'OPERATOR_FUNCTION_ID' and parser._peek().value != '(':
-                    raise CppDiagnostic('cpp.invalid-subscript-operator',
-                                        'operator[] must declare a function', member.coord)
+                    code = ('cpp.invalid-assignment-operator' if member.value == 'operator='
+                            else 'cpp.invalid-subscript-operator')
+                    raise CppDiagnostic(code, member.value + ' must declare a function', member.coord)
                 if parser._peek().value == "(":
                     if prior_data:
                         _unsupported(member, "mixed data/function declarator lists are not implemented")
@@ -497,10 +498,16 @@ def member_access(parser, expression, operator, member):
     if not isinstance(owner, ClassType):
         raise CppDiagnostic("cpp.invalid-member-access", "member access requires a class object", member.coord)
     require_complete(owner, member.coord)
+    if member.value == 'operator=' and getattr(owner, 'template_origin', None) is not None:
+        raise CppDiagnostic('cpp.unsupported.class-operators',
+                            'class-template assignment calls require their own body owner', member.coord)
     definition = owner.definition
     # Qualified member lookup must not find an unrelated enclosing declaration.
     symbol = definition.scope.names.get(member.value)
     if symbol is None:
+        if member.value == 'operator=':
+            raise CppDiagnostic('cpp.unsupported.class-assignment',
+                                'implicit assignment operator lookup and synthesis are not implemented', member.coord)
         raise CppDiagnostic("cpp.no-member", "class '" + owner.name + "' has no member '" + member.value + "'", member.coord)
     if symbol.kind == "function":
         from pcc.frontends.cpp.members import call_member, call_static_member, is_static_group
@@ -527,7 +534,11 @@ def member_access(parser, expression, operator, member):
             object_expression = expression
         if not parser._accept("("):
             raise CppDiagnostic("cpp.unsupported.member-pointers", "a member function name requires an immediate call", member.coord)
-        return call_member(parser, symbol, object_expression, parser._call_arguments(), member.coord,
+        arguments = parser._call_arguments()
+        if member.value == 'operator=':
+            from pcc.frontends.cpp.operators import require_explicit_assignment_candidates
+            require_explicit_assignment_candidates(owner, symbol, arguments, member.coord)
+        return call_member(parser, symbol, object_expression, arguments, member.coord,
                            address_available=True)
     parser.scope.check_member_access(symbol, member.coord)
     if symbol.kind == "enumerator":

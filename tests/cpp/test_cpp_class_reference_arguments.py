@@ -109,7 +109,7 @@ DEFERRED = (
     # Variadic members stop at declaration admission, before argument binding.
     ('static-member-class-ellipsis', 'struct S{int n;};struct H{static int f(int,...);};'
      'int g(){S s{42};return H::f(0,s);}', 'cpp.unsupported.variadic-functions'),
-    ('assignment-body-still-unowned', 'struct S{void operator=(const S&){} };', 'cpp.unsupported.class-reference-values'),
+    # Exact former assignment original: test_cpp_explicit_assignment.PROGRAMS.
     ('class-temporary-binding', 'struct S{S(int){} };int f(const S&);int g(){return ::f(S(42));}', 'cpp.unsupported.class-initialization'),
     ('reference-default', 'struct S{};S&object();int f(const S&s=object());', 'cpp.unsupported.default-argument-context'),
     ('class-reference-template', 'template<class T>int f(const T&s){return 42;}', 'cpp.unsupported.references'),

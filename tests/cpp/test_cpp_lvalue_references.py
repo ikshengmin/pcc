@@ -128,7 +128,7 @@ def test_copy_declarations_have_real_identity_without_copy_execution(access):
     ('void f(void&);','cpp.invalid-reference-type'),
     ('void f(int&*);','cpp.invalid-reference-type'),
     ('using A=int&[2];','cpp.invalid-array-element'),
-    ('struct S{void operator=(const S&){} };','cpp.unsupported.class-reference-values'),
+    # Exact former assignment original: test_cpp_explicit_assignment.PROGRAMS.
     ('struct S{static void operator=(int);};','cpp.invalid-assignment-operator'),
     ('struct S{void operator=(int=0);};','cpp.invalid-assignment-operator'),
     ('void operator=(int);','cpp.invalid-assignment-operator'),
