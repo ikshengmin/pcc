@@ -1,7 +1,8 @@
 """Java raw Unicode escapes before lexical analysis, never input rewriting.
 
-JLS21 3.2-3.4, 3.7, 3.10.4 and 3.10.7:
+JLS21 3.2-3.5, 3.7, 3.10.4 and 3.10.7:
 https://docs.oracle.com/javase/specs/jls/se21/html/jls-3.html#jls-3.3
+https://docs.oracle.com/javase/specs/jls/se21/html/jls-3.html#jls-3.5
 
 The exact raw inputs are shared by PCC native and development-only JDK lanes.
 Escaped strings and non-ASCII identifiers retain their separate boundaries.
@@ -70,6 +71,20 @@ CASES += [
      original("// " + "\\" * count + "u00G0\nreturn 42;"), 42)
     for count in (2, 4, 6)
 ]
+# A final SUB is an input terminator, not whitespace or an interior token.
+# Keep original bytes for all ordinary/native/JDK lanes, including the escape.
+CASES += [
+    ("terminal-sub-raw", "UnicodeEscapes", original("return 42;") + "\x1a", 42),
+    ("terminal-sub-escaped", "UnicodeEscapes", original("return 42;") + r"\u001a", 42),
+    ("terminal-sub-repeated-marker", "UnicodeEscapes", original("return 42;") + r"\uuuu001A", 42),
+    ("terminal-sub-after-crlf", "UnicodeEscapes", original("return 42;") + "\r\n\x1a", 42),
+    ("terminal-sub-after-escaped-lf", "UnicodeEscapes", original("return 42;") + r"\u000a\u001a", 42),
+    ("terminal-sub-after-block-comment", "UnicodeEscapes", original("return 42;") + "/*\x1a*/\x1a", 42),
+    ("terminal-sub-in-line-comment", "UnicodeEscapes", original("return 42;") + "//\x1a", 42),
+    ("terminal-sub-after-line-comment", "UnicodeEscapes", original("return 42;") + "//\x1a\n\x1a", 42),
+    ("sub-character-literal-is-retained", "UnicodeEscapes", original("return '\x1a';") + "\x1a", 26),
+    ("sub-escaped-character-is-retained", "UnicodeEscapes", original(r"return '\u001a';") + r"\u001a", 26),
+]
 
 
 INVALID = [
@@ -94,6 +109,16 @@ INVALID += [
     ("eligible-malformed-" + str(count), "UnicodeEscapes",
      original("// " + "\\" * count + "u00G0\nreturn 42;"))
     for count in (1, 3, 5)
+]
+INVALID += [
+    ("sub-before-space", "UnicodeEscapes", original("return 42;") + "\x1a "),
+    ("sub-before-lf", "UnicodeEscapes", original("return 42;") + "\x1a\n"),
+    ("two-terminal-subs", "UnicodeEscapes", original("return 42;") + "\x1a\x1a"),
+    ("escaped-sub-before-space", "UnicodeEscapes", original("return 42;") + r"\u001a\u0020"),
+    ("sub-before-closing-braces", "UnicodeEscapes", original("return 42;\x1a")),
+    ("sub-does-not-close-comment", "UnicodeEscapes", original("return 42;") + "/*\x1a"),
+    ("sub-does-not-close-string", "UnicodeEscapes", original("return 42;") + '"\x1a'),
+    ("sub-does-not-hide-malformed-escape", "UnicodeEscapes", original("return 42;") + r"\u00G0" + "\x1a"),
 ]
 
 
@@ -146,6 +171,32 @@ def test_invalid_escaped_original_fails_before_ir(name, owner, text, monkeypatch
 def test_translated_tokens_retain_raw_source_locations(text, needle, line, column):
     token = next(token for token in tokenize(text, "Raw.java") if token.text == needle)
     assert (token.filename, token.line, token.column) == ("Raw.java", line, column)
+
+
+@pytest.mark.parametrize("text,line,column", [
+    ("\x1a", 1, 2),
+    (r"\u001a", 1, 7),
+    (r"\uuuu001A", 1, 10),
+    (";\r\n\x1a", 2, 2),
+    (r"\u003b\u001a", 1, 13),
+    (";\r\n" + r"\u001a", 2, 7),
+])
+def test_terminal_sub_retains_raw_eof_location(text, line, column):
+    tokens = tokenize(text, "Raw.java")
+    assert [token.text for token in tokens] == ([";"] if text.startswith((";", r"\u003b")) else []) + ["<eof>"]
+    assert (tokens[-1].filename, tokens[-1].line, tokens[-1].column) == ("Raw.java", line, column)
+
+
+@pytest.mark.parametrize("text", ['"\x1a"\x1a', r'"\u001a"\u001a'])
+def test_terminal_sub_does_not_strip_literal_contents(text):
+    tokens = tokenize(text, "Raw.java")
+    assert len(tokens) == 2 and tokens[0].string_units == (26,)
+
+
+def test_terminal_sub_does_not_relax_source_size_limit():
+    with pytest.raises(UnsupportedJava) as caught:
+        tokenize(" " * 1_048_576 + "\x1a", "Raw.java")
+    assert caught.value.code == "java.unsupported.source-size-limit"
 
 
 @pytest.mark.parametrize("text,line,column,message", [

@@ -246,7 +246,11 @@ def tokenize(source, filename):
     tokens, pos = [], 0
     while pos < len(source):
         start = pos
-        if source[pos] in " \t\f\r\n":
+        if source[pos] == "\x1a" and pos + 1 == len(source):
+            # JLS 3.5 permits one final SUB in the escaped input stream.
+            # Consume it here so raw-source EOF coordinates remain intact.
+            pos += 1
+        elif source[pos] in " \t\f\r\n":
             pos += 1
             if source[start] == "\r" and source[pos:pos + 1] == "\n":
                 pos += 1
