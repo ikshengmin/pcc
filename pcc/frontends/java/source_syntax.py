@@ -27,6 +27,9 @@ KEYWORDS = frozenset((
 ).split())
 # These contextual spellings are ordinary Identifiers in label positions (JLS 3.8/3.9).
 LABEL_CONTEXTUAL_NAMES = frozenset("record sealed permits yield var".split())
+# JLS 3.8: these spellings are ordinary value/member identifiers. Yield keeps
+# its separate invocation/statement boundary until that grammar is owned.
+VALUE_CONTEXTUAL_NAMES = frozenset("record sealed permits var".split())
 MODIFIERS = frozenset("public protected private static final abstract native synchronized strictfp".split())
 PRECEDENCE = {"||": 1, "&&": 2, "|": 3, "^": 4, "&": 5,
               "==": 6, "!=": 6, "<": 7, ">": 7, "<=": 7, ">=": 7,
@@ -314,7 +317,7 @@ class SourceParser:
     def identifier(self, *, label=False, type_name=False):
         token = self.take()
         keywords = (KEYWORDS - LABEL_CONTEXTUAL_NAMES if label else
-                    KEYWORDS if type_name else KEYWORDS - {"var"})
+                    KEYWORDS if type_name else KEYWORDS - VALUE_CONTEXTUAL_NAMES)
         if not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", token.text) or token.text in keywords:
             token.error("expected a non-keyword Java identifier")
         return token
@@ -355,8 +358,8 @@ class SourceParser:
             names = [token]
             while self.accept("."):
                 names.append(self.identifier())
-            if names[-1].text == "var":
-                names[-1].error("var is not a declared reference type")
+            if names[-1].text in LABEL_CONTEXTUAL_NAMES:
+                names[-1].error(names[-1].text + " is not a declared reference type")
             if self.peek().text == "<":
                 self.peek().error("generic reference declarations require the next source type domain",
                                   code="java.unsupported.generic-declarations")
@@ -375,7 +378,7 @@ class SourceParser:
                 break
             index += 2
         following = self.peek(index + 1)
-        return (following.text not in KEYWORDS - {"var"}
+        return (following.text not in KEYWORDS - VALUE_CONTEXTUAL_NAMES
                 and re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", following.text) is not None
                 or following.text == "[" and self.peek(index + 2).text == "]"
                 or following.text == "<")
@@ -395,7 +398,7 @@ class SourceParser:
         # Reference casts use UnaryExpressionNotPlusMinus. Preserve ordinary
         # grouped variables followed by +, -, *, comparisons and postfix ops.
         return (operand.text in {"null", "this", "new", "!", "~", "("}
-                or operand.text not in KEYWORDS - {"var"}
+                or operand.text not in KEYWORDS - VALUE_CONTEXTUAL_NAMES
                 and re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", operand.text) is not None
                 or operand.text[0:1].isdigit() or operand.text.startswith(('"', "'")))
 
@@ -441,10 +444,11 @@ class SourceParser:
                     self.peek().error("on-demand imports require the next source-project lookup domain", code="java.unsupported.on-demand-imports")
                 imported.append(self.identifier())
             self.expect(";")
-            if not static and imported[-1].text == "var":
-                imported[-1].error("var cannot be imported as a type name")
             if len(imported) < (3 if static else 2):
                 imported[0].error("cannot import a type from the unnamed package")
+            imported_type = imported[-2] if static else imported[-1]
+            if imported_type.text in LABEL_CONTEXTUAL_NAMES:
+                imported_type.error(imported_type.text + " cannot be imported as a type name")
             (static_imports if static else imports).append(tuple(imported))
         program = self.class_declaration(self.modifiers(), "/".join(package),
                                          tuple(imports), tuple(static_imports))
@@ -808,7 +812,7 @@ class SourceParser:
         following = self.peek(1)
         inferred = (self.peek().text == "var" and
                     (following.text == "[" and self.peek(2).text == "]"
-                     or following.text not in KEYWORDS - {"var"}
+                     or following.text not in KEYWORDS - VALUE_CONTEXTUAL_NAMES
                      and re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", following.text)))
         if inferred:
             if not allow_declaration:
@@ -957,7 +961,12 @@ class SourceParser:
             node = Node("floating", token, token.text)
         elif token.text[0:1].isdigit():
             node = Node("integer", token, token.text)
-        elif re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", token.text) and token.text not in KEYWORDS - {"var"}:
+        elif (token.text == "record" and self.peek().text not in KEYWORDS
+              and re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", self.peek().text)):
+            # A local record declaration is not a value named record. Preserve
+            # its capability diagnostic before the ordinary identifier branch.
+            token.error("unsupported Java expression or statement", code="java.unsupported.local-types")
+        elif re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", token.text) and token.text not in KEYWORDS - VALUE_CONTEXTUAL_NAMES:
             parts = [token.text]
             while self.accept("."):
                 parts.append(self.identifier().text)
