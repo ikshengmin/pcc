@@ -176,7 +176,7 @@ NATIVE_GAPS = [
     ("null-conditional-comparison", original("var value=(true?null:null)==null;return value?42:0;"), "java.unsupported.object-expressions"),
     ("null-outside-inference", original("return null==null?42:0;"), "java.unsupported.object-expressions"),
 ]
-MODEL_GAPS = NATIVE_GAPS[:2] + [
+MODEL_GAPS = [
     ("array-inference", original("var value=new int[]{42};return 42;"), "java.unsupported.local-inference-domain"),
     ("reference-inference", original("var value=new Inferred();return 42;"), "java.unsupported.local-inference-domain"),
     ("reference-call-inference", original("var value=make();return 42;", helpers="static Inferred make(){return null;}"), "java.unsupported.local-inference-domain"),
@@ -264,6 +264,17 @@ def test_inference_model_does_not_invent_reference_storage(name, text, code, mon
     with pytest.raises(UnsupportedJava) as caught:
         analyze_class_sources({"Inferred.java": text})
     assert caught.value.code == code
+
+
+@pytest.mark.parametrize("name,text,code", NATIVE_GAPS[:2], ids=[row[0] for row in NATIVE_GAPS[:2]])
+def test_original_enhanced_var_model_gaps_now_have_primitive_bindings(name, text, code, monkeypatch):
+    forbid_lowering(monkeypatch)
+    model = analyze_class_sources({"Inferred.java": text})
+    declaration = model.programs[0].methods[0].body.children[0].children[0]
+    assert declaration.kind == "enhanced_var" and declaration.value == "int"
+    assert declaration.inference_token.text == "var"
+    assert declaration.symbol.dtype == "int" and declaration.constant is None
+    assert not model.models["Inferred"].runtime_registered
 
 
 @pytest.mark.parametrize("dtype", PRIMITIVES)

@@ -872,6 +872,8 @@ class SourceParser:
         if self.peek().text == "[":
             self.peek().error("var local declarations cannot add array dimensions")
         if allow_enhanced and self.peek().text == ":":
+            if self.class_model:
+                return Node("enhanced_var", name, "var", is_final=is_final, inference_token=token)
             self.peek().error("enhanced for inference requires the next array or Iterable inference domain",
                               code="java.unsupported.local-inference-domain")
         if not self.accept("="):

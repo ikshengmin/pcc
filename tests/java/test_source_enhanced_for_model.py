@@ -236,12 +236,14 @@ INVALID = INVALID_CONVERSIONS + [
         "for(final final int value:new int[]{42}){}return 42;"), "duplicate final"),
 ]
 
-# These are valid Java, but not part of the admitted model domain. They still
-# receive independent JDK typechecks without treating UnsupportedJava as an
-# invalid-language reference result.
-BOUNDARIES = [
+# Exact former model-boundary originals now retain inferred primitive bindings.
+INFERRED_PROGRAMS = [
     ("inferred-var-loop", original("for(var value:new int[]{42}){}return 42;")),
     ("final-inferred-var-loop", original("for(final var value:new int[]{42}){}return 42;")),
+]
+# These valid Java originals remain outside the admitted model domain. They
+# receive JDK typechecks without treating UnsupportedJava as invalid language.
+BOUNDARIES = [
     ("boxed-loop-variable", original("for(Integer value:new int[]{42}){}return 42;")),
     ("raw-iterable-loop",
         "class ArrayExample{static void consume(Iterable values){for(Object value:values){}}}"),
@@ -257,8 +259,6 @@ BOUNDARIES = [
         "int[] values;for(int value:(values=new int[]{42})){}return values[0];")),
 ]
 BOUNDARY_CODES = {
-    "inferred-var-loop": "java.unsupported.local-inference-domain",
-    "final-inferred-var-loop": "java.unsupported.local-inference-domain",
     "boxed-loop-variable": "java.unsupported.source-dependency",
     "raw-iterable-loop": "java.unsupported.source-dependency",
     "reference-array-loop": "java.unsupported.array-model-shape",
@@ -292,8 +292,8 @@ def checked_program(name, rows=PROGRAMS):
     return analyze_class_sources({"ArrayExample.java": text}).classes["ArrayExample"]
 
 
-@pytest.mark.parametrize("name,text", PROGRAMS + VALID_ONLY,
-                         ids=[row[0] for row in PROGRAMS + VALID_ONLY])
+@pytest.mark.parametrize("name,text", PROGRAMS + VALID_ONLY + INFERRED_PROGRAMS,
+                         ids=[row[0] for row in PROGRAMS + VALID_ONLY + INFERRED_PROGRAMS])
 def test_complete_originals_have_checked_enhanced_for_models_only(name, text, monkeypatch):
     from pcc.frontends.java.source_lowering import SourceLowerer
 
@@ -485,7 +485,7 @@ def test_abrupt_body_does_not_make_zero_iteration_exit_unreachable():
 def test_exact_enhanced_for_originals_against_selected_jdk_only(tmp_path, request):
     """Reference runtime/typechecks only; no PCC runtime or native acceptance."""
     check_originals_reference(
-        tmp_path, request, PROGRAMS, VALID_ONLY + BOUNDARIES,
+        tmp_path, request, PROGRAMS + INFERRED_PROGRAMS, VALID_ONLY + BOUNDARIES,
         INVALID + INCOMPLETE_TYPE_BOUNDARIES,
         source_input=Path(__file__),
     )

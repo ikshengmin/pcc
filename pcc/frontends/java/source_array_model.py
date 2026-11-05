@@ -80,6 +80,10 @@ class ArrayModelAnalyzer:
         if not isinstance(expression.dtype, ArrayType):
             expression.token.error("enhanced for requires an array or Iterable expression")
         component = expression.dtype.component
+        if variable.inference_token is not None:
+            # JLS 14.14.2: array var inference selects the component type,
+            # without promotion or making the binder visible in the expression.
+            variable.value = component
         if isinstance(variable.value, (ClassType, BootstrapStringType)):
             # Assignment conversion can box an element and then widen its
             # reference. Supplied names alone do not establish that hierarchy
