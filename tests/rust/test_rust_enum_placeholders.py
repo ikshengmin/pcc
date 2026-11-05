@@ -5,7 +5,7 @@ https://doc.rust-lang.org/reference/types/inferred.html
 https://doc.rust-lang.org/reference/items/enumerations.html
 https://doc.rust-lang.org/reference/expressions/call-expr.html
 https://doc.rust-lang.org/reference/expressions.html#evaluation-order-of-operands
-Omitted owner arguments, unresolved matches and associated-method owner holes
+Omitted owner arguments and associated-method owner holes
 remain explicit capability boundaries; no reference certification is invented.
 """
 from pathlib import Path
@@ -103,7 +103,6 @@ def test_invalid_enum_holes_fail_before_lowering(name, text, message, code, monk
     ('enum E<T>{Some(T)}fn f(){E::Some(1u64);}', 'requires explicit type arguments'),
     ('enum E<T>{Some(T)}fn f(){E::<u64>::Some::<_>(1);}', 'constructor segments'),
     ('enum E<T>{Some(T)}impl<T>E<T>{fn wrap(x:T)->Self{Self::Some(x)}}fn f()->E<u64>{E::<_>::wrap(1)}', "unsupported Rust type '_'"),
-    ('enum E<T>{Some(T)}fn f()->u64{match E::<_>::Some(4294967296){E::Some(x)=>x}}', 'unresolved inferred generic'),
     ('enum E<T>{Some(T)}fn f(p:&u64){E::<_>::Some(p);}', 'actual source/options-bound CheckedRustSource'),
     ('enum E<T>{None,Some(T)}fn f()->bool{let x:E<u64>=E::<_>::None;if let E::None=x{true}else{false}}', 'actual source/options-bound CheckedRustSource'),
     ('mod m {} fn f<T>() { T::<u64>::missing(); }', 'generic arguments require'),

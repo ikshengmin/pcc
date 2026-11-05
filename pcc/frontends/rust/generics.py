@@ -242,12 +242,20 @@ class GenericDeclarations:
             self.checker.records[ty] = instance
         return instance
 
-    def path_type(self, path, token, expected=None):
+    def path_type(self, path, token, expected=None, *, allow_inferred=False):
         if isinstance(path, str):
             path = self.canonical_name(path, token)
-        # A match already has the scrutinee's nominal type; resolving E::V in
-        # that context is not constructor/type-argument inference from values.
+        # A pattern inherits the scrutinee's known nominal owner and shares
+        # its unresolved slots. Payload/arm constraints can still solve them;
+        # do not normalize fresh holes or register an unfinished instance.
         if (isinstance(expected, TypeApplication) and path == expected.name
                 and self.definitions[path].type_parameters):
+            if allow_inferred and path not in self.checker.type_scope:
+                self.checker.valid_type(expected, token)
+                return expected
+            if not allow_inferred:
+                from .call_inference import pending_integer
+                if pending_integer(expected):
+                    raise token.error("matching an unresolved inferred generic type requires later pattern constraints, which is not implemented")
             path = expected
         return self.instantiate(self.normalize(path, token), token)

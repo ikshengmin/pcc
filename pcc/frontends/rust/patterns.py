@@ -5,6 +5,7 @@ partitions plus an explicit other-value class. This is not match ergonomics,
 a borrow checker, or a replacement for Rust's trait solver.
 """
 from .semantics import INTEGERS, bounds, resolve, unify
+from .syntax import Enumeration
 from .types import FixedArrayType, TupleType, TypeApplication, TypeParameter
 
 MAX_PATTERN_ROWS = 512
@@ -52,7 +53,7 @@ def contains_binding(pattern):
     return pattern.kind == "binding" or any(contains_binding(child) for child in pattern.children)
 
 
-def check_pattern(checker, pattern, ty):
+def check_pattern(checker, pattern, ty, *, allow_inferred=False):
     pattern.ty = ty
     if pattern.kind == "wildcard":
         return
@@ -64,12 +65,12 @@ def check_pattern(checker, pattern, ty):
         if contains_binding(pattern):
             raise pattern.token.error("bindings inside or-patterns require alternative binding unification, which is not implemented")
         for child in pattern.children:
-            check_pattern(checker, child, ty)
+            check_pattern(checker, child, ty, allow_inferred=allow_inferred)
     elif pattern.kind == "tuple":
         if not isinstance(ty, TupleType) or len(ty.elements) != len(pattern.children):
             raise pattern.token.error("tuple pattern shape does not match scrutinee")
         for child, element in zip(pattern.children, ty.elements):
-            check_pattern(checker, child, element)
+            check_pattern(checker, child, element, allow_inferred=allow_inferred)
     elif pattern.kind == "unit":
         unify("()", ty, pattern.token)
     elif pattern.kind == "literal":
@@ -77,18 +78,20 @@ def check_pattern(checker, pattern, ty):
     elif pattern.kind in {"variant", "payload"}:
         name, variant = pattern.value
         if isinstance(name, TypeApplication) or name in checker.generics.definitions or name == "Self" or checker.module_resolution is not None:
-            name = checker.generics.path_type(name, pattern.token, expected=ty)
+            name = checker.generics.path_type(
+                name, pattern.token, expected=ty, allow_inferred=allow_inferred)
             checker.valid_type(name, pattern.token)
-        enum = checker.enums.get(name)
-        if enum is None or variant not in enum.discriminants:
+        enum = checker.generics.definitions.get(
+            name.name if isinstance(name, TypeApplication) else name)
+        if not isinstance(enum, Enumeration) or variant not in enum.discriminants:
             raise pattern.token.error("unknown enum variant pattern")
         unify(name, ty, pattern.token)
-        fields = enum.payloads.get(variant)
+        fields = checker.generics.specialized_payload(name, variant)
         if pattern.kind == "payload":
             if fields is None or len(fields) != len(pattern.children):
                 raise pattern.token.error("enum payload pattern shape does not match variant")
             for child, field_ty in zip(pattern.children, fields):
-                check_pattern(checker, child, field_ty)
+                check_pattern(checker, child, field_ty, allow_inferred=allow_inferred)
         elif fields is not None:
             raise pattern.token.error("payload variant pattern requires fields")
         pattern.variant = variant

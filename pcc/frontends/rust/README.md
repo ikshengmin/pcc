@@ -671,10 +671,31 @@ The four complete authored originals in
 layouts, generic replay and left-to-right payload evaluation with owned native
 execution and gated same-source rustc comparison. Ambiguity, contradictory
 constraints, malformed arity, private owners and non-Copy moves remain errors.
-Omitted owner arguments, constructor-segment arguments and matching a still
-unresolved generic value remain explicit gaps. Reference-bearing source retains
+Omitted owner arguments and constructor-segment arguments remain explicit gaps.
+Ordinary enum matches can constrain owner slots as described below. Reference-bearing source retains
 its source/options-bound certification barrier. These checks do not establish
 upstream project, native pcc1 or owned borrow-checker qualification.
+
+### Enum match constraints before integer fallback
+
+Ordinary `match` expressions on a known generic enum owner share its unsolved
+type slots with variant payload patterns, arm expressions and later uses of
+the match result. For example, a function returning `u64` can match
+`Maybe::<_>::Some(4294967296)` and return its payload without prematurely
+defaulting that literal to `i32`. Unit variants can obtain their otherwise
+missing owner slots from typed payload patterns or result constraints.
+
+Pattern checking uses the declaration's substituted payload types; concrete
+nominal instances and exhaustiveness checks wait for whole-body resolution.
+Ambiguous slots, conflicting concrete owners, missing cases and non-Copy moves
+still fail before lowering. Unknown aggregate payload shapes, explicit holes
+in pattern owners, unresolved non-enum matches and conditional-let inference
+remain bounded. Reference source still needs its existing certification.
+
+`tests/rust/test_rust_enum_match_inference.py` retains the prior enum-match
+capability input and supplies four complete authored runtime originals with
+native execution and gated same-input rustc comparison. This is not upstream
+project, native pcc1, Darwin reference or owned borrow-checker qualification.
 
 ### Inherent method-local generic inference (qualified bounded slice)
 
