@@ -1,5 +1,19 @@
 {
   "functions": {
+    "tests/java/test_source_static_type_imports.py": {
+      "test_same_static_type_originals_match_jdk_raw_processes": {
+        "activity": "external-reference",
+        "reason": [
+          "Compiles unchanged complete source maps with the selected development JDK through prepare_reference, then compares exact raw process streams with owned PCC native execution. No source rewriting or whole-project acceptance."
+        ]
+      },
+      "test_same_invalid_static_type_originals_have_jdk_rejections": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls prepare_reference on the same complete invalid single-static member-type import originals and requires an actual source-attributed JDK compiler rejection."
+        ]
+      }
+    },
     "tests/java/test_source_static_constructors.py": {
       "test_identical_complete_utility_maps_match_selected_jdk_raw_processes": {
         "activity": "external-reference",

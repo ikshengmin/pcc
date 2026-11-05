@@ -65,7 +65,7 @@ class StaticMemberTypes:
             if not self.member_accessible(caller, owner, owner.modifiers, import_context=import_context):
                 token.error("source class is not accessible: " + owner.source_name.replace("/", "."))
 
-    def visible_simple_type(self, caller, name):
+    def visible_simple_type(self, caller, name, token=None):
         for owner in self.lexical_classes(caller):
             if owner.simple_name == name:
                 return owner
@@ -75,6 +75,11 @@ class StaticMemberTypes:
         imported = self.imports[caller.name].get(name)
         if imported is not None:
             return imported
+        imported = self.static_types[caller.name].get(name, {})
+        if len(imported) > 1:
+            (token or caller.token).error("ambiguous single-static imported type " + name)
+        if imported:
+            return next(iter(imported.values()))
         qualified = caller.package + "/" + name if caller.package else name
         same_package = self.canonical_classes.get(qualified)
         if same_package is not None:

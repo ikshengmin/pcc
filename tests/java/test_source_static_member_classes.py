@@ -434,11 +434,15 @@ def test_nested_runtime_and_unimplemented_declarations_are_not_silently_discarde
 
 @pytest.mark.parametrize("suffix", ("", "public static final int Inner=7;", "public static int Inner(){return 7;}"))
 def test_static_import_of_member_type_remains_explicit_even_with_same_name_values(suffix, monkeypatch):
-    forbid_lowering(monkeypatch)
+    # Preserve all three former boundary originals. The import now keeps
+    # the type's explicit identity alongside independently imported values.
+    forbid_bytecode_or_external_owner(monkeypatch)
     sources = app("import static provider.Outer.Inner;", "return 42;", "public static class Inner{}" + suffix)
-    with pytest.raises(UnsupportedJava) as caught:
-        compile_sources(sources, entry_class="app.Main")
-    assert caught.value.code == "java.unsupported.static-imports"
+    project = SourceProject([SourceParser(text, filename).parse() for filename, text in sources.items()])
+    assert project.static_types["app/Main"]["Inner"]["provider/Outer$Inner"] is project.classes["provider/Outer$Inner"]
+    assert bool(project.static_fields["app/Main"].get("Inner")) == (" int Inner=" in suffix)
+    assert bool(project.static_methods["app/Main"].get("Inner")) == (" int Inner()" in suffix)
+    assert compile_sources(sources, entry_class="app.Main").emit_object().startswith(b"\x7fELF")
 
 
 @pytest.mark.parametrize("imports,body,code", [

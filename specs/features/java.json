@@ -2041,13 +2041,60 @@
       ]
     },
     {
+      "id": "java.single-static-type-imports",
+      "title": "Single-static imports of supplied static member types",
+      "chapter_ids": [
+        "JLS-6",
+        "JLS-7",
+        "JLS-8",
+        "JLS-13",
+        "JLS-15"
+      ],
+      "scope": "JLS 6.3,6.4.1,6.5.5.1,6.6.1,7.5.3,8.5.1,13.1,15.12. Accessible declared static member classes can be imported from supplied canonical source owners. Preserve canonical/binary identities and independent type, field and method namespaces; deduplicate identical types, defer distinct static-import type ambiguity to actual type use, and retain lexical type shadowing plus early ordinary-import and top-level conflicts. Access checks remain outside class nests. On-demand imports, inheritance, managed execution and absent dependencies remain gated. This entry binds implementation and exact tests; it does not record full-feature, native pcc1 or whole-Java acceptance.",
+      "tests": [
+        "tests/java/test_source_static_type_imports.py::test_static_type_originals_retain_all_declarations_and_owned_ir",
+        "tests/java/test_source_static_type_imports.py::test_static_type_import_preserves_canonical_binary_and_namespace_identity",
+        "tests/java/test_source_static_type_imports.py::test_invalid_static_type_originals_fail_before_lowering",
+        "tests/java/test_source_static_type_imports.py::test_static_type_support_preserves_missing_dependency_and_demand_boundaries",
+        "tests/java/test_source_static_type_imports.py::test_same_static_type_originals_execute_owned_native_bytes",
+        "tests/java/test_source_static_type_imports.py::test_same_static_type_originals_match_jdk_raw_processes",
+        "tests/java/test_source_static_type_imports.py::test_same_invalid_static_type_originals_have_jdk_rejections",
+        "tests/java/test_source_static_member_classes.py::test_static_import_of_member_type_remains_explicit_even_with_same_name_values"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:1dcdafc805551001b94258a3f598cde720013eda9b675eca39f263559c664c81",
+        "sources": [
+          {
+            "path": "pcc/frontends/java/source_member_types.py",
+            "sha256": "244c219855e8097665178a8577fca6b3d7a833f85f1dcaeca25e16cb16a04470"
+          },
+          {
+            "path": "pcc/frontends/java/source_project.py",
+            "sha256": "ff4fb4087e93b53dbb9e5128c6022d1e3f20dce54ba498a4e2adfe3966c65208"
+          },
+          {
+            "path": "tests/java/test_source_static_member_classes.py",
+            "sha256": "491107967a52ce5a5e5ae759ced7eb26c424a70c41366a48a2273fd0ff54afa0"
+          },
+          {
+            "path": "tests/java/test_source_static_type_imports.py",
+            "sha256": "92a7f430167892a71d8dd85572d402a5328a0b64835eeeebc84814d4caf28bc1"
+          }
+        ]
+      },
+      "acceptance": []
+    },
+    {
       "id": "java.imports-expanded",
       "title": "Static and on-demand import resolution",
       "chapter_ids": [
         "JLS-6",
         "JLS-7"
       ],
-      "scope": "JLS 7.5.2,7.5.4. Type/static on-demand imports and static member-type imports remain unavailable. Single-static field/method imports from supplied top-level source classes have a separate source-reviewed, CI-unrun slice.",
+      "scope": "JLS 7.5.2,7.5.4. Type/static on-demand imports remain unavailable. Single-static field/method imports and accessible declared static member-type imports from supplied source owners have separate implementation slices and source-bound test obligations.",
       "status": "explicitly_unimplemented",
       "tests": [
         "tests/java/test_source_project.py::test_source_project_lookup_gaps_are_not_ignored",
@@ -3114,12 +3161,12 @@
         "feature_id": "java.implicit-type-directory",
         "source": {
           "path": "pcc/frontends/java/source_project.py",
-          "sha256": "3d8937bf5d3b8c9bbb80f84a27d1b165d4bab6ef2a20eb43754990e3ce6dd7fb"
+          "sha256": "ff4fb4087e93b53dbb9e5128c6022d1e3f20dce54ba498a4e2adfe3966c65208"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_project.py",
-            "sha256": "3d8937bf5d3b8c9bbb80f84a27d1b165d4bab6ef2a20eb43754990e3ce6dd7fb"
+            "sha256": "ff4fb4087e93b53dbb9e5128c6022d1e3f20dce54ba498a4e2adfe3966c65208"
           },
           {
             "path": "pcc/frontends/java/source_class_model.py",
@@ -3263,7 +3310,7 @@
           },
           {
             "path": "pcc/frontends/java/source_project.py",
-            "sha256": "3d8937bf5d3b8c9bbb80f84a27d1b165d4bab6ef2a20eb43754990e3ce6dd7fb"
+            "sha256": "ff4fb4087e93b53dbb9e5128c6022d1e3f20dce54ba498a4e2adfe3966c65208"
           }
         ]
       },
@@ -3332,12 +3379,12 @@
         "feature_id": "java.source-dependencies",
         "source": {
           "path": "pcc/frontends/java/source_project.py",
-          "sha256": "3d8937bf5d3b8c9bbb80f84a27d1b165d4bab6ef2a20eb43754990e3ce6dd7fb"
+          "sha256": "ff4fb4087e93b53dbb9e5128c6022d1e3f20dce54ba498a4e2adfe3966c65208"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_project.py",
-            "sha256": "3d8937bf5d3b8c9bbb80f84a27d1b165d4bab6ef2a20eb43754990e3ce6dd7fb"
+            "sha256": "ff4fb4087e93b53dbb9e5128c6022d1e3f20dce54ba498a4e2adfe3966c65208"
           },
           {
             "path": "pcc/frontends/java/source_class_model.py",
@@ -3384,10 +3431,6 @@
           {
             "path": "pcc/frontends/java/source_syntax.py",
             "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
-          },
-          {
-            "path": "pcc/frontends/java/source_project.py",
-            "sha256": "3d8937bf5d3b8c9bbb80f84a27d1b165d4bab6ef2a20eb43754990e3ce6dd7fb"
           }
         ]
       },
