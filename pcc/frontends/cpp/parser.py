@@ -640,6 +640,8 @@ class CppParser:
         return self._apply_declarator(declaration, dtype, allow_class_element=allow_class_element)
 
     def _is_declaration(self, allow_range=False):
+        if self._peek().value == "static":
+            return True
         if self._peek().value in (":", "::"):
             from pcc.frontends.cpp.allocation import global_delete_ahead, global_new_ahead
             # A leading global allocation expression has no qualified type
@@ -1314,6 +1316,9 @@ class CppParser:
 
     def _statement(self, for_init=False):
         token = self._peek()
+        if token.value == "static":
+            from pcc.frontends.cpp.local_statics import declare
+            return declare(self, for_init=for_init)
         if (token.value == "extern" and
                 self.cursor.tokens[self.cursor.position + 1].kind == "STRING_LITERAL"):
             raise CppDiagnostic("cpp.linkage-scope",

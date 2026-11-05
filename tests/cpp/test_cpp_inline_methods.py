@@ -123,7 +123,7 @@ def test_inline_method_original_artifacts_are_byte_stable(owned_only,name,units)
     ('struct S{int f(){return 1;}};int S::f(){return 2;}','cpp.redefinition'),
     ('struct S{int f(){return later();}};int later();','cpp.undeclared'),
     ('struct S{static int f()const{return 1;}};','cpp.static-member-cv'),
-    ('struct S{int f(){static int n=0;return n;}};','cpp.unsupported.syntax'),
+    ('struct S{int f(){static int n=0;return n;}};','cpp.unsupported.static-initialization-analysis'),
     ('struct S{int f(){thread_local int n=0;return n;}};','cpp.unsupported.syntax'),
     ('struct S{const char*f(){return "identity";}};','cpp.unsupported.syntax'),
     ('struct S{int f()noexcept{return 42;}};','cpp.unsupported.exceptions'),
