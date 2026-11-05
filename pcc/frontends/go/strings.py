@@ -1,7 +1,6 @@
 """Go string literal bytes, not Python string-expression semantics."""
 
-from pcc.frontends.go.diagnostics import UnsupportedGo
-from pcc.frontends.go.syntax import GoDiagnostic
+from pcc.frontends.go.diagnostics import GoDiagnostic, UnsupportedGo
 
 MAX_STRING_BYTES = 1 << 20
 

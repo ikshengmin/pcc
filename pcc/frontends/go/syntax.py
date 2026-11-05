@@ -11,6 +11,7 @@ import unicodedata
 
 from pcc.frontends.go.types import Results, TYPE_NAMES
 from pcc.frontends.go.diagnostics import GoDiagnostic, UnsupportedGo
+from pcc.frontends.go.strings import literal_bytes
 
 
 @dataclass(frozen=True)
@@ -399,8 +400,15 @@ class GoParser:
             else:
                 alias = "." if self.accept(".") else None
             token = self.take("string")
-            path = token.text[1:-1]
-            if (not path or "\\" in path or any(char.isspace() for char in path) or
+            # ImportPath is a Go string literal, not its quoted source spelling.
+            # Decode once before validation and dependency identity/lookup.
+            try:
+                path = literal_bytes(token).decode("utf-8")
+            except UnicodeDecodeError:
+                self.fail(token, "invalid UTF-8 in import path")
+            # Go permits graphic Unicode categories, excluding all spaces.
+            # L/M/N/P/S remain after excluding the graphic Zs category.
+            if (not path or any(unicodedata.category(char)[0] not in "LMNPS" for char in path) or
                     any(char in '!"#$%&\'()*,:;<=>?[\\]^`{|}\ufffd' for char in path)):
                 self.fail(token, "unsupported or invalid import path")
             imports.append(Import(token, alias, path))

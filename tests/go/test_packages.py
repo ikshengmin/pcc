@@ -1,4 +1,9 @@
-"""Explicit Go package graph and file-scoped import semantics."""
+"""Explicit Go package graph and file-scoped import semantics.
+
+https://go.dev/ref/spec#Import_declarations
+https://go.dev/ref/spec#String_literals
+https://go.dev/ref/spec#Package_initialization
+"""
 
 from pathlib import Path
 import struct
@@ -6,7 +11,7 @@ import sys
 
 import pytest
 
-from pcc.frontends.go import GoDiagnostic, compile_go_packages, function_symbol
+from pcc.frontends.go import GoDiagnostic, GoParser, UnsupportedGo, compile_go_packages, function_symbol
 from tests.go.owned_execution import Execution, compile_module, run, write_artifact
 
 
@@ -21,6 +26,34 @@ def fixture_packages():
     }
 
 
+def escaped_import_packages():
+    # Authored whole graph. Preserve each source byte for the official oracle,
+    # including the CR that Go discards inside the raw-string import path.
+    return {
+        "main": [
+            ("main.go", r'''package main
+import (
+    "example/\x61rith"
+    a "ex\u0061mple/adjust"
+    . "example/\U00000064ot"
+    _ "\145xample/blank"
+)
+func Result() int64 { return arithmetic.Value() + a.Offset + Dot() + helper() }
+func main() { if Result() != 0x7edcba987654322f { for {} } }
+'''),
+            ("helper.go", 'package main\nimport a `example/ar\rith`\nfunc helper() int64 { return a.Small }\n'),
+        ],
+        "example/arith": [("arith.go", r'''package arithmetic
+import a "example/\x61djust"
+const Small int64 = 13
+func Value() int64 { return 0x7edcba9876543210 + a.Offset }
+''')],
+        "example/adjust": [("adjust.go", "package adjust; const Offset int64 = 5")],
+        "example/dot": [("dot.go", "package dot; func Dot() int64 { return 8 }")],
+        "example/blank": [("blank.go", "package blank; const Unused = 3")],
+    }
+
+
 def packages(main, library="package arithmetic; const Base = 3; func Add(x int) int {return x+1}"):
     return {"main": [("main.go", main)], "lib": [("lib.go", library)]}
 
@@ -30,6 +63,80 @@ def test_import_alias_default_package_name_and_transitive_calls_use_public_ir():
     assert function_symbol("Combine", "example/arith") in text
     assert function_symbol("Result") in text
     assert "call i64" in text
+
+
+@pytest.mark.parametrize("spelling", [
+    '"lib"', '`lib`', r'"\x6cib"', r'"l\151b"', r'"li\u0062"', r'"\U0000006cib"', '`l\rib`',
+])
+def test_import_literal_decodes_before_package_lookup_without_rewriting_source(spelling):
+    original = "package main; import " + spelling + "; func main(){_ = arithmetic.Base}"
+    imported = GoParser().parse(original).imports[0]
+    assert imported.path == "lib"
+    assert imported.token.text == spelling
+    assert function_symbol("main") in compile_go_packages(packages(original)).globals
+
+
+@pytest.mark.parametrize("spelling,message", [
+    ('""', "import path"), (r'"\x00"', "import path"), (r'"l\x01ib"', "import path"),
+    (r'"l\x7fib"', "import path"), (r'"l\tib"', "import path"), (r'"l\u0020ib"', "import path"),
+    (r'"l\uFFFDib"', "import path"), (r'"l\xffib"', "UTF-8"),
+    (r'"l\\ib"', "import path"), (r'"l\x2aib"', "import path"),
+    (r'"l\qib"', "string escape"), (r'"l\x6ib"', "string escape digits"),
+    (r'"l\uD800ib"', "Unicode"), ('`l\nib`', "import path"),
+])
+def test_import_literal_rejects_invalid_decoded_paths_and_escapes(spelling, message, monkeypatch):
+    from pcc.frontends.go.lowering import Lowerer
+    monkeypatch.setattr(Lowerer, "lower", lambda *args: pytest.fail("invalid import reached IR"))
+    with pytest.raises(GoDiagnostic, match=message) as caught:
+        compile_go_packages(packages("package main; import " + spelling + "; func main(){}"))
+    assert not isinstance(caught.value, UnsupportedGo)
+
+
+NON_GRAPHIC_IMPORTS = (
+    (r'"l\u0080ib"', "l\u0080ib"), ('"l\u0080ib"', "l\u0080ib"),  # Cc
+    (r'"l\u200bib"', "l\u200bib"), ('"l\u200bib"', "l\u200bib"),  # Cf
+    (r'"l\ue000ib"', "l\ue000ib"), ('"l\ue000ib"', "l\ue000ib"),  # Co
+    (r'"l\u0378ib"', "l\u0378ib"), ('"l\u0378ib"', "l\u0378ib"),  # Cn
+)
+
+
+def non_graphic_import_packages(spelling, path):
+    return {
+        "main": [("main.go", "package main; import " + spelling + "; func main(){_=arithmetic.Base}")],
+        path: [("lib.go", "package arithmetic; const Base=3")],
+    }
+
+
+@pytest.mark.parametrize("spelling,path", NON_GRAPHIC_IMPORTS)
+def test_non_graphic_imports_reject_before_lookup_even_with_supplied_dependency(spelling, path, monkeypatch):
+    from pcc.frontends.go.lowering import Lowerer
+    monkeypatch.setattr(Lowerer, "lower", lambda *args: pytest.fail("non-graphic import reached IR"))
+    with pytest.raises(GoDiagnostic, match="invalid import path") as caught:
+        compile_go_packages(non_graphic_import_packages(spelling, path))
+    assert not isinstance(caught.value, UnsupportedGo)
+
+
+def test_decoded_import_paths_keep_package_identity_and_initialization_boundaries(monkeypatch):
+    from pcc.frontends.go.lowering import Lowerer
+    monkeypatch.setattr(Lowerer, "lower", lambda *args: pytest.fail("invalid graph reached IR"))
+    with pytest.raises(GoDiagnostic, match="duplicate import name"):
+        compile_go_packages(packages(r'package main; import "lib"; import "\x6cib"; func main(){_=arithmetic.Base}'))
+    with pytest.raises(GoDiagnostic, match="import cycle"):
+        compile_go_packages(packages(r'package main; import "\x6cib"; func main(){_=arithmetic.Base}',
+                                     r'package arithmetic; import _ "l\x69b"; const Base=3'))
+    with pytest.raises(GoDiagnostic, match="import source unavailable: unsafe"):
+        compile_go_packages(packages(r'package main; import _ "\x75nsafe"; func main(){}'))
+    with pytest.raises(UnsupportedGo) as caught:
+        compile_go_packages(packages(r'package main; import _ "\x6cib"; func main(){}',
+                                     'package arithmetic; var X=f(); func f()int{return 3}'))
+    assert caught.value.code == "go.unsupported.package-initialization"
+
+
+def test_complete_escaped_import_graph_keeps_single_dependency_owner(monkeypatch):
+    from tests.go.test_execution import forbid_external_compiler
+    forbid_external_compiler(monkeypatch)
+    module = compile_go_packages(escaped_import_packages())
+    assert list(module.globals).count(function_symbol("Value", "example/arith")) == 1
 
 
 @pytest.mark.parametrize("main,library,message", [
@@ -118,23 +225,64 @@ def test_cross_package_calls_execute_through_owned_ir_backend_and_elf(tmp_path, 
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize("observe_result", [False, True])
+def test_escaped_import_graph_executes_full_width_owned_result(tmp_path, monkeypatch, observe_result):
+    from tests.go.test_execution import forbid_external_compiler
+    from tests.go.test_labels import observed
+    assert sys.platform == "linux", "real Linux execution is required"
+    inputs = escaped_import_packages()
+    with monkeypatch.context() as denied:
+        forbid_external_compiler(denied)
+        artifact = compile_module(compile_go_packages(inputs), observe_result=observe_result)
+    binary = tmp_path / "package-program"
+    write_artifact(artifact, binary)
+    expected = struct.pack("<q", 0x7edcba987654322f) if observe_result else b""
+    originals = tuple((package + "/" + name, text) for package, files in inputs.items() for name, text in files)
+    assert observed(binary, tmp_path / "observation", owner=artifact.owner, originals=originals) == Execution(0, expected, b"")
+
+
+@pytest.mark.integration
 @pytest.mark.pcc_gate(env="PCC_GO_REFERENCE")
 @pytest.mark.xdist_group(name="go-reference")
-def test_original_package_sources_match_the_official_go_oracle(tmp_path):
+def test_original_package_sources_match_the_official_go_oracle(tmp_path, monkeypatch):
     import os
-    from tests.go.owned_execution import compile_reference_packages
+    from tests.go.owned_execution import compile_reference_packages, compile_reference_packages_rejection
+    from tests.go.test_execution import forbid_external_compiler
+    from tests.go.test_labels import observed
 
     assert os.environ.get("PCC_GO_REFERENCE_CACHE"), "select a bounded oracle cache explicitly"
-    inputs = fixture_packages()
-    reference = compile_reference_packages(inputs, tmp_path / "reference",
-        compiler=os.environ["PCC_GO_REFERENCE"], cache=os.environ["PCC_GO_REFERENCE_CACHE"])
-    owned = tmp_path / "owned"
-    write_artifact(compile_module(compile_go_packages(inputs)), owned)
-    assert run(owned) == run(reference) == Execution(0, b"", b"")
-    for package, source_units in inputs.items():
-        for filename, source in source_units:
-            copied = reference.parent / "gopath/src" / package / filename
-            assert copied.read_bytes() == source.encode("utf-8")
+    for name, graph in (("original", fixture_packages), ("escaped", escaped_import_packages)):
+        directory = tmp_path / name
+        directory.mkdir()
+        inputs = graph()
+        reference = compile_reference_packages(inputs, directory / "reference",
+            compiler=os.environ["PCC_GO_REFERENCE"], cache=os.environ["PCC_GO_REFERENCE_CACHE"])
+        owned = directory / "owned"
+        with monkeypatch.context() as denied:
+            forbid_external_compiler(denied)
+            artifact = compile_module(compile_go_packages(inputs))
+        write_artifact(artifact, owned)
+        originals = tuple((package + "/" + name, text) for package, files in inputs.items() for name, text in files)
+        actual = observed(owned, directory / "owned-observation", owner=artifact.owner, originals=originals)
+        expected = observed(reference, directory / "reference-observation", owner="official-go", originals=originals)
+        assert actual == expected == Execution(0, b"", b"")
+        for package, source_units in inputs.items():
+            for filename, source in source_units:
+                copied = reference.parent / "gopath/src" / package / filename
+                assert copied.read_bytes() == source.encode("utf-8")
+    # Invalid import paths must be rejected before dependency lookup, even
+    # when the exact named package exists. Keep both escaped/literal spellings.
+    for index, (spelling, path) in enumerate(NON_GRAPHIC_IMPORTS):
+        inputs = non_graphic_import_packages(spelling, path)
+        with pytest.raises(GoDiagnostic, match="invalid import path"):
+            compile_go_packages(inputs)
+        directory = tmp_path / ("non-graphic-" + str(index))
+        compile_reference_packages_rejection(inputs, directory,
+            compiler=os.environ["PCC_GO_REFERENCE"], cache=os.environ["PCC_GO_REFERENCE_CACHE"],
+            diagnostics="invalid import path|invalid character")
+        for package, files in inputs.items():
+            for filename, source in files:
+                assert (directory / "gopath/src" / package / filename).read_bytes() == source.encode("utf-8")
 
 
 def test_parenthesized_package_name_is_not_an_ordinary_value():
