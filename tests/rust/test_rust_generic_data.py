@@ -47,7 +47,6 @@ def compile_source(source, **options):
     ('struct S<T>{x:T} fn f(x:T){}', 'unsupported Rust type'),
     ('struct S<T>{x:&T}', 'lifetime analysis'),
     ('struct S<T>{x:T} fn f(){S::<bool>{x:1};}', 'type mismatch'),
-    ('enum E<T>{Value(T)} fn f(){E::Value(1);}', 'explicit type arguments'),
     ('struct S<T>{x:T} fn take(x:S<i64>){} fn f(x:S<u64>){take(x);}', 'type mismatch'),
     ('struct S<T>{x:T} struct R<T>{x:T} fn take(x:S<i64>){} fn f(x:R<i64>){take(x);}', 'type mismatch'),
     ('enum E<T>{Value(T)} fn f(x:E<i64>){match x{E::<u64>::Value(n)=>()}}', 'type mismatch'),

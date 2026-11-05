@@ -4,7 +4,7 @@ Rust Reference:
 https://doc.rust-lang.org/reference/expressions/struct-expr.html
 https://doc.rust-lang.org/reference/paths.html#paths-in-expressions
 https://doc.rust-lang.org/reference/expressions.html#evaluation-order-of-operands
-No omitted annotation/enum/method-owner arguments or new reference admission.
+No omitted annotation/method-owner arguments or new reference admission.
 """
 from pathlib import Path
 import platform
@@ -94,7 +94,6 @@ def test_invalid_omitted_constructors_fail_before_lowering(name, text, message, 
 
 @pytest.mark.parametrize('text,message', [
     ('struct R<T>{x:T}fn f(){let x:R=R{x:1u64};}', 'requires explicit type arguments'),
-    ('enum E<T>{Some(T)}fn f(){E::Some(1u64);}', 'requires explicit type arguments'),
     ('struct R<T>{x:T}impl<T>R<T>{fn take(self)->T{self.x}}fn f()->u64{R::<_>::take(R{x:1u64})}', "unsupported Rust type '_'"),
     ('struct R<T>{x:T}fn f(p:&u64){R{x:p};}', 'actual source/options-bound CheckedRustSource'),
 ])

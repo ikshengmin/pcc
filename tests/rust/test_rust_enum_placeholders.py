@@ -5,8 +5,8 @@ https://doc.rust-lang.org/reference/types/inferred.html
 https://doc.rust-lang.org/reference/items/enumerations.html
 https://doc.rust-lang.org/reference/expressions/call-expr.html
 https://doc.rust-lang.org/reference/expressions.html#evaluation-order-of-operands
-Omitted owner arguments and associated-method owner holes
-remain explicit capability boundaries; no reference certification is invented.
+Associated-method owner holes remain an explicit capability boundary;
+no reference certification is invented.
 """
 from pathlib import Path
 import platform
@@ -100,7 +100,6 @@ def test_invalid_enum_holes_fail_before_lowering(name, text, message, code, monk
 
 
 @pytest.mark.parametrize('text,message', [
-    ('enum E<T>{Some(T)}fn f(){E::Some(1u64);}', 'requires explicit type arguments'),
     ('enum E<T>{Some(T)}fn f(){E::<u64>::Some::<_>(1);}', 'constructor segments'),
     ('enum E<T>{Some(T)}impl<T>E<T>{fn wrap(x:T)->Self{Self::Some(x)}}fn f()->E<u64>{E::<_>::wrap(1)}', "unsupported Rust type '_'"),
     ('enum E<T>{Some(T)}fn f(p:&u64){E::<_>::Some(p);}', 'actual source/options-bound CheckedRustSource'),

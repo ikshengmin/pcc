@@ -469,8 +469,7 @@ class Checker:
         elif kind == "variant":
             enum_name, variant = expr.value
             if isinstance(enum_name, TypeApplication) or enum_name in self.generics.definitions or enum_name == "Self" or self.module_resolution is not None:
-                enum_name = self.generics.normalize(
-                    enum_name, expr.token, placeholder_context="enum constructor")
+                enum_name = self.generics.enum_constructor_type(enum_name, expr.token)
                 self.valid_type(enum_name, expr.token)
             enum = self.generics.definitions.get(
                 enum_name.name if isinstance(enum_name, TypeApplication) else enum_name)
@@ -692,8 +691,7 @@ class Checker:
                     raise callee.token.error("type arguments on enum constructor segments are not implemented; supply them on the enum owner")
                 enum_name, variant = callee.value
                 if isinstance(enum_name, TypeApplication) or enum_name in self.generics.definitions or enum_name == "Self" or self.module_resolution is not None:
-                    enum_name = self.generics.normalize(
-                        enum_name, callee.token, placeholder_context="enum constructor")
+                    enum_name = self.generics.enum_constructor_type(enum_name, callee.token)
                     self.valid_type(enum_name, callee.token)
                 enum = self.generics.definitions.get(
                     enum_name.name if isinstance(enum_name, TypeApplication) else enum_name)

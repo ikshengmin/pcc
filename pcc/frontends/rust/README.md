@@ -590,7 +590,7 @@ then inferred and explicit calls use the same instance registry. Generic
 bodies are still checked abstractly before any specialization; inference does
 not make T Copy or defer invalid unused bodies.
 
-Truly unconstrained parameters, omitted enum-constructor arguments, partial
+Truly unconstrained parameters, partial
 `_` type arguments, trait constraints, and method/pattern selection on unresolved
 generic results remain explicit gaps. No Rust lifetime inference, core/alloc
 qualification or production rustc dependency is introduced. The source-owned
@@ -669,7 +669,7 @@ nominal identity, ambiguity, numeric bounds and non-Copy moves remain intact.
 `tests/rust/test_rust_struct_omitted_arguments.py` preserves the former omitted
 constructor rejection and adds three complete authored programs for source-order
 effects, nested storage and replay, plus same-input native rustc comparisons.
-Omitted annotation/enum arguments, method-owner holes and reference certification
+Omitted annotation arguments, method-owner holes and reference certification
 retain their existing boundaries. This is not upstream, native pcc1 or complete
 Rust qualification.
 
@@ -688,7 +688,7 @@ The four complete authored originals in
 layouts, generic replay and left-to-right payload evaluation with owned native
 execution and gated same-source rustc comparison. Ambiguity, contradictory
 constraints, malformed arity, private owners and non-Copy moves remain errors.
-Omitted owner arguments and constructor-segment arguments remain explicit gaps.
+Omitted owner arguments are described below; constructor-segment arguments remain an explicit gap.
 Ordinary enum matches can constrain owner slots as described below. Reference-bearing source retains
 its source/options-bound certification barrier. These checks do not establish
 upstream project, native pcc1 or owned borrow-checker qualification.
@@ -1282,3 +1282,15 @@ Implementation proof: `pcc/frontends/rust/traits.py::StaticTraits.prepare` and
 `StaticTraits.validate_signatures`, with
 `pcc/frontends/rust/methods.py::InherentMethods.lookup`, at the exact tested
 `45118c1e` source revision. The generic registry, runtime and backend are unchanged.
+
+### Omitted enum constructor arguments
+
+A generic enum constructor may omit owner arguments (`E::Some(value)` or
+`E::None`). Fresh slots are constrained by payloads, annotations, later uses,
+match arms and the enclosing result, and resolved before concrete registration.
+This applies only to constructor expressions, including qualified/imported
+owners. Bare type annotations and associated-method owners still require
+explicit arguments. Abstract checking, nominal identities, moves, evaluation
+order and reference certification are unchanged. The authored omitted-enum
+fixtures carry focused native/reference obligations; they do not establish
+whole-project, native pcc1 or general inference acceptance.

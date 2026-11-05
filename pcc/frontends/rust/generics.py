@@ -122,6 +122,16 @@ class GenericDeclarations:
             raise token.error(f"generic type {ty} requires explicit type arguments; constructor inference is not implemented")
         return ty
 
+    def enum_constructor_type(self, owner, token):
+        """Fresh holes belong to a constructor use, never a bare type name."""
+        if isinstance(owner, str):
+            owner = self.canonical_name(owner, token)
+            declaration = self.definitions.get(owner)
+            if (owner not in self.checker.type_scope
+                    and isinstance(declaration, Enumeration) and declaration.type_parameters):
+                owner = TypeApplication(owner, ("_",) * len(declaration.type_parameters))
+        return self.normalize(owner, token, placeholder_context="enum constructor")
+
     def prepare(self):
         for name, declaration in self.definitions.items():
             if declaration.item_identity is not None:
