@@ -112,13 +112,11 @@ def call_member(parser, group, object_expression, arguments, coord, address_avai
     if parser.template_function is not None or (parser.instantiating_template and getattr(parser, 'class_template_instance', None) is None):
         raise CppDiagnostic("cpp.unsupported.member-templates", "member calls in templates require dependent lookup", coord)
     arguments = [parser._decay_array(arg) for arg in arguments]
-    from pcc.frontends.cpp.classes import is_class_type
-    if any(is_class_type(arg.dtype) for arg in arguments):
-        raise CppDiagnostic("cpp.unsupported.class-value-abi", "class by-value arguments need lifetime ABI", coord)
     # Use the same partial-order conversion owner as ordinary overloads. The
     # implicit-object candidate is local; canonical explicit signatures remain
     # unchanged for redeclaration identity and ABI encoding.
     selected = select_member_overload(parser, group, object_expression, arguments, coord)
+    parser._check_call_value_abi(selected, coord)
     parser.scope.check_member_access(selected, coord)
     from pcc.frontends.cpp.class_template_members import request_body
     request_body(parser, selected, coord)
@@ -134,8 +132,8 @@ def call_member(parser, group, object_expression, arguments, coord, address_avai
     name = parser._fresh_projection_name("__pcc_cpp_this_")
     temporary = parser._decl(name, this_type, coord,
                              parser._convert(object_expression, this_type, coord))
-    converted = [c_ast.ID(name, coord)] + [parser._convert(arg, dtype, coord)
-                                        for arg, dtype in zip(arguments, selected.parameters)]
+    from pcc.frontends.cpp.references import convert_call_arguments
+    converted = [c_ast.ID(name, coord)] + convert_call_arguments(parser, arguments, selected.parameters, coord)
     call = c_ast.FuncCall(c_ast.ID(selected.c_name, coord), c_ast.ExprList(converted, coord), coord)
     # [expr.call]: postfix-expression (including object) precedes every
     # argument. Capture once before evaluating arguments; do not rely on C's
@@ -155,7 +153,6 @@ def is_static_group(group):
 def call_static_member(parser, group, arguments, coord, discarded_base=None):
     # [class.static.mfct]: no this parameter. [expr.ref]/[expr.call]: an
     # object-qualified postfix expression is still evaluated before arguments.
-    from pcc.frontends.cpp.classes import is_class_type
     from pcc.frontends.cpp.parser import Expression
 
     if getattr(parser, 'class_template_method', None) is not None:
@@ -167,18 +164,17 @@ def call_static_member(parser, group, arguments, coord, discarded_base=None):
         raise CppDiagnostic("cpp.unsupported.member-templates",
                             "member calls in templates require dependent lookup", coord)
     arguments = [parser._decay_array(arg) for arg in arguments]
-    if any(is_class_type(arg.dtype) for arg in arguments):
-        raise CppDiagnostic("cpp.unsupported.class-value-abi", "class by-value arguments need lifetime ABI", coord)
     selected = resolve_overload(group, [arg.dtype for arg in arguments], parser.types,
                                 coord, [arg.null_pointer for arg in arguments],
                                 [arg.lvalue or arg.assignment_result for arg in arguments])
+    parser._check_call_value_abi(selected, coord)
     parser.scope.check_member_access(selected, coord)
     from pcc.frontends.cpp.class_template_members import request_body
     request_body(parser, selected, coord)
     from pcc.frontends.cpp.default_arguments import expand
     arguments = expand(parser, selected, arguments, coord)
-    converted = [parser._convert(arg, dtype, coord)
-                 for arg, dtype in zip(arguments, selected.parameters)]
+    from pcc.frontends.cpp.references import convert_call_arguments
+    converted = convert_call_arguments(parser, arguments, selected.parameters, coord)
     node = c_ast.FuncCall(c_ast.ID(selected.c_name, coord), c_ast.ExprList(converted, coord), coord)
     if discarded_base is not None:
         node = c_ast.ExprList([discarded_base, node], coord)

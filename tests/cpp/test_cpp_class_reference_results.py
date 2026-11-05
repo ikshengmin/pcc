@@ -105,7 +105,6 @@ INVALID = (
     ('nonconst-alias-of-const-result', 'struct S{};const S&f(S*p){return *p;}void g(S*p){S&r=f(p);}', 'cpp.invalid-reference-binding'),
 )
 DEFERRED = (
-    ('ordinary-class-reference-parameter', 'struct S{int n;};int f(const S&s){return s.n;}', 'cpp.unsupported.class-reference-values'),
     ('class-copy-from-result', 'struct S{int n;};S&f(S*p){return *p;}void g(S*p){S copy=f(p);}', 'cpp.unsupported.class-initialization'),
     ('assignment-operator-body', 'struct S{S&operator=(const S&other){return *this;}};', 'cpp.unsupported.class-reference-values'),
     ('class-value-return', 'struct S{};S f(){S s;return s;}', 'cpp.unsupported.class-value-abi'),

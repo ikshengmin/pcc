@@ -2,7 +2,9 @@
 
 Reference identity survives overload selection and declaration matching. Only
 projection to C uses an address parameter; source names denote the referent.
-Selected constructor parameters and local aliases may borrow class lvalues.
+Selected constructor parameters, ordinary call parameters and local aliases
+may borrow class lvalues. Free class-argument calls require explicit qualification
+until their separate unqualified-call capability is admitted.
 Ordinary reference results borrow existing scalar/pointer/class lvalues.
 Temporary materialization, class-value calls and implicit class copies remain
 gaps; class-reference results in template patterns/replay remain separate.
@@ -105,6 +107,33 @@ def bind(parser, expression, destination, coord, *, allow_class=False):
     # it never fetches the referent or manufactures a new source pointer value.
     node = expression.node
     return node.expr if isinstance(node, c_ast.UnaryOp) and node.op == '*' else c_ast.UnaryOp('&', node, coord)
+
+
+def convert_call_argument(parser, expression, dtype, coord):
+    """Bind a selected ordinary class-reference formal without an object copy.
+
+Overload selection and the call owner retain by-value, variadic and template
+gates. This is argument conversion, not general class value conversion.
+"""
+    from pcc.frontends.cpp.classes import is_class_type
+    if isinstance(dtype, ReferenceType) and is_class_type(dtype.referent):
+        if not ordinary_class_result_context(parser):
+            raise CppDiagnostic('cpp.unsupported.class-reference-values',
+                                'class-reference argument replay requires its own template owner', coord)
+        return bind(parser, expression, dtype, coord, allow_class=True)
+    return parser._convert(expression, dtype, coord)
+
+
+def convert_call_arguments(parser, arguments, parameters, coord):
+    from pcc.frontends.cpp.classes import is_class_type
+    for index, argument in enumerate(arguments):
+        if is_class_type(argument.dtype):
+            target = parameters[index] if index < len(parameters) else None
+            if not isinstance(target, ReferenceType) or not is_class_type(target.referent):
+                raise CppDiagnostic('cpp.unsupported.class-value-abi',
+                                    'class arguments require an explicit reference parameter', coord)
+    return [convert_call_argument(parser, argument, dtype, coord)
+            for argument, dtype in zip(arguments, parameters)]
 
 
 def declare_local(parser, name, dtype, *, for_init=False):

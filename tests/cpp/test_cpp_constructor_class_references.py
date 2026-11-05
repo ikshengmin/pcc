@@ -149,7 +149,6 @@ DEFERRED = (
     ('implicit-copy-not-synthesized', 'struct S{S(int){} };int f(){S a(1);S b(a);return 0;}', 'cpp.unsupported.class-initialization'),
     ('extra-required-parameter-not-copy-constructor', 'struct S{S(int){}S(const S&,int){} };'
      'int f(){S a(1);S b(a);return 0;}', 'cpp.unsupported.class-initialization'),
-    ('class-reference-function-body', 'struct N{int value;};int read(const N&n){return n.value;}', 'cpp.unsupported.class-reference-values'),
     ('class-reference-assignment-body', 'struct S{void operator=(const S&){} };', 'cpp.unsupported.class-reference-values'),
     # The original namespace object precedes the reference default and needs its own lifetime owner.
     ('class-reference-default', 'struct N{};N node;struct H{H(const N&n=node){}};', 'cpp.unsupported.static-class-lifetime'),

@@ -1126,7 +1126,9 @@ class CppParser:
         if template_parameters and any(isinstance(t, ReferenceType) for _, t in params):
             raise CppDiagnostic("cpp.unsupported.references", "reference template parameter deduction is not implemented", name.coord)
         if any(isinstance(t, ReferenceType) and is_class_type(t.referent) for _, t in params) and definition:
-            raise CppDiagnostic("cpp.unsupported.class-reference-values", "class-reference function bodies require class value/lifetime semantics", name.coord)
+            from pcc.frontends.cpp.references import ordinary_class_result_context
+            if name.value == 'operator=' or not ordinary_class_result_context(self):
+                raise CppDiagnostic("cpp.unsupported.class-reference-values", "class-reference operator/template bodies require separate semantics", name.coord)
         if definition or member_owner is not None or template_parameters:
             for dtype in (result_type,) + tuple(t for _, t in params):
                 self._check_value_type(dtype, name)
@@ -2433,7 +2435,10 @@ class CppParser:
                 raise CppDiagnostic("cpp.unsupported.enum-templates",
                                     "enum-related template deduction is not implemented", coord)
         if any(is_class_type(arg.dtype) for arg in arguments):
-            raise CppDiagnostic("cpp.unsupported.class-value-abi", "class argument ABI/ADL is not implemented", coord)
+            from pcc.frontends.cpp.references import ordinary_class_result_context
+            if (not ordinary_class_result_context(self)
+                    or any(candidate.template_parameters for candidate in group.overloads)):
+                raise CppDiagnostic("cpp.unsupported.class-value-abi", "class argument template deduction/replay is not implemented", coord)
         if any(pointer_type(arg.dtype) and is_class_type(unqualified(arg.dtype).pointee) for arg in arguments):
             # Class-pointer ADL has already run at the unqualified call site;
             # dependent template association/deduction remains a separate gate.
@@ -2490,8 +2495,8 @@ class CppParser:
             selected = entry.value
         from pcc.frontends.cpp.default_arguments import expand
         arguments = expand(self, selected, arguments, coord)
-        converted = [self._convert(arg, dtype, coord)
-                     for arg, dtype in zip(arguments, selected.parameters)]
+        from pcc.frontends.cpp.references import convert_call_arguments
+        converted = convert_call_arguments(self, arguments, selected.parameters, coord)
         if selected.variadic:
             for argument in arguments[len(selected.parameters):]:
                 source = unqualified(argument.dtype)
@@ -2574,11 +2579,14 @@ class CppParser:
         return tuple(arguments)
 
     def _call_arguments(self):
+        from pcc.frontends.cpp.references import ordinary_class_result_context
         arguments = []
         if not self._accept(")"):
             while True:
                 expression = self._expression()
-                self._require_value(expression)
+                allow_class = ordinary_class_result_context(self)
+                self._require_value(expression, allow_class=allow_class,
+                                    object_address=allow_class and is_class_type(expression.dtype))
                 arguments.append(expression)
                 if self._accept(")"):
                     break
@@ -2709,10 +2717,18 @@ class CppParser:
             if symbol is not None and symbol.kind != "function":
                 raise CppDiagnostic("cpp.not-callable", f"'{token.value}' is not callable", token.coord)
             arguments = []
+            from pcc.frontends.cpp.references import ordinary_class_result_context
+            # Qualified and member calls do not require argument-dependent
+            # lookup. Keep unqualified free class-argument calls at their old
+            # value gate, before entering the existing ADL owner.
+            allow_class_arguments = (ordinary_class_result_context(self)
+                                     and (name.global_scope or len(name.parts) > 1
+                                          or getattr(symbol, 'class_owner', None) is not None))
             if not self._accept(")"):
                 while True:
                     expression = self._expression()
-                    self._require_value(expression)
+                    self._require_value(expression, allow_class=allow_class_arguments,
+                                        object_address=allow_class_arguments and is_class_type(expression.dtype))
                     arguments.append(expression)
                     if self._accept(")"):
                         break
