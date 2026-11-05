@@ -177,10 +177,10 @@ NATIVE_GAPS = [
     ("null-outside-inference", original("return null==null?42:0;"), "java.unsupported.object-expressions"),
 ]
 MODEL_ARRAY_ORIGINAL = original("var value=new int[]{42};return 42;")
+MODEL_STRING_ORIGINAL = original('var value="answer";return 42;')
 MODEL_GAPS = [
     ("reference-inference", original("var value=new Inferred();return 42;"), "java.unsupported.local-inference-domain"),
     ("reference-call-inference", original("var value=make();return 42;", helpers="static Inferred make(){return null;}"), "java.unsupported.local-inference-domain"),
-    ("string-inference", original('var value="answer";return 42;'), "java.unsupported.local-inference-domain"),
 ]
 
 

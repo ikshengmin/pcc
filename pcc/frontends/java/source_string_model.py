@@ -33,6 +33,11 @@ class StringContextObligation:
 
 
 class StringModelAnalyzer:
+    def admits_inferred_local_type(self, dtype):
+        # Inference preserves the unresolved bootstrap identity and its
+        # obligations. It does not supply native String storage or a layout.
+        return isinstance(dtype, BootstrapStringType) or super().admits_inferred_local_type(dtype)
+
     def require_callable_string_context(self, method, token):
         """The selected signature owns the ABI contract, even for null actuals."""
         if (isinstance(method.result, BootstrapStringType)
