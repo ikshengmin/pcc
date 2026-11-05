@@ -22,6 +22,10 @@ RUNTIME_DIR = REPO_ROOT / "pcc" / "runtime"
 STATE_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_state.py"
 SELECTOR_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_relocation_selector.py"
 ROOT_OPERATIONS_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_root_operations.py"
+# Other GC kernel objects that own registered scalar storage.
+PRESSURE_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_pressure.py"
+INDEX_TABLE_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_index_table.py"
+MARK_CYCLE_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_common_mark_cycle.py"
 SUBSTRATE_SOURCE = RUNTIME_DIR / "py" / "py_substrate.py"
 
 
@@ -185,7 +189,13 @@ def test_freestanding_gc_state_has_complete_raw_abi_and_initial_values(
     # (pcc_gc_frame_registry_inactive) and the final stack-walk answer
     # (pcc_gc_stackmap_walk_state).
     # The opt-in GC4 tracing-only configuration adds one frozen mode word.
-    assert len(expected) == 234
+    # The nonmoving count-free collectors (GC1/GC2) fix one word with the
+    # collector (pcc_gc_nonmoving_count_free), and their collector thread
+    # hands a traced mark's final remark to a mutator
+    # (pcc_gc_cms_finish_pending).
+    assert len(expected) == 236
+    assert expected["pcc_gc_nonmoving_count_free"] == ("define_global_i32", 0)
+    assert expected["pcc_gc_cms_finish_pending"] == ("define_global_i32", 0)
     assert expected["pcc_gc_backend4_no_refcounts"] == ("define_global_i32", 0)
     assert expected["pcc_gc_frame_registry_inactive"] == ("define_global_i32", 0)
     assert expected["pcc_gc_stackmap_walk_state"] == ("define_global_i32", 0)
@@ -253,7 +263,13 @@ def test_production_archive_plan_includes_freestanding_gc_state():
 
 def test_gc_state_storage_types_are_registered_in_runtime_abi():
     definitions = _state_definitions(STATE_SOURCE)
-    for owner_source in (SELECTOR_SOURCE, ROOT_OPERATIONS_SOURCE):
+    for owner_source in (
+        SELECTOR_SOURCE,
+        ROOT_OPERATIONS_SOURCE,
+        PRESSURE_SOURCE,
+        INDEX_TABLE_SOURCE,
+        MARK_CYCLE_SOURCE,
+    ):
         owner_definitions = _state_definitions(owner_source)
         assert set(definitions).isdisjoint(owner_definitions)
         definitions.update(owner_definitions)

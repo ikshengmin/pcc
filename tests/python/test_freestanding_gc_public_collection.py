@@ -34,6 +34,11 @@ OWNED_SYMBOLS = {
 OWNED_TLS_GLOBALS = {"pcc_gc_cms_worker_current"}
 RAW_FUNCTION_IMPORTS = {
     "pcc_gc_refresh_read_barrier",
+    # The first allocation fixes the configuration under the graph lock.
+    "pcc_py_gc_minor_graph_lock",
+    "pcc_py_gc_minor_graph_unlock",
+    # gc.collect() advances GC4's empty-page quarantine after deallocators.
+    "pcc_gc_backend4_remap_and_retire_stopped_world",
     # The collector thread begins a cycle once debt reaches the threshold
     # and marks in fixed batches.
     "pcc_gc_tracing_debt_threshold",
@@ -41,6 +46,8 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_tracing_discharge_debt",
     "pcc_gc_tracing_has_sweep_candidate",
     "pcc_gc_tracing_step_cycle",
+    # Traced gray work hands the final remark to a mutator.
+    "pcc_gc_gray_count_load_acquire",
     "pcc_gc_tracing_sweep_unreachable",
     "pcc_platform_getenv",
     "pcc_platform_abort",
@@ -54,6 +61,7 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_thread_enable_conservative_roots",
 }
 RAW_GLOBAL_IMPORTS = {
+    "pcc_gc_cms_finish_pending",
     "pcc_gc_backend4_no_refcounts",
     "pcc_gc_frame_registry_inactive",
     "pcc_gc_backend0_frame_roots_enabled",
@@ -66,11 +74,13 @@ RAW_GLOBAL_IMPORTS = {
     # while gc.disable() holds.
     "pcc_gc_mark_active",
     "py_gc_enabled",
-    # It pauses with threshold0 == 0 too, begins a cycle only once debt or
-    # tracking growth is due, and has a mutator sweep each completed mark.
+    # It pauses with threshold0 == 0 too, begins a cycle only once the debt
+    # is due, and has a mutator sweep each completed mark.
     "py_gc_threshold0",
-    "py_gc_tracked_count",
-    "pcc_gc_tracked_after_collect",
+    # gc.collect() of count-free GC3 retires a forwarding population.
+    "pcc_gc_forwarding_population",
+    "pcc_gc_backend4_parked_head",
+    "pcc_gc_backend4_retained_page_head",
     "pcc_gc_debt_bytes",
     "pcc_gc_tracing_finish_commits",
     "pcc_gc_backend4_auto_step_pending",
@@ -104,7 +114,10 @@ def _literal_global_imports() -> set[str]:
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
             continue
-        if node.func.id != "global_addr" or not node.args:
+        # Pointer globals read or written by name are imports as well.
+        if node.func.id not in {
+            "global_addr", "global_load_ptr", "global_store_ptr"
+        } or not node.args:
             continue
         value = node.args[0]
         if isinstance(value, ast.Constant) and isinstance(value.value, str):
@@ -183,21 +196,25 @@ def test_public_collection_preserves_config_and_collection_order():
     # the step's root seeding and final remark stop the world, inside the
     # step. It traces in batches of 512, discharges the debt it traced,
     # polls every round and is paused by gc.disable() and threshold0 == 0.
-    # A cycle begins only when due (the debt threshold or tracking growth)
-    # and not while a completed mark waits for the sweep a mutator's
-    # application gate runs; a completed mark requests that sweep.
+    # A cycle begins only when due (the allocation debt threshold; tracked
+    # growth paces only GC0) and not while a completed mark waits for the
+    # sweep a mutator's application gate runs; a completed mark requests
+    # that sweep. GC1/GC2's traced gray work hands the final remark to that
+    # mutator instead, which finishes and sweeps in one stopped world.
     assert "pcc_stop_the_world()" not in worker
     assert "pcc_resume_world()" not in worker
+    assert 'global_addr("py_gc_tracked_count")' not in worker
     worker_enabled = worker.index('global_addr("py_gc_enabled")')
     worker_threshold0 = worker.index('global_addr("py_gc_threshold0")')
     worker_pending = worker.index('atomic_load_i32(sweep_pending, 0, "acquire") == 0')
     worker_due = worker.index("pcc_gc_tracing_debt_threshold()")
-    worker_growth = worker.index('global_addr("py_gc_tracked_count")')
+    worker_handoff = worker.index("pcc_gc_gray_count_load_acquire() == 0")
+    worker_finish = worker.index('global_addr("pcc_gc_cms_finish_pending")')
     worker_trace = worker.index("pcc_gc_tracing_step_cycle(512)")
     worker_discharge = worker.index("pcc_gc_tracing_discharge_debt(traced)")
     worker_sweep = worker.index('atomic_store_i32(pending, 0, 1, "release")', worker_discharge)
     assert max(worker_enabled, worker_threshold0) < worker_pending
-    assert worker_pending < worker_due < worker_growth < worker_trace
+    assert worker_pending < worker_due < worker_handoff < worker_finish < worker_trace
     assert worker_trace < worker_discharge < worker_sweep
     assert "pcc_thread_safepoint_gate()" in worker
 
@@ -212,10 +229,11 @@ def test_public_collection_preserves_config_and_collection_order():
     config = strict.split('@c_abi_export("pcc_gc_config_ensure")', 1)[1].split(
         "\n@c_abi_export", 1
     )[0]
+    # Collector identity fixes reference counting (8429b6671): no
+    # tracing-only switch remains to read.
+    assert "TRACING_ONLY" not in config
     for env_name in (
         "PCC_GC_BACKEND",
-        "PCC_GC4_TRACING_ONLY",
-        "PCC_GC_TRACING_ONLY",
         "PCC_GC_PAUSE",
         "PCC_GC_STEPMUL",
         "PCC_GC_STEP_MUL",
@@ -318,6 +336,7 @@ extern int64_t pcc_gc_tracing_finish_claim_epoch;
 extern int64_t pcc_gc_tracing_finish_claim_backend;
 extern int64_t pcc_gc_tracing_finish_commits;
 extern int32_t pcc_gc_backend4_auto_step_pending;
+extern int32_t pcc_gc_cms_finish_pending;
 extern int32_t pcc_gc_cms_worker_started;
 extern int32_t pcc_gc_cms_worker_starts;
 extern int32_t pcc_gc_cms_worker_stops;
@@ -431,6 +450,10 @@ int64_t pcc_gc_finish_tracing_cycle(
     return 1;
 }
 void pcc_gc_trace_referents(void *obj) { (void)obj; }
+int64_t pcc_gc_backend4_remap_and_retire_stopped_world(void) { return 0; }
+void pcc_gc_trace_stack_begin(void) {}
+void pcc_gc_trace_stack_end(void) {}
+int64_t pcc_gc_trace_stack_drain(int64_t budget) { (void)budget; return 0; }
 int64_t pcc_gc_gray_count_load_acquire(void) { return 0; }
 void pcc_gc_gray_count_decrement_acq_rel(void) {}
 void pcc_gc_gray_count_store_release(int64_t value) { (void)value; }
@@ -491,9 +514,11 @@ int main(void) {
         __atomic_load_n(&pcc_gc_tracing_finish_commits, __ATOMIC_ACQUIRE)
         != 0
     ) return 15;
-    /* Debt at the pacing threshold (no live bytes: 65536) begins one; the
-     * completed mark asks the next application gate to sweep it. */
-    pcc_gc_cms_note_alloc(65536);
+    /* Debt at the pacing threshold (no marked bytes: the 4 MiB floor)
+     * begins one. Its gray work traced, GC2's collector thread asks the next
+     * application gate to finish the mark and sweep it in one stopped
+     * world. */
+    pcc_gc_cms_note_alloc(4194304);
     for (
         int i = 0;
         i < 1000
@@ -507,10 +532,12 @@ int main(void) {
     if (
         __atomic_load_n(&pcc_gc_backend4_auto_step_pending, __ATOMIC_ACQUIRE)
         != 1
+        || __atomic_load_n(&pcc_gc_cms_finish_pending, __ATOMIC_ACQUIRE) != 1
     ) return 16;
     if (pcc_gc_cms_stop_worker() != 0) return 14;
     if (
-        pcc_gc_tracing_finish_commits != 1
+        pcc_gc_tracing_finish_commits != 0
+        || pcc_gc_mark_active != 1
         || stop_calls != resume_calls
         || pcc_gc_tracing_finish_claim_epoch != 0
         || pcc_gc_tracing_finish_claim_backend != -1

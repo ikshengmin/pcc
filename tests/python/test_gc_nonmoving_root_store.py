@@ -36,6 +36,7 @@ class RootStore:
             "pcc_diagnostics_runtime_log_fast_state": 0,
             "pcc_gc_refcount_provenance_probe": 0,
             "pcc_gc_mark_active": active,
+            "pcc_gc_forwarding_population": 0,
         }
         self.depth = self.gray = self.notes = self.lookups = 0
         self.events = []
@@ -48,6 +49,7 @@ class RootStore:
             "store_i32": self.write, "store_i64": self.write,
             "atomic_load_i32": lambda base, offset, order: self.read(base, offset),
             "atomic_cas_i32": self.cas,
+            "atomic_rmw_i32": self.rmw,
             "ptr_is_null": lambda value: int(value == 0),
             "is_tagged_int": lambda value: value & 1,
             "null": lambda: 0, "_gc_backend_fast": lambda: backend,
@@ -63,7 +65,8 @@ class RootStore:
             self.ns[name] = lambda *args, name=name: pytest.fail("unexpected " + name)
         load_functions(self.ns, "freestanding_gc_root_operations.py", {"pcc_gc_shade_gray_atomic"})
         load_functions(self.ns, "py_obj.py", {
-            "_store_root_nonmoving_tracing", "pcc_gc_store_root", "pcc_gc_store_root_take",
+            "_store_root_nonmoving_tracing", "_store_root_count_free_unforwarded",
+            "pcc_gc_store_root", "pcc_gc_store_root_take",
         })
 
     def read(self, base, offset):
@@ -83,6 +86,12 @@ class RootStore:
         if old == expected:
             self.words[base, offset] = desired
         self.events.append("shade")
+        return old
+
+    def rmw(self, op, base, offset, value, order):
+        assert op == "add" and base == "pcc_gc_cms_wb_flushes" and self.depth == 1
+        old = self.globals.get(base, 0)
+        self.globals[base] = old + value
         return old
 
     def enter(self):
@@ -171,3 +180,53 @@ def test_checked_or_logged_roots_keep_the_original_plan(backend, probe, logging)
     model.ns["pcc_gc_store_root"](model.slot, model.obj)
     assert events == [("init", backend), "lock", "commit", "unlock", "finish"]
     assert not model.events
+
+
+# GC3/GC4 (count-free, moving): with no forwarded object a root store is the
+# same lock-free publication; a white value is shaded in a cycle as by every
+# tracing root barrier. Forwarding is installed only with the world stopped.
+@pytest.mark.parametrize("backend", (3, 4))
+@pytest.mark.parametrize("entry", ("pcc_gc_store_root", "pcc_gc_store_root_take"))
+@pytest.mark.parametrize("value_kind", ("object", "null", "tagged", "foreign"))
+@pytest.mark.parametrize("active", (0, 1))
+def test_unforwarded_moving_root_publication_is_lock_free(backend, entry, value_kind, active):
+    model = RootStore(backend, active)
+    value = {"object": model.obj, "null": 0, "tagged": 123, "foreign": 0xCAFE}[value_kind]
+    model.ns[entry](model.slot, value)
+    shaded = int(active and value_kind == "object")
+    assert model.words[model.slot, 0] == value
+    assert model.notes == 1 and model.depth == 0 and model.gray == shaded
+    assert model.stopped_roots == [(value, shaded)]
+    if shaded:
+        assert model.events.index("store") < model.events.index("shade")
+    if not active or value_kind in ("null", "tagged"):
+        assert model.lookups == 0
+
+
+@pytest.mark.parametrize("backend", (3, 4))
+@pytest.mark.parametrize("color", (GRAY, BLACK, WHITE | DYING))
+def test_moving_root_barrier_shades_only_white(backend, color):
+    model = RootStore(backend, flags=color)
+    model.ns["pcc_gc_store_root"](model.slot, model.obj)
+    assert model.gray == 0
+    assert model.words[model.obj, 12] == color
+
+
+@pytest.mark.parametrize("backend", (3, 4))
+def test_forwarded_phase_keeps_the_relocating_plan(backend):
+    model = RootStore(backend)
+    model.globals["pcc_gc_forwarding_population"] = 1
+    events = []
+    model.ns.update(
+        stack_alloc=lambda size: 0x3000,
+        pcc_gc_store_root_plan_init=lambda plan, selected: events.append(("init", selected)),
+        pcc_py_gc_minor_graph_lock=lambda: events.append("lock"),
+        pcc_gc_store_root_plan_commit_locked=lambda *args: events.append("commit"),
+        pcc_py_gc_minor_graph_unlock=lambda: events.append("unlock"),
+        pcc_gc_store_root_plan_finish=lambda plan: events.append("finish"),
+    )
+    model.ns["pcc_gc_store_root"](model.slot, model.obj)
+    assert events == [("init", backend), "lock", "commit", "unlock", "finish"]
+    # The population test ran inside one no-park interval and stored nothing.
+    assert model.events == ["enter", "exit"] and model.notes == 0
+    assert model.words[model.slot, 0] == 0xBAD0

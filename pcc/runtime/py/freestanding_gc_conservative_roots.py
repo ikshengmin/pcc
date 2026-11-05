@@ -38,6 +38,9 @@ pcc_thread_visit_conservative_words = extern(
     "pcc_thread_visit_conservative_words", (c_ptr, c_ptr), c_int64
 )
 pcc_thread_world_stop_epoch_held = extern("pcc_thread_world_stop_epoch_held", (), c_int64)
+pcc_thread_snapshot_stopped_world_owner = extern(
+    "pcc_thread_snapshot_stopped_world_owner", (), c_int64
+)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
@@ -288,6 +291,10 @@ def _extent_has_word(words, count: i64, base, size: i64) -> i64:
 @c_abi_export("pcc_gc_scan_conservative_thread_roots")
 def _scan_thread_roots(mark: i64) -> None:
     if pcc_thread_world_stop_epoch_held() < 0:
+        pcc_platform_abort()
+        return
+    # The owner's own frames since it stopped the world are roots as well.
+    if pcc_thread_snapshot_stopped_world_owner() < 0:
         pcc_platform_abort()
         return
     context = stack_alloc(_WORDS_CONTEXT_BYTES)

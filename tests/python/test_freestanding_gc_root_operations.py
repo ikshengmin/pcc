@@ -24,6 +24,8 @@ MAKEFILE = RUNTIME_DIR / "Makefile"
 PIN_SYMBOLS = {"pcc_gc_pin", "pcc_gc_unpin"}
 TRANSFER_SYMBOLS = {"pcc_gc_take_pinned_slot"}
 LEASE_SYMBOLS = {"pcc_gc_borrowed_lease_acquire", "pcc_gc_foreign_lease_acquire", "pcc_gc_foreign_lease_release", "pcc_gc_object_is_address_pinned"}
+# Object-list walks of the collector read the listed object's own node.
+WALK_SYMBOLS = {"pcc_gc_object_node_is_address_pinned"}
 HANDLED_SYMBOLS = {"py_handled_context_push", "py_handled_context_pop", "py_handled_context_swap", "py_handled_exception_slot"}
 OWNED_DATA_SYMBOLS = {
     "pcc_gc_foreign_lease_active",
@@ -36,7 +38,7 @@ OWNED_DATA_SYMBOLS = {
     "pcc_gc_foreign_lease_active_isolation_after",
     "pcc_tls_handled_exception_context",
 }
-OWNED_SYMBOLS = PIN_SYMBOLS | TRANSFER_SYMBOLS | LEASE_SYMBOLS | HANDLED_SYMBOLS | {
+OWNED_SYMBOLS = PIN_SYMBOLS | TRANSFER_SYMBOLS | LEASE_SYMBOLS | HANDLED_SYMBOLS | WALK_SYMBOLS | {
     "pcc_gc_release_nonterminal_tail",
     "pcc_gc_mode_leases_freeze",
     "pcc_gc_mode_leases_thaw",
@@ -69,6 +71,10 @@ OWNED_SYMBOLS = PIN_SYMBOLS | TRANSFER_SYMBOLS | LEASE_SYMBOLS | HANDLED_SYMBOLS
 RAW_ONLY_CROSS_OBJECT_SYMBOLS = {
     "pcc_gc_forwarding_index_find",
     "pcc_gc_object_index_find",
+    # GC1/GC2 container initialization shades without the graph lock.
+    "pcc_gc_count_free_store_shade",
+    # A stopped-world remark traces the roots it shades from the stack.
+    "pcc_gc_trace_stack_push",
 }
 RAW_FUNCTION_IMPORTS = RAW_ONLY_CROSS_OBJECT_SYMBOLS | {
     # The Darwin thread-local descriptor bootstrap of the handled-context slot.
@@ -80,6 +86,7 @@ RAW_FUNCTION_IMPORTS = RAW_ONLY_CROSS_OBJECT_SYMBOLS | {
     "pcc_gc_granule_span",
 }
 RAW_GLOBAL_IMPORTS = {
+    "pcc_gc_nonmoving_count_free",
     "pcc_gc_backend4_no_refcounts",
     "pcc_gc_backend_selected", "pcc_gc_gray_count",
     # A lease on a non-moving collector is a no-op once the configuration
@@ -174,6 +181,8 @@ def test_root_operations_have_one_strict_source_owner():
                 caller = (REPO_ROOT / "pcc/frontends/python/codegen/call_object_lowering.py").read_text()
             if symbol == "pcc_gc_object_is_address_pinned":
                 caller = managed
+        elif symbol in WALK_SYMBOLS:
+            caller = (RUNTIME_DIR / "py/freestanding_gc_tracing_sweep_collector.py").read_text()
         elif symbol in HANDLED_SYMBOLS:
             caller = (REPO_ROOT / "pcc/frontends/python/codegen/exception_lowering.py").read_text()
             caller += (RUNTIME_DIR / "py/py_virtual_thread_runtime.py").read_text()

@@ -60,6 +60,7 @@ __pcc_freestanding__ = True
 pcc_gc_forwarding_index_find = extern("pcc_gc_forwarding_index_find", (c_ptr,), c_ptr)
 pcc_gc_object_index_find = extern("pcc_gc_object_index_find", (c_ptr,), c_ptr)
 py_decref = extern("py_decref", (c_ptr,), c_void)
+pcc_gc_trace_stack_push = extern("pcc_gc_trace_stack_push", (c_ptr,), c_void)
 py_incref = extern("py_incref", (c_ptr,), c_void)
 pcc_gc_config_ensure = extern("pcc_gc_config_ensure", (), c_int64)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
@@ -432,6 +433,8 @@ def pcc_gc_mark_root_gray_if_known(obj) -> None:
     if pcc_gc_object_is_known_no_lock(obj) == 0:
         return
     pcc_gc_shade_gray_atomic(obj, 1)
+    # A stopped-world remark traces its roots from the tracer's stack.
+    pcc_gc_trace_stack_push(obj)
 
 
 @c_abi_export("pcc_gc_resolve_root_slot_mode")
@@ -711,6 +714,11 @@ def pcc_gc_foreign_lease_release(slot, acquired: i64) -> i64:
     return status
 
 
+pcc_gc_count_free_store_shade = extern(
+    "pcc_gc_count_free_store_shade", (c_ptr,), c_void
+)
+
+
 @c_abi_export("pcc_gc_try_init_ptr_locked")
 def pcc_gc_try_init_ptr_locked(destination, source) -> i64:
     """Retain an authoritative source into a private, unowned new field.
@@ -722,6 +730,23 @@ def pcc_gc_try_init_ptr_locked(destination, source) -> i64:
     """
     if ptr_is_null(destination) != 0 or ptr_is_null(source) != 0 or ptr_eq(destination, source) != 0:
         return 0
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
+            and atomic_load_i64(global_addr("pcc_gc_foreign_lease_active"), 0, "acquire") >= 0):
+        # The nonmoving count-free GC1/GC2 retain by reachability: the first
+        # store needs no count, only the locked store barrier while a cycle
+        # is active. The same tag admission as GC0 keeps task objects and
+        # foreign handles on the ordinary protocol.
+        counted = load_ptr(source, 0)
+        if ptr_is_null(counted) == 0 and is_tagged_int(counted) == 0:
+            counted_tag: i64 = load_i32(counted, PYOBJECTHEADER_TYPE_TAG_OFFSET)
+            if not ((counted_tag >= PY_TYPE_NONE and counted_tag < PY_TYPE_CONTINUATION)
+                    or counted_tag == PY_TYPE_CPY_HANDLE
+                    or (counted_tag >= PY_TYPE_USER and counted_tag < PY_TYPE_CEXT_TAG_BASE)):
+                return 0
+            pcc_gc_count_free_store_shade(counted)
+        store_ptr(destination, 0, counted)
+        return 1
     if (load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
             or load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0
             or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0
@@ -821,6 +846,30 @@ def pcc_gc_object_is_address_pinned(obj) -> i64:
             return 1
         return 1 if load_i64(node, 80) != 0 else 0
     return 0
+
+
+@c_abi_export("pcc_gc_object_node_is_address_pinned")
+def pcc_gc_object_node_is_address_pinned(node, obj) -> i64:
+    """pcc_gc_object_is_address_pinned for a walk of the object list.
+
+    The nonmoving collectors (GC1/GC2) unlink an object's node when they
+    index-remove it, so an active listed node is the one the index finds:
+    read it instead of probing the index for every listed object. The
+    moving collectors keep the index's answer.
+    """
+    backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+    if backend != 1 and backend != 2:
+        return pcc_gc_object_is_address_pinned(obj)
+    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+        return 0
+    if pcc_gc_static_literal_contains(obj) != 0:
+        return 1
+    if (load_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED) != 0:
+        return 1
+    if (load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
+            and (load_i64(node, 56) & 1) != 0):
+        return 1
+    return 1 if load_i64(node, 80) != 0 else 0
 
 
 # Hot per-operation statistics: the pin balance at offset 0 and the

@@ -1084,7 +1084,7 @@ def py_dict_set(d, key, value) -> None:
         return
     if ptr_is_null(key) != 0:
         return
-    if pcc_gc_backend() == 0:
+    if pcc_gc_backend() == 0 or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
         kind: int = _dict_fast0_key_kind(key)
         if kind != 0:
             if _dict_set_gc0_locked(d, key, value, kind) != 0:
@@ -1114,7 +1114,15 @@ def _dict_set_fast0(d, key, value, kind: int) -> int:
 
 
 def _dict_gc0_admitted_locked() -> int:
-    """The graph-locked GC0 retain applies: no switch, probe or log."""
+    """The graph-locked GC0 retain applies: no switch, probe or log.
+
+    The nonmoving count-free GC1/GC2 share it: their retain is reachability
+    and pcc_gc_try_init_ptr_locked shades a first store during a cycle.
+    """
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            and atomic_load_i64(global_addr("pcc_gc_foreign_lease_active"), 0, "acquire") >= 0
+            and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0):
+        return 1
     if (load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0
             or atomic_load_i64(global_addr("pcc_gc_foreign_lease_active"), 0, "acquire") < 0
             or load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
@@ -1394,7 +1402,7 @@ def py_dict_get(d, key):
         return null()
     if ptr_is_null(key) != 0:
         return null()
-    if pcc_gc_backend() == 0:
+    if pcc_gc_backend() == 0 or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
         kind: int = _dict_fast0_key_kind(key)
         if kind != 0:
             result_slot = stack_alloc(8)
@@ -2499,16 +2507,18 @@ def _dict_gc0_materialize(receiver, kind: int, output) -> int:
     Returns 1 with the new list in output, 0 when this path does not apply,
     -1 with an exception after an allocation failure.
     """
-    if (load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
-            or load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0
-            or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0):
+    count_free: int = load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0)
+    if (load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0
+            or (count_free == 0
+                and (load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
+                     or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0))):
         return 0
     shard: int = pcc_gc_mode_lease_shard_index(receiver)
     if pcc_gc_mode_lease_reserve_shard(shard) != 0:
         return 0
     status: int = 1
     # A switch may have completed between the gate and the reservation.
-    if (load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
+    if count_free == 0 and (load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
             or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0):
         status = 0
     limit: int = 0

@@ -390,8 +390,8 @@ def test_concurrent_backend_barrier_grays_root_stores_inside_graph_lock_scope(
     A root store during marking grays its white value immediately -- also
     inside a caller-owned, nested graph-lock scope, where there is no later
     unlock to publish deferred work -- and the worker then traces every such
-    identity to black.  Leaving and re-entering CMS restarts the worker
-    exactly once.
+    identity to black.  The collector fixed by the first allocation refuses
+    a later switch and keeps its worker.
     """
     work_runtime = _build_threaded_runtime(tmp_path)
     result = _run_cms_probe(
@@ -451,13 +451,12 @@ def test_concurrent_backend_barrier_grays_root_stores_inside_graph_lock_scope(
 
         int64_t starts = pcc_gc_telemetry(PCC_GC_COUNTER_CMS_WORKER_STARTS);
         int64_t stops = pcc_gc_telemetry(PCC_GC_COUNTER_CMS_WORKER_STOPS);
-        if (pcc_gc_set_backend(PCC_GC_KIND_REFCOUNT_CYCLE) != 0) return 12;
-        if (pcc_gc_set_backend(PCC_GC_KIND_CONCURRENT_MARK_SWEEP) != 0) {
-            return 13;
-        }
+        /* The first allocation fixed the collector: a later switch is
+         * refused and leaves its collector thread running. */
+        if (pcc_gc_set_backend(PCC_GC_KIND_REFCOUNT_CYCLE) == 0) return 12;
         if (
-            pcc_gc_telemetry(PCC_GC_COUNTER_CMS_WORKER_STARTS) != starts + 1
-            || pcc_gc_telemetry(PCC_GC_COUNTER_CMS_WORKER_STOPS) != stops + 1
+            pcc_gc_telemetry(PCC_GC_COUNTER_CMS_WORKER_STARTS) != starts
+            || pcc_gc_telemetry(PCC_GC_COUNTER_CMS_WORKER_STOPS) != stops
         ) return 14;
         printf("cms-barrier-nested-lock-ok\\n");
         return 0;

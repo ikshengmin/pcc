@@ -24,7 +24,8 @@ OWNED_SYMBOLS = {
     "pcc_gc_prepare_object_list_mark",
 }
 RAW_FUNCTION_IMPORTS = {
-    "pcc_gc_object_is_address_pinned",
+    # The walk reads each listed object's own node (GC1/GC2).
+    "pcc_gc_object_node_is_address_pinned",
     "pcc_gc_gray_count_store_release",
     "pcc_gc_mark_root_gray_if_known",
     "pcc_gc_visit_registered_root_slots",
@@ -229,8 +230,11 @@ def test_archive_owns_object_root_seeding_and_executes_semantics(
         [str(executable)], capture_output=True, text=True, timeout=30
     )
     assert result.returncode == 0, result.stdout + result.stderr
+    # GC1 is count-free: a fresh allocation is white in an automatic cycle
+    # as in an explicit one (stopped-world stack roots protect temporaries;
+    # only refcounted tracing kept fresh objects black for one cycle).
     assert result.stdout == (
-        "prepare:1,1,0,1\n"
+        "prepare:1,0,0,1\n"
         "gray:1,1,2\n"
         "explicit:1,0\n"
     )

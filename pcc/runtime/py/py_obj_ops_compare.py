@@ -2461,9 +2461,13 @@ def _sorted_gc0(source_slot, reverse: int, result_slot) -> int:
     the list in result_slot, 0 when the general protocol must run, -1 with
     an exception after an allocation failure.
     """
-    if (load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
-            or load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0
-            or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0):
+    # GC0 and the nonmoving count-free GC1/GC2 (whose retain is reachability
+    # and whose first store shades during a cycle) share this path.
+    count_free: int = load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0)
+    if (load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0
+            or (count_free == 0
+                and (load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
+                     or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0))):
         return 0
     source = load_ptr(source_slot, 0)
     if ptr_is_null(source) != 0 or is_tagged_int(source) != 0:
@@ -2476,7 +2480,7 @@ def _sorted_gc0(source_slot, reverse: int, result_slot) -> int:
         return 0
     status: int = 1
     # A switch may have completed between the gate and the reservation.
-    if (load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
+    if count_free == 0 and (load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
             or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0):
         status = 0
     out = null()

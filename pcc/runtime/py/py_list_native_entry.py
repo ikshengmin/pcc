@@ -35,6 +35,9 @@ pcc_gc_native_root_bind_range = extern(
 # archive linking need not retain this module's initialization for 40/128/8.
 # Six equality/pop/remove entries keep their frame on GC0: their candidate
 # and result cells were unconditional scheduler roots before this port.
+# pcc_gc_nonmoving_count_free (fixed with the collector) skips the activation
+# protocol for the nonmoving count-free GC1/GC2: their stopped-world seed and
+# remark scan every thread's stack conservatively, which covers these inputs.
 
 pcc_list_body_pcc_list_grow_for_mutation = extern(
     "pcc_list_body_pcc_list_grow_for_mutation", (c_ptr, c_int64), c_ptr
@@ -44,9 +47,10 @@ pcc_list_body_pcc_list_grow_for_mutation = extern(
 def pcc_list_grow_for_mutation(l: c_ptr, want: int) -> c_ptr:
     # GC0 disabled frame tracking needs no native activation protocol here.
     # Its original input owners/counts still protect the body's raw inputs.
-    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-            and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            or (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+                and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0)):
         inputs = stack_alloc(1 * 8)
         store_ptr(inputs, 0 * 8, l)
         return pcc_list_body_pcc_list_grow_for_mutation(inputs, want)
@@ -77,9 +81,10 @@ pcc_list_body_py_list_new = extern(
 def py_list_new(initial_capacity: int) -> c_ptr:
     # GC0 disabled frame tracking needs no native activation protocol here.
     # Its original input owners/counts still protect the body's raw inputs.
-    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-            and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            or (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+                and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0)):
         return pcc_list_body_py_list_new(initial_capacity)
     native_frame_bytes: int = 40
     native_range_capacity: int = 8
@@ -102,9 +107,10 @@ pcc_list_body_py_list_from_static_items = extern(
 def py_list_from_static_items(items: c_ptr, count: int) -> c_ptr:
     # GC0 disabled frame tracking needs no native activation protocol here.
     # Its original input owners/counts still protect the body's raw inputs.
-    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-            and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            or (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+                and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0)):
         return pcc_list_body_py_list_from_static_items(items, count)
     native_frame_bytes: int = 40
     native_range_capacity: int = 8
@@ -127,9 +133,10 @@ pcc_list_body_py_list_from_owned_roots = extern(
 def py_list_from_owned_roots(sources: c_ptr, count: int, output: c_ptr) -> int:
     # GC0 disabled frame tracking needs no native activation protocol here.
     # Its original input owners/counts still protect the body's raw inputs.
-    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-            and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            or (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+                and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0)):
         return pcc_list_body_py_list_from_owned_roots(sources, count, output)
     native_frame_bytes: int = 40
     native_range_capacity: int = 8
@@ -152,9 +159,10 @@ pcc_list_body_py_list_append_from_slots = extern(
 def py_list_append_from_slots(list_slot: c_ptr, item_slot: c_ptr, borrowed_mask: int) -> None:
     # GC0 disabled frame tracking needs no native activation protocol here.
     # Its original input owners/counts still protect the body's raw inputs.
-    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-            and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            or (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+                and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0)):
         pcc_list_body_py_list_append_from_slots(list_slot, item_slot, borrowed_mask)
         return
     native_frame_bytes: int = 40
@@ -178,9 +186,10 @@ pcc_list_body_py_list_append = extern(
 def py_list_append(lst: c_ptr, item: c_ptr) -> None:
     # GC0 disabled frame tracking needs no native activation protocol here.
     # Its original input owners/counts still protect the body's raw inputs.
-    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-            and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            or (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+                and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0)):
         inputs = stack_alloc(2 * 8)
         store_ptr(inputs, 0 * 8, lst)
         store_ptr(inputs, 1 * 8, item)
@@ -214,9 +223,10 @@ pcc_list_body_py_list_append_fresh_native_instance = extern(
 def py_list_append_fresh_native_instance(lst: c_ptr, item: c_ptr) -> None:
     # GC0 disabled frame tracking needs no native activation protocol here.
     # Its original input owners/counts still protect the body's raw inputs.
-    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-            and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            or (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+                and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0)):
         inputs = stack_alloc(2 * 8)
         store_ptr(inputs, 0 * 8, lst)
         store_ptr(inputs, 1 * 8, item)
@@ -250,9 +260,10 @@ pcc_list_body_py_list_get = extern(
 def py_list_get(lst: c_ptr, i: int) -> c_ptr:
     # GC0 disabled frame tracking needs no native activation protocol here.
     # Its original input owners/counts still protect the body's raw inputs.
-    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-            and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            or (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+                and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0)):
         inputs = stack_alloc(1 * 8)
         store_ptr(inputs, 0 * 8, lst)
         return pcc_list_body_py_list_get(inputs, i)
@@ -283,9 +294,10 @@ pcc_list_body_py_list_getitem = extern(
 def py_list_getitem(lst: c_ptr, i: int) -> c_ptr:
     # GC0 disabled frame tracking needs no native activation protocol here.
     # Its original input owners/counts still protect the body's raw inputs.
-    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-            and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            or (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+                and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0)):
         inputs = stack_alloc(1 * 8)
         store_ptr(inputs, 0 * 8, lst)
         return pcc_list_body_py_list_getitem(inputs, i)
@@ -316,9 +328,10 @@ pcc_list_body_py_list_get_i64 = extern(
 def py_list_get_i64(lst: c_ptr, i: int) -> int:
     # GC0 disabled frame tracking needs no native activation protocol here.
     # Its original input owners/counts still protect the body's raw inputs.
-    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-            and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            or (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+                and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0)):
         inputs = stack_alloc(1 * 8)
         store_ptr(inputs, 0 * 8, lst)
         return pcc_list_body_py_list_get_i64(inputs, i)
@@ -349,9 +362,10 @@ pcc_list_body_py_list_get_i64_nonnegative = extern(
 def py_list_get_i64_nonnegative(lst: c_ptr, i: int) -> int:
     # GC0 disabled frame tracking needs no native activation protocol here.
     # Its original input owners/counts still protect the body's raw inputs.
-    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-            and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            or (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+                and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0)):
         inputs = stack_alloc(1 * 8)
         store_ptr(inputs, 0 * 8, lst)
         return pcc_list_body_py_list_get_i64_nonnegative(inputs, i)
@@ -382,9 +396,10 @@ pcc_list_body_py_list_set = extern(
 def py_list_set(lst: c_ptr, i: int, item: c_ptr) -> None:
     # GC0 disabled frame tracking needs no native activation protocol here.
     # Its original input owners/counts still protect the body's raw inputs.
-    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-            and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            or (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+                and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0)):
         inputs = stack_alloc(2 * 8)
         store_ptr(inputs, 0 * 8, lst)
         store_ptr(inputs, 1 * 8, item)
@@ -418,9 +433,10 @@ pcc_list_body_py_list_get_for_frame = extern(
 def py_list_get_for_frame(lst: c_ptr, i: int) -> c_ptr:
     # GC0 disabled frame tracking needs no native activation protocol here.
     # Its original input owners/counts still protect the body's raw inputs.
-    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-            and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            or (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+                and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0)):
         inputs = stack_alloc(1 * 8)
         store_ptr(inputs, 0 * 8, lst)
         return pcc_list_body_py_list_get_for_frame(inputs, i)
@@ -451,9 +467,10 @@ pcc_list_body_py_list_set_from_owned_root = extern(
 def py_list_set_from_owned_root(lst: c_ptr, i: int, source_slot: c_ptr, owned_flag: c_ptr) -> None:
     # GC0 disabled frame tracking needs no native activation protocol here.
     # Its original input owners/counts still protect the body's raw inputs.
-    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-            and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            or (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+                and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0)):
         inputs = stack_alloc(1 * 8)
         store_ptr(inputs, 0 * 8, lst)
         pcc_list_body_py_list_set_from_owned_root(inputs, i, source_slot, owned_flag)
@@ -485,9 +502,10 @@ pcc_list_body_py_list_setitem = extern(
 def py_list_setitem(lst: c_ptr, i: int, item: c_ptr) -> int:
     # GC0 disabled frame tracking needs no native activation protocol here.
     # Its original input owners/counts still protect the body's raw inputs.
-    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-            and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            or (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+                and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0)):
         inputs = stack_alloc(2 * 8)
         store_ptr(inputs, 0 * 8, lst)
         store_ptr(inputs, 1 * 8, item)
@@ -520,9 +538,10 @@ pcc_list_body_py_list_len = extern(
 def py_list_len(lst: c_ptr) -> int:
     # GC0 disabled frame tracking needs no native activation protocol here.
     # Its original input owners/counts still protect the body's raw inputs.
-    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-            and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            or (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+                and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0)):
         inputs = stack_alloc(1 * 8)
         store_ptr(inputs, 0 * 8, lst)
         return pcc_list_body_py_list_len(inputs)
@@ -553,9 +572,10 @@ pcc_list_body_py_list_concat = extern(
 def py_list_concat(a: c_ptr, b: c_ptr) -> c_ptr:
     # GC0 disabled frame tracking needs no native activation protocol here.
     # Its original input owners/counts still protect the body's raw inputs.
-    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-            and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            or (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+                and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0)):
         inputs = stack_alloc(2 * 8)
         store_ptr(inputs, 0 * 8, a)
         store_ptr(inputs, 1 * 8, b)
@@ -588,9 +608,10 @@ pcc_list_body_py_list_copy = extern(
 def py_list_copy(src: c_ptr) -> c_ptr:
     # GC0 disabled frame tracking needs no native activation protocol here.
     # Its original input owners/counts still protect the body's raw inputs.
-    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-            and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            or (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+                and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0)):
         inputs = stack_alloc(1 * 8)
         store_ptr(inputs, 0 * 8, src)
         return pcc_list_body_py_list_copy(inputs)
@@ -621,9 +642,10 @@ pcc_list_body_py_list_repeat = extern(
 def py_list_repeat(src: c_ptr, count: int) -> c_ptr:
     # GC0 disabled frame tracking needs no native activation protocol here.
     # Its original input owners/counts still protect the body's raw inputs.
-    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-            and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            or (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+                and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0)):
         inputs = stack_alloc(1 * 8)
         store_ptr(inputs, 0 * 8, src)
         return pcc_list_body_py_list_repeat(inputs, count)
@@ -680,9 +702,10 @@ pcc_list_body_py_list_slice = extern(
 def py_list_slice(lst: c_ptr, lo: c_ptr, hi: c_ptr, step: c_ptr) -> c_ptr:
     # GC0 disabled frame tracking needs no native activation protocol here.
     # Its original input owners/counts still protect the body's raw inputs.
-    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-            and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            or (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+                and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0)):
         inputs = stack_alloc(4 * 8)
         store_ptr(inputs, 0 * 8, lst)
         store_ptr(inputs, 1 * 8, lo)
@@ -719,9 +742,10 @@ pcc_list_body_py_list_del_slice = extern(
 def py_list_del_slice(lst: c_ptr, lo: c_ptr, hi: c_ptr, step: c_ptr) -> int:
     # GC0 disabled frame tracking needs no native activation protocol here.
     # Its original input owners/counts still protect the body's raw inputs.
-    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-            and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            or (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+                and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0)):
         inputs = stack_alloc(4 * 8)
         store_ptr(inputs, 0 * 8, lst)
         store_ptr(inputs, 1 * 8, lo)
@@ -758,9 +782,10 @@ pcc_list_body_py_list_extend = extern(
 def py_list_extend(a: c_ptr, b: c_ptr) -> None:
     # GC0 disabled frame tracking needs no native activation protocol here.
     # Its original input owners/counts still protect the body's raw inputs.
-    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-            and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            or (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+                and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0)):
         inputs = stack_alloc(2 * 8)
         store_ptr(inputs, 0 * 8, a)
         store_ptr(inputs, 1 * 8, b)
@@ -794,9 +819,10 @@ pcc_list_body_py_list_insert = extern(
 def py_list_insert(lst: c_ptr, i: int, item: c_ptr) -> None:
     # GC0 disabled frame tracking needs no native activation protocol here.
     # Its original input owners/counts still protect the body's raw inputs.
-    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-            and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            or (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+                and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0)):
         inputs = stack_alloc(2 * 8)
         store_ptr(inputs, 0 * 8, lst)
         store_ptr(inputs, 1 * 8, item)
@@ -881,9 +907,10 @@ pcc_list_body_py_list_clear = extern(
 def py_list_clear(lst: c_ptr) -> None:
     # GC0 disabled frame tracking needs no native activation protocol here.
     # Its original input owners/counts still protect the body's raw inputs.
-    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-            and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            or (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+                and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0)):
         inputs = stack_alloc(1 * 8)
         store_ptr(inputs, 0 * 8, lst)
         pcc_list_body_py_list_clear(inputs)
@@ -993,9 +1020,10 @@ pcc_list_body_py_list_reverse = extern(
 def py_list_reverse(lst: c_ptr) -> None:
     # GC0 disabled frame tracking needs no native activation protocol here.
     # Its original input owners/counts still protect the body's raw inputs.
-    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-            and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            or (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+                and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0)):
         inputs = stack_alloc(1 * 8)
         store_ptr(inputs, 0 * 8, lst)
         pcc_list_body_py_list_reverse(inputs)
@@ -1031,7 +1059,9 @@ def pcc_list_native_prepare_root(slot: c_ptr, handle_slot: c_ptr, owned: int) ->
     Managed allocation fixed the backend before this slot obtained a value.
     Config reads and the local bind are nonpolling; no wrapper can introduce
     an earlier implicit entry poll. Counted nonmoving modes keep their old
-    no-registration path, while count-free GC1/2 trace their NEW temporaries.
+    no-registration path; so do the count-free nonmoving GC1/2, whose
+    stopped-world seed and remark scan thread stacks conservatively. Only the
+    relocating GC3/4 bind a temporary they may move.
     """
     store_ptr(handle_slot, 0, null())
     value = load_ptr(slot, 0)
@@ -1039,8 +1069,11 @@ def pcc_list_native_prepare_root(slot: c_ptr, handle_slot: c_ptr, owned: int) ->
         return 0
     backend: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
     if backend != 3 and backend != 4:
-        if backend == 0 or load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0:
-            return 0
+        # GC0 and the counted modes keep their owners' counts. The nonmoving
+        # count-free GC1/GC2 rescan every thread's registers and stack
+        # conservatively at each stopped-world seed and remark, which finds a
+        # temporary held in this frame; neither moves it.
+        return 0
     handle = pcc_gc_native_root_bind_range(slot, 1 if owned != 0 else -1)
     if ptr_is_null(handle) != 0:
         return -1

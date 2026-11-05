@@ -24,6 +24,7 @@ OWNED_SYMBOLS = {
     "pcc_gc_tracing_class_needs_clear",
     "pcc_gc_tracing_clear_class_layout_slot",
     "pcc_gc_tracing_finalize_unreachable",
+    "pcc_gc_tracing_finalize_unpinned",
     "pcc_gc_tracing_has_sweep_candidate",
     "pcc_gc_tracing_recheck_reachability_after_finalizers",
     "pcc_gc_tracing_sweep_unreachable",
@@ -38,6 +39,7 @@ RAW_FUNCTION_IMPORTS = {
     'pcc_gc_mark_root_gray_if_known',
     'pcc_gc_note_object_freeing',
     'pcc_gc_object_is_address_pinned',
+    'pcc_gc_object_node_is_address_pinned',
     'pcc_gc_object_node_is_active',
     'pcc_gc_seed_roots',
     'pcc_gc_tracing_clear_unreachable',
@@ -130,22 +132,33 @@ def test_tracing_sweep_preserves_pep442_and_two_pass_order():
         "pcc_gc_tracing_clear_unreachable(obj)"
     )
     assert sweep.index("pcc_gc_tracing_clear_unreachable(obj)") < sweep.index(
-        "pcc_gc_tracing_finalize_unreachable(obj)"
+        "pcc_gc_tracing_finalize_unpinned(obj)"
     )
-    assert "(flags & 16384) == 0 and pcc_gc_object_is_address_pinned(obj) == 0" in sweep
+    assert (
+        "(flags & 16384) == 0 and pcc_gc_object_node_is_address_pinned(node, obj) == 0"
+        in sweep
+    )
     assert "pcc_capi_is_cext_type_tag(tag) == 0" in sweep
 
-    finalize = strict.split(
+    # The checked entry tests pinning, then finalizes through the body a
+    # sweep walk calls directly once it has read the object's own node.
+    checked = strict.split(
         '@c_abi_export("pcc_gc_tracing_finalize_unreachable")', 1
+    )[1].split("\n@c_abi_export", 1)[0]
+    assert checked.index("pcc_gc_object_is_address_pinned(obj)") < checked.index(
+        "pcc_gc_tracing_finalize_unpinned(obj)"
+    )
+    finalize = strict.split(
+        '@c_abi_export("pcc_gc_tracing_finalize_unpinned")', 1
     )[1].split("\n@c_abi_export", 1)[0]
     assert finalize.index("store_i32(obj, 12, flags | 524288)") < finalize.index(
         "pcc_gc_note_object_freeing(obj)"
     )
     assert "backend == 4 and (flags & 65536) != 0" in finalize
-    assert finalize.index("pcc_capi_dealloc_cext_object(obj, tag) == 0") < (
-        finalize.index(
-            'if tag >= abi_constant("object.type.user_class_start"):'
-        )
+    # Type-specific destruction (C-extension and user classes included) is
+    # one dispatch after logical death is published.
+    assert finalize.index("store_i32(obj, 12, flags | 524288)") < finalize.index(
+        "pcc_gc_dealloc_typed(obj, tag)"
     )
 
 
@@ -348,11 +361,13 @@ class _SweepModel(_CandidateModel):
             store_i32=store_i32,
             abi_constant=lambda name: 6,
             pcc_gc_object_is_address_pinned=lambda obj: 0,
+            pcc_gc_object_node_is_address_pinned=lambda node, obj: 0,
             pcc_capi_is_cext_type_tag=lambda tag: 0,
             py_user_del_dispatch=finalizer,
             pcc_gc_tracing_recheck_reachability_after_finalizers=recheck,
             pcc_gc_tracing_clear_unreachable=lambda obj: model.events.append(("clear", obj[1])),
             pcc_gc_tracing_finalize_unreachable=lambda obj: model.events.append(("free", obj[1])),
+            pcc_gc_tracing_finalize_unpinned=lambda obj: model.events.append(("free", obj[1])),
             pcc_thread_world_stop_epoch_held=lambda: model.held_epoch,
         )
         load_i32 = env["load_i32"]

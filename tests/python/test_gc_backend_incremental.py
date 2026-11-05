@@ -153,6 +153,7 @@ def test_incremental_backend_debt_threshold_triggers_bounded_real_steps(tmp_path
         pcc_gc_release = extern("pcc_gc_release", (c_ptr,), c_void)
         pcc_gc_telemetry = extern("pcc_gc_telemetry", (c_int64,), c_int64)
         pcc_gc_telemetry_reset = extern("pcc_gc_telemetry_reset", (), c_void)
+        pcc_platform_sleep_ns = extern("pcc_platform_sleep_ns", (c_int64,), c_int64)
 
         def main() -> None:
             pcc_gc_telemetry_reset()
@@ -161,6 +162,13 @@ def test_incremental_backend_debt_threshold_triggers_bounded_real_steps(tmp_path
                 o = pcc_gc_alloc(64, 2, 0)
                 pcc_gc_release(o)
                 i = i + 1
+            # The collector thread begins the cycle the debt asks for; a
+            # traced mark is finished by this thread's next application
+            # gate in real steps.
+            waited: int = 0
+            while pcc_gc_telemetry(5) == 0 and waited < 2000:
+                pcc_platform_sleep_ns(1000000)
+                waited = waited + 1
             print(pcc_gc_telemetry(0))
             print(pcc_gc_telemetry(5) > 0)
             print(pcc_gc_telemetry(5) < 200)

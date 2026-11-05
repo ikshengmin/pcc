@@ -6,6 +6,9 @@ from pcc.unsafe import (
     abi_constant,
     atomic_rmw_i64,
     atomic_store_i32,
+    define_global_i64,
+    define_global_null_ptr_array,
+    define_thread_local_i32,
     global_addr,
     global_load_ptr,
     global_store_ptr,
@@ -18,10 +21,24 @@ from pcc.unsafe import (
     ptr_is_null,
     store_i32,
     store_i64,
+    store_ptr,
 )
 
 
 __pcc_freestanding__ = True
+
+
+# The tracer's work stack. Gray objects are found by walking the object list;
+# children a trace shades behind the walk's cursor would otherwise wait for
+# another whole-list pass, one per level of the object graph. While a thread
+# drains gray work (holding the graph lock, or owning the stopped world), the
+# children it shades are also pushed here and traced right after their
+# parent. The stack only orders work: every entry stays gray and counted, so
+# an entry dropped at capacity or left at the end of a drain is still found
+# by the walk, and nothing on it outlives the drain that pushed it.
+define_global_null_ptr_array("pcc_gc_trace_stack", 4096)
+define_global_i64("pcc_gc_trace_stack_count", 0)
+define_thread_local_i32("pcc_gc_trace_stack_owner", 0)
 
 
 pcc_gc_gray_count_decrement_acq_rel = extern(
@@ -32,6 +49,9 @@ pcc_gc_gray_count_increment_acq_rel = extern(
 )
 pcc_gc_gray_count_store_release = extern(
     "pcc_gc_gray_count_store_release", (c_int64,), c_void
+)
+pcc_gc_gray_count_load_acquire = extern(
+    "pcc_gc_gray_count_load_acquire", (), c_int64
 )
 pcc_gc_gray_current_roots = extern("pcc_gc_gray_current_roots", (), c_void)
 pcc_gc_gray_refcount_external_roots = extern(
@@ -87,6 +107,61 @@ def pcc_gc_trace_mark_gray_if_known(obj) -> None:
     if pcc_gc_object_is_known_no_lock(obj) == 0:
         return
     pcc_gc_shade_gray_atomic(obj, 0)
+    pcc_gc_trace_stack_push(obj)
+
+
+@c_abi_export("pcc_gc_trace_stack_push")
+def pcc_gc_trace_stack_push(obj) -> None:
+    """Stack a gray ``obj`` for the drain this thread owns, if any."""
+    if load_i32(global_addr("pcc_gc_trace_stack_owner"), 0) == 0:
+        return
+    if (load_i32(obj, 12) & 16) == 0:
+        return
+    count: i64 = load_i64(global_addr("pcc_gc_trace_stack_count"), 0)
+    if count < 4096:
+        store_ptr(global_addr("pcc_gc_trace_stack"), count * 8, obj)
+        store_i64(global_addr("pcc_gc_trace_stack_count"), 0, count + 1)
+
+
+@c_abi_export("pcc_gc_trace_stack_begin")
+def pcc_gc_trace_stack_begin() -> None:
+    """Start pushing this thread's shaded children (see pcc_gc_trace_stack)."""
+    store_i64(global_addr("pcc_gc_trace_stack_count"), 0, 0)
+    store_i32(global_addr("pcc_gc_trace_stack_owner"), 0, 1)
+
+
+@c_abi_export("pcc_gc_trace_stack_end")
+def pcc_gc_trace_stack_end() -> None:
+    """Stop pushing; entries left behind stay gray for the object-list walk."""
+    store_i32(global_addr("pcc_gc_trace_stack_owner"), 0, 0)
+    store_i64(global_addr("pcc_gc_trace_stack_count"), 0, 0)
+
+
+@c_abi_export("pcc_gc_trace_stack_drain")
+def pcc_gc_trace_stack_drain(budget: i64) -> i64:
+    """Trace up to ``budget`` stacked gray objects; return how many.
+
+    The caller drains under the same graph-lock hold or stopped world that
+    pushed them, so no stacked object was freed. One traced already, a dying
+    one and a C-extension object (whose trace leaves the graph lock) are left
+    to the walk.
+    """
+    processed: i64 = 0
+    while processed < budget:
+        count: i64 = load_i64(global_addr("pcc_gc_trace_stack_count"), 0)
+        if count <= 0:
+            return processed
+        count = count - 1
+        store_i64(global_addr("pcc_gc_trace_stack_count"), 0, count)
+        obj = load_ptr(global_addr("pcc_gc_trace_stack"), count * 8)
+        flags: i64 = load_i32(obj, 12)
+        if (flags & 16) != 0 and (flags & 524288) == 0:
+            if pcc_capi_is_cext_type_tag(load_i32(obj, 8)) == 0:
+                pcc_gc_trace_referents(obj)
+                pcc_gc_gray_count_decrement_acq_rel()
+                pcc_gc_set_mark_color(obj, 32)
+                processed = processed + 1
+    return processed
 
 
 @c_abi_export("pcc_gc_trace_slot")
@@ -177,10 +252,13 @@ def pcc_gc_seed_roots() -> None:
 @c_abi_export("pcc_gc_drain_all_gray_unlocked")
 def pcc_gc_drain_all_gray_unlocked() -> i64:
     processed: i64 = 0
-    while True:
+    pcc_gc_trace_stack_begin()
+    # The gray count never falls below the gray objects: at zero no walk
+    # can find one.
+    while pcc_gc_gray_count_load_acquire() != 0:
         local_processed: i64 = 0
         node = global_load_ptr("pcc_gc_object_head")
-        while ptr_is_null(node) == 0:
+        while ptr_is_null(node) == 0 and pcc_gc_gray_count_load_acquire() != 0:
             nxt = load_ptr(node, 16)
             if load_i64(node, 32) != 0:
                 node = nxt
@@ -194,21 +272,24 @@ def pcc_gc_drain_all_gray_unlocked() -> i64:
                 pcc_gc_trace_referents(obj)
                 pcc_gc_gray_count_decrement_acq_rel()
                 pcc_gc_set_mark_color(obj, 32)
-                local_processed = local_processed + 1
-                processed = processed + 1
+                stacked: i64 = pcc_gc_trace_stack_drain(9223372036854775807)
+                local_processed = local_processed + 1 + stacked
+                processed = processed + 1 + stacked
             node = nxt
         if local_processed == 0:
             break
+    pcc_gc_trace_stack_end()
     return processed
 
 
 @c_abi_export("pcc_gc_drain_all_gray_locked_slice")
 def pcc_gc_drain_all_gray_locked_slice() -> i64:
     processed: i64 = 0
-    while True:
+    pcc_gc_trace_stack_begin()
+    while pcc_gc_gray_count_load_acquire() != 0:
         local_processed: i64 = 0
         node = global_load_ptr("pcc_gc_object_head")
-        while ptr_is_null(node) == 0:
+        while ptr_is_null(node) == 0 and pcc_gc_gray_count_load_acquire() != 0:
             nxt = load_ptr(node, 16)
             if pcc_gc_object_node_is_active(node) == 0:
                 node = nxt
@@ -238,15 +319,18 @@ def pcc_gc_drain_all_gray_locked_slice() -> i64:
                                 global_addr("pcc_gc_backend_selected"), 0
                             ),
                         )
+                        pcc_gc_trace_stack_end()
                         return processed + 1
                 pcc_gc_trace_referents(obj)
                 pcc_gc_gray_count_decrement_acq_rel()
                 pcc_gc_set_mark_color(obj, 32)
-                local_processed = local_processed + 1
-                processed = processed + 1
+                stacked: i64 = pcc_gc_trace_stack_drain(9223372036854775807)
+                local_processed = local_processed + 1 + stacked
+                processed = processed + 1 + stacked
             node = nxt
         if local_processed == 0:
             break
+    pcc_gc_trace_stack_end()
     return processed
 
 

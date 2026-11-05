@@ -24,6 +24,7 @@ MAKEFILE = RUNTIME_DIR / "Makefile"
 
 OWNED_SYMBOLS = {
     "pcc_gc_cms_note_alloc",
+    "pcc_gc_tracing_finish_left_to_mutator",
     "pcc_gc_cms_stop_worker",
     "pcc_gc_complete_claimed_tracing_cycle",
     "pcc_gc_complete_mark_cycle_seed",
@@ -71,6 +72,10 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_trace_mark_gray_if_known",
     "pcc_gc_trace_cext_referents_unlocked",
     "pcc_gc_trace_referents",
+    # The tracer's work stack (freestanding_gc_common_mark_cycle).
+    "pcc_gc_trace_stack_begin",
+    "pcc_gc_trace_stack_drain",
+    "pcc_gc_trace_stack_end",
     "pcc_platform_monotonic_us",
     "pcc_py_gc_minor_graph_lock",
     "pcc_py_gc_minor_graph_unlock",
@@ -84,6 +89,8 @@ RAW_FUNCTION_IMPORTS = {
 }
 RAW_GLOBAL_IMPORTS = {
     "pcc_gc_backend4_no_refcounts",
+    # GC1/GC2's collector thread leaves the final remark to a mutator.
+    "pcc_gc_cms_worker_current",
     "pcc_gc_live_bytes",
     "pcc_gc_cms_sweep_pending",
     # pcc_gc_backend4_maybe_auto_step's admission and reseed ownership.

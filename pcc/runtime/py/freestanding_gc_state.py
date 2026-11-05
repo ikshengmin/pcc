@@ -30,6 +30,10 @@ define_global_i32("pcc_gc_backend_frozen", 0)
 # without the refcount provenance probe. Set with pcc_gc_backend_frozen,
 # before the first object exists, and never changed afterwards.
 define_global_i32("pcc_gc_list_container_mode", 0)
+# Fixed with the collector: 1 for the nonmoving count-free GC1/GC2. They need
+# no native activation frames for list entries (py_list_native_entry), and
+# the container fast paths admit them beside GC0 (pcc_gc_try_init_ptr_locked).
+define_global_i32("pcc_gc_nonmoving_count_free", 0)
 # 1 when tracking is a header flag only (GC0): no tracked nodes exist between
 # collections; a stopped-world collection builds them from the live objects
 # that carry the flag. Set with pcc_gc_backend_frozen and never changed.
@@ -172,6 +176,10 @@ define_global_i32("pcc_gc_backend4_auto_step_pending", 0)
 # A finished mark waiting for mutator-owned cleanup, distinct from a moving
 # collector's pending generation/relocation work (which must not block marking).
 define_global_i32("pcc_gc_cms_sweep_pending", 0)
+# GC1/GC2's collector thread traced a cycle's gray work and leaves the final
+# remark to a mutator, which finishes the mark and sweeps it in one stopped
+# world, so the sweep keeps the remark's verdict.
+define_global_i32("pcc_gc_cms_finish_pending", 0)
 define_global_i32("pcc_gc_last_alloc_bytes", 0)
 define_global_i64("pcc_gc_live_bytes", 0)
 # Bytes the last completed tracing mark found reachable (Go's heap marked):

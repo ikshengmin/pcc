@@ -833,20 +833,44 @@ def _append_rooted_slots(
     return result
 
 
+def _container_fast_admitted() -> int:
+    """GC0's container transactions also serve the nonmoving count-free GC1/GC2.
+
+    Both keep every list in place under its own container lock. GC0 retains
+    with one atomic add; GC1/GC2 retain by reachability, and their first
+    store shades while a cycle is active (pcc_gc_try_init_ptr_locked).
+    """
+    if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
+        return 0
+    if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
+        return 1
+    return load_i32(global_addr("pcc_gc_refcount_atomic"), 0)
+
+
+def _container_fast_still_admitted() -> int:
+    """The locked recheck: a GC0 transition reserves -1 before switching."""
+    if atomic_load_i64(global_addr("pcc_gc_foreign_lease_active"), 0, "acquire") < 0:
+        return 0
+    if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
+        return 0
+    if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
+        return 1
+    if (load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0
+            or load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0):
+        return 0
+    return 1
+
+
 def _append_existing_capacity_gc0(list_slot, item_slot) -> int:
     """One nonparking transaction for an existing private append position."""
-    if (load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
-            or load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0):
+    if _container_fast_admitted() == 0:
         return 0
     locked = load_ptr(list_slot, 0)
     _list_lock(locked)
     # Configuration reserves -1 before dropping this lock for a transition.
     # Recheck the selected backend too: the atomic admission flag is updated
     # later in that transition, so its pre-lock value is not sufficient.
-    if (load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0
-            or atomic_load_i64(global_addr("pcc_gc_foreign_lease_active"), 0, "acquire") < 0
-            or load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
-            or load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0):
+    if _container_fast_still_admitted() == 0:
         _list_unlock(locked)
         return 0
     # Nonmoving GC0 and the graph lock protect these existing roots and the
@@ -890,10 +914,7 @@ def _append_grow_gc0(list_slot, item_slot, old_items, old_capacity: int) -> int:
         return 0
     locked = load_ptr(list_slot, 0)
     _list_lock(locked)
-    if (load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0
-            or atomic_load_i64(global_addr("pcc_gc_foreign_lease_active"), 0, "acquire") < 0
-            or load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
-            or load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0):
+    if _container_fast_still_admitted() == 0:
         _list_unlock(locked)
         free(new_items)
         return 0
@@ -1014,8 +1035,7 @@ def _list_get_gc0(lst, i: int, raising: int, taken):
     is always threaded.)
     """
     store_i64(taken, 0, 0)
-    if (load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
-            or load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0):
+    if _container_fast_admitted() == 0:
         return null()
     _list_lock(lst)
     if (load_i32(lst, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_DEALLOCATING) != 0:
@@ -1271,7 +1291,10 @@ def _native_body_py_list_len(_native_inputs) -> int:
     lst = load_ptr(_native_inputs, 0 * 8)
     if ptr_is_null(lst) != 0:
         return 0
-    if pcc_gc_backend() == 0:
+    len_backend: int = pcc_gc_backend()
+    if len_backend == 0 or len_backend == 1 or len_backend == 2:
+        # A nonmoving list's length is one word; only GC3/GC4 relocation
+        # needs the rooted reload under the graph lock.
         return load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
     list_slot = stack_alloc(8)
     list_handle_slot = stack_alloc(8)
@@ -2150,9 +2173,10 @@ def _native_body_py_list_slice(_native_inputs):
         py_decref(load_ptr(out_slot, 0))
         _finish_moving_root(source_handle_slot)
         return null()
+    # Only the relocating collectors bind this temporary; the nonmoving
+    # count-free GC1/GC2 find it by their conservative stack scans.
     if (load_i32(global_addr("pcc_gc_backend_selected"), 0) == 3
-            or load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4
-            or load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0):
+            or load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4):
         store_ptr(value_handle_slot, 0, pcc_gc_native_root_bind_range(value_slot, -1))
 
     if step_v > 0:

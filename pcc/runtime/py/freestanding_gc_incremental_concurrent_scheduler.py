@@ -69,6 +69,11 @@ pcc_gc_reclaim_retired_index_tables = extern(
     "pcc_gc_reclaim_retired_index_tables", (), c_int64
 )
 pcc_gc_trace_referents = extern("pcc_gc_trace_referents", (c_ptr,), c_void)
+pcc_gc_trace_stack_begin = extern("pcc_gc_trace_stack_begin", (), c_void)
+pcc_gc_trace_stack_end = extern("pcc_gc_trace_stack_end", (), c_void)
+pcc_gc_trace_stack_drain = extern(
+    "pcc_gc_trace_stack_drain", (c_int64,), c_int64
+)
 pcc_gc_trace_cext_referents_unlocked = extern(
     "pcc_gc_trace_cext_referents_unlocked", (c_ptr, c_ptr), c_void
 )
@@ -465,12 +470,17 @@ def pcc_gc_complete_claimed_tracing_cycle(
         store_i32(
             global_addr("pcc_gc_trace_extension_roots_pending"), 0, 0
         )
+        # Trace the remark's roots from the tracer's stack: when their
+        # closure leaves no gray count, the drain below needs no walk.
+        pcc_gc_trace_stack_begin()
         if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
             # Raw runtime/C locals can become roots after the initial seed.
             # The final verdict must include this stopped-world snapshot:
             # a same-epoch sweep is allowed to use it without another seed.
             pcc_gc_gray_conservative_thread_roots()
         pcc_gc_gray_current_roots()
+        pcc_gc_trace_stack_drain(9223372036854775807)
+        pcc_gc_trace_stack_end()
     else:
         if (
             load_i32(
@@ -677,6 +687,23 @@ def pcc_gc_record_explicit_pause(start_us: i64, end_us: i64) -> None:
     pcc_gc_tracing_record_pause(start_us, end_us)
 
 
+@c_abi_export("pcc_gc_tracing_finish_left_to_mutator")
+def pcc_gc_tracing_finish_left_to_mutator() -> i64:
+    # GC1/GC2's collector thread does not finish a mark in a stopped world of
+    # its own: the mutator sweeping it would then have to re-mark the heap
+    # first (a candidate may be reachable again by then). It leaves the
+    # final remark to that mutator (pcc_gc_cms_finish_pending), which
+    # finishes and sweeps in one stopped world.
+    if load_i32(global_addr("pcc_gc_cms_worker_current"), 0) == 0:
+        return 0
+    backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+    if backend != 1 and backend != 2:
+        return 0
+    if pcc_thread_owns_stopped_world() != 0:
+        return 0
+    return 1
+
+
 @c_abi_export("pcc_gc_tracing_step_cycle")
 def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
     if remaining_budget <= 0:
@@ -818,6 +845,7 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
     elif ptr_is_null(node) != 0:
         node = global_load_ptr("pcc_gc_object_head")
     scanned: i64 = 0
+    pcc_gc_trace_stack_begin()
     while (ptr_is_null(node) == 0 and local_processed < remaining_budget
            and scanned < scan_budget):
         scanned = scanned + 1
@@ -857,6 +885,10 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
                 pcc_gc_gray_count_decrement_acq_rel()
                 pcc_gc_set_mark_color(obj, 32)
                 local_processed = local_processed + 1
+                if local_processed < remaining_budget:
+                    local_processed = local_processed + pcc_gc_trace_stack_drain(
+                        remaining_budget - local_processed
+                    )
                 if pcc_gc_gray_count_load_acquire() == 0:
                     # Tracing the object can introduce gray children. Check
                     # after that work and this object's decrement, while the
@@ -864,6 +896,7 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
                     node = null()
                     break
         node = nxt
+    pcc_gc_trace_stack_end()
     global_store_ptr("pcc_gc_trace_cursor", node)
 
     cext_obj = load_ptr(cext_ctx, 0)
@@ -880,6 +913,7 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
                 global_addr("pcc_gc_tracing_finish_claim_epoch"), 0
             )
             == 0
+            and pcc_gc_tracing_finish_left_to_mutator() == 0
         ):
             cycle_epoch: i64 = load_i64(
                 global_addr("pcc_gc_tracing_cycle_epoch"), 0
@@ -1060,10 +1094,11 @@ def pcc_gc_cms_note_alloc(bytes: i64) -> None:
     previous: i64 = atomic_rmw_i64("add", global_addr("pcc_gc_debt_bytes"), 0, bytes, "acq_rel")
     debt: i64 = previous + bytes
     # An assist is automatic collection too: none while gc.disable() or
-    # threshold0 == 0 holds.
+    # threshold0 == 0 holds. Only a marking cycle has one, so most
+    # allocations skip the threshold's arithmetic.
     if (
-        debt >= pcc_gc_tracing_debt_threshold() * 4
-        and load_i32(global_addr("pcc_gc_mark_active"), 0) != 0
+        load_i32(global_addr("pcc_gc_mark_active"), 0) != 0
+        and debt >= pcc_gc_tracing_debt_threshold() * 4
         and load_i32(global_addr("py_gc_enabled"), 0) != 0
         and load_i32(global_addr("py_gc_threshold0"), 0) > 0
     ):

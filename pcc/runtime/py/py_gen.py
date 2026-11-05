@@ -78,6 +78,23 @@ pcc_gc_publish_initialized = extern(
 pcc_gc_alloc         = extern("pcc_gc_alloc",         (c_int64, c_int32, c_int32), c_ptr)
 pcc_gc_load_ptr      = extern("pcc_gc_load_ptr",      (c_ptr, c_ptr), c_ptr)
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
+pcc_container_lock = extern("pcc_container_lock", (c_ptr,), c_void)
+pcc_container_unlock = extern("pcc_container_unlock", (c_ptr,), c_void)
+pcc_gc_count_free_store_shade = extern(
+    "pcc_gc_count_free_store_shade", (c_ptr,), c_void
+)
+
+
+def _frame_list_raw() -> int:
+    """Whether a list frame cell is read and written in place.
+
+    GC0 counts its owners; the nonmoving count-free GC1/GC2 hold them by
+    reachability and never move the frame. Both access the compiler-private
+    fixed-size list directly; the relocating collectors use the list ABI.
+    """
+    if pcc_gc_backend() == 0:
+        return 1
+    return load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0)
 pcc_gc_pointer_is_managed = extern("pcc_gc_pointer_is_managed", (c_ptr,), c_int64)
 pcc_gc_store_ptr     = extern("pcc_gc_store_ptr",     (c_ptr, c_ptr, c_ptr), c_void)
 pcc_gc_store_root    = extern("pcc_gc_store_root",    (c_ptr, c_ptr), c_void)
@@ -204,11 +221,15 @@ def py_gen_frame_get(frame, index: int):
         if index < 0 or index >= load_i64(frame, PYINLINEGENOBJECT_LENGTH_OFFSET):
             return null()
         return pcc_gc_retain_known(load_ptr(frame, PYINLINEGENOBJECT_ITEMS_OFFSET + index * C_POINTER_SIZE))
-    if pcc_gc_backend() != 0:
+    if _frame_list_raw() == 0:
         return py_list_get(frame, index)
     if index < 0 or index >= load_i64(frame, PYLISTOBJECT_LENGTH_OFFSET):
         return py_list_get(frame, index)
     items = load_ptr(frame, PYLISTOBJECT_ITEMS_OFFSET)
+    if pcc_gc_backend() != 0:
+        # A count-free copy: the caller's frame or stack slot holds it,
+        # and the stopped-world remark rescans those.
+        return load_ptr(items, index * C_POINTER_SIZE)
     return pcc_gc_retain_known(load_ptr(items, index * C_POINTER_SIZE))
 
 
@@ -232,10 +253,13 @@ def py_gen_frame_take(frame, index: int):
         value = load_ptr(slot, 0)
         store_ptr(slot, 0, null())
         return value
-    if pcc_gc_backend() != 0:
+    if _frame_list_raw() == 0:
         value = py_list_get(frame, index)
         py_list_set(frame, index, null())
         return value
+    # GC0 moves the counted owner out. GC1/GC2 move it by reachability:
+    # storing NULL owes no barrier, and a marker scanning the frame reads
+    # either the value (one extra mark) or NULL after this thread holds it.
     if index < 0 or index >= load_i64(frame, PYLISTOBJECT_LENGTH_OFFSET):
         return py_list_get(frame, index)
     if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
@@ -272,11 +296,20 @@ def py_gen_frame_set(frame, index: int, value) -> None:
         store_ptr(slot, 0, value)
         pcc_gc_release_known(old)
         return
-    if pcc_gc_backend() != 0:
+    if _frame_list_raw() == 0:
         py_list_set(frame, index, value)
         return
     if index < 0 or index >= load_i64(frame, PYLISTOBJECT_LENGTH_OFFSET):
         py_list_set(frame, index, value)
+        return
+    if pcc_gc_backend() != 0:
+        # Count-free GC1/GC2: no counts, but a store during a cycle shades
+        # the value under the same container lock the marker scans with.
+        pcc_container_lock(frame)
+        cell = ptr_add(load_ptr(frame, PYLISTOBJECT_ITEMS_OFFSET), index * C_POINTER_SIZE)
+        pcc_gc_count_free_store_shade(value)
+        store_ptr(cell, 0, value)
+        pcc_container_unlock(frame)
         return
     if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
         pcc_diagnostics_runtime_log_event_code(2, 3, 0, 0, frame)

@@ -33,6 +33,9 @@ PUBLIC_SYMBOLS = {
     "pcc_gc_step",
 }
 OWNED_SYMBOLS = PUBLIC_SYMBOLS | {
+    # GC1/GC2's lock-free container stores shade through the barrier's
+    # own count-free predicate (generator frames, container init).
+    "pcc_gc_count_free_store_shade",
     "pcc_gc_dispatch_ptr_can_have_header",
     "pcc_gc_dispatch_selected_backend",
     "pcc_gc_dispatch_tracing_work_pending",
@@ -46,7 +49,10 @@ RAW_PROVIDER_SYMBOLS = {
     "pcc_gc_backend4_store_buffer_enqueue",
 }
 RAW_FUNCTION_IMPORTS = {
-    "pcc_gc_set_mark_color",
+    # One counted gray transition, beside lock-free container barriers.
+    "pcc_gc_shade_gray_atomic",
+    "pcc_container_lock_held",
+    "pcc_gc_object_index_seen_stable",
     "pcc_gc_backend3_drain_promotion_worklist",
     "pcc_gc_backend3_remember_owner",
     "pcc_gc_backend4_evacuation_page_drain",
@@ -54,7 +60,6 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_backend4_select_relocation_pages",
     "pcc_gc_config_ensure",
     "pcc_gc_generational_step",
-    "pcc_gc_gray_count_increment_acq_rel",
     "pcc_gc_incremental_concurrent_step",
     "pcc_gc_object_is_known_no_lock",
     "pcc_gc_pointer_is_managed",
@@ -76,6 +81,9 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_thread_owns_stopped_world",
 } | RAW_PROVIDER_SYMBOLS
 RAW_GLOBAL_IMPORTS = {
+    # GC4's step advances empty-page quarantine.
+    "pcc_gc_backend4_parked_head",
+    "pcc_gc_backend4_retained_page_head",
     "pcc_gc_backend4_no_refcounts",
     # GC3 copies young objects only while other mutators are at gates.
     "pcc_gc_backend3_oldify_suspended",

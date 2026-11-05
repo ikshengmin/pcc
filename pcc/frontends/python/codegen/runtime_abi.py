@@ -1792,9 +1792,11 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_cms_worker_stops',
         'pcc_gc_cms_worker_traces',
         'pcc_gc_cms_sweep_pending',
+        'pcc_gc_cms_finish_pending',
         'pcc_gc_config_initialized',
         'pcc_gc_backend_frozen',
         'pcc_gc_list_container_mode',
+        'pcc_gc_nonmoving_count_free',
         'pcc_gc_tracking_flag_mode',
         'pcc_gc_tracking_materialized',
         'pcc_gc_cycle_requested',
@@ -1920,6 +1922,7 @@ FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_foreign_lease_active',
         'pcc_gc_static_literal_low',
         'pcc_gc_static_literal_high',
+        'pcc_gc_trace_stack_count',
     }
 )
 
@@ -2001,6 +2004,7 @@ FREESTANDING_GC_THREAD_LOCAL_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_frame_node_pool_counts',
         'pcc_gc_frame_node_pool_heads',
         'pcc_gc_frame_node_pool_total',
+        'pcc_gc_trace_stack_owner',
     }
 )
 
@@ -2012,6 +2016,7 @@ FREESTANDING_GC_STATIC_GLOBALS: frozenset[str] = frozenset(
         # Raw address-selected mode-guard counters owned by the GC kernel.
         "pcc_gc_mode_lease_shards",
         "pcc_gc_static_literal_keys",
+        "pcc_gc_trace_stack",
         "pcc_gc_tracked_shards",
         # Stack-region sharded pin balance and allocation count.
         "pcc_gc_metric_shards",
@@ -3052,6 +3057,7 @@ def _cross_object_signatures_part_13():
         'pcc_container_lock': (('c_ptr',), 'c_void'),
         'pcc_container_unlock': (('c_ptr',), 'c_void'),
         'pcc_container_lock_held': ((), 'c_int64'),
+        'pcc_gc_count_free_store_shade': (('c_ptr',), 'c_void'),
         'pcc_gc_object_index_write_begin': ((), 'c_int64'),
         'pcc_gc_object_index_write_end': (('c_int64',), 'c_void'),
         'pcc_gc_object_index_seen_stable': (('c_ptr',), 'c_int64'),
@@ -3088,6 +3094,12 @@ def _cross_object_signatures_part_13():
     'pcc_gc_frame_leave_lifo_local': (('c_ptr',), 'c_void'),
     'pcc_gc_frame_enter_lifo_local_mapped': (('c_ptr', 'c_ptr'), 'c_void'),
     'pcc_gc_frame_leave_lifo_local_mapped': (('c_ptr',), 'c_void'),
+    'pcc_gc_trace_stack_begin': ((), 'c_void'),
+    'pcc_gc_trace_stack_end': ((), 'c_void'),
+    'pcc_gc_trace_stack_drain': (('c_int64',), 'c_int64'),
+    'pcc_gc_object_node_is_address_pinned': (('c_ptr', 'c_ptr'), 'c_int64'),
+    'pcc_gc_trace_stack_push': (('c_ptr',), 'c_void'),
+    'pcc_thread_snapshot_stopped_world_owner': ((), 'c_int64'),
     }
 
 

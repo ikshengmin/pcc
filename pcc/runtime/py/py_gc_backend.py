@@ -2685,6 +2685,14 @@ def pcc_gc_fix_backend() -> None:
         and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
     ):
         store_i32(global_addr("pcc_gc_list_container_mode"), 0, 1)
+    # The nonmoving count-free tracers find a native entry's raw inputs by
+    # their conservative stopped-world stack scans; no activation frame or
+    # root binding is needed for them.
+    if (
+        (container_backend == 1 or container_backend == 2)
+        and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
+    ):
+        store_i32(global_addr("pcc_gc_nonmoving_count_free"), 0, 1)
     # GC0's stop-the-world collector finds its candidates from the live
     # objects that carry the tracked flag (pcc_gc_tracked_materialize), so
     # tracking keeps no nodes between collections.

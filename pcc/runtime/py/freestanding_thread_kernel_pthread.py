@@ -667,6 +667,32 @@ def _thread_snapshot_roots(record) -> None:
     store_i64(record, _THREAD_ROOT_BYTES, size)
 
 
+@c_abi_export("pcc_thread_snapshot_stopped_world_owner")
+def pcc_thread_snapshot_stopped_world_owner() -> int:
+    """Refresh the stopped world's owner's own snapshot; 1 when refreshed.
+
+    The owner snapshots itself when it stops the world. Objects it allocates
+    or loads afterwards (a stopped-world collection that begins a cycle, a
+    finalizer) live in frames that snapshot predates: a conservative scan
+    refreshes it first, so the owner's current frames are roots like every
+    parked thread's. Returns -1 when the caller does not own the stop.
+    """
+    if pcc_thread_world_stop_epoch_held() < 0:
+        return -1
+    if atomic_load_i32(
+        global_addr("pcc_thread_conservative_roots_enabled"), 0, "acquire"
+    ) == 0:
+        return 0
+    record = global_load_ptr("pcc_tls_thread_record_py")
+    if ptr_is_null(record):
+        return 0
+    lock = global_load_ptr("pcc_world_lock_py")
+    pthread_mutex_lock(lock)
+    _thread_snapshot_roots(record)
+    pthread_mutex_unlock(lock)
+    return 1
+
+
 @c_abi_export("pcc_thread_enable_conservative_roots")
 def pcc_thread_enable_conservative_roots() -> None:
     """One-way startup admission; the collector freezes this before allocation."""
@@ -2083,6 +2109,11 @@ def pcc_gc_native_frame_bind_map(frame_map, slots) -> None:
     # The signed homogeneous map is the same owned/borrowed contract used by
     # compiled frames. Preserve GC0's optional frame-root policy; scheduler
     # replacements bind directly and therefore remain unconditional roots.
+    # The nonmoving count-free GC1/GC2 enter no native list frame
+    # (pcc_gc_nonmoving_count_free): their stopped-world conservative stack
+    # scans find these slots.
+    if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
+        return
     if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
             and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
             and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
@@ -2097,6 +2128,8 @@ def pcc_gc_native_frame_bind_map(frame_map, slots) -> None:
 
 @c_abi_export("pcc_gc_native_frame_unbind_map")
 def pcc_gc_native_frame_unbind_map(slots) -> None:
+    if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
+        return
     if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
             and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
             and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):

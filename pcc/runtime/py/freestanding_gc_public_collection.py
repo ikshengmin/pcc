@@ -48,6 +48,9 @@ pcc_platform_sleep_ns = extern("pcc_platform_sleep_ns", (c_int64,), c_int64)
 pcc_gc_tracing_step_cycle = extern(
     "pcc_gc_tracing_step_cycle", (c_int64,), c_int64
 )
+pcc_gc_gray_count_load_acquire = extern(
+    "pcc_gc_gray_count_load_acquire", (), c_int64
+)
 pcc_gc_tracing_debt_threshold = extern(
     "pcc_gc_tracing_debt_threshold", (), c_int64
 )
@@ -134,6 +137,21 @@ def pcc_gc_cms_worker_main_py(arg):
                 debt_slot = global_addr("pcc_gc_debt_bytes")
                 if atomic_load_i64(debt_slot, 0, "acquire") >= pcc_gc_tracing_debt_threshold():
                     due = 1
+            handoff: i64 = 0
+            if (
+                marking != 0
+                and (backend == 1 or backend == 2)
+                and pcc_gc_gray_count_load_acquire() == 0
+            ):
+                # The gray work is traced: a mutator finishes the mark and
+                # sweeps it in one stopped world (pcc_gc_cms_finish_pending).
+                # Gray objects shaded meanwhile are traced here first.
+                handoff = 1
+                due = 0
+                atomic_store_i32(
+                    global_addr("pcc_gc_cms_finish_pending"), 0, 1, "release"
+                )
+                atomic_store_i32(pending, 0, 1, "release")
             if due != 0:
                 # A dedicated thread marks at full speed; the batch bounds how
                 # long it holds the graph lock, not how much it traces.
@@ -161,7 +179,10 @@ def pcc_gc_cms_worker_main_py(arg):
                 atomic_store_i32(
                     global_addr("pcc_gc_cms_worker_drains"), 0, pushes, "release"
                 )
-            if traced == 0 and load_i32(global_addr("pcc_gc_mark_active"), 0) == 0:
+            if traced == 0 and (
+                handoff != 0
+                or load_i32(global_addr("pcc_gc_mark_active"), 0) == 0
+            ):
                 pcc_platform_sleep_ns(1000000)
         else:
             pcc_platform_sleep_ns(1000000)
@@ -319,14 +340,16 @@ def pcc_gc_config_ensure() -> i64:
         pcc_platform_getenv(cstr("PCC_GC_MINOR_ALLOC_MAX")),
         16, 16, 1073741824,
     )
-    # -1 (unset) resolves per backend: the relocating collectors (3, 4) keep
-    # the probe because a refcount can legitimately reach a pre-move address
-    # there; the non-moving collectors trust the caller.
+    # -1 (unset) trusts the caller. The probe checked that a refcount
+    # operation names a managed object, which a counting relocating
+    # collector could reach at a pre-move address; every collector but GC0
+    # is count-free (tracing_only above) and counts nothing, and GC0 never
+    # moves. An explicit setting still audits.
     refcount_probe: i64 = pcc_gc_config_parse_env_i32(
         pcc_platform_getenv(cstr("PCC_GC_REFCOUNT_PROVENANCE_PROBE")), -1, -1, 3
     )
     if refcount_probe < 0:
-        refcount_probe = 1 if (backend == 3 or backend == 4) else 0
+        refcount_probe = 0
     store_i32(global_addr("pcc_gc_backend_selected"), 0, backend)
     # The configuration is initialized; publish the frame-registry word
     # from the backend just stored and the current frame-root switch.

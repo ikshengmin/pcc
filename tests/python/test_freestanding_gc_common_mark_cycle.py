@@ -29,13 +29,30 @@ OWNED_SYMBOLS = {
     "pcc_gc_trace_cext_slot_transaction",
     "pcc_gc_trace_referents",
     "pcc_gc_trace_slot",
+    "pcc_gc_trace_stack_begin",
+    "pcc_gc_trace_stack_drain",
+    "pcc_gc_trace_stack_end",
+    "pcc_gc_trace_stack_push",
 }
+# The tracer's work stack: children shaded while a drain owns the stack are
+# traced after their parent instead of on another whole-list pass.
+OWNED_DATA_SYMBOLS = {
+    "pcc_gc_trace_stack",
+    "pcc_gc_trace_stack_count",
+}
+TLS_STORAGE_SYMBOLS = {"pcc_gc_trace_stack_owner"}
 RAW_FUNCTION_IMPORTS = {
     "pcc_gc_set_mark_color",
     "pcc_capi_is_cext_type_tag",
     "pcc_gc_gray_count_decrement_acq_rel",
     "pcc_gc_gray_count_store_release",
-    "pcc_gc_gray_count_increment_acq_rel",
+    # A zero gray count ends a drain without another object-list walk.
+    "pcc_gc_gray_count_load_acquire",
+    # Gray transitions counted atomically beside lock-free barrier shading.
+    "pcc_gc_shade_gray_atomic",
+    # Container-mode lists/instances are scanned under their own lock.
+    "pcc_container_lock",
+    "pcc_container_unlock",
     "pcc_gc_gray_current_roots",
     "pcc_gc_gray_refcount_external_roots",
     "pcc_gc_gray_conservative_thread_roots",
@@ -53,6 +70,7 @@ RAW_FUNCTION_IMPORTS = {
 }
 RAW_GLOBAL_IMPORTS = {
     "pcc_gc_backend4_no_refcounts",
+    "pcc_gc_list_container_mode",
     "pcc_gc_backend_selected",
     "pcc_gc_explicit_collect_active",
     "pcc_gc_mark_active",
@@ -175,10 +193,19 @@ def test_referent_trace_does_not_regray_black_objects():
         "\n@c_abi_export", 1
     )[0]
 
-    assert "if (flags & 32) == 0:" in mark
-    black_guard = mark.split("if (flags & 32) == 0:", 1)[1]
-    assert "pcc_gc_gray_count_increment_acq_rel()" in black_guard
-    assert "pcc_gc_set_mark_color(obj, 16)" in black_guard
+    # The single gray transition keeps black objects black (allow_black=0)
+    # and counts only a real transition; its own guard lives with the
+    # root operations.
+    assert "pcc_gc_shade_gray_atomic(obj, 0)" in mark
+    shade = (RUNTIME_DIR / "py" / "freestanding_gc_root_operations.py").read_text(
+        encoding="utf-8"
+    ).split('@c_abi_export("pcc_gc_shade_gray_atomic")', 1)[1].split(
+        "\n@c_abi_export", 1
+    )[0]
+    assert "(allow_black == 0 and (old & 32) != 0)" in shade
+    assert shade.index("pcc_gc_gray_count_increment_acq_rel()") < shade.index(
+        "atomic_cas_i32("
+    )
     assert "pcc_gc_trace_mark_gray_if_known(child)" in trace_slot
     assert "pcc_gc_mark_root_gray_if_known(child)" not in trace_slot
 
@@ -200,7 +227,8 @@ def test_common_mark_cycle_object_has_exact_raw_closure(
         for line in undefined_result.stdout.splitlines()
         if line.strip()
     }
-    assert undefined == RAW_FUNCTION_IMPORTS | RAW_GLOBAL_IMPORTS
+    # The Darwin thread-local descriptor bootstrap of the stack owner slot.
+    assert undefined - {"tlv_bootstrap"} == RAW_FUNCTION_IMPORTS | RAW_GLOBAL_IMPORTS
 
     symbols_result = subprocess.run(
         ["nm", "-g", str(obj)], capture_output=True, text=True, timeout=30
@@ -211,7 +239,10 @@ def test_common_mark_cycle_object_has_exact_raw_closure(
         for line in symbols_result.stdout.splitlines()
         if line.strip() and " U " not in line
     }
-    assert defined == OWNED_SYMBOLS
+    tls_initializers = {symbol + "$tlv$init" for symbol in TLS_STORAGE_SYMBOLS}
+    expected = OWNED_SYMBOLS | OWNED_DATA_SYMBOLS | TLS_STORAGE_SYMBOLS
+    assert expected <= defined
+    assert defined <= expected | tls_initializers
 
 
 def test_production_archive_has_one_common_mark_cycle_owner(

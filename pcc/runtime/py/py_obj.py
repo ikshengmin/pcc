@@ -1037,10 +1037,42 @@ def _store_root_nonmoving_tracing(slot, value, backend: int) -> None:
         flags: i64 = i64(atomic_load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET, "acquire"))
         if (flags & 524288) == 0:
             if backend == 2:
+                if (flags & 16) == 0:
+                    # GC2's barrier telemetry, as its locked root barrier
+                    # counts each store that shades.
+                    atomic_rmw_i32(
+                        "add", global_addr("pcc_gc_cms_wb_flushes"), 0, 1, "relaxed"
+                    )
                 pcc_gc_shade_gray_atomic(value, 1)
             elif (flags & 8) != 0:
                 pcc_gc_shade_gray_atomic(value, 0)
     pcc_thread_no_park_exit()
+
+
+def _store_root_count_free_unforwarded(slot, value) -> int:
+    # GC3/GC4 roots while no object is forwarded: the plan transaction would
+    # resolve nothing, so it only notes the store, writes the slot and, in a
+    # cycle, shades a white value as every tracing root barrier does.
+    # Forwarding is installed and a cycle activated only with the world
+    # stopped: one no-park interval keeps the test, the store and its
+    # barrier in one phase. Returns 0 when a forwarded value needs the plan.
+    pcc_thread_no_park_enter()
+    if atomic_load_i32(global_addr("pcc_gc_forwarding_population"), 0, "acquire") != 0:
+        pcc_thread_no_park_exit()
+        return 0
+    pcc_gc_note_store()
+    store_ptr(slot, 0, value)
+    if (
+        ptr_is_null(value) == 0
+        and is_tagged_int(value) == 0
+        and atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") != 0
+        and pcc_gc_object_index_seen_stable(value) != 0
+    ):
+        flags: i64 = i64(atomic_load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET, "acquire"))
+        if (flags & 524288) == 0 and (flags & 8) != 0:
+            pcc_gc_shade_gray_atomic(value, 0)
+    pcc_thread_no_park_exit()
+    return 1
 
 
 @c_abi_export("pcc_gc_store_root")
@@ -1131,6 +1163,14 @@ def pcc_gc_store_root(slot, value) -> None:
     ):
         _store_root_nonmoving_tracing(slot, value, backend)
         return
+    if (
+        (backend == 3 or backend == 4)
+        and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
+        and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
+        and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
+    ):
+        if _store_root_count_free_unforwarded(slot, value) != 0:
+            return
     plan = stack_alloc(128)
     pcc_gc_store_root_plan_init(plan, backend)
     pcc_py_gc_minor_graph_lock()
@@ -1165,6 +1205,15 @@ def pcc_gc_store_root_take(slot, value) -> None:
     ):
         _store_root_nonmoving_tracing(slot, value, backend)
         return
+    if (
+        (backend == 3 or backend == 4)
+        and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
+        and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
+        and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
+    ):
+        # Count-free: the caller's reference moves without a release.
+        if _store_root_count_free_unforwarded(slot, value) != 0:
+            return
     # Moving/tracing backends: commit through the relocation-aware plan (which
     # retains the stored value), then release the caller's reference through
     # the slot so a relocated address is never touched.
@@ -1691,7 +1740,15 @@ def _gc_tracing_automatic_collect(mark: int) -> int:
     pcc_gc_begin_explicit_tracing_collect()
     collected: int = 0
     idle_rounds: int = 0
-    while mark != 0 and pcc_gc_sweep_owed() == 0 and idle_rounds < 4:
+    # One mark: the one in progress, or a new one. A mark finished in this
+    # stopped world is swept by its own verdict, without another re-mark.
+    commits: int = load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0)
+    while (
+        mark != 0
+        and pcc_gc_sweep_owed() == 0
+        and idle_rounds < 4
+        and load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0) == commits
+    ):
         if pcc_gc_step(1024) > 0:
             idle_rounds = 0
         else:
@@ -1738,7 +1795,14 @@ def _gc_maybe_auto_collect() -> None:
     elif backend == 3:
         _gc_tracing_automatic_collect(1)
     else:
-        _gc_tracing_automatic_collect(0)
+        # GC1/GC2's collector thread left a traced mark's final remark to
+        # this collection (pcc_gc_cms_finish_pending).
+        finish: int = atomic_rmw_i32(
+            "xchg", global_addr("pcc_gc_cms_finish_pending"), 0, 0, "acq_rel"
+        )
+        if load_i32(global_addr("pcc_gc_mark_active"), 0) == 0:
+            finish = 0
+        _gc_tracing_automatic_collect(finish)
     atomic_store_i64(
         global_addr("pcc_gc_tracked_after_collect"),
         0,

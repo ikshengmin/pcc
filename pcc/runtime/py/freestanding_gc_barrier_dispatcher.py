@@ -341,6 +341,30 @@ def pcc_gc_step(budget: i64) -> i64:
     return processed
 
 
+@c_abi_export("pcc_gc_count_free_store_shade")
+def pcc_gc_count_free_store_shade(value) -> None:
+    """The nonmoving count-free GC1/GC2 barrier for a locked first store.
+
+    The caller holds the destination owner's container lock or the graph
+    lock, so its mark_active read is ordered with the marker's scan of that
+    owner, exactly as the container branch of pcc_gc_note_slot_write_barrier
+    decides. Outside a cycle nothing is owed; during one, GC2 shades the
+    value and GC1 shades a white value, both with one atomic transition.
+    """
+    if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
+        return
+    if atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") == 0:
+        return
+    if pcc_gc_object_index_seen_stable(value) == 0:
+        return
+    if (load_i32(value, 12) & 524288) != 0:
+        return
+    if load_i32(global_addr("pcc_gc_backend_selected"), 0) == 2:
+        pcc_gc_shade_gray_atomic(value, 1)
+    elif (load_i32(value, 12) & 8) != 0:
+        pcc_gc_shade_gray_atomic(value, 0)
+
+
 @c_abi_export("pcc_gc_note_slot_write_barrier")
 def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
     if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
@@ -349,6 +373,13 @@ def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
 
     if ptr_is_null(owner) != 0:
         if backend != 1 and backend != 2 and backend != 3 and backend != 4:
+            return
+        # A root store only shades during an active cycle. The cycle's
+        # mark_active becomes 1 under the graph lock, but the caller's store
+        # is not inside this barrier's lock section either way: reading 0
+        # here is the answer the locked read would give, so skip the lock and
+        # both index probes outside a cycle.
+        if atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") == 0:
             return
         pcc_py_gc_minor_graph_lock()
         if (
@@ -398,6 +429,12 @@ def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
                 pcc_gc_shade_gray_atomic(value, 1)
             elif (load_i32(value, 12) & 8) != 0:
                 pcc_gc_shade_gray_atomic(value, 0)
+            return
+        # As for roots: GC1/GC2 heap barriers shade only during a cycle, and
+        # a 0 read here is what the locked read would answer for a store
+        # that lands after this barrier returns. A caller already inside a
+        # graph transaction keeps that ordering through its own lock.
+        if atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") == 0:
             return
         pcc_py_gc_minor_graph_lock()
         if (

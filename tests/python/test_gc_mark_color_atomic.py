@@ -167,6 +167,9 @@ def _scheduler_namespace(memory, operation):
         "pcc_gc_gray_count_decrement_acq_rel": lambda: counts.append(-1),
         # Leave another gray object pending so this slice does not finish.
         "pcc_gc_gray_count_load_acquire": lambda: 1,
+        "pcc_gc_trace_stack_begin": lambda: None,
+        "pcc_gc_trace_stack_end": lambda: None,
+        "pcc_gc_trace_stack_drain": lambda budget: 0,
     })
     return namespace, locks, trace, counts
 
@@ -275,10 +278,14 @@ def test_actual_helper_emits_one_strong_full_word_cas(tmp_path):
     assert "store i32 " not in text
 
 
+# Gray transitions belong to pcc_gc_shade_gray_atomic (one counted CAS);
+# pcc_gc_set_mark_color writes the black of a traced object: after a list
+# walk, a work-stack trace and a stopped-world slice (mark cycle), and the
+# scheduler's concurrent step and C-extension commit.
 @pytest.mark.parametrize("filename,expected_calls", [
-    ("freestanding_gc_root_operations.py", 1),
+    ("freestanding_gc_root_operations.py", 0),
     ("freestanding_gc_common_mark_cycle.py", 3),
-    ("freestanding_gc_barrier_dispatcher.py", 3),
+    ("freestanding_gc_barrier_dispatcher.py", 0),
     ("freestanding_gc_incremental_concurrent_scheduler.py", 2),
 ])
 def test_active_color_writers_share_one_atomic_owner(filename, expected_calls):

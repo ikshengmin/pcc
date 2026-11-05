@@ -26,6 +26,9 @@ pcc_gc_dealloc_typed = extern("pcc_gc_dealloc_typed", (c_ptr, c_int64), c_void)
 
 
 pcc_gc_object_is_address_pinned = extern("pcc_gc_object_is_address_pinned", (c_ptr,), c_int64)
+pcc_gc_object_node_is_address_pinned = extern(
+    "pcc_gc_object_node_is_address_pinned", (c_ptr, c_ptr), c_int64
+)
 
 
 pcc_py_gc_minor_graph_lock = extern(
@@ -112,6 +115,13 @@ def pcc_gc_tracing_finalize_unreachable(obj) -> None:
         return
     if pcc_gc_object_is_address_pinned(obj) != 0:
         return
+    pcc_gc_tracing_finalize_unpinned(obj)
+
+
+@c_abi_export("pcc_gc_tracing_finalize_unpinned")
+def pcc_gc_tracing_finalize_unpinned(obj) -> None:
+    """Finalize a candidate whose caller found it unpinned (its walk read
+    the object's own node)."""
     backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
     flags: i64 = load_i32(obj, 12)
     tag: i64 = load_i32(obj, 8)
@@ -256,7 +266,7 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
             ):
                 flags = flags & ~1024
                 store_i32(obj, 12, flags)
-            if (flags & 1024) != 0 and (flags & 16384) == 0 and pcc_gc_object_is_address_pinned(obj) == 0:
+            if (flags & 1024) != 0 and (flags & 16384) == 0 and pcc_gc_object_node_is_address_pinned(node, obj) == 0:
                 tag: i64 = load_i32(obj, 8)
                 if pcc_capi_is_cext_type_tag(tag) == 0:
                     py_user_del_dispatch(obj)
@@ -286,7 +296,7 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
         ):
             flags = flags & ~1024
             store_i32(obj, 12, flags)
-        if (flags & 1024) != 0 and (flags & 16384) == 0 and pcc_gc_object_is_address_pinned(obj) == 0:
+        if (flags & 1024) != 0 and (flags & 16384) == 0 and pcc_gc_object_node_is_address_pinned(node, obj) == 0:
             is_class: i64 = 1 if load_i32(obj, 8) == abi_constant("object.type.class") else 0
             # A class can remain until a later budget slice frees its
             # instances. Empty owning slots prove clearing already finished;
@@ -318,7 +328,7 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
                 and ptr_is_null(pcc_gc_forwarding_index_find(obj)) == 0
             ):
                 store_i32(obj, 12, flags & ~1024)
-            elif (flags & 16384) != 0 or pcc_gc_object_is_address_pinned(obj) != 0:
+            elif (flags & 16384) != 0 or pcc_gc_object_node_is_address_pinned(node, obj) != 0:
                 store_i32(obj, 12, flags & ~1024)
             elif load_i32(obj, 8) == abi_constant("object.type.class"):
                 if count_free == 0:
@@ -326,7 +336,7 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
                     # the last owning instance/subclass reference.
                     store_i32(obj, 12, flags & ~1024)
             elif reclaimed < (cleared_nonclasses if count_free != 0 else cleared):
-                pcc_gc_tracing_finalize_unreachable(obj)
+                pcc_gc_tracing_finalize_unpinned(obj)
                 reclaimed = reclaimed + 1
         node = nxt
 
@@ -352,9 +362,9 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
                 if (
                     load_i32(obj, 8) == abi_constant("object.type.class")
                     and (load_i32(obj, 12) & 1024) != 0
-                    and pcc_gc_object_is_address_pinned(obj) == 0
+                    and pcc_gc_object_node_is_address_pinned(node, obj) == 0
                 ):
-                    pcc_gc_tracing_finalize_unreachable(obj)
+                    pcc_gc_tracing_finalize_unpinned(obj)
                     reclaimed = reclaimed + 1
             node = nxt
     return reclaimed

@@ -56,8 +56,10 @@ def test_both_mirrors_parse_the_same_env_default_and_range() -> None:
         'pcc_platform_getenv(cstr("PCC_GC_REFCOUNT_PROVENANCE_PROBE")), -1, -1, 3'
         in GC_CONFIG_PORT
     )
-    # Unset resolves per backend: the relocating collectors keep the probe.
-    assert "refcount_probe = 1 if (backend == 3 or backend == 4) else 0" in GC_CONFIG_PORT
+    # Unset trusts the caller for every collector: GC1-4 are count-free, so
+    # no refcount can reach a relocated object's pre-move address.
+    assert "if refcount_probe < 0:\n        refcount_probe = 0\n" in GC_CONFIG_PORT
+    assert "refcount_probe = 1 if (backend == 3 or backend == 4)" not in GC_CONFIG_PORT
     assert (
         'store_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0, refcount_probe)'
         in GC_CONFIG_PORT
@@ -193,28 +195,19 @@ def test_mode_two_reports_the_first_miss_once(fake_object_binary) -> None:
     assert result.stderr.count(FIRST_MISS_MESSAGE) == 1
 
 
-@pytest.mark.parametrize("backend", ["1", "2"])
-def test_non_moving_collectors_default_to_trusting_the_caller(
+@pytest.mark.parametrize("backend", ["1", "2", "3", "4"])
+def test_count_free_collectors_default_to_trusting_the_caller(
     fake_object_binary, backend
 ) -> None:
+    # GC1-4 count no references: a refcount operation, even on a pre-move
+    # address under relocation, returns before any header read.
     result = _run(fake_object_binary, None, backend)
     assert result.returncode == 0, result.stderr
     assert result.stdout.split() == ["0", "0"]
-
-
-@pytest.mark.parametrize("backend", ["3", "4"])
-def test_relocating_collectors_keep_the_probe_by_default(
-    fake_object_binary, backend
-) -> None:
-    # A refcount can reach a pre-move address under relocation; the probe is
-    # what turns that into a counted no-op instead of a header read.
-    result = _run(fake_object_binary, None, backend)
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.split() == ["1", "3"]
     # An explicit value still wins on every backend.
-    result = _run(fake_object_binary, "0", backend)
+    result = _run(fake_object_binary, "1", backend)
     assert result.returncode == 0, result.stderr
-    assert result.stdout.split() == ["0", "0"]
+    assert result.stdout.split()[0] == "1"
 
 
 def test_mode_three_aborts_at_the_first_miss(fake_object_binary) -> None:
