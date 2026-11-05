@@ -58,7 +58,7 @@ class _SweepBoundary:
             "null": lambda: None,
             "pcc_gc_object_node_is_active": lambda node: int(node["active"]),
             "pcc_gc_forwarding_index_find": lambda obj: self.forwardings.get(id(obj)),
-            "pcc_gc_object_is_address_pinned": lambda obj: int(obj["pinned"]),
+            "pcc_gc_object_node_is_address_pinned": self.node_is_address_pinned,
             "pcc_capi_is_cext_type_tag": lambda tag: int(tag == 10001),
             "pcc_gc_seed_roots": self.seed_roots,
             "pcc_gc_mark_root_gray_if_known": self.mark_root,
@@ -66,7 +66,7 @@ class _SweepBoundary:
             "py_user_del_dispatch": self.dispatch,
             "pcc_thread_world_stop_epoch_held": lambda: self.held_epoch,
             "pcc_gc_tracing_clear_unreachable": self.clear,
-            "pcc_gc_tracing_finalize_unreachable": self.reclaim,
+            "pcc_gc_tracing_finalize_unpinned": self.reclaim_unpinned,
             "pcc_gc_visit_object_slots": self.visit_slots,
             "py_weakref_invalidate_tracing_candidates": self.invalidate_candidates,
         }
@@ -197,6 +197,19 @@ class _SweepBoundary:
         for node in self.nodes:
             if node[0] is obj:
                 node["active"] = False
+
+    def node_is_address_pinned(self, node, obj):
+        # The sweep already has this object's registration node. Preserve
+        # that contract rather than silently accepting an unrelated node.
+        assert node["active"] and node[0] is obj
+        return int(obj["pinned"])
+
+    def reclaim_unpinned(self, obj):
+        # Production now calls its unpinned entry after checking this node.
+        # The boundary must fail if a future caller skips that prerequisite.
+        assert not obj["pinned"]
+        assert any(node["active"] and node[0] is obj for node in self.nodes)
+        self.reclaim(obj)
 
 
 def test_live_pending_candidate_is_rechecked_before_finalizer_or_weakref():
@@ -380,6 +393,37 @@ def test_pinned_and_cext_finalizer_exclusions_are_preserved():
     assert boundary.events == ["seed", "drain", "weakref:cext",
                                "clear:cext", "free:cext"]
     assert pinned["weakref_live"] and pinned[12] & CANDIDATE == 0
+
+
+def test_same_stop_epoch_pinned_candidate_skips_every_sweep_pass():
+    # Without a reachability refresh, this synthetic candidate reaches the
+    # node-aware pin check directly instead of being rescued by root seeding.
+    boundary = _SweepBoundary(held_epoch=7, finish_epoch=7)
+    pinned = boundary.object("pinned", pinned=True)
+    pinned["edges"] = [pinned]
+    assert boundary.sweep(1) == 0
+    assert boundary.events == []
+    assert boundary.nodes[0]["active"] and pinned["weakref_live"]
+    assert pinned["edges"] == [pinned]
+    assert pinned[12] & (CANDIDATE | FINALIZED) == 0
+
+
+def test_node_pin_boundary_rejects_a_different_objects_node():
+    boundary = _SweepBoundary()
+    first = boundary.object("first")
+    second = boundary.object("second", pinned=True)
+    assert boundary.node_is_address_pinned(boundary.nodes[0], first) == 0
+    assert boundary.node_is_address_pinned(boundary.nodes[1], second) == 1
+    with pytest.raises(AssertionError):
+        boundary.node_is_address_pinned(boundary.nodes[0], second)
+
+
+def test_unpinned_reclamation_boundary_rejects_a_pinned_object():
+    boundary = _SweepBoundary()
+    pinned = boundary.object("pinned", pinned=True)
+    with pytest.raises(AssertionError):
+        boundary.reclaim_unpinned(pinned)
+    assert boundary.events == [] and boundary.nodes[0]["active"]
 
 
 def test_same_stopped_world_without_user_finalizer_needs_no_recheck():
