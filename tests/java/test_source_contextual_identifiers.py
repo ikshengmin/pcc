@@ -3,8 +3,8 @@
 https://docs.oracle.com/javase/specs/jls/se21/html/jls-3.html#jls-3.8
 https://docs.oracle.com/javase/specs/jls/se21/html/jls-3.html#jls-3.9
 
-Record/sealed-class declarations, restricted type identifiers and yield remain
-separate boundaries. New source/native/raw-JDK obligations are locally UNRUN.
+Record/sealed-class declarations, restricted type identifiers, switch expressions
+and unqualified yield calls remain separate boundaries. Execution is locally UNRUN.
 """
 import hashlib
 import json
@@ -54,6 +54,80 @@ CASES = [
         "provider/Names.java": "package provider;public class Names{public static int record(){return 42;}}",
     }, "app.Main"),
 ]
+
+
+# JLS 3.8 excludes yield only as a TypeIdentifier or an unqualified method
+# invocation name. The former rejected local original is retained unchanged.
+YIELD_CASES = [
+    ("former-yield-local-boundary", original("int yield=42;return 42;"), "ContextNames"),
+    ("yield-parameter", original("return take(40);", "static int take(int yield){return yield+2;}"), "ContextNames"),
+    ("yield-inference-mutation", original("var yield=40;yield++;++yield;return yield;"), "ContextNames"),
+    ("yield-for-and-label", original("int result=0;yield:for(int yield=0;yield<3;yield++){result+=14;continue yield;}return result;"), "ContextNames"),
+    ("yield-qualified-call", original("return ContextNames.yield(40);", "static int yield(int value){return value+2;}"), "ContextNames"),
+    ("yield-qualified-call-statement", original("ContextNames.yield();return 42;", "static void yield(){}"), "ContextNames"),
+    ("yield-value-and-method", original("int yield=40;return ContextNames.yield(yield);", "static int yield(int yield){return yield+2;}"), "ContextNames"),
+    ("yield-existing-constant-field", original("return yield+ContextNames.yield;", "static final int yield=21;"), "ContextNames"),
+    ("yield-escaped-call", original(r"return ContextNames.y\u0069eld();", "static int yield(){return 42;}"), "ContextNames"),
+    ("yield-static-field-import", {
+        "app/Main.java": "package app;import static provider.Names.yield;public class Main{public static int run(){return yield;}}",
+        "provider/Names.java": "package provider;public class Names{public static final int yield=42;}",
+    }, "app.Main"),
+    ("yield-unused-method-import", {
+        "app/Main.java": "package app;import static provider.Names.yield;public class Main{public static int run(){return 42;}}",
+        "provider/Names.java": "package provider;public class Names{public static int yield(){return 42;}}",
+    }, "app.Main"),
+]
+CASES += YIELD_CASES
+
+
+YIELD_CALL_INVALID = [
+    (name, original(body, "static int yield(){return 42;}"))
+    for name, body in (
+        ("return", "return yield();"),
+        ("statement", "yield();return 42;"),
+        ("grouped", "return (yield());"),
+        ("escaped", r"return y\u0069eld();"),
+    )
+]
+
+
+@pytest.mark.parametrize("name,sources", YIELD_CALL_INVALID, ids=[row[0] for row in YIELD_CALL_INVALID])
+def test_unqualified_yield_calls_remain_ordinary_errors_before_lowering(name, sources, monkeypatch):
+    from pcc.frontends.java.source_lowering import SourceLowerer
+    monkeypatch.setattr(SourceLowerer, "__init__", lambda *args: pytest.fail("invalid yield call reached lowering"))
+    for invoke in (lambda: compile_sources(sources, entry_class="ContextNames"), lambda: analyze_class_sources(sources)):
+        with pytest.raises(JavaError, match="unqualified method invocation cannot use yield") as caught:
+            invoke()
+        assert type(caught.value) is JavaError and caught.value.code is None
+
+
+def test_yield_reference_and_receiver_names_remain_nonlowering_models():
+    source = "class Model{int yield;int yield(int yield){return this.yield+yield;}int run(){return this.yield(42);}}"
+    model = analyze_class_sources({"Model.java": source}).models["Model"]
+    assert model.source.fields[0].token.text == "yield"
+    assert model.source.methods[0].token.text == "yield"
+    assert not model.runtime_registered
+    reference = "class Reference{Reference run(Reference input){Reference yield=input;return yield;}}"
+    method, = analyze_class_sources({"Reference.java": reference}).models["Reference"].source.methods
+    local, returned = method.body.children
+    assert local.kind == "var" and local.token.text == "yield"
+    assert returned.children[0].symbol is local.symbol
+    grouped = "class Model{int run(int yield){return (yield)+1;}}"
+    returned, = analyze_class_sources({"Model.java": grouped}).models["Model"].source.methods[0].body.children
+    assert returned.children[0].children[0].kind == "group"
+    with pytest.raises(UnsupportedJava, match="reference casts") as caught:
+        analyze_class_sources({"Reference.java": "class Reference{Reference run(Reference yield){return (Reference)yield;}}"})
+    assert caught.value.code == "java.unsupported.object-expressions"
+
+
+@pytest.mark.integration
+@pytest.mark.pcc_gate(unavailable=JDK_REASON)
+@pytest.mark.xdist_group(name="java-contextual-identifiers-reference")
+@pytest.mark.parametrize("name,sources", YIELD_CALL_INVALID, ids=[row[0] for row in YIELD_CALL_INVALID])
+def test_same_unqualified_yield_calls_have_jdk_rejections(name, sources, tmp_path, request):
+    _, _, actual = prepare_reference(sources, tmp_path, request)
+    assert actual[0] == 1, actual
+    assert b"ContextNames.java:" in actual[2] and b"yield" in actual[2]
 
 
 @pytest.mark.parametrize("name,sources,entry", CASES, ids=[row[0] for row in CASES])
@@ -137,7 +211,9 @@ def test_contextual_value_names_never_become_type_identifiers(name, template):
     assert type(caught.value) is JavaError and caught.value.code is None
 
 
-@pytest.mark.parametrize("name", ("class", "true", "null", "_", "yield"))
+# Keep this historical node ID for ledger continuity. Its exact yield-local
+# original moved to the positive corpus above; reserved-name checks are intact.
+@pytest.mark.parametrize("name", ("class", "true", "null", "_"))
 def test_reserved_names_and_unexpanded_yield_remain_rejected(name):
     with pytest.raises(JavaError) as caught:
         compile_sources(original("int " + name + "=42;return 42;"), entry_class="ContextNames")

@@ -27,9 +27,9 @@ KEYWORDS = frozenset((
 ).split())
 # These contextual spellings are ordinary Identifiers in label positions (JLS 3.8/3.9).
 LABEL_CONTEXTUAL_NAMES = frozenset("record sealed permits yield var".split())
-# JLS 3.8: these spellings are ordinary value/member identifiers. Yield keeps
-# its separate invocation/statement boundary until that grammar is owned.
-VALUE_CONTEXTUAL_NAMES = frozenset("record sealed permits var".split())
+# JLS 3.8: these spellings are ordinary value/member identifiers. The method
+# invocation grammar separately excludes an unqualified yield(...) call.
+VALUE_CONTEXTUAL_NAMES = LABEL_CONTEXTUAL_NAMES
 MODIFIERS = frozenset("public protected private static final abstract native synchronized strictfp".split())
 PRECEDENCE = {"||": 1, "&&": 2, "|": 3, "^": 4, "&": 5,
               "==": 6, "!=": 6, "<": 7, ">": 7, "<=": 7, ">=": 7,
@@ -971,6 +971,8 @@ class SourceParser:
             while self.accept("."):
                 parts.append(self.identifier().text)
             if self.accept("("):
+                if parts == ["yield"]:
+                    token.error("unqualified method invocation cannot use yield; qualify the method name")
                 arguments = []
                 if self.peek().text != ")":
                     while True:
