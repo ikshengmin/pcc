@@ -122,7 +122,6 @@ def test_copy_declarations_have_real_identity_without_copy_execution(access):
     ('void f(const int&n){n=42;}','cpp.const-assignment'),
     ('using R=int&;int f(){int n=42;return R(n);}','cpp.unsupported.references'),
     ('int n;int&r=n;','cpp.unsupported.references'),
-    ('int g(){int n=0;int&r=n;return r;}','cpp.unsupported.references'),
     ('struct S{int&r;};','cpp.unsupported.references'),
     ('void f(int&,...);','cpp.unsupported.references'),
     ('void f(int&&);','cpp.unsupported.references'),

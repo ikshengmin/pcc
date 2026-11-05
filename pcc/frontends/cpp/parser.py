@@ -1385,7 +1385,8 @@ class CppParser:
             dtype = self._type()
             name, dtype = self._declarator(dtype, allow_class_element=True)
             if isinstance(dtype, ReferenceType):
-                raise CppDiagnostic("cpp.unsupported.references", "local reference initialization/lifetime is not implemented", name.coord)
+                from pcc.frontends.cpp.references import declare_local
+                return declare_local(self, name, dtype, for_init=for_init)
             self._check_object_type(dtype, name.coord)
             # The point of declaration precedes the initializer.
             symbol = self.scope.declare(Symbol(
@@ -2766,8 +2767,13 @@ class CppParser:
             return Expression(Pattern("name", token.coord, symbol), symbol.dtype,
                               symbol.kind == "value", symbol)
         if isinstance(symbol.dtype, ReferenceType):
-            result = Expression(c_ast.UnaryOp('*', c_ast.ID(symbol.c_name, token.coord), token.coord),
-                                symbol.dtype.referent, True, symbol)
+            no_fetch = is_class_type(symbol.dtype.referent) or unqualified(symbol.dtype.referent) == "nullptr"
+            address = c_ast.ID(symbol.c_name, token.coord)
+            # Observe the established binding without fetching its referent.
+            # Keeping its address evaluation also avoids inventing an ICE proof.
+            result = Expression(c_ast.UnaryOp('*', address, token.coord),
+                                symbol.dtype.referent, True, symbol, discarded_known=no_fetch,
+                                discarded_node=address if no_fetch else None)
             result.decltype_entity = symbol.dtype
             return result
         fact = self._symbol_constant_fact(symbol, token.coord)

@@ -153,14 +153,9 @@ DEFERRED = (
     ('class-reference-assignment-body', 'struct S{void operator=(const S&){} };', 'cpp.unsupported.class-reference-values'),
     # The original namespace object precedes the reference default and needs its own lifetime owner.
     ('class-reference-default', 'struct N{};N node;struct H{H(const N&n=node){}};', 'cpp.unsupported.static-class-lifetime'),
-    ('class-reference-local', 'struct N{};int f(){N n;N&r=n;return 0;}', 'cpp.unsupported.references'),
     ('incomplete-reference-list-candidate-set', 'struct N{};struct H{H(int){}H(const N&){} };'
      'int f(){H h{42};return 0;}', 'cpp.unsupported.constructor-list-initialization'),
     ('class-temporary-materialization', COPY_CLASS + 'int f(){S b(S(42));return 0;}', 'cpp.unsupported.class-initialization'),
-    ('static-member-through-borrowed-object', 'struct N{static int answer(){return 42;}};'
-     'struct H{H(const N&n):value(n.answer()){}int value;};', 'cpp.unsupported.discarded-class-expression'),
-    ('enumerator-through-borrowed-object', 'struct N{enum{Answer=42};};'
-     'struct H{H(const N&n):value(n.Answer){}int value;};', 'cpp.unsupported.discarded-class-expression'),
 )
 
 

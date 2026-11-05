@@ -1,8 +1,8 @@
-"""Direct lvalue-reference parameters, N4659 [dcl.ref], [dcl.init.ref].
+"""Direct lvalue-reference binding, N4659 [dcl.ref], [dcl.init.ref].
 
 Reference identity survives overload selection and declaration matching. Only
 projection to C uses an address parameter; source names denote the referent.
-Selected constructor parameters may also borrow compatible class lvalues.
+Selected constructor parameters and local aliases may borrow class lvalues.
 Reference results borrow existing scalar/pointer lvalues. Temporary
 materialization, class-reference results and implicit class copies remain gaps.
 """
@@ -96,3 +96,43 @@ def bind(parser, expression, destination, coord, *, allow_class=False):
     # it never fetches the referent or manufactures a new source pointer value.
     node = expression.node
     return node.expr if isinstance(node, c_ast.UnaryOp) and node.op == '*' else c_ast.UnaryOp('&', node, coord)
+
+
+def declare_local(parser, name, dtype, *, for_init=False):
+    """Bind an automatic reference with '=' without owning the referent.
+
+    The binding captures its address once. There is no temporary, object copy
+    or new destructor obligation; the existing object's lifetime owner remains
+    responsible for cleanup. Other initialization forms keep their old gate.
+    """
+    from pcc.frontends.cpp.sema import Symbol
+    from pcc.frontends.cpp.types import contains_function
+
+    if parser.parsing_template or parser.template_function is not None or parser.instantiating_template:
+        raise CppDiagnostic('cpp.unsupported.references',
+                            'local reference template replay requires binding patterns', name.coord)
+    if contains_function(dtype.referent):
+        raise CppDiagnostic('cpp.unsupported.function-pointers',
+                            'callback reference storage requires its own value rules', name.coord)
+    # [basic.scope.pdecl]: the reference hides any outer spelling during its
+    # initializer. In particular, do not silently bind a self-reference to it.
+    symbol = parser.scope.declare(Symbol(
+        name.value, 'value', name.coord, dtype=dtype,
+        c_name=parser._local_projection_name(name.value),
+    ))
+    if not parser._accept('='):
+        if parser._peek().value == ';':
+            raise CppDiagnostic('cpp.reference-initializer-required',
+                                'a local reference requires an initializer', name.coord)
+        raise CppDiagnostic('cpp.unsupported.references',
+                            'local references currently require an equals initializer', name.coord)
+    expression = parser._expression()
+    parser._require_value(expression, allow_class=True, object_address=True)
+    initializer = bind(parser, expression, dtype, name.coord, allow_class=True)
+    if for_init and parser._peek().value == ',':
+        raise CppDiagnostic('cpp.unsupported.for-declaration-list',
+                            'multiple init-declarators are not implemented', parser._peek().coord)
+    parser._expect(';')
+    symbol.initialization_complete = True
+    symbol.jump_entry = 'initialized'
+    return parser._decl(symbol.c_name, dtype, name.coord, initializer)
