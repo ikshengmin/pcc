@@ -2294,7 +2294,7 @@
       "test_identical_declaration_original_has_real_reference_execution": {
         "activity": "external-reference",
         "reason": [
-          "Official Go compiles and executes both exact declaration/nil-only originals, compared with owned native raw process results."
+          "Official Go compiles and executes exact complete declaration/nil-only and named-signature-anchor originals, compared with owned native raw process results."
         ]
       },
       "test_original_package_declarations_have_reference_execution": {
@@ -2312,7 +2312,7 @@
       "test_preserved_valid_frontiers_have_reference_only_execution": {
         "activity": "external-reference",
         "reason": [
-          "Official Go executes preserved valid recursive-anonymous and generic-signature originals; no PCC runtime acceptance is claimed."
+          "Official Go executes the preserved valid generic-signature original that PCC leaves explicitly unimplemented. The exact formerly misclassified anonymous-interface original is separately required to have a normal source rejection."
         ]
       },
       "test_invalid_originals_have_attributed_official_rejections": {
@@ -2325,6 +2325,12 @@
         "activity": "external-reference",
         "reason": [
           "Official Go builds the exact corrected complete any-variable source; owned interface storage stays explicitly unsupported. No external compiler is a production fallback."
+        ]
+      },
+      "test_identical_anonymous_cycle_originals_have_official_source_rejections": {
+        "activity": "external-reference",
+        "reason": [
+          "Checks the exact previously misclassified recursive-anonymous fixture and unchanged authored cycle forms against actual official Go normal source-attributed rc1/no-binary rejection. Original source bytes are preserved; canonical named-signature controls remain separate complete native/reference programs."
         ]
       }
     },

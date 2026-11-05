@@ -2408,17 +2408,20 @@
         "properties",
         "packages"
       ],
-      "scope": "Source declarations and signature metadata: canonical named placeholders, aliases, exact method signatures and variadicness, compatible embedded-interface merging, package-private identities and named signature recursion. Invalid embedding/value-containment cycles remain errors; recursively expanded anonymous signatures, general type sets and generic applications remain explicit capability boundaries. General values are blocked before Lowerer, including unused signatures, zero arrays and ignored conversions. Only existing error-compatible nil transport is admitted. No original math/bits or general interface runtime acceptance.",
+      "scope": "Source declarations and signature metadata: canonical named placeholders, aliases, exact method signatures and variadicness, compatible embedded-interface merging, package-private identities and named signature recursion. Invalid embedding/value-containment and recursively expanded anonymous-interface signature cycles are source errors. Canonical named signature references break anonymous expansion. Exact formerly misclassified originals remain unchanged rejection obligations, with positive named-anchor native/reference controls. General type sets and generic applications retain explicit capability boundaries. General values are blocked before Lowerer, including unused signatures, zero arrays and ignored conversions. Only existing error-compatible nil transport is admitted. No original math/bits or general interface runtime acceptance.",
       "tests": [
+        "tests/go/test_interface_source.py::test_source_helper_preserves_complete_empty_declaration_runtime_original",
         "tests/go/test_interface_source.py::test_complete_declaration_original_has_owned_lowering",
         "tests/go/test_interface_source.py::test_named_identity_and_aliases_survive_deepcopy_and_recursive_signatures",
+        "tests/go/test_interface_source.py::test_named_signature_anchors_stop_anonymous_expansion_without_erasing_identity",
         "tests/go/test_interface_source.py::test_underlying_name_chains_do_not_copy_an_incomplete_placeholder",
         "tests/go/test_interface_source.py::test_alias_signature_anchors_do_not_legalize_recursive_value_containment",
-        "tests/go/test_interface_source.py::test_recursive_anonymous_signature_is_capability_not_invalid_source",
+        "tests/go/test_interface_source.py::test_recursive_anonymous_signatures_are_invalid_before_ir",
         "tests/go/test_interface_source.py::test_outer_signature_does_not_hide_independent_embedding_cycle",
         "tests/go/test_interface_source.py::test_signature_only_declarations_do_not_require_runtime_storage",
         "tests/go/test_interface_source.py::test_invalid_interface_originals_are_validity_errors_before_ir",
         "tests/go/test_interface_source.py::test_general_interface_storage_never_reaches_lowerer",
+        "tests/go/test_interface_source.py::test_corrected_empty_declaration_runtime_original_is_reference_only",
         "tests/go/test_interface_source.py::test_generic_signature_application_is_a_capability_boundary",
         "tests/go/test_interface_source.py::test_malformed_type_arguments_remain_syntax_errors",
         "tests/go/test_interface_source.py::test_import_path_not_package_spelling_owns_private_interface_names",
@@ -2427,25 +2430,25 @@
         "tests/go/test_interface_source.py::test_identical_declaration_original_has_real_reference_execution",
         "tests/go/test_interface_source.py::test_original_package_declarations_have_reference_execution",
         "tests/go/test_interface_source.py::test_qualified_generic_embedding_has_reference_only_execution",
+        "tests/go/test_interface_source.py::test_original_recursive_anonymous_fixture_remains_unchanged_and_invalid",
+        "tests/go/test_interface_source.py::test_identical_anonymous_cycle_originals_have_official_source_rejections",
         "tests/go/test_interface_source.py::test_preserved_valid_originals_keep_explicit_capability_boundary",
         "tests/go/test_interface_source.py::test_preserved_valid_frontiers_have_reference_only_execution",
-        "tests/go/test_interface_source.py::test_invalid_originals_have_attributed_official_rejections",
-        "tests/go/test_interface_source.py::test_source_helper_preserves_complete_empty_declaration_runtime_original",
-        "tests/go/test_interface_source.py::test_corrected_empty_declaration_runtime_original_is_reference_only"
+        "tests/go/test_interface_source.py::test_invalid_originals_have_attributed_official_rejections"
       ],
       "diagnostics": [],
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:cef0cb2f2c02cf4dc0efdf0e59a5dd097a1cbb6ba423cee230a2fda2ac90d749",
+        "source_revision": "sha256:c27d1c16814cb134e4c3e91c995efb7ea2ba5ecfbdc94931e873400fbabf2c86",
         "sources": [
           {
             "path": "pcc/frontends/go/syntax.py",
-            "sha256": "62d24c3496bd5091da87064a977303729ed89e24c35c514f0d2783b6fdbbae78"
+            "sha256": "4b3a873da3625e67ded73c65cd55adc56689ce9158e89b1b00804772ba29bd68"
           },
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "eef145a31561818ea936f863a1ea97d6764287e731b971b4f35d1c472292b00c"
+            "sha256": "f10418f65d918189f95727a5bca6240bc6f5ffd3c203046783a109085d0c8b25"
           },
           {
             "path": "pcc/frontends/go/packages.py",
@@ -2453,7 +2456,7 @@
           },
           {
             "path": "pcc/frontends/go/generics.py",
-            "sha256": "225befad1456eecdd58968f03cfebb7e4516fe0eb849a651a93d406744e111c5"
+            "sha256": "22484d5c34db16331dd585354ea57247b63005e5b59dc3d2c591d222b2ade969"
           },
           {
             "path": "pcc/frontends/go/records.py",
@@ -2473,7 +2476,7 @@
           },
           {
             "path": "tests/go/test_interface_source.py",
-            "sha256": "2d311567a8b99d18e9548d95959475672ea697449b5c3e353d0e6cbefdec2e21"
+            "sha256": "51bad0c2f3273cccabe627dee07b1e0eab620867bf774c9ca941d276ab6223fa"
           },
           {
             "path": "tests/go/fixtures/interface_source/declarations.go",
@@ -2498,6 +2501,10 @@
           {
             "path": "tests/go/fixtures/source_interface_declarations.go",
             "sha256": "cf0b221c7cde10c081765a6dee12ffca08a2b6e5e488537e9197824fcd555487"
+          },
+          {
+            "path": "tests/go/fixtures/interface_source/named_signature_anchors.go",
+            "sha256": "90e740f827d2ad121c2a440a395bc70e36be5eb3c726c6bd38edefe6a9acb67c"
           }
         ]
       },
@@ -2505,23 +2512,26 @@
         {
           "id": "ci-only",
           "kind": "full-feature",
-          "scope": "Source declarations and signature metadata: canonical named placeholders, aliases, exact method signatures and variadicness, compatible embedded-interface merging, package-private identities and named signature recursion. Invalid embedding/value-containment cycles remain errors; recursively expanded anonymous signatures, general type sets and generic applications remain explicit capability boundaries. General values are blocked before Lowerer, including unused signatures, zero arrays and ignored conversions. Only existing error-compatible nil transport is admitted. No original math/bits or general interface runtime acceptance.",
+          "scope": "Source declarations and signature metadata: canonical named placeholders, aliases, exact method signatures and variadicness, compatible embedded-interface merging, package-private identities and named signature recursion. Invalid embedding/value-containment and recursively expanded anonymous-interface signature cycles are source errors. Canonical named signature references break anonymous expansion. Exact formerly misclassified originals remain unchanged rejection obligations, with positive named-anchor native/reference controls. General type sets and generic applications retain explicit capability boundaries. General values are blocked before Lowerer, including unused signatures, zero arrays and ignored conversions. Only existing error-compatible nil transport is admitted. No original math/bits or general interface runtime acceptance.",
           "status": "unrun",
-          "source_revision": "sha256:cef0cb2f2c02cf4dc0efdf0e59a5dd097a1cbb6ba423cee230a2fda2ac90d749",
+          "source_revision": "sha256:c27d1c16814cb134e4c3e91c995efb7ea2ba5ecfbdc94931e873400fbabf2c86",
           "mode": "pcc0",
           "platform": "linux-x86_64",
           "backend": "self",
           "gc": "not_applicable",
           "required_tests": [
+            "tests/go/test_interface_source.py::test_source_helper_preserves_complete_empty_declaration_runtime_original",
             "tests/go/test_interface_source.py::test_complete_declaration_original_has_owned_lowering",
             "tests/go/test_interface_source.py::test_named_identity_and_aliases_survive_deepcopy_and_recursive_signatures",
+            "tests/go/test_interface_source.py::test_named_signature_anchors_stop_anonymous_expansion_without_erasing_identity",
             "tests/go/test_interface_source.py::test_underlying_name_chains_do_not_copy_an_incomplete_placeholder",
             "tests/go/test_interface_source.py::test_alias_signature_anchors_do_not_legalize_recursive_value_containment",
-            "tests/go/test_interface_source.py::test_recursive_anonymous_signature_is_capability_not_invalid_source",
+            "tests/go/test_interface_source.py::test_recursive_anonymous_signatures_are_invalid_before_ir",
             "tests/go/test_interface_source.py::test_outer_signature_does_not_hide_independent_embedding_cycle",
             "tests/go/test_interface_source.py::test_signature_only_declarations_do_not_require_runtime_storage",
             "tests/go/test_interface_source.py::test_invalid_interface_originals_are_validity_errors_before_ir",
             "tests/go/test_interface_source.py::test_general_interface_storage_never_reaches_lowerer",
+            "tests/go/test_interface_source.py::test_corrected_empty_declaration_runtime_original_is_reference_only",
             "tests/go/test_interface_source.py::test_generic_signature_application_is_a_capability_boundary",
             "tests/go/test_interface_source.py::test_malformed_type_arguments_remain_syntax_errors",
             "tests/go/test_interface_source.py::test_import_path_not_package_spelling_owns_private_interface_names",
@@ -2530,14 +2540,14 @@
             "tests/go/test_interface_source.py::test_identical_declaration_original_has_real_reference_execution",
             "tests/go/test_interface_source.py::test_original_package_declarations_have_reference_execution",
             "tests/go/test_interface_source.py::test_qualified_generic_embedding_has_reference_only_execution",
+            "tests/go/test_interface_source.py::test_original_recursive_anonymous_fixture_remains_unchanged_and_invalid",
+            "tests/go/test_interface_source.py::test_identical_anonymous_cycle_originals_have_official_source_rejections",
             "tests/go/test_interface_source.py::test_preserved_valid_originals_keep_explicit_capability_boundary",
             "tests/go/test_interface_source.py::test_preserved_valid_frontiers_have_reference_only_execution",
-            "tests/go/test_interface_source.py::test_invalid_originals_have_attributed_official_rejections",
-            "tests/go/test_interface_source.py::test_source_helper_preserves_complete_empty_declaration_runtime_original",
-            "tests/go/test_interface_source.py::test_corrected_empty_declaration_runtime_original_is_reference_only"
+            "tests/go/test_interface_source.py::test_invalid_originals_have_attributed_official_rejections"
           ],
           "evidence": [],
-          "reason": "The shared Go semantic source now admits bounded value-record arrays and preserves storage/runtime diagnostics. This does not renew historical evidence. Full-feature acceptance on this changed source remains unrun; candidate focused/whole-language validation and official-reference availability are reported separately."
+          "reason": "Source implementation now rejects anonymous-interface cycles in agreement with the actual official compiler while preserving named signature anchors and exact original inputs. Formal full-feature acceptance evidence is not bound in this ledger; current candidate execution and same-original reference outcomes must be reported separately. No historical evidence is renewed."
         }
       ]
     },

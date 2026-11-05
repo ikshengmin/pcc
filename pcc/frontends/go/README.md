@@ -1119,8 +1119,13 @@ interface inclusion, exact named/alias identities and variadicness. It validates
 parameter/result names before discarding them from type identity. Canonical
 named identities are allocated before completion so
 recursive named method signatures do not duplicate declarations. Embedding and
-value-containment cycles remain errors. Recursively expanded anonymous
-signatures, general type sets and generic type applications remain explicit
+value-containment cycles remain errors. Anonymous interfaces whose expanded
+method signatures refer back to themselves are also invalid, including cycles
+through aliases and pointer/slice/array wrappers. Named signature references
+retain their canonical identity and break this anonymous expansion. This
+matches the official compiler's issue 56103 cycle check; the formerly
+misclassified original fixture is preserved unchanged as a rejection
+obligation. General type sets and generic type applications remain explicit
 capability boundaries. Package-private method names use import-path identity,
 not package spelling. Predeclared `any` denotes the empty interface; generic
 `any` and `comparable` constraints retain their separate checking rules.

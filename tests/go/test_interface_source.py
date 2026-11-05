@@ -28,6 +28,7 @@ from tests.go.test_execution import forbid_external_compiler
 
 FIXTURE = Path(__file__).parent / 'fixtures/interface_source/declarations.go'
 RECOVERED_ORIGINAL = Path(__file__).parent / 'fixtures/source_interface_declarations.go'
+NAMED_ANCHORS = FIXTURE.parent / 'named_signature_anchors.go'
 
 
 def units(fixture=FIXTURE):
@@ -57,7 +58,7 @@ def analyze(original):
     return analyzer
 
 
-@pytest.mark.parametrize('fixture', (FIXTURE, RECOVERED_ORIGINAL))
+@pytest.mark.parametrize('fixture', (FIXTURE, RECOVERED_ORIGINAL, NAMED_ANCHORS))
 def test_complete_declaration_original_has_owned_lowering(fixture, monkeypatch):
     forbid_external_compiler(monkeypatch)
     compile_go(units(fixture)[0][1], fixture.name)
@@ -71,6 +72,19 @@ def test_named_identity_and_aliases_survive_deepcopy_and_recursive_signatures():
     other = analyzer.types['Other'].resolved
     assert other is not named
     assert underlying(other) == underlying(named)
+
+
+def test_named_signature_anchors_stop_anonymous_expansion_without_erasing_identity():
+    owner = analyze(NAMED_ANCHORS.read_text())
+    direct = owner.types['Direct'].resolved
+    assert owner.types['Alias'].resolved is direct
+    signature = method_set(direct).lookup('Next').method.signature
+    assert signature.parameters == (direct,) and signature.result is direct
+    wrapped = method_set(owner.types['Wrapped'].resolved).lookup('Use').method.signature
+    assert all(parameter.element is direct for parameter in wrapped.parameters)
+    assert owner.types['ForwardAlias'].resolved is owner.types['Forward'].resolved
+    anonymous = method_set(owner.types['WithAnonymous'].resolved).lookup('Use').method.signature.parameters[0]
+    assert method_set(anonymous).lookup('Next').method.signature.result is owner.types['Left'].resolved
 
 
 @pytest.mark.parametrize('declarations', [
@@ -95,15 +109,28 @@ def test_alias_signature_anchors_do_not_legalize_recursive_value_containment(dec
     assert not isinstance(failure.value, UnsupportedGo)
 
 
-@pytest.mark.parametrize('declarations', [
+ANONYMOUS_CYCLES = (
     'type I interface{M(interface{I})}', 'type I interface{M(*interface{I})}',
     'type I interface{M([]interface{I})}', 'type I interface{M(A)};type A=interface{I}',
     'type A=interface{I};type I interface{M(A)}',
-])
-def test_recursive_anonymous_signature_is_capability_not_invalid_source(declarations):
-    with pytest.raises(UnsupportedGo, match='deferred method-set completion') as failure:
+    'type I interface{M([0]interface{I})}',
+    'type I interface{M(struct{F interface{I}})}',
+    'type I interface{M(...interface{I})}',
+    'type I interface{M() interface{I}}',
+    'type I interface{M() *interface{I}}',
+    'type I interface{M() (int,interface{I})}',
+    'type A interface{M(interface{B})};type B interface{N(interface{A})}',
+    'type I interface{M(interface{J})};type J interface{I}',
+)
+
+
+@pytest.mark.parametrize('declarations', ANONYMOUS_CYCLES)
+def test_recursive_anonymous_signatures_are_invalid_before_ir(declarations, monkeypatch):
+    from pcc.frontends.go.lowering import Lowerer
+    monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('anonymous cycle reached IR'))
+    with pytest.raises(GoDiagnostic, match='invalid recursive type: anonymous interface') as failure:
         compile_go(source(declarations))
-    assert failure.value.code == 'go.unsupported.interface-types'
+    assert not isinstance(failure.value, UnsupportedGo)
 
 
 def test_outer_signature_does_not_hide_independent_embedding_cycle():
@@ -230,20 +257,22 @@ def test_qualified_generic_embedding_keeps_explicit_capability_boundary():
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize('fixture', (FIXTURE, RECOVERED_ORIGINAL))
-def test_complete_declaration_original_executes_owned_native(fixture, tmp_path, monkeypatch):
+@pytest.mark.parametrize('fixture,expected', (
+    (FIXTURE, 42), (RECOVERED_ORIGINAL, 42), (NAMED_ANCHORS, 0xfedcba9876543210),
+))
+def test_complete_declaration_original_executes_owned_native(fixture, expected, tmp_path, monkeypatch):
     with monkeypatch.context() as denied:
         forbid_external_compiler(denied)
         artifact = compile_owned(units(fixture), observe_entry=('Result', ()))
     binary = tmp_path / 'declarations-owned'
     write_artifact(artifact, binary)
-    assert run(binary) == Execution(0, (42).to_bytes(8, 'little'), b'')
+    assert run(binary) == Execution(0, expected.to_bytes(8, 'little'), b'')
 
 
 @pytest.mark.integration
 @pytest.mark.pcc_gate(env='PCC_GO_REFERENCE')
 @pytest.mark.xdist_group(name='go-reference')
-@pytest.mark.parametrize('fixture', (FIXTURE, RECOVERED_ORIGINAL))
+@pytest.mark.parametrize('fixture', (FIXTURE, RECOVERED_ORIGINAL, NAMED_ANCHORS))
 def test_identical_declaration_original_has_real_reference_execution(fixture, tmp_path, monkeypatch):
     with monkeypatch.context() as denied:
         forbid_external_compiler(denied)
@@ -285,8 +314,40 @@ def test_qualified_generic_embedding_has_reference_only_execution(tmp_path):
     assert run(reference) == Execution(0, b'', b'')
 
 
-VALID_UNIMPLEMENTED = tuple(FIXTURE.parent / 'valid_but_unimplemented' / name for name in (
-    'recursive_anonymous_signature.go', 'generic_signature_instantiation.go'))
+# Preserve the exact formerly misclassified original at its historical path.
+# Actual Go 1.27.3 compilation rejects its anonymous interface cycle, as do
+# official issue56103/bug398 compiler tests; it is not a valid runtime frontier.
+ANONYMOUS_CYCLE_ORIGINAL = FIXTURE.parent / 'valid_but_unimplemented/recursive_anonymous_signature.go'
+VALID_UNIMPLEMENTED = (FIXTURE.parent / 'valid_but_unimplemented/generic_signature_instantiation.go',)
+
+
+def test_original_recursive_anonymous_fixture_remains_unchanged_and_invalid(monkeypatch):
+    original = ANONYMOUS_CYCLE_ORIGINAL.read_bytes()
+    assert original == b'package main\n\ntype Recursive interface {\n\tVisit(interface { Recursive })\n}\n\nfunc main() {}\n'
+    from pcc.frontends.go.lowering import Lowerer
+    monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('invalid original reached IR'))
+    with pytest.raises(GoDiagnostic, match='invalid recursive type: anonymous interface') as failure:
+        compile_go(original.decode(), ANONYMOUS_CYCLE_ORIGINAL.name)
+    assert not isinstance(failure.value, UnsupportedGo)
+
+
+@pytest.mark.integration
+@pytest.mark.pcc_gate(env='PCC_GO_REFERENCE')
+@pytest.mark.xdist_group(name='go-reference')
+def test_identical_anonymous_cycle_originals_have_official_source_rejections(tmp_path):
+    originals = [('original-' + str(index) + '.go', source(declarations))
+                 for index, declarations in enumerate(ANONYMOUS_CYCLES)]
+    originals.append((ANONYMOUS_CYCLE_ORIGINAL.name, ANONYMOUS_CYCLE_ORIGINAL.read_text()))
+    for index, (filename, original) in enumerate(originals):
+        with pytest.raises(GoDiagnostic, match='invalid recursive type: anonymous interface') as failure:
+            compile_go(original, filename)
+        assert not isinstance(failure.value, UnsupportedGo)
+        directory = tmp_path / str(index)
+        receipt = compile_reference_rejection(((filename, original),), directory,
+            compiler=os.environ['PCC_GO_REFERENCE'], cache=os.environ['PCC_GO_REFERENCE_CACHE'],
+            diagnostics='invalid recursive type')
+        assert receipt['classification'] == 'normal_source_rejection'
+        assert (directory / filename).read_bytes() == original.encode()
 
 
 @pytest.mark.parametrize('fixture', VALID_UNIMPLEMENTED)

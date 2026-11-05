@@ -594,12 +594,14 @@ class Analyzer:
             if all(item.alias for item in self.type_stack[start:]):
                 raise GoDiagnostic(declaration.token, "invalid recursive type or alias cycle")
             if self.interface_signature_depth > declaration.signature_depth:
-                # A method signature breaks embedding containment, but a
-                # recursively expanded anonymous parameter interface needs a
-                # deferred structural-identity/completion owner. Do not expose
-                # a partial set or misdiagnose this valid shape as embedding.
-                raise UnsupportedGo(declaration.token, 'go.unsupported.interface-types',
-                                    "recursive anonymous interface signatures require deferred method-set completion")
+                # Named signature references return their canonical identity
+                # above. Re-entering completion here instead expands an
+                # anonymous interface's method set through itself, including
+                # aliases and pointer/slice/array wrappers. The Go compiler
+                # rejects this type cycle (issue 56103); it is not a missing
+                # runtime representation or deferred valid method set.
+                raise GoDiagnostic(declaration.token,
+                                   "invalid recursive type: anonymous interface refers to itself")
             if self.pointer_type_depth > declaration.pointer_depth:
                 raise UnsupportedGo(declaration.token, 'go.unsupported.pointer-storage',
                                     "recursive pointer types require recursive lifetime/storage analysis")
