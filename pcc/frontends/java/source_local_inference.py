@@ -3,7 +3,8 @@
 JLS 6.3 and 14.4. The initializer has no target type and is checked once. Its
 own local name is in scope during inference, but must not be read or assigned.
 The scope-only marker never enters method locals, DA snapshots or native slots.
-Reference and enhanced-for inference remain separate explicit capabilities.
+The native owner admits primitive values only; nonlowering models may admit
+additional checked types without granting native reference storage.
 """
 from dataclasses import dataclass, field
 
@@ -17,6 +18,9 @@ class PendingInferredLocal:
 
 
 class LocalInferenceAnalyzer:
+    def admits_inferred_local_type(self, dtype):
+        return dtype in DECLARED
+
     def require_completed_local(self, binding, token):
         if isinstance(binding, PendingInferredLocal):
             token.error("cannot reference local variable in its own inferred initializer: " + binding.name)
@@ -57,7 +61,7 @@ class LocalInferenceAnalyzer:
         dtype = initializer.dtype
         if dtype in {"void", "null"}:
             node.token.error("cannot infer a local variable type from " + dtype)
-        if dtype not in DECLARED:
+        if not self.admits_inferred_local_type(dtype):
             node.inference_token.error("reference local inference requires the next source inference and managed-storage domain",
                                        code="java.unsupported.local-inference-domain")
         node.value = dtype

@@ -63,6 +63,9 @@ class ArrayIterationPlan:
 class ArrayModelAnalyzer:
     """Mixin used only by ClassAnalyzer, never the native scalar analyzer."""
 
+    def admits_inferred_local_type(self, dtype):
+        return isinstance(dtype, ArrayType) or super().admits_inferred_local_type(dtype)
+
     def array_iteration(self, node, assigned):
         variable, expression, body = node.children
         if isinstance(variable.value, NamedType):

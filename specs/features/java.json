@@ -110,6 +110,76 @@
   ],
   "features": [
     {
+      "id": "java.primitive-array-local-inference-model",
+      "title": "Primitive-array local inference without native storage",
+      "chapter_ids": [
+        "JLS-4",
+        "JLS-6",
+        "JLS-14",
+        "JLS-16"
+      ],
+      "scope": "JLS 14.4.1,6.3,4.12.4,16. Nonlowering ordinary var/final var local inference for the six already admitted one-dimensional boolean/integral array types. Reuse standalone initializer checking exactly once, pending-name self-reference prevention, lexical bindings, assignment/DA/final rules and existing managed array-value requirements. The inferred type remains ArrayType(component), not a pointer, new layout or native slot contract. Alias, call, parameter, conditional, basic-for and instance-initializer/constructor contexts retain their original source. The exact former array-inference rejection is preserved as positive model and JDK-only evidence obligations. Native arrays, nominal/String reference inference, wider arrays, allocation/GC and whole-project acceptance remain unavailable. Ordinary/model, selected-JDK and whole-Java execution are UNRUN.",
+      "tests": [
+        "tests/java/test_source_array_local_inference_model.py::test_array_var_originals_have_nonlowering_binding_and_managed_plans",
+        "tests/java/test_source_array_local_inference_model.py::test_former_array_inference_original_is_preserved_as_model_success",
+        "tests/java/test_source_array_local_inference_model.py::test_invalid_array_var_originals_remain_ordinary_errors",
+        "tests/java/test_source_array_local_inference_model.py::test_array_initializer_checked_once_with_pending_name_not_a_binding",
+        "tests/java/test_source_array_local_inference_model.py::test_array_aliases_keep_distinct_bindings_and_identical_component_type",
+        "tests/java/test_source_array_local_inference_model.py::test_array_var_model_does_not_grant_native_compilation",
+        "tests/java/test_source_array_local_inference_model.py::test_array_var_does_not_expand_array_component_domain",
+        "tests/java/test_source_array_local_inference_model.py::test_exact_array_var_originals_against_selected_jdk_only",
+        "tests/java/test_source_array_local_inference_model.py::test_exact_former_array_inference_original_against_jdk_only",
+        "tests/java/test_source_local_inference.py::test_inference_native_boundaries_remain_explicit",
+        "tests/java/test_source_local_inference.py::test_inference_model_does_not_invent_reference_storage",
+        "tests/java/test_source_local_inference.py::test_invalid_original_inference_fails_before_ir"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:483d3fce2d3ae8ace22aec3b7d82e2d717c69c8bf94d879d0b3eb23f6ffc0b78",
+        "sources": [
+          {
+            "path": "pcc/frontends/java/source_local_inference.py",
+            "sha256": "9a2082aab40d49cf73a8619bf9f77a54a56b2e0e14e073259e8d66c867a1970a"
+          },
+          {
+            "path": "pcc/frontends/java/source_array_model.py",
+            "sha256": "b83734fdaa21949bdee2e274df552c3eb0ffbaea35e913c96e80f82576e1db89"
+          }
+        ]
+      },
+      "acceptance": [
+        {
+          "id": "array-local-inference-model-ci-only",
+          "kind": "full-feature",
+          "scope": "JLS 14.4.1,6.3,4.12.4,16. Nonlowering ordinary var/final var local inference for the six already admitted one-dimensional boolean/integral array types. Reuse standalone initializer checking exactly once, pending-name self-reference prevention, lexical bindings, assignment/DA/final rules and existing managed array-value requirements. The inferred type remains ArrayType(component), not a pointer, new layout or native slot contract. Alias, call, parameter, conditional, basic-for and instance-initializer/constructor contexts retain their original source. The exact former array-inference rejection is preserved as positive model and JDK-only evidence obligations. Native arrays, nominal/String reference inference, wider arrays, allocation/GC and whole-project acceptance remain unavailable. Ordinary/model, selected-JDK and whole-Java execution are UNRUN.",
+          "status": "unrun",
+          "source_revision": "sha256:483d3fce2d3ae8ace22aec3b7d82e2d717c69c8bf94d879d0b3eb23f6ffc0b78",
+          "mode": "pcc0",
+          "platform": "linux-x86_64",
+          "backend": "self",
+          "gc": "not_applicable",
+          "required_tests": [
+            "tests/java/test_source_array_local_inference_model.py::test_array_var_originals_have_nonlowering_binding_and_managed_plans",
+            "tests/java/test_source_array_local_inference_model.py::test_former_array_inference_original_is_preserved_as_model_success",
+            "tests/java/test_source_array_local_inference_model.py::test_invalid_array_var_originals_remain_ordinary_errors",
+            "tests/java/test_source_array_local_inference_model.py::test_array_initializer_checked_once_with_pending_name_not_a_binding",
+            "tests/java/test_source_array_local_inference_model.py::test_array_aliases_keep_distinct_bindings_and_identical_component_type",
+            "tests/java/test_source_array_local_inference_model.py::test_array_var_model_does_not_grant_native_compilation",
+            "tests/java/test_source_array_local_inference_model.py::test_array_var_does_not_expand_array_component_domain",
+            "tests/java/test_source_array_local_inference_model.py::test_exact_array_var_originals_against_selected_jdk_only",
+            "tests/java/test_source_array_local_inference_model.py::test_exact_former_array_inference_original_against_jdk_only",
+            "tests/java/test_source_local_inference.py::test_inference_native_boundaries_remain_explicit",
+            "tests/java/test_source_local_inference.py::test_inference_model_does_not_invent_reference_storage",
+            "tests/java/test_source_local_inference.py::test_invalid_original_inference_fails_before_ir"
+          ],
+          "evidence": [],
+          "reason": "CI-only authored model and exact-original JDK obligations. No repository imports, collection, tests, compilers, native programs or JDK comparisons ran locally. JDK execution is reference-only and cannot establish PCC managed execution. Historical evidence is unchanged."
+        }
+      ]
+    },
+    {
       "id": "java.primitive-array-enhanced-var-model",
       "title": "Primitive-array enhanced-for inference without native storage",
       "chapter_ids": [
@@ -532,7 +602,7 @@
         "JLS-4",
         "JLS-14"
       ],
-      "scope": "Reference/array ordinary local var inference and native enhanced-for var inference remain explicit unsupported domains. Primitive-array enhanced-for inference has a separate nonlowering source-model owner; that does not provide native reference storage, Iterable inference or wider array components. Primitive block/basic-for inference has its own source owner with execution-unrun acceptance.",
+      "scope": "Nominal and String reference local var inference and native enhanced-for var inference remain explicit unsupported domains. Primitive-array ordinary local and enhanced-for inference have separate nonlowering source-model owners; they do not provide native reference storage, Iterable inference or wider array components. Primitive block/basic-for inference has its own native source owner with execution-unrun acceptance.",
       "status": "explicitly_unimplemented",
       "tests": [
         "tests/java/test_source_local_inference.py"
@@ -2553,12 +2623,12 @@
         "feature_id": "java.array-model-wider-shapes",
         "source": {
           "path": "pcc/frontends/java/source_array_model.py",
-          "sha256": "3f894760b8296771ff9704fa84c600d6ff2e546464b8fe8a7ca75308baa68fd8"
+          "sha256": "b83734fdaa21949bdee2e274df552c3eb0ffbaea35e913c96e80f82576e1db89"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_array_model.py",
-            "sha256": "3f894760b8296771ff9704fa84c600d6ff2e546464b8fe8a7ca75308baa68fd8"
+            "sha256": "b83734fdaa21949bdee2e274df552c3eb0ffbaea35e913c96e80f82576e1db89"
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
@@ -2741,12 +2811,12 @@
         "feature_id": "java.enhanced-for-reference-model",
         "source": {
           "path": "pcc/frontends/java/source_array_model.py",
-          "sha256": "3f894760b8296771ff9704fa84c600d6ff2e546464b8fe8a7ca75308baa68fd8"
+          "sha256": "b83734fdaa21949bdee2e274df552c3eb0ffbaea35e913c96e80f82576e1db89"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_array_model.py",
-            "sha256": "3f894760b8296771ff9704fa84c600d6ff2e546464b8fe8a7ca75308baa68fd8"
+            "sha256": "b83734fdaa21949bdee2e274df552c3eb0ffbaea35e913c96e80f82576e1db89"
           }
         ]
       },
@@ -2755,12 +2825,12 @@
         "feature_id": "java.enhanced-for-reference-model",
         "source": {
           "path": "pcc/frontends/java/source_array_model.py",
-          "sha256": "3f894760b8296771ff9704fa84c600d6ff2e546464b8fe8a7ca75308baa68fd8"
+          "sha256": "b83734fdaa21949bdee2e274df552c3eb0ffbaea35e913c96e80f82576e1db89"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_array_model.py",
-            "sha256": "3f894760b8296771ff9704fa84c600d6ff2e546464b8fe8a7ca75308baa68fd8"
+            "sha256": "b83734fdaa21949bdee2e274df552c3eb0ffbaea35e913c96e80f82576e1db89"
           }
         ]
       },
@@ -2875,12 +2945,12 @@
         "feature_id": "java.local-inference-wider-domains",
         "source": {
           "path": "pcc/frontends/java/source_local_inference.py",
-          "sha256": "138f20193ae795811842dea54c290bf17f8bb3003eec4cf4199d8f3e42dfcea3"
+          "sha256": "9a2082aab40d49cf73a8619bf9f77a54a56b2e0e14e073259e8d66c867a1970a"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_local_inference.py",
-            "sha256": "138f20193ae795811842dea54c290bf17f8bb3003eec4cf4199d8f3e42dfcea3"
+            "sha256": "9a2082aab40d49cf73a8619bf9f77a54a56b2e0e14e073259e8d66c867a1970a"
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
@@ -2966,7 +3036,7 @@
           },
           {
             "path": "pcc/frontends/java/source_array_model.py",
-            "sha256": "3f894760b8296771ff9704fa84c600d6ff2e546464b8fe8a7ca75308baa68fd8"
+            "sha256": "b83734fdaa21949bdee2e274df552c3eb0ffbaea35e913c96e80f82576e1db89"
           },
           {
             "path": "pcc/frontends/java/source_sema.py",
@@ -3164,7 +3234,7 @@
           },
           {
             "path": "pcc/frontends/java/source_array_model.py",
-            "sha256": "3f894760b8296771ff9704fa84c600d6ff2e546464b8fe8a7ca75308baa68fd8"
+            "sha256": "b83734fdaa21949bdee2e274df552c3eb0ffbaea35e913c96e80f82576e1db89"
           },
           {
             "path": "pcc/frontends/java/source_construction_model.py",
