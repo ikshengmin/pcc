@@ -96,6 +96,19 @@ class MoveChecker:
                 child_place = place[0], place[1] + (index,)
             self.pattern_access(child, state, child_place, bind=bind)
 
+    def wildcard_place(self, expr: Expr, state: State) -> State | None:
+        """A wildcard omits the final read, not evaluation of its place."""
+        if expr.kind in {"group", "field"}:
+            return self.wildcard_place(expr.children[0], state)
+        if expr.kind == "index":
+            # Indexing still reads/borrows its array base, including when the
+            # final element is ignored. A moved array cannot supply that place.
+            self.read_place(expr.children[0], state, consume=False)
+            return self.expression(expr.children[1], state)
+        if expr.kind == "deref":
+            return self.expression(expr.children[0], state)
+        return state
+
     def expression(self, expr: Expr, state: State) -> State | None:
         kind, children = expr.kind, expr.children
         if kind in {"integer", "bool", "unit", "variant"}:
@@ -133,6 +146,12 @@ class MoveChecker:
                     if binding not in visible:
                         del current[binding]
             return current
+        if kind == "wildcard_let":
+            # No final place read or move, but place evaluation and value-
+            # producing expressions retain their ordinary operand effects.
+            if self.checker.place(children[0]) is not None:
+                return self.wildcard_place(children[0], state)
+            return self.expression(children[0], state)
         if kind == "let":
             result = self.expression(children[0], state)
             if result is not None:

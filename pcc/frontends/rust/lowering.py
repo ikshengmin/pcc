@@ -278,6 +278,14 @@ class Lowerer:
         if kind in {"discard", "statement"}:
             self.expression(children[0])
             return None
+        if kind == "wildcard_let":
+            # Do not read a place merely to discard it. Address computation
+            # still evaluates a certified reference operand where required.
+            if self.checker.place(children[0]) is not None:
+                self.place_pointer(children[0])
+            else:
+                self.expression(children[0])
+            return None
         if kind == "let":
             value = self.expression(children[0])
             if not self.builder.block.is_terminated and expr.binding.ty != "()":

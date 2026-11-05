@@ -1294,3 +1294,14 @@ explicit arguments. Abstract checking, nominal identities, moves, evaluation
 order and reference certification are unchanged. The authored omitted-enum
 fixtures carry focused native/reference obligations; they do not establish
 whole-project, native pcc1 or general inference acceptance.
+
+### Wildcard let statements
+
+`let _ = expression;` and annotated wildcard lets check the initializer and
+annotation without introducing a local binding. A place is not read, copied or
+moved merely by matching `_`; calls and other value-producing initializers still
+evaluate once and retain their argument moves and side effects. Named `_name`
+bindings keep ordinary move semantics. Reference-bearing source still requires
+actual certification; destructuring lets, uninitialized/diverging lets, Drop
+and general lifetime handling are not enabled. The unchanged earlier
+`enum_omitted_values.rs` fixture is now a positive native/reference obligation.

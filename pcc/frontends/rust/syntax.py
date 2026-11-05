@@ -1248,12 +1248,16 @@ class Parser:
                 mutable = self.accept("mut")
                 if self.token.text == "[":
                     raise self.token.error("array destructuring patterns are not implemented")
-                name = self.name()
+                wildcard = self.token.text == "_"
+                name = self.take() if wildcard else self.name()
+                if wildcard and mutable:
+                    raise name.error("wildcard let patterns cannot be mutable")
                 annotation = self.type() if self.accept(":") else None
                 self.expect("=")
                 init = self.expression()
                 self.expect(";")
-                statements.append(Expr("let", name, (annotation, mutable), [init]))
+                statements.append(Expr("wildcard_let" if wildcard else "let", name,
+                                       (annotation, mutable), [init]))
                 continue
             expr = self.expression(complete_block=True)
             if self.accept(";"):

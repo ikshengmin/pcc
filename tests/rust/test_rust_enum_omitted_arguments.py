@@ -147,17 +147,15 @@ def test_actual_rustc_rejects_same_invalid_omitted_enum_originals(tmp_path, monk
     oracle.test_genuine_rustc_rejects_the_same_invalid_obligations(tmp_path, monkeypatch)
 
 
-def test_original_wildcard_let_remains_a_parser_gap():
-    # The first authored composite program exposed the existing wildcard-let
-    # parser gap. Preserve those exact bytes separately from the valid program.
-    with pytest.raises(RustError, match='expected an identifier'):
-        compile_rust(source('enum_omitted_values'), experimental_rustc_checked=True)
+def test_original_wildcard_let_now_compiles():
+    # Preserve the exact program that exposed the former wildcard-let gap.
+    compile_rust(source('enum_omitted_values'), experimental_rustc_checked=True)
 
 
 @pytest.mark.integration
 @pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
-def test_original_wildcard_let_is_valid_rust_but_outside_parser(tmp_path):
+def test_original_wildcard_let_is_valid_for_both_frontends(tmp_path):
     from tests.rust.certification_support import certify_source
     certify_source(source('enum_omitted_values'), tmp_path / 'certifier')
-    test_original_wildcard_let_remains_a_parser_gap()
+    test_original_wildcard_let_now_compiles()

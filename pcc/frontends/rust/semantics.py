@@ -480,11 +480,11 @@ class Checker:
             expr.value = enum.discriminants[variant]
             expr.binding = variant
             ty = enum_name
-        elif kind in {"unit", "let", "discard", "statement"}:
+        elif kind in {"unit", "let", "wildcard_let", "discard", "statement"}:
             ty = "()"
-            if kind == "let":
+            if kind in {"let", "wildcard_let"}:
                 annotation, mutable = expr.value
-                init_ty = self.expression(children[0])
+                init_ty = self.expression(children[0], place_context=kind == "wildcard_let")
                 if init_ty == NEVER:
                     raise expr.token.error("diverging let initializers are not implemented")
                 if annotation is not None:
@@ -498,7 +498,8 @@ class Checker:
                     unify(annotation, init_ty, expr.token)
                     from .call_inference import partial
                     init_ty = partial(annotation)
-                expr.binding = self.bind(expr.token, init_ty, mutable)
+                if kind == "let":
+                    expr.binding = self.bind(expr.token, init_ty, mutable)
             elif children:
                 child_ty = self.expression(children[0])
                 if kind == "statement":
