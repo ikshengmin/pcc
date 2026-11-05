@@ -201,6 +201,10 @@ def pcc_gc_backend3_drain_remembered_owners(
         owner = load_ptr(node, 0)
         store_ptr(node, 8, load_ptr(detached_out, 0))
         store_ptr(detached_out, 0, node)
+        # Charge every detached queue node, including unknown or clean owners.
+        # The caller subtracts this examined work before scanning more slots;
+        # stale entries must not extend this graph-lock batch without bound.
+        local_processed = local_processed + 1
         if pcc_gc_object_is_known_no_lock(owner) == 0:
             continue
         flags: i64 = load_i32(owner, 12)
@@ -208,5 +212,4 @@ def pcc_gc_backend3_drain_remembered_owners(
             continue
         pcc_gc_trace_referents_for_promotion(owner)
         store_i32(owner, 12, flags & ~512)
-        local_processed = local_processed + 1
     return local_processed
