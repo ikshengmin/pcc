@@ -141,8 +141,9 @@ def call_member(parser, group, object_expression, arguments, coord, address_avai
     # argument. Capture once before evaluating arguments; do not rely on C's
     # argument evaluation order, or repeat an effectful object expression.
     node = c_ast.StmtExpr(c_ast.Compound([temporary, call], coord), coord)
-    from pcc.frontends.cpp.references import call_result
-    return call_result(node, selected.dtype, coord)
+    from pcc.frontends.cpp.references import call_result, ordinary_class_result_context
+    return call_result(node, selected.dtype, coord,
+                       allow_class=ordinary_class_result_context(parser))
 
 
 def is_static_group(group):
@@ -181,5 +182,6 @@ def call_static_member(parser, group, arguments, coord, discarded_base=None):
     node = c_ast.FuncCall(c_ast.ID(selected.c_name, coord), c_ast.ExprList(converted, coord), coord)
     if discarded_base is not None:
         node = c_ast.ExprList([discarded_base, node], coord)
-    from pcc.frontends.cpp.references import call_result
-    return call_result(node, selected.dtype, coord)
+    from pcc.frontends.cpp.references import call_result, ordinary_class_result_context
+    return call_result(node, selected.dtype, coord,
+                       allow_class=ordinary_class_result_context(parser))

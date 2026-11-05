@@ -181,7 +181,6 @@ INVALID = (
 BOUNDARIES = (
     ('dependent-array-type', 'template<class T>int f(){return sizeof(T[2]);}', 'cpp.unsupported.array-templates'),
     ('unowned-bases', 'struct B{};struct S:B{};int f(){return sizeof(S);}', 'cpp.unsupported.classes'),
-    ('unowned-reference-result', 'struct S{int n;};S&get();int f(){return sizeof(get());}', 'cpp.unsupported.references'),
 )
 
 

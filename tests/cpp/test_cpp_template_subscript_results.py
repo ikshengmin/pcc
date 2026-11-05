@@ -179,7 +179,6 @@ BOUNDARIES = (
     ('unowned-explicit-assignment-call', 'struct S{void operator=(int);};'
      'void f(S*p){p->operator=(1);}', 'cpp.unsupported.class-operators'),
     ('reference-temporary', 'const int&f(){return 42;}', 'cpp.unsupported.reference-temporaries'),
-    ('class-result', 'struct L{int n;};L&f();', 'cpp.unsupported.references'),
     ('reference-member', 'struct S{int&r;};', 'cpp.unsupported.references'),
     ('reference-parameter-pattern', 'template<class T>struct S{T&f(T&n){return n;}};',
      'cpp.unsupported.references'),

@@ -1075,8 +1075,9 @@ class CppParser:
         if isinstance(result_type, ReferenceType):
             if not is_function:
                 raise CppDiagnostic("cpp.unsupported.references", "namespace reference objects require lifetime semantics", name.coord)
-            from pcc.frontends.cpp.references import check_result
-            check_result(result_type, name.coord)
+            from pcc.frontends.cpp.references import check_result, ordinary_class_result_context
+            check_result(result_type, name.coord,
+                         allow_class=not template_parameters and ordinary_class_result_context(self))
         if not is_function:
             if name.kind == "OPERATOR_FUNCTION_ID":
                 raise CppDiagnostic("cpp.invalid-allocation-function", "operator name must declare a function", name.coord)
@@ -1684,12 +1685,18 @@ class CppParser:
         if getattr(self.member_function, "constructor", False) and expression is not None:
             raise CppDiagnostic("cpp.constructor-return-value", "constructors cannot return an expression", coord)
         result_type = unqualified(self.return_type)
+        class_reference_result = (isinstance(result_type, ReferenceType)
+                                  and is_class_type(result_type.referent))
+        if class_reference_result:
+            from pcc.frontends.cpp.references import check_result, ordinary_class_result_context
+            check_result(result_type, coord, allow_class=ordinary_class_result_context(self))
         if expression is None:
             if not dependent(result_type) and result_type != "void":
                 raise CppDiagnostic("cpp.return-value-required",
                                     "non-void function requires a return expression", coord)
         else:
-            self._require_value(expression, allow_void=True)
+            self._require_value(expression, allow_void=True, allow_class=class_reference_result,
+                                object_address=class_reference_result)
             if not dependent(result_type) and not dependent(expression.dtype):
                 if result_type == "void" and unqualified(expression.dtype) != "void":
                     raise CppDiagnostic("cpp.return-value-in-void",
@@ -1705,6 +1712,10 @@ class CppParser:
             return Pattern("return", coord, children=[] if expression is None else [expression])
         if expression is None:
             return self.lifetimes.return_statement(self, None, coord)
+        if class_reference_result:
+            from pcc.frontends.cpp.references import bind
+            address = bind(self, expression, result_type, coord, allow_class=True)
+            return self.lifetimes.return_statement(self, address, coord)
         if result_type == "void":
             # Existing C lowering evaluates node.expr before ret void. Keep the
             # checked void expression intact so calls and other effects survive.
@@ -2396,8 +2407,8 @@ class CppParser:
                           discarded_known=dtype == "nullptr")
 
     def _check_call_value_abi(self, selected, coord):
-        from pcc.frontends.cpp.references import check_result
-        check_result(selected.dtype, coord)
+        from pcc.frontends.cpp.references import check_result, ordinary_class_result_context
+        check_result(selected.dtype, coord, allow_class=ordinary_class_result_context(self))
         for dtype in (selected.dtype,) + selected.parameters:
             if is_class_type(dtype):
                 raise CppDiagnostic("cpp.unsupported.class-value-abi", "record declaration projection does not implement copy/materialization at a call", coord)
@@ -2502,9 +2513,10 @@ class CppParser:
         if self.instantiating_template and is_enum_type(nominal):
             raise CppDiagnostic("cpp.unsupported.enum-templates",
                                 "enum results in template instantiation require dependent lookup", coord)
-        from pcc.frontends.cpp.references import call_result
+        from pcc.frontends.cpp.references import call_result, ordinary_class_result_context
         return call_result(c_ast.FuncCall(c_ast.ID(selected.c_name, coord),
-                                          c_ast.ExprList(converted, coord), coord), selected.dtype, coord)
+                                          c_ast.ExprList(converted, coord), coord), selected.dtype, coord,
+                           allow_class=ordinary_class_result_context(self))
 
     def _explicit_template_arguments(self, allow_class_types=False):
         """Parse type-ids or typed expressions, never re-lex or replace tokens.

@@ -3,8 +3,9 @@
 Reference identity survives overload selection and declaration matching. Only
 projection to C uses an address parameter; source names denote the referent.
 Selected constructor parameters and local aliases may borrow class lvalues.
-Reference results borrow existing scalar/pointer lvalues. Temporary
-materialization, class-reference results and implicit class copies remain gaps.
+Ordinary reference results borrow existing scalar/pointer/class lvalues.
+Temporary materialization, class-value calls and implicit class copies remain
+gaps; class-reference results in template patterns/replay remain separate.
 """
 from pcc.frontends.c.ast import c_ast
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
@@ -24,25 +25,33 @@ def lvalue_reference(referent, coord):
     return ReferenceType(referent)
 
 
-def check_result(dtype, coord):
+def ordinary_class_result_context(parser):
+    return not (parser.parsing_template or parser.template_function is not None
+                or parser.instantiating_template
+                or getattr(parser, 'class_template_method', None) is not None)
+
+
+def check_result(dtype, coord, *, allow_class=False):
     """No temporary, class-value, callback or array-result ABI is implied."""
     from pcc.frontends.cpp.classes import is_class_type
     from pcc.frontends.cpp.types import contains_array, contains_function
     if not isinstance(dtype, ReferenceType):
         return
-    if is_class_type(dtype.referent) or contains_array(dtype.referent) or contains_function(dtype.referent):
+    if ((is_class_type(dtype.referent) and not allow_class)
+            or contains_array(dtype.referent) or contains_function(dtype.referent)):
         raise CppDiagnostic('cpp.unsupported.references', 'reference results require scalar or object-pointer referents', coord)
 
 
-def call_result(node, dtype, coord):
+def call_result(node, dtype, coord, *, allow_class=False):
     """A reference call returns an address in C and a referent lvalue in C++."""
     from pcc.frontends.cpp.constants import not_constant
+    from pcc.frontends.cpp.classes import is_class_type
     from pcc.frontends.cpp.parser import Expression
     if isinstance(dtype, ReferenceType):
-        check_result(dtype, coord)
-        null_glvalue = unqualified(dtype.referent) == 'nullptr'
+        check_result(dtype, coord, allow_class=allow_class)
+        no_fetch = is_class_type(dtype.referent) or unqualified(dtype.referent) == 'nullptr'
         return Expression(c_ast.UnaryOp('*', node, coord), dtype.referent, True,
-                          discarded_known=null_glvalue, discarded_node=node if null_glvalue else None,
+                          discarded_known=no_fetch, discarded_node=node if no_fetch else None,
                           constant_fact=not_constant(unqualified(dtype.referent), 'reference call', coord))
     dtype = unqualified(dtype)
     return Expression(node, dtype, constant_fact=not_constant(dtype, 'call to a non-constexpr function', coord))
