@@ -189,3 +189,40 @@ def test_parenthesized_lvalues_do_not_become_short_declaration_identifiers(body)
 
 def test_parenthesized_ordinary_assignment_remains_valid():
     assert "store i64 2" in str(compile_go(source("x := 1; (x) = 2; _ = x")))
+
+
+# https://go.dev/ref/spec#If_statements permits [ SimpleStmt ";" ], and
+# https://go.dev/ref/spec#Empty_statements makes that SimpleStmt optional.
+@pytest.mark.parametrize("body", [
+    "if ; true {}",
+    "if ; false {} else {}",
+    "if ; true {} else if ; false {} else {}",
+    "if ;\ntrue {}",
+    "if /* empty initializer */ ; true {}",
+    "if ; (struct{X int}{3}).X == 3 {}",
+])
+def test_if_empty_initializer_is_absent_not_an_expression(body):
+    program = GoParser().parse(source(body))
+    statement = program.functions[0].body[0]
+    assert statement.kind == "if" and statement.init is None
+    assert len(statement.exprs) == 1
+    compile_go(source(body))
+
+
+@pytest.mark.parametrize("body,helpers,message", [
+    ("if ; {}", "", "unsupported expression"),
+    ("if ;; true {}", "", "unsupported expression"),
+    ("if ; true; {}", "", "expected"),
+    ("if ; 1 {}", "", "condition must be bool"),
+    ("if ; missing {}", "", "undefined name"),
+    ("if ; value := true {}", "", "expected"),
+    ("if ; f() {}", "func f()(bool,bool){return true,false}", "condition must be bool"),
+    ("if ; true {x:=1;_=x};_=x", "", "undefined name"),
+    ("if x:=1;false{}else if ;x==1{};_=x", "", "undefined name"),
+    ("", "func f()int{if ;true{return 1}}", "missing return"),
+])
+def test_if_empty_initializer_keeps_condition_scope_and_termination_rules(body, helpers, message, monkeypatch):
+    from pcc.frontends.go.lowering import Lowerer
+    monkeypatch.setattr(Lowerer, "lower", lambda *args: pytest.fail("invalid if reached IR"))
+    with pytest.raises(GoDiagnostic, match=message):
+        compile_go(source(body, helpers))

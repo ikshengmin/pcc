@@ -12,7 +12,7 @@ import pytest
 
 from pcc.frontends.go import GoDiagnostic
 from tests.go.owned_execution import (
-    Execution, compile_owned, compile_reference, run, write_artifact,
+    Execution, compile_owned, compile_reference, write_artifact,
 )
 
 
@@ -23,6 +23,7 @@ CASES = [
     (("integers.go",), -1),
     (("control.go",), 21440),
     (("multi_main.go", "multi_helper.go"), 409),
+    (("if_empty_init.go",), 0x7edcba987654322f),
 ]
 
 
@@ -65,6 +66,7 @@ def test_go_failure_never_publishes_an_artifact(tmp_path):
 @pytest.mark.parametrize("names,expected", CASES)
 @pytest.mark.parametrize("observe_result", [False, True], ids=["original-main", "full-i64-observer"])
 def test_go_unchanged_program_executes_owned_native_code(tmp_path, monkeypatch, names, expected, observe_result):
+    from tests.go.test_labels import observed
     assert sys.platform == "linux" and platform.machine() == "x86_64", "requires real Linux x86_64 execution"
     with monkeypatch.context() as owned:
         forbid_external_compiler(owned)
@@ -73,22 +75,29 @@ def test_go_unchanged_program_executes_owned_native_code(tmp_path, monkeypatch, 
     write_artifact(artifact, binary)
     assert binary.read_bytes() == artifact.executable
     output = struct.pack("<q", expected) if observe_result else b""
-    assert run(binary) == Execution(0, output, b"")
+    assert observed(binary, tmp_path / "observation", owner=artifact.owner,
+                    originals=units(names)) == Execution(0, output, b"")
 
 
 @pytest.mark.integration
 @pytest.mark.pcc_gate(env="PCC_GO_REFERENCE")
 @pytest.mark.xdist_group(name="go-reference")
 @pytest.mark.parametrize("names,expected", CASES)
-def test_go_explicit_official_compiler_oracle_receives_identical_program(tmp_path, names, expected):
+def test_go_explicit_official_compiler_oracle_receives_identical_program(tmp_path, monkeypatch, names, expected):
+    from tests.go.test_labels import observed
     del expected
     assert os.environ.get("PCC_GO_REFERENCE_CACHE"), "select a shared bounded oracle cache explicitly"
     original = units(names)
     reference = compile_reference(original, tmp_path / "reference", compiler=os.environ["PCC_GO_REFERENCE"],
                                   cache=os.environ["PCC_GO_REFERENCE_CACHE"])
     owned = tmp_path / "owned"
-    write_artifact(compile_owned(original), owned)
-    assert run(owned) == run(reference) == Execution(0, b"", b"")
+    with monkeypatch.context() as denied:
+        forbid_external_compiler(denied)
+        artifact = compile_owned(original)
+    write_artifact(artifact, owned)
+    actual = observed(owned, tmp_path / "owned-observation", owner=artifact.owner, originals=original)
+    expected_run = observed(reference, tmp_path / "reference-observation", owner="official-go", originals=original)
+    assert actual == expected_run == Execution(0, b"", b"")
     for filename, text in original:
         assert (reference.parent / filename).read_bytes() == text.encode("utf-8")
 

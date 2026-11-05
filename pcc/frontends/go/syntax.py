@@ -940,11 +940,13 @@ class GoParser:
             return Stmt("switch", token, exprs=[] if selector is None else [selector], init=init, cases=cases)
         if self.accept("if"):
             previous_literals, self.named_literals = self.named_literals, False
-            first = self.simple()
+            # The optional SimpleStmt before ';' may itself be empty.
+            # Keep an absent initializer out of semantic/evaluation handling.
+            first = None if self.at(";") else self.simple()
             init = None
             if self.accept(";"):
                 init, condition = first, self.expression()
-            elif first.kind == "expression" and len(first.exprs) == 1:
+            elif first is not None and first.kind == "expression" and len(first.exprs) == 1:
                 condition = first.exprs[0]
             else:
                 self.fail(token, "if requires a boolean condition")
