@@ -90,6 +90,7 @@ class _SelectorMemory:
             "malloc": self.malloc,
             "free": self.free,
             "atomic_rmw_i32": self.atomic,
+            "atomic_store_i32": self.atomic_store,
             "abi_constant": {
                 # Model objects are tag 5; scheduler-bearing tags are outside
                 # this model's scope and must retain their native coverage.
@@ -266,6 +267,20 @@ class _SelectorMemory:
         old = self.read(pointer, offset)
         self.write(pointer, offset, old | value)
         return old
+
+    def atomic_store(self, pointer, offset, value, ordering):
+        # This source model's selector issues a graph-locked release i32
+        # store. Record the word, not native inter-thread ordering. The
+        # intrinsic truncates to i32; i32 loads sign-extend on readback.
+        assert self.locked and ordering == "release"
+        assert type(value) is int
+        if not isinstance(pointer, str):
+            pointer, offset = self.address(pointer, offset, width=4)
+        # Interior pointers contribute a byte displacement to the final
+        # address; test alignment only after that displacement is included.
+        assert offset % 4 == 0
+        word = ((value + (1 << 31)) % (1 << 32)) - (1 << 31)
+        self.cells.setdefault(pointer, {})[offset] = word
 
     def lock(self):
         assert not self.locked
