@@ -110,6 +110,58 @@
   ],
   "features": [
     {
+      "id": "java.integer-literal-spelling",
+      "title": "Integer magnitude independent of redundant spelling",
+      "chapter_ids": [
+        "JLS-3",
+        "JLS-15"
+      ],
+      "scope": "JLS 3.10.1,15.15.4. Integer magnitude checking accepts legal leading zeroes and underscore separators beyond the former 128-character rejection. Validate radix spelling first, remove separators and non-significant zeroes, bound host conversion by at most 32/64 significant digits, then retain exact int/long magnitude, two-complement radix interpretation and direct unary-minus minimum rules. Invalid separator positions, octal digits and overflow remain ordinary errors. Original token text and source bytes are unchanged; existing source-size/token budgets, primitive widths, lowering and runtime owners remain intact. Source-reviewed implementation only; ordinary, owned-native, same-original JDK and whole-Java execution are UNRUN.",
+      "tests": [
+        "tests/java/test_source_integer_spelling.py::test_long_spelling_original_has_owned_ir",
+        "tests/java/test_source_integer_spelling.py::test_invalid_spelling_original_fails_before_ir",
+        "tests/java/test_source_integer_spelling.py::test_host_conversion_receives_only_bounded_significant_digits",
+        "tests/java/test_source_integer_spelling.py::test_long_spelling_original_has_exact_native_result",
+        "tests/java/test_source_integer_spelling.py::test_identical_long_spelling_original_matches_jdk_raw_processes",
+        "tests/java/test_source_integer_spelling.py::test_identical_invalid_spelling_original_has_jdk_rejection"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:d172cf800864c7ecafd7342e4ae07b4f13201b6b50ea9f88a3c84d4584369067",
+        "sources": [
+          {
+            "path": "pcc/frontends/java/source_sema.py",
+            "sha256": "52a65006cc63e39411087d3bc2548c42229a5226fee1b13c288708bbf2ec4670"
+          }
+        ]
+      },
+      "acceptance": [
+        {
+          "id": "integer-spelling-ci-only",
+          "kind": "full-feature",
+          "scope": "JLS 3.10.1,15.15.4. Integer magnitude checking accepts legal leading zeroes and underscore separators beyond the former 128-character rejection. Validate radix spelling first, remove separators and non-significant zeroes, bound host conversion by at most 32/64 significant digits, then retain exact int/long magnitude, two-complement radix interpretation and direct unary-minus minimum rules. Invalid separator positions, octal digits and overflow remain ordinary errors. Original token text and source bytes are unchanged; existing source-size/token budgets, primitive widths, lowering and runtime owners remain intact. Source-reviewed implementation only; ordinary, owned-native, same-original JDK and whole-Java execution are UNRUN.",
+          "status": "unrun",
+          "source_revision": "sha256:d172cf800864c7ecafd7342e4ae07b4f13201b6b50ea9f88a3c84d4584369067",
+          "mode": "pcc0",
+          "platform": "linux-x86_64",
+          "backend": "self",
+          "gc": "not_applicable",
+          "required_tests": [
+            "tests/java/test_source_integer_spelling.py::test_long_spelling_original_has_owned_ir",
+            "tests/java/test_source_integer_spelling.py::test_invalid_spelling_original_fails_before_ir",
+            "tests/java/test_source_integer_spelling.py::test_host_conversion_receives_only_bounded_significant_digits",
+            "tests/java/test_source_integer_spelling.py::test_long_spelling_original_has_exact_native_result",
+            "tests/java/test_source_integer_spelling.py::test_identical_long_spelling_original_matches_jdk_raw_processes",
+            "tests/java/test_source_integer_spelling.py::test_identical_invalid_spelling_original_has_jdk_rejection"
+          ],
+          "evidence": [],
+          "reason": "CI-only authored obligations. No repository imports, test collection, tests, compilers, native programs or JDK comparisons ran locally. Historical evidence remains bound to its original source identity."
+        }
+      ]
+    },
+    {
       "id": "java.static-class-constructor-declarations",
       "title": "Private empty constructor declarations in native static classes",
       "chapter_ids": [
@@ -2415,12 +2467,12 @@
         "feature_id": "java.division-dynamic-exception",
         "source": {
           "path": "pcc/frontends/java/source_sema.py",
-          "sha256": "48012ffc89efe2491c2d26d891e60b23510626782813efc96980785b2dd9ad4e"
+          "sha256": "52a65006cc63e39411087d3bc2548c42229a5226fee1b13c288708bbf2ec4670"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_sema.py",
-            "sha256": "48012ffc89efe2491c2d26d891e60b23510626782813efc96980785b2dd9ad4e"
+            "sha256": "52a65006cc63e39411087d3bc2548c42229a5226fee1b13c288708bbf2ec4670"
           }
         ]
       },
@@ -2475,12 +2527,12 @@
         "feature_id": "java.assignment-expression-nonlocal-targets",
         "source": {
           "path": "pcc/frontends/java/source_sema.py",
-          "sha256": "48012ffc89efe2491c2d26d891e60b23510626782813efc96980785b2dd9ad4e"
+          "sha256": "52a65006cc63e39411087d3bc2548c42229a5226fee1b13c288708bbf2ec4670"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_sema.py",
-            "sha256": "48012ffc89efe2491c2d26d891e60b23510626782813efc96980785b2dd9ad4e"
+            "sha256": "52a65006cc63e39411087d3bc2548c42229a5226fee1b13c288708bbf2ec4670"
           }
         ]
       },
@@ -2516,7 +2568,7 @@
           },
           {
             "path": "pcc/frontends/java/source_sema.py",
-            "sha256": "48012ffc89efe2491c2d26d891e60b23510626782813efc96980785b2dd9ad4e"
+            "sha256": "52a65006cc63e39411087d3bc2548c42229a5226fee1b13c288708bbf2ec4670"
           }
         ]
       },
@@ -2553,12 +2605,12 @@
         "feature_id": "java.class-initialization",
         "source": {
           "path": "pcc/frontends/java/source_sema.py",
-          "sha256": "48012ffc89efe2491c2d26d891e60b23510626782813efc96980785b2dd9ad4e"
+          "sha256": "52a65006cc63e39411087d3bc2548c42229a5226fee1b13c288708bbf2ec4670"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_sema.py",
-            "sha256": "48012ffc89efe2491c2d26d891e60b23510626782813efc96980785b2dd9ad4e"
+            "sha256": "52a65006cc63e39411087d3bc2548c42229a5226fee1b13c288708bbf2ec4670"
           },
           {
             "path": "pcc/frontends/java/source_string_model.py",
@@ -2687,12 +2739,12 @@
         "feature_id": "java.floating-remainder",
         "source": {
           "path": "pcc/frontends/java/source_sema.py",
-          "sha256": "48012ffc89efe2491c2d26d891e60b23510626782813efc96980785b2dd9ad4e"
+          "sha256": "52a65006cc63e39411087d3bc2548c42229a5226fee1b13c288708bbf2ec4670"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_sema.py",
-            "sha256": "48012ffc89efe2491c2d26d891e60b23510626782813efc96980785b2dd9ad4e"
+            "sha256": "52a65006cc63e39411087d3bc2548c42229a5226fee1b13c288708bbf2ec4670"
           }
         ]
       },
@@ -2783,12 +2835,12 @@
         "feature_id": "java.implementation-limits",
         "source": {
           "path": "pcc/frontends/java/source_sema.py",
-          "sha256": "48012ffc89efe2491c2d26d891e60b23510626782813efc96980785b2dd9ad4e"
+          "sha256": "52a65006cc63e39411087d3bc2548c42229a5226fee1b13c288708bbf2ec4670"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_sema.py",
-            "sha256": "48012ffc89efe2491c2d26d891e60b23510626782813efc96980785b2dd9ad4e"
+            "sha256": "52a65006cc63e39411087d3bc2548c42229a5226fee1b13c288708bbf2ec4670"
           }
         ]
       },
@@ -2846,7 +2898,7 @@
           },
           {
             "path": "pcc/frontends/java/source_sema.py",
-            "sha256": "48012ffc89efe2491c2d26d891e60b23510626782813efc96980785b2dd9ad4e"
+            "sha256": "52a65006cc63e39411087d3bc2548c42229a5226fee1b13c288708bbf2ec4670"
           }
         ]
       },
@@ -2997,12 +3049,12 @@
         "feature_id": "java.class-initialization",
         "source": {
           "path": "pcc/frontends/java/source_sema.py",
-          "sha256": "48012ffc89efe2491c2d26d891e60b23510626782813efc96980785b2dd9ad4e"
+          "sha256": "52a65006cc63e39411087d3bc2548c42229a5226fee1b13c288708bbf2ec4670"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_sema.py",
-            "sha256": "48012ffc89efe2491c2d26d891e60b23510626782813efc96980785b2dd9ad4e"
+            "sha256": "52a65006cc63e39411087d3bc2548c42229a5226fee1b13c288708bbf2ec4670"
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
@@ -3028,7 +3080,7 @@
           },
           {
             "path": "pcc/frontends/java/source_sema.py",
-            "sha256": "48012ffc89efe2491c2d26d891e60b23510626782813efc96980785b2dd9ad4e"
+            "sha256": "52a65006cc63e39411087d3bc2548c42229a5226fee1b13c288708bbf2ec4670"
           },
           {
             "path": "pcc/frontends/java/source_class_model.py",

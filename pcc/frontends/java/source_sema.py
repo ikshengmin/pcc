@@ -48,15 +48,20 @@ def integer_literal(node, allow_min=False):
     dtype = "long" if text[-1:] in ("l", "L") else "int"
     width = 64 if dtype == "long" else 32
     text = text[:-1] if dtype == "long" else text
-    if len(text) > 128:
-        node.token.error("integer literal exceeds " + dtype + " range")
     patterns = ((r"0[xX][0-9a-fA-F](?:[0-9a-fA-F_]*[0-9a-fA-F])?", 16, 2),
                 (r"0[bB][01](?:[01_]*[01])?", 2, 2),
                 (r"0(?:[0-7_]*[0-7])", 8, 0),
                 (r"(?:0|[1-9](?:[0-9_]*[0-9])?)", 10, 0))
     for pattern, base, prefix in patterns:
         if re.fullmatch(pattern, text):
-            value = int(text[prefix:].replace("_", ""), base)
+            digits = text[prefix:].replace("_", "").lstrip("0") or "0"
+            # Spelling length is not magnitude: arbitrary separators and
+            # leading zeroes are legal (JLS 3.10.1). Every admitted radix is
+            # at least two, so more than width significant digits cannot fit.
+            # Bound conversion before allocating a host arbitrary-width int.
+            if len(digits) > width:
+                node.token.error("integer literal exceeds " + dtype + " range")
+            value = int(digits, base)
             maximum = (1 << (width - 1)) if base == 10 and allow_min else (1 << (width - 1 if base == 10 else width)) - 1
             if value > maximum:
                 node.token.error("integer literal exceeds " + dtype + " range")
