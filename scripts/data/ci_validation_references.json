@@ -1,5 +1,25 @@
 {
   "functions": {
+    "tests/rust/test_rust_empty_call_arguments.py": {
+      "test_actual_rustc_accepts_exact_empty_call_originals": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "reason": [
+          "Calls tests.rust.certification_support.certify_source on unchanged empty-turbofish originals. Reference-bearing owned compilation requires the actual source/options-bound CheckedRustSource; narrower owner/constructor/reference-substitution capabilities remain explicit."
+        ]
+      },
+      "test_actual_rustc_rejects_exact_invalid_empty_calls": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.rust.test_rust_supertraits.test_genuine_rustc_rejects_the_same_invalid_obligations on unchanged invalid empty-call originals; requires actual source-attributed rustc rejection."
+        ]
+      },
+      "test_empty_call_originals_match_actual_rustc": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "reason": [
+          "Calls tests.rust.test_rust_method_reference.test_unchanged_inherent_programs_match_actual_rustc_native_execution for four unchanged complete empty-call programs. The reference-bearing input retains actual certification before owned compilation; full-width raw process comparison does not establish native pcc1 or whole-project acceptance."
+        ]
+      }
+    },
     "tests/java/test_source_static_type_imports.py": {
       "test_same_static_type_originals_match_jdk_raw_processes": {
         "activity": "external-reference",

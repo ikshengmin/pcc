@@ -1295,6 +1295,21 @@ order and reference certification are unchanged. The authored omitted-enum
 fixtures carry focused native/reference obligations; they do not establish
 whole-project, native pcc1 or general inference acceptance.
 
+### Empty call turbofish
+
+Direct function and method calls can use an empty turbofish (`f::<>(x)` or
+`value.method::<>(x)`). After resolving the callable, the empty list supplies
+no fixed type arguments and follows the existing omitted-argument inference
+path, including argument/result/body constraints, generic-body replay and the
+shared instance registry. A nongeneric callable, including array `len`, accepts
+an empty list but still rejects nonempty type arguments. Fixed impl-owner slots
+are unchanged. Empty nominal-owner lists, constructor-segment lists, stored
+function values and empty type-annotation arguments remain outside this slice.
+Reference-bearing originals still require actual source/options certification.
+Specification-linked tests cover focused behavior, owned-native execution and
+unchanged-input rustc comparisons. These component obligations do not establish
+whole-project or native pcc1 acceptance.
+
 ### Wildcard let statements
 
 `let _ = expression;` and annotated wildcard lets check the initializer and

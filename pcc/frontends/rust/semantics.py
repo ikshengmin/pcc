@@ -650,7 +650,7 @@ class Checker:
                 receiver_type = partial(self.expression(receiver, place_context=True))
                 array_type = receiver_type.referent if isinstance(receiver_type, SharedReference) else receiver_type
                 if isinstance(array_type, FixedArrayType) and callee.value == "len":
-                    if explicit_arguments is not None:
+                    if explicit_arguments:
                         raise callee.token.error("array len is not a generic method")
                     if len(children) != 1:
                         raise callee.token.error("array len expects no arguments")
@@ -718,6 +718,12 @@ class Checker:
                 if fn is None:
                     raise callee.token.error(f"unknown function {callee.value!r}")
                 explicit_arguments = path.arguments if isinstance(path, TypeApplication) else None
+            # An empty call turbofish supplies no fixed method/function slots.
+            # Resolve the callable first so it cannot authorize empty nominal
+            # owner arguments or enum constructor-segment arguments. The same
+            # omitted-argument path handles inference and nongeneric calls.
+            if explicit_arguments == ():
+                explicit_arguments = None
             self.function_generics.remember_bound_call(expr, fn)
             self.source_type_access(fn.result, callee.token)
             for _, parameter_type, _ in fn.params:

@@ -526,15 +526,17 @@ class Parser:
             return True
         return False
 
-    def type_arguments(self) -> tuple[object, ...]:
+    def type_arguments(self, *, allow_empty=False) -> tuple[object, ...]:
         start = self.expect("<")
         self.type_argument_depth += 1
         if self.type_argument_depth > 16:
             raise start.error("generic argument nesting exceeds implementation limit (16)")
-        if self.generic_close():
-            raise start.error("empty/inferred generic arguments are not implemented; supply explicit types")
         arguments = []
         try:
+            if self.generic_close():
+                if allow_empty:
+                    return ()
+                raise start.error("empty/inferred generic arguments are not implemented; supply explicit types")
             while True:
                 arguments.append(self.type())
                 if len(arguments) > 16:
@@ -661,7 +663,9 @@ class Parser:
         self.last_path_type_arguments = None
         while self.accept("::"):
             if self.token.text == "<":
-                arguments = self.type_arguments()
+                arguments = self.type_arguments(allow_empty=True)
+                if not arguments and self.token.text != "(":
+                    raise token.error("empty/inferred generic owner arguments are not implemented; use a direct function call or explicit owner types")
                 owner = TypeApplication("::".join(parts), arguments)
                 if not self.accept("::"):
                     if len(parts) == 1 or self.token.text == "{":
@@ -1429,7 +1433,7 @@ class Parser:
                     raise separator.error("tuple fields do not have generic method arguments")
                 if expr.type_arguments is not None or self.token.text != "<":
                     raise separator.error("expected one method type-argument list")
-                expr.type_arguments = self.type_arguments()
+                expr.type_arguments = self.type_arguments(allow_empty=True)
                 if self.token.text != "(":
                     raise separator.error("generic associated items require a direct call; stored function values are not implemented")
                 continue
