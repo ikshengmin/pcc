@@ -1,15 +1,15 @@
 """Constant-initialized block statics, N4659 [basic.start.static], [stmt.dcl].
 
-Only integral/enum '=' constants and zero initialization are admitted. The
-shared C declaration owner supplies persistent internal storage, not a runtime
-guard. Dynamic initialization, destruction, inline/ODR sharing and switch-body
-declaration hoisting stay gated.
+Only integral/enum constants, explicit-brace arrays and zero initialization
+are admitted. The shared C declaration owner supplies persistent internal
+storage, not a runtime guard. Dynamic initialization, destruction, inline/ODR
+sharing and switch-body declaration hoisting stay gated.
 """
 
 from pcc.frontends.cpp.constants import KNOWN, converted_fact
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.sema import Symbol
-from pcc.frontends.cpp.types import ConstType, ReferenceType, is_enum_type
+from pcc.frontends.cpp.types import ConstType, ReferenceType, array_type, is_enum_type
 
 
 def declare(parser, *, for_init=False):
@@ -32,6 +32,9 @@ def declare(parser, *, for_init=False):
                             'multiple storage class specifiers', parser._peek().coord)
     dtype = parser._type(storage_specifiers=[keyword])
     name, dtype = parser._declarator(dtype, allow_class_element=True)
+    if array_type(dtype):
+        from pcc.frontends.cpp.local_static_arrays import declare
+        return declare(parser, name, dtype, for_init=for_init)
     if isinstance(dtype, ReferenceType):
         raise CppDiagnostic('cpp.unsupported.references',
                             'static reference initialization is not implemented', name.coord)

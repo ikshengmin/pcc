@@ -119,7 +119,6 @@ DEFERRED = (
     ('switch-after-terminated-case', 'int f(int n){switch(n){case 1:return 1;static int x=42;case 2:return x;}return 0;}', STATIC_GAP),
     ('switch-nested-static', 'int f(int n){switch(n){case 1:{static int x=42;return x;}}return 0;}', STATIC_GAP),
     ('pointer-static', 'void f(){static int*p=nullptr;}', STATIC_GAP),
-    ('array-static', 'void f(){static int a[2]={17,25};}', STATIC_GAP),
     ('class-static', 'struct S{int n;};void f(){static S s{42};}', STATIC_GAP),
     ('reference-static', 'int f(){int n=42;static int&r=n;return r;}', 'cpp.unsupported.references'),
     ('floating-static', 'void f(){static double n=42.0;}', STATIC_GAP),
