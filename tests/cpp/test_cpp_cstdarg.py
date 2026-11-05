@@ -3,7 +3,8 @@
 Original programs use real <cstdarg> on both routes, with each compiler's
 respective owned/system header. No host compiler participates in PCC building.
 The scope is scalar retrieval and trivial record-array storage, not other
-va_list ABIs, member variadics, general class arrays or exception unwinding.
+va_list ABIs, general class arrays or exception unwinding. Ordinary member
+variadics have separate coverage in test_cpp_variadic_members.
 """
 import os
 import shutil
@@ -127,7 +128,7 @@ def test_record_one_past_address_has_no_array_element_fetch_projection():
     ('int f(int n,...){int ap;va_start(ap,n);return 0;}','cpp.invalid-va-list'),
     ('int f(int n,...){va_list ap;va_start(ap,n);return va_arg(ap,short);}','cpp.invalid-va-arg-type'),
     ('struct S{int n;};int f(int n,...){va_list ap;va_start(ap,n);va_arg(ap,S);return 0;}','cpp.unsupported.va-arg-type'),
-    ('struct S{int f(int,...);};','cpp.unsupported.variadic-functions'),
+    # Exact original is preserved in test_cpp_variadic_members.PROGRAMS.
     ('template<class T>int f(T n,...){return 0;}','cpp.unsupported.variadic-functions'),
 ))
 def test_varargs_invalid_or_unimplemented_contracts_fail_before_emission(body,code):

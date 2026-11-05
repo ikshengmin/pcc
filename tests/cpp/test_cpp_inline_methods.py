@@ -127,7 +127,7 @@ def test_inline_method_original_artifacts_are_byte_stable(owned_only,name,units)
     ('struct S{int f(){thread_local int n=0;return n;}};','cpp.unsupported.syntax'),
     ('struct S{const char*f(){return "identity";}};','cpp.unsupported.syntax'),
     ('struct S{int f()noexcept{return 42;}};','cpp.unsupported.exceptions'),
-    ('struct S{int f(int n,...){return n;}};','cpp.unsupported.variadic-functions'),
+    # Exact original is preserved in test_cpp_variadic_members.PROGRAMS.
 ))
 def test_inline_method_invalid_or_unimplemented_originals_remain_explicit(source,code):
     with pytest.raises(CppDiagnostic) as error:

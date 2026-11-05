@@ -18,7 +18,7 @@ from pcc.frontends.cpp.templates import same_type
 from pcc.frontends.cpp.types import ConstType, PointerType, _mangle_type, unqualified
 
 
-def mangle_member(owner, name, parameters, const=False):
+def mangle_member(owner, name, parameters, const=False, variadic=False):
     substitutions = []
     prefix = _mangle_type(unqualified(owner), substitutions)
     # Use the type owner's real namespace/template-prefix substitution order.
@@ -28,7 +28,7 @@ def mangle_member(owner, name, parameters, const=False):
     encoded_name = {"operator=": "aS", "operator[]": "ix"}.get(name, str(len(name)) + name)
     encoded = "_ZN" + ("K" if const else "") + prefix + encoded_name + "E"
     return encoded + ("".join(_mangle_type(unqualified(t), substitutions)
-                              for t in parameters) or "v")
+                              for t in parameters) + ("z" if variadic else "") or "v")
 
 
 def declare_member_function(definition, symbol, const=False, outside=False, static=False, encode_name=True):
@@ -43,6 +43,8 @@ def declare_member_function(definition, symbol, const=False, outside=False, stat
         raise CppDiagnostic("cpp.invalid-constructor", "a constructor cannot have a return type", symbol.coord)
     if group is not None:
         for previous in group.overloads:
+            if previous.variadic != symbol.variadic:
+                continue
             previous_static = getattr(previous, "method_static", False)
             if previous.parameters == symbol.parameters and (static or previous_static):
                 if not outside and static != previous_static:
@@ -74,7 +76,7 @@ def declare_member_function(definition, symbol, const=False, outside=False, stat
     symbol.language_linkage = "C++"
     symbol.internal_linkage = definition.dtype.internal_linkage
     if encode_name:
-        symbol.c_name = mangle_member(definition.dtype, symbol.name, symbol.parameters, const)
+        symbol.c_name = mangle_member(definition.dtype, symbol.name, symbol.parameters, const, symbol.variadic)
     if group is None:
         group = Symbol(symbol.name, "function", symbol.coord)
         group.class_owner = definition.dtype
@@ -96,6 +98,7 @@ def select_member_overload(parser, group, object_expression, arguments, coord):
     for method in group.overloads:
         candidate = Symbol(method.name, "function", method.coord, dtype=method.dtype,
                            parameters=(object_pointer_type(method),) + method.parameters)
+        candidate.variadic = method.variadic
         candidate.member_origin = method
         candidate.default_arguments = (None,) + tuple(getattr(method, "default_arguments", (None,) * len(method.parameters)))
         candidates.overloads.append(candidate)
@@ -134,6 +137,9 @@ def call_member(parser, group, object_expression, arguments, coord, address_avai
                              parser._convert(object_expression, this_type, coord))
     from pcc.frontends.cpp.references import convert_call_arguments
     converted = [c_ast.ID(name, coord)] + convert_call_arguments(parser, arguments, selected.parameters, coord)
+    if selected.variadic:
+        from pcc.frontends.cpp.varargs import convert_ellipsis_arguments
+        converted += convert_ellipsis_arguments(parser, arguments[len(selected.parameters):], coord)
     call = c_ast.FuncCall(c_ast.ID(selected.c_name, coord), c_ast.ExprList(converted, coord), coord)
     # [expr.call]: postfix-expression (including object) precedes every
     # argument. Capture once before evaluating arguments; do not rely on C's
@@ -175,6 +181,9 @@ def call_static_member(parser, group, arguments, coord, discarded_base=None):
     arguments = expand(parser, selected, arguments, coord)
     from pcc.frontends.cpp.references import convert_call_arguments
     converted = convert_call_arguments(parser, arguments, selected.parameters, coord)
+    if selected.variadic:
+        from pcc.frontends.cpp.varargs import convert_ellipsis_arguments
+        converted += convert_ellipsis_arguments(parser, arguments[len(selected.parameters):], coord)
     node = c_ast.FuncCall(c_ast.ID(selected.c_name, coord), c_ast.ExprList(converted, coord), coord)
     if discarded_base is not None:
         node = c_ast.ExprList([discarded_base, node], coord)

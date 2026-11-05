@@ -71,7 +71,7 @@ def test_variadic_caller_abi_matches_real_cpp17_reference(tmp_path):
     ('extern "C" int f(int,...);extern "C" int f(int);','cpp.conflicting-c-linkage-type'),
     ('extern "C" int f(int,...);int main(){return f();}','cpp.no-viable-overload'),
     ('extern "C" int f(int,...,int);','cpp.invalid-parameter'),
-    ('struct S{int f(int,...);};','cpp.unsupported.variadic-functions'),
+    # Exact original is preserved in test_cpp_variadic_members.PROGRAMS.
     ('extern "C" int f(...);','cpp.unsupported.variadic-functions'),
 ])
 def test_variadic_invalid_or_unimplemented_forms_are_explicit(source,code):

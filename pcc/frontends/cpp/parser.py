@@ -1141,9 +1141,11 @@ class CppParser:
                 contains_function(t) for t in (result_type,) + tuple(t for _, t in params)):
             raise CppDiagnostic("cpp.unsupported.function-pointers",
                                 "callback definitions, members and templates require function-value semantics", name.coord)
-        if variadic and (member_owner is not None or template_parameters):
-            raise CppDiagnostic("cpp.unsupported.variadic-functions",
-                                "variadic members/templates require additional ABI/lifetime semantics", name.coord)
+        if variadic:
+            from pcc.frontends.cpp.references import ordinary_class_result_context
+            if template_parameters or (member_owner is not None and not ordinary_class_result_context(self)):
+                raise CppDiagnostic("cpp.unsupported.variadic-functions",
+                                    "variadic template members/functions require separate ABI/lifetime semantics", name.coord)
         if variadic and definition:
             from pcc.frontends.cpp.varargs import require_sysv_target
             require_sysv_target(self, name.coord)
@@ -2504,18 +2506,8 @@ class CppParser:
         from pcc.frontends.cpp.references import convert_call_arguments
         converted = convert_call_arguments(self, arguments, selected.parameters, coord)
         if selected.variadic:
-            for argument in arguments[len(selected.parameters):]:
-                source = unqualified(argument.dtype)
-                if is_enum_type(source) and source.scoped:
-                    raise CppDiagnostic("cpp.unsupported.variadic-argument",
-                                        "scoped-enum variadic argument ABI is not implemented", coord)
-                if not self.types.value_lowering_supported(source):
-                    raise CppDiagnostic("cpp.unsupported.variadic-argument",
-                                        "extended floating variadic argument ABI is not implemented", coord)
-                destination = (PointerType("void") if source == "nullptr" else
-                               "double" if source == "float" else
-                               self.types.promote(source) if self.types.integral_operand(source) else source)
-                converted.append(self._convert(argument, destination, coord))
+            from pcc.frontends.cpp.varargs import convert_ellipsis_arguments
+            converted += convert_ellipsis_arguments(self, arguments[len(selected.parameters):], coord)
         dtype = unqualified(selected.dtype)
         nominal = unqualified(dtype.referent) if isinstance(dtype, ReferenceType) else dtype
         nominal = unqualified(nominal.pointee) if isinstance(nominal, PointerType) else nominal

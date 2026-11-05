@@ -25,6 +25,28 @@ def require_sysv_target(parser, coord):
                             'owned C++ va_list execution currently requires SysV x86_64 Linux', coord)
 
 
+def convert_ellipsis_arguments(parser, arguments, coord):
+    """One default-promotion owner for ordinary free and member ellipses.
+
+    The call owner checks fixed formals and rejects class-value tails before
+    reaching this conversion. Object parameters never enter the ellipsis.
+    """
+    converted = []
+    for argument in arguments:
+        source = unqualified(argument.dtype)
+        if is_enum_type(source) and source.scoped:
+            raise CppDiagnostic("cpp.unsupported.variadic-argument",
+                                "scoped-enum variadic argument ABI is not implemented", coord)
+        if not parser.types.value_lowering_supported(source):
+            raise CppDiagnostic("cpp.unsupported.variadic-argument",
+                                "extended floating variadic argument ABI is not implemented", coord)
+        destination = (PointerType("void") if source == "nullptr" else
+                       "double" if source == "float" else
+                       parser.types.promote(source) if parser.types.integral_operand(source) else source)
+        converted.append(parser._convert(argument, destination, coord))
+    return converted
+
+
 def _cursor(parser, expression, coord):
     # __pcc_sysv_va_list is the reserved implementation record defined by the
     # owned ABI header, not an arbitrary user's structurally similar record.

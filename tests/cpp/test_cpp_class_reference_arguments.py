@@ -106,9 +106,9 @@ DEFERRED = (
      'int g(){N::S s{42};return f(s);}', 'cpp.unsupported.class-values'),
     ('class-by-value-call', 'struct S{int n;};int f(S);int g(){S s{42};return ::f(s);}', 'cpp.unsupported.class-value-abi'),
     ('class-ellipsis-call', 'struct S{int n;};int f(int,...);int g(){S s{42};return ::f(0,s);}', 'cpp.unsupported.class-value-abi'),
-    # Variadic members stop at declaration admission, before argument binding.
+    # The original now reaches the unchanged class-value ellipsis boundary.
     ('static-member-class-ellipsis', 'struct S{int n;};struct H{static int f(int,...);};'
-     'int g(){S s{42};return H::f(0,s);}', 'cpp.unsupported.variadic-functions'),
+     'int g(){S s{42};return H::f(0,s);}', 'cpp.unsupported.class-value-abi'),
     # Exact former assignment original: test_cpp_explicit_assignment.PROGRAMS.
     ('class-temporary-binding', 'struct S{S(int){} };int f(const S&);int g(){return ::f(S(42));}', 'cpp.unsupported.class-initialization'),
     ('reference-default', 'struct S{};S&object();int f(const S&s=object());', 'cpp.unsupported.default-argument-context'),
