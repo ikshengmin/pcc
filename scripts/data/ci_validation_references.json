@@ -190,6 +190,32 @@
         ]
       }
     },
+    "tests/java/test_source_static_demand_imports.py": {
+      "test_same_static_demand_originals_match_jdk_raw_processes": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses prepare_reference to compile the identical complete source maps with the selected actual JDK, then compares owned native stdout, stderr and exit status with the actual Java observer."
+        ]
+      },
+      "test_same_invalid_static_demand_originals_have_jdk_rejections": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses prepare_reference on unchanged invalid static-demand source maps and requires actual source-attributed JDK compilation rejection."
+        ]
+      },
+      "test_static_demand_type_frontier_originals_are_jdk_valid": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses prepare_reference to establish actual JDK acceptance of unchanged member-type frontier originals, separately from explicit owned capability rejection."
+        ]
+      },
+      "test_mixed_static_demand_originals_retain_jdk_conformance_obligation": {
+        "activity": "external-reference",
+        "reason": [
+          "Runs the same complete mixed-import overload originals with the actual selected JDK compiler and runtime. Normative compile acceptance and raw result 42 remain strict, preserving the observed tool/specification disagreement as a failure rather than waiving or adapting the oracle. Owned mixed-overload execution stays explicitly unavailable."
+        ]
+      }
+    },
     "tests/java/test_source_static_imports.py": {
       "test_exact_static_import_originals_match_jdk_raw_processes": {
         "activity": "external-reference",

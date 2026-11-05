@@ -42,7 +42,7 @@ CAPABILITIES = [
     ("class Diagnostic{static enum Nested{VALUE}}", "member-types", "only native static member classes"),
     ("class Diagnostic{static record Nested(){}}", "member-types", "only native static member classes"),
     ("import static p.C.f; class Diagnostic{}", "source-dependency", "requires supplied source for p.C"),
-    ("import static p.C.*; class Diagnostic{}", "static-imports", "static on-demand imports"),
+    ("import static p.C.*; class Diagnostic{}", "source-dependency", "requires supplied source for p.C"),
     ("import p.*; class Diagnostic{}", "on-demand-imports", "on-demand imports"),
     ("import p.C; class Diagnostic{}", "source-dependency", "requires supplied source for p.C"),
     ("class Diagnostic{int run(){return 42;}}", "instance-methods", "only ordinary static source methods"),

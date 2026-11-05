@@ -67,6 +67,14 @@ def app(imports, body, declarations, *, public=True):
     }
 
 
+# Exact former unused nested-owner static-demand boundary. Keep the original
+# source map shared with the positive owned/native/JDK obligations.
+NESTED_DEMAND_ORIGINAL = app(
+    "import static provider.Outer.Inner.*;", "return 42;",
+    "public static class Inner{public static int f(){return 42;}}",
+)
+
+
 def row(name, members, expected=42, *, entry="p.Outer", imports=""):
     return name, outer(members, imports=imports), entry, "I", (), expected
 
@@ -450,7 +458,6 @@ def test_static_import_of_member_type_remains_explicit_even_with_same_name_value
     ("import static provider.Outer$Inner.f;", "return 42;", "source-dependency"),
     ("", "return provider.Outer.Inner.f();", "implicit-type-metadata"),
     ("import provider.Outer.*;", "return 42;", "on-demand-imports"),
-    ("import static provider.Outer.Inner.*;", "return 42;", "static-imports"),
 ])
 def test_member_support_does_not_guess_binary_import_aliases_or_unknown_package_roots(imports, body, code, monkeypatch):
     forbid_lowering(monkeypatch)

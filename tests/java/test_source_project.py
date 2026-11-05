@@ -135,7 +135,7 @@ def test_project_semantic_errors_precede_lowering(original, entry_class, message
     ("import absent.Library;", "requires supplied source"),
     ("import p.*;", "on-demand imports"),
     ("import static p.A.f;", "requires supplied source for p.A"),
-    ("import static p.A.*;", "static on-demand imports"),
+    ("import static p.A.*;", "requires supplied source for p.A"),
 ])
 def test_source_project_lookup_gaps_are_not_ignored(imports, message):
     with pytest.raises(UnsupportedJava, match=message):

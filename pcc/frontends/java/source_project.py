@@ -1,10 +1,10 @@
 """Closed-world Java source type/import and static-method identity resolution.
 
 Only supplied source classes are visible; there is no classpath, classfile,
-reflection lookup or host JDK fallback. Single-type and single-static imports,
-including accessible static member types, resolve against supplied declarations
-before lowering. Native static member classes retain their lexical type scope
-and distinct binary owners. Inheritance, inner classes and on-demand imports
+reflection lookup or host JDK fallback. Single-type, single-static and static
+field/method on-demand imports resolve against supplied declarations before
+lowering. Native static member classes retain their lexical type scope and
+distinct binary owners. Inheritance, inner classes and on-demand type imports
 remain explicit unsupported domains.
 """
 from .diagnostics import UnsupportedJava
@@ -29,6 +29,8 @@ class SourceProject(StaticMemberTypes):
         self.static_types = {}
         self.static_fields = {}
         self.static_methods = {}
+        self.static_demand_fields = {}
+        self.static_demand_methods = {}
         self.analyzers = {}
         for program in self.top_levels:
             imported = {}
@@ -57,6 +59,15 @@ class SourceProject(StaticMemberTypes):
             static_types = {}
             for tokens in program.static_imports:
                 owner = self.static_import_owner(program, tokens)
+                if tokens[-1].text == "*":
+                    # Importing a type on demand needs a complete competing
+                    # implicit-type directory. Do not silently drop visible
+                    # member types just because this slice owns values only.
+                    if any(self.static_import_type(program, owner, name) is not None
+                           for name in self.member_types[owner.name]):
+                        tokens[-1].error("static on-demand member types require complete type-import lookup",
+                                         code="java.unsupported.static-imports")
+                    continue
                 target = self.static_import_type(program, owner, tokens[-1].text)
                 if target is None:
                     continue
@@ -108,6 +119,7 @@ class SourceProject(StaticMemberTypes):
 
     def resolve_static_imports(self, program):
         fields, methods = {}, {}
+        demand_fields, demand_methods = {}, {}
         for tokens in program.static_imports:
             target = self.static_import_owner(program, tokens)
             analyzer = self.analyzers[target.name]
@@ -119,6 +131,16 @@ class SourceProject(StaticMemberTypes):
                 return ("static" in member.modifiers and
                         self.member_accessible(program, target, member.modifiers, import_context=True))
 
+            if name == "*":
+                # An accessible owner with no accessible static members is a
+                # valid import. Keep declaration identities, not copied values.
+                for field_name, field in analyzer.fields.items():
+                    if accessible(field):
+                        demand_fields.setdefault(field_name, {})[target.name] = field
+                for method in analyzer.methods.values():
+                    if accessible(method):
+                        demand_methods.setdefault(method.token.text, {})[target.name, method.parameter_types] = method
+                continue
             field = analyzer.fields.get(name)
             imported_field = field is not None and accessible(field)
             candidates = [method for method in analyzer.methods.values()
@@ -135,6 +157,8 @@ class SourceProject(StaticMemberTypes):
                 methods.setdefault(name, {})[target.name, method.parameter_types] = method
         self.static_fields[program.name] = fields
         self.static_methods[program.name] = methods
+        self.static_demand_fields[program.name] = demand_fields
+        self.static_demand_methods[program.name] = demand_methods
 
     def simple_field(self, analyzer, name, token):
         for owner in self.lexical_classes(analyzer.program):
@@ -142,9 +166,29 @@ class SourceProject(StaticMemberTypes):
             if field is not None:
                 return field
         imported = self.static_fields[analyzer.program.name].get(name, {})
+        kind = "single-static"
+        if not imported:
+            imported = self.static_demand_fields[analyzer.program.name].get(name, {})
+            kind = "static on-demand"
         if len(imported) > 1:
-            token.error("ambiguous single-static imported field " + name)
+            token.error("ambiguous " + kind + " imported field " + name)
         return next(iter(imported.values()), None)
+
+    def imported_methods(self, program, name, token):
+        single = self.static_methods[program.name].get(name, {})
+        # JLS 6.4.1 shadows by signature, not name. The selected JDK21
+        # reference instead excludes other demand overloads when a single
+        # import supplies this name. Do not silently adopt that disagreement
+        # as source semantics: retain the mixed domain as an explicit gap.
+        signatures = {method.parameter_types for method in single.values()}
+        imported = {key: method for key, method in
+                    self.static_demand_methods[program.name].get(name, {}).items()
+                    if method.parameter_types not in signatures}
+        if single and imported:
+            token.error("mixed single-static and on-demand method overload lookup requires the next source/reference domain",
+                        code="java.unsupported.static-imports")
+        imported.update(single)
+        return imported
 
     def resolve_declaration_types(self, program):
         pass
@@ -158,7 +202,8 @@ class SourceProject(StaticMemberTypes):
         if len(pieces) == 1:
             # JLS 6.4.1/15.12.1: a member method shadows every imported method
             # with the same name, including when no member overload applies.
-            imported = self.static_methods[analyzer.program.name].get(node.value, {})
+            imported = (self.static_methods[analyzer.program.name].get(node.value)
+                        or self.static_demand_methods[analyzer.program.name].get(node.value))
             for owner in self.lexical_classes(analyzer.program):
                 methods = self.analyzers[owner.name].methods
                 if any(method.token.text == node.value for method in methods.values()):
@@ -166,7 +211,7 @@ class SourceProject(StaticMemberTypes):
                 if node.value in OBJECT_INHERITED_METHOD_NAMES and (owner.enclosing_name is not None or imported):
                     node.token.error("inherited Object method lookup cannot be replaced by an enclosing or imported method",
                                      code="java.unsupported.object-inherited-methods")
-            return select_method(imported, node)
+            return select_method(self.imported_methods(analyzer.program, node.value, node.token), node)
         target = self.resolve_qualified_owner(analyzer, node)
         caller = analyzer.program
         methods = self.analyzers[target.name].methods

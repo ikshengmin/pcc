@@ -443,8 +443,8 @@ class SourceParser:
             while self.accept("."):
                 if self.peek().text == "*":
                     if static:
-                        self.peek().error("static on-demand imports require the next source-project lookup domain",
-                                          code="java.unsupported.static-imports")
+                        imported.append(self.take())
+                        break
                     self.peek().error("on-demand imports require the next source-project lookup domain", code="java.unsupported.on-demand-imports")
                 imported.append(self.identifier())
             self.expect(";")

@@ -40,6 +40,7 @@ def project(imports, body, providers, *, members="", result="int"):
 
 
 FIELD = {"provider.Values": "public static final int VALUE=42;"}
+ON_DEMAND_ORIGINAL = project("import static provider.Values.*;", "return 42;", FIELD)
 TWO_FIELDS = {"provider.Values": "public static final int VALUE=7;",
               "other.Values": "public static final int VALUE=9;"}
 AMBIGUOUS_FIELDS = "import static provider.Values.VALUE;import static other.Values.VALUE;"
@@ -261,13 +262,17 @@ def test_imported_model_string_calls_retain_callers_missing_runtime_contract(mon
 
 @pytest.mark.parametrize("imports,code", [
     ("import static absent.Values.VALUE;", "source-dependency"),
-    ("import static provider.Values.*;", "static-imports"),
     ("import provider.*;", "on-demand-imports"),
 ])
 def test_unavailable_import_domains_are_not_satisfied_by_host_metadata(imports, code):
     with pytest.raises(UnsupportedJava) as caught:
         compile_sources(project(imports, "return 42;", FIELD), entry_class="app.Main")
     assert caught.value.code == "java.unsupported." + code
+
+
+def test_original_unused_static_demand_import_now_keeps_its_source_owner():
+    # The same complete original also enters the new native/JDK obligations.
+    assert compile_sources(ON_DEMAND_ORIGINAL, entry_class="app.Main").emit_object().startswith(b"\x7fELF")
 
 
 def test_import_owner_is_canonical_and_cannot_use_another_import_alias():

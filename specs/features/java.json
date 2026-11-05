@@ -2088,13 +2088,68 @@
       "acceptance": []
     },
     {
+      "id": "java.static-demand-values",
+      "title": "Static field and method on-demand imports",
+      "chapter_ids": [
+        "JLS-6",
+        "JLS-7",
+        "JLS-15"
+      ],
+      "scope": "JLS 6.3,6.4.1,6.5.6.1,6.6.1,7.5.4,15.12.1-2. Static-import-on-demand declarations retain original star tokens and bind accessible declared static fields and methods from supplied canonical source owners. Preserve source identities, repeated-import deduplication, unused ambiguity, lexical shadowing and independent namespaces. Single fields shadow on-demand fields by name; single methods shadow matching on-demand signatures. Calling mixed single/on-demand same-name methods with unshadowed signatures remains explicitly unavailable because the selected JDK21 disagrees with normative overload lookup; exact conflicting originals retain their JDK conformance obligations. Empty accessible owners are legal. Accessible on-demand member types remain an explicit capability boundary, as do ordinary type-on-demand imports, missing sources, inheritance and managed execution. Implementation/test binding only; execution and full-feature acceptance are unrecorded.",
+      "tests": [
+        "tests/java/test_source_static_demand_imports.py::test_static_demand_originals_retain_all_declarations_and_owned_ir",
+        "tests/java/test_source_static_demand_imports.py::test_static_demand_tables_preserve_tokens_and_declaration_identity",
+        "tests/java/test_source_static_demand_imports.py::test_mixed_static_demand_overloads_keep_explicit_source_frontier",
+        "tests/java/test_source_static_demand_imports.py::test_invalid_static_demand_originals_fail_before_lowering",
+        "tests/java/test_source_static_demand_imports.py::test_accessible_static_demand_types_are_not_silently_dropped",
+        "tests/java/test_source_static_demand_imports.py::test_static_demand_preserves_missing_and_noncanonical_dependencies",
+        "tests/java/test_source_static_demand_imports.py::test_static_demand_does_not_replace_inherited_object_method_lookup",
+        "tests/java/test_source_static_demand_imports.py::test_model_static_demand_skips_instance_members_without_runtime_admission",
+        "tests/java/test_source_static_demand_imports.py::test_same_static_demand_originals_execute_owned_native_bytes",
+        "tests/java/test_source_static_demand_imports.py::test_same_static_demand_originals_match_jdk_raw_processes",
+        "tests/java/test_source_static_demand_imports.py::test_same_invalid_static_demand_originals_have_jdk_rejections",
+        "tests/java/test_source_static_demand_imports.py::test_static_demand_type_frontier_originals_are_jdk_valid",
+        "tests/java/test_source_static_imports.py::test_original_unused_static_demand_import_now_keeps_its_source_owner",
+        "tests/java/test_source_static_demand_imports.py::test_mixed_static_demand_originals_retain_jdk_conformance_obligation"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:12f88eac634cbddf709c3c46fc9bd9888e6021ba6fedf547f450ed13cd7eaa99",
+        "sources": [
+          {
+            "path": "pcc/frontends/java/source_project.py",
+            "sha256": "7aff761107923c11fce853efde03ae556ced0ea7227867280a45c93c1fde72b4"
+          },
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
+          },
+          {
+            "path": "tests/java/test_source_static_imports.py",
+            "sha256": "cf9a96a0d599705266b4e37efc77f945320b0b45e2078a0eff01a1f01bbb6eff"
+          },
+          {
+            "path": "tests/java/test_source_static_demand_imports.py",
+            "sha256": "5d9eaa8046adf83ef3594aaa2d99b9251c89b7f995681f0ebe973c1f20c063b6"
+          },
+          {
+            "path": "tests/java/test_source_static_member_classes.py",
+            "sha256": "404c9776d66d1ec711785f363205c45af7a55829f8272a6846f4bf23f1f449e3"
+          }
+        ]
+      },
+      "acceptance": []
+    },
+    {
       "id": "java.imports-expanded",
       "title": "Static and on-demand import resolution",
       "chapter_ids": [
         "JLS-6",
         "JLS-7"
       ],
-      "scope": "JLS 7.5.2,7.5.4. Type/static on-demand imports remain unavailable. Single-static field/method imports and accessible declared static member-type imports from supplied source owners have separate implementation slices and source-bound test obligations.",
+      "scope": "JLS 7.5.2,7.5.4. Ordinary type-on-demand imports and static on-demand imports exposing accessible member types and mixed single/on-demand method calls with unshadowed overload signatures remain unavailable. Single-static imports and static field/method on-demand imports have separate source-bound implementation and test slices; no full type-import or inherited-member acceptance.",
       "status": "explicitly_unimplemented",
       "tests": [
         "tests/java/test_source_project.py::test_source_project_lookup_gaps_are_not_ignored",
@@ -2833,12 +2888,12 @@
         "feature_id": "java.abstract-classes",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+          "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+            "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
           }
         ]
       },
@@ -2847,12 +2902,12 @@
         "feature_id": "java.interfaces-annotations",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+          "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+            "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
           }
         ]
       },
@@ -2884,7 +2939,7 @@
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+            "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
           }
         ]
       },
@@ -2893,12 +2948,12 @@
         "feature_id": "java.arrays-native",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+          "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+            "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
           }
         ]
       },
@@ -2907,12 +2962,12 @@
         "feature_id": "java.assert-statements",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+          "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+            "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
           }
         ]
       },
@@ -2935,12 +2990,12 @@
         "feature_id": "java.blank-final-local-wider-domains",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+          "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+            "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
           },
           {
             "path": "pcc/frontends/java/source_blank_final.py",
@@ -2971,12 +3026,12 @@
         "feature_id": "java.inheritance-generics",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+          "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+            "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
           }
         ]
       },
@@ -3017,12 +3072,12 @@
         "feature_id": "java.other-declared-primitives",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+          "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+            "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
           }
         ]
       },
@@ -3031,12 +3086,12 @@
         "feature_id": "java.other-declared-primitives",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+          "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+            "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
           }
         ]
       },
@@ -3045,12 +3100,12 @@
         "feature_id": "java.other-declared-primitives",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+          "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+            "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
           },
           {
             "path": "pcc/frontends/java/source_lowering.py",
@@ -3119,12 +3174,12 @@
         "feature_id": "java.blank-final-instance-model",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+          "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+            "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
           }
         ]
       },
@@ -3147,12 +3202,12 @@
         "feature_id": "java.inheritance-generics",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+          "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+            "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
           }
         ]
       },
@@ -3161,12 +3216,12 @@
         "feature_id": "java.implicit-type-directory",
         "source": {
           "path": "pcc/frontends/java/source_project.py",
-          "sha256": "ff4fb4087e93b53dbb9e5128c6022d1e3f20dce54ba498a4e2adfe3966c65208"
+          "sha256": "7aff761107923c11fce853efde03ae556ced0ea7227867280a45c93c1fde72b4"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_project.py",
-            "sha256": "ff4fb4087e93b53dbb9e5128c6022d1e3f20dce54ba498a4e2adfe3966c65208"
+            "sha256": "7aff761107923c11fce853efde03ae556ced0ea7227867280a45c93c1fde72b4"
           },
           {
             "path": "pcc/frontends/java/source_class_model.py",
@@ -3174,7 +3229,7 @@
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+            "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
           }
         ]
       },
@@ -3183,12 +3238,12 @@
         "feature_id": "java.objects-native",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+          "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+            "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
           }
         ]
       },
@@ -3206,7 +3261,7 @@
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+            "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
           }
         ]
       },
@@ -3215,12 +3270,12 @@
         "feature_id": "java.local-types",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+          "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+            "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
           }
         ]
       },
@@ -3243,12 +3298,12 @@
         "feature_id": "java.nested-classes-wider-domains",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+          "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+            "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
           }
         ]
       },
@@ -3275,12 +3330,12 @@
         "feature_id": "java.objects-native",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+          "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+            "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
           },
           {
             "path": "pcc/frontends/java/source_class_model.py",
@@ -3310,7 +3365,7 @@
           },
           {
             "path": "pcc/frontends/java/source_project.py",
-            "sha256": "ff4fb4087e93b53dbb9e5128c6022d1e3f20dce54ba498a4e2adfe3966c65208"
+            "sha256": "7aff761107923c11fce853efde03ae556ced0ea7227867280a45c93c1fde72b4"
           }
         ]
       },
@@ -3319,12 +3374,12 @@
         "feature_id": "java.imports-expanded",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+          "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+            "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
           }
         ]
       },
@@ -3365,12 +3420,12 @@
         "feature_id": "java.runtime-statements",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+          "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+            "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
           }
         ]
       },
@@ -3379,12 +3434,12 @@
         "feature_id": "java.source-dependencies",
         "source": {
           "path": "pcc/frontends/java/source_project.py",
-          "sha256": "ff4fb4087e93b53dbb9e5128c6022d1e3f20dce54ba498a4e2adfe3966c65208"
+          "sha256": "7aff761107923c11fce853efde03ae556ced0ea7227867280a45c93c1fde72b4"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_project.py",
-            "sha256": "ff4fb4087e93b53dbb9e5128c6022d1e3f20dce54ba498a4e2adfe3966c65208"
+            "sha256": "7aff761107923c11fce853efde03ae556ced0ea7227867280a45c93c1fde72b4"
           },
           {
             "path": "pcc/frontends/java/source_class_model.py",
@@ -3397,12 +3452,12 @@
         "feature_id": "java.implementation-limits",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+          "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+            "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
           }
         ]
       },
@@ -3411,12 +3466,12 @@
         "feature_id": "java.special-methods",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+          "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+            "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
           }
         ]
       },
@@ -3424,13 +3479,13 @@
         "code": "java.unsupported.static-imports",
         "feature_id": "java.imports-expanded",
         "source": {
-          "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+          "path": "pcc/frontends/java/source_project.py",
+          "sha256": "7aff761107923c11fce853efde03ae556ced0ea7227867280a45c93c1fde72b4"
         },
         "source_sites": [
           {
-            "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+            "path": "pcc/frontends/java/source_project.py",
+            "sha256": "7aff761107923c11fce853efde03ae556ced0ea7227867280a45c93c1fde72b4"
           }
         ]
       },
@@ -3448,7 +3503,7 @@
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+            "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
           },
           {
             "path": "pcc/frontends/java/source_string_model.py",
@@ -3461,12 +3516,12 @@
         "feature_id": "java.string-runtime",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+          "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+            "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
           },
           {
             "path": "pcc/frontends/java/source_sema.py",
@@ -3495,12 +3550,12 @@
         "feature_id": "java.switch-expressions",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+          "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+            "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
           }
         ]
       },
@@ -3532,7 +3587,7 @@
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+            "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
           }
         ]
       },
@@ -3541,12 +3596,12 @@
         "feature_id": "java.implementation-limits",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+          "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+            "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
           }
         ]
       },
@@ -3555,12 +3610,12 @@
         "feature_id": "java.unicode-tokens",
         "source": {
           "path": "pcc/frontends/java/source_syntax.py",
-          "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+          "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "64bd6d6760d9b25e7c42280ef240bf38fa103e4bc078bd49cec71b3a4058d087"
+            "sha256": "f0b9e98ffb1e0bc1ed23c8682fe2357ab6d97eb7ced9f760c2f10f6812f6697f"
           }
         ]
       }
