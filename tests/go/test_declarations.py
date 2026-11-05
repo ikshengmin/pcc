@@ -1,11 +1,18 @@
-"""Declaration groups retain source scope, typed repetition and iota context."""
+"""Declaration groups retain source scope, typed repetition and iota context.
+
+Parenthesized variable/constant types use the existing Type grammar:
+https://go.dev/ref/spec#Types
+https://go.dev/ref/spec#Variable_declarations
+https://go.dev/ref/spec#Constant_declarations
+These source components do not establish complete math/bits or native pcc1.
+"""
 import hashlib
 import json
 import os
 
 import pytest
 
-from pcc.frontends.go import GoDiagnostic, compile_go, compile_go_packages
+from pcc.frontends.go import GoDiagnostic, UnsupportedGo, compile_go, compile_go_packages
 from tests.go.owned_execution import Execution, compile_owned, compile_reference, run, write_artifact
 from tests.go.owned_execution import compile_reference_rejection
 from tests.go.test_execution import forbid_external_compiler, units
@@ -13,6 +20,56 @@ from tests.go.test_execution import forbid_external_compiler, units
 
 def program(declaration, body=""):
     return "package main;"+(declaration+";" if declaration else "")+"func main(){"+body+"}"
+
+
+@pytest.mark.parametrize("declaration,body", [
+    ("var X (int)", "_=X"),
+    ("var X ((uint64))=7", "_=X"),
+    ("const X (int)=7", "_=X"),
+    ("const (X (int)=7+iota;Y)", "var n int=Y;_=n"),
+    ("", "var x (int)=3;_=x"),
+    ("", "const x ((int))=3;_=x"),
+    ("", "var (x (int);y ((uint64))=7);_=x;_=y"),
+    ("type Number uint64;var X (Number)=7", "var n Number=X;_=n"),
+])
+def test_parenthesized_declaration_types_reuse_existing_type_rules(declaration, body, monkeypatch):
+    forbid_external_compiler(monkeypatch)
+    compile_go(program(declaration, body))
+
+
+@pytest.mark.parametrize("declaration,body,message", [
+    ("var X ()", "", "expected 'name'"),
+    ("var X (int,uint64)", "", "expected"),
+    ("var X (1)", "", "expected 'name'"),
+    ("var X (Missing)", "", "undefined type"),
+    ("const X (int)", "", "preceding ConstSpec"),
+    ("const X (uint8)=256", "", "overflows uint8"),
+    ("", "var x (uint8)=256;_=x", "overflows uint8"),
+    ("type T int;var X (T)=1", "var n int=X;_=n", "cannot use T as int"),
+])
+def test_parenthesized_types_keep_syntax_typing_and_nominal_errors(declaration, body, message, monkeypatch):
+    from pcc.frontends.go.lowering import Lowerer
+    monkeypatch.setattr(Lowerer, "lower", lambda *args: pytest.fail("invalid parenthesized type reached IR"))
+    with pytest.raises(GoDiagnostic, match=message) as caught:
+        compile_go(program(declaration, body))
+    assert not isinstance(caught.value, UnsupportedGo)
+
+
+@pytest.mark.parametrize("declaration,code", [
+    ("var X ([]int)", "slice-storage"),
+    ("var X (error)", "interface-types"),
+    ("var X (*int)", "pointer-storage"),
+    ("var X ([1]string)", "array-element-types"),
+])
+def test_parenthesized_types_do_not_bypass_storage_frontiers(declaration, code):
+    with pytest.raises(UnsupportedGo) as caught:
+        compile_go(program(declaration))
+    assert caught.value.code == "go.unsupported." + code
+
+
+def test_complete_parenthesized_fixture_has_owned_ir(monkeypatch):
+    forbid_external_compiler(monkeypatch)
+    compile_go(units(("parenthesized_types.go",))[0][1])
 
 
 @pytest.mark.parametrize("declaration,body,message", [
@@ -100,24 +157,61 @@ def test_original_declaration_helpers_return_exact_full_width_bytes(tmp_path, mo
 
 
 @pytest.mark.integration
-def test_original_declarations_main_executes_owned_native_code(tmp_path, monkeypatch):
+@pytest.mark.parametrize("filename", ["declarations.go", "parenthesized_types.go"])
+def test_original_declarations_main_executes_owned_native_code(tmp_path, monkeypatch, filename):
     with monkeypatch.context() as owned:
         forbid_external_compiler(owned)
-        artifact = compile_owned(units(("declarations.go",)))
+        artifact = compile_owned(units((filename,)))
     binary = tmp_path / "declarations-main"
     write_artifact(artifact, binary)
     assert run(binary) == Execution(0, b"", b"")
 
 
 @pytest.mark.integration
+def test_parenthesized_declarations_return_full_width_native_value(tmp_path, monkeypatch):
+    originals = units(("parenthesized_types.go",))
+    with monkeypatch.context() as owned:
+        forbid_external_compiler(owned)
+        artifact = compile_owned(originals, observe_entry=("Result", ()))
+    binary = tmp_path / "parenthesized-native"
+    write_artifact(artifact, binary)
+    actual = run(binary)
+    expected = (0xfedcba9876543211).to_bytes(8, "little")
+    (tmp_path / "observation.json").write_text(json.dumps({
+        "source_sha256": hashlib.sha256(originals[0][1].encode()).hexdigest(),
+        "binary_sha256": hashlib.sha256(artifact.executable).hexdigest(),
+        "owner": artifact.owner, "returncode": actual.returncode,
+        "stdout_hex": actual.stdout.hex(), "stderr_hex": actual.stderr.hex(),
+        "expected_hex": expected.hex(),
+    }, indent=2) + "\n")
+    assert actual == Execution(0, expected, b"")
+
+
+@pytest.mark.integration
 @pytest.mark.pcc_gate(env="PCC_GO_REFERENCE")
 @pytest.mark.xdist_group(name="go-reference")
-def test_official_go_receives_identical_complete_declarations_program(tmp_path):
-    original = units(("declarations.go",))
+@pytest.mark.parametrize("filename", ["declarations.go", "parenthesized_types.go"])
+def test_official_go_receives_identical_complete_declarations_program(tmp_path, monkeypatch, filename):
+    original = units((filename,))
     reference = compile_reference(original, tmp_path / "reference", compiler=os.environ["PCC_GO_REFERENCE"],
                                   cache=os.environ["PCC_GO_REFERENCE_CACHE"])
-    assert run(reference) == Execution(0, b"", b"")
-    assert (reference.parent / "declarations.go").read_bytes() == original[0][1].encode()
+    with monkeypatch.context() as owned:
+        forbid_external_compiler(owned)
+        artifact = compile_owned(original)
+    binary = tmp_path / "owned"
+    write_artifact(artifact, binary)
+    observations = []
+    for owner, executable in (("owned", binary), ("reference", reference)):
+        actual = run(executable)
+        observations.append(actual)
+        (tmp_path / (owner + ".execution.json")).write_text(json.dumps({
+            "binary_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+            "source_sha256": hashlib.sha256(original[0][1].encode()).hexdigest(),
+            "returncode": actual.returncode, "stdout_hex": actual.stdout.hex(),
+            "stderr_hex": actual.stderr.hex(),
+        }, indent=2) + "\n")
+    assert observations[0] == observations[1] == Execution(0, b"", b"")
+    assert (reference.parent / filename).read_bytes() == original[0][1].encode()
 
 
 def test_original_declaration_program_cross_emits_real_darwin_object(monkeypatch):
@@ -134,6 +228,10 @@ def test_original_declaration_program_cross_emits_real_darwin_object(monkeypatch
 @pytest.mark.parametrize("original,pcc_message,reference_message", [
     (program("var(A=iota)"), "iota is only defined", "cannot use iota outside constant declaration"),
     (program("const(_ int8=128)"), "overflows int8", "as int8 value in constant declaration.*overflows"),
+    (program("const X (uint8)=256"), "overflows uint8", "overflows"),
+    (program("var X (Missing)"), "undefined type", "undefined: Missing"),
+    (program("", "var x (uint8)=256;_=x"), "overflows uint8", "overflows"),
+    (program("type T int;var X (T)=1", "var n int=X;_=n"), "cannot use T as int", "cannot use X"),
 ])
 def test_official_go_rejects_identical_invalid_constant_inputs(original,pcc_message,reference_message,tmp_path):
     with pytest.raises(GoDiagnostic,match=pcc_message):

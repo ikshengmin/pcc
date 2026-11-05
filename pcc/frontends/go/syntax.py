@@ -855,7 +855,9 @@ class GoParser:
             names = [self.take("name")]
             while self.accept(","):
                 names.append(self.take("name"))
-            dtype = self.datatype() if self.current.kind in ("name", "[", "struct", "*", "interface") else None
+            # A VarSpec/ConstSpec uses Type, including its parenthesized form.
+            # The declaration group's own parentheses were consumed above.
+            dtype = self.datatype() if self.current.kind in ("name", "[", "struct", "*", "interface", "(") else None
             exprs = self.expression_list() if self.accept("=") else []
             if token.kind == "const" and not exprs:
                 if not grouped or previous is None or dtype is not None:
