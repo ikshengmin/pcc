@@ -148,6 +148,7 @@ def _scheduler_namespace(memory, operation):
         # The mutator does not take the graph lock. Publish after the
         # scheduler's flags snapshot, before its black transition.
         memory.update(operation)
+        return 1  # One fixed-size owner in this header-interleaving seam.
 
     namespace.update({
         "stack_alloc": lambda size: {}, "null": lambda: None,
@@ -164,6 +165,7 @@ def _scheduler_namespace(memory, operation):
         "pcc_thread_owns_stopped_world": lambda: 0,
         "pcc_capi_is_cext_type_tag": lambda tag: 0,
         "pcc_gc_trace_referents": trace_referents,
+        "pcc_gc_trace_referents_work": trace_referents,
         "pcc_gc_gray_count_decrement_acq_rel": lambda: counts.append(-1),
         # Leave another gray object pending so this slice does not finish.
         "pcc_gc_gray_count_load_acquire": lambda: 1,

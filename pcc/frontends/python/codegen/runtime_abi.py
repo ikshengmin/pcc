@@ -3035,6 +3035,8 @@ def _cross_object_signatures_part_12():
     # The frame-registry chunk is full. New raw ABIs start a new bounded
     # literal instead of exceeding the native compiler's 50-entry limit.
     return {
+    "pcc_gc_trace_referents_work": (("c_ptr",), "c_int64"),
+    "pcc_gc_trace_stack_drain_work": (("c_int64", "c_ptr"), "c_int64"),
     "pcc_thread_is_running": ((), "c_int64"),
     "pcc_gc_backend3_enqueue_promotion_owner": (("c_ptr",), "c_void"),
     "py_dealloc_int": (("c_ptr",), "c_void"),

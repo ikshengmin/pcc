@@ -19,6 +19,7 @@ from pcc.unsafe import (
     null,
     ptr_eq,
     ptr_is_null,
+    stack_alloc,
     store_i32,
     store_i64,
     store_ptr,
@@ -74,6 +75,11 @@ pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_gc_visit_object_slots = extern(
     "pcc_gc_visit_object_slots", (c_ptr, c_ptr, c_ptr), c_int64
+)
+pcc_gc_visit_object_slots_slice = extern(
+    "pcc_gc_visit_object_slots_slice",
+    (c_ptr, c_int64, c_int64, c_ptr, c_ptr, c_ptr),
+    c_int64,
 )
 pcc_capi_is_cext_type_tag = extern(
     "pcc_capi_is_cext_type_tag", (c_int64,), c_int64
@@ -170,6 +176,79 @@ def pcc_gc_trace_slot(slot, role: i64, context) -> None:
         return
     child = pcc_gc_load_ptr(null(), slot)
     pcc_gc_trace_mark_gray_if_known(child)
+
+
+@c_abi_export("pcc_gc_trace_stack_drain_work")
+def pcc_gc_trace_stack_drain_work(budget: i64, work_left) -> i64:
+    """Drain complete owners against shared slot work, never retain a cursor.
+
+    Like the original drain, this runs within the lock hold that pushed the
+    entries. The caller must discard all leftovers with trace_stack_end before
+    unlocking. Gray/count state and the object list remain the fallback.
+    """
+    processed: i64 = 0
+    while processed < budget and load_i64(work_left, 0) > 0:
+        count: i64 = load_i64(global_addr("pcc_gc_trace_stack_count"), 0)
+        if count <= 0:
+            return processed
+        count = count - 1
+        store_i64(global_addr("pcc_gc_trace_stack_count"), 0, count)
+        obj = load_ptr(global_addr("pcc_gc_trace_stack"), count * 8)
+        flags: i64 = load_i32(obj, 12)
+        if (flags & 16) != 0 and (flags & 524288) == 0:
+            if pcc_capi_is_cext_type_tag(load_i32(obj, 8)) == 0:
+                work: i64 = pcc_gc_trace_referents_work(obj)
+                pcc_gc_gray_count_decrement_acq_rel()
+                pcc_gc_set_mark_color(obj, 32)
+                processed = processed + 1
+                remaining: i64 = load_i64(work_left, 0)
+                if work >= remaining:
+                    store_i64(work_left, 0, 0)
+                else:
+                    store_i64(work_left, 0, remaining - work)
+    return processed
+
+
+@c_abi_export("pcc_gc_trace_referents_work")
+def pcc_gc_trace_referents_work(obj) -> i64:
+    """Trace one whole owner and charge its examined positions, at least one.
+
+    This is a soft concurrent budget, not partial marking. The raw slice state
+    is local to one complete scan under the same locks as trace_referents.
+    Holes and borrowed positions count too; callback count is not scan cost.
+    The legacy void entry point and stopped-world drains remain unchanged.
+    """
+    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+        return 1
+    if (load_i32(obj, 12) & 524288) != 0:
+        return 1
+    locked: i64 = 0
+    if load_i32(global_addr("pcc_gc_list_container_mode"), 0) != 0:
+        tag: i64 = load_i32(obj, abi_constant("object.header.type_tag_offset"))
+        if (
+            tag == abi_constant("object.type.list")
+            or tag == abi_constant("object.type.instance")
+            or (
+                tag >= abi_constant("object.type.user_class_start")
+                and pcc_capi_is_cext_type_tag(tag) == 0
+            )
+        ):
+            pcc_container_lock(obj)
+            locked = 1
+    state = stack_alloc(16)
+    handled: i64 = pcc_gc_visit_object_slots_slice(
+        obj, 0, 9223372036854775807, pcc_gc_trace_slot, null(), state
+    )
+    if handled == 0:
+        # Preserve the full visitor's fallback. Scheduler C-extension owners
+        # still use their existing unlock/incref/epoch handoff instead.
+        pcc_gc_visit_object_slots(obj, pcc_gc_trace_slot, null())
+    work: i64 = load_i64(state, 8)
+    if locked != 0:
+        pcc_container_unlock(obj)
+    if work < 1:
+        return 1
+    return work
 
 
 @c_abi_export("pcc_gc_trace_cext_slot_transaction")

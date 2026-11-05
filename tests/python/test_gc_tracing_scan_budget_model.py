@@ -69,6 +69,7 @@ class TraceState:
             "pcc_threads_enabled": lambda: 1,
             "pcc_capi_is_cext_type_tag": lambda tag: 0,
             "pcc_gc_visit_object_slots": self.visit_payload,
+            "pcc_gc_trace_referents_work": self.trace_fixed_owner_work,
             "pcc_gc_trace_slot": noop,
             "pcc_gc_complete_claimed_tracing_cycle": self.complete,
             "_promotion_unlink": noop, "pcc_gc_backend3_young_unlink": noop,
@@ -81,6 +82,7 @@ class TraceState:
         load_functions(ns, "freestanding_gc_common_mark_cycle.py", {
             "pcc_gc_trace_referents", "pcc_gc_trace_stack_begin",
             "pcc_gc_trace_stack_drain", "pcc_gc_trace_stack_end",
+            "pcc_gc_trace_stack_drain_work",
         })
         load_functions(ns, "freestanding_gc_object_nodes.py", {
             "pcc_gc_object_set_list_head", "pcc_gc_trace_cursor_load",
@@ -120,6 +122,12 @@ class TraceState:
     def unlock(self):
         assert self.depth > 0
         self.depth -= 1
+
+    def trace_fixed_owner_work(self, obj):
+        # This node-budget model has fixed one-unit payloads. Variable slot
+        # costs use the real visitor in test_gc_whole_owner_work_budget.py.
+        self.ns["pcc_gc_trace_referents"](obj)
+        return 1
 
     def visit_payload(self, obj, callback, context):
         assert self.depth > 0

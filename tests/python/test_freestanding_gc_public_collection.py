@@ -450,10 +450,14 @@ int64_t pcc_gc_finish_tracing_cycle(
     return 1;
 }
 void pcc_gc_trace_referents(void *obj) { (void)obj; }
+int64_t pcc_gc_trace_referents_work(void *obj) { (void)obj; return 1; }
 int64_t pcc_gc_backend4_remap_and_retire_stopped_world(void) { return 0; }
 void pcc_gc_trace_stack_begin(void) {}
 void pcc_gc_trace_stack_end(void) {}
 int64_t pcc_gc_trace_stack_drain(int64_t budget) { (void)budget; return 0; }
+int64_t pcc_gc_trace_stack_drain_work(int64_t budget, void *work) {
+    (void)budget; (void)work; return 0;
+}
 int64_t pcc_gc_gray_count_load_acquire(void) { return 0; }
 void pcc_gc_gray_count_decrement_acq_rel(void) {}
 void pcc_gc_gray_count_store_release(int64_t value) { (void)value; }

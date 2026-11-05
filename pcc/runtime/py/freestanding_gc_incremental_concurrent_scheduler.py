@@ -69,10 +69,16 @@ pcc_gc_reclaim_retired_index_tables = extern(
     "pcc_gc_reclaim_retired_index_tables", (), c_int64
 )
 pcc_gc_trace_referents = extern("pcc_gc_trace_referents", (c_ptr,), c_void)
+pcc_gc_trace_referents_work = extern(
+    "pcc_gc_trace_referents_work", (c_ptr,), c_int64
+)
 pcc_gc_trace_stack_begin = extern("pcc_gc_trace_stack_begin", (), c_void)
 pcc_gc_trace_stack_end = extern("pcc_gc_trace_stack_end", (), c_void)
 pcc_gc_trace_stack_drain = extern(
     "pcc_gc_trace_stack_drain", (c_int64,), c_int64
+)
+pcc_gc_trace_stack_drain_work = extern(
+    "pcc_gc_trace_stack_drain_work", (c_int64, c_ptr), c_int64
 )
 pcc_gc_trace_cext_referents_unlocked = extern(
     "pcc_gc_trace_cext_referents_unlocked", (c_ptr, c_ptr), c_void
@@ -717,8 +723,15 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
     # gc.collect() has a bounded zero-progress backstop and must cross long
     # black prefixes before it can finish its gray work.
     scan_budget: i64 = remaining_budget
-    if pcc_thread_owns_stopped_world() != 0:
+    stopped: i64 = pcc_thread_owns_stopped_world()
+    if stopped != 0:
         scan_budget = 9223372036854775807
+    # Direct and stacked owners share one soft slot-work allowance. Admit a
+    # whole owner whenever work remains, then saturate after its full scan:
+    # even an oversized owner makes progress, without a partial-gray state.
+    # The allowance does not bound one owner, seeding, remark or callbacks.
+    work_left = stack_alloc(8)
+    store_i64(work_left, 0, remaining_budget)
 
     claim_epoch: i64 = 0
     claim_backend: i64 = -1
@@ -847,7 +860,8 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
     scanned: i64 = 0
     pcc_gc_trace_stack_begin()
     while (ptr_is_null(node) == 0 and local_processed < remaining_budget
-           and scanned < scan_budget):
+           and scanned < scan_budget
+           and (stopped != 0 or load_i64(work_left, 0) > 0)):
         scanned = scanned + 1
         nxt = load_ptr(node, 16)
         if load_i64(node, 32) != 0:
@@ -881,14 +895,27 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
                 node = nxt
                 break
             else:
-                pcc_gc_trace_referents(obj)
+                if stopped != 0:
+                    pcc_gc_trace_referents(obj)
+                else:
+                    work: i64 = pcc_gc_trace_referents_work(obj)
+                    remaining: i64 = load_i64(work_left, 0)
+                    if work >= remaining:
+                        store_i64(work_left, 0, 0)
+                    else:
+                        store_i64(work_left, 0, remaining - work)
                 pcc_gc_gray_count_decrement_acq_rel()
                 pcc_gc_set_mark_color(obj, 32)
                 local_processed = local_processed + 1
                 if local_processed < remaining_budget:
-                    local_processed = local_processed + pcc_gc_trace_stack_drain(
-                        remaining_budget - local_processed
-                    )
+                    if stopped != 0:
+                        local_processed = local_processed + pcc_gc_trace_stack_drain(
+                            remaining_budget - local_processed
+                        )
+                    else:
+                        local_processed = local_processed + pcc_gc_trace_stack_drain_work(
+                            remaining_budget - local_processed, work_left
+                        )
                 if pcc_gc_gray_count_load_acquire() == 0:
                     # Tracing the object can introduce gray children. Check
                     # after that work and this object's decrement, while the

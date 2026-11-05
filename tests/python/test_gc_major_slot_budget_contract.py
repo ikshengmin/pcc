@@ -62,6 +62,9 @@ class _SlotBoundary(_MarkBoundary):
             "_visit_slot", "_has_no_pointer_slots",
             "pcc_gc_visit_object_slots_slice", "pcc_gc_visit_object_slots",
         }, self.namespace)
+        _load_bodies("freestanding_gc_common_mark_cycle.py", {
+            "pcc_gc_trace_referents_work", "pcc_gc_trace_stack_drain_work",
+        }, self.namespace)
         _load_bodies("freestanding_gc_incremental_concurrent_scheduler.py", {
             "pcc_gc_tracing_step_cycle",
         }, self.namespace)

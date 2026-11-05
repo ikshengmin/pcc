@@ -72,6 +72,8 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_trace_mark_gray_if_known",
     "pcc_gc_trace_cext_referents_unlocked",
     "pcc_gc_trace_referents",
+    "pcc_gc_trace_referents_work",
+    "pcc_gc_trace_stack_drain_work",
     # The tracer's work stack (freestanding_gc_common_mark_cycle).
     "pcc_gc_trace_stack_begin",
     "pcc_gc_trace_stack_drain",
