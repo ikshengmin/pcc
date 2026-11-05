@@ -2573,6 +2573,32 @@
           "Compiles unchanged complete record-array programs using the explicitly selected official Go toolchain, comparing raw owned/reference processes or requiring source-attributed compiler rejection. Full math/bits and native pcc1 are not established."
         ]
       }
+    },
+    "tests/cpp/test_cpp_explicit_inline_members_execution.py": {
+      "test_explicit_inline_member_originals_match_cpp17": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses execute_row_pair on unchanged full translation units, preserving owned artifacts and actual g++ process observations."
+        ]
+      },
+      "test_invalid_explicit_inline_members_are_rejected_by_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses syntax_reference on each complete invalid original and requires an actual C++17 compiler rejection."
+        ]
+      },
+      "test_deferred_explicit_inline_members_are_valid_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses syntax_reference for unchanged valid sources outside this bounded inline-member definition slice."
+        ]
+      },
+      "test_public_explicit_inline_preserves_receiver_order": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses execute_public_row_pair for actual owned public O0/O2 and separate g++ receiver-before-argument observations."
+        ]
+      }
     }
   },
   "method": "AST/source-reviewed direct reference calls and helper edges; no test bodies or imports executed. Function registry is classification only, never a prerequisite waiver or certification token. Unknown functions remain selected in ordinary/integration.",

@@ -400,14 +400,14 @@ def parse_class(parser):
                 continue
             member_start = parser.cursor.position
             mutable = parser._accept("mutable") is not None
-            if parser._peek().value in ("static", "extern"):
+            if parser._peek().value in ("static", "extern", "inline"):
                 if mutable:
                     raise CppDiagnostic("cpp.invalid-mutable", "mutable applies only to non-static data members", token.coord)
                 definition.method_declarations.append(parser._function(member_definition=definition))
                 continue
-            storage = []
-            base = parser._type(storage_specifiers=storage)
-            if storage:
+            storage, inline_specifiers = [], []
+            base = parser._type(storage_specifiers=storage, inline_specifiers=inline_specifiers)
+            if storage or inline_specifiers:
                 if mutable:
                     raise CppDiagnostic("cpp.invalid-mutable", "mutable applies only to non-static data members", token.coord)
                 parser.cursor.position = member_start

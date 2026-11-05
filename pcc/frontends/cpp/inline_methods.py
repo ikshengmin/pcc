@@ -49,3 +49,12 @@ def bind_methods(parser, definition):
     finally:
         parser.cursor = original_cursor
     publish_definitions(parser, definition, definition.inline_methods)
+
+
+def take_explicit_inline(parser, specifiers):
+    """Record an in-class declaration specifier, never rewrite body tokens."""
+    token = parser._expect('inline')
+    if specifiers:
+        raise CppDiagnostic('cpp.duplicate-inline-specifier',
+                            'inline may occur only once in a declaration', token.coord)
+    specifiers.append(token)

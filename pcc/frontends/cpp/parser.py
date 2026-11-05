@@ -426,7 +426,7 @@ class CppParser:
                                 token.coord)
         return dtype
 
-    def _type(self, check_lowering=True, storage_specifiers=None):
+    def _type(self, check_lowering=True, storage_specifiers=None, inline_specifiers=None):
         token = self._peek()
         if not self._is_type(token):
             if self.scope.lookup(token.value) is not None:
@@ -438,7 +438,10 @@ class CppParser:
         dtype = None
         while True:
             value = self._peek().value
-            if storage_specifiers is not None and value in ("extern", "static"):
+            if inline_specifiers is not None and value == "inline":
+                from pcc.frontends.cpp.inline_methods import take_explicit_inline
+                take_explicit_inline(self, inline_specifiers)
+            elif storage_specifiers is not None and value in ("extern", "static"):
                 if storage_specifiers:
                     raise CppDiagnostic("cpp.invalid-storage-specifier",
                                         "multiple storage class specifiers", self._peek().coord)
@@ -965,11 +968,17 @@ class CppParser:
             self._expect("]")
             noreturn = True
         storage = None
-        if self._peek().value in ("extern", "static"):
-            storage = self.cursor.take()
-            if self._peek().value in ("extern", "static"):
+        inline_specifiers = [] if member_definition is not None else None
+        while (self._peek().value in ("extern", "static")
+               or inline_specifiers is not None and self._peek().value == "inline"):
+            if self._peek().value == "inline":
+                from pcc.frontends.cpp.inline_methods import take_explicit_inline
+                take_explicit_inline(self, inline_specifiers)
+                continue
+            if storage is not None:
                 raise CppDiagnostic("cpp.invalid-storage-specifier",
                                     "multiple storage class specifiers", self._peek().coord)
+            storage = self.cursor.take()
             if self._peek().kind == "STRING_LITERAL":
                 raise CppDiagnostic("cpp.unsupported.language-linkage",
                                     "language linkage specifications are not implemented", storage.coord)
@@ -984,7 +993,8 @@ class CppParser:
         return_lookup.deferred_member_access = []
         self.scope = return_lookup
         try:
-            result_type = self._type(check_lowering=False, storage_specifiers=storage_specifiers)
+            result_type = self._type(check_lowering=False, storage_specifiers=storage_specifiers,
+                                     inline_specifiers=inline_specifiers)
         finally:
             self.scope = return_parent
         storage = storage_specifiers[0] if storage_specifiers else None
@@ -1079,6 +1089,10 @@ class CppParser:
             check_result(result_type, name.coord,
                          allow_class=not template_parameters and ordinary_class_result_context(self))
         if not is_function:
+            if inline_specifiers:
+                code = ("cpp.unsupported.inline-declarations" if storage is not None
+                        and storage.value == "static" else "cpp.invalid-inline-specifier")
+                raise CppDiagnostic(code, "this inline member specifier requires a function definition", name.coord)
             if name.kind == "OPERATOR_FUNCTION_ID":
                 raise CppDiagnostic("cpp.invalid-allocation-function", "operator name must declare a function", name.coord)
             self._check_value_type(result_type, name)
@@ -1121,6 +1135,9 @@ class CppParser:
             raise CppDiagnostic("cpp.main-language-linkage",
                                 "main cannot have a language linkage specification", name.coord)
         definition = self._peek().value == "{"
+        if inline_specifiers and not definition:
+            raise CppDiagnostic("cpp.unsupported.inline-member-declarations",
+                                "explicit inline member declarations without an in-class body need separate ODR tracking", name.coord)
         if variadic and any(isinstance(t, ReferenceType) for _, t in params):
             raise CppDiagnostic("cpp.unsupported.references", "variadic reference signatures require dedicated va_start/ABI admission", name.coord)
         if template_parameters and any(isinstance(t, ReferenceType) for _, t in params):
@@ -1168,6 +1185,7 @@ class CppParser:
             raise CppDiagnostic("cpp.main-template", "main cannot be a template", name.coord)
         new_symbol = Symbol(name.value, "function", name.coord, arity=len(params), dtype=result_type,
                             parameters=tuple(unqualified(dtype) for param, dtype in params))
+        new_symbol.explicit_inline = bool(inline_specifiers)
         new_symbol.variadic = bool(variadic)
         new_symbol.nonthrowing = bool(exception_specification)
         new_symbol.noreturn = noreturn
