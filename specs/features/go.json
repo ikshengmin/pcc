@@ -2055,7 +2055,7 @@
         "declarations",
         "comparison"
       ],
-      "scope": "Unconditional opaque any/comparable declaration checking; direct explicit/partial/argument-inferred admitted nonpointer value instances, source package scope and shared registry recursion. Unnamed type-parameter slots preserve arity, constraints and complete instance identity without declaring source names. No general type sets, generic data, function values or pointer type-argument escape contract.",
+      "scope": "Unconditional opaque any/comparable declaration checking; local and dot-imported named empty-interface constraints resolve to the same unrestricted type set as any. Direct explicit/partial/argument-inferred admitted nonpointer value instances, source package scope and shared registry recursion. Unnamed type-parameter slots preserve arity, constraints and complete instance identity without declaring source names. No general type sets, method-bearing constraints, qualified constraint names, generic data, function values or pointer type-argument escape contract.",
       "tests": [
         "tests/go/test_generic_functions.py::test_generic_function_typing_and_value_inference",
         "tests/go/test_generic_functions.py::test_registry_reuses_aliases_but_preserves_nominal_and_recursive_identity",
@@ -2074,17 +2074,22 @@
         "tests/go/test_generic_functions.py::test_malformed_constraint_syntax_is_not_an_unsupported_capability",
         "tests/go/test_generic_functions.py::test_unnamed_type_slots_preserve_arity_constraints_and_instance_identity",
         "tests/go/test_generic_functions.py::test_complete_unnamed_type_parameter_program_builds_owned_ir",
-        "tests/go/test_generic_functions.py::test_unnamed_type_parameter_program_executes_full_width_result"
+        "tests/go/test_generic_functions.py::test_unnamed_type_parameter_program_executes_full_width_result",
+        "tests/go/test_generic_functions.py::test_named_empty_constraints_resolve_to_any_without_erasing_argument_identity",
+        "tests/go/test_generic_functions.py::test_complete_named_empty_constraint_program_builds_owned_ir",
+        "tests/go/test_generic_functions.py::test_named_empty_constraint_program_executes_full_width_result",
+        "tests/go/test_generic_functions.py::test_dot_imported_empty_constraints_keep_owner_and_import_usage",
+        "tests/go/test_generic_functions.py::test_dot_imported_constraints_do_not_admit_values_methods_or_exact_sets"
       ],
       "diagnostics": [],
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:ecc98f9ac0f970062a1b61e7e6c7aa34dbb40f7024f9a263b25e3ed4485a6ea7",
+        "source_revision": "sha256:6a10a9279b17f83aa9ea762a2efae787142fccb091ef87aa9240d6fb8e45cb23",
         "sources": [
           {
             "path": "pcc/frontends/go/generics.py",
-            "sha256": "c8f3eaa82e788eafcb06d6e4ef823dd708c5352f29eabb8f7c6af965829133ec"
+            "sha256": "22484d5c34db16331dd585354ea57247b63005e5b59dc3d2c591d222b2ade969"
           },
           {
             "path": "pcc/frontends/go/syntax.py",
@@ -2114,7 +2119,7 @@
           "kind": "full-feature",
           "scope": "Declared bounded generic value function CI obligations, not complete Go generics",
           "status": "unrun",
-          "source_revision": "sha256:ecc98f9ac0f970062a1b61e7e6c7aa34dbb40f7024f9a263b25e3ed4485a6ea7",
+          "source_revision": "sha256:6a10a9279b17f83aa9ea762a2efae787142fccb091ef87aa9240d6fb8e45cb23",
           "mode": "pcc0",
           "platform": "linux-x86_64",
           "backend": "self",
@@ -2137,10 +2142,15 @@
             "tests/go/test_generic_functions.py::test_malformed_constraint_syntax_is_not_an_unsupported_capability",
             "tests/go/test_generic_functions.py::test_unnamed_type_slots_preserve_arity_constraints_and_instance_identity",
             "tests/go/test_generic_functions.py::test_complete_unnamed_type_parameter_program_builds_owned_ir",
-            "tests/go/test_generic_functions.py::test_unnamed_type_parameter_program_executes_full_width_result"
+            "tests/go/test_generic_functions.py::test_unnamed_type_parameter_program_executes_full_width_result",
+            "tests/go/test_generic_functions.py::test_named_empty_constraints_resolve_to_any_without_erasing_argument_identity",
+            "tests/go/test_generic_functions.py::test_complete_named_empty_constraint_program_builds_owned_ir",
+            "tests/go/test_generic_functions.py::test_named_empty_constraint_program_executes_full_width_result",
+            "tests/go/test_generic_functions.py::test_dot_imported_empty_constraints_keep_owner_and_import_usage",
+            "tests/go/test_generic_functions.py::test_dot_imported_constraints_do_not_admit_values_methods_or_exact_sets"
           ],
           "evidence": [],
-          "reason": "The source binding now includes unnamed type-parameter slots without source-name registration. Full-feature acceptance remains unrun; focused host pcc0/self and official Go reference results are reported separately. Historical evidence is unchanged and is not renewed for this source."
+          "reason": "The source binding now includes local and dot-imported named empty-interface constraints without admitting method/type-set or interface-value semantics. Full-feature acceptance remains unrun; focused source review and execution results are reported separately. Historical evidence is unchanged and is not renewed for this source."
         }
       ]
     },
@@ -2151,7 +2161,7 @@
         "types",
         "function-types"
       ],
-      "scope": "General union/underlying/exact/named/method constraints, generic data and function values, dependent composite layouts and pointer type arguments remain explicit boundaries. Existing predeclared-shadowing rules are preserved.",
+      "scope": "General union/underlying/exact/method constraints and qualified constraint names, generic data and function values, dependent composite layouts and pointer type arguments remain explicit boundaries. Local and dot-imported named empty-interface constraints have bounded support in the direct-value-function feature. Existing predeclared-shadowing rules are preserved.",
       "status": "explicitly_unimplemented",
       "tests": [
         "tests/go/test_generic_functions.py::test_generic_frontiers_preserve_constraint_and_pointer_contracts",

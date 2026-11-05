@@ -169,14 +169,12 @@ class GenericSession:
         imported = owner.dot_imported(token)
         if imported is not None:
             if token.text in imported.types:
-                raise UnsupportedGo(token, 'go.unsupported.generic-boundaries',
-                                    'named and exact-type constraints require general type-set resolution')
+                return self.resolve_named_constraint(imported, token)
             raise GoDiagnostic(token, 'constraint must denote a type')
         if token.text in owner.globals or token.text in owner.functions:
             raise GoDiagnostic(token, 'constraint must denote a type')
         if token.text in owner.types:
-            raise UnsupportedGo(token, 'go.unsupported.generic-boundaries',
-                                'named and exact-type constraints require general type-set resolution')
+            return self.resolve_named_constraint(owner, token)
         if token.text in owner.imports.get(token.filename, {}):
             raise GoDiagnostic(token, 'package name is not a type constraint')
         constraint = PREDECLARED_CONSTRAINTS.get(token.text)
@@ -189,6 +187,17 @@ class GenericSession:
         # names currently have their own explicit frontend frontier. Neither
         # that frontier nor future admitted shadows may silently bind here.
         return constraint
+
+    def resolve_named_constraint(self, owner, token):
+        # Resolution completes aliases and embedded basic interfaces first.
+        # An empty method set here has no type terms: general type sets are
+        # rejected by the source interface resolver, not erased into any.
+        dtype = owner.resolve_type_declaration(owner.types[token.text])
+        interface = interface_type(dtype)
+        if interface is not None and not interface.methods:
+            return ANY
+        raise UnsupportedGo(token, 'go.unsupported.generic-boundaries',
+                            'method-bearing and exact-type constraints require general type-set resolution')
 
     def resolve_argument(self, caller, expression):
         if expression.kind == 'name' and expression.value in ('any', 'error', 'comparable'):

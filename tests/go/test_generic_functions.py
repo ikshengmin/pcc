@@ -13,7 +13,7 @@ import os
 import pytest
 
 from pcc.frontends.go import GoDiagnostic, UnsupportedGo, compile_go, compile_go_packages
-from pcc.frontends.go.generics import GenericSession, TypeParameter
+from pcc.frontends.go.generics import ANY, GenericSession, TypeParameter
 from pcc.support.instantiation import InstanceRegistry, InstanceState
 from tests.go.owned_execution import (
     Execution, compile_module, compile_owned, compile_reference,
@@ -47,6 +47,11 @@ EQUAL = 'func Equal[T comparable](a,b T)bool{return a==b}'
     ('func F[_ any,T any](x T)T{return x}', '_=F[int](uint64(7))'),
     ('func F[T any,_ comparable](x T)T{return x}', '_=F[uint64,string](7)'),
     ('func F[_ any](_ int){}', 'F[int](3)'),
+    ('type C interface{};func F[T C](x T)T{return x}', '_=F(3)'),
+    ('type C=any;func F[T C](x T)T{return x}', '_=F[uint64](7)'),
+    ('type C any;func F[T C](x T)T{return x}', '_=F("x")'),
+    ('type Base interface{};type C interface{Base};func F[T C](x T)T{return x}', '_=F([2]int{})'),
+    ('type Base interface{};type C=Base;func F[T C](x T)T{return x}', '_=F(struct{X int}{3})'),
 ])
 def test_generic_function_typing_and_value_inference(declarations, body, monkeypatch):
     forbid_external_compiler(monkeypatch)
@@ -105,6 +110,26 @@ def test_complete_unnamed_type_parameter_program_builds_owned_ir(monkeypatch):
     compile_go(units(('unnamed_type_parameters.go',))[0][1])
 
 
+def test_named_empty_constraints_resolve_to_any_without_erasing_argument_identity():
+    text = source('type Empty interface{};type Alias=Empty;type N uint8;type Byte=uint8;'
+                  'func F[T Alias](x T)T{return x}',
+                  '_=F[Byte](3);_=F[uint8](4);_=F[N](5)')
+    analyzer, program = analyzed(text)
+    declared = analyzer.functions['F']
+    assert analyzer.generics.parameters[id(declared)][0].constraint is ANY
+    analyzer.generics.materialize()
+    analyzer.generics.validate_abstract([program])
+    entries = list(analyzer.generics.instances.entries.values())
+    assert len(entries) == 2
+    assert len({entry.value.abi_symbol for entry in entries}) == 2
+    assert all(entry.state is InstanceState.COMPLETE for entry in entries)
+
+
+def test_complete_named_empty_constraint_program_builds_owned_ir(monkeypatch):
+    forbid_external_compiler(monkeypatch)
+    compile_go(units(('named_empty_constraints.go',))[0][1])
+
+
 def test_generic_registry_failure_is_sticky_mechanism_only(monkeypatch):
     analyzer, _ = analyzed(source(IDENTITY, '_=Identity(3)'))
     failure = GoDiagnostic(analyzer.functions['Identity'].token, 'simulated instance failure')
@@ -143,6 +168,12 @@ INVALID_UNUSED = [
     ('func Bad[_ any,T any](x T)T{return x+1}', 'mismatched type-parameter', 'cannot convert|mismatched types'),
     ('func Need[_ any,_ comparable](){};func Bad[T any](){Need[int,T]()}',
      'does not satisfy comparable', 'does not satisfy comparable'),
+    ('type C interface{};func Bad[T C](a,b T)bool{return a==b}', 'not permitted', 'incomparable types'),
+    ('type C interface{};func Bad[T C](x T)T{return x+1}', 'mismatched type-parameter', 'cannot convert|mismatched types'),
+    ('type C interface{};'+EQUAL+';func Bad[T C](x T)bool{return Equal[T](x,x)}',
+     'does not satisfy comparable', 'does not satisfy comparable'),
+    ('type C interface{};func Bad[C C](){}', 'cannot be used as a constraint', 'cannot use a type parameter as constraint'),
+    ('const C=3;func Bad[T C](){}', 'constraint must denote a type', 'C is not a type'),
 ]
 
 
@@ -243,6 +274,10 @@ UNSUPPORTED = [
     ('limit-function-arity', source('func F['+','.join('T'+str(n) for n in range(257))+' any](){}')),
     ('generic-boundaries', source('func F[_ any](){}', 'F[*int]()')),
     ('generic-boundaries', source('func F[_ any](){}', 'F[any]()')),
+    ('generic-boundaries', source('type C interface{M()};func F[T C](x T){}')),
+    ('generic-boundaries', source('type C int;func F[T C](x T){}')),
+    ('generic-boundaries', source('type C interface{~int};func F[T C](x T){}')),
+    ('generic-boundaries', source('type C interface{};func F[T C](){}', 'F[C]()')),
 ]
 
 
@@ -323,10 +358,25 @@ def test_unnamed_type_parameter_program_executes_full_width_result(observe, tmp_
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize('observe', [False, True])
+def test_named_empty_constraint_program_executes_full_width_result(observe, tmp_path, monkeypatch):
+    from tests.go.test_labels import observed
+    originals = units(('named_empty_constraints.go',))
+    with monkeypatch.context() as denied:
+        forbid_external_compiler(denied)
+        artifact = compile_owned(originals, observe_entry=('Result', ()) if observe else None)
+    binary = tmp_path / 'named-empty-constraints'
+    write_artifact(artifact, binary)
+    expected = (0xfedcba9876543213).to_bytes(8, 'little') if observe else b''
+    assert observed(binary, tmp_path / 'observation', owner=artifact.owner,
+                    originals=originals) == Execution(0, expected, b'')
+
+
+@pytest.mark.integration
 @pytest.mark.pcc_gate(env='PCC_GO_REFERENCE')
 @pytest.mark.xdist_group(name='go-reference')
 def test_identical_generic_value_program_matches_official_raw_streams(tmp_path, monkeypatch):
-    for filename in ('generic_functions.go', 'unnamed_type_parameters.go'):
+    for filename in ('generic_functions.go', 'unnamed_type_parameters.go', 'named_empty_constraints.go'):
         directory = tmp_path / filename
         directory.mkdir()
         originals = units((filename,))
@@ -378,6 +428,40 @@ PROJECT = {
     'inner': [('inner.go', 'package inner;const Marker=7')],
 }
 
+EMPTY_CONSTRAINT_PROJECT = {
+    'main': [('main.go', 'package main;import . "example/constraints";import "example/helper";'
+        'func Forward[T Open](x T)T{return helper.Id(x)};'
+        'func main(){if Forward(uint64(0xfedcba9876543213))!=0xfedcba9876543213{for{}}}')],
+    'example/constraints': [('constraints.go', 'package constraints;type Open interface{};type Alias=Open')],
+    'example/helper': [('helper.go', 'package helper;import . "example/constraints";func Id[T Alias](x T)T{return x}')],
+}
+
+
+def test_dot_imported_empty_constraints_keep_owner_and_import_usage(monkeypatch):
+    forbid_external_compiler(monkeypatch)
+    compile_go_packages(EMPTY_CONSTRAINT_PROJECT)
+
+
+@pytest.mark.parametrize('declaration,diagnostic', [
+    ('const Open=3', GoDiagnostic),
+    ('type Open interface{M()}', UnsupportedGo),
+    ('type Open int', UnsupportedGo),
+])
+def test_dot_imported_constraints_do_not_admit_values_methods_or_exact_sets(declaration, diagnostic, monkeypatch):
+    from pcc.frontends.go.lowering import Lowerer
+    monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('invalid constraint reached IR'))
+    graph = {
+        'main': [('main.go', 'package main;import . "dep";func F[T Open](){};func main(){}')],
+        'dep': [('dep.go', 'package dep;'+declaration)],
+    }
+    with pytest.raises(diagnostic) as caught:
+        compile_go_packages(graph)
+    if diagnostic is UnsupportedGo:
+        assert caught.value.code == 'go.unsupported.generic-boundaries'
+    else:
+        assert not isinstance(caught.value, UnsupportedGo)
+        assert 'constraint must denote a type' in str(caught.value)
+
 
 def test_imported_generic_instances_keep_declaration_scope_and_owner_identity(monkeypatch):
     forbid_external_compiler(monkeypatch)
@@ -391,13 +475,16 @@ def test_imported_generic_instances_keep_declaration_scope_and_owner_identity(mo
 @pytest.mark.pcc_gate(env='PCC_GO_REFERENCE')
 @pytest.mark.xdist_group(name='go-reference')
 def test_identical_imported_generic_graph_matches_official_raw_streams(tmp_path, monkeypatch):
-    with monkeypatch.context() as denied:
-        forbid_external_compiler(denied)
-        artifact = compile_module(compile_go_packages(PROJECT))
-    binary = tmp_path/'generic-project'
-    write_artifact(artifact,binary)
-    reference = compile_reference_packages(PROJECT,tmp_path/'reference',compiler=os.environ['PCC_GO_REFERENCE'],cache=os.environ['PCC_GO_REFERENCE_CACHE'])
-    record_pair(tmp_path,hashlib.sha256(json.dumps(PROJECT,sort_keys=True).encode()).hexdigest(),binary,reference)
-    for package,originals in PROJECT.items():
-        for filename,text in originals:
-            assert (reference.parent/'gopath/src'/package/filename).read_bytes() == text.encode()
+    for name, graph in (('original', PROJECT), ('empty-constraints', EMPTY_CONSTRAINT_PROJECT)):
+        directory = tmp_path/name
+        directory.mkdir()
+        with monkeypatch.context() as denied:
+            forbid_external_compiler(denied)
+            artifact = compile_module(compile_go_packages(graph))
+        binary = directory/'generic-project'
+        write_artifact(artifact,binary)
+        reference = compile_reference_packages(graph,directory/'reference',compiler=os.environ['PCC_GO_REFERENCE'],cache=os.environ['PCC_GO_REFERENCE_CACHE'])
+        record_pair(directory,hashlib.sha256(json.dumps(graph,sort_keys=True).encode()).hexdigest(),binary,reference)
+        for package,originals in graph.items():
+            for filename,text in originals:
+                assert (reference.parent/'gopath/src'/package/filename).read_bytes() == text.encode()
