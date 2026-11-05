@@ -79,7 +79,8 @@ class TraceState:
             "pcc_gc_set_mark_color",
         })
         load_functions(ns, "freestanding_gc_common_mark_cycle.py", {
-            "pcc_gc_trace_referents",
+            "pcc_gc_trace_referents", "pcc_gc_trace_stack_begin",
+            "pcc_gc_trace_stack_drain", "pcc_gc_trace_stack_end",
         })
         load_functions(ns, "freestanding_gc_object_nodes.py", {
             "pcc_gc_object_set_list_head", "pcc_gc_trace_cursor_load",
@@ -88,7 +89,7 @@ class TraceState:
             "pcc_gc_object_node_set_prev", "pcc_gc_object_node_unlink",
         })
         load_functions(ns, "freestanding_gc_incremental_concurrent_scheduler.py", {
-            "pcc_gc_tracing_step_cycle",
+            "pcc_gc_tracing_step_cycle", "pcc_gc_tracing_finish_left_to_mutator",
         })
 
     def allocate(self, size):
@@ -165,6 +166,8 @@ class TraceState:
         self.visited_nodes.clear()
         result = self.ns["pcc_gc_tracing_step_cycle"](budget)
         assert self.depth == 0
+        assert self.load("pcc_gc_trace_stack_owner", 0) == 0
+        assert self.load("pcc_gc_trace_stack_count", 0) == 0
         return result
 
     def remove(self, node):
@@ -334,4 +337,51 @@ def test_pending_extension_scan_prevents_empty_work_completion(backend, tracing)
     state.store("pcc_gc_trace_cext_pending_obj", 0, 0x9000)
     assert state.step(1) == 0
     assert state.visited_nodes == [] and state.completions == []
+
+
+@pytest.mark.parametrize("backend,tracing", MODES)
+@pytest.mark.parametrize("worker", [False, True])
+@pytest.mark.parametrize("stopped", [False, True])
+def test_empty_work_finish_claim_respects_worker_handoff(backend, tracing, worker, stopped):
+    state = TraceState(backend, tracing, stopped=stopped)
+    state.store("pcc_gc_cms_worker_current", 0, int(worker))
+    node = state.node()
+    state.store("pcc_gc_trace_cursor", 0, node)
+
+    assert state.step(1) == 0
+    assert state.visited_nodes == [] and state.visited_payloads == []
+    assert state.cursor == 0 and state.gray == 0
+    deferred = worker and backend in (1, 2) and not stopped
+    if deferred:
+        assert state.completions == []
+        assert state.load("pcc_gc_tracing_finish_claim_epoch", 0) == 0
+    else:
+        # The completion callback records an unlocked claim boundary only.
+        # It does not model final remark, sweep or a committed collection.
+        assert state.completions == [(9, backend)]
+        assert state.load("pcc_gc_tracing_finish_claim_epoch", 0) == 9
+        assert state.load("pcc_gc_tracing_finish_claim_backend", 0) == backend
+
+
+@pytest.mark.parametrize("backend", [1, 2])
+def test_new_gray_work_before_mutator_handoff_is_traced_before_finish_claim(backend):
+    state = TraceState(backend)
+    state.store("pcc_gc_cms_worker_current", 0, 1)
+    child = state.node(8)
+    assert state.step(1) == 0
+    assert state.completions == []
+    assert state.load("pcc_gc_tracing_finish_claim_epoch", 0) == 0
+
+    # Model a barrier publishing gray work between worker and mutator calls.
+    # The barrier itself is outside this finite raw-memory boundary.
+    state.store(state.objects[child], 12, GRAY)
+    state.store("pcc_gc_gray_count", 0, 1)
+    state.store("pcc_gc_cms_worker_current", 0, 0)
+    assert state.step(1) == 1
+    assert state.visited_nodes == [child]
+    assert state.visited_payloads == [state.objects[child]]
+    assert state.load(state.objects[child], 12) & 56 == BLACK
+    assert state.cursor == 0 and state.gray == 0
+    assert state.completions == [(9, backend)]
+    assert state.load("pcc_gc_tracing_finish_claim_epoch", 0) == 9
 
