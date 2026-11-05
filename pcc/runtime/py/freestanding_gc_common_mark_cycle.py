@@ -79,7 +79,7 @@ pcc_gc_visit_object_slots = extern(
 pcc_gc_visit_object_slots_slice = extern(
     "pcc_gc_visit_object_slots_slice",
     (c_ptr, c_int64, c_int64, c_ptr, c_ptr, c_ptr),
-    c_int64,
+    c_int64
 )
 pcc_capi_is_cext_type_tag = extern(
     "pcc_capi_is_cext_type_tag", (c_int64,), c_int64
