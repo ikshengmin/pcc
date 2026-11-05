@@ -110,7 +110,6 @@ DEFERRED = (
     ('namespace-recovery-needs-dynamic-initialization',
      'int n;void*p=&n;int*q=static_cast<int*>(p);', 'cpp.unsupported.static-initialization-analysis'),
     ('c-style-pointer-recovery', 'int*f(void*p){return (int*)p;}', 'cpp.unsupported.c-style-cast'),
-    ('unrelated-reinterpret-owner', 'int*f(double*p){return reinterpret_cast<int*>(p);}', 'cpp.unsupported.syntax'),
     ('identity-pointer-static-cast', 'int*f(int*p){return static_cast<int*>(p);}', 'cpp.unsupported.static-cast'),
     ('object-pointer-to-void-static-cast', 'void*f(int*p){return static_cast<void*>(p);}', 'cpp.unsupported.static-cast'),
     ('nullptr-static-cast', 'int*f(){return static_cast<int*>(nullptr);}', 'cpp.unsupported.static-cast'),

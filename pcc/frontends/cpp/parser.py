@@ -2585,6 +2585,9 @@ class CppParser:
         if token.value == "static_cast":
             from pcc.frontends.cpp.static_casts import parse
             return parse(self, token)
+        if token.value == "reinterpret_cast":
+            from pcc.frontends.cpp.reinterpret_casts import parse
+            return parse(self, token)
         if token.value == "nullptr":
             if self.parsing_template and getattr(self, 'class_template_method', None) is None:
                 raise CppDiagnostic("cpp.unsupported.pointer-templates", "nullptr template expressions are not implemented", token.coord)
