@@ -688,8 +688,7 @@ missing owner slots from typed payload patterns or result constraints.
 Pattern checking uses the declaration's substituted payload types; concrete
 nominal instances and exhaustiveness checks wait for whole-body resolution.
 Ambiguous slots, conflicting concrete owners, missing cases and non-Copy moves
-still fail before lowering. Unknown non-tuple aggregate payload shapes, unresolved non-enum matches and
-conditional-let inference
+still fail before lowering. Unknown non-tuple aggregate payload shapes and conditional-let inference
 remain bounded. Reference source still needs its existing certification.
 
 `tests/rust/test_rust_enum_match_inference.py` retains the prior enum-match
@@ -731,6 +730,22 @@ Conditional-let owner holes and array-match coverage retain their explicit
 diagnostics even for genuinely certified input. The original array-bearing
 fixture is retained as a capability boundary, not an executed program. Reference admission, native pcc1 and upstream-project acceptance
 are unchanged; these tests are not whole-language qualification.
+
+### Inferred structs through ordinary binding matches
+
+Ordinary matches may bind or ignore an inferred generic struct without fixing
+its slots prematurely. Field uses, arm results and later assignments constrain
+the same variables before concrete layout registration. Wildcards still avoid
+moving the scrutinee, while bindings retain ordinary non-Copy move semantics.
+Concrete type positions, nominal identity, field privacy and exhaustiveness
+remain enforced. This does not add struct destructuring or array coverage.
+
+`tests/rust/test_rust_struct_match_inference.py` retains the earlier rejected
+binding-match original and adds three authored runtime programs for full-width
+results, nonmoving wildcards and fresh generic replay, with same-input rustc
+comparisons and invalid-source checks. Conditional-let inference and reference
+admission keep their existing gates. Native pcc1, Darwin reference and complete
+upstream/whole-language qualification remain independent obligations.
 
 ### Inherent method-local generic inference (qualified bounded slice)
 

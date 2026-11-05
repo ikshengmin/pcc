@@ -92,7 +92,6 @@ def test_invalid_inferred_matches_fail_before_ir(name, text, message, code, monk
 
 
 @pytest.mark.parametrize('text,message', [
-    ('struct R<T>{x:T}fn f()->u64{match (R::<_>{x:1}){r=>r.x}}', 'unresolved inferred generic'),
     ('enum E<T>{None,Some(T)}fn f()->u64{match E::<_>::None{E::None=>0,E::Some((x,y))=>x}}', 'cannot infer'),
     ('enum E<T>{Some(T)}fn f(p:&u64)->u64{match E::<_>::Some(p){E::Some(x)=>*x}}', 'actual source/options-bound CheckedRustSource'),
 ])

@@ -811,9 +811,11 @@ class Checker:
             scrutinee_ty = partial(self.expression(children[0]))
             if kind == "if_let" and scrutinee_ty == NEVER:
                 raise expr.token.error("diverging if let scrutinees require additional never-type analysis, which is not implemented")
+            # Ordinary bindings/wildcards can also carry unresolved struct
+            # slots into arm field access, result constraints and later uses.
+            # Keep conditional inference behind its existing capability gate.
             if (isinstance(scrutinee_ty, TypeApplication) and pending_integer(scrutinee_ty)
-                    and (kind != "match" or not isinstance(
-                        self.generics.definitions.get(scrutinee_ty.name), Enumeration))):
+                    and kind != "match"):
                 raise expr.token.error("matching an unresolved inferred generic type requires later pattern constraints, which is not implemented")
             ty = NEVER
             for pattern, arm in zip(expr.value, children[1:]):
