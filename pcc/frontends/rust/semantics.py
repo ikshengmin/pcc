@@ -469,10 +469,12 @@ class Checker:
         elif kind == "variant":
             enum_name, variant = expr.value
             if isinstance(enum_name, TypeApplication) or enum_name in self.generics.definitions or enum_name == "Self" or self.module_resolution is not None:
-                enum_name = self.generics.path_type(enum_name, expr.token)
+                enum_name = self.generics.normalize(
+                    enum_name, expr.token, placeholder_context="enum constructor")
                 self.valid_type(enum_name, expr.token)
-            enum = self.enums.get(enum_name)
-            if enum is None or variant not in enum.discriminants:
+            enum = self.generics.definitions.get(
+                enum_name.name if isinstance(enum_name, TypeApplication) else enum_name)
+            if not isinstance(enum, Enumeration) or variant not in enum.discriminants:
                 raise expr.token.error("unknown enum variant")
             if variant in enum.payloads:
                 raise expr.token.error("payload variant requires constructor arguments")
@@ -680,12 +682,14 @@ class Checker:
                     raise callee.token.error("type arguments on enum constructor segments are not implemented; supply them on the enum owner")
                 enum_name, variant = callee.value
                 if isinstance(enum_name, TypeApplication) or enum_name in self.generics.definitions or enum_name == "Self" or self.module_resolution is not None:
-                    enum_name = self.generics.path_type(enum_name, callee.token)
+                    enum_name = self.generics.normalize(
+                        enum_name, callee.token, placeholder_context="enum constructor")
                     self.valid_type(enum_name, callee.token)
-                enum = self.enums.get(enum_name)
-                if enum is None or variant not in enum.discriminants:
+                enum = self.generics.definitions.get(
+                    enum_name.name if isinstance(enum_name, TypeApplication) else enum_name)
+                if not isinstance(enum, Enumeration) or variant not in enum.discriminants:
                     raise callee.token.error("unknown enum constructor")
-                fields = enum.payloads.get(variant)
+                fields = self.generics.specialized_payload(enum_name, variant)
                 if fields is None:
                     raise callee.token.error("unit variant does not take constructor arguments")
                 if len(children) - 1 != len(fields):

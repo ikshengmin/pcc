@@ -9,6 +9,7 @@ checker; lookup must not prematurely materialize an owner-only instance.
 from dataclasses import replace
 
 from .generics import PRIMITIVES
+from .syntax import Enumeration
 from .types import SharedReference, TypeApplication, TypeParameter
 
 
@@ -127,6 +128,17 @@ class InherentMethods:
             owner = owner.referent
         # Typed receivers are canonical, source-qualified owners are lexical.
         if not receiver:
+            # Enum variants own this value-namespace spelling even when their
+            # explicit type slots are not solved yet. Constructor checking
+            # validates those slots; associated methods retain their gate.
+            base = owner.name if isinstance(owner, TypeApplication) else owner
+            base = self.checker.type_scope.get(base, base)
+            base = base.name if isinstance(base, TypeApplication) else base
+            if isinstance(base, str):
+                base = self.checker.generics.canonical_name(base, token)
+            enum = self.checker.generics.definitions.get(base)
+            if isinstance(enum, Enumeration) and name in enum.discriminants:
+                return None
             owner = self.checker.generics.normalize(owner, token)
         else:
             from .call_inference import pending_integer
@@ -137,13 +149,6 @@ class InherentMethods:
         # signature/call checking still owns all by-value storage obligations.
         self.checker.valid_type(owner, token, require_sized=False)
         base = owner.name if isinstance(owner, TypeApplication) else owner
-        if not receiver:
-            enum = self.checker.enums.get(owner)
-            if enum is not None and name in enum.discriminants:
-                # A type-qualified enum constructor is in the enum's value
-                # namespace. A same-named trait associated function remains
-                # legal but requires its trait-qualified path here.
-                return None
         inherent = self.declarations.get((base, name))
         unavailable = inherent is not None and not self.applicable(inherent, owner)
         if unavailable:

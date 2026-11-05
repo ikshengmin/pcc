@@ -5,7 +5,7 @@ https://doc.rust-lang.org/reference/types/inferred.html
 https://doc.rust-lang.org/reference/expressions/struct-expr.html
 https://doc.rust-lang.org/reference/expressions.html#evaluation-order-of-operands
 Only explicit type slots on named-field struct literals are added. Omitted
-arguments, enum/qualified-owner holes and borrow certification are unchanged.
+arguments, qualified-owner holes and borrow certification are unchanged.
 """
 from pathlib import Path
 import platform
@@ -93,10 +93,9 @@ def test_invalid_or_ambiguous_constructors_fail_before_lowering(name, text, mess
 
 @pytest.mark.parametrize('text,message', [
     ('struct R<T>{x:T}fn f(){R{x:1u64};}', 'requires explicit type arguments'),
-    ('enum E<T>{Some(T)}fn f(){E::<_>::Some(1u64);}', "unsupported Rust type '_'"),
     ('struct R<T>{x:T}impl<T>R<T>{fn take(self)->T{self.x}}fn f()->u64{R::<_>::take(R::<u64>{x:1})}', "unsupported Rust type '_'"),
 ])
-def test_constructor_holes_do_not_change_omitted_enum_or_owner_boundaries(text, message, monkeypatch):
+def test_constructor_holes_do_not_change_omitted_or_owner_boundaries(text, message, monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer
     monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('unsupported path reached IR'))
     with pytest.raises(RustError, match=message):

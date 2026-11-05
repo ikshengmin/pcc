@@ -81,7 +81,7 @@ class GenericDeclarations:
         bounded_type(ty, token)
         if ty == "_":
             if placeholder_context is None:
-                raise token.error("unsupported Rust type '_': inferred type placeholders are implemented only in function/method call type arguments, local annotations and struct constructors")
+                raise token.error("unsupported Rust type '_': inferred type placeholders are implemented only in function/method call type arguments, local annotations and struct/enum constructors")
             from .semantics import InferredType
             return InferredType(token, description=placeholder_context + " type placeholder")
         if isinstance(ty, FixedArrayType):
@@ -170,6 +170,14 @@ class GenericDeclarations:
         raw = ([t for fields in declaration.payloads.values() for t in fields]
                if isinstance(declaration, Enumeration) else [t for _, t in declaration.fields])
         return tuple(substitute(t, bindings) for t in raw)
+
+    def specialized_payload(self, ty, variant):
+        name = ty.name if isinstance(ty, TypeApplication) else ty
+        fields = self.definitions[name].payloads.get(variant)
+        if fields is None:
+            return None
+        bindings = dict(zip(self.parameters[name], ty.arguments)) if isinstance(ty, TypeApplication) else {}
+        return tuple(substitute(field, bindings) for field in fields)
 
     def check_layouts(self):
         for name, declaration in self.definitions.items():

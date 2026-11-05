@@ -629,7 +629,7 @@ each generic-body replay. Initializers, enclosing results, later arguments and
 assignments constrain the same variables before integer fallback; generic calls
 continue using the existing instance registry. Concrete annotation positions
 remain constraints, and unresolved holes, mismatches and non-Copy moves fail
-before lowering. Item signatures and enum-constructor/qualified-owner placeholders
+before lowering. Item signatures and qualified-method-owner placeholders
 retain their prior gates. Reference-bearing source still requires a genuine
 source/options-bound external check; an annotation hole cannot certify it.
 
@@ -652,10 +652,29 @@ source order even when it differs from declaration order.
 
 The four complete authored programs and same-input native/reference checks in
 `tests/rust/test_rust_struct_placeholders.py` cover this bounded slice. Bare
-omitted type arguments, enum constructor holes and qualified-owner holes remain
-explicit gaps. Reference storage still requires the existing certification and
+omitted type arguments and qualified-method-owner holes remain explicit gaps. Reference storage still requires the existing certification and
 layout rules. This is not whole-project, owned borrow-checker or native pcc1
 qualification.
+
+### Explicit enum-constructor placeholders
+
+Enum-owner slots in `Maybe::<_>::Some(value)` and `Maybe::<_>::None` accept
+explicit holes, including nested tuple, array and nominal arguments. Payloads,
+results and later uses share those variables until whole-body resolution.
+Concrete slots remain fixed, and generic replay gets fresh holes. Constructors
+keep precedence over same-named trait associated functions without making
+qualified method-owner holes generally available. Inferred nominal layouts
+enter the existing instance registry only after their arguments resolve.
+
+The four complete authored originals in
+`tests/rust/test_rust_enum_placeholders.py` cover payload/unit variants, nested
+layouts, generic replay and left-to-right payload evaluation with owned native
+execution and gated same-source rustc comparison. Ambiguity, contradictory
+constraints, malformed arity, private owners and non-Copy moves remain errors.
+Omitted owner arguments, constructor-segment arguments and matching a still
+unresolved generic value remain explicit gaps. Reference-bearing source retains
+its source/options-bound certification barrier. These checks do not establish
+upstream project, native pcc1 or owned borrow-checker qualification.
 
 ### Inherent method-local generic inference (qualified bounded slice)
 
