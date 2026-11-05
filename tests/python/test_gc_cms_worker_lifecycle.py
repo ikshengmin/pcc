@@ -233,7 +233,10 @@ def test_same_backend_reset_loses_to_a_concurrent_switch():
     rt = Runtime(backend=1, state=1)
     def switch_wins():
         rt.memory[BACKEND] = 4
-    rt.hooks[("load", BACKEND)] = switch_wins
+        rt.lock()
+    # Race after reset classification, immediately before graph admission.
+    # The first BACKEND load now belongs to the earlier frozen-backend guard.
+    rt.ns["_object_graph_lock"] = switch_wins
     assert rt.set_backend(1) == -1
     assert rt.memory[BACKEND] == 4
     assert rt.memory[STATE] == 1
