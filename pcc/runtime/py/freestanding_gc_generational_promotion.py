@@ -267,6 +267,12 @@ def _enqueue_promotion_owner(obj) -> None:
         or ptr_is_null(load_ptr(node, 64)) == 0
         or ptr_is_null(load_ptr(node, 72)) == 0
     ):
+        # A new GC3 remembered request can cover a slot behind this owner's
+        # in-flight cursor. Its existing queue entry must rescan that prefix
+        # before the remembered drain clears the dirty bit. Clean duplicate root
+        # visits keep their progress, and GC4 retains its own protocol.
+        if backend == 3 and (load_i32(obj, 12) & 512) != 0:
+            _set_promotion_cursor(node, 0)
         return
     tail = global_load_ptr("pcc_gc_backend3_promotion_tail")
     store_ptr(node, 64, null())
