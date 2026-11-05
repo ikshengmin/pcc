@@ -42,6 +42,11 @@ EQUAL = 'func Equal[T comparable](a,b T)bool{return a==b}'
     ('func F[T any](x T)(result T){result=x;return}', '_=F(7)'),
     (IDENTITY+';func F[T any](x T)T{return Identity[T](Identity(x))}', '_=F(7)'),
     ('func F[T any](x T,p *int)T{if p!=nil{*p+=1};return x}', '_=F(7,nil)'),
+    ('func F[_ any](){}', 'F[int]()'),
+    ('func F[_,_ any](){}', 'F[int,string]()'),
+    ('func F[_ any,T any](x T)T{return x}', '_=F[int](uint64(7))'),
+    ('func F[T any,_ comparable](x T)T{return x}', '_=F[uint64,string](7)'),
+    ('func F[_ any](_ int){}', 'F[int](3)'),
 ])
 def test_generic_function_typing_and_value_inference(declarations, body, monkeypatch):
     forbid_external_compiler(monkeypatch)
@@ -76,6 +81,30 @@ def test_registry_reuses_aliases_but_preserves_nominal_and_recursive_identity():
     assert len(analyzer.generics.instances) == 4
 
 
+def test_unnamed_type_slots_preserve_arity_constraints_and_instance_identity():
+    text = source('type A=uint8;type N uint8;func F[_,_ any,T any](_ int,x T)T{return x}',
+                  '_=F[int,A](0,uint64(3));_=F[int,uint8](0,uint64(4));'
+                  '_=F[string,uint8](0,uint64(5));_=F[int,N](0,uint64(6))')
+    analyzer, program = analyzed(text)
+    declared = analyzer.functions['F']
+    parameters = analyzer.generics.parameters[id(declared)]
+    assert [parameter.name for parameter in parameters] == ['_', '_', 'T']
+    assert len(set(parameters)) == 3
+    assert set(declared.type_bindings) == {'T'}
+    analyzer.generics.materialize()
+    analyzer.generics.validate_abstract([program])
+    entries = list(analyzer.generics.instances.entries.values())
+    assert len(entries) == 3
+    assert len({entry.value.abi_symbol for entry in entries}) == 3
+    assert all(set(entry.value.type_bindings) == {'T'} for entry in entries)
+    assert all(entry.state is InstanceState.COMPLETE for entry in entries)
+
+
+def test_complete_unnamed_type_parameter_program_builds_owned_ir(monkeypatch):
+    forbid_external_compiler(monkeypatch)
+    compile_go(units(('unnamed_type_parameters.go',))[0][1])
+
+
 def test_generic_registry_failure_is_sticky_mechanism_only(monkeypatch):
     analyzer, _ = analyzed(source(IDENTITY, '_=Identity(3)'))
     failure = GoDiagnostic(analyzer.functions['Identity'].token, 'simulated instance failure')
@@ -106,6 +135,14 @@ INVALID_UNUSED = [
     ('func Bad[T any,U T](){}', 'cannot be used as a constraint', 'cannot use a type parameter as constraint'),
     ('func Bad[any any](){}', 'cannot be used as a constraint', 'cannot use a type parameter as constraint'),
     ('func Bad[T Missing](){}', 'undefined type constraint', 'undefined: Missing'),
+    ('func Bad[_ any](x _){}', 'undefined type', 'cannot use _ as value or type'),
+    ('func Bad[_ any]()_{for{}}', 'undefined type', 'cannot use _ as value or type'),
+    ('func Bad[_ any](){_=_(3)}', 'undefined function _', 'cannot use _ as value or type'),
+    ('func Bad[_ Missing](){}', 'undefined type constraint', 'undefined: Missing'),
+    ('func Bad[_ any,T _](){}', 'undefined type constraint', 'cannot use _ as value or type'),
+    ('func Bad[_ any,T any](x T)T{return x+1}', 'mismatched type-parameter', 'cannot convert|mismatched types'),
+    ('func Need[_ any,_ comparable](){};func Bad[T any](){Need[int,T]()}',
+     'does not satisfy comparable', 'does not satisfy comparable'),
 ]
 
 
@@ -135,6 +172,10 @@ INVALID_CALLS = [
     # Go 1.24.13 rejects a[0,0] during parsing, before index type checking.
     ('', 'a:=[1]int{1};_=a[0,0]', 'multiple indices',
      r'not a generic|more than one index|^syntax error: unexpected literal 0, expected \]$'),
+    ('func F[_ any](){}', 'F()', 'cannot infer type argument', 'cannot infer'),
+    ('func F[_,_ any](){}', 'F[int]()', 'cannot infer type argument', 'cannot infer'),
+    ('func F[T any,_ any](x T){}', 'F[int](3)', 'cannot infer type argument', 'cannot infer'),
+    ('func F[_ any](){}', 'F[int,string]()', 'too many generic type arguments', 'got 2 type arguments but want 1'),
 ]
 
 
@@ -200,6 +241,8 @@ UNSUPPORTED = [
     ('pointer-nil', source('func F[T any](x T,p *int)T{_=*p;return x}')),
     ('pointer-escape', source('func F[T any](x T){var p *int;{y:=1;p=&y};_=p}')),
     ('limit-function-arity', source('func F['+','.join('T'+str(n) for n in range(257))+' any](){}')),
+    ('generic-boundaries', source('func F[_ any](){}', 'F[*int]()')),
+    ('generic-boundaries', source('func F[_ any](){}', 'F[any]()')),
 ]
 
 
@@ -265,18 +308,36 @@ def test_complete_generic_value_program_executes_owned(tmp_path, monkeypatch):
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize('observe', [False, True])
+def test_unnamed_type_parameter_program_executes_full_width_result(observe, tmp_path, monkeypatch):
+    from tests.go.test_labels import observed
+    originals = units(('unnamed_type_parameters.go',))
+    with monkeypatch.context() as denied:
+        forbid_external_compiler(denied)
+        artifact = compile_owned(originals, observe_entry=('Result', ()) if observe else None)
+    binary = tmp_path / 'unnamed-type-parameters'
+    write_artifact(artifact, binary)
+    expected = (0xfedcba9876543212).to_bytes(8, 'little') if observe else b''
+    assert observed(binary, tmp_path / 'observation', owner=artifact.owner,
+                    originals=originals) == Execution(0, expected, b'')
+
+
+@pytest.mark.integration
 @pytest.mark.pcc_gate(env='PCC_GO_REFERENCE')
 @pytest.mark.xdist_group(name='go-reference')
 def test_identical_generic_value_program_matches_official_raw_streams(tmp_path, monkeypatch):
-    originals = units(('generic_functions.go',))
-    with monkeypatch.context() as denied:
-        forbid_external_compiler(denied)
-        artifact = compile_owned(originals)
-    binary = tmp_path/'generic-main'
-    write_artifact(artifact,binary)
-    reference = compile_reference(originals,tmp_path/'reference',compiler=os.environ['PCC_GO_REFERENCE'],cache=os.environ['PCC_GO_REFERENCE_CACHE'])
-    record_pair(tmp_path,hashlib.sha256(originals[0][1].encode()).hexdigest(),binary,reference)
-    assert (reference.parent/originals[0][0]).read_bytes() == originals[0][1].encode()
+    for filename in ('generic_functions.go', 'unnamed_type_parameters.go'):
+        directory = tmp_path / filename
+        directory.mkdir()
+        originals = units((filename,))
+        with monkeypatch.context() as denied:
+            forbid_external_compiler(denied)
+            artifact = compile_owned(originals)
+        binary = directory/'generic-main'
+        write_artifact(artifact,binary)
+        reference = compile_reference(originals,directory/'reference',compiler=os.environ['PCC_GO_REFERENCE'],cache=os.environ['PCC_GO_REFERENCE_CACHE'])
+        record_pair(directory,hashlib.sha256(originals[0][1].encode()).hexdigest(),binary,reference)
+        assert (reference.parent/originals[0][0]).read_bytes() == originals[0][1].encode()
 
 
 @pytest.mark.integration

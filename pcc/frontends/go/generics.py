@@ -142,18 +142,18 @@ class GenericSession:
     def prepare(self, owner, function):
         scope = {}
         parameters = []
-        declared_names = {name.text for name, _ in function.type_parameters}
+        declared_names = {name.text for name, _ in function.type_parameters if name.text != '_'}
         for index, (name, constraint) in enumerate(function.type_parameters):
             resolved_constraint = self.resolve_constraint(owner, constraint, declared_names)
             owner.check_name(name)
-            if name.text == '_':
-                raise UnsupportedGo(name, 'go.unsupported.generic-boundaries',
-                                    'blank type parameter bindings are not implemented')
             if name.text in scope:
                 raise GoDiagnostic(name, 'duplicate type parameter ' + name.text)
             parameter = TypeParameter(function.abi_symbol, index, name.text, resolved_constraint)
             parameters.append(parameter)
-            scope[name.text] = parameter
+            # Blank slots retain their index, constraint and instance argument,
+            # but never declare a source name (even when repeated).
+            if name.text != '_':
+                scope[name.text] = parameter
         if parameters:
             self.parameters[id(function)] = tuple(parameters)
             self.owners[id(function)] = owner
@@ -275,7 +275,8 @@ class GenericSession:
         instance = replace(function, params=params, result=result,
                            body=deepcopy(self.raw_bodies[id(function)]), locals=[], parameters=[],
                            temporaries=[], result_symbols=[], type_parameters=[],
-                           type_bindings={parameter.name: bindings[parameter] for parameter in parameters},
+                           type_bindings={parameter.name: bindings[parameter] for parameter in parameters
+                                          if parameter.name != '_'},
                            abi_symbol=function.abi_symbol + '_instance_' + spelling)
         return self.instances.request(key, instance, self.owners[id(function)]).value
 

@@ -2055,7 +2055,7 @@
         "declarations",
         "comparison"
       ],
-      "scope": "Unconditional opaque any/comparable declaration checking; direct explicit/partial/argument-inferred admitted nonpointer value instances, source package scope and shared registry recursion. No general type sets, generic data, function values or pointer type-argument escape contract.",
+      "scope": "Unconditional opaque any/comparable declaration checking; direct explicit/partial/argument-inferred admitted nonpointer value instances, source package scope and shared registry recursion. Unnamed type-parameter slots preserve arity, constraints and complete instance identity without declaring source names. No general type sets, generic data, function values or pointer type-argument escape contract.",
       "tests": [
         "tests/go/test_generic_functions.py::test_generic_function_typing_and_value_inference",
         "tests/go/test_generic_functions.py::test_registry_reuses_aliases_but_preserves_nominal_and_recursive_identity",
@@ -2071,21 +2071,24 @@
         "tests/go/test_generic_functions.py::test_official_go_builds_identical_generic_frontiers_without_execution",
         "tests/go/test_generic_functions.py::test_imported_generic_instances_keep_declaration_scope_and_owner_identity",
         "tests/go/test_generic_functions.py::test_identical_imported_generic_graph_matches_official_raw_streams",
-        "tests/go/test_generic_functions.py::test_malformed_constraint_syntax_is_not_an_unsupported_capability"
+        "tests/go/test_generic_functions.py::test_malformed_constraint_syntax_is_not_an_unsupported_capability",
+        "tests/go/test_generic_functions.py::test_unnamed_type_slots_preserve_arity_constraints_and_instance_identity",
+        "tests/go/test_generic_functions.py::test_complete_unnamed_type_parameter_program_builds_owned_ir",
+        "tests/go/test_generic_functions.py::test_unnamed_type_parameter_program_executes_full_width_result"
       ],
       "diagnostics": [],
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:cef0cb2f2c02cf4dc0efdf0e59a5dd097a1cbb6ba423cee230a2fda2ac90d749",
+        "source_revision": "sha256:ecc98f9ac0f970062a1b61e7e6c7aa34dbb40f7024f9a263b25e3ed4485a6ea7",
         "sources": [
           {
             "path": "pcc/frontends/go/generics.py",
-            "sha256": "225befad1456eecdd58968f03cfebb7e4516fe0eb849a651a93d406744e111c5"
+            "sha256": "c8f3eaa82e788eafcb06d6e4ef823dd708c5352f29eabb8f7c6af965829133ec"
           },
           {
             "path": "pcc/frontends/go/syntax.py",
-            "sha256": "62d24c3496bd5091da87064a977303729ed89e24c35c514f0d2783b6fdbbae78"
+            "sha256": "4b3a873da3625e67ded73c65cd55adc56689ce9158e89b1b00804772ba29bd68"
           },
           {
             "path": "pcc/frontends/go/sema.py",
@@ -2111,7 +2114,7 @@
           "kind": "full-feature",
           "scope": "Declared bounded generic value function CI obligations, not complete Go generics",
           "status": "unrun",
-          "source_revision": "sha256:cef0cb2f2c02cf4dc0efdf0e59a5dd097a1cbb6ba423cee230a2fda2ac90d749",
+          "source_revision": "sha256:ecc98f9ac0f970062a1b61e7e6c7aa34dbb40f7024f9a263b25e3ed4485a6ea7",
           "mode": "pcc0",
           "platform": "linux-x86_64",
           "backend": "self",
@@ -2131,10 +2134,13 @@
             "tests/go/test_generic_functions.py::test_official_go_builds_identical_generic_frontiers_without_execution",
             "tests/go/test_generic_functions.py::test_imported_generic_instances_keep_declaration_scope_and_owner_identity",
             "tests/go/test_generic_functions.py::test_identical_imported_generic_graph_matches_official_raw_streams",
-            "tests/go/test_generic_functions.py::test_malformed_constraint_syntax_is_not_an_unsupported_capability"
+            "tests/go/test_generic_functions.py::test_malformed_constraint_syntax_is_not_an_unsupported_capability",
+            "tests/go/test_generic_functions.py::test_unnamed_type_slots_preserve_arity_constraints_and_instance_identity",
+            "tests/go/test_generic_functions.py::test_complete_unnamed_type_parameter_program_builds_owned_ir",
+            "tests/go/test_generic_functions.py::test_unnamed_type_parameter_program_executes_full_width_result"
           ],
           "evidence": [],
-          "reason": "The shared Go semantic source now admits bounded value-record arrays and preserves storage/runtime diagnostics. This does not renew historical evidence. Full-feature acceptance on this changed source remains unrun; candidate focused/whole-language validation and official-reference availability are reported separately."
+          "reason": "The source binding now includes unnamed type-parameter slots without source-name registration. Full-feature acceptance remains unrun; focused host pcc0/self and official Go reference results are reported separately. Historical evidence is unchanged and is not renewed for this source."
         }
       ]
     },
