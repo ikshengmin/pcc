@@ -110,6 +110,79 @@
   ],
   "features": [
     {
+      "id": "java.nominal-local-inference-model",
+      "title": "Nominal local inference without managed execution",
+      "chapter_ids": [
+        "JLS-4",
+        "JLS-6",
+        "JLS-14",
+        "JLS-15",
+        "JLS-16"
+      ],
+      "scope": "JLS 14.4.1,6.3,4.12.4,15.9,16. Nonlowering ordinary var/final var inference for already checked supplied-source ClassType initializers, including construction, call, typed null result, parameter, field, this, alias and same-type/null conditional. Preserve canonical class identity, constructor lookup/access/overload selection, pending-name self-reference checks, standalone initializer checking once, lexical scope, assignment, final and DA rules. References and equality never become source constants; existing managed value and construction obligations remain unresolved. Preserve all three exact former nominal-inference rejections as positive model and unchanged JDK-only obligations. No managed storage, runtime identity, member-access expansion, generic/inherited inference or native reference lowering. Model, selected-JDK and whole-Java execution are UNRUN.",
+      "tests": [
+        "tests/java/test_source_nominal_local_inference_model.py::test_nominal_var_keeps_canonical_bindings_and_unresolved_storage",
+        "tests/java/test_source_nominal_local_inference_model.py::test_former_string_nominal_control_is_preserved_as_model_success",
+        "tests/java/test_source_nominal_local_inference_model.py::test_nominal_initializer_once_and_aliases_do_not_create_constant_identity",
+        "tests/java/test_source_nominal_local_inference_model.py::test_invalid_nominal_var_originals_remain_ordinary_errors",
+        "tests/java/test_source_nominal_local_inference_model.py::test_nominal_inference_does_not_grant_member_access",
+        "tests/java/test_source_nominal_local_inference_model.py::test_nominal_inference_keeps_original_project_identity_and_access",
+        "tests/java/test_source_nominal_local_inference_model.py::test_nominal_inference_does_not_enable_native_reference_compilation",
+        "tests/java/test_source_nominal_local_inference_model.py::test_exact_nominal_var_originals_against_selected_jdk_only",
+        "tests/java/test_source_nominal_local_inference_model.py::test_exact_former_nominal_inference_originals_against_jdk_only",
+        "tests/java/test_source_nominal_local_inference_model.py::test_exact_former_string_nominal_control_against_jdk_only",
+        "tests/java/test_source_nominal_local_inference_model.py::test_exact_nominal_project_originals_against_jdk_only",
+        "tests/java/test_source_local_inference.py::test_inference_model_does_not_invent_reference_storage",
+        "tests/java/test_source_local_inference.py::test_inference_native_boundaries_remain_explicit"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:c43b821e7e34f2219b23c4406968d6079d57649bf663077c92217311b1d19c23",
+        "sources": [
+          {
+            "path": "pcc/frontends/java/source_local_inference.py",
+            "sha256": "9a2082aab40d49cf73a8619bf9f77a54a56b2e0e14e073259e8d66c867a1970a"
+          },
+          {
+            "path": "pcc/frontends/java/source_class_model.py",
+            "sha256": "184d369798ea6f99cec4d0d2d180deb94e976e580eabe9781f3c671f12a888f6"
+          }
+        ]
+      },
+      "acceptance": [
+        {
+          "id": "nominal-local-inference-model-ci-only",
+          "kind": "full-feature",
+          "scope": "JLS 14.4.1,6.3,4.12.4,15.9,16. Nonlowering ordinary var/final var inference for already checked supplied-source ClassType initializers, including construction, call, typed null result, parameter, field, this, alias and same-type/null conditional. Preserve canonical class identity, constructor lookup/access/overload selection, pending-name self-reference checks, standalone initializer checking once, lexical scope, assignment, final and DA rules. References and equality never become source constants; existing managed value and construction obligations remain unresolved. Preserve all three exact former nominal-inference rejections as positive model and unchanged JDK-only obligations. No managed storage, runtime identity, member-access expansion, generic/inherited inference or native reference lowering. Model, selected-JDK and whole-Java execution are UNRUN.",
+          "status": "unrun",
+          "source_revision": "sha256:c43b821e7e34f2219b23c4406968d6079d57649bf663077c92217311b1d19c23",
+          "mode": "pcc0",
+          "platform": "linux-x86_64",
+          "backend": "self",
+          "gc": "not_applicable",
+          "required_tests": [
+            "tests/java/test_source_nominal_local_inference_model.py::test_nominal_var_keeps_canonical_bindings_and_unresolved_storage",
+            "tests/java/test_source_nominal_local_inference_model.py::test_former_string_nominal_control_is_preserved_as_model_success",
+            "tests/java/test_source_nominal_local_inference_model.py::test_nominal_initializer_once_and_aliases_do_not_create_constant_identity",
+            "tests/java/test_source_nominal_local_inference_model.py::test_invalid_nominal_var_originals_remain_ordinary_errors",
+            "tests/java/test_source_nominal_local_inference_model.py::test_nominal_inference_does_not_grant_member_access",
+            "tests/java/test_source_nominal_local_inference_model.py::test_nominal_inference_keeps_original_project_identity_and_access",
+            "tests/java/test_source_nominal_local_inference_model.py::test_nominal_inference_does_not_enable_native_reference_compilation",
+            "tests/java/test_source_nominal_local_inference_model.py::test_exact_nominal_var_originals_against_selected_jdk_only",
+            "tests/java/test_source_nominal_local_inference_model.py::test_exact_former_nominal_inference_originals_against_jdk_only",
+            "tests/java/test_source_nominal_local_inference_model.py::test_exact_former_string_nominal_control_against_jdk_only",
+            "tests/java/test_source_nominal_local_inference_model.py::test_exact_nominal_project_originals_against_jdk_only",
+            "tests/java/test_source_local_inference.py::test_inference_model_does_not_invent_reference_storage",
+            "tests/java/test_source_local_inference.py::test_inference_native_boundaries_remain_explicit"
+          ],
+          "evidence": [],
+          "reason": "CI-only source/test checkpoint. No repository imports, collection, tests, compilers, native programs or JDK comparisons ran locally. Selected-JDK object/content/access observations are development-only references and cannot establish PCC managed execution. Historical evidence is preserved."
+        }
+      ]
+    },
+    {
       "id": "java.string-local-inference-model",
       "title": "String local inference with unresolved bootstrap ownership",
       "chapter_ids": [
@@ -119,7 +192,7 @@
         "JLS-15",
         "JLS-16"
       ],
-      "scope": "JLS 14.4.1,6.3,4.12.4,15.29,16. Nonlowering ordinary var/final var inference preserves the existing BootstrapStringType identity from literals, constant names, calls, parameters, aliases and standalone conditional expressions. Initializers remain checked once without a target; pending self-reference, lexical scope, assignment, final and DA rules remain active. Existing final String source facts propagate as immutable UTF-16 content only, never a numeric constant, interned identity or runtime value. The exact former String-inference rejection is retained as a positive model and unchanged JDK-only obligation. Missing bootstrap definition, materialization and shared owning-root/safepoint contracts remain explicit. Native String compilation, nominal inference and unsupported String operations remain closed. Model, selected-JDK and whole-Java execution are UNRUN.",
+      "scope": "JLS 14.4.1,6.3,4.12.4,15.29,16. Nonlowering ordinary var/final var inference preserves the existing BootstrapStringType identity from literals, constant names, calls, parameters, aliases and standalone conditional expressions. Initializers remain checked once without a target; pending self-reference, lexical scope, assignment, final and DA rules remain active. Existing final String source facts propagate as immutable UTF-16 content only, never a numeric constant, interned identity or runtime value. The exact former String-inference rejection is retained as a positive model and unchanged JDK-only obligation. Missing bootstrap definition, materialization and shared owning-root/safepoint contracts remain explicit. Native String compilation and unsupported String operations remain closed. Supplied-class nominal inference has a separate nonlowering source-model owner. Model, selected-JDK and whole-Java execution are UNRUN.",
       "tests": [
         "tests/java/test_source_string_local_inference_model.py::test_string_var_keeps_bootstrap_identity_and_unresolved_managed_obligations",
         "tests/java/test_source_string_local_inference_model.py::test_inferred_string_facts_follow_existing_final_constant_variable_rules",
@@ -187,7 +260,7 @@
         "JLS-14",
         "JLS-16"
       ],
-      "scope": "JLS 14.4.1,6.3,4.12.4,16. Nonlowering ordinary var/final var local inference for the six already admitted one-dimensional boolean/integral array types. Reuse standalone initializer checking exactly once, pending-name self-reference prevention, lexical bindings, assignment/DA/final rules and existing managed array-value requirements. The inferred type remains ArrayType(component), not a pointer, new layout or native slot contract. Alias, call, parameter, conditional, basic-for and instance-initializer/constructor contexts retain their original source. The exact former array-inference rejection is preserved as positive model and JDK-only evidence obligations. Native arrays, nominal reference inference, wider arrays, allocation/GC and whole-project acceptance remain unavailable. String local inference has its own nonlowering source-model owner. Ordinary/model, selected-JDK and whole-Java execution are UNRUN.",
+      "scope": "JLS 14.4.1,6.3,4.12.4,16. Nonlowering ordinary var/final var local inference for the six already admitted one-dimensional boolean/integral array types. Reuse standalone initializer checking exactly once, pending-name self-reference prevention, lexical bindings, assignment/DA/final rules and existing managed array-value requirements. The inferred type remains ArrayType(component), not a pointer, new layout or native slot contract. Alias, call, parameter, conditional, basic-for and instance-initializer/constructor contexts retain their original source. The exact former array-inference rejection is preserved as positive model and JDK-only evidence obligations. Native arrays, wider arrays, allocation/GC and whole-project acceptance remain unavailable. String and nominal local inference have separate nonlowering source-model owners. Ordinary/model, selected-JDK and whole-Java execution are UNRUN.",
       "tests": [
         "tests/java/test_source_array_local_inference_model.py::test_array_var_originals_have_nonlowering_binding_and_managed_plans",
         "tests/java/test_source_array_local_inference_model.py::test_former_array_inference_original_is_preserved_as_model_success",
@@ -553,7 +626,7 @@
         "JLS-15",
         "JLS-16"
       ],
-      "scope": "JLS 3.8,4.12.4,6.3-4,14.4,14.14.1,15.25,16. Primitive local var inference in blocks and basic-for initializers, including final, standalone initializer typing without target narrowing, all eight primitive types, exact Binding/slot identity, single initializer checking/evaluation, final constant-variable rules, scope and self-reference rejection, method-name namespace separation and contextual var identifiers. Inferred primitive bindings use existing source-to-native slots, conversions, stores, loads, calls and ABI; no bytecode/JDK production owner or runtime changes. Null/void, declaration shape and ill-typed initializers remain ordinary errors. Reference/array and enhanced-for inference remain separate explicit gaps. Source implementation is not execution acceptance: ordinary, owned native, raw selected-JDK and whole-Java obligations are UNRUN. Commons Numbers targets Java8 and does not use var; its complete-original frontier and the shared managed runtime/QPS gate are unchanged.",
+      "scope": "JLS 3.8,4.12.4,6.3-4,14.4,14.14.1,15.25,16. Primitive local var inference in blocks and basic-for initializers, including final, standalone initializer typing without target narrowing, all eight primitive types, exact Binding/slot identity, single initializer checking/evaluation, final constant-variable rules, scope and self-reference rejection, method-name namespace separation and contextual var identifiers. Inferred primitive bindings use existing source-to-native slots, conversions, stores, loads, calls and ABI; no bytecode/JDK production owner or runtime changes. Null/void, declaration shape and ill-typed initializers remain ordinary errors. Reference/array and enhanced-for inference have separate nonlowering source-model owners; native reference storage and enhanced-for execution remain explicit gaps. Source implementation is not execution acceptance: ordinary, owned native, raw selected-JDK and whole-Java obligations are UNRUN. Commons Numbers targets Java8 and does not use var; its complete-original frontier and the shared managed runtime/QPS gate are unchanged.",
       "tests": [
         "tests/java/test_source_local_inference.py::test_original_inference_uses_owned_ir_and_object",
         "tests/java/test_source_local_inference.py::test_invalid_original_inference_fails_before_ir",
@@ -671,7 +744,7 @@
         "JLS-4",
         "JLS-14"
       ],
-      "scope": "Nominal reference local var inference and native enhanced-for var inference remain explicit unsupported domains. Primitive-array and unresolved bootstrap String ordinary local inference, and primitive-array enhanced-for inference, have separate nonlowering source-model owners; they do not provide native reference storage, Iterable inference or wider array components. Primitive block/basic-for inference has its own native source owner with execution-unrun acceptance.",
+      "scope": "Native reference storage and enhanced-for var inference remain explicit unsupported domains. Supplied-class, primitive-array and unresolved bootstrap String ordinary local inference, and primitive-array enhanced-for inference, have separate nonlowering source-model owners. They do not provide managed execution, Iterable inference, generic/inherited inference or wider array components. Primitive block/basic-for inference has its own native source owner with execution-unrun acceptance.",
       "status": "explicitly_unimplemented",
       "tests": [
         "tests/java/test_source_local_inference.py"
@@ -2770,12 +2843,12 @@
         "feature_id": "java.objects-native",
         "source": {
           "path": "pcc/frontends/java/source_class_model.py",
-          "sha256": "8270c270797448f04668146704589f68e56c7caa7a7101dea53c7d55e2f3e02b"
+          "sha256": "184d369798ea6f99cec4d0d2d180deb94e976e580eabe9781f3c671f12a888f6"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "8270c270797448f04668146704589f68e56c7caa7a7101dea53c7d55e2f3e02b"
+            "sha256": "184d369798ea6f99cec4d0d2d180deb94e976e580eabe9781f3c671f12a888f6"
           },
           {
             "path": "pcc/frontends/java/source_sema.py",
@@ -2987,7 +3060,7 @@
           },
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "8270c270797448f04668146704589f68e56c7caa7a7101dea53c7d55e2f3e02b"
+            "sha256": "184d369798ea6f99cec4d0d2d180deb94e976e580eabe9781f3c671f12a888f6"
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
@@ -3083,7 +3156,7 @@
           },
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "8270c270797448f04668146704589f68e56c7caa7a7101dea53c7d55e2f3e02b"
+            "sha256": "184d369798ea6f99cec4d0d2d180deb94e976e580eabe9781f3c671f12a888f6"
           }
         ]
       },
@@ -3101,7 +3174,7 @@
           },
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "8270c270797448f04668146704589f68e56c7caa7a7101dea53c7d55e2f3e02b"
+            "sha256": "184d369798ea6f99cec4d0d2d180deb94e976e580eabe9781f3c671f12a888f6"
           },
           {
             "path": "pcc/frontends/java/source_array_model.py",
@@ -3118,12 +3191,12 @@
         "feature_id": "java.object-inherited-methods",
         "source": {
           "path": "pcc/frontends/java/source_class_model.py",
-          "sha256": "8270c270797448f04668146704589f68e56c7caa7a7101dea53c7d55e2f3e02b"
+          "sha256": "184d369798ea6f99cec4d0d2d180deb94e976e580eabe9781f3c671f12a888f6"
         },
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "8270c270797448f04668146704589f68e56c7caa7a7101dea53c7d55e2f3e02b"
+            "sha256": "184d369798ea6f99cec4d0d2d180deb94e976e580eabe9781f3c671f12a888f6"
           },
           {
             "path": "pcc/frontends/java/source_project.py",
@@ -3159,7 +3232,7 @@
           },
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "8270c270797448f04668146704589f68e56c7caa7a7101dea53c7d55e2f3e02b"
+            "sha256": "184d369798ea6f99cec4d0d2d180deb94e976e580eabe9781f3c671f12a888f6"
           }
         ]
       },
@@ -3205,7 +3278,7 @@
           },
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "8270c270797448f04668146704589f68e56c7caa7a7101dea53c7d55e2f3e02b"
+            "sha256": "184d369798ea6f99cec4d0d2d180deb94e976e580eabe9781f3c671f12a888f6"
           }
         ]
       },
@@ -3295,7 +3368,7 @@
           },
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "8270c270797448f04668146704589f68e56c7caa7a7101dea53c7d55e2f3e02b"
+            "sha256": "184d369798ea6f99cec4d0d2d180deb94e976e580eabe9781f3c671f12a888f6"
           },
           {
             "path": "pcc/frontends/java/source_string_model.py",

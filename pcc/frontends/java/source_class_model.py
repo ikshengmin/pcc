@@ -95,6 +95,11 @@ class ClassAnalyzer(IntegralArithmeticModelAnalyzer, ThrowModelAnalyzer, ClassCo
         self.string_constant_locals = {}
         self._class_members_declared = False
 
+    def admits_inferred_local_type(self, dtype):
+        # The initializer already owns lookup/access checks and canonical
+        # identity. Admitting that identity does not supply reference storage.
+        return isinstance(dtype, ClassType) or super().admits_inferred_local_type(dtype)
+
     def assignment_value(self, node, target):
         if isinstance(target, (ClassType, BootstrapStringType)):
             if not widening(node.dtype, target):

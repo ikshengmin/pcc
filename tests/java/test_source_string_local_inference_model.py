@@ -69,6 +69,7 @@ INVALID = [
     ("not-boolean", original('var value="answer";if(value)return value;return "bad";'), "condition requires boolean"),
 ]
 
+MODEL_NOMINAL_ORIGINAL = original('var value=new ArrayExample();return "answer";')
 GAPS = [
     ("mutable-concat", original('var value="an";return value+"swer";'), "java.unsupported.string-literals"),
     ("final-alias-of-mutable-concat", original('var first="an";final var value=first;return value+"swer";'), "java.unsupported.string-literals"),
@@ -76,7 +77,6 @@ GAPS = [
     ("compound-concat", original('var value="an";value+="swer";return value;'), "java.unsupported.string-literals"),
     ("reference-equality", original('var value="answer";return value==null?"bad":value;'), "java.unsupported.string-literals"),
     ("member-call", original('var value="answer";return value.toString();'), "java.unsupported.object-expressions"),
-    ("nominal-inference", original('var value=new ArrayExample();return "answer";'), "java.unsupported.local-inference-domain"),
 ]
 
 
@@ -158,6 +158,8 @@ def test_invalid_string_var_originals_remain_ordinary_errors(name, text, message
 
 @pytest.mark.parametrize("name,text,code", GAPS, ids=[row[0] for row in GAPS])
 def test_inference_does_not_supply_new_string_operations_or_nominal_inference(name, text, code):
+    # Keep this historical locator; the exact nominal control is preserved
+    # in test_source_nominal_local_inference_model as a positive obligation.
     with pytest.raises(UnsupportedJava) as caught:
         checked(text)
     assert caught.value.code == code

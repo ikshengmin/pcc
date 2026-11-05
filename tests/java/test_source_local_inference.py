@@ -178,9 +178,9 @@ NATIVE_GAPS = [
 ]
 MODEL_ARRAY_ORIGINAL = original("var value=new int[]{42};return 42;")
 MODEL_STRING_ORIGINAL = original('var value="answer";return 42;')
-MODEL_GAPS = [
-    ("reference-inference", original("var value=new Inferred();return 42;"), "java.unsupported.local-inference-domain"),
-    ("reference-call-inference", original("var value=make();return 42;", helpers="static Inferred make(){return null;}"), "java.unsupported.local-inference-domain"),
+MODEL_REFERENCE_ORIGINALS = [
+    ("reference-inference", original("var value=new Inferred();return 42;")),
+    ("reference-call-inference", original("var value=make();return 42;", helpers="static Inferred make(){return null;}")),
 ]
 
 
@@ -258,12 +258,18 @@ def test_inference_native_boundaries_remain_explicit(api, name, text, code, monk
     assert caught.value.code == code
 
 
-@pytest.mark.parametrize("name,text,code", MODEL_GAPS, ids=[row[0] for row in MODEL_GAPS])
-def test_inference_model_does_not_invent_reference_storage(name, text, code, monkeypatch):
+@pytest.mark.parametrize("name,text", MODEL_REFERENCE_ORIGINALS, ids=[row[0] for row in MODEL_REFERENCE_ORIGINALS])
+def test_inference_model_does_not_invent_reference_storage(name, text, monkeypatch):
+    from pcc.frontends.java.source_types import ClassType
+    from pcc.support.managed_objects import unmet_requirements
     forbid_lowering(monkeypatch)
-    with pytest.raises(UnsupportedJava) as caught:
-        analyze_class_sources({"Inferred.java": text})
-    assert caught.value.code == code
+    project = analyze_class_sources({"Inferred.java": text})
+    method = next(item for item in project.classes["Inferred"].methods if item.token.text == "run")
+    variable = method.body.children[0]
+    assert variable.value == variable.symbol.dtype == ClassType("Inferred")
+    assert variable.children[0].dtype == variable.value and variable.constant is None
+    assert unmet_requirements(variable.children[0].managed_value)
+    assert not project.models["Inferred"].runtime_registered
 
 
 @pytest.mark.parametrize("name,text,code", NATIVE_GAPS[:2], ids=[row[0] for row in NATIVE_GAPS[:2]])
