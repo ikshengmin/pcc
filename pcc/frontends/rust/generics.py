@@ -81,7 +81,7 @@ class GenericDeclarations:
         bounded_type(ty, token)
         if ty == "_":
             if placeholder_context is None:
-                raise token.error("unsupported Rust type '_': inferred type placeholders are implemented only in function/method call type arguments, local annotations and struct/enum constructors")
+                raise token.error("unsupported Rust type '_': inferred type placeholders are implemented only in function/method call type arguments, local annotations, struct/enum constructors and ordinary enum patterns")
             from .semantics import InferredType
             return InferredType(token, description=placeholder_context + " type placeholder")
         if isinstance(ty, FixedArrayType):
@@ -243,6 +243,11 @@ class GenericDeclarations:
         return instance
 
     def path_type(self, path, token, expected=None, *, allow_inferred=False):
+        if allow_inferred and isinstance(path, TypeApplication):
+            # Explicit pattern holes contribute constraints just like payload
+            # patterns. Their slots must unify with the scrutinee before any
+            # concrete nominal instance is registered by whole-body checking.
+            return self.normalize(path, token, placeholder_context="enum pattern")
         if isinstance(path, str):
             path = self.canonical_name(path, token)
         # A pattern inherits the scrutinee's known nominal owner and shares

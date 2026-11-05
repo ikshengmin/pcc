@@ -4,8 +4,8 @@ Rust Reference:
 https://doc.rust-lang.org/reference/types/inferred.html
 https://doc.rust-lang.org/reference/expressions/match-expr.html
 https://doc.rust-lang.org/reference/patterns.html#tuple-struct-patterns
-Only ordinary matches on a known enum owner are widened. Pattern owner holes,
-unknown nominal owners, reference matching and conditional-let gates remain.
+Only ordinary matches on a known enum owner are widened. Unknown nominal
+owners, reference matching and conditional-let gates remain.
 """
 from pathlib import Path
 import platform
@@ -92,7 +92,6 @@ def test_invalid_inferred_matches_fail_before_ir(name, text, message, code, monk
 
 
 @pytest.mark.parametrize('text,message', [
-    ('enum E<T>{Some(T)}fn f()->u64{match E::<_>::Some(1){E::<_>::Some(x)=>x}}', "unsupported Rust type '_'"),
     ('struct R<T>{x:T}fn f()->u64{match (R::<_>{x:1}){r=>r.x}}', 'unresolved inferred generic'),
     ('enum E<T>{None,Some(T)}fn f()->u64{match E::<_>::None{E::None=>0,E::Some((x,y))=>x}}', 'cannot infer'),
     ('enum E<T>{Some(T)}fn f(p:&u64)->u64{match E::<_>::Some(p){E::Some(x)=>*x}}', 'actual source/options-bound CheckedRustSource'),

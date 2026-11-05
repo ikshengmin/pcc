@@ -688,8 +688,8 @@ missing owner slots from typed payload patterns or result constraints.
 Pattern checking uses the declaration's substituted payload types; concrete
 nominal instances and exhaustiveness checks wait for whole-body resolution.
 Ambiguous slots, conflicting concrete owners, missing cases and non-Copy moves
-still fail before lowering. Unknown non-tuple aggregate payload shapes, explicit holes
-in pattern owners, unresolved non-enum matches and conditional-let inference
+still fail before lowering. Unknown non-tuple aggregate payload shapes, unresolved non-enum matches and
+conditional-let inference
 remain bounded. Reference source still needs its existing certification.
 
 `tests/rust/test_rust_enum_match_inference.py` retains the prior enum-match
@@ -713,6 +713,24 @@ replay, with owned execution and gated same-input reference comparison.
 Conditional-pattern inference, other unknown aggregate shapes and reference
 certification keep their existing boundaries. This is not whole-project,
 native pcc1 or Darwin reference qualification.
+
+### Explicit enum-pattern owner placeholders
+
+Ordinary matches accept explicit holes in enum pattern owners, including
+`Maybe::<_>::Some(x)`, mixed concrete slots and nested tuple or nominal
+type arguments. Each pattern gets fresh variables shared with the scrutinee,
+payload patterns, arm results and later uses. Generic body replay keeps those
+variables independent. Concrete slots, nominal identity, privacy, arity,
+exhaustiveness and non-Copy moves remain enforced; ambiguity still fails before
+lowering or concrete nominal registration.
+
+`tests/rust/test_rust_pattern_owner_placeholders.py` retains the earlier rejected
+original and supplies three complete authored programs for mixed slots, nested
+storage and replay, plus same-input reference and invalid-source checks.
+Conditional-let owner holes and array-match coverage retain their explicit
+diagnostics even for genuinely certified input. The original array-bearing
+fixture is retained as a capability boundary, not an executed program. Reference admission, native pcc1 and upstream-project acceptance
+are unchanged; these tests are not whole-language qualification.
 
 ### Inherent method-local generic inference (qualified bounded slice)
 
