@@ -540,11 +540,21 @@ class Checker:
                 raise expr.token.error("aggregate reference storage requires lifetime analysis, which is not implemented")
             ty = TupleType(elements)
         elif kind == "construct":
-            # A literal's explicit holes share its field/result constraints.
+            # Only a struct literal may omit its known owner's arguments.
+            # Type annotations and abstract parameters keep their own rules.
+            constructor = expr.binding
+            if isinstance(constructor, str):
+                constructor = self.generics.canonical_name(constructor, expr.token)
+                declaration = self.generics.definitions.get(constructor)
+                if (constructor not in self.type_scope and isinstance(declaration, Record)
+                        and declaration.type_parameters):
+                    constructor = TypeApplication(
+                        constructor, ("_",) * len(declaration.type_parameters))
+            # Fresh literal holes share their field/result constraints.
             # Do not put unresolved arguments into the data-instance registry;
             # valid_type materializes storage after whole-body resolution.
             record_name = self.generics.normalize(
-                expr.binding, expr.token, placeholder_context="constructor")
+                constructor, expr.token, placeholder_context="constructor")
             self.valid_type(record_name, expr.token)
             record = (self.generics.definitions.get(record_name.name)
                       if isinstance(record_name, TypeApplication) else self.records.get(record_name))

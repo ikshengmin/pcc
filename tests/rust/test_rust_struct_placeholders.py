@@ -4,8 +4,8 @@ Rust Reference:
 https://doc.rust-lang.org/reference/types/inferred.html
 https://doc.rust-lang.org/reference/expressions/struct-expr.html
 https://doc.rust-lang.org/reference/expressions.html#evaluation-order-of-operands
-Only explicit type slots on named-field struct literals are added. Omitted
-arguments, qualified-owner holes and borrow certification are unchanged.
+Explicit type slots on named-field struct literals share whole-body constraints.
+Qualified-owner holes and borrow certification remain separate boundaries.
 """
 from pathlib import Path
 import platform
@@ -92,7 +92,6 @@ def test_invalid_or_ambiguous_constructors_fail_before_lowering(name, text, mess
 
 
 @pytest.mark.parametrize('text,message', [
-    ('struct R<T>{x:T}fn f(){R{x:1u64};}', 'requires explicit type arguments'),
     ('struct R<T>{x:T}impl<T>R<T>{fn take(self)->T{self.x}}fn f()->u64{R::<_>::take(R::<u64>{x:1})}', "unsupported Rust type '_'"),
 ])
 def test_constructor_holes_do_not_change_omitted_or_owner_boundaries(text, message, monkeypatch):

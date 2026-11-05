@@ -590,7 +590,7 @@ then inferred and explicit calls use the same instance registry. Generic
 bodies are still checked abstractly before any specialization; inference does
 not make T Copy or defer invalid unused bodies.
 
-Truly unconstrained parameters, generic constructor inference, partial
+Truly unconstrained parameters, omitted enum-constructor arguments, partial
 `_` type arguments, trait constraints, and method/pattern selection on unresolved
 generic results remain explicit gaps. No Rust lifetime inference, core/alloc
 qualification or production rustc dependency is introduced. The source-owned
@@ -651,10 +651,27 @@ existing nominal registry and finite layout checks. Field expressions retain
 source order even when it differs from declaration order.
 
 The four complete authored programs and same-input native/reference checks in
-`tests/rust/test_rust_struct_placeholders.py` cover this bounded slice. Bare
-omitted type arguments and qualified-method-owner holes remain explicit gaps. Reference storage still requires the existing certification and
+`tests/rust/test_rust_struct_placeholders.py` cover this bounded slice. Qualified-method-owner holes remain explicit gaps;
+omitted struct-literal arguments are described below. Reference storage still requires the existing certification and
 layout rules. This is not whole-project, owned borrow-checker or native pcc1
 qualification.
+
+### Omitted struct-literal arguments
+
+A known generic named-field struct literal may omit its type arguments, as in
+`Cell { value: input }`. Canonical type lookup and privacy run first; each
+constructor and generic replay gets fresh slots shared with fields, results,
+annotations and later uses. Concrete instances still wait for full resolution.
+A shadowing abstract type parameter does not become the unrelated struct with
+the same spelling. Field order, duplicate/missing/unknown-field rejection,
+nominal identity, ambiguity, numeric bounds and non-Copy moves remain intact.
+
+`tests/rust/test_rust_struct_omitted_arguments.py` preserves the former omitted
+constructor rejection and adds three complete authored programs for source-order
+effects, nested storage and replay, plus same-input native rustc comparisons.
+Omitted annotation/enum arguments, method-owner holes and reference certification
+retain their existing boundaries. This is not upstream, native pcc1 or complete
+Rust qualification.
 
 ### Explicit enum-constructor placeholders
 
