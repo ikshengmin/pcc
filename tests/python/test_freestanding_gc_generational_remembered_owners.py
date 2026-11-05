@@ -102,12 +102,11 @@ def test_generational_remembered_owners_have_one_strict_source_owner() -> None:
 def test_remembered_owner_node_retirement_finishes_after_graph_unlock() -> None:
     strict = STRICT_SOURCE.read_text(encoding="utf-8")
     scheduler = SCHEDULER_SOURCE.read_text(encoding="utf-8")
-    managed = MANAGED_SOURCE.read_text(encoding="utf-8")
 
     finish_symbol = "pcc_gc_backend3_finish_detached_remembered_owners"
     assert finish_symbol in strict
     assert finish_symbol in scheduler
-    assert finish_symbol in managed
+    assert finish_symbol in MANAGED_SOURCE.read_text(encoding="utf-8")
 
     strict_clear = _export_body(
         strict, "pcc_gc_backend3_clear_remembered_owners"
@@ -127,16 +126,16 @@ def test_remembered_owner_node_retirement_finishes_after_graph_unlock() -> None:
     )
     assert strict_unlock_at < strict_step.index(finish_symbol, strict_unlock_at)
 
-    managed_telemetry = _export_body(managed, "pcc_gc_telemetry_reset")
-    managed_clear_at = managed_telemetry.index(
-        "_backend3_clear_remembered_owners"
-    )
-    managed_unlock_at = managed_telemetry.index(
-        "_object_graph_unlock()", managed_clear_at
-    )
-    assert managed_unlock_at < managed_telemetry.index(
-        "_backend3_finish_detached_remembered_owners", managed_unlock_at
-    )
+
+def test_telemetry_reset_preserves_pending_gc3_work_and_gc4_epoch_contract() -> None:
+    managed = MANAGED_SOURCE.read_text(encoding="utf-8")
+    reset = _export_body(managed, "pcc_gc_telemetry_reset")
+    assert "_backend3_clear_remembered_owners(" not in reset
+    assert "_backend3_finish_detached_remembered_owners(" not in reset
+    assert "_backend4_reset_store_buffer_epoch_state()" in reset
+    assert "_backend4_reset_remembered_set_epoch_state()" in reset
+    assert "_backend4_reseed_relocation_epoch_state()" in reset
+    assert "_backend4_clear_large_deferred_flags()" in reset
 
 
 def test_generational_locked_step_caps_work_without_safepointing() -> None:

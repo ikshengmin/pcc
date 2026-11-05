@@ -3120,10 +3120,10 @@ def pcc_gc_backend_name(backend: int):
 @c_abi_export("pcc_gc_telemetry_reset")
 def pcc_gc_telemetry_reset() -> None:
     _init_config()
-    _object_graph_lock()
-    detached_remembered = _backend3_clear_remembered_owners()
-    _object_graph_unlock()
-    _backend3_finish_detached_remembered_owners(detached_remembered)
+    # GC3's queue and overflow cursor are pending generational work, not
+    # telemetry. Detaching them here leaves owners' REMEMBERED bits set,
+    # so later old-to-young stores cannot enqueue those owners again.
+    # Keep their ownership with the normal remembered-work drain.
     i: int = 1
     while i < 4:
         store_i32(_counter_global(i), 0, 0)
