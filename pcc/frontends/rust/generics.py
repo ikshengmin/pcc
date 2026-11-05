@@ -81,7 +81,7 @@ class GenericDeclarations:
         bounded_type(ty, token)
         if ty == "_":
             if placeholder_context is None:
-                raise token.error("unsupported Rust type '_': inferred type placeholders are implemented only in function/method call type arguments and local annotations")
+                raise token.error("unsupported Rust type '_': inferred type placeholders are implemented only in function/method call type arguments, local annotations and struct constructors")
             from .semantics import InferredType
             return InferredType(token, description=placeholder_context + " type placeholder")
         if isinstance(ty, FixedArrayType):

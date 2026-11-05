@@ -538,11 +538,17 @@ class Checker:
                 raise expr.token.error("aggregate reference storage requires lifetime analysis, which is not implemented")
             ty = TupleType(elements)
         elif kind == "construct":
-            record_name = self.generics.path_type(expr.binding, expr.token)
+            # A literal's explicit holes share its field/result constraints.
+            # Do not put unresolved arguments into the data-instance registry;
+            # valid_type materializes storage after whole-body resolution.
+            record_name = self.generics.normalize(
+                expr.binding, expr.token, placeholder_context="constructor")
             self.valid_type(record_name, expr.token)
-            record = self.records.get(record_name)
-            if record is None:
+            record = (self.generics.definitions.get(record_name.name)
+                      if isinstance(record_name, TypeApplication) else self.records.get(record_name))
+            if not isinstance(record, Record):
                 raise expr.token.error(f"unknown struct {expr.token.text!r}")
+            field_types = self.generics.specialized_fields(record_name)
             provided = set()
             indices = []
             names = [field.text for field, _ in record.fields]
@@ -556,7 +562,7 @@ class Checker:
                 if self.module_resolution is not None:
                     self.module_resolution.field_access(record, index, self.current_module, field)
                 indices.append(index)
-                unify(record.fields[index][1], self.expression(child), field)
+                unify(field_types[index], self.expression(child), field)
             if provided != set(names):
                 raise expr.token.error("missing struct field initializer")
             expr.value = indices

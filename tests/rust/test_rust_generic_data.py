@@ -62,7 +62,6 @@ def compile_source(source, **options):
     ('struct S<const N:u32>{x:i32}', 'const generic'),
     ('fn unused<T>(value:T)->T{missing(value)}', 'unknown function'),
     ('struct S<T>{x:T} fn f(){S::<>{x:1};}', 'empty/inferred'),
-    ('struct S<T>{x:T} fn f(){S::<_>{x:1};}', 'unsupported Rust type'),
     ('struct S<i32>{x:i32}', 'shadowing primitive'),
 ])
 def test_generic_declarations_and_uses_are_checked_before_lowering_even_when_unused(source, message, monkeypatch):
@@ -75,6 +74,12 @@ def test_generic_declarations_and_uses_are_checked_before_lowering_even_when_unu
         # They do not authorize public compilation or produce pointer IR.
         if source_has_references(source): analyze_source(source)
         else: compile_source(source)
+
+
+def test_original_struct_constructor_placeholder_now_compiles():
+    # Retain the exact former capability input, now covered by the dedicated
+    # struct-placeholder constraints and native/reference execution tests.
+    compile_source('struct S<T>{x:T} fn f(){S::<_>{x:1};}')
 
 
 @pytest.mark.parametrize('source', [

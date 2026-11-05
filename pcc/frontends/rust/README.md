@@ -629,7 +629,7 @@ each generic-body replay. Initializers, enclosing results, later arguments and
 assignments constrain the same variables before integer fallback; generic calls
 continue using the existing instance registry. Concrete annotation positions
 remain constraints, and unresolved holes, mismatches and non-Copy moves fail
-before lowering. Item signatures and constructor/qualified-owner placeholders
+before lowering. Item signatures and enum-constructor/qualified-owner placeholders
 retain their prior gates. Reference-bearing source still requires a genuine
 source/options-bound external check; an annotation hole cannot certify it.
 
@@ -638,6 +638,24 @@ capability input and adds four authored complete runtime originals, target
 object checks and independently gated same-source rustc comparisons. These are
 not upstream project acceptance or native pcc1 qualification. Actual rustc
 reference execution remains unrun when its prerequisites are unavailable.
+
+### Explicit struct-constructor placeholders
+
+Named-field literals such as `Boxed::<_>{value:1}` accept explicit holes in
+their type arguments, including nested tuple, fixed-array and nominal slots.
+Fields, result types and later uses constrain fresh variables for each literal
+and generic-body replay. Concrete positions remain fixed; missing, duplicate
+or unknown fields, contradictory constraints and non-Copy moves still fail.
+Data-instance registration waits until those arguments resolve, reusing the
+existing nominal registry and finite layout checks. Field expressions retain
+source order even when it differs from declaration order.
+
+The four complete authored programs and same-input native/reference checks in
+`tests/rust/test_rust_struct_placeholders.py` cover this bounded slice. Bare
+omitted type arguments, enum constructor holes and qualified-owner holes remain
+explicit gaps. Reference storage still requires the existing certification and
+layout rules. This is not whole-project, owned borrow-checker or native pcc1
+qualification.
 
 ### Inherent method-local generic inference (qualified bounded slice)
 
