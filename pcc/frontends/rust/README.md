@@ -688,7 +688,7 @@ missing owner slots from typed payload patterns or result constraints.
 Pattern checking uses the declaration's substituted payload types; concrete
 nominal instances and exhaustiveness checks wait for whole-body resolution.
 Ambiguous slots, conflicting concrete owners, missing cases and non-Copy moves
-still fail before lowering. Unknown aggregate payload shapes, explicit holes
+still fail before lowering. Unknown non-tuple aggregate payload shapes, explicit holes
 in pattern owners, unresolved non-enum matches and conditional-let inference
 remain bounded. Reference source still needs its existing certification.
 
@@ -696,6 +696,23 @@ remain bounded. Reference source still needs its existing certification.
 capability input and supplies four complete authored runtime originals with
 native execution and gated same-input rustc comparison. This is not upstream
 project, native pcc1, Darwin reference or owned borrow-checker qualification.
+
+### Tuple shape constraints from ordinary patterns
+
+A tuple pattern inside an ordinary `match` can constrain an unknown payload
+type to that tuple shape. Its fresh element slots remain shared with literals,
+nested patterns, arm expressions and later uses; unresolved elements still
+fail before lowering. This does not specialize an abstract generic parameter
+into a tuple or reinterpret an integer as a tuple. Concrete arities, nominal
+identity, exhaustiveness and non-Copy moves remain enforced.
+
+`tests/rust/test_rust_tuple_pattern_inference.py` retains the earlier ambiguous
+payload original and checks its actual rustc rejection. Three complete authored
+runtime originals cover later assignment, nested tuple storage and fresh generic
+replay, with owned execution and gated same-input reference comparison.
+Conditional-pattern inference, other unknown aggregate shapes and reference
+certification keep their existing boundaries. This is not whole-project,
+native pcc1 or Darwin reference qualification.
 
 ### Inherent method-local generic inference (qualified bounded slice)
 

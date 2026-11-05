@@ -4,7 +4,7 @@ A bounded constructor matrix covers bool/enum/tuple cases and integer literal
 partitions plus an explicit other-value class. This is not match ergonomics,
 a borrow checker, or a replacement for Rust's trait solver.
 """
-from .semantics import INTEGERS, bounds, resolve, unify
+from .semantics import INTEGERS, InferredType, bounds, resolve, unify
 from .syntax import Enumeration
 from .types import FixedArrayType, TupleType, TypeApplication, TypeParameter
 
@@ -67,6 +67,14 @@ def check_pattern(checker, pattern, ty, *, allow_inferred=False):
         for child in pattern.children:
             check_pattern(checker, child, ty, allow_inferred=allow_inferred)
     elif pattern.kind == "tuple":
+        from .call_inference import partial
+        ty = partial(ty)
+        if allow_inferred and isinstance(ty, InferredType):
+            # The pattern contributes only shape, never guessed element types.
+            # Keep fresh slots shared with its scrutinee and later arm uses.
+            elements = tuple(InferredType(child.token, description="tuple pattern element")
+                             for child in pattern.children)
+            ty = unify(ty, TupleType(elements), pattern.token)
         if not isinstance(ty, TupleType) or len(ty.elements) != len(pattern.children):
             raise pattern.token.error("tuple pattern shape does not match scrutinee")
         for child, element in zip(pattern.children, ty.elements):
