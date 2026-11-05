@@ -65,6 +65,13 @@ class StringModelAnalyzer:
         super().type_expression(node, assigned)
         if node.kind == "group":
             node.string_constant = node.children[0].string_constant
+        elif node.kind == "conditional" and isinstance(node.dtype, BootstrapStringType):
+            condition, yes, no = node.children
+            # JLS 15.29 requires both arms to be constant expressions. Reuse
+            # the selected immutable fact only after both arms were checked.
+            if (condition.constant is not None
+                    and yes.string_constant is not None and no.string_constant is not None):
+                node.string_constant = (yes if condition.constant else no).string_constant
 
     def typed_binary_extension(self, node):
         left, right = node.children

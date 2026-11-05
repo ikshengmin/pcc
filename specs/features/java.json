@@ -110,6 +110,69 @@
   ],
   "features": [
     {
+      "id": "java.string-conditional-constant-model",
+      "title": "String conditional constants without managed execution",
+      "chapter_ids": [
+        "JLS-4",
+        "JLS-15",
+        "JLS-16"
+      ],
+      "scope": "JLS 15.25,15.29,4.12.4,16. Nonlowering String conditional source facts require a constant boolean condition and two independently checked String constant arms, then reuse the selected immutable UTF-16 fact. Preserve original condition/arm typing and DA, final variable rules, eager checking of unselected source arms, existing bounded String work, and separation from numeric constants and runtime identity. Null, mutable operands, calls and primary field access do not become constant expressions merely because a constant condition selects another arm. Static-final and final-local consumers reuse their existing source-fact owners. No owned String bootstrap, materialization, interning, equality, runtime concatenation or native lowering. Model, selected-JDK and whole-Java execution are UNRUN.",
+      "tests": [
+        "tests/java/test_source_string_conditional_model.py::test_string_conditionals_retain_selected_utf16_facts_and_unresolved_runtime",
+        "tests/java/test_source_string_conditional_model.py::test_runtime_or_null_operands_do_not_become_string_constant_expressions",
+        "tests/java/test_source_string_conditional_model.py::test_both_string_arms_are_checked_once_before_reusing_selected_fact",
+        "tests/java/test_source_string_conditional_model.py::test_invalid_string_conditional_originals_are_not_hidden_by_constant_condition",
+        "tests/java/test_source_string_conditional_model.py::test_string_conditional_facts_do_not_expand_runtime_operations",
+        "tests/java/test_source_string_conditional_model.py::test_string_conditional_model_does_not_enable_native_string_compilation",
+        "tests/java/test_source_string_conditional_model.py::test_exact_string_conditional_originals_against_selected_jdk_only",
+        "tests/java/test_source_string_model.py::test_source_constants_do_not_propagate_through_mutable_locals_parameters_or_primary_access",
+        "tests/java/test_source_string_model.py::test_string_constant_comparison_never_becomes_an_unknown_flow_boolean"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:f75f4f3efc3435c344cee382af852055f08186a4e3d31920cba25911c47c1eaa",
+        "sources": [
+          {
+            "path": "pcc/frontends/java/source_string_model.py",
+            "sha256": "c4767f4c7c2a76b796957ff4a2714ce8e96c80fb2ac5a357ccb8710c50d4d667"
+          },
+          {
+            "path": "pcc/frontends/java/source_sema.py",
+            "sha256": "52a65006cc63e39411087d3bc2548c42229a5226fee1b13c288708bbf2ec4670"
+          }
+        ]
+      },
+      "acceptance": [
+        {
+          "id": "string-conditional-constant-model-ci-only",
+          "kind": "full-feature",
+          "scope": "JLS 15.25,15.29,4.12.4,16. Nonlowering String conditional source facts require a constant boolean condition and two independently checked String constant arms, then reuse the selected immutable UTF-16 fact. Preserve original condition/arm typing and DA, final variable rules, eager checking of unselected source arms, existing bounded String work, and separation from numeric constants and runtime identity. Null, mutable operands, calls and primary field access do not become constant expressions merely because a constant condition selects another arm. Static-final and final-local consumers reuse their existing source-fact owners. No owned String bootstrap, materialization, interning, equality, runtime concatenation or native lowering. Model, selected-JDK and whole-Java execution are UNRUN.",
+          "status": "unrun",
+          "source_revision": "sha256:f75f4f3efc3435c344cee382af852055f08186a4e3d31920cba25911c47c1eaa",
+          "mode": "pcc0",
+          "platform": "linux-x86_64",
+          "backend": "self",
+          "gc": "not_applicable",
+          "required_tests": [
+            "tests/java/test_source_string_conditional_model.py::test_string_conditionals_retain_selected_utf16_facts_and_unresolved_runtime",
+            "tests/java/test_source_string_conditional_model.py::test_runtime_or_null_operands_do_not_become_string_constant_expressions",
+            "tests/java/test_source_string_conditional_model.py::test_both_string_arms_are_checked_once_before_reusing_selected_fact",
+            "tests/java/test_source_string_conditional_model.py::test_invalid_string_conditional_originals_are_not_hidden_by_constant_condition",
+            "tests/java/test_source_string_conditional_model.py::test_string_conditional_facts_do_not_expand_runtime_operations",
+            "tests/java/test_source_string_conditional_model.py::test_string_conditional_model_does_not_enable_native_string_compilation",
+            "tests/java/test_source_string_conditional_model.py::test_exact_string_conditional_originals_against_selected_jdk_only",
+            "tests/java/test_source_string_model.py::test_source_constants_do_not_propagate_through_mutable_locals_parameters_or_primary_access",
+            "tests/java/test_source_string_model.py::test_string_constant_comparison_never_becomes_an_unknown_flow_boolean"
+          ],
+          "evidence": [],
+          "reason": "CI-only source/test checkpoint. No repository imports, collection, tests, compilers, native programs or JDK comparisons ran locally. Unchanged-original selected-JDK content/rejection observations are development-only references and cannot establish PCC managed execution. Historical evidence is preserved."
+        }
+      ]
+    },
+    {
       "id": "java.nominal-local-inference-model",
       "title": "Nominal local inference without managed execution",
       "chapter_ids": [
@@ -1330,7 +1393,7 @@
         "JLS-15",
         "JLS-16"
       ],
-      "scope": "Execution-unrun nonlowering model for expected bootstrap String type dependency, immutable UTF-16 literal/constant-name/group/String+String source facts, static-final and final-local constant variables, bounded value/folding work and explicit missing bootstrap/materialization/interning/root obligations. Normal declaration shadowing and access/forward/DA checks remain active; literal type never becomes a user String class. Content is separate from numeric constants and runtime identity. Constant field reads do not imply class initialization. String equality, switches, methods/format, casts, mixed/runtime/compound concatenation and native lowering remain closed. All real project/dependency/runtime acceptance is missing; no String implementation, layout, allocation, host-JDK fallback or qualification evidence is supplied.",
+      "scope": "Execution-unrun nonlowering model for expected bootstrap String type dependency, immutable UTF-16 literal/constant-name/group/String+String/constant-conditional source facts, static-final and final-local constant variables, bounded value/folding work and explicit missing bootstrap/materialization/interning/root obligations. Normal declaration shadowing and access/forward/DA checks remain active; literal type never becomes a user String class. Content is separate from numeric constants and runtime identity. Constant field reads do not imply class initialization. String equality, switches, methods/format, casts, mixed/runtime/compound concatenation and native lowering remain closed. All real project/dependency/runtime acceptance is missing; no String implementation, layout, allocation, host-JDK fallback or qualification evidence is supplied.",
       "status": "missing",
       "tests": [
         "tests/java/test_source_string_model.py",
@@ -2898,7 +2961,7 @@
           },
           {
             "path": "pcc/frontends/java/source_string_model.py",
-            "sha256": "130cfc884aebe804ab22ffb380424bbb57615b7fdfd60b116bc0954f9807d814"
+            "sha256": "c4767f4c7c2a76b796957ff4a2714ce8e96c80fb2ac5a357ccb8710c50d4d667"
           }
         ]
       },
@@ -3346,7 +3409,7 @@
           },
           {
             "path": "pcc/frontends/java/source_string_model.py",
-            "sha256": "130cfc884aebe804ab22ffb380424bbb57615b7fdfd60b116bc0954f9807d814"
+            "sha256": "c4767f4c7c2a76b796957ff4a2714ce8e96c80fb2ac5a357ccb8710c50d4d667"
           }
         ]
       },
@@ -3372,7 +3435,7 @@
           },
           {
             "path": "pcc/frontends/java/source_string_model.py",
-            "sha256": "130cfc884aebe804ab22ffb380424bbb57615b7fdfd60b116bc0954f9807d814"
+            "sha256": "c4767f4c7c2a76b796957ff4a2714ce8e96c80fb2ac5a357ccb8710c50d4d667"
           },
           {
             "path": "pcc/frontends/java/source_array_model.py",
