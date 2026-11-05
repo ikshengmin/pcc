@@ -31,7 +31,7 @@ from pcc.frontends.cpp.constants import (
 )
 from pcc.frontends.cpp.enums import parse_enum
 from pcc.frontends.cpp.arrays import (
-    const_array_elements, lower_array_initializer, make_array_type,
+    const_array_elements, deduce_list_bound, lower_array_initializer, make_array_type,
     require_complete_array,
 )
 from pcc.frontends.cpp.objects import parse_namespace_object
@@ -1387,7 +1387,13 @@ class CppParser:
             if isinstance(dtype, ReferenceType):
                 from pcc.frontends.cpp.references import declare_local
                 return declare_local(self, name, dtype, for_init=for_init)
-            self._check_object_type(dtype, name.coord)
+            # An unknown outer bound is completed by an explicit braced list.
+            # Keep the declared symbol incomplete while its clauses are parsed;
+            # sizeof/self lookup must not acquire the eventual bound early.
+            deducing_array = (array_type(dtype) and dtype.bound is None
+                              and (self._peek().value == "{" or self._peek().value == "="
+                                   and self.cursor.tokens[self.cursor.position + 1].value == "{"))
+            self._check_object_type(dtype.element if deducing_array else dtype, name.coord)
             # The point of declaration precedes the initializer.
             symbol = self.scope.declare(Symbol(
                 name.value, "value", name.coord, dtype=dtype,
@@ -1406,6 +1412,10 @@ class CppParser:
                 equals = self._accept("=")
                 if self._peek().value == "{":
                     initializer_list = parse_initializer_list(self)
+                    if deducing_array:
+                        dtype = deduce_list_bound(dtype, initializer_list, self.types)
+                        self._check_object_type(dtype, name.coord)
+                        symbol.dtype = dtype
                     init = lower_array_initializer(dtype, initializer_list, self.types, self._convert)
                 elif equals is not None or self._peek().value == "(":
                     if self._peek().kind == "STRING_LITERAL":

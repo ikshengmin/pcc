@@ -2,8 +2,9 @@
 
 N4659 [dcl.array], [dcl.fct], [dcl.init.aggr], [conv.array], [expr.sub].
 Bounds use C++ typed constant proofs, never C evaluation or source rewriting.
-C array layout/emission remains the existing shared owner. Class-array lifetime,
-unknown-bound deduction and brace elision are explicit remaining dependencies.
+C array layout/emission remains the existing shared owner. Local explicit-list
+initialization can complete an unknown outer bound. Class-array initialization,
+string-bound deduction and brace elision remain explicit dependencies.
 """
 from pcc.frontends.c.ast import c_ast
 from pcc.frontends.c.c_abi_layout import c_size_type_name
@@ -49,8 +50,24 @@ def require_complete_array(dtype, coord):
     if not array_type(dtype):
         return
     if dtype.bound is None:
-        raise CppDiagnostic("cpp.unsupported.array-bound-deduction", "unknown array bound inference is not implemented", coord)
+        raise CppDiagnostic("cpp.unsupported.array-bound-deduction", "array bound is not complete in this context", coord)
     require_complete_array(dtype.element, coord)
+
+
+def deduce_list_bound(dtype, initializer, types):
+    """Complete only this object's outer bound, without mutating a type alias.
+
+    Each explicit top-level clause initializes one element. Nested arrays keep
+    their declared bounds and the existing initializer owner rejects elision.
+    Called after parsing, so the name remains incomplete in its initializer.
+    """
+    count = len(initializer.clauses)
+    size_type = c_size_type_name(types.target_triple)
+    if not 0 < count < (1 << types.width(size_type)):
+        raise CppDiagnostic('cpp.invalid-array-bound',
+                            'a deduced array bound must be positive and representable in target size_t',
+                            initializer.coord)
+    return ArrayType(dtype.element, count)
 
 
 def const_array_elements(dtype):

@@ -86,7 +86,6 @@ INVALID = (
 )
 
 UNSUPPORTED = (
-    'int f(){int a[]={1,2};return 0;}',
     'int f(){int a[2][2]={1,2,3,4};return 0;}',
     'struct S{~S();};int f(){S a[2];return 0;}',
     'int a[2]={1,2};',
