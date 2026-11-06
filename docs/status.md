@@ -93,6 +93,17 @@ after class replacement, and does not claim introspection support. The final
 gateway memory/throughput comparison and native-pcc1/bootstrap qualification
 remain open for this batch.
 
+The callback lifetime oracle keeps the final object of each shape explicitly
+reachable while retiring 100 prior objects per shape. Exact counts remain
+mandatory; bounded repeated collections allow concurrent marking/relocation
+retirement to progress. This detects the original complete retention without
+equating a conservative last-use word with an indefinitely retained owner.
+Runtime private-name lookup also exposed that method namespace publication
+used the unmangled spelling; publication now uses the lexical private key,
+separately from the function's original name. The checked-in L1 signature data
+has been regenerated from the current host methods. These source/schema checks
+do not establish a native compiler fixed point.
+
 The Linux arm64 application build from `2d0a617ea69b5816092cff0e2aed5a71ecbe3975`
 failed because the incremental collector's direct cross-module read of
 `pcc_gc_cms_worker_current` produced an ordinary GOT relocation to TLS storage.
