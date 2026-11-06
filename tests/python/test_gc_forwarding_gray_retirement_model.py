@@ -29,6 +29,15 @@ def _functions(namespace, filename, names):
     exec(compile(ast.Module(body=selected, type_ignores=[]), str(source), "exec"), namespace)
 
 
+@pytest.mark.parametrize('backend, count_free, expected', [
+    (0, 0, 0), (1, 0, 0), (2, 0, 0), (3, 0, 0), (3, 1, 1), (4, 0, 1),
+])
+def test_actual_retirement_backend_admission(backend, count_free, expected):
+    state = RetirementState(backend)
+    state.store('pcc_gc_backend4_no_refcounts', 0, count_free)
+    assert state.ns['_retirement_backend_admitted']() == expected
+
+
 class RetirementState:
     def __init__(self, backend=4):
         self.memory = {}
@@ -128,6 +137,7 @@ class RetirementState:
             "pcc_gc_object_node_unlink", "pcc_gc_live_bytes_subtract",
         })
         _functions(ns, "freestanding_gc_forwarding_retirement.py", {
+            "_retirement_backend_admitted",
             "_retire_forwarded_source_into_finish", "pcc_gc_backend4_remap_and_retire_unlocked",
             "pcc_gc_backend4_remap_and_retire_stopped_world", "pcc_gc_forwarding_remove_target",
             "pcc_gc_forwarding_detach", "pcc_gc_forwarding_detach_into_finish",
@@ -141,7 +151,14 @@ class RetirementState:
         _functions(ns, "freestanding_gc_relocation_copy.py", {
             "pcc_gc_backend4_relocate_copy_preallocated_unlocked",
         })
-        _functions(ns, "freestanding_gc_incremental_concurrent_scheduler.py", {"pcc_gc_tracing_step_cycle"})
+        _functions(ns, "freestanding_gc_common_mark_cycle.py", {
+            "pcc_gc_trace_stack_begin", "pcc_gc_trace_stack_end",
+            "pcc_gc_trace_stack_drain", "pcc_gc_trace_stack_drain_work",
+        })
+        _functions(ns, "freestanding_gc_public_collection.py", {"pcc_gc_is_cms_worker"})
+        _functions(ns, "freestanding_gc_incremental_concurrent_scheduler.py", {
+            "pcc_gc_tracing_step_cycle", "pcc_gc_tracing_finish_left_to_mutator",
+        })
         _functions(ns, "py_gc_backend.py", {"pcc_gc_note_object_freeing"})
         ns.update({
             "pcc_gc_relocate_copy": self.copy,

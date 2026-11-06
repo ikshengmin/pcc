@@ -20,6 +20,24 @@ from tests.python.test_gc_forwarding_gray_retirement_model import RetirementStat
 PY = Path(__file__).resolve().parents[2] / 'pcc/runtime/py'
 
 
+@pytest.mark.parametrize('case, expected', [
+    ('not-owner', -1), ('disabled', 0), ('missing-record', 0), ('refresh', 1),
+])
+def test_actual_owner_snapshot_admission_preserves_finite_roots(case, expected):
+    state = GC3()
+    state.words = [0x1000, 0x2000]
+    if case == 'not-owner':
+        state.stopped = False
+    elif case == 'disabled':
+        state.store('pcc_thread_conservative_roots_enabled', 0, 0)
+    elif case == 'missing-record':
+        state.store('pcc_tls_thread_record_py', 0, 0)
+    assert state.ns['pcc_thread_snapshot_stopped_world_owner']() == expected
+    assert state.owner_snapshot_refreshes == int(case == 'refresh')
+    assert state.words == [0x1000, 0x2000]
+    assert not state.owner_snapshot_locked
+
+
 class GC3(RetirementState):
     def __init__(self, counted=False):
         self.raw = {}
@@ -35,6 +53,8 @@ class GC3(RetirementState):
         self.words = []
         self.module_roots = []
         self.root_cells = []
+        self.owner_snapshot_refreshes = 0
+        self.owner_snapshot_locked = False
         self.foreign_releases = []
         self.cext_hook = None
         super().__init__(3)
@@ -123,10 +143,27 @@ class GC3(RetirementState):
         self.load_bodies('freestanding_gc_relocation_remap.py')
         self.load_bodies('freestanding_gc_forwarding_retirement.py')
         self.load_bodies('freestanding_gc_conservative_roots.py')
+        # Keep the actual owner/enable/record checks. Machine-word capture is
+        # the same explicit finite boundary as visit_words, not native stack
+        # or register evidence and not an unconditional success result.
+        self.load_bodies('freestanding_thread_kernel_pthread.py', {
+            'pcc_thread_snapshot_stopped_world_owner',
+        })
+        self.owner_record = self.allocate(216)
+        self.world_lock = self.allocate(8)
+        self.store('pcc_thread_conservative_roots_enabled', 0, 1)
+        self.store('pcc_tls_thread_record_py', 0, self.owner_record)
+        self.store('pcc_world_lock_py', 0, self.world_lock)
+        self.ns.update({
+            'pthread_mutex_lock': self.snapshot_lock,
+            'pthread_mutex_unlock': self.snapshot_unlock,
+            '_thread_snapshot_roots': self.snapshot_owner_words,
+        })
         self.load_bodies('freestanding_gc_generational_oldification.py')
         self.load_bodies('freestanding_gc_generational_promotion.py')
         self.load_bodies('freestanding_gc_root_operations.py', {
             'pcc_gc_object_is_address_pinned', '_resolve_root_slot_mode',
+            'pcc_gc_object_node_is_address_pinned', 'pcc_gc_shade_gray_atomic',
             'pcc_gc_resolve_root_slot_unlocked', 'pcc_gc_resolve_borrowed_root_slot_unlocked',
         })
         self.load_bodies('freestanding_gc_mapped_roots.py', {
@@ -293,6 +330,22 @@ class GC3(RetirementState):
         for word in self.words:
             callback(word, context)
         return len(self.words)
+
+    def snapshot_lock(self, lock):
+        assert self.stopped and lock == self.world_lock
+        assert not self.owner_snapshot_locked
+        self.owner_snapshot_locked = True
+
+    def snapshot_unlock(self, lock):
+        assert lock == self.world_lock and self.owner_snapshot_locked
+        self.owner_snapshot_locked = False
+
+    def snapshot_owner_words(self, record):
+        assert self.stopped and self.owner_snapshot_locked
+        assert record == self.owner_record
+        # self.words is already the model's current finite machine-word set.
+        # Do not add roots, alter headers, or manufacture retention results.
+        self.owner_snapshot_refreshes += 1
 
     def visit_modules(self, callback, context):
         for root in self.module_roots:
