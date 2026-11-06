@@ -69,6 +69,7 @@ RAW_GLOBAL_IMPORTS = {
     "pcc_gc_backend4_selector_scan_best",
     "pcc_gc_backend4_selector_scan_best_score",
     "pcc_gc_backend4_selector_scan_cursor",
+    "pcc_gc_backend4_selector_scan_page",
     "pcc_gc_backend4_selector_scan_restart",
     "pcc_gc_backend4_zpage_head",
 }
@@ -92,6 +93,12 @@ def _literal_global_imports() -> set[str]:
         if isinstance(value, ast.Constant) and isinstance(value.value, str):
             globals_.add(value.value)
     return globals_
+
+
+def test_zpage_lifecycle_declares_exact_raw_global_imports() -> None:
+    # Keep this source contract independent of reference-compiler availability.
+    assert _literal_global_imports() == RAW_GLOBAL_IMPORTS
+    assert RAW_GLOBAL_IMPORTS <= FREESTANDING_GC_RUNTIME_GLOBALS
 
 
 def test_zpage_lifecycle_has_one_strict_source_owner() -> None:

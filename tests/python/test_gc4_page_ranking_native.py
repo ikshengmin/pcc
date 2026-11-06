@@ -162,9 +162,26 @@ def test_simulated_owned_epoch_preserves_order_and_scan_counts(
         assert observed["pin_checks"] == (
             owners * (page_scans + budget * (2 if epoch > 0 else 3)) + 2 * budget
         )
-        assert observed["polls"] == budget * (
-            chunks + owners // 16 + 1 if epoch > 0 else 2 * chunks + owners // 16
+        # Global preflight keeps all-owner chunks. Without an owned seed,
+        # filtered discovery scans the global prefix then only this page.
+        # The C fixture prepends round-robin owners, so page p begins after
+        # pages-1-p global owners. Its fixed page pressures order the winners;
+        # equal scores keep descending page order from that same global list.
+        assert mode in ("tie", "scale")
+        page_order = sorted(
+            range(pages),
+            key=lambda page: (
+                0 if mode == "tie" else (page * 7) % 19 + page % 3,
+                page,
+            ),
+            reverse=True,
+        )[:budget]
+        filtered_chunks = sum(
+            (pages - 1 - page + owners + 15) // 16 for page in page_order
         )
+        expected_polls = budget * (chunks + owners // 16)
+        expected_polls += budget if epoch > 0 else filtered_chunks
+        assert observed["polls"] == expected_polls
 
 
 @pytest.fixture(scope="module")
