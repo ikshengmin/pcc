@@ -80,8 +80,18 @@ The existing descriptor fallback remains; a new deferred-call ABI in `py_func`
 reuses ordinary loaded-method invocation and its TLS owner. This avoids bound
 method/signature construction on cached plain-method calls. Actual gateway CPU
 sampling attributed about 5.3% inclusively to bound-capture wrapping and 5.8% to
-bound-call forwarding (overlapping stacks, not additive). This is a candidate
-mechanism, not a measured end-to-end speedup yet.
+bound-call forwarding (overlapping stacks, not additive).
+
+The patch published as `92d73d8ab`, applied to the common `8c604da53` source,
+passes a balanced four-repeat same-Mac C10 A/B on gateway `582c8f5`. Median
+GET / rises 2,705.9 -> 3,006.0 requests/s (+11.1%); dynamic-ID GET rises
+2,556.9 -> 2,811.9 (+10.0%); POST rises 2,702.4 -> 3,034.6 (+12.3%). All 24
+measurements have zero HTTP/transport errors and are server-bound. Median p99
+falls on all three routes. Both arms retain GC0, one carrier and the ordinary
+resource limits. Peer GC4 selector changes integrated during rebase are not
+part of this frozen paired experiment. The gateway benchmark document records
+binary/report hashes, QPS ranges and lifetime-RSS boundaries; the remaining
+throughput gap is open.
 
 Over `8c604da53`, 12 focused checks pass on local Mac: emitted lookup/release
 ordering, native descriptor/mutation/error behavior, temporary receivers spanning
