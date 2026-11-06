@@ -20,6 +20,7 @@ from pcc.unsafe import (
     ptr_add,
     ptr_eq,
     ptr_is_null,
+    ptr_to_int,
     stack_alloc,
     store_i32,
     store_i64,
@@ -496,6 +497,148 @@ def _selector_scan_reset() -> None:
     store_i32(
         global_addr("pcc_gc_backend4_selector_scan_restart"), 0, 0
     )
+
+
+@c_abi_export("pcc_gc_relocation_selector_owned_trailer_collect_batch")
+def _owned_trailer_collect_batch(
+    owner_thread_id: i64,
+    page_token: c_ptr,
+    require_unselected_page: i64,
+    allow_large_pages: i64,
+    result: c_ptr,
+    state: c_ptr,
+) -> i64:
+    # result: best node @0, examined @8, complete @16.
+    store_ptr(result, 0, null())
+    store_i64(result, 8, 0)
+    store_i64(result, 16, 0)
+    if owner_thread_id <= 0:
+        store_i64(result, 16, 1)
+        return -1
+    scan_owner: i64 = load_i64(
+        global_addr("pcc_gc_backend4_selector_scan_owner"), 0
+    )
+    if scan_owner == 0:
+        store_i64(
+            global_addr("pcc_gc_backend4_selector_scan_owner"),
+            0,
+            owner_thread_id,
+        )
+        global_store_ptr("pcc_gc_backend4_selector_scan_page", page_token)
+        store_i32(
+            global_addr("pcc_gc_backend4_selector_scan_allow_large"),
+            0,
+            allow_large_pages,
+        )
+        store_i32(
+            global_addr(
+                "pcc_gc_backend4_selector_scan_require_unselected"
+            ),
+            0,
+            require_unselected_page,
+        )
+        global_store_ptr("pcc_gc_backend4_selector_scan_cursor", _zpage_head())
+        global_store_ptr("pcc_gc_backend4_selector_scan_best", null())
+        store_i64(
+            global_addr("pcc_gc_backend4_selector_scan_best_score"), 0, -1
+        )
+        store_i32(
+            global_addr("pcc_gc_backend4_selector_scan_restart"), 0, 0
+        )
+    elif (
+        scan_owner != owner_thread_id
+        or ptr_eq(
+            global_load_ptr("pcc_gc_backend4_selector_scan_page"),
+            page_token,
+        ) == 0
+        or load_i32(
+            global_addr("pcc_gc_backend4_selector_scan_allow_large"), 0
+        ) != allow_large_pages
+        or load_i32(
+            global_addr(
+                "pcc_gc_backend4_selector_scan_require_unselected"
+            ),
+            0,
+        ) != require_unselected_page
+    ):
+        store_i64(result, 16, 1)
+        return -1
+    if load_i32(
+        global_addr("pcc_gc_backend4_selector_scan_restart"), 0
+    ) != 0:
+        global_store_ptr("pcc_gc_backend4_selector_scan_cursor", _zpage_head())
+        global_store_ptr("pcc_gc_backend4_selector_scan_best", null())
+        store_i64(
+            global_addr("pcc_gc_backend4_selector_scan_best_score"), 0, -1
+        )
+        store_i32(
+            global_addr("pcc_gc_backend4_selector_scan_restart"), 0, 0
+        )
+
+    examined: i64 = 0
+    cursor = global_load_ptr("pcc_gc_backend4_selector_scan_cursor")
+    while ptr_is_null(cursor) == 0 and examined < 16:
+        node = cursor
+        cursor = load_ptr(node, 16)
+        global_store_ptr("pcc_gc_backend4_selector_scan_cursor", cursor)
+        examined = examined + 1
+        if (
+            ptr_is_null(page_token) == 0
+            and ptr_eq(load_ptr(node, 8), page_token) == 0
+        ):
+            continue
+        score: i64 = _backend4_zpage_candidate_score(
+            node, allow_large_pages
+        )
+        _owned_trailer_note(state, node, score)
+        page = load_ptr(node, 8)
+        if (
+            score <= 0
+            or (
+                require_unselected_page != 0
+                and load_i32(page, 108) != 0
+            )
+        ):
+            continue
+        best_score: i64 = load_i64(
+            global_addr("pcc_gc_backend4_selector_scan_best_score"), 0
+        )
+        if score > best_score:
+            global_store_ptr("pcc_gc_backend4_selector_scan_best", node)
+            store_i64(
+                global_addr("pcc_gc_backend4_selector_scan_best_score"),
+                0,
+                score,
+            )
+    store_i64(result, 8, examined)
+    if ptr_is_null(cursor) == 0:
+        return 0
+
+    has_best: i64 = 0
+    best_node = global_load_ptr("pcc_gc_backend4_selector_scan_best")
+    if ptr_is_null(best_node) == 0:
+        best_page = load_ptr(best_node, 8)
+        score = _backend4_zpage_candidate_score(
+            best_node, allow_large_pages
+        )
+        if (
+            score > 0
+            and (
+                ptr_is_null(page_token) != 0
+                or ptr_eq(best_page, page_token) != 0
+            )
+            and (
+                require_unselected_page == 0
+                or load_i32(best_page, 108) == 0
+            )
+        ):
+            store_ptr(result, 0, best_node)
+            has_best = 1
+    _selector_scan_reset()
+    store_i64(state, 16, load_i64(global_addr("pcc_gc_backend4_candidate_fresh_skips_g"), 0) - load_i64(state, 16))
+    store_i64(state, 32, 1)
+    store_i64(result, 16, 1)
+    return has_best
 
 
 @c_abi_export("pcc_gc_relocation_selector_best_page_batch")
@@ -1080,6 +1223,254 @@ def _single_thread_page_best_batch(page, state, result) -> i64:
     return 0
 
 
+# Private helpers for owned-epoch trailer ranking.
+
+
+@c_abi_export("pcc_gc_relocation_selector_owned_trailer_drop")
+def _owned_trailer_drop(state: c_ptr) -> None:
+    store_ptr(state, 0, null())
+    store_ptr(state, 8, null())
+    store_i64(state, 16, 0)
+    store_i64(state, 24, 0)
+    store_i64(state, 32, -1)
+    store_ptr(state, 40, null())
+    store_ptr(state, 48, null())
+    store_ptr(state, 56, null())
+    store_ptr(state, 64, null())
+
+
+@c_abi_export("pcc_gc_relocation_selector_owned_trailer_valid")
+def _owned_trailer_valid(state: c_ptr) -> i64:
+    epoch: i64 = load_i64(state, 24)
+    if epoch <= 0 or pcc_thread_world_stop_epoch_held() != epoch:
+        _owned_trailer_drop(state)
+        return 0
+    return 1
+
+
+@c_abi_export("pcc_gc_relocation_selector_owned_trailer_record")
+def _owned_trailer_record(page: c_ptr) -> c_ptr:
+    return ptr_add(load_ptr(page, 72), load_i64(page, 80))
+
+
+@c_abi_export("pcc_gc_relocation_selector_owned_trailer_page_admitted")
+def _owned_trailer_page_admitted(page: c_ptr) -> i64:
+    span = load_ptr(page, 72)
+    capacity: i64 = load_i64(page, 16)
+    allocated: i64 = load_i64(page, 64)
+    extent: i64 = load_i64(page, 80)
+    kind: i64 = load_i32(page, 24)
+    if ptr_is_null(span) != 0 or capacity <= 0 or extent < capacity:
+        return 0
+    if allocated < 0 or allocated > capacity or extent > 9223372036854775551:
+        return 0
+    if kind == 0:
+        if capacity != 4096:
+            return 0
+    elif kind == 1:
+        if capacity != 65536:
+            return 0
+    elif kind == 2:
+        if capacity <= 65536 or capacity % 65536 != 0:
+            return 0
+    else:
+        return 0
+    if extent != 4096 and (extent < 65536 or extent % 65536 != 0):
+        return 0
+    address: i64 = ptr_to_int(span)
+    if address <= 0 or address % 8 != 0:
+        return 0
+    if address > 9223372036854775807 - extent - 256:
+        return 0
+    return 1
+
+
+@c_abi_export("pcc_gc_relocation_selector_owned_trailer_begin")
+def _owned_trailer_begin(state: c_ptr) -> i64:
+    _owned_trailer_drop(state)
+    epoch: i64 = pcc_thread_world_stop_epoch_held()
+    if epoch <= 0:
+        return 0
+    store_i64(state, 24, epoch)
+    pcc_py_gc_minor_graph_lock()
+    if (
+        _owned_trailer_valid(state) == 0
+        or load_i64(global_addr("pcc_gc_backend4_selector_scan_owner"), 0) != 0
+        or load_i64(global_addr("pcc_gc_backend4_selector_page_owner"), 0) != 0
+        or load_i64(global_addr("pcc_gc_backend4_relocation_reset_owner"), 0) != 0
+        or load_i64(global_addr("pcc_gc_backend4_reseed_commit_owner"), 0) != 0
+    ):
+        pcc_py_gc_minor_graph_unlock()
+        _owned_trailer_drop(state)
+        return 0
+    pcc_py_gc_minor_graph_unlock()
+    stage: i64 = 0
+    while stage < 2:
+        page = global_load_ptr("pcc_gc_backend4_page_head")
+        while ptr_is_null(page) == 0:
+            pcc_py_gc_minor_graph_lock()
+            if _owned_trailer_valid(state) == 0:
+                pcc_py_gc_minor_graph_unlock()
+                return 0
+            examined: i64 = 0
+            while ptr_is_null(page) == 0 and examined < 16:
+                if stage == 0:
+                    if _owned_trailer_page_admitted(page) == 0:
+                        pcc_py_gc_minor_graph_unlock()
+                        _owned_trailer_drop(state)
+                        return 0
+                else:
+                    record = _owned_trailer_record(page)
+                    store_ptr(record, 0, null())
+                    store_i64(record, 8, -1)
+                    store_ptr(record, 16, null())
+                    store_ptr(record, 24, null())
+                page = load_ptr(page, 56)
+                examined = examined + 1
+            pcc_py_gc_minor_graph_unlock()
+            if ptr_is_null(page) == 0:
+                pcc_thread_safepoint()
+        stage = stage + 1
+    pcc_py_gc_minor_graph_lock()
+    if _owned_trailer_valid(state) == 0:
+        pcc_py_gc_minor_graph_unlock()
+        return 0
+    store_i64(state, 16, load_i64(global_addr("pcc_gc_backend4_candidate_fresh_skips_g"), 0))
+    store_i64(state, 32, 0)
+    pcc_py_gc_minor_graph_unlock()
+    return 2
+
+
+@c_abi_export("pcc_gc_relocation_selector_owned_trailer_note")
+def _owned_trailer_note(state: c_ptr, node: c_ptr, score: i64) -> None:
+    if score <= 0:
+        return
+    page = load_ptr(node, 8)
+    if load_i32(page, 108) != 0:
+        return
+    record = _owned_trailer_record(page)
+    old_score: i64 = load_i64(record, 8)
+    if score <= old_score:
+        return
+    if old_score > 0:
+        previous = load_ptr(record, 16)
+        following = load_ptr(record, 24)
+        if ptr_is_null(previous) != 0:
+            store_ptr(state, 0, following)
+        else:
+            store_ptr(previous, 24, following)
+        if ptr_is_null(following) != 0:
+            store_ptr(state, 8, previous)
+        else:
+            store_ptr(following, 16, previous)
+    store_ptr(record, 0, node)
+    store_i64(record, 8, score)
+    store_ptr(record, 16, load_ptr(state, 8))
+    store_ptr(record, 24, null())
+    if ptr_is_null(load_ptr(state, 8)) != 0:
+        store_ptr(state, 0, record)
+    else:
+        store_ptr(load_ptr(state, 8), 24, record)
+    store_ptr(state, 8, record)
+
+
+@c_abi_export("pcc_gc_relocation_selector_owned_trailer_sort_consume_first")
+def _owned_trailer_sort_consume_first(state: c_ptr) -> i64:
+    bit: i64 = 0
+    while bit < 63:
+        store_ptr(state, 40, null())
+        store_ptr(state, 48, null())
+        store_ptr(state, 56, null())
+        store_ptr(state, 64, null())
+        cursor = load_ptr(state, 0)
+        while ptr_is_null(cursor) == 0:
+            pcc_py_gc_minor_graph_lock()
+            if _owned_trailer_valid(state) == 0:
+                pcc_py_gc_minor_graph_unlock()
+                return 0
+            examined: i64 = 0
+            while ptr_is_null(cursor) == 0 and examined < 16:
+                record = cursor
+                cursor = load_ptr(record, 24)
+                store_ptr(record, 24, null())
+                offset: i64 = 40
+                if ((load_i64(record, 8) >> bit) & 1) != 0:
+                    offset = 56
+                tail = load_ptr(state, offset + 8)
+                if ptr_is_null(tail) != 0:
+                    store_ptr(state, offset, record)
+                else:
+                    store_ptr(tail, 24, record)
+                store_ptr(state, offset + 8, record)
+                examined = examined + 1
+            pcc_py_gc_minor_graph_unlock()
+            if ptr_is_null(cursor) == 0:
+                pcc_thread_safepoint()
+        pcc_py_gc_minor_graph_lock()
+        if _owned_trailer_valid(state) == 0:
+            pcc_py_gc_minor_graph_unlock()
+            return 0
+        if ptr_is_null(load_ptr(state, 56)) == 0:
+            store_ptr(state, 0, load_ptr(state, 56))
+            store_ptr(load_ptr(state, 64), 24, load_ptr(state, 40))
+        else:
+            store_ptr(state, 0, load_ptr(state, 40))
+        pcc_py_gc_minor_graph_unlock()
+        bit = bit + 1
+    pcc_py_gc_minor_graph_lock()
+    if _owned_trailer_valid(state) == 0:
+        pcc_py_gc_minor_graph_unlock()
+        return 0
+    if ptr_is_null(load_ptr(state, 0)) == 0:
+        store_ptr(state, 0, load_ptr(load_ptr(state, 0), 24))
+    store_ptr(state, 8, null())
+    store_i64(state, 32, 2)
+    pcc_py_gc_minor_graph_unlock()
+    return 1
+
+
+@c_abi_export("pcc_gc_relocation_selector_owned_trailer_ranked_page")
+def _owned_trailer_ranked_page(state: c_ptr, result: c_ptr) -> i64:
+    store_ptr(result, 0, null())
+    store_i64(result, 8, 0)
+    store_i64(result, 16, 1)
+    record = load_ptr(state, 0)
+    found: i64 = 0
+    if ptr_is_null(record) == 0:
+        node = load_ptr(record, 0)
+        store_ptr(state, 0, load_ptr(record, 24))
+        if _backend4_zpage_candidate_score(node, 1) > 0:
+            store_ptr(result, 0, node)
+            store_i64(result, 8, 1)
+            found = 1
+    skips: i64 = load_i64(global_addr("pcc_gc_backend4_candidate_fresh_skips_g"), 0)
+    store_i64(global_addr("pcc_gc_backend4_candidate_fresh_skips_g"), 0, skips + load_i64(state, 16))
+    return found
+
+
+@c_abi_export("pcc_gc_relocation_selector_owned_trailer_finish")
+def _owned_trailer_finish(state: c_ptr) -> None:
+    page = global_load_ptr("pcc_gc_backend4_page_head")
+    while ptr_is_null(page) == 0:
+        pcc_py_gc_minor_graph_lock()
+        if _owned_trailer_valid(state) == 0:
+            pcc_py_gc_minor_graph_unlock()
+            return
+        examined: i64 = 0
+        while ptr_is_null(page) == 0 and examined < 16:
+            record = _owned_trailer_record(page)
+            store_ptr(record, 0, null())
+            store_i64(record, 8, 0)
+            store_ptr(record, 16, null())
+            store_ptr(record, 24, null())
+            page = load_ptr(page, 56)
+            examined = examined + 1
+        pcc_py_gc_minor_graph_unlock()
+        if ptr_is_null(page) == 0:
+            pcc_thread_safepoint()
+    _owned_trailer_drop(state)
+
+
 @c_abi_export("pcc_gc_backend4_select_relocation_pages")
 def pcc_gc_backend4_select_relocation_pages(page_budget: i64) -> i64:
     if pcc_gc_config_ensure() != 4 or page_budget <= 0:
@@ -1098,6 +1489,8 @@ def pcc_gc_backend4_select_relocation_pages(page_budget: i64) -> i64:
         # stays fixed until this call returns. Threaded/resumed scans keep
         # the registered original path, including its restart protocol.
         ranked = _single_thread_page_rank_begin(rank_state)
+    elif page_budget > 1:
+        ranked = _owned_trailer_begin(rank_state)
     while pages < page_budget:
         page_token = null()
         preflight_seed = null()
@@ -1107,9 +1500,16 @@ def pcc_gc_backend4_select_relocation_pages(page_budget: i64) -> i64:
         preflight_complete: i64 = 0
         while preflight_complete == 0:
             pcc_py_gc_minor_graph_lock()
+            if ranked == 2 and _owned_trailer_valid(rank_state) == 0:
+                ranked = 0
             has_preflight: i64 = 0
-            if ranked != 0:
+            if ranked == 1:
                 has_preflight = _single_thread_ranked_page(rank_state, preflight_result)
+            elif ranked == 2:
+                if load_i64(rank_state, 32) == 0:
+                    has_preflight = _owned_trailer_collect_batch(owner_thread_id, null(), 1, 1, preflight_result, rank_state)
+                else:
+                    has_preflight = _owned_trailer_ranked_page(rank_state, preflight_result)
             else:
                 has_preflight = _best_relocation_page_batch(
                     owner_thread_id, null(), 1, 1, preflight_result
@@ -1143,6 +1543,9 @@ def pcc_gc_backend4_select_relocation_pages(page_budget: i64) -> i64:
                 and load_i64(preflight_result, 8) > 0
             ):
                 pcc_thread_safepoint()
+        if ranked == 2 and load_i64(rank_state, 32) == 1 and ptr_is_null(page_token) == 0:
+            if _owned_trailer_sort_consume_first(rank_state) == 0:
+                ranked = 0
         if ptr_is_null(page_token) != 0 or object_budget <= 0:
             break
 
@@ -1208,7 +1611,7 @@ def pcc_gc_backend4_select_relocation_pages(page_budget: i64) -> i64:
                         store_ptr(current_result, 0, preflight_seed)
                         has_current = 1
                     preflight_seed = null()
-                elif ranked != 0:
+                elif ranked == 1:
                     has_current = _single_thread_page_best_batch(
                         page_token, rank_state, current_result
                     )
@@ -1293,6 +1696,8 @@ def pcc_gc_backend4_select_relocation_pages(page_budget: i64) -> i64:
         if page_selected <= 0:
             break
         pages = pages + 1
-    if ptr_is_null(load_ptr(rank_state, 0)) == 0:
+    if ranked == 2:
+        _owned_trailer_finish(rank_state)
+    elif ranked == 1 and ptr_is_null(load_ptr(rank_state, 0)) == 0:
         free(load_ptr(rank_state, 0))
     return selected

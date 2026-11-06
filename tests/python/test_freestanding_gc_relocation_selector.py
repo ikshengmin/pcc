@@ -21,6 +21,16 @@ MANAGED_SOURCE = RUNTIME_DIR / "py" / "py_gc_backend.py"
 MAKEFILE = RUNTIME_DIR / "Makefile"
 
 OWNED_SYMBOLS = {
+    'pcc_gc_relocation_selector_owned_trailer_begin',
+    'pcc_gc_relocation_selector_owned_trailer_collect_batch',
+    'pcc_gc_relocation_selector_owned_trailer_drop',
+    'pcc_gc_relocation_selector_owned_trailer_finish',
+    'pcc_gc_relocation_selector_owned_trailer_note',
+    'pcc_gc_relocation_selector_owned_trailer_page_admitted',
+    'pcc_gc_relocation_selector_owned_trailer_ranked_page',
+    'pcc_gc_relocation_selector_owned_trailer_record',
+    'pcc_gc_relocation_selector_owned_trailer_sort_consume_first',
+    'pcc_gc_relocation_selector_owned_trailer_valid',
     "pcc_gc_relocation_selector_single_thread_rank_sift_down",
     "pcc_gc_relocation_selector_single_thread_rank_begin",
     "pcc_gc_relocation_selector_single_thread_ranked_page",
@@ -65,6 +75,7 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_threads_enabled",
 }
 RAW_GLOBAL_IMPORTS = {
+    "pcc_gc_backend4_page_head",
     "pcc_gc_read_barrier_enabled",
     "pcc_gc_backend4_evacuation_candidate_bytes_count",
     "pcc_gc_backend4_evacuation_candidate_zpage_bytes_count",
@@ -292,3 +303,53 @@ def test_production_archive_has_one_relocation_selector_owner(
         assert len(owners) == 1, (symbol, owners)
         assert ":freestanding_gc_relocation_selector.o:" in owners[0]
         assert ":py_gc_backend.o:" not in owners[0]
+
+
+# Exact raw helper signatures, also checked against emitted IR by the native fixture.
+OWNED_TRAILER_SIGNATURES = {'pcc_gc_relocation_selector_owned_trailer_collect_batch': {'arguments': ['i64',
+                                                                          'ptr',
+                                                                          'i64',
+                                                                          'i64',
+                                                                          'ptr',
+                                                                          'ptr'],
+                                                            'return': 'i64'},
+ 'pcc_gc_relocation_selector_owned_trailer_drop': {'arguments': ['ptr'],
+                                                   'return': 'void'},
+ 'pcc_gc_relocation_selector_owned_trailer_valid': {'arguments': ['ptr'],
+                                                    'return': 'i64'},
+ 'pcc_gc_relocation_selector_owned_trailer_record': {'arguments': ['ptr'],
+                                                     'return': 'ptr'},
+ 'pcc_gc_relocation_selector_owned_trailer_page_admitted': {'arguments': ['ptr'],
+                                                            'return': 'i64'},
+ 'pcc_gc_relocation_selector_owned_trailer_begin': {'arguments': ['ptr'],
+                                                    'return': 'i64'},
+ 'pcc_gc_relocation_selector_owned_trailer_note': {'arguments': ['ptr', 'ptr', 'i64'],
+                                                   'return': 'void'},
+ 'pcc_gc_relocation_selector_owned_trailer_sort_consume_first': {'arguments': ['ptr'],
+                                                                 'return': 'i64'},
+ 'pcc_gc_relocation_selector_owned_trailer_ranked_page': {'arguments': ['ptr', 'ptr'],
+                                                          'return': 'i64'},
+ 'pcc_gc_relocation_selector_owned_trailer_finish': {'arguments': ['ptr'],
+                                                     'return': 'void'}}
+
+
+def test_owned_trailer_helpers_have_exact_raw_signatures():
+    tree = ast.parse(STRICT_SOURCE.read_text(encoding="utf-8"))
+    functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+    for symbol, expected in OWNED_TRAILER_SIGNATURES.items():
+        function = functions["_owned_trailer_" + symbol.removeprefix("pcc_gc_relocation_selector_owned_trailer_")]
+        annotations = {"c_ptr": "ptr", "i64": "i64"}
+        arguments = [annotations[arg.annotation.id] for arg in function.args.args]
+        result = function.returns
+        result_type = "void" if isinstance(result, ast.Constant) and result.value is None else annotations[result.id]
+        assert {"arguments": arguments, "return": result_type} == expected
+        assert any(isinstance(decorator, ast.Call) and isinstance(decorator.func, ast.Name)
+                   and decorator.func.id == "c_abi_export"
+                   and ast.literal_eval(decorator.args[0]) == symbol
+                   for decorator in function.decorator_list)
+    for index, node in enumerate(tree.body):
+        if isinstance(node, ast.Expr):
+            docstring = index == 0 and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
+            definition = (isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
+                          and node.value.func.id == "define_global_i64")
+            assert docstring or definition, (node.lineno, ast.dump(node))

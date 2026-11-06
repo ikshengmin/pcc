@@ -65,6 +65,7 @@ class _SelectorMemory:
         self.runtime_guard_polls = []
         self.runtime_guard_kinds = []
         self.rank_entry_pending = False
+        self.trailer_entry_pending = False
         self.rank_building = False
         self.rank_score_count = 0
         self.rank_score_batches = []
@@ -72,6 +73,7 @@ class _SelectorMemory:
         self.page_best_batches = []
         self.namespace = {
             "i64": int,
+            "c_ptr": int,
             "null": lambda: 0,
             "ptr_eq": lambda left, right: int(left == right),
             "ptr_is_null": lambda value: int(value == 0),
@@ -131,6 +133,17 @@ class _SelectorMemory:
         ranked_page = self.namespace["_single_thread_ranked_page"]
         page_best = self.namespace["_single_thread_page_best_batch"]
         candidate_score = self.namespace["_backend4_zpage_candidate_score"]
+        trailer_begin = self.namespace["_owned_trailer_begin"]
+
+        def begin_trailer(state):
+            assert not self.locked and self.threads_enabled != 0
+            self.trailer_entry_pending = True
+            try:
+                return trailer_begin(state)
+            finally:
+                self.trailer_entry_pending = False
+
+        self.namespace["_owned_trailer_begin"] = begin_trailer
 
         def bounded_scan(owner, page, unselected, large, result):
             assert self.locked
@@ -232,7 +245,9 @@ class _SelectorMemory:
         return self.threads_enabled
 
     def held_epoch(self):
-        assert self.locked
+        # Admission's first epoch query precedes its graph lock. All existing
+        # preflight/commit queries still require the lock.
+        assert self.locked or self.trailer_entry_pending
         epoch = self.stop_epoch if self.world_stopped and self.stop_owner == 1 else -1
         self.epoch_queries.append(epoch)
         return epoch
@@ -332,6 +347,10 @@ class _SelectorMemory:
         # Keep a positive, equal fragmentation score across model pages.
         self.write(page, 16, 4096 + owners * 64)
         self.write(page, 40, pressure)
+        # This cursor model has no payload spans. Expose its live pages so
+        # trailer admission rejects the model before any scratch write.
+        self.write(page, 56, self.global_get("pcc_gc_backend4_page_head"))
+        self.global_set("pcc_gc_backend4_page_head", page)
         nodes = [self.add_owner(page) for _ in range(owners)]
         return page, nodes
 

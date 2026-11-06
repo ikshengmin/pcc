@@ -64,7 +64,10 @@ int main(int argc,char **argv){
   if(!strcmp(mode,"blocked")&&p%5==0)w64(page,88,1);
   if(!strcmp(mode,"preselected")&&p%3==0)w32(page,108,1);
   if(!strcmp(mode,"zero")){w64(page,8,5000);w64(page,40,0);w64(page,48,0);}
+  wp(page,56,p+1<page_count?pages+(p+1)*128:NULL);
  }
+ /* Legacy pages deliberately have no valid span: admission must reject them. */
+ pcc_gc_backend4_page_head=(uintptr_t)(page_count?pages:NULL);
  for(long i=0;i<node_count;i++){
   void *obj=objects+i*256,*node=nodes+i*80,*page=pages+(i%page_count)*128;
   w32(obj,8,2);w64(obj,16,i+1);wp(node,0,obj);wp(node,8,page);w64(node,32,64);

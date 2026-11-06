@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -151,7 +152,11 @@ def test_simulated_owned_epoch_preserves_order_and_scan_counts(
         observed = json.loads(result.stdout)
         assert {name: observed[name] for name in ORACLE["fields"]} == expected
         assert observed["rank_allocs"] == 0  # Threaded mode never enables ranking.
-        assert observed["epoch_queries"] == budget * (2 if epoch > 0 else 1)
+        # Multi-page threaded calls attempt trailer admission once. These
+        # legacy pages have no span, so a positive lease is rejected after
+        # the entry, owner, and first-page checks; an unowned lease stops at entry.
+        admission_queries = (3 if epoch > 0 else 1) if budget > 1 else 0
+        assert observed["epoch_queries"] == budget * (2 if epoch > 0 else 1) + admission_queries
         # Count stub pin-provider/poll calls, not all visits or runtime latency.
         page_scans = budget * pages - budget * (budget - 1) // 2
         assert observed["pin_checks"] == (
@@ -160,3 +165,102 @@ def test_simulated_owned_epoch_preserves_order_and_scan_counts(
         assert observed["polls"] == budget * (
             chunks + owners // 16 + 1 if epoch > 0 else 2 * chunks + owners // 16
         )
+
+
+@pytest.fixture(scope="module")
+def trailer_selector(emitted_selector):
+    build, obj, _legacy = emitted_selector
+    ir = obj.with_suffix(".ll").read_text()
+    for symbol, expected in contract.OWNED_TRAILER_SIGNATURES.items():
+        matches = re.findall(r"^define external (i64|ptr|void) @" + re.escape(symbol) + r"\(([^)]*)\)", ir, re.MULTILINE)
+        assert len(matches) == 1, (symbol, matches)
+        result_type, parameters = matches[0]
+        arguments = [parameter.strip().split()[0] for parameter in parameters.split(",")] if parameters else []
+        assert {"arguments": arguments, "return": result_type} == expected
+    executable = build / "trailer-harness"
+    link = subprocess.run(
+        ["cc", "-O2", "-I", str(build), str(FIXTURES / "gc4_trailer_native.c"), str(obj),
+         "-Wl,--wrap=malloc", "-Wl,--wrap=free", "-o", str(executable)],
+        capture_output=True, text=True, timeout=15,
+    )
+    assert link.returncode == 0, link.stdout + link.stderr
+    return executable
+
+
+def _run_trailer(executable, *, shape="ordinary", mode="tie", pages=9, owners=17,
+                 budget=20, threads=1, epoch=11, fail_at=0, fail_rank=0,
+                 loss="none", replacement=-1):
+    argv = [shape, mode, pages, owners, budget, threads, epoch, fail_at, fail_rank, loss, replacement]
+    result = subprocess.run([str(executable), *map(str, argv)], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, (argv, result.stdout, result.stderr)
+    observed = json.loads(result.stdout)
+    for key in ("free_errors", "protect_errors", "integrity_errors", "lock_errors", "rank_live"):
+        assert observed[key] == 0, (key, argv, observed)
+    assert observed["distinct_spans"] == pages
+    return observed
+
+
+def _trailer_pair(executable, **kwargs):
+    # Both execute the current production source. The unowned provider forces
+    # the original registered-scan path; this is not a historical binary oracle.
+    baseline = _run_trailer(executable, **dict(kwargs, epoch=-1))
+    candidate = _run_trailer(executable, **kwargs)
+    fields = ORACLE["fields"] + ["rank_allocs", "malloc_calls", "plan_attempts", "allocation_hash", "free_hash"]
+    assert {key: candidate[key] for key in fields} == {key: baseline[key] for key in fields}
+    assert baseline["initialized_seen"] == baseline["active_seen"] == 0
+    assert baseline["trailer_sentinel"] == kwargs.get("pages", 9)
+    return baseline, candidate
+
+
+@pytest.mark.parametrize("shape", ["ordinary", "retained"])
+def test_owned_trailer_explicit_tie_order_and_storage(trailer_selector, shape):
+    _, observed = _trailer_pair(trailer_selector, shape=shape, pages=3, owners=4, budget=2)
+    assert observed["selected"] == 8 and observed["page_n"] == 2
+    assert observed["first_obj"] == 12 and observed["first_page"] == 2
+    assert observed["reloc_hash"] == 15810070159895781251
+    assert observed["page_hash"] == 11125486474286715500
+    assert observed["initialized_seen"] == observed["active_seen"] == observed["trailer_clean"] == 3
+    assert observed["logical_capacity"] == 4096
+    assert observed["retained_extent"] == (65536 if shape == "retained" else 4096)
+
+
+@pytest.mark.parametrize("shape", ["ordinary", "retained"])
+def test_owned_trailer_full_multi_chunk_rank(trailer_selector, shape):
+    fallback, observed = _trailer_pair(trailer_selector, shape=shape, mode="scale", pages=32, owners=32, budget=32)
+    assert observed["selected"] == 1024 and observed["page_n"] == 32
+    assert observed["initialized_seen"] == observed["active_seen"] == observed["trailer_clean"] == 32
+    assert observed["pin_checks"] < fallback["pin_checks"]
+
+
+@pytest.mark.parametrize("shape", ["no_span", "bad_capacity", "bad_extent", "bad_allocated", "bad_class", "unaligned", "overflow"])
+def test_owned_trailer_invalid_last_page_falls_back(trailer_selector, shape):
+    _, observed = _trailer_pair(trailer_selector, shape=shape)
+    assert observed["selected"] > 0
+    assert observed["initialized_seen"] == observed["active_seen"] == 0
+    assert observed["trailer_sentinel"] == 9
+
+
+@pytest.mark.parametrize("shape", ["ordinary", "retained"])
+@pytest.mark.parametrize("fail_at", [1, 2, 5, 18, 19, 20, 76, 77, 80])
+def test_owned_trailer_absolute_plan_oom_and_cleanup(trailer_selector, shape, fail_at):
+    _, observed = _trailer_pair(trailer_selector, shape=shape, fail_at=fail_at)
+    assert observed["malloc_calls"] == fail_at
+    assert observed["initialized_seen"] == observed["trailer_clean"] == 9
+    assert observed["rank_allocs"] == 0
+
+
+@pytest.mark.parametrize("phase", ["admit", "initialize", "scan", "sort", "plan", "commit", "cleanup"])
+@pytest.mark.parametrize("replacement", [-1, 0, 12])
+def test_owned_trailer_epoch_loss_poisoned_storage(trailer_selector, phase, replacement):
+    kwargs = dict(mode="tie", pages=32, owners=4, budget=32, shape="retained")
+    fallback = _run_trailer(trailer_selector, **kwargs, epoch=-1)
+    observed = _run_trailer(trailer_selector, **kwargs, loss=phase, replacement=replacement)
+    fields = ORACLE["fields"] + ["rank_allocs", "malloc_calls", "plan_attempts", "allocation_hash", "free_hash"]
+    assert {key: observed[key] for key in fields} == {key: fallback[key] for key in fields}
+    assert observed["loss_fired"] == 1 and observed["poison_count"] == 32
+    assert observed["final_epoch"] == replacement
+    assert observed["selected"] == 128
+    if phase not in {"admit", "initialize"}:
+        assert observed["initialized_seen"] == 32 and observed["active_seen"] > 0
+    if phase == "cleanup":
+        assert observed["trailer_clean"] == 16 and observed["trailer_nonzero"] == 16
