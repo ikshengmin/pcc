@@ -241,6 +241,11 @@ pcc_gc_note_slot_write_barrier = extern(
     (c_ptr, c_ptr, c_ptr),
     c_void,
 )
+pcc_gc_backend4_note_heap_store_locked = extern(
+    "pcc_gc_backend4_note_heap_store_locked",
+    (c_ptr, c_ptr, c_ptr),
+    c_void,
+)
 pcc_gc_object_is_known_no_lock = extern(
     "pcc_gc_object_is_known_no_lock",
     (c_ptr,),
@@ -865,7 +870,10 @@ def _pcc_gc_store_plan_commit_locked(plan, owner, slot, value) -> int:
         # for the root case while this same outer lock keeps the phase stable.
         if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
             if ptr_is_null(owner) == 0 or load_i32(global_addr("pcc_gc_mark_active"), 0) != 0:
-                pcc_gc_note_slot_write_barrier(owner, slot, value)
+                if backend == 4 and ptr_is_null(owner) == 0:
+                    pcc_gc_backend4_note_heap_store_locked(owner, slot, value)
+                else:
+                    pcc_gc_note_slot_write_barrier(owner, slot, value)
         store_ptr(slot, 0, value)
         store_i32(plan, _STORE_PLAN_STATE, 3)
         return 1
@@ -875,9 +883,10 @@ def _pcc_gc_store_plan_commit_locked(plan, owner, slot, value) -> int:
         # run, but no slot publication or old-value release occurs.
         return 0
     if backend == 1 or backend == 2 or backend == 3 or backend == 4:
-        pcc_gc_note_slot_write_barrier(
-            owner, slot, load_ptr(plan, 0)
-        )
+        if backend == 4 and ptr_is_null(owner) == 0:
+            pcc_gc_backend4_note_heap_store_locked(owner, slot, load_ptr(plan, 0))
+        else:
+            pcc_gc_note_slot_write_barrier(owner, slot, load_ptr(plan, 0))
     old = load_ptr(slot, 0)
     store_ptr(slot, 0, load_ptr(plan, 0))
     if ptr_is_null(old) == 0 and is_tagged_int(old) == 0:
@@ -936,7 +945,10 @@ def _pcc_gc_store_plan_commit_sentinel_aware_locked(
         # for the root case while this same outer lock keeps the phase stable.
         if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
             if ptr_is_null(owner) == 0 or load_i32(global_addr("pcc_gc_mark_active"), 0) != 0:
-                pcc_gc_note_slot_write_barrier(owner, slot, value)
+                if backend == 4 and ptr_is_null(owner) == 0:
+                    pcc_gc_backend4_note_heap_store_locked(owner, slot, value)
+                else:
+                    pcc_gc_note_slot_write_barrier(owner, slot, value)
         store_ptr(slot, 0, value)
         store_i32(plan, _STORE_PLAN_STATE, 3)
         return 1
@@ -955,7 +967,10 @@ def _pcc_gc_store_plan_commit_sentinel_aware_locked(
         if load_i64(plan, 48) != 0:
             return 0
     if backend == 1 or backend == 2 or backend == 3 or backend == 4:
-        pcc_gc_note_slot_write_barrier(owner, slot, load_ptr(plan, 0))
+        if backend == 4 and ptr_is_null(owner) == 0:
+            pcc_gc_backend4_note_heap_store_locked(owner, slot, load_ptr(plan, 0))
+        else:
+            pcc_gc_note_slot_write_barrier(owner, slot, load_ptr(plan, 0))
     old = load_ptr(slot, 0)
     store_ptr(slot, 0, load_ptr(plan, 0))
     if ptr_eq(old, sentinel) != 0:

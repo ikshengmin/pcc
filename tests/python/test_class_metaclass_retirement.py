@@ -66,6 +66,9 @@ class Retirement:
             _gc_forwarding_population=lambda: 0,
             _gc4_old_slot_is_releasable=lambda value: 1,
             pcc_gc_note_slot_write_barrier=self.barrier,
+            # This model observes retirement ordering, not barrier policy.
+            # Both barrier entries must execute while its graph lock is held.
+            pcc_gc_backend4_note_heap_store_locked=self.barrier,
             _refcount_provenance_probe_enabled=lambda: 0,
             pcc_capi_is_cext_type_tag=lambda tag: 0,
             pcc_gc_object_is_known=lambda value: 1,

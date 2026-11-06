@@ -33,6 +33,8 @@ PUBLIC_SYMBOLS = {
     "pcc_gc_step",
 }
 OWNED_SYMBOLS = PUBLIC_SYMBOLS | {
+    # Heap StorePlans already hold the graph lock on GC4.
+    "pcc_gc_backend4_note_heap_store_locked",
     # GC1/GC2's lock-free container stores shade through the barrier's
     # own count-free predicate (generator frames, container init).
     "pcc_gc_count_free_store_shade",
@@ -152,7 +154,7 @@ def test_barrier_dispatcher_has_one_strict_source_owner() -> None:
         assert f'@c_abi_export("{symbol}")' not in managed
 
 
-@pytest.mark.parametrize("emitter", ["llvm", "self"])
+@pytest.mark.parametrize("emitter", ["llvm", "self", "owned"])
 def test_barrier_dispatcher_has_exact_strict_object_closure(
     tmp_path: Path, emitter: str
 ) -> None:
@@ -172,13 +174,19 @@ def test_barrier_dispatcher_has_exact_strict_object_closure(
             emit_self_asm(llvm_ir.read_text(encoding="utf-8")), encoding="utf-8"
         )
     obj = tmp_path / ("barrier_dispatcher_" + emitter + ".o")
-    result = subprocess.run(
-        ["clang", "-c", str(source), "-o", str(obj)],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
+    if emitter == "owned":
+        from pcc.backend.owned_object_emit import emit_owned_object
+        from pcc.frontends.python.pipeline_targets import host_target_triple
+
+        obj.write_bytes(emit_owned_object(llvm_ir.read_text(), host_target_triple()))
+    else:
+        result = subprocess.run(
+            ["clang", "-c", str(source), "-o", str(obj)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
     assert _literal_global_imports() == RAW_GLOBAL_IMPORTS
     assert RAW_GLOBAL_IMPORTS <= FREESTANDING_GC_RUNTIME_GLOBALS
 
@@ -388,3 +396,31 @@ def test_barrier_dispatcher_records_old_to_young_edges(
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout == expected
+
+
+def test_gc4_locked_heap_helper_has_explicit_runtime_port_abi() -> None:
+    from pcc.frontends.python.pipeline_freestanding import (
+        source_declares_freestanding_module,
+        source_declares_runtime_port_module,
+    )
+
+    source = (RUNTIME_DIR / "py/py_obj.py").read_text()
+    # This caller is a runtime port, not a strict freestanding module.
+    # Its explicit extern owns the ABI; the strict import allowlist applies
+    # only to freestanding callers, not to the defining dispatcher export.
+    assert source_declares_runtime_port_module(source)
+    assert not source_declares_freestanding_module(source)
+    # Runtime-port extern syntax is ordinary Python (including trailing
+    # commas), not the stricter freestanding allowlist source grammar.
+    bindings = [node.value for node in ast.parse(source).body
+                if isinstance(node, ast.Assign)
+                and any(isinstance(target, ast.Name)
+                        and target.id == "pcc_gc_backend4_note_heap_store_locked"
+                        for target in node.targets)]
+    assert len(bindings) == 1
+    call = bindings[0]
+    assert isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+    assert call.func.id == "extern" and len(call.args) == 3
+    assert call.args[0].value == "pcc_gc_backend4_note_heap_store_locked"
+    assert tuple(item.id for item in call.args[1].elts) == ("c_ptr", "c_ptr", "c_ptr")
+    assert call.args[2].id == "c_void"

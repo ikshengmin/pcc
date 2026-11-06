@@ -32,6 +32,7 @@ class Store:
         self.initialized = set()
         self.events = []
         self.old_reads = 0
+        self.locked_heap_barriers = 0
         self.ready = False
         self.reenter_finish = None
         self.globals = {
@@ -52,6 +53,9 @@ class Store:
             _gc_relocation_candidate=self.candidate,
             pcc_gc_note_relocation_read=self.resolve,
             pcc_gc_note_slot_write_barrier=self.barrier,
+            # This fixture checks StorePlan sequencing/RC records, not the
+            # barrier policy. The native heap-barrier test runs that policy.
+            pcc_gc_backend4_note_heap_store_locked=self.locked_heap_barrier,
             _gc4_old_slot_is_releasable=self.old_known,
             _py_incref_prepare=lambda value, plan: self.prepare('retain', value, plan),
             _py_decref_prepare=lambda value, plan: self.prepare('release', value, plan),
@@ -112,6 +116,11 @@ class Store:
     def barrier(self, owner, slot, value):
         assert self.words[slot] == self.OLD
         self.events.append(('barrier', owner, value))
+
+    def locked_heap_barrier(self, owner, slot, value):
+        assert self.backend == 4 and owner == self.OWNER
+        self.locked_heap_barriers += 1
+        self.barrier(owner, slot, value)
 
     def old_known(self, value):
         assert not self.count_free, 'count-free store checked old provenance'
@@ -283,3 +292,14 @@ def test_store_plan_mode_checks_emit_scalar_ir_without_boxed_comparison(tmp_path
         for symbol in ('py_obj_eq_value', 'py_int_from_i64', 'pcc_gc_pin', 'pcc_gc_retain'):
             assert '@' + symbol + '(' not in body, (name, symbol)
         assert '.modvar.py_obj._STORE_PLAN_' not in body
+
+
+@pytest.mark.parametrize('backend', range(5))
+@pytest.mark.parametrize('count_free', [False, True])
+@pytest.mark.parametrize('kind', ['root', 'field', 'sentinel'])
+def test_locked_heap_barrier_dispatch_is_gc4_heap_only(backend, count_free, kind):
+    # GC0 has no count-free StorePlan mode, regardless of the global flag.
+    model = Store(backend=backend, count_free=count_free and backend != 0)
+    model.init(owner=kind != 'root')
+    assert model.commit(kind, model.VALUE) == 1
+    assert model.locked_heap_barriers == int(backend == 4 and kind != 'root')
