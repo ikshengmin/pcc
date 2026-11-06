@@ -111,6 +111,23 @@ and raises `StopIteration` for the current fixed-arity tuple path; that failure
 also reproduces against unmodified `8c604da53`. It is not a passed ownership
 gate. Full Python/GC suites and native-pcc1/bootstrap qualification remain unrun.
 
+A fresh build of the complete merged `92d73d8ab` source passes all 23 selected
+new/sensitive/ABI checks above, including the native GC0–4 executions. Its
+same-Mac C64/C256/C512 HTTP comparison completes all 18 measurements without
+errors; throughput is 2,573–3,034 requests/s versus aiohttp's 20,861–22,966.
+P99 at C512 remains 2.69–2.94 seconds, and native whole-arm peak RSS is
+1,052,622,848 bytes (nine 15-second measurements plus warmup/probes). These
+remain performance boundaries, not an accepted aiohttp parity claim or a leak
+diagnosis. Raw reports and exact reproducible commands remain outside Git;
+the gateway benchmark entry records their source and artifact hashes.
+
+A diagnostic sample of the paired candidate reduces bound-capture wrapping
+from about 5.3% to 1.2% and bound-call forwarding from 5.8% to 2.0% inclusively.
+Root stores, request parsing and socket operations remain substantial owners.
+That temporary sampling wrapper did not produce its final process-observer
+receipt, so its timing/shutdown is not accepted benchmark evidence; the
+unprofiled A/B and merged comparison above have complete receipts.
+
 ## Owned C++17: builtin-pointer increment, complete language still open
 
 The pointer increment over `f3f8a345c65c1d5ed7b49915d35e69c2c81a35a9` adds
