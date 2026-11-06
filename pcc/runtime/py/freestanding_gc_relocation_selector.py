@@ -634,6 +634,10 @@ def _owned_trailer_collect_batch(
         ):
             store_ptr(result, 0, best_node)
             has_best = 1
+    # Collection is complete: state+8 no longer owns the collection tail.
+    # Reuse that word for the exact positive score maximum already computed
+    # by the original registered scan. Do not derive a pressure upper bound.
+    store_i64(state, 8, load_i64(global_addr("pcc_gc_backend4_selector_scan_best_score"), 0))
     _selector_scan_reset()
     store_i64(state, 16, load_i64(global_addr("pcc_gc_backend4_candidate_fresh_skips_g"), 0) - load_i64(state, 16))
     store_i64(state, 32, 1)
@@ -1377,7 +1381,7 @@ def _owned_trailer_note(state: c_ptr, node: c_ptr, score: i64) -> None:
 @c_abi_export("pcc_gc_relocation_selector_owned_trailer_sort_consume_first")
 def _owned_trailer_sort_consume_first(state: c_ptr) -> i64:
     bit: i64 = 0
-    while bit < 63:
+    while bit < 63 and load_i64(state, 8) > 0:
         store_ptr(state, 40, null())
         store_ptr(state, 48, null())
         store_ptr(state, 56, null())
@@ -1416,6 +1420,7 @@ def _owned_trailer_sort_consume_first(state: c_ptr) -> i64:
         else:
             store_ptr(state, 0, load_ptr(state, 40))
         pcc_py_gc_minor_graph_unlock()
+        store_i64(state, 8, load_i64(state, 8) >> 1)
         bit = bit + 1
     pcc_py_gc_minor_graph_lock()
     if _owned_trailer_valid(state) == 0:

@@ -38,6 +38,25 @@ static uint64_t free_hash=1469598103934665603ULL;
 struct allocation { void *pointer; size_t size; int live; };
 static struct allocation allocations[MAX_ALLOCS];
 static long allocation_count;
+static long forced_failures, failed_ordinal, failed_size, preplan_unlocks;
+static int64_t input_keys[MAX_PAGES];
+static int custom_keys;
+static int64_t key_for(long p){
+ unsigned k=0; const uint64_t M=INT64_MAX;
+ if(!strncmp(mode,"width-",6)){
+  k=(unsigned)atoi(mode+6); if(k<1||k>62)_Exit(30);
+  uint64_t v=1ULL<<k;
+  uint64_t keys[10]={1,v-1,v,v+1,1ULL<<32,1ULL<<62,M,v+1,M,2};
+  return (int64_t)keys[p%10];
+ }
+ if(!strncmp(mode,"early-",6)){
+  k=(unsigned)atoi(mode+6); if(k<2||k>61)_Exit(31);
+  uint64_t v=1ULL<<k, keys[7]={v+1,v-1,2,v+1,v,v-1,1};
+  return (int64_t)keys[p%7];
+ }
+ int64_t keys[10]={1,INT64_MAX,0,-1,INT64_MIN,1LL<<32,1LL<<62,INT64_MAX-1,2,1};
+ return keys[p%10];
+}
 
 static uint64_t u64(const void *p,int o){uint64_t v;memcpy(&v,(const char *)p+o,8);return v;}
 static uint32_t u32(const void *p,int o){uint32_t v;memcpy(&v,(const char *)p+o,4);return v;}
@@ -107,7 +126,7 @@ void *__wrap_malloc(size_t size){
  if(!strcmp(loss,"plan")&&size==16&&plan_attempts==1)lose_epoch();
  allocation_hash=hash(allocation_hash,size);
  if((fail_at&&malloc_calls==fail_at)||(fail_rank&&size!=16)){
-  allocation_hash=hash(allocation_hash,0);return NULL;
+  forced_failures++;failed_ordinal=malloc_calls;failed_size=(long)size;allocation_hash=hash(allocation_hash,0);return NULL;
  }
  void *p=__real_malloc(size);
  allocation_hash=hash(allocation_hash,p!=NULL);
@@ -144,6 +163,7 @@ void pcc_py_gc_minor_graph_lock(void){if(lock_depth++)lock_errors++;}
 void pcc_py_gc_minor_graph_unlock(void){
  if(--lock_depth)lock_errors++;
  observe_records();
+ if(pin_checks>0&&pcc_gc_backend4_selector_scan_owner==0&&plan_attempts==0&&active_seen>0)preplan_unlocks++;
  if(!loss_fired&&!strcmp(loss,"initialize")&&pin_checks==0&&initialized_seen>0&&initialized_seen<page_count)lose_epoch();
  if(!loss_fired&&!strcmp(loss,"cleanup")&&active_seen==page_count){
   long cleaned=0;
@@ -165,6 +185,7 @@ int64_t pcc_threads_enabled(void){return threads;}
 int64_t pcc_thread_world_stop_epoch_held(void){epoch_queries++;return epoch;}
 
 static int build_fixture(void){
+ custom_keys=!strncmp(mode,"width-",6)||!strncmp(mode,"early-",6)||!strcmp(mode,"signed")||!strcmp(mode,"wrap")||!strcmp(mode,"updates");
  if(sysconf(_SC_PAGESIZE)!=OS_PAGE)return 21;
  pages=calloc(page_count?page_count:1,PAGE_BYTES);
  nodes=calloc(node_count?node_count:1,NODE_BYTES);
@@ -193,6 +214,7 @@ static int build_fixture(void){
   if(!strcmp(mode,"blocked")&&p%5==0)w64(page,88,1);
   if(!strcmp(mode,"preselected")&&p%3==0)w32(page,108,1);
   if(!strcmp(mode,"zero")){w64(page,8,4096);w64(page,40,0);w64(page,48,0);}
+  if(custom_keys){w64(page,40,!strcmp(mode,"wrap")?INT64_MAX:0);w64(page,48,!strcmp(mode,"wrap")?2:0);input_keys[p]=key_for(p);}
  }
  pcc_gc_backend4_page_head=(uintptr_t)(page_count?pages:NULL);
  for(long i=0;i<node_count;i++){
@@ -210,12 +232,29 @@ static int build_fixture(void){
    if(i%21==0)w64(obj,24,1);else if(i%23==0)w64(obj,24,2);
    w64(node,72,(i*17)%50);
   }
-  if(!strcmp(mode,"fresh"))w32(obj,12,16384);
+  if(!strcmp(mode,"fresh"))w32(obj,12,16384); if(!strcmp(mode,"defer_mix")){if(i%4==0)w64(node,32,65537);else if(i%7==0)w32(obj,12,16384);}
   if(!strcmp(mode,"forward"))w64(obj,24,1);
   if(!strcmp(mode,"residual")&&i%4==0)w32(obj,12,16384);
   if(!strcmp(mode,"fresh_priority")){
    w64(node,72,(i*17)%50);
    if(i==node_count-1)w32(obj,12,16384);
+  }
+ }
+ if(custom_keys){
+  for(long i=0;i<node_count;i++){
+   long p=i%page_count; uint64_t key=(uint64_t)input_keys[p];
+   if(!strcmp(mode,"updates")){
+    /* Registered scan runs from the last node to the first. */
+    long visit=node_count-1-i;
+    key=1;
+    if(visit==1||visit==3||visit==5||visit==6||visit==10||visit==12||visit==18||visit==20)key=INT64_MAX;
+    if(visit==2)key=1ULL<<32;
+    if(visit==4)key=1ULL<<62;
+   }
+   void *page=pages+p*PAGE_BYTES,*node=nodes+i*NODE_BYTES;
+   uint64_t base=u64(page,16)-u64(page,8);
+   /* Unsigned C arithmetic constructs exact signed-i64 wrapping metadata. */
+   w64(node,72,key-base-u64(page,40)-u64(page,48));
   }
  }
  /* Only the last live page is malformed: the earlier valid pages must not be
@@ -267,15 +306,19 @@ int main(int argc,char **argv){
   clean+=is_zero(r,TRAILER_BYTES);sentinel+=is_sentinel(r,TRAILER_BYTES);nonzero+=!is_zero(r,TRAILER_BYTES);
  }
  uint64_t rh=1469598103934665603ULL,ph=rh,fh=rh;
- long reloc_n=0,page_n=0,first_obj=-1,first_page=-1;
+ long reloc_n=0,page_n=0,first_obj=-1,first_page=-1;long page_order[MAX_PAGES];
  for(void *r=(void *)(uintptr_t)pcc_gc_relocation_set_head;r;r=ptr(r,8)){
   long id=u64(ptr(r,0),16);rh=hash(rh,id);reloc_n++;first_obj=id;if(reloc_n>node_count)return 28;
  }
  for(void *r=(void *)(uintptr_t)pcc_gc_backend4_evacuation_page_head;r;r=ptr(r,8)){
-  long id=((unsigned char *)ptr(r,0)-pages)/PAGE_BYTES;ph=hash(ph,id);page_n++;first_page=id;if(page_n>page_count)return 29;
+  if(page_n>=page_count)return 29;
+  long id=((unsigned char *)ptr(r,0)-pages)/PAGE_BYTES;ph=hash(ph,id);page_order[page_n]=id;page_n++;first_page=id;if(page_n>page_count)return 29;
  }
  for(long i=0;i<node_count;i++)fh=hash(fh,u32(object(i),12));
- printf("{\"selected\":%lld,\"second\":%lld,\"reloc_n\":%ld,\"page_n\":%ld,\"reloc_hash\":%llu,\"page_hash\":%llu,\"flags_hash\":%llu,\"first_obj\":%ld,\"first_page\":%ld,",(long long)selected,(long long)second,reloc_n,page_n,(unsigned long long)rh,(unsigned long long)ph,(unsigned long long)fh,first_obj,first_page);
+ printf("{\"page_order\":[");
+ for(long i=0;i<page_n;i++)printf("%s%ld",i?",":"",page_order[i]);
+ printf("],\"forced_failures\":%ld,\"failed_ordinal\":%ld,\"failed_size\":%ld,\"preplan_unlocks\":%ld,",forced_failures,failed_ordinal,failed_size,preplan_unlocks);
+ printf("\"selected\":%lld,\"second\":%lld,\"reloc_n\":%ld,\"page_n\":%ld,\"reloc_hash\":%llu,\"page_hash\":%llu,\"flags_hash\":%llu,\"first_obj\":%ld,\"first_page\":%ld,",(long long)selected,(long long)second,reloc_n,page_n,(unsigned long long)rh,(unsigned long long)ph,(unsigned long long)fh,first_obj,first_page);
  printf("\"fresh\":%lld,\"refusals\":%lld,\"deferred\":%llu,\"deferred_bytes\":%llu,\"candidates\":%llu,\"candidate_bytes\":%llu,\"zpage_bytes\":%llu,\"revision\":%llu,\"page_revision\":%llu,",(long long)pcc_gc_backend4_candidate_fresh_skips_count(),(long long)pcc_gc_backend4_relocation_add_refusals_count(),(unsigned long long)pcc_gc_backend4_large_object_defers,(unsigned long long)pcc_gc_backend4_large_object_deferred_bytes_count,(unsigned long long)pcc_gc_backend4_evacuation_candidates,(unsigned long long)pcc_gc_backend4_evacuation_candidate_bytes_count,(unsigned long long)pcc_gc_backend4_evacuation_candidate_zpage_bytes_count,(unsigned long long)pcc_gc_backend4_reseed_relocation_revision,(unsigned long long)pcc_gc_backend4_reseed_page_revision);
  printf("\"small_candidates\":%llu,\"medium_candidates\":%llu,\"small_bytes\":%llu,\"medium_bytes\":%llu,\"small_zbytes\":%llu,\"medium_zbytes\":%llu,",(unsigned long long)pcc_gc_backend4_small_page_candidates,(unsigned long long)pcc_gc_backend4_medium_page_candidates,(unsigned long long)pcc_gc_backend4_small_page_candidate_bytes_count,(unsigned long long)pcc_gc_backend4_medium_page_candidate_bytes_count,(unsigned long long)pcc_gc_backend4_small_page_candidate_zpage_bytes_count,(unsigned long long)pcc_gc_backend4_medium_page_candidate_zpage_bytes_count);
  printf("\"pin_checks\":%ld,\"polls\":%ld,\"epoch_queries\":%ld,\"lock_errors\":%ld,\"rank_allocs\":%ld,\"rank_live\":%ld,\"plan_live\":%ld,\"malloc_calls\":%ld,\"plan_attempts\":%ld,\"allocation_hash\":%llu,\"free_hash\":%llu,",pin_checks,polls,epoch_queries,lock_errors,rank_allocs,rank_live,plan_live,malloc_calls,plan_attempts,(unsigned long long)allocation_hash,(unsigned long long)free_hash);
