@@ -184,6 +184,11 @@ admission. Existing escape, volatile/atomic, type and CFG checks remain intact.
 No allocation or activation check is moved. Removal handles the admitted
 declarations in their original blocks.
 
+Implementation `f0be772ae` contains the repair. Its focused evidence uses the
+frozen `acdbef96a` base plus the same optimizer/test patch. Upstream GC4 barrier
+change `4079ee8d0` was integrated without conflict after validation; it was not
+included in these Mac measurements.
+
 The new guarded-loop/default-frontend cases and native before/after execution
 pass. Thirteen final checks cover those shapes, recursion-depth/error handling
 and native memory checks under GC0–4. The broader run is **mixed**: 50 passed
