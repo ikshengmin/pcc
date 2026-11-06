@@ -70,10 +70,16 @@ static void check_protected(void){
  for(long p=0;p<page_count;p++){
   const unsigned char *page=pages+p*PAGE_BYTES,*before=pages_before+p*PAGE_BYTES;
   for(int i=0;i<PAGE_BYTES;i++)if((i<108||i>=112)&&page[i]!=before[i])integrity_errors++;
-  for(size_t i=0;i<extents[p];i++){
+  size_t payload_bytes=(size_t)owners_per_page*OBJECT_BYTES;
+  for(size_t i=0;i<payload_bytes;i++){
    /* Flags are the only authorized payload writes in this selector. */
-   if(i<(size_t)owners_per_page*OBJECT_BYTES&&i%OBJECT_BYTES>=12&&i%OBJECT_BYTES<16)continue;
+   if(i%OBJECT_BYTES>=12&&i%OBJECT_BYTES<16)continue;
    if(spans[p][i]!=span_before[p][i])integrity_errors++;
+  }
+  /* Compare all retained slack at every observation without a scalar scan. */
+  if(memcmp(spans[p]+payload_bytes,span_before[p]+payload_bytes,extents[p]-payload_bytes)){
+   for(size_t i=payload_bytes;i<extents[p];i++)
+    if(spans[p][i]!=span_before[p][i])integrity_errors++;
   }
   if(!poisoned[p]){
    const unsigned char *r=spans[p]+extents[p];
