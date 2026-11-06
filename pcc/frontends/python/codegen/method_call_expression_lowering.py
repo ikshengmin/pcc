@@ -1004,9 +1004,14 @@ class MethodCallExpressionLoweringMixin:
                     kwargs=expr.kwargs,
                     operand_order=expr.operand_order,
                 )
-        if isinstance(attr.obj, Attr):
-            # Evaluate the chain eagerly; if the result was tagged as a
-            # CPython value (e.g. ``os.path``), dispatch there.
+        if (
+            isinstance(attr.obj, Attr)
+            and not self._strict_no_libpython
+            and self._expr_looks_cpython(attr.obj)
+        ):
+            # Only an explicitly foreign expression needs this compatibility
+            # dispatch. Native lowering below owns receiver evaluation: an
+            # eager probe would invoke getters twice and leak its first owner.
             chain_val = self._emit_expr(attr.obj)
             if chain_val in getattr(self, "_cpy_values", ()):
                 return self._emit_cpy_method_call_src(
@@ -2006,7 +2011,11 @@ class MethodCallExpressionLoweringMixin:
                     )
                 kind = info.method_kinds.get(attr.name, "instance")
                 if kind == "static":
-                    self._emit_expr(attr.obj)
+                    # Attribute evaluation still runs for a static method,
+                    # but the resulting instance is not a bound argument.
+                    receiver = self._emit_expr(attr.obj)
+                    if self._method_receiver_is_owned(attr.obj, receiver):
+                        self._gc_release(receiver)
                     method_fn = info.methods[attr.name]
                     return self._emit_static_method_call(
                         method_fn,

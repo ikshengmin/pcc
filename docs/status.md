@@ -16,8 +16,13 @@ LIFO. The candidate publishes an atomic injection-backlog hint, shares service
 with that backlog on alternating turns, and uses FIFO when the ready set
 exceeds one 64-step batch. Queue capacity, IO batch size, stop checks and root
 ownership remain unchanged. The same single-carrier cohort now reaches every
-task in 512 steps. This is a scheduling-progress result; live HTTP timing is
-still pending for this batch.
+task in 512 steps. A balanced two-repeat native C512 A/B now passes all 12
+HTTP/transport/saturation rows. Median p99 changes from 2,878 -> 276 ms for
+GET /, 2,983 -> 360 ms for dynamic-ID GET, and 2,839 -> 280 ms for POST.
+Corresponding throughput changes are +3.7%, +3.9% and -1.2%; this is a large
+tail-latency improvement, not a uniform throughput win. The paired candidate
+applies published patch `32b9aaa12` to the same pre-rebase source as the
+control; peer `68d7e1288` GC4 tuning is excluded from this experiment.
 
 Ten native cases cover one-carrier progress and two-carrier exactly-once
 completion under GC0–4. The bounded-policy source check and three existing
@@ -39,8 +44,23 @@ A two-module reproducer narrows the leak to chained method receivers:
 `holder.child.method()` leaves all 100 children alive, while direct calls and
 an explicitly captured child release all 100. The emitted native-program IR
 evaluates the field twice; the speculative CPython probe discards the first
-owned value before ordinary native method lowering. The frontend repair and
-the real gateway memory retest remain open.
+owned value before ordinary native method lowering. Owned native compilation
+now skips that foreign probe, and a known static-method call retires the
+receiver value it evaluated but does not bind. Seventeen focused checks pass:
+one emitted lookup-order check, six existing slot/cleanup checks and ten native
+CPython differentials under GC0–4. The differentials cover 11 receiver/ownership
+patterns, property side effects, keyword calls, a shadowed builtin name and
+lookup/argument failures. Four existing descriptor, rebinding and class-lookup
+checks also pass. Reproduce the new cases with `uv run pytest -x -vv --tb=short
+-m '' tests/python/test_chained_method_receiver_evaluation.py`.
+
+The first native attempt exposed a separate owned receiver left behind by the
+static-method branch; that branch is included in the passing correction.
+The older integer-callback finalizer check still fails under GC1 with 215
+finalizations versus CPython's 216, with its original `PCC_PYTHON_IR_PASSES=off`
+setting. It remains an explicit open boundary. Real gateway memory/performance
+retesting of the chained-receiver repair is pending; no full-suite/bootstrap
+qualification is claimed.
 
 The Linux arm64 application build from `2d0a617ea69b5816092cff0e2aed5a71ecbe3975`
 failed because the incremental collector's direct cross-module read of
