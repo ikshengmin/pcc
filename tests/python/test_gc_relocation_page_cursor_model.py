@@ -43,6 +43,7 @@ class _SelectorMemory:
         self.members = []
         self.refused = set()
         self.heap_visits = 0
+        self.discovery_active = False
         self.heap_visits_by_lock = {False: 0, True: 0}
         self.scan_starts = []
         self.scan_member_counts = []
@@ -150,7 +151,11 @@ class _SelectorMemory:
             if self.global_get("pcc_gc_backend4_selector_scan_owner") == 0:
                 self.scan_starts.append((page, unselected))
                 self.scan_member_counts.append(len(self.members))
-            outcome = scan(owner, page, unselected, large, result)
+            self.discovery_active = True
+            try:
+                outcome = scan(owner, page, unselected, large, result)
+            finally:
+                self.discovery_active = False
             assert 0 <= self.read(result, 8) <= 16
             return outcome
 
@@ -261,7 +266,9 @@ class _SelectorMemory:
         if isinstance(pointer, str):
             return self.cells.get(pointer, {}).get(offset, 0)
         pointer, offset = self.address(pointer, offset)
-        if pointer in self.nodes and offset == 16:
+        if pointer in self.nodes and (
+            offset == 16 or (self.discovery_active and offset == 48)
+        ):
             self.heap_visits += 1
             self.heap_visits_by_lock[self.locked] += 1
         return self.cells[pointer].get(offset, 0)
@@ -499,8 +506,11 @@ def test_preflight_reuse_preserves_mixed_page_score_and_seed_tie_order():
         assert memory.runtime_guard_kinds == ["rank-entry"] + ["preflight"] * 3
         if threads_enabled:
             walks = 3 if stop_owner else 6
-            assert memory.heap_visits == 148 * walks
-            assert memory.heap_visits_by_lock == {False: 0, True: 148 * walks}
+            # Each filtered discovery stops at its page tail, after the
+            # original global prefix: high=129, tied=81, middle=33.
+            visits = 148 * 3 + (0 if stop_owner else 129 + 81 + 33)
+            assert memory.heap_visits == visits
+            assert memory.heap_visits_by_lock == {False: 0, True: visits}
             assert len(memory.scan_starts) == walks
             assert memory.rank_score_batches == memory.ranked_page_batches == []
             assert memory.page_best_batches == []
@@ -690,7 +700,8 @@ def test_page_budget_and_score_order_preserve_complete_selected_pages():
     assert memory.read(high, 108) == memory.read(middle, 108) == 1
     assert memory.read(low, 108) == 0
     assert not ({memory.read(node, 0) for node in low_nodes} & set(memory.members))
-    assert memory.heap_visits == 100 * 2 * 2
+    # Two global preflights, then the high-page prefix/pass and middle pass.
+    assert memory.heap_visits == 100 * 2 + 81 + 33
     assert len(memory.scan_starts) == 4
     assert memory.runtime_guard_kinds == ["rank-entry", "preflight", "preflight"]
 
@@ -901,3 +912,100 @@ def test_object_selector_keeps_its_object_budget(budget):
     assert len(memory.members) == budget
     assert not memory.locked
     assert memory.global_get("pcc_gc_backend4_selector_page_owner") == 0
+
+
+def _interleaved_page_scan_fixture(owners=33, prefix=0):
+    memory = _SelectorMemory()
+    page, nodes = memory.page(owners)
+    other, other_nodes = memory.page(owners)
+    local, foreign = list(reversed(nodes)), list(reversed(other_nodes))
+    order = foreign[:prefix]
+    foreign = foreign[prefix:]
+    order += [group[i] for i in range(owners) for group in (local, foreign) if i < len(group)]
+    for index, node in enumerate(order):
+        memory.write(node, 40, order[index - 1] if index else 0)
+        memory.write(node, 16, order[index + 1] if index + 1 < len(order) else 0)
+    memory.global_set("pcc_gc_backend4_zpage_head", order[0])
+    for token, expected in ((page, local), (other, list(reversed(other_nodes)))):
+        assert [n for n in order if memory.read(n, 8) == token] == expected
+        assert [memory.read(n, 48) for n in expected] == expected[1:] + [0]
+    return memory, page, local, order
+
+
+def _finish_filtered_page_scan(memory, page, result):
+    examined = 0
+    for _ in range(100):
+        memory.lock()
+        found = memory.namespace["_best_relocation_page_batch"](1, page, 0, 1, result)
+        count, complete = memory.read(result, 8), memory.read(result, 16)
+        memory.unlock()
+        assert 0 <= count <= 16
+        examined += count
+        if complete:
+            assert memory.global_get("pcc_gc_backend4_selector_scan_owner") == 0
+            return found, memory.read(result, 0), examined
+        memory.poll()
+    raise AssertionError("filtered discovery did not complete")
+
+
+@pytest.mark.parametrize("owners", [1, 16, 17, 33])
+@pytest.mark.parametrize("prefix", [0, 1])
+def test_filtered_page_scan_keeps_ties_counters_and_skips_unrelated_owners(owners, prefix):
+    memory, page, local, order = _interleaved_page_scan_fixture(owners, prefix)
+    if owners > 1:
+        memory.write(memory.read(local[-1], 0), 12, 16384)
+    result = memory.new(24)
+    found, best, examined = _finish_filtered_page_scan(memory, page, result)
+    assert found == 1 and best == local[0]
+    assert examined == prefix + owners
+    assert memory.global_get("pcc_gc_backend4_candidate_fresh_skips_g") == int(owners > 1)
+    # Null is still a global scan, preserving original global ordering.
+    found, best, examined = _finish_filtered_page_scan(memory, 0, result)
+    assert found == 1 and best == order[0]
+    assert examined == len(order)
+    assert memory.global_get("pcc_gc_backend4_candidate_fresh_skips_g") == 2 * int(owners > 1)
+
+
+@pytest.mark.parametrize("deletion", ["cursor", "prefix", "last", "best"])
+def test_filtered_page_scan_repairs_actual_cursor_before_free(deletion):
+    owners, prefix = (17 if deletion == "last" else 33), (17 if deletion == "prefix" else 0)
+    memory, page, local, order = _interleaved_page_scan_fixture(owners, prefix)
+    result = memory.new(24)
+    memory.lock()
+    assert memory.namespace["_best_relocation_page_batch"](1, page, 0, 1, result) == 0
+    assert memory.read(result, 8) == 16
+    cursor = memory.global_get("pcc_gc_backend4_selector_scan_cursor")
+    victim = memory.global_get("pcc_gc_backend4_selector_scan_best") if deletion == "best" else cursor
+    if deletion == "prefix":
+        assert memory.read(victim, 8) != page
+        expected = memory.read(victim, 16)
+    else:
+        assert memory.read(victim, 8) == page
+        assert memory.read(victim, 16) != memory.read(victim, 48)
+        expected = memory.read(victim, 48)
+    memory.remove(victim)
+    if deletion == "best":
+        assert memory.global_get("pcc_gc_backend4_selector_scan_best") == 0
+        assert memory.global_get("pcc_gc_backend4_selector_scan_best_score") == -1
+        assert memory.global_get("pcc_gc_backend4_selector_scan_restart") == 1
+    else:
+        assert memory.global_get("pcc_gc_backend4_selector_scan_cursor") == expected
+    assert victim in memory.freed
+    memory.unlock()
+    found, best, _ = _finish_filtered_page_scan(memory, page, result)
+    # Deleting an owner increases page slack. Without a restart, the
+    # first unvisited owner now beats the cached pre-deletion score.
+    winner = local[1] if deletion == "best" else expected if deletion == "cursor" else local[0]
+    assert found == 1 and best == winner
+
+
+def test_filtered_page_scan_accepts_retired_token_as_identity_only():
+    memory, page, local, _ = _interleaved_page_scan_fixture()
+    memory.lock()
+    for node in local:
+        memory.remove(node)
+    memory.freed.add(page)
+    memory.unlock()
+    found, best, examined = _finish_filtered_page_scan(memory, page, memory.new(24))
+    assert found == best == 0
+    assert examined == 33

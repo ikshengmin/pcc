@@ -579,7 +579,13 @@ def _owned_trailer_collect_batch(
     cursor = global_load_ptr("pcc_gc_backend4_selector_scan_cursor")
     while ptr_is_null(cursor) == 0 and examined < 16:
         node = cursor
-        cursor = load_ptr(node, 16)
+        # Once a live owner matches this page, next48 has the same order as
+        # next16 filtered by page. Never dereference the identity-only token.
+        # Lifecycle unlink repairs this registered cursor with the same rule.
+        if ptr_is_null(page_token) == 0 and ptr_eq(load_ptr(node, 8), page_token) != 0:
+            cursor = load_ptr(node, 48)
+        else:
+            cursor = load_ptr(node, 16)
         global_store_ptr("pcc_gc_backend4_selector_scan_cursor", cursor)
         examined = examined + 1
         if (
@@ -724,7 +730,13 @@ def _best_relocation_page_batch(
     cursor = global_load_ptr("pcc_gc_backend4_selector_scan_cursor")
     while ptr_is_null(cursor) == 0 and examined < 16:
         node = cursor
-        cursor = load_ptr(node, 16)
+        # Once a live owner matches this page, next48 has the same order as
+        # next16 filtered by page. Never dereference the identity-only token.
+        # Lifecycle unlink repairs this registered cursor with the same rule.
+        if ptr_is_null(page_token) == 0 and ptr_eq(load_ptr(node, 8), page_token) != 0:
+            cursor = load_ptr(node, 48)
+        else:
+            cursor = load_ptr(node, 16)
         global_store_ptr("pcc_gc_backend4_selector_scan_cursor", cursor)
         examined = examined + 1
         if (

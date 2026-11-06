@@ -228,7 +228,19 @@ def pcc_gc_backend4_zpage_unlink_node(node) -> None:
     if ptr_eq(
         global_load_ptr("pcc_gc_backend4_selector_scan_cursor"), node
     ) != 0:
-        global_store_ptr("pcc_gc_backend4_selector_scan_cursor", nxt)
+        # A page-filtered discovery switches to next48 after its first live
+        # matching owner. Keep repair consistent with both scan helpers; the
+        # page token is only compared, since the page itself may be retiring.
+        if (
+            ptr_is_null(global_load_ptr("pcc_gc_backend4_selector_scan_page")) == 0
+            and ptr_eq(
+                global_load_ptr("pcc_gc_backend4_selector_scan_page"),
+                load_ptr(node, 8),
+            ) != 0
+        ):
+            global_store_ptr("pcc_gc_backend4_selector_scan_cursor", load_ptr(node, 48))
+        else:
+            global_store_ptr("pcc_gc_backend4_selector_scan_cursor", nxt)
     if ptr_eq(
         global_load_ptr("pcc_gc_backend4_selector_scan_best"), node
     ) != 0:
