@@ -219,9 +219,9 @@ def test_an_unreachable_predecessor_does_not_force_a_phi() -> None:
             """,
         ),
         (
-            "slot allocated outside the entry block",
+            "slot allocated on a repeated loop path",
             """
-            define i64 @late() {
+            define i64 @late(i1 %again) {
             entry:
               br label %tail
 
@@ -229,6 +229,9 @@ def test_an_unreachable_predecessor_does_not_force_a_phi() -> None:
               %slot = alloca i64, align 8
               store i64 9, ptr %slot, align 8
               %v = load i64, ptr %slot, align 8
+              br i1 %again, label %tail, label %done
+
+            done:
               ret i64 %v
             }
             """,
@@ -415,7 +418,7 @@ def test_the_owned_dispatcher_uses_the_owned_kernel() -> None:
     cannot promote it, the owned kernel must.
     """
     text = textwrap.dedent(_DIAMOND).lstrip()
-    out = run_owned_passes(text, ["mem2reg", "sroa"], True)
+    out = run_owned_passes(text, ["mem2reg", "sroa"])
     assert _counts(out) == (0, 0, 0), out
     assert " = phi i64 " in out
 

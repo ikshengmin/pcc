@@ -163,6 +163,46 @@ See the sibling gateway's `benchmarks/web-frameworks.md` for source/artifact
 identities, report hashes and reproduction options. Aiohttp was not rerun in
 this native-control experiment; full suites/bootstrap remain unrun.
 
+The subsequent profiling round captures all three routes and counts direct
+application calls separately from timing. Plain GET issues about 20,700 direct
+calls per handled request; the two handwritten Latin-1 conversions account for
+about 2,090. Gateway `b83d215` replaces those loops with standard codecs. With
+the same frozen `2085bf26c` compiler/runtime, a balanced C512 A/B passes all 12
+server-bound HTTP rows: 3,191.3 -> 3,446.3 requests/s for GET /, 2,882.1 ->
+3,201.2 for changing-ID GET and 2,954.1 -> 3,374.8 for POST. Fifty host checks
+and five native codec cases across GC0–4 pass. These gains belong to the codec
+change, not the optimizer repair below.
+
+The final compiler finding is an entry/prologue mismatch. Python activation
+checks precede the original entry block, while owned mem2reg admitted allocas
+only in the first block. The default path already selects the full owned
+algorithm; it was not falling back to the textual subset. Promotion now also
+admits a conservative single-execution prefix: a block has one predecessor
+block already proven single-execution, starting at a predecessor-free entry.
+Duplicate edges from that parent are allowed; joins and loop backedges stop
+admission. Existing escape, volatile/atomic, type and CFG checks remain intact.
+No allocation or activation check is moved. Removal handles the admitted
+declarations in their original blocks.
+
+The new guarded-loop/default-frontend cases and native before/after execution
+pass. Thirteen final checks cover those shapes, recursion-depth/error handling
+and native memory checks under GC0–4. The broader run is **mixed**: 50 passed
+and one strict GC2 slice-lifetime assertion reported 99 rather than 100 for a
+finalizer bucket. A read-only stopped-process census finds the extra `Bound`
+objects conservatively pinned by matching words in the main-thread snapshot;
+the intended live canaries are separately identified. Runtime IR is identical
+between the two snapshots after normalizing only their source-directory text.
+An attempted test-stack isolation also produced a GC1 count discrepancy and
+was withdrawn. The original strict test and its assertions remain unchanged;
+the failed attempts and the 10-pair/30-control diagnostics are retained. This
+does not establish complete tracing-collector lifetime qualification.
+
+Reproduce the compiler checks with `uv run pytest -x -vv --tb=short -m ''
+tests/python/test_mem2reg_guarded_prologue.py` and the existing
+`test_owned_mem2reg_{phi_insertion,pruned,frontiers}.py` cases. Per the user's
+stop request, no additional optimizer throughput round was started. Native
+pcc1, full-language suites and bootstrap remain unrun.
+
 The callback lifetime oracle keeps the final object of each shape explicitly
 reachable while retiring 100 prior objects per shape. Exact counts remain
 mandatory; bounded repeated collections allow concurrent marking/relocation

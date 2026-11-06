@@ -37,9 +37,12 @@ allocas, 74991 loads and 36493 stores:
     ported llvmlite pass       68.9%
     LLVM's own mem2reg + sroa  75.1%
 
-Entry-block allocas are 17483 of those 17870 (97.8%), so following upstream
-and skipping the rest costs 2.2% of the candidates and keeps the transform
-correct by construction rather than by a loop analysis.
+Entry-block allocas were 17483 of those 17870 (97.8%) in that runtime sample.
+Ordinary Python functions also have an activation check before their original
+entry block. Include scalar slots in a proven single-execution prologue: each
+admitted block has only one predecessor block, itself already admitted from
+the predecessor-free function entry. A loop backedge prevents admission. This
+does not move allocations or checks, and does not admit arbitrary loop slots.
 
 Everything here fails closed.  A terminator this module cannot read, an
 alloca whose address reaches anything but a matching load or store, a
@@ -251,14 +254,15 @@ def _promote_function(function) -> bool:
     blocks = function.blocks
     if len(blocks) == 0:
         return False
-    candidates = _entry_block_candidates(function)
-    if not candidates:
-        return False
     cfg = _build_cfg(function)
     if cfg is None:
         return False
     successors, predecessors = cfg
     entry = blocks[0].name
+    once = _single_execution_prologue(entry, successors, predecessors)
+    candidates = _entry_block_candidates(function, once)
+    if not candidates:
+        return False
     order = _reverse_postorder(entry, successors)
     reachable = set(order)
     idom = _immediate_dominators(order, predecessors, reachable)
@@ -287,22 +291,51 @@ def _promote_function(function) -> bool:
     return _apply(function, plan)
 
 
-def _entry_block_candidates(function) -> dict[str, str]:
-    """Scalar allocas in the entry block, mapped to their slot type.
+def _single_execution_prologue(entry: str, successors: dict, predecessors: dict) -> set:
+    """A conservative prefix whose blocks cannot be reached a second time.
 
-    Upstream restricts promotion to the entry block; a slot allocated
-    somewhere a loop can reach again is a different object on each
-    execution.
+    Duplicate branch/switch edges from one predecessor still choose one edge
+    per execution. Joins and backedges with another predecessor stop the walk.
+    """
+    once = set()
+    if predecessors.get(entry):
+        return once
+    once.add(entry)
+    pending = [entry]
+    while pending:
+        parent = pending.pop()
+        for child in successors[parent]:
+            if child in once:
+                continue
+            single = True
+            for predecessor in predecessors[child]:
+                if predecessor != parent:
+                    single = False
+                    break
+            if single:
+                once.add(child)
+                pending.append(child)
+    return once
+
+
+def _entry_block_candidates(function, once: set) -> dict[str, str]:
+    """Scalar slots in the one-execution entry/prologue region.
+
+    All other escape, access-type, atomic/volatile and reachability checks
+    remain in the shared use classifier before any promotion is planned.
     """
     out: dict[str, str] = {}
-    for instruction in function.blocks[0].instructions:
-        parsed = _parse_alloca(instruction.text)
-        if parsed is None:
+    for block in function.blocks:
+        if block.name not in once:
             continue
-        alloca_name, slot_type = parsed
-        if not _is_scalar_type(slot_type):
-            continue
-        out[alloca_name] = slot_type
+        for instruction in block.instructions:
+            parsed = _parse_alloca(instruction.text)
+            if parsed is None:
+                continue
+            alloca_name, slot_type = parsed
+            if not _is_scalar_type(slot_type):
+                continue
+            out[alloca_name] = slot_type
     return out
 
 
@@ -891,7 +924,7 @@ def _apply(function, plan: dict) -> bool:
         for index, instruction in enumerate(block.instructions):
             if index in drop:
                 continue
-            if block is function.blocks[0]:
+            if instruction.opcode == "alloca":
                 parsed = _parse_alloca(instruction.text)
                 if parsed is not None and parsed[0] in allocas:
                     continue
