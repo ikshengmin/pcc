@@ -775,33 +775,24 @@ def pcc_gc_install_forwarding(from_obj: c_ptr, to_obj: c_ptr) -> i64:
 def _note_relocation_read_unlocked(obj: c_ptr) -> c_ptr:
     if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
         return obj
-    if pcc_gc_object_is_known_no_lock(obj) == 0:
-        unknown_node = pcc_gc_forwarding_find(obj)
-        if ptr_is_null(unknown_node) == 0:
-            unknown_target = load_ptr(unknown_node, 8)
-            if ptr_is_null(unknown_target) == 0:
-                count: i64 = load_i32(
-                    global_addr("pcc_gc_relocation_barrier_forwards"), 0
-                )
-                store_i32(
-                    global_addr("pcc_gc_relocation_barrier_forwards"),
-                    0,
-                    count + 1,
-                )
-                return unknown_target
-        return obj
-    flags: i64 = load_i32(obj, 12)
+    # Both known objects and retired source shells resolve through the same
+    # forwarding index. Under the caller's graph lock a live target settles
+    # the answer before object provenance is needed. Keep the miss path's
+    # validation before reading or clearing a possibly stale object's header.
     node = pcc_gc_forwarding_find(obj)
     if ptr_is_null(node) == 0:
         target = load_ptr(node, 8)
         if ptr_is_null(target) == 0:
-            count2: i64 = load_i32(
+            count: i64 = load_i32(
                 global_addr("pcc_gc_relocation_barrier_forwards"), 0
             )
             store_i32(
-                global_addr("pcc_gc_relocation_barrier_forwards"), 0, count2 + 1
+                global_addr("pcc_gc_relocation_barrier_forwards"), 0, count + 1
             )
             return target
+    if pcc_gc_object_is_known_no_lock(obj) == 0:
+        return obj
+    flags: i64 = load_i32(obj, 12)
     if (flags & 2048) != 0:
         store_i32(obj, 12, flags & ~2048)
     return obj
@@ -875,3 +866,4 @@ def pcc_gc_backend4_stable_id_entries() -> i64:
         node = load_ptr(node, 16)
     _graph_unlock()
     return count
+
