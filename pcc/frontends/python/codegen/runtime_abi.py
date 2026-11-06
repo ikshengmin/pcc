@@ -399,12 +399,12 @@ def _runtime_signatures_part_6():
     # ---- refcount --------------------------------------------------
     "py_incref": (_VOID, [_PYOBJ], False),
     "py_decref": (_VOID, [_PYOBJ], False),
-    "pcc_py_type_of": (_I64, [_PYOBJ], False),
     }
 
 
 def _runtime_signatures_part_7():
     return {
+    "pcc_py_type_of": (_I64, [_PYOBJ], False),
     "pcc_thread_safepoint_gate": (_VOID, [], False),
     "pcc_gc_frame_enter_mapped": (_VOID, [_PTR, _PTR], False),
     "pcc_gc_frame_leave_mapped": (_VOID, [_PTR], False),
@@ -824,6 +824,7 @@ def _runtime_signatures_part_17():
     "py_obj_unpack_ex": (_PYOBJ, [_PYOBJ, _I64, _I64], False),
     "py_obj_call_context_is_deferred": (_I64, [], False),
     "py_obj_call_deferred": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
+    "py_obj_call_method_deferred": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_obj_call_forward": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_func_call_bound_forward": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_obj_call_method1": (_PYOBJ, [_PYOBJ, _CSTR, _PYOBJ], False),

@@ -75,6 +75,7 @@ py_dict_len = extern("py_dict_len", (c_ptr,), c_int64)
 py_call_merge_kwargs = extern("py_call_merge_kwargs", (c_ptr, c_ptr), c_ptr)
 py_call_validate_kwargs = extern("py_call_validate_kwargs", (c_ptr,), c_int64)
 py_obj_call = extern("py_obj_call", (c_ptr, c_ptr, c_ptr), c_ptr)
+py_obj_call_method = extern("py_obj_call_method", (c_ptr, c_ptr, c_ptr), c_ptr)
 py_obj_call_default = extern("py_obj_call_default", (c_ptr, c_ptr, c_ptr), c_ptr)
 py_obj_call_slots = extern("py_obj_call_slots", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64)
 py_obj_getattr = extern("py_obj_getattr", (c_ptr, c_ptr), c_ptr)
@@ -2631,6 +2632,18 @@ def py_obj_call_deferred(callable_obj, args, kwargs):
     previous: int = load_i32(global_addr("pcc_native_callable_sync_context"), 0)
     store_i32(global_addr("pcc_native_callable_sync_context"), 0, 0)
     result = py_obj_call(callable_obj, args, kwargs)
+    store_i32(global_addr("pcc_native_callable_sync_context"), 0, previous)
+    return result
+
+
+@c_abi_export("py_obj_call_method_deferred")
+def py_obj_call_method_deferred(method, receiver, args):
+    # The compiler already performed descriptor lookup, before arguments.
+    # Keep defer TLS in its defining owner and reuse ordinary loaded-method
+    # invocation, including the callable-field/descriptor fallback (NULL self).
+    previous: int = load_i32(global_addr("pcc_native_callable_sync_context"), 0)
+    store_i32(global_addr("pcc_native_callable_sync_context"), 0, 0)
+    result = py_obj_call_method(method, receiver, args)
     store_i32(global_addr("pcc_native_callable_sync_context"), 0, previous)
     return result
 

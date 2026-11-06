@@ -2483,10 +2483,8 @@ class CallObjectLoweringMixin:
             self._cpy_operand_cleanup_block = saved_cpy
         return output
 
-    def _emit_slot_call_attribute(self, expr, label):
-        runtime_name = expr.name
-        if live_import_expr_binding(self, expr.obj):
-            runtime_name = self.class_lowering.private_field_key(runtime_name)
+    def _emit_slot_attribute_projection(self, expr, label):
+        """Keep namespace/value-payload projections ahead of object lookup."""
         uname = self._emit_slot_call_os_uname_attr(expr, label)
         if uname is not None:
             return uname
@@ -2498,6 +2496,19 @@ class CallObjectLoweringMixin:
             return projected
         if self._is_valueclass_payload_type(expr.obj.ty):
             raise L1CodegenError("slot-call valueclass attribute requires a payload-slot producer")
+        return None
+
+    def _slot_attribute_runtime_name(self, expr):
+        name = expr.name
+        if live_import_expr_binding(self, expr.obj):
+            name = self.class_lowering.private_field_key(name)
+        return name
+
+    def _emit_slot_call_attribute(self, expr, label):
+        projected = self._emit_slot_attribute_projection(expr, label)
+        if projected is not None:
+            return projected
+        runtime_name = self._slot_attribute_runtime_name(expr)
         output = self._new_slot_call_root(label)
         previous = self._current_try_err_block()
         target = previous if previous is not None else self._ensure_fn_err_exit()
@@ -2522,6 +2533,66 @@ class CallObjectLoweringMixin:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = saved_cpy
         return output
+
+    def _emit_slot_call_method_target(self, expr, label):
+        """Load a callable plus its optional bound receiver before arguments.
+
+        Both outputs are owning roots. No borrowed pointer or binding flag
+        survives argument evaluation, which may suspend or collect. A plain
+        method transfers the receiver owner; other descriptors release their
+        temporary receiver immediately, as ordinary attribute evaluation does.
+        """
+        projected = self._emit_slot_attribute_projection(expr, label)
+        if projected is not None:
+            return projected, None
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        roots = []
+        method = self._new_slot_call_root(label + ".method")
+        roots.append(method)
+        bound_self = self._new_slot_call_root(label + ".self")
+        roots.append(bound_self)
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            receiver = self._emit_slot_call_operand(expr.obj, label + ".receiver")
+            roots.append(receiver)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            loaded_self = self._alloca_in_entry(_CSTR, self._fresh(label + ".loaded.self"), init_null=True)
+            runtime_name = self._slot_attribute_runtime_name(expr)
+            self._slot_call_runtime_call(
+                "py_obj_load_method", (receiver,), result_slot=method,
+                suffix_args=(self._attr_name_ptr(runtime_name), loaded_self), span=expr.span,
+            )
+            self._emit_attribute_error_if_null(self.builder.load(method), runtime_name, expr.span)
+            has_self = self.builder.icmp_unsigned(
+                "!=", self.builder.load(loaded_self), ir.Constant(_CSTR, None),
+            )
+            # Keep only the decision: the scratch out-pointer must not retain
+            # a stale receiver address across a collecting/parking argument.
+            self.builder.store(ir.Constant(_CSTR, None), loaded_self)
+            bound = self.current_function.append_basic_block(self._fresh(label + ".bound"))
+            ready = self.current_function.append_basic_block(self._fresh(label + ".ready"))
+            self.builder.cbranch(has_self, bound, ready)
+            self.builder.position_at_end(bound)
+            borrowed = getattr(self, "_slot_call_borrowed_operands", {}).get(id(receiver)) is receiver
+            if self._slot_call_root_is_registered(receiver) and not borrowed:
+                moved = self._emit_root_slot_move(bound_self, receiver, label=label + ".move.self")
+                self._slot_call_check_status(moved, "method receiver transfer", expr.span)
+            elif self._value_is_never_gc_object(receiver):
+                self._publish_slot_call_owned(bound_self, receiver, label="permanent method receiver")
+            else:
+                self._slot_call_copy_source(bound_self, receiver, borrowed=True, span=expr.span)
+            self._slot_call_note_published(bound_self)
+            self.builder.branch(ready)
+            self.builder.position_at_end(ready)
+            self._release_slot_call_roots((receiver,))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        return method, bound_self
 
     def _emit_slot_call_kwargs_object(self, kwargs, kwargs_expr, span, label="call.kwargs", callable_root=None):
         self._reject_kwargs_merge_with_explicit_keywords(kwargs_expr, kwargs)

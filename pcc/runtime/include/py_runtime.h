@@ -1326,6 +1326,9 @@ PyObject *py_obj_call_default_sync(PyObject *callable, PyObject *args_tuple, PyO
 PyObject *py_obj_call_sync(PyObject *, PyObject *, PyObject *);
 int64_t py_obj_call_context_is_deferred(void);
 PyObject *py_obj_call_deferred(PyObject *, PyObject *, PyObject *);
+/* Descriptor lookup has already selected method and optional bound receiver.
+ * Invoke with defer semantics without allocating another bound-method object. */
+PyObject *py_obj_call_method_deferred(PyObject *method, PyObject *receiver, PyObject *args);
 PyObject *py_obj_call_forward(PyObject *, PyObject *, PyObject *);
 /* Already-bound positional slots, including self; do not rebind */
 PyObject *py_func_call_bound_forward(PyObject *, PyObject *);

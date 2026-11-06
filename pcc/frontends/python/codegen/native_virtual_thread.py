@@ -194,8 +194,17 @@ class NativeVirtualThreadLoweringMixin:
         try:
             # These owners are enrolled in the persistent generator frame.
             # A later argument may suspend before the callback is invoked.
-            callable_root = self._emit_slot_call_operand(args[0], "vthread.call.callable")
-            roots.append(callable_root)
+            bound_self = None
+            if isinstance(args[0], Attr):
+                callable_root, bound_self = self._emit_slot_call_method_target(
+                    args[0], "vthread.call.target",
+                )
+                roots.append(callable_root)
+                if bound_self is not None:
+                    roots.append(bound_self)
+            else:
+                callable_root = self._emit_slot_call_operand(args[0], "vthread.call.callable")
+                roots.append(callable_root)
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
             args_root = self._emit_slot_call_args_tuple(args[1:], "vthread.call.args")
@@ -209,11 +218,17 @@ class NativeVirtualThreadLoweringMixin:
             # Keep explicit defer semantics. Counted operand leases protect
             # the raw compatibility ABI and its result is published before
             # any lease or argument cleanup, then moved into the child cell.
-            self._slot_call_runtime_call(
-                "py_obj_call_deferred", (callable_root, args_root),
-                suffix_args=(self._emit_none_literal(),),
-                result_slot=result_root, span=expr.span,
-            )
+            if bound_self is not None:
+                self._slot_call_runtime_call(
+                    "py_obj_call_method_deferred", (callable_root, bound_self, args_root),
+                    result_slot=result_root, span=expr.span,
+                )
+            else:
+                self._slot_call_runtime_call(
+                    "py_obj_call_deferred", (callable_root, args_root),
+                    suffix_args=(self._emit_none_literal(),),
+                    result_slot=result_root, span=expr.span,
+                )
             self._move_call_result_to_frame(
                 result_root, child_root_ptr, expr.span, "virtual-thread callback",
             )

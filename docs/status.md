@@ -65,9 +65,41 @@ existing native lock/API tests pass. The five waiter-pool C ABI reference cases
 also pass with their original bounded drain budget; that harness uses external
 C compilation and is not a pcc1 ownership claim. Reproduce the new native cases
 with `uv run pytest -x -vv --tb=short -m integration tests/python/test_threading_mixed_waiters.py`.
-The compiler/runtime continuation protocol must be rebuilt together. The real
-gateway rebuild, wider HTTP matrix and throughput optimization remain open;
-full suites and bootstrap were not run.
+The compiler/runtime continuation protocol must be rebuilt together. The rebuilt
+gateway at core `8c604da53` / gateway `582c8f5` completes all 12 same-Mac C256/C512
+measurements with zero transport/HTTP errors and all runs server-bound. Single
+carrier throughput remains 2,605–2,824 requests/s; p99 reaches 1.15–3.06 seconds.
+The gateway benchmark document records the complete route table and artifact
+hashes. Throughput/tail-latency optimization remains open; full suites and
+bootstrap were not run.
+
+The next optimization reuses `py_obj_load_method` for an immediate
+`vt.call(receiver.method, ...)`, retaining the resolved function and optional
+receiver in separate owning roots across argument evaluation and suspension.
+The existing descriptor fallback remains; a new deferred-call ABI in `py_func`
+reuses ordinary loaded-method invocation and its TLS owner. This avoids bound
+method/signature construction on cached plain-method calls. Actual gateway CPU
+sampling attributed about 5.3% inclusively to bound-capture wrapping and 5.8% to
+bound-call forwarding (overlapping stacks, not additive). This is a candidate
+mechanism, not a measured end-to-end speedup yet.
+
+Over `8c604da53`, 12 focused checks pass on local Mac: emitted lookup/release
+ordering, native descriptor/mutation/error behavior, temporary receivers spanning
+parking arguments and method bodies under GC0–4, and GC0 immediate descriptor
+receiver release. The semantic output is compared with CPython. Tracing
+collectors may finalize the temporary receiver later than CPython; the test
+checks lookup/argument order and exactly-once finalization separately, as Python
+reference 3.1 permits delayed collection. Reproduce with
+`uv run pytest -x -vv --tb=short -m '' tests/python/test_vthread_loaded_method_call.py`.
+The two existing temporary-callback success/error tests also execute successfully
+through their GC0–4 loops; two runtime-attribute checks and seven ABI table checks
+pass. The earlier waiter ABI addition had grown one signature chunk to 51;
+moving its last entry to the next chunk preserves the flattened values/order
+and restores the existing 50-entry bound.
+An existing IR ownership checker still assumes list-to-tuple argument building
+and raises `StopIteration` for the current fixed-arity tuple path; that failure
+also reproduces against unmodified `8c604da53`. It is not a passed ownership
+gate. Full Python/GC suites and native-pcc1/bootstrap qualification remain unrun.
 
 ## Owned C++17: builtin-pointer increment, complete language still open
 
