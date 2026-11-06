@@ -355,6 +355,67 @@ class _SelectorMemory:
         return selected
 
 
+@pytest.mark.parametrize(
+    ("size", "accepted", "deferred"),
+    [
+        (-(1 << 63), 0, 0),
+        (-1, 0, 0),
+        (0, 0, 0),
+        (1, 1, 0),
+        (4095, 1, 0),
+        (4096, 1, 0),
+        (4097, 1, 0),
+        (65535, 1, 0),
+        (65536, 1, 0),
+        (65537, 0, 1),
+        ((1 << 63) - 1, 0, 1),
+    ],
+)
+def test_candidate_size_policy_boundaries(size, accepted, deferred):
+    # These helpers only compare sizes; integer extremes do not exercise
+    # the host memory model's unbounded diagnostic-counter stores.
+    memory = _SelectorMemory()
+    assert memory.namespace["_backend4_evacuation_policy_accept"](size) == accepted
+    assert memory.namespace["_backend4_evacuation_policy_defer_large"](size) == deferred
+
+
+@pytest.mark.parametrize(
+    ("size", "page_class", "free_bytes", "allow_large", "score", "deferred"),
+    [
+        (65536, 2, 0, 0, 2, 0),  # Ordinary-size limit bypasses large-page gates.
+        (65537, 2, 1, 1, 3, 0),
+        (65537, 2, 1, -1, 3, 0),  # Any nonzero allow value enables the policy.
+        (65537, 2, 1, 0, -1, 1),
+        (65537, 2, 0, 1, -1, 1),  # Large pages need strictly positive space.
+        (65537, 2, -1, 1, -1, 1),
+        (65537, 0, 1, 1, -1, 1),
+        (65537, 1, 1, 1, -1, 1),
+    ],
+)
+def test_large_page_candidate_policy_boundaries(
+    size, page_class, free_bytes, allow_large, score, deferred,
+):
+    memory = _SelectorMemory()
+    page, nodes = memory.page(1, pressure=2)
+    node = nodes[0]
+    obj = memory.read(node, 0)
+    memory.write(node, 32, size)
+    memory.write(page, 24, page_class)
+    memory.write(page, 16, memory.read(page, 8) + free_bytes)
+
+    memory.lock()
+    observed = memory.namespace["_backend4_zpage_candidate_score"](node, allow_large)
+    memory.unlock()
+
+    assert observed == score
+    assert memory.read(obj, 12) == (32768 if deferred else 0)
+    assert memory.global_get("pcc_gc_backend4_large_object_defers") == deferred
+    assert memory.global_get(
+        "pcc_gc_backend4_large_object_deferred_bytes_count"
+    ) == size * deferred
+    assert memory.global_get("pcc_gc_backend4_candidate_fresh_skips_g") == 0
+
+
 @pytest.mark.parametrize("owners", [17, 48, 64, 128])
 def test_page_cursor_continues_without_a_heap_scan_per_object_batch(owners):
     memory = _SelectorMemory()
