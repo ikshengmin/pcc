@@ -122,3 +122,41 @@ def test_current_owned_object_has_exact_strict_closure(emitted_selector):
     assert {line.split()[-1] for line in defined.splitlines()} == (
         contract.OWNED_SYMBOLS | contract.OWNED_GLOBALS
     )
+
+
+@pytest.mark.parametrize("mode,pages,owners,budget", [
+    ("tie", 3, 4, 2),       # Equal page scores and a partial page budget.
+    ("tie", 1, 48, 1),      # Multiple 16-owner chunks, including the seed slot.
+    ("scale", 32, 32, 32),  # Unequal page priorities and a complete page budget.
+])
+def test_simulated_owned_epoch_preserves_order_and_scan_counts(
+    emitted_selector, mode, pages, owners, budget,
+):
+    # Reuse the existing explicit semantic/order oracle, not a candidate or
+    # timing baseline. Provider values simulate ownership; no world is stopped.
+    build, _obj, executable = emitted_selector
+    case = next(c for c in ORACLE["cases"]
+                if c["argv"] == [mode, pages, owners, budget, 0, 0, 0])
+    expected = dict(zip(ORACLE["fields"], case["expected"], strict=True))
+    chunks = (pages * owners + 15) // 16
+    for epoch in (-1, 11):
+        argv = [mode, pages, owners, budget, 1, 0, 0, epoch]
+        result = subprocess.run(
+            [str(executable), *map(str, argv)], capture_output=True, text=True, timeout=10,
+        )
+        with (build / "epoch-results.jsonl").open("a") as stream:
+            stream.write(json.dumps({"argv": argv, "returncode": result.returncode,
+                                    "stdout": result.stdout, "stderr": result.stderr}) + "\n")
+        assert result.returncode == 0, result.stdout + result.stderr
+        observed = json.loads(result.stdout)
+        assert {name: observed[name] for name in ORACLE["fields"]} == expected
+        assert observed["rank_allocs"] == 0  # Threaded mode never enables ranking.
+        assert observed["epoch_queries"] == budget * (2 if epoch > 0 else 1)
+        # Count stub pin-provider/poll calls, not all visits or runtime latency.
+        page_scans = budget * pages - budget * (budget - 1) // 2
+        assert observed["pin_checks"] == (
+            owners * (page_scans + budget * (2 if epoch > 0 else 3)) + 2 * budget
+        )
+        assert observed["polls"] == budget * (
+            chunks + owners // 16 + 1 if epoch > 0 else 2 * chunks + owners // 16
+        )

@@ -12,6 +12,7 @@ extern void *__real_malloc(size_t);
 extern void __real_free(void *);
 static long pin_checks, polls, lock_depth, lock_errors, rank_allocs, rank_live, plan_live;
 static long fail_rank, fail_plan, plan_attempts, threads, backend=4;
+static long simulated_epoch=-1, epoch_queries;
 static unsigned char *objects, *nodes, *pages;
 static long node_count,page_count,owners_per_page;
 static uint64_t u64(void *p,int off){uint64_t v;memcpy(&v,(char*)p+off,8);return v;}
@@ -41,13 +42,15 @@ void pcc_py_gc_minor_graph_unlock(void){if(--lock_depth)lock_errors++;}
 void pcc_thread_safepoint(void){polls++;if(lock_depth)lock_errors++;}
 int64_t pcc_current_thread_id(void){return 1;}
 int64_t pcc_threads_enabled(void){return threads;}
-/* This isolated harness never owns a stopped-world epoch. Threaded cases must
- * retain the original registered-scan path, not the epoch-seed shortcut. */
-int64_t pcc_thread_world_stop_epoch_held(void){return -1;}
+/* A positive value only simulates an owned epoch; no real world is stopped.
+ * Omitted argument preserves the ordinary unowned registered-scan path. */
+int64_t pcc_thread_world_stop_epoch_held(void){epoch_queries++;return simulated_epoch;}
 static uint64_t hash(uint64_t h,uint64_t x){return (h^x)*1099511628211ULL;}
 static double now(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec+t.tv_nsec*1e-9;}
 int main(int argc,char **argv){
- if(argc!=8)return 2;
+ if(argc!=8&&argc!=9)return 2;
+ if(argc==9)simulated_epoch=atol(argv[8]);
+ if(simulated_epoch!=-1&&simulated_epoch!=11)return 2;
  const char *mode=argv[1];page_count=atol(argv[2]);owners_per_page=atol(argv[3]);
  long budget=atol(argv[4]);threads=atol(argv[5]);fail_rank=atol(argv[6]);fail_plan=atol(argv[7]);
  if(page_count<0||page_count>1024||owners_per_page<0||owners_per_page>128)return 3;
@@ -100,6 +103,6 @@ int main(int argc,char **argv){
  printf("{\"selected\":%lld,\"second\":%lld,\"reloc_n\":%ld,\"page_n\":%ld,\"reloc_hash\":%llu,\"page_hash\":%llu,\"flags_hash\":%llu,\"first_obj\":%ld,\"first_page\":%ld,",(long long)selected,(long long)second,reloc_n,page_n,(unsigned long long)rh,(unsigned long long)ph,(unsigned long long)fh,first_obj,first_page);
  printf("\"fresh\":%lld,\"refusals\":%lld,\"deferred\":%llu,\"deferred_bytes\":%llu,\"candidates\":%llu,\"candidate_bytes\":%llu,\"zpage_bytes\":%llu,\"revision\":%llu,\"page_revision\":%llu,",(long long)pcc_gc_backend4_candidate_fresh_skips_count(),(long long)pcc_gc_backend4_relocation_add_refusals_count(),(unsigned long long)pcc_gc_backend4_large_object_defers,(unsigned long long)pcc_gc_backend4_large_object_deferred_bytes_count,(unsigned long long)pcc_gc_backend4_evacuation_candidates,(unsigned long long)pcc_gc_backend4_evacuation_candidate_bytes_count,(unsigned long long)pcc_gc_backend4_evacuation_candidate_zpage_bytes_count,(unsigned long long)pcc_gc_backend4_reseed_relocation_revision,(unsigned long long)pcc_gc_backend4_reseed_page_revision);
  printf("\"small_candidates\":%llu,\"medium_candidates\":%llu,\"small_bytes\":%llu,\"medium_bytes\":%llu,\"small_zbytes\":%llu,\"medium_zbytes\":%llu,",(unsigned long long)pcc_gc_backend4_small_page_candidates,(unsigned long long)pcc_gc_backend4_medium_page_candidates,(unsigned long long)pcc_gc_backend4_small_page_candidate_bytes_count,(unsigned long long)pcc_gc_backend4_medium_page_candidate_bytes_count,(unsigned long long)pcc_gc_backend4_small_page_candidate_zpage_bytes_count,(unsigned long long)pcc_gc_backend4_medium_page_candidate_zpage_bytes_count);
- printf("\"pin_checks\":%ld,\"polls\":%ld,\"lock_errors\":%ld,\"rank_allocs\":%ld,\"rank_live\":%ld,\"plan_live\":%ld,\"seconds\":%.9f}\n",pin_checks,polls,lock_errors,rank_allocs,rank_live,plan_live,elapsed);
+ printf("\"epoch_queries\":%ld,\"pin_checks\":%ld,\"polls\":%ld,\"lock_errors\":%ld,\"rank_allocs\":%ld,\"rank_live\":%ld,\"plan_live\":%ld,\"seconds\":%.9f}\n",epoch_queries,pin_checks,polls,lock_errors,rank_allocs,rank_live,plan_live,elapsed);
  return lock_errors||rank_live||plan_live!=reloc_n+page_n?5:0;
 }
