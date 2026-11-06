@@ -1,8 +1,8 @@
 """threading locks between virtual threads on several carriers.
 
 A virtual thread that blocks on a lock parks on the lock's FIFO instead of
-holding its carrier, and the release hands the lock to the oldest parked
-waiter. Workers yield while holding Lock, RLock and BoundedSemaphore, so
+holding its carrier, and release notifies the oldest parked waiter to retry
+acquisition. Workers yield while holding Lock, RLock and BoundedSemaphore, so
 parked holders and parked waiters interleave across three carriers:
 
 * Lock and RLock read-modify-write counters stay exact;

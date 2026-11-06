@@ -383,6 +383,7 @@ def _runtime_signatures_part_6():
     "py_threading_condition_wait_vthread_timeout": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_threading_condition_wait_resume": (_I64, [_PYOBJ], False),
     "py_threading_condition_wait_cancel": (_I64, [_PYOBJ], False),
+    "py_threading_acquire_wait_cancel": (_I64, [_PYOBJ], False),
     "py_threading_condition_notify": (_I64, [_PYOBJ], False),
     "py_threading_condition_notify_all": (_I64, [_PYOBJ], False),
     "py_threading_semaphore_new": (_PYOBJ, [_I64], False),

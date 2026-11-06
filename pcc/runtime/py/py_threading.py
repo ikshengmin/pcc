@@ -63,6 +63,8 @@ pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_note_write_barrier = extern("pcc_gc_note_write_barrier", (c_ptr, c_ptr), c_void)
 
 _VTHREAD_WAITER_POOL_LIMIT = 4096
+_WAITER_NEXT_OFFSET = 8
+_WAITER_ROOT_HANDLE_OFFSET = 16
 
 pcc_current_thread_id = extern("pcc_current_thread_id", (), c_int64)
 pcc_threads_enabled = extern("pcc_threads_enabled", (), c_int64)
@@ -252,21 +254,48 @@ def _waiter_enqueue(owner, head_offset: int, tail_offset: int, vthread) -> int:
     return 0
 
 
+def _waiter_drop(node) -> None:
+    handle = load_ptr(node, _WAITER_ROOT_HANDLE_OFFSET)
+    pcc_gc_scheduler_root_unregister_handle(handle)
+    pcc_vthread_effect_note_waiter_root_leave()
+    store_ptr(node, _WAITER_ROOT_HANDLE_OFFSET, null())
+    pcc_gc_store_root(node, null())
+    _waiter_recycle(node)
+
+
+def _waiter_remove(owner, head_offset: int, tail_offset: int, vthread) -> None:
+    """Remove this task's old registration under the primitive's mutex.
+
+    An unrelated unpark can resume an acquire before its queue node was
+    notified. A retry must not register the same task twice.
+    """
+    previous = null()
+    node = load_ptr(owner, head_offset)
+    while ptr_is_null(node) == 0:
+        following = load_ptr(node, _WAITER_NEXT_OFFSET)
+        if ptr_eq(pcc_gc_load_ptr(null(), node), vthread) != 0:
+            if ptr_is_null(previous):
+                store_ptr(owner, head_offset, following)
+            else:
+                store_ptr(previous, _WAITER_NEXT_OFFSET, following)
+            if ptr_eq(load_ptr(owner, tail_offset), node) != 0:
+                store_ptr(owner, tail_offset, previous)
+            _waiter_drop(node)
+        else:
+            previous = node
+        node = following
+
+
 def _waiter_pop(owner, head_offset: int, tail_offset: int):
     while ptr_is_null(load_ptr(owner, head_offset)) == 0:
         node = load_ptr(owner, head_offset)
-        after = load_ptr(node, 8)
+        after = load_ptr(node, _WAITER_NEXT_OFFSET)
         store_ptr(owner, head_offset, after)
         if ptr_is_null(after):
             store_ptr(owner, tail_offset, null())
         vthread = pcc_gc_load_ptr(null(), node)
         py_incref_extern(vthread)
-        handle = load_ptr(node, 16)
-        pcc_gc_scheduler_root_unregister_handle(handle)
-        pcc_vthread_effect_note_waiter_root_leave()
-        store_ptr(node, 16, null())
-        pcc_gc_store_root(node, null())
-        _waiter_recycle(node)
+        _waiter_drop(node)
         if ptr_is_null(vthread) == 0:
             return vthread
         py_decref_extern(vthread)
@@ -839,6 +868,7 @@ def py_threading_lock_acquire_vthread(lock) -> int:
     if pcc_mutex_lock(m) != 0:
         py_decref_extern(vthread)
         return -1
+    _waiter_remove(lock, 40, 48, vthread)
     if load_i64(lock, 32) == 0:
         store_i64(lock, 32, 1)
         pcc_mutex_unlock(m)
@@ -849,9 +879,49 @@ def py_threading_lock_acquire_vthread(lock) -> int:
         py_decref_extern(vthread)
         return -1
     result = py_virtual_thread_park(vthread)
+    if result != 0:
+        _waiter_remove(lock, 40, 48, vthread)
     pcc_mutex_unlock(m)
     py_decref_extern(vthread)
     return 1 if result == 0 else -1
+
+
+@c_abi_export("py_threading_acquire_wait_cancel")
+def py_threading_acquire_wait_cancel(resource) -> int:
+    """Abandon the current task's pending acquire without consuming a unit.
+
+    If a notified task is closed before it can reacquire, pass availability
+    to another waiter. Preserve the caller's pending exception throughout.
+    """
+    if ptr_is_null(resource) or is_tagged_int(resource):
+        return -1
+    tag: int = load_i32(resource, PYOBJECTHEADER_TYPE_TAG_OFFSET)
+    head_offset: int = 40
+    tail_offset: int = 48
+    cond_offset: int = 24
+    if tag == PY_TYPE_THREAD_RLOCK:
+        head_offset = 48
+        tail_offset = 56
+        cond_offset = 40
+    elif tag != PY_TYPE_THREAD_LOCK and tag != PY_TYPE_THREAD_SEMAPHORE:
+        return -1
+    current = _current_vthread()
+    mutex = load_ptr(resource, 16)
+    if pcc_mutex_lock(mutex) != 0:
+        py_decref_extern(current)
+        return -1
+    if ptr_is_null(current) == 0:
+        _waiter_remove(resource, head_offset, tail_offset, current)
+    state: int = load_i64(resource, 32)
+    available: int = 1 if state == 0 else 0
+    if tag == PY_TYPE_THREAD_SEMAPHORE:
+        available = 1 if state > 0 else 0
+    if available != 0:
+        _waiter_wake_one(resource, head_offset, tail_offset)
+        pcc_cond_signal(load_ptr(resource, cond_offset))
+    result: int = pcc_mutex_unlock(mutex)
+    py_decref_extern(current)
+    return result
 
 
 @c_abi_export("py_threading_lock_release")
@@ -865,16 +935,15 @@ def py_threading_lock_release(lock) -> int:
         pcc_mutex_unlock(m)
         py_raise_owned(py_exc_new(7, cstr("release unlocked lock")))
         return -1
+    # A wake is a notification, not ownership. Reserving the released lock
+    # for a queued vthread can deadlock its only carrier when that carrier
+    # enters a synchronous acquire before the queued task resumes.
+    store_i64(lock, 32, 0)
     woken = _waiter_wake_one(lock, 40, 48)
     if woken < 0:
         pcc_mutex_unlock(m)
         return -1
-    if woken == 0:
-        store_i64(lock, 32, 0)
-        pcc_cond_signal(load_ptr(lock, 24))
-    else:
-        # Ownership transfers directly to the oldest parked vthread.
-        store_i64(lock, 32, 1)
+    pcc_cond_signal(load_ptr(lock, 24))
     return pcc_mutex_unlock(m)
 
 
@@ -978,37 +1047,17 @@ def py_threading_rlock_release(lock) -> int:
         return -1
     depth = depth - 1
     store_i64(lock, 32, depth)
-    if depth == 0 and _rlock_hand_off(lock) == 0:
+    if depth == 0:
         store_i64(lock, 24, 0)
+        _waiter_wake_one(lock, 48, 56)
         pcc_cond_signal(load_ptr(lock, 40))
     return pcc_mutex_unlock(m)
-
-
-def _rlock_hand_off(lock) -> int:
-    """Give a released RLock (mutex held) to its oldest parked virtual thread
-    that can still run: 1 when one took it, 0 when none waits."""
-    handed: int = 0
-    done: int = 0
-    while done == 0:
-        vthread = _waiter_pop(lock, 48, 56)
-        if ptr_is_null(vthread):
-            done = 1
-        else:
-            store_i64(lock, 24, 0 - load_i64(vthread, PYVIRTUALTHREADOBJECT_IDENTITY_OFFSET))
-            store_i64(lock, 32, 1)
-            if py_virtual_thread_unpark(vthread) == 0:
-                handed = 1
-                done = 1
-            else:
-                store_i64(lock, 32, 0)
-            py_decref_extern(vthread)
-    return handed
 
 
 @c_abi_export("py_threading_rlock_acquire_vthread")
 def py_threading_rlock_acquire_vthread(lock) -> int:
     """RLock.acquire() in a resumable frame: 0 acquired or re-entered, 1
-    parked until a release hands this virtual thread the lock, -1 failure.
+    parked until notified to retry acquisition, -1 failure.
 
     Outside a virtual thread it is the blocking acquire.
     """
@@ -1022,6 +1071,7 @@ def py_threading_rlock_acquire_vthread(lock) -> int:
     if pcc_mutex_lock(m) != 0:
         py_decref_extern(vthread)
         return -1
+    _waiter_remove(lock, 48, 56, vthread)
     result: int = 0
     depth: int = load_i64(lock, 32)
     if depth > 0 and load_i64(lock, 24) == me:
@@ -1034,8 +1084,7 @@ def py_threading_rlock_acquire_vthread(lock) -> int:
     elif py_virtual_thread_park(vthread) == 0:
         result = 1
     else:
-        # A park the scheduler refuses (cancelled task) leaves the node for
-        # the releaser's handoff, which skips a waiter that cannot resume.
+        _waiter_remove(lock, 48, 56, vthread)
         result = -1
     pcc_mutex_unlock(m)
     py_decref_extern(vthread)
@@ -1507,6 +1556,7 @@ def py_threading_semaphore_acquire_vthread(sem) -> int:
     if pcc_mutex_lock(m) != 0:
         py_decref_extern(vthread)
         return -1
+    _waiter_remove(sem, 40, 48, vthread)
     value = load_i64(sem, 32)
     if value > 0:
         store_i64(sem, 32, value - 1)
@@ -1518,13 +1568,15 @@ def py_threading_semaphore_acquire_vthread(sem) -> int:
         py_decref_extern(vthread)
         return -1
     result = py_virtual_thread_park(vthread)
+    if result != 0:
+        _waiter_remove(sem, 40, 48, vthread)
     pcc_mutex_unlock(m)
     py_decref_extern(vthread)
     return 1 if result == 0 else -1
 
 
 def _semaphore_release_count(sem, n: int) -> int:
-    """Release ``n`` units: parked virtual threads take theirs directly.
+    """Release ``n`` units and notify waiters to retry their acquisition.
     0, or -1 with ValueError raised past a BoundedSemaphore's bound."""
     m = load_ptr(sem, 16)
     c = load_ptr(sem, 24)
@@ -1537,12 +1589,11 @@ def _semaphore_release_count(sem, n: int) -> int:
         return -1
     released: int = 0
     while released < n:
+        store_i64(sem, 32, load_i64(sem, 32) + 1)
         woken = _waiter_wake_one(sem, 40, 48)
         if woken < 0:
             pcc_mutex_unlock(m)
             return -1
-        if woken == 0:
-            store_i64(sem, 32, load_i64(sem, 32) + 1)
         released = released + 1
     if n == 1:
         pcc_cond_signal(c)

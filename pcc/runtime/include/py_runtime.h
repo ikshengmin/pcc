@@ -921,7 +921,14 @@ int64_t   py_threading_get_ident(void);
 PyObject *py_threading_current_thread(void);
 PyObject *py_threading_lock_new(void);
 int64_t   py_threading_lock_acquire(PyObject *lock);
+/* Resumable Lock/RLock/Semaphore acquire: 0 acquired, 1 queued and parked,
+ * -1 error. A notification does not transfer ownership; callers retry the
+ * same acquire after every resume and enter the critical section only on 0.
+ * Compiler and runtime receipts must agree on this continuation protocol. */
 int64_t   py_threading_lock_acquire_vthread(PyObject *lock);
+/* Abandon a parked acquire on close/cancellation and forward a free unit's
+ * notification. Does not release a lock already owned by the caller. */
+int64_t   py_threading_acquire_wait_cancel(PyObject *resource);
 int64_t   py_threading_lock_release(PyObject *lock);
 PyObject *py_threading_rlock_new(void);
 int64_t   py_threading_rlock_acquire(PyObject *lock);

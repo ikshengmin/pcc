@@ -497,7 +497,9 @@ class NativeThreadingLoweringMixin:
             _release_recv_if_owned()
             return self._threading_bool_result(raw, hint)
 
-        def _check_negative_rc(raw: ir.Value, hint: str) -> None:
+        def _check_negative_rc(
+            raw: ir.Value, hint: str, slot: Optional[ir.Value] = None,
+        ) -> None:
             failed = self.builder.icmp_signed(
                 "<",
                 raw,
@@ -512,7 +514,7 @@ class NativeThreadingLoweringMixin:
             )
             self.builder.cbranch(failed, fail_bb, ok_bb)
             self.builder.position_at_end(fail_bb)
-            _release_recv_if_owned()
+            _release_recv_if_owned(slot)
             self._threading_raise_unless_pending(hint + " failed")
             self.builder.position_at_end(ok_bb)
 
@@ -615,8 +617,29 @@ class NativeThreadingLoweringMixin:
                 name=self._fresh(hint + ".done"),
             )
             self.builder.cbranch(parked, park_bb, done_bb)
+            cancelled_bb = None
+            if reacquire_runtime_name is not None:
+                outer_error = self._current_try_err_block()
+                if outer_error is None:
+                    outer_error = self._ensure_fn_err_exit()
+                cancelled_bb = self.current_function.append_basic_block(
+                    name=self._fresh(hint + ".cancelled"),
+                )
+                self.builder.position_at_end(cancelled_bb)
+                cancelled_recv = self.builder.call(
+                    self.runtime["pcc_gc_load_ptr"],
+                    [ir.Constant(_CSTR, None), self._as_gc_ptr(recv_slot)],
+                    name=self._fresh(hint + ".cancelled.receiver"),
+                )
+                self.builder.call(
+                    self.runtime["py_threading_acquire_wait_cancel"], [cancelled_recv],
+                )
+                _release_recv_if_owned(recv_slot)
+                self.builder.branch(outer_error)
             self.builder.position_at_end(park_bb)
-            self._emit_generator_yield_value(self._emit_none_literal())
+            self._emit_generator_yield_value(
+                self._emit_none_literal(), resume_err_target=cancelled_bb,
+            )
             if reacquire_runtime_name is not None:
                 reacquire_recv = self.builder.call(
                     self.runtime["pcc_gc_load_ptr"],
@@ -628,7 +651,12 @@ class NativeThreadingLoweringMixin:
                     [reacquire_recv],
                     name=self._fresh(hint + ".reacquire.rc"),
                 )
-                _check_threading_rc(reacquire_rc, hint + ".reacquire", recv_slot)
+                _check_negative_rc(reacquire_rc, hint + ".reacquire", recv_slot)
+                retry = self.builder.icmp_signed(
+                    "==", reacquire_rc, ir.Constant(_I64, 1),
+                    name=self._fresh(hint + ".repark"),
+                )
+                self.builder.cbranch(retry, park_bb, done_bb)
             if not self._builder_block_is_terminated():
                 self.builder.branch(done_bb)
             self.builder.position_at_end(done_bb)
@@ -753,11 +781,12 @@ class NativeThreadingLoweringMixin:
                     raw = _args_call("py_threading_lock_acquire_args", "threading.acquire")
                     return self._threading_bool_result(raw, "threading.acquire")
                 if len(self._generator_ctx_stack) > 0:
-                    # A virtual thread parks on the lock's FIFO; the release
-                    # hands the lock over (an RLock names it as owner).
+                    # A release notifies a parked waiter. It must reacquire:
+                    # a native waiter may have won before this task resumed.
                     return _vthread_park_bool_call(
                         prefix + "_acquire_vthread",
                         "threading.acquire",
+                        reacquire_runtime_name=prefix + "_acquire_vthread",
                     )
                 return _bool_call(prefix + "_acquire", "threading.acquire")
             if method == "release":
@@ -829,6 +858,7 @@ class NativeThreadingLoweringMixin:
                     return _vthread_park_bool_call(
                         "py_threading_semaphore_acquire_vthread",
                         "threading.sem.acquire",
+                        reacquire_runtime_name="py_threading_semaphore_acquire_vthread",
                     )
                 return _bool_call(
                     "py_threading_semaphore_acquire", "threading.sem.acquire"

@@ -1,7 +1,7 @@
 """5-GC common production contract: vthread waiter-node freelist pool.
 
 Part of the virtual-thread T-track (T-P0-VTHREAD-NODE-POOL) and the 5-GC
-Production Equality Rule (docs/goal/goal-prompt.md G-track). py_threading.c wakes
+production slot/root contract. The owned py_threading runtime wakes
 virtual threads that block on a Lock / Event / Condition / Semaphore through a
 per-object waiter queue whose nodes (PyThreadVThreadWaiter) used to be raw
 calloc()/free() per park. This slice recycles those nodes through a bounded
@@ -14,8 +14,8 @@ runtime archive and runs the same probe under PCC_GC_BACKEND 0..4.
 
 The probe spawns many virtual threads that each try to acquire one shared
 threading.Lock while running on the scheduler. Only one holds it at a time; the
-rest enqueue waiter nodes and park. A releaser vthread hands the lock along one
-waiter at a time until every worker has acquired and released it. Running this
+rest enqueue waiter nodes and park. A releaser notifies one virtual waiter at a
+time to retry acquisition until every worker has acquired and released it. Running this
 over many rounds forces the freelist to fill and be reused. The pool must
 preserve the observable contract: every worker eventually acquires the lock
 (mutual exclusion, FIFO wake, no lost wakeups), the scheduler queues drain to
@@ -80,16 +80,16 @@ static int64_t worker_resume(PyObject *vthread, PyObject *continuation) {
     if (stage == 0) {
         int64_t rc = py_threading_lock_acquire_vthread(g_lock);
         if (rc < 0) return -1;
+        if (rc == 1) {
+            /* A wake is not ownership. Keep stage 0 so the next resume
+             * retries acquisition before entering the critical section. */
+            return 0;
+        }
         /* Remember that our next resume must release the lock. */
         PyObject *held = py_int_from_i64(1);
         if (held == NULL) return -1;
         (void)py_continuation_set_slot(continuation, 0, held);
         py_decref(held);
-        if (rc == 1) {
-            /* Enqueued a waiter node + parked; the scheduler resumes us when a
-             * releaser hands the lock over. Leave state PARKED. */
-            return 0;
-        }
         /* rc == 0: took the lock uncontended. Yield while holding so the other
          * queued workers contend and enqueue waiter nodes; we come back at
          * stage 1 to release. */
@@ -198,7 +198,10 @@ int main(int argc, char **argv) {
 def _vthread_waiter_pool_exe(tmp_path_factory, request):
     tmp = tmp_path_factory.mktemp("gc_vthread_waiter_pool")
     archive = request.getfixturevalue("pcc_runtime_archive")
-    work_runtime = archive.parent
+    # This is an external-C ABI reference harness, not an owned application
+    # build. Owned archives live below build_owned/<target>/<config>; their
+    # parent is not the runtime's source/include directory.
+    work_runtime = Path(os.environ.get("PCC_RUNTIME_DIR", str(RUNTIME_DIR)))
 
     src = tmp / "vthread_waiter_node_pool.c"
     src.write_text(textwrap.dedent(_SOURCE).lstrip(), encoding="utf-8")

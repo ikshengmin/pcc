@@ -49,6 +49,26 @@ was reproduced with the unmodified `d345f400b` compiler/runtime snapshot, before
 the numeric dispatch fix. It remains an open finalization boundary; these
 focused passes do not certify the complete Python/GC suite.
 
+The C256 gateway stall was reproduced with a minimal mixed-waiter program
+over `d2bb7661a`. Sampled main/carrier stacks both waited on the connection
+state lock: release had reserved ownership for a queued virtual thread while
+a synchronous waiter blocked its only carrier. Lock/RLock/Semaphore now make
+the resource available and notify waiters; generated continuations recheck
+acquisition after every resume. A cancelled notified waiter removes its queue
+registration and forwards availability, while retries remove stale duplicate
+registrations after unrelated unparks. Carrier counts, semaphore bounds and
+the waiter-pool scheduler-step budget are unchanged.
+
+Validation: 75 new native cases cover three primitives, GC0–4, one/two carriers,
+re-parking, cancellation and spurious wakes; five focused IR checks and four
+existing native lock/API tests pass. The five waiter-pool C ABI reference cases
+also pass with their original bounded drain budget; that harness uses external
+C compilation and is not a pcc1 ownership claim. Reproduce the new native cases
+with `uv run pytest -x -vv --tb=short -m integration tests/python/test_threading_mixed_waiters.py`.
+The compiler/runtime continuation protocol must be rebuilt together. The real
+gateway rebuild, wider HTTP matrix and throughput optimization remain open;
+full suites and bootstrap were not run.
+
 ## Owned C++17: builtin-pointer increment, complete language still open
 
 The pointer increment over `f3f8a345c65c1d5ed7b49915d35e69c2c81a35a9` adds
