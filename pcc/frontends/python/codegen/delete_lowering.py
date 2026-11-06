@@ -226,8 +226,15 @@ class DeleteLoweringMixin:
                 self._unbind_module_global(target.ident)
                 continue
             if isinstance(target, Subscript):
-                if live_import_expr_binding(self, target.obj):
-                    roots = [self._emit_slot_call_operand(target.obj, "import.delete.receiver")]
+                native_slice = (
+                    isinstance(target.idx, Slice)
+                    and isinstance(target.obj.ty, (ListType, ByteArrayType, DynType))
+                    and (self._strict_no_libpython or not self._expr_looks_cpython(target.obj))
+                )
+                if live_import_expr_binding(self, target.obj) or native_slice:
+                    # Bounds can call back, collect or raise. Keep the receiver
+                    # and every evaluated bound rooted until deletion finishes.
+                    roots = [self._emit_slot_call_operand(target.obj, "delete.receiver")]
                     previous = self._current_try_err_block()
                     error = previous if previous is not None else self._ensure_fn_err_exit()
                     saved_cpy = self._cpy_operand_cleanup_block
@@ -238,11 +245,13 @@ class DeleteLoweringMixin:
                         for part in parts:
                             if part is None:
                                 part = NoneLit(span=target.span, ty=NoneType(name="None"))
-                            roots.append(self._emit_slot_call_operand(part, "import.delete.key"))
+                            roots.append(self._emit_slot_call_operand(part, "delete.key"))
                             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), error)
                             self._cpy_operand_cleanup_block = self._try_err_block
                         helper = "py_obj_del_slice" if isinstance(target.idx, Slice) else "py_obj_delete_subscript"
-                        self._slot_call_runtime_call(helper, tuple(roots), span=target.span)
+                        status = self._slot_call_runtime_call(helper, tuple(roots), span=target.span)
+                        if isinstance(target.idx, Slice):
+                            self._slot_call_check_status(status, "slice deletion", target.span)
                         self._release_slot_call_roots(tuple(roots))
                     finally:
                         self._try_err_block = previous
@@ -254,27 +263,6 @@ class DeleteLoweringMixin:
                     obj = self._emit_expr(target.obj)
                     obj_ty = target.obj.ty
                     if obj not in getattr(self, "_cpy_values", ()):
-                        lo_obj = self._emit_slice_bound_object(target.idx.lo)
-                        hi_obj = self._emit_slice_bound_object(target.idx.hi)
-                        step_obj = self._emit_slice_bound_object(target.idx.step)
-                        if isinstance(obj_ty, ListType):
-                            self.builder.call(
-                                self.runtime["py_list_del_slice"],
-                                [obj, lo_obj, hi_obj, step_obj],
-                            )
-                            return
-                        if isinstance(obj_ty, ByteArrayType):
-                            self.builder.call(
-                                self.runtime["py_bytearray_del_slice"],
-                                [obj, lo_obj, hi_obj, step_obj],
-                            )
-                            return
-                        if isinstance(obj_ty, DynType):
-                            self.builder.call(
-                                self.runtime["py_obj_del_slice"],
-                                [obj, lo_obj, hi_obj, step_obj],
-                            )
-                            return
                         raise NotImplementedError(
                             f"Layer 1 slice delete on type "
                             f"{type(obj_ty).__name__} not supported"

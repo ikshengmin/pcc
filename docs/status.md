@@ -121,6 +121,23 @@ Reproduce the new test with `uv run pytest -x -vv --tb=short -m integration
 tests/python/test_dunder_receiver_ownership.py`. Application performance for
 this repair and the remaining slice-delete ownership repair is pending.
 
+Native list/bytearray slice deletion now shares the rooted operand path used
+by imported containers. It retires the receiver and bounds on success and
+error, checks the returned status, and continues to later targets in the same
+`del` statement. Twenty-six focused checks pass: 15 native cases across GC0–4,
+five existing native slice-mutation checks and six imported-mutation IR checks.
+The new native cases include callback collection, raising bounds, exact
+finalization after producer-thread exit, multiple targets and steady allocator
+growth. The old deletion path retains about 4.1 MB per 64 replaced 64-KiB
+bytearrays. The corrected path has zero additional requested bytes in a second
+64-operation diagnostic batch; the first batch initializes roughly 1.1 MB of
+attribute-resolution bookkeeping. The regression warms the same operations
+and keeps the original 256-KiB bound; the warmed old-source control still fails.
+Reproduce with `uv run pytest -x -vv --tb=short -m integration
+tests/python/test_slice_delete_ownership.py`. These checks do not add general
+user-class slice deletion or certify every bytearray bound-conversion case.
+Whole suites and native-pcc1/bootstrap qualification remain unrun.
+
 The callback lifetime oracle keeps the final object of each shape explicitly
 reachable while retiring 100 prior objects per shape. Exact counts remain
 mandatory; bounded repeated collections allow concurrent marking/relocation
