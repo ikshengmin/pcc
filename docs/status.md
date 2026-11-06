@@ -184,10 +184,11 @@ admission. Existing escape, volatile/atomic, type and CFG checks remain intact.
 No allocation or activation check is moved. Removal handles the admitted
 declarations in their original blocks.
 
-Implementation `f0be772ae` contains the repair. Its focused evidence uses the
-frozen `acdbef96a` base plus the same optimizer/test patch. Upstream GC4 barrier
-change `4079ee8d0` was integrated without conflict after validation; it was not
-included in these Mac measurements.
+Focused evidence uses the frozen `acdbef96a` base plus the optimizer/test patch.
+The validated `pcc/ir/optimization/mem2reg.py` SHA-256 is
+`3eb350c776e7134e48caaaa24f98da8642406c26377df4a8357734151463c47a`.
+Later upstream commits were integrated without conflict after validation and
+were not part of these Mac measurements.
 
 The new guarded-loop/default-frontend cases and native before/after execution
 pass. Thirteen final checks cover those shapes, recursion-depth/error handling
