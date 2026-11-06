@@ -78,6 +78,7 @@ define_global_ptr_null("pcc_vthread_io_free_py")
 define_global_ptr_null("pcc_vthread_io_resource_head_py")
 define_global_i64("pcc_vthread_io_resource_generation_py", 0)
 define_global_i64("pcc_vthread_ready_count_py", 0)
+define_global_i64("pcc_vthread_injection_pending_py", 0)
 define_global_i64("pcc_vthread_io_count_py", 0)
 define_global_i64("pcc_vthread_ready_alloc_py", 0)
 define_global_i64("pcc_vthread_ready_reuse_py", 0)
@@ -771,6 +772,8 @@ def _join_release(node) -> None:
 
 
 def _queue_push(head_slot, tail_slot, node) -> None:
+    # All callers publish into the injection FIFO under the scheduler lock.
+    # The hint avoids taking that lock on every idle global-queue probe.
     store_ptr(node, 8, null())
     tail = load_ptr(tail_slot, 0)
     if ptr_is_null(tail):
@@ -778,6 +781,7 @@ def _queue_push(head_slot, tail_slot, node) -> None:
     else:
         store_ptr(tail, 8, node)
     store_ptr(tail_slot, 0, node)
+    _counter_set(global_addr("pcc_vthread_injection_pending_py"), 1)
 
 
 def _carrier_queue(index: int):
@@ -833,10 +837,11 @@ def _carrier_pop_locked(queue, owner: int):
     if owner != 0:
         turn_slot = _carrier_turn_slot(queue)
         turn = load_i64(turn_slot, 0)
-        # Local LIFO preserves locality. Periodically take the oldest item
-        # so a yielding task cannot indefinitely hide earlier local work.
+        # Preserve locality for a small ready set. With more than one ready
+        # batch, FIFO prevents the same hot tail from repeatedly overtaking
+        # older work (including completed IO) across many batches.
         take_front = 0
-        if turn % 16 == 15:
+        if turn % 16 == 15 or _counter(global_addr("pcc_vthread_ready_count_py")) > 64:
             take_front = 1
         store_i64(turn_slot, 0, (turn + 1) % 16)
     index = begin
@@ -2129,6 +2134,10 @@ def _dequeue_global():
         return null()
     thread = _dequeue_from(global_addr("pcc_vthread_ready_head_py"),
                            global_addr("pcc_vthread_ready_tail_py"))
+    pending: int = 0
+    if ptr_is_null(global_load_ptr("pcc_vthread_ready_head_py")) == 0:
+        pending = 1
+    _counter_set(global_addr("pcc_vthread_injection_pending_py"), pending)
     _scheduler_unlock()
     return thread
 
@@ -2156,9 +2165,12 @@ def _dequeue():
         budget_slot = global_addr("pcc_vthread_local_poll_budget_py")
         budget = load_i32(budget_slot, 0)
         store_i32(budget_slot, 0, (budget + 1) % 32)
-        if budget == 31:
-            # Bounded local traffic cannot starve external submissions or
-            # overflow work. A failed poll still proceeds to local work.
+        injected = _counter(global_addr("pcc_vthread_injection_pending_py"))
+        if budget == 31 or (injected != 0 and budget % 2 == 1):
+            # Share service with an actual injection backlog. One global
+            # item per 32 local steps multiplied the wait of an overflow
+            # cohort by 32. Keep periodic polling even without the hint;
+            # a missed/empty poll still proceeds to local work.
             thread = _dequeue_global()
             if ptr_is_null(thread) == 0:
                 return thread

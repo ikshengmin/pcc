@@ -9,6 +9,39 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 
 ## Gateway Web Frameworks Benchmark: native request path
 
+The next queue-pressure probe uses 400 yielding tasks on a persistent carrier.
+At `92d73d8ab`, the last task first enters after 9,113 task steps: overflow
+injection is served only once per 32 local dequeues, and local work is mostly
+LIFO. The candidate publishes an atomic injection-backlog hint, shares service
+with that backlog on alternating turns, and uses FIFO when the ready set
+exceeds one 64-step batch. Queue capacity, IO batch size, stop checks and root
+ownership remain unchanged. The same single-carrier cohort now reaches every
+task in 512 steps. This is a scheduling-progress result; live HTTP timing is
+still pending for this batch.
+
+Ten native cases cover one-carrier progress and two-carrier exactly-once
+completion under GC0–4. The bounded-policy source check and three existing
+runtime C ABI reference cases also pass, including overflow/queued-root and
+persistent-carrier/pin checks. The C cases use an external reference compiler;
+the ten new programs are compiled by owned host-pcc0/self. Reproduce with
+`uv run pytest -x -vv --tb=short -m integration tests/python/test_virtual_thread_ready_fairness.py`.
+Initial diagnostic attempts used an overly strict aggregate-step bound across
+two independently scheduled CPUs and an incomplete copied runtime inventory;
+those attempts are not accepted validation. Full suites/bootstrap remain unrun.
+
+A separate fixed-work gateway probe observes about 6.7 MB of additional live
+requested allocator bytes per 5,000 requests, surviving explicit collection.
+A bounded read-only heap census attributes the dominant growth to one
+`BodyStream`, one `BufferSegment` and one empty list per request. Debugger
+suspension can interrupt a flag/count publication; the census records its
+one-object counter discrepancy rather than claiming a stopped-world invariant.
+A two-module reproducer narrows the leak to chained method receivers:
+`holder.child.method()` leaves all 100 children alive, while direct calls and
+an explicitly captured child release all 100. The emitted native-program IR
+evaluates the field twice; the speculative CPython probe discards the first
+owned value before ordinary native method lowering. The frontend repair and
+the real gateway memory retest remain open.
+
 The Linux arm64 application build from `2d0a617ea69b5816092cff0e2aed5a71ecbe3975`
 failed because the incremental collector's direct cross-module read of
 `pcc_gc_cms_worker_current` produced an ordinary GOT relocation to TLS storage.
