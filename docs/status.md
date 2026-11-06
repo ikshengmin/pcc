@@ -138,6 +138,16 @@ tests/python/test_slice_delete_ownership.py`. These checks do not add general
 user-class slice deletion or certify every bytearray bound-conversion case.
 Whole suites and native-pcc1/bootstrap qualification remain unrun.
 
+The complete gateway rebuilt from `2085bf26c` confirms the ownership repairs on
+the original fixed-work load. Its 1,812 tracked objects do not increase over
+four batches of 5,000 requests. After the first batch, live requested bytes
+remain exactly 3,597,873, mapped bytes 6,311,936 and RSS 31,227,904 through the
+20,000-request endpoint. The ordinary application and HTTP codec are unchanged
+from gateway `582c8f5`; no diagnostic endpoints or request-limit changes are
+used. The source inventory verifies all 1,124 compiler inputs and 21 application
+Python files before/after compilation. This is a bounded allocator/HTTP result,
+not a general no-leak claim or a new throughput result.
+
 The callback lifetime oracle keeps the final object of each shape explicitly
 reachable while retiring 100 prior objects per shape. Exact counts remain
 mandatory; bounded repeated collections allow concurrent marking/relocation
