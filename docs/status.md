@@ -7,7 +7,7 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
 
-## Gateway Web Frameworks Benchmark: CMS TLS handoff
+## Gateway Web Frameworks Benchmark: native request path
 
 The Linux arm64 application build from `2d0a617ea69b5816092cff0e2aed5a71ecbe3975`
 failed because the incremental collector's direct cross-module read of
@@ -24,6 +24,22 @@ pcc1 qualification or a bootstrap fixed point. Reproduce with
 `uv run pytest -x -vv --tb=short -m integration tests/python/test_gc_cms_handoff_tls_boundary.py`.
 The complete gateway rebuild, upstream HTTP contract and same-guest throughput
 comparison remain in progress in `pcc-gateway`.
+
+The next Mac request-path failure was a dynamic `BufferView.to_bytes()` call
+being selected as `int.to_bytes()` by name. Over core `9753f3334`, dynamic
+`to_bytes`, `bit_length`, `bit_count` and `is_integer` now guard the actual
+receiver type and use ordinary rooted method lookup for other objects. The
+integer binder is reused; generic calls can borrow the already evaluated
+receiver and publish into the caller's result root. Boolean bit operations and
+large-integer `is_integer` retain their integer semantics.
+
+Validation: 21 focused IR/schema checks and an executed CPython differential
+program under GC0–4 pass on local Mac arm64. The differential includes custom
+method names, keyword binding, property lookup before argument evaluation and
+failure recovery. Reproduce with `uv run pytest -x -vv --tb=short -m integration
+tests/python/test_dynamic_numeric_method_guard.py`. This is scoped host-pcc0
+native execution, not full collector, native-pcc1 or bootstrap qualification.
+The live gateway rebuild and throughput measurement remain open.
 
 ## Owned C++17: builtin-pointer increment, complete language still open
 

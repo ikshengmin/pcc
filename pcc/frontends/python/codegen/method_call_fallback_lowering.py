@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 from pcc.ir.compat import ir
+from pcc.frontends.python.codegen.freestanding_abi_constants import (
+    PY_TYPE_BOOL,
+    PY_TYPE_FLOAT,
+    PY_TYPE_INT,
+)
 from pcc.frontends.python.py_ast import (
     Attr,
     BoolLit,
@@ -64,6 +69,106 @@ def _bytes_split_operands(expr: Call):
 
 
 class MethodCallFallbackLoweringMixin:
+    def _emit_guarded_dynamic_numeric_method(self, expr, attr):
+        """Select numeric helpers by the receiver tag, never by name alone.
+
+        The shared object-call path owns custom lookup and argument binding.
+        Both branches borrow the same rooted receiver evaluated exactly once.
+        """
+        previous = self._current_try_err_block()
+        saved_cpy = self._cpy_operand_cleanup_block
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root("numeric.method.result")
+            roots.append(output)
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            receiver = self._emit_slot_call_operand(attr.obj, "numeric.method.receiver")
+            roots.append(receiver)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            tag = self._slot_call_runtime_call("py_obj_type_tag", (receiver,), span=expr.span)
+            tags = (PY_TYPE_INT, PY_TYPE_BOOL)
+            if attr.name == "is_integer":
+                tags = (PY_TYPE_INT, PY_TYPE_BOOL, PY_TYPE_FLOAT)
+            matches = self.builder.icmp_signed("==", tag, ir.Constant(_I64, tags[0]))
+            for type_tag in tags[1:]:
+                matches = self.builder.or_(matches, self.builder.icmp_signed(
+                    "==", tag, ir.Constant(_I64, type_tag)))
+            function = self.current_function
+            native = function.append_basic_block(self._fresh("numeric.method.native"))
+            generic = function.append_basic_block(self._fresh("numeric.method.generic"))
+            done = function.append_basic_block(self._fresh("numeric.method.done"))
+            self.builder.cbranch(matches, native, generic)
+
+            self.builder.position_at_end(generic)
+            self._emit_slot_call_object(
+                expr, "numeric.method.custom", receiver_slot=receiver, result_slot=output,
+            )
+            self.builder.branch(done)
+
+            self.builder.position_at_end(native)
+            if attr.name == "to_bytes":
+                result = self._emit_int_to_bytes_method(expr, attr, receiver_slot=receiver)
+                self._publish_slot_call_owned(output, result, label="numeric.to_bytes")
+            elif attr.name == "is_integer":
+                # All integers, including arbitrary-precision integers, are
+                # integral. Converting them to double could overflow or round.
+                floating = function.append_basic_block(self._fresh("numeric.float"))
+                integral = function.append_basic_block(self._fresh("numeric.integral"))
+                joined = function.append_basic_block(self._fresh("numeric.truth"))
+                self.builder.cbranch(self.builder.icmp_signed(
+                    "==", tag, ir.Constant(_I64, PY_TYPE_FLOAT)), floating, integral)
+                self.builder.position_at_end(floating)
+                value = self._slot_call_runtime_call("py_float_is_integer", (receiver,), span=expr.span)
+                bit = self.builder.trunc(value, _I32)
+                float_exit = self.builder.block
+                self.builder.branch(joined)
+                self.builder.position_at_end(integral)
+                self.builder.branch(joined)
+                self.builder.position_at_end(joined)
+                truth = self.builder.phi(_I32, name=self._fresh("numeric.is_integer"))
+                truth.add_incoming(bit, float_exit)
+                truth.add_incoming(ir.Constant(_I32, 1), integral)
+                self._slot_call_runtime_call(
+                    "py_bool_from_bit", (), suffix_args=(truth,), result_slot=output, span=expr.span,
+                )
+            else:
+                boolean = function.append_basic_block(self._fresh("numeric.boolean"))
+                integer = function.append_basic_block(self._fresh("numeric.integer"))
+                joined = function.append_basic_block(self._fresh("numeric.count"))
+                self.builder.cbranch(self.builder.icmp_signed(
+                    "==", tag, ir.Constant(_I64, PY_TYPE_BOOL)), boolean, integer)
+                self.builder.position_at_end(boolean)
+                bool_value = self._slot_call_runtime_call("py_obj_truthy", (receiver,), span=expr.span)
+                bool_exit = self.builder.block
+                self.builder.branch(joined)
+                self.builder.position_at_end(integer)
+                helper = "py_int_bit_length" if attr.name == "bit_length" else "py_int_bit_count"
+                int_value = self._slot_call_runtime_call(helper, (receiver,), span=expr.span)
+                int_exit = self.builder.block
+                self.builder.branch(joined)
+                self.builder.position_at_end(joined)
+                value = self.builder.phi(_I64, name=self._fresh("numeric.bit_count"))
+                value.add_incoming(bool_value, bool_exit)
+                value.add_incoming(int_value, int_exit)
+                self._slot_call_runtime_call(
+                    "py_int_from_i64", (), suffix_args=(value,), result_slot=output, span=expr.span,
+                )
+            self.builder.branch(done)
+            self.builder.position_at_end(done)
+            self._release_slot_call_roots((receiver,))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        if sink is not None:
+            return self.builder.load(output, name=self._fresh("numeric.method.current"))
+        return self._take_slot_call_root(output, source_expr=expr)
+
     def _emit_method_call_fallback(self, expr: Call, attr: Attr) -> ir.Value:
         """Finish dispatch without repeating earlier receiver/operand checks."""
         # Last-resort CPython fallback: when the receiver is a DynType
@@ -84,136 +189,18 @@ class MethodCallFallbackLoweringMixin:
         expanded_int_bytes_call = False
         if attr.name == "to_bytes":
             expanded_int_bytes_call = self._has_unpacked_operands(expr.args, expr.kwargs)
+        if isinstance(obj_ty, DynType) and (
+            attr.name == "to_bytes" and not expanded_int_bytes_call
+            or attr.name in ("is_integer", "bit_length", "bit_count")
+            and not expr.args and not expr.kwargs
+        ):
+            return self._emit_guarded_dynamic_numeric_method(expr, attr)
         if (
             attr.name == "to_bytes"
-            and isinstance(obj_ty, (IntType, DynType, BoolType))
+            and isinstance(obj_ty, (IntType, BoolType))
             and not expanded_int_bytes_call
         ):
-            # One binder for inferred ints and dynamic integer results. Keep
-            # the receiver and all source-order operands owned and pinned while
-            # the runtime performs __index__ and signed.__bool__ conversion.
-            operands = [attr.obj] + list(expr.args)
-            length_index = 1 if expr.args else -1
-            order_index = 2 if len(expr.args) >= 2 else -1
-            signed_index = -1
-            binding_error = ""
-            if len(expr.args) > 2:
-                binding_error = "to_bytes() takes at most 2 positional arguments"
-            for keyword, operand in expr.kwargs:
-                index = len(operands)
-                operands.append(operand)
-                if keyword == "length":
-                    if length_index >= 0:
-                        binding_error = "to_bytes() got multiple values for argument 'length'"
-                    length_index = index
-                elif keyword == "byteorder":
-                    if order_index >= 0:
-                        binding_error = "to_bytes() got multiple values for argument 'byteorder'"
-                    order_index = index
-                elif keyword == "signed":
-                    if signed_index >= 0:
-                        binding_error = "to_bytes() got multiple values for argument 'signed'"
-                    signed_index = index
-                else:
-                    binding_error = "to_bytes() got an unexpected keyword argument '" + keyword + "'"
-            if length_index < 0:
-                length_index = len(operands)
-                operands.append(IntLit(span=expr.span, ty=IntType(name="int"), value=1))
-            if order_index < 0:
-                order_index = len(operands)
-                operands.append(StrLit(span=expr.span, ty=StrType(name="str"), value="big"))
-            if signed_index < 0:
-                signed_index = len(operands)
-                operands.append(BoolLit(span=expr.span, ty=BoolType(name="bool"), value=False))
-            roots = []
-            previous = self._current_try_err_block()
-            previous_cpy = getattr(self, "_cpy_operand_cleanup_block", None)
-            target = previous if previous is not None else self._ensure_fn_err_exit()
-            leases = []
-            try:
-                for operand in operands:
-                    cleanup = self._extern_cleanup_block(tuple(roots), target)
-                    self._try_err_block = cleanup
-                    self._cpy_operand_cleanup_block = cleanup
-                    value = self._emit_expr_with_cpy_operand_cleanup(
-                        operand, (), as_pcc_object=True,
-                    )
-                    roots.append(self._extern_enter_root(
-                        value, self._owned_release_needed(value, operand), "to_bytes.argument.root",
-                    ))
-                cleanup = self._extern_cleanup_block(tuple(roots), target)
-                self._try_err_block = cleanup
-                self._cpy_operand_cleanup_block = cleanup
-                if binding_error:
-                    message = self._pooled_cstr_ptr(binding_error, ".to_bytes.binding_error")
-                    exc = self.builder.call(
-                        self.runtime["py_exc_new"], [ir.Constant(ir.IntType(64), 3), message],
-                        name=self._fresh("to_bytes.binding.exc"),
-                    )
-                    self.builder.call(self.runtime["py_raise"], [exc])
-                    self._gc_release(exc)
-                    self._emit_post_call_err_check(expr.span)
-                    self._extern_release_roots(tuple(roots))
-                    return self._emit_none_literal()
-                # A traced slot follows moves while evaluating later operands.
-                # Counted leases additionally protect raw ABI arguments across
-                # callbacks that clear an aliased object's Boolean pin flag.
-                for root in roots:
-                    acquired = self.builder.call(
-                        self.runtime["pcc_gc_foreign_lease_acquire"],
-                        [self._as_gc_ptr(root[0])], name=self._fresh("to_bytes.lease.acquire"),
-                    )
-                    failed = self.builder.icmp_signed("<", acquired, ir.Constant(ir.IntType(64), 0))
-                    error = self.current_function.append_basic_block(self._fresh("to_bytes.lease.error"))
-                    ready = self.current_function.append_basic_block(self._fresh("to_bytes.lease.ready"))
-                    self.builder.cbranch(failed, error, ready)
-                    self.builder.position_at_end(error)
-                    cleanup = self._extern_cleanup_block(tuple(roots), target, tuple(leases))
-                    self._try_err_block = cleanup
-                    self._cpy_operand_cleanup_block = cleanup
-                    overflow = self.current_function.append_basic_block(self._fresh("bytes.lease.overflow"))
-                    invalid = self.current_function.append_basic_block(self._fresh("bytes.lease.invalid"))
-                    self.builder.cbranch(
-                        self.builder.icmp_signed("==", acquired, ir.Constant(ir.IntType(64), -2)), overflow, invalid,
-                    )
-                    self.builder.position_at_end(overflow)
-                    self._emit_builtin_exception_and_branch(
-                        "OverflowError", "integer byte conversion address lease overflow", expr.span,
-                    )
-                    self.builder.position_at_end(invalid)
-                    self._emit_builtin_exception_and_branch(
-                        "RuntimeError", "integer byte conversion requires a stable managed owner", expr.span,
-                    )
-                    self.builder.position_at_end(ready)
-                    leases.append((root, acquired))
-                cleanup = self._extern_cleanup_block(tuple(roots), target, tuple(leases))
-                self._try_err_block = cleanup
-                self._cpy_operand_cleanup_block = cleanup
-                result = self.builder.call(
-                    self.runtime["py_int_to_bytes_args"],
-                    [self._extern_load_root(roots[0]), self._extern_load_root(roots[length_index]),
-                     self._extern_load_root(roots[order_index]), self._extern_load_root(roots[signed_index])],
-                    name=self._fresh("int.to_bytes"),
-                )
-                self._emit_post_call_err_check(expr.span)
-                result_root = self._extern_enter_root(result, True, "to_bytes.result.root")
-                # Root teardown may call finalizers and move the result. The
-                # shared take helper consumes the source owner exactly once,
-                # then transfers the root owner after restoring prior pin state.
-                prior = result_root[2]
-                for root in reversed(roots):
-                    alias = self.builder.icmp_unsigned("==", self._extern_load_root(result_root), self._extern_load_root(root))
-                    prior = self.builder.select(alias, root[2], prior)
-                result_root = (result_root[0], True, prior)
-            finally:
-                self._try_err_block = previous
-                self._cpy_operand_cleanup_block = previous_cpy
-            release_failed = self._extern_release_foreign_leases(tuple(leases))
-            self._extern_check_lease_cleanup(release_failed, tuple(roots) + (result_root,))
-            self._extern_release_roots(tuple(roots))
-            result = self._extern_take_root(result_root)
-            self._note_owned_object_value(result)
-            return result
+            return self._emit_int_to_bytes_method(expr, attr)
         if isinstance(obj_ty, DynType):
             if attr.name == "clear" and not expr.args and not expr.kwargs:
                 self.builder.call(
@@ -247,40 +234,6 @@ class MethodCallFallbackLoweringMixin:
             native = self._maybe_emit_str_method_via_dyn(expr)
             if native is not None:
                 return native
-            # DynType numeric methods on a boxed value (e.g. a float from
-            # py_obj_truediv, or a boxed int): handle .is_integer()/.bit_length()
-            # natively before the getattr-based dynamic dispatch (which would
-            # AttributeError, since boxed float/int have no method table).
-            # py_float_is_integer / py_int_bit_length read the object by tag.
-            # (Same "assume the runtime type matches the method" pragmatism as
-            # the str_method_via_dyn path above.)
-            if attr.name == "is_integer" and not expr.args and not expr.kwargs:
-                obj = self._emit_as_object(attr.obj)
-                i64v = self.builder.call(
-                    self.runtime["py_float_is_integer"],
-                    [obj],
-                    name=self._fresh("dyn.is_integer"),
-                )
-                return self.builder.icmp_signed(
-                    "!=",
-                    i64v,
-                    ir.Constant(_I64, 0),
-                    name=self._fresh("dyn.is_integer.i1"),
-                )
-            if attr.name == "bit_length" and not expr.args and not expr.kwargs:
-                obj = self._emit_as_object(attr.obj)
-                return self.builder.call(
-                    self.runtime["py_int_bit_length"],
-                    [obj],
-                    name=self._fresh("dyn.bit_length"),
-                )
-            if attr.name == "bit_count" and not expr.args and not expr.kwargs:
-                obj = self._emit_as_object(attr.obj)
-                return self.builder.call(
-                    self.runtime["py_int_bit_count"],
-                    [obj],
-                    name=self._fresh("dyn.bit_count"),
-                )
             # General dynamic calls need the same operand/result transaction
             # whether a containing expression supplied a sink or not.
             return self._emit_slot_method_call(expr, "method." + attr.name)
@@ -765,18 +718,13 @@ class MethodCallFallbackLoweringMixin:
             )
             return result
         if (
-            isinstance(obj_ty, (FloatType, DynType))
+            isinstance(obj_ty, FloatType)
             and attr.name == "is_integer"
             and not expr.args
             and not expr.kwargs
         ):
-            # Native float.is_integer() — avoid the libpython fallback below so
-            # it works under --python-libpython=off. Returns a bool (i1).
-            # DynType is included so a boxed float from a dynamic expression
-            # (e.g. ``(total / count).is_integer()`` where ``/`` is py_obj_truediv
-            # -> a boxed float) works; py_float_is_integer reads the object via
-            # py_float_to_f64 (float/int/bool). (A user class defining its own
-            # is_integer would route here too, but that is vanishingly rare.)
+            # Native float.is_integer() returns a bool (i1). Dynamic receivers
+            # use the guarded branch above, preserving ordinary user methods.
             obj = self._emit_as_object(attr.obj)
             i64v = self.builder.call(
                 self.runtime["py_float_is_integer"],
@@ -790,16 +738,15 @@ class MethodCallFallbackLoweringMixin:
                 name=self._fresh("float.is_integer.i1"),
             )
         if (
-            isinstance(obj_ty, (IntType, DynType))
+            isinstance(obj_ty, IntType)
             and attr.name == "bit_length"
             and not expr.args
             and not expr.kwargs
         ):
             # Native int.bit_length() — avoid the libpython fallback so it works
             # under --python-libpython=off. Returns the bit count as an int (i64),
-            # exact for bignums (py_int_bit_length). DynType included so a boxed
-            # int from a dynamic expression works (py_int_bit_length reads the
-            # object's tag: tagged int / bignum).
+            # exact for bignums (py_int_bit_length). Dynamic receivers use the
+            # guarded branch above.
             obj = self._emit_as_object(attr.obj)
             return self.builder.call(
                 self.runtime["py_int_bit_length"],
@@ -807,7 +754,7 @@ class MethodCallFallbackLoweringMixin:
                 name=self._fresh("int.bit_length"),
             )
         if (
-            isinstance(obj_ty, (IntType, DynType))
+            isinstance(obj_ty, IntType)
             and attr.name == "bit_count"
             and not expr.args
             and not expr.kwargs
@@ -815,9 +762,8 @@ class MethodCallFallbackLoweringMixin:
             # Native int.bit_count() — sibling of bit_length; avoid the libpython
             # fallback so it works under --python-libpython=off. Returns the
             # population count (set bits of abs(value)) as an int (i64), exact
-            # for bignums (py_int_bit_count popcounts each limb). DynType included
-            # so a boxed int from a dynamic expression works (py_int_bit_count
-            # reads the object's tag: tagged int / bignum).
+            # for bignums (py_int_bit_count popcounts each limb). Dynamic
+            # receivers use the guarded branch above.
             obj = self._emit_as_object(attr.obj)
             return self.builder.call(
                 self.runtime["py_int_bit_count"],
@@ -906,3 +852,135 @@ class MethodCallFallbackLoweringMixin:
             expr.span,
             call_expr=expr,
         )
+
+    def _emit_int_to_bytes_method(self, expr, attr, receiver_slot=None):
+        # One binder for inferred ints and dynamic integer results. Keep
+        # the receiver and all source-order operands owned and pinned while
+        # the runtime performs __index__ and signed.__bool__ conversion.
+        operands = [attr.obj] + list(expr.args)
+        length_index = 1 if expr.args else -1
+        order_index = 2 if len(expr.args) >= 2 else -1
+        signed_index = -1
+        binding_error = ""
+        if len(expr.args) > 2:
+            binding_error = "to_bytes() takes at most 2 positional arguments"
+        for keyword, operand in expr.kwargs:
+            index = len(operands)
+            operands.append(operand)
+            if keyword == "length":
+                if length_index >= 0:
+                    binding_error = "to_bytes() got multiple values for argument 'length'"
+                length_index = index
+            elif keyword == "byteorder":
+                if order_index >= 0:
+                    binding_error = "to_bytes() got multiple values for argument 'byteorder'"
+                order_index = index
+            elif keyword == "signed":
+                if signed_index >= 0:
+                    binding_error = "to_bytes() got multiple values for argument 'signed'"
+                signed_index = index
+            else:
+                binding_error = "to_bytes() got an unexpected keyword argument '" + keyword + "'"
+        if length_index < 0:
+            length_index = len(operands)
+            operands.append(IntLit(span=expr.span, ty=IntType(name="int"), value=1))
+        if order_index < 0:
+            order_index = len(operands)
+            operands.append(StrLit(span=expr.span, ty=StrType(name="str"), value="big"))
+        if signed_index < 0:
+            signed_index = len(operands)
+            operands.append(BoolLit(span=expr.span, ty=BoolType(name="bool"), value=False))
+        roots = []
+        previous = self._current_try_err_block()
+        previous_cpy = getattr(self, "_cpy_operand_cleanup_block", None)
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        leases = []
+        try:
+            for index, operand in enumerate(operands):
+                cleanup = self._extern_cleanup_block(tuple(roots), target)
+                self._try_err_block = cleanup
+                self._cpy_operand_cleanup_block = cleanup
+                if index == 0 and receiver_slot is not None:
+                    value = self.builder.load(receiver_slot, name=self._fresh("to_bytes.receiver.current"))
+                    owned = False
+                else:
+                    value = self._emit_expr_with_cpy_operand_cleanup(
+                        operand, (), as_pcc_object=True,
+                    )
+                    owned = self._owned_release_needed(value, operand)
+                roots.append(self._extern_enter_root(
+                    value, owned, "to_bytes.argument.root",
+                ))
+            cleanup = self._extern_cleanup_block(tuple(roots), target)
+            self._try_err_block = cleanup
+            self._cpy_operand_cleanup_block = cleanup
+            if binding_error:
+                message = self._pooled_cstr_ptr(binding_error, ".to_bytes.binding_error")
+                exc = self.builder.call(
+                    self.runtime["py_exc_new"], [ir.Constant(ir.IntType(64), 3), message],
+                    name=self._fresh("to_bytes.binding.exc"),
+                )
+                self.builder.call(self.runtime["py_raise"], [exc])
+                self._gc_release(exc)
+                self._emit_post_call_err_check(expr.span)
+                self._extern_release_roots(tuple(roots))
+                return self._emit_none_literal()
+            # A traced slot follows moves while evaluating later operands.
+            # Counted leases additionally protect raw ABI arguments across
+            # callbacks that clear an aliased object's Boolean pin flag.
+            for root in roots:
+                acquired = self.builder.call(
+                    self.runtime["pcc_gc_foreign_lease_acquire"],
+                    [self._as_gc_ptr(root[0])], name=self._fresh("to_bytes.lease.acquire"),
+                )
+                failed = self.builder.icmp_signed("<", acquired, ir.Constant(ir.IntType(64), 0))
+                error = self.current_function.append_basic_block(self._fresh("to_bytes.lease.error"))
+                ready = self.current_function.append_basic_block(self._fresh("to_bytes.lease.ready"))
+                self.builder.cbranch(failed, error, ready)
+                self.builder.position_at_end(error)
+                cleanup = self._extern_cleanup_block(tuple(roots), target, tuple(leases))
+                self._try_err_block = cleanup
+                self._cpy_operand_cleanup_block = cleanup
+                overflow = self.current_function.append_basic_block(self._fresh("bytes.lease.overflow"))
+                invalid = self.current_function.append_basic_block(self._fresh("bytes.lease.invalid"))
+                self.builder.cbranch(
+                    self.builder.icmp_signed("==", acquired, ir.Constant(ir.IntType(64), -2)), overflow, invalid,
+                )
+                self.builder.position_at_end(overflow)
+                self._emit_builtin_exception_and_branch(
+                    "OverflowError", "integer byte conversion address lease overflow", expr.span,
+                )
+                self.builder.position_at_end(invalid)
+                self._emit_builtin_exception_and_branch(
+                    "RuntimeError", "integer byte conversion requires a stable managed owner", expr.span,
+                )
+                self.builder.position_at_end(ready)
+                leases.append((root, acquired))
+            cleanup = self._extern_cleanup_block(tuple(roots), target, tuple(leases))
+            self._try_err_block = cleanup
+            self._cpy_operand_cleanup_block = cleanup
+            result = self.builder.call(
+                self.runtime["py_int_to_bytes_args"],
+                [self._extern_load_root(roots[0]), self._extern_load_root(roots[length_index]),
+                 self._extern_load_root(roots[order_index]), self._extern_load_root(roots[signed_index])],
+                name=self._fresh("int.to_bytes"),
+            )
+            self._emit_post_call_err_check(expr.span)
+            result_root = self._extern_enter_root(result, True, "to_bytes.result.root")
+            # Root teardown may call finalizers and move the result. The
+            # shared take helper consumes the source owner exactly once,
+            # then transfers the root owner after restoring prior pin state.
+            prior = result_root[2]
+            for root in reversed(roots):
+                alias = self.builder.icmp_unsigned("==", self._extern_load_root(result_root), self._extern_load_root(root))
+                prior = self.builder.select(alias, root[2], prior)
+            result_root = (result_root[0], True, prior)
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = previous_cpy
+        release_failed = self._extern_release_foreign_leases(tuple(leases))
+        self._extern_check_lease_cleanup(release_failed, tuple(roots) + (result_root,))
+        self._extern_release_roots(tuple(roots))
+        result = self._extern_take_root(result_root)
+        self._note_owned_object_value(result)
+        return result

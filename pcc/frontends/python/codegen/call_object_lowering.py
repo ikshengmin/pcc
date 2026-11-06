@@ -1998,12 +1998,13 @@ class CallObjectLoweringMixin:
                     keywords.append(("**", argument.args[0]))
         return arguments, tuple(keywords)
 
-    def _emit_slot_call_object(self, expr, label="object.call", module_name=None, attr_name=None):
+    def _emit_slot_call_object(self, expr, label="object.call", module_name=None, attr_name=None,
+                               receiver_slot=None, result_slot=None):
         """Native callable dispatch with authoritative inputs and output."""
         previous = self._current_try_err_block()
         target = previous if previous is not None else self._ensure_fn_err_exit()
         saved_cpy = self._cpy_operand_cleanup_block
-        sink = self._slot_call_result_sink(expr)
+        sink = result_slot if result_slot is not None else self._slot_call_result_sink(expr)
         output = sink
         roots = []
         if output is None:
@@ -2030,13 +2031,26 @@ class CallObjectLoweringMixin:
                     lexical_context["lexical_slot_operands"] = True
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
-            if module_name is None:
+            if receiver_slot is not None:
+                callable_root = self._new_slot_call_root(label + ".callable")
+                roots.append(callable_root)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+                self._slot_call_runtime_call(
+                    "py_obj_getattr", (receiver_slot,), result_slot=callable_root,
+                    suffix_args=(self._attr_name_ptr(expr.func.name),), span=expr.span,
+                )
+                self._emit_attribute_error_if_null(
+                    self.builder.load(callable_root), expr.func.name, expr.func.span,
+                )
+            elif module_name is None:
                 callable_root = self._emit_slot_call_operand(expr.func, label + ".callable")
             else:
                 callable_root = self._emit_slot_call_module_value(
                     module_name, attr_name, expr.span, label + ".callable",
                 )
-            roots.append(callable_root)
+            if receiver_slot is None:
+                roots.append(callable_root)
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
             positional, keywords = self._slot_call_split_operands(expr)
