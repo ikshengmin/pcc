@@ -7,7 +7,9 @@ from pcc.unsafe import (
     global_load_ptr,
     load_i64,
     load_ptr,
+    logical_shift_right_i64,
     ptr_add,
+    ptr_diff,
     ptr_eq,
     ptr_is_null,
 )
@@ -99,6 +101,16 @@ def pcc_gc_coroutine_root_score() -> i64:
 def pcc_gc_root_slot_in_span(slot, slots, count: i64) -> i64:
     if ptr_is_null(slot) != 0 or ptr_is_null(slots) != 0 or count <= 0:
         return 0
+    if count <= 100000:
+        # Registered maps admit at most 100000 slots. Compare the slot's
+        # byte offset modulo the raw 64-bit address space, not pointer order:
+        # a span can cross the signed-address boundary or wrap at 2**64.
+        # Alignment is relative to slots, which need not be 8-byte aligned.
+        # Larger direct-call counts retain the original loop unchanged.
+        delta: i64 = ptr_diff(slot, slots)
+        if (delta & 7) != 0:
+            return 0
+        return 1 if logical_shift_right_i64(delta, 3) < count else 0
     i: i64 = 0
     while i < count:
         if ptr_eq(ptr_add(slots, i * 8), slot) != 0:
