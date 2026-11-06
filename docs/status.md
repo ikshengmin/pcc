@@ -89,9 +89,37 @@ schema checks. Reproduce with `uv run pytest -x -vv --tb=short -m ''
 tests/python/test_self_method_value_ownership.py`.
 The existing bound-method `__func__` getter is still missing; the binding test
 checks preservation of the selected function by invoking a saved callback
-after class replacement, and does not claim introspection support. The final
-gateway memory/throughput comparison and native-pcc1/bootstrap qualification
-remain open for this batch.
+after class replacement, and does not claim introspection support.
+
+The callback repair's fixed-work gateway census completes: after 20,000
+requests, live requested bytes are 4,806,539 and RSS is 33,505,280. Connection,
+callback and codec growth disappears. Two remaining owners are identified:
+special-method calls retain the `ChannelBuffer` receiver, and native slice
+deletion retains each replaced HTTP bytearray. This is allocator/heap evidence,
+not a throughput score.
+
+The subsequent two-repeat C10/C512 throughput matrix is **failed**: its final
+POST/C512 row becomes server-idle and postflight HTTP verification times out.
+Three diagnostic cycles on the same binary do not reproduce the stall and
+finish cleanly; non-reproduction does not resolve the failed comparison.
+The latest accepted throughput remains the queue-pressure A/B above. The
+paired callback artifact predates the later peer GC/root-span changes; it is
+not evidence for their merged performance. Native-pcc1/bootstrap remain unrun.
+
+The next compiler repair passes the receiver expression into direct special
+method ownership handling, and routes typed class/scalar comparisons through
+the existing owner-preserving comparison path. Five native CPython
+differentials cover nine call/lifetime shapes under GC0–4; four existing
+protocol, NotImplemented and subclass-dispatch cases also pass. The old source
+still reproduces complete retention for the affected shapes. The lifetime
+oracle now retires its producer thread before collection, preserving exact
+100-object assertions without conservative dead words on an active producer
+stack. Earlier active-stack attempts retained one object on some tracing
+collectors and are not passing evidence. An isolated-snapshot packaging failure
+was corrected by using the existing environment without package synchronization.
+Reproduce the new test with `uv run pytest -x -vv --tb=short -m integration
+tests/python/test_dunder_receiver_ownership.py`. Application performance for
+this repair and the remaining slice-delete ownership repair is pending.
 
 The callback lifetime oracle keeps the final object of each shape explicitly
 reachable while retiring 100 prior objects per shape. Exact counts remain

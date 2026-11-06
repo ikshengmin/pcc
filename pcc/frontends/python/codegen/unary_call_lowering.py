@@ -1110,6 +1110,7 @@ class UnaryCallLoweringMixin:
             dunder_name,
             arg_exprs,
             result_slot=result_slot,
+            receiver_expr=receiver_expr,
         )
 
     def _dunder_dispatch_target(self, host_expr: "Expr", dunder_name: str):

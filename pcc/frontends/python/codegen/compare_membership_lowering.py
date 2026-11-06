@@ -886,6 +886,12 @@ class CompareMembershipLoweringMixin:
             # valueboxes here (value equality), not identity instances
             return self._emit_owned_string_predicate(expr, False, object_compare=True)
 
+        if isinstance(lhs_ty, ClassType) or isinstance(rhs_ty, ClassType):
+            # A class/scalar comparison may run either operand's protocol.
+            # Keep evaluated owners alive through RHS effects and callbacks,
+            # and retire them on both success and exception edges.
+            return self._emit_owned_string_predicate(expr, False, object_compare=True)
+
         lhs = self._emit_expr(expr.lhs)
         rhs = self._emit_expr(expr.rhs)
         if (
@@ -924,17 +930,6 @@ class CompareMembershipLoweringMixin:
                 self.builder, self.module, self.runtime, rhs, rhs_ty
             )
             return self._emit_runtime_object_compare(expr, lo, ro, "dyn")
-        if isinstance(lhs_ty, ClassType) or isinstance(rhs_ty, ClassType):
-            # A class instance against a scalar (``key == 1``) has no integer
-            # reading: box both and let the runtime protocol answer (user
-            # dunders, NotImplemented, then identity or the builtin order).
-            lo = marshal.marshal_to_object(
-                self.builder, self.module, self.runtime, lhs, lhs_ty
-            )
-            ro = marshal.marshal_to_object(
-                self.builder, self.module, self.runtime, rhs, rhs_ty
-            )
-            return self._emit_runtime_object_compare(expr, lo, ro, "class")
         lv = self._to_int64(lhs, lhs_ty)
         rv = self._to_int64(rhs, rhs_ty)
         if (
