@@ -41,6 +41,14 @@ tests/python/test_dynamic_numeric_method_guard.py`. This is scoped host-pcc0
 native execution, not full collector, native-pcc1 or bootstrap qualification.
 The live gateway rebuild and throughput measurement remain open.
 
+Additional sensitivity checks are mixed: integer binding/width execution and
+dynamic method-result ownership pass across their five-collector loops. The
+existing `test_argument_owners_and_result_survive_callbacks_all_collectors`
+fails with a finalizer count of 215 instead of CPython's 216. The same failure
+was reproduced with the unmodified `d345f400b` compiler/runtime snapshot, before
+the numeric dispatch fix. It remains an open finalization boundary; these
+focused passes do not certify the complete Python/GC suite.
+
 ## Owned C++17: builtin-pointer increment, complete language still open
 
 The pointer increment over `f3f8a345c65c1d5ed7b49915d35e69c2c81a35a9` adds
