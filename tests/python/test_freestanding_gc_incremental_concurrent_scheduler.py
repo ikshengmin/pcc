@@ -91,8 +91,6 @@ RAW_FUNCTION_IMPORTS = {
 }
 RAW_GLOBAL_IMPORTS = {
     "pcc_gc_backend4_no_refcounts",
-    # GC1/GC2's collector thread leaves the final remark to a mutator.
-    "pcc_gc_cms_worker_current",
     "pcc_gc_live_bytes",
     "pcc_gc_cms_sweep_pending",
     # pcc_gc_backend4_maybe_auto_step's admission and reseed ownership.

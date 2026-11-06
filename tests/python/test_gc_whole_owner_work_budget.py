@@ -21,6 +21,9 @@ class _WorkBoundary(_SlotBoundary):
         self.cells["pcc_gc_tracing_finish_claim_backend"] = {0: -1}
         self.namespace["pcc_thread_owns_stopped_world"] = lambda: int(stopped)
         self.namespace["pcc_gc_complete_claimed_tracing_cycle"] = self.complete
+        _load_bodies("freestanding_gc_public_collection.py", {
+            "pcc_gc_is_cms_worker",
+        }, self.namespace)
         _load_bodies("freestanding_gc_incremental_concurrent_scheduler.py", {
             "pcc_gc_tracing_finish_left_to_mutator",
         }, self.namespace)

@@ -75,6 +75,9 @@ class TraceState:
             "_promotion_unlink": noop, "pcc_gc_backend3_young_unlink": noop,
         }
         self.ns = ns
+        load_functions(ns, "freestanding_gc_public_collection.py", {
+            "pcc_gc_is_cms_worker",
+        })
         load_functions(ns, "freestanding_gc_root_operations.py", {
             "pcc_gc_gray_count_load_acquire", "pcc_gc_gray_count_decrement_acq_rel",
             "pcc_gc_set_mark_color",

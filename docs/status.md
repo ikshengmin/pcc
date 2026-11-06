@@ -7,6 +7,24 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
 
+## Gateway Web Frameworks Benchmark: CMS TLS handoff
+
+The Linux arm64 application build from `2d0a617ea69b5816092cff0e2aed5a71ecbe3975`
+failed because the incremental collector's direct cross-module read of
+`pcc_gc_cms_worker_current` produced an ordinary GOT relocation to TLS storage.
+The scheduler now uses the existing `pcc_gc_is_cms_worker` ABI getter owned by
+the public collection module. Backend selection and stopped-world handoff
+semantics are unchanged.
+
+Focused validation: 212 host/model and Linux object tests passed; the new
+`test_gc_cms_handoff_tls_boundary.py` native integration test executed nonzero
+and zero TLS states for backend selectors 0–4 on local Mac arm64 with the owned
+host-pcc0 toolchain. This is a controlled handoff probe, not five-GC collection,
+pcc1 qualification or a bootstrap fixed point. Reproduce with
+`uv run pytest -x -vv --tb=short -m integration tests/python/test_gc_cms_handoff_tls_boundary.py`.
+The complete gateway rebuild, upstream HTTP contract and same-guest throughput
+comparison remain in progress in `pcc-gateway`.
+
 ## Owned C++17: builtin-pointer increment, complete language still open
 
 The pointer increment over `f3f8a345c65c1d5ed7b49915d35e69c2c81a35a9` adds
