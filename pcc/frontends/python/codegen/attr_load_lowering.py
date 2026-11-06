@@ -1930,6 +1930,18 @@ class AttrLoadLoweringMixin:
             self_val = self.builder.load(self.env["self"][0], name=self._fresh("self"))
             method_fn = receiver_info.methods.get(expr.name)
             if method_fn is not None:
+                if not receiver_info.valueclass:
+                    # A first-class method value needs ordinary descriptor
+                    # binding, a recorded NEW owner and the runtime's rooted
+                    # call adapter. The old generated adapter leaked its
+                    # tuple_get owners and bypassed instance/MRO replacement.
+                    lookup = Attr(
+                        span=expr.span, ty=expr.ty, obj=expr.obj,
+                        name=runtime_attr_name,
+                    )
+                    return self._take_slot_call_root(
+                        self._emit_slot_call_attribute(lookup, "self.method.value"),
+                    )
                 return self._emit_bound_self_method_value(
                     receiver_info,
                     expr.name,

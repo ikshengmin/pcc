@@ -5993,7 +5993,10 @@ class ClassLowering:
                         self.parent.env[attr_name] = (method_root, _PTR, DynType(name="dyn"))
                         # A split method's undecorated function is never stored
                         # in the namespace: the class body reads it from its root.
-                        namespace_key = attr_name if attr_name == public_method_name(attr_name) else None
+                        namespace_key = (
+                            self.mangle_private_attr_name(info, attr_name)
+                            if attr_name == public_method_name(attr_name) else None
+                        )
                         namespace_bindings[attr_name] = (method_root, namespace_key)
                     continue
                 self._emit_class_attribute_initializer(info, cls_ptr, attr_name, value_expr, prepared_attr_objects, class_body_root)
@@ -6107,6 +6110,7 @@ class ClassLowering:
         parent = self.parent
         builder = parent.builder
         mname_ptr = self._cname_ptr(mname)
+        lookup_name_ptr = self._cname_ptr(self.mangle_private_attr_name(info, mname))
         method_kind = info.method_kinds.get(mname, "instance")
         mref = info.method_refs.get(mname)
         if mref is None:
@@ -6146,7 +6150,7 @@ class ClassLowering:
                 )
             parent._slot_call_runtime_call(
                 "py_class_add_method", (class_root,),
-                suffix_args=(mname_ptr, raw_method), argument_order=(0, 1, 2),
+                suffix_args=(lookup_name_ptr, raw_method), argument_order=(0, 1, 2),
                 span=cd.span,
             )
             return None
@@ -6163,7 +6167,7 @@ class ClassLowering:
                 # static/class adapter ABI while the slot selector migrates.
                 parent._slot_call_runtime_call(
                     "py_class_add_method", (class_root,),
-                    suffix_args=(mname_ptr, raw_method), argument_order=(0, 1, 2),
+                    suffix_args=(lookup_name_ptr, raw_method), argument_order=(0, 1, 2),
                     span=method_def.span,
                 )
             if alias:
@@ -6183,7 +6187,8 @@ class ClassLowering:
                 if mname != method_def.name:
                     parent._slot_call_runtime_call(
                         "py_class_getattr", (class_root,), result_slot=output,
-                        suffix_args=(self._cname_ptr(method_def.name),), span=method_def.span,
+                        suffix_args=(self._cname_ptr(self.mangle_private_attr_name(info, method_def.name)),),
+                        span=method_def.span,
                     )
                 elif mname in prepared_method_objects:
                     borrowed = parent._alloca_in_entry(_PTR, name=self._fresh("method.prepared"), init_null=True)
@@ -6208,7 +6213,7 @@ class ClassLowering:
                 if closure:
                     parent._slot_call_runtime_call(
                         "py_class_add_method", (class_root, function),
-                        suffix_args=(mname_ptr,), argument_order=(0, 2, 1), span=method_def.span,
+                        suffix_args=(lookup_name_ptr,), argument_order=(0, 2, 1), span=method_def.span,
                     )
                 parent._slot_call_runtime_call(
                     "py_" + descriptor_kind + "_new", (function,), result_slot=output,
@@ -6227,11 +6232,11 @@ class ClassLowering:
             if method_kind == "instance":
                 parent._slot_call_runtime_call(
                     "py_class_add_method", (class_root, output),
-                    suffix_args=(mname_ptr,), argument_order=(0, 2, 1), span=method_def.span,
+                    suffix_args=(lookup_name_ptr,), argument_order=(0, 2, 1), span=method_def.span,
                 )
             status = parent._slot_call_runtime_call(
                 "py_class_setattr_raw", (class_root, output),
-                suffix_args=(mname_ptr,), argument_order=(0, 2, 1), span=method_def.span,
+                suffix_args=(lookup_name_ptr,), argument_order=(0, 2, 1), span=method_def.span,
             )
             parent._slot_call_check_status(status, "class method namespace publication", method_def.span)
             return output

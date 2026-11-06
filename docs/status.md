@@ -62,6 +62,37 @@ setting. It remains an explicit open boundary. Real gateway memory/performance
 retesting of the chained-receiver repair is pending; no full-suite/bootstrap
 qualification is claimed.
 
+The uninstrumented gateway confirms the chained-receiver repair on fixed work:
+after 20,000 requests (four batches of ten connections, 500 requests each),
+live requested allocator bytes fall from 30,500,654 to 4,941,283 and observed
+RSS from 78,856,192 to 33,865,728. The per-request `BodyStream`/`BufferSegment`
+growth disappears. The remaining growth is per connection: 26 tracked objects
+and about 33 KB per new connection in this probe, including four cleanup
+callbacks and their receiver.
+
+That remainder reproduces with a class evaluating `self.method` as a value.
+The old compiler-created adapter loses its NEW callable owner and its
+`py_tuple_get` argument owners; calling it leaves extra receiver references.
+Ordinary class method values now use the existing rooted runtime attribute and
+binding path. Private method publication uses the lexical mangled namespace key
+while retaining the original function name. The L1 host contract includes the
+new slot-method helpers, and regenerated data also matches previously changed
+call/status-helper signatures.
+
+Sixteen focused checks pass: emitted owner routing plus native lifetime,
+binding/replacement/private-name and parking cases under GC0–4. Lifetime
+checks retain explicit live canaries and require exact finalizer counts after
+at most eight collection-progress steps; initial single-collection attempts
+could retain one last-use object on tracing collectors. Five existing lookup,
+descriptor, rebinding and private-field checks also pass, along with host
+schema checks. Reproduce with `uv run pytest -x -vv --tb=short -m ''
+tests/python/test_self_method_value_ownership.py`.
+The existing bound-method `__func__` getter is still missing; the binding test
+checks preservation of the selected function by invoking a saved callback
+after class replacement, and does not claim introspection support. The final
+gateway memory/throughput comparison and native-pcc1/bootstrap qualification
+remain open for this batch.
+
 The Linux arm64 application build from `2d0a617ea69b5816092cff0e2aed5a71ecbe3975`
 failed because the incremental collector's direct cross-module read of
 `pcc_gc_cms_worker_current` produced an ordinary GOT relocation to TLS storage.
