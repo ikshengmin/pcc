@@ -42,18 +42,30 @@ int main(int argc,char **argv) {
     int mode=argv[1][0];
     int major=mode=='m' || mode=='b' || mode=='f';
     int generation=mode=='i' || mode=='b' || mode=='f';
+    int marking=major || mode=='g' || mode=='w' || mode=='a' || mode=='u' || mode=='q';
+    int old_owner=generation || mode=='d' || mode=='t';
+    int old_child=mode=='m' || mode=='g' || mode=='w' || mode=='y' || mode=='a';
+    int sentinel=mode=='s' || mode=='t' || mode=='q';
+    int unknown=mode=='u' || mode=='d';
     if (mode=='f' && pcc_gc_install_forwarding(from,child)!=0) return 3;
     pcc_py_gc_minor_graph_lock();
-    if (generation) pcc_gc_generational_promote_young_if_known((PyObject *)owner);
-    if (mode=='m') pcc_gc_generational_promote_young_if_known(child);
-    if (generation && (py_header_flags_load(py_header((PyObject *)owner))&256)==0) return 4;
-    if (generation && (py_header_flags_load(py_header(child))&128)==0) return 5;
+    if (old_owner) pcc_gc_generational_promote_young_if_known((PyObject *)owner);
+    if (old_child) pcc_gc_generational_promote_young_if_known(child);
+    if (old_owner && (py_header_flags_load(py_header((PyObject *)owner))&256)==0) return 4;
+    if (!old_owner && ((py_header_flags_load(py_header((PyObject *)owner))&128)==0 || (py_header_flags_load(py_header((PyObject *)owner))&256)!=0)) return 18;
+    if (!old_child && (py_header_flags_load(py_header(child))&128)==0) return 5;
+    if (old_child && ((py_header_flags_load(py_header(child))&256)==0 || (py_header_flags_load(py_header(child))&128)!=0)) return 19;
     if (mode=='m' && ((py_header_flags_load(py_header((PyObject *)owner))&128)==0 || (py_header_flags_load(py_header(child))&256)==0)) return 6;
-    if (major) {
-        pcc_gc_set_mark_color((PyObject *)owner,32);
-        pcc_gc_set_mark_color(child,8);
-        __atomic_store_n(&pcc_gc_mark_active,1,__ATOMIC_RELEASE);
+    if (marking || mode=='y') {
+        int owner_color=mode=='g'?16:(mode=='w'?8:32);
+        int child_color=mode=='a'?16:8;
+        pcc_gc_set_mark_color((PyObject *)owner,owner_color);
+        pcc_gc_set_mark_color(child,child_color);
+        __atomic_store_n(&pcc_gc_mark_active,marking,__ATOMIC_RELEASE);
+        if ((py_header_flags_load(py_header((PyObject *)owner))&56)!=owner_color) return 20;
+        if ((py_header_flags_load(py_header(child))&56)!=child_color) return 21;
     }
+    if (pcc_gc_mark_active!=marking) return 22;
     int64_t gray=pcc_gc_gray_count_load_acquire();
     int32_t barriers=pcc_gc_backend4_genzgc_store_barriers;
     int64_t depth=pcc_py_gc_minor_graph_lock_depth();
@@ -62,17 +74,18 @@ int main(int argc,char **argv) {
     PccGcStoreRootPlan plan;
     pcc_gc_store_ptr_plan_init(&plan,(PyObject *)owner,4);
     PyObject *value=mode=='f'?from:child;
-    if (mode=='s') value=(PyObject *)(uintptr_t)2;
-    int result=mode=='s' ? pcc_gc_store_ptr_plan_commit_sentinel_aware_locked(&plan,(PyObject *)owner,&owner->items[0],value,value) : pcc_gc_store_ptr_plan_commit_locked(&plan,(PyObject *)owner,&owner->items[0],value);
+    if (sentinel) value=(PyObject *)(uintptr_t)2;
+    if (unknown) value=(PyObject *)(uintptr_t)6;
+    int result=sentinel ? pcc_gc_store_ptr_plan_commit_sentinel_aware_locked(&plan,(PyObject *)owner,&owner->items[0],value,value) : pcc_gc_store_ptr_plan_commit_locked(&plan,(PyObject *)owner,&owner->items[0],value);
     if (result!=1 || pcc_py_gc_minor_graph_lock_depth()!=depth) return 7;
-    if (owner->items[0]!=(mode=='s'?value:child)) return 8;
+    if (owner->items[0]!=(sentinel || unknown ? value : child)) return 8;
     if (pcc_gc_store_ptr_plan_commit_locked(&plan,(PyObject *)owner,&owner->items[0],0)!=0) return 9;
     if (pcc_gc_gray_count_load_acquire()!=gray+(major?1:0)) return 10;
     if (major && (py_header_flags_load(py_header(child))&16)==0) return 11;
     if (pcc_gc_backend4_genzgc_store_barriers!=barriers+(generation?1:0)) return 12;
     if (pcc_gc_store_buffer_owner_entries(owner)!=(generation?1:0)) return 13;
     if (pcc_gc_store_buffer_slot_pending(&owner->items[0])!=(generation?1:0)) return 14;
-    if (pcc_gc_mark_active!=(major?1:0)) return 15;
+    if (pcc_gc_mark_active!=marking) return 15;
     if (pcc_gc_backend4_no_refcounts && py_header(child)->refcount!=refs) return 16;
     pcc_py_gc_minor_graph_unlock();
     pcc_gc_store_ptr_plan_finish(&plan);
@@ -193,8 +206,12 @@ def run_gc4(binary, *args):
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("mode", ["i", "m", "b", "f", "s", "n"],
-                         ids=["idle-generation", "active-major", "both", "forwarded", "sentinel", "idle-no-edge"])
+@pytest.mark.parametrize(
+    "mode", ["i", "m", "b", "f", "s", "n", "y", "g", "w", "a", "u", "d", "t", "q"],
+    ids=["idle-generation", "active-major", "both", "forwarded", "sentinel", "idle-no-edge",
+         "idle-young-black", "active-young-gray", "active-young-white", "already-gray",
+         "active-unknown-value", "old-unknown-value", "old-sentinel", "active-sentinel"],
+)
 def test_gc4_locked_heap_barrier_policy(locked_heap_binaries, mode):
     result = run_gc4(locked_heap_binaries["barrier"], mode)
     assert (result.returncode, result.stdout, result.stderr) == (

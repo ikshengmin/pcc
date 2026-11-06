@@ -372,15 +372,23 @@ def pcc_gc_backend4_note_heap_store_locked(owner, slot, value) -> None:
     Known-object membership is checked before reading either header. This
     entry is not for roots or the GC1/GC2 container-lock transaction.
     """
-    if (
-        pcc_gc_object_is_known_no_lock(owner) == 0
-        or pcc_gc_object_is_known_no_lock(value) == 0
-    ):
+    if pcc_gc_object_is_known_no_lock(owner) == 0:
         return
     owner_flags: i64 = load_i32(owner, 12)
+    mark_active: i64 = load_i32(global_addr("pcc_gc_mark_active"), 0)
+    # The graph lock keeps the owner's generation/color and the mark phase
+    # stable. A non-old owner owes no generation recording; unless it is
+    # black during marking it owes no major insertion work either. Avoid
+    # probing the value in this common case, including unknown sentinels.
+    if (owner_flags & 256) == 0 and (
+        mark_active == 0 or (owner_flags & 32) == 0
+    ):
+        return
+    if pcc_gc_object_is_known_no_lock(value) == 0:
+        return
     value_flags: i64 = load_i32(value, 12)
     if (
-        load_i32(global_addr("pcc_gc_mark_active"), 0) != 0
+        mark_active != 0
         and (owner_flags & 32) != 0
         and (value_flags & 8) != 0
     ):
