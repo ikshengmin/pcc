@@ -148,6 +148,21 @@ used. The source inventory verifies all 1,124 compiler inputs and 21 application
 Python files before/after compilation. This is a bounded allocator/HTTP result,
 not a general no-leak claim or a new throughput result.
 
+A separate, balanced C512 native A/B on that artifact now completes all 12
+server-bound rows with successful HTTP checks and clean exits. Median throughput
+is 2,958.9 / 2,567.4 / 2,800.2 requests/s for GET /, changing-ID GET and POST,
+versus 2,884.1 / 2,648.0 / 2,529.9 for the queue-pressure control. Latest p99 is
+268.896 / 298.848 / 309.664 ms. Variation and the mixed direction do not establish
+a uniform throughput win. Lifetime peak RSS falls from 377–403 MB to about
+45 MB across the two arms. This compares the cumulative merged source, including
+peer changes; it does not isolate an individual optimization. A preceding
+C10/C512 matrix completed correctly but had four non-saturated rows; its overall
+medians are not accepted as throughput-ceiling evidence. The earlier callback
+stall remains undiagnosed rather than being declared fixed by non-reproduction.
+See the sibling gateway's `benchmarks/web-frameworks.md` for source/artifact
+identities, report hashes and reproduction options. Aiohttp was not rerun in
+this native-control experiment; full suites/bootstrap remain unrun.
+
 The callback lifetime oracle keeps the final object of each shape explicitly
 reachable while retiring 100 prior objects per shape. Exact counts remain
 mandatory; bounded repeated collections allow concurrent marking/relocation
