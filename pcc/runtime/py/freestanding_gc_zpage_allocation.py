@@ -98,6 +98,7 @@ def pcc_gc_backend4_try_zpage_alloc(size: i64, flags: i64):
     prepared_page = null()
     prepared_from_free: i64 = 0
     while 1:
+        published_reset_page: i64 = 0
         unused_fresh_page = null()
         pcc_py_gc_minor_graph_lock()
         if load_i32(global_addr("pcc_gc_backend_selected"), 0) != 4:
@@ -162,6 +163,7 @@ def pcc_gc_backend4_try_zpage_alloc(size: i64, flags: i64):
                 return null()
             store_ptr(page, 56, global_load_ptr("pcc_gc_backend4_page_head"))
             global_store_ptr("pcc_gc_backend4_page_head", page)
+            published_reset_page = 1
         if ptr_is_null(page) == 0:
             span = load_ptr(page, 72)
             capacity = load_i64(page, 16)
@@ -188,7 +190,10 @@ def pcc_gc_backend4_try_zpage_alloc(size: i64, flags: i64):
             if ptr_is_null(unused_fresh_page) == 0:
                 free(load_ptr(unused_fresh_page, 72))
                 free(unused_fresh_page)
-            memset(obj, 0, alloc_size)
+            # Only our just-reset, private page carries the full-span zero
+            # proof. Reused pages and tail rewinds still require object zeroing.
+            if published_reset_page == 0 or allocated != 0:
+                memset(obj, 0, alloc_size)
             return obj
 
         page = pcc_gc_backend4_zpage_pop_free_page(size)
