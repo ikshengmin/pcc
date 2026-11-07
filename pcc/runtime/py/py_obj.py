@@ -2160,8 +2160,7 @@ def pcc_gc_immortalize(o) -> None:
     if is_tagged_int(o) != 0:
         return
     pcc_gc_pin(o)
-    flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
-    store_i32(o, PYOBJECTHEADER_FLAGS_OFFSET, flags | PY_FLAG_IMMORTAL)
+    atomic_rmw_i32("or", o, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_IMMORTAL, "relaxed")
     return
 
 

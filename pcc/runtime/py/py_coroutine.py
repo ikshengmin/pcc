@@ -152,11 +152,8 @@ def py_coroutine_class():
         return cls
     cls = py_class_new_builtin(cstr("coroutine"), null(), 0, null(), 0)
     if not ptr_is_null(cls):
-        flags: int = load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET)
-        store_i32(
-            cls,
-            PYOBJECTHEADER_FLAGS_OFFSET,
-            flags | PY_FLAG_IMMORTAL,
+        atomic_rmw_i32(
+            "or", cls, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_IMMORTAL, "relaxed",
         )
         global_store_ptr("py_coroutine_class_cache", cls)
     return cls
@@ -1150,11 +1147,8 @@ def py_continuation_class():
         return cls
     cls = py_class_new_builtin(cstr("continuation"), null(), 0, null(), 0)
     if not ptr_is_null(cls):
-        flags: int = load_i32(cls, PYOBJECTHEADER_FLAGS_OFFSET)
-        store_i32(
-            cls,
-            PYOBJECTHEADER_FLAGS_OFFSET,
-            flags | PY_FLAG_IMMORTAL,
+        atomic_rmw_i32(
+            "or", cls, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_IMMORTAL, "relaxed",
         )
         global_store_ptr("py_continuation_class_cache", cls)
     return cls

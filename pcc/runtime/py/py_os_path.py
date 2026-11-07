@@ -16,6 +16,7 @@ from pcc.extern import (
     extern, c_abi_export, c_double, c_ptr, c_int32, c_int64, c_void,
 )
 from pcc.unsafe import (
+    atomic_rmw_i32,
     target_sys_platform, windows_full_path,
     chmod_file,
     cstr,
@@ -150,7 +151,7 @@ def _path_clear_root_prefix(slots, pins, count: int) -> None:
             prior_pin: int = load_i64(pins, offset)
             pcc_gc_unpin(value)
             if prior_pin:
-                store_i32(value, 12, load_i32(value, 12) | 64)
+                atomic_rmw_i32("or", value, 12, 64, "relaxed")
         pcc_gc_store_root(ptr_add(slots, offset), null())
 
 

@@ -77,6 +77,7 @@ class Runtime:
             'define_global_ptr_null': lambda k:self.globals.setdefault(k,None),
             'atomic_load_i64': lambda p,n,*_: self.read(p,n),
             'atomic_cas_i64': self.cas, 'atomic_rmw_i64': self.rmw,
+            'atomic_rmw_i32': self.rmw,
             'int_to_ptr': lambda n: n, 'ptr_to_int': lambda p:p,
             'target_sys_platform': lambda:self.cstr('linux'),
             'function_addr':lambda name:self.exports[name],
@@ -207,7 +208,11 @@ class Runtime:
         was=self.read(p,n)
         if was==old:self.write(p,n,new)
         return was
-    def rmw(self,op,p,n,v,*_):was=self.read(p,n);self.write(p,n,was+v);return was
+    def rmw(self,op,p,n,v,*_):
+        assert op in ('add', 'or'), op
+        was=self.read(p,n)
+        self.write(p,n,was+v if op=='add' else was|v)
+        return was
     def pin(self,o):
         if isinstance(o,Obj):o.pins+=1;o.flags|=64
     def unpin(self,o):

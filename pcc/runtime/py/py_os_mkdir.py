@@ -14,7 +14,7 @@ from pcc.runtime.py.py_abi_constants import (
     PYBYTESOBJECT_DATA_OFFSET,
 )
 from pcc.unsafe import (
-    atomic_cas_i64, atomic_load_i64, cstr, define_global_i32, define_global_i64,
+    atomic_cas_i64, atomic_load_i64, atomic_rmw_i32, cstr, define_global_i32, define_global_i64,
     define_global_ptr_null, function_addr, global_addr, global_load_ptr,
     global_store_ptr, int_to_ptr, is_tagged_int, load_i8, load_i32, load_i64,
     load_ptr, memset, mkdir_at, null, ptr_add, ptr_eq, ptr_is_null, ptr_to_int,
@@ -113,8 +113,8 @@ def _mkdir_drop(slots, pins, index: int) -> None:
         if keep_error and not load_i64(pins, offset):
             store_i64(pins, _MKDIR_SAVED_ERROR * C_POINTER_SIZE, 0)
         if load_i64(pins, offset) or keep_result or keep_error:
-            store_i32(value, PYOBJECTHEADER_FLAGS_OFFSET,
-                      load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) | PY_FLAG_GC_PINNED)
+            atomic_rmw_i32("or", value, PYOBJECTHEADER_FLAGS_OFFSET,
+                           PY_FLAG_GC_PINNED, "relaxed")
     pcc_gc_store_root(ptr_add(slots, offset), null())
     store_i64(pins, offset, 0)
 
@@ -135,8 +135,8 @@ def _mkdir_finish(slots, pins):
     if not ptr_is_null(saved):
         pcc_gc_unpin(saved)
         if load_i64(pins, _MKDIR_SAVED_ERROR * C_POINTER_SIZE):
-            store_i32(saved, PYOBJECTHEADER_FLAGS_OFFSET,
-                      load_i32(saved, PYOBJECTHEADER_FLAGS_OFFSET) | PY_FLAG_GC_PINNED)
+            atomic_rmw_i32("or", saved, PYOBJECTHEADER_FLAGS_OFFSET,
+                           PY_FLAG_GC_PINNED, "relaxed")
     py_tls_exc_swap_slot(saved_slot)
     pcc_gc_frame_leave(slots)
     return pcc_gc_take_pinned_slot(ptr_add(slots, _MKDIR_OUTPUT * C_POINTER_SIZE),
