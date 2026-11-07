@@ -908,6 +908,11 @@ class Checker:
             if kind == "break":
                 self.loops[-1].has_break = True
             ty = NEVER
+        elif kind == "try":
+            # Its operand is a core Try implementor (Result, Option, ...); the
+            # early return converts errors through From. No core model exists.
+            raise expr.token.error("the ? operator requires owned core Try/Result/Option and From lowering, "
+                                   "which is not implemented")
         else:
             raise expr.token.error(f"unsupported semantic node {kind}")
         expr.ty = ty

@@ -2619,6 +2619,20 @@
           "Uses syntax_reference for unchanged valid sources outside this bounded dependent-call slice."
         ]
       }
+    },
+    "tests/rust/test_rust_try_operator.py": {
+      "test_actual_rustc_accepts_question_mark_originals_with_explicit_owned_gap": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "reason": [
+          "Calls tests.rust.certification_support.certify_source on unchanged question-mark originals; the owned compilation of each certified source keeps an explicit core Try/Result/Option gap."
+        ]
+      },
+      "test_actual_rustc_rejects_non_try_question_mark_operands": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.rust.test_rust_supertraits.test_genuine_rustc_rejects_the_same_invalid_obligations on unchanged non-Try operand originals; requires actual source-attributed rustc rejection."
+        ]
+      }
     }
   },
   "method": "AST/source-reviewed direct reference calls and helper edges; no test bodies or imports executed. Function registry is classification only, never a prerequisite waiver or certification token. Unknown functions remain selected in ordinary/integration.",

@@ -1461,6 +1461,11 @@ class Parser:
                 self.expect("]")
                 expr = Expr("index", index_token, children=[expr, index])
                 continue
+            if self.token.text == "?":
+                # The question-mark operator is postfix and binds like field,
+                # call and index continuations, before any unary operator.
+                expr = Expr("try", self.take(), children=[expr])
+                continue
             if self.token.text == ".":
                 self.take()
                 field = self.take()
