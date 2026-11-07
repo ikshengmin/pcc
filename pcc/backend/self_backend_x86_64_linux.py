@@ -2068,8 +2068,13 @@ def _emit_memory_instruction(func: ParsedFunction, kind: str, data: tuple) -> li
         # x86-TSO: every aligned mov load is already an acquire load; a
         # seq_cst load needs no fence because seq_cst stores lower to
         # the implicitly locked xchg below.
-        lines = _materialize_value(func, ptr_name, ptr_type, "r11")
-        lines.extend(_load_from_address("r11", _reg_name(value_type, 10), value_type))
+        if ptr_name.startswith("@") and not _WINDOWS_ABI and _tls_global(ptr_name) is None:
+            # Use the same RIP-relative access as an ordinary global load.
+            # TLS and other pointer forms retain their address lowering.
+            lines = _load_global_to_reg(ptr_name, _reg_name(value_type, 10), value_type)
+        else:
+            lines = _materialize_value(func, ptr_name, ptr_type, "r11")
+            lines.extend(_load_from_address("r11", _reg_name(value_type, 10), value_type))
         lines.extend(
             _store_reg_to_slot(
                 _reg_name(value_type, 10), func.value_slots[dest].offset, value_type
