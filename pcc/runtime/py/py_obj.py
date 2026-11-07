@@ -753,9 +753,35 @@ def pcc_gc_store_field_ptr(owner, slot, value) -> None:
         pcc_gc_store_ptr_plan_commit_locked(plan, owner, slot, value)
         pcc_container_unlock(owner)
     else:
+        _FIELD_PLAN_BACKEND: i64 = 112
+        _FIELD_PLAN_MODE: i64 = 120
         pcc_py_gc_minor_graph_lock()
-        pcc_gc_store_ptr_plan_commit_locked(plan, owner, slot, value)
+        if load_i64(plan, _FIELD_PLAN_BACKEND) == 4 and load_i32(plan, _FIELD_PLAN_MODE) != 0:
+            # Preserve the complete StorePlan image at unlock. Another
+            # carrier can replace the shared field immediately, leaving
+            # this frame's saved value as a root.
+            # Mode was captured before logging by the unchanged initializer.
+            _FIELD_PLAN_VALUE: i64 = 0
+            _FIELD_PLAN_STATE: i64 = 124
+            store_i32(plan, _FIELD_PLAN_STATE, 1)
+            pcc_gc_note_store()
+            if _gc_forwarding_population() > 0 and _gc_relocation_candidate(value) != 0:
+                value = pcc_gc_note_relocation_read(value)
+            store_ptr(plan, _FIELD_PLAN_VALUE, value)
+            if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+                if ptr_is_null(owner) == 0 or load_i32(global_addr("pcc_gc_mark_active"), 0) != 0:
+                    if ptr_is_null(owner) == 0:
+                        pcc_gc_backend4_note_heap_store_locked(owner, slot, value)
+                    else:
+                        pcc_gc_note_slot_write_barrier(owner, slot, value)
+            store_ptr(slot, 0, value)
+            store_i32(plan, _FIELD_PLAN_STATE, 3)
+        else:
+            pcc_gc_store_ptr_plan_commit_locked(plan, owner, slot, value)
         pcc_py_gc_minor_graph_unlock()
+    # Both commit paths keep the finish helper's compiled entry stop poll.
+    # A stop can arrive after unlock checked its flag; do not replace this
+    # shared tail with a direct state7 store.
     pcc_gc_store_ptr_plan_finish(plan)
 
 
