@@ -73,7 +73,7 @@ def test_tracing_releases_foreign_handle_payload_once(backend, foreign):
     _load(namespace, "py_obj_dealloc.py", {"_dealloc_dispatch", "py_dealloc_cpy_handle"})
     namespace["pcc_gc_dealloc_typed"] = namespace["_dealloc_dispatch"]
     _load(namespace, "freestanding_gc_tracing_sweep_collector.py",
-          {"pcc_gc_tracing_finalize_unreachable"})
+          {"pcc_gc_tracing_finalize_unreachable", "pcc_gc_tracing_finalize_unpinned"})
     namespace["pcc_gc_tracing_finalize_unreachable"](obj)
     expected = [("note", obj)]
     if foreign:

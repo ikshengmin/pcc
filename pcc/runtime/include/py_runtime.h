@@ -679,7 +679,39 @@ enum {
     PCC_GC_COUNTER_COLLECTION_STW_HIST_LT_100US = 122,
     PCC_GC_COUNTER_COLLECTION_STW_HIST_LT_1MS = 123,
     PCC_GC_COUNTER_COLLECTION_STW_HIST_LT_10MS = 124,
-    PCC_GC_COUNTER_COLLECTION_STW_HIST_GE_10MS = 125
+    PCC_GC_COUNTER_COLLECTION_STW_HIST_GE_10MS = 125,
+    /* Local tracing sweep phases (GC1..4), independently accumulated, not
+     * additional STW windows. NODES counts ObjectNode list visits, including
+     * inactive nodes and repeat passes; it excludes nested root/mark walks.
+     * CANDIDATE counts uncached discovery walks only and excludes lock wait;
+     * FOUND counts walks returning true, not the whole candidate population.
+     * PASS0 counts actual user-finalizer runs, PASS1 completed clear calls,
+     * PASS2 completed typed-deallocation calls (not physical allocator frees
+     * or released pages). RECHECK counts removed candidate verdicts, including
+     * forwarding shells; it is not a resurrection count. SUM_US includes
+     * callback/root work and their internal waits, with a 1-us minimum per valid
+     * clock pair; invalid clocks still count work but add no time. Slots are
+     * atomic; quiescent read/reset is required for an interval snapshot. */
+    PCC_GC_COUNTER_SWEEP_CANDIDATE_CALLS = 126,
+    PCC_GC_COUNTER_SWEEP_CANDIDATE_NODES = 127,
+    PCC_GC_COUNTER_SWEEP_CANDIDATE_FOUND = 128,
+    PCC_GC_COUNTER_SWEEP_CANDIDATE_SUM_US = 129,
+    PCC_GC_COUNTER_SWEEP_PASS0_CALLS = 130,
+    PCC_GC_COUNTER_SWEEP_PASS0_NODES = 131,
+    PCC_GC_COUNTER_SWEEP_PASS0_FINALIZER_RUNS = 132,
+    PCC_GC_COUNTER_SWEEP_PASS0_SUM_US = 133,
+    PCC_GC_COUNTER_SWEEP_PASS1_CALLS = 134,
+    PCC_GC_COUNTER_SWEEP_PASS1_NODES = 135,
+    PCC_GC_COUNTER_SWEEP_PASS1_CLEARED = 136,
+    PCC_GC_COUNTER_SWEEP_PASS1_SUM_US = 137,
+    PCC_GC_COUNTER_SWEEP_PASS2_CALLS = 138,
+    PCC_GC_COUNTER_SWEEP_PASS2_NODES = 139,
+    PCC_GC_COUNTER_SWEEP_PASS2_RECLAIMED = 140,
+    PCC_GC_COUNTER_SWEEP_PASS2_SUM_US = 141,
+    PCC_GC_COUNTER_SWEEP_RECHECK_CALLS = 142,
+    PCC_GC_COUNTER_SWEEP_RECHECK_NODES = 143,
+    PCC_GC_COUNTER_SWEEP_RECHECK_CANDIDATES_CLEARED = 144,
+    PCC_GC_COUNTER_SWEEP_RECHECK_SUM_US = 145
 };
 
 int64_t   pcc_gc_backend(void);

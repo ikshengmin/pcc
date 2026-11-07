@@ -33,6 +33,7 @@ class _SweepBoundary:
         self.nodes = []
         self.roots = []
         self.events = []
+        self.phase_observations = []
         self.callbacks = {}
         self.held_epoch = held_epoch
         self.global_cells = {
@@ -69,6 +70,10 @@ class _SweepBoundary:
             "pcc_gc_tracing_finalize_unpinned": self.reclaim_unpinned,
             "pcc_gc_visit_object_slots": self.visit_slots,
             "py_weakref_invalidate_tracing_candidates": self.invalidate_candidates,
+            # Capture the production phase boundaries independently of the
+            # collector event oracle. Atomic storage has its own native test.
+            "pcc_platform_monotonic_us": lambda: 100,
+            "_record_sweep_phase": lambda *args: self.phase_observations.append(args),
         }
         tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
         names = {

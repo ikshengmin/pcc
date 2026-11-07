@@ -20,6 +20,7 @@ MANAGED_SOURCE = RUNTIME_DIR / "py" / "py_gc_backend.py"
 MAKEFILE = RUNTIME_DIR / "Makefile"
 
 OWNED_SYMBOLS = {
+    "pcc_gc_record_sweep_phase",
     "pcc_gc_tracing_class_note_owned_slot",
     "pcc_gc_tracing_class_needs_clear",
     "pcc_gc_tracing_clear_class_layout_slot",
@@ -30,6 +31,7 @@ OWNED_SYMBOLS = {
     "pcc_gc_tracing_sweep_unreachable",
 }
 RAW_FUNCTION_IMPORTS = {
+    'pcc_platform_monotonic_us',
     'pcc_capi_is_cext_type_tag',
     'pcc_gc_dealloc_typed',
     'pcc_gc_drain_all_gray_unlocked',
@@ -53,6 +55,26 @@ RAW_FUNCTION_IMPORTS = {
     'py_weakref_invalidate_tracing_candidates',
 }
 RAW_GLOBAL_IMPORTS = {
+    "pcc_gc_metric_sweep_candidate_calls",
+    "pcc_gc_metric_sweep_candidate_nodes",
+    "pcc_gc_metric_sweep_candidate_work",
+    "pcc_gc_metric_sweep_candidate_sum_us",
+    "pcc_gc_metric_sweep_pass0_calls",
+    "pcc_gc_metric_sweep_pass0_nodes",
+    "pcc_gc_metric_sweep_pass0_work",
+    "pcc_gc_metric_sweep_pass0_sum_us",
+    "pcc_gc_metric_sweep_pass1_calls",
+    "pcc_gc_metric_sweep_pass1_nodes",
+    "pcc_gc_metric_sweep_pass1_work",
+    "pcc_gc_metric_sweep_pass1_sum_us",
+    "pcc_gc_metric_sweep_pass2_calls",
+    "pcc_gc_metric_sweep_pass2_nodes",
+    "pcc_gc_metric_sweep_pass2_work",
+    "pcc_gc_metric_sweep_pass2_sum_us",
+    "pcc_gc_metric_sweep_recheck_calls",
+    "pcc_gc_metric_sweep_recheck_nodes",
+    "pcc_gc_metric_sweep_recheck_work",
+    "pcc_gc_metric_sweep_recheck_sum_us",
     "pcc_gc_backend4_no_refcounts",
     "pcc_gc_backend_selected",
     "pcc_gc_object_head",
@@ -224,6 +246,7 @@ class _CandidateModel:
                       "pcc_gc_tracing_no_candidate_commit": -1}
         self.visits = 0
         self.locked = 0
+        self.phase_observations = []
 
     def environment(self):
         model = self
@@ -265,6 +288,8 @@ class _CandidateModel:
             "pcc_gc_object_node_is_active": is_active,
             "pcc_py_gc_minor_graph_lock": lock,
             "pcc_py_gc_minor_graph_unlock": unlock,
+            "pcc_platform_monotonic_us": lambda: 100,
+            "_record_sweep_phase": lambda *args: model.phase_observations.append(args),
         }
 
 

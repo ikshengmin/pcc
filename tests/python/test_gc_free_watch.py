@@ -11,7 +11,10 @@ from pathlib import Path
 
 import pytest
 
-from pcc.runtime.py.py_abi_constants import PY_TYPE_VALUEBOX
+from pcc.runtime.py.py_abi_constants import (
+    PY_TYPE_INT,
+    PY_TYPE_VALUEBOX,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNTIME = ROOT / "pcc/runtime/py"
@@ -165,7 +168,7 @@ def test_null_note_does_not_mark_watch():
 def _caller(rt, caller, deallocate, delayed):
     ns = rt.ns
     obj = rt.allocate()
-    rt.memory[obj] = {0: 0, 8: 1, 12: 65536 if delayed else 0}
+    rt.memory[obj] = {0: 0, 8: PY_TYPE_INT, 12: 65536 if delayed else 0}
 
     def probe(o):
         assert o not in rt.reused, "reused object must not be probed"
@@ -176,7 +179,7 @@ def _caller(rt, caller, deallocate, delayed):
         "GC_FREE_WATCH_BYTES": 24, "PYOBJECTHEADER_REFCOUNT_OFFSET": 0,
         "PYOBJECTHEADER_FLAGS_OFFSET": 12, "PY_TYPE_GEN": 10, "PY_FLAG_GC_TRACKED": 2,
         "PY_TYPE_INSTANCE": 20, "PY_TYPE_USER_CLASS_START": 100,
-        "PY_TYPE_VALUEBOX": PY_TYPE_VALUEBOX,
+        "PY_TYPE_INT": PY_TYPE_INT, "PY_TYPE_VALUEBOX": PY_TYPE_VALUEBOX,
         "pcc_refcount_forget": lambda o: None, "py_gc_untrack": lambda o: None,
         "py_weakref_invalidate": lambda o: None, "py_user_del_dispatch": lambda o: None,
         "_dealloc_ptr_is_instance": lambda o: False,
@@ -185,17 +188,20 @@ def _caller(rt, caller, deallocate, delayed):
         "pcc_dealloc_with_trash": lambda o, tag: deallocate(o),
         "pcc_gc_free_object_memory": deallocate,
         "is_tagged_int": lambda o: 0, "pcc_gc_object_is_address_pinned": lambda o: 0,
-        "abi_constant": lambda name: 1 if name == "object.type.int" else 99,
+        "abi_constant": lambda name: PY_TYPE_INT if name == "object.type.int" else 99,
         "py_dealloc_int": deallocate,
     })
     if caller == "decref":
         _load("py_obj.py", ["_py_decref_finish"], ns)
-        prepared = {0: obj, 8: 1, 16: rt.memory[obj][12], 24: 4, 32: 0, 40: 1, 48: 0}
+        prepared = {0: obj, 8: PY_TYPE_INT, 16: rt.memory[obj][12], 24: 4, 32: 0, 40: 1, 48: 0}
         return obj, lambda: ns["_py_decref_finish"](prepared)
     if caller == "instance":
         _load("py_class.py", ["py_instance_dealloc"], ns)
         return obj, lambda: ns["py_instance_dealloc"](obj)
-    _load("freestanding_gc_tracing_sweep_collector.py", ["pcc_gc_tracing_finalize_unreachable"], ns)
+    _load("py_obj_dealloc.py", ["_dealloc_dispatch"], ns)
+    ns["pcc_gc_dealloc_typed"] = ns["_dealloc_dispatch"]
+    _load("freestanding_gc_tracing_sweep_collector.py",
+          ["pcc_gc_tracing_finalize_unreachable", "pcc_gc_tracing_finalize_unpinned"], ns)
     # Caller selects GC4; the actual note function selects its non-moving
     # bookkeeping branch. This deliberately does not model zpage retirement.
     original_addr = ns["global_addr"]

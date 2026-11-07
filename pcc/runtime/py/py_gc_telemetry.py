@@ -265,6 +265,46 @@ pcc_gc_backend4_zpage_free_capacity_bytes = extern(
 @c_abi_export("pcc_gc_telemetry")
 def pcc_gc_telemetry(metric: i64) -> i64:
     gc_backend_current()
+    if metric == 126:
+        return atomic_load_i64(global_addr("pcc_gc_metric_sweep_candidate_calls"), 0, "relaxed")
+    if metric == 127:
+        return atomic_load_i64(global_addr("pcc_gc_metric_sweep_candidate_nodes"), 0, "relaxed")
+    if metric == 128:
+        return atomic_load_i64(global_addr("pcc_gc_metric_sweep_candidate_work"), 0, "relaxed")
+    if metric == 129:
+        return atomic_load_i64(global_addr("pcc_gc_metric_sweep_candidate_sum_us"), 0, "relaxed")
+    if metric == 130:
+        return atomic_load_i64(global_addr("pcc_gc_metric_sweep_pass0_calls"), 0, "relaxed")
+    if metric == 131:
+        return atomic_load_i64(global_addr("pcc_gc_metric_sweep_pass0_nodes"), 0, "relaxed")
+    if metric == 132:
+        return atomic_load_i64(global_addr("pcc_gc_metric_sweep_pass0_work"), 0, "relaxed")
+    if metric == 133:
+        return atomic_load_i64(global_addr("pcc_gc_metric_sweep_pass0_sum_us"), 0, "relaxed")
+    if metric == 134:
+        return atomic_load_i64(global_addr("pcc_gc_metric_sweep_pass1_calls"), 0, "relaxed")
+    if metric == 135:
+        return atomic_load_i64(global_addr("pcc_gc_metric_sweep_pass1_nodes"), 0, "relaxed")
+    if metric == 136:
+        return atomic_load_i64(global_addr("pcc_gc_metric_sweep_pass1_work"), 0, "relaxed")
+    if metric == 137:
+        return atomic_load_i64(global_addr("pcc_gc_metric_sweep_pass1_sum_us"), 0, "relaxed")
+    if metric == 138:
+        return atomic_load_i64(global_addr("pcc_gc_metric_sweep_pass2_calls"), 0, "relaxed")
+    if metric == 139:
+        return atomic_load_i64(global_addr("pcc_gc_metric_sweep_pass2_nodes"), 0, "relaxed")
+    if metric == 140:
+        return atomic_load_i64(global_addr("pcc_gc_metric_sweep_pass2_work"), 0, "relaxed")
+    if metric == 141:
+        return atomic_load_i64(global_addr("pcc_gc_metric_sweep_pass2_sum_us"), 0, "relaxed")
+    if metric == 142:
+        return atomic_load_i64(global_addr("pcc_gc_metric_sweep_recheck_calls"), 0, "relaxed")
+    if metric == 143:
+        return atomic_load_i64(global_addr("pcc_gc_metric_sweep_recheck_nodes"), 0, "relaxed")
+    if metric == 144:
+        return atomic_load_i64(global_addr("pcc_gc_metric_sweep_recheck_work"), 0, "relaxed")
+    if metric == 145:
+        return atomic_load_i64(global_addr("pcc_gc_metric_sweep_recheck_sum_us"), 0, "relaxed")
     if metric == 119:
         return atomic_load_i64(global_addr("pcc_gc_metric_collection_stw_count"), 0, "relaxed")
     if metric == 120:

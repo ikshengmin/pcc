@@ -40,6 +40,7 @@ class Finalization:
                        ('pcc_gc_tracing_finish_stop_epoch', 0): 7,
                        (3000, 0): 1000, (3000, 16): 0}
         self.events = []
+        self.phase_observations = []
         self.pending = 0
         self.count_free = count_free
         self.weak_hook = None
@@ -83,11 +84,15 @@ class Finalization:
             pcc_thread_world_stop_epoch_held=lambda: 7,
             pcc_gc_object_node_is_active=lambda node: int(self.active),
             pcc_gc_object_is_address_pinned=lambda value: int(bool(self.load(value, 12) & 64)),
+            pcc_gc_object_node_is_address_pinned=self.node_is_address_pinned,
             pcc_gc_forwarding_index_find=lambda value: 0,
             pcc_gc_tracing_recheck_reachability_after_finalizers=self.recheck,
             py_weakref_invalidate_tracing_candidates=lambda: 0,
             pcc_gc_tracing_clear_unreachable=lambda value: self.events.append(('clear',)),
             pcc_gc_tracing_finalize_unreachable=self.free,
+            pcc_gc_tracing_finalize_unpinned=self.free_unpinned,
+            pcc_platform_monotonic_us=lambda: 100,
+            _record_sweep_phase=lambda *args: self.phase_observations.append(args),
             abi_constant=lambda name: self.ns['PY_TYPE_CLASS'],
         )
         _bodies('py_gen.py', {'py_gen_finalize'}, self.ns)
@@ -154,6 +159,14 @@ class Finalization:
     def free(self, value):
         self.events.append(('free',))
         self.active = False
+
+    def node_is_address_pinned(self, node, value):
+        assert node == 3000 and self.load(node, 0) == value and self.active
+        return int(bool(self.load(value, 12) & 64))
+
+    def free_unpinned(self, value):
+        assert self.active and not self.load(value, 12) & 64
+        self.free(value)
 
 
 @pytest.mark.parametrize('entry', ('py_user_del_dispatch', 'py_gen_finalize'))
