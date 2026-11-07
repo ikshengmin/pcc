@@ -75,6 +75,7 @@ RAW_ONLY_CROSS_OBJECT_SYMBOLS = {
     "pcc_gc_count_free_store_shade",
     # A stopped-world remark traces the roots it shades from the stack.
     "pcc_gc_trace_stack_push",
+    "pcc_gc_gray_worklist_note",
 }
 RAW_FUNCTION_IMPORTS = RAW_ONLY_CROSS_OBJECT_SYMBOLS | {
     # The Darwin thread-local descriptor bootstrap of the handled-context slot.

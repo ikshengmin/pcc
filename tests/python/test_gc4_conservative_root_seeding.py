@@ -136,6 +136,7 @@ def test_cycle_pin_is_distinct_from_count_surplus_and_address_leases(enabled, co
 @pytest.mark.parametrize("enabled", (0, 1))
 def test_mark_preparation_drops_previous_cycle_conservative_pins(enabled):
     words = {0x1000: 0x2000, 0x1010: 0, 0x1020: 0, 0x1038: 1, 0x200C: 32}
+    gray_worklist_events = []
     prepare = body("freestanding_gc_object_root_seeding.py", "pcc_gc_prepare_object_list_mark", {
         "global_addr": lambda name: name, "global_load_ptr": lambda name: 0x1000,
         "load_i32": lambda base, offset: enabled if isinstance(base, str) else words[base + offset],
@@ -145,6 +146,8 @@ def test_mark_preparation_drops_previous_cycle_conservative_pins(enabled):
         "store_i64": lambda base, offset, value: words.__setitem__(base + offset, value),
         "ptr_is_null": lambda ptr: ptr == 0, "is_tagged_int": lambda ptr: ptr & 1,
         "pcc_gc_gray_count_store_release": lambda count: None,
+        # This pin-reset fixture owns no persistent gray-queue storage.
+        "pcc_gc_gray_worklist_clear_stopped": lambda: gray_worklist_events.append("clear"),
     })
     prepare(1)
     assert words[0x1038] == (0 if enabled else 1)

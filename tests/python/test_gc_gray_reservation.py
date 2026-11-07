@@ -1,4 +1,4 @@
-"""Production atomic shader/count bodies under competing color publication."""
+"""Production shader/count bodies; persistent queue publication is recorded only."""
 import ast
 from pathlib import Path
 
@@ -14,10 +14,13 @@ class Shader:
         self.words = {(0x1000, 12): flags, ('pcc_gc_gray_count', 0): int(bool(flags & GRAY))}
         self.before_cas = None
         self.events = []
+        self.gray_worklist_notes = []
         self.ns = dict(i64=int, PYOBJECTHEADER_FLAGS_OFFSET=12,
             global_addr=lambda name: name, atomic_load_i32=self.load,
             atomic_store_i32=self.store, atomic_rmw_i32=self.rmw,
-            atomic_cas_i32=self.cas)
+            atomic_cas_i32=self.cas,
+            # Keep the actual CAS/count body; no persistent queue is modeled.
+            pcc_gc_gray_worklist_note=self.gray_worklist_notes.append)
         names = {'pcc_gc_shade_gray_atomic', 'pcc_gc_set_mark_color',
                  'pcc_gc_gray_count_increment_acq_rel', 'pcc_gc_gray_count_decrement_acq_rel'}
         functions = [node for node in ast.parse(SOURCE.read_text()).body

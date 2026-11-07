@@ -1,9 +1,11 @@
 """Production mark-workstack bodies with a controlled host memory boundary.
 
-Only raw memory, atomic instructions, object registration and slot enumeration
-are modeled. The workstack, gray transitions and object-list walks execute the
-unchanged production function bodies. These are host correctness obligations,
-not native execution, concurrent scheduling, reclamation or Mac/QPS evidence.
+Raw memory, atomic instructions, object registration and slot enumeration are
+modeled. The persistent gray queue is explicitly disabled at its extern
+boundary, so these retain the object-list fallback/stack-overflow obligations.
+The workstack, gray transitions and object-list walks execute the unchanged
+production bodies. These are not persistent-queue, native execution, concurrent
+scheduling, reclamation or Mac/QPS evidence.
 """
 from __future__ import annotations
 
@@ -44,6 +46,7 @@ class _MarkBoundary:
         self.known = set()
         self.gray = 0
         self.gray_changes = []
+        self.gray_worklist_events = []
         self.traces = Counter()
         self.increfs = Counter()
         self.peak = 0
@@ -75,6 +78,12 @@ class _MarkBoundary:
             "pcc_gc_gray_count_increment_acq_rel": lambda: self.change_gray(1),
             "pcc_gc_gray_count_decrement_acq_rel": lambda: self.change_gray(-1),
             "pcc_gc_gray_count_load_acquire": lambda: self.gray,
+            # Empty persistent queue: preserve the original fallback oracle.
+            # Record the new boundary without replacing the atomic shader.
+            "pcc_gc_gray_worklist_note": lambda obj: self.gray_worklist_events.append(("note", obj)),
+            "pcc_gc_gray_worklist_take_locked": self.take_disabled_gray_worklist,
+            "pcc_gc_gray_worklist_flush": lambda: self.gray_worklist_events.append(("flush",)),
+            "pcc_gc_gray_worklist_clear_stopped": lambda: self.gray_worklist_events.append(("clear",)),
             "pcc_gc_object_is_known_no_lock": self.is_known,
             "pcc_gc_object_node_is_active": lambda node: int(node[32] == 0),
             "pcc_gc_forwarding_index_find": lambda obj: self.forwardings.get(id(obj)),
@@ -85,6 +94,10 @@ class _MarkBoundary:
         }
         _load_bodies("freestanding_gc_root_operations.py", COLOR_FUNCTIONS, self.namespace)
         _load_bodies("freestanding_gc_common_mark_cycle.py", COMMON_FUNCTIONS, self.namespace)
+
+    def take_disabled_gray_worklist(self):
+        self.gray_worklist_events.append(("take",))
+        return None
 
     def call(self, suffix, *arguments):
         return self.namespace["pcc_gc_" + suffix](*arguments)

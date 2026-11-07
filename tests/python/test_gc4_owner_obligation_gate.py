@@ -38,6 +38,7 @@ class BarrierState:
         self.index = {}
         self.nodes = {}
         self.events = []
+        self.gray_worklist_notes = []
         self.reads = Counter()
         self.provenance = set()
         self.depth = 2
@@ -60,6 +61,8 @@ class BarrierState:
             "pcc_gc_object_index_find": self.find,
             "pcc_gc_gray_count_increment_acq_rel": self.increment,
             "pcc_gc_gray_count_decrement_acq_rel": self.decrement,
+            # No persistent queue here; retain the actual color/CAS owner.
+            "pcc_gc_gray_worklist_note": self.gray_worklist_notes.append,
             "pcc_gc_backend4_store_buffer_enqueue": self.enqueue,
         }
         exec(extracted(RUNTIME / "freestanding_gc_root_operations.py", (

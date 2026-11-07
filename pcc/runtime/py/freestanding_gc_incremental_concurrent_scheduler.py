@@ -80,6 +80,10 @@ pcc_gc_trace_stack_drain = extern(
 pcc_gc_trace_stack_drain_work = extern(
     "pcc_gc_trace_stack_drain_work", (c_int64, c_ptr), c_int64
 )
+pcc_gc_gray_worklist_take_locked = extern(
+    "pcc_gc_gray_worklist_take_locked", (), c_ptr
+)
+pcc_gc_gray_worklist_flush = extern("pcc_gc_gray_worklist_flush", (), c_void)
 pcc_gc_trace_cext_referents_unlocked = extern(
     "pcc_gc_trace_cext_referents_unlocked", (c_ptr, c_ptr), c_void
 )
@@ -893,18 +897,30 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
         node = global_load_ptr("pcc_gc_object_head")
     scanned: i64 = 0
     pcc_gc_trace_stack_begin()
-    while (ptr_is_null(node) == 0 and local_processed < remaining_budget
+    while (local_processed < remaining_budget
            and scanned < scan_budget
            and (stopped != 0 or load_i64(work_left, 0) > 0)):
+        queued = pcc_gc_gray_worklist_take_locked()
+        if ptr_is_null(queued) != 0 and ptr_is_null(node) != 0:
+            break
         scanned = scanned + 1
-        nxt = load_ptr(node, 16)
-        if load_i64(node, 32) != 0:
-            node = nxt
-            continue
-        obj = load_ptr(node, 0)
-        if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
-            node = nxt
-            continue
+        if ptr_is_null(queued) == 0:
+            nxt = node
+            # A queued pointer may have been freed/reused since publication.
+            # The graph lock covers exact membership and every header load.
+            # Invalid and already-black tokens still consume scan allowance.
+            if pcc_gc_object_is_known_no_lock(queued) == 0:
+                continue
+            obj = queued
+        else:
+            nxt = load_ptr(node, 16)
+            if load_i64(node, 32) != 0:
+                node = nxt
+                continue
+            obj = load_ptr(node, 0)
+            if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+                node = nxt
+                continue
         flags: i64 = load_i32(obj, 12)
         if (flags & 16) != 0:
             if pcc_capi_is_cext_type_tag(load_i32(obj, 8)) != 0:
@@ -958,6 +974,7 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
                     break
         node = nxt
     pcc_gc_trace_stack_end()
+    pcc_gc_gray_worklist_flush()
     global_store_ptr("pcc_gc_trace_cursor", node)
 
     cext_obj = load_ptr(cext_ctx, 0)

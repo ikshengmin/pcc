@@ -40,6 +40,7 @@ class RootStore:
         }
         self.depth = self.gray = self.notes = self.lookups = 0
         self.events = []
+        self.gray_worklist_notes = []
         self.stopped_roots = []
         self.ns = {
             "i64": int, "PYOBJECTHEADER_FLAGS_OFFSET": 12,
@@ -59,6 +60,8 @@ class RootStore:
             "pcc_gc_object_index_seen_stable": self.member,
             "pcc_gc_gray_count_increment_acq_rel": self.increment,
             "pcc_gc_gray_count_decrement_acq_rel": self.decrement,
+            # Queue-disabled publication boundary; execute the real shader.
+            "pcc_gc_gray_worklist_note": self.gray_worklist_notes.append,
         }
         for name in ("pcc_py_gc_minor_graph_lock", "pcc_py_gc_minor_graph_unlock",
                      "py_incref", "py_decref", "pcc_gc_load_ptr", "stack_alloc"):

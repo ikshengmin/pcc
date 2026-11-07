@@ -23,6 +23,12 @@ def _namespace(filename):
         function.decorator_list = []
     module = ast.Module(body=functions, type_ignores=[])
     namespace = {"null": lambda: None, "ptr_is_null": lambda value: value is None}
+    if filename == "freestanding_thread_kernel_pthread.py":
+        # These lifecycle/log models contain no persistent gray queue. Record
+        # its extern boundary separately from the existing lock/log oracle.
+        gray_worklist_events = []
+        namespace["gray_worklist_events"] = gray_worklist_events
+        namespace["pcc_gc_gray_worklist_flush"] = lambda: gray_worklist_events.append("flush")
     exec(compile(module, filename, "exec", flags=__future__.annotations.compiler_flag), namespace)
     return namespace
 
@@ -568,6 +574,9 @@ class WorldTraceModel:
         self.state = dict(# The polling thread is registered as thread 1.
                           pcc_tls_thread_state_py=REGISTERED,
                           pcc_tls_thread_id_py=1,
+                          # This trace-only model does not enable raw-root
+                          # snapshots; unknown global reads still fail.
+                          pcc_thread_conservative_roots_enabled=0,
                           # The poll flag and the stopped-world epoch.
                           pcc_thread_stop_requested=int(stopped),
                           pcc_thread_world_stop_py=int(stopped),

@@ -1,8 +1,9 @@
 """Deterministic host interleavings of actual production GC color writers.
 
-The only model is raw memory/atomic intrinsics. Function bodies are loaded
-unchanged from the runtime source. These tests prove a lost-header-update
-regression and owned host IR, not native threading or bootstrap qualification.
+Raw memory/atomic intrinsics are modeled, with an explicitly empty persistent
+gray queue in the scheduler seam. Function bodies are loaded unchanged from the
+runtime source. These tests prove a lost-header-update regression and owned host
+IR, not persistent-queue behavior, native threading or bootstrap qualification.
 """
 
 from __future__ import annotations
@@ -55,6 +56,7 @@ class HeaderMemory:
         self.cas_calls = []
         self.loads = 0
         self.writes = []
+        self.gray_worklist_events = []
 
     def update(self, operation):
         kind, mask = operation
@@ -172,6 +174,9 @@ def _scheduler_namespace(memory, operation):
         "pcc_gc_trace_stack_begin": lambda: None,
         "pcc_gc_trace_stack_end": lambda: None,
         "pcc_gc_trace_stack_drain": lambda budget: 0,
+        # Empty-queue fallback only; keep the header-interleaving oracle intact.
+        "pcc_gc_gray_worklist_take_locked": lambda: memory.gray_worklist_events.append("take"),
+        "pcc_gc_gray_worklist_flush": lambda: memory.gray_worklist_events.append("flush"),
     })
     return namespace, locks, trace, counts
 

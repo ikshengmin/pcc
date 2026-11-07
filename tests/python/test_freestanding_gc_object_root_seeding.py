@@ -24,6 +24,7 @@ OWNED_SYMBOLS = {
     "pcc_gc_prepare_object_list_mark",
 }
 RAW_FUNCTION_IMPORTS = {
+    "pcc_gc_gray_worklist_clear_stopped",
     # The walk reads each listed object's own node (GC1/GC2).
     "pcc_gc_object_node_is_address_pinned",
     "pcc_gc_gray_count_store_release",

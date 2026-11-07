@@ -17,6 +17,10 @@ from pcc.unsafe import (
 
 __pcc_freestanding__ = True
 
+pcc_gc_gray_worklist_clear_stopped = extern(
+    "pcc_gc_gray_worklist_clear_stopped", (), c_void
+)
+
 
 pcc_gc_object_node_is_address_pinned = extern(
     "pcc_gc_object_node_is_address_pinned", (c_ptr, c_ptr), c_int64
@@ -36,6 +40,7 @@ pcc_gc_visit_registered_root_slots = extern(
 
 @c_abi_export("pcc_gc_prepare_object_list_mark")
 def pcc_gc_prepare_object_list_mark(explicit_collect: i64) -> None:
+    pcc_gc_gray_worklist_clear_stopped()
     pcc_gc_gray_count_store_release(0)
     # A fresh allocation stays black for one automatic cycle only while
     # refcounts find the external references of objects nothing traced. A

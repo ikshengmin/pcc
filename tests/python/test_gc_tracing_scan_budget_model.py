@@ -2,8 +2,9 @@
 
 Contract: docs/project-intent.md (five collectors and ordinary object lifetime),
 and the concurrent-slice node budget in pcc_gc_tracing_step_cycle. These checks
-bound object-list nodes only; one object's outgoing references remain unsliced.
-No native ABI, thread scheduling, or end-to-end collection claim follows here.
+bound object-list nodes with the persistent gray queue explicitly disabled;
+one object's outgoing references remain unsliced. No persistent-queue, native
+ABI, thread scheduling, or end-to-end collection claim follows here.
 """
 
 from __future__ import annotations
@@ -42,6 +43,7 @@ class TraceState:
         self.visited_nodes = []
         self.visited_payloads = []
         self.completions = []
+        self.gray_worklist_events = []
         self.depth = 0
         self.lock_acquisitions = 0
         self.stopped = stopped
@@ -72,6 +74,9 @@ class TraceState:
             "pcc_gc_trace_referents_work": self.trace_fixed_owner_work,
             "pcc_gc_trace_slot": noop,
             "pcc_gc_complete_claimed_tracing_cycle": self.complete,
+            # This fixture measures the original object-list fallback budget.
+            "pcc_gc_gray_worklist_take_locked": self.take_disabled_gray_worklist,
+            "pcc_gc_gray_worklist_flush": lambda: self.gray_worklist_events.append("flush"),
             "_promotion_unlink": noop, "pcc_gc_backend3_young_unlink": noop,
         }
         self.ns = ns
@@ -96,6 +101,10 @@ class TraceState:
         load_functions(ns, "freestanding_gc_incremental_concurrent_scheduler.py", {
             "pcc_gc_tracing_step_cycle", "pcc_gc_tracing_finish_left_to_mutator",
         })
+
+    def take_disabled_gray_worklist(self):
+        self.gray_worklist_events.append("take")
+        return 0
 
     def allocate(self, size):
         result = self.address

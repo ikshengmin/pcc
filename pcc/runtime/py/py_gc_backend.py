@@ -6600,9 +6600,15 @@ def pcc_gc_scheduler_queue_len(queue) -> int:
     return length
 
 
+pcc_gc_gray_worklist_unregister = extern(
+    "pcc_gc_gray_worklist_unregister", (), c_void
+)
+
+
 @c_abi_export("pcc_gc_thread_unregister_buffers")
 def pcc_gc_thread_unregister_buffers() -> None:
     pcc_gc_frame_node_tls_pool_drain()
+    pcc_gc_gray_worklist_unregister()
     # Called from pcc_threads.c::pcc_thread_trampoline on thread exit. The C
     # runtime (py_gc_backend.c) flushes+frees a PER-THREAD backend-4 medium
     # store-buffer state here. The pcc-Python runtime mirror keeps the

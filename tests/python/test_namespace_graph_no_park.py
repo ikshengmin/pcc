@@ -43,6 +43,7 @@ class GraphPollModel:
                     'pcc_stop_owner_thread_id_py':8 if stop_requested else 0,
                     'pcc_thread_stop_requested':stop_requested}
         self.world_entries=[]
+        self.gray_worklist_events=[]
         self.env=dict(i64=int,c_ptr=int,
             global_addr=lambda name:name,
             load_i32=lambda address,offset:self.state[address],
@@ -58,6 +59,8 @@ class GraphPollModel:
             pcc_threads_enabled=lambda:1,pcc_current_thread_id=lambda:7,
             _tls_i64=lambda address:self.state[address],
             _finish_deferred_tripwire=lambda:None,
+            # No persistent queue is modeled in these lock/poll obligations.
+            pcc_gc_gray_worklist_flush=lambda:self.gray_worklist_events.append('flush'),
             _world_init=self.world_init,
             pcc_platform_abort=self.abort)
         self.load('freestanding_thread_kernel_pthread.py',{

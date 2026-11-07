@@ -61,6 +61,7 @@ pcc_gc_forwarding_index_find = extern("pcc_gc_forwarding_index_find", (c_ptr,), 
 pcc_gc_object_index_find = extern("pcc_gc_object_index_find", (c_ptr,), c_ptr)
 py_decref = extern("py_decref", (c_ptr,), c_void)
 pcc_gc_trace_stack_push = extern("pcc_gc_trace_stack_push", (c_ptr,), c_void)
+pcc_gc_gray_worklist_note = extern("pcc_gc_gray_worklist_note", (c_ptr,), c_void)
 py_incref = extern("py_incref", (c_ptr,), c_void)
 pcc_gc_config_ensure = extern("pcc_gc_config_ensure", (), c_int64)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
@@ -404,6 +405,10 @@ def pcc_gc_shade_gray_atomic(obj, allow_black: i64) -> None:
             obj, PYOBJECTHEADER_FLAGS_OFFSET, old, desired, "acq_rel", "acquire"
         )
         if observed == old:
+            # Caller holds the graph lock/STW or an existing no-park lease.
+            # Publish work only for the winning color transition; no phase
+            # gate here, because initial and resurrection seeds run inactive.
+            pcc_gc_gray_worklist_note(obj)
             return
         old = observed
 

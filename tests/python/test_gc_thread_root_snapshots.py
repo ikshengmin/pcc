@@ -21,6 +21,7 @@ class SnapshotMemory:
         self.next = 0x10000
         self.freed = []
         self.allocations = []
+        self.gray_worklist_events = []
         self.epoch = 1
         self.globals = {"pcc_tls_thread_record_py": self.record,
                         "pcc_thread_records_head_py": self.record,
@@ -44,6 +45,9 @@ class SnapshotMemory:
             "null": lambda: 0, "malloc": self.allocate, "free": self.freed.append,
             "memcpy": self.copy, "capture_gc_registers": self.capture,
             "pcc_platform_abort": self.abort,
+            # Snapshot memory does not contain a persistent queue. Record its
+            # publication boundary without claiming queue visibility coverage.
+            "pcc_gc_gray_worklist_flush": lambda: self.gray_worklist_events.append("flush"),
             "pcc_thread_world_stop_epoch_held": lambda: self.epoch,
             "call_void_ptr2": lambda callback, word, context: callback(word, context),
         }

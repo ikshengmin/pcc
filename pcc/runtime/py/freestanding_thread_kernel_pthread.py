@@ -158,6 +158,7 @@ pthread_cond_broadcast = extern("pthread_cond_broadcast", (c_ptr,), c_int64)
 sched_yield = extern("sched_yield", (), c_int64)
 pcc_platform_wall_time_us = extern("pcc_platform_wall_time_us", (), c_int64)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+pcc_gc_gray_worklist_flush = extern("pcc_gc_gray_worklist_flush", (), c_void)
 pcc_gc_thread_unregister_buffers = extern(
     "pcc_gc_thread_unregister_buffers", (), c_void
 )
@@ -731,7 +732,10 @@ def pcc_thread_visit_conservative_words(visitor, context) -> int:
 
 
 def _thread_record_mark(state: int, frame) -> None:
-    # Caller holds the world lock.
+    # Caller holds the world lock. Publish before advertising parked/exited;
+    # the raw flush neither allocates nor polls nor acquires another lock.
+    if state != 0:
+        pcc_gc_gray_worklist_flush()
     record = global_load_ptr("pcc_tls_thread_record_py")
     if ptr_is_null(record):
         return
@@ -1378,6 +1382,7 @@ def pcc_thread_safepoint() -> None:
     if (state & 281474976710656) != 0:
         pcc_platform_abort()
         return
+    pcc_gc_gray_worklist_flush()
     # Nothing requested and nothing to undo: this thread is registered
     # (pcc_current_thread_id admits a newcomer under the world lock), it is
     # not still marked parked from an earlier stop, and either no stop is
@@ -1501,6 +1506,7 @@ def pcc_stop_the_world() -> int:
     if _world_init() != 0:
         return -1
     self_id = pcc_current_thread_id()
+    pcc_gc_gray_worklist_flush()
     lock = global_load_ptr("pcc_world_lock_py")
     cond = global_load_ptr("pcc_world_cond_py")
     trace_records = null()

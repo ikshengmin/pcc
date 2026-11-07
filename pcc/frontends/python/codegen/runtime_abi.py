@@ -1966,6 +1966,7 @@ FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_static_literal_low',
         'pcc_gc_static_literal_high',
         'pcc_gc_trace_stack_count',
+        'pcc_gc_gray_worklist_allocation_failures',
     }
 )
 
@@ -2030,6 +2031,8 @@ FREESTANDING_GC_PTR_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_stack_diff_values',
         'pcc_gc_stackmap_index',
         'pcc_gc_trace_cursor',
+        'pcc_gc_gray_published_batches',
+        'pcc_gc_gray_pending_batches',
         'pcc_gc_trace_cext_pending_obj',
         'py_gc_callbacks',
         'py_gc_head',
@@ -2048,6 +2051,7 @@ FREESTANDING_GC_THREAD_LOCAL_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_frame_node_pool_heads',
         'pcc_gc_frame_node_pool_total',
         'pcc_gc_trace_stack_owner',
+        'pcc_gc_gray_local_batch',
     }
 )
 
@@ -3084,6 +3088,11 @@ def _cross_object_signatures_part_12():
     # literal instead of exceeding the native compiler's 50-entry limit.
     return {
     "pcc_gc_trace_referents_work": (("c_ptr",), "c_int64"),
+    "pcc_gc_gray_worklist_note": (("c_ptr",), "c_void"),
+    "pcc_gc_gray_worklist_flush": ((), "c_void"),
+    "pcc_gc_gray_worklist_take_locked": ((), "c_ptr"),
+    "pcc_gc_gray_worklist_unregister": ((), "c_void"),
+    "pcc_gc_gray_worklist_clear_stopped": ((), "c_void"),
     "pcc_gc_trace_stack_drain_work": (("c_int64", "c_ptr"), "c_int64"),
     "pcc_thread_is_running": ((), "c_int64"),
     "pcc_gc_backend3_enqueue_promotion_owner": (("c_ptr",), "c_void"),

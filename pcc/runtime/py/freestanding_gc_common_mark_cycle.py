@@ -6,6 +6,7 @@ from pcc.unsafe import (
     abi_constant,
     atomic_rmw_i64,
     atomic_store_i32,
+    atomic_store_i64,
     define_global_i64,
     define_global_null_ptr_array,
     define_thread_local_i32,
@@ -98,6 +99,13 @@ pcc_gc_shade_gray_atomic = extern(
 pcc_container_lock = extern("pcc_container_lock", (c_ptr,), c_void)
 pcc_container_unlock = extern("pcc_container_unlock", (c_ptr,), c_void)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+pcc_gc_gray_worklist_take_locked = extern(
+    "pcc_gc_gray_worklist_take_locked", (), c_ptr
+)
+pcc_gc_gray_worklist_flush = extern("pcc_gc_gray_worklist_flush", (), c_void)
+pcc_gc_gray_worklist_clear_stopped = extern(
+    "pcc_gc_gray_worklist_clear_stopped", (), c_void
+)
 
 
 @c_abi_export("pcc_gc_trace_mark_gray_if_known")
@@ -337,15 +345,26 @@ def pcc_gc_drain_all_gray_unlocked() -> i64:
     while pcc_gc_gray_count_load_acquire() != 0:
         local_processed: i64 = 0
         node = global_load_ptr("pcc_gc_object_head")
-        while ptr_is_null(node) == 0 and pcc_gc_gray_count_load_acquire() != 0:
-            nxt = load_ptr(node, 16)
-            if load_i64(node, 32) != 0:
-                node = nxt
-                continue
-            obj = load_ptr(node, 0)
-            if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
-                node = nxt
-                continue
+        while pcc_gc_gray_count_load_acquire() != 0:
+            queued = pcc_gc_gray_worklist_take_locked()
+            if ptr_is_null(queued) == 0:
+                nxt = node
+                # Persistent entries are non-owning address tokens. The
+                # stopped world protects membership/header use here.
+                if pcc_gc_object_is_known_no_lock(queued) == 0:
+                    continue
+                obj = queued
+            else:
+                if ptr_is_null(node) != 0:
+                    break
+                nxt = load_ptr(node, 16)
+                if load_i64(node, 32) != 0:
+                    node = nxt
+                    continue
+                obj = load_ptr(node, 0)
+                if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+                    node = nxt
+                    continue
             flags: i64 = load_i32(obj, 12)
             if (flags & 16) != 0:
                 pcc_gc_trace_referents(obj)
@@ -358,6 +377,7 @@ def pcc_gc_drain_all_gray_unlocked() -> i64:
         if local_processed == 0:
             break
     pcc_gc_trace_stack_end()
+    pcc_gc_gray_worklist_flush()
     return processed
 
 
@@ -368,12 +388,23 @@ def pcc_gc_drain_all_gray_locked_slice() -> i64:
     while pcc_gc_gray_count_load_acquire() != 0:
         local_processed: i64 = 0
         node = global_load_ptr("pcc_gc_object_head")
-        while ptr_is_null(node) == 0 and pcc_gc_gray_count_load_acquire() != 0:
-            nxt = load_ptr(node, 16)
-            if pcc_gc_object_node_is_active(node) == 0:
-                node = nxt
-                continue
-            obj = load_ptr(node, 0)
+        while pcc_gc_gray_count_load_acquire() != 0:
+            queued = pcc_gc_gray_worklist_take_locked()
+            if ptr_is_null(queued) == 0:
+                nxt = node
+                # Consumers keep the graph lock across lookup and header
+                # use. Never load a retired token's header before lookup.
+                if pcc_gc_object_is_known_no_lock(queued) == 0:
+                    continue
+                obj = queued
+            else:
+                if ptr_is_null(node) != 0:
+                    break
+                nxt = load_ptr(node, 16)
+                if pcc_gc_object_node_is_active(node) == 0:
+                    node = nxt
+                    continue
+                obj = load_ptr(node, 0)
             flags: i64 = load_i32(obj, 12)
             if (flags & 16) != 0:
                 if pcc_capi_is_cext_type_tag(load_i32(obj, 8)) != 0:
@@ -399,6 +430,7 @@ def pcc_gc_drain_all_gray_locked_slice() -> i64:
                             ),
                         )
                         pcc_gc_trace_stack_end()
+                        pcc_gc_gray_worklist_flush()
                         return processed + 1
                 pcc_gc_trace_referents(obj)
                 pcc_gc_gray_count_decrement_acq_rel()
@@ -410,6 +442,7 @@ def pcc_gc_drain_all_gray_locked_slice() -> i64:
         if local_processed == 0:
             break
     pcc_gc_trace_stack_end()
+    pcc_gc_gray_worklist_flush()
     return processed
 
 
@@ -446,7 +479,11 @@ def pcc_gc_tracing_cycle_epoch_advance_unlocked() -> i64:
         pcc_platform_abort()
         return 0
     next_epoch: i64 = current + 1
-    store_i64(global_addr("pcc_gc_tracing_cycle_epoch"), 0, next_epoch)
+    # Graph exclusion serializes advances; no-park gray producers may read
+    # this epoch without graph exclusion during a same-backend reset.
+    atomic_store_i64(
+        global_addr("pcc_gc_tracing_cycle_epoch"), 0, next_epoch, "release"
+    )
     return next_epoch
 
 
@@ -523,6 +560,7 @@ def pcc_gc_finish_tracing_cycle(
     # every gate.
     atomic_rmw_i64("xchg", global_addr("pcc_gc_debt_bytes"), 0, 0, "acq_rel")
     global_store_ptr("pcc_gc_trace_cursor", null())
+    pcc_gc_gray_worklist_clear_stopped()
     # The scheduler owns the release-store helper for this shared counter.
     # Its ABI is already part of the common tracing surface.
     pcc_gc_gray_count_store_release(0)

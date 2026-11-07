@@ -44,6 +44,9 @@ OWNED_DATA_SYMBOLS = {
 }
 TLS_STORAGE_SYMBOLS = {"pcc_gc_trace_stack_owner"}
 RAW_FUNCTION_IMPORTS = {
+    "pcc_gc_gray_worklist_take_locked",
+    "pcc_gc_gray_worklist_flush",
+    "pcc_gc_gray_worklist_clear_stopped",
     "pcc_gc_set_mark_color",
     "pcc_capi_is_cext_type_tag",
     "pcc_gc_gray_count_decrement_acq_rel",

@@ -2,7 +2,9 @@
 
 Raw memory, lock, allocator, payload and index providers are finite doubles.
 The retirement, remap, unlink, copy, gray primitives and scheduler are actual
-source functions. This is not native ABI, concurrency, or full-cycle proof.
+source functions. Persistent gray-queue externs record calls but provide no
+queued work: this covers object-list fallback, not persistent-queue behavior,
+native ABI, concurrency, or full-cycle proof.
 """
 from __future__ import annotations
 
@@ -47,6 +49,7 @@ class RetirementState:
         self.reverse = {}
         self.depth = 0
         self.events = []
+        self.gray_worklist_events = []
         self.trips = []
         self.claims = []
         self.granule_result = 0
@@ -115,6 +118,11 @@ class RetirementState:
             "pcc_gc_relocation_member_forget": noop,
             "pcc_gc_trace_referents": lambda obj: self.events.append(("scan", obj)),
             "pcc_gc_complete_claimed_tracing_cycle": lambda epoch, kind: self.claims.append((epoch, kind)),
+            # Inherited color-writer fixtures also keep the real shader body.
+            "pcc_gc_gray_worklist_note": lambda obj: self.gray_worklist_events.append(("note", obj)),
+            "pcc_gc_gray_worklist_take_locked": self.take_disabled_gray_worklist,
+            "pcc_gc_gray_worklist_flush": lambda: self.gray_worklist_events.append(("flush",)),
+            "pcc_gc_gray_worklist_clear_stopped": lambda: self.gray_worklist_events.append(("clear",)),
             "_gc_tracks_objects": lambda: 1, "_identity_remove": noop,
             "_relocation_set_remove": noop, "_backend4_store_buffer_remove": noop,
             "_backend4_remembered_set_remove": noop, "_object_node_zpage": zero,
@@ -174,6 +182,10 @@ class RetirementState:
             "_live_bytes_subtract": ns["pcc_gc_live_bytes_subtract"],
             "_unlink_object_node": ns["pcc_gc_object_node_unlink"],
         })
+
+    def take_disabled_gray_worklist(self):
+        self.gray_worklist_events.append(("take",))
+        return 0
 
     def allocate(self, size):
         address = self.next_address
