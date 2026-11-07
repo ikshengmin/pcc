@@ -299,6 +299,9 @@ pcc_gc_precise_stack_diff_if_requested = extern(
     "pcc_gc_precise_stack_diff_if_requested", (), c_void
 )
 pcc_resume_world = extern("pcc_resume_world", (), c_int64)
+pcc_thread_owns_stopped_world = extern("pcc_thread_owns_stopped_world", (), c_int64)
+pcc_gc_deferred_free_begin = extern("pcc_gc_deferred_free_begin", (c_int64,), c_int64)
+pcc_gc_deferred_free_close = extern("pcc_gc_deferred_free_close", (), c_int64)
 pcc_gc_reclaim_retired_index_tables = extern(
     "pcc_gc_reclaim_retired_index_tables", (), c_int64
 )
@@ -1789,11 +1792,13 @@ def _gc_tracing_automatic_collect(mark: int) -> int:
     if load_i32(global_addr("pcc_gc_explicit_collect_active"), 0) != 0:
         return 0
     _pcc_gc_fire_callbacks(cstr("start"), 5)
+    prior_world_held: int = pcc_thread_owns_stopped_world()
     stw: int = pcc_stop_the_world()
     while stw != 0:
         pcc_thread_safepoint()
         stw = pcc_stop_the_world()
     collection_stw_start: int = pcc_runtime_monotonic_us()
+    deferred_free: int = pcc_gc_deferred_free_begin(prior_world_held)
     pcc_gc_reclaim_retired_index_tables()
     pcc_gc_begin_explicit_tracing_collect()
     collected: int = 0
@@ -1816,6 +1821,8 @@ def _gc_tracing_automatic_collect(mark: int) -> int:
     pcc_gc_end_explicit_tracing_collect()
     pcc_gc_record_collection_stw_pause(collection_stw_start, pcc_runtime_monotonic_us())
     pcc_resume_world()
+    if deferred_free != 0:
+        pcc_gc_deferred_free_close()
     pcc_gc_external_resource_poll()
     _pcc_gc_fire_callbacks(cstr("stop"), 4)
     return collected
@@ -2064,11 +2071,13 @@ def pcc_gc_collect(reason: int) -> int:
         collected = py_gc_collect()
         pcc_gc_record_explicit_pause(pause_t0, pcc_runtime_monotonic_us())
     else:
+        prior_world_held: int = pcc_thread_owns_stopped_world()
         stw: int = pcc_stop_the_world()
         while stw != 0:
             pcc_thread_safepoint()
             stw = pcc_stop_the_world()
         collection_stw_start: int = pcc_runtime_monotonic_us()
+        deferred_free: int = pcc_gc_deferred_free_begin(prior_world_held)
         pcc_gc_reclaim_retired_index_tables()
         if backend == 3 or backend == 4:
             # Stack-map step 3: with PCC_GC_STACKMAP_DIFF and a published table,
@@ -2107,6 +2116,8 @@ def pcc_gc_collect(reason: int) -> int:
         pcc_gc_end_explicit_tracing_collect()
         pcc_gc_record_collection_stw_pause(collection_stw_start, pcc_runtime_monotonic_us())
         pcc_resume_world()
+        if deferred_free != 0:
+            pcc_gc_deferred_free_close()
     # Release callbacks run after the tracing world is resumed. The shared
     # C-kernel registry has a zero-ready fast path and contains no PyObjects.
     pcc_gc_external_resource_poll()

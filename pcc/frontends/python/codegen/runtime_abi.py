@@ -1721,6 +1721,7 @@ RUNTIME_GLOBALS: dict[str, ir.Type] = {
 # extra live LLVM type objects while importing this module.
 FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
     {
+        "pcc_gc_deferred_free_active",
         "pcc_gc_pressure_active",
         'pcc_gc_backend4_remembered_page_incomplete',
         'pcc_builtin_function_cache_registered',
@@ -1857,6 +1858,12 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
 
 FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
     {
+        "pcc_gc_deferred_free_attempts",
+        "pcc_gc_deferred_free_enqueued",
+        "pcc_gc_deferred_free_drained",
+        "pcc_gc_deferred_free_cap_fallbacks",
+        "pcc_gc_deferred_free_peak_bytes",
+        "pcc_gc_deferred_free_active_drainers",
         "pcc_gc_object_index_generation",
         "pcc_gc_pressure_publications",
         "pcc_gc_pressure_requests",
@@ -1975,6 +1982,12 @@ FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
 
 FREESTANDING_GC_PTR_GLOBALS: frozenset[str] = frozenset(
     {
+        "pcc_gc_deferred_free_head",
+        "pcc_gc_deferred_free_tail",
+        "pcc_gc_deferred_free_pending_count",
+        "pcc_gc_deferred_free_pending_bytes",
+        "pcc_gc_deferred_free_local_attempts",
+        "pcc_gc_deferred_free_local_fallbacks",
         'pcc_builtin_function_cache',
         'pcc_gc_backend3_remembered_owner_head',
         'pcc_gc_backend3_continuation_root_scan_cursor',
@@ -2047,6 +2060,13 @@ FREESTANDING_GC_PTR_GLOBALS: frozenset[str] = frozenset(
 
 FREESTANDING_GC_THREAD_LOCAL_GLOBALS: frozenset[str] = frozenset(
     {
+        "pcc_gc_deferred_free_active",
+        "pcc_gc_deferred_free_head",
+        "pcc_gc_deferred_free_tail",
+        "pcc_gc_deferred_free_pending_count",
+        "pcc_gc_deferred_free_pending_bytes",
+        "pcc_gc_deferred_free_local_attempts",
+        "pcc_gc_deferred_free_local_fallbacks",
         "pcc_gc_pressure_owner",
         "pcc_gc_pressure_image_depth",
         "pcc_gc_cms_worker_current",
@@ -3090,6 +3110,11 @@ def _cross_object_signatures_part_12():
     # The frame-registry chunk is full. New raw ABIs start a new bounded
     # literal instead of exceeding the native compiler's 50-entry limit.
     return {
+    "malloc_usable_size": (("c_ptr",), "c_int64"),
+    "pcc_gc_deferred_free_begin": (("c_int64",), "c_int64"),
+    "pcc_gc_deferred_free_try_enqueue": (("c_ptr", "c_int64"), "c_int64"),
+    "pcc_gc_deferred_free_close": ((), "c_int64"),
+    "pcc_gc_deferred_free_counter": (("c_int64",), "c_int64"),
     "pcc_gc_trace_referents_work": (("c_ptr",), "c_int64"),
     "pcc_gc_gray_worklist_note": (("c_ptr",), "c_void"),
     "pcc_gc_gray_worklist_flush": ((), "c_void"),

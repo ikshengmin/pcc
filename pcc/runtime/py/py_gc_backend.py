@@ -697,6 +697,9 @@ _record_pause = extern(
 )
 _stop_cms_worker = extern("pcc_gc_cms_stop_worker", (), c_int64)
 _is_cms_worker = extern("pcc_gc_is_cms_worker", (), c_int64)
+pcc_gc_deferred_free_try_enqueue = extern(
+    "pcc_gc_deferred_free_try_enqueue", (c_ptr, c_int64), c_int64
+)
 _step_tracing = extern("pcc_gc_tracing_step_cycle", (c_int64,), c_int64)
 _step_incremental_concurrent = extern(
     "pcc_gc_incremental_concurrent_step", (c_int64,), c_int64
@@ -4768,6 +4771,8 @@ def pcc_gc_free_object_memory(o) -> None:
         # fail closed instead of scanning every page or calling free().
         return
     if (flags & 4096) == 0 and backend != 3:
+        if (backend == 1 or backend == 2) and pcc_gc_deferred_free_try_enqueue(o, flags) != 0:
+            return
         free(o)
         return
     if (flags & 4096) != 0 or backend == 3:
