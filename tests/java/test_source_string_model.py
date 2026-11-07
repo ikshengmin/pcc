@@ -79,7 +79,10 @@ def test_partial_string_facts_never_enable_native_compilation(name, text, monkey
                    lambda: compile_sources({"ArrayExample.java": text}, entry_class="ArrayExample")):
         with pytest.raises(UnsupportedJava) as caught:
             invoke()
-        assert caught.value.code == "java.unsupported.declared-result-type"
+        # The static final String constant variable folds without storage
+        # (test_source_string_constant_fields.py); the String-returning
+        # instance method stays outside the native route.
+        assert caught.value.code == "java.unsupported.instance-methods"
 
 
 def test_scalar_lowering_cannot_guess_an_integer_lane_for_reference_model_types():

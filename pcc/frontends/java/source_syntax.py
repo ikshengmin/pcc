@@ -537,7 +537,13 @@ class SourceParser:
                 self.peek().error("source method results require boolean, integral primitives or void",
                                   code="java.unsupported.generic-declarations")
             result = self.take()
-            result_type = self.array_suffix(self.declaration_type(result))
+            if (not self.class_model and result.text == "String" and {"static", "final"} <= mods
+                    and self.peek(1).text in ("=", ",", ";")):
+                # JLS 4.12.4 constant variables need no String object until a
+                # value use: sema resolves the name and folds the initializer.
+                result_type = NamedType((result,))
+            else:
+                result_type = self.array_suffix(self.declaration_type(result))
             method_name = self.identifier()
             if self.peek().text != "(":
                 common_type = result_type

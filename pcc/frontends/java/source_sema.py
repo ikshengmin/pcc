@@ -16,8 +16,9 @@ from .source_blank_final import check_blank_final_locals
 from .source_static_constructors import check_static_constructor_declarations
 
 
+from .source_string_model import MAX_STRING_UNITS, StringSourceConstant
 from .source_types import (
-    FLOATING, INTEGRAL, NUMERIC, conditional_type, promoted, select_method, widening,
+    FLOATING, INTEGRAL, NUMERIC, NamedType, conditional_type, promoted, select_method, widening,
 )
 
 
@@ -106,6 +107,8 @@ class SourceAnalyzer(LocalInferenceAnalyzer):
             self.fields[field.token.text] = field
 
     def evaluate_field(self, field):
+        if isinstance(field.dtype, NamedType):
+            return self.evaluate_string_constant_field(field)
         state = self.field_states.get(field.token.text)
         if state == "complete":
             return field.constant
@@ -124,6 +127,75 @@ class SourceAnalyzer(LocalInferenceAnalyzer):
             return field.constant
         finally:
             self.current_field = previous
+
+    def evaluate_string_constant_field(self, field):
+        """JLS 4.12.4/15.29 String constant variables, folded to source units.
+
+        Native lowering stores no String object for them and reads none: a
+        value use needs managed materialization and stays an explicit gap.
+        """
+        token = field.dtype.tokens[0]
+        if len(field.dtype.tokens) != 1 or token.text != "String":
+            token.error("source method results require boolean, integral primitives or void",
+                        code="java.unsupported.declared-result-type")
+        state = self.field_states.get(field.token.text)
+        if state == "complete":
+            return None
+        if self.project is not None and self.project.visible_simple_type(self.program, "String", token) is not None:
+            # A supplied type named String shadows java.lang.String; its
+            # values are ordinary references, not String constants.
+            token.error("reference-typed constant fields require the managed-object domain",
+                        code="java.unsupported.object-expressions")
+        if state == "evaluating":
+            field.token.error("cyclic String initialization requires the shared Java initialization contract",
+                              code="java.unsupported.cyclic-initialization")
+        self.field_states[field.token.text] = "evaluating"
+        previous = self.current_field
+        self.current_field = field
+        try:
+            field.string_constant = self.string_constant(field.initializer)
+            self.field_states[field.token.text] = "complete"
+            return None
+        finally:
+            self.current_field = previous
+
+    def string_constant(self, node):
+        if node.kind == "string":
+            units = tuple(node.value)
+        elif node.kind == "group":
+            return self.string_constant(node.children[0])
+        elif node.kind == "binary" and node.value == "+":
+            left, right = (self.string_constant(child) for child in node.children)
+            units = left.units + right.units
+        elif node.kind == "conditional":
+            condition = node.children[0]
+            self.expression(condition, set())
+            if condition.dtype != "boolean" or condition.constant is None:
+                node.token.error("static String initialization outside the implemented constant-expression subset "
+                                 "requires the shared Java initialization contract",
+                                 code="java.unsupported.static-initialization")
+            # JLS 15.29: both arms are constant expressions of type String.
+            yes, no = (self.string_constant(child) for child in node.children[1:])
+            return yes if condition.constant else no
+        elif node.kind == "name":
+            field = self.project.resolve_field(self, node) if self.project is not None else self.fields.get(node.value)
+            if field is None or not isinstance(field.dtype, NamedType):
+                node.token.error("String concatenation requires the next source-constant or owned runtime conversion domain",
+                                 code="java.unsupported.string-literals")
+            if (self.current_field is not None and "." not in node.value and field.owner == self.program.name
+                    and field.ordinal >= self.current_field.ordinal):
+                node.token.error("illegal forward or self reference in a static field initializer")
+            owner = self.project.analyzers[field.owner] if self.project is not None else self
+            owner.evaluate_field(field)
+            return field.string_constant
+        else:
+            node.token.error("static String initialization outside the implemented constant-expression subset "
+                             "requires the shared Java initialization contract",
+                             code="java.unsupported.static-initialization")
+        if len(units) > MAX_STRING_UNITS:
+            node.token.error("String source constant exceeds the bounded UTF-16 value/folding budget",
+                             code="java.unsupported.string-literals")
+        return StringSourceConstant(units)
 
     def analyze(self):
         if not self.methods:
@@ -357,6 +429,9 @@ class SourceAnalyzer(LocalInferenceAnalyzer):
                         node.constant = self.constant_locals.get(node.symbol)
                         return
             field = self.project.resolve_field(self, node)
+            if isinstance(field.dtype, NamedType):
+                node.token.error("String constant values require shared managed String materialization",
+                                 code="java.unsupported.string-literals")
             if (self.current_field is not None and "." not in op and field.owner == self.program.name
                     and field.ordinal >= self.current_field.ordinal):
                 node.token.error("illegal forward or self reference in a static field initializer")

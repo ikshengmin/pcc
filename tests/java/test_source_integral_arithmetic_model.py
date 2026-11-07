@@ -635,8 +635,9 @@ def test_complete_primes_original_keeps_modulo_site_and_existing_project_boundar
     assert first + ":108:23:" in str(class_error.value)
     with pytest.raises(UnsupportedJava) as native_error:
         compile_sources(sources, **ENTRY)
-    assert native_error.value.code == "java.unsupported.declared-result-type"
-    assert first + ":31:" in str(native_error.value)
+    # The String constant variable folds; the managed-array loop is next.
+    assert native_error.value.code == "java.unsupported.array-storage"
+    assert first + ":53:26:" in str(native_error.value)
     assert sources == before
     assert all(sources[name].encode("utf-8") == files[name] for name in sources)
 

@@ -109,8 +109,10 @@ def test_invalid_constant_source_fails_before_ir(fields, body, message, monkeypa
     (original("static final int VALUE=Constants.VALUE;", "return 42;"), "cyclic field initialization"),
     (original("static final int A=Constants.B,B=Constants.A;", "return 42;"), "cyclic field initialization"),
     (original("static final int[] VALUES={2,3,5};", "return 42;"), "array fields"),
-    # String tokens are owned; declared String typing remains an explicit gap.
-    (original('static final String MESSAGE="unchanged";', "return 42;"), "source method results require boolean, integral primitives or void"),
+    # String tokens are owned. Static final String constant variables fold
+    # without storage (test_source_string_constant_fields.py); other declared
+    # String typing remains an explicit gap.
+    (original('static String MESSAGE="unchanged";', "return 42;"), "source method results require boolean, integral primitives or void"),
     (original("static { int value=42; }", "return 42;"), "source method results"),
 ])
 def test_runtime_or_lexical_boundaries_do_not_drop_original_declarations(text, message, monkeypatch):
