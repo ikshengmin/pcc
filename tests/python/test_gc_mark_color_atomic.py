@@ -132,6 +132,8 @@ def _scheduler_namespace(memory, operation):
     globals_ = {
         "pcc_gc_mark_active": {0: 1},
         "pcc_gc_cycle_requested": {0: 0},
+        # Keep this header-interleaving seam on the object-list fallback.
+        "pcc_gc_nonmoving_count_free": {0: 0},
         "pcc_gc_trace_extension_roots_pending": {0: 0},
         "pcc_gc_trace_cext_pending_obj": None,
         "pcc_gc_trace_cursor": node,

@@ -888,12 +888,20 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
 
     cms_worker: i64 = pcc_gc_is_cms_worker()
     queue_only: i64 = 0
+    # An automatic mutator assist can wait for a producer's next legal poll,
+    # just like the CMS consumer. Paused automatic work clears publication
+    # requests, so disabled/zero-threshold explicit steps retain the cursor.
+    # Stopped-world drains keep their synchronous progress contract as well.
     if (
-        cms_worker != 0
-        and stopped == 0
+        stopped == 0
         and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
         and (load_i32(global_addr("pcc_gc_backend_selected"), 0) == 1
              or load_i32(global_addr("pcc_gc_backend_selected"), 0) == 2)
+        and (
+            cms_worker != 0
+            or (load_i32(global_addr("py_gc_enabled"), 0) != 0
+                and load_i32(global_addr("py_gc_threshold0"), 0) > 0)
+        )
         and atomic_load_i32(
             global_addr("pcc_gc_gray_worklist_fallback_required"), 0, "acquire"
         ) == 0
@@ -1035,7 +1043,8 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
     pcc_gc_trace_stack_end()
     pcc_gc_gray_worklist_flush()
     global_store_ptr("pcc_gc_trace_cursor", node)
-    if cms_worker != 0 and pcc_gc_gray_count_load_acquire() == 0:
+    if ((cms_worker != 0 or queue_only != 0)
+            and pcc_gc_gray_count_load_acquire() == 0):
         atomic_store_i32(
             global_addr("pcc_gc_gray_worklist_flush_requested"), 0, 0, "release"
         )

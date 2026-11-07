@@ -2,9 +2,10 @@
 
 The initial GC1/GC2 persistent-batch increment is `c6ece4e37ccd308dbd7933e555f84a15d7b627bd`,
 based on `39bd633713d928169f18e47160aeb4e0023b0aaa`. The tail-publication
-increment builds on it. Both apply to count-free, nonmoving tracing; neither
-replaces the collector's gray-credit and final stopped-world termination
-protocol.
+increment builds on it. The auto-enabled mutator consumer increment builds
+on `11239ee425b52e6191c3a7c162d09bb02471dd75`. These apply to count-free,
+nonmoving tracing; none replaces the collector's gray-credit and final
+stopped-world termination protocol.
 
 ## Production path
 
@@ -21,7 +22,11 @@ A consumer can resume work left by another consumer.
 
 Common, mutator and stopped-world drains prefer these entries before the
 object-list cursor. A healthy count-free GC1/GC2 CMS worker's ordinary,
-non-stopped slice uses only queue entries. At an empty queue with positive
+non-stopped slice uses only queue entries. Auto-enabled mutator assists and
+explicit non-stopped steps use the same queue path. When automatic work is
+disabled or threshold0 is zero, explicit steps retain the cursor: the paused
+CMS worker can clear publication requests, so such steps cannot depend on
+other producers observing that request. At an empty queue with positive
 gray credit it requests tail publication and returns without claiming
 completion. The worker yields between empty retries. This covers both a
 hidden TLS tail and credit reserved before a color CAS. An entry does not own the object. Under collector
@@ -37,7 +42,7 @@ old tokens, including a resurrection recheck that reuses an epoch. Tags alone
 do not make reset, color transition and append one atomic transaction.
 
 The request is not an acknowledgement that every producer has flushed.
-During healthy non-stopped marking, the CMS consumer clears it when it
+During healthy non-stopped marking, an eligible consumer clears it when it
 resumes consuming a token; if another tail remains hidden, queue exhaustion
 with positive credit requests publication again. Stopped cleanup, automatic
 work being disabled and worker exit also clear the request without retiring
@@ -47,7 +52,7 @@ does not acquire a new bounded-completion guarantee.
 
 ## Remaining work and bounds
 
-- Explicit, mutator and stopped-world drains retain their cursor. A lost
+- Paused-automatic explicit steps and stopped-world drains retain their cursor. A lost
   token from batch allocation failure sets a cycle-local fallback latch,
   which only stopped-world cleanup clears; CMS then retains the original
   cursor walk as well. The short-lived trace stack remains. Whitening, root
@@ -66,7 +71,67 @@ does not acquire a new bounded-completion guarantee.
   collector protocols remain separate; common thread entrypoints still call
   the empty-batch flush helper.
 
-## Validation boundary
+## Auto-enabled mutator validation boundary
+
+`test_gc_gray_worklist_scheduler.py` exercises the actual scheduler and
+allocation-assist bodies for both eligible consumer identities. It preserves
+the previous cursor, budget, header, C-extension and completion assertions,
+including paused-automatic and allocation-failure fallbacks. The legacy
+header-interleaving and node-budget fixtures explicitly retain count-free=0;
+they do not certify the new queue path.
+
+`test_gc_mutator_gray_queue_native.py` executes real list objects, index
+membership, shading and a registered producer's partial TLS batch on GC1
+and GC2. Before publication, the mutator completes zero objects and leaves
+the cursor, gray credit and completion identity unchanged. The real
+`pcc_gc_cms_note_alloc(7)` call adds seven bytes of debt without paying any
+back. After a real kernel safepoint publishes the batch, one object becomes
+black and discharges 64 bytes. The producer is still alive. The unchanged
+C source fails assertion 20 on both collectors with the frozen `11239ee`
+runtime and passes with this increment.
+
+That native witness deliberately pauses CMS and stages an active mark under
+the stopped world. It retains one gray credit and does not execute a whole
+seed/remark/sweep cycle. The explicit allocation-note call does not prove
+the allocator-to-note chain, and the explicit safepoint is not a proof of
+generated poll insertion. Existing native queue, generated-poll and
+five-collector graph-lock/stop/registration/reuse tests also pass with the
+new 201-module Linux x86-64 host-pcc0/self runtime. The original build limits,
+default eight build jobs and six pytest workers are unchanged.
+
+The wider semantic selection is not all green: GC1 and GC2 lifecycle cases
+in `test_gc12_tracing_only.py` print `False []` and fail at `rescued[0]`,
+and the sliced CMS handoff fixture has a duplicate `pcc_gc_backend_selected`
+definition when linked to the full archive. The frozen parent reproduces
+these outcomes. Four final-remark model cases also fail on both versions
+because their boundary lacks `pcc_gc_trace_stack_begin`; the separate owned
+native GC4 final-remark case passes. The focused selections total 796
+distinct passes, seven failures and no skips. An initial missing count-free
+fixture field failed before its explicit fallback configuration was added;
+that failed run is not counted again as passing coverage. This increment
+does not repair the seven remaining failures or establish complete collector
+correctness. Seven strict/reference cases requiring unavailable Clang remain
+unrun; source/archive and owned-native checks are separate evidence, not
+substitutes for those cases.
+
+A fixed-binary parent/current screen completes all 20 Linux x86-64
+host-pcc0/self handler runs. Each uses concurrency 100, delay 0 and 400
+rounds: 40,000 measured requests, 200 warmup requests and 40,000 latency
+samples. Alternating the pair order by cell gives current/parent QPS ratios
+for GC0-4 of 1.016/1.094/1.003/0.968/1.032 at one worker and
+1.008/0.966/0.863/1.033/0.962 at four workers. No run is retried or excluded.
+In particular, GC1/GC2 four-worker throughput does not improve in this
+screen; GC2's roughly 13.7% negative observation needs the fixed-binary
+seven-pair check. This checkpoint is not performance-qualified. A single
+pair cannot establish stable gains, regressions or attribution, and
+container observations do not certify an idle physical host. The screen
+does not measure outer GC pause p99, peak GC heap or collection counts.
+It is not HTTP, native-pcc1, Mac or the older 10,000-request workload.
+
+## Recorded tail-publication checkpoint
+
+The following describes the earlier tail-publication checkpoint, not the
+auto-enabled mutator extension above.
 
 For the tail-publication increment, the Linux x86-64 owned host-pcc0/self
 runtime builds all 201 modules within the unchanged 90-second/1-GiB

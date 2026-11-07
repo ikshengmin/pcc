@@ -5,9 +5,10 @@ batch, a safepoint or thread exit publishes it to the shared MPSC list. The
 graph lock serializes consumers and protects the partially consumed list;
 the producer never takes that lock. Entries are addresses, not lifetime
 leases: a consumer must check current object-index membership before reading
-a header. Healthy CMS slices request publication of another running thread's
-tail instead of searching the object list. Explicit/stopped drains and a
-cycle which lost a token to allocation failure retain that fallback.
+a header. Healthy CMS and auto-enabled mutator slices request publication of another
+running thread's tail instead of searching the object list. Paused-automatic
+explicit steps, stopped drains and a cycle which lost a token to allocation
+failure retain that fallback.
 """
 
 from pcc import i64
@@ -53,8 +54,8 @@ define_thread_local_ptr_null("pcc_gc_gray_local_batch")
 define_global_ptr_null("pcc_gc_gray_published_batches")
 define_global_ptr_null("pcc_gc_gray_pending_batches")
 define_global_i64("pcc_gc_gray_worklist_allocation_failures", 0)
-# Only the CMS consumer requests publication. A mutator flush never clears
-# this level: its own tail says nothing about another running producer.
+# An eligible mark consumer requests publication. A producer flush never
+# clears this level: its own tail says nothing about another running producer.
 define_global_i32("pcc_gc_gray_worklist_flush_requested", 0)
 # A successful later allocation cannot recover a token already lost to OOM.
 # Only stopped whitening/finished cleanup may clear this cycle-local latch.

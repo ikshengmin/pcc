@@ -48,6 +48,8 @@ class TraceState:
         self.lock_acquisitions = 0
         self.stopped = stopped
         self.store("pcc_gc_backend_selected", 0, backend)
+        # Keep this node-budget model on the object-list fallback.
+        self.store("pcc_gc_nonmoving_count_free", 0, 0)
         self.store("pcc_gc_backend4_no_refcounts", 0, tracing)
         self.store("pcc_gc_mark_active", 0, 1)
         self.store("pcc_gc_tracing_cycle_epoch", 0, 9)
