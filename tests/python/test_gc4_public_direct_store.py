@@ -181,21 +181,20 @@ def test_public_scalar_store_exhaustive_differential():
             options, owner, slot, value, before.snapshot(), after.snapshot())
         if slot and backend == 4 and count_free:
             assert len(after.initialized) == 32
-            assert all(after.words[after.PLAN + i] == 0 for i in range(0, 128, 4))
+            assert before.words == after.words
+            assert all(after.words[after.PLAN + i] == 0 for i in range(8, 112, 4))
+            assert after.words[after.PLAN + 124] == 7
             assert after.old_reads == 0
             assert not any(isinstance(e, tuple) and e[0] in ('prepare', 'finish')
                            for e in after.events)
 
 
-def test_other_modes_retain_exact_generic_public_body():
+def test_all_modes_retain_exact_generic_public_body():
     before = public_body(OLD_PUBLIC_SOURCE)
     after = public_body(SOURCE.read_text())
-    branches = [i for i, node in enumerate(after.body) if isinstance(node, ast.If)
-                and ast.unparse(node.test).startswith('backend == 4 and')]
-    assert len(branches) == 1
-    branch = after.body.pop(branches[0])
+    # The scalar bypass removed the finish helper's compiled entry stop poll
+    # and its committed-value root image. Restore the complete baseline path.
     assert ast.dump(before) == ast.dump(after)
-    assert ast.unparse(branch.body[0]) == 'memset(plan, 0, 128)'
 
 
 def test_plan_dependencies_match_frozen_baseline():
