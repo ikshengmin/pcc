@@ -56,12 +56,15 @@ class Runtime:
             "define_thread_local_i32": self.define_tls,
             "define_thread_local_ptr_null": self.define_tls,
             "define_global_i64": self.define_global,
+            "define_global_ptr_null": self.define_global,
             "global_addr": self.global_address,
             "global_load_ptr": lambda name: self.read(self.global_address(name), 0),
             "global_store_ptr": lambda name, value: self.write(self.global_address(name), 0, value),
             "load_i32": self.read, "load_i64": self.read, "load_ptr": self.read,
             "store_i32": self.write, "store_i64": self.write, "store_ptr": self.write,
             "atomic_load_i64": lambda p, off, order: self.read(p, off),
+            "atomic_load_i32": lambda p, off, order: self.read(p, off),
+            "atomic_store_i64": lambda p, off, value, order: self.write(p, off, value),
             "atomic_rmw_i64": self.rmw, "atomic_cas_i64": self.cas,
             "null": lambda: 0, "ptr_is_null": lambda p: int(p == 0),
             "is_tagged_int": lambda p: 0, "ptr_eq": lambda a, b: int(a == b),
@@ -71,15 +74,29 @@ class Runtime:
             "pcc_thread_no_park_depth": lambda: self.no_park,
             "pcc_py_gc_minor_graph_lock_depth": lambda: self.graph,
             "pcc_capi_is_cext_type_tag": lambda tag: int(tag == 10001),
+            "pcc_py_gc_minor_graph_lock": self.lock,
+            "pcc_py_gc_minor_graph_unlock": self.unlock,
+            "pcc_gc_is_cms_worker": lambda: int(self.thread == 2),
+            "pcc_current_thread_id": lambda: self.thread,
         }
         for name, value in {
             "pcc_gc_backend_selected": backend,
             "pcc_gc_backend4_no_refcounts": int(backend != 0),
             "pcc_gc_config_initialized": 1,
+            "pcc_gc_cms_worker_started": 0,
+            "pcc_gc_cms_worker_stop_requested": 0,
         }.items():
             self.define_global(name, value)
         self.define_tls("pcc_gc_last_noted_free")
         _load(SOURCE, self.ns)
+
+    def lock(self):
+        assert self.graph == 0
+        self.graph = 1
+
+    def unlock(self):
+        assert self.graph == 1
+        self.graph = 0
 
     def alloc(self, usable=64, flags=TERMINAL, tag=3):
         obj = self.next_address
@@ -428,6 +445,7 @@ def test_deferred_free_abi_owner_storage_and_bounded_signature_chunks():
     from pcc.frontends.python.codegen.runtime_abi import (
         FREESTANDING_GC_CROSS_OBJECT_SIGNATURES,
         FREESTANDING_GC_I64_GLOBALS,
+        FREESTANDING_GC_PTR_GLOBALS,
         FREESTANDING_GC_THREAD_LOCAL_GLOBALS,
     )
     from pcc.frontends.python.owned_runtime_build import runtime_modules
@@ -436,6 +454,8 @@ def test_deferred_free_abi_owner_storage_and_bounded_signature_chunks():
         "begin": (("c_int64",), "c_int64"),
         "try_enqueue": (("c_ptr", "c_int64"), "c_int64"),
         "close": ((), "c_int64"), "counter": (("c_int64",), "c_int64"),
+        "worker_drain": (("c_int64",), "c_int64"),
+        "drain_raw_chain": (("c_ptr", "c_int64", "c_int64"), "c_void"),
     }
     for name, signature in signatures.items():
         assert FREESTANDING_GC_CROSS_OBJECT_SIGNATURES[PREFIX + name] == signature
@@ -447,7 +467,7 @@ def test_deferred_free_abi_owner_storage_and_bounded_signature_chunks():
                 name = ast.literal_eval(call.args[0])
                 (tls_seen if "thread_local" in call.func.id else globals_seen).add(name)
     assert tls_seen <= FREESTANDING_GC_THREAD_LOCAL_GLOBALS
-    assert globals_seen <= FREESTANDING_GC_I64_GLOBALS
+    assert globals_seen <= FREESTANDING_GC_I64_GLOBALS | FREESTANDING_GC_PTR_GLOBALS
     assert not globals_seen & FREESTANDING_GC_THREAD_LOCAL_GLOBALS
     modules = runtime_modules(str(ROOT / "pcc/runtime"), "x86_64-unknown-linux-gnu", threads=True)
     assert modules.count(SOURCE.stem) == 1
@@ -469,3 +489,207 @@ def test_owned_allocator_usable_query_requires_exact_raw_signature():
     assert freestanding_gc_cross_object_runtime_imports(declaration) == {"malloc_usable_size"}
     assert not freestanding_gc_cross_object_runtime_imports(declaration.replace("(c_ptr,)", "(c_int64,)"))
     assert not freestanding_gc_cross_object_runtime_imports(declaration.replace("c_int64)", "c_ptr)"))
+
+
+def _publish(rt, sizes=(32, 64)):
+    rt.world = 1
+    assert rt.call("begin", 0) == 1
+    objects = [rt.alloc(size) for size in sizes]
+    for obj in objects:
+        assert rt.call("try_enqueue", obj, TERMINAL) == 1
+    rt.world = 0
+    assert rt.call("close") == len(objects)
+    return objects
+
+
+def test_complete_batch_handoff_is_exclusive_and_asynchronously_freed():
+    rt = Runtime()
+    rt.write(rt.global_address("pcc_gc_cms_worker_started"), 0, 1)
+    objects = _publish(rt)
+    assert not rt.freed and (rt.counter(0), rt.counter(1)) == (0, 0)
+    assert [rt.counter(i) for i in (3, 4, 8, 9, 10, 11, 12)] == [2, 0, 2, 0, 0, 2, 96]
+    # A mutator cannot masquerade as the production consumer.
+    assert rt.call("worker_drain", 0) == 0 and not rt.freed
+    rt.thread = 2
+    rt.reuse_on_free = True
+    def during_free(obj):
+        assert rt.graph == 0 and rt.counter(7) == 1
+        assert (rt.counter(11), rt.counter(12)) == (2, 96)
+        assert rt.scalar(PREFIX + "worker_head") == 0
+    rt.free_hook = during_free
+    assert rt.call("worker_drain", 0) == 2
+    assert rt.call("worker_drain", 0) == 0
+    assert rt.events == [("free", obj, 0, 2) for obj in objects]
+    assert rt.live_usable == 0
+    assert [rt.counter(i) for i in (3, 4, 8, 9, 10, 11, 12, 13)] == [2, 2, 2, 2, 0, 0, 0, 2]
+
+
+@pytest.mark.parametrize("state,stop", [(0, 0), (2, 0), (3, 0), (3, 1), (4, 1), (1, 1)])
+def test_unavailable_starting_stopping_or_quarantined_worker_falls_back(state, stop):
+    rt = Runtime()
+    rt.write(rt.global_address("pcc_gc_cms_worker_started"), 0, state)
+    rt.write(rt.global_address("pcc_gc_cms_worker_stop_requested"), 0, stop)
+    objects = _publish(rt)
+    assert rt.events == [("free", obj, 0, 1) for obj in objects]
+    assert [rt.counter(i) for i in (3, 4, 8, 9, 10, 11, 12)] == [2, 2, 0, 0, 2, 0, 0]
+
+
+def test_busy_mailbox_including_worker_private_chain_forces_bounded_local_assist():
+    rt = Runtime()
+    rt.write(rt.global_address("pcc_gc_cms_worker_started"), 0, 1)
+    first = _publish(rt)
+    second = _publish(rt, (128,))
+    assert rt.freed == set(second)
+    assert rt.counter(11) == 2 and rt.counter(12) == 96
+    rt.thread = 2
+    later = []
+    def during_free(obj):
+        rt.free_hook = None
+        # Simulate a producer while the CMS worker owns the detached chain.
+        assert rt.scalar(PREFIX + "worker_head") == 0 and rt.counter(11) == 2
+        rt.thread = 1
+        later.extend(_publish(rt, (256,)))
+        rt.thread = 2
+        assert rt.counter(11) == 2 and rt.counter(12) == 96
+    rt.free_hook = during_free
+    assert rt.call("worker_drain", 0) == 2
+    assert rt.freed == set(first + second + later)
+    assert [rt.counter(i) for i in (3, 4, 8, 9, 10, 11)] == [4, 4, 2, 2, 2, 0]
+
+
+def _install_worker_loop(rt):
+    for name, value in {
+        "pcc_gc_cms_queue_pushes": 0, "pcc_gc_cms_worker_drains": 0,
+        "pcc_gc_mark_active": 0, "py_gc_threshold0": 700, "py_gc_enabled": 1,
+        "pcc_gc_gray_worklist_flush_requested": 0, "pcc_gc_backend4_auto_step_pending": 0,
+        "pcc_gc_cms_sweep_pending": 0, "pcc_gc_cms_worker_stops": 0,
+    }.items():
+        rt.define_global(name, value)
+    rt.define_tls("pcc_gc_cms_worker_current")
+    rt.ns.update({
+        "pcc_gc_is_cms_worker": lambda: rt.scalar("pcc_gc_cms_worker_current"),
+        "atomic_store_i32": lambda p, off, value, order: rt.write(p, off, value),
+        "atomic_rmw_i32": rt.rmw,
+        "pcc_platform_sleep_ns": lambda ns: 0,
+        "pcc_thread_safepoint_gate": lambda: rt.write(rt.global_address("pcc_gc_cms_worker_stop_requested"), 0, 1),
+    })
+    _load(RUNTIME / "freestanding_gc_public_collection.py", rt.ns, {"pcc_gc_cms_worker_main_py"})
+
+
+@pytest.mark.parametrize("pause", ("disabled", "zero-threshold", "stop-before-loop"))
+def test_real_worker_loop_drains_terminal_blocks_despite_disabled_marking_or_stop(pause):
+    rt = Runtime()
+    _install_worker_loop(rt)
+    rt.write(rt.global_address("pcc_gc_cms_worker_started"), 0, 1)
+    objects = _publish(rt)
+    if pause == "disabled":
+        rt.write(rt.global_address("py_gc_enabled"), 0, 0)
+    elif pause == "zero-threshold":
+        rt.write(rt.global_address("py_gc_threshold0"), 0, 0)
+    else:
+        rt.write(rt.global_address("pcc_gc_cms_worker_started"), 0, 3)
+        rt.write(rt.global_address("pcc_gc_cms_worker_stop_requested"), 0, 1)
+    rt.thread = 2
+    assert rt.ns["pcc_gc_cms_worker_main_py"](0) == 0
+    assert rt.freed == set(objects) and rt.counter(9) == 2 and rt.counter(11) == 0
+    assert rt.scalar("pcc_gc_cms_worker_current") == 0
+    assert rt.scalar("pcc_gc_cms_worker_stops") == 1
+
+
+def test_final_empty_drain_always_acquires_the_publication_lock():
+    rt = Runtime()
+    rt.world = 0
+    rt.thread = 2
+    locks = []
+    original = rt.ns["pcc_py_gc_minor_graph_lock"]
+    rt.ns["pcc_py_gc_minor_graph_lock"] = lambda: (locks.append(True), original())
+    assert rt.call("worker_drain", 0) == 0 and locks == []
+    assert rt.call("worker_drain", 1) == 0 and locks == [True]
+
+
+def test_stop_after_admission_cannot_escape_before_late_publication():
+    # Real host threads schedule production bodies at the exact read/lock
+    # boundaries. This is an interleaving model, not native runtime evidence.
+    import threading
+    class ConcurrentRuntime(Runtime):
+        @property
+        def thread(self):
+            return getattr(self.local, "thread", 1)
+        @thread.setter
+        def thread(self, value):
+            if not hasattr(self, "local"):
+                self.local = threading.local()
+            self.local.thread = value
+        @property
+        def graph(self):
+            return getattr(self.local, "graph", 0)
+        @graph.setter
+        def graph(self, value):
+            self.local.graph = value
+    rt = ConcurrentRuntime()
+    _install_worker_loop(rt)
+    mutex = threading.Lock()
+    admitted, finish_attempted, publish = threading.Event(), threading.Event(), threading.Event()
+    errors = []
+    def lock():
+        if rt.thread == 2:
+            finish_attempted.set()
+        assert mutex.acquire(timeout=2)
+        rt.graph = 1
+    def unlock():
+        rt.graph = 0
+        mutex.release()
+    rt.ns["pcc_py_gc_minor_graph_lock"] = lock
+    rt.ns["pcc_py_gc_minor_graph_unlock"] = unlock
+    rt.write(rt.global_address("pcc_gc_cms_worker_started"), 0, 1)
+    stop_slot = rt.global_address("pcc_gc_cms_worker_stop_requested")
+    def load(p, off, order):
+        value = rt.read(p, off)
+        if rt.thread == 1 and p == stop_slot and rt.graph:
+            admitted.set()
+            assert publish.wait(2)
+        return value
+    rt.ns["atomic_load_i32"] = load
+    obj = rt.alloc()
+    rt.call("begin", 0)
+    rt.call("try_enqueue", obj, TERMINAL)
+    rt.world = 0
+    def producer():
+        try:
+            # Scope belongs to logical producer 1 in the model's TLS map.
+            rt.thread = 1
+            assert rt.call("close") == 1
+        except BaseException as exc:
+            errors.append(exc)
+    def worker():
+        try:
+            rt.thread = 2
+            rt.ns["pcc_gc_cms_worker_main_py"](0)
+        except BaseException as exc:
+            errors.append(exc)
+    a = threading.Thread(target=producer)
+    b = threading.Thread(target=worker)
+    a.start()
+    assert admitted.wait(2)
+    rt.write(rt.global_address("pcc_gc_cms_worker_started"), 0, 3)
+    rt.write(stop_slot, 0, 1)
+    b.start()
+    try:
+        assert finish_attempted.wait(2), "final drain skipped the empty publication barrier"
+        assert not rt.freed and rt.counter(11) == 0
+    finally:
+        publish.set()
+        a.join(2)
+        b.join(2)
+    assert not a.is_alive() and not b.is_alive() and not errors
+    assert rt.freed == {obj} and rt.counter(9) == 1 and rt.counter(11) == 0
+    assert rt.scalar("pcc_gc_cms_worker_stops") == 1
+
+
+def test_every_freestanding_helper_has_a_native_abi_export():
+    for node in ast.parse(SOURCE.read_text()).body:
+        if isinstance(node, ast.FunctionDef):
+            assert any(isinstance(decorator, ast.Call)
+                       and isinstance(decorator.func, ast.Name)
+                       and decorator.func.id == "c_abi_export"
+                       for decorator in node.decorator_list), node.name

@@ -40,7 +40,7 @@ def deferred_binaries(tmp_path_factory):
     }
     directory = tmp_path_factory.mktemp("gc_deferred_free")
     outputs = {}
-    for kind in ("queue", "owners"):
+    for kind in ("queue", "owners", "worker"):
         source = FIXTURES / f"gc_deferred_free_{kind}.c"
         binary = directory / f"{kind}.out"
         before = (_digest(source), _digest(archive), _digest(provenance))
@@ -134,3 +134,22 @@ def test_leaf_batch_collection_owner_native(deferred_binaries, backend, route):
     else:
         assert int(fields["queued"]) == 0, diagnostic
     assert output == f"deferred-owners backend={backend} route={route} mode=9 status=0\n"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("backend", range(5), ids=lambda value: f"gc{value}")
+@pytest.mark.parametrize("mode", (1, 2, 3), ids=("disabled", "zero-threshold", "stop-race"))
+def test_existing_cms_worker_consumes_retired_blocks_native(deferred_binaries, backend, mode):
+    output = _execute(deferred_binaries, "worker", backend, (mode,))
+    assert output.startswith("cms-terminal ")
+    fields = {key: int(value) for key, value in
+              (item.split("=") for item in output.strip().split()[1:])}
+    assert fields["status"] == fields["pending"] == fields["pending_bytes"] == 0, output
+    assert fields["backend"] == backend and fields["mode"] == mode, output
+    assert fields["queued"] == fields["drained"] == fields["handed"] == fields["worker_drained"], output
+    assert fields["local"] == 0, output
+    if backend in (1, 2):
+        assert fields["worker_drained"] == 128 and fields["reused"] > 0, output
+        assert fields["worker"] > 0 and fields["worker"] != fields["producer"], output
+    else:
+        assert fields["worker_drained"] == fields["worker"] == fields["reused"] == 0, output

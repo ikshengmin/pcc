@@ -1864,6 +1864,12 @@ FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
         "pcc_gc_deferred_free_cap_fallbacks",
         "pcc_gc_deferred_free_peak_bytes",
         "pcc_gc_deferred_free_active_drainers",
+        "pcc_gc_deferred_free_handed_off",
+        "pcc_gc_deferred_free_worker_drained",
+        "pcc_gc_deferred_free_local_drained",
+        "pcc_gc_deferred_free_worker_thread",
+        "pcc_gc_deferred_free_worker_count",
+        "pcc_gc_deferred_free_worker_bytes",
         "pcc_gc_object_index_generation",
         "pcc_gc_pressure_publications",
         "pcc_gc_pressure_requests",
@@ -1982,6 +1988,7 @@ FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
 
 FREESTANDING_GC_PTR_GLOBALS: frozenset[str] = frozenset(
     {
+        "pcc_gc_deferred_free_worker_head",
         "pcc_gc_deferred_free_head",
         "pcc_gc_deferred_free_tail",
         "pcc_gc_deferred_free_pending_count",
@@ -3115,6 +3122,8 @@ def _cross_object_signatures_part_12():
     "pcc_gc_deferred_free_try_enqueue": (("c_ptr", "c_int64"), "c_int64"),
     "pcc_gc_deferred_free_close": ((), "c_int64"),
     "pcc_gc_deferred_free_counter": (("c_int64",), "c_int64"),
+    "pcc_gc_deferred_free_worker_drain": (("c_int64",), "c_int64"),
+    "pcc_gc_deferred_free_drain_raw_chain": (("c_ptr", "c_int64", "c_int64"), "c_void"),
     "pcc_gc_trace_referents_work": (("c_ptr",), "c_int64"),
     "pcc_gc_gray_worklist_note": (("c_ptr",), "c_void"),
     "pcc_gc_gray_worklist_flush": ((), "c_void"),

@@ -236,8 +236,8 @@ static PyObject *owner_callback(PyObject *captures, PyObject *args) {
     owner_callbacks++;
     if (pcc_gc_deferred_free_counter(0) || pcc_gc_deferred_free_counter(1)) callback_error = 10;
     if (owner_callbacks == 2) {
-        if (pcc_gc_deferred_free_counter(3) - before_enqueued !=
-            pcc_gc_deferred_free_counter(4) - before_drained) callback_error = 11;
+        /* Physical release may still belong to CMS. TLS ownership must
+         * already be closed; equality is checked after quiescent join below. */
         if (route != 2 && pcc_thread_owns_stopped_world()) callback_error = 12;
     }
     return py_int_from_i64(0);
@@ -314,6 +314,14 @@ static int owners(void) {
         if (mode == 4) watched[1] = pcc_gc_note_relocation_read(watched[1]);
         if (pcc_gc_backend() != 0 && !inspect_live(0)) return 165;
     } else if (!known || finalizers || weak_callbacks) return 166;
+    /* Keep all semantic checks above at their original boundary. Only the
+     * physical completion oracle moves to a successful worker join. */
+    if (held_world) {
+        if (pcc_resume_world() != 0) return 177;
+        held_world = 0;
+    }
+    if (pcc_gc_cms_stop_worker() != 0) return 178;
+    if (pcc_gc_deferred_free_counter(11) || pcc_gc_deferred_free_counter(12)) return 179;
     int64_t queued = pcc_gc_deferred_free_counter(3) - before_enqueued;
     int64_t drained = pcc_gc_deferred_free_counter(4) - before_drained;
     if (queued != drained || pcc_gc_deferred_free_counter(0) || pcc_gc_deferred_free_counter(1)) return 167;

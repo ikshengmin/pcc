@@ -33,6 +33,7 @@ OWNED_SYMBOLS = {
 }
 OWNED_TLS_GLOBALS = {"pcc_gc_cms_worker_current"}
 RAW_FUNCTION_IMPORTS = {
+    "pcc_gc_deferred_free_worker_drain",
     "pcc_gc_refresh_read_barrier",
     # The first allocation fixes the configuration under the graph lock.
     "pcc_py_gc_minor_graph_lock",
@@ -205,6 +206,8 @@ def test_public_collection_preserves_config_and_collection_order():
     assert "pcc_stop_the_world()" not in worker
     assert "pcc_resume_world()" not in worker
     assert 'global_addr("py_gc_tracked_count")' not in worker
+    assert worker.index("pcc_gc_deferred_free_worker_drain(0)") < worker.index('global_addr("py_gc_enabled")')
+    assert worker.index("pcc_gc_deferred_free_worker_drain(1)") < worker.index('global_addr("pcc_gc_cms_worker_stops")')
     worker_enabled = worker.index('global_addr("py_gc_enabled")')
     worker_threshold0 = worker.index('global_addr("py_gc_threshold0")')
     worker_pending = worker.index('atomic_load_i32(sweep_pending, 0, "acquire") == 0')
