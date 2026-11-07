@@ -146,7 +146,8 @@ def test_member_owner_encoding_and_substitution_order(namespace, expected):
     ('template<class T>struct Box{T n;Box():n(1),n(2){}};', 'cpp.duplicate-member-initializer'),
     ('template<class T>struct Box{Box():missing(1){}};', 'cpp.invalid-member-initializer'),
     ('template<class T>struct Box{Box():Box(1){}};', 'cpp.unsupported.delegating-constructors'),
-    ('int choose(void*);namespace N{struct Tag{};int choose(Tag*);}template<class T>struct Box{int f(T p){return choose(p);}};', 'cpp.unsupported.dependent-lookup'),
+    # The unqualified dependent choose(p) original moved to the supported
+    # instantiation-time ADL rows of test_cpp_dependent_call_adl.py.
     ('enum class E{A};template<class T>struct Box{bool same(E a,E b){return a==b;}};int f(Box<int>*p,E e){return p->same(e,e);}', 'cpp.unsupported.enum-templates'),
     ('template<class T>struct Box{int f(){bool b=nullptr;return 42;}};', 'cpp.invalid-conversion'),
     ('template<class T>struct Box{T f(){T b=nullptr;return b;}};int g(Box<bool>*p){return p->f();}', 'cpp.invalid-conversion'),

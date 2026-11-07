@@ -2599,6 +2599,26 @@
           "Uses execute_public_row_pair for actual owned public O0/O2 and separate g++ receiver-before-argument observations."
         ]
       }
+    },
+    "tests/cpp/test_cpp_dependent_call_adl_execution.py": {
+      "test_dependent_calls_match_cpp17": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses execute_row_pair on unchanged full translation units, preserving owned artifacts and actual g++ process observations."
+        ]
+      },
+      "test_invalid_dependent_calls_fail_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses syntax_reference on each complete invalid original and requires an actual C++17 compiler rejection."
+        ]
+      },
+      "test_deferred_dependent_calls_remain_valid_cpp17": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses syntax_reference for unchanged valid sources outside this bounded dependent-call slice."
+        ]
+      }
     }
   },
   "method": "AST/source-reviewed direct reference calls and helper edges; no test bodies or imports executed. Function registry is classification only, never a prerequisite waiver or certification token. Unknown functions remain selected in ordinary/integration.",

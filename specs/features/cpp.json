@@ -1069,6 +1069,7 @@
       "scope": "Only inputs routed to cpp.unsupported.dependent-lookup in the pinned frontend; this is an explicit capability boundary, not a claim that the entire corresponding specification feature is absent or implemented.",
       "status": "explicitly_unimplemented",
       "tests": [
+        "tests/cpp/test_cpp_dependent_call_adl.py",
         "tests/cpp/test_cpp_namespaces.py",
         "tests/cpp/test_cpp_templates.py"
       ],

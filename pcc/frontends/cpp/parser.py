@@ -2442,7 +2442,7 @@ class CppParser:
                 raise CppDiagnostic("cpp.unsupported.class-value-abi", "record declaration projection does not implement copy/materialization at a call", coord)
             self._check_extended_value_type(dtype, selected)
 
-    def _call_expression(self, group, arguments, coord, explicit_arguments=None):
+    def _call_expression(self, group, arguments, coord, explicit_arguments=None, unqualified_lookup=False):
         if (self.template_function is not None or self.instantiating_template) and any(
                 isinstance(t, ReferenceType) for candidate in group.overloads for t in candidate.parameters):
             raise CppDiagnostic("cpp.unsupported.references", "reference calls in template replay require value-category deduction", coord)
@@ -2474,9 +2474,12 @@ class CppParser:
         null_constants = [arg.null_pointer for arg in arguments]
         if self.template_function is not None:
             # A later overload declaration must not mutate the definition-point
-            # candidate set of an unqualified dependent call (ADL still absent).
+            # candidate set of an unqualified dependent call. N4659
+            # [temp.dep.candidate] adds only what argument-dependent lookup
+            # finds from the instantiated argument types.
             snapshot = Symbol(group.name, "function", group.coord)
             snapshot.overloads = list(group.overloads)
+            snapshot.instantiation_adl = unqualified_lookup and any(dependent(t) for t in argument_types)
             dtype = None
             if (not any(dependent(t) for t in argument_types)
                     and not any(argument_dependent(a) for a in explicit_arguments or ())):
@@ -2754,22 +2757,26 @@ class CppParser:
                 if is_static_group(symbol):
                     return call_static_member(self, symbol, arguments, token.coord)
                 return call_member(self, symbol, self._implicit_object(symbol.class_owner, token.coord), arguments, token.coord)
-            if not name.global_scope and len(name.parts) == 1:
+            unqualified_call = not name.global_scope and len(name.parts) == 1
+            if unqualified_call:
                 if (getattr(self, 'class_template_method', None) is not None
-                        and (any(dependent(arg.dtype) for arg in arguments)
-                             or (arguments and any(argument_dependent(arg) for arg in explicit_arguments or ())))):
+                        and arguments and any(argument_dependent(arg) for arg in explicit_arguments or ())):
                     raise CppDiagnostic("cpp.unsupported.dependent-lookup",
-                                        "unqualified dependent free calls require instantiation-time ADL", token.coord)
+                                        "dependent explicit template arguments in class template members "
+                                        "require typed call replay", token.coord)
                 # No actual arguments means no associated argument types for
                 # ADL. A dependent explicit template argument still needs the
                 # existing definition-point snapshot and typed call replay.
+                # Dependent argument types associate nothing here; the call
+                # Pattern repeats ADL with the instantiated types.
                 symbol = argument_dependent_lookup(token.value, [arg.dtype for arg in arguments], symbol, token.coord)
             if symbol is None:
                 if self.template_function is not None and any(dependent(arg.dtype) for arg in arguments):
                     raise CppDiagnostic("cpp.unsupported.dependent-lookup",
                                         "ADL-only dependent call lookup is not implemented", token.coord)
                 raise CppDiagnostic("cpp.undeclared", f"undeclared name '{token.value}'", token.coord)
-            return self._call_expression(symbol, arguments, token.coord, explicit_arguments)
+            return self._call_expression(symbol, arguments, token.coord, explicit_arguments,
+                                         unqualified_lookup=unqualified_call)
         if symbol is None:
             raise CppDiagnostic("cpp.undeclared", f"undeclared name '{token.value}'", token.coord)
         default_binding = getattr(self, "default_argument_binding", None)
@@ -2957,9 +2964,20 @@ class CppParser:
                     substitute(argument.value, bindings) if argument.kind == "type" else
                     self._instantiate_expression(argument.value, bindings, environment),
                     argument.coord, argument.tokens) for argument in explicit)
-                return self._call_expression(group, arguments, coord, substituted)
-            return self._call_expression(pattern.value, arguments, coord)
+                return self._call_expression(self._instantiation_candidates(group, arguments, coord),
+                                             arguments, coord, substituted)
+            return self._call_expression(self._instantiation_candidates(pattern.value, arguments, coord),
+                                         arguments, coord)
         raise CppDiagnostic("cpp.internal-pattern", "unknown expression pattern", coord)
+
+    def _instantiation_candidates(self, group, arguments, coord):
+        """N4659 [temp.dep.candidate]: an unqualified dependent call keeps its
+        definition-point candidates and adds those argument-dependent lookup
+        finds from the instantiated argument types. Qualified, member and
+        non-dependent calls keep exactly their recorded group."""
+        if not getattr(group, "instantiation_adl", False):
+            return group
+        return argument_dependent_lookup(group.name, [argument.dtype for argument in arguments], group, coord)
 
     def _instantiate_statement(self, pattern, bindings, environment):
         kind, coord = pattern.kind, pattern.coord
