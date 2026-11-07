@@ -129,7 +129,8 @@ def _node_has_live_extent(node) -> i64:
 @c_abi_export("pcc_gc_conservative_pin_owner_chain")
 def _pin_owner_chain(node, mark: i64) -> None:
     owner = load_ptr(node, 0)
-    if (load_i32(global_addr("pcc_gc_backend_selected"), 0) != 3
+    backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+    if ((backend != 3 and backend != 4)
             or load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0):
         if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
             store_i64(node, 56, load_i64(node, 56) | 1)
@@ -138,6 +139,9 @@ def _pin_owner_chain(node, mark: i64) -> None:
         if mark != 0:
             pcc_gc_mark_root_gray_if_known(owner)
         return
+    # An old raw address pins every physical owner along a moving chain.
+    # Shade its canonical target directly: the generic root helper follows
+    # only one edge, which may still name another forwarding shell.
     remaining: i64 = load_i32(global_addr("pcc_gc_forwarding_population"), 0) + 1
     while remaining > 0:
         current = pcc_gc_object_index_find(owner)
@@ -319,11 +323,17 @@ def _scan_thread_roots(mark: i64) -> None:
         pcc_platform_abort()
         return
     count: i64 = _sort_words(words, capacity)
-    gc3_count_free: i64 = 1 if (load_i32(global_addr("pcc_gc_backend_selected"), 0) == 3
-                              and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0) else 0
-    if gc3_count_free != 0:
+    backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+    count_free: i64 = load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0)
+    gc3_count_free: i64 = 1 if backend == 3 and count_free != 0 else 0
+    chain_pin_cut: i64 = gc3_count_free
+    if (backend == 4 and count_free != 0
+            and load_i32(global_addr("pcc_gc_forwarding_population"), 0) > 0):
+        chain_pin_cut = 1
+    if chain_pin_cut != 0:
         # Clear the old cut before any source can pin a later node in its
         # forwarding chain. Inactive source pins are cycle-local as well.
+        # A GC4 heap without forwarding edges keeps the single-pass refresh.
         reset = global_load_ptr("pcc_gc_object_head")
         while ptr_is_null(reset) == 0:
             if _node_has_live_extent(reset) != 0:
@@ -335,7 +345,7 @@ def _scan_thread_roots(mark: i64) -> None:
             # A stopped-world relocation step needs CURRENT raw addresses,
             # including objects allocated since the last completed mark.
             # Retire old conservative pins without changing marking colors.
-            if mark == 0 and gc3_count_free == 0:
+            if mark == 0 and chain_pin_cut == 0:
                 if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
                     store_i64(node, 56, load_i64(node, 56) & ~1)
                 else:
