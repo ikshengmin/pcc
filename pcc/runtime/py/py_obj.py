@@ -315,6 +315,9 @@ pcc_debug_note_alloc_size = extern(
     "pcc_debug_note_alloc_size", (c_ptr, c_int64), c_void
 )
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
+pcc_py_gc_minor_graph_lock_for = extern(
+    "pcc_py_gc_minor_graph_lock_for", (c_int64,), c_void
+)
 pcc_container_lock = extern("pcc_container_lock", (c_ptr,), c_void)
 pcc_container_unlock = extern("pcc_container_unlock", (c_ptr,), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
@@ -531,7 +534,7 @@ def pcc_gc_publish_initialized(obj) -> None:
         return
     if _gc_backend_fast() != 4:
         return
-    pcc_py_gc_minor_graph_lock()
+    pcc_py_gc_minor_graph_lock_for(2)
     flags: int = load_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET)
     store_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET, flags & ~16384)
     pcc_py_gc_minor_graph_unlock()
@@ -722,7 +725,7 @@ def pcc_gc_store_ptr(owner, slot, value) -> None:
         return
     plan = stack_alloc(128)
     pcc_gc_store_ptr_plan_init(plan, owner, backend)
-    pcc_py_gc_minor_graph_lock()
+    pcc_py_gc_minor_graph_lock_for(3)
     pcc_gc_store_ptr_plan_commit_locked(plan, owner, slot, value)
     pcc_py_gc_minor_graph_unlock()
     pcc_gc_store_ptr_plan_finish(plan)
@@ -768,7 +771,7 @@ def pcc_gc_store_field_ptr(owner, slot, value) -> None:
     else:
         _FIELD_PLAN_BACKEND: i64 = 112
         _FIELD_PLAN_MODE: i64 = 120
-        pcc_py_gc_minor_graph_lock()
+        pcc_py_gc_minor_graph_lock_for(3)
         if load_i64(plan, _FIELD_PLAN_BACKEND) == 4 and load_i32(plan, _FIELD_PLAN_MODE) != 0:
             # Preserve the complete StorePlan image at unlock. Another
             # carrier can replace the shared field immediately, leaving
@@ -823,7 +826,7 @@ def pcc_gc_store_field_ptr_if_empty(owner, slot, value) -> int:
             stored = pcc_gc_store_ptr_plan_commit_locked(plan, owner, slot, value)
         pcc_container_unlock(owner)
     else:
-        pcc_py_gc_minor_graph_lock()
+        pcc_py_gc_minor_graph_lock_for(3)
         if ptr_is_null(pcc_gc_load_ptr(owner, slot)) != 0:
             stored = pcc_gc_store_ptr_plan_commit_locked(plan, owner, slot, value)
         pcc_py_gc_minor_graph_unlock()

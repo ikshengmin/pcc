@@ -265,6 +265,30 @@ pcc_gc_backend4_zpage_free_capacity_bytes = extern(
 @c_abi_export("pcc_gc_telemetry")
 def pcc_gc_telemetry(metric: i64) -> i64:
     gc_backend_current()
+    if metric == 146:
+        return atomic_load_i64(global_addr("pcc_gc_metric_graph_wait_other_count"), 0, "relaxed")
+    if metric == 147:
+        return atomic_load_i64(global_addr("pcc_gc_metric_graph_wait_other_sum_us"), 0, "relaxed")
+    if metric == 148:
+        return atomic_load_i64(global_addr("pcc_gc_metric_graph_wait_other_max_us"), 0, "relaxed")
+    if metric == 149:
+        return atomic_load_i64(global_addr("pcc_gc_metric_graph_wait_barrier_count"), 0, "relaxed")
+    if metric == 150:
+        return atomic_load_i64(global_addr("pcc_gc_metric_graph_wait_barrier_sum_us"), 0, "relaxed")
+    if metric == 151:
+        return atomic_load_i64(global_addr("pcc_gc_metric_graph_wait_barrier_max_us"), 0, "relaxed")
+    if metric == 152:
+        return atomic_load_i64(global_addr("pcc_gc_metric_graph_wait_allocation_count"), 0, "relaxed")
+    if metric == 153:
+        return atomic_load_i64(global_addr("pcc_gc_metric_graph_wait_allocation_sum_us"), 0, "relaxed")
+    if metric == 154:
+        return atomic_load_i64(global_addr("pcc_gc_metric_graph_wait_allocation_max_us"), 0, "relaxed")
+    if metric == 155:
+        return atomic_load_i64(global_addr("pcc_gc_metric_graph_wait_store_count"), 0, "relaxed")
+    if metric == 156:
+        return atomic_load_i64(global_addr("pcc_gc_metric_graph_wait_store_sum_us"), 0, "relaxed")
+    if metric == 157:
+        return atomic_load_i64(global_addr("pcc_gc_metric_graph_wait_store_max_us"), 0, "relaxed")
     if metric == 126:
         return atomic_load_i64(global_addr("pcc_gc_metric_sweep_candidate_calls"), 0, "relaxed")
     if metric == 127:

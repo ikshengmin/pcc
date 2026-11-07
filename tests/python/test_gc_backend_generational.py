@@ -584,7 +584,7 @@ def test_gc_slot_barriers_fast_path_non_relocation_and_non_old_to_young():
         "if backend != 3 and backend != 4:", 1
     )[1]
     assert generational_barrier.index("value_flags & 128") < (
-        generational_barrier.index("pcc_py_gc_minor_graph_lock()")
+        generational_barrier.index("pcc_py_gc_minor_graph_lock_for(1)")
     )
 
 

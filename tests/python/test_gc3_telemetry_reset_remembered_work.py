@@ -61,6 +61,7 @@ class RememberedReset:
             "pcc_gc_object_node_is_active": lambda node: int(self.load(node, 32) == 0),
             "pcc_gc_trace_referents_for_promotion": self.record_promotion_request,
             "pcc_py_gc_minor_graph_lock": self.lock,
+            "pcc_py_gc_minor_graph_lock_for": self.lock_for,
             "pcc_py_gc_minor_graph_unlock": self.unlock,
             "_object_graph_lock": self.lock, "_object_graph_unlock": self.unlock,
             "_init_config": noop, "_counter_global": lambda index: "counter_" + str(index),
@@ -107,6 +108,10 @@ class RememberedReset:
         assert self.depth == 0, "remembered-node free while graph lock held"
         assert address not in self.freed
         self.freed.add(address)
+
+    def lock_for(self, site):
+        assert site == 1
+        self.ns["pcc_py_gc_minor_graph_lock"]()
 
     def lock(self):
         self.depth += 1

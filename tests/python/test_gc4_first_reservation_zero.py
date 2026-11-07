@@ -49,6 +49,7 @@ class Model:
             "store_i64": lambda p, o, v: self.store(p, o, v, 8),
             "store_ptr": lambda p, o, v: self.store(p, o, v, 8),
             "pcc_py_gc_minor_graph_lock": self.lock,
+            "pcc_py_gc_minor_graph_lock_for": self.lock_for,
             "pcc_py_gc_minor_graph_unlock": self.unlock,
             "pcc_gc_config_ensure": lambda: 4,
             "pcc_gc_backend4_evacuation_page_find": lambda p: 0,
@@ -121,6 +122,10 @@ class Model:
             self.mem[p] = bytearray(8)
             self.globals[n] = p
         return self.globals[n]
+
+    def lock_for(self, site):
+        assert site == 2
+        self.ns["pcc_py_gc_minor_graph_lock"]()
 
     def lock(self):
         assert not self.locked

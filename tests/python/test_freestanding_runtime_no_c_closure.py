@@ -1953,6 +1953,8 @@ def test_runtime_high_substrate_is_owned_by_freestanding_pcc_python(
         "pcc_py_gc_pending_minor_block_get",
         "pcc_py_gc_pending_minor_block_set",
         "pcc_py_gc_minor_graph_lock",
+        "pcc_py_gc_minor_graph_lock_for",
+        "pcc_gc_record_graph_lock_wait",
         "pcc_py_gc_minor_graph_unlock",
     ):
         assert owners[symbol] == expected_owner

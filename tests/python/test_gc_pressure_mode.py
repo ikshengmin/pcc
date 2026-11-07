@@ -192,6 +192,11 @@ def test_managed_index_counts_new_publications_not_reregistration_or_scratch():
         pcc_gc_pressure_image_leave=p.ns['pcc_gc_pressure_image_leave'],
         _static_literal_record=lambda value: None,
     )
+    def allocation_lock(site):
+        assert site == 2
+        ns['_object_graph_lock']()
+
+    ns['pcc_py_gc_minor_graph_lock_for'] = allocation_lock
     text = transform.instrument_source((RUNTIME / 'py_gc_backend.py').read_text(), 'py_gc_backend', 1)
     bodies(text, {'pcc_gc_pointer_register', 'pcc_gc_pointer_register_static_literal'}, ns)
     register = ns['pcc_gc_pointer_register']

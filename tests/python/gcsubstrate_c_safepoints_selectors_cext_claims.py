@@ -1495,16 +1495,16 @@ def test_graph_lock_outermost_ownership_is_one_no_park_lease():
     ).read_text(encoding="utf-8")
     strict_lock = strict.split("def pcc_py_gc_minor_graph_lock() -> None:", 1)[
         1
-    ].split('@c_abi_export("pcc_py_gc_minor_graph_unlock")', 1)[0]
+    ].split('@c_abi_export("pcc_py_gc_minor_graph_lock_for")', 1)[0]
     # The acquisition is the thread kernel's: the outermost one registers the
     # thread, takes the word and then raises the no-park depth together with
     # the lock's own depth, in the kernel's one thread state word.
-    assert "pcc_thread_graph_lock_acquire(" in strict_lock
+    assert 'pcc_thread_graph_lock_acquire_for(global_addr("g_pcc_py_gc_minor_graph_lock"), 0)' in strict_lock
     kernel = (
         RUNTIME_DIR / "py" / "freestanding_thread_kernel_pthread.py"
     ).read_text(encoding="utf-8")
     kernel_enter = kernel.split(
-        "def pcc_thread_graph_lock_acquire(lock_word) -> None:", 1
+        "def pcc_thread_graph_lock_acquire_for(lock_word, site: i64) -> None:", 1
     )[1].split('@c_abi_export("pcc_thread_graph_lock_release")', 1)[0]
     strict_registration = kernel_enter.index("pcc_current_thread_id()")
     strict_cas = kernel_enter.index("atomic_cas_i32(lock_word")

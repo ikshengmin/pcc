@@ -199,6 +199,8 @@ def _runtime_signatures_part_2():
 
 def _runtime_signatures_part_3():
     return {
+    # The preceding managed-signature chunk is already at its 50-entry bound.
+    "pcc_py_gc_minor_graph_lock_for": (_VOID, [_I64], False),
     "py_obj_ternary_pow": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_builtin_round": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_builtin_round1": (_PYOBJ, [_PYOBJ], False),
@@ -1894,6 +1896,18 @@ FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_metric_sweep_recheck_nodes',
         'pcc_gc_metric_sweep_recheck_work',
         'pcc_gc_metric_sweep_recheck_sum_us',
+        'pcc_gc_metric_graph_wait_other_count',
+        'pcc_gc_metric_graph_wait_other_sum_us',
+        'pcc_gc_metric_graph_wait_other_max_us',
+        'pcc_gc_metric_graph_wait_barrier_count',
+        'pcc_gc_metric_graph_wait_barrier_sum_us',
+        'pcc_gc_metric_graph_wait_barrier_max_us',
+        'pcc_gc_metric_graph_wait_allocation_count',
+        'pcc_gc_metric_graph_wait_allocation_sum_us',
+        'pcc_gc_metric_graph_wait_allocation_max_us',
+        'pcc_gc_metric_graph_wait_store_count',
+        'pcc_gc_metric_graph_wait_store_sum_us',
+        'pcc_gc_metric_graph_wait_store_max_us',
         'pcc_builtin_function_cache_mutex_bits',
         'pcc_gc_debt_bytes',
         'pcc_gc_live_bytes',
@@ -3080,6 +3094,10 @@ def _cross_object_signatures_part_12():
     "pcc_gc_tracked_materialize": ((), "c_int64"),
     "pcc_gc_tracked_dematerialize": ((), "c_void"),
     "pcc_gc_tracking_enter_flag_mode": ((), "c_void"),
+    # Keep graph-wait additions out of the already full chunks 0 and 1.
+    "pcc_py_gc_minor_graph_lock_for": (("c_int64",), "c_void"),
+    "pcc_gc_record_graph_lock_wait": (("c_int64", "c_int64", "c_int64"), "c_void"),
+    "pcc_thread_graph_lock_acquire_for": (("c_ptr", "c_int64"), "c_void"),
     # Moved from full chunks 7 and 10 to keep every literal within 50.
     "pcc_gc_backend4_zpage_page_head": (("c_ptr",), "c_ptr"),
     "py_weakref_invalidate_tracing_candidates": ((), "c_int64"),

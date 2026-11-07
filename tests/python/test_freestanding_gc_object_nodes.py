@@ -181,9 +181,10 @@ def test_object_registration_prepares_node_and_index_before_graph_lock() -> None
     for registration, prepare, lock, unlock in ((
             strict_registration,
             "_object_node_prepare()",
-            "_object_graph_lock()",
+            "pcc_py_gc_minor_graph_lock_for(2)",
             "_object_graph_unlock()",
         ),):
+        assert lock in registration
         prepare_at = registration.index(prepare)
         assert registration[:prepare_at].rfind(unlock) > (
             registration[:prepare_at].rfind(lock)

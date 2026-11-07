@@ -31,6 +31,7 @@ PCC_PY_GC_SUBSTRATE_SYMBOLS = {
     "pcc_py_gc_minor_current_get",
     "pcc_py_gc_minor_current_set",
     "pcc_py_gc_minor_graph_lock",
+    "pcc_py_gc_minor_graph_lock_for",
     # This thread's nesting depth, for cross-object callers' lock assertions.
     "pcc_py_gc_minor_graph_lock_depth",
     "pcc_py_gc_minor_graph_unlock",

@@ -151,8 +151,12 @@ def test_thread_no_park_source_order_and_newcomer_lock_contracts():
     assert registers < py_enter.index(
         "pcc_platform_abort()", registers
     ) < py_enter.rindex("store_i64(state_slot, 0, load_i64(state_slot, 0) + 1)")
-    py_graph_enter = py_src.split(
+    py_graph_wrapper = py_src.split(
         '@c_abi_export("pcc_thread_graph_lock_acquire")', 1
+    )[1].split('@c_abi_export("pcc_thread_graph_lock_acquire_for")', 1)[0]
+    assert "pcc_thread_graph_lock_acquire_for(lock_word, 0)" in py_graph_wrapper
+    py_graph_enter = py_src.split(
+        '@c_abi_export("pcc_thread_graph_lock_acquire_for")', 1
     )[1].split('@c_abi_export("pcc_thread_graph_lock_release")', 1)[0]
     assert py_graph_enter.index("pcc_current_thread_id()") < py_graph_enter.index(
         "atomic_cas_i32(lock_word"

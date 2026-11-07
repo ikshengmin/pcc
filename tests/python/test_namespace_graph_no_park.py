@@ -62,7 +62,8 @@ class GraphPollModel:
             pcc_platform_abort=self.abort)
         self.load('freestanding_thread_kernel_pthread.py',{
             'pcc_thread_no_park_enter','pcc_thread_no_park_exit','pcc_thread_safepoint',
-            'pcc_thread_graph_lock_acquire','pcc_thread_graph_lock_release',
+            'pcc_thread_graph_lock_acquire','pcc_thread_graph_lock_acquire_for',
+            'pcc_thread_graph_lock_release',
         })
         self.env['thread_safepoint']=self.env['pcc_thread_safepoint']
         self.load('freestanding_runtime_high_substrate.py',{

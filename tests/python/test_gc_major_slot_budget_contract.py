@@ -34,6 +34,9 @@ class _SlotBoundary(_MarkBoundary):
         self.cells.update({
             "pcc_gc_backend_selected": {0: backend},
             "pcc_gc_list_container_mode": {0: container_mode},
+            # This fixture preserves the graph/container budget contracts.
+            # Count-free shading has its own production-helper tests.
+            "pcc_gc_nonmoving_count_free": {0: 0},
             "pcc_gc_config_initialized": {0: 1},
             "pcc_gc_mark_active": {0: 1},
             "pcc_gc_cycle_requested": {0: 0},
@@ -49,6 +52,7 @@ class _SlotBoundary(_MarkBoundary):
             "call_void_ptr_i64_ptr": lambda visitor, slot, role, ctx: visitor(slot, role, ctx),
             "pcc_gc_load_ptr": self.read_slot,
             "pcc_py_gc_minor_graph_lock": self.lock,
+            "pcc_py_gc_minor_graph_lock_for": self.lock_for,
             "pcc_py_gc_minor_graph_unlock": self.unlock,
             "pcc_container_lock": self.container_lock,
             "pcc_container_unlock": self.container_unlock,
@@ -72,6 +76,10 @@ class _SlotBoundary(_MarkBoundary):
             "_selected_backend", "_ptr_can_have_header",
             "pcc_gc_note_slot_write_barrier",
         }, self.namespace)
+
+    def lock_for(self, site):
+        assert site == 1
+        self.namespace["pcc_py_gc_minor_graph_lock"]()
 
     def lock(self):
         self.graph_depth += 1

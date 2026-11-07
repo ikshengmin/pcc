@@ -11,9 +11,12 @@ from pcc.extern import (
     extern,
 )
 from pcc.unsafe import (
-    define_global_i64_array,
+    atomic_cas_i64,
+    atomic_load_i64,
+    atomic_rmw_i64,
     atomic_store_i32,
     define_global_i32,
+    define_global_i64_array,
     define_thread_local_i32,
     define_thread_local_ptr_null,
     global_addr,
@@ -46,8 +49,8 @@ define_global_i64_array(
 pcc_threads_enabled = extern("pcc_threads_enabled", (), c_int64)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 pcc_thread_no_park_exit = extern("pcc_thread_no_park_exit", (), c_void)
-pcc_thread_graph_lock_acquire = extern(
-    "pcc_thread_graph_lock_acquire", (c_ptr,), c_void
+pcc_thread_graph_lock_acquire_for = extern(
+    "pcc_thread_graph_lock_acquire_for", (c_ptr, c_int64), c_void
 )
 pcc_thread_graph_lock_release = extern(
     "pcc_thread_graph_lock_release", (c_ptr,), c_int64
@@ -153,7 +156,49 @@ def pcc_py_gc_minor_graph_lock() -> None:
     # and the registration it requires in one thread-local word: a lock and
     # unlock look up one thread-local each (on Darwin every lookup is a
     # _tlv_get_addr call; the pair used to make seven).
-    pcc_thread_graph_lock_acquire(global_addr("g_pcc_py_gc_minor_graph_lock"))
+    pcc_thread_graph_lock_acquire_for(global_addr("g_pcc_py_gc_minor_graph_lock"), 0)
+
+
+@c_abi_export("pcc_py_gc_minor_graph_lock_for")
+def pcc_py_gc_minor_graph_lock_for(site: i64) -> None:
+    # Classification changes neither ownership nor lock ordering. It belongs
+    # to this acquisition, not thread-local state inherited by nested helpers.
+    pcc_thread_graph_lock_acquire_for(global_addr("g_pcc_py_gc_minor_graph_lock"), site)
+
+
+@c_abi_export("pcc_gc_record_graph_lock_wait")
+def pcc_gc_record_graph_lock_wait(site: i64, start_us: i64, end_us: i64) -> None:
+    # Only an outer acquisition whose first CAS failed reaches this recorder.
+    # The kernel records after establishing graph/no-park ownership. This
+    # helper calls no runtime owners and cannot introduce a safepoint or lock.
+    if site == 1:
+        count_slot = global_addr("pcc_gc_metric_graph_wait_barrier_count")
+        sum_slot = global_addr("pcc_gc_metric_graph_wait_barrier_sum_us")
+        max_slot = global_addr("pcc_gc_metric_graph_wait_barrier_max_us")
+    elif site == 2:
+        count_slot = global_addr("pcc_gc_metric_graph_wait_allocation_count")
+        sum_slot = global_addr("pcc_gc_metric_graph_wait_allocation_sum_us")
+        max_slot = global_addr("pcc_gc_metric_graph_wait_allocation_max_us")
+    elif site == 3:
+        count_slot = global_addr("pcc_gc_metric_graph_wait_store_count")
+        sum_slot = global_addr("pcc_gc_metric_graph_wait_store_sum_us")
+        max_slot = global_addr("pcc_gc_metric_graph_wait_store_max_us")
+    else:
+        count_slot = global_addr("pcc_gc_metric_graph_wait_other_count")
+        sum_slot = global_addr("pcc_gc_metric_graph_wait_other_sum_us")
+        max_slot = global_addr("pcc_gc_metric_graph_wait_other_max_us")
+    atomic_rmw_i64("add", count_slot, 0, 1, "relaxed")
+    if start_us <= 0 or end_us < start_us:
+        return
+    elapsed: i64 = end_us - start_us
+    # Sub-microsecond waits may quantize to zero; do not fabricate one us.
+    atomic_rmw_i64("add", sum_slot, 0, elapsed, "relaxed")
+    observed: i64 = atomic_load_i64(max_slot, 0, "relaxed")
+    while elapsed > observed:
+        previous: i64 = atomic_cas_i64(max_slot, 0, observed, elapsed, "relaxed", "relaxed")
+        if previous == observed:
+            return
+        observed = previous
 
 
 @c_abi_export("pcc_py_gc_minor_graph_unlock")

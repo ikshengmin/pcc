@@ -34,6 +34,7 @@ class BarrierState:
                      'global_addr': lambda name: name, 'load_i32': self.load,
                      'store_i32': self.store,
                      'pcc_py_gc_minor_graph_lock': self.lock,
+                     'pcc_py_gc_minor_graph_lock_for': self.lock_for,
                      'pcc_py_gc_minor_graph_unlock': self.unlock,
                      'pcc_gc_object_is_known_no_lock': self.known,
                      'pcc_gc_gray_count_increment_acq_rel': self.increment,
@@ -48,6 +49,10 @@ class BarrierState:
 
     def store(self, address, offset, value):
         self.globals[address] = value
+
+    def lock_for(self, site):
+        assert site == 1
+        self.lock()
 
     def lock(self):
         if self.before_lock:

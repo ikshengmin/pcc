@@ -41,6 +41,7 @@ models = {}
 
 def model(n, b):
     models[n] = b
+model('pcc_py_gc_minor_graph_lock_for', 'cmp rdi, 3\njne fail\njmp pcc_py_gc_minor_graph_lock')
 model('pcc_py_gc_minor_graph_lock', 'cmp DWORD PTR [rip+depth], 0\njne fail\nmov DWORD PTR [rip+depth], 1\nlea rax, [rbp-184]\nmov QWORD PTR [rip+plan], rax\nret')
 check = 'mov rax, QWORD PTR [rip+plan]\nmov rcx, QWORD PTR [rip+expected]\ncmp QWORD PTR [rax], rcx\njne fail\ncmp QWORD PTR [rax+112], 4\njne fail\ncmp DWORD PTR [rax+120], 1\njne fail\ncmp DWORD PTR [rax+124], 3\njne fail\n' + ''.join((f'cmp QWORD PTR [rax+{i}], 0\njne fail\n' for i in range(8, 112, 8)))
 model('pcc_py_gc_minor_graph_unlock', 'cmp DWORD PTR [rip+depth], 1\njne fail\n' + check + 'mov rcx, QWORD PTR [rip+expected]\ncmp QWORD PTR [rip+slot], rcx\njne fail\nmov DWORD PTR [rip+depth], 0\nmov QWORD PTR [rip+slot], 0\nmov ecx, DWORD PTR [rip+late]\nmov DWORD PTR [rip+pcc_thread_stop_requested], ecx\nadd DWORD PTR [rip+unlocks], 1\nret')

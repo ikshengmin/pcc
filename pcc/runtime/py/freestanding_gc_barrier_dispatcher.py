@@ -78,6 +78,9 @@ pcc_resume_world = extern("pcc_resume_world", (), c_int64)
 pcc_py_gc_minor_graph_lock = extern(
     "pcc_py_gc_minor_graph_lock", (), c_void
 )
+pcc_py_gc_minor_graph_lock_for = extern(
+    "pcc_py_gc_minor_graph_lock_for", (c_int64,), c_void
+)
 pcc_py_gc_minor_graph_unlock = extern(
     "pcc_py_gc_minor_graph_unlock", (), c_void
 )
@@ -455,7 +458,7 @@ def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
         if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
             pcc_gc_count_free_barrier_shade(value)
             return
-        pcc_py_gc_minor_graph_lock()
+        pcc_py_gc_minor_graph_lock_for(1)
         if (
             pcc_gc_object_is_known_no_lock(value) != 0
             and load_i32(global_addr("pcc_gc_mark_active"), 0) != 0
@@ -516,7 +519,7 @@ def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
         if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
             pcc_gc_count_free_barrier_shade(value)
             return
-        pcc_py_gc_minor_graph_lock()
+        pcc_py_gc_minor_graph_lock_for(1)
         if (
             pcc_gc_object_is_known_no_lock(owner) != 0
             and pcc_gc_object_is_known_no_lock(value) != 0
@@ -569,7 +572,7 @@ def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
     if load_i32(global_addr("pcc_gc_mark_active"), 0) == 0:
         if (owner_flags & 256) == 0 or (value_flags & 128) == 0:
             return
-    pcc_py_gc_minor_graph_lock()
+    pcc_py_gc_minor_graph_lock_for(1)
     if (
         pcc_gc_object_is_known_no_lock(owner) != 0
         and pcc_gc_object_is_known_no_lock(value) != 0

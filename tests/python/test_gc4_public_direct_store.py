@@ -120,6 +120,7 @@ class PublicStore(Store):
                        _store_root_nonmoving_tracing=self.nonmoving_store,
                        pcc_gc_backend=self.initialize_backend,
                        pcc_py_gc_minor_graph_lock=self.lock,
+                       pcc_py_gc_minor_graph_lock_for=self.lock_for,
                        pcc_py_gc_minor_graph_unlock=self.unlock,
                        py_incref=lambda v: self.events.append(('incref', v)),
                        py_decref=lambda v: self.events.append(('decref', v)))
@@ -136,6 +137,10 @@ class PublicStore(Store):
         # Start with poison that resembles an address, not zeroed host storage.
         self.words.update({self.PLAN + i: self.VALUE for i in range(0, 128, 4)})
         return self.PLAN
+
+    def lock_for(self, site):
+        assert site == 3
+        self.ns['pcc_py_gc_minor_graph_lock']()
 
     def lock(self):
         assert self.depth == 0
@@ -237,6 +242,14 @@ def test_all_modes_retain_exact_generic_public_body():
     # It follows GC0's counted path and precedes the StorePlan transaction.
     assert extra[0] == plan - 1
     del after.body[extra[0]]
+    # Only the explicit store-site classification may differ from the
+    # frozen semantic baseline, at this same transaction boundary.
+    locks = [node for node in ast.walk(before) if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Name)
+             and node.func.id == 'pcc_py_gc_minor_graph_lock']
+    assert len(locks) == 1 and not locks[0].args and not locks[0].keywords
+    locks[0].func.id = 'pcc_py_gc_minor_graph_lock_for'
+    locks[0].args = [ast.Constant(value=3)]
     assert ast.dump(before) == ast.dump(after)
 
 

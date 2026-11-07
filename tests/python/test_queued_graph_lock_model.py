@@ -214,6 +214,8 @@ def kernel_model(allocation_results=()):
     tree = ast.parse(path.read_text())
     memory = {}
     events = []
+    clock_reads = []
+    wait_records = []
     allocations = iter(allocation_results)
     head = 'pcc_graph_wait_context_head_py'
     tls = 'pcc_tls_thread_state_py'
@@ -246,6 +248,14 @@ def kernel_model(allocation_results=()):
         memory[9000, 0] = 0
     def abort():
         raise AssertionError('unexpected native abort')
+    def clock():
+        value = 100 + len(clock_reads)
+        clock_reads.append(value)
+        return value
+    def record_wait(site, start, end):
+        state = memory[tls, 0]
+        assert state & 281474959933440 and state & 16777215
+        wait_records.append((site, start, end))
     ns = dict(i64=int, null=lambda: 0, ptr_is_null=lambda p: p == 0,
               ptr_to_int=lambda p: p, int_to_ptr=lambda p: p,
               global_addr=lambda n: n, global_load_ptr=lambda n: read(n),
@@ -257,10 +267,13 @@ def kernel_model(allocation_results=()):
               atomic_cas_i64=cas, atomic_cas_i32=cas, atomic_rmw_i64=rmw,
               malloc=lambda size: next(allocations, 0), free=lambda p: events.append(('free', p)),
               pcc_current_thread_id=register, pcc_thread_safepoint=poll,
-              pcc_platform_abort=abort)
+              pcc_platform_abort=abort, pcc_platform_monotonic_us=clock,
+              pcc_gc_record_graph_lock_wait=record_wait,
+              graph_wait_clock_reads=clock_reads, graph_wait_records=wait_records)
     wanted = {'_graph_wait_node', '_graph_wait_context', '_graph_wait_acquire',
               '_graph_wait_release', 'pcc_thread_no_park_enter',
-              'pcc_thread_graph_lock_acquire', 'pcc_thread_graph_lock_release',
+              'pcc_thread_graph_lock_acquire', 'pcc_thread_graph_lock_acquire_for',
+              'pcc_thread_graph_lock_release',
               'pcc_thread_no_park_exit'}
     definitions = []
     for node in tree.body:
@@ -280,6 +293,8 @@ def test_actual_kernel_node_or_context_oom_keeps_polling_fallback(allocations):
     ns['pcc_thread_graph_lock_acquire'](9000)
     state = memory['pcc_tls_thread_state_py', 0]
     assert events[0] == 'register'
+    assert ns['graph_wait_clock_reads'] == [100, 101]
+    assert ns['graph_wait_records'] == [(0, 100, 101)]
     assert any(isinstance(e, tuple) and e[0] == 'poll' for e in events)
     assert state & 16777215 == 1
     assert state & 281474959933440 == 16777216
@@ -303,6 +318,8 @@ def test_actual_kernel_nested_queue_owner_and_deferred_exit(outer_depth, tripwir
     assert memory[tls, 0] & 16777215 == outer_depth + 1
     ns['pcc_thread_graph_lock_acquire'](9000)
     assert memory[tls, 0] & 281474959933440 == 2 * 16777216
+    assert ns['graph_wait_clock_reads'] == [100, 101]
+    assert ns['graph_wait_records'] == [(0, 100, 101)]
     assert ns['pcc_thread_graph_lock_release'](9000) == 0
     assert memory[9000, 0] == 1 and memory[context, 16] == node
     if tripwire:
@@ -326,6 +343,8 @@ def test_actual_kernel_fast_path_never_allocates_or_reads_queue_tls():
     ns['_graph_wait_release'] = forbidden
     ns['malloc'] = forbidden
     ns['global_load_ptr'] = forbidden
+    ns['pcc_platform_monotonic_us'] = forbidden
+    ns['pcc_gc_record_graph_lock_wait'] = forbidden
     ns['pcc_thread_graph_lock_acquire'](9000)
     assert ns['pcc_thread_graph_lock_release'](9000) == 0
     assert not events

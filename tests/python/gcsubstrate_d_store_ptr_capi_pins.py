@@ -89,7 +89,7 @@ def test_store_ptr_uses_owner_aware_prepare_commit_finish_transaction():
         1
     ].split('@c_abi_export("pcc_gc_store_root_plan_init")', 1)[0]
     py_plan = py_store.index("pcc_gc_store_ptr_plan_init(plan, owner, backend)")
-    py_lock = py_store.index("pcc_py_gc_minor_graph_lock()", py_plan)
+    py_lock = py_store.index("pcc_py_gc_minor_graph_lock_for(3)", py_plan)
     py_commit = py_store.index("pcc_gc_store_ptr_plan_commit_locked(", py_lock)
     py_unlock = py_store.index("pcc_py_gc_minor_graph_unlock()", py_commit)
     py_finish = py_store.index("pcc_gc_store_ptr_plan_finish(plan)", py_unlock)
@@ -137,7 +137,7 @@ def test_backend4_container_constructors_use_fresh_then_publish_contract():
     py_publish = py_obj.split(
         '@c_abi_export("pcc_gc_publish_initialized")', 1
     )[1].split('@c_abi_export("pcc_gc_retain")', 1)[0]
-    assert py_publish.index("pcc_py_gc_minor_graph_lock()") < py_publish.index(
+    assert py_publish.index("pcc_py_gc_minor_graph_lock_for(2)") < py_publish.index(
         "flags & ~16384"
     ) < py_publish.index("pcc_py_gc_minor_graph_unlock()")
 

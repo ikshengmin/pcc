@@ -1049,8 +1049,19 @@ def _graph_wait_release() -> None:
     # No subsequent access to successor or any shared field of this node.
 
 
+pcc_platform_monotonic_us = extern("pcc_platform_monotonic_us", (), c_int64)
+pcc_gc_record_graph_lock_wait = extern(
+    "pcc_gc_record_graph_lock_wait", (c_int64, c_int64, c_int64), c_void
+)
+
+
 @c_abi_export("pcc_thread_graph_lock_acquire")
 def pcc_thread_graph_lock_acquire(lock_word) -> None:
+    pcc_thread_graph_lock_acquire_for(lock_word, 0)
+
+
+@c_abi_export("pcc_thread_graph_lock_acquire_for")
+def pcc_thread_graph_lock_acquire_for(lock_word, site: i64) -> None:
     """Keep the 0/1 fast word; queue only contended outer acquisitions.
 
     A queued thread stays registered and no-park through dequeue. A stop waits
@@ -1078,9 +1089,17 @@ def pcc_thread_graph_lock_acquire(lock_word) -> None:
             return
     acquired: int = 0
     queued: int = 0
+    contended: int = 0
+    wait_started: i64 = 0
+    wait_finished: i64 = 0
     if atomic_cas_i32(lock_word, 0, 0, 1, "acq_rel", "acquire") == 0:
         acquired = 1
     else:
+        # Measure the slow acquisition, including any pending-stop service,
+        # queue setup and OOM fallback polls. Fast CAS and recursive entries
+        # read no clock. This is not critical-section or pure-spin time.
+        contended = 1
+        wait_started = i64(pcc_platform_monotonic_us())
         # Service a pending stop before publishing a waiter. An existing
         # outer no-park scope retains the normal poll suppression contract.
         pcc_thread_safepoint()
@@ -1093,15 +1112,19 @@ def pcc_thread_graph_lock_acquire(lock_word) -> None:
                 acquired = 1
             else:
                 pcc_thread_safepoint()
+        wait_finished = i64(pcc_platform_monotonic_us())
     state = load_i64(state_slot, 0)
     if queued != 0:
         # The queue entered no-park before linking; do not count it twice.
         store_i64(state_slot, 0, state + 16777216)
+        pcc_gc_record_graph_lock_wait(site, wait_started, wait_finished)
         return
     if (state & 16777215) == 16777215:
         pcc_platform_abort()
         return
     store_i64(state_slot, 0, state + 16777217)
+    if contended != 0:
+        pcc_gc_record_graph_lock_wait(site, wait_started, wait_finished)
 
 
 @c_abi_export("pcc_thread_graph_lock_release")

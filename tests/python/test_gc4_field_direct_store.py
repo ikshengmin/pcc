@@ -243,6 +243,14 @@ def test_field_fallback_body_remains_exact():
         else:
             fallback.append(node)
     transaction.orelse = fallback
+    # Keep the complete baseline transaction after accounting for its
+    # exact typed acquisition, rather than discarding either lock call.
+    locks = [node for node in ast.walk(old) if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Name)
+             and node.func.id == 'pcc_py_gc_minor_graph_lock']
+    assert len(locks) == 1 and not locks[0].args and not locks[0].keywords
+    locks[0].func.id = 'pcc_py_gc_minor_graph_lock_for'
+    locks[0].args = [ast.Constant(value=3)]
     assert ast.dump(new) == ast.dump(old)
 
 

@@ -711,7 +711,33 @@ enum {
     PCC_GC_COUNTER_SWEEP_RECHECK_CALLS = 142,
     PCC_GC_COUNTER_SWEEP_RECHECK_NODES = 143,
     PCC_GC_COUNTER_SWEEP_RECHECK_CANDIDATES_CLEARED = 144,
-    PCC_GC_COUNTER_SWEEP_RECHECK_SUM_US = 145
+    PCC_GC_COUNTER_SWEEP_RECHECK_SUM_US = 145,
+    /* Completed contended outer graph-lock acquisition calls, by the site
+     * that actually waits: OTHER includes unclassified calls; BARRIER is
+     * note_slot_write_barrier; ALLOCATION is pointer_register,
+     * note_object_allocated_sized, try_zpage_alloc and publish_initialized;
+     * STORE is store_ptr, store_field_ptr and store_field_ptr_if_empty.
+     * Nested acquisitions do not wait and are not counted again. Fast CAS
+     * success and recursive entries read no clock. SUM/MAX_US cover first
+     * CAS failure to acquisition, including pending-stop service, queue
+     * setup and OOM fallback polls, but not the critical section or recorder.
+     * This is acquisition latency, not pure spin or mutex-only wait time.
+     * Concurrent waits can overlap; their sum is not elapsed wall time.
+     * COUNT includes invalid clocks; SUM/MAX omit them. Valid zero duration
+     * remains zero. Slots are individually atomic, not a joint snapshot;
+     * read/reset only while collectors and mutators are quiescent. */
+    PCC_GC_COUNTER_GRAPH_WAIT_OTHER_COUNT = 146,
+    PCC_GC_COUNTER_GRAPH_WAIT_OTHER_SUM_US = 147,
+    PCC_GC_COUNTER_GRAPH_WAIT_OTHER_MAX_US = 148,
+    PCC_GC_COUNTER_GRAPH_WAIT_BARRIER_COUNT = 149,
+    PCC_GC_COUNTER_GRAPH_WAIT_BARRIER_SUM_US = 150,
+    PCC_GC_COUNTER_GRAPH_WAIT_BARRIER_MAX_US = 151,
+    PCC_GC_COUNTER_GRAPH_WAIT_ALLOCATION_COUNT = 152,
+    PCC_GC_COUNTER_GRAPH_WAIT_ALLOCATION_SUM_US = 153,
+    PCC_GC_COUNTER_GRAPH_WAIT_ALLOCATION_MAX_US = 154,
+    PCC_GC_COUNTER_GRAPH_WAIT_STORE_COUNT = 155,
+    PCC_GC_COUNTER_GRAPH_WAIT_STORE_SUM_US = 156,
+    PCC_GC_COUNTER_GRAPH_WAIT_STORE_MAX_US = 157
 };
 
 int64_t   pcc_gc_backend(void);
@@ -959,6 +985,14 @@ void    pcc_py_gc_minor_current_set(void *block);
 void   *pcc_py_gc_pending_minor_block_get(void);
 void    pcc_py_gc_pending_minor_block_set(void *block);
 void    pcc_py_gc_minor_graph_lock(void);
+/* Classification applies to this outer contended acquisition only. */
+enum {
+    PCC_GC_GRAPH_LOCK_SITE_OTHER = 0,
+    PCC_GC_GRAPH_LOCK_SITE_BARRIER = 1,
+    PCC_GC_GRAPH_LOCK_SITE_ALLOCATION = 2,
+    PCC_GC_GRAPH_LOCK_SITE_STORE = 3
+};
+void    pcc_py_gc_minor_graph_lock_for(int64_t site);
 void    pcc_py_gc_minor_graph_unlock(void);
 /* ---- Native threading module substrate -------------------------------- */
 /* Low-level C ABI backing the Python-visible threading shim. These helpers

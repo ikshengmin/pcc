@@ -21,6 +21,7 @@ class PipelineGC3(GC3):
         })
         self.load_bodies('py_obj.py', {'pcc_gc_collect', '_gc_backend_fast'})
         self.ns.update({
+            'pcc_py_gc_minor_graph_lock_for': self.lock_for,
             'pcc_thread_no_park_depth': lambda: self.depth,
             'pcc_py_gc_minor_graph_lock_depth': lambda: self.depth,
             'pcc_gc_visit_walked_stack_roots': self.visit_roots,
@@ -45,6 +46,10 @@ class PipelineGC3(GC3):
             return result
 
         self.ns['pcc_gc_step'] = bounded_observer
+
+    def lock_for(self, site):
+        assert site == 1
+        self.ns['pcc_py_gc_minor_graph_lock']()
 
     def keep_target(self, target):
         slot = self.allocate(8)

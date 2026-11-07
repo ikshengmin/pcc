@@ -46,7 +46,7 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_backend4_zpage_reset",
     "pcc_gc_backend4_zpage_set_active_page",
     "pcc_gc_config_ensure",
-    "pcc_py_gc_minor_graph_lock",
+    "pcc_py_gc_minor_graph_lock_for",
     "pcc_py_gc_minor_graph_unlock",
 }
 RAW_GLOBAL_IMPORTS = {
@@ -96,6 +96,7 @@ def test_zpage_allocation_has_one_strict_source_owner() -> None:
 def _assert_calls_follow_latest_unlock(
     body: str, call: str, lock: str, unlock: str
 ) -> None:
+    assert lock in body, lock
     starts = [match.start() for match in re.finditer(re.escape(call), body)]
     assert starts, call
     for start in starts:
@@ -113,19 +114,19 @@ def test_zpage_allocation_prepares_and_clears_storage_outside_graph_lock() -> No
     _assert_calls_follow_latest_unlock(
         strict_alloc,
         "pcc_gc_backend4_zpage_reset(",
-        "pcc_py_gc_minor_graph_lock()",
+        "pcc_py_gc_minor_graph_lock_for(2)",
         "pcc_py_gc_minor_graph_unlock()",
     )
     _assert_calls_follow_latest_unlock(
         strict_alloc,
         "malloc(",
-        "pcc_py_gc_minor_graph_lock()",
+        "pcc_py_gc_minor_graph_lock_for(2)",
         "pcc_py_gc_minor_graph_unlock()",
     )
     _assert_calls_follow_latest_unlock(
         strict_alloc,
         "memset(obj",
-        "pcc_py_gc_minor_graph_lock()",
+        "pcc_py_gc_minor_graph_lock_for(2)",
         "pcc_py_gc_minor_graph_unlock()",
     )
 
@@ -214,10 +215,11 @@ def test_object_registration_prepares_zpage_tracking_before_graph_lock() -> None
     for registration, prepare, lock, unlock, preallocated in ((
             strict_registration,
             "_backend4_zpage_node_prepare()",
-            "_object_graph_lock()",
+            "pcc_py_gc_minor_graph_lock_for(2)",
             "_object_graph_unlock()",
             "_backend4_zpage_track_alloc_preallocated(",
         ),):
+        assert lock in registration
         prepare_at = registration.index(prepare)
         assert registration[:prepare_at].rfind(unlock) > (
             registration[:prepare_at].rfind(lock)

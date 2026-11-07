@@ -73,7 +73,7 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_tracing_record_pause",
     "pcc_gc_tracing_step_cycle",
     "pcc_platform_monotonic_us",
-    "pcc_py_gc_minor_graph_lock",
+    "pcc_py_gc_minor_graph_lock_for",
     "pcc_py_gc_minor_graph_unlock",
     "pcc_resume_world",
     "pcc_stop_the_world",
@@ -252,7 +252,7 @@ def test_barrier_dispatcher_preserves_backend_order_and_lock_contract() -> None:
     assert "_ptr_can_have_header(value)" in barrier
     generational = barrier.split("if backend != 3 and backend != 4:", 1)[1]
     assert generational.index("value_flags & 128") < generational.index(
-        "pcc_py_gc_minor_graph_lock()"
+        "pcc_py_gc_minor_graph_lock_for(1)"
     )
     assert "pcc_gc_object_is_known_no_lock(owner)" in barrier
     assert "pcc_gc_object_is_known_no_lock(value)" in barrier
@@ -287,7 +287,7 @@ def test_strict_cms_barrier_has_no_tls_wb_queue_lock_contract() -> None:
         assert c_only_mechanism not in combined
 
     barrier = _export_body(strict, "pcc_gc_note_slot_write_barrier")
-    assert "pcc_py_gc_minor_graph_lock()" in barrier
+    assert "pcc_py_gc_minor_graph_lock_for(1)" in barrier
     assert "pcc_py_gc_minor_graph_unlock()" in barrier
     assert "pcc_gc_cms_wb_flushes" in barrier
     assert "pcc_gc_cms_flush_wb_buffer" not in barrier

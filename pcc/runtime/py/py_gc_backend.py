@@ -611,6 +611,9 @@ pcc_py_gc_pending_minor_block_set = extern(
     "pcc_py_gc_pending_minor_block_set", (c_ptr,), c_void
 )
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
+pcc_py_gc_minor_graph_lock_for = extern(
+    "pcc_py_gc_minor_graph_lock_for", (c_int64,), c_void
+)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_gc_scheduler_root_link_locked = extern(
     "pcc_gc_scheduler_root_link_locked", (c_ptr,), c_void
@@ -2717,7 +2720,7 @@ def pcc_gc_pointer_register(o) -> int:
         return -1
     if granule_result > 0:
         return 0
-    _object_graph_lock()
+    pcc_py_gc_minor_graph_lock_for(2)
     result: int = pcc_gc_managed_pointer_index_insert(o)
     _object_graph_unlock()
     # The insert may have grown the set (see pcc_gc_reclaim_retired_index_tables).
@@ -3167,6 +3170,18 @@ def pcc_gc_telemetry_reset() -> None:
     atomic_store_i64(global_addr("pcc_gc_metric_sweep_recheck_nodes"), 0, 0, "relaxed")
     atomic_store_i64(global_addr("pcc_gc_metric_sweep_recheck_work"), 0, 0, "relaxed")
     atomic_store_i64(global_addr("pcc_gc_metric_sweep_recheck_sum_us"), 0, 0, "relaxed")
+    atomic_store_i64(global_addr("pcc_gc_metric_graph_wait_other_count"), 0, 0, "relaxed")
+    atomic_store_i64(global_addr("pcc_gc_metric_graph_wait_other_sum_us"), 0, 0, "relaxed")
+    atomic_store_i64(global_addr("pcc_gc_metric_graph_wait_other_max_us"), 0, 0, "relaxed")
+    atomic_store_i64(global_addr("pcc_gc_metric_graph_wait_barrier_count"), 0, 0, "relaxed")
+    atomic_store_i64(global_addr("pcc_gc_metric_graph_wait_barrier_sum_us"), 0, 0, "relaxed")
+    atomic_store_i64(global_addr("pcc_gc_metric_graph_wait_barrier_max_us"), 0, 0, "relaxed")
+    atomic_store_i64(global_addr("pcc_gc_metric_graph_wait_allocation_count"), 0, 0, "relaxed")
+    atomic_store_i64(global_addr("pcc_gc_metric_graph_wait_allocation_sum_us"), 0, 0, "relaxed")
+    atomic_store_i64(global_addr("pcc_gc_metric_graph_wait_allocation_max_us"), 0, 0, "relaxed")
+    atomic_store_i64(global_addr("pcc_gc_metric_graph_wait_store_count"), 0, 0, "relaxed")
+    atomic_store_i64(global_addr("pcc_gc_metric_graph_wait_store_sum_us"), 0, 0, "relaxed")
+    atomic_store_i64(global_addr("pcc_gc_metric_graph_wait_store_max_us"), 0, 0, "relaxed")
     _atomic_i32_store(global_addr("pcc_gc_minor_allocations"), 0)
     _atomic_i32_store(global_addr("pcc_gc_minor_collections"), 0)
     _atomic_i32_store(global_addr("pcc_gc_minor_bytes"), 0)
@@ -4828,7 +4843,7 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
     zpage_slots_owner = stack_alloc(8)
     zpage_owner = stack_alloc(8)
     while 1:
-        _object_graph_lock()
+        pcc_py_gc_minor_graph_lock_for(2)
         backend = load_i32(global_addr("pcc_gc_backend_selected"), 0)
         graph_leaf: int = 0
         if (
@@ -4932,7 +4947,7 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                             ptr_is_null(prepared_zpage) == 0
                             and prepared_zpage_from_free != 0
                         ):
-                            _object_graph_lock()
+                            pcc_py_gc_minor_graph_lock_for(2)
                             store_ptr(
                                 prepared_zpage,
                                 56,
@@ -4969,7 +4984,7 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                             ptr_is_null(prepared_zpage) == 0
                             and prepared_zpage_from_free != 0
                         ):
-                            _object_graph_lock()
+                            pcc_py_gc_minor_graph_lock_for(2)
                             store_ptr(
                                 prepared_zpage,
                                 56,
@@ -5004,7 +5019,7 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                             ptr_is_null(prepared_zpage) == 0
                             and prepared_zpage_from_free != 0
                         ):
-                            _object_graph_lock()
+                            pcc_py_gc_minor_graph_lock_for(2)
                             store_ptr(
                                 prepared_zpage,
                                 56,
@@ -5041,7 +5056,7 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                             ptr_is_null(prepared_zpage) == 0
                             and prepared_zpage_from_free != 0
                         ):
-                            _object_graph_lock()
+                            pcc_py_gc_minor_graph_lock_for(2)
                             store_ptr(
                                 prepared_zpage,
                                 56,

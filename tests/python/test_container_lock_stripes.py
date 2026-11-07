@@ -25,7 +25,7 @@ NAMES = ("_container_stripe_index", "_container_stripe_word", "_container_stripe
          "_container_enter", "_container_acquire", "_container_exit",
          "pcc_container_lock", "pcc_container_unlock", "pcc_container_lock_pair",
          "pcc_container_unlock_pair", "pcc_container_lock_held",
-         "pcc_thread_graph_lock_acquire")
+         "pcc_thread_graph_lock_acquire", "pcc_thread_graph_lock_acquire_for")
 REGISTERED = 1 << 49
 SCHEDULER = 1 << 48
 HELD = 1 << 53
@@ -40,6 +40,8 @@ class Kernel:
     def __init__(self, state=REGISTERED, stop=0):
         self.memory = {("pcc_tls_thread_state_py", 0): state, ("pcc_thread_stop_requested", 0): stop}
         self.events = []
+        self.graph_wait_clock_reads = []
+        self.graph_wait_records = []
         self.on_spin = None
         tree = ast.parse(KERNEL.read_text())
         constants = {node.target.id: node.value.value for node in tree.body
@@ -61,6 +63,8 @@ class Kernel:
             "atomic_cas_i32": self.cas,
             "atomic_store_i32": self.atomic_store,
             "pcc_platform_abort": self.abort,
+            "pcc_platform_monotonic_us": self.graph_wait_clock,
+            "pcc_gc_record_graph_lock_wait": self.record_graph_wait,
             "pcc_current_thread_id": self.register,
             "pcc_thread_safepoint": lambda: self.events.append("safepoint"),
             "_graph_wait_acquire": lambda word: pytest.fail("graph lock contended in the model"),
@@ -69,6 +73,15 @@ class Kernel:
         for const in code.co_consts:
             if isinstance(const, types.CodeType) and const.co_name in NAMES:
                 self.ns[const.co_name] = types.FunctionType(const, self.ns)
+
+    def graph_wait_clock(self):
+        value = 100 + len(self.graph_wait_clock_reads)
+        self.graph_wait_clock_reads.append(value)
+        return value
+
+    def record_graph_wait(self, site, start, end):
+        assert self.state & GRAPH_UNIT and self.state & (GRAPH_UNIT - 1)
+        self.graph_wait_records.append((site, start, end))
 
     def store(self, slot, offset, value):
         self.memory[(slot[0], slot[1] + offset)] = value
@@ -178,6 +191,7 @@ def test_a_container_lock_inside_the_graph_lock_is_the_allowed_order():
     # Re-entering the held graph lock waits on nothing.
     kernel.ns["pcc_thread_graph_lock_acquire"](("g_pcc_py_gc_minor_graph_lock", 0))
     assert kernel.state == REGISTERED | 2 * GRAPH_UNIT | HELD | 2
+    assert kernel.graph_wait_clock_reads == kernel.graph_wait_records == []
     kernel.unlock(0x10000)
     assert kernel.state == REGISTERED | 2 * GRAPH_UNIT | 1
 

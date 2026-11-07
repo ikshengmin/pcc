@@ -70,6 +70,9 @@ pcc_gc_backend4_zpage_set_active_page = extern(
 )
 pcc_gc_config_ensure = extern("pcc_gc_config_ensure", (), c_int64)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
+pcc_py_gc_minor_graph_lock_for = extern(
+    "pcc_py_gc_minor_graph_lock_for", (c_int64,), c_void
+)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 
 
@@ -100,7 +103,7 @@ def pcc_gc_backend4_try_zpage_alloc(size: i64, flags: i64):
     while 1:
         published_reset_page: i64 = 0
         unused_fresh_page = null()
-        pcc_py_gc_minor_graph_lock()
+        pcc_py_gc_minor_graph_lock_for(2)
         if load_i32(global_addr("pcc_gc_backend_selected"), 0) != 4:
             pcc_py_gc_minor_graph_unlock()
             if ptr_is_null(prepared_page) == 0:
