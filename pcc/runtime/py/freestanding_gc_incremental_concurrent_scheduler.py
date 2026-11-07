@@ -693,6 +693,38 @@ def pcc_gc_record_explicit_pause(start_us: i64, end_us: i64) -> None:
     pcc_gc_tracing_record_pause(start_us, end_us)
 
 
+@c_abi_export("pcc_gc_record_collection_stw_pause")
+def pcc_gc_record_collection_stw_pause(start_us: i64, end_us: i64) -> None:
+    # The collection owner records while the world is still stopped. Unlike
+    # the legacy step metric, this covers its complete mark/sweep/remap window
+    # once, including nested steps, but excludes stop rendezvous and callbacks
+    # outside the stopped world. Do not add the two inclusive metrics together.
+    if start_us <= 0 or end_us < start_us:
+        return
+    pause: i64 = end_us - start_us
+    if pause <= 0:
+        pause = 1
+    # Individual slots also admit concurrent telemetry reads. They are not a
+    # joint snapshot; callers reset/sample at a quiescent measurement boundary.
+    atomic_rmw_i64("add", global_addr("pcc_gc_metric_collection_stw_count"), 0, 1, "relaxed")
+    atomic_rmw_i64("add", global_addr("pcc_gc_metric_collection_stw_sum_us"), 0, pause, "relaxed")
+    maximum = global_addr("pcc_gc_metric_collection_stw_max_us")
+    previous: i64 = atomic_load_i64(maximum, 0, "relaxed")
+    while pause > previous:
+        observed: i64 = atomic_cas_i64(maximum, 0, previous, pause, "relaxed", "relaxed")
+        if observed == previous:
+            break
+        previous = observed
+    bucket = global_addr("pcc_gc_metric_collection_stw_hist3")
+    if pause < 100:
+        bucket = global_addr("pcc_gc_metric_collection_stw_hist0")
+    elif pause < 1000:
+        bucket = global_addr("pcc_gc_metric_collection_stw_hist1")
+    elif pause < 10000:
+        bucket = global_addr("pcc_gc_metric_collection_stw_hist2")
+    atomic_rmw_i64("add", bucket, 0, 1, "relaxed")
+
+
 @c_abi_export("pcc_gc_tracing_finish_left_to_mutator")
 def pcc_gc_tracing_finish_left_to_mutator() -> i64:
     # GC1/GC2's collector thread does not finish a mark in a stopped world of

@@ -664,7 +664,22 @@ enum {
     /* Object cells handed to the free list while already free.  Non-zero means
      * two owners share one address; the allocator leaks the cell rather than
      * linking it twice, and under audit mode reports the second free. */
-    PCC_GC_COUNTER_ALLOCATOR_DOUBLE_FREES = 118
+    PCC_GC_COUNTER_ALLOCATOR_DOUBLE_FREES = 118,
+    /* Complete collection-owned STW windows, from successful stop acquisition
+     * to just before resume. Includes nested mark/sweep/remap steps, excludes
+     * rendezvous and callbacks outside STW. Separate from PAUSE_* step/call
+     * metrics: never sum these inclusive scopes. Histogram gives ranges, not
+     * an exact p99. Direct pcc_gc_step/pcc_gc_collect_tracing stops outside
+     * explicit/automatic collection entrypoints are not counted here.
+     * Each slot is an atomic 64-bit counter, not a joint seven-value snapshot.
+     * Reset/read with collectors quiescent for consistent interval results. */
+    PCC_GC_COUNTER_COLLECTION_STW_COUNT = 119,
+    PCC_GC_COUNTER_COLLECTION_STW_SUM_US = 120,
+    PCC_GC_COUNTER_COLLECTION_STW_MAX_US = 121,
+    PCC_GC_COUNTER_COLLECTION_STW_HIST_LT_100US = 122,
+    PCC_GC_COUNTER_COLLECTION_STW_HIST_LT_1MS = 123,
+    PCC_GC_COUNTER_COLLECTION_STW_HIST_LT_10MS = 124,
+    PCC_GC_COUNTER_COLLECTION_STW_HIST_GE_10MS = 125
 };
 
 int64_t   pcc_gc_backend(void);

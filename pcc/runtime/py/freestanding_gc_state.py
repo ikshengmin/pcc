@@ -169,6 +169,15 @@ define_global_i32("pcc_gc_metric_pause_hist0", 0)
 define_global_i32("pcc_gc_metric_pause_hist1", 0)
 define_global_i32("pcc_gc_metric_pause_hist2", 0)
 define_global_i32("pcc_gc_metric_pause_hist3", 0)
+# Complete collection-owned stopped-world windows, separate from inclusive
+# step/call timing. These are recorded before the collector resumes mutators.
+define_global_i64("pcc_gc_metric_collection_stw_count", 0)
+define_global_i64("pcc_gc_metric_collection_stw_sum_us", 0)
+define_global_i64("pcc_gc_metric_collection_stw_max_us", 0)
+define_global_i64("pcc_gc_metric_collection_stw_hist0", 0)
+define_global_i64("pcc_gc_metric_collection_stw_hist1", 0)
+define_global_i64("pcc_gc_metric_collection_stw_hist2", 0)
+define_global_i64("pcc_gc_metric_collection_stw_hist3", 0)
 # Byte accounting must cover a heap and allocation debt beyond 2 GiB.
 # The public byte-count APIs are i64; retain that width in raw state too.
 define_global_i64("pcc_gc_debt_bytes", 0)

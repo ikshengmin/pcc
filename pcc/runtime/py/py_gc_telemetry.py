@@ -13,6 +13,7 @@ from pcc import i64
 from pcc.extern import c_abi_export, c_int64, extern
 from pcc.unsafe import (
     atomic_load_i32,
+    atomic_load_i64,
     gc_backend_current,
     global_addr,
     load_i32,
@@ -264,6 +265,20 @@ pcc_gc_backend4_zpage_free_capacity_bytes = extern(
 @c_abi_export("pcc_gc_telemetry")
 def pcc_gc_telemetry(metric: i64) -> i64:
     gc_backend_current()
+    if metric == 119:
+        return atomic_load_i64(global_addr("pcc_gc_metric_collection_stw_count"), 0, "relaxed")
+    if metric == 120:
+        return atomic_load_i64(global_addr("pcc_gc_metric_collection_stw_sum_us"), 0, "relaxed")
+    if metric == 121:
+        return atomic_load_i64(global_addr("pcc_gc_metric_collection_stw_max_us"), 0, "relaxed")
+    if metric == 122:
+        return atomic_load_i64(global_addr("pcc_gc_metric_collection_stw_hist0"), 0, "relaxed")
+    if metric == 123:
+        return atomic_load_i64(global_addr("pcc_gc_metric_collection_stw_hist1"), 0, "relaxed")
+    if metric == 124:
+        return atomic_load_i64(global_addr("pcc_gc_metric_collection_stw_hist2"), 0, "relaxed")
+    if metric == 125:
+        return atomic_load_i64(global_addr("pcc_gc_metric_collection_stw_hist3"), 0, "relaxed")
     if metric == 116:
         return load_i64(global_addr("pcc_gc_unmanaged_refcount_ops"), 0)
     if metric == 117:

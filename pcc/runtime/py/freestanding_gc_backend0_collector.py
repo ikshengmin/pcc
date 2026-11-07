@@ -66,6 +66,10 @@ pcc_gc_note_object_freeing = extern(
 )
 pcc_stop_the_world = extern("pcc_stop_the_world", (), c_int64)
 pcc_resume_world = extern("pcc_resume_world", (), c_int64)
+pcc_platform_monotonic_us = extern("pcc_platform_monotonic_us", (), c_int64)
+pcc_gc_record_collection_stw_pause = extern(
+    "pcc_gc_record_collection_stw_pause", (c_int64, c_int64), c_void
+)
 pcc_gc_reclaim_retired_index_tables = extern(
     "pcc_gc_reclaim_retired_index_tables", (), c_int64
 )
@@ -493,10 +497,12 @@ def _collect(pairs, candidate_count: i64) -> i64:
     while stw != 0:
         pcc_thread_safepoint()
         stw = pcc_stop_the_world()
+    collection_stw_start: i64 = pcc_platform_monotonic_us()
     pcc_gc_reclaim_retired_index_tables()
     pcc_gc_default_table_lock()
     if ptr_is_null(pairs) == 0 and load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0:
         pcc_gc_default_table_unlock()
+        pcc_gc_record_collection_stw_pause(collection_stw_start, pcc_platform_monotonic_us())
         pcc_resume_world()
         return 0
     store_i32(collecting_slot, 0, 1)
@@ -518,6 +524,7 @@ def _collect(pairs, candidate_count: i64) -> i64:
         store_i32(collecting_slot, 0, 0)
         pcc_gc_tracked_dematerialize()
         pcc_gc_default_table_unlock()
+        pcc_gc_record_collection_stw_pause(collection_stw_start, pcc_platform_monotonic_us())
         pcc_resume_world()
         return 0
 
@@ -528,6 +535,7 @@ def _collect(pairs, candidate_count: i64) -> i64:
         store_i32(collecting_slot, 0, 0)
         pcc_gc_tracked_dematerialize()
         pcc_gc_default_table_unlock()
+        pcc_gc_record_collection_stw_pause(collection_stw_start, pcc_platform_monotonic_us())
         pcc_resume_world()
         return 0
 
@@ -618,5 +626,6 @@ def _collect(pairs, candidate_count: i64) -> i64:
     store_i32(collecting_slot, 0, 0)
     pcc_gc_tracked_dematerialize()
     pcc_gc_default_table_unlock()
+    pcc_gc_record_collection_stw_pause(collection_stw_start, pcc_platform_monotonic_us())
     pcc_resume_world()
     return collected

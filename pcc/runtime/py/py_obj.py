@@ -133,6 +133,9 @@ pcc_runtime_monotonic_us = extern("pcc_platform_monotonic_us", (), c_int64)
 pcc_gc_record_explicit_pause = extern(
     "pcc_gc_record_explicit_pause", (c_int64, c_int64), c_void
 )
+pcc_gc_record_collection_stw_pause = extern(
+    "pcc_gc_record_collection_stw_pause", (c_int64, c_int64), c_void
+)
 py_gc_collect = extern("py_gc_collect", (), c_int64)
 py_gc_untrack = extern("py_gc_untrack", (c_ptr,), c_void)
 pcc_gc_slot_is_runtime_root = extern("pcc_gc_slot_is_runtime_root", (c_ptr,), c_int64)
@@ -1777,6 +1780,7 @@ def _gc_tracing_automatic_collect(mark: int) -> int:
     while stw != 0:
         pcc_thread_safepoint()
         stw = pcc_stop_the_world()
+    collection_stw_start: int = pcc_runtime_monotonic_us()
     pcc_gc_reclaim_retired_index_tables()
     pcc_gc_begin_explicit_tracing_collect()
     collected: int = 0
@@ -1797,6 +1801,7 @@ def _gc_tracing_automatic_collect(mark: int) -> int:
     if pcc_gc_sweep_owed() != 0:
         collected = pcc_gc_collect_tracing()
     pcc_gc_end_explicit_tracing_collect()
+    pcc_gc_record_collection_stw_pause(collection_stw_start, pcc_runtime_monotonic_us())
     pcc_resume_world()
     pcc_gc_external_resource_poll()
     _pcc_gc_fire_callbacks(cstr("stop"), 4)
@@ -2050,6 +2055,7 @@ def pcc_gc_collect(reason: int) -> int:
         while stw != 0:
             pcc_thread_safepoint()
             stw = pcc_stop_the_world()
+        collection_stw_start: int = pcc_runtime_monotonic_us()
         pcc_gc_reclaim_retired_index_tables()
         if backend == 3 or backend == 4:
             # Stack-map step 3: with PCC_GC_STACKMAP_DIFF and a published table,
@@ -2086,6 +2092,7 @@ def pcc_gc_collect(reason: int) -> int:
                     if idle_rounds >= 4:
                         draining = 0
         pcc_gc_end_explicit_tracing_collect()
+        pcc_gc_record_collection_stw_pause(collection_stw_start, pcc_runtime_monotonic_us())
         pcc_resume_world()
     # Release callbacks run after the tracing world is resumed. The shared
     # C-kernel registry has a zero-ready fast path and contains no PyObjects.

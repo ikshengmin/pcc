@@ -64,8 +64,11 @@ RAW_IMPORTS = {
     # Every mutator's mapped stack frames (a13c5b4a1), walked only while
     # GC0's frame roots are on.
     "pcc_gc_visit_walked_stack_roots",
+    "pcc_gc_visit_native_root_frames",
     "pcc_gc_backend0_frame_roots_enabled",
     "pcc_resume_world",
+    "pcc_platform_monotonic_us",
+    "pcc_gc_record_collection_stw_pause",
     "pcc_stop_the_world",
     "pcc_thread_safepoint",
     "py_class_dealloc",
