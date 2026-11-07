@@ -708,6 +708,25 @@ def pcc_gc_store_ptr(owner, slot, value) -> None:
         py_decref(old)
         return
     plan = stack_alloc(128)
+    if backend == 4 and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
+        # Keep the reserved scratch clear for conservative stack scanning even
+        # though this scalar count-free path does not use StorePlan records.
+        memset(plan, 0, 128)
+        if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
+            pcc_diagnostics_runtime_log_event_code(2, 3, backend, 0, owner)
+        pcc_py_gc_minor_graph_lock()
+        pcc_gc_note_store()
+        if _gc_forwarding_population() > 0 and _gc_relocation_candidate(value) != 0:
+            value = pcc_gc_note_relocation_read(value)
+        if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+            if ptr_is_null(owner) == 0 or load_i32(global_addr("pcc_gc_mark_active"), 0) != 0:
+                if ptr_is_null(owner) == 0:
+                    pcc_gc_backend4_note_heap_store_locked(owner, slot, value)
+                else:
+                    pcc_gc_note_slot_write_barrier(owner, slot, value)
+        store_ptr(slot, 0, value)
+        pcc_py_gc_minor_graph_unlock()
+        return
     pcc_gc_store_ptr_plan_init(plan, owner, backend)
     pcc_py_gc_minor_graph_lock()
     pcc_gc_store_ptr_plan_commit_locked(plan, owner, slot, value)
