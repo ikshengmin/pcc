@@ -2696,7 +2696,6 @@ def _cross_object_signatures_part_7():
     "pcc_gc_backend4_zpage_cache": (("c_ptr",), "c_void"),
     "pcc_gc_backend4_zpage_destroy": (("c_ptr",), "c_void"),
     "pcc_gc_backend4_zpage_recycle": (("c_ptr",), "c_void"),
-    "pcc_gc_backend4_zpage_page_head": (("c_ptr",), "c_ptr"),
     }
 
 
@@ -3012,7 +3011,6 @@ def _cross_object_signatures_part_10():
     "py_gc_untrack": (("c_ptr",), "c_void"),
     "py_user_del_dispatch": (("c_ptr",), "c_void"),
     "py_weakref_invalidate": (("c_ptr",), "c_void"),
-    "py_weakref_invalidate_tracing_candidates": ((), "c_int64"),
     }
 
 
@@ -3082,6 +3080,9 @@ def _cross_object_signatures_part_12():
     "pcc_gc_tracked_materialize": ((), "c_int64"),
     "pcc_gc_tracked_dematerialize": ((), "c_void"),
     "pcc_gc_tracking_enter_flag_mode": ((), "c_void"),
+    # Moved from full chunks 7 and 10 to keep every literal within 50.
+    "pcc_gc_backend4_zpage_page_head": (("c_ptr",), "c_ptr"),
+    "py_weakref_invalidate_tracing_candidates": ((), "c_int64"),
     }
 
 

@@ -38,6 +38,8 @@ OWNED_SYMBOLS = PUBLIC_SYMBOLS | {
     # GC1/GC2's lock-free container stores shade through the barrier's
     # own count-free predicate (generator frames, container init).
     "pcc_gc_count_free_store_shade",
+    # Their unlocked heap/root stores shade under a no-park scope instead.
+    "pcc_gc_count_free_barrier_shade",
     "pcc_gc_dispatch_ptr_can_have_header",
     "pcc_gc_dispatch_selected_backend",
     "pcc_gc_dispatch_tracing_work_pending",
@@ -81,6 +83,9 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_thread_live_count",
     # GC3 suspends oldification in a stopped world with a mutator outside one.
     "pcc_thread_owns_stopped_world",
+    # The unlocked count-free shade holds the cycle phase by not parking.
+    "pcc_thread_no_park_enter",
+    "pcc_thread_no_park_exit",
 } | RAW_PROVIDER_SYMBOLS
 RAW_GLOBAL_IMPORTS = {
     # GC4's step advances empty-page quarantine.
@@ -100,6 +105,8 @@ RAW_GLOBAL_IMPORTS = {
     "pcc_gc_forwarding_population",
     "pcc_gc_mark_active",
     "pcc_gc_metric_step",
+    # Fixed with the collector: GC1/GC2 heap and root barriers skip the lock.
+    "pcc_gc_nonmoving_count_free",
     # A GC4 automatic step continues its mark up to the next commit.
     "pcc_gc_tracing_finish_commits",
 }

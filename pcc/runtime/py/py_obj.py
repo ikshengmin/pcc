@@ -710,6 +710,16 @@ def pcc_gc_store_ptr(owner, slot, value) -> None:
         store_ptr(slot, 0, value)
         py_decref(old)
         return
+    if (
+        (backend == 1 or backend == 2)
+        and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+    ):
+        # Count-free GC1/GC2 neither count nor move: the plan would only note
+        # the store, write the slot and shade the value in a cycle. Do that
+        # under one no-park scope, as a root store does, without the graph
+        # lock that serialized every such store with the marker.
+        _store_root_nonmoving_tracing(slot, value, backend)
+        return
     plan = stack_alloc(128)
     pcc_gc_store_ptr_plan_init(plan, owner, backend)
     pcc_py_gc_minor_graph_lock()

@@ -110,8 +110,14 @@ class PublicStore(Store):
         self.allocations = 0
         self.globals.update(pcc_gc_config_initialized=config,
                             pcc_gc_backend_selected=backend,
-                            pcc_gc_backend4_no_refcounts=int(count_free))
+                            pcc_gc_backend4_no_refcounts=int(count_free),
+                            # Fixed with the collector, as pcc_gc_fix_backend
+                            # sets it: count-free nonmoving GC1/GC2 only.
+                            pcc_gc_nonmoving_count_free=int(
+                                count_free and backend in (1, 2)))
+        self.nonmoving_stores = []
         self.ns.update(stack_alloc=self.allocate,
+                       _store_root_nonmoving_tracing=self.nonmoving_store,
                        pcc_gc_backend=self.initialize_backend,
                        pcc_py_gc_minor_graph_lock=self.lock,
                        pcc_py_gc_minor_graph_unlock=self.unlock,
@@ -145,6 +151,13 @@ class PublicStore(Store):
         self.events.append(('candidate', value))
         return value == self.VALUE
 
+    def nonmoving_store(self, slot, value, backend):
+        # The unlocked GC1/GC2 store: its no-park scope, store note, slot
+        # write and shade are covered by the native nonmoving-store tests.
+        assert self.depth == 0
+        self.nonmoving_stores.append((slot, value, backend))
+        self.words[slot] = value
+
     def barrier(self, owner, slot, value):
         assert self.depth == 1
         super().barrier(owner, slot, value)
@@ -158,7 +171,7 @@ class PublicStore(Store):
         # All modeled observable mutable state; only private plan scratch and
         # its initialization bookkeeping differ by design.
         return (dict(self.globals), self.events, self.depth, self.old_reads,
-                self.locked_heap_barriers, self.allocations,
+                self.locked_heap_barriers, self.allocations, self.nonmoving_stores,
                 {p: v for p, v in self.words.items()
                  if not self.PLAN <= p < self.PLAN + 128},
                 self.ready, self.reenter_finish)
@@ -177,6 +190,16 @@ def test_public_scalar_store_exhaustive_differential():
         after = PublicStore(source=candidate, **options)
         left = before.ns['pcc_gc_store_ptr'](owner, slot, value)
         right = after.ns['pcc_gc_store_ptr'](owner, slot, value)
+        if slot and count_free and backend in (1, 2):
+            # Count-free GC1/GC2 store through the unlocked nonmoving path:
+            # no graph lock, no StorePlan scratch, the value written as is.
+            assert left == right is None
+            assert after.nonmoving_stores == [(slot, value, backend)]
+            assert after.allocations == 0 and after.depth == 0
+            assert 'lock' not in after.events
+            assert after.events == (['config-init'] if not config else [])
+            assert after.words[slot] == value
+            continue
         assert left == right and before.snapshot() == after.snapshot(), (
             options, owner, slot, value, before.snapshot(), after.snapshot())
         if slot and backend == 4 and count_free:
@@ -189,11 +212,31 @@ def test_public_scalar_store_exhaustive_differential():
                            for e in after.events)
 
 
+NONMOVING_BRANCH = '''
+if (backend == 1 or backend == 2) and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
+    _store_root_nonmoving_tracing(slot, value, backend)
+    return
+'''
+
+
 def test_all_modes_retain_exact_generic_public_body():
     before = public_body(OLD_PUBLIC_SOURCE)
     after = public_body(SOURCE.read_text())
     # The scalar bypass removed the finish helper's compiled entry stop poll
-    # and its committed-value root image. Restore the complete baseline path.
+    # and its committed-value root image. Restore the complete baseline path
+    # for every collector that relocates. Count-free GC1/GC2 relocate
+    # nothing, so no root image is owed; their one extra branch stores under
+    # a no-park scope whose exit is the stop poll (pcc_thread_no_park_exit).
+    branch = ast.parse(NONMOVING_BRANCH).body[0]
+    extra = [i for i, stmt in enumerate(after.body)
+             if ast.dump(stmt) == ast.dump(branch)]
+    assert len(extra) == 1
+    plan = next(i for i, stmt in enumerate(after.body)
+                if isinstance(stmt, ast.Assign)
+                and ast.unparse(stmt.targets[0]) == 'plan')
+    # It follows GC0's counted path and precedes the StorePlan transaction.
+    assert extra[0] == plan - 1
+    del after.body[extra[0]]
     assert ast.dump(before) == ast.dump(after)
 
 

@@ -282,11 +282,12 @@ def test_actual_helper_emits_one_strong_full_word_cas(tmp_path):
 
 # Gray transitions belong to pcc_gc_shade_gray_atomic (one counted CAS);
 # pcc_gc_set_mark_color writes the black of a traced object: after a list
-# walk, a work-stack trace and a stopped-world slice (mark cycle), and the
-# scheduler's concurrent step and C-extension commit.
+# walk, a work-stack trace, a work-accounted work-stack trace (b7e2e3a53)
+# and a stopped-world slice (mark cycle), and the scheduler's concurrent
+# step and C-extension commit.
 @pytest.mark.parametrize("filename,expected_calls", [
     ("freestanding_gc_root_operations.py", 0),
-    ("freestanding_gc_common_mark_cycle.py", 3),
+    ("freestanding_gc_common_mark_cycle.py", 4),
     ("freestanding_gc_barrier_dispatcher.py", 0),
     ("freestanding_gc_incremental_concurrent_scheduler.py", 2),
 ])

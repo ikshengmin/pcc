@@ -4,6 +4,7 @@ from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     atomic_load_i32,
+    atomic_rmw_i32,
     global_addr,
     global_load_ptr,
     is_tagged_int,
@@ -29,6 +30,8 @@ pcc_container_lock_held = extern("pcc_container_lock_held", (), c_int64)
 pcc_gc_object_index_seen_stable = extern("pcc_gc_object_index_seen_stable", (c_ptr,), c_int64)
 
 
+pcc_thread_no_park_enter = extern("pcc_thread_no_park_enter", (), c_void)
+pcc_thread_no_park_exit = extern("pcc_thread_no_park_exit", (), c_void)
 pcc_thread_live_count = extern("pcc_thread_live_count", (), c_int64)
 pcc_thread_all_stopped_at_gates = extern("pcc_thread_all_stopped_at_gates", (), c_int64)
 pcc_thread_owns_stopped_world = extern("pcc_thread_owns_stopped_world", (), c_int64)
@@ -365,6 +368,37 @@ def pcc_gc_count_free_store_shade(value) -> None:
         pcc_gc_shade_gray_atomic(value, 0)
 
 
+@c_abi_export("pcc_gc_count_free_barrier_shade")
+def pcc_gc_count_free_barrier_shade(value) -> None:
+    """The nonmoving count-free GC1/GC2 barrier for an unlocked store.
+
+    A cycle's mark_active changes only with the world stopped, and this
+    no-park scope keeps the world running until the shade is done, so the
+    phase read here holds for the whole transition. The marker reads each
+    slot word whole: it sees either the stored value, which it traces, or
+    the old one, and then this shade gives the stored value its marking
+    work. Outside a cycle the caller's store owes nothing. GC2 shades the
+    value and counts the shade as its locked barrier did; GC1 shades a white
+    value whatever the owner's color, as the container branch does.
+    """
+    pcc_thread_no_park_enter()
+    if (
+        atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") != 0
+        and pcc_gc_object_index_seen_stable(value) != 0
+    ):
+        flags: i64 = atomic_load_i32(value, 12, "acquire")
+        if (flags & 524288) == 0:
+            if load_i32(global_addr("pcc_gc_backend_selected"), 0) == 2:
+                if (flags & 16) == 0:
+                    atomic_rmw_i32(
+                        "add", global_addr("pcc_gc_cms_wb_flushes"), 0, 1, "relaxed"
+                    )
+                pcc_gc_shade_gray_atomic(value, 1)
+            elif (flags & 8) != 0:
+                pcc_gc_shade_gray_atomic(value, 0)
+    pcc_thread_no_park_exit()
+
+
 @c_abi_export("pcc_gc_backend4_note_heap_store_locked")
 def pcc_gc_backend4_note_heap_store_locked(owner, slot, value) -> None:
     """GC4 heap-only insertion barrier; caller holds the graph lock.
@@ -417,6 +451,9 @@ def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
         # here is the answer the locked read would give, so skip the lock and
         # both index probes outside a cycle.
         if atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") == 0:
+            return
+        if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
+            pcc_gc_count_free_barrier_shade(value)
             return
         pcc_py_gc_minor_graph_lock()
         if (
@@ -472,6 +509,12 @@ def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
         # that lands after this barrier returns. A caller already inside a
         # graph transaction keeps that ordering through its own lock.
         if atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") == 0:
+            return
+        # Count-free GC1/GC2 never move or count, so the graph lock orders
+        # nothing a phase-stable shade does not: the marker blackens an owner
+        # after reading its slots, and the shade covers a store it missed.
+        if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
+            pcc_gc_count_free_barrier_shade(value)
             return
         pcc_py_gc_minor_graph_lock()
         if (
