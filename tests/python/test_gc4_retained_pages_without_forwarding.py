@@ -65,13 +65,16 @@ class Runtime:
             'pcc_gc_backend4_zpage_clear_reusable_state', 'pcc_gc_backend4_zpage_destroy',
         })
         self.install('freestanding_gc_forwarding_retirement.py', {
+            '_retirement_backend_admitted',
             '_release_retained_pages', 'pcc_gc_backend4_drain_parked_pages',
             'pcc_gc_backend4_finish_retained_page_releases', 'pcc_gc_backend4_finish_remap_retirement',
             'pcc_gc_backend4_remap_and_retire_unlocked', 'pcc_gc_backend4_remap_and_retire_stopped_world',
         })
         self.install('freestanding_gc_barrier_dispatcher.py', {'pcc_gc_step'})
         self.install('freestanding_gc_public_collection.py', {'pcc_gc_collect_tracing'})
-        self.install('freestanding_gc_root_operations.py', {'pcc_gc_object_is_address_pinned'})
+        self.install('freestanding_gc_root_operations.py', {
+            'pcc_gc_object_is_address_pinned', 'pcc_gc_object_node_is_address_pinned',
+        })
         self.set('pcc_gc_config_initialized', 1)
         self.set('pcc_gc_backend_selected', 4)
         self.set('pcc_gc_backend4_no_refcounts', 1)
@@ -211,9 +214,9 @@ def test_actual_sweep_pin_guard_keeps_page_owner_count(protection):
     guards = [n for n in ast.walk(sweep) if isinstance(n, ast.If)
               and isinstance(n.test, ast.BoolOp) and isinstance(n.test.op, ast.Or)
               and any(isinstance(c, ast.Call) and isinstance(c.func, ast.Name)
-                      and c.func.id == 'pcc_gc_object_is_address_pinned' for c in ast.walk(n.test))]
+                      and c.func.id == 'pcc_gc_object_node_is_address_pinned' for c in ast.walk(n.test))]
     assert len(guards) == 1
-    runtime.ns.update(obj=owner, flags=flags)
+    runtime.ns.update(obj=owner, node=node, flags=flags)
     exec(compile(ast.Module(body=guards, type_ignores=[]), 'actual-sweep-guard', 'exec'), runtime.ns)
     assert runtime.load(owner, 12) & 1024 == 0
     runtime.retire()
