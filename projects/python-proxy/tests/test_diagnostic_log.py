@@ -1,4 +1,5 @@
 import asyncio
+import errno
 import inspect
 import json
 import os
@@ -11,7 +12,7 @@ import sys
 
 import pytest
 
-from pproxy import proto
+from pproxy import proto, server
 from pproxy.diagnostic_log import LogPolicy, expected_disconnect, failure_metadata
 
 from test_proxy_stability import network, tunnel
@@ -76,14 +77,215 @@ def test_unexpected_direct_fallback_is_kept():
 
 
 @pytest.mark.parametrize('error', [ConnectionResetError(54, 'reset'), BrokenPipeError(),
-                                  asyncio.CancelledError(), EOFError()])
+                                  asyncio.CancelledError(), EOFError(),
+                                  OSError(errno.ENOTCONN, 'Socket is not connected')])
 def test_routine_disconnect_can_be_filtered_before_collecting_frames(error):
     assert expected_disconnect(error)
 
 
-@pytest.mark.parametrize('error', [AssertionError(), TimeoutError(), ConnectionRefusedError()])
+@pytest.mark.parametrize('error', [AssertionError(), TimeoutError(), ConnectionRefusedError(),
+                                  OSError(errno.EHOSTUNREACH, 'No route to host'), OSError()])
 def test_real_failures_are_not_classified_as_routine_disconnects(error):
     assert not expected_disconnect(error)
+
+
+def test_socks5_reply_code_is_recorded_without_the_message():
+    fields = failure_metadata(proto.Socks5Error(5))
+    assert fields['error_type'] == 'Socks5Error' and fields['reply'] == 5
+    assert 'SOCKS5 upstream failure' not in json.dumps(fields)
+
+    class PrivateReply(Exception):
+        reply = 'private-reply-marker'
+
+    assert 'reply' not in failure_metadata(PrivateReply())
+
+
+def test_client_handshake_deadline_keeps_its_timeout_type(monkeypatch):
+    """A client that connects and sends nothing hits the read deadline in the
+    first guess(); the record must name that deadline, not a generic closure."""
+    monkeypatch.setattr(server, 'SOCKET_TIMEOUT', 0.05)
+
+    async def scenario():
+        with pytest.raises(asyncio.TimeoutError) as caught:
+            await proto.accept([proto.HTTP(None), proto.Socks5(None)], reader=asyncio.StreamReader())
+        return caught.value
+
+    fields = failure_metadata(asyncio.run(asyncio.wait_for(scenario(), 3)))
+    assert fields['error_type'] == 'TimeoutError'
+    assert any(frame['function'] == 'HTTP.guess' for frame in fields['traceback'])
+    assert fields['expected_disconnect'] is False
+
+
+async def echo_until_released(reader, writer, client_eof, release):
+    try:
+        while data := await reader.read(65536):
+            writer.write(data)
+            await writer.drain()
+        client_eof.set()
+        await release.wait()
+    finally:
+        writer.close()
+
+
+async def reset_after_half_close(net, proxy_port, target, client_eof, release):
+    """Half-close, then reset before the upstream closes, so the proxy's later
+    write_eof() toward the client meets a socket that is no longer connected."""
+    reader, writer = await tunnel(net, proxy_port, target, 'domain')
+    writer.write(b'payload')
+    await writer.drain()
+    assert await reader.readexactly(7) == b'payload'
+    writer.write_eof()
+    await asyncio.wait_for(client_eof.wait(), 3)
+    linger = 'hh' if sys.platform == 'win32' else 'ii'
+    writer.get_extra_info('socket').setsockopt(
+        socket.SOL_SOCKET, socket.SO_LINGER, struct.pack(linger, 1, 0))
+    writer.transport.abort()
+    await asyncio.sleep(.05)
+    release.set()
+
+
+def test_half_close_toward_reset_client_fails_with_routine_enotconn(monkeypatch):
+    async def scenario():
+        failures, reported = [], asyncio.Event()
+
+        def record(self, error, phase):
+            failures.append((error, phase))
+            reported.set()
+
+        monkeypatch.setattr(proto.BaseProtocol, 'channel_error', record)
+        async with network() as net:
+            client_eof, release = asyncio.Event(), asyncio.Event()
+            target = await net.listen(lambda r, w: echo_until_released(r, w, client_eof, release))
+            await reset_after_half_close(net, await net.proxy(), target, client_eof, release)
+            await asyncio.wait_for(reported.wait(), 3)
+            await asyncio.sleep(.05)
+        return failures
+
+    failures = asyncio.run(asyncio.wait_for(scenario(), 12))
+    assert [(type(e), e.errno, phase) for e, phase in failures] == [(OSError, errno.ENOTCONN, 'half_close')]
+    assert expected_disconnect(failures[0][0])
+
+
+def start_diagnostic(log_path, *args):
+    return asyncio.create_subprocess_exec(
+        sys.executable, '-u', '-m', 'pproxy.diagnostic', '-l', 'socks5://127.0.0.1:0', *args,
+        cwd=Path(__file__).resolve().parents[1],
+        env={**os.environ, 'PPROXY_TRACE_PATH': str(log_path), 'PPROXY_TRACE_MODE': 'essential'},
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+
+
+def test_essential_half_close_toward_reset_client_is_not_logged(tmp_path):
+    async def scenario():
+        async with network() as net:
+            client_eof, release = asyncio.Event(), asyncio.Event()
+            target = await net.listen(lambda r, w: echo_until_released(r, w, client_eof, release))
+            log_path = tmp_path / 'connections.jsonl'
+            process = await start_diagnostic(log_path)
+            try:
+                line = await asyncio.wait_for(process.stdout.readline(), 3)
+                match = re.search(rb'127\.0\.0\.1:(\d+)', line)
+                assert match, line
+                await reset_after_half_close(net, int(match[1]), target, client_eof, release)
+                await asyncio.sleep(.1)
+                process.send_signal(signal.SIGTERM)
+                _, stderr = await asyncio.wait_for(process.communicate(), 3)
+                assert process.returncode == 0, stderr.decode()
+                records = [json.loads(line) for line in log_path.read_text().splitlines()]
+                assert [r['event'] for r in records] == ['process_start', 'shutdown_requested', 'process_stop'], records
+            finally:
+                if process.returncode is None:
+                    process.kill()
+                    await process.wait()
+
+    asyncio.run(asyncio.wait_for(scenario(), 12))
+
+
+def test_handshake_probe_transitions_are_logged_with_reply_code(tmp_path):
+    """The TCP connect succeeds but the upstream rejects the probe's CONNECT;
+    the probe takes the upstream offline, and that transition must be logged
+    with its phase and SOCKS reply, then logged again when it recovers."""
+    async def scenario():
+        async with network() as net:
+            reply = {'code': 4}
+
+            async def upstream(reader, writer):
+                assert await reader.readexactly(3) == b'\x05\x01\x00'
+                writer.write(b'\x05\x00')
+                header = await reader.readexactly(4)
+                if header[3] == 3:
+                    await reader.readexactly((await reader.readexactly(1))[0] + 2)
+                else:
+                    await reader.readexactly((4 if header[3] == 1 else 16) + 2)
+                writer.write(b'\x05' + bytes([reply['code']]) + b'\x00\x01' + b'\x00' * 6)
+                await writer.drain()
+                writer.close()
+
+            port = await net.listen(upstream)
+            log_path = tmp_path / 'probe.jsonl'
+            process = await start_diagnostic(log_path, '-r', f'socks5://127.0.0.1:{port}', '-a', '1')
+
+            async def status(available):
+                for _ in range(80):
+                    for line in log_path.read_text().splitlines():
+                        record = json.loads(line)
+                        if record['event'] == 'upstream_status' and record['available'] is available:
+                            return record
+                    await asyncio.sleep(.05)
+                raise AssertionError(log_path.read_text())
+
+            try:
+                await asyncio.wait_for(process.stdout.readline(), 3)
+                offline = await status(False)
+                reply['code'] = 0
+                online = await status(True)
+                process.send_signal(signal.SIGTERM)
+                _, stderr = await asyncio.wait_for(process.communicate(), 3)
+                assert process.returncode == 0, stderr.decode()
+            finally:
+                if process.returncode is None:
+                    process.kill()
+                    await process.wait()
+            records = [json.loads(line) for line in log_path.read_text().splitlines()]
+            return port, offline, online, records
+
+    port, offline, online, records = asyncio.run(asyncio.wait_for(scenario(), 12))
+    assert offline['bind'] == online['bind'] == f'127.0.0.1:{port}'
+    assert offline['phase'] == 'upstream_handshake'
+    assert offline['error_type'] == 'Socks5Error' and offline['reply'] == 4
+    assert online['phase'] == 'upstream_handshake' and 'error_type' not in online
+    assert [r['event'] for r in records if r['event'] == 'upstream_status'] == ['upstream_status'] * 2
+    # Failed probes are summarized by the transition, not logged per attempt.
+    assert not [r for r in records if r['event'] == 'upstream_handshake_error']
+
+
+def test_connect_probe_failure_is_logged_once_with_connect_phase(tmp_path):
+    closed = socket.socket()
+    closed.bind(('127.0.0.1', 0))
+    port = closed.getsockname()[1]
+    closed.close()
+
+    async def scenario():
+        log_path = tmp_path / 'probe.jsonl'
+        process = await start_diagnostic(log_path, '-r', f'socks5://127.0.0.1:{port}', '-a', '1')
+        try:
+            await asyncio.wait_for(process.stdout.readline(), 3)
+            await asyncio.sleep(2.5)
+            process.send_signal(signal.SIGTERM)
+            _, stderr = await asyncio.wait_for(process.communicate(), 3)
+            assert process.returncode == 0, stderr.decode()
+        finally:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+        return [json.loads(line) for line in log_path.read_text().splitlines()]
+
+    records = asyncio.run(asyncio.wait_for(scenario(), 12))
+    statuses = [r for r in records if r['event'] == 'upstream_status']
+    assert len(statuses) == 1, records
+    assert statuses[0]['available'] is False and statuses[0]['phase'] == 'upstream_connect'
+    assert statuses[0]['error_type'] == 'ConnectionRefusedError'
+    assert not [r for r in records if r['event'] == 'upstream_connect_error']
 
 
 def test_assertion_location_without_messages_source_or_locals():

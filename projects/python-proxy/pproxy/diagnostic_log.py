@@ -2,6 +2,7 @@
 
 import asyncio
 from collections import deque
+import errno
 
 
 def expected_disconnect(error):
@@ -13,7 +14,10 @@ def expected_disconnect(error):
         closed = (type(current) is Exception and current.args
                   and isinstance(current.args[0], str)
                   and current.args[0].startswith('Connection closed'))
-        if not (closed or isinstance(current, (
+        # ENOTCONN: a half-close toward a peer that already reset; the socket
+        # is gone, exactly as with ECONNRESET/EPIPE, but Python has no subclass.
+        not_connected = isinstance(current, OSError) and current.errno == errno.ENOTCONN
+        if not (closed or not_connected or isinstance(current, (
                 asyncio.CancelledError, KeyboardInterrupt,
                 asyncio.IncompleteReadError, EOFError,
                 ConnectionResetError, BrokenPipeError))):
@@ -48,6 +52,11 @@ def failure_metadata(error):
             'errno': error_number if type(error_number) is int else None,
             'traceback': list(frames),
         }
+        # Protocol reply codes (Socks5Error.reply) say why an upstream refused,
+        # which the type alone cannot; only integers, never formatted messages.
+        reply = getattr(current, 'reply', None)
+        if type(reply) is int:
+            record['reply'] = reply
         if count > len(frames):
             record['omitted_outer_frames'] = count - len(frames)
         chain.append(record)

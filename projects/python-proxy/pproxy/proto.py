@@ -721,6 +721,10 @@ async def accept(protos, reader, **kw):
     for proto in protos:
         try:
             user = await proto.guess(reader, **kw)
+        except asyncio.TimeoutError:
+            # A client that connected but sent nothing before the deadline has
+            # not closed; keep the timeout so logs and callers can tell them apart.
+            raise
         except Exception:
             raise Exception('Connection closed')
         if user:

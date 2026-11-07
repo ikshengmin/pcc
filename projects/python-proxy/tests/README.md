@@ -8,7 +8,7 @@ concurrent HTTP/2 streams for 245 seconds.
 | Area | Checks |
 | --- | --- |
 | Negotiation | SOCKS5 domain/IPv4/IPv6, HTTP CONNECT, fragmented headers, payload arriving with the handshake, abandoned handshakes |
-| Logging | Essential mode suppresses normal traffic and expected cancellation; retains failure context, one issue per connection, and zero-response upstream closes; diagnostic mode remains available |
+| Logging | Essential mode suppresses normal traffic, expected cancellation and half-close toward a reset client (ENOTCONN); retains failure context, one issue per connection, zero-response upstream closes, SOCKS reply codes, client handshake deadlines, and every health-probe transition with its connect/handshake phase; diagnostic mode remains available |
 | Authentication | Valid and invalid credentials, rejection when no authentication method is shared |
 | Connection failures | Delayed upstream connection, DNS failure, refusal, timeout, network unreachable, permission denial, SOCKS error propagation through a chain, HTTP 403/407/502 rejection |
 | Data integrity | Eight simultaneous 1 MiB transfers, binary payloads, two-hop HTTP/SOCKS chains, 2 MiB transfer to a slow receiver |

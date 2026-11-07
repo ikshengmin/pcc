@@ -252,6 +252,11 @@ async def datagram_handler(writer, data, addr, protos, urserver, block, cipher, 
         if not str(ex).startswith('Connection closed'):
             verbose(f'{str(ex) or "Unsupported protocol"} from {remote_ip}')
 
+def set_upstream_alive(remote, alive, phase, error=None):
+    """Apply one health-probe transition. phase is 'upstream_connect' or
+    'upstream_handshake'; observers (pproxy.diagnostic) hook every change here."""
+    remote.alive = alive
+
 async def check_server_alive(interval, rserver, verbose):
     while True:
         await asyncio.sleep(interval)
@@ -265,7 +270,7 @@ async def check_server_alive(interval, rserver, verbose):
             except Exception as ex:
                 if remote.alive:
                     verbose(f'{remote.rproto.name} {remote.bind} -> OFFLINE')
-                    remote.alive = False
+                    set_upstream_alive(remote, False, 'upstream_connect', ex)
                 continue
             # A completed TCP connect only proves the port still accepts. An upstream can
             # accept and then stop answering the proxy handshake; with a TCP-only probe
@@ -285,11 +290,12 @@ async def check_server_alive(interval, rserver, verbose):
                     writer.close()
                     if remote.alive:
                         verbose(f'{remote.rproto.name} {remote.bind} -> OFFLINE ({type(ex).__name__} in handshake)')
-                        remote.alive = False
+                        set_upstream_alive(remote, False, 'upstream_handshake', ex)
                     continue
             if not remote.alive:
                 verbose(f'{remote.rproto.name} {remote.bind} -> ONLINE')
-                remote.alive = True
+                set_upstream_alive(remote, True, 'upstream_connect' if isinstance(remote, ProxyBackward)
+                                   else 'upstream_handshake')
             try:
                 if isinstance(remote, ProxyBackward):
                     writer.write(b'\x00')

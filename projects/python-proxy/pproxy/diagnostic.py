@@ -34,11 +34,13 @@ def main():
     CLIENT_WRITER = contextvars.ContextVar('trace_client_writer', default=0)
     TARGET = contextvars.ContextVar('trace_target', default=None)
     CONNECTION = contextvars.ContextVar('trace_connection', default=None)
+    # True only inside the check_server_alive task: its connects and handshakes
+    # are probes, summarized by upstream_status transitions, not client traffic.
+    HEALTH_PROBE = contextvars.ContextVar('trace_health_probe', default=False)
     IDS = itertools.count(1)
     READERS = weakref.WeakKeyDictionary()
     WRITERS = weakref.WeakKeyDictionary()
     WATCHED_LOOPS = weakref.WeakSet()
-    UPSTREAM_AVAILABLE = {}
 
 
     def emit(event, **fields):
@@ -68,14 +70,17 @@ def main():
         emit_error('channel_error', error, phase=phase, protocol=self.name)
 
 
-    def health_status(bind, available, error=None):
-        previous = UPSTREAM_AVAILABLE.get(bind, True)
-        UPSTREAM_AVAILABLE[bind] = available
-        if previous != available:
-            if error is None:
-                emit('upstream_status', bind=bind, available=available)
-            else:
-                emit_error('upstream_status', error, bind=bind, available=available)
+    def set_upstream_alive(remote, alive, phase, error=None):
+        original_set_alive(remote, alive, phase, error)
+        if error is None:
+            emit('upstream_status', bind=remote.bind, available=alive, phase=phase)
+        else:
+            emit_error('upstream_status', error, bind=remote.bind, available=alive, phase=phase)
+
+
+    async def check_server_alive(*args, **kwargs):
+        HEALTH_PROBE.set(True)
+        return await original_check_alive(*args, **kwargs)
 
 
     def safe_host(host):
@@ -102,6 +107,8 @@ def main():
     original_schedule = server.schedule
     original_open = server.ProxyDirect.open_connection
     original_prepare = server.ProxySimple.prepare_connection
+    original_set_alive = server.set_upstream_alive
+    original_check_alive = server.check_server_alive
     original_channel = proto.BaseProtocol.channel
     original_read = asyncio.StreamReader.read
     original_write = asyncio.StreamWriter.write
@@ -168,20 +175,13 @@ def main():
         started = time.monotonic() if POLICY.mode == 'diagnostic' else None
         try:
             reader, writer = await original_open(self, *args, **kwargs)
-            if FLOW.get() == 0:
-                health_status(self.bind, True)
             if POLICY.mode == 'diagnostic':
                 emit('upstream_connected', bind=self.bind, peer=writer.get_extra_info('peername'),
                      local=writer.get_extra_info('sockname'), ms=round((time.monotonic() - started) * 1000),
-                     healthcheck=FLOW.get() == 0)
+                     healthcheck=HEALTH_PROBE.get())
             return reader, writer
         except BaseException as error:
-            if FLOW.get() == 0:
-                if not isinstance(error, (asyncio.CancelledError, KeyboardInterrupt)):
-                    health_status(self.bind, False, error)
-                if POLICY.mode == 'diagnostic':
-                    emit_error('upstream_connect_error', error, bind=self.bind)
-            else:
+            if POLICY.mode == 'diagnostic' or not HEALTH_PROBE.get():
                 emit_error('upstream_connect_error', error, bind=self.bind)
             raise
 
@@ -195,7 +195,8 @@ def main():
                      ms=round((time.monotonic() - started) * 1000))
             return result
         except BaseException as error:
-            emit_error('upstream_handshake_error', error, bind=self.bind)
+            if POLICY.mode == 'diagnostic' or not HEALTH_PROBE.get():
+                emit_error('upstream_handshake_error', error, bind=self.bind)
             raise
 
 
@@ -302,6 +303,8 @@ def main():
     server.schedule = schedule
     server.ProxyDirect.open_connection = open_connection
     server.ProxySimple.prepare_connection = prepare
+    server.set_upstream_alive = set_upstream_alive
+    server.check_server_alive = check_server_alive
     if POLICY.mode == 'diagnostic':
         proto.BaseProtocol.channel = channel
         asyncio.StreamReader.read = read
