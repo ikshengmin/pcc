@@ -1,21 +1,30 @@
 # Persistent gray batches
 
-This is the first GC1/GC2 worklist increment, based on `39bd633713d928169f18e47160aeb4e0023b0aaa`.
-It applies to count-free, nonmoving tracing. It does not finish the worklist
-migration or replace the collector's termination protocol.
+The initial GC1/GC2 persistent-batch increment is `c6ece4e37ccd308dbd7933e555f84a15d7b627bd`,
+based on `39bd633713d928169f18e47160aeb4e0023b0aaa`. The tail-publication
+increment builds on it. Both apply to count-free, nonmoving tracing; neither
+replaces the collector's gray-credit and final stopped-world termination
+protocol.
 
 ## Production path
 
 The successful color-CAS branch in `pcc_gc_shade_gray_atomic` appends the
 object's address to a thread-local raw batch. Full batches contain 64 entries.
 Calls into the runtime safepoint, parked/exited publication and thread
-unregister publish a partial batch. A fast compiler poll that does not enter
-the runtime does not flush it. Published batches are transferred with release CAS and acquire
-exchange; the graph-locked consumer owns shared partial batches. A consumer
-can resume work left by another consumer.
+unregister publish a partial batch. Ordinary compiler polls now enter that
+same safe runtime boundary for either a stop request or a gray-tail
+publication request. The last graph/container/no-park lease exits honor
+both requests, but never flush inside a live lease. Runtime-kernel implicit
+polls remain disabled. Published batches transfer with release CAS and
+acquire exchange; the graph-locked consumer owns shared partial batches.
+A consumer can resume work left by another consumer.
 
-Both common drains and `pcc_gc_tracing_step_cycle` prefer these entries before
-the object-list cursor. An entry does not own the object. Under collector
+Common, mutator and stopped-world drains prefer these entries before the
+object-list cursor. A healthy count-free GC1/GC2 CMS worker's ordinary,
+non-stopped slice uses only queue entries. At an empty queue with positive
+gray credit it requests tail publication and returns without claiming
+completion. The worker yields between empty retries. This covers both a
+hidden TLS tail and credit reserved before a color CAS. An entry does not own the object. Under collector
 exclusion, exact current index membership is checked before reading its
 header; a retired address is discarded, while a reused address refers to the
 currently registered object. Only a still-gray object retires gray credit.
@@ -27,15 +36,28 @@ stop mutators. The stopped-world whitening and finish boundaries also discard
 old tokens, including a resurrection recheck that reuses an epoch. Tags alone
 do not make reset, color transition and append one atomic transaction.
 
+The request is not an acknowledgement that every producer has flushed.
+During healthy non-stopped marking, the CMS consumer clears it when it
+resumes consuming a token; if another tail remains hidden, queue exhaustion
+with positive credit requests publication again. Stopped cleanup, automatic
+work being disabled and worker exit also clear the request without retiring
+gray credit. A producer never clears another thread's request. With finite work, the last hidden tail leaves a persistent request
+until that producer reaches a legal poll, park or exit. Continuous mutation
+does not acquire a new bounded-completion guarantee.
+
 ## Remaining work and bounds
 
-- The ordinary cursor is still the fallback for an unpublished running
-  thread's tail and for batch allocation failure. The original short-lived
-  trace stack remains. Removing normal cursor scans needs a complete flush
-  and termination handshake; whole-collection O(live) is not established.
+- Explicit, mutator and stopped-world drains retain their cursor. A lost
+  token from batch allocation failure sets a cycle-local fallback latch,
+  which only stopped-world cleanup clears; CMS then retains the original
+  cursor walk as well. The short-lived trace stack remains. Whitening, root
+  scanning, final remark and sweep still have their existing heap work;
+  whole-collection O(live) is not established.
 - The producer never waits for the graph lock. A batch is 544 requested bytes
   and uses the allocator's 1024-byte size class. Its allocation can fail;
-  failure leaves the successful gray transition and count intact.
+  failure leaves the successful gray transition and count intact. Request
+  handling adds poll work and can publish short batches; performance must
+  be measured for this increment, not inherited from the first one.
 - Invalid and already-black returned tokens consume the scheduler's scan
   allowance. Whole-owner scanning can still overshoot the soft slot budget.
   A take can discard multiple stale or exhausted metadata batches, outside
@@ -46,31 +68,72 @@ do not make reset, color transition and append one atomic transaction.
 
 ## Validation boundary
 
-The Linux x86-64 owned host-pcc0/self runtime builds all 201 modules within the
-unchanged 90-second/1-GiB process-tree guard and default eight build jobs.
-The new host tests execute actual queue, shader, membership, common-drain,
+For the tail-publication increment, the Linux x86-64 owned host-pcc0/self
+runtime builds all 201 modules within the unchanged 90-second/1-GiB
+process-tree guard and default eight build jobs. Its focused host/model,
+IR, archive and native selections have 658 distinct passing test cases.
+That is not a whole-language or whole-collector pass count.
+
+The host tests execute actual queue, shader, membership, common-drain,
 whole-owner visitor and scheduler bodies, including released/reused addresses,
-OOM fallback, budget carry-over and C-extension epoch invalidation.
+OOM fallback, reserved-before-CAS credit, request re-arming, budget carry-over
+and C-extension epoch invalidation. The ordinary CMS slice model rejects
+object-list reads while waiting for a hidden tail; explicit/stopped and OOM
+paths keep their original traversal and termination checks.
 
 The owned native queue harness executes four producers and two consumers on
 each of GC1 and GC2, accounts for all 16,396 tokens, and checks stopped-world
 entry after helper and worker exit. Runtime thread unregister, rather than
 an explicit queue flush in the callback, publishes the final partial batches.
-Archive checks verify the unique queue owner, TLS ownership and actual
-cross-object users. The existing five-GC graph-lock/stop/registration/reuse
-harness also passes with this runtime.
+The same harness verifies that each of the four last-lease exits publishes a
+requested tail, without publishing inside a live lease or treating a producer
+flush as a global acknowledgement. Archive checks verify the unique queue
+owner, TLS ownership and actual cross-object users. The existing five-GC
+graph-lock/stop/registration/reuse harness also passes with this runtime.
+
+`test_gc_gray_flush_poll_native.py` separately compiles and audits the poll
+switch both on and off. With polls enabled, a real generated native producer
+loop publishes a short tail before being released or exiting, while the stop
+flag remains zero. The loop has only intrinsic operations and generated
+safepoint calls; this does not claim the entire thread program is allocation
+free. The test uses opaque tokens and synthetic GC1/GC2 worklist controls,
+checks that CMS has not started, and therefore proves the poll/publication
+boundary rather than a real CMS collection's final termination.
 
 Useful focused commands, with a current verified runtime archive supplied by
 the repository fixtures:
 
-- `uv run pytest -x -q tests/python/test_gc_gray_worklist.py tests/python/test_gc_gray_worklist_scheduler.py`
+- `uv run pytest -x -q tests/python/test_gc_gray_worklist.py tests/python/test_gc_gray_worklist_scheduler.py tests/python/test_gc_gray_flush_polls.py tests/python/test_gc_gray_flush_poll_native.py`
 - `uv run pytest -x -q -m integration tests/python/test_gc_gray_worklist.py::test_owned_native_gray_batches_mpsc_tls_and_consumer_handoff`
+- `uv run pytest -x -q -m integration tests/python/test_gc_gray_flush_poll_native.py::test_generated_allocation_free_loop_publishes_gray_tail_without_stop`
 - `uv run pytest -x -q -m integration tests/python/test_gc_graph_lock_wait_timing.py::test_graph_wait_native_five_gc_handoff_stop_registration_and_reuse`
 
-These are component results, not full collector qualification. The unchanged
-`test_native_generator_finalization.py` fails at `next(rescued[0])` on GC1
-with both the candidate and the frozen parent runtime; GC0 passes and that
-test does not reach GC2-4. Old counted-mode configuration fixtures also remain
-inconsistent with the parent's count-free defaults; their assertions are not
-weakened here. Mac execution, native self-host and seven rotated frozen A/B
-pairs with collection counts, outer-pause p99 and peak heap remain unrun.
+The broader validation is not all green. One existing Darwin-arm64 execution
+test actually skips on Linux. Three inline-related failures are reproduced
+unchanged on the frozen `c6ece4e` parent: two Windows emitter target mismatches
+and a removed single-thread runtime configuration. A combined inline selection
+also exceeds the unchanged 1-GiB process-tree limit; its interrupted results
+are not counted as passes. The smaller selections preserve default xdist and
+resource limits. Four strict/reference checks report a missing Clang
+prerequisite. Those failures, unavailable configurations and unexecuted cases
+are not converted to passes or weakened assertions.
+
+The initial increment's known generator-finalization failure is not repaired
+by this mechanism. The unchanged original test failed at `next(rescued[0])`
+on GC1 for both `c6ece4e` and its frozen parent; GC0 passed and that original
+test did not reach GC2-4. These are historical results, not a fresh execution
+claim for the tail increment. Old counted-mode configuration fixtures also
+remain inconsistent with the parent's count-free defaults.
+
+A same-input, single alternating parent/candidate proxy screen completes
+all 20 runs across five GC backends and one/four workers. It checks output,
+request counts and latency sample counts, not HTTP or native-pcc1 behavior.
+The candidate/parent QPS ratios for GC0-4 are 0.919/0.980/1.000/0.923/1.001
+at one worker and 1.123/1.053/1.003/0.961/0.924 at four workers. These mixed
+single-pair observations do not establish a throughput gain or a stable
+regression. GC1-4 do not reach 3x four-worker scaling in this screen.
+
+Mac execution, native self-host, complete collector correctness and seven
+rotated frozen A/B pairs for this tail increment with collection counts,
+outer-pause p99 and peak heap remain unverified. Performance results for the
+initial batch must not be attributed to this increment.

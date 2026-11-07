@@ -555,6 +555,12 @@ def _inline_multiblock_call_sites(ir_text: str, candidates: dict[str, dict]) -> 
 _POLL_FLAG_RE = re.compile(
     r"^\s*%(?P<flag>[\w.$-]+) = load atomic i32, ptr @pcc_thread_stop_requested acquire, align 4\s*$"
 )
+_POLL_FLUSH_RE = re.compile(
+    r"^\s*%(?P<flush>[\w.$-]+) = load atomic i32, ptr @pcc_gc_gray_worklist_flush_requested acquire, align 4\s*$"
+)
+_POLL_PENDING_RE = re.compile(
+    r"^\s*%(?P<pending>[\w.$-]+) = or i32 %(?P<flag>[\w.$-]+), %(?P<flush>[\w.$-]+)\s*$"
+)
 _POLL_NEED_RE = re.compile(r"^\s*%(?P<need>[\w.$-]+) = icmp ne i32 %(?P<flag>[\w.$-]+), 0\s*$")
 _POLL_BRANCH_RE = re.compile(
     r"^\s*br i1 %(?P<need>[\w.$-]+), label %(?P<slow>[\w.$-]+), label %(?P<cont>[\w.$-]+)\s*$"
@@ -566,18 +572,35 @@ _LOCAL_REF_RE = re.compile(r"%([\w.$-]+)")
 
 
 def _poll_tail(block: BasicBlock):
-    """(flag, need, slow, cont) when ``block`` ends in a thread-safepoint poll."""
+    """(flag, flush, pending, need, slow, cont) for an exact poll tail.
+
+    Legacy stop-only IR has empty flush/pending names. Keep recognizing it,
+    but do not let a legacy caller poll cover a callee's publication request.
+    """
     insts = block.instructions
     if len(insts) < 3:
         return None
     branch = _POLL_BRANCH_RE.match(insts[-1].text)
     need = _POLL_NEED_RE.match(insts[-2].text)
+    if branch is None or need is None or branch.group("need") != need.group("need"):
+        return None
     flag = _POLL_FLAG_RE.match(insts[-3].text)
-    if branch is None or need is None or flag is None:
+    if flag is not None and need.group("flag") == flag.group("flag"):
+        return (flag.group("flag"), "", "", need.group("need"),
+                branch.group("slow"), branch.group("cont"))
+    if len(insts) < 5:
         return None
-    if branch.group("need") != need.group("need") or need.group("flag") != flag.group("flag"):
+    flag = _POLL_FLAG_RE.match(insts[-5].text)
+    flush = _POLL_FLUSH_RE.match(insts[-4].text)
+    pending = _POLL_PENDING_RE.match(insts[-3].text)
+    if flag is None or flush is None or pending is None:
         return None
-    return flag.group("flag"), need.group("need"), branch.group("slow"), branch.group("cont")
+    if (pending.group("flag") != flag.group("flag")
+            or pending.group("flush") != flush.group("flush")
+            or need.group("flag") != pending.group("pending")):
+        return None
+    return (flag.group("flag"), flush.group("flush"), pending.group("pending"),
+            need.group("need"), branch.group("slow"), branch.group("cont"))
 
 
 def _blocks_on_cycles(fn) -> set[str]:
@@ -640,10 +663,10 @@ def _blocks_on_cycles(fn) -> set[str]:
 def _drop_acyclic_inlined_polls(ir_text: str) -> str:
     """Remove inlined callees' entry polls that lie on no cycle.
 
-    Functions poll for a stop on entry and on loop back-edges; an inlined
-    callee brings its own entry poll into the caller. When the caller's entry
-    block already ends in a poll and the inlined block is on no cycle, only
-    bounded acyclic work separates the two, so the inner poll adds a flag load
+    Functions poll for a stop or gray publication on entry and loop back-edges;
+    an inlined callee brings its own entry poll into the caller. When the
+    caller's entry block already ends in a poll and the inlined block is on no
+    cycle, only bounded acyclic work separates the two, so the inner poll adds flag loads
     and branch without shortening any wait. Loop polls and polls the frontend
     emitted for the function itself stay.
     """
@@ -652,7 +675,10 @@ def _drop_acyclic_inlined_polls(ir_text: str) -> str:
     module = MutableModule.parse(ir_text)
     changed = False
     for fn in module.functions:
-        if not fn.blocks or _poll_tail(fn.blocks[0]) is None:
+        if not fn.blocks:
+            continue
+        entry_poll = _poll_tail(fn.blocks[0])
+        if entry_poll is None:
             continue
         inlined_polls = []
         for block in fn.blocks[1:]:
@@ -666,6 +692,13 @@ def _drop_acyclic_inlined_polls(ir_text: str) -> str:
         blocks_by_name: dict[str, BasicBlock] = {}
         for block in fn.blocks:
             blocks_by_name[block.name] = block
+        entry_slow = blocks_by_name.get(entry_poll[4])
+        if entry_slow is None or len(entry_slow.instructions) != 2:
+            continue
+        if _POLL_CALL_RE.match(entry_slow.instructions[0].text) is None:
+            continue
+        if entry_slow.instructions[1].text.strip() != "br label %" + entry_poll[5]:
+            continue
         label_refs: dict[str, int] = {}
         phi_preds: set[str] = set()
         local_uses: dict[str, int] = {}
@@ -680,10 +713,14 @@ def _drop_acyclic_inlined_polls(ir_text: str) -> str:
                     local_uses[operand] = local_uses.get(operand, 0) + 1
         dropped: set[str] = set()
         for block, parts in inlined_polls:
-            flag, need, slow, cont = parts
+            flag, flush, pending, need, slow, cont = parts
+            if flush and not entry_poll[1]:
+                continue
             if block.name in cyclic or slow in phi_preds or label_refs.get(slow, 0) != 1:
                 continue
             if local_uses.get(flag, 0) != 1 or local_uses.get(need, 0) != 1:
+                continue
+            if flush and (local_uses.get(flush, 0) != 1 or local_uses.get(pending, 0) != 1):
                 continue
             slow_block = blocks_by_name.get(slow)
             if slow_block is None or len(slow_block.instructions) != 2:
@@ -692,7 +729,8 @@ def _drop_acyclic_inlined_polls(ir_text: str) -> str:
                 continue
             if slow_block.instructions[1].text.strip() != "br label %" + cont:
                 continue
-            block.instructions = list(block.instructions[:-3]) + [
+            tail_size = 5 if flush else 3
+            block.instructions = list(block.instructions[:-tail_size]) + [
                 llvm_line("  br label %" + cont + "\n")
             ]
             dropped.add(slow)

@@ -886,6 +886,29 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
             global_addr("pcc_gc_trace_extension_roots_pending"), 0, 0
         )
 
+    cms_worker: i64 = pcc_gc_is_cms_worker()
+    queue_only: i64 = 0
+    if (
+        cms_worker != 0
+        and stopped == 0
+        and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+        and (load_i32(global_addr("pcc_gc_backend_selected"), 0) == 1
+             or load_i32(global_addr("pcc_gc_backend_selected"), 0) == 2)
+        and atomic_load_i32(
+            global_addr("pcc_gc_gray_worklist_fallback_required"), 0, "acquire"
+        ) == 0
+    ):
+        queue_only = 1
+    elif cms_worker != 0:
+        atomic_store_i32(
+            global_addr("pcc_gc_gray_worklist_flush_requested"), 0, 0, "release"
+        )
+    publication_requested: i64 = 0
+    if queue_only != 0:
+        publication_requested = atomic_load_i32(
+            global_addr("pcc_gc_gray_worklist_flush_requested"), 0, "acquire"
+        )
+    waiting_for_publication: i64 = 0
     node = global_load_ptr("pcc_gc_trace_cursor")
     if pcc_gc_gray_count_load_acquire() == 0:
         # An empty work count needs final remark, not another object-list
@@ -893,7 +916,7 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
         # found no gray roots. Mutator insertions after unlock are still
         # covered by the existing stopped-world completion protocol below.
         node = null()
-    elif ptr_is_null(node) != 0:
+    elif ptr_is_null(node) != 0 and queue_only == 0:
         node = global_load_ptr("pcc_gc_object_head")
     scanned: i64 = 0
     pcc_gc_trace_stack_begin()
@@ -901,6 +924,42 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
            and scanned < scan_budget
            and (stopped != 0 or load_i64(work_left, 0) > 0)):
         queued = pcc_gc_gray_worklist_take_locked()
+        if ptr_is_null(queued) == 0 and publication_requested != 0:
+            # Consumer progress ends this request, not a producer's TLS ack.
+            # Even a stale token is finite scan work. Exhausting the queue
+            # with credit remaining re-arms the request below. Clear at most
+            # once per slice, not once per token, to preserve batch amortization.
+            atomic_store_i32(
+                global_addr("pcc_gc_gray_worklist_flush_requested"),
+                0, 0, "release",
+            )
+            publication_requested = 0
+        if ptr_is_null(queued) != 0 and queue_only != 0:
+            if pcc_gc_gray_count_load_acquire() == 0:
+                node = null()
+                break
+            if atomic_load_i32(
+                global_addr("pcc_gc_gray_worklist_fallback_required"),
+                0, "acquire",
+            ) == 0:
+                # Positive credit can be an unpublished tail or a shader's
+                # reserved-before-CAS credit. Neither permits termination.
+                # Do not inspect the object list or acknowledge other TLS.
+                atomic_store_i32(
+                    global_addr("pcc_gc_gray_worklist_flush_requested"),
+                    0, 1, "release",
+                )
+                waiting_for_publication = 1
+                break
+            # A no-park producer may lose a token while this slice runs.
+            # Recheck at exhaustion and retain the original bounded walk.
+            queue_only = 0
+            if ptr_is_null(node) != 0:
+                node = global_load_ptr("pcc_gc_object_head")
+            atomic_store_i32(
+                global_addr("pcc_gc_gray_worklist_flush_requested"),
+                0, 0, "release",
+            )
         if ptr_is_null(queued) != 0 and ptr_is_null(node) != 0:
             break
         scanned = scanned + 1
@@ -976,6 +1035,10 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
     pcc_gc_trace_stack_end()
     pcc_gc_gray_worklist_flush()
     global_store_ptr("pcc_gc_trace_cursor", node)
+    if cms_worker != 0 and pcc_gc_gray_count_load_acquire() == 0:
+        atomic_store_i32(
+            global_addr("pcc_gc_gray_worklist_flush_requested"), 0, 0, "release"
+        )
 
     cext_obj = load_ptr(cext_ctx, 0)
     if ptr_is_null(cext_obj) == 0:
@@ -983,9 +1046,11 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
         _pcc_gc_trace_cext_complete_context(cext_ctx)
         return local_processed
 
-    if ptr_is_null(global_load_ptr("pcc_gc_trace_cursor")) != 0:
+    if (waiting_for_publication == 0
+            and ptr_is_null(global_load_ptr("pcc_gc_trace_cursor")) != 0):
         if pcc_gc_gray_count_load_acquire() != 0:
-            global_store_ptr("pcc_gc_trace_cursor", global_load_ptr("pcc_gc_object_head"))
+            if queue_only == 0:
+                global_store_ptr("pcc_gc_trace_cursor", global_load_ptr("pcc_gc_object_head"))
         elif (
             load_i64(
                 global_addr("pcc_gc_tracing_finish_claim_epoch"), 0

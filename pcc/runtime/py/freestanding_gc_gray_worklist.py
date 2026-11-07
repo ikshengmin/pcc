@@ -5,8 +5,9 @@ batch, a safepoint or thread exit publishes it to the shared MPSC list. The
 graph lock serializes consumers and protects the partially consumed list;
 the producer never takes that lock. Entries are addresses, not lifetime
 leases: a consumer must check current object-index membership before reading
-a header. The existing gray-count/object-list fallback remains authoritative
-on allocation failure or work not yet published by another running thread.
+a header. Healthy CMS slices request publication of another running thread's
+tail instead of searching the object list. Explicit/stopped drains and a
+cycle which lost a token to allocation failure retain that fallback.
 """
 
 from pcc import i64
@@ -15,6 +16,8 @@ from pcc.unsafe import (
     atomic_cas_i64,
     atomic_load_i64,
     atomic_rmw_i64,
+    atomic_store_i32,
+    define_global_i32,
     define_global_i64,
     define_global_ptr_null,
     define_thread_local_ptr_null,
@@ -50,6 +53,12 @@ define_thread_local_ptr_null("pcc_gc_gray_local_batch")
 define_global_ptr_null("pcc_gc_gray_published_batches")
 define_global_ptr_null("pcc_gc_gray_pending_batches")
 define_global_i64("pcc_gc_gray_worklist_allocation_failures", 0)
+# Only the CMS consumer requests publication. A mutator flush never clears
+# this level: its own tail says nothing about another running producer.
+define_global_i32("pcc_gc_gray_worklist_flush_requested", 0)
+# A successful later allocation cannot recover a token already lost to OOM.
+# Only stopped whitening/finished cleanup may clear this cycle-local latch.
+define_global_i32("pcc_gc_gray_worklist_fallback_required", 0)
 
 
 @c_abi_export("pcc_gc_gray_worklist_flush")
@@ -93,6 +102,10 @@ def pcc_gc_gray_worklist_note(obj) -> None:
         if ptr_is_null(batch) != 0:
             # The color/count transition is NOT undone. The original walk
             # will still find this gray object, including while stopped.
+            atomic_store_i32(
+                global_addr("pcc_gc_gray_worklist_fallback_required"),
+                0, 1, "release",
+            )
             atomic_rmw_i64(
                 "add", global_addr("pcc_gc_gray_worklist_allocation_failures"),
                 0, 1, "relaxed",
@@ -198,3 +211,11 @@ def pcc_gc_gray_worklist_clear_stopped() -> None:
         nxt = load_ptr(batch, _BATCH_NEXT)
         free(batch)
         batch = nxt
+    # Every other producer is parked/exited and has published its tail.
+    # Same-backend epoch advances alone do not provide this exclusion.
+    atomic_store_i32(
+        global_addr("pcc_gc_gray_worklist_fallback_required"), 0, 0, "release"
+    )
+    atomic_store_i32(
+        global_addr("pcc_gc_gray_worklist_flush_requested"), 0, 0, "release"
+    )

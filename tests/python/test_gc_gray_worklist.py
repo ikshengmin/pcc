@@ -36,6 +36,8 @@ LOCAL = "pcc_gc_gray_local_batch"
 PUBLISHED = "pcc_gc_gray_published_batches"
 PENDING = "pcc_gc_gray_pending_batches"
 FAILURES = "pcc_gc_gray_worklist_allocation_failures"
+REQUEST = "pcc_gc_gray_worklist_flush_requested"
+FALLBACK = "pcc_gc_gray_worklist_fallback_required"
 MODE = "pcc_gc_nonmoving_count_free"
 BACKEND = "pcc_gc_backend_selected"
 EPOCH = "pcc_gc_tracing_cycle_epoch"
@@ -75,6 +77,7 @@ class _BatchMemory:
             BACKEND: bytearray((2).to_bytes(4, "little")),
             EPOCH: bytearray((17).to_bytes(8, "little")),
             PUBLISHED: bytearray(8), PENDING: bytearray(8), FAILURES: bytearray(8),
+            REQUEST: bytearray(4), FALLBACK: bytearray(4),
         }
         self.blocks = {}
         self.initialized = {}
@@ -105,6 +108,7 @@ class _BatchMemory:
             "atomic_load_i64": self.atomic_load,
             "atomic_cas_i64": self.cas,
             "atomic_rmw_i64": self.rmw,
+            "atomic_store_i32": self.atomic_store32,
             "malloc": self.malloc,
             "free": self.free,
             "null": lambda: 0,
@@ -238,6 +242,11 @@ class _BatchMemory:
             self.retired.add(pointer)
             self.freed.append(pointer)
 
+    def atomic_store32(self, pointer, offset, value, order):
+        assert pointer in (REQUEST, FALLBACK) and offset == 0 and order == "release"
+        assert value in (0, 1)
+        self.store(pointer, offset, value, 4)
+
     def atomic_load(self, pointer, offset, order):
         if pointer == EPOCH:
             assert (offset, order) == (0, "acquire")
@@ -334,7 +343,8 @@ def test_batch_layout_exports_and_storage_owners_are_explicit():
                    and node.value.func.id.startswith("define_")}
     assert definitions == {LOCAL: "define_thread_local_ptr_null",
                            PUBLISHED: "define_global_ptr_null",
-                           PENDING: "define_global_ptr_null", FAILURES: "define_global_i64"}
+                           PENDING: "define_global_ptr_null", FAILURES: "define_global_i64",
+                           REQUEST: "define_global_i32", FALLBACK: "define_global_i32"}
     exports = {node.name: ast.literal_eval(node.decorator_list[0].args[0])
                for node in tree.body if isinstance(node, ast.FunctionDef)}
     assert exports == {name: name for name in FUNCTIONS}
@@ -581,9 +591,15 @@ def test_allocator_failure_is_counted_per_attempt_and_a_later_batch_recovers():
     assert memory.local() == 0 and memory.scalar(PUBLISHED) == 0
     assert memory.scalar(FAILURES) == (1 << 32) + 9
     assert not memory.freed and not memory.cas_attempts
+    assert memory.scalar(FALLBACK) == 1
     memory.call("note", 13024)
     assert memory.local_count() == 1 and len(memory.allocations) == 3
     assert memory.drain() == [13024]
+    assert memory.scalar(FALLBACK) == 1
+    memory.set_scalar(EPOCH, 18)
+    assert memory.scalar(FALLBACK) == 1
+    memory.locked_call("clear_stopped")
+    assert memory.scalar(FALLBACK) == 0
     memory.call("unregister")
 
 
@@ -731,11 +747,17 @@ NATIVE_SOURCE = r'''
 extern int32_t pcc_gc_nonmoving_count_free;
 extern int32_t pcc_gc_backend_selected;
 extern int64_t pcc_gc_tracing_cycle_epoch;
+extern int32_t pcc_gc_gray_worklist_fallback_required;
+extern void *pcc_gc_gray_published_batches;
 extern void pcc_gc_gray_worklist_note(void *);
 extern void pcc_gc_gray_worklist_flush(void);
 extern void *pcc_gc_gray_worklist_take_locked(void);
 extern void pcc_gc_gray_worklist_unregister(void);
 extern void pcc_gc_gray_worklist_clear_stopped(void);
+extern void pcc_container_lock(void *);
+extern void pcc_container_unlock(void *);
+extern void pcc_container_lock_pair(void *, void *);
+extern void pcc_container_unlock_pair(void *, void *);
 
 enum { PRODUCERS = 4, CONSUMERS = 2, EACH = 4099, TOTAL = PRODUCERS * EACH };
 static int32_t start, ready, done, failure;
@@ -825,6 +847,65 @@ static int expect_take(uintptr_t expected, int code) {
     uintptr_t actual = (uintptr_t)pcc_gc_gray_worklist_take_locked();
     pcc_py_gc_minor_graph_unlock();
     return actual == expected ? 0 : code;
+}
+static int requested_release_boundaries(void) {
+    static char first[64], second[64];
+    for (int mode = 0; mode < 4; mode++) {
+        uintptr_t token = (uintptr_t)0x52345008 + mode * 8;
+        __atomic_store_n(&pcc_gc_gray_worklist_flush_requested, 0, __ATOMIC_RELEASE);
+        if (mode == 0) {
+            pcc_thread_no_park_enter();
+            pcc_thread_no_park_enter();
+        } else if (mode == 1) {
+            pcc_py_gc_minor_graph_lock();
+            pcc_py_gc_minor_graph_lock();
+        } else if (mode == 2) {
+            pcc_container_lock(first);
+        } else {
+            pcc_container_lock_pair(first, second);
+        }
+        pcc_gc_gray_worklist_note((void *)token);
+        __atomic_store_n(&pcc_gc_gray_worklist_flush_requested, 1, __ATOMIC_RELEASE);
+        int error = 0;
+        /* The real safepoint must suppress even publication within a lease.
+           Finish the lease before reporting a failed observation. Read the
+           raw head's complete uintptr_t bits, as the runtime's i64 atomics
+           do; a narrow non-null test could miss a nonzero high half. */
+        pcc_thread_safepoint();
+        if (__atomic_load_n((uintptr_t *)&pcc_gc_gray_published_batches, __ATOMIC_ACQUIRE)) error = 50;
+        if (mode == 0) {
+            pcc_thread_no_park_exit();
+            if (__atomic_load_n((uintptr_t *)&pcc_gc_gray_published_batches, __ATOMIC_ACQUIRE)) error = 51;
+            pcc_thread_no_park_exit();
+        } else if (mode == 1) {
+            pcc_py_gc_minor_graph_unlock();
+            if (__atomic_load_n((uintptr_t *)&pcc_gc_gray_published_batches, __ATOMIC_ACQUIRE)) error = 52;
+            pcc_py_gc_minor_graph_unlock();
+        } else if (mode == 2) {
+            pcc_container_unlock(first);
+        } else {
+            pcc_container_unlock_pair(first, second);
+        }
+        if (error) return error;
+        if (!__atomic_load_n((uintptr_t *)&pcc_gc_gray_published_batches, __ATOMIC_ACQUIRE)) return 53;
+        if (__atomic_load_n(&pcc_gc_gray_worklist_flush_requested, __ATOMIC_ACQUIRE) != 1) return 54;
+        if (pcc_thread_stop_requested != 0 || pcc_thread_owns_stopped_world()) return 55;
+        __atomic_store_n(&pcc_gc_gray_worklist_flush_requested, 0, __ATOMIC_RELEASE);
+        int check = expect_take(token, 56);
+        if (check) return check;
+        check = expect_take(0, 57);
+        if (check) return check;
+    }
+    /* A stopped clear, not an epoch change alone, clears both controls. */
+    __atomic_store_n(&pcc_gc_gray_worklist_flush_requested, 1, __ATOMIC_RELEASE);
+    __atomic_store_n(&pcc_gc_gray_worklist_fallback_required, 1, __ATOMIC_RELEASE);
+    if (pcc_stop_the_world() != 0) return 58;
+    pcc_gc_gray_worklist_clear_stopped();
+    int invalid = __atomic_load_n(&pcc_gc_gray_worklist_flush_requested, __ATOMIC_ACQUIRE)
+        || __atomic_load_n(&pcc_gc_gray_worklist_fallback_required, __ATOMIC_ACQUIRE);
+    int resumed = pcc_resume_world();
+    if (invalid || resumed != 0) return 59;
+    return 0;
 }
 static int sequential_boundaries(void) {
     pcc_gc_gray_worklist_note((void *)(uintptr_t)0x12345008);
@@ -934,6 +1015,8 @@ int main(int argc, char **argv) {
     pcc_gc_backend_selected = backend;
     pcc_gc_tracing_cycle_epoch = 17;
     int initial = sequential_boundaries();
+    if (initial) return finish_main(initial);
+    initial = requested_release_boundaries();
     if (initial) return finish_main(initial);
     int ran = run_workers();
     if (ran) return finish_main(ran);
@@ -1290,6 +1373,8 @@ def test_queue_cross_object_abi_is_unique_bounded_and_registered_with_correct_st
     expected[PREFIX + "take_locked"] = ((), "c_ptr")
     for name, signature in expected.items():
         assert FREESTANDING_GC_CROSS_OBJECT_SIGNATURES[name] == signature
+    assert {REQUEST, FALLBACK} <= FREESTANDING_GC_I32_GLOBALS
+    assert not {REQUEST, FALLBACK} & FREESTANDING_GC_THREAD_LOCAL_GLOBALS
     assert LOCAL in FREESTANDING_GC_THREAD_LOCAL_GLOBALS
     assert not {PUBLISHED, PENDING} & FREESTANDING_GC_THREAD_LOCAL_GLOBALS
     assert {PUBLISHED, PENDING} <= FREESTANDING_GC_PTR_GLOBALS
@@ -1319,7 +1404,7 @@ def _assert_native_owner_closure(archive):
         read_archive_payloads,
     )
 
-    selected = FUNCTIONS | {LOCAL, PUBLISHED, PENDING, FAILURES}
+    selected = FUNCTIONS | {LOCAL, PUBLISHED, PENDING, FAILURES, REQUEST, FALLBACK}
     owners = {name: [] for name in selected}
     users = {name: set() for name in selected}
     owner_name = SOURCE.stem + ".o"
@@ -1341,6 +1426,7 @@ def _assert_native_owner_closure(archive):
     assert all(owner == [owner_name] for owner in owners.values()), owners
     assert owner_symbols is not None and owner_symbols[LOCAL].type == STT_TLS
     assert all(owner_symbols[name].size == 8 for name in (LOCAL, PUBLISHED, PENDING, FAILURES))
+    assert all(owner_symbols[name].size == 4 for name in (REQUEST, FALLBACK))
     assert not users[LOCAL], "TLS owner must be accessed through its exported queue API"
     assert owner_imports == {MODE, BACKEND, EPOCH, "malloc", "free"}
     expected_users = {
@@ -1359,3 +1445,22 @@ def _assert_native_owner_closure(archive):
     return {"owner": owner_name, "exports": sorted(selected),
             "imports": sorted(owner_imports),
             "users": {name: sorted(members) for name, members in users.items()}}
+
+
+@pytest.mark.parametrize("operation", ["flush", "unregister"])
+def test_producer_publication_and_raw_take_never_acknowledge_other_tails(operation):
+    memory = _BatchMemory()
+    for producer, token in (("a", 0x6008), ("b", 0x6010)):
+        with memory.as_thread(producer):
+            memory.call("note", token)
+    memory.set_scalar(REQUEST, 1)
+    with memory.as_thread("a"):
+        memory.call(operation)
+    assert memory.scalar(REQUEST) == 1
+    assert memory.take() == 0x6008 and memory.scalar(REQUEST) == 1
+    with memory.as_thread("b"):
+        assert memory.local_count() == 1
+        memory.call("unregister")
+    assert memory.take() == 0x6010 and memory.scalar(REQUEST) == 1
+    memory.locked_call("clear_stopped")
+    assert memory.scalar(REQUEST) == 0

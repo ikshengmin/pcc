@@ -15,7 +15,7 @@ import pytest
 
 from pcc.frontends.python.codegen.freestanding_abi_constants import ABI_CONSTANTS
 from tests.python.test_gc_gray_worklist import (
-    BACKEND, BLACK, COUNT, EPOCH, GRAY, PENDING, PUBLISHED, READ,
+    BACKEND, BLACK, COUNT, EPOCH, FALLBACK, GRAY, MODE, PENDING, PUBLISHED, READ, REQUEST,
     SOURCE, WHITE, _RawCollectorMemory, _install,
 )
 
@@ -355,8 +355,11 @@ def test_stale_queue_token_spends_scan_budget_without_retiring_gray(backend, sta
 
 @pytest.mark.parametrize("backend", [1, 2])
 @pytest.mark.parametrize("invalidate", [None, "epoch", "backend"])
-def test_queued_cext_handoff_keeps_pin_identity_and_unlocked_callback(backend, invalidate):
+@pytest.mark.parametrize("cms_worker", [False, True])
+def test_queued_cext_handoff_keeps_pin_identity_and_unlocked_callback(backend, invalidate, cms_worker):
     memory = _SchedulerMemory(backend)
+    memory.set_scalar("pcc_gc_cms_worker_current", int(cms_worker))
+    memory.set_scalar(REQUEST, int(cms_worker))
     extension = memory.object("extension", cext=True)
     child = memory.leaf("child")
     other = memory.leaf("other")
@@ -372,6 +375,9 @@ def test_queued_cext_handoff_keeps_pin_identity_and_unlocked_callback(backend, i
         # A reentrant scheduler must observe the pending owner and leave it
         # alone, without consuming or double-retiring its queued obligation.
         assert memory.step(1) == 0
+        # The CMS take ended its request before the unlocked callback;
+        # the reentrant pending-owner return must not arm another request.
+        assert memory.scalar(REQUEST) == 0
         if invalidate == "epoch":
             memory.set_scalar(EPOCH, 18)
         elif invalidate == "backend":
@@ -397,7 +403,181 @@ def test_queued_cext_handoff_keeps_pin_identity_and_unlocked_callback(backend, i
         assert memory.load(other, 12, 4) & 56 == GRAY
         assert memory.step(1) == 1
         assert memory.gray == 0 and memory.load(other, 12, 4) & 56 == BLACK
+        assert memory.completions == ([] if cms_worker else [(17, backend)])
+        assert not memory.node_next_reads(before)
     else:
         assert memory.load(extension, 12, 4) & 56 == GRAY
         assert memory.load(child, 12, 4) & 56 == WHITE
         assert memory.gray == 2 and memory.gray_changes == []
+
+
+@pytest.mark.parametrize("backend", [1, 2])
+@pytest.mark.parametrize("initial_cursor", [False, True])
+def test_cms_requests_two_unpublished_tails_without_inspecting_cursor(backend, initial_cursor):
+    memory = _SchedulerMemory(backend)
+    memory.set_scalar("pcc_gc_cms_worker_current", 1)
+    for index in range(97):
+        memory.leaf(f"prefix-{index}", black=True)
+    first, second = memory.leaf("first"), memory.leaf("second")
+    for producer, obj in (("producer-a", first), ("producer-b", second)):
+        with memory.as_thread(producer):
+            memory.shade(obj)
+            assert memory.local_count() == 1
+    cursor = memory.scalar(HEAD) if initial_cursor else 0
+    memory.set_scalar(CURSOR, cursor)
+    before = len(memory.accesses)
+    assert memory.step(8) == 0
+    assert memory.gray == 2 and memory.scalar(REQUEST) == 1
+    assert memory.scalar(CURSOR) == cursor and not memory.node_next_reads(before)
+    assert not memory.completions
+    with memory.as_thread("producer-a"):
+        memory.call("flush")
+        assert memory.scalar(REQUEST) == 1  # Cannot acknowledge producer-b.
+    # Only CMS consumption may end the request. B is still unpublished, so
+    # clearing on A's token is progress, never a claim that all TLS is empty.
+    assert memory.step(1) == 1
+    assert memory.gray == 1 and memory.scalar(REQUEST) == 0
+    assert memory.scalar(CURSOR) == cursor
+    assert not memory.node_next_reads(before) and not memory.completions
+    assert memory.step(8) == 0
+    assert memory.gray == 1 and memory.scalar(REQUEST) == 1
+    with memory.as_thread("producer-b"):
+        memory.call("flush")
+        assert memory.scalar(REQUEST) == 1
+    # No new allocation ticket or cycle request accompanies publication.
+    assert memory.step(8) == 1
+    assert memory.gray == 0 and memory.scalar(REQUEST) == 0
+    assert not memory.node_next_reads(before) and not memory.completions
+    assert memory.gray_changes == [1, 1, -1, -1]
+
+
+@pytest.mark.parametrize("backend", [1, 2])
+def test_cms_does_not_finish_a_shader_reserved_before_cas(backend):
+    memory = _SchedulerMemory(backend)
+    memory.set_scalar("pcc_gc_cms_worker_current", 1)
+    target = memory.leaf("reserved")
+    original = memory.namespace["atomic_cas_i32"]
+    observations = []
+
+    def interleave(pointer, offset, expected, desired, success, failure):
+        if pointer == target and not observations:
+            assert memory.gray == 1 and memory.load(target, 12, 4) & 56 == WHITE
+            with memory.as_thread("cms"):
+                before = len(memory.accesses)
+                observations.append(memory.step(8))
+                assert not memory.node_next_reads(before)
+                assert memory.scalar(REQUEST) == 1 and not memory.completions
+        return original(pointer, offset, expected, desired, success, failure)
+
+    memory.namespace["atomic_cas_i32"] = interleave
+    with memory.as_thread("producer"):
+        memory.shade(target)
+        memory.call("flush")
+    assert observations == [0] and memory.gray == 1
+    assert memory.step(8) == 1
+    assert memory.gray == 0 and memory.scalar(REQUEST) == 0
+
+
+@pytest.mark.parametrize("backend", [1, 2])
+def test_cms_oom_keeps_bounded_cursor_fallback_after_later_allocation(backend):
+    memory = _SchedulerMemory(backend)
+    memory.set_scalar("pcc_gc_cms_worker_current", 1)
+    for index in range(9):
+        memory.leaf(f"prefix-{index}", black=True)
+    lost, queued = memory.leaf("lost"), memory.leaf("queued")
+    with memory.as_thread("producer"):
+        memory.fail_allocations = 1
+        memory.shade(lost)
+        memory.shade(queued)
+        memory.call("flush")
+    assert memory.scalar(FALLBACK) == 1
+    memory.set_scalar(REQUEST, 1)
+    before = len(memory.accesses)
+    assert memory.step(2) == 1
+    assert memory.gray == 1 and memory.scalar(REQUEST) == 0
+    assert len(memory.node_next_reads(before)) == 1
+    for _ in range(8):
+        if memory.gray == 0:
+            break
+        before = len(memory.accesses)
+        memory.step(2)
+        assert len(memory.node_next_reads(before)) <= 2
+    assert memory.gray == 0 and memory.scalar(FALLBACK) == 1
+    memory.locked_call("clear_stopped")
+    assert memory.scalar(FALLBACK) == memory.scalar(REQUEST) == 0
+
+
+@pytest.mark.parametrize("backend", [1, 2])
+def test_cms_observes_oom_that_arrives_at_queue_exhaustion(backend):
+    memory = _SchedulerMemory(backend)
+    memory.set_scalar("pcc_gc_cms_worker_current", 1)
+    target = memory.leaf("lost")
+    original = memory.namespace["pcc_gc_gray_worklist_take_locked"]
+    injected = []
+
+    def exhaust():
+        result = original()
+        if not result and not injected:
+            injected.append(True)
+            with memory.as_thread("producer"):
+                memory.fail_allocations = 1
+                memory.shade(target)
+        return result
+
+    memory.namespace["pcc_gc_gray_worklist_take_locked"] = exhaust
+    assert memory.step(2) == 1
+    assert memory.gray == 0 and memory.scalar(FALLBACK) == 1
+    assert memory.scalar(REQUEST) == 0
+
+
+@pytest.mark.parametrize("mode", ["mutator", "stopped", "disabled-queue"])
+def test_unpublished_tail_retains_original_fallback_outside_healthy_cms(mode):
+    memory = _SchedulerMemory(2)
+    memory.set_scalar("pcc_gc_cms_worker_current", int(mode != "mutator"))
+    if mode == "stopped":
+        memory.namespace["pcc_thread_owns_stopped_world"] = lambda: 1
+    target = memory.leaf("tail")
+    with memory.as_thread("producer"):
+        memory.shade(target)
+    if mode == "disabled-queue":
+        memory.set_scalar(MODE, 0)
+    before = len(memory.accesses)
+    assert memory.step(2) == 1
+    assert memory.node_next_reads(before) and memory.gray == 0
+    assert memory.scalar(REQUEST) == 0
+
+
+@pytest.mark.parametrize("backend", [1, 2])
+def test_mutator_consumer_cannot_acknowledge_cms_publication_request(backend):
+    memory = _SchedulerMemory(backend)
+    target = memory.leaf("queued")
+    with memory.as_thread("producer"):
+        memory.shade(target)
+        memory.call("flush")
+    memory.set_scalar(REQUEST, 1)
+    assert memory.step(1) == 1
+    assert memory.gray == 0 and memory.scalar(REQUEST) == 1
+
+
+@pytest.mark.parametrize("backend", [1, 2])
+def test_cms_stale_tokens_clear_request_once_per_slice_then_rearm(backend):
+    memory = _SchedulerMemory(backend)
+    memory.set_scalar("pcc_gc_cms_worker_current", 1)
+    stale = [memory.leaf(f"black-{index}", black=True) for index in range(3)]
+    hidden = memory.leaf("hidden")
+    with memory.as_thread("stale-publisher"):
+        for obj in stale:
+            memory.call("note", obj)
+        memory.call("flush")
+    with memory.as_thread("hidden-producer"):
+        memory.shade(hidden)
+    memory.set_scalar(REQUEST, 1)
+    before = len(memory.accesses)
+    assert memory.step(2) == 0
+    writes = [row for row in memory.accesses[before:]
+              if row[1] == "write" and row[2] == REQUEST]
+    assert len(writes) == 1 and writes[0][-1] == 0
+    assert memory.gray == 1 and not memory.completions
+    assert not memory.node_next_reads(before)
+    assert memory.step(2) == 0
+    assert memory.gray == 1 and memory.scalar(REQUEST) == 1

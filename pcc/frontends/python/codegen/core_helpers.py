@@ -148,9 +148,23 @@ class CoreHelperMixin:
             4,
             name=self._fresh("thread.safepoint.flag"),
         )
+        flush_gv = declare_runtime_global(
+            self.module, "pcc_gc_gray_worklist_flush_requested",
+        )
+        flush = self.builder.load_atomic(
+            flush_gv,
+            "acquire",
+            4,
+            name=self._fresh("thread.safepoint.flush"),
+        )
+        # Publication uses the same no-park/lease checks as a stop. Never
+        # flush a local gray tail directly from an application poll.
+        pending = self.builder.or_(
+            flag, flush, name=self._fresh("thread.safepoint.pending"),
+        )
         need_slow = self.builder.icmp_unsigned(
             "!=",
-            flag,
+            pending,
             ir.Constant(_I32, 0),
             name=self._fresh("thread.safepoint.need"),
         )

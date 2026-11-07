@@ -419,7 +419,7 @@ def _low_builder_thread_safepoint(builder: pcc_low_ir.LowBuilder) -> None:
 
 def _emit_thread_safepoint_poll_llvm(builder, llvm_module, fn, runtime) -> None:
     block = getattr(builder, "_block", None)
-    if block is not None and getattr(block, "terminator", None) is not None:
+    if block is not None and getattr(block, "is_terminated", False):
         return
     flag_gv = declare_runtime_global(llvm_module, "pcc_thread_stop_requested")
     flag = builder.load_atomic(
@@ -428,9 +428,19 @@ def _emit_thread_safepoint_poll_llvm(builder, llvm_module, fn, runtime) -> None:
         4,
         name="low.safepoint.flag",
     )
+    flush_gv = declare_runtime_global(
+        llvm_module, "pcc_gc_gray_worklist_flush_requested",
+    )
+    flush = builder.load_atomic(
+        flush_gv,
+        "acquire",
+        4,
+        name="low.safepoint.flush",
+    )
+    pending = builder.or_(flag, flush, name="low.safepoint.pending")
     need_slow = builder.icmp_unsigned(
         "!=",
-        flag,
+        pending,
         ir.Constant(_I32, 0),
         name="low.safepoint.need",
     )
@@ -440,7 +450,7 @@ def _emit_thread_safepoint_poll_llvm(builder, llvm_module, fn, runtime) -> None:
     builder.position_at_end(slow_block)
     builder.call(runtime["pcc_thread_safepoint"], [])
     block = getattr(builder, "_block", None)
-    if block is None or getattr(block, "terminator", None) is None:
+    if block is None or not getattr(block, "is_terminated", False):
         builder.branch(cont_block)
     builder.position_at_end(cont_block)
 

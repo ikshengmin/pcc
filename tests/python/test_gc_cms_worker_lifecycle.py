@@ -496,3 +496,80 @@ def test_finished_mark_rearms_a_consumed_wakeup_only_after_collection_is_enabled
     rt.call("pcc_gc_cms_worker_main_py", 0)
     assert rt.memory["pcc_gc_backend4_auto_step_pending"] == int(bool(enabled and threshold))
     assert rt.memory["pcc_gc_cms_sweep_pending"] == 1
+
+
+@pytest.mark.parametrize("backend", [1, 2])
+def test_empty_publication_wait_backs_off_without_finish_or_debt_credit(backend):
+    rt = Runtime(backend=backend, state=1)
+    request = "pcc_gc_gray_worklist_flush_requested"
+    rt.memory.update({"py_gc_enabled": 1, "py_gc_threshold0": 700,
+                      "pcc_gc_mark_active": 1, request: 0})
+    rt.ns["pcc_gc_gray_count_load_acquire"] = lambda: 1
+    traced, slept, discharged = [], [], []
+    def step(budget):
+        traced.append(budget)
+        rt.memory[request] = 1
+        return 0
+    def sleep(nanoseconds):
+        assert rt.memory[request] == 1
+        assert rt.memory.get("pcc_gc_cms_finish_pending", 0) == 0
+        slept.append(nanoseconds)
+        rt.memory[STOP] = 1
+    rt.ns["pcc_gc_tracing_step_cycle"] = step
+    rt.ns["pcc_platform_sleep_ns"] = sleep
+    rt.ns["pcc_gc_tracing_discharge_debt"] = discharged.append
+    rt.call("pcc_gc_cms_worker_main_py", 0)
+    assert traced == [512] and slept == [1000000] and discharged == []
+    assert rt.memory[request] == 0 and rt.memory[TLS] == 0
+
+
+@pytest.mark.parametrize("backend", [1, 2])
+@pytest.mark.parametrize("paused", ["disabled", "zero-threshold", "inactive", "other-backend"])
+def test_paused_worker_clears_publication_request_and_rearms_after_resume(backend, paused):
+    rt = Runtime(backend=backend, state=1)
+    request = "pcc_gc_gray_worklist_flush_requested"
+    rt.memory.update({"py_gc_enabled": 1, "py_gc_threshold0": 700,
+                      "pcc_gc_mark_active": 1, request: 1})
+    if paused == "disabled":
+        rt.memory["py_gc_enabled"] = 0
+    elif paused == "zero-threshold":
+        rt.memory["py_gc_threshold0"] = 0
+    elif paused == "inactive":
+        rt.memory["pcc_gc_mark_active"] = 0
+    else:
+        rt.memory[BACKEND] = 0
+    rt.ns["pcc_gc_gray_count_load_acquire"] = lambda: 1
+    sleeps, traces = [], []
+    def step(budget):
+        traces.append(budget)
+        rt.memory[request] = 1
+        return 0
+    def sleep(nanoseconds):
+        sleeps.append(nanoseconds)
+        assert rt.memory[request] == int(len(sleeps) > 1)
+        if len(sleeps) == 1:
+            rt.memory.update({"py_gc_enabled": 1, "py_gc_threshold0": 700,
+                              "pcc_gc_mark_active": 1, BACKEND: backend})
+        else:
+            rt.memory[STOP] = 1
+    rt.ns["pcc_gc_tracing_step_cycle"] = step
+    rt.ns["pcc_platform_sleep_ns"] = sleep
+    rt.call("pcc_gc_cms_worker_main_py", 0)
+    assert traces == [512] and sleeps == [1000000, 1000000]
+    assert rt.memory[request] == 0
+
+
+@pytest.mark.parametrize("backend", [1, 2])
+def test_zero_credit_handoff_clears_publication_request_before_gate(backend):
+    rt = Runtime(backend=backend, state=1)
+    request = "pcc_gc_gray_worklist_flush_requested"
+    rt.memory.update({"py_gc_enabled": 1, "py_gc_threshold0": 700,
+                      "pcc_gc_mark_active": 1, request: 1})
+    rt.ns["pcc_gc_gray_count_load_acquire"] = lambda: 0
+    def sleep(_):
+        assert rt.memory[request] == 0
+        assert rt.memory["pcc_gc_cms_finish_pending"] == 1
+        rt.memory[STOP] = 1
+    rt.ns["pcc_platform_sleep_ns"] = sleep
+    rt.call("pcc_gc_cms_worker_main_py", 0)
+    assert rt.memory[request] == 0

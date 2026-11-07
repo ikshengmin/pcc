@@ -93,6 +93,9 @@ RAW_FUNCTION_IMPORTS = {
     "py_incref",
 }
 RAW_GLOBAL_IMPORTS = {
+    "pcc_gc_gray_worklist_flush_requested",
+    "pcc_gc_gray_worklist_fallback_required",
+    "pcc_gc_nonmoving_count_free",
     "pcc_gc_backend4_no_refcounts",
     "pcc_gc_live_bytes",
     "pcc_gc_cms_sweep_pending",

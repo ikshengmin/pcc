@@ -1168,7 +1168,10 @@ def pcc_thread_graph_lock_release(lock_word) -> int:
         if (state & 281474976710656) != 0:
             pcc_platform_abort()
             return 0
-        if atomic_load_i32(global_addr("pcc_thread_stop_requested"), 0, "acquire") != 0:
+        if (atomic_load_i32(global_addr("pcc_thread_stop_requested"), 0, "acquire") != 0
+                or atomic_load_i32(
+                    global_addr("pcc_gc_gray_worklist_flush_requested"), 0, "acquire"
+                ) != 0):
             pcc_thread_safepoint()
     return 0
 
@@ -1230,7 +1233,10 @@ def _container_exit() -> None:
         if (state & 281474976710656) != 0:
             pcc_platform_abort()
             return
-        if atomic_load_i32(global_addr("pcc_thread_stop_requested"), 0, "acquire") != 0:
+        if (atomic_load_i32(global_addr("pcc_thread_stop_requested"), 0, "acquire") != 0
+                or atomic_load_i32(
+                    global_addr("pcc_gc_gray_worklist_flush_requested"), 0, "acquire"
+                ) != 0):
             pcc_thread_safepoint()
 
 
@@ -1292,7 +1298,10 @@ def pcc_container_unlock(obj) -> None:
         if (state & 281474976710656) != 0:
             pcc_platform_abort()
             return
-        if atomic_load_i32(global_addr("pcc_thread_stop_requested"), 0, "acquire") != 0:
+        if (atomic_load_i32(global_addr("pcc_thread_stop_requested"), 0, "acquire") != 0
+                or atomic_load_i32(
+                    global_addr("pcc_gc_gray_worklist_flush_requested"), 0, "acquire"
+                ) != 0):
             pcc_thread_safepoint()
 
 
@@ -1355,13 +1364,16 @@ def pcc_thread_no_park_exit() -> None:
     if (state & 16777215) == 0:
         # Leaving the last no-park level is pcc_thread_safepoint's poll. This
         # thread is registered (entering no-park required it) and not marked
-        # parked (it is running), so with no stop pending that poll returns
-        # at once; the stop-flag read is the same acquire load it makes. A
-        # pending stop takes the real locked path.
+        # parked (it is running). Publication requests take the existing poll
+        # only after the last lease ends; the poll flushes without parking
+        # unless a real stop is pending too.
         if (state & 281474976710656) != 0:
             pcc_platform_abort()
             return
-        if atomic_load_i32(global_addr("pcc_thread_stop_requested"), 0, "acquire") == 0:
+        if (atomic_load_i32(global_addr("pcc_thread_stop_requested"), 0, "acquire") == 0
+                and atomic_load_i32(
+                    global_addr("pcc_gc_gray_worklist_flush_requested"), 0, "acquire"
+                ) == 0):
             return
         pcc_thread_safepoint()
 

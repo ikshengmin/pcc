@@ -60,6 +60,7 @@ class _SlotBoundary(_MarkBoundary):
             "pcc_gc_object_index_seen_stable": self.is_known,
             "pcc_gc_pointer_is_managed": self.is_known,
             "pcc_thread_owns_stopped_world": lambda: 0,
+            "pcc_gc_is_cms_worker": lambda: 0,
             "pcc_threads_enabled": lambda: 1,
         })
         _load_bodies("freestanding_gc_object_slots.py", {

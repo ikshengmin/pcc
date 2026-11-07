@@ -579,6 +579,7 @@ class WorldTraceModel:
                           pcc_thread_conservative_roots_enabled=0,
                           # The poll flag and the stopped-world epoch.
                           pcc_thread_stop_requested=int(stopped),
+                          pcc_gc_gray_worklist_flush_requested=0,
                           pcc_thread_world_stop_py=int(stopped),
                           pcc_stop_owner_thread_id_py=owner,
                           pcc_stop_epoch_py=1, pcc_stop_depth_py=int(stopped),

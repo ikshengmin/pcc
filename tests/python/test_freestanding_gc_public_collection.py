@@ -61,6 +61,7 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_thread_enable_conservative_roots",
 }
 RAW_GLOBAL_IMPORTS = {
+    "pcc_gc_gray_worklist_flush_requested",
     "pcc_gc_cms_finish_pending",
     "pcc_gc_backend4_no_refcounts",
     "pcc_gc_frame_registry_inactive",

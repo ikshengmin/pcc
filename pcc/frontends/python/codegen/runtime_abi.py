@@ -1710,6 +1710,7 @@ RUNTIME_GLOBALS: dict[str, ir.Type] = {
     "py_func_code_class_cache": _PYOBJ,
     "pcc_builtin_function_cache": _PYOBJ,
     "pcc_thread_stop_requested": _I32,
+    "pcc_gc_gray_worklist_flush_requested": _I32,
     "pcc_object_type_epoch": _I64,
     "pcc_gc_backend4_auto_step_pending": _I32,
 }
@@ -1807,6 +1808,8 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_explicit_collect_active',
         'pcc_gc_forwarding_population',
         'pcc_gc_gray_count',
+        'pcc_gc_gray_worklist_flush_requested',
+        'pcc_gc_gray_worklist_fallback_required',
         'pcc_gc_in_auto_step',
         'pcc_gc_backend4_auto_step_pending',
         'pcc_gc_last_alloc_bytes',
@@ -3208,6 +3211,7 @@ def is_freestanding_gc_cross_object_runtime_import(
 RUNTIME_MUTABLE_GLOBALS = frozenset(
     {
         "pcc_thread_stop_requested",
+        "pcc_gc_gray_worklist_flush_requested",
         "pcc_gc_backend4_auto_step_pending",
         "py_func_code_class_cache",
         "pcc_builtin_function_cache",

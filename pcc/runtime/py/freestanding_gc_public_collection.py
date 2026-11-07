@@ -107,6 +107,14 @@ def pcc_gc_cms_worker_main_py(arg):
         enabled: i64 = load_i32(global_addr("py_gc_enabled"), 0)
         if threshold0 <= 0:
             enabled = 0
+        if enabled == 0 or marking == 0 or (backend != 1 and backend != 2):
+            # Pausing automatic work must not leave every compiled poll on
+            # the slow path. No credit/token is removed: a resumed healthy
+            # CMS slice requests publication again if its queue is empty.
+            atomic_store_i32(
+                global_addr("pcc_gc_gray_worklist_flush_requested"),
+                0, 0, "release",
+            )
         traced: i64 = 0
         pending = global_addr("pcc_gc_backend4_auto_step_pending")
         sweep_pending = global_addr("pcc_gc_cms_sweep_pending")
@@ -149,6 +157,10 @@ def pcc_gc_cms_worker_main_py(arg):
                 handoff = 1
                 due = 0
                 atomic_store_i32(
+                    global_addr("pcc_gc_gray_worklist_flush_requested"),
+                    0, 0, "release",
+                )
+                atomic_store_i32(
                     global_addr("pcc_gc_cms_finish_pending"), 0, 1, "release"
                 )
                 atomic_store_i32(pending, 0, 1, "release")
@@ -182,7 +194,14 @@ def pcc_gc_cms_worker_main_py(arg):
             if traced == 0 and (
                 handoff != 0
                 or load_i32(global_addr("pcc_gc_mark_active"), 0) == 0
+                or atomic_load_i32(
+                    global_addr("pcc_gc_gray_worklist_flush_requested"),
+                    0, "acquire",
+                ) != 0
             ):
+                # A running producer may still own a short tail or reserved
+                # credit. Yield between retries instead of spinning on the
+                # graph lock; gray count remains the completion authority.
                 pcc_platform_sleep_ns(1000000)
         else:
             pcc_platform_sleep_ns(1000000)
@@ -190,6 +209,9 @@ def pcc_gc_cms_worker_main_py(arg):
         # Park as relocation-safe here; an in-batch runtime poll remains
         # non-gated and continues to prevent unsafe movement.
         pcc_thread_safepoint_gate()
+    atomic_store_i32(
+        global_addr("pcc_gc_gray_worklist_flush_requested"), 0, 0, "release"
+    )
     atomic_rmw_i32(
         "add", global_addr("pcc_gc_cms_worker_stops"), 0, 1, "relaxed"
     )

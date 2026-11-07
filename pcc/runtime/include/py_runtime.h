@@ -230,6 +230,8 @@ void      pcc_gc_store_root_known(PyObject **slot, PyObject *value);
 void      pcc_gc_store_root_take_known(PyObject **slot, PyObject *value);
 void      pcc_gc_set_known_ref_checks(int64_t enabled);
 extern int32_t pcc_thread_stop_requested;
+/* Publication request only: neither a stop nor a completed-mark signal. */
+extern int32_t pcc_gc_gray_worklist_flush_requested;
 void      pcc_debug_check_release(const char *name, void *obj);
 void      pcc_debug_bad_str_concat(void *a, void *b,
                                    int64_t tag_a, int64_t tag_b);

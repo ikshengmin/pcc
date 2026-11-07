@@ -41,7 +41,8 @@ class GraphPollModel:
                     'pcc_tls_thread_id_py':7,
                     # A pending stop belongs to another thread.
                     'pcc_stop_owner_thread_id_py':8 if stop_requested else 0,
-                    'pcc_thread_stop_requested':stop_requested}
+                    'pcc_thread_stop_requested':stop_requested,
+                    'pcc_gc_gray_worklist_flush_requested':0}
         self.world_entries=[]
         self.gray_worklist_events=[]
         self.env=dict(i64=int,c_ptr=int,
@@ -134,3 +135,50 @@ def test_unleased_scheduler_lock_still_trips_before_suspension(stop_requested):
     model.state['pcc_tls_thread_state_py']|=SCHEDULER_HELD
     with pytest.raises(LockTripwire):model.env['pcc_thread_safepoint']()
     assert model.world_entries==[]
+
+
+@pytest.mark.parametrize('exit_kind', ('graph', 'no-park', 'container', 'container-inline'))
+@pytest.mark.parametrize('requested', (0, 1))
+def test_publication_request_polls_only_after_outermost_lease(exit_kind, requested):
+    model = GraphPollModel(0)
+    model.state['pcc_gc_gray_worklist_flush_requested'] = requested
+    container_held = 1 << 53
+    if exit_kind == 'graph':
+        model.env['pcc_py_gc_minor_graph_lock']()
+        model.env['pcc_py_gc_minor_graph_lock']()
+        inner = model.env['pcc_py_gc_minor_graph_unlock']
+        outer = inner
+    elif exit_kind == 'no-park':
+        model.env['pcc_thread_no_park_enter']()
+        model.env['pcc_thread_no_park_enter']()
+        inner = model.env['pcc_thread_no_park_exit']
+        outer = inner
+    else:
+        model.load('freestanding_thread_kernel_pthread.py', {
+            '_container_exit', 'pcc_container_unlock',
+        })
+        model.env['ptr_add'] = lambda base, offset: (base, offset)
+        model.state['pcc_tls_thread_state_py'] = REGISTERED | container_held | 2
+        if exit_kind == 'container':
+            inner = model.env['_container_exit']
+        else:
+            inner = lambda: model.env['pcc_container_unlock'](4096)
+        outer = model.env['pcc_thread_no_park_exit']
+    # Actual poll suppression, not just an exit-call counter.
+    model.env['pcc_thread_safepoint']()
+    assert not model.gray_worklist_events and not model.world_entries
+    inner()
+    assert not model.gray_worklist_events and no_park_depth(model.state) == 1
+    outer()
+    assert model.gray_worklist_events == (['flush'] if requested else [])
+    assert not model.world_entries and no_park_depth(model.state) == 0
+    assert model.state['pcc_gc_gray_worklist_flush_requested'] == requested
+
+
+def test_publication_request_does_not_bypass_scheduler_lock_tripwire():
+    model = GraphPollModel(0)
+    model.state['pcc_gc_gray_worklist_flush_requested'] = 1
+    model.state['pcc_tls_thread_state_py'] = REGISTERED | SCHEDULER_HELD | 1
+    with pytest.raises(LockTripwire):
+        model.env['pcc_thread_no_park_exit']()
+    assert not model.gray_worklist_events and not model.world_entries
