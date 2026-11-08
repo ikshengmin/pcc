@@ -127,6 +127,9 @@ _GRAPH_CONTEXT_NEXT: i64 = 8
 _GRAPH_CONTEXT_TAIL: i64 = 16
 _GRAPH_CONTEXT_ALLOCATION: i64 = 24
 _GRAPH_QUEUED_BIT: i64 = 4503599627370496
+# Scheduling hint after this many unsuccessful READY loads. This initial
+# budget keeps short handoffs local; it is not a measured optimum.
+_GRAPH_WAIT_SPIN_BUDGET: i64 = 64
 
 # Per-object container locks (GC0): one 0/1 word per 128-byte stripe (64
 # stripes, 8 KiB: 512 stripes cost one worker an L1 miss per transaction),
@@ -1015,8 +1018,14 @@ def _graph_wait_acquire(lock_word) -> int:
     if predecessor_bits != 0:
         predecessor = int_to_ptr(predecessor_bits)
         atomic_store_i64(predecessor, _GRAPH_WAIT_NEXT, ptr_to_int(node), "release")
+        spins_left: i64 = _GRAPH_WAIT_SPIN_BUDGET
         while atomic_load_i64(node, _GRAPH_WAIT_READY, "acquire") == 0:
-            pass
+            spins_left -= 1
+            if spins_left == 0:
+                # Yield only the OS timeslice, never the GC no-park lease.
+                # A linked waiter remains live until it acquires and dequeues.
+                sched_yield()
+                spins_left = _GRAPH_WAIT_SPIN_BUDGET
     # A grant selects the sole queued contender; it does not own lock_word.
     # Fast arrivals may barge. While the word is held, poll it read-only:
     # followers remain on their own node instead of all issuing LL/SC.
