@@ -45,11 +45,20 @@ def test_group_entry_rejects_other_policies_before_any_native_frame_or_poll():
     assert "pcc_gc_pin(" not in body and "pcc_gc_native_root_unbind" not in body
 
 
-def assert_group_restore_contract(blocks, globals_, start="gen.dispatch", target="gen.select", frame_offset=8):
-    """Every success/fallback path restores the same physical cells in order."""
+def assert_group_restore_contract(blocks, globals_, start="gen.dispatch", target="gen.select", frame_offset=8,
+                                  *, promoted_owners=False):
+    """Every success/fallback path restores the same physical cells in order.
+
+    Raw emitter checks stay memory-exact. Only the actual optimized consumer
+    opts into the separately proved SSA ownership representation.
+    """
     roots = RootSlotContract(blocks, globals_)
     by_name = {block.name: block for block in blocks}
     expected, batches, flags = {}, {}, {}
+    promoted = None
+    if promoted_owners:
+        from tests.python.promoted_restore_contract import PromotedRestoreOwners
+        promoted = PromotedRestoreOwners(roots)
     authoritative = None
     for block, position, ins in roots.rows:
         if roots.called(ins, "py_gen_frame_take") and ins.data[0].startswith("gen.operand.restore"):
@@ -60,9 +69,14 @@ def assert_group_restore_contract(blocks, globals_, start="gen.dispatch", target
             roots.require_owning(output)
             assert index not in expected
             expected[index] = output
-            flag = block.instructions[position + 2]
-            assert flag.kind == "store" and flag.data[1] == "1"
-            flags[index] = roots.slot(flag.data[3])
+            following_flags = block.instructions[position + 2:position + 3]
+            flag = following_flags[0] if following_flags else None
+            if flag is not None and flag.kind == "store" and flag.data[0].describe() == "i1":
+                assert flag.data[1] == "1"
+                flags[index] = roots.slot(flag.data[3])
+            else:
+                assert promoted is not None, "each scalar restore needs its immediate ownership store"
+                flags[index] = None
         if roots.called(ins, "py_gen_frame_take_group"):
             receiver, first, count, output = roots.args(ins)
             first, count = int(first), int(count)
@@ -86,6 +100,10 @@ def assert_group_restore_contract(blocks, globals_, start="gen.dispatch", target
             assert check.data[0] == "ne" and check.data[3:] == (ins.data[0], "0")
     for run in batches.values():
         assert all(expected[index] == output for index, output in run)
+    grouped = {index for run in batches.values() for index, _ in run}
+    assert all(flag is not None or index in grouped for index, flag in flags.items()), (
+        "only a grouped restore can use a promoted join flag"
+    )
     pending, seen, results = [(start, ())], set(), set()
     while pending:
         name, history = pending.pop()
@@ -114,9 +132,14 @@ def assert_group_restore_contract(blocks, globals_, start="gen.dispatch", target
             fast, slow = term.data[1:]
             assert fast.startswith("gen.operand.group.owned") and slow.startswith("gen.operand.scalar")
             fast_stores = by_name[fast].instructions
-            assert len(fast_stores) == len(batches[name])
-            assert all(row.kind == "store" and row.data[1] == "1" for row in fast_stores)
-            assert [roots.slot(row.data[3]) for row in fast_stores] == [flags[index] for index, _ in batches[name]]
+            memory_flags = [flags[index] for index, _ in batches[name] if flags[index] is not None]
+            assert len(fast_stores) == len(memory_flags)
+            assert all(row.kind == "store" and row.data[0].describe() == "i1"
+                       and row.data[1] == "1" for row in fast_stores)
+            assert [roots.slot(row.data[3]) for row in fast_stores] == memory_flags
+            if promoted is not None:
+                promoted.check_join(fast, slow, [output for index, output in batches[name]
+                                                 if flags[index] is None])
             pending.extend(((fast, history + batches[name]), (slow, history)))
         else:
             assert term.kind == "br", "restore chain must not escape or loop before selection"
@@ -543,21 +566,26 @@ def test_no_log_generator_group_finalization_and_cleanup_matches_reference(tmp_p
     from pcc.frontends.python import pipeline
     original_link = pipeline._link_with_self_backend_ir_texts
     observed = []
+    def inspect_consumer(text, path):
+        # Drop test-private parsed IR references before the backend links the
+        # same text. Inspection must not retain a second module across link.
+        from pcc.backend.self_backend_parse import parse_self_backend_module
+        from pcc.backend.self_backend_kernel import get_indexed_function_kernel
+        module = parse_self_backend_module(text)
+        for function in module.functions:
+            if function.name.endswith("_grouped__gen_resume"):
+                blocks = get_indexed_function_kernel(function).materialize_legacy_blocks(function)
+                batches = assert_group_restore_contract(blocks, module.globals_, promoted_owners=True)
+                assert any(len(run) == 16 for run in batches.values())
+                observed.append(str(path))
+
     def observe_link(texts, *args, **kwargs):
         for index, text in enumerate(texts):
             if "grouped__gen_resume" not in text:
                 continue
             path = tmp_path / ("group-link-input-" + str(index) + ".ll")
             path.write_text(text)
-            from pcc.backend.self_backend_parse import parse_self_backend_module
-            from pcc.backend.self_backend_kernel import get_indexed_function_kernel
-            module = parse_self_backend_module(text)
-            for function in module.functions:
-                if function.name.endswith("_grouped__gen_resume"):
-                    blocks = get_indexed_function_kernel(function).materialize_legacy_blocks(function)
-                    batches = assert_group_restore_contract(blocks, module.globals_)
-                    assert any(len(run) == 16 for run in batches.values())
-                    observed.append(str(path))
+            inspect_consumer(text, path)
         return original_link(texts, *args, **kwargs)  # Same list/arguments, unchanged IR.
     monkeypatch.setattr(pipeline, "_link_with_self_backend_ir_texts", observe_link)
     compile_python(str(_SOURCE), str(executable), backend="self", ir_scaffold_mode="on",
