@@ -554,6 +554,7 @@ def test_native_group_after_real_gc3_value_and_gc4_owner_value_relocation(tmp_pa
 
 @pytest.mark.integration
 def test_no_log_generator_group_finalization_and_cleanup_matches_reference(tmp_path, monkeypatch, pcc_runtime_archive):
+    from hashlib import sha256
     from pcc.frontends.python.pipeline import compile_python
     from tests.python.process_timeout import run_process_group_timeout
     from tests.python.test_generator_operand_root_groups import _parsed_function
@@ -567,10 +568,9 @@ def test_no_log_generator_group_finalization_and_cleanup_matches_reference(tmp_p
     executable = tmp_path / "frame_group_finalizers"
     from pcc.frontends.python import pipeline
     original_link = pipeline._link_with_self_backend_ir_texts
-    observed = []
+    observed, saved_inputs = [], []
     def inspect_consumer(text, path):
-        # Drop test-private parsed IR references before the backend links the
-        # same text. Inspection must not retain a second module across link.
+        # Check the exact saved link input before any reference/native run.
         from pcc.backend.self_backend_parse import parse_self_backend_module
         from pcc.backend.self_backend_kernel import get_indexed_function_kernel
         module = parse_self_backend_module(text)
@@ -581,17 +581,32 @@ def test_no_log_generator_group_finalization_and_cleanup_matches_reference(tmp_p
                 assert any(len(run) == 16 for run in batches.values())
                 observed.append(str(path))
 
-    def observe_link(texts, *args, **kwargs):
+    def save_consumer_inputs(texts):
+        saved = []
         for index, text in enumerate(texts):
             if "grouped__gen_resume" not in text:
                 continue
             path = tmp_path / ("group-link-input-" + str(index) + ".ll")
-            path.write_text(text)
-            inspect_consumer(text, path)
+            data = text.encode("utf-8")
+            path.write_bytes(data)
+            saved.append((path, sha256(data).hexdigest()))
+        return saved
+
+    def inspect_saved_consumer(path, digest):
+        data = path.read_bytes()
+        assert sha256(data).hexdigest() == digest, "saved consumer link input changed"
+        inspect_consumer(data.decode("utf-8"), path)
+
+    def observe_link(texts, *args, **kwargs):
+        # Keep only paths/digests across link, so consume_ir_texts can release
+        # its original list without a test-local text or parsed-module owner.
+        saved_inputs.extend(save_consumer_inputs(texts))
         return original_link(texts, *args, **kwargs)  # Same list/arguments, unchanged IR.
     monkeypatch.setattr(pipeline, "_link_with_self_backend_ir_texts", observe_link)
     compile_python(str(_SOURCE), str(executable), backend="self", ir_scaffold_mode="on",
                    runtime_archive=str(pcc_runtime_archive))
+    for path, digest in saved_inputs:
+        inspect_saved_consumer(path, digest)
     assert observed, "native fixture did not link the new consumer"
     for case in ("normal", "early", "close", "exception", "weakref", "resurrection", "alias", "small"):
         reference = run_process_group_timeout([sys.executable, str(_SOURCE), case], timeout=20)
