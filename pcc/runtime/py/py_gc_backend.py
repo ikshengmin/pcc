@@ -341,9 +341,9 @@ _backend4_zpage_track_page_prepare = extern(
     (c_ptr, c_ptr, c_int64),
     c_ptr,
 )
-_backend4_zpage_track_alloc_preallocated = extern(
-    "pcc_gc_backend4_zpage_track_alloc_preallocated",
-    (c_ptr, c_int64, c_ptr, c_ptr, c_int64),
+_backend4_zpage_track_alloc_selected = extern(
+    "pcc_gc_backend4_zpage_track_alloc_selected",
+    (c_ptr, c_int64, c_ptr, c_ptr, c_int64, c_ptr, c_int64),
     c_ptr,
 )
 _backend4_active_page = extern(
@@ -4904,11 +4904,18 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                 need_zpage_node = (
                     _backend4_zpage_node_plan_requires_prepare()
                 )
+                # Recompute after every preparation unlock/retry. The final
+                # attempt carries this selection through the locked commit.
                 current_page = null()
+                current_page_offset: int = -1
                 if (load_i32(o, 12) & 65536) != 0:
                     current_page = _backend4_zpage_find_page_for_addr(
                         o, size
                     )
+                    if ptr_is_null(current_page) == 0:
+                        current_page_offset = ptr_diff(
+                            o, load_ptr(current_page, 72)
+                        )
                 if ptr_is_null(current_page) != 0:
                     current_page = _backend4_zpage_find_reusable_page(
                         o, size
@@ -5322,12 +5329,14 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
         if backend == 4:
             store_ptr(zpage_node_owner, 0, prepared_zpage_node)
             store_ptr(zpage_owner, 0, prepared_zpage)
-            zpage_node = _backend4_zpage_track_alloc_preallocated(
+            zpage_node = _backend4_zpage_track_alloc_selected(
                 o,
                 size,
                 zpage_node_owner,
                 zpage_owner,
                 prepared_zpage_from_free,
+                current_page,
+                current_page_offset,
             )
             prepared_zpage_node = load_ptr(zpage_node_owner, 0)
             prepared_zpage = load_ptr(zpage_owner, 0)

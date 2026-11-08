@@ -30,6 +30,7 @@ class Registration(Index):
         self.short_commit = False
         self.fail_zpage_commit = False
         self.removed_provenance = []
+        self.selections = []
         self.object = self.calloc(1, 40)
         self.page = self.calloc(1, 80)
         self.znode = self.calloc(1, 80)
@@ -60,7 +61,7 @@ class Registration(Index):
             '_backend4_zpage_node_plan_requires_prepare': lambda: 0,
             '_backend4_zpage_find_page_for_addr': lambda obj, size: self.page,
             '_backend4_zpage_find_reusable_page': lambda obj, size: self.page,
-            '_backend4_zpage_track_alloc_preallocated': self.track_zpage,
+            '_backend4_zpage_track_alloc_selected': self.track_zpage,
         })
         load_bodies(self.ns, ROOT / 'freestanding_gc_object_nodes.py')
         aliases = {
@@ -141,8 +142,9 @@ class Registration(Index):
     def set_pending(self, block):
         self.pending = block
 
-    def track_zpage(self, obj, size, node_owner, page_owner, from_free):
+    def track_zpage(self, obj, size, node_owner, page_owner, from_free, page, offset):
         assert self.locked and obj == self.object and size == 40
+        self.selections.append((page, offset))
         assert self.call('pcc_gc_object_index_find', obj) != 0
         assert self.call('pcc_gc_zpage_owner_index_upsert_preallocated',
                          obj, self.znode) >= 0
@@ -397,3 +399,49 @@ int main(int argc, char **argv) {
         assert (result.returncode, result.stdout, result.stderr) == (
             0, 'ALLOCATION_INDEX_NOOP_OK\n', '',
         ), (backend, result)
+
+
+@pytest.mark.parametrize('address_hit', (False, True))
+def test_gc4_registration_carries_exact_page_selection_and_offset(address_hit):
+    model = Registration(4)
+    model.store(model.object, 12, 65536 | 256)
+    model.store(model.page, 72, model.object - 24)
+    lookups = []
+    def address(obj, size):
+        assert model.locked
+        lookups.append((model.acquires, 'address'))
+        return model.page if address_hit else 0
+    def reusable(obj, size):
+        assert model.locked
+        lookups.append((model.acquires, 'reusable'))
+        return model.page
+    model.ns['_backend4_zpage_find_page_for_addr'] = address
+    model.ns['_backend4_zpage_find_reusable_page'] = reusable
+    model.register()
+    model.assert_published()
+    # The initially empty owner index prepares storage outside the lock.
+    # Each attempt selects once; only the second attempt commits tracking.
+    assert model.acquires == 2
+    expected = ['address'] if address_hit else ['address', 'reusable']
+    assert lookups == [(attempt, name) for attempt in (1, 2) for name in expected]
+    assert model.selections == [(model.page, 24 if address_hit else -1)]
+    assert model.load(model.object, 12) & (65536 | 256) == 65536 | 256
+
+
+def test_gc4_registration_reselects_page_and_resets_offset_after_unlock():
+    model = Registration(4, pooled_node=False)
+    model.store(model.object, 12, 65536)
+    old_page = model.page
+    model.store(old_page, 72, model.object - 24)
+    new_page = model.calloc(1, 96)
+    lookups = []
+    def address(obj, size):
+        assert model.locked
+        lookups.append(model.acquires)
+        return old_page if model.acquires == 1 else 0
+    model.ns['_backend4_zpage_find_page_for_addr'] = address
+    model.on_relock = lambda: setattr(model, 'page', new_page)
+    model.register()
+    model.assert_published()
+    assert model.acquires == 2 and lookups == [1, 2]
+    assert model.selections == [(new_page, -1)]

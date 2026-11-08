@@ -25,6 +25,7 @@ OWNED_SYMBOLS = {
     "pcc_gc_backend4_try_zpage_alloc",
     "pcc_gc_backend4_zpage_track_alloc",
     "pcc_gc_backend4_zpage_track_alloc_preallocated",
+    "pcc_gc_backend4_zpage_track_alloc_selected",
     "pcc_gc_backend4_zpage_track_page_prepare",
 }
 RAW_FUNCTION_IMPORTS = {
@@ -217,7 +218,7 @@ def test_object_registration_prepares_zpage_tracking_before_graph_lock() -> None
             "_backend4_zpage_node_prepare()",
             "pcc_py_gc_minor_graph_lock_for(2)",
             "_object_graph_unlock()",
-            "_backend4_zpage_track_alloc_preallocated(",
+            "_backend4_zpage_track_alloc_selected(",
         ),):
         assert lock in registration
         prepare_at = registration.index(prepare)
@@ -607,3 +608,149 @@ def test_zpage_first_page_race_publishes_one_page(
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout == "1,4096,2048,0,0\n"
+
+
+@pytest.mark.parametrize('entry', ('preallocated', 'selected'))
+@pytest.mark.parametrize('selection', ('address', 'reusable', 'resident_fallback', 'prepared'))
+@pytest.mark.parametrize('failure', ('none', 'take', 'link', 'link_refill'))
+@pytest.mark.parametrize('from_free', (0, 1))
+def test_zpage_selected_commit_preserves_offsets_and_prepared_ownership(
+    entry, selection, failure, from_free,
+):
+    # Execute both production entry points against the same modeled primitives.
+    # Contract: docs/project-intent.md shared GC roots and object lifetime.
+    from tests.python.test_gc_stable_object_membership import Index, load_bodies
+
+    model = Index()
+    load_bodies(model.ns, STRICT_SOURCE, {
+        'pcc_gc_backend4_zpage_track_alloc_preallocated',
+        'pcc_gc_backend4_zpage_track_alloc_selected',
+    })
+    owner = model.calloc(1, 40)
+    page = model.calloc(1, 376)
+    spare = model.calloc(1, 376)
+    node = model.calloc(1, 80)
+    node_io = model.calloc(1, 8)
+    page_io = model.calloc(1, 8)
+    replacement = model.calloc(1, 80)
+    model.store('pcc_gc_backend_selected', 0, 4)
+    model.store(owner, 12, 65536 if selection in ('address', 'resident_fallback') else 0)
+    model.store(page, 72, owner - 24)
+    for target in (page, spare):
+        model.store(target, 64, 128)
+        model.store(target, 88, 2)
+    model.store(node_io, 0, node)
+    model.store(page_io, 0, spare)
+    lookups, released, active = [], [], []
+    def address(obj, size):
+        lookups.append('address')
+        return page if selection == 'address' else 0
+    def reusable(obj, size):
+        lookups.append('reusable')
+        return 0 if selection == 'prepared' else page
+    def take(io):
+        if failure == 'take':
+            return 0
+        result = model.load(io)
+        model.store(io, 0, 0)
+        return result
+    def link(result):
+        assert result == node
+        if failure == 'link_refill':
+            model.store(node_io, 0, replacement)
+        return -1 if failure.startswith('link') else 0
+    model.ns.update({
+        'pcc_gc_backend4_zpage_find_page_for_addr': address,
+        'pcc_gc_backend4_zpage_find_reusable_page': reusable,
+        'pcc_gc_backend4_zpage_node_take_prepared': take,
+        'pcc_gc_backend4_zpage_link_node_preallocated': link,
+        'pcc_gc_backend4_zpage_node_release': released.append,
+        'pcc_gc_backend4_zpage_set_active_page': active.append,
+    })
+    args = [owner, 40, node_io, page_io, from_free]
+    if entry == 'selected':
+        args += [0 if selection == 'prepared' else page,
+                 24 if selection == 'address' else -1]
+    result = model.call('pcc_gc_backend4_zpage_track_alloc_' + entry, *args)
+    assert lookups == ([] if entry == 'selected' else
+                       ['address'] if selection == 'address' else
+                       ['address', 'reusable'] if selection == 'resident_fallback' else
+                       ['reusable'])
+    target = spare if selection == 'prepared' else page
+    success = failure == 'none'
+    assert result == (node if success else 0)
+    assert model.load(node_io) == (0 if success else
+                                  replacement if failure == 'link_refill' else node)
+    assert released == ([node] if failure == 'link_refill' else [])
+    retained = (not success if selection == 'prepared' else not from_free)
+    assert model.load(page_io) == (spare if retained else 0)
+    assert model.load('pcc_gc_backend4_free_page_head') == (
+        spare if selection != 'prepared' and from_free else 0
+    )
+    assert model.load('pcc_gc_backend4_page_head') == (spare if selection == 'prepared' and success else 0)
+    assert active == ([target] if success else [])
+    assert model.load(target, 88) == (1 if success and selection == 'address' else 2)
+    assert model.load(target, 64) == (168 if success and selection != 'address' else 128)
+    assert model.load(target, 8) == (40 if success else 0)
+    assert model.load(target, 32) == (1 if success else 0)
+    if failure != 'take':
+        assert model.load(node, 8) == target
+        assert model.load(node, 24) == (24 if selection == 'address' else 128)
+
+
+def test_zpage_selected_commit_has_no_page_lookup():
+    tree = ast.parse(STRICT_SOURCE.read_text(encoding='utf-8'))
+    selected = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                    and node.name == 'pcc_gc_backend4_zpage_track_alloc_selected')
+    calls = {node.func.id for node in ast.walk(selected)
+             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+    assert not any('find_page' in name or 'find_reusable' in name for name in calls)
+
+
+def test_zpage_selected_internal_abi_matches_explicit_managed_extern():
+    # The only external caller is managed runtime-port code, not a strict
+    # freestanding importer. Same-object strict calls need no import admission.
+    managed = ast.parse(MANAGED_SOURCE.read_text(encoding='utf-8'))
+    binding = next(node.value for node in managed.body
+                   if isinstance(node, ast.Assign)
+                   and any(isinstance(target, ast.Name)
+                           and target.id == '_backend4_zpage_track_alloc_selected'
+                           for target in node.targets))
+    assert isinstance(binding, ast.Call) and binding.func.id == 'extern'
+    assert binding.args[0].value == 'pcc_gc_backend4_zpage_track_alloc_selected'
+    assert [value.id for value in binding.args[1].elts] == [
+        'c_ptr', 'c_int64', 'c_ptr', 'c_ptr', 'c_int64', 'c_ptr', 'c_int64',
+    ]
+    assert binding.args[2].id == 'c_ptr'
+    strict = ast.parse(STRICT_SOURCE.read_text(encoding='utf-8'))
+    helper = next(node for node in strict.body if isinstance(node, ast.FunctionDef)
+                  and node.name == 'pcc_gc_backend4_zpage_track_alloc_selected')
+    assert [arg.arg for arg in helper.args.args] == [
+        'owner', 'size', 'prepared_node_io', 'prepared_page_io',
+        'prepared_page_from_free', 'page', 'existing_offset',
+    ]
+    assert [arg.annotation.id if arg.annotation is not None else None
+            for arg in helper.args.args] == [None, 'i64', None, None, 'i64', None, 'i64']
+    assert any(isinstance(decorator, ast.Call)
+               and decorator.func.id == 'c_abi_export'
+               and decorator.args[0].value == helper.name
+               for decorator in helper.decorator_list)
+    wrapper = next(node for node in strict.body if isinstance(node, ast.FunctionDef)
+                   and node.name == 'pcc_gc_backend4_zpage_track_alloc_preallocated')
+    assert any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+               and node.func.id == helper.name for node in ast.walk(wrapper))
+    assert not any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                   and node.func.id == 'extern' and node.args
+                   and isinstance(node.args[0], ast.Constant)
+                   and node.args[0].value == helper.name for node in ast.walk(strict))
+    assert not any(isinstance(node, ast.Assign)
+                   and any(isinstance(target, ast.Name)
+                           and target.id == '__pcc_freestanding__'
+                           for target in node.targets)
+                   for node in managed.body)
+    header = (RUNTIME_DIR / 'src' / 'py_internal.h').read_text(encoding='utf-8')
+    assert (
+        'void *pcc_gc_backend4_zpage_track_alloc_selected( PyObject *owner, '
+        'int64_t size, void **prepared_node_io, void **prepared_page_io, '
+        'int64_t prepared_page_from_free, void *page, int64_t existing_offset );'
+    ) in ' '.join(header.split())

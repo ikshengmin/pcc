@@ -593,6 +593,16 @@ void *pcc_gc_backend4_zpage_track_alloc_preallocated(
     void **prepared_page_io,
     int64_t prepared_page_from_free
 );
+/* Internal: selected page/offset remain valid under uninterrupted graph lock. */
+void *pcc_gc_backend4_zpage_track_alloc_selected(
+    PyObject *owner,
+    int64_t size,
+    void **prepared_node_io,
+    void **prepared_page_io,
+    int64_t prepared_page_from_free,
+    void *page,
+    int64_t existing_offset
+);
 void *pcc_gc_zpage_owner_index_remove(PyObject *obj);
 void pcc_gc_zpage_owner_index_clear(void);
 void *pcc_gc_zpage_page_index_find(void *page);

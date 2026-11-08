@@ -327,6 +327,34 @@ def pcc_gc_backend4_zpage_track_alloc_preallocated(
             existing_offset = ptr_diff(owner, load_ptr(page, 72))
     if ptr_is_null(page) != 0:
         page = pcc_gc_backend4_zpage_find_reusable_page(owner, size)
+    return pcc_gc_backend4_zpage_track_alloc_selected(
+        owner, size, prepared_node_io, prepared_page_io,
+        prepared_page_from_free, page, existing_offset,
+    )
+
+
+@c_abi_export("pcc_gc_backend4_zpage_track_alloc_selected")
+def pcc_gc_backend4_zpage_track_alloc_selected(
+    owner,
+    size: i64,
+    prepared_node_io,
+    prepared_page_io,
+    prepared_page_from_free: i64,
+    page,
+    existing_offset: i64,
+):
+    # Internal commit entry: selection and commit must share uninterrupted
+    # graph exclusion. Only an address lookup hit supplies existing_offset;
+    # a reusable-page fallback (even for a resident owner) supplies -1.
+    if (
+        ptr_is_null(owner) != 0
+        or is_tagged_int(owner) != 0
+        or ptr_is_null(prepared_node_io) != 0
+        or ptr_is_null(prepared_page_io) != 0
+    ):
+        return null()
+    if load_i32(global_addr("pcc_gc_backend_selected"), 0) != 4:
+        return null()
     prepared_page = load_ptr(prepared_page_io, 0)
     uses_prepared_page: i64 = 0
     if ptr_is_null(page) != 0:
