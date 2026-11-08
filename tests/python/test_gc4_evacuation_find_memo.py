@@ -241,15 +241,17 @@ def test_evacuation_list_mutators_keep_revision_invalidation(filename, name):
 
 
 @pytest.mark.integration
-def test_native_threaded_evacuation_memo_handoff_and_reset(tmp_path):
-    from tests.runtime_build_cache import cached_threaded_pcc_python_runtime
-    from tests.python.test_gc_backend4_production import (
-        _compile_and_run_threaded_archive,
-    )
+def test_native_threaded_evacuation_memo_handoff_and_reset(
+    tmp_path, threaded_pcc_runtime_archive,
+):
+    import textwrap
 
-    runtime = cached_threaded_pcc_python_runtime()
-    result = _compile_and_run_threaded_archive(
-        tmp_path,
+    from tests.owned_c_execution import compile_owned_c_with_runtime
+    from tests.python.process_timeout import run_process_group_timeout
+
+    source = tmp_path / "gc4_evacuation_memo.c"
+    executable = tmp_path / "gc4_evacuation_memo.out"
+    source.write_text(textwrap.dedent(
         r"""
         #include "py_runtime.h"
         #include <pthread.h>
@@ -389,9 +391,11 @@ def test_native_threaded_evacuation_memo_handoff_and_reset(tmp_path):
             puts("gc4-evacuation-memo-threaded-ok");
             return 0;
         }
-        """,
-        runtime / "libpy_runtime_pcc_py.a",
-        "gc4_evacuation_memo",
+        """
+    ).lstrip(), encoding="utf-8")
+    compile_owned_c_with_runtime(
+        source, executable, runtime_archive=threaded_pcc_runtime_archive,
     )
+    result = run_process_group_timeout([str(executable)], timeout=20)
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout.strip() == "gc4-evacuation-memo-threaded-ok"
