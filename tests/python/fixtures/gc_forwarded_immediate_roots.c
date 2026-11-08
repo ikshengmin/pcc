@@ -105,6 +105,46 @@ static void require_forwarded(Fixture *fixture) {
     require(fixture->roots[SHARED] == fixture->roots[TARGET], 17, "healed_slot");
     fixture->roots[SHARED] = fixture->roots[FROM];
 }
+/* The global store metric also includes runtime-internal rooted temporaries.
+ * An unknown even/foreign pointer reaches _is_type_object's rooted loop index
+ * through the provenance query. Compare fallbacks with the real original plan,
+ * not a fixed +3 tied to today's C-extension registry or lowering decisions.
+ * py_internal.h owns the 128-byte layout and plan declarations. */
+static int64_t reference_plan_delta(Fixture *fixture, PyObject *value,
+                                    PyObject *expected) {
+    PccGcStoreRootPlan plan;
+    require(sizeof(plan) == 128, 22, "reference_plan_abi");
+    pcc_py_gc_minor_graph_lock();
+    require_forwarded(fixture);  /* Same old forwarded root as the public call. */
+    pcc_py_gc_minor_graph_unlock();
+    int64_t graph = pcc_py_gc_minor_graph_lock_depth();
+    int64_t lease = pcc_thread_no_park_depth();
+    int64_t from_refs = py_header(fixture->roots[FROM])->refcount;
+    int64_t target_refs = py_header(fixture->roots[TARGET])->refcount;
+    int64_t backend = pcc_gc_backend();
+    int64_t before = pcc_gc_metric_store_count();
+    pcc_gc_store_root_plan_init(&plan, backend);
+    pcc_py_gc_minor_graph_lock();
+    int64_t committed = pcc_gc_store_root_plan_commit_locked(
+        &plan, &fixture->roots[SHARED], value);
+    pcc_py_gc_minor_graph_unlock();
+    pcc_gc_store_root_plan_finish(&plan);
+    /* Match only the ownership-transfer tail of public root_take. Do not call
+     * either root ABI recursively as the reference transaction. Reload the
+     * stored address before decref, exactly as the production fallback does. */
+    if (fixture->take && value) {
+        PyObject *stored = pcc_gc_load_ptr(0, &fixture->roots[SHARED]);
+        if (stored && (((uintptr_t)stored & 1) == 0)) py_decref(stored);
+    }
+    int64_t delta = pcc_gc_metric_store_count() - before;
+    require(committed == 1 && fixture->roots[SHARED] == expected,
+            23, "reference_plan_publication");
+    require_balanced(graph, lease);
+    require(py_header(fixture->roots[FROM])->refcount == from_refs &&
+            py_header(fixture->roots[TARGET])->refcount == target_refs,
+            24, "reference_count_free_owners");
+    return delta;
+}
 static void checked_store(Fixture *fixture, PyObject *value, PyObject *expected) {
     pcc_py_gc_minor_graph_lock();
     require_forwarded(fixture);
@@ -117,7 +157,10 @@ static void checked_store(Fixture *fixture, PyObject *value, PyObject *expected)
     store_root(fixture, &fixture->roots[SHARED], value);
     require(fixture->roots[SHARED] == expected, 18, "published_value");
     require_balanced(graph, lease);
-    require(pcc_gc_metric_store_count() == stores + 1, 19, "one_store_metric");
+    int64_t public_delta = pcc_gc_metric_store_count() - stores;
+    int immediate = !value || (((uintptr_t)value & 1) != 0);
+    /* This remains the exact native regression for the optimized shape. */
+    if (immediate) require(public_delta == 1, 19, "one_store_metric");
     require(py_header(fixture->roots[FROM])->refcount == from_refs &&
             py_header(fixture->roots[TARGET])->refcount == target_refs,
             20, "count_free_owners");
@@ -125,6 +168,11 @@ static void checked_store(Fixture *fixture, PyObject *value, PyObject *expected)
     store_root(fixture, 0, value);
     require(pcc_gc_metric_store_count() == stores, 21, "null_slot_metric");
     require_balanced(graph, lease);
+    if (!immediate) {
+        int64_t planned_delta = reference_plan_delta(fixture, value, expected);
+        require(planned_delta > 0 && public_delta == planned_delta,
+                25, "fallback_matches_reference_plan_metric");
+    }
 }
 static void semantics(Fixture *fixture) {
     PyObject *values[6] = {
