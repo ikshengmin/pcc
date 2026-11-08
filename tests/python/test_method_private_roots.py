@@ -1,8 +1,12 @@
-"""Method stack-cell provenance, paired exits, and five-GC execution.
+"""Method roots retain legacy registration, paired exits, and five-GC coverage.
 
 Specification: docs/compiler-contract.md; docs/project-intent.md shared
 slot/root, ordinary-class identity, value-payload, and suspension contracts.
-The IR checks distinguish address proof from ownership and map extent.
+An exact private address and bounded map do not prove equivalent conservative
+collection: changing registration calls can expose stale pointer words in GC
+implementation frames and change finalizer timing. Method parameter cells
+keep the legacy protocol until that collector boundary is qualified. These
+contracts do not claim to fix the existing finalizer-count failure.
 """
 from __future__ import annotations
 
@@ -261,12 +265,18 @@ print(vt.result(task))
 '''
 
 
-def test_method_allocations_record_proof_without_repositioning():
+def test_method_allocations_keep_legacy_provenance_and_initialization_order():
     from pcc.frontends.python.codegen import class_gen
 
     tree = ast.parse(Path(class_gen.__file__).read_text(encoding="utf-8"))
     method = next(node for node in ast.walk(tree)
                   if isinstance(node, ast.FunctionDef) and node.name == "_emit_method_body")
+    assert not any(isinstance(node, ast.ImportFrom)
+                   and any(alias.name == "record_private_root_address" for alias in node.names)
+                   for node in ast.walk(tree))
+    assert not any(isinstance(node, ast.Call)
+                   and ast.unparse(node.func).rsplit(".", 1)[-1] == "record_private_root_address"
+                   for node in ast.walk(method))
     records = []
     for owner in ast.walk(method):
         for _field, statements in ast.iter_fields(owner):
@@ -279,16 +289,12 @@ def test_method_allocations_record_proof_without_repositioning():
                     continue
                 allocated = ast.unparse(statement.value.args[0])
                 slot = ast.unparse(statement.targets[0])
-                proof = statements[position + 1]
-                store = statements[position + 2]
-                assert isinstance(proof, ast.Expr) and isinstance(proof.value, ast.Call)
-                assert ast.unparse(proof.value.func) == "record_private_root_address"
-                assert [ast.unparse(arg) for arg in proof.value.args[:2]] == ["parent", slot]
-                expected = ("1" if allocated == "_CSTR" else
-                            "1 if isinstance(" + allocated + ", ir.PointerType) else 0")
-                assert ast.unparse(proof.value.args[2]) == expected
+                store = statements[position + 1]
                 assert isinstance(store, ast.Expr) and isinstance(store.value, ast.Call)
                 assert ast.unparse(store.value.func) == "parent.builder.store"
+                expected = ("cell" if allocated == "_CSTR" else
+                            "recv_arg" if allocated == "recv_ir_ty" else "ir_arg")
+                assert ast.unparse(store.value.args[0]) == expected
                 assert ast.unparse(store.value.args[1]) == slot
                 records.append((allocated, slot))
     assert sorted(records) == sorted([
@@ -329,13 +335,13 @@ def _assert_borrowed_pointer(roots, parameter, mapped):
     entries = [(block, index, ins) for block, index, ins in roots.rows
                if roots.called(ins, "pcc_gc_frame_enter")
                and roots.slot(roots.args(ins)[1]) in {(base, 0) for base in cells}]
-    # A boxed receiver also has its original unused alloca. Only the cell
-    # actually registered as borrowed is required to carry the private proof.
+    # A boxed receiver also has its original unused alloca. Check the cell
+    # actually registered as borrowed, which must retain the legacy protocol.
     assert len(entries) == 1, (parameter, cells)
     block, index, enter = entries[0]
     assert block.name == "entry"
     suffix = "_mapped" if mapped else ""
-    assert enter.data[2] == "pcc_gc_frame_enter_local" + suffix
+    assert enter.data[2] == "pcc_gc_frame_enter" + suffix
     frame_map, address = roots.args(enter)
     descriptor = roots.globals[roots.symbol(frame_map).lstrip("@")]
     assert descriptor.is_constant and descriptor.type.describe() == "i32"
@@ -348,12 +354,12 @@ def _assert_borrowed_pointer(roots, parameter, mapped):
     leaves = [ins for _, _, ins in roots.rows
               if roots.called(ins, "pcc_gc_frame_leave")
               and roots.slot(roots.args(ins)[0]) == identity]
-    assert leaves and all(ins.data[2] == "pcc_gc_frame_leave_local" + suffix for ins in leaves)
+    assert leaves and all(ins.data[2] == "pcc_gc_frame_leave" + suffix for ins in leaves)
     roots.assert_frame_exits()
 
 
 @pytest.mark.parametrize("mapped", (False, True))
-def test_method_borrowed_pointer_cells_use_paired_private_scope(tmp_path, monkeypatch, mapped):
+def test_method_borrowed_pointer_cells_keep_paired_legacy_scope(tmp_path, monkeypatch, mapped):
     module, _text = _emit(tmp_path, monkeypatch, METHOD_PROGRAM, mapped)
     expected = {
         "Probe_receiver": ("self", "value"),
@@ -396,7 +402,7 @@ def test_value_payload_fields_keep_conservative_registration(tmp_path, monkeypat
 
 
 @pytest.mark.parametrize("mapped", (False, True))
-def test_factory_methods_admit_native_cells_without_resume_wrapper(tmp_path, monkeypatch, mapped):
+def test_factory_methods_keep_legacy_cells_without_resume_wrapper(tmp_path, monkeypatch, mapped):
     module, text = _emit(tmp_path, monkeypatch, FACTORY_PROGRAM, mapped)
     for method in ("Gate_choose", "Gate_fail"):
         assert method + "__gen_resume" not in text

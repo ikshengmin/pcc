@@ -60,17 +60,20 @@ def test_boxed_parameter_roots_owned_ir(tmp_path, monkeypatch):
                    ir_scaffold_mode="on")
     text = output.read_text()
     for name in ("function", "Methods_static", "Methods_instance"):
+        # Function parameters already use the private entry allocator. Method
+        # parameters keep legacy registration until collection is equivalent.
+        protocol = "_local" if name == "function" else ""
         body = re.search(r"(?ms)^define [^\n]*@user_boxed_roots_" + name + r"\(.*?\n\}", text).group(0)
         slot = re.search(r"(%value\.addr(?:\.\d+)?) = alloca ptr", body).group(1)
         before_collection = body[:body.index("@pcc_gc_collect")]
         # The slot is registered and retired directly, or through identity aliases.
         roots = [slot] + re.findall(r"(%gc\.frame\.slots\.ptr[^ ]*) = bitcast ptr " + re.escape(slot) + r" to ptr", before_collection)
-        assert any(re.search(r"@pcc_gc_frame_enter_local_mapped\([^\n]*ptr " + re.escape(root) + r"\)", before_collection)
+        assert any(re.search(r"@pcc_gc_frame_enter" + protocol + r"_mapped\([^\n]*ptr " + re.escape(root) + r"\)", before_collection)
                    for root in roots), name
         assert ".pcc.gc.frame.map.borrowed" in before_collection, name
         assert "@pcc_gc_load_borrowed_ptr" in body, name
         leaves = [slot] + re.findall(r"(%gc\.frame\.leave\.ptr[^ ]*) = bitcast ptr " + re.escape(slot) + r" to ptr", body)
-        assert any(re.search(r"@pcc_gc_frame_leave_local_mapped\(ptr " + re.escape(leave) + r"\)", body) for leave in leaves), name
+        assert any(re.search(r"@pcc_gc_frame_leave" + protocol + r"_mapped\(ptr " + re.escape(leave) + r"\)", body) for leave in leaves), name
     body = re.search(r"(?ms)^define [^\n]*@user_boxed_roots_rebound\(.*?\n\}", text).group(0)
     assert "value.param.retain" in body
     assert ".pcc.gc.frame.map.borrowed" not in body
