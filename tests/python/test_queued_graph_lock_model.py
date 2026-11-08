@@ -431,17 +431,14 @@ def test_actual_granted_successor_retries_after_a_barger_releases():
 
 
 @pytest.mark.parametrize('outer_depth', (0, 2))
-@pytest.mark.parametrize('budgets,extra_loads', [(0, 0), (1, -1), (1, 0), (1, 1), (3, 5)])
-def test_actual_ready_wait_yields_only_after_bounded_acquire_loads(
-    outer_depth, budgets, extra_loads,
+@pytest.mark.parametrize('failed_loads', (0, 1, 2, 17, 197))
+def test_actual_ready_wait_keeps_queue_live_until_acquire_grant(
+    outer_depth, failed_loads,
 ):
     ns, memory, events = kernel_model()
     node, predecessor, context, word = 10000, 11000, 12000, 9000
     tls = 'pcc_tls_thread_state_py'
     registered, queued = 562949953421312, ns['_GRAPH_QUEUED_BIT']
-    budget = ns['_GRAPH_WAIT_SPIN_BUDGET']
-    assert budget > 1
-    failed_loads = budgets * budget + extra_loads
     memory[tls, 0] = registered + outer_depth
     memory['pcc_tls_graph_wait_node_py', 0] = node
     memory['pcc_graph_wait_context_head_py', 0] = context
@@ -450,7 +447,6 @@ def test_actual_ready_wait_yields_only_after_bounded_acquire_loads(
     memory[word, 0] = 1
     timeline = []
     ready_loads = []
-    yield_loads = []
     load, store = ns['atomic_load_i64'], ns['atomic_store_i64']
     load_word, compare = ns['atomic_load_i32'], ns['atomic_cas_i32']
 
@@ -476,6 +472,9 @@ def test_actual_ready_wait_yields_only_after_bounded_acquire_loads(
         if (base, offset) == (node, ns['_GRAPH_WAIT_READY']):
             assert_linked()
             assert order == 'acquire'
+            assert memory['pcc_thread_stop_requested', 0] == 1
+            assert memory['pcc_gc_gray_worklist_flush_requested', 0] == 1
+            assert memory[word, 0] == 1
             assert len(ready_loads) <= failed_loads
             if len(ready_loads) == failed_loads:
                 store(node, offset, 1, 'release')
@@ -484,17 +483,6 @@ def test_actual_ready_wait_yields_only_after_bounded_acquire_loads(
             timeline.append(('ready', value))
             return value
         return load(base, offset, order)
-
-    def yield_timeslice():
-        assert_linked()
-        assert ready_loads and ready_loads[-1] == 0
-        assert len(ready_loads) == (len(yield_loads) + 1) * budget
-        assert memory['pcc_thread_stop_requested', 0] == 1
-        assert memory['pcc_gc_gray_worklist_flush_requested', 0] == 1
-        assert memory[word, 0] == 1
-        yield_loads.append(len(ready_loads))
-        timeline.append('yield')
-        return -1  # A scheduling hint's result never grants queue ownership.
 
     def word_ready(base, offset, order):
         assert ready_loads == [0] * failed_loads + [1]
@@ -513,28 +501,35 @@ def test_actual_ready_wait_yields_only_after_bounded_acquire_loads(
         return compare(base, offset, expected, desired, success, failure)
 
     ns.update(atomic_store_i64=publish, atomic_load_i64=ready,
-              atomic_load_i32=word_ready, atomic_cas_i32=acquire_word,
-              sched_yield=yield_timeslice)
+              atomic_load_i32=word_ready, atomic_cas_i32=acquire_word)
     assert ns['_graph_wait_acquire'](word) == 1
     assert timeline[0] == 'published'
     assert timeline[-3:] == [('word', 1), ('word', 0), 'cas']
     assert ready_loads == [0] * failed_loads + [1]
-    assert yield_loads == list(range(budget, failed_loads + 1, budget))
     assert memory[word, 0] == 1
     assert_linked()
+    assert memory['pcc_thread_stop_requested', 0] == 1
+    assert memory['pcc_gc_gray_worklist_flush_requested', 0] == 1
     assert not events  # No GC poll, registration, free, or park while linked.
 
     # Finish the outer acquisition as its public wrapper does, then prove the
     # normal release removes the queue before a pending stop can be serviced.
+    poll = ns['pcc_thread_safepoint']
+
+    def poll_after_detach():
+        assert memory[word, 0] == memory[context, 16] == memory[node, 16] == 0
+        assert memory[tls, 0] == registered
+        poll()
+
     memory[tls, 0] += 16777216
-    ns['atomic_load_i32'] = load_word
+    ns.update(atomic_load_i32=load_word, pcc_thread_safepoint=poll_after_detach)
     assert ns['pcc_thread_graph_lock_release'](word) == 0
     assert memory[word, 0] == memory[context, 16] == memory[node, 16] == 0
     assert memory[tls, 0] == registered + outer_depth
     assert events == ([] if outer_depth else [('poll', registered)])
 
 
-def test_actual_ready_grant_during_yield_is_reloaded_before_word_acquisition():
+def test_actual_ready_grant_after_stale_read_is_reloaded_before_word_acquisition():
     ns, memory, events = kernel_model()
     node, predecessor, context, word = 10000, 11000, 12000, 9000
     tls = 'pcc_tls_thread_state_py'
@@ -544,34 +539,47 @@ def test_actual_ready_grant_during_yield_is_reloaded_before_word_acquisition():
     memory['pcc_graph_wait_context_head_py', 0] = context
     memory[context, 0] = word
     memory[context, 16] = predecessor
-    loads, yields = [], []
+    loads, timeline = [], []
     load, store = ns['atomic_load_i64'], ns['atomic_store_i64']
-    compare = ns['atomic_cas_i32']
+    load_word, compare = ns['atomic_load_i32'], ns['atomic_cas_i32']
 
     def ready(base, offset, order):
         value = load(base, offset, order)
         if (base, offset) == (node, ns['_GRAPH_WAIT_READY']):
             assert order == 'acquire'
-            assert len(loads) <= ns['_GRAPH_WAIT_SPIN_BUDGET']
+            assert memory[tls, 0] == registered + queued + 1
+            assert memory[node, 16] == context and memory[context, 16] == node
+            assert memory[predecessor, ns['_GRAPH_WAIT_NEXT']] == node
+            assert len(loads) <= 1
             loads.append(value)
+            timeline.append(('ready', value))
+            if len(loads) == 1:
+                assert value == 0
+                # The predecessor grants after this load took its snapshot.
+                # Returning the old zero must lead to a fresh acquire load.
+                store(node, ns['_GRAPH_WAIT_READY'], 1, 'release')
+                timeline.append('grant')
         return value
 
-    def yield_timeslice():
-        assert not yields
-        assert memory[tls, 0] == registered + queued + 1
-        assert memory[node, 16] == context and memory[context, 16] == node
-        assert loads == [0] * ns['_GRAPH_WAIT_SPIN_BUDGET']
-        yields.append('yield')
-        store(node, ns['_GRAPH_WAIT_READY'], 1, 'release')
-        return 0
+    def word_ready(base, offset, order):
+        assert loads == [0, 1]
+        assert (base, offset, order) == (word, 0, 'acquire')
+        value = load_word(base, offset, order)
+        timeline.append(('word', value))
+        return value
 
-    def acquire_word(*args):
-        assert loads == [0] * ns['_GRAPH_WAIT_SPIN_BUDGET'] + [1]
-        return compare(*args)
+    def acquire_word(base, offset, expected, desired, success, failure):
+        assert loads == [0, 1] and timeline[-1] == ('word', 0)
+        assert (base, offset, expected, desired, success, failure) == (
+            word, 0, 0, 1, 'acq_rel', 'acquire',
+        )
+        timeline.append('cas')
+        return compare(base, offset, expected, desired, success, failure)
 
-    ns.update(atomic_load_i64=ready, atomic_cas_i32=acquire_word,
-              sched_yield=yield_timeslice)
+    ns.update(atomic_load_i64=ready, atomic_load_i32=word_ready,
+              atomic_cas_i32=acquire_word)
     assert ns['_graph_wait_acquire'](word) == 1
-    assert yields == ['yield'] and not events
+    assert timeline == [('ready', 0), 'grant', ('ready', 1), ('word', 0), 'cas']
+    assert not events
     assert memory[word, 0] == 1
     assert memory[tls, 0] == registered + queued + 1
