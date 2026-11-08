@@ -67,7 +67,7 @@ def test_take_rechecks_admission_after_lock_and_keeps_rooted_finish():
 SHAPES = r'''
 #include "py_internal.h"
 #include <stdio.h>
-#include <stdlib.h>
+extern char *pcc_platform_getenv(const char *);
 extern int32_t pcc_log_init_state;
 extern int32_t pcc_diagnostics_runtime_log_fast_state;
 extern int32_t pcc_gc_refcount_provenance_probe;
@@ -119,7 +119,7 @@ int main(void) {
     if (roots[2] != roots[3] || py_cpy_handle_get(roots[2]) != &foreign_token) return 12;
     if (py_gen_frame_get(roots[0], 1) != NULL) return 13;
     /* Ordinary startup must initialize logging without writing its gates. */
-    const char *log_mode = getenv("PCC_LOG");
+    const char *log_mode = pcc_platform_getenv("PCC_LOG");
     if (backend == 4 && (!log_mode || log_mode[0] == 0)
             && pcc_gc_refcount_provenance_probe == 0) {
         if (pcc_log_init_state != 2 || pcc_diagnostics_runtime_log_fast_state != 0) return 16;
