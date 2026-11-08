@@ -24,6 +24,7 @@ from pcc.runtime.py.py_abi_constants import (
 )
 from pcc.unsafe import (
     atomic_load_i32,
+    cstr,
     global_addr,
     global_load_ptr,
     is_tagged_int,
@@ -46,7 +47,10 @@ py_list_copy = extern("py_list_copy", (c_ptr,), c_ptr)
 py_list_append = extern("py_list_append", (c_ptr, c_ptr), c_void)
 py_list_get = extern("py_list_get", (c_ptr, c_int64), c_ptr)
 py_list_len = extern("py_list_len", (c_ptr,), c_int64)
+py_exc_new = extern("py_exc_new", (c_int64, c_ptr), c_ptr)
+py_raise_owned = extern("py_raise_owned", (c_ptr,), c_void)
 py_err_occurred = extern("py_err_occurred", (), c_int64)
+pcc_gc_fix_backend = extern("pcc_gc_fix_backend", (), c_void)
 pcc_stop_the_world = extern("pcc_stop_the_world", (), c_int64)
 pcc_resume_world = extern("pcc_resume_world", (), c_void)
 pcc_thread_owns_stopped_world = extern("pcc_thread_owns_stopped_world", (), c_int64)
@@ -54,10 +58,14 @@ pcc_thread_safepoint = extern("pcc_thread_safepoint", (), c_void)
 pcc_gc_default_table_lock = extern("pcc_gc_default_table_lock", (), c_void)
 pcc_gc_default_table_unlock = extern("pcc_gc_default_table_unlock", (), c_void)
 pcc_gc_tracked_materialize = extern("pcc_gc_tracked_materialize", (), c_int64)
-pcc_gc_tracked_dematerialize = extern("pcc_gc_tracked_dematerialize", (), c_void)
+pcc_gc_tracked_dematerialize = extern("pcc_gc_tracked_dematerialize", (c_int64,), c_void)
 
 
 def _tracked_snapshot_enter() -> int:
+    # The result list would fix the backend on its first managed allocation.
+    # Do that before retaining a cursor: entering GC0 flag mode discards any
+    # pre-freeze tracking nodes (e.g. registered static images).
+    pcc_gc_fix_backend()
     owns_world: int = 0
     if pcc_thread_owns_stopped_world() == 0:
         stopped: int = pcc_stop_the_world()
@@ -67,14 +75,27 @@ def _tracked_snapshot_enter() -> int:
         owns_world = 1
     pcc_gc_default_table_lock()
     # Flag-only tracking (GC0) builds the tracked list for the snapshot.
-    pcc_gc_tracked_materialize()
-    return owns_world
+    acquired: int = 0
+    if (load_i32(global_addr("pcc_gc_tracking_flag_mode"), 0) != 0
+            and load_i32(global_addr("pcc_gc_tracking_materialized"), 0) == 0):
+        acquired = 1
+    materialized: int = pcc_gc_tracked_materialize()
+    if materialized < 0:
+        pcc_gc_default_table_unlock()
+        if owns_world != 0:
+            pcc_resume_world()
+        # PY_EXC_MEMORYERROR, from the public py_runtime.h exception ABI.
+        py_raise_owned(py_exc_new(19, cstr("gc snapshot: out of memory")))
+        return -1
+    # Bit 0 owns STW, bit 1 owns the materialized view. Nesting can borrow
+    # either independently; in particular a nested snapshot owns neither.
+    return owns_world | (acquired << 1)
 
 
-def _tracked_snapshot_leave(owns_world: int) -> None:
-    pcc_gc_tracked_dematerialize()
+def _tracked_snapshot_leave(ownership: int) -> None:
+    pcc_gc_tracked_dematerialize(ownership >> 1)
     pcc_gc_default_table_unlock()
-    if owns_world != 0:
+    if (ownership & 1) != 0:
         pcc_resume_world()
 
 
@@ -125,7 +146,9 @@ def _list_has_identical_item(lst, target) -> int:
 
 @c_abi_export("py_gc_get_objects")
 def py_gc_get_objects():
-    owns_world = _tracked_snapshot_enter()
+    ownership = _tracked_snapshot_enter()
+    if ownership < 0:
+        return null()
     try:
         tracked = atomic_load_i32(global_addr("py_gc_tracked_count"), 0, "acquire")
         n = global_load_ptr("py_gc_head")
@@ -152,7 +175,7 @@ def py_gc_get_objects():
             n = load_ptr(n, 32)
         return out
     finally:
-        _tracked_snapshot_leave(owns_world)
+        _tracked_snapshot_leave(ownership)
 
 
 @c_abi_export("py_gc_get_referrers")

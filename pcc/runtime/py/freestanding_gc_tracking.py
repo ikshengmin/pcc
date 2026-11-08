@@ -504,66 +504,96 @@ def py_gc_untrack(obj: c_ptr) -> None:
 
 @c_abi_export("pcc_gc_tracked_materialize")
 def pcc_gc_tracked_materialize() -> i64:
-    """Build a node for every live object that carries the tracked flag.
+    """Acquire a complete stopped-world tracked view, or borrow an outer one.
 
-    Flag mode only. The caller has stopped the world and holds the whole
-    table (pcc_gc_default_table_lock), so the nodes join the merged
-    ``py_gc_head`` list that the collector and gc-module snapshots walk,
-    and py_gc_index_find finds them. Until pcc_gc_tracked_dematerialize,
-    track and untrack maintain these nodes. Returns the number of nodes in
-    the list, or -1 if the object list cannot be allocated.
+    The caller owns the stopped world and whole table. Return the actual
+    node count, or -1 on failure (0 is also returned for ordinary tracking).
+    A pre-existing view is borrowed without rebuilding its nodes. Callers
+    record the pre-call flag/materialized state to distinguish an acquired
+    empty view from a borrow; only an acquired view may be dematerialized.
+    Neither construction nor rollback changes object flags or tracked count.
     """
     if load_i32(global_addr("pcc_gc_tracking_flag_mode"), 0) == 0:
         return 0
-    store_i32(global_addr("pcc_gc_tracking_materialized"), 0, 1)
+    if load_i32(global_addr("pcc_gc_tracking_materialized"), 0) != 0:
+        count: i64 = 0
+        node = global_load_ptr("py_gc_head")
+        while ptr_is_null(node) == 0:
+            count = count + 1
+            node = load_ptr(node, _NODE_NEXT)
+        return count
     small_cap: i64 = pcc_allocator_object_cells_enumerate(null(), 0, _TRACKED)
     large_cap: i64 = pcc_gc_managed_pointer_index_enumerate(null(), 0, _TRACKED)
-    if small_cap + large_cap <= 0:
+    # Count/fill runs under STW. Reject invalid sizes or changed enumeration
+    # rather than clamp away tracked objects and publish a partial snapshot.
+    if small_cap < 0 or large_cap < 0:
+        return -1
+    if small_cap > 1152921504606846975 - large_cap:
+        return -1
+    if small_cap + large_cap == 0:
+        store_i32(global_addr("pcc_gc_tracking_materialized"), 0, 1)
         return 0
     objects = malloc((small_cap + large_cap) * 8)
     if ptr_is_null(objects):
         return -1
     small: i64 = pcc_allocator_object_cells_enumerate(objects, small_cap, _TRACKED)
-    if small > small_cap:
-        small = small_cap
+    if small != small_cap:
+        free(objects)
+        return -1
     large: i64 = pcc_gc_managed_pointer_index_enumerate(
         ptr_add(objects, small * 8), large_cap, _TRACKED
     )
-    if large > large_cap:
-        large = large_cap
+    if large != large_cap:
+        free(objects)
+        return -1
+    store_i32(global_addr("pcc_gc_tracking_materialized"), 0, 1)
     added: i64 = 0
     index: i64 = 0
     while index < small + large:
         obj = load_ptr(objects, index * 8)
         shard: i64 = _tracked_shard_index(obj)
         node = _tracked_node_pool_take(shard, 1)
-        if ptr_is_null(node) == 0:
-            store_i32(node, _NODE_SHARD, shard)
-            if py_gc_index_insert(obj, node) > 0:
-                store_ptr(node, _NODE_OBJECT, obj)
-                store_i64(node, _NODE_GC_REFS, 0)
-                store_i32(node, _NODE_REACHABLE, 0)
-                store_ptr(node, _NODE_PREV, null())
-                head = global_load_ptr("py_gc_head")
-                store_ptr(node, _NODE_NEXT, head)
-                if ptr_is_null(head) == 0:
-                    store_ptr(head, _NODE_PREV, node)
-                global_store_ptr("py_gc_head", node)
-                added = added + 1
-            else:
-                _tracked_node_recycle(node)
+        if ptr_is_null(node):
+            free(objects)
+            pcc_gc_tracked_dematerialize(1)
+            return -1
+        store_i32(node, _NODE_SHARD, shard)
+        inserted: i64 = py_gc_index_insert(obj, node)
+        if inserted < 0:
+            _tracked_node_recycle(node)
+            free(objects)
+            pcc_gc_tracked_dematerialize(1)
+            return -1
+        if inserted == 0:
+            # The enumeration sources may overlap; the existing node already
+            # represents this object, so a duplicate is not an allocation error.
+            _tracked_node_recycle(node)
+        else:
+            store_ptr(node, _NODE_OBJECT, obj)
+            store_i64(node, _NODE_GC_REFS, 0)
+            store_i32(node, _NODE_REACHABLE, 0)
+            store_ptr(node, _NODE_PREV, null())
+            head = global_load_ptr("py_gc_head")
+            store_ptr(node, _NODE_NEXT, head)
+            if ptr_is_null(head) == 0:
+                store_ptr(head, _NODE_PREV, node)
+            global_store_ptr("py_gc_head", node)
+            added = added + 1
         index = index + 1
     free(objects)
     return added
 
 
 @c_abi_export("pcc_gc_tracked_dematerialize")
-def pcc_gc_tracked_dematerialize() -> None:
-    """Drop every node in the merged list; objects keep their tracked flag.
+def pcc_gc_tracked_dematerialize(acquired: i64) -> None:
+    """Release only a successfully acquired view, preserving flags/count.
 
-    The tracked count is unchanged: the objects are still tracked. Nodes of
-    objects that died meanwhile were already unlinked by py_gc_untrack.
+    Nodes of objects that died meanwhile were already unlinked by untrack.
+    Their deferred storage remains owned by the outermost table unlock, not
+    by this view: a collector can still hold those dead-node pointers.
     """
+    if acquired <= 0:
+        return
     if load_i32(global_addr("pcc_gc_tracking_materialized"), 0) == 0:
         return
     node = global_load_ptr("py_gc_head")
@@ -590,6 +620,6 @@ def pcc_gc_tracking_enter_flag_mode() -> None:
         return
     pcc_gc_default_table_lock()
     store_i32(global_addr("pcc_gc_tracking_materialized"), 0, 1)
-    pcc_gc_tracked_dematerialize()
+    pcc_gc_tracked_dematerialize(1)
     store_i32(global_addr("pcc_gc_tracking_flag_mode"), 0, 1)
     pcc_gc_default_table_unlock()

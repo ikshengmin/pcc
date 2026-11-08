@@ -35,6 +35,8 @@ OWNED_SYMBOLS = {
 }
 RAW_IMPORTS = {
     "pcc_gc_tracked_materialize",
+    "pcc_gc_tracking_flag_mode",
+    "pcc_gc_tracking_materialized",
     "pcc_gc_tracked_dematerialize",
     "pcc_gc_backend0_subset_active",
     "pcc_gc_backend0_subset_pairs",
@@ -50,7 +52,6 @@ RAW_IMPORTS = {
     "pcc_gc_backend0_mark_reachable",
     "pcc_gc_backend0_visit_subtract",
     "pcc_gc_continuation_root_head",
-    "pcc_gc_default_drain_deferred_nodes",
     "pcc_gc_default_table_lock",
     "pcc_gc_default_table_unlock",
     "pcc_gc_default_unlink_tracked_node",
@@ -178,9 +179,9 @@ def test_backend0_collector_preserves_ordering_and_graph_contract():
     assert collect.index("py_weakref_invalidate(obj)") < collect.index(
         "pcc_gc_backend0_clear_referents(obj)"
     )
-    assert collect.index("pcc_gc_default_drain_deferred_nodes()") < collect.index(
-        'store_i32(collecting_slot, 0, 0)'
-    )
+    # A nested collector may borrow outer node cursors. Only the outermost
+    # whole-table unlock owns draining dead-node storage.
+    assert "pcc_gc_default_drain_deferred_nodes()" not in collect
     # Wrong-backend candidate calls leave before publishing collecting. The
     # admitted cleanup paths clear collecting before releasing either lock.
     admitted = collect[collect.index('store_i32(collecting_slot, 0, 1)'):]

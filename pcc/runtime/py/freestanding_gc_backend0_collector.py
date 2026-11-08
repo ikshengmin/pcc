@@ -87,12 +87,9 @@ py_gc_index_remove = extern("py_gc_index_remove", (c_ptr,), c_ptr)
 pcc_gc_default_unlink_tracked_node = extern(
     "pcc_gc_default_unlink_tracked_node", (c_ptr,), c_void
 )
-pcc_gc_default_drain_deferred_nodes = extern(
-    "pcc_gc_default_drain_deferred_nodes", (), c_void
-)
 pcc_gc_default_table_lock = extern("pcc_gc_default_table_lock", (), c_void)
 pcc_gc_tracked_materialize = extern("pcc_gc_tracked_materialize", (), c_int64)
-pcc_gc_tracked_dematerialize = extern("pcc_gc_tracked_dematerialize", (), c_void)
+pcc_gc_tracked_dematerialize = extern("pcc_gc_tracked_dematerialize", (c_int64,), c_void)
 pcc_gc_default_table_unlock = extern(
     "pcc_gc_default_table_unlock", (), c_void
 )
@@ -511,8 +508,14 @@ def _collect(pairs, candidate_count: i64) -> i64:
     # collection first builds them from the live objects carrying the
     # tracked flag (a no-op returning 0 outside flag mode).
     materialized: i64 = 0
+    materialization_owned: i64 = 0
     if ptr_is_null(pairs) != 0:
+        if (load_i32(global_addr("pcc_gc_tracking_flag_mode"), 0) != 0
+                and load_i32(global_addr("pcc_gc_tracking_materialized"), 0) == 0):
+            materialization_owned = 1
         materialized = pcc_gc_tracked_materialize()
+        if materialized < 0:
+            materialization_owned = 0
     tracked: i64 = atomic_load_i32(global_addr("py_gc_tracked_count"), 0, "acquire")
     if materialized > tracked:
         tracked = materialized
@@ -520,9 +523,8 @@ def _collect(pairs, candidate_count: i64) -> i64:
         tracked = _prepare_subset(pairs, candidate_count)
     if materialized < 0 or tracked <= 0:
         _finish_subset()
-        pcc_gc_default_drain_deferred_nodes()
         store_i32(collecting_slot, 0, 0)
-        pcc_gc_tracked_dematerialize()
+        pcc_gc_tracked_dematerialize(materialization_owned)
         pcc_gc_default_table_unlock()
         pcc_gc_record_collection_stw_pause(collection_stw_start, pcc_platform_monotonic_us())
         pcc_resume_world()
@@ -531,9 +533,8 @@ def _collect(pairs, candidate_count: i64) -> i64:
     unreachable = malloc(tracked * 8)
     if ptr_is_null(unreachable):
         _finish_subset()
-        pcc_gc_default_drain_deferred_nodes()
         store_i32(collecting_slot, 0, 0)
-        pcc_gc_tracked_dematerialize()
+        pcc_gc_tracked_dematerialize(materialization_owned)
         pcc_gc_default_table_unlock()
         pcc_gc_record_collection_stw_pause(collection_stw_start, pcc_platform_monotonic_us())
         pcc_resume_world()
@@ -622,9 +623,8 @@ def _collect(pairs, candidate_count: i64) -> i64:
 
     free(unreachable)
     _finish_subset()
-    pcc_gc_default_drain_deferred_nodes()
     store_i32(collecting_slot, 0, 0)
-    pcc_gc_tracked_dematerialize()
+    pcc_gc_tracked_dematerialize(materialization_owned)
     pcc_gc_default_table_unlock()
     pcc_gc_record_collection_stw_pause(collection_stw_start, pcc_platform_monotonic_us())
     pcc_resume_world()

@@ -3172,7 +3172,7 @@ def _cross_object_signatures_part_12():
     "pcc_allocator_object_cells_enumerate": (("c_ptr", "c_int64", "c_int64"), "c_int64"),
     "pcc_gc_managed_pointer_index_enumerate": (("c_ptr", "c_int64", "c_int64"), "c_int64"),
     "pcc_gc_tracked_materialize": ((), "c_int64"),
-    "pcc_gc_tracked_dematerialize": ((), "c_void"),
+    "pcc_gc_tracked_dematerialize": (("c_int64",), "c_void"),
     "pcc_gc_tracking_enter_flag_mode": ((), "c_void"),
     # Keep graph-wait additions out of the already full chunks 0 and 1.
     "pcc_py_gc_minor_graph_lock_for": (("c_int64",), "c_void"),

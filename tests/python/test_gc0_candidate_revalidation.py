@@ -7,7 +7,7 @@ import pytest
 
 
 PROBE = r'''
-#include "py_internal.h"
+#include "py_runtime.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,22 +15,43 @@ extern int64_t pcc_gc_backend0_collect_candidates(void *, int64_t);
 extern int32_t pcc_gc_backend0_subset_active;
 extern int64_t pcc_gc_backend0_subset_count;
 extern void *pcc_gc_backend0_subset_pairs;
+typedef struct PyInstanceObject PyInstanceObject;
+extern PyClassObject *py_class_new(const char *, PyClassObject **, int32_t, const char **, int32_t);
+extern void py_class_add_method(PyClassObject *, const char *, PyObject *);
+extern PyObject *py_instance_new(PyClassObject *);
+extern void py_instance_set_field(PyInstanceObject *, int32_t, PyObject *);
 extern int64_t pcc_gc_tracked_materialize(void);
-typedef struct Candidate { PyGcNode *node; PyObject *object; } Candidate;
+extern void pcc_gc_tracked_dematerialize(int64_t);
+extern int32_t pcc_gc_tracking_materialized;
+extern int32_t pcc_gc_tracking_flag_mode;
+extern void *py_gc_index_find(PyObject *);
+extern void pcc_gc_default_table_lock(void);
+extern void pcc_gc_default_table_unlock(void);
+typedef struct Candidate { void *node; PyObject *object; } Candidate;
+static int view_active;
+static int64_t view_owned;
 static int fail(int code) { fprintf(stderr, "candidate-check=%d\n", code); return code; }
 static Candidate record(PyObject *obj) {
     Candidate entry;
-    /* Flag-only GC0 deliberately keeps no nodes between collections.
-     * Discovery must materialize its actual stopped-world snapshot before
-     * taking identities; a completed collection invalidates that snapshot. */
-    if (pcc_stop_the_world() != 0) abort();
-    pcc_gc_default_table_lock();
-    if (pcc_gc_tracked_materialize() < 0) abort();
+    /* Candidate identities borrow one explicitly retained stopped-world
+     * table/view owner. A candidate collection never releases that owner. */
+    if (!view_active) {
+        if (pcc_stop_the_world() != 0) abort();
+        pcc_gc_default_table_lock();
+        view_owned = pcc_gc_tracking_flag_mode && !pcc_gc_tracking_materialized;
+        if (pcc_gc_tracked_materialize() < 0) abort();
+        view_active = 1;
+    }
     entry.node = py_gc_index_find(obj);
     entry.object = obj;
+    return entry;
+}
+static void release_view(void) {
+    if (!view_active) return;
+    pcc_gc_tracked_dematerialize(view_owned);
     pcc_gc_default_table_unlock();
     pcc_resume_world();
-    return entry;
+    view_active = 0;
 }
 static int clean_context(void) {
     return pcc_gc_backend0_subset_active == 0 && pcc_gc_backend0_subset_count == 0
@@ -93,12 +114,12 @@ int main(void) {
     py_list_append(child, child); py_list_append(parent, child);
     Candidate pending[2] = { record(parent), record(child) };
     py_decref(child);
-    __atomic_store_n(&py_header(parent)->refcount, 0, __ATOMIC_RELEASE);
-    __atomic_fetch_or(&py_header(parent)->flags, 524288u, __ATOMIC_RELEASE);
+    __atomic_store_n(&((PyObjectHeader *)parent)->refcount, 0, __ATOMIC_RELEASE);
+    __atomic_fetch_or(&((PyObjectHeader *)parent)->flags, 524288u, __ATOMIC_RELEASE);
     if (pcc_gc_backend0_collect_candidates(pending, 2) != 0) return fail(15);
     if (py_list_len(child) != 1) return fail(16);
-    __atomic_store_n(&py_header(parent)->refcount, 1, __ATOMIC_RELEASE);
-    __atomic_fetch_and(&py_header(parent)->flags, ~524288u, __ATOMIC_RELEASE);
+    __atomic_store_n(&((PyObjectHeader *)parent)->refcount, 1, __ATOMIC_RELEASE);
+    __atomic_fetch_and(&((PyObjectHeader *)parent)->flags, ~524288u, __ATOMIC_RELEASE);
     py_decref(parent);
     pending[1] = record(child);
     if (pcc_gc_backend0_collect_candidates(pending + 1, 1) != 1) return fail(17);
@@ -128,6 +149,8 @@ int main(void) {
     if (seen != py_None || finalized != 1 || !clean_context()) return fail(25);
     py_decref(seen); py_decref(weak); py_decref((PyObject *)cls);
     if (py_err_occurred() != 0) return fail(26);
+    release_view();
+    if (pcc_gc_tracking_materialized || pcc_thread_owns_stopped_world()) return fail(28);
     /* The ordinary full-heap entry still collects objects outside any subset. */
     child = py_list_new(0); py_list_append(child, child); py_decref(child);
     if (py_gc_collect() < 1 || !clean_context()) return fail(27);
@@ -139,13 +162,12 @@ int main(void) {
 
 @pytest.mark.integration
 def test_native_candidate_revalidation_preserves_current_roots_and_resurrection(tmp_path, pcc_runtime_archive):
-    from tests.owned_runtime_c_fixture import link_c_harness
+    from tests.owned_c_execution import compile_owned_c_with_runtime
 
     source = tmp_path / 'candidate_revalidation.c'
     source.write_text(PROBE)
     binary = tmp_path / 'candidate_revalidation'
-    runtime = Path(__file__).resolve().parents[2] / 'pcc/runtime'
-    link_c_harness(source, binary, extra_include_dirs=(str(runtime / 'src'),))
+    compile_owned_c_with_runtime(source, binary, runtime_archive=pcc_runtime_archive)
     run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,
                          env=dict(os.environ, PCC_GC_BACKEND='0', PATH='/nonexistent'))
     (tmp_path / 'native.stdout').write_text(run.stdout)

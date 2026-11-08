@@ -172,6 +172,10 @@ class CollectionWindow:
             "pcc_gc_reclaim_retired_index_tables": lambda: self.advance("reclaim", 3),
             "pcc_gc_begin_explicit_tracing_collect": self.begin,
             "pcc_gc_end_explicit_tracing_collect": self.end,
+            "pcc_thread_owns_stopped_world": lambda: int(self.world),
+            "pcc_gc_deferred_free_begin": self.deferred_begin,
+            "pcc_gc_scalar_sweep_seal": self.scalar_seal,
+            "pcc_gc_deferred_free_close": self.deferred_close,
             "pcc_gc_step": self.step,
             "pcc_gc_sweep_owed": lambda: int(self.pending),
             "pcc_gc_collect_tracing": self.sweep,
@@ -180,7 +184,7 @@ class CollectionWindow:
             "pcc_gc_default_table_lock": lambda: self.advance("table_lock", 2),
             "pcc_gc_default_table_unlock": lambda: self.advance("table_unlock", 2),
             "pcc_gc_tracked_materialize": lambda: -1 if gc0_exit == "materialize" else 0,
-            "pcc_gc_tracked_dematerialize": lambda: self.advance("dematerialize", 2),
+            "pcc_gc_tracked_dematerialize": lambda acquired: self.advance("dematerialize", 2),
             "pcc_gc_default_drain_deferred_nodes": lambda: self.advance("deferred", 2),
             "_finish_subset": lambda: self.advance("subset_finish", 2),
             "_prepare_subset": lambda pairs, count: count,
@@ -234,6 +238,34 @@ class CollectionWindow:
         self.memory.set("pcc_gc_explicit_collect_active", 0)
         self.advance("end", 17)
 
+    def deferred_begin(self, prior_world_held):
+        # py_obj's current explicit/automatic entry opens retirement inside
+        # STW. This provider includes the nested scalar-sweep begin boundary.
+        assert self.world and prior_world_held == 0
+        self.advance("deferred_begin", 3)
+        self.advance("scalar_begin", 2)
+        return 1
+
+    def scalar_seal(self):
+        assert self.world
+        assert self.memory.get("pcc_gc_explicit_collect_active") == 0
+        self.advance("scalar_seal", 3)
+
+    def deferred_close(self):
+        assert not self.world
+        self.advance("deferred_close", 5)
+
+    def assert_retirement_window(self):
+        if self.backend == 0:
+            assert not any(name in self.events for name in (
+                "deferred_begin", "scalar_begin", "scalar_seal", "deferred_close",
+            ))
+            return
+        order = ["stop", "deferred_begin", "scalar_begin", "reclaim", "begin",
+                 "sweep", "end", "scalar_seal", "record", "resume", "deferred_close", "poll"]
+        positions = [self.events.index(name) for name in order]
+        assert positions == sorted(positions)
+
     def step(self, budget):
         assert self.world and budget == 1024
         old = self.clock
@@ -269,6 +301,7 @@ def test_explicit_collection_counts_one_complete_window_on_five_backends(backend
     state = CollectionWindow(backend, retries=retries)
     assert state.ns["pcc_gc_collect"](0) == (0 if backend == 0 else 7)
     state.assert_one_window()
+    state.assert_retirement_window()
     assert state.ns["pcc_gc_telemetry"](32) == (1 if backend == 0 else 5)
     assert state.events[-2:] == ["poll", "callback_stop"]
 
@@ -280,6 +313,7 @@ def test_automatic_collection_covers_mark_sweep_and_end_before_resume(backend, m
     state.pending = not mark
     assert state.ns["_gc_tracing_automatic_collect"](mark) == 7
     state.assert_one_window()
+    state.assert_retirement_window()
     assert state.events.index("sweep") < state.events.index("end") < state.events.index("record")
     assert state.steps == mark
 

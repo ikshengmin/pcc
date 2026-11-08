@@ -173,6 +173,23 @@ def test_managed_index_counts_new_publications_not_reregistration_or_scratch():
     p = Pressure(1)
     live = set()
     globals_ = {'pcc_gc_backend_frozen': 1}
+    headers = {}
+    freeze_events = []
+
+    def load_frozen(name, offset, order):
+        assert (name, offset, order) == ('pcc_gc_backend_frozen', 0, 'acquire')
+        freeze_events.append('read')
+        return globals_[name]
+
+    def fix_backend():
+        assert globals_['pcc_gc_backend_frozen'] == 0
+        freeze_events.append('freeze')
+        globals_['pcc_gc_backend_frozen'] = 1
+
+    def load_flags(value, offset):
+        assert offset == 12
+        freeze_events.append('flags')
+        return headers.get(value, 0)
 
     def insert(value):
         if value in live:
@@ -182,7 +199,8 @@ def test_managed_index_counts_new_publications_not_reregistration_or_scratch():
 
     ns = dict(
         ptr_is_null=lambda value: value == 0, is_tagged_int=lambda value: value & 1,
-        global_addr=lambda name: name, load_i32=lambda name, offset: globals_[name],
+        global_addr=lambda name: name, load_i32=load_flags,
+        atomic_load_i32=load_frozen, pcc_gc_fix_backend=fix_backend,
         pcc_gc_granule_object_publish=lambda value: 0,
         _object_graph_lock=lambda: None, _object_graph_unlock=lambda: None,
         pcc_gc_managed_pointer_index_insert=insert,
@@ -209,6 +227,22 @@ def test_managed_index_counts_new_publications_not_reregistration_or_scratch():
     assert p.counter(0) == 2
     ns['pcc_gc_managed_pointer_index_insert'] = lambda value: -1
     assert register(12288) == -1 and p.counter(0) == 2
+    # Already frozen registration never reads an object header or re-freezes.
+    assert freeze_events == ['read'] * 5
+    ns['pcc_gc_managed_pointer_index_insert'] = insert
+    globals_['pcc_gc_backend_frozen'] = 0
+    freeze_events.clear()
+    # Static images publish without fixing collector selection.
+    assert ns['pcc_gc_pointer_register_static_literal'](16384) == 1
+    assert p.counter(0) == 2 and globals_['pcc_gc_backend_frozen'] == 0
+    assert freeze_events == ['read', 'flags']
+    headers[20480] = 262144  # PY_FLAG_GC_MALLOC_ALLOC: raw managed object.
+    freeze_events.clear()
+    assert register(20480) == 1 and p.counter(0) == 3
+    assert freeze_events == ['read', 'flags', 'freeze']
+    assert globals_['pcc_gc_backend_frozen'] == 1
+    assert register(20480) == 0 and p.counter(0) == 3
+    assert freeze_events[-1] == 'read' and freeze_events.count('freeze') == 1
 
 
 @pytest.mark.parametrize('state,expected_count,status', [(7, 1, 1), (8, 0, 1), (9, 0, -1)])
@@ -251,19 +285,47 @@ def test_only_completed_tracing_work_acknowledges_pressure(active, sweep, commit
     assert p.counter(2) == expected
 
 
-@pytest.mark.parametrize('materialized,tracked,oom,already,expected', [
-    (0, 0, False, False, 1),   # completed empty heap
-    (1, 1, False, False, 1),   # completed all-live heap, return value still zero
-    (-1, 0, False, False, 0),  # materialization failed
-    (1, 1, True, False, 0),    # candidate-vector allocation failed
-    (1, 1, False, True, 0),    # recursive collect refused
+@pytest.mark.parametrize('materialized,tracked,oom,already,borrowed,expected', [
+    (0, 0, False, False, False, 1),   # completed empty heap, still owns its view
+    (1, 1, False, False, False, 1),   # all live: completed, but collected zero
+    (-1, 0, False, False, False, 0),  # materialization failed
+    (1, 1, True, False, False, 0),    # candidate-vector allocation failed
+    (1, 1, False, True, False, 0),    # recursive collect refused
+    (1, 1, False, False, True, 1),    # full collect borrows an existing view
+    (1, 1, True, False, True, 0),     # scratch OOM cannot release borrowed view
 ])
-def test_gc0_completion_hook_distinguishes_empty_success_from_failure(materialized, tracked, oom, already, expected):
+def test_gc0_completion_hook_distinguishes_empty_success_from_failure(
+    materialized, tracked, oom, already, borrowed, expected,
+):
     p = Pressure()
+    outer_depth = int(already or borrowed)
     p.cells.update(pcc_gc_pressure_owner=1, py_gc_collecting=int(already),
-                   py_gc_tracked_count=tracked, pcc_gc_backend_selected=0)
-    words = {3016: 1, 3032: 0}
-    load = lambda base, offset: p.cells.get(base, 0) if isinstance(base, str) else words.get(base + offset, 0)
+                   py_gc_tracked_count=tracked, pcc_gc_backend_selected=0,
+                   pcc_gc_tracking_flag_mode=1,
+                   pcc_gc_tracking_materialized=outer_depth)
+    # One reachable node, so this is a completion/timing/owner test, not a
+    # replacement for real finalizer/deallocation geometry regressions.
+    words = {3000: 6000, 3008: 1, 3016: 1, 3032: 0, 6000: 1, 6012: 2}
+    state = {'world': outer_depth, 'table': outer_depth, 'clock': 100}
+    events = []
+    windows = []
+    releases = []
+
+    def event(name):
+        events.append(name)
+        state['clock'] += 7
+
+    def assert_owned():
+        assert state['world'] == outer_depth + 1
+        assert state['table'] == outer_depth + 1
+
+    def load(base, offset):
+        return p.cells.get(base, 0) if isinstance(base, str) else words.get(base + offset, 0)
+
+    def load_count(base, offset, order):
+        assert (base, offset, order) == ('py_gc_tracked_count', 0, 'acquire')
+        assert_owned()
+        return load(base, offset)
 
     def store(base, offset, value):
         if isinstance(base, str):
@@ -271,32 +333,138 @@ def test_gc0_completion_hook_distinguishes_empty_success_from_failure(materializ
         else:
             words[base + offset] = value
 
+    def stop():
+        assert state['world'] == outer_depth
+        state['world'] += 1
+        event('stop')
+        return 0
+
+    def resume():
+        assert state['world'] == outer_depth + 1 and state['table'] == outer_depth
+        state['world'] -= 1
+        event('resume')
+
+    def lock():
+        assert state['world'] == outer_depth + 1 and state['table'] == outer_depth
+        state['table'] += 1
+        event('lock')
+
+    def unlock():
+        assert_owned()
+        assert p.cells['py_gc_collecting'] == 0
+        state['table'] -= 1
+        event('unlock')
+
+    def reclaim():
+        assert state['world'] == outer_depth + 1 and state['table'] == outer_depth
+        event('reclaim')
+
+    def materialize():
+        assert_owned()
+        assert p.cells['py_gc_collecting'] == 1
+        event('materialize')
+        if materialized >= 0:
+            p.cells['pcc_gc_tracking_materialized'] = 1
+        return materialized
+
+    def dematerialize(acquired):
+        assert_owned()
+        assert p.cells['py_gc_collecting'] == 0
+        releases.append(acquired)
+        assert acquired == int(materialized >= 0 and not borrowed)
+        if acquired:
+            p.cells['pcc_gc_tracking_materialized'] = 0
+        event('dematerialize')
+
+    def allocate(size):
+        assert_owned()
+        assert size == max(tracked, materialized) * 8
+        event('allocate')
+        return 0 if oom else 5000
+
+    def free(value):
+        assert_owned()
+        assert value == 5000 and not oom
+        event('free')
+
+    def mark():
+        assert_owned()
+        assert p.cells['py_gc_collecting'] == 1
+        event('mark')
+
+    def weak_candidates():
+        assert_owned()
+        event('weak')
+        return 0
+
+    def finalize(vector, count):
+        assert_owned()
+        assert (vector, count) == (5000, 0)
+        event('finalize')
+        return 0
+
+    def finish():
+        assert_owned()
+        event('finish')
+
+    def complete():
+        assert_owned()
+        assert p.cells['py_gc_collecting'] == 1
+        event('complete')
+        p.ns['pcc_gc_pressure_collection_completed']()
+
+    def monotonic():
+        assert state['world'] == outer_depth + 1
+        return state['clock']
+
+    def record(start, end):
+        assert state['world'] == outer_depth + 1 and state['table'] == outer_depth
+        assert end > start
+        windows.append((start, end))
+        event('record')
+
     ns = dict(
         i64=int, global_addr=lambda name: name,
-        global_load_ptr=lambda name: 3000 if name == 'py_gc_head' else 0,
+        global_load_ptr=lambda name: 3000 if name == 'py_gc_head' and tracked > 0 else 0,
         load_i32=load, load_i64=load, load_ptr=load,
-        atomic_load_i32=lambda base, offset, order: load(base, offset),
+        atomic_load_i32=load_count,
         store_i32=store, store_i64=store, store_ptr=store,
         ptr_is_null=lambda value: value == 0,
-        pcc_stop_the_world=lambda: 0, pcc_resume_world=lambda: None,
-        pcc_thread_safepoint=lambda: None,
-        pcc_gc_reclaim_retired_index_tables=lambda: None,
-        pcc_gc_default_table_lock=lambda: None, pcc_gc_default_table_unlock=lambda: None,
-        pcc_gc_tracked_materialize=lambda: materialized,
-        pcc_gc_tracked_dematerialize=lambda: None,
-        pcc_gc_default_drain_deferred_nodes=lambda: None,
-        _finish_subset=lambda: None,
-        _recompute_reachability=lambda: None,
-        _maybe_finalize_unreachable=lambda vector, count: 0,
-        malloc=lambda size: 0 if oom else 5000,
-        free=lambda value: None,
-        pcc_gc_pressure_collection_completed=p.ns['pcc_gc_pressure_collection_completed'],
+        pcc_stop_the_world=stop, pcc_resume_world=resume,
+        pcc_thread_safepoint=lambda: pytest.fail('unexpected contention'),
+        pcc_platform_monotonic_us=monotonic,
+        pcc_gc_record_collection_stw_pause=record,
+        pcc_gc_reclaim_retired_index_tables=reclaim,
+        pcc_gc_default_table_lock=lock, pcc_gc_default_table_unlock=unlock,
+        pcc_gc_tracked_materialize=materialize,
+        pcc_gc_tracked_dematerialize=dematerialize,
+        _finish_subset=finish, _recompute_reachability=mark,
+        py_weakref_invalidate_gc0_candidates=weak_candidates,
+        _maybe_finalize_unreachable=finalize, malloc=allocate, free=free,
+        pcc_gc_pressure_collection_completed=complete,
     )
     text = transform.instrument_source((RUNTIME / 'freestanding_gc_backend0_collector.py').read_text(),
                                        'freestanding_gc_backend0_collector', 3)
     bodies(text, {'_collect'}, ns)
     assert ns['_collect'](0, 0) == 0
     assert p.counter(2) == expected
+    assert p.cells['py_gc_tracked_count'] == tracked
+    assert p.cells['py_gc_collecting'] == int(already)
+    assert p.cells['pcc_gc_tracking_materialized'] == outer_depth
+    assert state['world'] == state['table'] == outer_depth
+    if already:
+        assert events == releases == windows == []
+        return
+    assert len(windows) == len(releases) == 1
+    assert events[:4] == ['stop', 'reclaim', 'lock', 'materialize']
+    assert events[-5:] == ['finish', 'dematerialize', 'unlock', 'record', 'resume']
+    assert events.count('complete') == expected
+    if materialized < 0 or tracked == 0:
+        assert 'allocate' not in events and 'mark' not in events
+    elif oom:
+        assert 'allocate' in events and 'mark' not in events and 'complete' not in events
+    else:
+        assert events[4:10] == ['allocate', 'mark', 'weak', 'finalize', 'free', 'complete']
 
 
 @pytest.mark.parametrize('bit', [1, 1 << 24, 1 << 48, 1 << 53])
