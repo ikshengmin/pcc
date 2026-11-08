@@ -1111,15 +1111,22 @@ def _store_root_nonmoving_tracing(slot, value, backend: int) -> None:
 
 
 def _store_root_count_free_unforwarded(slot, value) -> int:
-    # GC3/GC4 roots while no object is forwarded: the plan transaction would
-    # resolve nothing, so it only notes the store, writes the slot and, in a
-    # cycle, shades a white value as every tracing root barrier does.
-    # Forwarding is installed and a cycle activated only with the world
-    # stopped: one no-park interval keeps the test, the store and its
-    # barrier in one phase. Returns 0 when a forwarded value needs the plan.
+    # Keep the existing no-forwarding publication/barrier path below. With
+    # forwarding present, even an immediate store must serialize with shared
+    # root readers that heal an old forwarded address back into this slot.
     pcc_thread_no_park_enter()
     if atomic_load_i32(global_addr("pcc_gc_forwarding_population"), 0, "acquire") != 0:
+        # Preserve the original stop-admission boundary before graph entry.
         pcc_thread_no_park_exit()
+        if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
+            # NULL/tagged ints need no relocation, old-owner release or gray
+            # work in count-free mode. Skip only StorePlan setup/finish, not
+            # the graph lock or its own no-park/safepoint protocol.
+            pcc_py_gc_minor_graph_lock()
+            pcc_gc_note_store()
+            store_ptr(slot, 0, value)
+            pcc_py_gc_minor_graph_unlock()
+            return 1
         return 0
     pcc_gc_note_store()
     store_ptr(slot, 0, value)
