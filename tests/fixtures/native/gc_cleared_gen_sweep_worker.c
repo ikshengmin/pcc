@@ -27,6 +27,7 @@ extern void *pcc_gc_scalar_sweep_head;
 extern int64_t pcc_gc_tracing_finish_stop_epoch;
 extern int64_t pcc_gc_user_finalizer_runs;
 extern int32_t py_gc_enabled, py_gc_tracked_count;
+extern int32_t pcc_gc_tracking_flag_mode, pcc_gc_tracking_materialized;
 
 #define C(n) pcc_gc_scalar_sweep_counter(n)
 #define CHECK(x, n) do { if (!(x)) { if (!first_failure) first_failure = n; return n; } } while (0)
@@ -234,10 +235,26 @@ static void set_dead_verdict(PyObject *obj) {
     header->flags = (header->flags & ~(16384 | 16 | 32)) | CANDIDATE | WHITE;
 }
 
+/* Call only after establishing the object's live ObjectNode lifetime.
+ * TRACKED is the membership contract. Flag mode has no permanent GCNode;
+ * temporary nodes belong only to an active stopped-world materialized view.
+ * Node mode retains the original identity oracle across every lifecycle. */
+static int tracking_matches(PyObject *object, void *expected_node, int compare_identity) {
+    if (!(((PyObjectHeader *)object)->flags & TRACKED)) return 0;
+    void *node = py_gc_index_find(object);
+    if (pcc_gc_tracking_flag_mode) {
+        if (!pcc_gc_tracking_materialized) return node == 0;
+        if (!pcc_thread_owns_stopped_world()) return 0;
+    } else if (compare_identity && node != expected_node) {
+        return 0;
+    }
+    return node && pointer(node, 0) == object;
+}
+
 static int require_live_target(PyObject *object, void *expected_node, int tag) {
     void *node = node_for(object);
     CHECK(node && node == expected_node, 162);
-    CHECK(word(node, NODE_OWNER) == 0 && py_gc_index_find(object), 163);
+    CHECK(word(node, NODE_OWNER) == 0 && tracking_matches(object, 0, 0), 163);
     /* Membership precedes header reads, including regression failures. */
     CHECK(((PyObjectHeader *)object)->type_tag == tag, 164);
     CHECK((((PyObjectHeader *)object)->flags & (CANDIDATE | 524288 | 32 | TRACKED)) ==
@@ -301,8 +318,8 @@ static int prepare_controlled(int count) {
         pcc_gc_store_ptr(gen, (PyObject **)((char *)gen + GEN_SEND), sends[i]);
         object_nodes[i] = node_for(gen);
         tracking_nodes[i] = py_gc_index_find(gen);
-        CHECK(object_nodes[i] && tracking_nodes[i], 27);
-        CHECK(pointer(tracking_nodes[i], 0) == gen, 28);
+        CHECK(object_nodes[i] && tracking_matches(gen, 0, 0), 27);
+        CHECK(tracking_matches(gen, tracking_nodes[i], 1), 28);
         frame_nodes[i] = node_for(frames[i]);
         child_nodes[i] = node_for(children[i]);
         send_nodes[i] = node_for(sends[i]);
@@ -339,7 +356,7 @@ static int install_controlled_verdict(int count) {
         int flags = ((PyObjectHeader *)generators[i])->flags;
         CHECK(pcc_gc_scalar_sweep_try_enqueue(generators[i], object_nodes[i]) == 0, 44);
         CHECK(((PyObjectHeader *)generators[i])->flags == flags, 45);
-        CHECK(py_gc_index_find(generators[i]) == tracking_nodes[i], 46);
+        CHECK(tracking_matches(generators[i], tracking_nodes[i], 1), 46);
         CHECK(pcc_gc_object_index_find(generators[i]) == object_nodes[i], 47);
         CHECK(word(object_nodes[i], NODE_OWNER) == 0 && C(3) == 0, 48);
         rejected++;
@@ -436,7 +453,7 @@ static int controlled_sweep(void) {
          * A synchronous-free regression must fail here, not read freed GEN
          * or list bytes merely because no asynchronous claim was counted. */
         CHECK(require_live_target(generators[0], object_nodes[0], PY_TYPE_GEN) == 0, 107);
-        CHECK(py_gc_index_find(generators[0]) == tracking_nodes[0], 108);
+        CHECK(tracking_matches(generators[0], tracking_nodes[0], 1), 108);
         CHECK((first_children_dead_mask & 3) == 0, 149);
         CHECK(pointer(generators[0], GEN_FRAME) == frames[0], 104);
         CHECK(py_gen_frame_len(frames[0]) == 1, 105);
@@ -463,8 +480,9 @@ static int controlled_sweep(void) {
         retained_gen++;
     } else if (mode == 7) {
         CHECK(rescued == generators[0] && reclaimed == 0 && observed_gen == 0, 52);
+        CHECK(object_nodes[0] && node_for(rescued) == object_nodes[0], 177);
         CHECK(pointer(rescued, GEN_FRAME) == frames[0], 53);
-        CHECK(py_gen_frame_len(frames[0]) == 1 && py_gc_index_find(rescued) == tracking_nodes[0], 54);
+        CHECK(py_gen_frame_len(frames[0]) == 1 && tracking_matches(rescued, tracking_nodes[0], 1), 54);
         CHECK(word(object_nodes[0], NODE_OWNER) == 0, 55);
         CHECK((((PyObjectHeader *)rescued)->flags & CANDIDATE) == 0, 56);
         CHECK(weak_events == 1 && event_order == 1, 57);
@@ -541,7 +559,7 @@ static int check_public_lifecycle(int resurrection_stage) {
         }
         CHECK(rescued == generators[0] && close_events == 1 && finalizer_total == 1, 128);
         CHECK(require_live_target(rescued, object_nodes[0], PY_TYPE_GEN) == 0, 132);
-        CHECK(py_gc_index_find(rescued) == tracking_nodes[0], 133);
+        CHECK(tracking_matches(rescued, tracking_nodes[0], 1), 133);
         CHECK(require_live_target(frames[0], frame_nodes[0], PY_TYPE_LIST) == 0, 173);
         CHECK(require_live_target(children[0], child_nodes[0], PY_TYPE_LIST) == 0, 174);
         CHECK(event_order == 12 && py_gen_is_done(rescued) == 1, 129);
@@ -648,7 +666,7 @@ int main(int argc, char **argv) {
     if (mode < 1 || mode > 7 || argv[1][1]) return 99;
     int status = run();
     if (pcc_thread_owns_stopped_world()) pcc_resume_world();
-    printf("cleared-gen-sweep backend=%d mode=%d status=%d first_failure=%d producer=%lld worker=%lld "
+    printf("cleared-gen-sweep backend=%d mode=%d status=%d first_failure=%d tracking_flags=%d tracking_view=%d producer=%lld worker=%lld "
            "admitted=%lld observed_gen=%lld children_gone=%lld public_gen_gone=%lld "
            "retired=%lld released=%lld worker_retired=%lld local=%lld pending=%lld "
            "state=%lld quarantine=%lld chunks=%lld peak_objects=%lld peak_bytes=%lld "
@@ -658,7 +676,9 @@ int main(int argc, char **argv) {
            "retained_gen=%lld public_collections=%lld finalizer_total=%lld "
            "lifecycle_stage=%d final_children_gone=%lld event_order=%lld first_epoch_admitted=%lld "
            "first_children_gone=%lld first_children_dead_mask=%lld",
-           pcc_gc_backend(), mode, status, first_failure, (long long)producer, (long long)C(8),
+           pcc_gc_backend(), mode, status, first_failure,
+           pcc_gc_tracking_flag_mode, pcc_gc_tracking_materialized,
+           (long long)producer, (long long)C(8),
            (long long)admitted, (long long)observed_gen, (long long)children_gone,
            (long long)public_gen_gone, (long long)C(4), (long long)C(5),
            (long long)C(6), (long long)C(7), (long long)C(1), (long long)C(0),

@@ -24,6 +24,7 @@ class GeneratorRuntime(ScalarRuntime):
         self.define_global("pcc_gc_deferred_node_free_head", 0)
         self.ns.update({
             "pcc_threads_enabled": lambda: 1,
+            "pcc_current_thread_id": lambda: 1,
             "gc_backend_current": lambda: self.backend,
             "_flag_only_tracking": lambda: 0,
             "_tracked_table_owned_by_current": lambda: int(self.merged),

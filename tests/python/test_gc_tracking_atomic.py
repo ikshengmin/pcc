@@ -87,6 +87,7 @@ class TrackingState:
             "is_tagged_int": lambda obj: 0,
             "null": lambda: None,
             "pcc_threads_enabled": lambda: 1,
+            "pcc_current_thread_id": lambda: 99,
             "gc_backend_current": lambda: backend,
             "atomic_load_i64": self.load_owner,
             "atomic_load_i32": self.load32,
@@ -150,6 +151,7 @@ class TrackingState:
         assert offset == 0
         assert any(slot is self.globals[name] for name in (
             "pcc_gc_tracked_node_pool_count", "py_gc_tracked_count",
+            "pcc_gc_tracking_flag_mode", "pcc_gc_tracking_materialized",
         ))
         return slot[offset]
 
@@ -347,7 +349,6 @@ def test_tracking_header_writes_are_exact_masked_atomic_operations():
                 assert ast.literal_eval(node.args[4]) == "acq_rel"
         elif node.func.id == "store_i32":
             assert ast.unparse(node.args[0]) != "obj"
-    # Node-path untrack/track (two ors: tracked and already-indexed), plus the
-    # flag-mode track and untrack.
-    assert sorted(writes) == [("and", ~TRACKED), ("and", ~TRACKED),
-                              ("or", TRACKED), ("or", TRACKED), ("or", TRACKED)]
+    # Node-path untrack/track (two ors: tracked and already-indexed), plus
+    # flag-mode entry and the first-freeze race recheck under shard ownership.
+    assert sorted(writes) == [("and", ~TRACKED)] * 3 + [("or", TRACKED)] * 4

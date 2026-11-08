@@ -12,7 +12,9 @@ conservative retention. The former requires an observed negative-owner claim
 with cleared slots; the latter requires the live verdict and intact fields.
 Both join the entire observer thread before fresh public collections prove
 eventual retirement.
-Each child independently must have a missing index or a verified live verdict;
+Live tracking checks require TRACKED and the selected representation: no idle
+GCNode for flag mode, the original stable GCNode identity for node mode.
+Each child independently must have a missing ObjectNode index or a verified live verdict;
 the first sweep's reclaimed count is checked against this actual partition.
 The old one-epoch death assertion was wrong when a real snapshot still held
 the generator. Finally resurrection must actually occur before its explicit
@@ -96,6 +98,8 @@ def _run(cleared_gen_binary, backend, mode):
     }
     assert fields["backend"] == backend and fields["mode"] == mode, receipt
     assert fields["status"] == fields["double_frees"] == 0, receipt
+    assert fields["tracking_flags"] == int(backend <= 2), receipt
+    assert fields["tracking_view"] == 0, receipt
     assert fields["retired"] == fields["released"] == fields["admitted"], receipt
     assert fields["worker_retired"] == fields["admitted"] and fields["local"] == 0, receipt
     assert fields["pending"] == fields["state"] == fields["quarantine"] == 0, receipt

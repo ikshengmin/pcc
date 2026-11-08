@@ -74,7 +74,7 @@ def _tracked_snapshot_enter() -> int:
             stopped = pcc_stop_the_world()
         owns_world = 1
     pcc_gc_default_table_lock()
-    # Flag-only tracking (GC0) builds the tracked list for the snapshot.
+    # Flag-only tracking builds the tracked list for this cold snapshot.
     acquired: int = 0
     if (load_i32(global_addr("pcc_gc_tracking_flag_mode"), 0) != 0
             and load_i32(global_addr("pcc_gc_tracking_materialized"), 0) == 0):

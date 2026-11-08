@@ -42,6 +42,7 @@ pcc_thread_safepoint = extern("pcc_thread_safepoint", (), c_void)
 pcc_thread_no_park_enter = extern("pcc_thread_no_park_enter", (), c_void)
 pcc_thread_no_park_exit = extern("pcc_thread_no_park_exit", (), c_void)
 pcc_threads_enabled = extern("pcc_threads_enabled", (), c_int64)
+pcc_current_thread_id = extern("pcc_current_thread_id", (), c_int64)
 pcc_current_native_thread_token = extern(
     "pcc_current_native_thread_token", (), c_ptr
 )
@@ -53,6 +54,9 @@ pcc_allocator_object_cells_enumerate = extern(
 )
 pcc_gc_managed_pointer_index_enumerate = extern(
     "pcc_gc_managed_pointer_index_enumerate", (c_ptr, c_int64, c_int64), c_int64
+)
+pcc_gc_object_list_non_slab_enumerate = extern(
+    "pcc_gc_object_list_non_slab_enumerate", (c_ptr, c_int64, c_int64), c_int64
 )
 
 _SHARD_COUNT: i64 = 32
@@ -124,9 +128,9 @@ def _flag_only_tracking() -> i64:
     collection or gc-module snapshot on this thread), track and untrack keep
     them exact through the node path instead.
     """
-    if load_i32(global_addr("pcc_gc_tracking_flag_mode"), 0) == 0:
+    if atomic_load_i32(global_addr("pcc_gc_tracking_flag_mode"), 0, "acquire") == 0:
         return 0
-    if load_i32(global_addr("pcc_gc_tracking_materialized"), 0) != 0:
+    if atomic_load_i32(global_addr("pcc_gc_tracking_materialized"), 0, "acquire") != 0:
         return 0
     return 1
 
@@ -377,6 +381,13 @@ def py_gc_track(obj: c_ptr) -> None:
         return
     if pcc_threads_enabled() != 0 and gc_backend_current() == 4:
         return
+    # The old shard entry admitted raw newcomers before touching the header.
+    # Flag-only tracking needs that boundary too. An admitted caller's ID
+    # lookup is TLS-only; a newcomer may wait for STW, so select the current
+    # representation only AFTER it returns. No safepoint splits flag/count.
+    if pcc_current_thread_id() == 0:
+        pcc_platform_abort()
+        return
     if _flag_only_tracking() != 0:
         # One atomic: the previous flags say whether this call tracked it,
         # so concurrent trackers count the object once.
@@ -390,6 +401,20 @@ def py_gc_track(obj: c_ptr) -> None:
     index: i64 = _tracked_shard_index(obj)
     if merged == 0:
         _tracked_shard_lock(index)
+        # First-allocation freeze can take every shard and enable flag mode
+        # while this caller waits. Recheck under the acquired no-park lease:
+        # publishing a permanent node now would outlive flag-only untrack.
+        if _flag_only_tracking() != 0:
+            previous: i64 = atomic_rmw_i32("or", obj, 12, _TRACKED, "acq_rel")
+            tracked: i64 = 0
+            if (previous & _TRACKED) == 0:
+                tracked = atomic_rmw_i32(
+                    "add", global_addr("py_gc_tracked_count"), 0, 1, "acq_rel"
+                ) + 1
+            _tracked_shard_unlock(index)
+            if (previous & _TRACKED) == 0:
+                _tracked_growth(tracked)
+            return
     # This lock owns TRACKED and membership, not color/pin/lifetime bits.
     flags: i64 = load_i32(obj, 12)
     if (flags & _TRACKED) != 0:
@@ -472,6 +497,11 @@ def py_gc_untrack(obj: c_ptr) -> None:
         return
     if pcc_threads_enabled() != 0 and gc_backend_current() == 4:
         return
+    # Admission can wait across materialization/dematerialization. Never
+    # retain a representation decision made before that wait.
+    if pcc_current_thread_id() == 0:
+        pcc_platform_abort()
+        return
     if _flag_only_tracking() != 0:
         previous: i64 = atomic_rmw_i32("and", obj, 12, ~_TRACKED, "acq_rel")
         if (previous & _TRACKED) != 0:
@@ -481,6 +511,14 @@ def py_gc_untrack(obj: c_ptr) -> None:
     index: i64 = _tracked_shard_index(obj)
     if merged == 0:
         _tracked_shard_lock(index)
+        # A first freeze may have removed this object's node while we waited.
+        # The flag/count transition still belongs to this call exactly once.
+        if _flag_only_tracking() != 0:
+            previous: i64 = atomic_rmw_i32("and", obj, 12, ~_TRACKED, "acq_rel")
+            if (previous & _TRACKED) != 0:
+                atomic_rmw_i32("sub", global_addr("py_gc_tracked_count"), 0, 1, "acq_rel")
+            _tracked_shard_unlock(index)
+            return
     flags: i64 = load_i32(obj, 12)
     if (flags & _TRACKED) == 0:
         if merged == 0:
@@ -513,9 +551,9 @@ def pcc_gc_tracked_materialize() -> i64:
     empty view from a borrow; only an acquired view may be dematerialized.
     Neither construction nor rollback changes object flags or tracked count.
     """
-    if load_i32(global_addr("pcc_gc_tracking_flag_mode"), 0) == 0:
+    if atomic_load_i32(global_addr("pcc_gc_tracking_flag_mode"), 0, "acquire") == 0:
         return 0
-    if load_i32(global_addr("pcc_gc_tracking_materialized"), 0) != 0:
+    if atomic_load_i32(global_addr("pcc_gc_tracking_materialized"), 0, "acquire") != 0:
         count: i64 = 0
         node = global_load_ptr("py_gc_head")
         while ptr_is_null(node) == 0:
@@ -524,16 +562,23 @@ def pcc_gc_tracked_materialize() -> i64:
         return count
     small_cap: i64 = pcc_allocator_object_cells_enumerate(null(), 0, _TRACKED)
     large_cap: i64 = pcc_gc_managed_pointer_index_enumerate(null(), 0, _TRACKED)
+    tracing_cap: i64 = 0
+    if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
+        tracing_cap = pcc_gc_object_list_non_slab_enumerate(null(), 0, _TRACKED)
     # Count/fill runs under STW. Reject invalid sizes or changed enumeration
     # rather than clamp away tracked objects and publish a partial snapshot.
-    if small_cap < 0 or large_cap < 0:
+    if small_cap < 0 or large_cap < 0 or tracing_cap < 0:
         return -1
     if small_cap > 1152921504606846975 - large_cap:
         return -1
-    if small_cap + large_cap == 0:
-        store_i32(global_addr("pcc_gc_tracking_materialized"), 0, 1)
+    capacity: i64 = small_cap + large_cap
+    if capacity > 1152921504606846975 - tracing_cap:
+        return -1
+    capacity = capacity + tracing_cap
+    if capacity == 0:
+        atomic_store_i32(global_addr("pcc_gc_tracking_materialized"), 0, 1, "release")
         return 0
-    objects = malloc((small_cap + large_cap) * 8)
+    objects = malloc(capacity * 8)
     if ptr_is_null(objects):
         return -1
     small: i64 = pcc_allocator_object_cells_enumerate(objects, small_cap, _TRACKED)
@@ -546,10 +591,18 @@ def pcc_gc_tracked_materialize() -> i64:
     if large != large_cap:
         free(objects)
         return -1
-    store_i32(global_addr("pcc_gc_tracking_materialized"), 0, 1)
+    tracing: i64 = 0
+    if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
+        tracing = pcc_gc_object_list_non_slab_enumerate(
+            ptr_add(objects, (small + large) * 8), tracing_cap, _TRACKED
+        )
+    if tracing != tracing_cap:
+        free(objects)
+        return -1
+    atomic_store_i32(global_addr("pcc_gc_tracking_materialized"), 0, 1, "release")
     added: i64 = 0
     index: i64 = 0
-    while index < small + large:
+    while index < small + large + tracing:
         obj = load_ptr(objects, index * 8)
         shard: i64 = _tracked_shard_index(obj)
         node = _tracked_node_pool_take(shard, 1)
@@ -594,7 +647,7 @@ def pcc_gc_tracked_dematerialize(acquired: i64) -> None:
     """
     if acquired <= 0:
         return
-    if load_i32(global_addr("pcc_gc_tracking_materialized"), 0) == 0:
+    if atomic_load_i32(global_addr("pcc_gc_tracking_materialized"), 0, "acquire") == 0:
         return
     node = global_load_ptr("py_gc_head")
     global_store_ptr("py_gc_head", null())
@@ -605,21 +658,23 @@ def pcc_gc_tracked_dematerialize(acquired: i64) -> None:
             py_gc_index_remove(obj)
         _tracked_node_recycle(node)
         node = next_node
-    store_i32(global_addr("pcc_gc_tracking_materialized"), 0, 0)
+    atomic_store_i32(global_addr("pcc_gc_tracking_materialized"), 0, 0, "release")
 
 
 @c_abi_export("pcc_gc_tracking_enter_flag_mode")
 def pcc_gc_tracking_enter_flag_mode() -> None:
-    """Switch to flag-only tracking once, when GC0 is fixed.
+    """Switch once, when GC0 or a count-free nonmoving tracer is fixed.
 
     Objects tracked earlier (process images register before the collector
     is fixed) keep their flag but lose their nodes now, so no node outlives
     an object whose later death only clears the flag.
     """
-    if load_i32(global_addr("pcc_gc_tracking_flag_mode"), 0) != 0:
+    if atomic_load_i32(global_addr("pcc_gc_tracking_flag_mode"), 0, "acquire") != 0:
         return
     pcc_gc_default_table_lock()
-    store_i32(global_addr("pcc_gc_tracking_materialized"), 0, 1)
+    atomic_store_i32(global_addr("pcc_gc_tracking_materialized"), 0, 1, "release")
     pcc_gc_tracked_dematerialize(1)
-    store_i32(global_addr("pcc_gc_tracking_flag_mode"), 0, 1)
+    # Publish only after old nodes/index entries are gone and materialized is
+    # clear. A fast reader's acquire must never see flag mode before teardown.
+    atomic_store_i32(global_addr("pcc_gc_tracking_flag_mode"), 0, 1, "release")
     pcc_gc_default_table_unlock()

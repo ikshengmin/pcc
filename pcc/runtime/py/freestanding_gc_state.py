@@ -34,9 +34,9 @@ define_global_i32("pcc_gc_list_container_mode", 0)
 # no native activation frames for list entries (py_list_native_entry), and
 # the container fast paths admit them beside GC0 (pcc_gc_try_init_ptr_locked).
 define_global_i32("pcc_gc_nonmoving_count_free", 0)
-# 1 when tracking is a header flag only (GC0): no tracked nodes exist between
-# collections; a stopped-world collection builds them from the live objects
-# that carry the flag. Set with pcc_gc_backend_frozen and never changed.
+# 1 for header-only tracking (GC0 and count-free GC1/2). Cold stopped-world
+# views build nodes from the live objects carrying the flag; the nonmoving
+# tracers keep their separate ObjectNode graph. Fixed with the backend.
 define_global_i32("pcc_gc_tracking_flag_mode", 0)
 # 1 while pcc_gc_tracked_materialize's nodes exist (stopped world, whole
 # table held); track and untrack then keep the nodes exact.

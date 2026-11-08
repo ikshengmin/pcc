@@ -113,11 +113,11 @@ int main(void) {
     pcc_gc_default_table_lock();
     int64_t owned = pcc_gc_tracking_flag_mode && !pcc_gc_tracking_materialized;
     int64_t count = pcc_gc_tracked_materialize();
-    if (count < 0 || owned != (backend == 0)) return fail(2);
+    if (count < 0 || owned != (backend <= 2)) return fail(2);
     Node *first = (Node *)py_gc_index_find(roots[0]);
     Node *dead = (Node *)py_gc_index_find(roots[1]);
     if (backend != 4 && (!first || !dead)) return fail(3);
-    if (backend == 0 && count != py_gc_get_count(0)) return fail(4);
+    if (pcc_gc_tracking_flag_mode && count != py_gc_get_count(0)) return fail(4);
     if (backend == 0) {
         py_gc_enable();
         py_gc_set_threshold(1, 10, 10);
@@ -152,7 +152,7 @@ int main(void) {
         }
     }
     pcc_gc_tracked_dematerialize(owned);
-    if (backend == 0 && (pcc_gc_tracking_materialized || py_gc_head
+    if (pcc_gc_tracking_flag_mode && (pcc_gc_tracking_materialized || py_gc_head
             || py_gc_index_find(roots[0]))) return fail(16);
     if (backend != 4 && pcc_gc_deferred_node_free_head != dead) return fail(17);
     pcc_gc_default_table_unlock();

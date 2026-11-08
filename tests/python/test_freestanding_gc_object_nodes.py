@@ -30,6 +30,7 @@ OWNED_SYMBOLS = {
     "pcc_gc_live_bytes_subtract",
     "pcc_gc_object_known_size",
     "pcc_gc_object_list_head",
+    "pcc_gc_object_list_non_slab_enumerate",
     "pcc_gc_object_node_alloc",
     "pcc_gc_object_node_clear_promotion_state",
     "pcc_gc_object_node_freeing",
@@ -65,6 +66,8 @@ RAW_FUNCTION_IMPORTS = {
     "malloc",
     "pcc_gc_object_index_find",
     "pcc_gc_object_node_is_active",
+    "pcc_thread_owns_stopped_world",
+    "pcc_gc_granule_is_object_start",
 }
 RAW_GLOBAL_IMPORTS = {
     "pcc_gc_backend3_remembered_scan_cursor",

@@ -2701,10 +2701,12 @@ def pcc_gc_fix_backend() -> None:
         and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
     ):
         store_i32(global_addr("pcc_gc_nonmoving_count_free"), 0, 1)
-    # GC0's stop-the-world collector finds its candidates from the live
-    # objects that carry the tracked flag (pcc_gc_tracked_materialize), so
-    # tracking keeps no nodes between collections.
-    if load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0:
+    # GC0 builds cycle candidates from TRACKED flags. Count-free GC1/2 keep
+    # their independent ObjectNode graph for tracing and need tracked nodes
+    # only for cold snapshots. Freeze both representations with this policy;
+    # GC3/4 retain their existing tracking/relocation behavior.
+    if (container_backend == 0
+            or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0):
         pcc_gc_tracking_enter_flag_mode()
     atomic_store_i32(global_addr("pcc_gc_backend_frozen"), 0, 1, "release")
     _object_graph_unlock()

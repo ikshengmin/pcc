@@ -35,7 +35,7 @@ INTERNAL_SYMBOLS = {
     "pcc_gc_tracked_table_owned_by_current",
     "pcc_gc_tracked_shard_lock",
     "pcc_gc_tracked_shard_unlock",
-    # GC0 flag-only tracking and its collection-time nodes.
+    # GC0/count-free GC1/2 flag tracking and its cold temporary nodes.
     "pcc_gc_flag_only_tracking",
     "pcc_gc_tracked_growth",
     "pcc_gc_tracked_materialize",
@@ -46,6 +46,7 @@ RAW_FUNCTION_IMPORTS = {
     "free",
     "malloc",
     "pcc_current_native_thread_token",
+    "pcc_current_thread_id",
     "pcc_gc_backend",
     "pcc_thread_safepoint",
     "pcc_thread_no_park_enter",
@@ -57,10 +58,12 @@ RAW_FUNCTION_IMPORTS = {
     # Collection-time discovery of the flagged objects.
     "pcc_allocator_object_cells_enumerate",
     "pcc_gc_managed_pointer_index_enumerate",
+    "pcc_gc_object_list_non_slab_enumerate",
 }
 RAW_GLOBAL_IMPORTS = {
     "pcc_gc_tracking_flag_mode",
     "pcc_gc_tracking_materialized",
+    "pcc_gc_nonmoving_count_free",
     # py_gc_track schedules GC0's automatic cycle collection.
     "pcc_gc_tracked_after_collect",
     "pcc_gc_backend4_auto_step_pending",

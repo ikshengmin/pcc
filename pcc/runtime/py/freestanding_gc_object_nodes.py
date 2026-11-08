@@ -36,11 +36,46 @@ pcc_gc_object_index_find = extern("pcc_gc_object_index_find", (c_ptr,), c_ptr)
 pcc_gc_object_node_is_active = extern(
     "pcc_gc_object_node_is_active", (c_ptr,), c_int64
 )
+pcc_thread_owns_stopped_world = extern("pcc_thread_owns_stopped_world", (), c_int64)
+pcc_gc_granule_is_object_start = extern("pcc_gc_granule_is_object_start", (c_ptr,), c_int64)
 
 
 @c_abi_export("pcc_gc_object_list_head")
 def pcc_gc_object_list_head() -> c_ptr:
     return global_load_ptr("pcc_gc_object_head")
+
+
+@c_abi_export("pcc_gc_object_list_non_slab_enumerate")
+def pcc_gc_object_list_non_slab_enumerate(out: c_ptr, capacity: i64, required_flags: i64) -> i64:
+    """Count/fill flagged non-slab objects from the stopped active graph.
+
+    Successful ObjectNode publication removes these objects from the exact
+    managed-pointer set. Slab objects have their own LIVE-cell enumeration;
+    exact-set overlap during publication is deduplicated by the materializer.
+    Return every match, writing at most capacity pointers, or -1 without STW.
+
+    CMS joins the ordinary live-thread set before its entry, and graph-lock
+    holders cannot park. A completed stop therefore excludes graph mutation,
+    including scalar retirement. Pending nodes were detached at claim before
+    their links were reused; never enumerate the object index or pending chain.
+    Raw frees touch only retired/detached storage and remain running until a
+    poll. No graph lock, allocation or callback is needed during this walk.
+    """
+    if pcc_thread_owns_stopped_world() == 0:
+        return -1
+    total: i64 = 0
+    node = pcc_gc_object_list_head()
+    while ptr_is_null(node) == 0:
+        if load_i64(node, 32) == 0:
+            obj = load_ptr(node, 0)
+            if ptr_is_null(obj) == 0 and is_tagged_int(obj) == 0:
+                if ((load_i32(obj, 12) & required_flags) == required_flags
+                        and pcc_gc_granule_is_object_start(obj) != 1):
+                    if total < capacity:
+                        store_ptr(out, total * 8, obj)
+                    total = total + 1
+        node = load_ptr(node, 16)
+    return total
 
 
 @c_abi_export("pcc_gc_object_set_list_head")

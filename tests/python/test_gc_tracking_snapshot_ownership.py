@@ -52,6 +52,7 @@ class SnapshotRuntime:
                        atomic_store_i64=lambda p, o, v, order: self.store(p, o, v),
                        atomic_cas_i32=self.cas, atomic_rmw_i32=self.rmw,
                        pcc_threads_enabled=lambda: 1, gc_backend_current=lambda: backend,
+                       pcc_current_thread_id=lambda: 77,
                        pcc_current_native_thread_token=lambda: 77,
                        pcc_platform_abort=lambda: pytest.fail('unexpected abort'),
                        pcc_thread_no_park_enter=lambda: None,

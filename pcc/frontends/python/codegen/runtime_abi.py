@@ -2477,6 +2477,7 @@ def _cross_object_signatures_part_3():
     "py_incref": (("c_ptr",), "c_void"),
     "py_decref": (("c_ptr",), "c_void"),
     "pcc_gc_object_list_head": ((), "c_ptr"),
+    "pcc_gc_object_list_non_slab_enumerate": (("c_ptr", "c_int64", "c_int64"), "c_int64"),
     "pcc_gc_object_set_list_head": (("c_ptr",), "c_void"),
     "pcc_gc_trace_cursor_load": ((), "c_ptr"),
     "pcc_gc_trace_cursor_store": (("c_ptr",), "c_void"),
