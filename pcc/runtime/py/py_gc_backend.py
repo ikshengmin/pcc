@@ -5133,11 +5133,26 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                         return
                     prepared_zpage_ready = 1
                 continue
-            store_ptr(slots_owner, 0, prepared_slots)
-            commit_result: int = pcc_gc_object_index_plan_commit(
-                slots_owner, prepared_cap, 1
-            )
-            prepared_slots = load_ptr(slots_owner, 0)
+            # The capacity plan still belongs to this graph-lock transaction.
+            # With room already available, only the actual insertion below
+            # needs a write generation. Keep unusual/nested generations on
+            # the existing commit path, including exhaustion after its no-op
+            # generation and before insertion. An unused prepared buffer
+            # remains ours and is freed after unlock, as on a no-op commit.
+            index_generation: int = 0
+            if required == 0:
+                index_generation = atomic_load_i64(
+                    global_addr("pcc_gc_object_index_generation"), 0, "relaxed"
+                )
+            commit_result: int = 0
+            if (required > 0 or index_generation < 0
+                    or (index_generation & 1) != 0
+                    or index_generation > 9223372036854775802):
+                store_ptr(slots_owner, 0, prepared_slots)
+                commit_result = pcc_gc_object_index_plan_commit(
+                    slots_owner, prepared_cap, 1
+                )
+                prepared_slots = load_ptr(slots_owner, 0)
             if commit_result < 0:
                 if (
                     ptr_is_null(prepared_zpage) == 0
