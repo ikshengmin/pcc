@@ -1,9 +1,11 @@
-"""Committed GC1/2 scalar deaths, retired in bounded CMS work chunks.
+"""Committed GC1/2 single-block deaths, retired in bounded CMS work chunks.
 
 The ordinary sweep has already invalidated weakrefs, run PASS0/rechecked
-resurrection and cleared slots. Only exact, untracked INT/FLOAT/STR object-family
-allocations enter this queue. No typed dispatcher, callback or managed allocation
-runs in its worker. This is not whole-heap concurrent sweep or a finalizer queue.
+resurrection and cleared slots. Exact INT/FLOAT/STR and fully cleared ordinary
+GEN object-family allocations enter this queue. A claimed GEN is synchronously
+untracked before PASS2 returns, while BUILDING still forbids consumption. No
+typed dispatcher, callback or managed allocation runs in the worker. This is not
+whole-heap concurrent sweep or a finalizer queue.
 
 One stopped-world epoch detaches its proven-dead nodes from the active object
 list, retaining their index and negative batch-token owner. Existing node storage
@@ -62,6 +64,9 @@ _QUARANTINED: i64 = 4
 _CANDIDATE: i64 = 1024
 _DEALLOCATING: i64 = 524288
 _EXCLUDED: i64 = 610419  # IMMORTAL|TRACKED|GRAY|BLACK|PINNED|MINOR|FRESH|ZPAGE|DEALLOCATING
+_TRACKED: i64 = 2
+_GEN_FRAME: i64 = 24
+_GEN_SEND: i64 = 48
 
 # Only a raw physical-release chunk uses the fixed scratch array. Unretired
 # nodes stay in globally anchored pending/quarantine chains, not in this array.
@@ -105,6 +110,7 @@ pcc_gc_object_node_is_address_pinned = extern("pcc_gc_object_node_is_address_pin
 pcc_gc_object_node_unlink = extern("pcc_gc_object_node_unlink", (c_ptr,), c_void)
 pcc_gc_object_node_release_to_pool = extern("pcc_gc_object_node_release_to_pool", (c_ptr,), c_int64)
 pcc_gc_note_scalar_sweep_claim = extern("pcc_gc_note_scalar_sweep_claim", (c_ptr,), c_void)
+py_gc_untrack = extern("py_gc_untrack", (c_ptr,), c_void)
 pcc_gc_live_bytes_subtract = extern("pcc_gc_live_bytes_subtract", (c_int64,), c_void)
 malloc_usable_size = extern("malloc_usable_size", (c_ptr,), c_int64)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
@@ -152,17 +158,28 @@ def pcc_gc_scalar_sweep_try_enqueue(obj, node) -> i64:
             or load_i64(global_addr("pcc_gc_scalar_sweep_bytes"), 0) > _MAX_PENDING_BYTES - 16):
         atomic_rmw_i64("add", global_addr("pcc_gc_scalar_sweep_cap_rejections"), 0, 1, "relaxed")
         return 0
-    # All other PASS2 types keep the old path without a new graph transaction.
-    # STW ownership protects these initial scalar/header reads. GC1/2 do
+    # This internal entry is called only by ordinary PASS2, after weakrefs,
+    # PASS0, resurrection rechecks and complete PASS1 clearing. Empty slots
+    # prove no remaining typed GEN work; they do not replace those phases.
+    # Other types keep the old path without a new graph transaction.
+    # STW ownership protects these initial header/slot reads. GC1/2 do
     # not set the moving collectors' MALLOC_ALLOC bit; the LIVE object-family
     # granule checked below is the exact allocator-origin authority.
     tag: i64 = load_i32(obj, 8)
     flags: i64 = load_i32(obj, 12)
-    if ((tag != abi_constant("object.type.int")
-         and tag != abi_constant("object.type.float")
-         and tag != abi_constant("object.type.str"))
-            or (flags & (_CANDIDATE | 8)) != (_CANDIDATE | 8)
-            or (flags & _EXCLUDED) != 0):
+    excluded: i64 = _EXCLUDED
+    if tag == abi_constant("object.type.gen"):
+        if ((flags & abi_constant("object.gen.inline_frame_flag")) != 0
+                or ptr_is_null(load_ptr(obj, _GEN_FRAME)) == 0
+                or ptr_is_null(load_ptr(obj, _GEN_SEND)) == 0):
+            return 0
+        excluded = excluded & ~_TRACKED
+    elif (tag != abi_constant("object.type.int")
+          and tag != abi_constant("object.type.float")
+          and tag != abi_constant("object.type.str")):
+        return 0
+    if ((flags & (_CANDIDATE | 8)) != (_CANDIDATE | 8)
+            or (flags & excluded) != 0):
         return 0
     pcc_py_gc_minor_graph_lock()
     if (
@@ -177,12 +194,22 @@ def pcc_gc_scalar_sweep_try_enqueue(obj, node) -> i64:
         return 0
     flags: i64 = load_i32(obj, 12)
     tag: i64 = load_i32(obj, 8)
+    excluded = _EXCLUDED
+    if tag == abi_constant("object.type.gen"):
+        if ((flags & abi_constant("object.gen.inline_frame_flag")) != 0
+                or ptr_is_null(load_ptr(obj, _GEN_FRAME)) == 0
+                or ptr_is_null(load_ptr(obj, _GEN_SEND)) == 0):
+            pcc_py_gc_minor_graph_unlock()
+            return 0
+        excluded = excluded & ~_TRACKED
+    elif (tag != abi_constant("object.type.int")
+          and tag != abi_constant("object.type.float")
+          and tag != abi_constant("object.type.str")):
+        pcc_py_gc_minor_graph_unlock()
+        return 0
     if (
         (flags & (_CANDIDATE | 8)) != (_CANDIDATE | 8)
-        or (flags & _EXCLUDED) != 0
-        or (tag != abi_constant("object.type.int")
-            and tag != abi_constant("object.type.float")
-            and tag != abi_constant("object.type.str"))
+        or (flags & excluded) != 0
         or pcc_gc_object_node_is_address_pinned(node, obj) != 0
         or ptr_is_null(load_ptr(node, 24)) == 0
         or ptr_is_null(load_ptr(node, 48)) == 0
@@ -231,6 +258,12 @@ def pcc_gc_scalar_sweep_try_enqueue(obj, node) -> i64:
         atomic_store_i64(global_addr("pcc_gc_scalar_sweep_peak_pending_bytes"), 0, pending_bytes + usable, "release")
     atomic_rmw_i64("add", global_addr("pcc_gc_scalar_sweep_enqueued"), 0, 1, "relaxed")
     pcc_py_gc_minor_graph_unlock()
+    if tag == abi_constant("object.type.gen"):
+        # Preserve logical-death note -> real tracking removal, with no
+        # graph-to-tracked-shard lock nesting. No rejection remains after
+        # claim. BUILDING cannot drain, and outer owners seal only after
+        # this sweep returns, so no consumer can observe a stale GCNode.
+        py_gc_untrack(obj)
     return 1
 
 
@@ -316,7 +349,15 @@ def pcc_gc_scalar_sweep_drain(worker: i64, closing: i64, expected_token: i64) ->
                 store_ptr(global_addr("pcc_gc_scalar_sweep_tail"), 0, null())
             valid: i64 = 0
             flags: i64 = load_i32(obj, 12)
-            if (load_i32(obj, 8) == tag
+            payload_cleared: i64 = 1
+            if load_i32(obj, 8) != tag:
+                payload_cleared = 0
+            elif tag == abi_constant("object.type.gen"):
+                if ((flags & abi_constant("object.gen.inline_frame_flag")) != 0
+                        or ptr_is_null(load_ptr(obj, _GEN_FRAME)) == 0
+                        or ptr_is_null(load_ptr(obj, _GEN_SEND)) == 0):
+                    payload_cleared = 0
+            if (payload_cleared != 0
                     and (flags & (_CANDIDATE | 8 | 4 | _DEALLOCATING)) == (_CANDIDATE | 8 | 4 | _DEALLOCATING)
                     and (flags & (_EXCLUDED & ~_DEALLOCATING)) == 0
                     and pcc_gc_object_node_is_address_pinned(node, obj) == 0

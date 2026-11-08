@@ -30,7 +30,9 @@ class ScalarRuntime(Runtime):
         self.write(self.global_address("pcc_gc_cms_worker_started"), 0, 1)
         self.ns.update({
             "define_global_null_ptr_array": lambda name, count: self.define_array(name, count),
-            "abi_constant": {"object.type.int": 2, "object.type.float": 3, "object.type.str": 4}.__getitem__,
+            "abi_constant": {"object.type.int": 2, "object.type.float": 3,
+                             "object.type.str": 4, "object.type.gen": 15,
+                             "object.gen.inline_frame_flag": 4194304}.__getitem__,
             "pcc_gc_object_index_find": lambda obj: self.nodes.get(obj, 0),
             "pcc_gc_object_index_remove": self.remove_index,
             "pcc_gc_identity_index_find": lambda obj: int(obj in self.identities),
@@ -191,7 +193,9 @@ def test_exclusions_keep_synchronous_owner(reason):
     if reason == "provenance": rt.provenance.add(obj)
     if reason == "not-frozen": rt.write(rt.global_address("pcc_gc_backend_frozen"), 0, 0)
     if reason in ("list", "cext", "generator", "class"):
-        rt.write(obj, 8, {"list": 5, "cext": 65536, "generator": 12, "class": 100}[reason])
+        rt.write(obj, 8, {"list": 5, "cext": 65536, "generator": 15, "class": 100}[reason])
+        if reason == "generator":
+            rt.write(obj, 24, 1234)  # An uncleared frame still owns referents.
     rt.begin()
     assert rt.enqueue((obj, node)) == 0
     assert rt.read(node, 32) == 0 and rt.read(obj, 0) == 731
