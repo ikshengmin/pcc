@@ -350,7 +350,7 @@ class _SelectorMemory:
         return node
 
     def page(self, owners, pressure=0):
-        page = self.new(376)
+        page = self.new(384)
         # Keep a positive, equal fragmentation score across model pages.
         self.write(page, 16, 4096 + owners * 64)
         self.write(page, 40, pressure)

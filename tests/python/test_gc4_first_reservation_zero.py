@@ -142,8 +142,8 @@ class Model:
         return self.ns["pcc_gc_backend4_" + n](*a)
 
     def page(self, size, poison=True):
-        p = self.malloc(376)
-        self.memset(p, 0, 376)
+        p = self.malloc(384)
+        self.memset(p, 0, 384)
         self.call("zpage_reset", p, 0, size)
         if poison:
             self.memset(self.load(p, 72, 8), 109, self.load(p, 80, 8))
@@ -212,7 +212,7 @@ def scenario(variant, kind, size, flags=0):
 
         def hook(x):
             if x.locks == 2:
-                pages = [p for p, a in x.mem.items() if len(a) == 376]
+                pages = [p for p, a in x.mem.items() if len(a) == 384]
                 page = pages[-1]
                 if kind == "prepared_nonzero":
                     x.store(page, 64, 8, 8)

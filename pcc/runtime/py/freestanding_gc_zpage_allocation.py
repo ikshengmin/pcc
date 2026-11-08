@@ -164,7 +164,12 @@ def pcc_gc_backend4_try_zpage_alloc(size: i64, flags: i64):
                 free(span)
                 free(page)
                 return null()
-            store_ptr(page, 56, global_load_ptr("pcc_gc_backend4_page_head"))
+            # +376 is the previous live page; +56 also serves the free/retired lists.
+            head = global_load_ptr("pcc_gc_backend4_page_head")
+            store_ptr(page, 56, head)
+            store_ptr(page, 376, null())
+            if ptr_is_null(head) == 0:
+                store_ptr(head, 376, page)
             global_store_ptr("pcc_gc_backend4_page_head", page)
             published_reset_page = 1
         if ptr_is_null(page) == 0:
@@ -216,7 +221,7 @@ def pcc_gc_backend4_try_zpage_alloc(size: i64, flags: i64):
             prepared_from_free = 1
         else:
             pcc_py_gc_minor_graph_unlock()
-            page = malloc(376)
+            page = malloc(384)
             if ptr_is_null(page) != 0:
                 return null()
             memset(page, 0, 120)
@@ -253,14 +258,19 @@ def pcc_gc_backend4_zpage_track_alloc(owner, size: i64):
     if ptr_is_null(page) != 0:
         page = pcc_gc_backend4_zpage_pop_free_page(size)
     if ptr_is_null(page) != 0:
-        page = malloc(376)
+        page = malloc(384)
         if ptr_is_null(page) != 0:
             pcc_gc_backend4_zpage_node_release(node)
             return null()
         memset(page, 0, 120)
     if existing_offset < 0 and load_i64(page, 32) <= 0:
         pcc_gc_backend4_zpage_reset(page, owner, size)
-        store_ptr(page, 56, global_load_ptr("pcc_gc_backend4_page_head"))
+        # +376 is the previous live page; +56 also serves the free/retired lists.
+        head = global_load_ptr("pcc_gc_backend4_page_head")
+        store_ptr(page, 56, head)
+        store_ptr(page, 376, null())
+        if ptr_is_null(head) == 0:
+            store_ptr(head, 376, page)
         global_store_ptr("pcc_gc_backend4_page_head", page)
     store_ptr(node, 0, owner)
     store_ptr(node, 8, page)
@@ -289,7 +299,7 @@ def pcc_gc_backend4_zpage_track_page_prepare(page, owner, size: i64):
     if size <= 0:
         return null()
     if ptr_is_null(page) != 0:
-        page = malloc(376)
+        page = malloc(384)
         if ptr_is_null(page) != 0:
             return null()
         memset(page, 0, 120)
@@ -392,7 +402,12 @@ def pcc_gc_backend4_zpage_track_alloc_selected(
         return null()
     if uses_prepared_page != 0:
         store_ptr(prepared_page_io, 0, null())
-        store_ptr(page, 56, global_load_ptr("pcc_gc_backend4_page_head"))
+        # +376 is the previous live page; +56 also serves the free/retired lists.
+        head = global_load_ptr("pcc_gc_backend4_page_head")
+        store_ptr(page, 56, head)
+        store_ptr(page, 376, null())
+        if ptr_is_null(head) == 0:
+            store_ptr(head, 376, page)
         global_store_ptr("pcc_gc_backend4_page_head", page)
     if existing_offset >= 0:
         pending: i64 = load_i64(page, 88)

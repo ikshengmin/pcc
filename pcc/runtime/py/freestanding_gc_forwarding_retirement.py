@@ -156,6 +156,7 @@ def pcc_gc_backend4_park_page(page) -> None:
     pcc_gc_backend4_zpage_clear_active_page(page)
     store_i32(page, 108, 0)
     store_ptr(page, 112, null())
+    store_ptr(page, 376, null())
     store_ptr(page, 56, global_load_ptr("pcc_gc_backend4_parked_head"))
     global_store_ptr("pcc_gc_backend4_parked_head", page)
 

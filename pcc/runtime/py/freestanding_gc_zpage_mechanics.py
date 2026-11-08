@@ -204,6 +204,8 @@ def pcc_gc_backend4_zpage_reset(page, owner, size: i64) -> None:
     store_i32(page, 104, 0)
     store_i32(page, 108, 0)
     store_ptr(page, 112, null())
+    # Appended live-list predecessor; metadata is 384 bytes including cards.
+    store_ptr(page, 376, null())
     # 64 i32 remembered-card refcounts at +120 (page+48 counts non-zero ones).
     card: i64 = 0
     while card < 32:

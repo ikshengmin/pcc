@@ -104,8 +104,8 @@ class EvacuationModel:
 @pytest.mark.parametrize("threaded,depth", [(0, 0), (1, 1), (1, 2)])
 def test_exact_memo_reuses_hits_and_misses_and_invalidates(threaded, depth):
     model = EvacuationModel(threaded, depth)
-    page = model.malloc(376)
-    other = model.malloc(376)
+    page = model.malloc(384)
+    other = model.malloc(384)
     assert model.call("add", other) == 1
     assert model.call("find", page) == 0
     model.reads.clear()
@@ -132,7 +132,7 @@ def test_exact_memo_reuses_hits_and_misses_and_invalidates(threaded, depth):
 
 def test_preallocated_add_and_failed_add_preserve_exact_invalidation():
     model = EvacuationModel(1, 1)
-    page = model.malloc(376)
+    page = model.malloc(384)
     available = model.malloc(8)
     node = model.malloc(16)
     model.store(available, 0, node)
@@ -154,8 +154,8 @@ def test_preallocated_add_and_failed_add_preserve_exact_invalidation():
 @pytest.mark.parametrize("depth", [1, 2])
 def test_locked_results_match_uncached_list_with_duplicate_and_stale_flags(depth):
     def scenario(model):
-        page = model.malloc(376)
-        other = model.malloc(376)
+        page = model.malloc(384)
+        other = model.malloc(384)
         results = [model.call("find", page), model.call("find", 0)]
         assert model.call("add", page) == 1
         first = model.call("find", page)
@@ -183,7 +183,7 @@ def test_locked_results_match_uncached_list_with_duplicate_and_stale_flags(depth
 
 def test_unlocked_threaded_lookup_never_reads_or_publishes_shared_memo():
     model = EvacuationModel(1, 0)
-    page = model.malloc(376)
+    page = model.malloc(384)
     assert model.call("add", page) == 1
     # Deliberately wrong memo proves this path follows the list, not the cache.
     model.globals.update({PAGE: page, NODE: 0, MEMO_REVISION: 2})
@@ -200,7 +200,7 @@ def test_unlocked_threaded_lookup_never_reads_or_publishes_shared_memo():
 
 def test_lock_handoff_revalidates_after_another_thread_changes_the_list():
     model = EvacuationModel(1, 1)
-    page = model.malloc(376)
+    page = model.malloc(384)
     assert model.call("find", page) == 0
     model.depth = 0
     # The next serialized graph owner adds the page, then releases ownership.
@@ -339,7 +339,7 @@ def test_native_threaded_evacuation_memo_handoff_and_reset(
             if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 10;
             if (!pcc_threads_enabled() || pcc_current_thread_id() <= 0) return 11;
             for (int i = 0; i < THREADS; i++) {
-                pages[i] = calloc(1, 376);
+                pages[i] = calloc(1, 384);
                 if (!pages[i]) return 12;
             }
             pthread_t threads[THREADS];

@@ -120,7 +120,7 @@ class Runtime:
         return 0
 
     def page(self, queue='retained', live=0, pending=0, forwards=0):
-        page = self.alloc(376)
+        page = self.alloc(384)
         span = self.alloc(4352)
         self.store(page, 32, live)
         self.store(page, 88, pending)

@@ -627,8 +627,8 @@ def test_zpage_selected_commit_preserves_offsets_and_prepared_ownership(
         'pcc_gc_backend4_zpage_track_alloc_selected',
     })
     owner = model.calloc(1, 40)
-    page = model.calloc(1, 376)
-    spare = model.calloc(1, 376)
+    page = model.calloc(1, 384)
+    spare = model.calloc(1, 384)
     node = model.calloc(1, 80)
     node_io = model.calloc(1, 8)
     page_io = model.calloc(1, 8)

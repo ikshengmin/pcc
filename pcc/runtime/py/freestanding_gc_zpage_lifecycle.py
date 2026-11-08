@@ -99,6 +99,7 @@ def pcc_gc_backend4_zpage_clear_reusable_state(page) -> None:
     store_i32(page, 104, 0)
     store_i32(page, 108, 0)
     store_ptr(page, 112, null())
+    store_ptr(page, 376, null())
     card: i64 = 0
     while card < 32:
         store_i64(page, 120 + card * 8, 0)
@@ -308,18 +309,28 @@ def pcc_gc_backend4_zpage_find(owner):
 def pcc_gc_backend4_zpage_unlink_page(page) -> None:
     if ptr_is_null(page) != 0:
         return
+    # The live list is doubly linked under graph exclusion. Reset and unlink
+    # clear +376, so free, parked, retained and private pages cannot unlink a
+    # live neighbour through their reused +56 next field. Keep the removed
+    # page's next field unchanged, as the original scan did.
+    head = global_load_ptr("pcc_gc_backend4_page_head")
+    if ptr_is_null(head) != 0:
+        return
     prev = null()
-    cur = global_load_ptr("pcc_gc_backend4_page_head")
-    while ptr_is_null(cur) == 0:
-        nxt = load_ptr(cur, 56)
-        if ptr_eq(cur, page) != 0:
-            if ptr_is_null(prev) != 0:
-                global_store_ptr("pcc_gc_backend4_page_head", nxt)
-            else:
-                store_ptr(prev, 56, nxt)
+    if ptr_eq(head, page) == 0:
+        prev = load_ptr(page, 376)
+        if ptr_is_null(prev) != 0:
             return
-        prev = cur
-        cur = nxt
+        if ptr_eq(load_ptr(prev, 56), page) == 0:
+            return
+    nxt = load_ptr(page, 56)
+    if ptr_is_null(prev) != 0:
+        global_store_ptr("pcc_gc_backend4_page_head", nxt)
+    else:
+        store_ptr(prev, 56, nxt)
+    if ptr_is_null(nxt) == 0:
+        store_ptr(nxt, 376, prev)
+    store_ptr(page, 376, null())
 
 
 @c_abi_export("pcc_gc_backend4_zpage_find_owner_for_page")

@@ -231,7 +231,7 @@ def _link_zpage_mechanics_probe(tmp_path: Path, archive: Path) -> Path:
             }
 
             int main(void) {
-                unsigned char *page = (unsigned char *)calloc(1, 120);
+                unsigned char *page = (unsigned char *)calloc(1, 384);
                 if (page == NULL) return 2;
                 pcc_gc_backend4_zpage_reset(page, NULL, 128);
                 void *span = get_ptr(page, 72);
