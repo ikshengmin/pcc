@@ -66,6 +66,14 @@ class PromotedRestoreOwners:
                 pending.extend(self.successors[name])
         return reached
 
+    def assert_phi_predecessors(self):
+        # Parsing can prune a bad incoming edge and disconnect its PHI from
+        # every restored owner. Check all parsed PHIs, including such orphans.
+        for block, phi in self.phis.values():
+            assert {item.label for item in phi.incoming} == self.predecessors[block], (
+                "parsed PHI must cover its actual predecessors"
+            )
+
     def _dominates(self, definition, use):
         assert definition in self.reachable and use in self.reachable, "promoted owner is unreachable"
         if definition not in self.avoiding:

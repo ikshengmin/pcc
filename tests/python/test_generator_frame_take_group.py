@@ -146,6 +146,8 @@ def assert_group_restore_contract(blocks, globals_, start="gen.dispatch", target
             pending.append((term.data[0], history))
     assert results == {tuple(sorted(expected.items()))}
     assert by_name[target].terminator.kind == "switch"
+    if promoted is not None:
+        promoted.assert_phi_predecessors()
     roots.assert_frame_exits()
     return batches
 
