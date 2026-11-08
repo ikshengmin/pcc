@@ -1808,14 +1808,14 @@ def _emit_gep_instruction(
     return lines
 
 
-def _emit_prologue(func: ParsedFunction) -> list[str]:
+def _emit_prologue(func: ParsedFunction, *, padding=()) -> list[str]:
     from .definition_linkage import checked_function_definition_linkage
     linkage = checked_function_definition_linkage(
         func, "x86_64-pc-windows-msvc" if _WINDOWS_ABI else "x86_64-unknown-linux-gnu"
     )
     if _WINDOWS_ABI:
         from .self_backend_win64_abi import prologue
-        return prologue(func)
+        return prologue(func, padding=padding)
     is_process_entry = _is_linux_process_entry(func)
     symbol = _asm_symbol(func.name)
     lines = ["", ".text", ".p2align 4, 0x90"]
@@ -1845,6 +1845,13 @@ def _emit_prologue(func: ParsedFunction) -> list[str]:
             lines.append(f"  mov QWORD PTR [rsp + {index * 8}], {register}")
         for index in range(8):
             lines.append(f"  movdqu XMMWORD PTR [rsp + {48 + index * 16}], xmm{index}")
+    from .self_backend_x86_frame import emit_fixed_frame_padding
+    lines.extend(emit_fixed_frame_padding(padding))
+    # The nearbyint MXCSR pair is write-before-read compiler scratch, not
+    # a saved input or a managed value. Unused reservations must not retain
+    # object-looking words from a previous activation's stack.
+    mxcsr = saved_rbx + 8
+    lines.append(f"  mov QWORD PTR [rsp + {mxcsr}], 0")
     gp_start = 0
     if func.hidden_sret_slot is not None:
         lines.extend(_store_reg_to_slot("rdi", func.hidden_sret_slot.offset, func.hidden_sret_slot.type))
@@ -3466,7 +3473,10 @@ def _emit_function(
         from .self_backend_win64_abi import outgoing_size
         _WINDOWS_SCRATCH_BASE = outgoing_size(func)
     symbol = _asm_symbol(func.name)
-    lines = _emit_prologue(func)
+    from .self_backend_x86_frame import fixed_frame_padding
+    lines = _emit_prologue(
+        func, padding=fixed_frame_padding(func, stack_map_plan),
+    )
     kernel = get_indexed_function_kernel(func)
     if phase_timing is not None:
         phase_timing.add(12, phase_start)

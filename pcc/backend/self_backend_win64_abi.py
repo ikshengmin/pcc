@@ -49,7 +49,7 @@ def frame_size(func) -> int:
     return func.frame_size + func.platform_frame_extra
 
 
-def prologue(func):
+def prologue(func, *, padding=()):
     from .self_backend_x86_64_linux import (
         _asm_symbol, _store_reg_to_slot, _reg_alias, _copy_address_to_address,
         _slot_addr, _load_address_chunk_to_gp_reg,
@@ -72,6 +72,11 @@ def prologue(func):
     for reg, offset in (("xmm10", 32), ("xmm11", 48)):
         lines.extend([f"  movdqu XMMWORD PTR [rsp + {saved + offset}], {reg}", f"  .seh_savexmm {reg}, {saved + offset}"])
     lines.append("  .seh_endprologue")
+    from .self_backend_x86_frame import emit_fixed_frame_padding
+    lines.extend(emit_fixed_frame_padding(padding))
+    # Preserve saved registers, outgoing home space and transient register
+    # spills. Only the write-before-read MXCSR scratch starts at zero.
+    lines.append(f"  mov QWORD PTR [rsp + {saved + MXCSR_OFFSET}], 0")
     if func.is_vararg:
         for index, reg in enumerate(GPRS):
             lines.append(f"  mov QWORD PTR [rbp + {16 + index * 8}], {reg}")
