@@ -412,7 +412,7 @@ extern Page *pcc_gc_backend4_page_head;
 extern Page *pcc_gc_backend4_free_page_head;
 extern Page *pcc_gc_backend4_parked_head;
 extern Page *pcc_gc_backend4_retained_page_head;
-extern _Atomic int64_t pcc_dealloc_cascades_active;
+extern _Atomic(int64_t) pcc_dealloc_cascades_active;
 extern int64_t pcc_gc_backend4_deferred_recycle_pages;
 extern void pcc_py_gc_minor_graph_lock(void);
 extern void pcc_py_gc_minor_graph_unlock(void);
