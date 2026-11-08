@@ -124,6 +124,8 @@ pcc_diagnostics_runtime_log_event_code = extern("pcc_diagnostics_runtime_log_eve
 
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
+pcc_gc_frame_enter_local = extern("pcc_gc_frame_enter_local", (c_ptr, c_ptr), c_void)
+pcc_gc_frame_leave_local = extern("pcc_gc_frame_leave_local", (c_ptr,), c_void)
 pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
 pcc_gc_note_write_barrier = extern("pcc_gc_note_write_barrier", (c_ptr, c_ptr), c_void)
 define_global_i32("pcc_gen_sync_frame_map", 5)
@@ -349,7 +351,7 @@ def _gen_frame_factory_finish(slots, token: i64, success: i64):
         pcc_gc_store_root(value_slot, null())
         py_clear_exception()
         py_tls_exc_swap_slot(error_slot)
-        pcc_gc_frame_leave(slots)
+        pcc_gc_frame_leave_local(slots)
         return null()
     # Bridge the terminal raw ABI with the same pin/slot transfer protocol
     # as ordinary list construction. The counted lease remains live through
@@ -362,7 +364,7 @@ def _gen_frame_factory_finish(slots, token: i64, success: i64):
     if pcc_gc_foreign_lease_release(value_slot, token) != 0:
         pcc_platform_abort()
         return null()
-    pcc_gc_frame_leave(slots)
+    pcc_gc_frame_leave_local(slots)
     return pcc_gc_take_pinned_slot(value_slot, prior)
 
 
@@ -379,7 +381,10 @@ def py_gen_frame_new(slot_count: i64):
         return _require_result(null(), cstr("py_gen_frame_new"), cstr("invalid generator frame size"))
     slots = stack_alloc(_GEN_FRAME_FACTORY_SLOT_COUNT * C_POINTER_SIZE)
     memset(slots, 0, _GEN_FRAME_FACTORY_SLOT_COUNT * C_POINTER_SIZE)
-    pcc_gc_frame_enter(global_addr("pcc_gen_frame_factory_map"), slots)
+    # These two roots belong to this native activation, not the persistent
+    # generator frame being built. Local registration publishes them before
+    # any allocation/park and the shared finish helper retires both exits.
+    pcc_gc_frame_enter_local(global_addr("pcc_gen_frame_factory_map"), slots)
     value_slot = ptr_add(slots, _GEN_FRAME_FACTORY_VALUE * C_POINTER_SIZE)
     store_ptr(value_slot, 0, pcc_gc_alloc(PYLISTOBJECT_SIZE, PY_TYPE_LIST, 0))
     if ptr_is_null(load_ptr(value_slot, 0)):
@@ -433,7 +438,7 @@ def py_gen_inline_frame_new(slot_count: i64):
         return _require_result(null(), cstr("py_gen_inline_frame_new"), cstr("invalid generator frame size"))
     slots = stack_alloc(_GEN_FRAME_FACTORY_SLOT_COUNT * C_POINTER_SIZE)
     memset(slots, 0, _GEN_FRAME_FACTORY_SLOT_COUNT * C_POINTER_SIZE)
-    pcc_gc_frame_enter(global_addr("pcc_gen_frame_factory_map"), slots)
+    pcc_gc_frame_enter_local(global_addr("pcc_gen_frame_factory_map"), slots)
     value_slot = ptr_add(slots, _GEN_FRAME_FACTORY_VALUE * C_POINTER_SIZE)
     items_offset: i64 = i64(PYINLINEGENOBJECT_ITEMS_OFFSET)
     slot_stride: i64 = i64(C_POINTER_SIZE)
