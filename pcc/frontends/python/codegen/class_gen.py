@@ -75,6 +75,9 @@ from pcc.frontends.python.codegen.class_override_index import (
     build_export_subclassed_classes,
 )
 from pcc.frontends.python.codegen.ownership_lowering import prepare_rebound_object_parameters
+from pcc.frontends.python.codegen.private_frame_scopes import (
+    record_private_root_address,
+)
 from pcc.frontends.python.codegen.local_bound_lowering import prepare_local_boundness
 from pcc.frontends.python.codegen.str_default_cells import str_default_cell_expr
 from pcc.frontends.python.py_ast import (
@@ -4452,6 +4455,7 @@ class ClassLowering:
                     [cell, initial],
                 )
                 slot = parent.builder.alloca(_CSTR, name=f"{ast_arg.name}.addr")
+                record_private_root_address(parent, slot, 1)
                 parent.builder.store(cell, slot)
                 parent.env[ast_arg.name] = (
                     slot,
@@ -4489,6 +4493,9 @@ class ClassLowering:
                     ):
                         continue
                     slot = parent.builder.alloca(ir_ty, name=f"{ast_arg.name}.addr")
+                    record_private_root_address(
+                        parent, slot, 1 if isinstance(ir_ty, ir.PointerType) else 0,
+                    )
                     parent.builder.store(ir_arg, slot)
                     parent.env[ast_arg.name] = (slot, ir_ty, bind_ty)
                     if auto_root_borrowed_params and (
@@ -4527,6 +4534,13 @@ class ClassLowering:
                 recv_arg = fn.args[0]
                 _classgen_ensure_value_type(recv_arg, recv_ir_ty)
                 self_slot = parent.builder.alloca(recv_ir_ty, name=f"{recv_name}.addr")
+                # Keep the direct allocation and insertion point. Only a
+                # pointer-sized cell has the one-slot private-root proof;
+                # value payload aggregates keep their existing field roots.
+                record_private_root_address(
+                    parent, self_slot,
+                    1 if isinstance(recv_ir_ty, ir.PointerType) else 0,
+                )
                 parent.builder.store(recv_arg, self_slot)
                 # The receiver's bind type honours an explicit ``ClassType``
                 # annotation when type-infer placed one on the first arg.
@@ -4596,6 +4610,9 @@ class ClassLowering:
                     ):
                         continue
                     slot = parent.builder.alloca(ir_ty, name=f"{ast_arg.name}.addr")
+                    record_private_root_address(
+                        parent, slot, 1 if isinstance(ir_ty, ir.PointerType) else 0,
+                    )
                     parent.builder.store(ir_arg, slot)
                     parent.env[ast_arg.name] = (slot, ir_ty, bind_ty)
                     if auto_root_borrowed_params and (

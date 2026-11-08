@@ -51,6 +51,7 @@ main()
 
 
 def test_boxed_parameter_roots_owned_ir(tmp_path, monkeypatch):
+    monkeypatch.setenv("PCC_PRECISE_STACKMAP_TABLES", "1")
     monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
     source = tmp_path / "boxed_roots.py"
     source.write_text(ROOTS)
@@ -64,12 +65,12 @@ def test_boxed_parameter_roots_owned_ir(tmp_path, monkeypatch):
         before_collection = body[:body.index("@pcc_gc_collect")]
         # The slot is registered and retired directly, or through identity aliases.
         roots = [slot] + re.findall(r"(%gc\.frame\.slots\.ptr[^ ]*) = bitcast ptr " + re.escape(slot) + r" to ptr", before_collection)
-        assert any(re.search(r"@pcc_gc_frame_enter_mapped\([^\n]*ptr " + re.escape(root) + r"\)", before_collection)
+        assert any(re.search(r"@pcc_gc_frame_enter_local_mapped\([^\n]*ptr " + re.escape(root) + r"\)", before_collection)
                    for root in roots), name
         assert ".pcc.gc.frame.map.borrowed" in before_collection, name
         assert "@pcc_gc_load_borrowed_ptr" in body, name
         leaves = [slot] + re.findall(r"(%gc\.frame\.leave\.ptr[^ ]*) = bitcast ptr " + re.escape(slot) + r" to ptr", body)
-        assert any(re.search(r"@pcc_gc_frame_leave_mapped\(ptr " + re.escape(leave) + r"\)", body) for leave in leaves), name
+        assert any(re.search(r"@pcc_gc_frame_leave_local_mapped\(ptr " + re.escape(leave) + r"\)", body) for leave in leaves), name
     body = re.search(r"(?ms)^define [^\n]*@user_boxed_roots_rebound\(.*?\n\}", text).group(0)
     assert "value.param.retain" in body
     assert ".pcc.gc.frame.map.borrowed" not in body
