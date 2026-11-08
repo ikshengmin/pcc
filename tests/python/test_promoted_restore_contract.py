@@ -11,6 +11,7 @@ from tests.python.test_generator_operand_root_groups import _parsed_function
 
 
 _MIXED = r'''
+target triple = "x86_64-unknown-linux-gnu"
 @own.map = constant i32 2
 @borrowed.map = constant i32 -2
 declare void @pcc_gc_frame_enter(ptr, ptr)
