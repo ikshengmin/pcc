@@ -254,6 +254,7 @@ asyncio.run(main())
 """
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("bulk", ("0", "1"))
 def test_native_await_operands_preserve_exceptions_cleanup_and_lifetime(
     tmp_path,
@@ -267,6 +268,7 @@ def test_native_await_operands_preserve_exceptions_cleanup_and_lifetime(
     )
 
 
+@pytest.mark.integration
 def test_native_asyncio_cancellation_and_async_context_exception_identity(
     tmp_path,
     monkeypatch,

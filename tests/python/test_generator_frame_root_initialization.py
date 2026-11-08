@@ -184,9 +184,10 @@ def test_root_initialization_contract_rejects_unsafe_changes(tmp_path, monkeypat
     if mutation in ("missing-null", "late-null"):
         body = body.replace(empty, "", 1)
         if mutation == "late-null":
-            enter = re.search(r"^  call void[^\n]*@pcc_gc_frame_enter(?:_mapped)?\([^\n]*, ptr %"
-                              + re.escape(cell) + r"\)\n", body, re.M).group(0)
-            body = body.replace(enter, enter + empty, 1)
+            enter = re.search(r"^  call void[^\n]*@pcc_gc_frame_enter(?:_local)?(?:_mapped)?\([^\n]*, ptr %"
+                              + re.escape(cell) + r"\)\n", body, re.M)
+            assert enter is not None, "fixture must publish the selected legacy root"
+            body = body.replace(enter.group(0), enter.group(0) + empty, 1)
     elif mutation == "borrowed-cleared":
         parameter = function.args[0].name
         store = re.search(r"^  store ptr %" + re.escape(parameter) + r", ptr %[^\n]+\n", body, re.M).group(0)
