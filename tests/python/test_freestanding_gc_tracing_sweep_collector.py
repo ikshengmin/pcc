@@ -31,6 +31,7 @@ OWNED_SYMBOLS = {
     "pcc_gc_tracing_sweep_unreachable",
 }
 RAW_FUNCTION_IMPORTS = {
+    "pcc_gc_scalar_sweep_try_enqueue",
     'pcc_platform_monotonic_us',
     'pcc_capi_is_cext_type_tag',
     'pcc_gc_dealloc_typed',
@@ -385,6 +386,9 @@ class _SweepModel(_CandidateModel):
         env.update(
             store_i32=store_i32,
             abi_constant=lambda name: 6,
+            # This finalizer-order model uses tag 11, never an admitted
+            # scalar. Keep its synchronous fallback as the observed owner.
+            pcc_gc_scalar_sweep_try_enqueue=lambda obj, node: 0,
             pcc_gc_object_is_address_pinned=lambda obj: 0,
             pcc_gc_object_node_is_address_pinned=lambda node, obj: 0,
             pcc_capi_is_cext_type_tag=lambda tag: 0,

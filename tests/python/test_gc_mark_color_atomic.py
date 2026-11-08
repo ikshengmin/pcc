@@ -214,6 +214,7 @@ def test_terminal_gray_clear_preserves_mutator_header_update(initial, operation)
         "pcc_gc_config_initialized": {0: 1},
         "pcc_gc_backend_selected": {0: 1},
         "pcc_gc_free_watch": None,
+        "pcc_gc_scalar_sweep_state": {0: 0},
     }
     counts, retired, released, locks = [], [], [], []
 
@@ -222,6 +223,7 @@ def test_terminal_gray_clear_preserves_mutator_header_update(initial, operation)
         memory.update(operation)
 
     namespace.update({
+        "atomic_load_i64": lambda obj, offset, order: obj[offset],
         "stack_alloc": lambda size: {}, "null": lambda: None,
         "ptr_is_null": lambda obj: int(obj is None),
         "load_i32": lambda obj, offset: obj[offset],

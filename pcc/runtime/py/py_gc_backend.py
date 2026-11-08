@@ -201,6 +201,8 @@ pcc_gc_forwarding_target_index_remove = extern(
 pcc_gc_forwarding_target_index_clear = extern(
     "pcc_gc_forwarding_target_index_clear", (), c_void
 )
+pcc_gc_scalar_sweep_owns = extern("pcc_gc_scalar_sweep_owns", (c_ptr,), c_int64)
+
 pcc_gc_identity_index_find = extern("pcc_gc_identity_index_find", (c_ptr,), c_ptr)
 pcc_gc_identity_index_insert = extern(
     "pcc_gc_identity_index_insert",
@@ -2744,6 +2746,9 @@ def pcc_gc_pointer_register_static_literal(o) -> int:
 def pcc_gc_pointer_unregister(o) -> int:
     if ptr_is_null(o) != 0 or is_tagged_int(o) != 0:
         return 0
+    if (atomic_load_i64(global_addr("pcc_gc_scalar_sweep_state"), 0, "acquire") != 0
+            and pcc_gc_scalar_sweep_owns(o) != 0):
+        return -1
     granule_was_live: int = pcc_gc_granule_is_object_start(o)
     granule_result: int = pcc_gc_granule_object_retire(o)
     if granule_result < 0:
@@ -4743,6 +4748,10 @@ def pcc_gc_free_object_memory(o) -> None:
         _object_graph_unlock()
         return
     lease_node = pcc_gc_object_index_find(o)
+    if ((backend == 1 or backend == 2) and ptr_is_null(lease_node) == 0
+            and load_i64(lease_node, 32) < 0):
+        _object_graph_unlock()
+        return
     leased: int = 0
     if ptr_is_null(lease_node) == 0 and load_i64(lease_node, 80) != 0:
         leased = 1
@@ -5348,6 +5357,19 @@ def pcc_gc_free_watch_end(record) -> int:
     return noted
 
 
+@c_abi_export("pcc_gc_note_scalar_sweep_claim")
+def pcc_gc_note_scalar_sweep_claim(o) -> None:
+    """The STW scalar claimant emits its first-death observation on this TLS.
+
+    The caller already owns graph exclusion and checked the callback-free
+    subset. Metadata retirement is intentionally left to its bounded task.
+    """
+    watch = global_load_ptr("pcc_gc_free_watch")
+    if ptr_is_null(watch) == 0 and ptr_eq(load_ptr(watch, _FREE_WATCH_OBJECT), o) != 0:
+        store_i64(watch, _FREE_WATCH_NOTED, 1)
+    global_store_ptr("pcc_gc_last_noted_free", o)
+
+
 @c_abi_export("pcc_gc_note_object_freeing")
 def pcc_gc_note_object_freeing(o) -> None:
     backend: int = 0
@@ -5363,6 +5385,12 @@ def pcc_gc_note_object_freeing(o) -> None:
         _object_graph_unlock()
         if permitted == 0:
             return
+    # A committed scalar death is owned by its task, not this notifier.
+    # Check before publishing free-watch success or touching metadata.
+    if ((backend == 1 or backend == 2)
+            and atomic_load_i64(global_addr("pcc_gc_scalar_sweep_state"), 0, "acquire") != 0
+            and pcc_gc_scalar_sweep_owns(o) != 0):
+        return
     watch = global_load_ptr("pcc_gc_free_watch")
     if ptr_is_null(watch) == 0 and ptr_eq(load_ptr(watch, _FREE_WATCH_OBJECT), o) != 0:
         store_i64(watch, _FREE_WATCH_NOTED, 1)

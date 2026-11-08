@@ -1858,6 +1858,19 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
 
 FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
     {
+        "pcc_gc_scalar_sweep_state",
+        "pcc_gc_scalar_sweep_token",
+        "pcc_gc_scalar_sweep_count",
+        "pcc_gc_scalar_sweep_bytes",
+        "pcc_gc_scalar_sweep_enqueued",
+        "pcc_gc_scalar_sweep_retired",
+        "pcc_gc_scalar_sweep_released",
+        "pcc_gc_scalar_sweep_worker_retired",
+        "pcc_gc_scalar_sweep_local_retired",
+        "pcc_gc_scalar_sweep_worker_thread",
+        "pcc_gc_scalar_sweep_quarantined",
+        "pcc_gc_scalar_sweep_cap_rejections",
+        "pcc_gc_scalar_sweep_sealed",
         "pcc_gc_deferred_free_attempts",
         "pcc_gc_deferred_free_enqueued",
         "pcc_gc_deferred_free_drained",
@@ -1988,6 +2001,7 @@ FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
 
 FREESTANDING_GC_PTR_GLOBALS: frozenset[str] = frozenset(
     {
+        "pcc_gc_scalar_sweep_producer_token",
         "pcc_gc_deferred_free_worker_head",
         "pcc_gc_deferred_free_head",
         "pcc_gc_deferred_free_tail",
@@ -2067,6 +2081,7 @@ FREESTANDING_GC_PTR_GLOBALS: frozenset[str] = frozenset(
 
 FREESTANDING_GC_THREAD_LOCAL_GLOBALS: frozenset[str] = frozenset(
     {
+        "pcc_gc_scalar_sweep_producer_token",
         "pcc_gc_deferred_free_active",
         "pcc_gc_deferred_free_head",
         "pcc_gc_deferred_free_tail",
@@ -2090,6 +2105,7 @@ FREESTANDING_GC_THREAD_LOCAL_GLOBALS: frozenset[str] = frozenset(
 # address comparisons let the GC kernel recognize their fixed lifetimes.
 FREESTANDING_GC_STATIC_GLOBALS: frozenset[str] = frozenset(
     {
+        "pcc_gc_scalar_sweep_tasks",
         # Raw address-selected mode-guard counters owned by the GC kernel.
         "pcc_gc_mode_lease_shards",
         "pcc_gc_static_literal_keys",
@@ -3117,6 +3133,14 @@ def _cross_object_signatures_part_12():
     # The frame-registry chunk is full. New raw ABIs start a new bounded
     # literal instead of exceeding the native compiler's 50-entry limit.
     return {
+    "pcc_gc_note_scalar_sweep_claim": (("c_ptr",), "c_void"),
+    "pcc_gc_scalar_sweep_begin": ((), "c_void"),
+    "pcc_gc_scalar_sweep_try_enqueue": (("c_ptr", "c_ptr"), "c_int64"),
+    "pcc_gc_scalar_sweep_seal": ((), "c_void"),
+    "pcc_gc_scalar_sweep_close": ((), "c_int64"),
+    "pcc_gc_scalar_sweep_owns": (("c_ptr",), "c_int64"),
+    "pcc_gc_scalar_sweep_drain": (("c_int64", "c_int64", "c_int64"), "c_int64"),
+    "pcc_gc_scalar_sweep_counter": (("c_int64",), "c_int64"),
     "malloc_usable_size": (("c_ptr",), "c_int64"),
     "pcc_gc_deferred_free_begin": (("c_int64",), "c_int64"),
     "pcc_gc_deferred_free_try_enqueue": (("c_ptr", "c_int64"), "c_int64"),

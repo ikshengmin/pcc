@@ -227,9 +227,10 @@ static int inspect_live(int index) {
 }
 
 extern int64_t pcc_gc_deferred_free_counter(int64_t);
+extern int64_t pcc_gc_scalar_sweep_counter(int64_t);
 extern int32_t pcc_gc_backend4_auto_step_pending;
 static int route;
-static int64_t before_enqueued, before_drained;
+static int64_t before_enqueued, before_drained, before_scalar;
 static int owner_callbacks;
 static PyObject *owner_callback(PyObject *captures, PyObject *args) {
     (void)captures; (void)args;
@@ -253,6 +254,7 @@ static int owners(void) {
         status = inject_candidates(mode == 9 ? 64 : (mode == 4 ? 2 : 1));
         if (status) return status;
     }
+    before_scalar = pcc_gc_scalar_sweep_counter(3);
     before_enqueued = pcc_gc_deferred_free_counter(3);
     before_drained = pcc_gc_deferred_free_counter(4);
     if (route != 2 && route != 3 && route != 5) {
@@ -324,14 +326,19 @@ static int owners(void) {
     if (pcc_gc_deferred_free_counter(11) || pcc_gc_deferred_free_counter(12)) return 179;
     int64_t queued = pcc_gc_deferred_free_counter(3) - before_enqueued;
     int64_t drained = pcc_gc_deferred_free_counter(4) - before_drained;
+    int64_t scalar = pcc_gc_scalar_sweep_counter(3) - before_scalar;
+    if (pcc_gc_scalar_sweep_counter(4) != pcc_gc_scalar_sweep_counter(3)
+        || pcc_gc_scalar_sweep_counter(5) != pcc_gc_scalar_sweep_counter(3)
+        || pcc_gc_scalar_sweep_counter(1) || pcc_gc_scalar_sweep_counter(9)) return 180;
     if (queued != drained || pcc_gc_deferred_free_counter(0) || pcc_gc_deferred_free_counter(1)) return 167;
     if (route == 2 || route == 3 || route == 5 || pcc_gc_backend() == 0 || pcc_gc_backend() > 2) {
-        if (queued) return 168;
-    } else if ((mode == 2 || mode == 6 || mode == 9) && queued == 0) return 169;
+        if (queued || scalar) return 168;
+    } else if ((mode == 2 || mode == 6 || mode == 9) && queued + scalar == 0) return 169;
     if (owner_callbacks != ((route == 3 || route == 5) ? 0 : 2)) return 170;
     if (mode == 9)
-        printf("owner-leaf-batch candidates=64 queued=%lld drained=%lld\n",
-               (long long)queued, (long long)drained);
+        printf("owner-leaf-batch candidates=64 queued=%lld drained=%lld scalar=%lld scalar_worker=%lld\n",
+               (long long)queued, (long long)drained, (long long)scalar,
+               (long long)pcc_gc_scalar_sweep_counter(6));
     return 0;
 }
 int main(int argc, char **argv) {

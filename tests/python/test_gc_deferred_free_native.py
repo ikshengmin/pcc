@@ -130,9 +130,9 @@ def test_leaf_batch_collection_owner_native(deferred_binaries, backend, route):
     assert int(fields["candidates"]) == 64, diagnostic
     assert int(fields["queued"]) == int(fields["drained"]), diagnostic
     if backend in (1, 2):
-        assert int(fields["queued"]) > 0, diagnostic
+        assert int(fields["queued"]) + int(fields["scalar"]) > 0, diagnostic
     else:
-        assert int(fields["queued"]) == 0, diagnostic
+        assert int(fields["queued"]) == int(fields["scalar"]) == 0, diagnostic
     assert output == f"deferred-owners backend={backend} route={route} mode=9 status=0\n"
 
 

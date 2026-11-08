@@ -302,6 +302,7 @@ pcc_resume_world = extern("pcc_resume_world", (), c_int64)
 pcc_thread_owns_stopped_world = extern("pcc_thread_owns_stopped_world", (), c_int64)
 pcc_gc_deferred_free_begin = extern("pcc_gc_deferred_free_begin", (c_int64,), c_int64)
 pcc_gc_deferred_free_close = extern("pcc_gc_deferred_free_close", (), c_int64)
+pcc_gc_scalar_sweep_seal = extern("pcc_gc_scalar_sweep_seal", (), c_void)
 pcc_gc_reclaim_retired_index_tables = extern(
     "pcc_gc_reclaim_retired_index_tables", (), c_int64
 )
@@ -1819,6 +1820,8 @@ def _gc_tracing_automatic_collect(mark: int) -> int:
     if pcc_gc_sweep_owed() != 0:
         collected = pcc_gc_collect_tracing()
     pcc_gc_end_explicit_tracing_collect()
+    if deferred_free != 0:
+        pcc_gc_scalar_sweep_seal()
     pcc_gc_record_collection_stw_pause(collection_stw_start, pcc_runtime_monotonic_us())
     pcc_resume_world()
     if deferred_free != 0:
@@ -2114,6 +2117,8 @@ def pcc_gc_collect(reason: int) -> int:
                     if idle_rounds >= 4:
                         draining = 0
         pcc_gc_end_explicit_tracing_collect()
+        if deferred_free != 0:
+            pcc_gc_scalar_sweep_seal()
         pcc_gc_record_collection_stw_pause(collection_stw_start, pcc_runtime_monotonic_us())
         pcc_resume_world()
         if deferred_free != 0:

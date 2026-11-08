@@ -45,6 +45,7 @@ class _SweepBoundary:
         self.forwardings = {}
         namespace = {
             "i64": int,
+            "pcc_gc_scalar_sweep_try_enqueue": lambda obj, node: 0,
             "abi_constant": ABI_CONSTANTS.__getitem__,
             "global_addr": self.global_cells.__getitem__,
             "global_load_ptr": lambda name: self.nodes[0] if self.nodes else None,

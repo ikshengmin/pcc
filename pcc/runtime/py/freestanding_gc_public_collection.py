@@ -66,6 +66,10 @@ pcc_gc_refresh_read_barrier = extern("pcc_gc_refresh_read_barrier", (), c_void)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 
+pcc_gc_scalar_sweep_drain = extern(
+    "pcc_gc_scalar_sweep_drain", (c_int64, c_int64, c_int64), c_int64
+)
+
 pcc_gc_deferred_free_worker_drain = extern(
     "pcc_gc_deferred_free_worker_drain", (c_int64,), c_int64
 )
@@ -98,6 +102,7 @@ def pcc_gc_cms_worker_main_py(arg):
     ) == 0:
         # Already-retired raw blocks are independent of mark pacing and of
         # gc.disable()/threshold0. Consume them on the existing CMS thread.
+        pcc_gc_scalar_sweep_drain(1, 0, 0)
         pcc_gc_deferred_free_worker_drain(0)
         pushes: i64 = atomic_load_i32(
             global_addr("pcc_gc_cms_queue_pushes"), 0, "acquire"
@@ -218,6 +223,7 @@ def pcc_gc_cms_worker_main_py(arg):
         pcc_thread_safepoint_gate()
     # stop changed worker_started to 3 before requesting exit. The final
     # unconditional graph-lock acquisition orders behind any admitted writer.
+    pcc_gc_scalar_sweep_drain(1, 1, 0)
     pcc_gc_deferred_free_worker_drain(1)
     atomic_store_i32(
         global_addr("pcc_gc_gray_worklist_flush_requested"), 0, 0, "release"

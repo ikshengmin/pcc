@@ -28,6 +28,8 @@ pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 
 # Internal object-node tail: i64 foreign-address lease count at byte 80.
 # This is not a PyObjectHeader field. Live promotion state never resets it.
+# freeing@32: 0 active, 1 retired, negative = scalar-sweep batch token owner.
+# Pending nodes stay linked/indexed; their first-death live debit already ran.
 
 pcc_gc_object_index_find = extern("pcc_gc_object_index_find", (c_ptr,), c_ptr)
 pcc_gc_object_node_is_active = extern(

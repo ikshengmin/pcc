@@ -53,6 +53,10 @@ class Runtime:
         self.free_hook = None
         self.ns = {
             "i64": int,
+            "pcc_gc_scalar_sweep_begin": lambda: None,
+            "pcc_gc_scalar_sweep_close": lambda: 0,
+            "pcc_gc_scalar_sweep_seal": lambda: None,
+            "pcc_gc_scalar_sweep_drain": lambda *args: 0,
             "define_thread_local_i32": self.define_tls,
             "define_thread_local_ptr_null": self.define_tls,
             "define_global_i64": self.define_global,

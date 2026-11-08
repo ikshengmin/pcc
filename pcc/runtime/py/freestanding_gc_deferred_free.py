@@ -73,6 +73,9 @@ define_global_ptr_null("pcc_gc_deferred_free_worker_head")
 define_global_i64("pcc_gc_deferred_free_worker_count", 0)
 define_global_i64("pcc_gc_deferred_free_worker_bytes", 0)
 
+pcc_gc_scalar_sweep_begin = extern("pcc_gc_scalar_sweep_begin", (), c_void)
+pcc_gc_scalar_sweep_close = extern("pcc_gc_scalar_sweep_close", (), c_int64)
+
 pcc_thread_owns_stopped_world = extern("pcc_thread_owns_stopped_world", (), c_int64)
 pcc_thread_no_park_depth = extern("pcc_thread_no_park_depth", (), c_int64)
 pcc_py_gc_minor_graph_lock_depth = extern("pcc_py_gc_minor_graph_lock_depth", (), c_int64)
@@ -109,6 +112,7 @@ def pcc_gc_deferred_free_begin(prior_held: i64) -> i64:
     store_i64(global_addr("pcc_gc_deferred_free_local_attempts"), 0, 0)
     store_i64(global_addr("pcc_gc_deferred_free_local_fallbacks"), 0, 0)
     store_i32(global_addr("pcc_gc_deferred_free_active"), 0, 1)
+    pcc_gc_scalar_sweep_begin()
     return 1
 
 
@@ -190,6 +194,7 @@ def pcc_gc_deferred_free_close() -> i64:
     ):
         pcc_platform_abort()
         return 0
+    pcc_gc_scalar_sweep_close()
     count: i64 = load_i64(global_addr("pcc_gc_deferred_free_pending_count"), 0)
     pending_bytes: i64 = load_i64(global_addr("pcc_gc_deferred_free_pending_bytes"), 0)
     obj = global_load_ptr("pcc_gc_deferred_free_head")

@@ -33,6 +33,7 @@ OWNED_SYMBOLS = {
 }
 OWNED_TLS_GLOBALS = {"pcc_gc_cms_worker_current"}
 RAW_FUNCTION_IMPORTS = {
+    "pcc_gc_scalar_sweep_drain",
     "pcc_gc_deferred_free_worker_drain",
     "pcc_gc_refresh_read_barrier",
     # The first allocation fixes the configuration under the graph lock.

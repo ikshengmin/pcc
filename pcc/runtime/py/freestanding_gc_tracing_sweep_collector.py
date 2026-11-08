@@ -23,6 +23,10 @@ from pcc.unsafe import (
 __pcc_freestanding__ = True
 
 
+pcc_gc_scalar_sweep_try_enqueue = extern(
+    "pcc_gc_scalar_sweep_try_enqueue", (c_ptr, c_ptr), c_int64
+)
+
 pcc_gc_dealloc_typed = extern("pcc_gc_dealloc_typed", (c_ptr, c_int64), c_void)
 
 
@@ -408,7 +412,12 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
                     # the last owning instance/subclass reference.
                     store_i32(obj, 12, flags & ~1024)
             elif reclaimed < (cleared_nonclasses if count_free != 0 else cleared):
-                pcc_gc_tracing_finalize_unpinned(obj)
+                deferred_scalar: i64 = 0
+                selected: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+                if selected == 1 or selected == 2:
+                    deferred_scalar = pcc_gc_scalar_sweep_try_enqueue(obj, node)
+                if deferred_scalar == 0:
+                    pcc_gc_tracing_finalize_unpinned(obj)
                 reclaimed = reclaimed + 1
         node = nxt
 
