@@ -362,8 +362,8 @@ define_global_i64("pcc_gc_backend4_deferred_recycle_pages", 0)
 define_global_ptr_null("pcc_gc_backend4_free_page_head")
 define_global_ptr_null("pcc_gc_backend4_retained_page_head")
 define_global_ptr_null("pcc_gc_backend4_evacuation_page_head")
-# Last single-threaded evacuation_page_find answer, valid while
-# pcc_gc_backend4_reseed_page_revision (bumped by every list mutation) holds.
+# Exact evacuation_page_find answer, shared only under the graph lock or
+# without threads; invalidated by every reseed_page_revision list mutation.
 define_global_ptr_null("pcc_gc_backend4_evacuation_find_memo_page")
 define_global_ptr_null("pcc_gc_backend4_evacuation_find_memo_node")
 define_global_i64("pcc_gc_backend4_evacuation_find_memo_revision", 0)

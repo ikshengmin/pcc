@@ -6211,16 +6211,20 @@ def _backend4_reseed_relocation_epoch_state() -> None:
 def _backend4_evacuation_page_find(page):
     if ptr_is_null(page) != 0:
         return null()
-    # Allocation fast paths ask this for the same active page between list
-    # changes, and the list held 18,108 nodes in one pcc1 GC4 compile. Every
-    # list mutation bumps the page revision and nodes are freed only after
-    # leaving the list, so a single-threaded answer stays exact until then.
+    # The exact list answer remains valid until a list mutation bumps the
+    # revision, before its detached nodes can be freed. Allocation and object
+    # registration already hold the graph lock, so their repeated lookups can
+    # share this memo even when threads are enabled. Unlocked threaded callers
+    # neither read nor publish memo state. Keep the list authoritative: page
+    # selection flags can be cleared separately by recycling/parking.
     revision: int = load_i64(
         global_addr("pcc_gc_backend4_reseed_page_revision"), 0
     )
-    single_threaded: int = 1 if pcc_threads_enabled() == 0 else 0
+    memo_safe: int = 0
+    if pcc_threads_enabled() == 0 or pcc_py_gc_minor_graph_lock_depth() > 0:
+        memo_safe = 1
     if (
-        single_threaded != 0
+        memo_safe != 0
         and ptr_eq(
             global_load_ptr("pcc_gc_backend4_evacuation_find_memo_page"), page
         ) != 0
@@ -6235,7 +6239,7 @@ def _backend4_evacuation_page_find(page):
         if ptr_eq(load_ptr(node, 0), page) != 0:
             found = node
         node = load_ptr(node, 8)
-    if single_threaded != 0:
+    if memo_safe != 0:
         global_store_ptr("pcc_gc_backend4_evacuation_find_memo_page", page)
         global_store_ptr("pcc_gc_backend4_evacuation_find_memo_node", found)
         store_i64(
