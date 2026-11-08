@@ -176,7 +176,9 @@ def pcc_gc_frame_node_alloc(root_count: i64):
                         0,
                         total - 1,
                     )
-                memset(head, 0, node_size)
+                # Release clears the entire exact-size node; the pool only
+                # overwrites next@16. Restore the fully zeroed return value.
+                store_ptr(head, 16, null())
                 return head
     node = malloc(node_size)
     if ptr_is_null(node) == 0:
