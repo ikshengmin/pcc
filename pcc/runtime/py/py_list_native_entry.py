@@ -10,6 +10,7 @@ __pcc_runtime_port__ = True
 
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
+    atomic_load_i32,
     global_addr,
     is_tagged_int,
     load_i32,
@@ -309,6 +310,48 @@ def py_list_take_for_gen_frame(lst: c_ptr, i: int) -> c_ptr:
     result = pcc_list_body_py_list_take_for_gen_frame(inputs, i)
     pcc_gc_native_frame_leave(frame)
     return result
+
+
+pcc_list_body_py_gen_frame_take_group = extern(
+    "pcc_list_body_py_gen_frame_take_group", (c_ptr, c_int64, c_int64, c_ptr), c_int64
+)
+
+
+@c_abi_export("py_gen_frame_take_group")
+def py_gen_frame_take_group(lst: c_ptr, start: int, count: int, outputs: c_ptr) -> int:
+    """Try a bounded move directly into already registered, empty caller roots.
+
+    Return 0 without consuming a cell when the original scalar path is needed.
+    The caller must reload its authoritative frame root before that fallback.
+    No managed pointer is returned or removed from its caller-owned output root.
+    """
+    # This module has no implicit polls. Reject other collectors/policies
+    # before allocating/registering a native frame, without dereferencing lst
+    # or invoking a configuration getter that could park with a raw input.
+    if (count < 2 or count > 16 or start < 0 or ptr_is_null(outputs) != 0
+            or load_i32(global_addr("pcc_gc_config_initialized"), 0) == 0
+            or (load_i32(global_addr("pcc_gc_backend_selected"), 0) != 3
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) != 4)
+            or load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0
+            or atomic_load_i32(global_addr("pcc_log_init_state"), 0, "acquire") != 2
+            or load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0
+            or load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) != 0):
+        return 0
+    native_frame_bytes: int = 40
+    native_range_capacity: int = 8
+    native_ranges_bytes: int = 128
+    pcc_thread_no_park_enter()
+    frame = stack_alloc(40)
+    memset(frame, 0, native_frame_bytes)
+    ranges = stack_alloc(128)
+    inputs = stack_alloc(8)
+    store_ptr(inputs, 0, lst)
+    pcc_gc_native_frame_enter(frame, ranges, native_range_capacity)
+    pcc_gc_native_root_bind_range(inputs, -1)
+    pcc_thread_no_park_exit()
+    taken: int = pcc_list_body_py_gen_frame_take_group(inputs, start, count, outputs)
+    pcc_gc_native_frame_leave(frame)
+    return taken
 
 
 pcc_list_body_py_list_getitem = extern(

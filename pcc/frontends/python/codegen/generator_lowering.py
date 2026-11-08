@@ -135,7 +135,7 @@ def allocate_generator_operand_root(host, name):
     )
     host.builder.position_at_end(saved_block)
     group["used"] = index + 1
-    members[id(slot)] = (slot, group)
+    members[id(slot)] = (slot, group, index)
     return slot
 
 
@@ -163,6 +163,12 @@ def register_generator_operand_root(host, name, slot, flag) -> None:
     index = len(ctx["frame_slots"])
     ctx["frame_names"].append(name)
     ctx["frame_slots"][name] = (index, slot)
+    if "operand_restore_bb" in ctx:
+        member = ctx.get("operand_root_group_members", {}).get(id(slot))
+        group = generator_operand_root_group(host, slot)
+        cell = member[2] if group is not None else -1
+        ctx.setdefault("operand_restores", []).append((index, slot, flag, group, cell))
+        return
     saved = host.builder._block
     # SwitchInstr is a wrapper, not an InstructionRecord. Anchor to the
     # dispatch block's actual terminator record, preserving any state read
@@ -172,6 +178,67 @@ def register_generator_operand_root(host, name, slot, flag) -> None:
     current = host._generator_frame_take(frame, index, host._fresh("gen.operand.restore"))
     host.builder.store(current, slot)
     host.builder.store(ir.Constant(_I1, 1), flag)
+    host.builder.position_at_end(saved)
+
+
+def emit_generator_operand_restores(host) -> None:
+    """Restore in original order, batching only adjacent existing owning cells.
+
+    Delaying emission until the body is complete gives a fixed count without
+    mutating projected IR. Imports and other nongroup cells split a run. The
+    scalar branch retains each original take/store/owned-flag sequence.
+    """
+    ctx = host._generator_ctx_stack[-1]
+    saved = host.builder._block
+    host.builder.position_at_end(ctx["operand_restore_bb"])
+    records = ctx.get("operand_restores", [])
+    cursor = 0
+    while cursor < len(records):
+        first = records[cursor]
+        group = first[3]
+        end = cursor + 1
+        if (group is not None and group["registered"]
+                and host._generator_frame_helper("get").name == "py_gen_frame_get"):
+            while end < len(records) and end - cursor < _GENERATOR_OPERAND_ROOT_GROUP_SIZE:
+                following = records[end]
+                if (following[3] is not group
+                        or following[0] != first[0] + end - cursor
+                        or following[4] != first[4] + end - cursor):
+                    break
+                end += 1
+        run = records[cursor:end]
+        joined = None
+        if len(run) > 1:
+            frame = host.builder.load(ctx["frame_root"], name=host._fresh("gen.operand.frame"))
+            taken = host.builder.call(
+                host.runtime["py_gen_frame_take_group"],
+                [frame, ir.Constant(_I64, first[0]), ir.Constant(_I64, len(run)),
+                 host._as_gc_ptr(first[1], name=host._fresh("gen.operand.outputs"))],
+                name=host._fresh("gen.operand.group.taken"),
+            )
+            fast = host.current_function.append_basic_block(host._fresh("gen.operand.group.owned"))
+            slow = host.current_function.append_basic_block(host._fresh("gen.operand.scalar"))
+            joined = host.current_function.append_basic_block(host._fresh("gen.operand.restored"))
+            host.builder.cbranch(
+                host.builder.icmp_signed("!=", taken, ir.Constant(_I64, 0)), fast, slow,
+            )
+            host.builder.position_at_end(fast)
+            for _, _, flag, _, _ in run:
+                host.builder.store(ir.Constant(_I1, 1), flag)
+            host.builder.branch(joined)
+            host.builder.position_at_end(slow)
+        for index, slot, flag, _, _ in run:
+            # The group can decline after parking. Never reuse the raw frame
+            # SSA passed into it, or a preceding scalar take's raw receiver.
+            frame = host.builder.load(ctx["frame_root"], name=host._fresh("gen.operand.frame"))
+            current = host._generator_frame_take(frame, index, host._fresh("gen.operand.restore"))
+            host.builder.store(current, slot)
+            host.builder.store(ir.Constant(_I1, 1), flag)
+        if joined is not None:
+            host.builder.branch(joined)
+            host.builder.position_at_end(joined)
+        cursor = end
+    host.builder.branch(ctx["dispatch_bb"])
     host.builder.position_at_end(saved)
 
 
@@ -2762,6 +2829,11 @@ class GeneratorLoweringMixin:
                 [gen_current],
                 name=self._fresh("gen.state"),
             )
+        # Keep the state read at its original point, then restore operands
+        # before the state switch. The body discovers the final group sizes.
+        operand_restore_bb = dispatch_bb
+        dispatch_bb = fn.append_basic_block(name="gen.select")
+        self.builder.position_at_end(dispatch_bb)
         switch_inst = self.builder.switch(state, start_bb)
         self.builder.position_at_end(start_bb)
         # The body reads the generator and its frame through these rooted
@@ -2781,6 +2853,8 @@ class GeneratorLoweringMixin:
                 "active_exception_unwind_roots": [],
                 "operand_root_groups": [],
                 "operand_root_group_members": {},
+                "operand_restore_bb": operand_restore_bb,
+                "operand_restores": [],
             }
         )
 
@@ -2799,6 +2873,7 @@ class GeneratorLoweringMixin:
         if not self._builder_block_is_terminated():
             self._emit_generator_finish()
 
+        emit_generator_operand_restores(self)
         self._instrument_python_activation(fn)
         self.builder = saved_builder
         self.current_function = saved_fn

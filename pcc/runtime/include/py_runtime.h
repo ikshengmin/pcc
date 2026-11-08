@@ -1708,6 +1708,12 @@ int64_t py_gen_frame_len(PyObject *frame);
  * list operations and their existing barriers. */
 PyObject *py_gen_frame_get(PyObject *frame, int64_t index);
 PyObject *py_gen_frame_take(PyObject *frame, int64_t index);
+/* Try 2..16 consecutive cells. outputs must be empty, disjoint caller-owned
+ * root slots registered before entry and kept registered after return.
+ * Returns 1 after consuming every cell, 0 without consuming any. On 0 the
+ * caller reloads its frame root before the original scalar take sequence. */
+int64_t py_gen_frame_take_group(PyObject *frame, int64_t start, int64_t count,
+                                PyObject **outputs);
 void      py_gen_frame_set(PyObject *frame, int64_t index, PyObject *value);
 /* Save compiler-owned, rooted local slots. Returns 0 without mutation when
  * the collector/frame is not eligible; callers retain their ordinary path. */

@@ -28,7 +28,7 @@ VOID = ir.VoidType()
 
 class Host(CallObjectLoweringMixin, OwnershipLoweringMixin, CoreHelperMixin):
     """Production root emitters in an independent, bounded function shell."""
-    def __init__(self, function_name="resume", with_error=False):
+    def __init__(self, function_name="resume", with_error=False, deferred_restores=False):
         self.module = ir.Module(name="group_model")
         self.module.triple = "x86_64-unknown-linux-gnu"
         self.serial = 0
@@ -39,6 +39,7 @@ class Host(CallObjectLoweringMixin, OwnershipLoweringMixin, CoreHelperMixin):
         self.entry = self.current_function.append_basic_block("entry")
         self.dispatch = self.current_function.append_basic_block("dispatch")
         self.body = self.current_function.append_basic_block("body")
+        self.restore = self.current_function.append_basic_block("restore") if deferred_restores else self.dispatch
         self.builder = ir.IRBuilder(self.entry)
         self._current_entry_block = None
         self._entry_alloca_insert_before_function = None
@@ -85,12 +86,13 @@ class Host(CallObjectLoweringMixin, OwnershipLoweringMixin, CoreHelperMixin):
             ("pcc_gc_store_root", VOID, [PTR, PTR]),
             ("py_gen_frame_get", PTR, [PTR, I64]),
             ("py_gen_frame_take", PTR, [PTR, I64]),
+            ("py_gen_frame_take_group", I64, [PTR, I64, I64, PTR]),
             ("py_gen_frame_set", VOID, [PTR, I64, PTR]),
         ):
             self.runtime[name] = ir.Function(self.module, ir.FunctionType(ret, args), name)
         frame_root = self._alloca_in_entry(PTR, name="frame.root", init_null=True)
         self.builder.store(self.current_function.args[0], frame_root)
-        self.builder.branch(self.dispatch)
+        self.builder.branch(self.restore)
         self.builder.position_at_end(self.dispatch)
         switch = self.builder.switch(ir.Constant(I64, 0), self.body)
         self.builder.position_at_end(self.body)
@@ -100,6 +102,9 @@ class Host(CallObjectLoweringMixin, OwnershipLoweringMixin, CoreHelperMixin):
             "dispatch_bb": self.dispatch, "switch": switch,
             "operand_root_groups": [], "operand_root_group_members": {},
         }
+        if deferred_restores:
+            self.context["operand_restore_bb"] = self.restore
+            self.context["operand_restores"] = []
         self._generator_ctx_stack = [self.context]
         self.releases = []
         if with_error:

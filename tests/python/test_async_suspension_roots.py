@@ -40,8 +40,12 @@ def test_awaited_operand_has_persistent_roots_and_valid_resume_edges(expression)
     assert dispatch is not None
     restores = re.findall(r"^  %gen\.operand\.restore[^\n]* = call ptr[^\n]*", body, re.M)
     assert restores
-    assert all(restore in dispatch.group(1) for restore in restores)
-    assert dispatch.group(1).rfind("gen.operand.restore") < dispatch.group(1).index("switch i64")
+    # Restores may form a success/scalar-fallback chain before gen.select.
+    # Check every CFG path, rather than requiring one textual dispatch block.
+    from tests.python.test_generator_operand_root_groups import _parsed_function
+    from tests.python.test_generator_frame_take_group import assert_group_restore_contract
+    module, blocks = _parsed_function(text, "user_slot_operand_probe__gen_resume")
+    assert_group_restore_contract(blocks, module.globals_)
     assert "@py_tls_exc_swap_slot(" in body
     handoff = re.search(r"(%gen.yield.owner[^ ]*) = call ptr[^\n]*@pcc_gc_take_pinned_slot[^\n]*\n  ret ptr \1", body)
     assert handoff is not None, "yield ownership must transfer after every cleanup call"
