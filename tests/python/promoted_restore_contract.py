@@ -152,10 +152,19 @@ class PromotedRestoreOwners:
                 else:
                     assert use.kind == "select" and use.data[2] == value, "unsupported promoted owner use"
                     outputs.add(self._projection(block, position, use))
-        assert source in direct, "restored owner needs a direct guarded cleanup witness"
+        # Reverse only validated PHI def-use edges from guarded cleanup.
+        # An ancestor/sibling guard is not a forward witness for this source.
+        witnessed, pending = set(direct), list(direct)
+        while pending:
+            phi = self.phis[pending.pop()][1]
+            for incoming in phi.incoming:
+                if incoming.value in family and incoming.value not in witnessed:
+                    witnessed.add(incoming.value)
+                    pending.append(incoming.value)
+        assert source in witnessed, "restored owner needs a forward guarded cleanup witness"
         assert len(outputs) == 1, "ownership family must clean exactly one physical output"
         output = next(iter(outputs))
-        for value in family:
+        for value in witnessed:
             self.owners[value] = output
         return output
 
