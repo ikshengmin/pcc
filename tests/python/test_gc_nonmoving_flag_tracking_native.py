@@ -21,6 +21,9 @@ from pathlib import Path
 import pytest
 
 from pcc.runtime.py.py_abi_constants import (
+    PYLISTOBJECT_CAPACITY_OFFSET,
+    PYLISTOBJECT_ITEMS_OFFSET,
+    PYLISTOBJECT_LENGTH_OFFSET,
     PY_FLAG_GC_DEALLOCATING,
     PY_FLAG_GC_TRACKED,
     PY_FLAG_IMMORTAL,
@@ -60,6 +63,9 @@ def nonmoving_tracking_binary(tmp_path_factory, threaded_pcc_runtime_archive):
             f"-DTEST_TRACKED={PY_FLAG_GC_TRACKED}",
             f"-DTEST_IMMORTAL={PY_FLAG_IMMORTAL}",
             f"-DTEST_DEALLOCATING={PY_FLAG_GC_DEALLOCATING}",
+            f"-DTEST_LIST_ITEMS={PYLISTOBJECT_ITEMS_OFFSET}",
+            f"-DTEST_LIST_CAPACITY={PYLISTOBJECT_CAPACITY_OFFSET}",
+            f"-DTEST_LIST_LENGTH={PYLISTOBJECT_LENGTH_OFFSET}",
         ),
     )
     assert before == tuple(_digest(path) for path in inputs)
@@ -122,3 +128,10 @@ def test_pending_generator_retirement_is_not_snapshotted(nonmoving_tracking_bina
     fields, receipt = _run(nonmoving_tracking_binary, backend, 2, 1)
     assert 0 < fields["pending"] <= 32, receipt
     assert fields["origins"] == fields["raw_calls"] == 0, receipt
+
+
+@pytest.mark.parametrize("backend", (1, 2), ids=lambda backend: f"gc{backend}")
+def test_terminal_list_retires_retained_items_in_both_tracking_views(nonmoving_tracking_binary, backend):
+    fields, receipt = _run(nonmoving_tracking_binary, backend, 3, 1)
+    assert fields["terminal"] == 4, receipt
+    assert fields["origins"] == fields["raw_calls"] == fields["pending"] == 0, receipt

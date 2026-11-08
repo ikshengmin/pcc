@@ -196,6 +196,9 @@ class Runtime:
             self.managed.remove(obj)
             return 0
 
+        def retire_granule(obj):
+            return -1 if unregister(obj) < 0 else 1
+
         self.ns.update({
             "_gc0_terminal_free_has_no_metadata": lambda obj: 0,
             "pcc_gc_pointer_is_managed": lambda obj: int(obj in self.managed),
@@ -204,9 +207,13 @@ class Runtime:
             "pcc_gc_object_index_find": lambda obj: self.nodes.get(obj, 0),
             "pcc_gc_note_object_freeing": note,
             "pcc_gc_pointer_unregister": unregister,
+            "pcc_gc_granule_is_object_start": lambda obj: 1,
+            "pcc_gc_granule_object_retire": retire_granule,
             "_minor_block_containing": lambda obj: 0,
         })
-        _load(RUNTIME / "py_gc_backend.py", self.ns, {"pcc_gc_free_object_memory"})
+        _load(RUNTIME / "py_gc_backend.py", self.ns, {
+            "pcc_gc_free_object_memory", "_gc_pointer_unregister_unowned_locked",
+        })
         return self.ns["pcc_gc_free_object_memory"]
 
 
@@ -392,13 +399,16 @@ def test_close_fails_closed_after_disabling_scope_without_losing_queued_block(un
 
 @pytest.mark.parametrize("backend", range(5))
 @pytest.mark.parametrize("retirement_fails", (False, True))
-def test_actual_terminal_boundary_defers_only_after_successful_retirement(backend, retirement_fails):
+@pytest.mark.parametrize("already_noted", (False, True))
+def test_actual_terminal_boundary_defers_only_after_successful_retirement(backend, retirement_fails, already_noted):
     rt = Runtime(backend)
     terminal_free = rt.install_free_boundary()
     obj = rt.alloc()
     if retirement_fails:
         rt.retirement_failures.add(obj)
     began = rt.call("begin", 0)
+    if already_noted:
+        rt.ns["pcc_gc_note_object_freeing"](obj)
     terminal_free(obj)
     assert rt.events[:2] == [("retire-index", obj), ("retire-provenance", obj)]
     if retirement_fails:

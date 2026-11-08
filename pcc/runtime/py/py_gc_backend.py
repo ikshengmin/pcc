@@ -2770,6 +2770,22 @@ def pcc_gc_pointer_unregister(o) -> int:
     return result
 
 
+def _gc_pointer_unregister_unowned_locked(o) -> int:
+    # Terminal GC1/2 caller holds the graph lock continuously from the
+    # negative-owner and lease checks. Do not use this entry after unlocking:
+    # the public unregister must still recheck scalar-sweep ownership.
+    granule_was_live: int = pcc_gc_granule_is_object_start(o)
+    granule_result: int = pcc_gc_granule_object_retire(o)
+    if granule_result < 0:
+        return -1
+    if granule_result > 0:
+        # Match public unregister's RESERVED/FREE exact-key cleanup.
+        if granule_was_live != 1:
+            pcc_gc_managed_pointer_index_remove(o)
+        return 0
+    return pcc_gc_managed_pointer_index_remove(o)
+
+
 @c_abi_export("pcc_gc_object_is_known")
 def pcc_gc_object_is_known(o) -> int:
     _object_graph_lock()
@@ -4754,24 +4770,32 @@ def pcc_gc_free_object_memory(o) -> None:
             and load_i64(lease_node, 32) < 0):
         _object_graph_unlock()
         return
-    leased: int = 0
     if ptr_is_null(lease_node) == 0 and load_i64(lease_node, 80) != 0:
-        leased = 1
-    _object_graph_unlock()
-    if leased != 0:
+        _object_graph_unlock()
         return
-    flags: int = load_i32(o, 12)
-    # Direct constructor cleanup does not necessarily pass through decref.
-    # The ordinary dealloc path already emitted this idempotent event; when
-    # it was the last object noted (a leaf: no nested free in between), the
-    # repeat is skipped -- it paid a graph lock, a granule lookup and an
-    # identity probe on every free.
-    if ptr_eq(o, global_load_ptr("pcc_gc_last_noted_free")) == 0:
-        pcc_gc_note_object_freeing(o)
-    # A structurally invalid object-family lifecycle must remain quarantined:
-    # never hand the pointer back to an allocator after retirement failed.
-    if pcc_gc_pointer_unregister(o) < 0:
-        return
+    flags: int = 0
+    if ((backend == 1 or backend == 2)
+            and ptr_eq(o, global_load_ptr("pcc_gc_last_noted_free")) != 0):
+        # The completed note already handled the object graph. Keep this
+        # ownership check and provenance retirement in one transaction, even
+        # when another scalar batch keeps the mailbox nonempty. Capture the
+        # allocation origin before retirement; raw release stays after unlock.
+        flags = load_i32(o, 12)
+        retired: int = _gc_pointer_unregister_unowned_locked(o)
+        _object_graph_unlock()
+        if retired < 0:
+            return
+    else:
+        _object_graph_unlock()
+        flags = load_i32(o, 12)
+        # Direct constructor cleanup and nested frees still need their note.
+        # Do not carry the earlier ownership result across this unlock or
+        # the note: public unregister retains its independent ownership guard.
+        if ptr_eq(o, global_load_ptr("pcc_gc_last_noted_free")) == 0:
+            pcc_gc_note_object_freeing(o)
+        # Failed object-family retirement quarantines instead of freeing.
+        if pcc_gc_pointer_unregister(o) < 0:
+            return
     if (flags & 65536) != 0:
         return
     if (backend == 1 or backend == 2) and flags == 0:

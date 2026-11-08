@@ -3,7 +3,7 @@
  * exported PyObject_GC_Track/UnTrack stubs. The ObjectNode graph is distinct
  * from the optional tracked GCNode representation and must remain intact.
  *
- * Arguments: scenario (0 origins, 1 raw admission, 2 pending GEN), workers
+ * Arguments: scenario (0 origins, 1 raw admission, 2 pending GEN, 3 terminal LIST), workers
  * (1 or 4), required flag mode (0 nodes or 1 flags). No mode is forced here.
  * GC4's existing empty tracked view is a labeled limitation, not API parity.
  */
@@ -33,6 +33,13 @@ extern void pcc_gc_scalar_sweep_seal(void);
 extern int64_t pcc_gc_scalar_sweep_owns(void *);
 extern int64_t pcc_gc_scalar_sweep_counter(int64_t);
 extern int64_t pcc_gc_cms_stop_worker(void);
+extern void pcc_gc_note_object_freeing(PyObject *);
+extern void pcc_gc_free_object_memory(PyObject *);
+extern void pcc_gc_dealloc_typed(PyObject *, int64_t);
+extern void pcc_gc_tracing_clear_unreachable(PyObject *);
+extern int64_t pcc_gc_deferred_free_counter(int64_t);
+extern int64_t malloc_usable_size(void *);
+extern int64_t pcc_allocator_live_usable_bytes(void);
 
 /* Values supplied by the test from the runtime's generated ABI constants. */
 #ifndef TEST_TRACKED
@@ -46,7 +53,7 @@ static PyObject *roots[ROOT_COUNT];
 static PyObject *garbage[GARBAGE_COUNT]; /* identities, deliberately NOT roots */
 static int backend, workers, flag_mode;
 static int creator_status;
-static int64_t pending_seen, raw_calls;
+static int64_t pending_seen, raw_calls, terminal_checks;
 
 struct StaticFloat { PyObjectHeader header; double value; };
 /* A complete process-lifetime scalar image, not a truncated container header.
@@ -380,6 +387,11 @@ static int pending_retirement(void) {
         int64_t count = py_gc_get_count(0);
         py_gc_untrack(garbage[i]);
         CHECK(py_gc_get_count(0) == count, 103, "pending-untrack-idempotent");
+        void *pending_node = object_node(garbage[i]);
+        pcc_gc_free_object_memory(garbage[i]);
+        CHECK(object_node(garbage[i]) == pending_node &&
+              pcc_gc_pointer_unregister(garbage[i]) == -1,
+              108, "pending-gen-terminal-cannot-steal");
         pending_seen++;
     }
     CHECK(pending_seen > 0, 104, "observed-real-pending-gen");
@@ -399,12 +411,91 @@ static int pending_retirement(void) {
     return 0;
 }
 
+static int terminal_lists(void) {
+    CHECK(backend == 1 || backend == 2, 120, "terminal-nonmoving-backend");
+    roots[SMALL] = py_list_new(0);
+    CHECK(roots[SMALL], 121, "terminal-child");
+    pcc_gc_pin(roots[SMALL]);
+    for (int view = 0; view < 2; view++) {
+        for (int cleared = 0; cleared < 2; cleared++) {
+            PyObject *obj = py_list_new(8);
+            CHECK(obj, 122, "terminal-list");
+            roots[LARGE] = obj;
+            py_list_append(obj, roots[SMALL]);
+            py_list_append(obj, roots[SMALL]);
+            CHECK(py_list_len(obj) == 2 && py_gc_is_tracked(obj), 123, "terminal-populated");
+            void *items = *(void **)((char *)obj + TEST_LIST_ITEMS);
+            int64_t capacity = *(int64_t *)((char *)obj + TEST_LIST_CAPACITY);
+            CHECK(items && capacity >= 2, 124, "terminal-items-origin");
+            CHECK(stop_world() == 0, 126, "terminal-stop");
+            CHECK(pcc_gc_deferred_free_begin(0) == 1 &&
+                  pcc_gc_scalar_sweep_counter(0) == 1, 127, "terminal-nonempty-mailbox");
+            int64_t acquired = 0;
+            pcc_gc_default_table_lock();
+            if (view) {
+                acquired = flag_mode && !pcc_gc_tracking_materialized;
+                CHECK(pcc_gc_tracked_materialize() >= 0, 128, "terminal-materialize");
+            }
+            CHECK((py_gc_index_find(obj) != 0) == (view || !flag_mode),
+                  129, "terminal-tracked-representation");
+            pcc_gc_default_table_unlock();
+            CHECK(object_node(obj) != 0, 130, "terminal-objectnode-independent");
+            int64_t tracked = py_gc_get_count(0);
+            /* Controlled completed-death verdict, with real list contents,
+             * typed payload release and both tracked representations. */
+            PyObjectHeader *header = (PyObjectHeader *)obj;
+            header->flags = (header->flags & ~16384) | 1024;
+            if (cleared) {
+                /* Execute the production PASS1 body with its actual STW and
+                 * graph ownership, not list.clear or hand-cleared fields. */
+                pcc_py_gc_minor_graph_lock();
+                pcc_gc_tracing_clear_unreachable(obj);
+                pcc_py_gc_minor_graph_unlock();
+            }
+            CHECK(py_list_len(obj) == (cleared ? 0 : 2) &&
+                  *(void **)((char *)obj + TEST_LIST_ITEMS) == items &&
+                  *(int64_t *)((char *)obj + TEST_LIST_CAPACITY) == capacity,
+                  125, "terminal-pass1-retains-items");
+            header->flags |= TEST_DEALLOCATING;
+            pcc_gc_note_object_freeing(obj);
+            py_gc_untrack(obj);
+            CHECK(object_node(obj) == 0 && py_gc_index_find(obj) == 0 &&
+                  py_gc_get_count(0) == tracked - 1, 131, "terminal-metadata-retired");
+            int64_t item_bytes = malloc_usable_size(items);
+            int64_t live = pcc_allocator_live_usable_bytes();
+            pcc_gc_dealloc_typed(obj, PY_TYPE_LIST);
+            CHECK(pcc_allocator_live_usable_bytes() == live - item_bytes,
+                  132, "terminal-items-freed-header-queued");
+            CHECK(pcc_gc_deferred_free_counter(0) == 1 &&
+                  pcc_gc_pointer_is_managed(obj) == 0 && exact_member(obj) == 0,
+                  133, "terminal-provenance-retired");
+            CHECK(*(int64_t *)((char *)obj + TEST_LIST_LENGTH) == 0 &&
+                  *(void **)((char *)obj + TEST_LIST_ITEMS) == 0,
+                  134, "terminal-typed-payload-cleared");
+            pcc_gc_free_object_memory(obj);
+            CHECK(pcc_gc_deferred_free_counter(0) == 1, 135, "terminal-no-double-free");
+            roots[LARGE] = 0; /* no API should inspect the retired header */
+            CHECK(pcc_gc_pointer_is_managed(roots[SMALL]) &&
+                  py_list_len(roots[SMALL]) == 0 && object_node(roots[SMALL]),
+                  136, "terminal-retained-child");
+            pcc_gc_default_table_lock();
+            pcc_gc_tracked_dematerialize(acquired);
+            pcc_gc_default_table_unlock();
+            pcc_gc_scalar_sweep_seal();
+            CHECK(pcc_resume_world() == 0, 137, "terminal-resume");
+            CHECK(pcc_gc_deferred_free_close() == 1, 138, "terminal-close");
+            terminal_checks++;
+        }
+    }
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc != 4) return 1;
     int scenario = atoi(argv[1]);
     workers = atoi(argv[2]);
     int required_flag_mode = atoi(argv[3]);
-    if ((workers != 1 && workers != 4) || scenario < 0 || scenario > 2) return 2;
+    if ((workers != 1 && workers != 4) || scenario < 0 || scenario > 3) return 2;
     backend = (int)pcc_gc_backend();
     CHECK(backend >= 0 && backend <= 4 && pcc_threads_enabled() == 1, 3, "configuration");
     py_gc_disable();
@@ -419,13 +510,15 @@ int main(int argc, char **argv) {
     CHECK(flag_mode == required_flag_mode, 5, "required-tracking-mode");
     CHECK(pcc_gc_backend4_no_refcounts == (backend != 0), 6, "countfree-mode");
     CHECK(pcc_gc_nonmoving_count_free == (backend == 1 || backend == 2), 7, "nonmoving-mode");
-    int result = scenario == 0 ? origins() : scenario == 1 ? raw_admission() : pending_retirement();
+    int result = scenario == 0 ? origins() : scenario == 1 ? raw_admission()
+        : scenario == 2 ? pending_retirement() : terminal_lists();
     if (result) return result;
     if (backend != 0) CHECK(pcc_gc_cms_stop_worker() == 0, 8, "worker-stop");
     CHECK(!py_err_occurred(), 9, "no-pending-exception");
     printf("NONMOVING_TRACKING_OK gc=%d scenario=%d workers=%d flag_mode=%d "
-           "origins=%d raw_calls=%lld pending=%lld\n", backend, scenario, workers,
-           flag_mode, scenario == 0 ? 4 : 0, (long long)raw_calls, (long long)pending_seen);
+           "origins=%d raw_calls=%lld pending=%lld terminal=%lld\n", backend, scenario, workers,
+           flag_mode, scenario == 0 ? 4 : 0, (long long)raw_calls, (long long)pending_seen,
+           (long long)terminal_checks);
     /* Process-isolated fixture: all pinned origin owners remain valid until
      * exit, including the C object's tp_traverse edge. No C-API free claim. */
     return 0;

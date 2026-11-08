@@ -59,6 +59,8 @@ def _execute(outputs, kind, backend, args):
     environment = dict(os.environ, PCC_GC_BACKEND=str(backend),
                        PCC_GC_DEBT_THRESHOLD="1099511627776",
                        PCC_TEST_NO_NATIVE_PROVISIONING="1", PCC_NO_AUTO_PCC1="1")
+    if kind == "queue" and args == (5,):
+        environment["PCC_GC_REFCOUNT_PROVENANCE_PROBE"] = "1"
     command = [str(binary), *(str(arg) for arg in args)]
     result = run_process_group_timeout(command, env=environment, timeout=30)
     receipt = dict(identity, command=command, gc_backend=backend,
@@ -72,8 +74,8 @@ def _execute(outputs, kind, backend, args):
 
 @pytest.mark.integration
 @pytest.mark.parametrize("backend", range(5), ids=lambda value: f"gc{value}")
-@pytest.mark.parametrize("mode", (1, 2, 3, 4),
-                         ids=("block-cap", "usable-cap", "carrier-resume", "excluded-flags"))
+@pytest.mark.parametrize("mode", (1, 2, 3, 4, 5),
+                         ids=("block-cap", "usable-cap", "carrier-resume", "excluded-flags", "terminal-provenance"))
 def test_terminal_queue_native(deferred_binaries, backend, mode):
     output = _execute(deferred_binaries, "queue", backend, (mode,))
     if mode == 3 and backend in (1, 2):

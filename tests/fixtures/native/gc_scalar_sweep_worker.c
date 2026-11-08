@@ -398,6 +398,8 @@ static int run(int mode) {
                 CHECK(field(quarantined_nodes[i], 32) == -C(11), 104);
                 CHECK(pcc_gc_scalar_sweep_owns(obj) == 1, 105);
                 CHECK((((PyObjectHeader *)obj)->flags & 64) != 0, 106);
+                pcc_gc_free_object_memory(obj);
+                CHECK(node_for(obj) == quarantined_nodes[i], 116);
                 CHECK(pcc_gc_pointer_unregister(obj) == -1, 107);
                 CHECK(((PyObjectHeader *)obj)->refcount == quarantined_rc[i], 112);
                 quarantine_checks++;

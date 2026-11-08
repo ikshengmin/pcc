@@ -16,12 +16,16 @@ extern int64_t pcc_gc_object_is_known_no_lock(PyObject *);
 extern int64_t pcc_thread_start(void **, void *(*)(void *), void *);
 extern int64_t pcc_thread_join(void *, void **);
 extern int64_t pcc_gc_cms_stop_worker(void);
+extern void *pcc_allocator_alloc_object(int64_t);
+extern int64_t pcc_gc_managed_pointer_index_contains(void *);
+extern void *pcc_gc_object_index_find(void *);
 static PyObject *objects[4097];
 /* Registry-only synthetic C-extension type, including tp_version_tag. */
 static uint64_t extension_type[64];
 static int64_t ready, done, observed, worker_error;
 static int64_t resume_request, resume_ack, queued_live_bytes;
 #define C(n) pcc_gc_deferred_free_counter(n)
+#define GRANULE_STATE_OFFSET (-48) /* freestanding_allocator lifecycle word */
 #define CHECK(x, n) do { if (!(x)) return n; } while (0)
 static void *carrier(void *unused) {
     (void)unused;
@@ -160,6 +164,80 @@ static int exclusions(void) {
     CHECK(pcc_gc_deferred_free_close() == 1 && C(2) == attempts + 1, 56);
     return 0;
 }
+static int terminal_provenance(void) {
+    CHECK(pcc_stop_the_world() == 0, 70);
+    CHECK(pcc_gc_deferred_free_begin(0) == 1, 71);
+    /* Real LIVE, RESERVED, already-FREE and large exact-only allocations.
+     * FREE here means retired provenance, not already returned to malloc. */
+    for (int origin = 0; origin < 4; origin++) {
+        PyObject *obj = origin == 0 || origin == 3
+            ? pcc_gc_alloc(origin == 3 ? 32768 : 64, PY_TYPE_FLOAT, 0)
+            : (PyObject *)pcc_allocator_alloc_object(64);
+        CHECK(obj != 0, 72);
+        PyObjectHeader *header = (PyObjectHeader *)obj;
+        if (origin == 1 || origin == 2) {
+            header->refcount = 1;
+            header->type_tag = PY_TYPE_FLOAT;
+            header->flags = 1024 | 524288;
+        } else header->flags = (header->flags & ~16384) | 1024 | 524288;
+        if (origin == 2) CHECK(pcc_gc_granule_object_retire(obj) == 1, 73);
+        pcc_gc_note_object_freeing(obj);
+        CHECK(pcc_gc_granule_is_object_start(obj) == (origin == 0 ? 1 : -1), 74);
+        CHECK(pcc_gc_managed_pointer_index_contains(obj) == (origin != 0), 75);
+        int64_t queued = C(0), live = pcc_allocator_live_usable_bytes();
+        pcc_gc_free_object_memory(obj);
+        CHECK(C(0) == queued + 1 && pcc_allocator_live_usable_bytes() == live, 76);
+        CHECK(pcc_gc_granule_is_object_start(obj) == -1 &&
+              pcc_gc_managed_pointer_index_contains(obj) == 0, 77);
+        CHECK(pcc_gc_pointer_is_managed(obj) == 0, 78);
+        pcc_gc_free_object_memory(obj);
+        CHECK(C(0) == queued + 1, 79);
+    }
+    /* A corrupt lifecycle is not an allocator free or exact-key removal.
+     * Keep this deliberate quarantine alive until process exit. */
+    PyObject *bad = (PyObject *)pcc_allocator_alloc_object(64);
+    CHECK(bad != 0, 80);
+    ((PyObjectHeader *)bad)->refcount = 1;
+    ((PyObjectHeader *)bad)->type_tag = PY_TYPE_FLOAT;
+    ((PyObjectHeader *)bad)->flags = 1024 | 524288;
+    pcc_gc_note_object_freeing(bad);
+    CHECK(pcc_gc_managed_pointer_index_contains(bad) == 1, 81);
+    *(int64_t *)((char *)bad + GRANULE_STATE_OFFSET) = 123;
+    int64_t live = pcc_allocator_live_usable_bytes();
+    pcc_gc_free_object_memory(bad);
+    CHECK(C(0) == 4 && pcc_allocator_live_usable_bytes() == live &&
+          pcc_gc_managed_pointer_index_contains(bad) == 1, 82);
+    CHECK(pcc_gc_pointer_unregister(bad) == -1, 83);
+    /* The provenance-probe configuration takes a real indexed foreign lease
+     * even for nonmoving GC1/2. The terminal entry must preserve that owner. */
+    PyObject *leased = pcc_gc_alloc(32768, PY_TYPE_FLOAT, 0);
+    CHECK(leased != 0, 86);
+    pcc_gc_publish_initialized(leased);
+    int32_t map = 1;
+    pcc_gc_frame_enter(&map, &leased);
+    int64_t token = pcc_gc_foreign_lease_acquire(&leased);
+    CHECK(token == 1, 87);
+    void *node = pcc_gc_object_index_find(leased);
+    CHECK(node && *(int64_t *)((char *)node + 80) == 1, 88);
+    int flags = ((PyObjectHeader *)leased)->flags;
+    live = pcc_allocator_live_usable_bytes();
+    pcc_gc_note_object_freeing(leased);
+    pcc_gc_free_object_memory(leased);
+    CHECK(C(0) == 4 && pcc_allocator_live_usable_bytes() == live &&
+          pcc_gc_object_index_find(leased) == node &&
+          pcc_gc_granule_is_object_start(leased) == -1 &&
+          ((PyObjectHeader *)leased)->flags == flags, 89);
+    CHECK(pcc_gc_foreign_lease_release(&leased, token) == 0, 90);
+    ((PyObjectHeader *)leased)->flags = (flags & ~16384) | 1024 | 524288;
+    pcc_gc_note_object_freeing(leased);
+    pcc_gc_free_object_memory(leased);
+    leased = 0;
+    pcc_gc_frame_leave(&leased);
+    CHECK(C(0) == 5, 91);
+    CHECK(pcc_resume_world() == 0, 84);
+    CHECK(pcc_gc_deferred_free_close() == 5, 85);
+    return 0;
+}
 static int run(int mode) {
     CHECK(pcc_current_thread_id() > 0 && pcc_threads_enabled() == 1, 10);
     CHECK(pcc_refcount_strategy() == PCC_REFCOUNT_STRATEGY_ATOMIC, 11);
@@ -186,6 +264,7 @@ static int run(int mode) {
     CHECK(pcc_resume_world() == 0, 19);
     (void)pcc_gc_deferred_free_close();
     if (!enabled) return C(0) || C(1) || C(2) || C(3) || C(4) ? 40 : 0;
+    if (mode == 5) return terminal_provenance();
     if (mode == 4) return exclusions();
     if (mode == 1) return batch(32, 4097, 1);
     if (mode == 2) return batch(32768, 40, 2);
@@ -210,7 +289,7 @@ static int run(int mode) {
 }
 int main(int argc, char **argv) {
     int mode = argc == 2 ? argv[1][0] - '0' : 0;
-    if (mode < 1 || mode > 4) return 99;
+    if (mode < 1 || mode > 5) return 99;
     int status = run(mode);
     if (pcc_thread_owns_stopped_world()) pcc_resume_world();
     pcc_gc_cms_stop_worker();
