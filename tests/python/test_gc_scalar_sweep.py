@@ -31,7 +31,11 @@ class ScalarRuntime(Runtime):
         self.ns.update({
             "define_global_null_ptr_array": lambda name, count: self.define_array(name, count),
             "abi_constant": {"object.type.int": 2, "object.type.float": 3,
-                             "object.type.str": 4, "object.type.gen": 15,
+                             "object.type.str": 4, "object.type.list": 5,
+                             "object.type.gen": 15,
+                             "object.list.length_offset": 16,
+                             "object.list.capacity_offset": 24,
+                             "object.list.items_offset": 32,
                              "object.gen.inline_frame_flag": 4194304}.__getitem__,
             "pcc_gc_object_index_find": lambda obj: self.nodes.get(obj, 0),
             "pcc_gc_object_index_remove": self.remove_index,
@@ -196,6 +200,10 @@ def test_exclusions_keep_synchronous_owner(reason):
         rt.write(obj, 8, {"list": 5, "cext": 65536, "generator": 15, "class": 100}[reason])
         if reason == "generator":
             rt.write(obj, 24, 1234)  # An uncleared frame still owns referents.
+        if reason == "list":
+            rt.write(obj, 16, 1)  # An uncleared list still owns referents.
+            rt.write(obj, 24, 4)
+            rt.write(obj, 32, 1234)
     rt.begin()
     assert rt.enqueue((obj, node)) == 0
     assert rt.read(node, 32) == 0 and rt.read(obj, 0) == 731

@@ -1,9 +1,10 @@
 """Committed GC1/2 single-block deaths, retired in bounded CMS work chunks.
 
 The ordinary sweep has already invalidated weakrefs, run PASS0/rechecked
-resurrection and cleared slots. Exact INT/FLOAT/STR and fully cleared ordinary
-GEN object-family allocations enter this queue. A claimed GEN is synchronously
-untracked before PASS2 returns, while BUILDING still forbids consumption. No
+resurrection and cleared slots. Exact INT/FLOAT/STR, fully cleared ordinary GEN
+and cleared LIST object-family allocations enter this queue. Claimed containers
+are synchronously untracked; LIST items detach under the claim's graph hold and
+are freed after unlocking, before PASS2 returns. BUILDING forbids consumption. No
 typed dispatcher, callback or managed allocation runs in the worker. This is not
 whole-heap concurrent sweep or a finalizer queue.
 
@@ -174,6 +175,16 @@ def pcc_gc_scalar_sweep_try_enqueue(obj, node) -> i64:
                 or ptr_is_null(load_ptr(obj, _GEN_SEND)) == 0):
             return 0
         excluded = excluded & ~_TRACKED
+    elif tag == abi_constant("object.type.list"):
+        # PASS1 clears owned slots and length, but retains the raw items array.
+        # Admit normal published LIST storage only; partial/terminal shapes
+        # keep the ordinary typed path. Shape is not an allocator-origin test.
+        capacity: i64 = load_i64(obj, abi_constant("object.list.capacity_offset"))
+        if (load_i64(obj, abi_constant("object.list.length_offset")) != 0
+                or capacity < 4 or capacity > 134217728
+                or ptr_is_null(load_ptr(obj, abi_constant("object.list.items_offset"))) != 0):
+            return 0
+        excluded = excluded & ~_TRACKED
     elif (tag != abi_constant("object.type.int")
           and tag != abi_constant("object.type.float")
           and tag != abi_constant("object.type.str")):
@@ -199,6 +210,14 @@ def pcc_gc_scalar_sweep_try_enqueue(obj, node) -> i64:
         if ((flags & abi_constant("object.gen.inline_frame_flag")) != 0
                 or ptr_is_null(load_ptr(obj, _GEN_FRAME)) == 0
                 or ptr_is_null(load_ptr(obj, _GEN_SEND)) == 0):
+            pcc_py_gc_minor_graph_unlock()
+            return 0
+        excluded = excluded & ~_TRACKED
+    elif tag == abi_constant("object.type.list"):
+        capacity = load_i64(obj, abi_constant("object.list.capacity_offset"))
+        if (load_i64(obj, abi_constant("object.list.length_offset")) != 0
+                or capacity < 4 or capacity > 134217728
+                or ptr_is_null(load_ptr(obj, abi_constant("object.list.items_offset"))) != 0):
             pcc_py_gc_minor_graph_unlock()
             return 0
         excluded = excluded & ~_TRACKED
@@ -250,6 +269,16 @@ def pcc_gc_scalar_sweep_try_enqueue(obj, node) -> i64:
     store_i32(obj, 12, flags | 4 | _DEALLOCATING)
     pcc_gc_live_bytes_subtract(load_i64(node, 8))
     pcc_gc_note_scalar_sweep_claim(obj)
+    items = null()
+    if tag == abi_constant("object.type.list"):
+        # Every rejection precedes the ownership commit. The real post-PASS1
+        # LIST owner supplies this malloc-backed array, just as py_dealloc_list
+        # does. No child release or typed dispatch remains at length zero.
+        # Do not leave raw payload ownership in the asynchronously held shell.
+        items = load_ptr(obj, abi_constant("object.list.items_offset"))
+        store_i64(obj, abi_constant("object.list.length_offset"), 0)
+        store_i64(obj, abi_constant("object.list.capacity_offset"), 0)
+        store_ptr(obj, abi_constant("object.list.items_offset"), null())
     atomic_store_i64(global_addr("pcc_gc_scalar_sweep_count"), 0, count + 1, "release")
     atomic_store_i64(global_addr("pcc_gc_scalar_sweep_bytes"), 0, pending_bytes + usable, "release")
     if count + 1 > load_i64(global_addr("pcc_gc_scalar_sweep_peak_pending_objects"), 0):
@@ -258,12 +287,17 @@ def pcc_gc_scalar_sweep_try_enqueue(obj, node) -> i64:
         atomic_store_i64(global_addr("pcc_gc_scalar_sweep_peak_pending_bytes"), 0, pending_bytes + usable, "release")
     atomic_rmw_i64("add", global_addr("pcc_gc_scalar_sweep_enqueued"), 0, 1, "relaxed")
     pcc_py_gc_minor_graph_unlock()
-    if tag == abi_constant("object.type.gen"):
+    if tag == abi_constant("object.type.gen") or tag == abi_constant("object.type.list"):
         # Preserve logical-death note -> real tracking removal, with no
         # graph-to-tracked-shard lock nesting. No rejection remains after
         # claim. BUILDING cannot drain, and outer owners seal only after
         # this sweep returns, so no consumer can observe a stale GCNode.
         py_gc_untrack(obj)
+    if tag == abi_constant("object.type.list"):
+        # Raw free may take the allocator lock. The claim graph hold and any
+        # untrack-local shard hold have ended; an outer merged table owner is
+        # unchanged. Outer STW owns BUILDING, so seal cannot race this tail.
+        free(items)
     return 1
 
 
@@ -356,6 +390,11 @@ def pcc_gc_scalar_sweep_drain(worker: i64, closing: i64, expected_token: i64) ->
                 if ((flags & abi_constant("object.gen.inline_frame_flag")) != 0
                         or ptr_is_null(load_ptr(obj, _GEN_FRAME)) == 0
                         or ptr_is_null(load_ptr(obj, _GEN_SEND)) == 0):
+                    payload_cleared = 0
+            elif tag == abi_constant("object.type.list"):
+                if (load_i64(obj, abi_constant("object.list.length_offset")) != 0
+                        or load_i64(obj, abi_constant("object.list.capacity_offset")) != 0
+                        or ptr_is_null(load_ptr(obj, abi_constant("object.list.items_offset"))) == 0):
                     payload_cleared = 0
             if (payload_cleared != 0
                     and (flags & (_CANDIDATE | 8 | 4 | _DEALLOCATING)) == (_CANDIDATE | 8 | 4 | _DEALLOCATING)

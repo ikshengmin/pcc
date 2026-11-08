@@ -57,7 +57,8 @@ static int64_t snapshot_words, snapshot_hits[4], snapshot_pins[4], snapshot_flag
 static int64_t actual_reclaimed, diagnostic_pending;
 static int64_t retained_gen, public_collections, initial_finalizers, finalizer_total;
 static int64_t final_children_gone, first_epoch_admitted;
-static int64_t first_children_gone, first_children_dead_mask;
+static int64_t first_children_gone, first_children_pending, first_children_dead_mask;
+static int64_t observed_list;
 
 static int64_t word(void *base, int offset) {
     return *(int64_t *)((char *)base + offset);
@@ -262,10 +263,28 @@ static int require_live_target(PyObject *object, void *expected_node, int tag) {
     return 0;
 }
 
+static int require_pending_list(PyObject *object, void *expected_node) {
+    void *node = node_for(object);
+    /* Establish this retained lifetime before reading any LIST payload. */
+    CHECK(node && node == expected_node && word(node, NODE_OWNER) == -C(11), 178);
+    CHECK(word(node, NODE_TAG) == PY_TYPE_LIST && pcc_gc_scalar_sweep_owns(object), 179);
+    CHECK(((PyObjectHeader *)object)->type_tag == PY_TYPE_LIST, 180);
+    CHECK((((PyObjectHeader *)object)->flags & (CANDIDATE | WHITE | 4 | 524288 | TRACKED)) ==
+          (CANDIDATE | WHITE | 4 | 524288), 181);
+    CHECK(word(object, 16) == 0 && word(object, 24) == 0 && pointer(object, 32) == 0, 182);
+    CHECK(py_gc_index_find(object) == 0, 183);
+    observed_list++;
+    return 0;
+}
+
 static int record_first_child(PyObject *object, void *expected_node, int bit) {
     if (!node_for(object)) {
         CHECK(py_gc_index_find(object) == 0, 166);
         first_children_gone++;
+        first_children_dead_mask |= bit;
+    } else if (word(node_for(object), NODE_OWNER) < 0) {
+        CHECK(require_pending_list(object, expected_node) == 0, 184);
+        first_children_pending++;
         first_children_dead_mask |= bit;
     } else {
         CHECK(require_live_target(object, expected_node, PY_TYPE_LIST) == 0, 167);
@@ -429,13 +448,13 @@ static int controlled_sweep(void) {
         CHECK(record_first_child(frames[0], frame_nodes[0], 1) == 0, 169);
         CHECK(record_first_child(children[0], child_nodes[0], 2) == 0, 170);
         CHECK(record_first_child(sends[0], send_nodes[0], 4) == 0, 171);
-        CHECK(reclaimed == observed_gen + first_children_gone, 172);
+        CHECK(reclaimed == observed_gen + first_children_gone + first_children_pending, 172);
         children_gone = first_children_gone;
     }
     if (mode == 5 && observed_gen == 1) {
         /* A platform with no residual conservative GEN word may retire it
          * immediately. Prove the actual claim, not merely a queue count. */
-        CHECK(C(3) == 1 && tracking_checks == 1, 152);
+        CHECK(C(3) == 1 + observed_list && tracking_checks == 1, 152);
         CHECK(node_for(generators[0]) == object_nodes[0], 153);
         CHECK(word(object_nodes[0], NODE_OWNER) == -C(11), 154);
         CHECK(((PyObjectHeader *)generators[0])->type_tag == PY_TYPE_GEN, 155);
@@ -448,7 +467,7 @@ static int controlled_sweep(void) {
         /* A real conservative root is a live verdict, not a failed queue
          * admission. The old one-round oracle incorrectly demanded freeing
          * this GEN while the refreshed owner snapshot still held it. */
-        CHECK(observed_gen == 0 && C(3) == 0, 103);
+        CHECK(observed_gen == 0 && C(3) == observed_list, 103);
         /* Establish live indexed lifetimes before touching any payload.
          * A synchronous-free regression must fail here, not read freed GEN
          * or list bytes merely because no asynchronous claim was counted. */
@@ -492,9 +511,10 @@ static int controlled_sweep(void) {
         CHECK(reclaimed == count * 4 && observed_gen == count, 60);
         CHECK(finalizer_delta == 0 && close_events == 0, 61);
         for (int i = 0; i < count; i++) {
-            CHECK(!node_for(frames[i]) && !node_for(children[i]) && !node_for(sends[i]), 63);
+            CHECK(require_pending_list(frames[i], frame_nodes[i]) == 0, 63);
+            CHECK(require_pending_list(children[i], child_nodes[i]) == 0, 185);
+            CHECK(require_pending_list(sends[i], send_nodes[i]) == 0, 186);
             CHECK(!py_gc_index_find(frames[i]) && !py_gc_index_find(children[i]) && !py_gc_index_find(sends[i]), 64);
-            children_gone += 3;
         }
         tracked_delta = tracked_before - py_gc_tracked_count;
         if (mode == 2) CHECK(tracked_delta == count * 4, 65);
@@ -505,8 +525,9 @@ static int controlled_sweep(void) {
         py_clear_exception();
     }
     admitted = C(3);
-    /* Do not assign unrelated scalar/exception deaths to the target GENs. */
-    CHECK(admitted == observed_gen, 67);
+    /* Reconcile the independently observed target GEN and zero-shell LIST
+     * claims; do not assign unrelated scalar/exception deaths to either. */
+    CHECK(admitted == observed_gen + observed_list, 67);
     pcc_gc_scalar_sweep_seal();
     CHECK(C(12) == admitted && C(4) == 0 && C(5) == 0, 68);
     CHECK(pcc_resume_world() == 0, 69);
@@ -515,11 +536,18 @@ static int controlled_sweep(void) {
      * real marking. Keep the CMS worker and the resurrection root alive. */
     if (mode == 5 || mode == 6) {
         CHECK(drain_worker() == 0, 123);
+        if (first_children_dead_mask & 1) CHECK(node_for(frames[0]) == 0, 187);
+        if (first_children_dead_mask & 2) CHECK(node_for(children[0]) == 0, 188);
+        if (first_children_dead_mask & 4) CHECK(node_for(sends[0]) == 0, 189);
         return 0;
     }
     CHECK(finish_worker() == 0, 70);
     for (int i = 0; i < count; i++) {
         if (observed[i]) CHECK(node_for(generators[i]) == 0 && py_gc_index_find(generators[i]) == 0, 71);
+        if (mode < 5) {
+            CHECK(!node_for(frames[i]) && !node_for(children[i]) && !node_for(sends[i]), 190);
+            children_gone += 3;
+        }
     }
     if (rescued) {
         CHECK(mode == 7 && py_gen_is_done(rescued) == 0, 74);
@@ -675,7 +703,8 @@ int main(int argc, char **argv) {
            "sentinel_checks=%lld resurrection_checks=%lld double_frees=%lld actual_reclaimed=%lld "
            "retained_gen=%lld public_collections=%lld finalizer_total=%lld "
            "lifecycle_stage=%d final_children_gone=%lld event_order=%lld first_epoch_admitted=%lld "
-           "first_children_gone=%lld first_children_dead_mask=%lld",
+           "first_children_gone=%lld first_children_dead_mask=%lld "
+           "first_children_pending=%lld observed_list=%lld",
            pcc_gc_backend(), mode, status, first_failure,
            pcc_gc_tracking_flag_mode, pcc_gc_tracking_materialized,
            (long long)producer, (long long)C(8),
@@ -692,7 +721,8 @@ int main(int argc, char **argv) {
            (long long)public_collections, (long long)finalizer_total,
            lifecycle_stage, (long long)final_children_gone, (long long)event_order,
            (long long)first_epoch_admitted,
-           (long long)first_children_gone, (long long)first_children_dead_mask);
+           (long long)first_children_gone, (long long)first_children_dead_mask,
+           (long long)first_children_pending, (long long)observed_list);
     if (snapshot_words > 0) {
         /* Omit uncaptured diagnostics. A -1 pin/flags pair means the
          * object's index was already removed, so its bytes were not read. */

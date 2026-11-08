@@ -14,8 +14,10 @@ Both join the entire observer thread before fresh public collections prove
 eventual retirement.
 Live tracking checks require TRACKED and the selected representation: no idle
 GCNode for flag mode, the original stable GCNode identity for node mode.
-Each child independently must have a missing ObjectNode index or a verified live verdict;
-the first sweep's reclaimed count is checked against this actual partition.
+Each child independently must have a missing ObjectNode index, a verified
+pending zero-shell LIST claim, or a verified live verdict. Pending is counted
+separately from gone; every claimed child must lose its index after worker drain.
+The first sweep's reclaimed count is checked against this actual partition.
 The old one-epoch death assertion was wrong when a real snapshot still held
 the generator. Finally resurrection must actually occur before its explicit
 root is released; it is never replaced by a direct finalizer call.
@@ -142,7 +144,9 @@ def test_controlled_bounded_sweep_clears_owned_gen_edges_before_retirement(
     assert fields["rejected"] == count, receipt
     assert 1 <= fields["bounded_calls"] <= count * 4 + 1, receipt
     if mode < 5:
-        assert fields["observed_gen"] == fields["admitted"] == count, receipt
+        assert fields["observed_gen"] == count, receipt
+        assert fields["observed_list"] == 3 * count, receipt
+        assert fields["admitted"] == 4 * count, receipt
         assert fields["tracking_checks"] == count, receipt
         assert fields["children_gone"] == 3 * count, receipt
         assert fields["finalizers"] == fields["closes"] == 0, receipt
@@ -152,8 +156,10 @@ def test_controlled_bounded_sweep_clears_owned_gen_edges_before_retirement(
             assert fields["tracked_delta"] == 4 * count, receipt
     elif mode in (5, 6):
         assert 0 <= fields["first_children_dead_mask"] <= 7, receipt
-        assert fields["first_children_gone"] == fields["first_children_dead_mask"].bit_count(), receipt
-        assert fields["actual_reclaimed"] == fields["observed_gen"] + fields["first_children_gone"], receipt
+        first_children_dead = fields["first_children_gone"] + fields["first_children_pending"]
+        assert first_children_dead == fields["first_children_dead_mask"].bit_count(), receipt
+        assert fields["observed_list"] == fields["first_children_pending"], receipt
+        assert fields["actual_reclaimed"] == fields["observed_gen"] + first_children_dead, receipt
         assert fields["public_gen_gone"] == 1 and fields["children_gone"] == 3, receipt
         assert fields["finalizer_total"] == fields["closes"] == 1, receipt
         # Public collection may retire other scalars as well. These total
@@ -180,11 +186,12 @@ def test_controlled_bounded_sweep_clears_owned_gen_edges_before_retirement(
             assert fields["finalizers"] in (0, 1), receipt
             assert fields["first_children_dead_mask"] & 3 == 0, receipt
             if fields["finalizers"] == 0:
-                assert fields["first_children_gone"] == 0, receipt
+                assert first_children_dead == 0, receipt
             assert 2 <= fields["public_collections"] <= 8, receipt
             assert fields["weak"] == fields["resurrection_checks"] == 1, receipt
     else:
         assert fields["observed_gen"] == fields["admitted"] == 0, receipt
+        assert fields["observed_list"] == 0, receipt
         assert fields["weak"] == fields["resurrection_checks"] == 1, receipt
         assert fields["children_gone"] == fields["finalizers"] == 0, receipt
         # Weak resurrection keeps the explicit owner and its fields intact;
