@@ -298,6 +298,62 @@ def test_fixed_caps_keep_original_free_fallback_and_report_coverage(shape):
     assert rt.live_usable == 0
 
 
+@pytest.mark.parametrize("backend", (1, 2))
+def test_saturated_block_cap_rejects_without_size_query_or_queue_mutation(backend):
+    rt = Runtime(backend)
+    assert rt.ns["_MAX_BLOCKS"] == 4096
+    assert rt.call("begin", 0) == 1
+    accepted = [rt.alloc(16) for _ in range(4096)]
+    for obj in accepted:
+        assert rt.call("try_enqueue", obj, TERMINAL) == 1
+    before = {field: rt.scalar(PREFIX + field) for field in
+              ("head", "tail", "pending_count", "pending_bytes")}
+
+    def forbidden_size_query(obj):
+        raise AssertionError("a full queue must reject before reading usable size")
+
+    original_query = rt.ns["malloc_usable_size"]
+    rt.ns["malloc_usable_size"] = forbidden_size_query
+    # Count saturation wins even when size would also reject. The combined
+    # fallback counter still records exactly one attempt, not two reasons.
+    for usable in (-1, 0, 16, 1048577):
+        obj = rt.alloc(16)
+        rt.write(obj, -16, usable)
+        snapshot = dict(rt.memory[obj])
+        assert rt.call("try_enqueue", obj, TERMINAL) == 0
+        assert rt.memory[obj] == snapshot
+        assert {field: rt.scalar(PREFIX + field) for field in before} == before
+    rt.ns["malloc_usable_size"] = original_query
+    rt.world = 0
+    assert rt.call("close") == 4096
+    assert [rt.counter(i) for i in range(2, 6)] == [4100, 4096, 4096, 4]
+    assert rt.freed == set(accepted)
+
+
+@pytest.mark.parametrize("backend", (1, 2))
+@pytest.mark.parametrize("usable,expected", [(-1, 0), (0, 0), (16, 1),
+                                           (1048576, 1), (1048577, 0)])
+def test_unsaturated_queue_still_checks_exact_usable_size(backend, usable, expected):
+    rt = Runtime(backend)
+    obj = rt.alloc(max(16, usable))
+    rt.write(obj, -16, usable)
+    probes = []
+
+    def size_query(pointer):
+        probes.append(pointer)
+        return rt.read(pointer, -16)
+
+    rt.ns["malloc_usable_size"] = size_query
+    assert rt.call("begin", 0) == 1
+    assert rt.call("try_enqueue", obj, TERMINAL) == expected
+    assert probes == [obj]
+    assert rt.counter(0) == expected
+    assert rt.counter(1) == (usable if expected else 0)
+    rt.world = 0
+    assert rt.call("close") == expected
+    assert [rt.counter(i) for i in range(2, 6)] == [1, expected, expected, 1 - expected]
+
+
 def test_queue_is_tls_but_completed_accounting_is_process_wide_and_i64():
     rt = Runtime()
     assert rt.call("begin", 0) == 1

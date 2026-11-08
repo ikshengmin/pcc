@@ -135,11 +135,17 @@ def pcc_gc_deferred_free_try_enqueue(obj, flags: i64) -> i64:
     attempts = global_addr("pcc_gc_deferred_free_local_attempts")
     store_i64(attempts, 0, load_i64(attempts, 0) + 1)
     count_slot = global_addr("pcc_gc_deferred_free_pending_count")
-    bytes_slot = global_addr("pcc_gc_deferred_free_pending_bytes")
     count: i64 = load_i64(count_slot, 0)
+    # Saturation is already a complete rejection verdict. Preserve the same
+    # coverage accounting without querying every later dead block's size.
+    if count >= _MAX_BLOCKS:
+        fallbacks = global_addr("pcc_gc_deferred_free_local_fallbacks")
+        store_i64(fallbacks, 0, load_i64(fallbacks, 0) + 1)
+        return 0
+    bytes_slot = global_addr("pcc_gc_deferred_free_pending_bytes")
     pending_bytes: i64 = load_i64(bytes_slot, 0)
     usable: i64 = malloc_usable_size(obj)
-    if count >= _MAX_BLOCKS or usable <= 0 or usable > _MAX_USABLE_BYTES - pending_bytes:
+    if usable <= 0 or usable > _MAX_USABLE_BYTES - pending_bytes:
         fallbacks = global_addr("pcc_gc_deferred_free_local_fallbacks")
         store_i64(fallbacks, 0, load_i64(fallbacks, 0) + 1)
         return 0
