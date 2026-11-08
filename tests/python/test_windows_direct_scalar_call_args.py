@@ -357,6 +357,70 @@ entry:
     assert win64.epilogue(function) == epilogue
 
 
+def _is_local_precise_root_argument(load, previous, borrow_slot, root_slot):
+    if load in (f"  mov rcx, {borrow_slot}", f"  mov rcx, {root_slot}"):
+        return True
+    source = load.rsplit(", ", 1)[-1]
+    homes = (borrow_slot, "rbx", "rsi", "rdi", "r12", "r13", "r14", "r15")
+    registers = ("rax", "rcx", "rdx", "r8", "r9", "r10", "r11", *homes[1:])
+    return (
+        load == "  mov rcx, " + source and source in registers
+        and (any(previous == f"  mov {home}, {source}" for home in homes)
+             or previous == f"  mov {source}, {root_slot}")
+    )
+
+
+@pytest.mark.parametrize("offset,expected", ((8, False), (16, True), (24, True), (32, False)))
+@pytest.mark.parametrize("previous", (
+    "  call pcc_gc_frame_enter", "  mov rbx, QWORD PTR [rbp - {offset}]",
+))
+def test_precise_root_argument_oracle_requires_the_expected_slot(offset, expected, previous):
+    assert _is_local_precise_root_argument(
+        f"  mov rcx, QWORD PTR [rbp - {offset}]", previous.format(offset=offset),
+        "QWORD PTR [rbp - 24]", "QWORD PTR [rbp - 16]",
+    ) is expected
+
+
+def _precise_root_return_survives_frame_leave(instructions, root_slot, after_slot):
+    if len(instructions) < 4:
+        return False
+    home = instructions[-1].removeprefix("  mov rax, ")
+    homes = (after_slot, "rbx", "rsi", "rdi", "r12", "r13", "r14", "r15")
+    if home not in homes or instructions[-3:-1] != [
+        f"  lea rcx, {root_slot.removeprefix('QWORD PTR ')}", "  call pcc_gc_frame_leave",
+    ]:
+        return False
+    reload = instructions[:-3]
+    if home != after_slot and reload[-1:] == [f"  mov {home}, {root_slot}"]:
+        return True
+    return any(reload[-2:] == [
+        f"  mov {scratch}, {root_slot}", f"  mov {home}, {scratch}",
+    ] for scratch in ("r10", "r11"))
+
+
+@pytest.mark.parametrize("reload,returned,expected", (
+    (("  mov rbx, {root}",), "rbx", True),
+    (("  mov r10, {root}", "  mov {after}, r10"), "{after}", True),
+    (("  mov r10, {root}", "  mov rbx, r10"), "rbx", True),
+    (("  mov rbx, {borrow}",), "rbx", False),
+    (("  mov rbx, QWORD PTR [rbp - 8]",), "rbx", False),
+    (("  mov r10, {root}",), "r10", False),
+    ((), "rbx", False),
+    (("  mov rbx, {root}", "  mov rbx, 1"), "rbx", False),
+    (("  mov rbx, {root}",), "rsi", False),
+))
+def test_precise_root_return_oracle_requires_a_fresh_preserved_value(reload, returned, expected):
+    slots = dict(root="QWORD PTR [rbp - 16]", borrow="QWORD PTR [rbp - 24]",
+                 after="QWORD PTR [rbp - 40]")
+    instructions = [line.format(**slots) for line in reload] + [
+        "  lea rcx, [rbp - 16]", "  call pcc_gc_frame_leave",
+        "  mov rax, " + returned.format(**slots),
+    ]
+    assert _precise_root_return_survives_frame_leave(
+        instructions, slots["root"], slots["after"],
+    ) is expected
+
+
 def test_precise_root_remains_local_across_a_direct_scalar_call(monkeypatch):
     from pcc.backend import target_objects
     from pcc.backend.coff_x86_64 import parse_object
@@ -397,18 +461,13 @@ entry:
     index = lines.index("  call callee")
     instructions = [line for line in lines[:index] if line.startswith("  ")]
     setup = instructions[-4:]
-    # rcx receives %borrow: reloaded from its slot, or copied from the
-    # register the previous instruction stored to the value's home (its slot
-    # or the callee-saved register x86_64_frame_registers keeps it in) or
-    # loaded from %root, when nothing reads the home and its store is dead.
+    # rcx receives %borrow from its home or the same registered root. The
+    # scratch-register load/copy may be retargeted directly to rcx after the
+    # dead borrow-home store is removed; unrelated stack slots are not roots.
     borrow_slot = f"QWORD PTR [rbp - {function.value_slots['borrow'].offset}]"
-    homes = (borrow_slot, "rbx", "rsi", "rdi", "r12", "r13", "r14", "r15")
-    stored = instructions[-5]
-    source = setup[0].rsplit(", ", 1)[1]
-    assert setup[0] == f"  mov rcx, {borrow_slot}" or (
-        setup[0] == "  mov rcx, " + source
-        and (any(stored == f"  mov {home}, {source}" for home in homes)
-             or stored == f"  mov {source}, QWORD PTR [rbp - {-root_offset}]")
+    root_slot = f"QWORD PTR [rbp - {-root_offset}]"
+    assert _is_local_precise_root_argument(
+        setup[0], instructions[-5], borrow_slot, root_slot,
     ), instructions[-5:]
     assert setup[1:] == ["  mov rdx, 11", "  mov r8, 22", "  mov r9, 33"]
     maps = decode_stack_map(next(s.data for s in obj.sections if s.name == ".pcc_stackmaps"))
@@ -418,7 +477,16 @@ entry:
                for location in roots)
     outgoing_top = -win64.frame_size(function) + win64.outgoing_size(function)
     assert all(location.offset >= -function.frame_size > outgoing_top for location in roots)
-    assert f"  mov r10, QWORD PTR [rbp - {-root_offset}]" in lines[index + 1:]
+    # Reload the registered root after callee, preserve that value across
+    # frame_leave, and return it before the epilogue restores saved registers.
+    end = lines.index("  ret", index + 1)
+    post_call = [line for line in lines[index + 1:end + 1] if line.startswith("  ")]
+    leave = post_call.index("  call pcc_gc_frame_leave")
+    after_slot = f"QWORD PTR [rbp - {function.value_slots['after'].offset}]"
+    assert _precise_root_return_survives_frame_leave(
+        post_call[:leave + 2], root_slot, after_slot,
+    ), post_call
+    assert post_call[leave + 2:] == win64.epilogue(function)
     assert any(section.name == ".xdata" and section.data for section in obj.sections)
 
 
