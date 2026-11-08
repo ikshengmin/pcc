@@ -23,6 +23,7 @@ from pcc.runtime.py.py_abi_constants import (
 
 from pcc.extern import extern, c_abi_export, c_int32, c_ptr, c_int64, c_void
 from pcc.unsafe import (
+    atomic_load_i32,
     atomic_rmw_i32,
     atomic_rmw_i64,
     define_global_i32,
@@ -115,6 +116,9 @@ pcc_gc_backend4_zpage_register_owner_payload_span = extern(
 )
 
 py_list_get = extern("py_list_get", (c_ptr, c_int64), c_ptr)
+py_list_take_for_gen_frame = extern(
+    "py_list_take_for_gen_frame", (c_ptr, c_int64), c_ptr
+)
 py_list_len = extern("py_list_len", (c_ptr,), c_int64)
 py_list_set = extern("py_list_set", (c_ptr, c_int64, c_ptr), c_void)
 pcc_gc_retain_known = extern("pcc_gc_retain_known", (c_ptr,), c_ptr)
@@ -256,6 +260,14 @@ def py_gen_frame_take(frame, index: int):
         store_ptr(slot, 0, null())
         return value
     if _frame_list_raw() == 0:
+        # Fuse only the count-free moving case. Counted, logging and
+        # provenance modes keep the original callback/diagnostic ordering.
+        if (index >= 0
+                and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
+                and atomic_load_i32(global_addr("pcc_log_init_state"), 0, "acquire") == 2
+                and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
+                and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0):
+            return py_list_take_for_gen_frame(frame, index)
         value = py_list_get(frame, index)
         py_list_set(frame, index, null())
         return value

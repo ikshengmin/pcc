@@ -28,8 +28,11 @@ from pcc.runtime.py.py_abi_constants import PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG
 from pcc.runtime.py.py_abi_constants import (
     C_POINTER_SIZE,
     PY_FLAG_GC_DEALLOCATING,
+    PY_TYPE_CEXT_TAG_BASE,
+    PY_TYPE_CPY_HANDLE,
 )
 from pcc.unsafe import (
+    atomic_load_i32,
     atomic_load_i64,
     cstr,
     define_global_i32,
@@ -1129,6 +1132,81 @@ def _list_get_finish(result_slot, result_handle, list_handle_slot):
     # No callback/park/refcount change after removing the last result root;
     # the existing primitive also restores a pin held before this getter.
     return pcc_gc_take_pinned_slot(result_slot, prior_pin)
+
+
+@c_abi_export("pcc_list_body_py_list_take_for_gen_frame")
+def _native_body_py_list_take_for_gen_frame(_native_inputs, i: int):
+    """One private frame-cell read/clear transaction, not an N-slot batch.
+
+    The no-poll entry has already published the borrowed frame address.
+    Keep that root for this whole operation instead of preparing a second
+    owner root. The result is an owning root before the cell is cleared and
+    stays movable through both plan finishes and terminal pin acquisition.
+    Ordinary list reads and writes keep their existing stack layouts.
+    """
+    result_slot = stack_alloc(C_POINTER_SIZE)
+    store_ptr(result_slot, 0, null())
+    result_handle = pcc_gc_native_root_bind_range(result_slot, 1)
+    if ptr_is_null(result_handle) != 0:
+        return null()
+    # _list_get_finish accepts an empty owner-handle slot: the enclosing
+    # native entry, not this body, owns _native_inputs and its lifetime.
+    list_handle_slot = stack_alloc(C_POINTER_SIZE)
+    store_ptr(list_handle_slot, 0, null())
+    taken: int = 0
+    planned: int = 0
+    retain_plan = stack_alloc(56)
+    store_plan = stack_alloc(128)
+    # Acquisition can park. Recheck admission afterwards, before preparing
+    # either plan or touching a cell. Backend/policy commits use this lock;
+    # logging's completed init state excludes its temporary disabled state.
+    pcc_py_gc_minor_graph_lock()
+    backend: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+    if ((backend == 3 or backend == 4) and i >= 0
+            and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
+            and atomic_load_i32(global_addr("pcc_log_init_state"), 0, "acquire") == 2
+            and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
+            and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0):
+        lst = pcc_gc_load_ptr(null(), _native_inputs)
+        pcc_gc_store_ptr_plan_init(store_plan, lst, backend)
+        planned = 1
+        # Admission is silent: malformed inputs must reach the original
+        # get/set checks once each, without an extra debug diagnostic here.
+        if _ptr_is_list(lst):
+            length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
+            capacity: int = load_i64(lst, PYLISTOBJECT_CAPACITY_OFFSET)
+            items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
+            if (i < length and capacity >= length and capacity <= 134217728
+                    and ptr_is_null(items) == 0
+                    and (load_i32(lst, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_DEALLOCATING) == 0):
+                slot = ptr_add(items, i * C_POINTER_SIZE)
+                value = pcc_gc_load_ptr(lst, slot)
+                ordinary: int = 1
+                if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
+                    if pcc_gc_pointer_is_managed(value) == 0:
+                        ordinary = 0
+                    else:
+                        tag: int = load_i32(value, PYOBJECTHEADER_TYPE_TAG_OFFSET)
+                        if tag == PY_TYPE_CPY_HANDLE or tag >= PY_TYPE_CEXT_TAG_BASE:
+                            ordinary = 0
+                if ordinary != 0:
+                    value = pcc_gc_retain_plan_prepare_locked(retain_plan, value)
+                    store_ptr(result_slot, 0, value)
+                    pcc_gc_store_ptr_plan_commit_locked(store_plan, lst, slot, null())
+                    taken = 1
+    pcc_py_gc_minor_graph_unlock()
+    if taken != 0:
+        pcc_gc_retain_plan_finish(retain_plan)
+    if planned != 0:
+        pcc_gc_store_ptr_plan_finish(store_plan)
+    if taken == 0:
+        # Preserve the general ABI for invalid/foreign inputs. Reload the
+        # borrowed input after the getter, and root its NEW result while the
+        # setter may park; neither raw address may be carried across it.
+        value = py_list_get(pcc_gc_load_ptr(null(), _native_inputs), i)
+        store_ptr(result_slot, 0, value)
+        py_list_set(pcc_gc_load_ptr(null(), _native_inputs), i, null())
+    return _list_get_finish(result_slot, result_handle, list_handle_slot)
 
 
 @c_abi_export("pcc_list_body_py_list_get_i64")

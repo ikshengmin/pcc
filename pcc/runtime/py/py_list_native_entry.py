@@ -286,6 +286,31 @@ def py_list_get(lst: c_ptr, i: int) -> c_ptr:
     pcc_gc_native_frame_leave(frame)
     return result
 
+pcc_list_body_py_list_take_for_gen_frame = extern(
+    "pcc_list_body_py_list_take_for_gen_frame", (c_ptr, c_int64), c_ptr
+)
+
+
+@c_abi_export("py_list_take_for_gen_frame")
+def py_list_take_for_gen_frame(lst: c_ptr, i: int) -> c_ptr:
+    """Publish the private moving-frame input before the body's first poll."""
+    native_frame_bytes: int = 40
+    native_range_capacity: int = 8
+    native_ranges_bytes: int = 128
+    pcc_thread_no_park_enter()
+    frame = stack_alloc(40)
+    memset(frame, 0, native_frame_bytes)
+    ranges = stack_alloc(128)
+    inputs = stack_alloc(8)
+    store_ptr(inputs, 0, lst)
+    pcc_gc_native_frame_enter(frame, ranges, native_range_capacity)
+    pcc_gc_native_root_bind_range(inputs, -1)
+    pcc_thread_no_park_exit()
+    result = pcc_list_body_py_list_take_for_gen_frame(inputs, i)
+    pcc_gc_native_frame_leave(frame)
+    return result
+
+
 pcc_list_body_py_list_getitem = extern(
     "pcc_list_body_py_list_getitem", (c_ptr, c_int64), c_ptr
 )
