@@ -41,6 +41,7 @@ OWNED_SYMBOLS = {
     "pcc_gc_object_node_prepare",
     "pcc_gc_object_node_prev",
     "pcc_gc_object_node_release",
+    "pcc_gc_object_node_release_to_pool",
     "pcc_gc_object_node_set_freeing",
     "pcc_gc_object_node_set_gc_refs",
     "pcc_gc_object_node_set_next",

@@ -39,7 +39,7 @@ class ScalarRuntime(Runtime):
             "pcc_gc_granule_object_retire": self.retire_granule,
             "pcc_gc_object_node_is_address_pinned": lambda node, obj: int(obj in self.static or self.read(obj, 12) & 64 or self.read(node, 56) & 1 or self.read(node, 80)),
             "pcc_gc_object_node_unlink": self.unlink,
-            "pcc_gc_object_node_release": self.release_node,
+            "pcc_gc_object_node_release_to_pool": self.release_to_pool,
             "pcc_gc_live_bytes_subtract": self.debit,
             "pcc_gc_note_scalar_sweep_claim": lambda obj: self.noted.append(obj),
         })
@@ -65,7 +65,7 @@ class ScalarRuntime(Runtime):
         self.next_address += 128
         head = self.scalar("pcc_gc_object_head")
         self.memory[node] = {0: obj, 8: usable, 16: head, 24: 0, 32: 0,
-                             40: 0, 48: 0, 56: 0, 64: 0, 72: 0, 80: 0}
+                             40: 0, 48: 0, 56: 0, 64: 0, 72: 0, 80: 0, -16: 88}
         if head:
             self.write(head, 40, node)
         self.write(self.global_address("pcc_gc_object_head"), 0, node)
@@ -101,6 +101,14 @@ class ScalarRuntime(Runtime):
         if nxt:
             self.write(nxt, 40, prev)
         self.live_nodes.remove(node)
+
+    def release_to_pool(self, node):
+        self.release_node(node)
+        return 1
+
+    def free(self, obj):
+        assert self.graph == 0, "allocator free inside graph exclusion"
+        return super().free(obj)
 
     def release_node(self, node):
         assert self.graph > 0 and node not in self.live_nodes
@@ -264,16 +272,55 @@ def test_impossible_index_removal_mismatch_fails_stop_without_physical_release()
 
 
 @pytest.mark.parametrize("mode", ("tasks", "bytes"))
-def test_fixed_object_and_byte_limits_do_not_expand_raw_caps(mode):
+def test_work_chunks_bound_processing_without_truncating_epoch(mode):
     rt = ScalarRuntime()
     rt.begin()
-    pairs = [rt.object(64 if mode == "tasks" else 32768) for _ in range(257 if mode == "tasks" else 3)]
-    admitted = 256 if mode == "tasks" else 2
-    assert sum(rt.enqueue(pair) for pair in pairs) == admitted
-    assert rt.sc(10) == 1
+    size, total, per_chunk = (64, 777, 256) if mode == "tasks" else (32768, 5, 2)
+    pairs = [rt.object(size) for _ in range(total)]
+    assert sum(rt.enqueue(pair) for pair in pairs) == total
+    assert rt.sc(10) == 0 and rt.sc(17) == total and rt.sc(18) == total * size
+    assert rt.scalar("pcc_gc_object_head") == 0
+    assert len(rt.nodes) == total and not rt.live_nodes
     rt.seal()
-    assert rt.drain() == admitted
-    assert rt.read(pairs[-1][1], 32) == 0
+    done = 0
+    while done < total:
+        got = rt.drain()
+        assert got == min(per_chunk, total - done)
+        done += got
+        assert rt.sc(1) == total - done and rt.sc(2) == (total - done) * size
+        assert rt.sc(0) == (2 if done < total else 0)
+    assert rt.sc(13) == (total + per_chunk - 1) // per_chunk
+    assert rt.sc(14) == per_chunk and rt.sc(15) == per_chunk * size
+    assert rt.sc(4) == rt.sc(5) == total and rt.live_bytes == 0
+
+
+@pytest.mark.parametrize("sizes,chunk_counts", (([65536, 1], [1, 1]), ([32769, 32768, 32768], [1, 2])))
+def test_byte_boundary_makes_forward_progress(sizes, chunk_counts):
+    rt = ScalarRuntime()
+    rt.begin()
+    pairs = [rt.object(size) for size in sizes]
+    assert all(rt.enqueue(pair) == 1 for pair in pairs)
+    huge = rt.object(65537)
+    assert rt.enqueue(huge) == 0 and rt.read(huge[1], 32) == 0
+    rt.seal()
+    assert [rt.drain() for _ in chunk_counts] == chunk_counts
+    assert rt.sc(0) == 0 and rt.sc(15) <= 65536
+    assert rt.scalar("pcc_gc_object_head") == huge[1]
+
+
+@pytest.mark.parametrize("limit", ("objects", "bytes"))
+def test_independent_backlog_bound_retains_synchronous_fallback(limit):
+    rt = ScalarRuntime()
+    assert rt.ns["_MAX_PENDING_OBJECTS"] == 65536
+    assert rt.ns["_MAX_PENDING_BYTES"] == 4194304
+    # Exercise the same production comparisons with a compact model quota.
+    rt.ns["_MAX_PENDING_OBJECTS" if limit == "objects" else "_MAX_PENDING_BYTES"] = 3 if limit == "objects" else 192
+    rt.begin()
+    pairs = [rt.object() for _ in range(4)]
+    assert [rt.enqueue(pair) for pair in pairs] == [1, 1, 1, 0]
+    assert rt.read(pairs[-1][1], 32) == 0 and rt.sc(10) == 1
+    rt.seal(); assert rt.drain() == 3
+    assert rt.nodes == {pairs[-1][0]: pairs[-1][1]}
 
 
 def test_new_allocation_head_survives_worker_unlink():
@@ -369,7 +416,7 @@ def test_nonempty_unsealed_close_fails_closed():
 def test_full_scope_rejects_before_index_or_eligibility_probes():
     rt = ScalarRuntime()
     rt.begin()
-    for _ in range(256): assert rt.enqueue(rt.object()) == 1
+    rt.write(rt.global_address("pcc_gc_scalar_sweep_count"), 0, 65536)
     rt.ns["pcc_gc_object_index_find"] = lambda obj: (_ for _ in ()).throw(AssertionError("capacity fast path probed index"))
     assert rt.enqueue((-999, -998)) == 0 and rt.sc(10) == 1
 
@@ -456,3 +503,153 @@ def test_raw_allocations_cannot_impersonate_object_family_with_origin_flag(origi
     rt.granules.remove(obj)
     rt.begin()
     assert rt.enqueue((obj, node)) == 0 and rt.read(node, 32) == 0
+
+
+@pytest.mark.parametrize("consumer", ("worker-stop", "producer-stop"))
+def test_closing_continues_after_all_quarantined_first_chunk(consumer):
+    rt = ScalarRuntime()
+    rt.begin()
+    pairs = [rt.object() for _ in range(513)]
+    for pair in pairs: assert rt.enqueue(pair) == 1
+    rt.retirement_failures.update(obj for obj, node in pairs[:256])
+    rt.seal()
+    if consumer == "worker-stop":
+        rt.thread = 2
+        retired = rt.scalar_call("drain", 1, 1, 0)
+    else:
+        rt.write(rt.global_address("pcc_gc_cms_worker_started"), 0, 3)
+        retired = rt.scalar_call("close")
+    assert retired == 257 and rt.sc(13) == 3 and rt.sc(14) == 256
+    assert rt.sc(0) == 4 and rt.sc(1) == rt.sc(9) == 256
+    assert rt.sc(2) == 256 * 64 and rt.sc(4) == rt.sc(5) == 257
+    quarantine = rt.scalar("pcc_gc_scalar_sweep_quarantine_head")
+    observed = set()
+    while quarantine:
+        assert quarantine not in observed
+        observed.add(quarantine)
+        assert rt.read(quarantine, 32) == -rt.sc(11)
+        quarantine = rt.read(quarantine, 16)
+    assert observed == {node for obj, node in pairs[:256]}
+    assert rt.scalar("pcc_gc_scalar_sweep_head") == 0
+    assert rt.scalar_call("drain", 1, 1, 0) == 0 and rt.sc(9) == 256
+
+
+def test_interleaved_live_dead_chains_reset_and_new_epoch_keep_distinct_owners():
+    rt = ScalarRuntime()
+    pairs = [rt.object(tag=(2, 3, 4)[i % 3]) for i in range(600)]
+    live = pairs[::2]
+    dead = pairs[1::2]
+    rt.begin()
+    for pair in dead: assert rt.enqueue(pair) == 1
+    rt.seal(); assert rt.drain() == 256
+    old_token = rt.sc(11)
+    rt.thread = 3; rt.world = 1
+    rt.begin()
+    extra = rt.object(flags=32)
+    assert rt.enqueue(live[0]) == 0  # old epoch owns its remaining chain
+    rt.ns.update({"pcc_gc_gray_worklist_clear_stopped": lambda: None,
+                  "pcc_gc_gray_count_store_release": lambda value: None})
+    _load(RUNTIME / "freestanding_gc_object_root_seeding.py", rt.ns, {"pcc_gc_prepare_object_list_mark"})
+    rt.ns["pcc_gc_prepare_object_list_mark"](1)
+    for obj, node in dead[256:]:
+        assert rt.read(node, 32) == -old_token and rt.read(node, 64) in (2, 3, 4)
+    rt.seal(); assert rt.drain() == 44
+    seen = []
+    node = rt.scalar("pcc_gc_object_head")
+    while node:
+        seen.append(node); node = rt.read(node, 16)
+    assert set(seen) == {node for obj, node in live + [extra]}
+    rt.thread = 1; rt.world = 1; rt.begin()
+    obj, node = live[0]
+    rt.write(obj, 12, FLAGS)
+    assert rt.enqueue((obj, node)) == 1 and rt.sc(11) > old_token
+    rt.seal(); assert rt.drain() == 1
+    assert rt.sc(4) == rt.sc(5) == 301 and rt.sc(0) == 0
+
+
+def test_full_pool_overflow_node_is_physically_freed_outside_graph_lock():
+    rt = ScalarRuntime()
+    rt.define_global("pcc_gc_object_node_free_head", 0)
+    rt.define_global("pcc_gc_object_node_free_count", 8192)
+    _load(RUNTIME / "freestanding_gc_object_nodes.py", rt.ns,
+          {"_clear_promotion_state", "pcc_gc_object_node_release_to_pool"})
+    rt.begin()
+    obj, node = rt.object()
+    assert rt.enqueue((obj, node)) == 1
+    rt.seal(); assert rt.drain() == 1
+    assert rt.freed == {obj, node} and rt.sc(16) == 1
+    assert rt.scalar("pcc_gc_object_node_free_count") == 8192
+    assert rt.scalar("pcc_gc_object_node_free_head") == 0
+
+
+def test_actual_pool_admission_clears_private_tag_links_after_retirement():
+    rt = ScalarRuntime()
+    rt.define_global("pcc_gc_object_node_free_head", 0)
+    rt.define_global("pcc_gc_object_node_free_count", 0)
+    _load(RUNTIME / "freestanding_gc_object_nodes.py", rt.ns,
+          {"_clear_promotion_state", "pcc_gc_object_node_release_to_pool"})
+    rt.begin()
+    obj, node = rt.object(tag=4)
+    assert rt.enqueue((obj, node)) == 1 and rt.read(node, 64) == 4
+    rt.seal(); assert rt.drain() == 1
+    assert rt.freed == {obj} and rt.sc(16) == 0
+    assert rt.scalar("pcc_gc_object_node_free_head") == node
+    assert rt.scalar("pcc_gc_object_node_free_count") == 1
+    assert rt.read(node, 56) == rt.read(node, 64) == rt.read(node, 72) == 0
+
+
+@pytest.mark.parametrize("which", ("head", "middle", "tail"))
+def test_claim_uses_actual_unlink_cursor_updates_before_private_link_reuse(which):
+    rt = ScalarRuntime()
+    pairs = [rt.object() for _ in range(3)]
+    by_position = dict(head=pairs[2], middle=pairs[1], tail=pairs[0])
+    obj, node = by_position[which]
+    nxt = rt.read(node, 16)
+    for name in ("pcc_gc_trace_cursor", "pcc_gc_backend4_reset_object_cursor",
+                 "pcc_gc_backend3_remembered_scan_cursor"):
+        rt.define_global(name, node)
+    rt.define_global("pcc_gc_object_list_revision", 0)
+    rt.ns.update(pcc_gc_trace_cursor_load=lambda: rt.scalar("pcc_gc_trace_cursor"),
+                 pcc_gc_trace_cursor_store=lambda value: rt.ns["global_store_ptr"]("pcc_gc_trace_cursor", value),
+                 _promotion_unlink=lambda node: None,
+                 pcc_gc_backend3_young_unlink=lambda node: None)
+    _load(RUNTIME / "freestanding_gc_object_nodes.py", rt.ns,
+          {"pcc_gc_object_node_prev", "pcc_gc_object_node_next",
+           "pcc_gc_object_node_set_next", "pcc_gc_object_node_set_prev",
+           "pcc_gc_object_set_list_head", "pcc_gc_object_node_unlink"})
+    actual_unlink = rt.ns["pcc_gc_object_node_unlink"]
+    def unlink(value):
+        actual_unlink(value)
+        rt.live_nodes.remove(value)
+    rt.ns["pcc_gc_object_node_unlink"] = unlink
+    rt.begin(); assert rt.enqueue((obj, node)) == 1
+    for name in ("pcc_gc_trace_cursor", "pcc_gc_backend4_reset_object_cursor",
+                 "pcc_gc_backend3_remembered_scan_cursor"):
+        assert rt.scalar(name) == nxt
+    assert rt.scalar("pcc_gc_object_list_revision") == 1
+    assert rt.read(node, 16) == 0 and rt.read(node, 40) == 64
+    rt.seal(); assert rt.drain() == 1
+    assert rt.scalar("pcc_gc_object_list_revision") == 1  # no second unlink
+
+
+def test_drain_in_progress_cannot_be_stolen_by_stop_close_or_later_epoch():
+    rt = ScalarRuntime()
+    rt.begin()
+    pairs = [rt.object() for _ in range(300)]
+    for pair in pairs: assert rt.enqueue(pair) == 1
+    rt.seal()
+    old_token = rt.sc(11)
+    def raw_tail(obj):
+        rt.free_hook = None
+        assert rt.sc(0) == 3 and rt.sc(1) == 300
+        rt.thread = 1
+        rt.write(rt.global_address("pcc_gc_cms_worker_started"), 0, 3)
+        assert rt.scalar_call("close") == 0  # worker still owns raw tail
+        rt.thread = 3; rt.world = 1; rt.begin()
+        extra = rt.object()
+        assert rt.enqueue(extra) == 0 and rt.sc(11) == old_token
+        rt.seal(); rt.thread = 2
+    rt.free_hook = raw_tail
+    assert rt.drain() == 256 and rt.sc(0) == 2 and rt.sc(1) == 44
+    assert rt.scalar_call("drain", 1, 1, 0) == 44
+    assert rt.sc(4) == rt.sc(5) == 300 and rt.sc(0) == 0

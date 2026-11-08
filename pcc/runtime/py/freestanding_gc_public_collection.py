@@ -102,7 +102,7 @@ def pcc_gc_cms_worker_main_py(arg):
     ) == 0:
         # Already-retired raw blocks are independent of mark pacing and of
         # gc.disable()/threshold0. Consume them on the existing CMS thread.
-        pcc_gc_scalar_sweep_drain(1, 0, 0)
+        retired: i64 = pcc_gc_scalar_sweep_drain(1, 0, 0)
         pcc_gc_deferred_free_worker_drain(0)
         pushes: i64 = atomic_load_i32(
             global_addr("pcc_gc_cms_queue_pushes"), 0, "acquire"
@@ -203,7 +203,7 @@ def pcc_gc_cms_worker_main_py(arg):
                 atomic_store_i32(
                     global_addr("pcc_gc_cms_worker_drains"), 0, pushes, "release"
                 )
-            if traced == 0 and (
+            if retired == 0 and traced == 0 and (
                 handoff != 0
                 or load_i32(global_addr("pcc_gc_mark_active"), 0) == 0
                 or atomic_load_i32(
@@ -215,7 +215,7 @@ def pcc_gc_cms_worker_main_py(arg):
                 # credit. Yield between retries instead of spinning on the
                 # graph lock; gray count remains the completion authority.
                 pcc_platform_sleep_ns(1000000)
-        else:
+        elif retired == 0:
             pcc_platform_sleep_ns(1000000)
         # A completed batch leaves no raw managed address on this stack.
         # Park as relocation-safe here; an in-batch runtime poll remains

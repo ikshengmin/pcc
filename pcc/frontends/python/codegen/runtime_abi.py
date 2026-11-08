@@ -1871,6 +1871,12 @@ FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
         "pcc_gc_scalar_sweep_quarantined",
         "pcc_gc_scalar_sweep_cap_rejections",
         "pcc_gc_scalar_sweep_sealed",
+        "pcc_gc_scalar_sweep_chunks",
+        "pcc_gc_scalar_sweep_overflow_nodes_released",
+        "pcc_gc_scalar_sweep_peak_pending_objects",
+        "pcc_gc_scalar_sweep_peak_pending_bytes",
+        "pcc_gc_scalar_sweep_peak_chunk_objects",
+        "pcc_gc_scalar_sweep_peak_chunk_bytes",
         "pcc_gc_deferred_free_attempts",
         "pcc_gc_deferred_free_enqueued",
         "pcc_gc_deferred_free_drained",
@@ -2003,6 +2009,9 @@ FREESTANDING_GC_PTR_GLOBALS: frozenset[str] = frozenset(
     {
         "pcc_gc_scalar_sweep_producer_token",
         "pcc_gc_deferred_free_worker_head",
+        "pcc_gc_scalar_sweep_head",
+        "pcc_gc_scalar_sweep_tail",
+        "pcc_gc_scalar_sweep_quarantine_head",
         "pcc_gc_deferred_free_head",
         "pcc_gc_deferred_free_tail",
         "pcc_gc_deferred_free_pending_count",
@@ -3134,6 +3143,7 @@ def _cross_object_signatures_part_12():
     # literal instead of exceeding the native compiler's 50-entry limit.
     return {
     "pcc_gc_note_scalar_sweep_claim": (("c_ptr",), "c_void"),
+    "pcc_gc_object_node_release_to_pool": (("c_ptr",), "c_int64"),
     "pcc_gc_scalar_sweep_begin": ((), "c_void"),
     "pcc_gc_scalar_sweep_try_enqueue": (("c_ptr", "c_ptr"), "c_int64"),
     "pcc_gc_scalar_sweep_seal": ((), "c_void"),

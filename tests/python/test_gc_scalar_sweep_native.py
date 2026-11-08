@@ -1,6 +1,8 @@
-"""Real owned-runtime CMS logical retirement, with injected dead verdicts.
+"""Bounded CMS retirement chunks over real owned-runtime allocations.
 
 Host pcc0 self backend, no native-pcc1 or full lifecycle qualification.
+All modes but public-collect inject dead verdicts. Quarantine mode additionally
+invalidates the first pending chunk's eligibility after sealing.
 Specification: docs/project-intent.md, five-GC lifetime equality.
 """
 from __future__ import annotations
@@ -46,9 +48,13 @@ def scalar_binary(tmp_path_factory):
 
 @pytest.mark.integration
 @pytest.mark.parametrize("backend", range(5), ids=lambda value: f"gc{value}")
-@pytest.mark.parametrize("mode", (1, 2, 3, 4, 5, 6, 7, 8, 9, 10),
-                         ids=("disabled", "threshold0", "stop-race", "same-backend-reset",
-                              "missing-worker", "task-cap", "exclusions", "concurrent-allocation", "public-collect", "busy-sealed"))
+@pytest.mark.parametrize(
+    "mode", range(1, 16),
+    ids=("disabled", "threshold0", "stop-race", "same-backend-reset",
+         "missing-worker", "object-chunks", "exclusions", "concurrent-allocation",
+         "public-collect", "busy-sealed", "byte-chunks", "multichunk-stop",
+         "repeated-epochs", "node-pool-overflow", "quarantined-first-chunk"),
+)
 def test_cms_retires_scalar_nodes_and_provenance_after_resume(scalar_binary, backend, mode):
     binary, identity = scalar_binary
     command = [str(binary), str(mode)]
@@ -63,14 +69,32 @@ def test_cms_retires_scalar_nodes_and_provenance_after_resume(scalar_binary, bac
     assert result.stdout.startswith("scalar-sweep "), receipt
     fields = {key: int(value) for key, value in
               (item.split("=") for item in result.stdout.strip().split()[1:])}
-    expected = (256 if mode == 6 else 48) if backend in (1, 2) and mode != 5 else 0
+    enabled = backend in (1, 2) and mode != 5
+    per_epoch = 8705 if mode == 14 else (777 if mode == 6 or mode >= 11 else 48)
+    epochs = 3 if mode == 13 else 1
+    expected = per_epoch * epochs if enabled else 0
+    quarantined = 256 if enabled and mode == 15 else 0
     if mode == 9:
         expected = fields["admitted"]
-        assert (expected > 0) == (backend in (1, 2)), receipt
-    assert fields["admitted"] == fields["sealed_pending"] == fields["retired"] == fields["released"] == expected, receipt
-    assert fields["pending"] == fields["quarantine"] == fields["status"] == 0, receipt
-    if expected and mode != 3:
+        if enabled:
+            # Real mark/root/sweep, without injected candidate flags. Allow
+            # conservative roots, but require more than two chunks of deaths.
+            assert expected > 512, receipt
+        else:
+            assert expected == 0, receipt
+    assert fields["backend"] == backend and fields["mode"] == mode, receipt
+    assert fields["admitted"] == fields["sealed_pending"] == expected, receipt
+    assert fields["retired"] == fields["released"] == expected - quarantined, receipt
+    assert fields["worker_retired"] + fields["local"] == expected - quarantined, receipt
+    assert fields["pending"] == fields["quarantine"] == quarantined, receipt
+    assert fields["pending_bytes"] == quarantined * fields["usable"], receipt
+    assert fields["state"] == (4 if quarantined else 0), receipt
+    assert fields["status"] == fields["double_frees"] == 0, receipt
+    assert fields["epochs"] == epochs, receipt
+    if expected and mode not in (3, 12, 15):
         assert fields["worker_retired"] == expected and fields["local"] == 0, receipt
+        assert fields["worker"] > 0 and fields["worker"] != fields["producer"], receipt
+    if fields["worker_retired"]:
         assert fields["worker"] > 0 and fields["worker"] != fields["producer"], receipt
     if backend in (1, 2) and mode == 4:
         assert fields["reset"] == 2, receipt
@@ -78,3 +102,38 @@ def test_cms_retires_scalar_nodes_and_provenance_after_resume(scalar_binary, bac
         assert fields["canary_allocations"] > 0, receipt
     if expected and mode not in (8, 9):
         assert fields["node_reused"] > 0, receipt
+    if backend != 0:
+        assert fields["list_checks"] > 0, receipt
+    if expected:
+        assert 0 < fields["peak_objects"] <= 256, receipt
+        assert 0 < fields["peak_bytes"] <= 65536, receipt
+        assert fields["chunks"] >= (expected + 255) // 256, receipt
+        if mode == 9:
+            assert fields["peak_pending"] == expected, receipt
+            assert fields["peak_pending_bytes"] >= expected * 64, receipt
+        else:
+            usable = fields["usable"]
+            assert usable >= (1024 if mode == 11 else 64), receipt
+            per_chunk = min(256, 65536 // usable)
+            assert fields["chunks"] == epochs * ((per_epoch + per_chunk - 1) // per_chunk), receipt
+            assert fields["peak_objects"] == min(per_epoch, per_chunk), receipt
+            assert fields["peak_bytes"] == fields["peak_objects"] * usable, receipt
+            assert fields["peak_pending"] == per_epoch, receipt
+            assert fields["peak_pending_bytes"] == per_epoch * usable, receipt
+            assert fields["claimed_bytes"] == expected * usable, receipt
+            assert fields["observers"] == expected, receipt
+        assert fields["overflow_nodes"] == (8705 - 8192 if mode == 14 else 0), receipt
+        if mode == 11:
+            assert fields["chunks"] >= 12 and fields["peak_objects"] < 256, receipt
+        if mode == 13:
+            assert fields["reset"] == epochs, receipt
+            assert fields["list_checks"] >= 4 * epochs, receipt
+        if mode == 15:
+            assert fields["quarantine_checks"] == quarantined, receipt
+            assert fields["stop_checks"] == 1, receipt
+    else:
+        # GC0/3/4 and missing-worker retain their synchronous paths. Merely
+        # surviving the fixture is insufficient: none may consume this queue.
+        for name in ("chunks", "peak_objects", "peak_bytes", "overflow_nodes",
+                     "peak_pending", "peak_pending_bytes", "claimed_bytes", "observers"):
+            assert fields[name] == 0, receipt

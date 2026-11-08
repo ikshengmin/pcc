@@ -29,7 +29,8 @@ pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 # Internal object-node tail: i64 foreign-address lease count at byte 80.
 # This is not a PyObjectHeader field. Live promotion state never resets it.
 # freeing@32: 0 active, 1 retired, negative = scalar-sweep batch token owner.
-# Pending nodes stay linked/indexed; their first-death live debit already ran.
+# Pending scalar nodes are detached/indexed; next@16, prev@40 and young-next@64
+# belong to their retirement chain. Their first-death live debit already ran.
 
 pcc_gc_object_index_find = extern("pcc_gc_object_index_find", (c_ptr,), c_ptr)
 pcc_gc_object_node_is_active = extern(
@@ -265,6 +266,26 @@ def pcc_gc_object_node_release(node: c_ptr) -> None:
     store_ptr(node, 16, global_load_ptr("pcc_gc_object_node_free_head"))
     global_store_ptr("pcc_gc_object_node_free_head", node)
     store_i32(global_addr("pcc_gc_object_node_free_count"), 0, count + 1)
+
+
+@c_abi_export("pcc_gc_object_node_release_to_pool")
+def pcc_gc_object_node_release_to_pool(node: c_ptr) -> i64:
+    """Pool an already detached/index-retired node; never free under the lock.
+
+    Return zero to transfer the full pool's overflow node to the caller's raw
+    release chunk. The caller must not inspect a successfully pooled node again.
+    """
+    if ptr_is_null(node) != 0 or load_i64(node, 80) != 0:
+        pcc_platform_abort()
+        return 0
+    count: i64 = load_i32(global_addr("pcc_gc_object_node_free_count"), 0)
+    if count >= 8192:
+        return 0
+    _clear_promotion_state(node)
+    store_ptr(node, 16, global_load_ptr("pcc_gc_object_node_free_head"))
+    global_store_ptr("pcc_gc_object_node_free_head", node)
+    store_i32(global_addr("pcc_gc_object_node_free_count"), 0, count + 1)
+    return 1
 
 
 @c_abi_export("pcc_gc_object_node_finish_detached")
