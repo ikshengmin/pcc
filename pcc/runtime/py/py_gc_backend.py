@@ -5385,12 +5385,16 @@ def pcc_gc_note_object_freeing(o) -> None:
         _object_graph_unlock()
         if permitted == 0:
             return
-    # A committed scalar death is owned by its task, not this notifier.
-    # Check before publishing free-watch success or touching metadata.
-    if ((backend == 1 or backend == 2)
-            and atomic_load_i64(global_addr("pcc_gc_scalar_sweep_state"), 0, "acquire") != 0
-            and pcc_gc_scalar_sweep_owns(o) != 0):
-        return
+    # GC1/2 can check pending scalar ownership in the metadata transaction
+    # already required below. Keep this node under the same graph hold, and
+    # reject a negative owner before publishing free-watch success.
+    lease_node = null()
+    if backend == 1 or backend == 2:
+        _object_graph_lock()
+        lease_node = pcc_gc_object_index_find(o)
+        if ptr_is_null(lease_node) == 0 and load_i64(lease_node, 32) < 0:
+            _object_graph_unlock()
+            return
     watch = global_load_ptr("pcc_gc_free_watch")
     if ptr_is_null(watch) == 0 and ptr_eq(load_ptr(watch, _FREE_WATCH_OBJECT), o) != 0:
         store_i64(watch, _FREE_WATCH_NOTED, 1)
@@ -5414,8 +5418,9 @@ def pcc_gc_note_object_freeing(o) -> None:
     store_ptr(finish, 24, null())
     store_ptr(finish, 32, null())
     store_ptr(finish, 40, null())
-    _object_graph_lock()
-    lease_node = pcc_gc_object_index_find(o)
+    if backend != 1 and backend != 2:
+        _object_graph_lock()
+        lease_node = pcc_gc_object_index_find(o)
     if ptr_is_null(lease_node) == 0 and load_i64(lease_node, 80) != 0:
         _object_graph_unlock()
         return
@@ -5451,7 +5456,11 @@ def pcc_gc_note_object_freeing(o) -> None:
         if moving != 0:
             _backend4_finish_remap_retirement(finish)
         return
-    node = pcc_gc_object_index_find(o)
+    # GC1/2's provenance and identity work does not mutate the object index.
+    # Moving backends may detach forwarding metadata and need a fresh lookup.
+    node = lease_node
+    if backend != 1 and backend != 2:
+        node = pcc_gc_object_index_find(o)
     if ptr_is_null(node) == 0:
         if _object_node_freeing(node) == 0:
             # Retire this mark-cycle work before publishing freeing, including

@@ -208,7 +208,7 @@ def test_scheduler_preserves_mutator_header_update(initial, operation):
 def test_terminal_gray_clear_preserves_mutator_header_update(initial, operation):
     memory = HeaderMemory(initial)
     namespace = memory.namespace()
-    node = {80: 0}
+    node = {32: 0, 80: 0}
     # No free watch is open on this thread (pcc_gc_free_watch_begin).
     globals_ = {
         "pcc_gc_config_initialized": {0: 1},

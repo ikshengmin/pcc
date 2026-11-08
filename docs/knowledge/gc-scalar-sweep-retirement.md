@@ -86,9 +86,13 @@ pending node, index and task in durable bounded quarantine. Such a batch is not
 retried or reused, and its bytes are never physically freed. Structural loss of
 node/index/token ownership or an unexpected index-remove result aborts rather
 than claiming recoverable quarantine. Generic note/free/pointer-unregister
-paths cannot steal a negative-token node. The pointer-unregister and note
-callers bypass the new ownership helper when the mailbox is empty; GC0 note
-also bypasses it by backend.
+paths cannot steal a negative-token node. Pointer-unregister bypasses the
+ownership helper when the mailbox is empty. GC1/2 note checks the node's
+negative owner inside its existing metadata graph-lock transaction, before
+publishing free-watch success. It reuses that node for the lease and retirement
+checks while the lock stays held. Their intervening provenance and identity
+operations do not mutate the object index. Other backends retain their existing
+lookup order, including a fresh lookup after moving-backend forwarding work.
 
 This does not make an unrooted stale pointer safe. Legal roots must prevent the
 original dead verdict. GC1/2 foreign-lease mode guards and no-op increfs are not
@@ -100,6 +104,9 @@ late pin through an invalid unrooted pointer has no new lifetime guarantee.
 - `tests/python/test_gc_scalar_sweep.py` executes production ownership,
   accounting, guards, seal, capacity, quarantine and failure bodies over raw
   memory cells. It is deterministic host-model evidence, not native threading.
+- `tests/python/test_gc_note_object_freeing.py` executes the production note
+  body, checking pending and leased rejection order, gray/live-byte accounting,
+  node reuse under one graph hold, and moving-backend fresh-lookup controls.
 - `tests/fixtures/native/gc_scalar_sweep_worker.c` and
   `tests/python/test_gc_scalar_sweep_native.py` exercise all five backend
   selections. Modes 1–8 and 10 use controlled verdicts on real allocations and the
