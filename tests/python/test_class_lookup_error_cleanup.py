@@ -34,6 +34,12 @@ class _LookupCleanupModel(SpecialCallModel):
         self.unregistered = []
         self.slots = 0
         self.ns.update(
+            # pcc_gc_pin/unpin publish the pin bit with one atomic read-
+            # modify-write and count the pin in a stack-selected shard.
+            atomic_rmw_i32=self.atomic_rmw,
+            atomic_rmw_i64=self.atomic_rmw,
+            frame_address=lambda: 0,
+            logical_shift_right_i64=lambda value, bits: (value & ((1 << 64) - 1)) >> bits,
             _metaclass=lambda _cls: self.meta,
             py_builtin_type_class_tag=lambda _cls: 0,
             py_incref=self.retain,
@@ -59,6 +65,12 @@ class _LookupCleanupModel(SpecialCallModel):
             {"pcc_gc_pin", "pcc_gc_unpin", "pcc_gc_take_pinned_slot"},
             self.ns,
         )
+
+    def atomic_rmw(self, operation, base, offset, value, order):
+        old = self.load(base, offset)
+        self.store(base, offset, {"or": old | value, "and": old & value,
+                                  "add": old + value, "sub": old - value}[operation])
+        return old
 
     def register(self, slot):
         # These existing wrappers publish populated input slots. The newer
