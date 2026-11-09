@@ -42,6 +42,9 @@ class ClearMemory(BatchMemory):
             self.lst.flags |= abi.PY_FLAG_GC_PINNED
         self.none = self.make(abi.PY_TYPE_NONE, abi.PY_FLAG_IMMORTAL)
         self.global_cell("py_None").fields[0] = self.none
+        self.values = [None if i % 3 == 0 else self.none if i % 3 == 1 else 2 * i + 1
+                       for i in range(count)]
+        self.items.fields.update({i * 8: value for i, value in enumerate(self.values)})
         ns = self.namespace
         # Restore the actual StorePlan functions, replacing take-specific hooks.
         exec(_plan_code(), ns)
@@ -164,14 +167,34 @@ def test_malformed_or_other_frame_shape_is_unchanged(shape):
     memory.assert_clean()
 
 
-def test_null_none_and_foreign_old_cells_do_not_bypass_real_store_plans():
+def test_null_none_and_tagged_old_cells_do_not_bypass_real_store_plans():
     memory = ClearMemory(count=3)
     memory.items.fields[0] = None
     memory.items.fields[8] = memory.none
-    memory.items.fields[16] = memory.make(abi.PY_TYPE_CPY_HANDLE)
+    memory.items.fields[16] = 85
     assert memory.run() == 1
     assert memory.events.count("commit") == memory.events.count("finish") == 3
     assert all(memory.items.fields[i * 8] is memory.none for i in range(3))
+    memory.assert_clean()
+
+
+@pytest.mark.parametrize("shape", ("heap", "foreign", "immortal", "transitive"))
+@pytest.mark.parametrize("position", (0, 15))
+def test_any_heap_owner_rejects_the_entire_range_without_prefix_writes(shape, position):
+    memory = ClearMemory()
+    owner = memory.make(abi.PY_TYPE_LIST)
+    if shape == "foreign":
+        owner.tag = abi.PY_TYPE_CPY_HANDLE
+    elif shape == "immortal":
+        owner.flags |= abi.PY_FLAG_IMMORTAL
+    elif shape == "transitive":
+        # Direct finalizer flags cannot prove safety: a container can own a
+        # graph with finalizers/weakrefs. Reject the container without walking.
+        owner.fields[0] = memory.item
+    memory.items.fields[position * 8] = owner
+    before = dict(memory.items.fields)
+    assert memory.run() == 0
+    assert memory.items.fields == before and not memory.events
     memory.assert_clean()
 
 
@@ -202,6 +225,11 @@ extern int32_t pcc_log_init_state, pcc_diagnostics_runtime_log_fast_state;
 extern int32_t pcc_gc_refcount_provenance_probe;
 extern int64_t pcc_py_gc_minor_graph_lock_depth(void);
 extern int64_t pcc_thread_no_park_depth(void);
+static PyObject *seed(int index) {
+    if (index % 3 == 0) return NULL;
+    if (index % 3 == 1) return py_None;
+    return py_int_from_i64(index + 41);
+}
 int main(void) {
     int backend = pcc_gc_backend();
     py_gc_disable();
@@ -216,9 +244,11 @@ int main(void) {
         && pcc_log_init_state == 2 && !pcc_diagnostics_runtime_log_fast_state
         && !pcc_gc_refcount_provenance_probe;
     if (backend >= 3 && !pcc_gc_refcount_provenance_probe && !pcc_diagnostics_runtime_log_fast_state && !admitted) return 2;
+    for (int i = 0; i < 18; i++)
+        if (i % 3 == 2 && !py_mem_ptr_is_tagged_int(seed(i))) return 13;
     int counts[] = {0, 1, 2, 15, 16, 17, 18};
     for (int test = 0; test < 7; test++) {
-        for (int i = 0; i < 18; i++) py_gen_frame_set(roots[0], i, roots[1]);
+        for (int i = 0; i < 18; i++) py_gen_frame_set(roots[0], i, seed(i));
         int count = counts[test];
         py_raise(roots[2]);
         int result = py_gen_frame_clear_group(roots[0], 0, count);
@@ -226,7 +256,7 @@ int main(void) {
         if (py_current_exception() != roots[2]) return 4;
         py_clear_exception();
         for (int i = 0; i < 18; i++) {
-            PyObject *expected = result && i < count ? py_None : roots[1];
+            PyObject *expected = result && i < count ? py_None : seed(i);
             if (((PyListObject *)roots[0])->items[i] != expected) return 5;
         }
         if (!result) {
@@ -237,17 +267,26 @@ int main(void) {
         for (int i = 0; i < count; i++)
             if (((PyListObject *)roots[0])->items[i] != py_None) return 6;
     }
-    for (int i = 0; i < 18; i++) py_gen_frame_set(roots[0], i, roots[1]);
+    for (int i = 0; i < 18; i++) py_gen_frame_set(roots[0], i, seed(i));
     if (py_gen_frame_clear_group(roots[0], -1, 2)
             || py_gen_frame_clear_group(roots[0], 17, 2)
             || py_gen_frame_clear_group(roots[0], INT64_MAX, 2)) return 7;
     for (int i = 0; i < 18; i++)
-        if (((PyListObject *)roots[0])->items[i] != roots[1]) return 8;
+        if (((PyListObject *)roots[0])->items[i] != seed(i)) return 8;
     /* A rejected partially invalid range is left to the serial caller. */
     py_gen_frame_set(roots[0], 17, py_None);
     py_gen_frame_set(roots[0], 18, py_None);
     if (((PyListObject *)roots[0])->items[17] != py_None
-            || ((PyListObject *)roots[0])->items[16] != roots[1]) return 9;
+            || ((PyListObject *)roots[0])->items[16] != seed(16)) return 9;
+    /* A nonfinalizable container can own a finalizable/weakly observed graph.
+       The whole range must reject, not only objects with direct callbacks. */
+    for (int i = 0; i < 18; i++) py_gen_frame_set(roots[0], i, seed(i));
+    py_list_append(roots[1], roots[2]);
+    py_gen_frame_set(roots[0], 15, roots[1]);
+    if (py_gen_frame_clear_group(roots[0], 0, 16)) return 11;
+    for (int i = 0; i < 18; i++)
+        if (((PyListObject *)roots[0])->items[i] != (i == 15 ? roots[1] : seed(i))) return 12;
+    py_gen_frame_set(roots[0], 15, seed(15));
     if (pcc_py_gc_minor_graph_lock_depth() || pcc_thread_no_park_depth()) return 10;
     for (int i = 0; i < 3; i++) pcc_gc_store_root(&roots[i], 0);
     pcc_gc_frame_leave(roots);
@@ -273,6 +312,10 @@ int main(void) {
     roots[1] = backend == 3 ? py_bytes_new("moved", 5) : py_list_new(0);
     if (!roots[0] || !roots[1]) return 2;
     for (int i = 0; i < 4; i++) py_gen_frame_set(roots[0], i, roots[1]);
+    /* Only nonowning target cells admit; the untouched ends still prove
+       GC3 value relocation and GC4 owner/value canonicalization. */
+    py_gen_frame_set(roots[0], 1, NULL);
+    py_gen_frame_set(roots[0], 2, py_int_from_i64(42));
     pcc_gc_unpin(roots[0]);
     pcc_gc_unpin(roots[1]);
     PyObject *source = roots[0], *value = roots[1], *owner = source, *moved;

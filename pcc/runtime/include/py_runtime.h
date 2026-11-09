@@ -1715,8 +1715,9 @@ PyObject *py_gen_frame_take(PyObject *frame, int64_t index);
 int64_t py_gen_frame_take_group(PyObject *frame, int64_t start, int64_t count,
                                 PyObject **outputs);
 void      py_gen_frame_set(PyObject *frame, int64_t index, PyObject *value);
-/* Try replacing 2..16 consecutive frame cells with None. Caller keeps a
- * live frame owner. Returns 1 after every cell is replaced, 0 with all cells
+/* Try replacing 2..16 consecutive NULL/tagged-int/actual-None cells with None.
+ * Heap-owned ranges decline. Caller keeps a live frame owner.
+ * Returns 1 after every cell is replaced, 0 with all cells
  * unchanged. On 0 reload the caller root and retain the serial setter/error
  * sequence. No compiler caller selects this primitive yet. */
 int64_t py_gen_frame_clear_group(PyObject *frame, int64_t start, int64_t count);

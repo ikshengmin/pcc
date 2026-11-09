@@ -361,9 +361,10 @@ pcc_list_body_py_gen_frame_clear_group = extern(
 
 @c_abi_export("py_gen_frame_clear_group")
 def py_gen_frame_clear_group(lst: c_ptr, start: int, count: int) -> int:
-    """Try replacing 2..16 frame cells with None; 0 leaves every cell alone.
+    """Try clearing 2..16 NULL/tagged-int/actual-None cells; 0 changes none.
 
-    The caller keeps its frame owner alive. A declined group must reload that
+    Heap owners decline, including containers with indirect callbacks. The
+    caller keeps its frame owner alive. A declined group must reload that
     owner and use the original serial setters, including their error order.
     This primitive is not yet selected by generator lowering.
     """

@@ -1317,20 +1317,31 @@ def _native_body_py_gen_frame_clear_group(_native_inputs, start: int, count: int
                     and capacity >= length and capacity <= 134217728
                     and ptr_is_null(items) == 0
                     and (load_i32(lst, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_DEALLOCATING) == 0):
-                # Validate the entire range before the first write. In this
-                # captured mode StorePlan commit does not prepare old-value
-                # releases, and finish returns before decref callbacks. Keep
-                # every store note, canonicalization and owner-aware barrier.
+                # Removing a heap owner can change the set seen by finalizers
+                # or weakrefs at the unlock's pending-stop boundary. NoRC is
+                # not a lifetime proof. Admit only values with no collectable
+                # referents, and validate EVERY old cell before any write.
+                # An arbitrary immortal flag is deliberately insufficient.
                 none = global_load_ptr("py_None")
+                valid: int = 1
                 offset: int = 0
                 while offset < count:
-                    plan = ptr_add(store_plans, offset * 128)
-                    pcc_gc_store_ptr_plan_init(plan, lst, backend)
-                    pcc_gc_store_ptr_plan_commit_locked(
-                        plan, lst, ptr_add(items, (start + offset) * C_POINTER_SIZE), none
-                    )
+                    old = load_ptr(items, (start + offset) * C_POINTER_SIZE)
+                    if (ptr_is_null(old) == 0 and is_tagged_int(old) == 0
+                            and ptr_eq(old, none) == 0):
+                        valid = 0
+                        break
                     offset = offset + 1
-                cleared = 1
+                if valid != 0:
+                    offset = 0
+                    while offset < count:
+                        plan = ptr_add(store_plans, offset * 128)
+                        pcc_gc_store_ptr_plan_init(plan, lst, backend)
+                        pcc_gc_store_ptr_plan_commit_locked(
+                            plan, lst, ptr_add(items, (start + offset) * C_POINTER_SIZE), none
+                        )
+                        offset = offset + 1
+                    cleared = 1
     pcc_py_gc_minor_graph_unlock()
     if cleared != 0:
         offset = 0
