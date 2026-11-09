@@ -55,6 +55,7 @@ OWNED_SYMBOLS = {
     "pcc_gc_object_id",
 }
 RAW_FUNCTION_IMPORTS = {
+    "pcc_platform_abort",
     "pcc_gc_object_is_address_pinned",
     # GC3 forwarding asks the current step's pin snapshot (b95151692).
     "pcc_gc_generational_object_is_address_pinned",

@@ -48,6 +48,7 @@ pcc_gc_index_slot_size = extern("pcc_gc_index_slot_size", (), c_int64)
 
 py_incref = extern("py_incref", (c_ptr,), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 pcc_gc_config_ensure = extern("pcc_gc_config_ensure", (), c_int64)
 pcc_gc_generational_oldify_supported_tag = extern(
     "pcc_gc_generational_oldify_supported_tag", (c_int64,), c_int64
@@ -786,14 +787,24 @@ def pcc_gc_install_forwarding(from_obj: c_ptr, to_obj: c_ptr) -> i64:
 def _note_relocation_read_unlocked(obj: c_ptr) -> c_ptr:
     if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
         return obj
-    # Both known objects and retired source shells resolve through the same
-    # forwarding index. Under the caller's graph lock a live target settles
-    # the answer before object provenance is needed. Keep the miss path's
-    # validation before reading or clearing a possibly stale object's header.
+    # Follow exact forwarding identities under the caller's graph lock.
+    # Intermediate sources may already be inactive or absent from the object
+    # index; only a terminal needs live provenance, before any header read.
     node = pcc_gc_forwarding_find(obj)
     if ptr_is_null(node) == 0:
-        target = load_ptr(node, 8)
-        if ptr_is_null(target) == 0:
+        remaining: i64 = load_i32(global_addr("pcc_gc_forwarding_population"), 0)
+        while remaining > 0:
+            remaining = remaining - 1
+            target = load_ptr(node, 8)
+            if ptr_is_null(target) != 0 or is_tagged_int(target) != 0:
+                break
+            node = pcc_gc_forwarding_find(target)
+            if ptr_is_null(node) == 0:
+                continue
+            if pcc_gc_object_is_known_no_lock(target) == 0:
+                break
+            # A live terminal may retain FORWARDED after edge removal.
+            # Do not mutate that hint, compress edges or change RC here.
             count: i64 = load_i32(
                 global_addr("pcc_gc_relocation_barrier_forwards"), 0
             )
@@ -801,6 +812,9 @@ def _note_relocation_read_unlocked(obj: c_ptr) -> c_ptr:
                 global_addr("pcc_gc_relocation_barrier_forwards"), 0, count + 1
             )
             return target
+        # A malformed/cyclic chain must not escape as a partial prefix.
+        pcc_platform_abort()
+        return null()
     if pcc_gc_object_is_known_no_lock(obj) == 0:
         return obj
     flags: i64 = load_i32(obj, 12)
