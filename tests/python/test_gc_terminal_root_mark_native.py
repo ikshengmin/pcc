@@ -1,4 +1,4 @@
-"""Execute real terminal-root chain and helper code with exact synthetic indexes.
+"""Execute terminal-root marking and the actual GC3 zero-edge conservative scan.
 
 Consumes an explicitly source-admitted owned runtime. Host pcc0 owns C
 compilation/linking. Does not prove full relocation, bootstrap or throughput.
@@ -84,4 +84,5 @@ def test_owned_native_terminal_root_marking(terminal_root_binary, backend):
     )
     (binary.parent / f"gc{backend}.json").write_text(json.dumps(receipt, indent=2) + "\n")
     assert result.returncode == 0 and result.stderr == "", receipt
-    assert result.stdout == f"TERMINAL_ROOT_OK gc={backend} cases=24\n", receipt
+    scan_receipt = "ZERO_EDGE_SCAN_OK cases=4\n" if backend == 3 else ""
+    assert result.stdout == scan_receipt + f"TERMINAL_ROOT_OK gc={backend} cases=24\n", receipt
