@@ -74,9 +74,10 @@ CASES = (
      'int take(E x){return int(x);}int take(int x){return 1;}int cpp_test_entry(){return take(a::value);}'),
     ('nested-linkage-restoration', 'namespace n{extern "C"{int a=17;extern "C++"{int b=25;}}}'
      'int cpp_test_entry(){return n::a+n::b;}'),
-    ('internal-prior-linkage-is-not-overridden', 'namespace a{static int value=17;extern "C" int value;}'
-     'namespace b{extern "C" int value=25;}int cpp_test_entry(){return a::value+b::value;}'),
 )
+# Formerly a positive row; g++ 12.2 and clang++ 16 both reject this original.
+INTERNAL_PRIOR_LINKAGE = ('namespace a{static int value=17;extern "C" int value;}'
+                          'namespace b{extern "C" int value=25;}int cpp_test_entry(){return a::value+b::value;}')
 
 INVALID = (
     ('extern int value;extern "C" int value;', 'cpp.conflicting-language-linkage'),
@@ -103,6 +104,7 @@ INVALID = (
     ('namespace a{extern "C" int value;}namespace b{extern "C" int value;}namespace b{extern "C++" int value;}', 'cpp.conflicting-language-linkage'),
     ('namespace a{extern "C" int value;}namespace b{extern "C" int value;}namespace c{int value;}namespace b{using c::value;}', 'cpp.ambiguous-name'),
     ('extern "C" const int value=42;int f(){value=1;return 0;}', 'cpp.const-assignment'),
+    (INTERNAL_PRIOR_LINKAGE, 'cpp.conflicting-language-linkage'),
 )
 
 UNSUPPORTED = (
@@ -207,6 +209,12 @@ def test_c_linkage_external_object_public_pipeline_keeps_undefined_symbol(monkey
 @pytest.mark.parametrize('name,source', CASES, ids=[case[0] for case in CASES])
 def test_c_objects_execute_against_explicit_cpp17_reference(name, source, tmp_path, monkeypatch):
     execute_and_record(tmp_path, monkeypatch, ((name + '.cpp', source),), 42)
+
+
+@pytest.mark.integration
+def test_internal_prior_linkage_original_is_rejected_by_reference(tmp_path):
+    from tests.cpp.test_cpp_constructor_direct_list_execution import syntax_reference
+    assert syntax_reference(tmp_path, 'internal-prior-linkage', INTERNAL_PRIOR_LINKAGE).returncode != 0
 
 
 @pytest.mark.integration

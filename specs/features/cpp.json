@@ -779,7 +779,8 @@
       "scope": "Only inputs routed to cpp.unsupported.class-templates in the pinned frontend; this is an explicit capability boundary, not a claim that the entire corresponding specification feature is absent or implemented.",
       "status": "explicitly_unimplemented",
       "tests": [
-        "tests/cpp/test_cpp_initializers.py"
+        "tests/cpp/test_cpp_initializers.py",
+        "tests/cpp/test_cpp_template_id_static_calls.py"
       ],
       "diagnostics": [
         "cpp.unsupported.class-templates"

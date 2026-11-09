@@ -114,7 +114,10 @@ DEFERRED = (
     ('class-elements', 'struct S{int n;};void f(){static S a[]={{42}};}', GAP),
     ('string-initialization', 'void f(){static char a[]="x";}', GAP),
     ('brace-elision', 'void f(){static int a[][2]={1,2,3,4};}', 'cpp.unsupported.array-brace-elision'),
-    ('inline-function', 'inline int f(){static int a[]={42};return a[0];}', GAP),
+    # Namespace-scope inline functions stop at their own ODR boundary first;
+    # an in-class member body reaches the inline local-static gate.
+    ('inline-function', 'inline int f(){static int a[]={42};return a[0];}', 'cpp.unsupported.inline-declarations'),
+    ('inline-member-function', 'struct S{int f(){static int a[]={42};return a[0];}};', GAP),
     ('inline-constructor', 'struct S{S(){static int a[]={42};}};int f(){S s;return 42;}', GAP),
     ('template-function', 'template<class T>int f(T x){static int a[]={42};return a[0];}', GAP),
     ('switch-declaration', 'int f(int n){switch(n){case 1:static int a[]={42};case 2:return a[0];}return 0;}', GAP),

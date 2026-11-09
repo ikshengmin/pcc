@@ -2709,6 +2709,10 @@ class CppParser:
                 raise CppDiagnostic("cpp.unsupported.template-static-assert",
                                     "dependent static assertions require instantiation-time assertion checking", token.coord)
             self._unsupported(token)
+        if (symbol is not None and symbol.kind == "class-template" and self._peek().value == "<"
+                and self.template_function is None):
+            from pcc.frontends.cpp.template_id_members import member_expression
+            return member_expression(self, symbol, token.coord)
         if token.value in TYPE_WORDS or symbol is not None and symbol.kind in ("type", "template-type", "class-template"):
             dtype = canonical_type([token.value]) if token.value in TYPE_WORDS else symbol.dtype
             if isinstance(dtype, ReferenceType):

@@ -303,6 +303,12 @@
       }
     },
     "tests/cpp/test_cpp_c_object_linkage.py": {
+      "test_internal_prior_linkage_original_is_rejected_by_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses syntax_reference on the complete original and requires an actual C++17 compiler rejection."
+        ]
+      },
       "test_c_object_external_names_and_storage_have_an_independent_observer": {
         "activity": "external-reference",
         "reason": [
@@ -2637,6 +2643,26 @@
         "activity": "external-reference",
         "reason": [
           "Uses syntax_reference for unchanged valid sources outside this bounded virtual-function slice."
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_template_id_static_calls_execution.py": {
+      "test_template_id_static_calls_match_cpp17": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses execute_row_pair on unchanged full translation units, preserving owned artifacts and actual g++ process observations."
+        ]
+      },
+      "test_invalid_template_id_members_fail_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses syntax_reference on each complete invalid original and requires an actual C++17 compiler rejection."
+        ]
+      },
+      "test_deferred_template_id_members_remain_valid_cpp17": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses syntax_reference for unchanged valid sources outside this bounded template-id call slice."
         ]
       }
     },

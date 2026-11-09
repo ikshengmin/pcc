@@ -389,6 +389,11 @@ class Scope:
                     and symbol.requested_language_linkage != previous.language_linkage):
                 raise CppDiagnostic("cpp.conflicting-language-linkage",
                                     "object redeclared with different language linkage", symbol.coord)
+            if previous.internal_linkage and symbol.requested_language_linkage == "C":
+                # [dcl.link]/5; both C++17 references reject a C-linkage
+                # redeclaration of an internal-linkage (C++-linkage) object.
+                raise CppDiagnostic("cpp.conflicting-language-linkage",
+                                    "C-linkage redeclaration of an internal-linkage object", symbol.coord)
             if definition and previous.defined:
                 raise CppDiagnostic("cpp.redefinition", "object has more than one definition", symbol.coord)
             if definition:
