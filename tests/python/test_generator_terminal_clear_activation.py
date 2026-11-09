@@ -154,16 +154,16 @@ def test_frontend_terminal_groups_keep_scalar_remainder_and_current_owner(source
 _INDEX_MEMORY = '''
 target triple = "x86_64-unknown-linux-gnu"
 declare void @py_gen_frame_set(ptr, i64, ptr)
-define void @index_model(i64 %length, i64 %count) {
+define void @index_model(i64 %length, i64 %count, i1 %probe, i1 %admitted) {
 entry:
   %index.slot = alloca i64
   store i64 0, ptr %index.slot
   br label %group.test
 group.test:
   %index = load i64, ptr %index.slot
-  br i1 1, label %attempt, label %scalar.test
+  br i1 %probe, label %attempt, label %scalar.test
 attempt:
-  br i1 1, label %accepted, label %scalar.test
+  br i1 %admitted, label %accepted, label %scalar.test
 accepted:
   %group.next = add i64 %index, %count
   store i64 %group.next, ptr %index.slot
