@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.python.runtime_body_model import load_functions
+
 from pcc.frontends.python.codegen.freestanding_abi_constants import ABI_CONSTANTS
 from pcc.runtime.py import py_abi_constants as abi
 from tests.python.test_gc_forwarding_gray_retirement_model import RetirementState
@@ -209,22 +211,7 @@ class GC3(RetirementState):
         self.store('py_cpy_handle_release_fn', 0, self.foreign_releases.append)
 
     def load_bodies(self, filename, names=None):
-        path = PY / filename
-        selected, aliases = [], []
-        for node in ast.parse(path.read_text()).body:
-            if isinstance(node, ast.AnnAssign):
-                selected.append(node)
-            elif isinstance(node, ast.FunctionDef) and (names is None or node.name in names):
-                for decorator in node.decorator_list:
-                    if isinstance(decorator, ast.Call) and decorator.args and isinstance(decorator.args[0], ast.Constant):
-                        aliases.append((decorator.args[0].value, node.name))
-                node.decorator_list = []
-                selected.append(node)
-        if names is not None:
-            assert {n.name for n in selected if isinstance(n, ast.FunctionDef)} == set(names)
-        exec(compile(ast.Module(selected, type_ignores=[]), str(path), 'exec'), self.ns)
-        for exported, name in aliases:
-            self.ns[exported] = self.ns[name]
+        load_functions(PY / filename, names, self.ns)
 
     def load(self, address, offset=0):
         if isinstance(address, tuple):

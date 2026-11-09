@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.python.runtime_body_model import load_functions
+
 
 SOURCE = Path(__file__).resolve().parents[2] / (
     "pcc/runtime/py/freestanding_gc_tracing_sweep_collector.py"
@@ -77,22 +79,10 @@ class _SweepBoundary:
             "pcc_platform_monotonic_us": lambda: 100,
             "_record_sweep_phase": lambda *args: self.phase_observations.append(args),
         }
-        tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
-        names = {
+        load_functions(SOURCE, {
             "pcc_gc_tracing_recheck_reachability_after_finalizers",
             "pcc_gc_tracing_sweep_unreachable",
-            "_class_note_owned_slot", "_class_needs_clear", "_clear_class_layout_slot",
-        }
-        constants = [node for node in tree.body if isinstance(node, ast.AnnAssign)
-                     and isinstance(node.target, ast.Name)
-                     and node.target.id.startswith("_CLASS_CLEAR_")]
-        tree.body = [node for node in tree.body
-                     if isinstance(node, ast.FunctionDef) and node.name in names]
-        assert {node.name for node in tree.body} == names
-        for node in tree.body:
-            node.decorator_list = []
-        tree.body = constants + tree.body
-        exec(compile(tree, str(SOURCE), "exec"), namespace)
+        }, namespace)
         self.sweep = namespace["pcc_gc_tracing_sweep_unreachable"]
 
     def object(self, name, *, candidate=True, pinned=False, cext=False, is_class=False):

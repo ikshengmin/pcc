@@ -228,6 +228,9 @@ pcc_gc_scheduler_root_register_handle = extern(
 pcc_gc_scheduler_root_unregister_handle = extern(
     "pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void
 )
+pcc_gc_stack_slot_root_is_conservative = extern(
+    "pcc_gc_stack_slot_root_is_conservative", (c_ptr,), c_int64
+)
 pcc_gc_retain_plan_prepare_locked = extern(
     "pcc_gc_retain_plan_prepare_locked", (c_ptr, c_ptr), c_ptr
 )
@@ -2928,8 +2931,10 @@ def _instance_field_load(inst, offset: int, out) -> int:
         return -1
     result_handle = null()
     backend: int = pcc_gc_backend()
-    if backend == 3 or backend == 4:
-        # Register the empty result root before the transaction stores into it.
+    if (backend == 3 or backend == 4) and pcc_gc_stack_slot_root_is_conservative(out) == 0:
+        # Register the empty result root before the transaction stores into
+        # it. A count-free collector's conservative stack scan already roots
+        # a stack ``out`` and keeps its object in place.
         result_handle = pcc_gc_scheduler_root_register_handle(out)
         if ptr_is_null(result_handle) != 0:
             _instance_finish_moving_root(receiver_handle_slot)
@@ -2944,7 +2949,8 @@ def _instance_field_load(inst, offset: int, out) -> int:
     pcc_py_gc_minor_graph_unlock()
     pcc_gc_retain_plan_finish(retain_plan)
     if ptr_is_null(result_handle) != 0:
-        # GC0/1/2 cannot relocate the retained owner.
+        # GC0/1/2 cannot relocate the retained owner, and the count-free
+        # GC3/GC4 do not move what a stack ``out`` holds.
         _instance_finish_moving_root(receiver_handle_slot)
         return 0
     # Only the result root's teardown needs a short pin (py_list_get's finish).

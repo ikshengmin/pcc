@@ -20,6 +20,7 @@ from pcc.frontends.python.codegen.runtime_abi import (
     FREESTANDING_GC_I64_GLOBALS,
     FREESTANDING_GC_CROSS_OBJECT_SIGNATURES,
 )
+from tests.python.runtime_body_model import load_functions
 from tests.python.test_gc_phase_counter_widths import (
     ROOT, RUNTIME, SCHEDULER, _definitions, _function, _host_functions,
 )
@@ -38,10 +39,7 @@ RECORD = "pcc_gc_record_collection_stw_pause"
 
 
 def install(namespace, path, *names):
-    nodes = [_function(path, name) for name in names]
-    for node in nodes:
-        node.decorator_list = []
-    exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), "exec"), namespace)
+    load_functions(path, names, namespace)
 
 
 def counter_functions():

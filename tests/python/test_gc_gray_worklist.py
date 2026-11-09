@@ -26,6 +26,8 @@ import time
 
 import pytest
 
+from tests.python.runtime_body_model import gc_state_cells, load_functions
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "pcc/runtime/py/freestanding_gc_gray_worklist.py"
@@ -49,19 +51,12 @@ def _tree(path=SOURCE):
     return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
 
-def _install(namespace, path, names, *, constants=False):
+GC_STATE_CELLS = gc_state_cells()
+
+
+def _install(namespace, path, names):
     """Remove only export decorators; preserve every production statement."""
-    tree = _tree(path)
-    functions = [node for node in tree.body
-                 if isinstance(node, ast.FunctionDef) and node.name in names]
-    assert {node.name for node in functions} == names
-    for node in functions:
-        node.decorator_list = []
-    assignments = [node for node in tree.body if isinstance(node, ast.Assign)
-                   and all(isinstance(target, ast.Name)
-                           and target.id.startswith("_BATCH_") for target in node.targets)]
-    body = (assignments if constants else []) + functions
-    exec(compile(ast.Module(body=body, type_ignores=[]), str(path), "exec"), namespace)
+    load_functions(path, names, namespace)
 
 
 class _BatchMemory:
@@ -116,7 +111,7 @@ class _BatchMemory:
             "ptr_to_int": lambda value: value,
             "int_to_ptr": lambda value: value,
         }
-        _install(self.namespace, SOURCE, FUNCTIONS, constants=True)
+        _install(self.namespace, SOURCE, FUNCTIONS)
 
     @property
     def tid(self):
@@ -153,6 +148,11 @@ class _BatchMemory:
         return result
 
     def global_addr(self, name):
+        if name not in self.cells and name in GC_STATE_CELLS:
+            # A GC state global the model did not size starts at its declared
+            # width and value; any other unknown name still fails closed.
+            width, initial = GC_STATE_CELLS[name]
+            self.cells[name] = bytearray(initial.to_bytes(width, "little", signed=True))
         assert name in self.cells, ("unknown global", name)
         return name
 

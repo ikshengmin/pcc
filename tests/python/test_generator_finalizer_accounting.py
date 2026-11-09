@@ -10,22 +10,15 @@ import subprocess
 
 import pytest
 
+from tests.python.runtime_body_model import load_functions
+
 ROOT = Path(os.environ.get('PCC_FINALIZER_MODEL_SOURCE_ROOT',
                            str(Path(__file__).resolve().parents[2])))
 COUNTER = 'pcc_gc_user_finalizer_runs'
 
 
 def _bodies(name, functions, namespace):
-    path = ROOT / 'pcc/runtime/py' / name
-    tree = ast.parse(path.read_text())
-    nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef)
-             and node.name in functions]
-    assert {node.name for node in nodes} == set(functions)
-    for node in nodes:
-        node.decorator_list = []
-    tree = ast.Module(body=[ast.ImportFrom(module='__future__',
-        names=[ast.alias(name='annotations')], level=0), *nodes], type_ignores=[])
-    exec(compile(ast.fix_missing_locations(tree), str(path), 'exec'), namespace)
+    load_functions(ROOT / 'pcc/runtime/py' / name, functions, namespace)
 
 
 class Finalization:

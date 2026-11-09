@@ -318,7 +318,16 @@ def pcc_gc_step(budget: i64) -> i64:
                             processed = processed + moved
                         else:
                             processed = processed + selected
-                if processed < budget and _tracing_work_pending() != 0:
+                # The gate's automatic step (pcc_gc_in_auto_step) leaves the
+                # mark to its gate, which runs or finishes it and sweeps it
+                # in one stopped world (_gc4_maybe_auto_step): a mark
+                # finished in this stop was swept at a later one, after a
+                # whole-heap re-mark. Other callers keep marking here.
+                if (
+                    processed < budget
+                    and load_i32(global_addr("pcc_gc_in_auto_step"), 0) == 0
+                    and _tracing_work_pending() != 0
+                ):
                     stw: i64 = pcc_stop_the_world()
                     # A call ends at each phase boundary (root seeding,
                     # extension roots, one pass over the object list).

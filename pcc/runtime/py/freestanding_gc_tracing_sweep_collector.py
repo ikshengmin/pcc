@@ -4,13 +4,18 @@ from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     abi_constant,
+    atomic_load_i32,
     atomic_rmw_i64,
+    atomic_store_i32,
+    free,
     global_addr,
     global_load_ptr,
+    global_store_ptr,
     is_tagged_int,
     load_i32,
     load_i64,
     load_ptr,
+    malloc,
     null,
     ptr_is_null,
     stack_alloc,
@@ -291,6 +296,126 @@ def _clear_class_layout_slot(slot, role: i64, context) -> None:
         store_ptr(slot, 0, null())
 
 
+@c_abi_export("pcc_gc_concurrent_sweep_eligible")
+def _concurrent_sweep_eligible(tag: i64) -> i64:
+    """1 for a kind whose destruction frees only its own storage.
+
+    Scalars, plain containers, functions, iterators and instances qualify:
+    PASS1 cleared their slots, PASS0 ran their finalizers, and an instance
+    reads only its class layout (classes retire last, in a stopped world).
+    Classes, weakrefs, generators and coroutines, tasks and threads, files,
+    exceptions, C-API handles and C-extension objects keep the stopped
+    sweep: their teardown touches shared structures or foreign code.
+    """
+    if (
+        tag == abi_constant("object.type.int")
+        or tag == abi_constant("object.type.float")
+        or tag == abi_constant("object.type.str")
+        or tag == abi_constant("object.type.bytes")
+        or tag == abi_constant("object.type.list")
+        or tag == abi_constant("object.type.tuple")
+        or tag == abi_constant("object.type.dict")
+        or tag == abi_constant("object.type.set")
+        or tag == abi_constant("object.type.func")
+        or tag == abi_constant("object.type.iter")
+        or tag == abi_constant("object.type.instance")
+        or tag == abi_constant("object.type.valuebox")
+    ):
+        return 1
+    if tag >= abi_constant("object.type.user_class_start"):
+        if pcc_capi_is_cext_type_tag(tag) == 0:
+            return 1
+    return 0
+
+
+@c_abi_export("pcc_gc_concurrent_sweep_admitted")
+def _concurrent_sweep_admitted(count_free: i64) -> i64:
+    """1 when this sweep may leave eligible candidates to the collector
+    thread: a count-free nonmoving collector (GC1/GC2), an automatic
+    collection (pcc_gc_concurrent_sweep_allowed) and a running thread."""
+    if count_free == 0:
+        return 0
+    backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+    if backend != 1 and backend != 2:
+        return 0
+    if load_i32(global_addr("pcc_gc_concurrent_sweep_allowed"), 0) == 0:
+        return 0
+    if atomic_load_i32(global_addr("pcc_gc_cms_worker_started"), 0, "acquire") != 1:
+        return 0
+    return 1
+
+
+@c_abi_export("pcc_gc_concurrent_sweep_slice")
+def pcc_gc_concurrent_sweep_slice(budget: i64) -> i64:
+    """Free up to budget deferred objects; returns the number freed.
+
+    Runs on the collector thread, concurrently with mutators. The stopped
+    sweep recorded each deferred object in an array: no walk over the live
+    heap, and no unreachable object can gain a reference, a pin or a mark
+    meanwhile (no mark begins before this sweep is done). Destruction runs
+    under the graph lock, in batches: the object's own unlink, index and
+    allocator transactions then nest in one acquisition instead of taking it
+    again from mutators for each object, and nothing parks half-destroyed
+    for a stopped collection to see. Between batches this thread may park
+    and a stopped collection may finish the sweep
+    (pcc_gc_concurrent_sweep_finish_stopped): each entry is claimed and
+    loaded under the lock, and the loop stops once the sweep is over.
+    """
+    if atomic_load_i32(global_addr("pcc_gc_concurrent_sweep_state"), 0, "acquire") == 0:
+        return 0
+    freed: i64 = 0
+    pcc_py_gc_minor_graph_lock()
+    while freed < budget and load_i32(global_addr("pcc_gc_concurrent_sweep_state"), 0) != 0:
+        next_index: i64 = load_i64(global_addr("pcc_gc_concurrent_sweep_next"), 0)
+        if next_index >= load_i64(global_addr("pcc_gc_concurrent_sweep_count"), 0):
+            _concurrent_sweep_finish_locked()
+        else:
+            store_i64(global_addr("pcc_gc_concurrent_sweep_next"), 0, next_index + 1)
+            objects = global_load_ptr("pcc_gc_concurrent_sweep_objects")
+            pcc_gc_tracing_finalize_unpinned(load_ptr(objects, next_index * 8))
+            freed = freed + 1
+            if (freed & 31) == 0:
+                # Let waiting mutators allocate between batches.
+                pcc_py_gc_minor_graph_unlock()
+                pcc_py_gc_minor_graph_lock()
+    pcc_py_gc_minor_graph_unlock()
+    atomic_rmw_i64("add", global_addr("pcc_gc_concurrent_sweep_freed"), 0, freed, "relaxed")
+    return freed
+
+
+@c_abi_export("pcc_gc_concurrent_sweep_finish_locked")
+def _concurrent_sweep_finish_locked() -> None:
+    """Every deferred object is freed: retire the array and, when the sweep
+    kept classes (they retire after all their instances), request the
+    stopped sweep that retires them. The caller holds the graph lock."""
+    objects = global_load_ptr("pcc_gc_concurrent_sweep_objects")
+    global_store_ptr("pcc_gc_concurrent_sweep_objects", null())
+    store_i64(global_addr("pcc_gc_concurrent_sweep_count"), 0, 0)
+    store_i64(global_addr("pcc_gc_concurrent_sweep_next"), 0, 0)
+    atomic_store_i32(global_addr("pcc_gc_concurrent_sweep_state"), 0, 0, "release")
+    if load_i64(global_addr("pcc_gc_concurrent_sweep_remaining"), 0) != 0:
+        atomic_store_i32(global_addr("pcc_gc_cms_sweep_pending"), 0, 1, "release")
+        atomic_store_i32(global_addr("pcc_gc_backend4_auto_step_pending"), 0, 1, "release")
+    else:
+        # The sweep left no other candidate: none is left now.
+        store_i64(
+            global_addr("pcc_gc_tracing_no_candidate_commit"),
+            0,
+            load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0),
+        )
+    free(objects)
+
+
+@c_abi_export("pcc_gc_concurrent_sweep_finish_stopped")
+def pcc_gc_concurrent_sweep_finish_stopped() -> i64:
+    """Free every remaining deferred candidate now. A stopped collection
+    calls this before its own mark or sweep reads candidate flags."""
+    freed: i64 = 0
+    while atomic_load_i32(global_addr("pcc_gc_concurrent_sweep_state"), 0, "acquire") != 0:
+        freed = freed + pcc_gc_concurrent_sweep_slice(4096)
+    return freed
+
+
 @c_abi_export("pcc_gc_tracing_sweep_unreachable")
 def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
     if budget <= 0:
@@ -381,12 +506,30 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
                     cleared_nonclasses = cleared_nonclasses + 1
                 cleared = cleared + 1
         node = nxt
+    # Only a sweep that cleared every candidate may leave candidates to the
+    # collector thread: an uncleared one still owns its referents.
+    pass1_complete: i64 = 1 if ptr_is_null(node) != 0 else 0
     _record_sweep_phase(2, started, pcc_platform_monotonic_us(), visited, cleared)
 
-    # PASS 2: finalize the same number of still-candidate objects.
+    # PASS 2: finalize the same number of still-candidate objects. An
+    # automatic GC1/GC2 sweep leaves plain dead objects to the collector
+    # thread (pcc_gc_concurrent_sweep_slice): after PASS0/recheck and PASS1
+    # nothing can reach them and their destruction touches only themselves.
     started = pcc_platform_monotonic_us()
     visited = 0
     reclaimed: i64 = 0
+    defer_concurrent: i64 = 0
+    deferred_objects = null()
+    if pass1_complete != 0 and cleared_nonclasses > 0:
+        defer_concurrent = _concurrent_sweep_admitted(count_free)
+        if defer_concurrent != 0:
+            # PASS2 frees at most the objects PASS1 cleared; without the
+            # array every object is destroyed here, as before.
+            deferred_objects = malloc(cleared_nonclasses * 8)
+            if ptr_is_null(deferred_objects) != 0:
+                defer_concurrent = 0
+    deferred: i64 = 0
+    classes_kept: i64 = 0
     node = global_load_ptr("pcc_gc_object_head")
     while ptr_is_null(node) == 0:
         visited = visited + 1
@@ -411,15 +554,33 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
                     # Legacy counted collectors still release metadata with
                     # the last owning instance/subclass reference.
                     store_i32(obj, 12, flags & ~1024)
+                else:
+                    classes_kept = classes_kept + 1
             elif reclaimed < (cleared_nonclasses if count_free != 0 else cleared):
-                deferred_scalar: i64 = 0
-                selected: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-                if selected == 1 or selected == 2:
-                    deferred_scalar = pcc_gc_scalar_sweep_try_enqueue(obj, node)
-                if deferred_scalar == 0:
-                    pcc_gc_tracing_finalize_unpinned(obj)
+                if defer_concurrent != 0 and _concurrent_sweep_eligible(load_i32(obj, 8)) != 0:
+                    store_ptr(deferred_objects, deferred * 8, obj)
+                    deferred = deferred + 1
+                else:
+                    deferred_scalar: i64 = 0
+                    selected: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+                    if selected == 1 or selected == 2:
+                        deferred_scalar = pcc_gc_scalar_sweep_try_enqueue(obj, node)
+                    if deferred_scalar == 0:
+                        pcc_gc_tracing_finalize_unpinned(obj)
                 reclaimed = reclaimed + 1
         node = nxt
+    if deferred != 0:
+        # Publish after the walk. The kept classes stay candidates until the
+        # collector thread has freed every deferred instance.
+        pcc_py_gc_minor_graph_lock()
+        global_store_ptr("pcc_gc_concurrent_sweep_objects", deferred_objects)
+        store_i64(global_addr("pcc_gc_concurrent_sweep_count"), 0, deferred)
+        store_i64(global_addr("pcc_gc_concurrent_sweep_next"), 0, 0)
+        store_i64(global_addr("pcc_gc_concurrent_sweep_remaining"), 0, classes_kept)
+        atomic_store_i32(global_addr("pcc_gc_concurrent_sweep_state"), 0, 1, "release")
+        pcc_py_gc_minor_graph_unlock()
+    elif ptr_is_null(deferred_objects) == 0:
+        free(deferred_objects)
 
     if count_free != 0 and reclaimed < budget:
         # Keep layout metadata until EVERY pending ordinary object has been

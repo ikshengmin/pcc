@@ -85,6 +85,8 @@ RAW_FUNCTION_IMPORTS = RAW_ONLY_CROSS_OBJECT_SYMBOLS | {
     "pcc_gc_granule_is_object_start", "pcc_gc_managed_pointer_index_contains",
     "pcc_gc_managed_pointer_index_seen",
     "pcc_gc_granule_span",
+    # A count-free collector's stack scan already holds a stack slot's lease.
+    "pcc_gc_stack_slot_root_is_conservative",
 }
 RAW_GLOBAL_IMPORTS = {
     # Moving collectors read listed nodes directly only without edges.

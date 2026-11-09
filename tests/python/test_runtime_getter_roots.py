@@ -45,9 +45,18 @@ class _FieldWord:
         return mask & 1 if isinstance(self.value, int) else 0
 
 
+_STACK_HANDLE = object()
+
+
 class _GetterMemory:
-    def __init__(self, backend=4, phase="unregister", prior_pin=False, fail_register=0):
+    def __init__(self, backend=4, phase="unregister", prior_pin=False, fail_register=0,
+                 count_free=False):
         self.backend, self.phase, self.fail_register = backend, phase, fail_register
+        # Count-free collectors scan every stack conservatively and move only
+        # while all other mutators wait at application gates; a getter's own
+        # parks are never gates. Counted GC3/GC4 relocate at these parks.
+        self.count_free = count_free
+        self.stack_slots = []
         self.objects, self.payloads, self.handles, self.forward = [], [], {}, {}
         self.depth = self.moves = self.pins = self.registrations = 0
         self.no_park_depth = 0
@@ -70,6 +79,7 @@ class _GetterMemory:
         self.namespace["_prepare_moving_root"] = self.namespace["pcc_list_native_prepare_root"]
         self.global_cell("pcc_gc_config_initialized").fields[0] = 1
         self.global_cell("pcc_gc_backend_selected").fields[0] = backend
+        self.global_cell("pcc_gc_backend4_no_refcounts").fields[0] = int(count_free)
 
     def load(self, relative):
         # Functions plus the module's constant assignments they read (for
@@ -126,6 +136,9 @@ class _GetterMemory:
 
     def gc(self, phase):
         if self.depth or self.no_park_depth or phase != self.phase or self.backend not in (3, 4):
+            return
+        if self.count_free:
+            # No relocation while this mutator is parked outside a gate.
             return
         for old in list(self.objects):
             if not old.alive or old.flags & (abi.PY_FLAG_IMMORTAL | abi.PY_FLAG_GC_PINNED):
@@ -193,11 +206,25 @@ class _GetterMemory:
         self.gc("read_barrier")
         return self.read(*self.pointer(slot))
 
+    def stack_alloc(self, size):
+        slots = _Slots(size)
+        self.stack_slots.append(slots)
+        return slots
+
+    def stack_root_is_conservative(self, slot):
+        # pcc_gc_stack_slot_root_is_conservative: a count-free collector's
+        # stack scan already roots a slot in this thread's stack.
+        owner, _offset = self.pointer(slot)
+        return int(self.count_free and any(owner is frame for frame in self.stack_slots))
+
     def zero(self, slots, value, size):
         for offset in range(0, size, 8):
             self.write(slots, offset, value)
 
     def register(self, slot):
+        if self.stack_root_is_conservative(slot):
+            # The registry's conservative stack handle: nothing is linked.
+            return _STACK_HANDLE
         self.registrations += 1
         if self.registrations == self.fail_register:
             return None
@@ -206,6 +233,8 @@ class _GetterMemory:
         return handle
 
     def unregister(self, handle):
+        if handle is _STACK_HANDLE:
+            return
         # Registry lock acquisition can park before unlinking the root.
         self.gc("unregister")
         del self.handles[handle]
@@ -263,7 +292,8 @@ class _GetterMemory:
             "ptr_is_null": lambda value: value is None,
             "is_tagged_int": lambda value: isinstance(value, int),
             "ptr_eq": lambda first, second: first is second,
-            "ptr_add": self.add, "stack_alloc": _Slots, "memset": self.zero,
+            "ptr_add": self.add, "stack_alloc": self.stack_alloc, "memset": self.zero,
+            "pcc_gc_stack_slot_root_is_conservative": self.stack_root_is_conservative,
             "pcc_thread_no_park_enter": self.no_park_enter,
             "pcc_thread_no_park_exit": self.no_park_exit,
             "pcc_gc_native_frame_enter": self.native_enter,
@@ -307,6 +337,20 @@ def test_list_getter_returns_current_owned_element_after_actual_cleanup_park(nam
     assert memory.moves > 0
     assert not memory.native_frames and not memory.native_ranges
     assert not memory.handles and memory.depth == 0 and memory.pins == 0
+
+
+@pytest.mark.parametrize("name", ("py_list_get", "py_list_getitem", "py_list_get_for_frame"))
+@pytest.mark.parametrize("backend", (3, 4))
+@pytest.mark.parametrize("phase", ("graph_unlock", "retain_finish", "no_park_exit", "read_barrier"))
+def test_count_free_list_getter_leaves_stack_slots_to_the_conservative_scan(name, backend, phase):
+    memory = _GetterMemory(backend=backend, phase=phase, count_free=True)
+    result = memory.namespace[name](memory.lst, 0)
+    assert result is memory.item and result.alive
+    # No result binding or pin: the stack slot's object stays in place.
+    assert memory.pins == 0 and not (memory.item.flags & abi.PY_FLAG_GC_PINNED)
+    assert memory.registrations == 0 and not memory.moves
+    assert not memory.native_ranges and not memory.handles
+    assert memory.depth == 0
 
 
 @pytest.mark.parametrize("backend", (0, 1, 2))
@@ -363,8 +407,8 @@ def test_list_getter_out_of_range_balances_roots_and_keeps_raising_contract(name
 
 
 class _FieldMemory(_GetterMemory):
-    def __init__(self, backend=4, stale_receiver=False):
-        super().__init__(backend=backend, phase="before_call")
+    def __init__(self, backend=4, stale_receiver=False, count_free=False):
+        super().__init__(backend=backend, phase="before_call", count_free=count_free)
         self.klass = self.make(abi.PY_TYPE_CLASS, abi.PY_FLAG_IMMORTAL)
         self.klass.fields[abi.PYCLASSOBJECT_N_FIELDS_OFFSET] = 1
         self.record = self.make(abi.PY_TYPE_USER_CLASS_START)
@@ -390,6 +434,22 @@ def test_instance_field_getter_uses_healed_receiver_before_deriving_field_slot(b
     assert result is memory.item and result.alive
     assert result.references == 2
     assert not memory.handles and memory.depth == 0 and memory.pins == 0
+
+
+@pytest.mark.parametrize("backend", (3, 4))
+@pytest.mark.parametrize("name", ("py_instance_get_field", "py_valuebox_get_field"))
+def test_count_free_instance_field_getter_reads_in_one_transaction(backend, name):
+    memory = _FieldMemory(backend=backend, count_free=True)
+    locks = []
+    lock = memory.namespace["pcc_py_gc_minor_graph_lock"]
+    memory.namespace["pcc_py_gc_minor_graph_lock"] = lambda: (locks.append(1), lock())
+    result = memory.namespace[name](memory.record, 0)
+    assert result is memory.item and result.alive
+    # The receiver and result live in stack slots the conservative scan
+    # roots: no registration, result root or teardown pin, one transaction.
+    assert len(locks) == 1
+    assert memory.registrations == 0 and memory.pins == 0 and not memory.moves
+    assert not memory.handles and memory.depth == 0
 
 
 @pytest.mark.parametrize("backend", (0, 1, 2))

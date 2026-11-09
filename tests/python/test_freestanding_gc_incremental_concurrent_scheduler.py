@@ -96,6 +96,8 @@ RAW_FUNCTION_IMPORTS = {
     "py_incref",
 }
 RAW_GLOBAL_IMPORTS = {
+    # No mark begins while a finished mark's deferred frees remain.
+    "pcc_gc_concurrent_sweep_state",
     "pcc_gc_gray_worklist_flush_requested",
     "pcc_gc_gray_worklist_fallback_required",
     "pcc_gc_nonmoving_count_free",

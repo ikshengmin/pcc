@@ -147,6 +147,9 @@ pcc_gc_native_root_bind_range = extern(
 pcc_gc_native_root_unbind = extern(
     "pcc_gc_native_root_unbind", (c_ptr,), c_void
 )
+pcc_gc_stack_slot_root_is_conservative = extern(
+    "pcc_gc_stack_slot_root_is_conservative", (c_ptr,), c_int64
+)
 pcc_py_gc_minor_graph_lock = extern(
     "pcc_py_gc_minor_graph_lock", (), c_void
 )
@@ -1072,14 +1075,14 @@ def _list_get_owned_rooted(lst, i: int, raising: int):
     store_ptr(result_slot, 0, null())
     result_handle = null()
     backend: int = pcc_gc_backend()
-    if backend == 3 or backend == 4:
+    if (backend == 3 or backend == 4) and pcc_gc_stack_slot_root_is_conservative(result_slot) == 0:
         # The relocating collectors bind an empty owning slot before reading
         # the NEW element, so it cannot move before the caller roots it.
         # Binding cannot park; the first object store happens under the
-        # graph lease. The nonmoving count-free GC1/GC2 need no binding or
-        # pin: every final remark rescans each thread's registers and stack
-        # conservatively in the stopped world, which finds the returned
-        # value wherever it is held.
+        # graph lease. The count-free collectors need no binding or pin:
+        # every stopped-world seed and remark scans each thread's stack
+        # conservatively, which finds the returned value wherever it is held
+        # and keeps it in place (pcc_gc_stack_slot_root_is_conservative).
         result_handle = pcc_gc_native_root_bind_range(result_slot, 1)
         if ptr_is_null(result_handle) != 0:
             _finish_moving_root(list_handle_slot)
@@ -1111,13 +1114,22 @@ def _list_get_owned_rooted(lst, i: int, raising: int):
     _list_unlock(locked)
     pcc_gc_retain_plan_finish(retain_plan)
     if ptr_is_null(result_handle) != 0:
-        # GC0/1/2 cannot relocate; return the retained owner directly.
+        # GC0/1/2 cannot relocate, and the count-free GC3/GC4 do not move
+        # what this stack slot holds: return the retained owner directly.
         _finish_moving_root(list_handle_slot)
         return v
     return _list_get_finish(result_slot, result_handle, list_handle_slot)
 
 
 def _list_get_finish(result_slot, result_handle, list_handle_slot):
+    if pcc_gc_stack_slot_root_is_conservative(result_slot) != 0:
+        # The count-free collectors' conservative stack scan roots the result
+        # here and keeps it in place: tear the bound range down unpinned.
+        pcc_gc_native_root_unbind(result_handle)
+        _finish_moving_root(list_handle_slot)
+        taken = load_ptr(result_slot, 0)
+        store_ptr(result_slot, 0, null())
+        return taken
     # Keep the result movable during normal work. Only the final root teardown
     # needs a short pin, acquired while its address is protected by the lease.
     pcc_py_gc_minor_graph_lock()

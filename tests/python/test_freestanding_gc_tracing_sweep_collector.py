@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.python.runtime_body_model import load_functions
+
 from pcc.frontends.python import pipeline
 from pcc.frontends.python.codegen.runtime_abi import FREESTANDING_GC_RUNTIME_GLOBALS
 
@@ -20,6 +22,12 @@ MANAGED_SOURCE = RUNTIME_DIR / "py" / "py_gc_backend.py"
 MAKEFILE = RUNTIME_DIR / "Makefile"
 
 OWNED_SYMBOLS = {
+    # Automatic GC1/GC2 sweeps defer plain dead objects to the collector thread.
+    "pcc_gc_concurrent_sweep_eligible",
+    "pcc_gc_concurrent_sweep_admitted",
+    "pcc_gc_concurrent_sweep_slice",
+    "pcc_gc_concurrent_sweep_finish_stopped",
+    "pcc_gc_concurrent_sweep_finish_locked",
     "pcc_gc_record_sweep_phase",
     "pcc_gc_tracing_class_note_owned_slot",
     "pcc_gc_tracing_class_needs_clear",
@@ -51,11 +59,25 @@ RAW_FUNCTION_IMPORTS = {
     'pcc_py_gc_minor_graph_unlock',
     'pcc_refcount_forget',
     'pcc_thread_world_stop_epoch_held',
+    # The array a deferring sweep records its objects in.
+    'malloc',
+    'free',
     'py_gc_untrack',
     'py_user_del_dispatch',
     'py_weakref_invalidate_tracing_candidates',
 }
 RAW_GLOBAL_IMPORTS = {
+    # Deferred-sweep state; a finished deferral with classes left requests a stop.
+    "pcc_gc_concurrent_sweep_allowed",
+    "pcc_gc_concurrent_sweep_state",
+    "pcc_gc_concurrent_sweep_objects",
+    "pcc_gc_concurrent_sweep_count",
+    "pcc_gc_concurrent_sweep_next",
+    "pcc_gc_concurrent_sweep_remaining",
+    "pcc_gc_concurrent_sweep_freed",
+    "pcc_gc_cms_worker_started",
+    "pcc_gc_cms_sweep_pending",
+    "pcc_gc_backend4_auto_step_pending",
     "pcc_gc_metric_sweep_candidate_calls",
     "pcc_gc_metric_sweep_candidate_nodes",
     "pcc_gc_metric_sweep_candidate_work",
@@ -285,6 +307,7 @@ class _CandidateModel:
             "store_i64": lambda name, offset, value: model.words.__setitem__(name, value),
             "load_ptr": load_ptr,
             "load_i32": load_i32,
+            "null": lambda: None,
             "ptr_is_null": lambda value: 1 if value is None else 0,
             "pcc_gc_object_node_is_active": is_active,
             "pcc_py_gc_minor_graph_lock": lock,
@@ -295,15 +318,9 @@ class _CandidateModel:
 
 
 def _has_sweep_candidate(model):
-    tree = ast.parse(STRICT_SOURCE.read_text(encoding="utf-8"))
-    function = next(
-        node for node in tree.body
-        if isinstance(node, ast.FunctionDef)
-        and node.name == "pcc_gc_tracing_has_sweep_candidate"
+    namespace = load_functions(
+        STRICT_SOURCE, {"pcc_gc_tracing_has_sweep_candidate"}, model.environment()
     )
-    function.decorator_list = []
-    namespace = model.environment()
-    exec(compile(ast.Module(body=[function], type_ignores=[]), str(STRICT_SOURCE), "exec"), namespace)
     return namespace["pcc_gc_tracing_has_sweep_candidate"]
 
 
@@ -417,15 +434,9 @@ class _SweepModel(_CandidateModel):
 
 
 def _sweep(model):
-    tree = ast.parse(STRICT_SOURCE.read_text(encoding="utf-8"))
-    function = next(
-        node for node in tree.body
-        if isinstance(node, ast.FunctionDef)
-        and node.name == "pcc_gc_tracing_sweep_unreachable"
+    namespace = load_functions(
+        STRICT_SOURCE, {"pcc_gc_tracing_sweep_unreachable"}, model.environment()
     )
-    function.decorator_list = []
-    namespace = model.environment()
-    exec(compile(ast.Module(body=[function], type_ignores=[]), str(STRICT_SOURCE), "exec"), namespace)
     return namespace["pcc_gc_tracing_sweep_unreachable"]
 
 

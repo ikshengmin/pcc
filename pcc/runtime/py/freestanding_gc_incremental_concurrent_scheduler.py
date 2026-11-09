@@ -793,6 +793,11 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
         if requested == 0:
             pcc_py_gc_minor_graph_unlock()
             return local_processed
+        # A new mark resets candidate flags: never begin one while the
+        # collector thread still frees a finished mark's deferred candidates.
+        if load_i32(global_addr("pcc_gc_concurrent_sweep_state"), 0) != 0:
+            pcc_py_gc_minor_graph_unlock()
+            return local_processed
         if (
             load_i64(
                 global_addr("pcc_gc_tracing_finish_claim_epoch"), 0

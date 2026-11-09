@@ -205,6 +205,31 @@ def test_move_reloads_after_contended_lock_before_publishing():
     assert model.load(source, 0) == 0 and model.load(destination, 0) == 2000
 
 
+@pytest.mark.parametrize("backend", (1, 2, 3, 4))
+@pytest.mark.parametrize("both", (True, False))
+def test_count_free_stack_roots_move_with_two_plain_stores(backend, both):
+    # Both roots in this thread's stack: a count-free collector's conservative
+    # scan names the value in either and finds it at every stopped-world
+    # remark, so the move needs no transaction or barrier. One root outside
+    # the stack keeps the transaction.
+    model = HandoffModel(backend)
+    source, destination = model.object(), model.empty()
+    model.ns["pcc_gc_stack_slot_root_is_conservative"] = (
+        lambda slot: int(both or slot == source)
+    )
+    locks = []
+    model.on_lock = lambda: locks.append(True)
+    before = dict(model.references)
+    assert model.move(destination, source) == 0
+    assert model.load(source, 0) == 0 and model.load(destination, 0) == 1000
+    assert model.references == before
+    barriers = [event for event in model.events if event[0] == "barrier"]
+    if both:
+        assert not locks and not barriers
+    else:
+        assert locks and barriers == [("barrier", destination, 1000)]
+
+
 @pytest.mark.parametrize("value", [0, 7])
 def test_empty_and_tagged_source_need_no_counted_lease(value):
     model = HandoffModel()

@@ -394,6 +394,18 @@ define_global_i64("pcc_gc_tracing_finish_commits", 0)
 define_global_i64("pcc_gc_tracing_no_candidate_commit", -1)
 # The finish commit at which GC4 last selected relocation pages; -1: none.
 define_global_i64("pcc_gc_backend4_selection_commit", -1)
+# GC1/GC2 automatic collections leave proven-dead plain objects to the
+# collector thread: allowed while such a sweep runs its stopped world, state
+# 1 while deferred objects remain, the array the sweep recorded them in, its
+# length and the next entry to free, the classes it kept (retired later in a
+# stop) and the objects the thread freed.
+define_global_i32("pcc_gc_concurrent_sweep_allowed", 0)
+define_global_i32("pcc_gc_concurrent_sweep_state", 0)
+define_global_ptr_null("pcc_gc_concurrent_sweep_objects")
+define_global_i64("pcc_gc_concurrent_sweep_count", 0)
+define_global_i64("pcc_gc_concurrent_sweep_next", 0)
+define_global_i64("pcc_gc_concurrent_sweep_remaining", 0)
+define_global_i64("pcc_gc_concurrent_sweep_freed", 0)
 # The stopped-world epoch the last mark finished in (-1: the world ran).
 define_global_i64("pcc_gc_tracing_finish_stop_epoch", -1)
 # Finalizers (__del__, generator close) that ran user code; a sweep

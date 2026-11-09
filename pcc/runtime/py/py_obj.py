@@ -156,6 +156,7 @@ py_clear_exception = extern("py_clear_exception", (), c_void)
 py_weakref_invalidate = extern("py_weakref_invalidate", (c_ptr,), c_void)
 pcc_gc_note_alloc = extern("pcc_gc_note_alloc", (c_int64,), c_void)
 pcc_gc_backend4_maybe_auto_step = extern("pcc_gc_backend4_maybe_auto_step", (), c_void)
+pcc_gc_tracing_debt_threshold = extern("pcc_gc_tracing_debt_threshold", (), c_int64)
 pcc_thread_no_park_depth = extern("pcc_thread_no_park_depth", (), c_int64)
 pcc_thread_no_park_enter = extern("pcc_thread_no_park_enter", (), c_void)
 pcc_thread_no_park_exit = extern("pcc_thread_no_park_exit", (), c_void)
@@ -212,6 +213,9 @@ pcc_gc_shade_gray_atomic = extern(
 pcc_gc_note_safepoint = extern("pcc_gc_note_safepoint", (), c_void)
 pcc_gc_step = extern("pcc_gc_step", (c_int64,), c_int64)
 pcc_gc_tracing_step_cycle = extern("pcc_gc_tracing_step_cycle", (c_int64,), c_int64)
+pcc_gc_concurrent_sweep_finish_stopped = extern(
+    "pcc_gc_concurrent_sweep_finish_stopped", (), c_int64
+)
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
 pcc_gc_note_frame_enter = extern(
     "pcc_gc_note_frame_enter",
@@ -239,6 +243,9 @@ pcc_gc_note_write_barrier = extern(
     "pcc_gc_note_write_barrier",
     (c_ptr, c_ptr),
     c_void,
+)
+pcc_gc_stack_slot_root_is_conservative = extern(
+    "pcc_gc_stack_slot_root_is_conservative", (c_ptr,), c_int64
 )
 pcc_gc_note_slot_write_barrier = extern(
     "pcc_gc_note_slot_write_barrier",
@@ -1458,6 +1465,20 @@ def pcc_gc_root_move(destination, source) -> int:
         store_ptr(destination, 0, load_ptr(source, 0))
         store_ptr(source, 0, null())
         return 0
+    if (
+        load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
+        and pcc_gc_stack_slot_root_is_conservative(source) != 0
+        and pcc_gc_stack_slot_root_is_conservative(destination) != 0
+    ):
+        # Both roots lie in this thread's stack: a count-free collector's
+        # conservative scan names the value in either, keeps it in place and,
+        # at every stopped-world remark, finds it wherever it moved. Two
+        # plain stores, as on GC0.
+        if ptr_is_null(load_ptr(destination, 0)) == 0:
+            return -4
+        store_ptr(destination, 0, load_ptr(source, 0))
+        store_ptr(source, 0, null())
+        return 0
     _gc_backend_fast()
     pcc_py_gc_minor_graph_lock()
     if ptr_is_null(load_ptr(destination, 0)) == 0:
@@ -1813,6 +1834,9 @@ def _gc_tracing_automatic_collect(mark: int) -> int:
     deferred_free: int = pcc_gc_deferred_free_begin(prior_world_held)
     pcc_gc_reclaim_retired_index_tables()
     pcc_gc_begin_explicit_tracing_collect()
+    # Finish the collector thread's deferred frees before any mark step or
+    # sweep reads candidate flags again.
+    pcc_gc_concurrent_sweep_finish_stopped()
     collected: int = 0
     idle_rounds: int = 0
     # One mark: the one in progress, or a new one. A mark finished in this
@@ -1834,7 +1858,11 @@ def _gc_tracing_automatic_collect(mark: int) -> int:
         else:
             idle_rounds = idle_rounds + 1
     if pcc_gc_sweep_owed() != 0:
+        # An automatic GC1/GC2 sweep may leave plain dead objects to the
+        # collector thread (pcc_gc_concurrent_sweep_slice).
+        store_i32(global_addr("pcc_gc_concurrent_sweep_allowed"), 0, 1)
         collected = pcc_gc_collect_tracing()
+        store_i32(global_addr("pcc_gc_concurrent_sweep_allowed"), 0, 0)
     pcc_gc_end_explicit_tracing_collect()
     if deferred_free != 0:
         pcc_gc_scalar_sweep_seal()
@@ -1924,6 +1952,21 @@ def _gc4_maybe_auto_step() -> None:
             _gc_tracing_automatic_collect(2)
             return
     pcc_gc_backend4_maybe_auto_step()
+    if pcc_thread_no_park_depth() == 0 and pcc_py_gc_minor_graph_lock_depth() == 0:
+        # The step leaves a due mark to this gate (pcc_gc_step): run or
+        # finish it and sweep it in one stopped world, the gc callbacks
+        # outside it. A mark finished in the step's own stop was swept at a
+        # later one, after re-marking the whole heap from every survivor.
+        if (
+            atomic_load_i64(global_addr("pcc_gc_debt_bytes"), 0, "acquire")
+            >= pcc_gc_tracing_debt_threshold()
+            and (
+                load_i32(global_addr("pcc_gc_mark_active"), 0) != 0
+                or load_i32(global_addr("pcc_gc_cycle_requested"), 0) != 0
+            )
+        ):
+            _gc_tracing_automatic_collect(2)
+            return
     # The background marker may have finished before this gate was entered.
     # Its completed sweep must not depend on this mutator finishing a cycle.
     if (
@@ -2116,6 +2159,8 @@ def pcc_gc_collect(reason: int) -> int:
         collection_stw_start: int = pcc_runtime_monotonic_us()
         deferred_free: int = pcc_gc_deferred_free_begin(prior_world_held)
         pcc_gc_reclaim_retired_index_tables()
+        # gc.collect() frees what an automatic sweep deferred, synchronously.
+        pcc_gc_concurrent_sweep_finish_stopped()
         if backend == 3 or backend == 4:
             # Stack-map step 3: with PCC_GC_STACKMAP_DIFF and a published table,
             # compare the stopped stack's mapped roots with the registered ones.
@@ -2182,8 +2227,14 @@ def pcc_gc_pin_slot_for_take(slot, keep_pinned: int) -> int:
     value = load_ptr(slot, 0)
     if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
         return PY_FLAG_GC_PINNED if keep_pinned != 0 else 0
-    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0):
+    if load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0 and (
+        load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+        or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+        or pcc_gc_stack_slot_root_is_conservative(slot) != 0
+    ):
+        # Nothing can move the object between the load and the pin: GC0 and
+        # the nonmoving GC1/GC2 never relocate, and a count-free collector
+        # keeps in place what this thread's stack slot names.
         prior: int = PY_FLAG_GC_PINNED
         if keep_pinned == 0:
             prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED

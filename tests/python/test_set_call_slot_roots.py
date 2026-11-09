@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from pcc.runtime.py import py_abi_constants as abi
+from tests.python.runtime_body_model import load_functions
 
 
 PORT = Path(__file__).resolve().parents[2] / "pcc/runtime/py/py_set.py"
@@ -424,12 +425,7 @@ class Memory:
             ("freestanding_gc_root_operations.py", {"pcc_gc_resolve_root_slot_unlocked"}),
             ("py_obj.py", {"pcc_gc_root_copy_lease_prepare_locked", "pcc_gc_root_copy_lease_finish"}),
         ):
-            path = PORT.with_name(name)
-            tree = ast.parse(path.read_text())
-            body = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in functions]
-            for node in body:
-                node.decorator_list = []
-            exec(compile(ast.Module(body=body, type_ignores=[]), str(path), "exec"), self.ns)
+            load_functions(PORT.with_name(name), functions, self.ns)
         return transfers
 
     def rehash(self, obj, needed):

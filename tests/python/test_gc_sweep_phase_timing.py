@@ -25,6 +25,7 @@ from pcc.frontends.python.codegen.runtime_abi import (
     FREESTANDING_GC_I32_GLOBALS,
     FREESTANDING_GC_I64_GLOBALS,
 )
+from tests.python.runtime_body_model import load_functions
 from tests.python.test_freestanding_gc_tracing_sweep_collector import (
     _CandidateModel,
     _has_sweep_candidate,
@@ -60,9 +61,7 @@ METRICS = {
 
 def _counter_functions():
     memory, namespace = _host_functions()
-    record = _function(SOURCE, "_record_sweep_phase")
-    record.decorator_list = []
-    exec(compile(ast.Module(body=[record], type_ignores=[]), str(SOURCE), "exec"), namespace)
+    load_functions(SOURCE, ("_record_sweep_phase",), namespace)
     return memory, namespace
 
 

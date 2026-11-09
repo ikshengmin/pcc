@@ -6,6 +6,8 @@ import subprocess
 
 import pytest
 
+from tests.python.runtime_body_model import load_functions
+
 RUNTIME = Path(os.environ.get('PCC_RETIREMENT_TEST_SOURCE', Path(__file__).resolve().parents[2])) / 'pcc/runtime/py'
 
 
@@ -81,13 +83,7 @@ class Runtime:
         self.set('pcc_gc_explicit_collect_active', 1)
 
     def install(self, filename, names):
-        nodes = []
-        for node in ast.parse((RUNTIME / filename).read_text()).body:
-            if isinstance(node, ast.FunctionDef) and node.name in names:
-                node.decorator_list = []
-                nodes.append(node)
-        assert {n.name for n in nodes} == names
-        exec(compile(ast.Module(body=nodes, type_ignores=[]), filename, 'exec'), self.ns)
+        load_functions(RUNTIME / filename, names, self.ns)
 
     def get(self, name):
         return self.globals.get(name, 0)

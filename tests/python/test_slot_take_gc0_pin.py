@@ -6,17 +6,17 @@ a moving collector from relocating the object between the load and the
 pin; GC0 never relocates and the root belongs to the activation, yet every
 take on four workers queued on the global lock (14% of the lock wait in
 the request handler). pcc_gc_pin_slot_for_take keeps the transaction for
-the moving collectors and pins directly on GC0.
+the moving collectors and pins directly on GC0, on the nonmoving count-free
+GC1/GC2, and on a count-free GC3/GC4 whose call root lies in the thread's
+stack: their conservative stack scan keeps what it names in place.
 """
 from __future__ import annotations
 
-import ast
 import os
 from pathlib import Path
 import re
 import subprocess
 import sys
-import types
 
 import pytest
 
@@ -24,6 +24,7 @@ from pcc.frontends.python.codegen.layer1 import L1CodeGen
 from pcc.frontends.python.pipeline import compile_python
 from pcc.frontends.python.py_lift import parse_and_lift
 from pcc.frontends.python.type_infer import infer_module
+from tests.python.runtime_body_model import load_functions
 
 
 RUNTIME = Path(__file__).resolve().parents[2] / "pcc/runtime/py/py_obj.py"
@@ -75,16 +76,15 @@ def test_take_pins_through_the_runtime_without_a_graph_lock(monkeypatch):
 
 
 class Words:
-    def __init__(self, backend, initialized=1):
+    def __init__(self, backend, initialized=1, count_free=False, stack_slot=False):
         self.memory = {("pcc_gc_backend_selected", 0): backend,
-                       ("pcc_gc_config_initialized", 0): initialized}
+                       ("pcc_gc_config_initialized", 0): initialized,
+                       ("pcc_gc_nonmoving_count_free", 0): int(count_free and backend in (1, 2))}
+        # pcc_gc_stack_slot_root_is_conservative: count-free, in this stack.
+        self.stack_slot = count_free and stack_slot
         self.events = []
 
     def namespace(self):
-        tree = ast.parse(RUNTIME.read_text())
-        node = next(node for node in tree.body
-                    if isinstance(node, ast.FunctionDef) and node.name == "pcc_gc_pin_slot_for_take")
-        node.decorator_list = []
         namespace = {
             "PY_FLAG_GC_PINNED": PINNED, "PYOBJECTHEADER_FLAGS_OFFSET": 12,
             "load_ptr": lambda base, offset: self.memory[(base, offset)],
@@ -97,11 +97,9 @@ class Words:
             "pcc_gc_load_ptr": lambda owner, slot: self.events.append("load") or self.memory[(slot, 0)],
             "pcc_py_gc_minor_graph_lock": lambda: self.events.append("lock"),
             "pcc_py_gc_minor_graph_unlock": lambda: self.events.append("unlock"),
+            "pcc_gc_stack_slot_root_is_conservative": lambda slot: int(self.stack_slot),
         }
-        code = compile(ast.Module([node], type_ignores=[]), str(RUNTIME), "exec")
-        for const in code.co_consts:
-            if isinstance(const, types.CodeType):
-                namespace[const.co_name] = types.FunctionType(const, namespace)
+        load_functions(RUNTIME, {"pcc_gc_pin_slot_for_take"}, namespace)
         return namespace["pcc_gc_pin_slot_for_take"]
 
 
@@ -114,13 +112,27 @@ def test_gc0_pins_without_the_lock_and_reports_the_prior_pin(prior):
     assert words.events == [("pin", "object")]
 
 
-@pytest.mark.parametrize("backend", (1, 2, 3, 4))
-def test_other_collectors_pin_the_current_object_inside_the_transaction(backend):
-    words = Words(backend=backend)
+@pytest.mark.parametrize("backend, count_free", ((1, False), (2, False), (3, False),
+                                                 (4, False), (3, True), (4, True)))
+def test_collectors_that_may_move_it_pin_the_current_object_inside_the_transaction(
+        backend, count_free):
+    # Counted collectors, and a count-free GC3/GC4 root outside the stack.
+    words = Words(backend=backend, count_free=count_free)
     words.memory[("slot", 0)] = "object"
     words.memory[("object", 12)] = PINNED
     assert words.namespace()("slot", 0) == PINNED
     assert words.events == ["lock", "load", ("pin", "object"), "unlock"]
+
+
+@pytest.mark.parametrize("backend", (1, 2, 3, 4))
+@pytest.mark.parametrize("prior", (0, PINNED))
+def test_count_free_collectors_pin_a_root_they_keep_in_place_without_the_lock(backend, prior):
+    # GC1/GC2 never move; GC3/GC4 keep in place what a stack slot names.
+    words = Words(backend=backend, count_free=True, stack_slot=True)
+    words.memory[("slot", 0)] = "object"
+    words.memory[("object", 12)] = prior | 8
+    assert words.namespace()("slot", 0) == prior
+    assert words.events == [("pin", "object")]
 
 
 def test_uninitialized_configuration_takes_the_transaction():

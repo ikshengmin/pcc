@@ -10,6 +10,7 @@ import pytest
 
 from pcc.frontends.python import pipeline
 from pcc.frontends.python.codegen.runtime_abi import FREESTANDING_GC_RUNTIME_GLOBALS
+from tests.python.runtime_body_model import load_functions
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -88,6 +89,8 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_thread_no_park_exit",
 } | RAW_PROVIDER_SYMBOLS
 RAW_GLOBAL_IMPORTS = {
+    # The gate's automatic GC4 step leaves a due mark to its gate.
+    "pcc_gc_in_auto_step",
     # GC4's step advances empty-page quarantine.
     "pcc_gc_backend4_parked_head",
     "pcc_gc_backend4_retained_page_head",
@@ -458,13 +461,10 @@ class _AutoStepModel:
             "pcc_gc_cycle_requested": 0,
             "pcc_gc_backend4_parked_head": 0,
             "pcc_gc_backend4_retained_page_head": 0,
+            # The gate's automatic step, which leaves a due mark to its gate.
+            "pcc_gc_in_auto_step": 1,
         }
         self.events = []
-        tree = ast.parse(STRICT_SOURCE.read_text(encoding="utf-8"))
-        nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef)
-                 and node.name in {"pcc_gc_step", "_selected_backend", "_tracing_work_pending"}]
-        for node in nodes:
-            node.decorator_list = []
         load = lambda name, offset=0, *order: self.cells[name]
         record = lambda name, result=0: (lambda *args: self.events.append(name) or result)
         self.ns = {
@@ -490,13 +490,25 @@ class _AutoStepModel:
             "pcc_gc_backend4_select_relocation_pages": record("select"),
             "pcc_gc_backend4_remap_and_retire_stopped_world": record("retire"),
         }
-        exec(compile(ast.fix_missing_locations(ast.Module(body=nodes, type_ignores=[])),
-                     str(STRICT_SOURCE), "exec"), self.ns)
+        load_functions(STRICT_SOURCE, {"pcc_gc_step"}, self.ns)
 
     def step(self):
         self.events.clear()
         self.ns["pcc_gc_step"](64)
         return list(self.events)
+
+
+def test_gc4_automatic_step_leaves_a_requested_mark_to_its_gate():
+    # A due mark runs at the gate with its sweep (py_obj's
+    # _gc4_maybe_auto_step), never inside the gate's own step.
+    model = _AutoStepModel()
+    model.cells["pcc_gc_cycle_requested"] = 1
+    model.ns["pcc_gc_tracing_step_cycle"] = lambda budget: model.events.append("mark") or 0
+    model.ns["pcc_stop_the_world"] = lambda: 0
+    model.ns["pcc_resume_world"] = lambda: 0
+    assert "mark" not in model.step()
+    model.cells["pcc_gc_in_auto_step"] = 0
+    assert model.step()[-1] == "mark"
 
 
 def test_gc4_automatic_steps_select_relocation_pages_once_per_finished_mark():

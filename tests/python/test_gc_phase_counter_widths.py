@@ -27,6 +27,7 @@ from pcc.frontends.python.codegen.runtime_abi import (
     FREESTANDING_GC_I32_GLOBALS,
     FREESTANDING_GC_I64_GLOBALS,
 )
+from tests.python.runtime_body_model import load_functions
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -248,11 +249,7 @@ def _host_functions(*, other_mutators=()):
         (TELEMETRY, ("pcc_gc_telemetry",)),
     )
     for path, names in groups:
-        functions = [_function(path, name) for name in names]
-        for function in functions:
-            function.decorator_list = []
-        module = ast.Module(body=functions, type_ignores=[])
-        exec(compile(module, str(path), "exec"), namespace)
+        load_functions(path, names, namespace)
     return memory, namespace
 
 
@@ -471,6 +468,26 @@ def test_host_source_direct_moving_step_owns_its_stopped_world(backend, stopped)
         assert events == ["stop", "retire", "resume"] and result == 1
     else:
         assert events == ["stop", "resume"]
+
+
+@pytest.mark.parametrize("auto_step", (0, 1))
+def test_host_source_gc4_automatic_step_leaves_a_due_mark_to_its_gate(auto_step):
+    # The gate runs or finishes the mark and sweeps it in one stopped world
+    # (py_obj's _gc4_maybe_auto_step); the gate's own step does GC4's other
+    # work. A mark finished in the step's stop was swept at a later one,
+    # after a whole-heap re-mark. Other callers keep marking in the step.
+    memory, functions = _host_functions()
+    memory.set("pcc_gc_backend_selected", 4)
+    memory.set("pcc_gc_cycle_requested", 1)
+    memory.set("pcc_gc_in_auto_step", auto_step)
+    traced = []
+    functions["pcc_thread_owns_stopped_world"] = lambda: 0
+    functions["pcc_stop_the_world"] = lambda: 0
+    functions["pcc_resume_world"] = lambda: 0
+    functions["_tracing_work_pending"] = lambda: 1
+    functions["pcc_gc_tracing_step_cycle"] = lambda budget: traced.append(budget) or 0
+    functions["pcc_gc_step"](7)
+    assert traced == ([] if auto_step else [7])
 
 
 def test_host_source_pause_accumulation_max_and_full_reset_keep_high_bits():

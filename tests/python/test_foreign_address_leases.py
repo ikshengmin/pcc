@@ -1,25 +1,17 @@
 """Execute production lease bodies against deterministic lock/object metadata."""
 from __future__ import annotations
-import ast
 from pathlib import Path
 import pytest
 
 from pcc.runtime.py import py_abi_constants as abi
+from tests.python.runtime_body_model import load_functions
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNTIME = ROOT / "pcc/runtime/py"
 
 
 def _functions(path, names, namespace):
-    tree = ast.parse(path.read_text())
-    chosen = []
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name in names:
-            node.decorator_list = []
-            chosen.append(node)
-    assert len(chosen) == len(names)
-    code = ast.Module(body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0)] + chosen, type_ignores=[])
-    exec(compile(ast.fix_missing_locations(code), str(path), "exec"), namespace)
+    load_functions(path, names, namespace)
 
 
 class Model:
@@ -956,6 +948,29 @@ def test_a_production_lease_on_a_moving_collector_still_counts(backend):
     slot = m.object(flags=262144)
     assert m.acquire(slot) == 1 and m.count() == 1
     assert m.release(slot, 1) == 0 and m.count() == 0
+
+
+@pytest.mark.parametrize("backend", (3, 4))
+@pytest.mark.parametrize("probe", (0, 1))
+def test_a_count_free_stack_slot_lease_is_held_by_the_conservative_scan(backend, probe):
+    # The slot stays stable for the whole lease and lies in this thread's
+    # stack: a count-free collector's conservative scan keeps its object
+    # alive and in place, so the lease is a no-op token without the graph
+    # lock. The provenance probe keeps the checked, counted path.
+    m = Model(backend)
+    m.store("pcc_gc_refcount_provenance_probe", 0, probe)
+    slot = m.object(flags=262144)
+    asked = []
+    m.ns["pcc_gc_stack_slot_root_is_conservative"] = lambda candidate: asked.append(candidate) or 1
+    before = dict(m.memory)
+    token = m.acquire(slot)
+    if probe:
+        assert token == 1 and m.count() == 1 and not asked
+        assert m.release(slot, token) == 0 and m.count() == 0
+    else:
+        assert token == 0 and asked == [slot]
+        assert m.events == [] and m.memory == before and m.count() == 0
+        assert m.release(slot, token) == 0 and m.events == []
 
 
 @pytest.mark.parametrize("before", range(5))

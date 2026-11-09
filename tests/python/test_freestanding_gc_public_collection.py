@@ -33,6 +33,8 @@ OWNED_SYMBOLS = {
 }
 OWNED_TLS_GLOBALS = {"pcc_gc_cms_worker_current"}
 RAW_FUNCTION_IMPORTS = {
+    # The collector thread frees deferred dead objects before any new mark.
+    "pcc_gc_concurrent_sweep_slice",
     "pcc_gc_scalar_sweep_drain",
     "pcc_gc_deferred_free_worker_drain",
     "pcc_gc_refresh_read_barrier",
@@ -63,6 +65,8 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_thread_enable_conservative_roots",
 }
 RAW_GLOBAL_IMPORTS = {
+    # No mark work while deferred dead objects remain.
+    "pcc_gc_concurrent_sweep_state",
     "pcc_gc_gray_worklist_flush_requested",
     "pcc_gc_cms_finish_pending",
     "pcc_gc_backend4_no_refcounts",
@@ -499,6 +503,8 @@ int64_t pcc_gc_scalar_sweep_drain(int64_t worker, int64_t closing, int64_t token
     (void)worker; (void)closing; (void)token; return 0;
 }
 int64_t pcc_gc_deferred_free_worker_drain(int64_t closing) { (void)closing; return 0; }
+/* No sweep runs in this harness, so nothing is ever deferred to the worker. */
+int64_t pcc_gc_concurrent_sweep_slice(int64_t budget) { (void)budget; return 0; }
 /* No mutator publishes gray batches here: the queue stays empty. */
 int32_t pcc_gc_gray_worklist_flush_requested;
 int32_t pcc_gc_gray_worklist_fallback_required;

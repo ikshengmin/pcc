@@ -30,6 +30,8 @@ PUBLIC_SYMBOLS = {
     "pcc_gc_unregister_continuation_root_node",
 }
 INTERNAL_SYMBOLS = {
+    # A count-free collector's conservative scan roots this thread's stack.
+    "pcc_gc_stack_slot_root_is_conservative",
     "pcc_gc_scheduler_handle_needs_graph",
     "pcc_gc_cycle_requested_store_release",
     "pcc_gc_root_registry_note_mutation_locked",
@@ -51,9 +53,11 @@ OWNED_GLOBALS = {
     "pcc_py_gc_scheduler_root_spin",
     "pcc_py_gc_scheduler_root_free_head",
     "pcc_py_gc_scheduler_root_free_count",
+    "pcc_py_gc_scheduler_root_stack_handle",
 }
 RAW_FUNCTION_IMPORTS = {
     "pcc_thread_is_running",
+    "pcc_thread_stack_high",
     "free",
     "malloc",
     "memset",
@@ -243,8 +247,19 @@ int main(void) {
 #include <stdint.h>
 #include <stdio.h>
 
+/* Not in a thread stack: every collector links these registrations. */
+static PyObject *scheduler_slots[2];
+
 int main(void) {
-    PyObject *scheduler_slots[2] = {NULL, NULL};
+    /* A stack slot: count-free collectors root it by their conservative
+     * stack scan and hand back their stack handle without linking it. */
+    PyObject *stack_slot = NULL;
+    void *stack_handle = pcc_gc_scheduler_root_register_handle(&stack_slot);
+    if (stack_handle == NULL) return 1;
+    printf("stack:%lld\n", (long long)pcc_gc_scheduler_root_count());
+    pcc_gc_scheduler_root_unregister_handle(stack_handle);
+    printf("stack-empty:%lld\n", (long long)pcc_gc_scheduler_root_count());
+
     void *first = pcc_gc_scheduler_root_register_handle(&scheduler_slots[0]);
     pcc_gc_scheduler_root_register(&scheduler_slots[1]);
     void *second = pcc_gc_scheduler_root_register_handle(&scheduler_slots[0]);
@@ -302,7 +317,15 @@ def _link_harness(
     return executable
 
 
-# What the harness printed against the retired C runtime oracle.
+# What the harness printed against the retired C runtime oracle, after the
+# stack-slot lines: counted GC0 links a stack slot, count-free GC1-4 do not.
+def _registry_expected(backend: int) -> str:
+    return (
+        f"stack:{1 if backend == 0 else 0}\n"
+        "stack-empty:0\n"
+    ) + REGISTRY_EXPECTED
+
+
 REGISTRY_EXPECTED = (
     "scheduler:3\n"
     "scheduler-slot:2\n"
@@ -358,7 +381,7 @@ def test_production_archive_uniquely_owns_registry(
             [str(implementation)], env=env, capture_output=True, text=True, timeout=30
         )
         assert result.returncode == 0, result.stdout + result.stderr
-        assert result.stdout == REGISTRY_EXPECTED
+        assert result.stdout == _registry_expected(backend)
 
 
 def test_root_registry_survives_pthread_mutation_and_observation(

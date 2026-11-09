@@ -1801,6 +1801,8 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_cms_worker_traces',
         'pcc_gc_cms_sweep_pending',
         'pcc_gc_cms_finish_pending',
+        'pcc_gc_concurrent_sweep_allowed',
+        'pcc_gc_concurrent_sweep_state',
         'pcc_gc_config_initialized',
         'pcc_gc_backend_frozen',
         'pcc_gc_list_container_mode',
@@ -1989,6 +1991,10 @@ FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_tracing_finish_commits',
         'pcc_gc_tracing_no_candidate_commit',
         'pcc_gc_backend4_selection_commit',
+        'pcc_gc_concurrent_sweep_count',
+        'pcc_gc_concurrent_sweep_next',
+        'pcc_gc_concurrent_sweep_remaining',
+        'pcc_gc_concurrent_sweep_freed',
         'pcc_gc_backend4_remembered_page_index_cap',
         'pcc_gc_backend4_remembered_page_index_count',
         'pcc_gc_backend4_remembered_page_index_used',
@@ -2036,6 +2042,7 @@ FREESTANDING_GC_PTR_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_backend4_active_small_old_page',
         'pcc_gc_backend4_active_small_young_page',
         'pcc_gc_backend4_evacuation_page_head',
+        'pcc_gc_concurrent_sweep_objects',
         'pcc_gc_backend4_evacuation_find_memo_page',
         'pcc_gc_backend4_evacuation_find_memo_node',
         'pcc_gc_backend4_free_page_head',
@@ -3255,6 +3262,9 @@ def _cross_object_signatures_part_14():
         "pcc_gc_gray_registered_roots": ((), "c_void"),
         "pcc_gc_backend4_remembered_owner_has_entries": (("c_ptr",), "c_int64"),
         "pcc_gc_tracing_clear_unpinned": (("c_ptr",), "c_void"),
+        "pcc_gc_concurrent_sweep_slice": (("c_int64",), "c_int64"),
+        "pcc_gc_concurrent_sweep_finish_stopped": ((), "c_int64"),
+        "pcc_gc_stack_slot_root_is_conservative": (("c_ptr",), "c_int64"),
     }
 
 

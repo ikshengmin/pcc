@@ -15,6 +15,7 @@ from pcc.unsafe import (
     atomic_store_i32,
     define_global_i32,
     define_global_ptr_null,
+    frame_address,
     free,
     gc_backend_current,
     global_addr,
@@ -29,6 +30,7 @@ from pcc.unsafe import (
     ptr_add,
     ptr_eq,
     ptr_is_null,
+    ptr_to_int,
     store_i32,
     store_i64,
     store_ptr,
@@ -43,6 +45,7 @@ pcc_py_gc_minor_graph_unlock = extern(
     "pcc_py_gc_minor_graph_unlock", (), c_void
 )
 pcc_thread_is_running = extern("pcc_thread_is_running", (), c_int64)
+pcc_thread_stack_high = extern("pcc_thread_stack_high", (), c_int64)
 
 
 # The scheduler-root list is changed only under this word, held for a few
@@ -57,6 +60,9 @@ pcc_thread_is_running = extern("pcc_thread_is_running", (), c_int64)
 define_global_i32("pcc_py_gc_scheduler_root_spin", 0)
 define_global_ptr_null("pcc_py_gc_scheduler_root_free_head")
 define_global_i32("pcc_py_gc_scheduler_root_free_count", 0)
+# The handle of a slot the count-free collectors already root through the
+# thread's conservative stack scan: its address, never linked or freed.
+define_global_ptr_null("pcc_py_gc_scheduler_root_stack_handle")
 
 
 @c_abi_export("pcc_gc_scheduler_root_list_acquire")
@@ -259,11 +265,39 @@ def _scheduler_root_unlink(node) -> i64:
     return 1
 
 
+@c_abi_export("pcc_gc_stack_slot_root_is_conservative")
+def pcc_gc_stack_slot_root_is_conservative(slot) -> i64:
+    """1 when a count-free collector already roots ``slot`` exactly as a
+    registration would.
+
+    The slot lies in this thread's own stack, between the caller's frames
+    and the thread's outermost frame. Every count-free stopped-world seed and
+    remark grays the conservative words of every thread's stack, a stopping
+    thread's own frames included, and what those words name stays in place:
+    GC3 promotes it without copying and GC4 never selects it. Both move an
+    object only while every other mutator waits at an application gate. So
+    the object a stack slot holds can neither die nor move while it does,
+    and the registration (and its global list word or graph lock) adds
+    nothing. Counted collectors scan no stack and keep registering.
+    """
+    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0:
+        return 0
+    high: i64 = pcc_thread_stack_high()
+    if high == 0:
+        return 0
+    address: i64 = ptr_to_int(slot)
+    if address < ptr_to_int(frame_address()) or address >= high:
+        return 0
+    return 1
+
+
 @c_abi_export("pcc_gc_scheduler_root_register_handle")
 def pcc_gc_scheduler_root_register_handle(slot) -> c_ptr:
     backend: i64 = gc_backend_current()
     if ptr_is_null(slot) != 0:
         return null()
+    if pcc_gc_stack_slot_root_is_conservative(slot) != 0:
+        return global_addr("pcc_py_gc_scheduler_root_stack_handle")
     if (
         backend == 0
         or (load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
@@ -318,6 +352,8 @@ def pcc_gc_scheduler_root_register(slot) -> None:
 def pcc_gc_scheduler_root_unregister_handle(handle) -> None:
     backend: i64 = gc_backend_current()
     if ptr_is_null(handle) != 0:
+        return
+    if ptr_eq(handle, global_addr("pcc_py_gc_scheduler_root_stack_handle")) != 0:
         return
     if (
         backend == 0

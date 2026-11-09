@@ -485,8 +485,10 @@ def _gc4_gate_namespace(pending, calls, enabled, unsafe):
         "global_addr": lambda key: key,
         "load_i32": lambda key, *_: pending.get(key, 0),
         "atomic_load_i32": lambda key, *_: pending.get(key, 0),
+        "atomic_load_i64": lambda key, *_: pending.get(key, 0),
         "atomic_store_i32": lambda key, offset, value, *ordering: pending.update({key: value}),
         "atomic_rmw_i32": xchg,
+        "pcc_gc_tracing_debt_threshold": lambda: 1024,
         "_gc_automatic_collection_enabled": lambda: enabled,
         "pcc_gc_backend4_maybe_auto_step": lambda: calls.append("step"),
         "pcc_gc_sweep_owed": lambda: 0,
@@ -494,6 +496,24 @@ def _gc4_gate_namespace(pending, calls, enabled, unsafe):
         "pcc_py_gc_minor_graph_lock_depth": lambda: 0,
         "_gc_tracing_automatic_collect": lambda mark: calls.append(mark),
     }
+
+
+@pytest.mark.parametrize("debt", [1023, 1024])
+@pytest.mark.parametrize("mark_active,requested", [(0, 0), (0, 1), (1, 0)])
+@pytest.mark.parametrize("unsafe", [0, 1])
+def test_gc4_gate_runs_a_due_mark_and_its_sweep_in_one_collection(debt, mark_active, requested, unsafe):
+    # The gate's step does GC4's own work; a due mark is the gate's, run or
+    # finished in the same stopped world as its sweep, so that sweep needs
+    # no whole-heap re-mark first. Inside runtime code nothing is collected.
+    tree = _body("py_obj", ["_gc4_maybe_auto_step"])
+    pending = {"pcc_gc_debt_bytes": debt, "pcc_gc_mark_active": mark_active,
+               "pcc_gc_cycle_requested": requested}
+    calls = []
+    namespace = _gc4_gate_namespace(pending, calls, 1, unsafe)
+    exec(compile(ast.fix_missing_locations(tree), "gc4-production-gate", "exec"), namespace)
+    namespace["_gc4_maybe_auto_step"]()
+    due = debt >= 1024 and (mark_active or requested)
+    assert calls == (["step", 2] if due and not unsafe else ["step"])
 
 
 @pytest.mark.parametrize("mark_active", [0, 1])

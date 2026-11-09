@@ -72,6 +72,9 @@ pcc_gc_managed_pointer_index_seen = extern(
     "pcc_gc_managed_pointer_index_seen", (c_ptr,), c_int64
 )
 pcc_gc_granule_span = extern("pcc_gc_granule_span", (c_ptr,), c_ptr)
+pcc_gc_stack_slot_root_is_conservative = extern(
+    "pcc_gc_stack_slot_root_is_conservative", (c_ptr,), c_int64
+)
 
 
 # Exact, process-lifetime image origins, not a cache of arbitrary immortals.
@@ -540,6 +543,15 @@ def _foreign_lease_acquire(slot, borrowed: i64) -> i64:
         load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
         and load_i32(global_addr("pcc_gc_backend_selected"), 0) <= 2
         and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
+    ):
+        return 0
+    # The caller keeps its owning slot stable while leased. In this thread's
+    # stack it names its object to every count-free collector's conservative
+    # scan, which keeps that object alive and in place for the whole lease,
+    # wherever the callee keeps its address: the lease guards nothing.
+    if (
+        load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
+        and pcc_gc_stack_slot_root_is_conservative(slot) != 0
     ):
         return 0
     # The caller keeps its owning slot stable while leased. Collectors can

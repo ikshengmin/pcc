@@ -73,6 +73,9 @@ pcc_gc_scalar_sweep_drain = extern(
 pcc_gc_deferred_free_worker_drain = extern(
     "pcc_gc_deferred_free_worker_drain", (c_int64,), c_int64
 )
+pcc_gc_concurrent_sweep_slice = extern(
+    "pcc_gc_concurrent_sweep_slice", (c_int64,), c_int64
+)
 
 pcc_gc_tracing_discharge_debt = extern(
     "pcc_gc_tracing_discharge_debt", (c_int64,), c_void
@@ -104,6 +107,16 @@ def pcc_gc_cms_worker_main_py(arg):
         # gc.disable()/threshold0. Consume them on the existing CMS thread.
         retired: i64 = pcc_gc_scalar_sweep_drain(1, 0, 0)
         pcc_gc_deferred_free_worker_drain(0)
+        # Dead objects an automatic GC1/GC2 sweep left to this thread come
+        # before any new mark: no cycle begins while they remain.
+        retired = retired + pcc_gc_concurrent_sweep_slice(256)
+        sweeping: i64 = atomic_load_i32(
+            global_addr("pcc_gc_concurrent_sweep_state"), 0, "acquire"
+        )
+        if sweeping != 0:
+            # A walk over live objects frees nothing yet is progress: keep
+            # going instead of sleeping between slices.
+            retired = retired + 1
         pushes: i64 = atomic_load_i32(
             global_addr("pcc_gc_cms_queue_pushes"), 0, "acquire"
         )
@@ -142,6 +155,7 @@ def pcc_gc_cms_worker_main_py(arg):
         if (
             enabled != 0
             and (backend >= 1 and backend <= 4)
+            and sweeping == 0
             and (drains < pushes or marking != 0)
         ):
             # Every allocation requests a cycle. A new one begins only once
@@ -221,6 +235,10 @@ def pcc_gc_cms_worker_main_py(arg):
         pcc_thread_safepoint_gate()
     # stop changed worker_started to 3 before requesting exit. The final
     # unconditional graph-lock acquisition orders behind any admitted writer.
+    while atomic_load_i32(
+        global_addr("pcc_gc_concurrent_sweep_state"), 0, "acquire"
+    ) != 0:
+        pcc_gc_concurrent_sweep_slice(4096)
     pcc_gc_scalar_sweep_drain(1, 1, 0)
     pcc_gc_deferred_free_worker_drain(1)
     atomic_store_i32(

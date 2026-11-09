@@ -12,6 +12,12 @@ from pathlib import Path
 
 import pytest
 
+from tests.python.runtime_body_model import (
+    declare_module_globals,
+    gc_state_initial_values,
+    load_functions,
+)
+
 ROOT = Path(__file__).resolve().parents[2]
 RUNTIME = ROOT / "pcc/runtime/py"
 SOURCE = RUNTIME / "freestanding_gc_deferred_free.py"
@@ -20,25 +26,15 @@ CANDIDATE, DEALLOCATING, MALLOC = 1024, 524288, 262144
 TERMINAL = CANDIDATE | DEALLOCATING | MALLOC
 
 
+GC_STATE = gc_state_initial_values()
+
+
 def _load(path, namespace, names=None):
-    tree = ast.parse(path.read_text())
-    body = []
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and (names is None or node.name in names):
-            node.decorator_list = []
-            body.append(node)
-        elif names is None and isinstance(node, (ast.Assign, ast.AnnAssign)):
-            if isinstance(node.value, ast.Call):
-                continue  # Externs are supplied by the raw-memory boundary.
-            body.append(node)
-        elif (names is None and isinstance(node, ast.Expr)
-              and isinstance(node.value, ast.Call)
-              and isinstance(node.value.func, ast.Name)
-              and node.value.func.id.startswith("define_")):
-            body.append(node)
-    if names is not None:
-        assert {node.name for node in body} == set(names)
-    exec(compile(ast.Module(body, type_ignores=[]), str(path), "exec"), namespace)
+    """A whole module also declares its globals through the model's own
+    ``define_*`` providers; externs are supplied by the raw-memory boundary."""
+    if names is None:
+        declare_module_globals(path, namespace)
+    load_functions(path, names, namespace)
 
 
 class Runtime:
@@ -130,6 +126,10 @@ class Runtime:
                 self.tls[key] = address
                 self.memory[address] = {0: self.tls_defaults[name]}
             return self.tls[key]
+        if name not in self.globals and name in GC_STATE:
+            # A GC state global the model did not define starts at its
+            # declared value; any other unknown name still fails closed.
+            self.define_global(name, GC_STATE[name])
         return self.globals[name]
 
     def scalar(self, name):

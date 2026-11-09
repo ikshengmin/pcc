@@ -1308,21 +1308,40 @@ def test_pcc_python_relocating_step_copies_simple_object(tmp_path, pcc_runtime_a
     harness.write_text(
         """
         #include "pcc/runtime/include/py_runtime.h"
+        #include <stdint.h>
         #include <stdio.h>
         #include <stdlib.h>
 
+        /* GC4 counts no references: a raw stack word naming the object pins
+         * it in place. Its live reference is a registered off-stack root and
+         * the harness keeps the old address only masked. */
+        #define PROBE_MASK ((uintptr_t)0x5a5a5a5a5a5a5a5aULL)
+
         int main(void) {
             setenv("PCC_GC_BACKEND", "4", 1);
-            /* Non-leaf zpage-resident tag: leaf scalars are excluded from the
-             * relocation graph by the rework, so they never relocate. */
-            PyObject *old = pcc_gc_alloc(64, PY_TYPE_TUPLE, 0);
-            if (old == NULL) return 2;
-            /* Constructors publish a completed object; a fresh one is
-             * never relocated (half-initialized fields). */
-            pcc_gc_publish_initialized(old);
-            int64_t old_id = pcc_gc_object_id(old);
-            PyObject *slot = NULL;
-            pcc_gc_store_ptr(NULL, &slot, old);
+            PyObject **cells = calloc(2, sizeof(PyObject *));
+            if (cells == NULL) return 3;
+            PyObject **root = &cells[0];
+            /* An untraced slot the evacuation does not remap: loading it
+             * must take the read barrier's forwarding. */
+            PyObject **stale = &cells[1];
+            pcc_gc_scheduler_root_register(root);
+            uintptr_t masked;
+            int64_t old_id;
+            {
+                /* Non-leaf zpage-resident tag: leaf scalars are excluded from
+                 * the relocation graph by the rework, so they never relocate. */
+                PyObject *old = pcc_gc_alloc(64, PY_TYPE_TUPLE, 0);
+                if (old == NULL) return 2;
+                /* Constructors publish a completed object; a fresh one is
+                 * never relocated (half-initialized fields). */
+                pcc_gc_publish_initialized(old);
+                old_id = pcc_gc_object_id(old);
+                pcc_gc_store_ptr(NULL, root, old);
+                *stale = old;
+                masked = (uintptr_t)old ^ PROBE_MASK;
+                old = NULL;
+            }
             pcc_gc_telemetry_reset();
             /* A step spends its budget on earlier phases first (remembered
              * roots, aging); step until the evacuation moves the object. */
@@ -1331,14 +1350,19 @@ def test_pcc_python_relocating_step_copies_simple_object(tmp_path, pcc_runtime_a
                 if (pcc_gc_step(2) <= 0) break;
                 steps += 1;
             }
+            PyObject *old = (PyObject *)(masked ^ PROBE_MASK);
             printf("relocated=%d\\n", steps > 0 && steps < 64);
             printf("forwards=%lld\\n", (long long)pcc_gc_telemetry(PCC_GC_COUNTER_RELOCATION_FORWARDS));
-            PyObject *loaded = pcc_gc_load_ptr(NULL, &slot);
+            printf("root_remapped=%d\\n", *root != old);
+            PyObject *loaded = pcc_gc_load_ptr(NULL, stale);
             printf("same_old=%d\\n", loaded == old);
+            printf("same_root=%d\\n", loaded == *root);
             printf("same_id=%d\\n", pcc_gc_object_id(loaded) == old_id);
             printf("barrier_forwards=%lld\\n", (long long)pcc_gc_telemetry(PCC_GC_COUNTER_RELOCATION_BARRIER_FORWARDS));
-            pcc_gc_store_ptr(NULL, &slot, NULL);
-            pcc_gc_release(old);
+            *stale = NULL;
+            pcc_gc_store_ptr(NULL, root, NULL);
+            pcc_gc_scheduler_root_unregister(root);
+            free(cells);
             return 0;
         }
         """,
@@ -1371,7 +1395,9 @@ def test_pcc_python_relocating_step_copies_simple_object(tmp_path, pcc_runtime_a
     assert run_res.stdout == (
         "relocated=1\n"
         "forwards=1\n"
+        "root_remapped=1\n"
         "same_old=0\n"
+        "same_root=1\n"
         "same_id=1\n"
         "barrier_forwards=1\n"
     )
