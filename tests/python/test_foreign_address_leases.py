@@ -267,8 +267,59 @@ def _mode_setter(model):
         _is_cms_worker=lambda:0)
     # Atomic stores carry one memory-order argument beyond ordinary stores.
     ns["atomic_store_i32"]=lambda base,offset,value,order:model.store(base,offset,value)
-    _functions(RUNTIME / "py_gc_backend.py", {"pcc_gc_set_backend"},ns)
+    # Keep the real policy-publication bodies. Their stores and recursive
+    # graph locks use model memory; this does not execute the thread kernel.
+    _functions(RUNTIME / "freestanding_thread_kernel_pthread.py", {
+        "pcc_thread_enable_conservative_roots"}, ns)
+    _functions(RUNTIME / "freestanding_gc_forwarding_identity.py", {
+        "pcc_gc_refresh_read_barrier", "_graph_lock", "_graph_unlock"}, ns)
+    _functions(RUNTIME / "py_gc_backend.py", {
+        "pcc_gc_set_backend", "_publish_frame_registry_inactive"}, ns)
     return ns["pcc_gc_set_backend"]
+
+
+@pytest.mark.parametrize("backend", range(5))
+def test_mode_setter_models_root_policy_and_registry_publication(backend):
+    m = Model(0)
+    setter = _mode_setter(m)
+    m.store("pcc_gc_frame_registry_inactive", 0, 1)
+    m.store("pcc_gc_read_barrier_enabled", 0, 1)
+    publications = []
+
+    def record_store(base, offset, value):
+        if base == "pcc_gc_backend_selected":
+            publications.append((value, m.depth, m.active(),
+                                 m.load("pcc_thread_conservative_roots_enabled")))
+        m.store(base, offset, value)
+
+    m.ns["store_i32"] = record_store
+    registry_at_unlock = []
+    m.on_unlock = lambda: registry_at_unlock.append(
+        m.load("pcc_gc_frame_registry_inactive"))
+    assert setter(backend) == 0
+    assert publications == [(backend, 1, -1, int(backend != 0))]
+    # GC0 first publishes inactive, then enables frame roots outside the
+    # graph lock and republishes. Tracing collectors keep the registry active.
+    assert registry_at_unlock == [int(backend == 0)]
+    assert m.load("pcc_gc_backend0_frame_roots_enabled") == int(backend == 0)
+    assert m.load("pcc_gc_frame_registry_inactive") == 0
+    assert m.load("pcc_gc_read_barrier_enabled") == 0
+    assert m.depth == 0 and m.active() == 0
+    # Conservative-root admission is one-way, including selecting GC0 later.
+    assert setter(0) == 0
+    assert m.load("pcc_thread_conservative_roots_enabled") == int(backend != 0)
+
+
+def test_mode_setter_models_read_barrier_for_live_relocation_set():
+    m = Model(4)
+    setter = _mode_setter(m)
+    m.store("pcc_gc_relocation_set_head", 0, 1000)
+    assert setter(4) == 0
+    assert m.load("pcc_gc_read_barrier_enabled") == 1
+    m.store("pcc_gc_relocation_set_head", 0, 0)
+    assert setter(4) == 0
+    assert m.load("pcc_gc_read_barrier_enabled") == 0
+    assert m.depth == 0 and m.active() == 0
 
 
 @pytest.mark.parametrize("before",range(5))
