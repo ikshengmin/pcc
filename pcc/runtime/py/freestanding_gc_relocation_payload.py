@@ -269,8 +269,11 @@ def pcc_gc_relocation_payload_raw_snapshot_locked(
             return 0
         store_i64(ctx, 88, load_i32(chunk, 0))
         store_i64(ctx, 96, slot_count)
+        # Match PyContinuationStackChunk, including root_node at offset 24.
+        # The private copy starts without a registration handle; zero-fill
+        # must cover that field before rollback or mount can inspect it.
         if _relocate_raw_add_descriptor(
-            ctx, chunk, 24, 0, 24, 0, 1
+            ctx, chunk, 32, 0, 24, 0, 1
         ) == 0:
             return 0
         if slot_count > 0 and _relocate_raw_add_descriptor(
