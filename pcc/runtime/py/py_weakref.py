@@ -512,11 +512,66 @@ def py_weakref_invalidate_tracing_candidates() -> int:
     return count
 
 
+def _weakref_invalidate_gc0_target(target) -> None:
+    """A terminal GC0 target clears all its refs before any callback.
+
+    Callbacks may drop other weakrefs or replace the global chain. Prepare
+    counted holds before clearing targets, then use only that fixed queue
+    once user code can run. GC0 never moves these owned weakrefs; the malloc
+    slots are not offered as roots to the count-free collectors.
+    """
+    pending = null()
+    tail = null()
+    wr = global_load_ptr("py_weakref_head")
+    while ptr_is_null(wr) == 0:
+        if (ptr_eq(load_ptr(wr, 16), target) != 0
+                and (load_i32(wr, 12) & 524288) == 0
+                and load_i64(wr, 0) > 0
+                and ptr_is_null(load_ptr(wr, 24)) == 0):
+            entry = malloc(_PENDING_WEAK_BYTES)
+            if ptr_is_null(entry) != 0:
+                while ptr_is_null(pending) == 0:
+                    cleanup = pending
+                    pending = load_ptr(cleanup, _PENDING_WEAK_NEXT)
+                    py_decref(load_ptr(cleanup, _PENDING_WEAK_ROOT))
+                    free(cleanup)
+                pcc_platform_abort()
+                return
+            store_ptr(entry, _PENDING_WEAK_NEXT, null())
+            store_ptr(entry, _PENDING_WEAK_ROOT, wr)
+            store_i64(entry, _PENDING_WEAK_LEASE, 0)
+            py_incref(wr)
+            if ptr_is_null(tail) != 0:
+                pending = entry
+            else:
+                store_ptr(tail, _PENDING_WEAK_NEXT, entry)
+            tail = entry
+        wr = load_ptr(wr, 40)
+
+    wr = global_load_ptr("py_weakref_head")
+    while ptr_is_null(wr) == 0:
+        if ptr_eq(load_ptr(wr, 16), target) != 0:
+            store_ptr(wr, 16, null())
+            pcc_diagnostics_runtime_log_event_code(4, 2, 0, load_i32(target, 8), target)
+        wr = load_ptr(wr, 40)
+
+    while ptr_is_null(pending) == 0:
+        entry = pending
+        pending = load_ptr(entry, _PENDING_WEAK_NEXT)
+        held = load_ptr(entry, _PENDING_WEAK_ROOT)
+        _weakref_run_callback(held)
+        py_decref(held)
+        free(entry)
+
+
 @c_abi_export("py_weakref_invalidate")
 def py_weakref_invalidate(target) -> None:
     if ptr_is_null(target) != 0:
         return
     if is_tagged_int(target) != 0:
+        return
+    if pcc_gc_backend() == 0:
+        _weakref_invalidate_gc0_target(target)
         return
     wr = global_load_ptr("py_weakref_head")
     while ptr_is_null(wr) == 0:

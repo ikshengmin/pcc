@@ -7,12 +7,12 @@ Specification: docs/project-intent.md, weakrefs/finalizers/resurrection.
 """
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 
 import pytest
 
 from pcc.runtime.py import py_abi_constants as abi
+from tests.python.runtime_body_model import load_functions
 
 
 SOURCE = Path(__file__).resolve().parents[2] / "pcc/runtime/py/py_weakref.py"
@@ -32,6 +32,7 @@ class WeakBatch:
         self.events = []
         self.allocated = []
         self.freed = []
+        self.poison_freed = False
         self.malloc_calls = 0
         self.fail_at = 0
         self.fail_tracking = False
@@ -68,20 +69,20 @@ class WeakBatch:
             py_exc_new=lambda code, message: (code, message),
             py_raise_owned=self.errors.append,
         )
-        selected = []
         names = {"_py_none", "_unlink", "py_weakref_new", "py_dealloc_weakref",
-                 "_weakref_run_callback", "py_weakref_invalidate_gc0_candidates"}
-        for node in ast.parse(SOURCE.read_text()).body:
-            if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id.startswith("_PENDING_WEAK_"):
-                selected.append(node)
-            elif isinstance(node, ast.FunctionDef) and node.name in names:
-                node.decorator_list = []
-                selected.append(node)
-        exec(compile(ast.Module(selected, type_ignores=[]), str(SOURCE), "exec"), ns)
+                 "_weakref_run_callback", "py_weakref_invalidate_gc0_candidates",
+                 "py_weakref_invalidate", "py_weakref_call"}
         ns["_weakref_target_is_base_object"] = lambda target: 0
+        load_functions(SOURCE, names, ns)
         self.ns = ns
 
     def load(self, base, offset=0):
+        assert not self.poison_freed or not any(
+            address <= base + offset < address + 48
+            for address in self.freed if address in self.refcounts
+        ), (
+            "read from freed weakref", base, offset,
+        )
         if offset == 0 and base in self.refcounts:
             return self.refcounts[base]
         return self.words.get(base + offset, 0)
@@ -292,3 +293,105 @@ def test_constructor_preserves_tracing_tracking_route(backend):
     model = WeakBatch(backend)
     result = model.ns['py_weakref_new'](0x2000, 0)
     assert result != 0 and model.head == result and model.tracked == []
+
+
+def test_terminal_target_clears_all_refs_before_callback_without_a_cycle():
+    model = WeakBatch()
+    model.stopped = False  # Immediate deallocation does not require a GC stop.
+    target = 0x2000
+    unrelated_target = 0x3000
+    older = model.ref(target, 0x8000)
+    silent = model.ref(target)
+    unrelated = model.ref(unrelated_target, 0x8200)
+    newer = model.ref(target, 0x8100)
+
+    def observe(wr):
+        assert all(model.ns["py_weakref_call"](ref) == model.none
+                   for ref in (older, silent, newer))
+        assert model.load(unrelated, 16) == unrelated_target
+
+    model.callbacks[0x8000] = model.callbacks[0x8100] = observe
+    model.ns["py_weakref_invalidate"](target)
+    assert model.calls == [newer, older]
+    assert not model.candidates  # Immediate terminal death, not GC0's batch.
+    assert all(model.refcounts[ref] == 1 for ref in (older, silent, newer))
+    assert model.freed == model.allocated
+    model.ns["py_weakref_invalidate"](target)
+    assert model.calls == [newer, older]
+
+
+def test_terminal_callback_can_drop_the_next_ref_and_replace_the_chain():
+    model = WeakBatch()
+    model.poison_freed = True
+    target = 0x2000
+    older = model.ref(target, 0x8000)
+    newer = model.ref(target, 0x8100)
+    replacement = []
+
+    def drop_refs(wr):
+        model.decref(older)
+        model.decref(newer)
+        assert older not in model.freed and newer not in model.freed
+        replacement.append(model.ref(0x3000, 0x8200))
+        # Reentrancy cannot deliver either callback again.
+        model.ns["py_weakref_invalidate"](target)
+
+    model.callbacks[0x8100] = drop_refs
+    model.ns["py_weakref_invalidate"](target)
+    assert model.calls == [newer, older]
+    assert model.refcounts[older] == model.refcounts[newer] == 0
+    assert older in model.freed and newer in model.freed
+    assert model.head == replacement[0]
+    assert model.load(replacement[0], 16) == 0x3000
+
+
+@pytest.mark.parametrize("callback", (0, 0x8200))
+def test_terminal_callback_can_free_the_next_unrelated_ref(callback):
+    model = WeakBatch()
+    model.poison_freed = True
+    target = 0x2000
+    older = model.ref(target, 0x8000)
+    unrelated = model.ref(0x3000, callback)
+    newer = model.ref(target, 0x8100)
+
+    def drop_unrelated(wr):
+        model.decref(unrelated)
+        assert unrelated in model.freed
+
+    model.callbacks[0x8100] = drop_unrelated
+    model.ns["py_weakref_invalidate"](target)
+    assert model.calls == [newer, older]
+    assert model.load(newer, 40) == older
+    assert model.refcounts[older] == model.refcounts[newer] == 1
+
+
+@pytest.mark.parametrize("failure", (1, 2))
+def test_terminal_queue_oom_preserves_targets_and_rolls_back_holds(failure):
+    model = WeakBatch()
+    target = 0x2000
+    refs = [model.ref(target, 0x8000), model.ref(target, 0x8100)]
+    model.fail_at = failure
+    with pytest.raises(RuntimeError, match="abort"):
+        model.ns["py_weakref_invalidate"](target)
+    assert all(model.load(ref, 16) == target and model.refcounts[ref] == 1
+               for ref in refs)
+    assert model.calls == [] and model.freed == model.allocated
+
+
+def test_terminal_target_clears_silent_and_dying_refs_without_holding_them():
+    model = WeakBatch()
+    target = 0x2000
+    refs = [model.ref(target), model.ref(target, 0x8000, count=0),
+            model.ref(target, 0x8100, dying=True)]
+    model.ns["py_weakref_invalidate"](target)
+    assert all(model.load(ref, 16) == 0 for ref in refs)
+    assert model.calls == [] and model.allocated == []
+
+
+@pytest.mark.parametrize("target", (0, 1))
+def test_terminal_null_and_tagged_targets_leave_the_chain_untouched(target):
+    model = WeakBatch()
+    ref = model.ref(0x2000, 0x8000)
+    model.ns["py_weakref_invalidate"](target)
+    assert model.load(ref, 16) == 0x2000
+    assert model.calls == [] and model.allocated == []
