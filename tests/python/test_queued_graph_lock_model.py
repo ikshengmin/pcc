@@ -583,3 +583,193 @@ def test_actual_ready_grant_after_stale_read_is_reloaded_before_word_acquisition
     assert not events
     assert memory[word, 0] == 1
     assert memory[tls, 0] == registered + queued + 1
+
+
+def _observe_graph_entry_state(ns):
+    """Count the actual body's state reads, not the model's memory accesses."""
+    reads = []
+    original = ns['load_i64']
+
+    def read(base, offset=0):
+        value = original(base, offset)
+        if (base, offset) == ('pcc_tls_thread_state_py', 0):
+            reads.append(value)
+        return value
+
+    ns['load_i64'] = read
+    return reads
+
+
+def _forbid_graph_entry_callback(*args):
+    raise AssertionError('fast graph entry reached a callback or cold path')
+
+
+@pytest.mark.parametrize('outer_depth,flags', [
+    (0, 0), (1, 0), (3, 1 << 48), ((1 << 24) - 2, 0), (2, 1 << 51),
+])
+def test_actual_registered_fast_and_recursive_entry_read_state_once(outer_depth, flags):
+    ns, memory, events = kernel_model()
+    tls, word = 'pcc_tls_thread_state_py', 9000
+    graph, registered, tripwire = 1 << 24, 1 << 49, 1 << 51
+    initial = registered | flags | outer_depth
+    memory[tls, 0] = initial
+    reads = _observe_graph_entry_state(ns)
+    comparisons = []
+    compare = ns['atomic_cas_i32']
+
+    def cas(*args):
+        comparisons.append(args)
+        return compare(*args)
+
+    ns['atomic_cas_i32'] = cas
+    for name in ('pcc_current_thread_id', 'pcc_thread_safepoint',
+                 'pcc_platform_monotonic_us', 'pcc_gc_record_graph_lock_wait',
+                 '_graph_wait_acquire', '_graph_wait_release', 'malloc',
+                 'global_load_ptr'):
+        ns[name] = _forbid_graph_entry_callback
+    ns['pcc_thread_graph_lock_acquire_for'](word, 3)
+    assert reads == [initial]
+    assert memory[tls, 0] == initial + graph + 1
+    assert comparisons == [(word, 0, 0, 1, 'acq_rel', 'acquire')]
+    ns['pcc_thread_graph_lock_acquire'](word)
+    assert reads == [initial, initial + graph + 1]
+    assert len(comparisons) == 1
+    assert memory[tls, 0] == initial + 2 * graph + 1
+    assert ns['pcc_thread_graph_lock_release'](word) == 0
+    assert memory[word, 0] == 1 and memory[tls, 0] == initial + graph + 1
+    assert ns['pcc_thread_graph_lock_release'](word) == int(bool(flags & tripwire))
+    if flags & tripwire:
+        assert memory[tls, 0] == (initial & ~tripwire) + 1
+        ns['pcc_thread_no_park_exit']()
+    assert memory[tls, 0] == initial & ~tripwire
+    assert memory[word, 0] == 0 and not events
+
+
+@pytest.mark.parametrize('registration_state', [
+    1 << 49, (1 << 49) | (1 << 48) | 2, (1 << 49) | (1 << 51),
+])
+def test_actual_cold_fast_entry_reloads_the_complete_registration_state(registration_state):
+    ns, memory, events = kernel_model()
+    tls, word = 'pcc_tls_thread_state_py', 9000
+    reads = _observe_graph_entry_state(ns)
+    compare = ns['atomic_cas_i32']
+
+    def register():
+        assert memory[tls, 0] == 0
+        events.append('register')
+        # Adversarial provider state tests the full callback boundary, rather
+        # than accepting a shortcut that merely ORs the registered bit.
+        memory[tls, 0] = registration_state
+        return 7
+
+    def cas(*args):
+        assert events == ['register']
+        assert reads == [0, registration_state]
+        assert memory[tls, 0] == registration_state
+        events.append('cas')
+        return compare(*args)
+
+    ns.update(pcc_current_thread_id=register, atomic_cas_i32=cas,
+              pcc_platform_monotonic_us=_forbid_graph_entry_callback,
+              _graph_wait_acquire=_forbid_graph_entry_callback)
+    ns['pcc_thread_graph_lock_acquire_for'](word, 2)
+    assert reads == [0, registration_state]
+    assert memory[tls, 0] == registration_state + (1 << 24) + 1
+    assert memory[word, 0] == 1 and events == ['register', 'cas']
+
+
+@pytest.mark.parametrize('thread_id', (0, -1))
+def test_actual_cold_entry_registration_failure_never_acquires(thread_id):
+    ns, memory, events = kernel_model()
+    ns.update(pcc_current_thread_id=lambda: thread_id,
+              atomic_cas_i32=_forbid_graph_entry_callback,
+              pcc_platform_monotonic_us=_forbid_graph_entry_callback)
+    with pytest.raises(AssertionError, match='unexpected native abort'):
+        ns['pcc_thread_graph_lock_acquire_for'](9000, 0)
+    assert memory['pcc_tls_thread_state_py', 0] == 0
+    assert memory.get((9000, 0), 0) == 0 and not events
+
+
+@pytest.mark.parametrize('initial,word_after', [
+    ((1 << 49) | ((1 << 24) - 1), 1),
+    ((1 << 49) | ((1 << 48) - (1 << 24)) | 1, 0),
+    ((1 << 49) | (1 << 53) | 1, 0),
+])
+def test_actual_fast_entry_preserves_overflow_and_lock_order_fail_stops(initial, word_after):
+    ns, memory, events = kernel_model()
+    memory['pcc_tls_thread_state_py', 0] = initial
+    ns.update(pcc_current_thread_id=_forbid_graph_entry_callback,
+              pcc_platform_monotonic_us=_forbid_graph_entry_callback,
+              _graph_wait_acquire=_forbid_graph_entry_callback)
+    with pytest.raises(AssertionError, match='unexpected native abort'):
+        ns['pcc_thread_graph_lock_acquire_for'](9000, 0)
+    # The existing no-park overflow fails after taking the word. Recursion
+    # overflow and inverted container order fail before touching the word.
+    assert memory.get((9000, 0), 0) == word_after
+    assert memory['pcc_tls_thread_state_py', 0] == initial and not events
+
+
+@pytest.mark.parametrize('allocations,queued', [((10001, 20001), True), ((), False), ((10001,), False)])
+@pytest.mark.parametrize('initially_registered', (False, True))
+def test_actual_slow_entry_refreshes_state_after_queue_or_oom_and_final_clock(
+    allocations, queued, initially_registered,
+):
+    ns, memory, events = kernel_model(allocations)
+    tls, word = 'pcc_tls_thread_state_py', 9000
+    registered, parked, tripwire = 1 << 49, 1 << 50, 1 << 51
+    memory[tls, 0] = registered | parked if initially_registered else 0
+    memory[word, 0] = 1
+    reads = _observe_graph_entry_state(ns)
+    compare, register = ns['atomic_cas_i32'], ns['pcc_current_thread_id']
+    polls, clocks, comparisons = [], [], []
+
+    def admission():
+        result = register()
+        memory[tls, 0] |= parked
+        return result
+
+    def poll():
+        polls.append(memory[tls, 0])
+        memory[tls, 0] &= ~parked
+        if len(polls) == (1 if queued else 3):
+            memory[word, 0] = 0
+        assert len(polls) <= 3
+
+    def cas(*args):
+        assert args == (word, 0, 0, 1, 'acq_rel', 'acquire')
+        observed = compare(*args)
+        comparisons.append(observed)
+        return observed
+
+    def clock():
+        clocks.append(memory[tls, 0])
+        assert len(clocks) <= 2
+        if len(clocks) == 2:
+            assert memory[word, 0] == 1
+            # A controlled late helper side effect ensures the reload stays
+            # after the final callback, not merely after queue construction.
+            memory[tls, 0] |= tripwire
+        return 99 + len(clocks)
+
+    ns.update(pcc_current_thread_id=admission, pcc_thread_safepoint=poll,
+              atomic_cas_i32=cas, pcc_platform_monotonic_us=clock)
+    ns['pcc_thread_graph_lock_acquire_for'](word, 1)
+    queue_state = ns['_GRAPH_QUEUED_BIT'] + 1 if queued else 0
+    assert clocks == [registered | parked, registered + queue_state]
+    assert reads[-1] == registered + queue_state + tripwire
+    assert len(reads) == (4 if queued else 2) + int(not initially_registered)
+    assert memory[tls, 0] == registered + tripwire + (1 << 24) + 1 + (
+        ns['_GRAPH_QUEUED_BIT'] if queued else 0
+    )
+    assert len(polls) == (1 if queued else 3)
+    assert comparisons == ([1, 0] if queued else [1, 1, 1, 0])
+    assert ns['graph_wait_records'] == [(1, 100, 101)]
+    assert events == ([] if initially_registered else ['register'])
+    assert ns['pcc_thread_graph_lock_release'](word) == 1
+    assert memory[word, 0] == 0 and memory[tls, 0] == registered + 1
+    if queued:
+        node = memory['pcc_tls_graph_wait_node_py', 0]
+        context = memory['pcc_graph_wait_context_head_py', 0]
+        assert memory[node, 16] == memory[context, 16] == 0
+    ns['pcc_thread_no_park_exit']()
+    assert memory[tls, 0] == registered

@@ -23,6 +23,8 @@ SOURCE = r'''
 extern int64_t pcc_thread_start(void **, void *(*)(void *), void *);
 extern int64_t pcc_thread_join(void *, void **);
 extern int64_t pcc_py_gc_minor_graph_lock_depth(void);
+extern void pcc_thread_graph_lock_acquire_for(void *, int64_t);
+extern int64_t pcc_thread_graph_lock_release(void *);
 extern int32_t g_pcc_py_gc_minor_graph_lock;
 extern void *pcc_graph_wait_context_head_py;
 
@@ -117,10 +119,46 @@ static void *reuse(void *argument) {
     }
     return 0;
 }
+/* This word is never published to fixture workers or runtime owners. Only
+ * this phase acquires it, so first-CAS success is deterministic even if a
+ * background collector uses the separate public graph word. While held, call
+ * only thread-state diagnostics, not helpers requiring the public graph. */
+static int32_t fast_word;
+static int registered_fast_phase(void) {
+    int64_t thread_id = pcc_current_thread_id();
+    if (thread_id <= 0 || pcc_thread_no_park_depth() != 0
+            || pcc_py_gc_minor_graph_lock_depth() != 0) return 60;
+    for (int outer = 0; outer < 4; outer++) {
+        for (int level = 0; level < outer; level++) pcc_thread_no_park_enter();
+        if (__atomic_load_n(&fast_word, __ATOMIC_ACQUIRE) != 0) return 61;
+        pcc_thread_graph_lock_acquire_for(&fast_word, outer);
+        if (pcc_py_gc_minor_graph_lock_depth() != 1
+                || pcc_thread_no_park_depth() != outer + 1
+                || pcc_current_thread_id() != thread_id) return 62;
+        pcc_thread_graph_lock_acquire_for(&fast_word, (outer + 1) % 4);
+        if (pcc_py_gc_minor_graph_lock_depth() != 2
+                || pcc_thread_no_park_depth() != outer + 1) return 63;
+        if (pcc_thread_graph_lock_release(&fast_word) != 0) return 64;
+        if (__atomic_load_n(&fast_word, __ATOMIC_ACQUIRE) != 1
+                || pcc_py_gc_minor_graph_lock_depth() != 1
+                || pcc_thread_no_park_depth() != outer + 1) return 65;
+        if (pcc_thread_graph_lock_release(&fast_word) != 0) return 66;
+        if (__atomic_load_n(&fast_word, __ATOMIC_ACQUIRE) != 0
+                || pcc_py_gc_minor_graph_lock_depth() != 0
+                || pcc_thread_no_park_depth() != outer) return 67;
+        for (int level = 0; level < outer; level++) pcc_thread_no_park_exit();
+        if (pcc_thread_no_park_depth() != 0
+                || pcc_current_thread_id() != thread_id) return 68;
+    }
+    return 0;
+}
+
 int main(void) {
     if (pcc_threads_enabled() != 1) return 1;
     int backend = (int)pcc_gc_backend();
     pcc_current_thread_id();
+    int fast_result = registered_fast_phase();
+    if (fast_result != 0) return fast_result;
     void *handles[4] = {0, 0, 0, 0};
     pcc_py_gc_minor_graph_lock();
     if (tail() != 0) return 2;
