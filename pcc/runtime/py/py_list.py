@@ -1296,9 +1296,8 @@ def _native_body_py_gen_frame_clear_group(_native_inputs, start: int, count: int
     """
     if count < 2 or count > 16 or start < 0:
         return 0
-    store_plans = stack_alloc(2048)  # 16 * existing 128-byte StorePlan ABI
-    # A short group leaves unused plans in the conservative stack extent.
-    memset(store_plans, 0, 2048)
+    store_plan = stack_alloc(128)  # Existing StorePlan ABI.
+    memset(store_plan, 0, 128)
     cleared: int = 0
     pcc_py_gc_minor_graph_lock()
     backend: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
@@ -1335,10 +1334,12 @@ def _native_body_py_gen_frame_clear_group(_native_inputs, start: int, count: int
                 if valid != 0:
                     offset = 0
                     while offset < count:
-                        plan = ptr_add(store_plans, offset * 128)
-                        pcc_gc_store_ptr_plan_init(plan, lst, backend)
+                        # Admission excludes collectable old values and RC
+                        # work. Each commit saves only the same immortal None;
+                        # canonical init may reset this private count-free plan.
+                        pcc_gc_store_ptr_plan_init(store_plan, lst, backend)
                         pcc_gc_store_ptr_plan_commit_locked(
-                            plan, lst, ptr_add(items, (start + offset) * C_POINTER_SIZE), none
+                            store_plan, lst, ptr_add(items, (start + offset) * C_POINTER_SIZE), none
                         )
                         offset = offset + 1
                     cleared = 1
@@ -1346,9 +1347,9 @@ def _native_body_py_gen_frame_clear_group(_native_inputs, start: int, count: int
     if cleared != 0:
         offset = 0
         while offset < count:
-            # Preserve each plan's ordinary finish outside the outer lock.
-            # Its only saved managed value is the permanent None singleton.
-            pcc_gc_store_ptr_plan_finish(ptr_add(store_plans, offset * 128))
+            # Keep all N calls outside the lock: even an already-finished
+            # plan crosses wrapper/shared entry polls and this loop's latch.
+            pcc_gc_store_ptr_plan_finish(store_plan)
             offset = offset + 1
     return cleared
 
