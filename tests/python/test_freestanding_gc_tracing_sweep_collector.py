@@ -168,8 +168,16 @@ def test_tracing_sweep_preserves_pep442_and_two_pass_order():
     )[1]
 
     recheck = "pcc_gc_tracing_recheck_reachability_after_finalizers()"
-    # Initial verdict refresh, callback resurrection, then finalizer resurrection.
-    assert sweep.count(recheck) == 3
+    # Initial verdict, early callbacks, finalizers, then late callbacks.
+    assert sweep.count(recheck) == 4
+    batch = "py_weakref_invalidate_tracing_candidates()"
+    assert sweep.count(batch) == 2
+    post_finalizer = sweep.split(
+        'if load_i64(global_addr("pcc_gc_user_finalizer_runs"), 0) != finalizer_runs:',
+        1,
+    )[1].split("# PASS 1:", 1)[0]
+    assert post_finalizer.index(recheck) < post_finalizer.index(batch)
+    assert post_finalizer.index(batch) < post_finalizer.rindex(recheck)
     assert sweep.index("if budget <= 0:") < sweep.index(recheck)
     assert sweep.index(recheck) < sweep.index("py_user_del_dispatch(obj)")
     assert sweep.index("py_user_del_dispatch(obj)") < sweep.rindex(recheck)

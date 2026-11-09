@@ -466,10 +466,15 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
     _record_sweep_phase(1, started, pcc_platform_monotonic_us(), visited,
                         load_i64(global_addr("pcc_gc_user_finalizer_runs"), 0) - finalizer_runs)
 
-    # Only user code -- a finalizer -- can resurrect a candidate or change
-    # the graph during this stopped-world sweep.
+    # Finalizers can resurrect candidates and create new weakrefs. Preserve
+    # those of resurrected targets before batching the remaining dead targets.
     if load_i64(global_addr("pcc_gc_user_finalizer_runs"), 0) != finalizer_runs:
         pcc_gc_tracing_recheck_reachability_after_finalizers()
+        if count_free != 0:
+            if py_weakref_invalidate_tracing_candidates() != 0:
+                # Late callbacks must see every candidate weak target cleared,
+                # and can rescue other candidates before PASS 1 clears fields.
+                pcc_gc_tracing_recheck_reachability_after_finalizers()
 
     # PASS 1: clear at most budget candidates without freeing any sibling.
     started = pcc_platform_monotonic_us()
