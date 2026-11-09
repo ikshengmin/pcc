@@ -87,6 +87,8 @@ RAW_FUNCTION_IMPORTS = RAW_ONLY_CROSS_OBJECT_SYMBOLS | {
     "pcc_gc_granule_span",
 }
 RAW_GLOBAL_IMPORTS = {
+    # Moving collectors read listed nodes directly only without edges.
+    "pcc_gc_forwarding_population",
     "pcc_gc_nonmoving_count_free",
     "pcc_gc_backend4_no_refcounts",
     "pcc_gc_backend_selected", "pcc_gc_gray_count",
@@ -256,6 +258,8 @@ extern void pcc_gc_gray_count_decrement_acq_rel(void);
 extern void pcc_gc_mark_root_gray_if_known(PyObject *obj);
 extern int64_t pcc_gc_object_is_known_no_lock(PyObject *obj);
 extern PyObject *pcc_gc_resolve_root_slot_unlocked(PyObject **base, int64_t offset);
+extern int64_t pcc_gc_object_node_is_address_pinned(void *node, PyObject *obj);
+extern int32_t pcc_gc_forwarding_population;
 
 typedef struct {
     PyObjectHeader h;
@@ -290,6 +294,32 @@ int main(void) {
            (long long)known,
            (long long)(slot[0] != (PyObject *)obj),
            (long long)(resolved == moved));
+
+    /* With a forwarding edge, the source and its copy each keep their own
+     * indexed node, and a walk's node answer equals the index's answer,
+     * unpinned and lease-pinned (node offset 80). */
+    void *source_node = pcc_gc_object_index_find((PyObject *)obj);
+    void *moved_node = pcc_gc_object_index_find(moved);
+    int64_t distinct = source_node != NULL && moved_node != NULL
+        && source_node != moved_node;
+    int64_t agree = distinct;
+    PyObject *edge_objects[2] = {(PyObject *)obj, moved};
+    void *edge_nodes[2] = {source_node, moved_node};
+    for (int i = 0; distinct && i < 2; ++i) {
+        int64_t *lease = (int64_t *)((char *)edge_nodes[i] + 80);
+        int64_t saved = *lease;
+        *lease = 0;
+        agree &= pcc_gc_object_node_is_address_pinned(edge_nodes[i], edge_objects[i])
+            == pcc_gc_object_is_address_pinned(edge_objects[i]);
+        *lease = 1;
+        agree &= pcc_gc_object_node_is_address_pinned(edge_nodes[i], edge_objects[i]) == 1
+            && pcc_gc_object_is_address_pinned(edge_objects[i]) == 1;
+        *lease = saved;
+    }
+    printf("edge:%lld,%lld,%lld\n",
+           (long long)(pcc_gc_forwarding_population > 0),
+           (long long)distinct,
+           (long long)agree);
 
     pcc_gc_gray_count_store_release(0);
     pcc_gc_gray_count_increment_acq_rel();
@@ -440,7 +470,7 @@ def test_archive_owns_root_operations_and_executes_semantics(
         [str(executable)], capture_output=True, text=True, timeout=30
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert result.stdout == "root:1,1,1,1\ncounter:0\n"
+    assert result.stdout == "root:1,1,1,1\nedge:1,1,1\ncounter:0\n"
 
 
 def test_gray_counter_survives_threaded_increment_decrement(

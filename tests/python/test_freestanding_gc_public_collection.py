@@ -202,7 +202,7 @@ def test_public_collection_preserves_config_and_collection_order():
     # A cycle begins only when due (the allocation debt threshold; tracked
     # growth paces only GC0) and not while a completed mark waits for the
     # sweep a mutator's application gate runs; a completed mark requests
-    # that sweep. GC1/GC2's traced gray work hands the final remark to that
+    # that sweep. Traced gray work (GC1-GC4) hands the final remark to that
     # mutator instead, which finishes and sweeps in one stopped world.
     assert "pcc_stop_the_world()" not in worker
     assert "pcc_resume_world()" not in worker
@@ -306,7 +306,8 @@ def test_public_collection_object_has_exact_raw_closure(
     assert defined == OWNED_SYMBOLS | OWNED_TLS_GLOBALS
 
 
-def test_pcc_python_cms_worker_starts_drains_and_joins(tmp_path: Path) -> None:
+@pytest.mark.parametrize("backend", [1, 2, 3, 4])
+def test_pcc_python_cms_worker_starts_drains_and_joins(tmp_path: Path, backend: int) -> None:
     public_obj = _compile_object(tmp_path, "llvm")
     scheduler_obj = _compile_llvm_object(
         tmp_path,
@@ -491,9 +492,20 @@ int64_t pcc_py_gc_minor_graph_lock_depth(void) { return 0; }
 int64_t pcc_thread_no_park_depth(void) { return 0; }
 void py_incref(void *obj) { (void)obj; }
 void py_decref(void *obj) { (void)obj; }
+/* The worker drains retired scalar blocks and deferred frees each round;
+ * this harness retires none. */
+int64_t pcc_gc_scalar_sweep_drain(int64_t worker, int64_t closing, int64_t token) {
+    (void)worker; (void)closing; (void)token; return 0;
+}
+int64_t pcc_gc_deferred_free_worker_drain(int64_t closing) { (void)closing; return 0; }
+/* No mutator publishes gray batches here: the queue stays empty. */
+int32_t pcc_gc_gray_worklist_flush_requested;
+int32_t pcc_gc_gray_worklist_fallback_required;
+void *pcc_gc_gray_worklist_take_locked(void) { return NULL; }
+void pcc_gc_gray_worklist_flush(void) {}
 
 int main(void) {
-    pcc_gc_backend_selected = 2;
+    pcc_gc_backend_selected = PCC_TEST_BACKEND;
     pcc_gc_config_initialized = 1;
     pcc_gc_cycle_requested = 1;
     pcc_gc_maybe_start_cms_worker();
@@ -524,7 +536,7 @@ int main(void) {
         != 0
     ) return 15;
     /* Debt at the pacing threshold (no marked bytes: the 4 MiB floor)
-     * begins one. Its gray work traced, GC2's collector thread asks the next
+     * begins one. Its gray work traced, the collector thread asks the next
      * application gate to finish the mark and sweep it in one stopped
      * world. */
     pcc_gc_cms_note_alloc(4194304);
@@ -568,6 +580,7 @@ int main(void) {
             "clang",
             "-std=c11",
             "-pthread",
+            f"-DPCC_TEST_BACKEND={backend}",
             str(harness),
             str(public_obj),
             str(scheduler_obj),

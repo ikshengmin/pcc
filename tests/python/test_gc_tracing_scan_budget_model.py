@@ -373,7 +373,7 @@ def test_empty_work_finish_claim_respects_worker_handoff(backend, tracing, worke
     assert state.step(1) == 0
     assert state.visited_nodes == [] and state.visited_payloads == []
     assert state.cursor == 0 and state.gray == 0
-    deferred = worker and backend in (1, 2) and not stopped
+    deferred = worker and backend in (1, 2, 3, 4) and not stopped
     if deferred:
         assert state.completions == []
         assert state.load("pcc_gc_tracing_finish_claim_epoch", 0) == 0
@@ -385,7 +385,7 @@ def test_empty_work_finish_claim_respects_worker_handoff(backend, tracing, worke
         assert state.load("pcc_gc_tracing_finish_claim_backend", 0) == backend
 
 
-@pytest.mark.parametrize("backend", [1, 2])
+@pytest.mark.parametrize("backend", [1, 2, 3, 4])
 def test_new_gray_work_before_mutator_handoff_is_traced_before_finish_claim(backend):
     state = TraceState(backend)
     state.store("pcc_gc_cms_worker_current", 0, 1)

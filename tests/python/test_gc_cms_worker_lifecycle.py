@@ -468,20 +468,84 @@ def test_gc4_gate_consumes_a_worker_completion_that_predates_the_gate(enabled, u
     tree = _body("py_obj", ["_gc4_maybe_auto_step"])
     pending = {"pcc_gc_cms_sweep_pending": 1}
     calls = []
-    namespace = {
+    namespace = _gc4_gate_namespace(pending, calls, enabled, unsafe)
+    exec(compile(ast.fix_missing_locations(tree), "gc4-production-gate", "exec"), namespace)
+    namespace["_gc4_maybe_auto_step"]()
+    expected = ["step", 0] if enabled and not unsafe else (["step"] if enabled else [])
+    assert calls == expected
+
+
+def _gc4_gate_namespace(pending, calls, enabled, unsafe):
+    def xchg(operation, key, offset, value, *ordering):
+        assert operation == "xchg"
+        previous = pending.get(key, 0)
+        pending[key] = value
+        return previous
+    return {
         "global_addr": lambda key: key,
+        "load_i32": lambda key, *_: pending.get(key, 0),
         "atomic_load_i32": lambda key, *_: pending.get(key, 0),
         "atomic_store_i32": lambda key, offset, value, *ordering: pending.update({key: value}),
+        "atomic_rmw_i32": xchg,
         "_gc_automatic_collection_enabled": lambda: enabled,
-        "pcc_gc_backend4_maybe_auto_step": lambda: None,
+        "pcc_gc_backend4_maybe_auto_step": lambda: calls.append("step"),
         "pcc_gc_sweep_owed": lambda: 0,
         "pcc_thread_no_park_depth": lambda: unsafe,
         "pcc_py_gc_minor_graph_lock_depth": lambda: 0,
         "_gc_tracing_automatic_collect": lambda mark: calls.append(mark),
     }
+
+
+@pytest.mark.parametrize("mark_active", [0, 1])
+@pytest.mark.parametrize("enabled,unsafe", [(1, 0), (0, 0), (1, 1)])
+def test_gc4_gate_finishes_a_left_remark_and_sweeps_in_one_collection(mark_active, enabled, unsafe):
+    # The collector thread leaves GC4's final remark to a gate, as GC1/GC2's:
+    # finishing and sweeping in one stopped world needs no pre-sweep re-mark.
+    tree = _body("py_obj", ["_gc4_maybe_auto_step"])
+    pending = {"pcc_gc_cms_finish_pending": 1, "pcc_gc_mark_active": mark_active}
+    calls = []
+    namespace = _gc4_gate_namespace(pending, calls, enabled, unsafe)
     exec(compile(ast.fix_missing_locations(tree), "gc4-production-gate", "exec"), namespace)
     namespace["_gc4_maybe_auto_step"]()
-    assert calls == ([0] if enabled and not unsafe else [])
+    if not enabled:
+        assert calls == [] and pending["pcc_gc_cms_finish_pending"] == 1
+    elif unsafe:
+        # A gate inside runtime code leaves the request for a safe one.
+        assert calls == ["step"] and pending["pcc_gc_cms_finish_pending"] == 1
+    elif mark_active:
+        assert calls == [2] and pending["pcc_gc_cms_finish_pending"] == 0
+    else:
+        assert calls == ["step"] and pending["pcc_gc_cms_finish_pending"] == 0
+
+
+@pytest.mark.parametrize("left,mark_active", [(1, 1), (1, 0), (0, 1)])
+def test_gc3_collection_consumes_a_left_remark(left, mark_active):
+    tree = _body("py_obj", ["_gc_maybe_auto_collect"])
+    memory = {"pcc_gc_backend4_auto_step_pending": 1, "pcc_gc_cms_finish_pending": left,
+              "pcc_gc_mark_active": mark_active}
+    calls = []
+    def xchg(operation, key, offset, value, *ordering):
+        previous = memory.get(key, 0)
+        memory[key] = value
+        return previous
+    namespace = {
+        "global_addr": lambda key: key,
+        "load_i32": lambda key, *_: memory.get(key, 0),
+        "atomic_load_i32": lambda key, *_: memory.get(key, 0),
+        "atomic_store_i32": lambda key, offset, value, *ordering: memory.update({key: value}),
+        "atomic_store_i64": lambda *args: None,
+        "atomic_rmw_i32": xchg,
+        "pcc_thread_no_park_depth": lambda: 0,
+        "pcc_py_gc_minor_graph_lock_depth": lambda: 0,
+        "_gc_automatic_collection_enabled": lambda: 1,
+        "_gc_backend_fast": lambda: 3,
+        "_gc_tracing_automatic_collect": lambda mark: calls.append(mark),
+    }
+    exec(compile(ast.fix_missing_locations(tree), "gc3-production-gate", "exec"), namespace)
+    namespace["_gc_maybe_auto_collect"]()
+    # Only a left remark of an active mark takes the finish-only collection.
+    assert calls == ([2] if left and mark_active else [1])
+    assert memory["pcc_gc_cms_finish_pending"] == 0
 
 
 @pytest.mark.parametrize("backend", [1, 2, 3, 4])
@@ -559,7 +623,7 @@ def test_paused_worker_clears_publication_request_and_rearms_after_resume(backen
     assert rt.memory[request] == 0
 
 
-@pytest.mark.parametrize("backend", [1, 2])
+@pytest.mark.parametrize("backend", [1, 2, 3, 4])
 def test_zero_credit_handoff_clears_publication_request_before_gate(backend):
     rt = Runtime(backend=backend, state=1)
     request = "pcc_gc_gray_worklist_flush_requested"

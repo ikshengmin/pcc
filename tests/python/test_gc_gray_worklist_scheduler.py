@@ -105,6 +105,10 @@ class _SchedulerMemory(_RawCollectorMemory):
         self.namespace.update({
             "atomic_rmw_i32": self.metric_add32,
             "unsigned_div_i64": lambda left, right: left // right,
+            # The worker retires scalar blocks and deferred frees each round;
+            # this model retires none.
+            "pcc_gc_scalar_sweep_drain": lambda worker, closing, token: 0,
+            "pcc_gc_deferred_free_worker_drain": lambda closing: 0,
         })
         _install(self.namespace, SOURCE.with_name("freestanding_gc_incremental_concurrent_scheduler.py"), {
             "pcc_gc_cms_note_alloc", "pcc_gc_tracing_debt_threshold",

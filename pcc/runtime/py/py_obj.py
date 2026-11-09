@@ -211,6 +211,7 @@ pcc_gc_shade_gray_atomic = extern(
 )
 pcc_gc_note_safepoint = extern("pcc_gc_note_safepoint", (), c_void)
 pcc_gc_step = extern("pcc_gc_step", (c_int64,), c_int64)
+pcc_gc_tracing_step_cycle = extern("pcc_gc_tracing_step_cycle", (c_int64,), c_int64)
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
 pcc_gc_note_frame_enter = extern(
     "pcc_gc_note_frame_enter",
@@ -1792,11 +1793,14 @@ def pcc_gc_frame_leave_lifo_mapped(slots) -> None:
 
 def _gc_tracing_automatic_collect(mark: int) -> int:
     # One automatic collection of GC1..GC4 with the world stopped, as an
-    # explicit gc.collect() runs it, but a single cycle. With mark set (GC3,
-    # which has no collector thread) it finishes the mark in progress or runs
-    # one; otherwise it sweeps only a mark that has completed (GC1/GC2's
-    # collector thread or GC4's automatic step completed it). An explicit
-    # collect keeps stepping until nothing is left.
+    # explicit gc.collect() runs it, but a single cycle. With mark 1 (GC3, or
+    # GC1/GC2's left remark) it finishes the mark in progress or runs one;
+    # with 0 it sweeps only a mark that has completed (GC4's automatic step
+    # completed it). With 2 it only finishes the traced mark the collector
+    # thread left to this mutator, as that thread would have: GC3/GC4 steps
+    # also promote, and each promoted copy is gray work that a stopped walk
+    # finds only by passing the whole object list again. An explicit collect
+    # keeps stepping until nothing is left.
     if load_i32(global_addr("pcc_gc_explicit_collect_active"), 0) != 0:
         return 0
     _pcc_gc_fire_callbacks(cstr("start"), 5)
@@ -1820,7 +1824,12 @@ def _gc_tracing_automatic_collect(mark: int) -> int:
         and idle_rounds < 4
         and load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0) == commits
     ):
-        if pcc_gc_step(1024) > 0:
+        stepped: int = 0
+        if mark == 2:
+            stepped = pcc_gc_tracing_step_cycle(1024)
+        else:
+            stepped = pcc_gc_step(1024)
+        if stepped > 0:
             idle_rounds = 0
         else:
             idle_rounds = idle_rounds + 1
@@ -1869,7 +1878,15 @@ def _gc_maybe_auto_collect() -> None:
     if backend == 0:
         pcc_gc_collect(0)
     elif backend == 3:
-        _gc_tracing_automatic_collect(1)
+        # GC3's collection finishes the mark in progress. A remark the
+        # collector thread left to it needs only that finish.
+        left: int = atomic_rmw_i32(
+            "xchg", global_addr("pcc_gc_cms_finish_pending"), 0, 0, "acq_rel"
+        )
+        if left != 0 and load_i32(global_addr("pcc_gc_mark_active"), 0) != 0:
+            _gc_tracing_automatic_collect(2)
+        else:
+            _gc_tracing_automatic_collect(1)
     else:
         # GC1/GC2's collector thread left a traced mark's final remark to
         # this collection (pcc_gc_cms_finish_pending).
@@ -1896,6 +1913,16 @@ def _gc4_maybe_auto_step() -> None:
             global_addr("pcc_gc_backend4_auto_step_pending"), 0, 0, "release"
         )
         return
+    if pcc_thread_no_park_depth() == 0 and pcc_py_gc_minor_graph_lock_depth() == 0:
+        # The collector thread left a traced mark's final remark to this
+        # gate (pcc_gc_cms_finish_pending): finish and sweep it in one
+        # stopped world. Its thread re-arms the request while marking.
+        finish: int = atomic_rmw_i32(
+            "xchg", global_addr("pcc_gc_cms_finish_pending"), 0, 0, "acq_rel"
+        )
+        if finish != 0 and load_i32(global_addr("pcc_gc_mark_active"), 0) != 0:
+            _gc_tracing_automatic_collect(2)
+            return
     pcc_gc_backend4_maybe_auto_step()
     # The background marker may have finished before this gate was entered.
     # Its completed sweep must not depend on this mutator finishing a cycle.

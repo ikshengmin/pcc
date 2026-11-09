@@ -158,14 +158,12 @@ def pcc_gc_cms_worker_main_py(arg):
                 if atomic_load_i64(debt_slot, 0, "acquire") >= pcc_gc_tracing_debt_threshold():
                     due = 1
             handoff: i64 = 0
-            if (
-                marking != 0
-                and (backend == 1 or backend == 2)
-                and pcc_gc_gray_count_load_acquire() == 0
-            ):
+            if marking != 0 and pcc_gc_gray_count_load_acquire() == 0:
                 # The gray work is traced: a mutator finishes the mark and
                 # sweeps it in one stopped world (pcc_gc_cms_finish_pending).
-                # Gray objects shaded meanwhile are traced here first.
+                # Gray objects shaded meanwhile are traced here first. A
+                # finish in this thread's own stopped world left GC3/GC4's
+                # sweep to re-mark the whole heap from every survivor.
                 handoff = 1
                 due = 0
                 atomic_store_i32(

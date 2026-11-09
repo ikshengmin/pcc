@@ -98,7 +98,7 @@ int main(void) {
             pcc_gc_cms_worker_current = worker;
             if (pcc_gc_is_cms_worker() != worker) return 10 + backend;
             for (stopped = 0; stopped <= 1; ++stopped) {
-                int expected = worker && (backend == 1 || backend == 2) && !stopped;
+                int expected = worker && backend >= 1 && backend <= 4 && !stopped;
                 if (pcc_gc_tracing_finish_left_to_mutator() != expected) return 20 + backend;
             }
         }

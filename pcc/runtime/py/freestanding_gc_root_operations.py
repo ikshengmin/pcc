@@ -868,12 +868,16 @@ def pcc_gc_object_node_is_address_pinned(node, obj) -> i64:
 
     The nonmoving collectors (GC1/GC2) unlink an object's node when they
     index-remove it, so an active listed node is the one the index finds:
-    read it instead of probing the index for every listed object. The
-    moving collectors keep the index's answer.
+    read it instead of probing the index for every listed object. The moving
+    collectors (GC3/GC4) give the same guarantee while no forwarding edge
+    exists; with one, a source or target node may not be its address's
+    indexed node, so they keep the index's answer.
     """
     backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
     if backend != 1 and backend != 2:
-        return pcc_gc_object_is_address_pinned(obj)
+        if ((backend != 3 and backend != 4)
+                or load_i32(global_addr("pcc_gc_forwarding_population"), 0) != 0):
+            return pcc_gc_object_is_address_pinned(obj)
     if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
         return 0
     if pcc_gc_static_literal_contains(obj) != 0:

@@ -318,6 +318,21 @@ def test_automatic_collection_covers_mark_sweep_and_end_before_resume(backend, m
     assert state.steps == mark
 
 
+@pytest.mark.parametrize("backend", range(1, 5))
+def test_left_remark_finishes_with_tracing_steps_and_sweeps_in_one_window(backend):
+    # A remark the collector thread left needs only its tracing finish. The
+    # full step's promotion would add gray copies for stopped walks to find.
+    state = CollectionWindow(backend)
+    traced = []
+    state.ns["pcc_gc_tracing_step_cycle"] = lambda budget: traced.append(budget) or state.step(budget)
+    state.ns["pcc_gc_step"] = lambda budget: pytest.fail("left remark ran a full collector step")
+    assert state.ns["_gc_tracing_automatic_collect"](2) == 7
+    state.assert_one_window()
+    state.assert_retirement_window()
+    assert traced == [1024] and state.steps == 1
+    assert state.events.index("sweep") < state.events.index("end") < state.events.index("record")
+
+
 @pytest.mark.parametrize("exit_kind", ["empty", "materialize", "allocation", "wrong_backend"])
 def test_gc0_early_exits_count_the_acquired_stop_once(exit_kind):
     state = CollectionWindow(0 if exit_kind != "wrong_backend" else 2, gc0_exit=exit_kind)

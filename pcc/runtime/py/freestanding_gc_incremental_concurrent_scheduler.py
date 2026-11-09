@@ -731,17 +731,17 @@ def pcc_gc_record_collection_stw_pause(start_us: i64, end_us: i64) -> None:
 
 @c_abi_export("pcc_gc_tracing_finish_left_to_mutator")
 def pcc_gc_tracing_finish_left_to_mutator() -> i64:
-    # GC1/GC2's collector thread does not finish a mark in a stopped world of
-    # its own: the mutator sweeping it would then have to re-mark the heap
-    # first (a candidate may be reachable again by then). It leaves the
-    # final remark to that mutator (pcc_gc_cms_finish_pending), which
+    # The collector thread (GC1-GC4) does not finish a mark in a stopped
+    # world of its own: the mutator sweeping it would then have to re-mark
+    # the heap first (a candidate may be reachable again by then). It leaves
+    # the final remark to that mutator (pcc_gc_cms_finish_pending), which
     # finishes and sweeps in one stopped world.
     # The public collection module owns this TLS cell. Access it through its
     # existing ABI getter so separate compilation preserves thread locality.
     if pcc_gc_is_cms_worker() == 0:
         return 0
     backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if backend != 1 and backend != 2:
+    if backend < 1 or backend > 4:
         return 0
     if pcc_thread_owns_stopped_world() != 0:
         return 0
