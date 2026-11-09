@@ -176,6 +176,17 @@ These are required outcomes, not assertions that migration is complete. See
   protocol, allocation). Do not add per-module or per-feature fast paths, for
   speed or for semantics; a module's general implementation carries CPython's
   semantics.
+- Publish a performance change only with a same-input A/B: alternate the two
+  arms for at least five pairs, report medians and pair wins, and include an
+  unchanged control (for example a collector the change cannot reach) to expose
+  host drift. One screening run is not evidence. Label an unmeasured change as
+  correctness or refactoring work, never as performance.
+- Budgeted steps and hot queries must not gain heap-proportional work or a new
+  call on their common path. Time a probe at n, 4n and 16n; a superlinear curve
+  is a regression even when every result is correct.
+- Fix a subsystem's known correctness failures before stacking optimizations
+  on it, and commit a change together with its tests rather than as a chain of
+  test-only follow-ups.
 - Execute emitted programs and preserve the five-GC/ownership contracts.
   Instruction counts, byte equality and QPS support different claims.
   The [memory-pass audit](docs/knowledge/2026-09-08-optimizer-pipeline-audit.md)
