@@ -172,7 +172,8 @@ def test_source_target_and_budget_codes(monkeypatch):
     assert caught.value.code == "java.unsupported.token-limit"
     def recurse(*args):
         raise RecursionError("injected bounded parser exhaustion")
-    monkeypatch.setattr(SourceParser, "parse", recurse)
+    # Every source entry parses a whole compilation unit through parse_unit.
+    monkeypatch.setattr(SourceParser, "parse_unit", recurse)
     for invoke in (lambda: compile_source("class C{}"),
                    lambda: compile_sources({"C.java": "class C{}"}, entry_class="C"),
                    lambda: analyze_class_sources({"C.java": "class C{}"})):

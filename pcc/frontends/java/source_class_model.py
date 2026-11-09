@@ -545,8 +545,8 @@ def analyze_class_sources(sources):
     if sum(len(text) for text in sources.values()) > 8_388_608:
         raise UnsupportedJava("class source model exceeds the 8 MiB aggregate input limit", code="java.unsupported.project-size-limit")
     try:
-        programs = [program for program in (SourceParser(sources[name], name, class_model=True).parse()
-                                            for name in sorted(sources)) if program is not None]
+        programs = [program for name in sorted(sources)
+                    for program in SourceParser(sources[name], name, class_model=True).parse_unit()]
         return ClassModelProject(programs).analyze()
     except RecursionError as error:
         raise UnsupportedJava("class source model exceeds the bounded parser/analysis nesting limit", code="java.unsupported.nesting-limit") from error

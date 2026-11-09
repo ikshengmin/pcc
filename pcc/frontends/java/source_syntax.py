@@ -430,6 +430,14 @@ class SourceParser:
         return result
 
     def parse(self):
+        """The class of a unit with at most one top-level type, else None."""
+        classes = self.parse_unit()
+        if len(classes) > 1:
+            raise ValueError("compilation unit declares " + str(len(classes)) + " top-level classes; use parse_unit")
+        return classes[0] if classes else None
+
+    def parse_unit(self):
+        """JLS 7.3/7.6: every top-level class of one compilation unit."""
         package = []
         if self.accept("package"):
             package.append(self.identifier().text)
@@ -460,11 +468,13 @@ class SourceParser:
             if imports or static_imports:
                 self.peek().error("imports of a compilation unit without type declarations need project import resolution",
                                   code="java.unsupported.source-dependency")
-            return None
-        program = self.class_declaration(self.modifiers(), "/".join(package),
-                                         tuple(imports), tuple(static_imports))
-        self.expect("<eof>")
-        return program
+            return ()
+        # Each type of the unit shares its package and imports.
+        classes = []
+        while self.peek().text != "<eof>":
+            classes.append(self.class_declaration(self.modifiers(), "/".join(package),
+                                                  tuple(imports), tuple(static_imports)))
+        return tuple(classes)
 
     def class_declaration(self, mods, package, imports, static_imports, *, enclosing=None, enclosing_names=()):
         # JLS 8.1.1: unsupported abstract classes differ from illegal

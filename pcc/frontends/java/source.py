@@ -41,7 +41,9 @@ def _compile_programs(programs, entry_class, entry, descriptor, target):
 
 def compile_source(source: str, *, filename: str = "<java>", entry: str = "run",
                    descriptor: str = "()I", target: str = "x86_64-unknown-linux-gnu") -> JavaCompilation:
-    """Compile one original scalar Java class, without javac or bytecode.
+    """Compile one original scalar Java unit, without javac or bytecode.
+
+    Its first top-level class owns the entry.
 
     All source methods are checked and emitted, including uncalled methods.
     The selected export is not Java main(String[]) startup. Heap/fields/class
@@ -49,10 +51,11 @@ def compile_source(source: str, *, filename: str = "<java>", entry: str = "run",
     """
     try:
         _admit_target(target)
-        program = SourceParser(source, filename).parse()
-        if program is None:
+        programs = SourceParser(source, filename).parse_unit()
+        if not programs:
             raise JavaError("source unit declares no class")
-        return _compile_programs((program,), program.name, entry, descriptor, target)
+        # The unit's first top-level class is the entry class.
+        return _compile_programs(programs, programs[0].name, entry, descriptor, target)
     except RecursionError as error:
         raise UnsupportedJava("Java source exceeds the bounded parser/analysis nesting limit", code="java.unsupported.nesting-limit") from error
 
@@ -77,9 +80,8 @@ def compile_sources(sources: Mapping[str, str], *, entry_class: str, entry: str 
             raise JavaError("source project names and contents must be text")
         if sum(len(text) for text in sources.values()) > 8_388_608:
             raise UnsupportedJava("source project exceeds the 8 MiB aggregate input limit", code="java.unsupported.project-size-limit")
-        # Units without type declarations contribute no class.
-        programs = [program for program in (SourceParser(sources[name], name).parse() for name in sorted(sources))
-                    if program is not None]
+        # A unit contributes each of its top-level classes, possibly none.
+        programs = [program for name in sorted(sources) for program in SourceParser(sources[name], name).parse_unit()]
         return _compile_programs(programs, entry_class.replace(".", "/"), entry, descriptor, target)
     except RecursionError as error:
         raise UnsupportedJava("Java source exceeds the bounded parser/analysis nesting limit", code="java.unsupported.nesting-limit") from error

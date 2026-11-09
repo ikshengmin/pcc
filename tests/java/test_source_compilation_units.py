@@ -1,11 +1,12 @@
-"""Compilation units without type declarations.
+"""Compilation units with zero or several top-level classes.
 
 JLS 7.3: CompilationUnit is [PackageDeclaration] {ImportDeclaration}
 {TypeDeclaration}, so a unit may declare no type; JLS 7.4.1 uses such a
-package-info.java for package documentation and annotations. The unit
-contributes no class. Imports in a type-less unit still need resolution
-against the project and stay an explicit gap. The unchanged Commons Numbers
-Primes package-info.java is the project input.
+package-info.java for package documentation and annotations. Such a unit
+contributes no class, and imports in it still need resolution against the
+project, an explicit gap. JLS 7.6: several top-level classes share their
+unit's package and imports. The unchanged Commons Numbers Primes
+package-info.java is the project input.
 """
 import pytest
 
@@ -19,6 +20,7 @@ from tests.java.test_source_scalars import NATIVE_REASON
 
 
 PACKAGE_INFO = PRODUCTION[2]
+TWO_CLASSES = "class A{static int run(){return B.v()+38;}}class B{static int v(){return 4;}}"
 ENTRY = "package org.apache.commons.numbers.primes;final class Answer{static int run(){return 42;}}"
 TYPELESS = (
     ("empty", ""),
@@ -68,11 +70,50 @@ def test_imports_in_a_typeless_unit_stay_an_explicit_gap():
     assert caught.value.code == "java.unsupported.source-dependency"
 
 
+def test_top_level_classes_of_one_unit_share_its_package_and_imports():
+    first, second = SourceParser("package p;import q.R;" + TWO_CLASSES, "Two.java").parse_unit()
+    assert (first.name, second.name) == ("p/A", "p/B")
+    assert first.imports == second.imports and first.imports[0][-1].text == "R"
+
+
+def test_single_class_parse_rejects_a_unit_with_several_classes():
+    with pytest.raises(ValueError, match="2 top-level classes"):
+        SourceParser(TWO_CLASSES, "Two.java").parse()
+
+
+def test_classes_of_one_unit_call_each_other(monkeypatch):
+    forbid_bytecode_or_external_owner(monkeypatch)
+    assert compile_source(TWO_CLASSES).emit_object().startswith(b"\x7fELF")
+    assert compile_sources({"Two.java": TWO_CLASSES}, entry_class="A").emit_object().startswith(b"\x7fELF")
+    model = analyze_class_sources({"Two.java": TWO_CLASSES})
+    assert sorted(program.name for program in model.programs) == ["A", "B"]
+
+
+def test_single_source_entry_is_its_first_class():
+    with pytest.raises(JavaError, match="source entry method not found"):
+        compile_source("class B{static int v(){return 4;}}" + "class A{static int run(){return 42;}}")
+
+
+def test_duplicate_classes_in_one_unit_are_invalid():
+    with pytest.raises(JavaError, match="duplicate source class A") as caught:
+        compile_source("class A{}class A{}")
+    assert not isinstance(caught.value, UnsupportedJava)
+
+
 @pytest.mark.parametrize("text", ("package a", "package a;;class", "package a; int x;"))
 def test_malformed_units_remain_invalid(text):
     with pytest.raises(JavaError) as caught:
         SourceParser(text, "Bad.java").parse()
     assert not isinstance(caught.value, UnsupportedJava)
+
+
+@pytest.mark.integration
+@pytest.mark.pcc_gate(unavailable=NATIVE_REASON)
+def test_classes_of_one_unit_keep_exact_native_result(tmp_path, monkeypatch):
+    with monkeypatch.context() as denied:
+        forbid_bytecode_or_external_owner(denied)
+        compiled = compile_source(TWO_CLASSES)
+    assert observe_scalar(compiled, tmp_path, monkeypatch) == 42
 
 
 @pytest.mark.integration
