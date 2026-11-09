@@ -33,6 +33,7 @@ extern void *pcc_graph_wait_context_head_py;
 enum { CONTEXT_WORD = 0, CONTEXT_NEXT = 8, CONTEXT_TAIL = 16, ROUNDS = 300 };
 static int64_t entered, stop_completed, late_entered, failure, counter;
 static int64_t order[3];
+static int64_t handoff_payload;
 struct Worker { int64_t id; int64_t rounds; };
 static struct Worker workers[4];
 
@@ -63,6 +64,11 @@ static int wait_tail_changes(uint64_t previous) {
 static void *queued_once(void *argument) {
     struct Worker *worker = (struct Worker *)argument;
     pcc_py_gc_minor_graph_lock();
+    /* This read precedes entered's atomic RMW: the graph ownership edge
+       itself must publish the preceding queued owner's plain write. */
+    if (handoff_payload != worker->id) fail(24);
+    handoff_payload = worker->id + 1;
+    if (__atomic_load_n(&g_pcc_py_gc_minor_graph_lock, __ATOMIC_ACQUIRE) != 1) fail(25);
     int64_t position = __atomic_fetch_add(&entered, 1, __ATOMIC_ACQ_REL);
     if (position < 0 || position >= 3) fail(20);
     else order[position] = worker->id;
@@ -182,7 +188,8 @@ int main(void) {
     }
     if (__atomic_load_n(&failure, __ATOMIC_ACQUIRE)) return (int)failure;
     if (!stop_completed || late_entered != 1 || entered != 3) return 9;
-    if (order[0] != 0 || order[1] != 1 || order[2] != 2 || tail() != 0) return 10;
+    if (order[0] != 0 || order[1] != 1 || order[2] != 2 || tail() != 0
+            || handoff_payload != 3) return 10;
     for (int i = 0; i < 4; i++) {
         workers[i].rounds = ROUNDS;
         if (pcc_thread_start(&handles[i], reuse, &workers[i]) != 0) return 11;

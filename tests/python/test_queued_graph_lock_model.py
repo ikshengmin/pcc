@@ -1,9 +1,9 @@
-"""Interleavings of the queued-contender graph-lock protocol.
+"""Interleavings of the direct-handoff graph-lock protocol.
 
-The public word remains a 0/1 lock. MCS grants permission to contend, not
-ownership of that word; a fast newcomer may barge. A queued owner keeps its
-queue position through public-word release. Nodes and queue contexts are
-private to a thread and a lock respectively, never shared by hash collision.
+The public word remains a 0/1 lock. A queued owner retains that word while
+its release grant transfers ownership to a linked successor. Only a new
+predecessor-less head competes with fast arrivals. Nodes and queue contexts
+are private to a thread and a lock respectively, never shared by hash collision.
 """
 from collections import deque
 from dataclasses import dataclass
@@ -63,7 +63,8 @@ def advance(state, thread, locks):
     elif stage == 5:
         if not grant[thread]:
             return None
-        pc[thread] = 7
+        assert word[lock] == thread
+        pc[thread] = 8
     elif stage == 7:  # Only queued head may contend on the public word.
         assert queue[lock][0] == thread
         if word[lock] != -1:
@@ -74,8 +75,10 @@ def advance(state, thread, locks):
         pc[thread] = 9
     elif stage == 9:
         assert word[lock] == thread
-        word[lock] = -1
-        pc[thread] = 10 if linked[thread] else 13
+        if linked[thread]:
+            pc[thread] = 10
+        else:
+            word[lock], pc[thread] = -1, 13
     elif stage == 10:
         if nxt[thread] != -1:
             pc[thread] = 12
@@ -93,7 +96,8 @@ def advance(state, thread, locks):
     elif stage == 12:
         successor = nxt[thread]
         assert queue[lock][0] == thread and queue[lock][1] == successor
-        grant[successor] = 1
+        assert word[lock] == thread
+        word[lock], grant[successor] = successor, 1
         queue[lock] = queue[lock][1:]
         linked[thread], pc[thread] = 0, 13
     elif stage == 13:
@@ -101,8 +105,9 @@ def advance(state, thread, locks):
         depth[thread] = 0
         remaining[thread] -= 1
         pc[thread] = 0 if remaining[thread] else 14
-    elif stage == 16:  # A new head may arrive before detached-node cleanup ends.
-        pc[thread] = 13
+    elif stage == 16:  # A new head may arrive before the detached owner releases.
+        assert word[lock] == thread
+        word[lock], pc[thread] = -1, 13
     else:
         return None
     return State(**{name: tuple(value) for name, value in fields.items()})
@@ -111,11 +116,14 @@ def advance(state, thread, locks):
 def verify(state, locks):
     for lock, owner in enumerate(state.word):
         critical = [t for t, stage in enumerate(state.pc)
-                    if locks[t] == lock and stage in (8, 9)]
+                    if locks[t] == lock and (
+                        stage in (8, 9, 10, 11, 12, 16)
+                        or (stage == 5 and state.grant[t]))]
         assert critical == ([] if owner == -1 else [owner])
         assert state.tail[lock] == (state.queue[lock][-1] if state.queue[lock] else -1)
         contenders = [t for t in state.queue[lock]
-                      if state.pc[t] in (7, 8, 9)]
+                      if state.pc[t] in (7, 8, 9, 10, 11, 12)
+                      or (state.pc[t] == 5 and state.grant[t])]
         assert not contenders or contenders == [state.queue[lock][0]]
     for thread, linked in enumerate(state.linked):
         assert bool(linked) == any(thread in queue for queue in state.queue)
@@ -352,7 +360,7 @@ def test_actual_kernel_fast_path_never_allocates_or_reads_queue_tls():
 
 
 @pytest.mark.parametrize('tripwire', (False, True))
-def test_actual_queued_release_grants_permission_before_deferred_exit(tripwire):
+def test_actual_queued_release_hands_off_ownership_before_deferred_exit(tripwire):
     ns, memory, events = kernel_model()
     node, successor, context, word = 10000, 11000, 12000, 9000
     memory['pcc_tls_thread_state_py', 0] = 562949953421312 + 4503599627370496 + 16777216 + 1
@@ -365,17 +373,95 @@ def test_actual_queued_release_grants_permission_before_deferred_exit(tripwire):
     memory[context, 0] = word
     memory[context, 16] = successor
     assert ns['pcc_thread_graph_lock_release'](word) == int(tripwire)
-    assert memory[word, 0] == 0
+    assert memory[word, 0] == 1
     assert memory[successor, 8] == 1
     assert memory[node, 16] == 0
-    assert ns['atomic_cas_i32'](word, 0, 0, 1, 'acq_rel', 'acquire') == 0
+    assert ns['atomic_cas_i32'](word, 0, 0, 1, 'acq_rel', 'acquire') == 1
     assert memory['pcc_tls_thread_state_py', 0] == 562949953421312 + int(tripwire)
     if tripwire:
         ns['pcc_thread_no_park_exit']()
     assert not events
 
 
-def test_actual_new_head_after_tail_detachment_keeps_its_ownership():
+@pytest.mark.parametrize('pending_next', (False, True))
+@pytest.mark.parametrize('stop_requested', (False, True))
+def test_actual_two_successors_keep_word_owned_through_publication_and_stop(
+    pending_next, stop_requested,
+):
+    ns, memory, events = kernel_model()
+    nodes, context, word = (10000, 11000, 12000), 13000, 9000
+    tls, node_tls = 'pcc_tls_thread_state_py', 'pcc_tls_graph_wait_node_py'
+    registered, held = 1 << 49, (1 << 49) | (1 << 52) | (1 << 24) | 1
+    memory[word, 0] = 1
+    memory[context, 0], memory[context, 16] = word, nodes[-1]
+    memory['pcc_thread_stop_requested', 0] = int(stop_requested)
+    memory['pcc_gc_gray_worklist_flush_requested', 0] = int(stop_requested)
+    for index, node in enumerate(nodes):
+        memory[node, 16] = context
+        memory[node, 0] = nodes[index + 1] if index + 1 < len(nodes) else 0
+    if pending_next:
+        memory[nodes[0], 0] = 0  # Successor exchanged tail, not published next.
+    load, store = ns['atomic_load_i64'], ns['atomic_store_i64']
+    store_word, compare = ns['atomic_store_i32'], ns['atomic_cas_i32']
+    retired, grants, polls, writes, next_loads = set(), [], [], [], []
+
+    def checked_load(base, offset=0, order=None):
+        assert base not in retired, 'accessed a detached node after grant'
+        if pending_next and (base, offset) == (nodes[0], 0):
+            assert order == 'acquire' and memory[word, 0] == 1
+            assert memory[tls, 0] == held
+            next_loads.append(1)
+            if len(next_loads) == 3:
+                # Publication itself requires no graph acquisition or poll.
+                store(base, offset, nodes[1], 'release')
+        return load(base, offset, order)
+
+    def checked_store(base, offset, value, order=None):
+        assert base not in retired, 'accessed a detached node after grant'
+        store(base, offset, value, order)
+        if base in nodes and offset == 8 and value == 1:
+            owner = memory[node_tls, 0]
+            assert order == 'release' and memory[word, 0] == 1
+            assert memory[owner, 16] == 0 and memory[tls, 0] == held
+            assert memory[base, 16] == context
+            assert compare(word, 0, 0, 1, 'acq_rel', 'acquire') == 1
+            grants.append((owner, base))
+            # A successor may immediately finish and retire its node.
+            retired.update((owner, base))
+
+    def release_word(base, offset, value, order):
+        assert (base, offset, value, order) == (word, 0, 0, 'release')
+        assert memory[node_tls, 0] == nodes[-1]
+        assert memory[context, 16] == memory[nodes[-1], 16] == 0
+        writes.append(value)
+        store_word(base, offset, value, order)
+
+    def poll():
+        owner = memory[node_tls, 0]
+        assert memory[tls, 0] == registered and memory[owner, 16] == 0
+        # Prior owners may park after handoff while a successor owns word=1.
+        assert memory[word, 0] == int(owner != nodes[-1])
+        polls.append(owner)
+
+    ns.update(atomic_load_i64=checked_load, load_ptr=checked_load,
+              atomic_store_i64=checked_store, store_ptr=checked_store,
+              atomic_store_i32=release_word, pcc_thread_safepoint=poll)
+    for index, node in enumerate(nodes):
+        if index:
+            assert memory[node, 8] == 1
+        # Resume this live queued owner; all prior nodes stay inaccessible.
+        retired.discard(node)
+        memory[node_tls, 0], memory[tls, 0] = node, held
+        assert ns['pcc_thread_graph_lock_release'](word) == 0
+        assert memory[node, 16] == 0 and memory[tls, 0] == registered
+        assert memory[word, 0] == int(index + 1 < len(nodes))
+    assert grants == [(nodes[0], nodes[1]), (nodes[1], nodes[2])]
+    assert writes == [0] and memory[context, 16] == 0
+    assert len(next_loads) == (3 if pending_next else 0)
+    assert polls == (list(nodes) if stop_requested else []) and not events
+
+
+def test_actual_new_head_after_tail_detachment_waits_for_word_release():
     ns, memory, events = kernel_model()
     node, newcomer, context, word = 10000, 11000, 12000, 9000
     memory['pcc_tls_thread_state_py', 0] = 562949953421312 + 4503599627370496 + 16777216 + 1
@@ -388,19 +474,20 @@ def test_actual_new_head_after_tail_detachment_keeps_its_ownership():
     def arrive(base, offset, expected, desired, success, failure):
         result = compare(base, offset, expected, desired, success, failure)
         if base == context and offset == 16 and result == node:
-            assert memory[word, 0] == 0 and memory[context, 16] == 0
+            assert memory[word, 0] == 1 and memory[context, 16] == 0
             memory[context, 16] = newcomer
             memory[newcomer, 16] = context
-            assert ns['atomic_cas_i32'](word, 0, 0, 1, 'acq_rel', 'acquire') == 0
+            assert ns['atomic_cas_i32'](word, 0, 0, 1, 'acq_rel', 'acquire') == 1
         return result
     ns['atomic_cas_i64'] = arrive
     assert ns['pcc_thread_graph_lock_release'](word) == 0
     assert memory[context, 16] == newcomer
-    assert memory[node, 16] == 0 and memory[word, 0] == 1
-    assert ns['atomic_cas_i32'](word, 0, 0, 1, 'acq_rel', 'acquire') == 1
+    assert memory[node, 16] == 0 and memory[word, 0] == 0
+    assert memory.get((newcomer, 8), 0) == 0  # No grant across the empty tail.
+    assert ns['atomic_cas_i32'](word, 0, 0, 1, 'acq_rel', 'acquire') == 0
 
 
-def test_actual_granted_successor_retries_after_a_barger_releases():
+def test_actual_granted_successor_does_not_recontend_on_the_word():
     ns, memory, events = kernel_model()
     node, predecessor, context, word = 10000, 11000, 12000, 9000
     memory['pcc_tls_thread_state_py', 0] = 562949953421312
@@ -413,20 +500,14 @@ def test_actual_granted_successor_retries_after_a_barger_releases():
     def publish(base, offset, value, order):
         store(base, offset, value, order)
         if base == predecessor and offset == 0:
-            # The predecessor granted permission, but a newcomer got the word.
-            memory[node, 8] = 1
-    load = ns['atomic_load_i32']
-    observations = []
-    def barger_releases(base, offset, order):
-        value = load(base, offset, order)
-        observations.append(value)
-        memory[word, 0] = 0
-        return value
-    ns['atomic_store_i64'] = publish
-    ns['atomic_load_i32'] = barger_releases
+            # The predecessor grants ownership without clearing the word.
+            store(node, 8, 1, 'release')
+    def forbidden(*args):
+        raise AssertionError('granted successor touched the physical word')
+    ns.update(atomic_store_i64=publish, atomic_load_i32=forbidden,
+              atomic_cas_i32=forbidden, atomic_store_i32=forbidden)
     assert ns['_graph_wait_acquire'](word) == 1
     assert memory[word, 0] == 1 and memory[predecessor, 0] == node
-    assert observations == [1, 0]
     assert memory['pcc_tls_thread_state_py', 0] & 16777215 == 1
 
 
@@ -448,7 +529,7 @@ def test_actual_ready_wait_keeps_queue_live_until_acquire_grant(
     timeline = []
     ready_loads = []
     load, store = ns['atomic_load_i64'], ns['atomic_store_i64']
-    load_word, compare = ns['atomic_load_i32'], ns['atomic_cas_i32']
+    load_word = ns['atomic_load_i32']
 
     def assert_linked():
         assert memory[tls, 0] == registered + queued + outer_depth + 1
@@ -484,27 +565,15 @@ def test_actual_ready_wait_keeps_queue_live_until_acquire_grant(
             return value
         return load(base, offset, order)
 
-    def word_ready(base, offset, order):
-        assert ready_loads == [0] * failed_loads + [1]
-        assert (base, offset, order) == (word, 0, 'acquire')
-        value = load_word(base, offset, order)
-        timeline.append(('word', value))
-        memory[word, 0] = 0  # A barger releases only after the first word read.
-        return value
-
-    def acquire_word(base, offset, expected, desired, success, failure):
-        assert timeline[-1] == ('word', 0)
-        assert (base, offset, expected, desired, success, failure) == (
-            word, 0, 0, 1, 'acq_rel', 'acquire',
-        )
-        timeline.append('cas')
-        return compare(base, offset, expected, desired, success, failure)
+    def forbidden_word_access(*args):
+        raise AssertionError('direct handoff polled or CASed the word')
 
     ns.update(atomic_store_i64=publish, atomic_load_i64=ready,
-              atomic_load_i32=word_ready, atomic_cas_i32=acquire_word)
+              atomic_load_i32=forbidden_word_access,
+              atomic_cas_i32=forbidden_word_access)
     assert ns['_graph_wait_acquire'](word) == 1
     assert timeline[0] == 'published'
-    assert timeline[-3:] == [('word', 1), ('word', 0), 'cas']
+    assert timeline[1:] == [('ready', value) for value in ready_loads]
     assert ready_loads == [0] * failed_loads + [1]
     assert memory[word, 0] == 1
     assert_linked()
@@ -529,7 +598,7 @@ def test_actual_ready_wait_keeps_queue_live_until_acquire_grant(
     assert events == ([] if outer_depth else [('poll', registered)])
 
 
-def test_actual_ready_grant_after_stale_read_is_reloaded_before_word_acquisition():
+def test_actual_ready_grant_after_stale_read_is_reloaded_before_ownership():
     ns, memory, events = kernel_model()
     node, predecessor, context, word = 10000, 11000, 12000, 9000
     tls = 'pcc_tls_thread_state_py'
@@ -539,9 +608,9 @@ def test_actual_ready_grant_after_stale_read_is_reloaded_before_word_acquisition
     memory['pcc_graph_wait_context_head_py', 0] = context
     memory[context, 0] = word
     memory[context, 16] = predecessor
+    memory[word, 0] = 1
     loads, timeline = [], []
     load, store = ns['atomic_load_i64'], ns['atomic_store_i64']
-    load_word, compare = ns['atomic_load_i32'], ns['atomic_cas_i32']
 
     def ready(base, offset, order):
         value = load(base, offset, order)
@@ -561,25 +630,13 @@ def test_actual_ready_grant_after_stale_read_is_reloaded_before_word_acquisition
                 timeline.append('grant')
         return value
 
-    def word_ready(base, offset, order):
-        assert loads == [0, 1]
-        assert (base, offset, order) == (word, 0, 'acquire')
-        value = load_word(base, offset, order)
-        timeline.append(('word', value))
-        return value
+    def forbidden_word_access(*args):
+        raise AssertionError('direct handoff polled or CASed the word')
 
-    def acquire_word(base, offset, expected, desired, success, failure):
-        assert loads == [0, 1] and timeline[-1] == ('word', 0)
-        assert (base, offset, expected, desired, success, failure) == (
-            word, 0, 0, 1, 'acq_rel', 'acquire',
-        )
-        timeline.append('cas')
-        return compare(base, offset, expected, desired, success, failure)
-
-    ns.update(atomic_load_i64=ready, atomic_load_i32=word_ready,
-              atomic_cas_i32=acquire_word)
+    ns.update(atomic_load_i64=ready, atomic_load_i32=forbidden_word_access,
+              atomic_cas_i32=forbidden_word_access)
     assert ns['_graph_wait_acquire'](word) == 1
-    assert timeline == [('ready', 0), 'grant', ('ready', 1), ('word', 0), 'cas']
+    assert timeline == [('ready', 0), 'grant', ('ready', 1)]
     assert not events
     assert memory[word, 0] == 1
     assert memory[tls, 0] == registered + queued + 1

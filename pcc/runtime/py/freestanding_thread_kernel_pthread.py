@@ -1017,9 +1017,11 @@ def _graph_wait_acquire(lock_word) -> int:
         atomic_store_i64(predecessor, _GRAPH_WAIT_NEXT, ptr_to_int(node), "release")
         while atomic_load_i64(node, _GRAPH_WAIT_READY, "acquire") == 0:
             pass
-    # A grant selects the sole queued contender; it does not own lock_word.
-    # Fast arrivals may barge. While the word is held, poll it read-only:
-    # followers remain on their own node instead of all issuing LL/SC.
+        # The queued predecessor retained lock_word=1. Its release grant
+        # transfers physical ownership and publishes the critical section.
+        return 1
+    # A predecessor-less head still competes with an unqueued owner or fast
+    # arrival. Poll read-only while held; followers wait on their own nodes.
     acquired: int = 0
     while acquired == 0:
         if atomic_load_i32(lock_word, 0, "acquire") == 0:
@@ -1028,7 +1030,7 @@ def _graph_wait_acquire(lock_word) -> int:
     return 1
 
 
-def _graph_wait_release() -> None:
+def _graph_wait_release(lock_word) -> None:
     node = global_load_ptr("pcc_tls_graph_wait_node_py")
     if ptr_is_null(node) != 0:
         pcc_platform_abort()
@@ -1042,6 +1044,9 @@ def _graph_wait_release() -> None:
         if atomic_cas_i64(context, _GRAPH_CONTEXT_TAIL, ptr_to_int(node), 0,
                           "release", "relaxed") == ptr_to_int(node):
             store_ptr(node, _GRAPH_WAIT_CONTEXT, null())
+            # A new predecessor-less head may already have exchanged tail,
+            # but must acquire the word after this release, never by grant.
+            atomic_store_i32(lock_word, 0, 0, "release")
             return
         # A successor exchanged tail but has not published predecessor.next.
         # Both nodes remain live/no-park until this publication completes.
@@ -1049,6 +1054,7 @@ def _graph_wait_release() -> None:
             successor_bits = i64(atomic_load_i64(node, _GRAPH_WAIT_NEXT, "acquire"))
     successor = int_to_ptr(successor_bits)
     store_ptr(node, _GRAPH_WAIT_CONTEXT, null())
+    # Keep lock_word=1: only this linked successor may take ownership.
     atomic_store_i64(successor, _GRAPH_WAIT_READY, 1, "release")
     # No subsequent access to successor or any shared field of this node.
 
@@ -1070,7 +1076,8 @@ def pcc_thread_graph_lock_acquire_for(lock_word, site: i64) -> None:
 
     A queued thread stays registered and no-park through dequeue. A stop waits
     for that finite queue to drain; a grant can never target a parked waiter.
-    Only queued waiters are FIFO: a fresh fast CAS may still barge.
+    Linked successors inherit ownership directly. A fresh fast CAS may
+    still barge before a predecessor-less queued head acquires the word.
     """
     state_slot = global_addr("pcc_tls_thread_state_py")
     state: int = load_i64(state_slot, 0)
@@ -1139,10 +1146,10 @@ def pcc_thread_graph_lock_acquire_for(lock_word, site: i64) -> None:
 def pcc_thread_graph_lock_release(lock_word) -> int:
     """Release one object-graph lock level with one thread-local lookup.
 
-    The outermost release frees the word, then leaves no-park (polling a
-    pending stop) and returns 0; when a tripwire was deferred while the lock
-    was held it returns 1 before leaving no-park, and the caller reports the
-    tripwire and then calls pcc_thread_no_park_exit. A release without a
+    The outermost release frees or hands off the word, then leaves no-park
+    (polling a pending stop) and returns 0; when a tripwire was deferred while
+    the lock was held it returns 1 before leaving no-park. The caller reports
+    the tripwire and then calls pcc_thread_no_park_exit. A release without a
     held level returns 0 and changes nothing."""
     state_slot = global_addr("pcc_tls_thread_state_py")
     state: int = load_i64(state_slot, 0)
@@ -1152,13 +1159,14 @@ def pcc_thread_graph_lock_release(lock_word) -> int:
     if (state & 281474959933440) != 0:
         store_i64(state_slot, 0, state)
         return 0
-    atomic_store_i32(lock_word, 0, 0, "release")
     queued_state: i64 = i64(state)
     if (queued_state & _GRAPH_QUEUED_BIT) != 0:
         # Dequeue before the deferred-tripwire return or any possible park.
         # This slow branch is the only release path that reads queue TLS.
-        _graph_wait_release()
+        _graph_wait_release(lock_word)
         state = int(queued_state & ~_GRAPH_QUEUED_BIT)
+    else:
+        atomic_store_i32(lock_word, 0, 0, "release")
     if (state & 2251799813685248) != 0:
         store_i64(state_slot, 0, state - 2251799813685248)
         return 1
