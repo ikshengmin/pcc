@@ -629,8 +629,10 @@ def pcc_gc_install_forwarding_preallocated_unlocked(
             if ptr_is_null(zpage) == 0:
                 store_i64(zpage, 96, load_i64(zpage, 96) + 1)
                 store_ptr(node, 48, zpage)
-    store_i32(from_obj, 12, flags | 2048)
-    store_i32(to_obj, 12, load_i32(to_obj, 12) | 8192)
+    # Pin/unpin do not take the graph lock. Preserve their current bits;
+    # this publishes metadata, not a new source-pin admission protocol.
+    atomic_rmw_i32("or", from_obj, 12, 2048, "relaxed")
+    atomic_rmw_i32("or", to_obj, 12, 8192, "relaxed")
     forwards: i64 = load_i32(global_addr("pcc_gc_relocation_forwards"), 0)
     store_i32(global_addr("pcc_gc_relocation_forwards"), 0, forwards + 1)
     return 0
@@ -732,8 +734,10 @@ def pcc_gc_install_forwarding_unlocked(from_obj: c_ptr, to_obj: c_ptr) -> i64:
                 if ptr_is_null(zpage) == 0:
                     store_i64(zpage, 96, load_i64(zpage, 96) + 1)
                     store_ptr(node, 48, zpage)
-    store_i32(from_obj, 12, flags | 2048)
-    store_i32(to_obj, 12, load_i32(to_obj, 12) | 8192)
+    # The old-target decref above may also run reentrant pin/unpin work.
+    # Never restore a flags snapshot across that boundary.
+    atomic_rmw_i32("or", from_obj, 12, 2048, "relaxed")
+    atomic_rmw_i32("or", to_obj, 12, 8192, "relaxed")
     forwards: i64 = load_i32(global_addr("pcc_gc_relocation_forwards"), 0)
     store_i32(global_addr("pcc_gc_relocation_forwards"), 0, forwards + 1)
     return 0
