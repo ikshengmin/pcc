@@ -300,18 +300,32 @@ def test_alias_payload_replacement_is_reloaded_after_graph_acquisition():
 
 @pytest.mark.integration
 def test_emitted_single_plan_keeps_count_bound_finish_and_all_three_poll_edges(tmp_path, monkeypatch):
-    """Real emitted IR, not native parking or machine prologue acceptance."""
+    """Production post-pass IR, not native parking or machine prologue acceptance."""
     import re
 
+    from pcc.frontends.python import owned_runtime_build
+    from pcc.frontends.python.pipeline_targets import host_target_triple
+    from pcc.ir.optimization.driver import optimize_ir
     from pcc.ir.optimization.ir_mutator import MutableModule
-    from tests.owned_runtime_c_fixture import runtime_ir
     from tests.python.test_generator_moving_frame_take import RUNTIME
 
     monkeypatch.setenv("PCC_IMPLICIT_THREAD_SAFEPOINTS", "1")
+    target = host_target_triple()
+    passes = owned_runtime_build.runtime_ir_passes(str(RUNTIME))
     functions = {}
     for name in ("py_list", "py_obj"):
-        output = runtime_ir(RUNTIME / "py" / (name + ".py"), tmp_path / (name + ".ll"))
-        functions.update({fn.name: fn for fn in MutableModule.parse(output.read_text()).functions})
+        # These are runtime ports, not freestanding fixtures. Match
+        # _build_runtime_module through the IR passed to emit_owned_object.
+        output = tmp_path / (name + ".ll")
+        frontend_prefix = owned_runtime_build._compile_runtime_module(
+            name, str(RUNTIME / "py" / (name + ".py")), str(output), target,
+        )
+        text = output.read_text()
+        remaining = owned_runtime_build._runtime_passes_after_frontend(passes, frontend_prefix, text)
+        if remaining is not None:
+            text = optimize_ir(text, remaining)
+        output.write_text(text)
+        functions.update({fn.name: fn for fn in MutableModule.parse(text).functions})
 
     def successors(block):
         return re.findall(r"label %([\w.$-]+)", block.terminator.text)
