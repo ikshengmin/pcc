@@ -66,6 +66,7 @@ class GC3(RetirementState):
             'abi_constant': ABI_CONSTANTS.__getitem__,
             'ptr_to_int': lambda value: value,
             'int_to_ptr': lambda value: value,
+            'logical_shift_right_i64': lambda value, bits: (value % (1 << 64)) >> bits,
             'is_tagged_int': lambda value: int(isinstance(value, int) and value & 1),
             'ptr_add': self.add,
             'ptr_diff': lambda a, b: a - b,

@@ -94,3 +94,10 @@ def pcc_gc_gray_current_roots() -> None:
         node = nxt
 
     pcc_gc_visit_registered_root_slots(1, 1)
+
+
+@c_abi_export("pcc_gc_gray_registered_roots")
+def pcc_gc_gray_registered_roots() -> None:
+    """The registered-root half of pcc_gc_gray_current_roots, for a caller
+    whose conservative walk already shaded every listed pinned object."""
+    pcc_gc_visit_registered_root_slots(1, 1)

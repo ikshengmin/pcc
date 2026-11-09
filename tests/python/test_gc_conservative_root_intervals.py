@@ -28,6 +28,7 @@ class IntervalMemory:
         }
         self.namespace = {
             "i64": int, "ptr_add": lambda base, offset: base + offset,
+            "logical_shift_right_i64": lambda value, bits: (value % (1 << 64)) >> bits,
             "ptr_is_null": lambda pointer: pointer == 0, "ptr_to_int": int,
             "null": lambda: 0,
             "global_addr": lambda name: name,
@@ -178,6 +179,32 @@ class FrozenWordMemory(IntervalMemory):
         self.namespace["pcc_gc_gray_conservative_thread_roots"]()
 
 
+@pytest.mark.parametrize("seed", range(6))
+def test_paged_extent_query_matches_the_sorted_word_search(seed):
+    # Words cluster on a few of many pages; extents span one page, several,
+    # and more than the paged probe admits (the search answers those).
+    rng = random.Random(4409 + seed)
+    memory = FrozenWordMemory([[]])
+    ns = memory.namespace
+    pages = [rng.randrange(1, 4000) for _ in range(rng.randrange(1, 40))]
+    words = sorted({page * 4096 + rng.randrange(0, 4096)
+                    for page in pages for _ in range(rng.randrange(1, 9))})
+    base = memory.allocate(len(words) * 8)
+    for index, word in enumerate(words):
+        memory.words[base + index * 8] = word
+    table = ns["_build_word_pages"](base, len(words))
+    assert table != 0
+    for _ in range(400):
+        page = rng.choice(pages) if rng.random() < 0.7 else rng.randrange(1, 4000)
+        start = page * 4096 + rng.randrange(-2048, 4096)
+        size = rng.choice([1, 8, 48, rng.randrange(1, 9000), rng.randrange(1, 60000)])
+        expected = int(any(start <= word < start + size for word in words))
+        assert ns["_extent_has_word"](base, len(words), start, size) == expected
+        assert ns["_extent_has_paged_word"](table, base, len(words), start, size) == expected
+    # Without a table every query keeps the sorted search.
+    assert ns["_extent_has_paged_word"](0, base, len(words), words[0], 1) == 1
+
+
 @pytest.mark.parametrize("word_count", (0, 1, 2, 3, 8, 51, 256))
 @pytest.mark.parametrize("owner_count", (0, 1, 19, 257))
 def test_frozen_word_index_matches_independent_heap_membership(word_count, owner_count):
@@ -207,7 +234,9 @@ def test_frozen_word_index_matches_independent_heap_membership(word_count, owner
     # Scratch capacity follows the frozen words, regardless of heap population.
     positive_words = sum(0 < word < 9223372036854775807 for word in words)
     assert memory.allocations[0][1] == max(8, 8 * positive_words)
-    assert memory.freed == [memory.allocations[0][0]]
+    # The scan's page table over those words is its only other scratch.
+    assert len(memory.allocations) == 2
+    assert sorted(memory.freed) == sorted(address for address, _ in memory.allocations)
 
 
 def test_word_index_retains_all_overlapping_owners_and_unaligned_interior_roots():
@@ -263,11 +292,33 @@ def test_word_scan_rejects_invalid_owned_extents_even_without_candidates(base, s
 NATIVE_DRIVER = r'''
 extern void pcc_gc_gray_conservative_thread_roots(void);
 extern void pcc_gc_pin_conservative_thread_roots(void);
+extern long pcc_gc_gray_conservative_and_listed_pinned_roots(void);
 void *pcc_gc_object_head;
 static long nodes[3][11];
+/* Count-free GC1 without forwarding edges, unless a case selects GC4. */
+int pcc_gc_backend_selected = 1;
+int pcc_gc_backend4_no_refcounts = 1;
+int pcc_gc_forwarding_population;
+void *pcc_gc_backend3_step_pin_snapshot;
+/* The object a listed-node pin query answers as pinned. */
+static long listed_pinned;
+void *pcc_gc_object_index_find(void *object) {
+    for (int i = 0; i < 3; ++i)
+        if (nodes[i][0] == (long)object) return nodes[i];
+    return (void *)0;
+}
+void *pcc_gc_forwarding_index_find(void *object) { (void)object; return (void *)0; }
+void *pcc_gc_forwarding_target_index_find(void *object) { (void)object; return (void *)0; }
+long pcc_gc_object_is_address_pinned(void *object) { return (long)object == listed_pinned; }
+long pcc_gc_object_node_is_address_pinned(void *node, void *object) {
+    (void)node; return (long)object == listed_pinned;
+}
+long pcc_gc_static_literal_contains(void *object) { (void)object; return 0; }
+long pcc_thread_snapshot_stopped_world_owner(void) { return 0; }
 static long owner[9];
 static long span[6];
-static long storage[512];
+static long storage[1024];
+static long storage_used;
 static long candidates[8];
 static long candidate_count;
 static long marked;
@@ -275,8 +326,16 @@ static long visits;
 static long graph_depth;
 void pcc_py_gc_minor_graph_lock(void) { graph_depth++; }
 void pcc_py_gc_minor_graph_unlock(void) { graph_depth--; }
-void *malloc(long size) { return size <= 4096 ? storage : (void *)0; }
-void free(void *value) { (void)value; }
+/* A scan allocates its word snapshot, then a page table over it; freeing
+ * the snapshot (always the first block) releases both. */
+void *malloc(long size) {
+    long words = (size + 7) / 8;
+    if (storage_used + words > 1024) return (void *)0;
+    void *block = storage + storage_used;
+    storage_used += words;
+    return block;
+}
+void free(void *value) { if (value == (void *)storage) storage_used = 0; }
 void pcc_platform_abort(void) { __builtin_trap(); }
 long pcc_thread_world_stop_epoch_held(void) { return 1; }
 long pcc_gc_object_node_is_active(void *node) { return ((long *)node)[4] == 0; }
@@ -324,8 +383,18 @@ int main(void) {
     pcc_gc_pin_conservative_thread_roots();
     if (marked != 0 || graph_depth != 0) return 9;
     if (nodes[0][7] != 0 || nodes[1][7] != 1 || nodes[2][7] != 0) return 10;
+    /* Without a chain cut one walk shades word owners and listed pins. */
+    candidates[0] = 8199; candidate_count = 1; marked = 0; listed_pinned = 12288;
+    if (pcc_gc_gray_conservative_and_listed_pinned_roots() != 1 || marked != 3) return 11;
+    /* A listed node being freed is not a root. */
+    candidate_count = 0; marked = 0; listed_pinned = 16384;
+    if (pcc_gc_gray_conservative_and_listed_pinned_roots() != 1 || marked != 0) return 12;
+    /* A GC4 chain cut leaves listed pins to the separate walk. */
+    pcc_gc_backend_selected = 4; pcc_gc_forwarding_population = 1;
+    listed_pinned = 12288; marked = 0;
+    if (pcc_gc_gray_conservative_and_listed_pinned_roots() != 0 || marked != 0) return 13;
     /* Each stopped snapshot is visited once to size and once to fill words. */
-    return visits == 16 ? 0 : 7;
+    return visits == 22 ? 0 : 7;
 }
 '''
 

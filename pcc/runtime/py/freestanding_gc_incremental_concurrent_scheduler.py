@@ -91,9 +91,10 @@ pcc_gc_drain_all_gray_locked_slice = extern(
     "pcc_gc_drain_all_gray_locked_slice", (), c_int64
 )
 pcc_gc_gray_current_roots = extern("pcc_gc_gray_current_roots", (), c_void)
-pcc_gc_gray_conservative_thread_roots = extern(
-    "pcc_gc_gray_conservative_thread_roots", (), c_void
+pcc_gc_gray_conservative_and_listed_pinned_roots = extern(
+    "pcc_gc_gray_conservative_and_listed_pinned_roots", (), c_int64
 )
+pcc_gc_gray_registered_roots = extern("pcc_gc_gray_registered_roots", (), c_void)
 pcc_capi_is_cext_type_tag = extern("pcc_capi_is_cext_type_tag", (c_int64,), c_int64)
 pcc_gc_object_is_known_no_lock = extern("pcc_gc_object_is_known_no_lock", (c_ptr,), c_int64)
 pcc_gc_trace_mark_gray_if_known = extern(
@@ -483,12 +484,16 @@ def pcc_gc_complete_claimed_tracing_cycle(
         # Trace the remark's roots from the tracer's stack: when their
         # closure leaves no gray count, the drain below needs no walk.
         pcc_gc_trace_stack_begin()
+        listed_pins_shaded: i64 = 0
         if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
             # Raw runtime/C locals can become roots after the initial seed.
             # The final verdict must include this stopped-world snapshot:
             # a same-epoch sweep is allowed to use it without another seed.
-            pcc_gc_gray_conservative_thread_roots()
-        pcc_gc_gray_current_roots()
+            listed_pins_shaded = pcc_gc_gray_conservative_and_listed_pinned_roots()
+        if listed_pins_shaded != 0:
+            pcc_gc_gray_registered_roots()
+        else:
+            pcc_gc_gray_current_roots()
         pcc_gc_trace_stack_drain(9223372036854775807)
         pcc_gc_trace_stack_end()
     else:

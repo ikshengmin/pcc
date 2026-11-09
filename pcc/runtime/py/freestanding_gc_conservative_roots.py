@@ -18,6 +18,7 @@ from pcc.unsafe import (
     load_i32,
     load_i64,
     load_ptr,
+    logical_shift_right_i64,
     malloc,
     null,
     ptr_add,
@@ -39,6 +40,9 @@ pcc_gc_static_literal_contains = extern("pcc_gc_static_literal_contains", (c_ptr
 
 pcc_gc_object_node_is_active = extern("pcc_gc_object_node_is_active", (c_ptr,), c_int64)
 pcc_gc_mark_root_gray_if_known = extern("pcc_gc_mark_root_gray_if_known", (c_ptr,), c_void)
+pcc_gc_object_node_is_address_pinned = extern(
+    "pcc_gc_object_node_is_address_pinned", (c_ptr, c_ptr), c_int64
+)
 pcc_gc_shade_gray_atomic = extern("pcc_gc_shade_gray_atomic", (c_ptr, c_int64), c_void)
 pcc_gc_trace_stack_push = extern("pcc_gc_trace_stack_push", (c_ptr,), c_void)
 pcc_thread_visit_conservative_words = extern(
@@ -322,8 +326,93 @@ def _extent_has_word(words, count: i64, base, size: i64) -> i64:
     return 0
 
 
+# Page table over a sorted word snapshot: one 16-byte entry per distinct
+# 4 KiB page, (page + 1, index of its first word); key 0 is empty.
+_PAGE_KEY: i64 = 0
+_PAGE_FIRST: i64 = 8
+_PAGE_ENTRY_BYTES: i64 = 16
+
+
+@c_abi_export("pcc_gc_conservative_page_slot")
+def _page_slot(table, mask: i64, page: i64) -> i64:
+    """Entry index for page: its own, or the empty one where it belongs."""
+    slot: i64 = (page ^ logical_shift_right_i64(page, 9)) & mask
+    while True:
+        key: i64 = load_i64(table, slot * 16)
+        if key == 0 or key == page + 1:
+            return slot
+        slot = (slot + 1) & mask
+
+
+@c_abi_export("pcc_gc_conservative_build_word_pages")
+def _build_word_pages(words, count: i64):
+    """A page table over count sorted, distinct words, or null.
+
+    Its mask (capacity - 1) is stored in the returned block's first entry's
+    first-word field; entries start at the second. Capacity is a power of
+    two of at least twice the words, so probes stay short.
+    """
+    capacity: i64 = 16
+    while capacity < count * 2:
+        capacity = capacity * 2
+    block = malloc((capacity + 1) * 16)
+    if ptr_is_null(block) != 0:
+        return null()
+    store_i64(block, 0, capacity - 1)
+    store_i64(block, 8, 0)
+    table = ptr_add(block, 16)
+    index: i64 = 0
+    while index < capacity:
+        store_i64(table, index * 16, 0)
+        index = index + 1
+    previous: i64 = -1
+    index = 0
+    while index < count:
+        page: i64 = logical_shift_right_i64(load_i64(words, index * 8), 12)
+        if page != previous:
+            slot: i64 = _page_slot(table, capacity - 1, page)
+            store_i64(table, slot * 16, page + 1)
+            store_i64(table, slot * 16 + 8, index)
+            previous = page
+        index = index + 1
+    return block
+
+
+@c_abi_export("pcc_gc_conservative_extent_has_paged_word")
+def _extent_has_paged_word(pages, words, count: i64, base, size: i64) -> i64:
+    """_extent_has_word answered from a page table: an extent within a few
+    pages probes each page's own words instead of searching all of them."""
+    start: i64 = ptr_to_int(base)
+    if start <= 0 or size <= 0 or size > 9223372036854775807 - start:
+        pcc_platform_abort()
+        return 0
+    end: i64 = start + size
+    page: i64 = logical_shift_right_i64(start, 12)
+    last: i64 = logical_shift_right_i64(end - 1, 12)
+    if ptr_is_null(pages) != 0 or last - page > 8:
+        return _extent_has_word(words, count, base, size)
+    mask: i64 = load_i64(pages, 0)
+    table = ptr_add(pages, 16)
+    while page <= last:
+        slot: i64 = _page_slot(table, mask, page)
+        if load_i64(table, slot * 16) != 0:
+            index: i64 = load_i64(table, slot * 16 + 8)
+            while index < count:
+                word: i64 = load_i64(words, index * 8)
+                if logical_shift_right_i64(word, 12) != page:
+                    index = count
+                elif word >= end:
+                    return 0
+                elif word >= start:
+                    return 1
+                else:
+                    index = index + 1
+        page = page + 1
+    return 0
+
+
 @c_abi_export("pcc_gc_scan_conservative_thread_roots")
-def _scan_thread_roots(mark: i64) -> None:
+def _scan_thread_roots(mark: i64) -> i64:
     active = global_load_ptr("pcc_gc_backend3_step_pin_snapshot")
     if ptr_is_null(active) == 0:
         # A nested mark may discover roots acquired since the outer step's
@@ -333,8 +422,9 @@ def _scan_thread_roots(mark: i64) -> None:
     _capture_thread_words(context)
     words = load_ptr(context, _WORDS_DATA)
     count: i64 = load_i64(context, _WORDS_COUNT)
-    _pin_snapshot_owners(words, count, mark)
+    listed_in_walk: i64 = _pin_snapshot_owners(words, count, mark)
     free(words)
+    return listed_in_walk
 
 
 @c_abi_export("pcc_gc_conservative_capture_thread_words")
@@ -441,7 +531,15 @@ def pcc_gc_generational_object_is_address_pinned(obj) -> i64:
 
 
 @c_abi_export("pcc_gc_conservative_pin_snapshot_owners")
-def _pin_snapshot_owners(words, count: i64, mark: i64) -> None:
+def _pin_snapshot_owners(words, count: i64, mark: i64) -> i64:
+    """Pin (and with mark != 0 shade) every owner a captured word names.
+
+    Mark 2 also shades every listed pinned object, as
+    pcc_gc_gray_current_roots does, in this same walk, and returns 1. It
+    does so only without a chain cut: a node's pin then changes only by its
+    own words, so a shade test right after them sees the final answer. With
+    a cut it returns 0 and leaves listed pins to the caller's own walk.
+    """
     backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
     count_free: i64 = load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0)
     gc3_count_free: i64 = 1 if backend == 3 and count_free != 0 else 0
@@ -452,6 +550,10 @@ def _pin_snapshot_owners(words, count: i64, mark: i64) -> None:
     if (backend == 4 and count_free != 0
             and load_i32(global_addr("pcc_gc_forwarding_population"), 0) > 0):
         chain_pin_cut = 1
+    listed_in_walk: i64 = 1 if mark == 2 and chain_pin_cut == 0 else 0
+    # Every listed extent asks whether a word falls inside it; most hold
+    # none. A page table answers those with one probe (null: search).
+    pages = _build_word_pages(words, count)
     if chain_pin_cut != 0:
         # Clear the old cut before any source can pin a later node in its
         # forwarding chain. Inactive source pins are cycle-local as well.
@@ -476,26 +578,47 @@ def _pin_snapshot_owners(words, count: i64, mark: i64) -> None:
                     store_i64(node, 56, load_i64(node, 56) & ~1)
                 else:
                     store_i64(node, 56, 0)
-            rooted: i64 = _extent_has_word(words, count, load_ptr(node, 0), load_i64(node, 8))
+            rooted: i64 = _extent_has_paged_word(
+                pages, words, count, load_ptr(node, 0), load_i64(node, 8)
+            )
             if gc3_count_free != 0 and pcc_gc_object_is_address_pinned(load_ptr(node, 0)) != 0:
                 rooted = 1
             owner = load_ptr(node, 48)
             if ptr_is_null(owner) == 0:
                 span = load_ptr(owner, 64)
                 while ptr_is_null(span) == 0:
-                    if _extent_has_word(words, count, load_ptr(span, 8), load_i64(span, 16)) != 0:
+                    if _extent_has_paged_word(
+                        pages, words, count, load_ptr(span, 8), load_i64(span, 16)
+                    ) != 0:
                         rooted = 1
                     span = load_ptr(span, 40)
             if rooted != 0:
                 # A raw source address retains its bytes and shades the
                 # canonical target; source metadata itself is not a root.
                 _pin_owner_chain(node, mark)
+        if listed_in_walk != 0 and load_i64(node, 32) == 0:
+            listed = load_ptr(node, 0)
+            if ptr_is_null(listed) == 0 and is_tagged_int(listed) == 0:
+                if pcc_gc_object_node_is_address_pinned(node, listed) != 0:
+                    pcc_gc_mark_root_gray_if_known(listed)
         node = load_ptr(node, 16)
+    if ptr_is_null(pages) == 0:
+        free(pages)
+    return listed_in_walk
 
 
 @c_abi_export("pcc_gc_gray_conservative_thread_roots")
 def pcc_gc_gray_conservative_thread_roots() -> None:
     _scan_thread_roots(1)
+
+
+@c_abi_export("pcc_gc_gray_conservative_and_listed_pinned_roots")
+def pcc_gc_gray_conservative_and_listed_pinned_roots() -> i64:
+    """pcc_gc_gray_conservative_thread_roots whose object-list walk also
+    shades every listed pinned object, saving pcc_gc_gray_current_roots its
+    own walk. Returns 1 when it did, 0 when a chain cut leaves that walk to
+    the caller (pins along a forwarding chain can land behind the walk)."""
+    return _scan_thread_roots(2)
 
 
 @c_abi_export("pcc_gc_pin_conservative_thread_roots")

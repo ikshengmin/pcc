@@ -4,6 +4,7 @@ import subprocess
 import textwrap
 
 from pcc.frontends.python.codegen.runtime_abi import RUNTIME_SIGNATURES
+from pcc.runtime.py.py_abi_constants import PY_TYPE_LIST
 
 
 REPO_ROOT = Path(__file__).absolute().parents[2]
@@ -569,33 +570,44 @@ def test_generational_gc_surface_reports_young_allocations(tmp_path):
 
 
 def test_colored_relocating_gc_read_barrier_clears_candidate(tmp_path):
+    # GC4 selects relocation pages; the forwarded-source flag (2048) appears
+    # when a copy installs its forwarding edge, not at selection. A slot read
+    # through the barrier then resolves the candidate and heals the slot.
+    # The first managed allocation fixes the collector (4bba76893), so the
+    # program selects GC4 by environment; switching inside main is refused.
     from pcc.frontends.python.pipeline import compile_python
 
     src = tmp_path / "prog.py"
     exe = tmp_path / "prog.out"
     src.write_text(textwrap.dedent(f"""
         from pcc.extern import extern, c_int32, c_int64, c_ptr, c_void, c_obj, c_rawptr
-        from pcc.unsafe import free, load_i32, malloc, null, store_ptr
+        from pcc.unsafe import free, load_i32, load_ptr, malloc, null, ptr_eq, store_i64, store_ptr
 
-        pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_obj)
-        pcc_gc_set_backend = extern("pcc_gc_set_backend", (c_int64,), c_int64)
+        pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_rawptr)
+        pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
+        pcc_gc_publish_initialized = extern("pcc_gc_publish_initialized", (c_ptr,), c_void)
         pcc_gc_select_relocation_set = extern("pcc_gc_select_relocation_set", (c_int64,), c_int64)
+        pcc_gc_relocate_copy = extern("pcc_gc_relocate_copy", (c_ptr, c_int64), c_rawptr)
         # The read barrier returns a borrowed pointer; c_obj would release it.
         pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_rawptr)
         pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
-        py_list_new = extern("py_list_new", (c_int64,), c_obj)
 
         def main() -> None:
-            pcc_gc_set_backend({BACKEND_COLORED_RELOCATING})
-            # obj is an owned c_obj local: the compiler releases it at exit.
-            obj = py_list_new(0)
+            print(pcc_gc_backend())
+            obj = pcc_gc_alloc(64, {PY_TYPE_LIST}, 0)
+            store_i64(obj, 16, 0)
+            store_i64(obj, 24, 0)
+            store_ptr(obj, 32, null())
+            # GC4 never relocates an object its constructor has not published.
+            pcc_gc_publish_initialized(obj)
             slot = malloc(8)
             store_ptr(slot, 0, null())
             pcc_gc_store_ptr(null(), slot, obj)
             print(pcc_gc_select_relocation_set(1))
+            moved = pcc_gc_relocate_copy(obj, 64)
             print(load_i32(obj, 12) & 2048)
-            pcc_gc_load_ptr(null(), slot)
-            print(load_i32(obj, 12) & 2048)
+            resolved = pcc_gc_load_ptr(null(), slot)
+            print(1 if ptr_eq(resolved, moved) != 0 and ptr_eq(load_ptr(slot, 0), moved) != 0 else 0)
             pcc_gc_store_ptr(null(), slot, null())
             free(slot)
 
@@ -609,6 +621,8 @@ def test_colored_relocating_gc_read_barrier_clears_candidate(tmp_path):
     )
     result = subprocess.run(
         [str(exe)], capture_output=True, text=True, timeout=20,
+        env=dict(os.environ, PCC_GC_BACKEND=str(BACKEND_COLORED_RELOCATING)),
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip().splitlines() == ["1", "2048", "0"]
+    assert result.stdout.strip().splitlines() == [
+        str(BACKEND_COLORED_RELOCATING), "1", "2048", "1"]

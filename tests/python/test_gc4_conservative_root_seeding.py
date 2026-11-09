@@ -119,18 +119,32 @@ def body(module, name, namespace):
 
 
 @pytest.mark.parametrize("enabled", (0, 1))
-def test_root_seed_selects_one_external_root_owner_after_preparation(enabled):
+@pytest.mark.parametrize("chain_cut", (False, True))
+def test_root_seed_selects_one_external_root_owner_after_preparation(enabled, chain_cut):
     events = []
     globals_ = {"pcc_gc_explicit_collect_active": 1, "pcc_gc_backend4_no_refcounts": enabled}
+
+    def machine():
+        # Without a chain cut the conservative walk shades listed pins too.
+        events.append("machine" if chain_cut else "machine+listed")
+        return 0 if chain_cut else 1
+
     seed = body("freestanding_gc_common_mark_cycle.py", "pcc_gc_seed_roots", {
         "global_addr": lambda name: name, "load_i32": lambda name, offset: globals_[name],
         "pcc_gc_prepare_object_list_mark": lambda explicit: events.append(("prepare", explicit)),
         "pcc_gc_gray_refcount_external_roots": lambda: events.append("counts"),
-        "pcc_gc_gray_conservative_thread_roots": lambda: events.append("machine"),
-        "pcc_gc_gray_current_roots": lambda: events.append("registered"),
+        "pcc_gc_gray_conservative_and_listed_pinned_roots": machine,
+        "pcc_gc_gray_registered_roots": lambda: events.append("registered"),
+        "pcc_gc_gray_current_roots": lambda: events.append("listed+registered"),
     })
     seed()
-    assert events == [("prepare", 1), "machine" if enabled else "counts", "registered"]
+    if not enabled:
+        roots = ["counts", "listed+registered"]
+    elif chain_cut:
+        roots = ["machine", "listed+registered"]
+    else:
+        roots = ["machine+listed", "registered"]
+    assert events == [("prepare", 1)] + roots
 
 
 @pytest.mark.parametrize("enabled,conservative,lease,pinned", (

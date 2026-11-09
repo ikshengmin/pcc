@@ -1548,6 +1548,12 @@ def _assert_backend_three_non_list_slots_rewrite(
             #include <stdlib.h>
             #include <string.h>
 
+            /* Count-free collectors pin what raw stack words name: each
+             * probe keeps the child's old address only masked, so the
+             * owner's slot is its sole reference while the refill may copy
+             * it. */
+            #define PROBE_MASK ((uintptr_t)0x5a5a5a5a5a5a5a5aULL)
+
             static void force_refill(void) {
                 for (int i = 0; i < 4; i++) {
                     PyObject *filler = py_str_new("filler", 6);
@@ -1573,7 +1579,10 @@ def _assert_backend_three_non_list_slots_rewrite(
                 PyObject *child = py_str_new("tuple-child", 11);
                 if (child == 0) return 0;
                 py_tuple_set_item(owner, 0, child);
+                uintptr_t masked = (uintptr_t)child ^ PROBE_MASK;
+                child = 0;
                 force_refill();
+                child = (PyObject *)(masked ^ PROBE_MASK);
 
                 return forwarded_slot_matches(
                     child, ((PyTupleObject *)owner)->items[0]
@@ -1588,7 +1597,10 @@ def _assert_backend_three_non_list_slots_rewrite(
                 PyObject *child = py_str_new("dict-child", 10);
                 if (child == 0) return 0;
                 py_dict_set(owner, py_tag_int(7), child);
+                uintptr_t masked = (uintptr_t)child ^ PROBE_MASK;
+                child = 0;
                 force_refill();
+                child = (PyObject *)(masked ^ PROBE_MASK);
 
                 PyDictObject *d = (PyDictObject *)owner;
                 PyObject *slot = 0;
@@ -1609,7 +1621,10 @@ def _assert_backend_three_non_list_slots_rewrite(
                 PyObject *child = py_str_new("set-child", 9);
                 if (child == 0) return 0;
                 py_set_add(owner, child);
+                uintptr_t masked = (uintptr_t)child ^ PROBE_MASK;
+                child = 0;
                 force_refill();
+                child = (PyObject *)(masked ^ PROBE_MASK);
 
                 PySetObject *s = (PySetObject *)owner;
                 PyObject *slot = 0;
@@ -1646,7 +1661,10 @@ def _assert_backend_three_non_list_slots_rewrite(
                 PyObject *child = py_str_new("field-child", 11);
                 if (child == 0) return 0;
                 pcc_gc_store_ptr((PyObject *)owner, &owner->fields[0], child);
+                uintptr_t masked = (uintptr_t)child ^ PROBE_MASK;
+                child = 0;
                 force_refill();
+                child = (PyObject *)(masked ^ PROBE_MASK);
 
                 return forwarded_slot_matches(child, owner->fields[0]);
             }
@@ -1674,7 +1692,10 @@ def _assert_backend_three_non_list_slots_rewrite(
                 PyObject *child = py_str_new("valuebox-child", 14);
                 if (child == 0) return 0;
                 pcc_gc_store_ptr((PyObject *)owner, &owner->fields[0], child);
+                uintptr_t masked = (uintptr_t)child ^ PROBE_MASK;
+                child = 0;
                 force_refill();
+                child = (PyObject *)(masked ^ PROBE_MASK);
 
                 return forwarded_slot_matches(child, owner->fields[0]);
             }
@@ -1749,6 +1770,8 @@ def _assert_backend_three_frame_root_slot_rewrite(
             #include <stdio.h>
             #include <stdlib.h>
 
+            #define PROBE_MASK ((uintptr_t)0x5a5a5a5a5a5a5a5aULL)
+
             static void force_refill(void) {
                 for (int i = 0; i < 6; i++) {
                     PyObject *filler = pcc_gc_alloc(96, PY_TYPE_FLOAT, 0);
@@ -1764,13 +1787,20 @@ def _assert_backend_three_frame_root_slot_rewrite(
                 pcc_gc_telemetry_reset();
 
                 int32_t frame_map[1] = {1};
-                PyObject *slots[1] = {0};
-                PyObject *child = py_str_new("root-child", 10);
-                if (child == 0) return 3;
-                pcc_gc_store_root(&slots[0], child);
+                /* Count-free collectors pin what raw stack words name, a
+                 * stack-resident frame included. Keep this registered frame
+                 * off the stack (as generator frames are) and the old
+                 * address only masked: the frame slot is the child's sole
+                 * root while the refill may copy it. */
+                PyObject **slots = calloc(1, sizeof(PyObject *));
+                if (slots == 0) return 4;
+                pcc_gc_store_root(&slots[0], py_str_new("root-child", 10));
+                if (slots[0] == 0) return 3;
+                uintptr_t masked = (uintptr_t)slots[0] ^ PROBE_MASK;
                 pcc_gc_frame_enter(frame_map, slots);
                 force_refill();
 
+                PyObject *child = (PyObject *)(masked ^ PROBE_MASK);
                 PyObject *forwarded = pcc_gc_note_relocation_read(child);
                 printf("%d\\n", forwarded != 0 && forwarded != child ? 1 : 0);
                 printf("%d\\n", slots[0] == forwarded ? 1 : 0);
@@ -1778,6 +1808,7 @@ def _assert_backend_three_frame_root_slot_rewrite(
                 printf("%d\\n", ((PyObjectHeader *)forwarded)->flags & PY_FLAG_GC_MINOR_ARENA ? 1 : 0);
 
                 pcc_gc_frame_leave(slots);
+                free(slots);
                 return 0;
             }
             """).lstrip(),
@@ -1844,22 +1875,30 @@ def _assert_backend_three_borrowed_frame_root_rewrite_preserves_source_ref(
                 PyObject **items;
             } ProbeListObject;
 
+            #define PROBE_MASK ((uintptr_t)0x5a5a5a5a5a5a5a5aULL)
+
             int main(void) {
                 static const int32_t borrowed_frame_map[1] = {-1};
-                PyObject *slots[1] = {0};
+                /* Count-free collectors pin what raw stack words name, a
+                 * stack-resident frame included. Keep this registered frame
+                 * off the stack (as generator frames are) and the old
+                 * address only masked, so the step may copy the child. */
+                PyObject **slots = calloc(1, sizeof(PyObject *));
+                if (slots == 0) return 4;
 
                 if (pcc_gc_set_backend(PCC_GC_KIND_GENERATIONAL_MINOR_MAJOR) != 0) {
                     return 2;
                 }
                 pcc_gc_telemetry_reset();
 
-                PyObject *child = py_str_new("borrowed-root", 13);
-                if (child == 0) return 3;
-                slots[0] = child;
+                slots[0] = py_str_new("borrowed-root", 13);
+                if (slots[0] == 0) return 3;
+                uintptr_t masked = (uintptr_t)slots[0] ^ PROBE_MASK;
                 pcc_gc_frame_enter(borrowed_frame_map, slots);
 
                 (void)pcc_gc_step(1024);
 
+                PyObject *child = (PyObject *)(masked ^ PROBE_MASK);
                 PyObject *forwarded = pcc_gc_note_relocation_read(child);
                 printf("%d\\n", forwarded != 0 && forwarded != child ? 1 : 0);
                 printf("%d\\n", slots[0] == forwarded ? 1 : 0);
@@ -1868,6 +1907,7 @@ def _assert_backend_three_borrowed_frame_root_rewrite_preserves_source_ref(
 
                 pcc_gc_frame_leave(slots);
                 pcc_gc_release(child);
+                free(slots);
                 return 0;
             }
             """).lstrip(),
@@ -1963,11 +2003,16 @@ def _assert_backend_three_suspended_generator_frame_slot_rewrite(
                 printf("%d\\n", gen_obj->frame == (PyObject *)frame_list ? 1 : 0);
                 printf("%d\\n", ((PyObjectHeader *)frame_list)->flags & PY_FLAG_GC_OLD ? 1 : 0);
 
-                PyObject *child = py_str_new("suspended-child", 15);
-                if (child == 0) return 5;
-                py_list_set((PyObject *)frame_list, 0, child);
+                /* Count-free collectors pin what raw stack words name: the
+                 * old address stays only masked, so the frame's slot is the
+                 * child's sole reference while the refill may copy it. */
+                py_list_set((PyObject *)frame_list, 0, py_str_new("suspended-child", 15));
+                if (frame_list->items[0] == 0 || frame_list->items[0] == py_None) return 5;
+                #define PROBE_MASK ((uintptr_t)0x5a5a5a5a5a5a5a5aULL)
+                uintptr_t masked = (uintptr_t)frame_list->items[0] ^ PROBE_MASK;
                 force_refill();
 
+                PyObject *child = (PyObject *)(masked ^ PROBE_MASK);
                 PyObject *forwarded = pcc_gc_note_relocation_read(child);
                 printf("%d\\n", forwarded != 0 && forwarded != child ? 1 : 0);
                 printf("%d\\n", frame_list->items[0] == forwarded ? 1 : 0);
@@ -2068,11 +2113,18 @@ def _assert_backend_three_continuation_stack_slot_rewrite(
                 (void)pcc_gc_step(8);
                 printf("%d\\n", ((PyObjectHeader *)cont)->flags & PY_FLAG_GC_OLD ? 1 : 0);
 
-                PyObject *child = py_str_new("continuation-child", 18);
-                if (child == 0) return 7;
-                if (py_continuation_set_slot(cont, 0, child) != 0) return 8;
+                /* Count-free collectors pin what raw stack words name: the
+                 * old address stays only masked, so the heap chunk's slot is
+                 * the child's sole reference while the refill may copy it. */
+                if (py_continuation_set_slot(cont, 0, py_str_new("continuation-child", 18)) != 0) {
+                    return 8;
+                }
+                if (chunk->slots[0] == 0) return 7;
+                #define PROBE_MASK ((uintptr_t)0x5a5a5a5a5a5a5a5aULL)
+                uintptr_t masked = (uintptr_t)chunk->slots[0] ^ PROBE_MASK;
                 force_refill();
 
+                PyObject *child = (PyObject *)(masked ^ PROBE_MASK);
                 PyObject *forwarded = pcc_gc_note_relocation_read(child);
                 printf("%d\\n", forwarded != 0 && forwarded != child ? 1 : 0);
                 printf("%d\\n", chunk->slots[0] == forwarded ? 1 : 0);
@@ -2182,6 +2234,12 @@ def _assert_backend_three_generator_coroutine_state_slot_rewrite(
                     && ((((PyObjectHeader *)forwarded)->flags & PY_FLAG_GC_MINOR_ARENA) == 0);
             }
 
+            /* Count-free collectors pin what raw stack words name: each
+             * probe keeps the child's old address only masked, so the
+             * object's slot is its sole reference while the refill may
+             * copy it. */
+            #define PROBE_MASK ((uintptr_t)0x5a5a5a5a5a5a5a5aULL)
+
             static int check_generator_send_slot(void) {
                 PyObject *frame = py_list_new(0);
                 if (frame == 0) return 0;
@@ -2200,8 +2258,12 @@ def _assert_backend_three_generator_coroutine_state_slot_rewrite(
                 PyObject *result = py_gen_send(gen, child);
                 if (result == 0) return 0;
                 pcc_gc_release(result);
+                uintptr_t masked = (uintptr_t)child ^ PROBE_MASK;
+                child = 0;
+                result = 0;
                 force_refill();
 
+                child = (PyObject *)(masked ^ PROBE_MASK);
                 PyGenObject *g = (PyGenObject *)gen;
                 int ok = forwarded_slot_matches(child, g->send_value);
                 pcc_gc_release(child);
@@ -2225,8 +2287,12 @@ def _assert_backend_three_generator_coroutine_state_slot_rewrite(
                 PyObject *child = result;
                 py_incref(child);
                 pcc_gc_release(result);
+                uintptr_t masked = (uintptr_t)child ^ PROBE_MASK;
+                child = 0;
+                result = 0;
                 force_refill();
 
+                child = (PyObject *)(masked ^ PROBE_MASK);
                 ProbeCoroutineObject *c = (ProbeCoroutineObject *)coro;
                 int ok = forwarded_slot_matches(child, c->result);
                 pcc_gc_release(child);
@@ -2335,24 +2401,30 @@ def _assert_backend_three_task_state_slot_rewrite(
                     return 5;
                 }
 
-                PyObject *result = py_str_new("task-result", 11);
-                PyObject *waiter = py_str_new("task-waiter", 11);
-                if (result == 0 || waiter == 0) return 6;
+                /* Count-free collectors pin what raw stack words name: the
+                 * old addresses stay only masked, so the task's slots are the
+                 * children's sole references while the refill may copy them. */
+                #define PROBE_MASK ((uintptr_t)0x5a5a5a5a5a5a5a5aULL)
+                PyTaskObject *t = (PyTaskObject *)task;
+                py_task_set_result(task, py_str_new("task-result", 11));
+                py_task_set_waiter(task, py_str_new("task-waiter", 11));
+                if (t->result == 0 || t->waiter == 0) return 6;
                 if (
-                    ((((PyObjectHeader *)result)->flags & PY_FLAG_GC_YOUNG) == 0)
-                    || ((((PyObjectHeader *)waiter)->flags & PY_FLAG_GC_YOUNG) == 0)
+                    ((((PyObjectHeader *)t->result)->flags & PY_FLAG_GC_YOUNG) == 0)
+                    || ((((PyObjectHeader *)t->waiter)->flags & PY_FLAG_GC_YOUNG) == 0)
                 ) {
                     return 7;
                 }
-                py_task_set_result(task, result);
-                py_task_set_waiter(task, waiter);
+                uintptr_t result_masked = (uintptr_t)t->result ^ PROBE_MASK;
+                uintptr_t waiter_masked = (uintptr_t)t->waiter ^ PROBE_MASK;
                 if ((((PyObjectHeader *)task)->flags & PY_FLAG_GC_REMEMBERED) == 0) {
                     return 8;
                 }
 
                 force_refill();
 
-                PyTaskObject *t = (PyTaskObject *)task;
+                PyObject *result = (PyObject *)(result_masked ^ PROBE_MASK);
+                PyObject *waiter = (PyObject *)(waiter_masked ^ PROBE_MASK);
                 printf("%d\\n", forwarded_slot_matches(result, t->result));
                 printf("%d\\n", forwarded_slot_matches(waiter, t->waiter));
 
@@ -2434,23 +2506,31 @@ def _assert_backend_three_scheduler_root_slot_rewrite(
                 }
                 pcc_gc_telemetry_reset();
 
-                PyObject *slot = 0;
-                pcc_gc_scheduler_root_register(&slot);
+                /* Count-free collectors pin what raw stack words name, a
+                 * stack-resident root slot included. Keep the registered
+                 * slot off the stack and the old address only masked, so
+                 * the refill may copy the child. */
+                PyObject **slot = calloc(1, sizeof(PyObject *));
+                if (slot == 0) return 4;
+                pcc_gc_scheduler_root_register(slot);
 
-                PyObject *child = py_str_new("scheduler-root", 14);
-                if (child == 0) return 3;
-                pcc_gc_store_root(&slot, child);
+                pcc_gc_store_root(slot, py_str_new("scheduler-root", 14));
+                if (*slot == 0) return 3;
+                #define PROBE_MASK ((uintptr_t)0x5a5a5a5a5a5a5a5aULL)
+                uintptr_t masked = (uintptr_t)*slot ^ PROBE_MASK;
                 force_refill();
 
+                PyObject *child = (PyObject *)(masked ^ PROBE_MASK);
                 PyObject *forwarded = pcc_gc_note_relocation_read(child);
                 printf("%d\\n", forwarded != 0 && forwarded != child ? 1 : 0);
-                printf("%d\\n", slot == forwarded ? 1 : 0);
-                printf("%d\\n", slot != child ? 1 : 0);
+                printf("%d\\n", *slot == forwarded ? 1 : 0);
+                printf("%d\\n", *slot != child ? 1 : 0);
                 printf("%d\\n", ((PyObjectHeader *)forwarded)->flags & PY_FLAG_GC_MINOR_ARENA ? 1 : 0);
 
-                pcc_gc_scheduler_root_unregister(&slot);
-                pcc_gc_store_root(&slot, 0);
+                pcc_gc_scheduler_root_unregister(slot);
+                pcc_gc_store_root(slot, 0);
                 pcc_gc_release(child);
+                free(slot);
                 return 0;
             }
             """).lstrip(),
@@ -2527,13 +2607,23 @@ def _assert_backend_three_scheduler_queue_entry_slot_rewrite(
                 PccGcSchedulerQueue *queue = pcc_gc_scheduler_queue_new();
                 if (queue == 0) return 3;
 
-                PyObject *child = py_str_new("queued-task", 11);
-                if (child == 0) return 4;
-                if (pcc_gc_scheduler_queue_push(queue, child) != 0) return 5;
+                /* Count-free collectors pin what raw stack words name: the
+                 * old address stays only masked, so the queue entry is the
+                 * child's sole reference while the refill may copy it. */
+                #define PROBE_MASK ((uintptr_t)0x5a5a5a5a5a5a5a5aULL)
+                uintptr_t masked = 0;
+                {
+                    PyObject *queued = py_str_new("queued-task", 11);
+                    if (queued == 0) return 4;
+                    masked = (uintptr_t)queued ^ PROBE_MASK;
+                    if (pcc_gc_scheduler_queue_push(queue, queued) != 0) return 5;
+                    queued = 0;
+                }
                 printf("%d\\n", pcc_gc_scheduler_queue_len(queue) == 1 ? 1 : 0);
 
                 force_refill();
 
+                PyObject *child = (PyObject *)(masked ^ PROBE_MASK);
                 PyObject *forwarded = pcc_gc_note_relocation_read(child);
                 printf("%d\\n", forwarded != 0 && forwarded != child ? 1 : 0);
 
@@ -2634,6 +2724,11 @@ def _assert_backend_three_class_metadata_slots_rewrite(
                 if (cls == 0) return 3;
                 (void)pcc_gc_step(1);
 
+                /* Count-free collectors pin what raw stack words name: the
+                 * old addresses stay only masked, so the class's slots are
+                 * the children's sole references while the refill may copy
+                 * them. */
+                #define PROBE_MASK ((uintptr_t)0x5a5a5a5a5a5a5a5aULL)
                 PyObject *method_child = py_str_new("method-child", 12);
                 PyObject *del_child = py_str_new("del-child", 9);
                 if (method_child == 0 || del_child == 0) return 4;
@@ -2642,7 +2737,14 @@ def _assert_backend_three_class_metadata_slots_rewrite(
                 py_class_add_method(cls, "__del__", del_child);
                 PyObject *cached_before = py_class_lookup(cls, "m");
                 if (cached_before != method_child) return 5;
+                uintptr_t method_masked = (uintptr_t)method_child ^ PROBE_MASK;
+                uintptr_t del_masked = (uintptr_t)del_child ^ PROBE_MASK;
+                method_child = 0;
+                del_child = 0;
+                cached_before = 0;
                 force_refill();
+                method_child = (PyObject *)(method_masked ^ PROBE_MASK);
+                del_child = (PyObject *)(del_masked ^ PROBE_MASK);
                 PyObject *cached_after = py_class_lookup(cls, "m");
 
                 printf("%d\\n", cls->n_methods == 2 ? 1 : 0);
@@ -2744,8 +2846,15 @@ def _assert_backend_three_forwarded_minor_source_cleanup(
                 PyObject *child = pcc_gc_alloc(64, PY_TYPE_INT, 0);
                 if (child == 0) return 5;
                 pcc_gc_store_ptr((PyObject *)owner, &owner->items[0], child);
+                /* Count-free collectors pin what raw stack words name: the
+                 * old address stays only masked, so the owner's slot is the
+                 * child's sole reference while the refill may copy it. */
+                #define PROBE_MASK ((uintptr_t)0x5a5a5a5a5a5a5a5aULL)
+                uintptr_t masked = (uintptr_t)child ^ PROBE_MASK;
+                child = 0;
 
                 force_refill();
+                child = (PyObject *)(masked ^ PROBE_MASK);
 
                 PyObject *forwarded = pcc_gc_note_relocation_read(child);
                 printf("%d\\n", forwarded != 0 && forwarded != child ? 1 : 0);
@@ -4132,9 +4241,14 @@ def test_generational_backend_minor_refill_oldifies_copy_for_remembered_child(
                 if (owner->items == 0) return 4;
 
                 (void)pcc_gc_step(1);
-                PyObject *child = pcc_gc_alloc(64, PY_TYPE_INT, 0);
-                if (child == 0) return 5;
-                pcc_gc_store_ptr((PyObject *)owner, &owner->items[0], child);
+                pcc_gc_store_ptr((PyObject *)owner, &owner->items[0],
+                                 pcc_gc_alloc(64, PY_TYPE_INT, 0));
+                if (owner->items[0] == 0) return 5;
+                /* Count-free collectors pin what raw stack words name: the
+                 * old address stays only masked, so the owner's slot is the
+                 * child's sole reference while the refill may copy it. */
+                #define PROBE_MASK ((uintptr_t)0x5a5a5a5a5a5a5a5aULL)
+                uintptr_t masked = (uintptr_t)owner->items[0] ^ PROBE_MASK;
 
                 for (int i = 0; i < 3; i++) {
                     PyObject *filler = pcc_gc_alloc(64, PY_TYPE_INT, 0);
@@ -4142,6 +4256,7 @@ def test_generational_backend_minor_refill_oldifies_copy_for_remembered_child(
                     pcc_gc_release(filler);
                 }
 
+                PyObject *child = (PyObject *)(masked ^ PROBE_MASK);
                 PyObject *forwarded = pcc_gc_note_relocation_read(child);
                 PyObject *loaded = pcc_gc_load_ptr(
                     (PyObject *)owner, &owner->items[0]
@@ -4218,6 +4333,8 @@ def test_generational_backend_minor_refill_rewrites_remembered_list_slot_to_oldi
                 PyObject **items;
             } ProbeListObject;
 
+            #define PROBE_MASK ((uintptr_t)0x5a5a5a5a5a5a5a5aULL)
+
             int main(void) {
                 if (pcc_gc_set_backend(PCC_GC_KIND_GENERATIONAL_MINOR_MAJOR) != 0) {
                     return 2;
@@ -4234,9 +4351,13 @@ def test_generational_backend_minor_refill_rewrites_remembered_list_slot_to_oldi
                 if (owner->items == 0) return 4;
 
                 (void)pcc_gc_step(1);
-                PyObject *child = pcc_gc_alloc(64, PY_TYPE_INT, 0);
-                if (child == 0) return 5;
-                pcc_gc_store_ptr((PyObject *)owner, &owner->items[0], child);
+                pcc_gc_store_ptr((PyObject *)owner, &owner->items[0],
+                                 pcc_gc_alloc(64, PY_TYPE_INT, 0));
+                if (owner->items[0] == 0) return 5;
+                /* Count-free collectors pin what raw stack words name: the
+                 * old address stays only masked, so the owner's slot is the
+                 * child's sole reference while the refill may copy it. */
+                uintptr_t masked = (uintptr_t)owner->items[0] ^ PROBE_MASK;
 
                 for (int i = 0; i < 3; i++) {
                     PyObject *filler = pcc_gc_alloc(64, PY_TYPE_INT, 0);
@@ -4244,6 +4365,7 @@ def test_generational_backend_minor_refill_rewrites_remembered_list_slot_to_oldi
                     pcc_gc_release(filler);
                 }
 
+                PyObject *child = (PyObject *)(masked ^ PROBE_MASK);
                 PyObject *forwarded = pcc_gc_note_relocation_read(child);
                 printf("%d\\n", forwarded != 0 && forwarded != child ? 1 : 0);
                 printf("%d\\n", owner->items[0] == forwarded ? 1 : 0);
@@ -4308,10 +4430,18 @@ def _assert_backend_three_young_owner_promotion_rewrites_list_referent(
             #include "py_internal.h"
             #include <stdint.h>
             #include <stdio.h>
+            #include <stdlib.h>
+
+            #define PROBE_MASK ((uintptr_t)0x5a5a5a5a5a5a5a5aULL)
 
             int main(void) {
                 static const int32_t frame_map[1] = {1};
-                PyObject *roots[1] = {0};
+                /* Count-free collectors pin what raw stack words name, a
+                 * stack-resident frame included. Keep this registered frame
+                 * off the stack (as generator frames are) and the child's
+                 * old address only masked, so the step may copy it. */
+                PyObject **roots = calloc(1, sizeof(PyObject *));
+                if (roots == 0) return 5;
 
                 if (pcc_gc_set_backend(PCC_GC_KIND_GENERATIONAL_MINOR_MAJOR) != 0) {
                     return 2;
@@ -4320,15 +4450,16 @@ def _assert_backend_three_young_owner_promotion_rewrites_list_referent(
 
                 PyObject *owner = py_list_new(1);
                 if (owner == 0) return 3;
-                PyObject *child = py_str_new("args", 4);
-                if (child == 0) return 4;
+                pcc_gc_store_root(&roots[0], py_str_new("args", 4));
+                if (roots[0] == 0) return 4;
+                uintptr_t masked = (uintptr_t)roots[0] ^ PROBE_MASK;
 
-                py_list_append(owner, child);
-                pcc_gc_store_root(&roots[0], child);
+                py_list_append(owner, roots[0]);
                 pcc_gc_frame_enter(frame_map, roots);
 
                 (void)pcc_gc_step(1024);
 
+                PyObject *child = (PyObject *)(masked ^ PROBE_MASK);
                 PyListObject *list = (PyListObject *)owner;
                 PyObject *forwarded = pcc_gc_note_relocation_read(child);
 
@@ -4343,6 +4474,7 @@ def _assert_backend_three_young_owner_promotion_rewrites_list_referent(
                 pcc_gc_store_root(&roots[0], 0);
                 pcc_gc_release(child);
                 pcc_gc_release(owner);
+                free(roots);
                 return 0;
             }
             """).lstrip(),
@@ -4400,26 +4532,35 @@ def _assert_backend_three_safepoint_does_not_promote_frame_roots(
             #include "py_internal.h"
             #include <stdint.h>
             #include <stdio.h>
+            #include <stdlib.h>
+
+            #define PROBE_MASK ((uintptr_t)0x5a5a5a5a5a5a5a5aULL)
 
             int main(void) {
                 static const int32_t borrowed_frame_map[1] = {-1};
-                PyObject *roots[1] = {0};
+                /* Count-free collectors pin what raw stack words name, a
+                 * stack-resident frame included. Keep this registered frame
+                 * off the stack (as generator frames are) and the old
+                 * address only masked, so the explicit step may copy it. */
+                PyObject **roots = calloc(1, sizeof(PyObject *));
+                if (roots == 0) return 4;
 
                 if (pcc_gc_set_backend(PCC_GC_KIND_GENERATIONAL_MINOR_MAJOR) != 0) {
                     return 2;
                 }
                 pcc_gc_telemetry_reset();
 
-                PyObject *root = pcc_gc_alloc(64, PY_TYPE_INT, 0);
-                if (root == 0) return 3;
-                roots[0] = root;
+                roots[0] = pcc_gc_alloc(64, PY_TYPE_INT, 0);
+                if (roots[0] == 0) return 3;
+                uintptr_t masked = (uintptr_t)roots[0] ^ PROBE_MASK;
                 pcc_gc_frame_enter(borrowed_frame_map, roots);
 
                 pcc_gc_safepoint();
                 printf("%lld\\n", (long long)pcc_gc_telemetry(PCC_GC_COUNTER_RELOCATION_FORWARDS));
-                printf("%d\\n", pcc_gc_note_relocation_read(root) == root ? 1 : 0);
+                printf("%d\\n", pcc_gc_note_relocation_read(roots[0]) == roots[0] ? 1 : 0);
 
                 (void)pcc_gc_step(1024);
+                PyObject *root = (PyObject *)(masked ^ PROBE_MASK);
                 PyObject *forwarded = pcc_gc_note_relocation_read(root);
                 printf("%d\\n", forwarded != 0 && forwarded != root ? 1 : 0);
                 printf("%d\\n", roots[0] == forwarded ? 1 : 0);
@@ -4427,6 +4568,7 @@ def _assert_backend_three_safepoint_does_not_promote_frame_roots(
                 pcc_gc_frame_leave(roots);
                 roots[0] = 0;
                 pcc_gc_release(root);
+                free(roots);
                 return 0;
             }
             """).lstrip(),
@@ -4817,25 +4959,32 @@ def _assert_backend_three_oldified_tuple_retains_old_child(
             #include "py_internal.h"
             #include <stdint.h>
             #include <stdio.h>
+            #include <stdlib.h>
+
+            #define PROBE_MASK ((uintptr_t)0x5a5a5a5a5a5a5a5aULL)
 
             int main(void) {
                 static const int32_t frame_map[1] = {1};
-                PyObject *roots[1] = {0};
+                /* Count-free collectors pin what raw stack words name, a
+                 * stack-resident frame included. Keep this registered frame
+                 * off the stack (as generator frames are) and the child's
+                 * old address only masked, so the step may copy it. */
+                PyObject **roots = calloc(1, sizeof(PyObject *));
+                if (roots == 0) return 6;
 
                 if (pcc_gc_set_backend(PCC_GC_KIND_GENERATIONAL_MINOR_MAJOR) != 0) {
                     return 2;
                 }
                 pcc_gc_telemetry_reset();
 
-                PyObject *child_source = py_str_new("x", 1);
-                if (child_source == 0) return 3;
-                pcc_gc_store_root(&roots[0], child_source);
-                pcc_gc_release(child_source);
+                pcc_gc_store_root(&roots[0], py_str_new("x", 1));
+                if (roots[0] == 0) return 3;
+                uintptr_t masked = (uintptr_t)roots[0] ^ PROBE_MASK;
                 pcc_gc_frame_enter(frame_map, roots);
                 (void)pcc_gc_step(1024);
 
                 PyObject *child_old = roots[0];
-                if (child_old == 0 || child_old == child_source) return 4;
+                if (child_old == 0 || (uintptr_t)child_old == (masked ^ PROBE_MASK)) return 4;
 
                 PyObject *owner = py_tuple_new(1);
                 if (owner == 0) return 5;
@@ -5177,9 +5326,14 @@ def test_generational_backend_pcc_python_runtime_minor_refill_oldifies_copy_for_
                 if (owner->items == 0) return 4;
 
                 (void)pcc_gc_step(1);
-                PyObject *child = pcc_gc_alloc(64, PY_TYPE_INT, 0);
-                if (child == 0) return 5;
-                pcc_gc_store_ptr((PyObject *)owner, &owner->items[0], child);
+                pcc_gc_store_ptr((PyObject *)owner, &owner->items[0],
+                                 pcc_gc_alloc(64, PY_TYPE_INT, 0));
+                if (owner->items[0] == 0) return 5;
+                /* Count-free collectors pin what raw stack words name: the
+                 * old address stays only masked, so the owner's slot is the
+                 * child's sole reference while the refill may copy it. */
+                #define PROBE_MASK ((uintptr_t)0x5a5a5a5a5a5a5a5aULL)
+                uintptr_t masked = (uintptr_t)owner->items[0] ^ PROBE_MASK;
 
                 for (int i = 0; i < 3; i++) {
                     PyObject *filler = pcc_gc_alloc(64, PY_TYPE_INT, 0);
@@ -5187,6 +5341,7 @@ def test_generational_backend_pcc_python_runtime_minor_refill_oldifies_copy_for_
                     pcc_gc_release(filler);
                 }
 
+                PyObject *child = (PyObject *)(masked ^ PROBE_MASK);
                 PyObject *forwarded = pcc_gc_note_relocation_read(child);
                 PyObject *loaded = pcc_gc_load_ptr(
                     (PyObject *)owner, &owner->items[0]
@@ -5280,9 +5435,14 @@ def test_generational_backend_pcc_python_runtime_minor_refill_rewrites_remembere
                 if (owner->items == 0) return 4;
 
                 (void)pcc_gc_step(1);
-                PyObject *child = pcc_gc_alloc(64, PY_TYPE_INT, 0);
-                if (child == 0) return 5;
-                pcc_gc_store_ptr((PyObject *)owner, &owner->items[0], child);
+                pcc_gc_store_ptr((PyObject *)owner, &owner->items[0],
+                                 pcc_gc_alloc(64, PY_TYPE_INT, 0));
+                if (owner->items[0] == 0) return 5;
+                /* Count-free collectors pin what raw stack words name: the
+                 * old address stays only masked, so the owner's slot is the
+                 * child's sole reference while the refill may copy it. */
+                #define PROBE_MASK ((uintptr_t)0x5a5a5a5a5a5a5a5aULL)
+                uintptr_t masked = (uintptr_t)owner->items[0] ^ PROBE_MASK;
 
                 for (int i = 0; i < 3; i++) {
                     PyObject *filler = pcc_gc_alloc(64, PY_TYPE_INT, 0);
@@ -5290,6 +5450,7 @@ def test_generational_backend_pcc_python_runtime_minor_refill_rewrites_remembere
                     pcc_gc_release(filler);
                 }
 
+                PyObject *child = (PyObject *)(masked ^ PROBE_MASK);
                 PyObject *forwarded = pcc_gc_note_relocation_read(child);
                 printf("%d\\n", forwarded != 0 && forwarded != child ? 1 : 0);
                 printf("%d\\n", owner->items[0] == forwarded ? 1 : 0);

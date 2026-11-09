@@ -21,6 +21,7 @@ MAKEFILE = RUNTIME_DIR / "Makefile"
 
 OWNED_SYMBOLS = {
     "pcc_gc_gray_current_roots",
+    "pcc_gc_gray_registered_roots",
     "pcc_gc_prepare_object_list_mark",
 }
 RAW_FUNCTION_IMPORTS = {

@@ -384,7 +384,8 @@ void pcc_thread_safepoint_gate(void) {}
  * their own source-built native tests and must not run through this stub. */
 void pcc_gc_refresh_read_barrier(void) { abort(); }
 void pcc_thread_enable_conservative_roots(void) { abort(); }
-void pcc_gc_gray_conservative_thread_roots(void) { abort(); }
+int64_t pcc_gc_gray_conservative_and_listed_pinned_roots(void) { abort(); }
+void pcc_gc_gray_registered_roots(void) {}
 /* This counted-mode scheduler fixture has one shared atomic statistics
  * shard. Real root scanning is exercised with the source-built runtime. */
 int64_t pcc_gc_metric_shards[16];

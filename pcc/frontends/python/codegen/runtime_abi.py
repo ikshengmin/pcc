@@ -3248,6 +3248,13 @@ def _cross_object_signatures_part_13():
     }
 
 
+def _cross_object_signatures_part_14():
+    return {
+        "pcc_gc_gray_conservative_and_listed_pinned_roots": ((), "c_int64"),
+        "pcc_gc_gray_registered_roots": ((), "c_void"),
+    }
+
+
 FREESTANDING_GC_CROSS_OBJECT_SIGNATURES: dict[
     str, tuple[tuple[str, ...], str]
 ] = _cross_object_signatures_part_0()
@@ -3266,6 +3273,7 @@ FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_12(
 
 
 FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_13())
+FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_14())
 def is_freestanding_gc_cross_object_runtime_import(
     symbol: str, parameters_source: str, return_source: str
 ) -> bool:

@@ -26,16 +26,32 @@ ROOT_OPERATIONS_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_root_operations.p
 PRESSURE_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_pressure.py"
 INDEX_TABLE_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_index_table.py"
 MARK_CYCLE_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_common_mark_cycle.py"
+DEFERRED_FREE_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_deferred_free.py"
+SCALAR_SWEEP_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_scalar_sweep.py"
+GRAY_WORKLIST_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_gray_worklist.py"
 SUBSTRATE_SOURCE = RUNTIME_DIR / "py" / "py_substrate.py"
 
 
-def _state_definitions(path: Path) -> dict[str, tuple[str, int | None]]:
+_THREAD_LOCAL_KINDS = {
+    "define_thread_local_i32": "define_global_i32",
+    "define_thread_local_i64": "define_global_i64",
+    "define_thread_local_ptr_null": "define_global_ptr_null",
+}
+
+
+def _state_definitions(
+    path: Path, *, thread_locals: bool = False
+) -> dict[str, tuple[str, int | None]]:
     definitions: dict[str, tuple[str, int | None]] = {}
     tree = ast.parse(path.read_text(encoding="utf-8"))
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
             continue
-        if node.func.id not in {
+        kind = node.func.id
+        if thread_locals:
+            # Registered storage types do not distinguish thread locals.
+            kind = _THREAD_LOCAL_KINDS.get(kind, kind)
+        if kind not in {
             "define_global_i32",
             "define_global_i64",
             "define_global_ptr_null",
@@ -48,9 +64,9 @@ def _state_definitions(path: Path) -> dict[str, tuple[str, int | None]]:
             continue
         assert name not in definitions
         value = None
-        if node.func.id in {"define_global_i32", "define_global_i64"}:
+        if kind in {"define_global_i32", "define_global_i64"}:
             value = ast.literal_eval(node.args[1])
-        definitions[name] = (node.func.id, value)
+        definitions[name] = (kind, value)
     return definitions
 
 
@@ -193,7 +209,10 @@ def test_freestanding_gc_state_has_complete_raw_abi_and_initial_values(
     # collector (pcc_gc_nonmoving_count_free), and their collector thread
     # hands a traced mark's final remark to a mutator
     # (pcc_gc_cms_finish_pending).
-    assert len(expected) == 236
+    # Measurement added 39 counters: collection stopped-world windows (7),
+    # contended graph-lock waits by class (12) and the tracing sweep phases
+    # (20); GC3 steps publish their stopped-word pin snapshot (1).
+    assert len(expected) == 276
     assert expected["pcc_gc_nonmoving_count_free"] == ("define_global_i32", 0)
     assert expected["pcc_gc_cms_finish_pending"] == ("define_global_i32", 0)
     assert expected["pcc_gc_backend4_no_refcounts"] == ("define_global_i32", 0)
@@ -261,20 +280,8 @@ def test_production_archive_plan_includes_freestanding_gc_state():
     assert "build_py/freestanding_gc_state.o" in archive_lines[0]
 
 
-def test_gc_state_storage_types_are_registered_in_runtime_abi():
-    definitions = _state_definitions(STATE_SOURCE)
-    for owner_source in (
-        SELECTOR_SOURCE,
-        ROOT_OPERATIONS_SOURCE,
-        PRESSURE_SOURCE,
-        INDEX_TABLE_SOURCE,
-        MARK_CYCLE_SOURCE,
-    ):
-        owner_definitions = _state_definitions(owner_source)
-        assert set(definitions).isdisjoint(owner_definitions)
-        definitions.update(owner_definitions)
-    assert definitions["pcc_gc_foreign_lease_active"] == ("define_global_i64", 0)
-    expected = {
+def _storage_types(definitions):
+    return {
         name: (
             "i32" if kind == "define_global_i32"
             else "i64" if kind == "define_global_i64"
@@ -282,6 +289,28 @@ def test_gc_state_storage_types_are_registered_in_runtime_abi():
         )
         for name, (kind, _value) in definitions.items()
     }
+
+
+def test_gc_state_storage_types_are_registered_in_runtime_abi():
+    definitions = _state_definitions(STATE_SOURCE)
+    with_thread_locals = dict(definitions)
+    for owner_source in (
+        SELECTOR_SOURCE,
+        ROOT_OPERATIONS_SOURCE,
+        PRESSURE_SOURCE,
+        INDEX_TABLE_SOURCE,
+        MARK_CYCLE_SOURCE,
+        DEFERRED_FREE_SOURCE,
+        SCALAR_SWEEP_SOURCE,
+        GRAY_WORKLIST_SOURCE,
+    ):
+        owner_definitions = _state_definitions(owner_source)
+        assert set(definitions).isdisjoint(owner_definitions)
+        definitions.update(owner_definitions)
+        owner_storage = _state_definitions(owner_source, thread_locals=True)
+        assert set(with_thread_locals).isdisjoint(owner_storage)
+        with_thread_locals.update(owner_storage)
+    assert definitions["pcc_gc_foreign_lease_active"] == ("define_global_i64", 0)
     registered = {name: "i32" for name in FREESTANDING_GC_I32_GLOBALS}
     registered.update({name: "i64" for name in FREESTANDING_GC_I64_GLOBALS})
     registered.update({name: "ptr" for name in FREESTANDING_GC_PTR_GLOBALS})
@@ -290,7 +319,13 @@ def test_gc_state_storage_types_are_registered_in_runtime_abi():
         for name, kind in registered.items()
         if name.startswith(("pcc_gc_", "py_gc_"))
     }
-    assert registered == expected
+    # Every shared global is registered with its storage type. A thread
+    # local is registered only when another object reads it, and then with
+    # its type; nothing registered lacks a definition.
+    globals_ = _storage_types(definitions)
+    storage = _storage_types(with_thread_locals)
+    assert {name: registered.get(name) for name in globals_} == globals_
+    assert {name: storage.get(name) for name in registered} == registered
 
 
 def test_raw_gc_state_uses_string_kinds_not_managed_llvm_type_registry():

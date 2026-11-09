@@ -68,6 +68,10 @@ class FinalizerModel(Model):
         _functions(RUNTIME / 'freestanding_gc_object_root_seeding.py', {
             'pcc_gc_gray_current_roots'
         }, self.ns)
+        # The root walk reads each listed node's own pin state.
+        _functions(RUNTIME / 'freestanding_gc_root_operations.py', {
+            'pcc_gc_object_node_is_address_pinned'
+        }, self.ns)
         self.on_unlock = self.boundary
 
     def alloc(self, size):

@@ -13,9 +13,11 @@ SOURCE = (Path(__file__).resolve().parents[2] / "pcc/runtime/py"
 
 
 class RemarkModel:
-    def __init__(self, tracing, *, owned=False, stop_failure=False, invalidate=False):
+    def __init__(self, tracing, *, owned=False, stop_failure=False, invalidate=False,
+                 chain_cut=False):
         self.events = []
         self.owned = owned
+        self.chain_cut = chain_cut
         self.depth = 0
         self.invalidate = invalidate
         self.cells = {
@@ -44,8 +46,12 @@ class RemarkModel:
             ptr_is_null=lambda obj: obj == 0,
             pcc_gc_tracing_finish_claim_clear_unlocked=lambda *args: self.events.append("clear"),
             pcc_capi_visit_extension_module_state_roots=self.extensions,
-            pcc_gc_gray_conservative_thread_roots=lambda: self.root("raw"),
-            pcc_gc_gray_current_roots=lambda: self.root("registered"),
+            pcc_gc_gray_conservative_and_listed_pinned_roots=self.conservative,
+            pcc_gc_gray_registered_roots=lambda: self.root("registered"),
+            pcc_gc_gray_current_roots=lambda: self.root("listed+registered"),
+            pcc_gc_trace_stack_begin=lambda: self.stack("stack_begin"),
+            pcc_gc_trace_stack_drain=lambda budget: self.stack("stack_drain") or 0,
+            pcc_gc_trace_stack_end=lambda: self.stack("stack_end"),
             _pcc_gc_drain_all_gray_stopped_world=lambda *args: self.events.append("drain"),
             pcc_gc_finish_tracing_cycle=self.finish,
         )
@@ -79,6 +85,16 @@ class RemarkModel:
         assert self.depth == 1 and self.owned
         self.events.append(kind)
 
+    def conservative(self):
+        # The fused walk also shades listed pinned objects unless a
+        # forwarding chain cut leaves them to the separate walk.
+        self.root("raw" if self.chain_cut else "raw+listed")
+        return 0 if self.chain_cut else 1
+
+    def stack(self, kind):
+        assert self.depth == 1 and self.owned
+        self.events.append(kind)
+
     def finish(self, epoch, backend):
         assert self.depth == 1 and self.owned
         self.events.append("finish")
@@ -92,10 +108,20 @@ class RemarkModel:
 
 @pytest.mark.parametrize("tracing", [False, True])
 @pytest.mark.parametrize("owned", [False, True])
-def test_final_snapshot_roots_precede_drain_and_verdict_under_valid_world(tracing, owned):
-    model = RemarkModel(tracing, owned=owned)
+@pytest.mark.parametrize("chain_cut", [False, True])
+def test_final_snapshot_roots_precede_drain_and_verdict_under_valid_world(tracing, owned, chain_cut):
+    model = RemarkModel(tracing, owned=owned, chain_cut=chain_cut)
     assert model.complete() == 1
-    expected = ["extensions"] + (["raw"] if tracing else []) + ["registered", "drain", "finish"]
+    if not tracing:
+        roots = ["listed+registered"]
+    elif chain_cut:
+        roots = ["raw", "listed+registered"]
+    else:
+        # One walk shades conservative owners and listed pins; only the
+        # registered roots remain.
+        roots = ["raw+listed", "registered"]
+    expected = (["extensions", "stack_begin"] + roots
+                + ["stack_drain", "stack_end", "drain", "finish"])
     assert model.events == (expected if owned else ["stop"] + expected + ["resume"])
 
 

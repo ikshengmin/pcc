@@ -748,7 +748,9 @@ def test_capi_extension_dynamic_tags_do_not_use_instance_layout_source():
     sweep_guard = "pcc_capi_is_cext_type_tag((int64_t)py_header(o)->type_tag) == 0"
 
     assert "pcc_capi_is_cext_type_tag = extern(" in gc_backend_py
-    assert "pcc_capi_dealloc_cext_object = extern(" in tracing_collector_py
+    # Typed deallocation moved to py_obj_dealloc's shared dispatcher
+    # (pcc_gc_dealloc_typed, 8429b6671); tracing sweeps call it.
+    assert "pcc_capi_dealloc_cext_object = extern(" in obj_dealloc_py
     py_instance_body = strict_slots_py.split(
         "def _visit_instance_slots(o, visitor, context)", 1
     )[1].split("\ndef ", 1)[0]
@@ -804,12 +806,14 @@ def test_capi_extension_dynamic_tags_do_not_use_instance_layout_source():
             '@c_abi_export("pcc_gc_tracing_recheck_reachability_after_finalizers")'
         )
     ]
-    assert "pcc_capi_dealloc_cext_object(obj, tag) == 0" in py_finalize_body
-    assert py_finalize_body.index(
-        "pcc_capi_dealloc_cext_object(obj, tag) == 0"
-    ) < py_finalize_body.index(
-        'if tag >= abi_constant("object.type.user_class_start"):'
-    )
+    assert "pcc_gc_dealloc_typed(obj, tag)" in py_finalize_body
+    typed_body = obj_dealloc_py.split(
+        "def _dealloc_dispatch(o, tag: int) -> None:", 1
+    )[1].split("\ndef ", 1)[0]
+    assert "pcc_capi_dealloc_cext_object(o, tag) != 0" in typed_body
+    assert typed_body.index(
+        "pcc_capi_dealloc_cext_object(o, tag) != 0"
+    ) < typed_body.index("if tag >= PY_TYPE_USER_CLASS_START:")
 
     py_sweep_body = tracing_collector_py[
         tracing_collector_py.index(
@@ -1137,10 +1141,17 @@ def test_unreachable_file_uses_file_deallocator_in_c_and_python_mirror():
     from pcc.runtime.py.py_abi_constants import PY_TYPE_FILE
 
     assert PY_TYPE_FILE == 13
-    file_case = py_body.split(
-        'elif tag == abi_constant("object.type.file"):', 1
-    )[1].split("elif tag ==", 1)[0]
-    assert "py_dealloc_file(obj)" in file_case
+    # Typed deallocation moved to py_obj_dealloc's shared dispatcher
+    # (pcc_gc_dealloc_typed, 8429b6671), which the tracing sweep calls.
+    assert "pcc_gc_dealloc_typed(obj, tag)" in py_body
+    dealloc_source = (RUNTIME_DIR / "py" / "py_obj_dealloc.py").read_text(
+        encoding="utf-8"
+    )
+    typed_body = dealloc_source.split(
+        "def _dealloc_dispatch(o, tag: int) -> None:", 1
+    )[1].split("\ndef ", 1)[0]
+    file_case = typed_body.split("if tag == PY_TYPE_FILE:", 1)[1].split("if tag ==", 1)[0]
+    assert "py_dealloc_file(o)" in file_case
     assert "if delay_zpage_freeing_note != 0:" in py_body
 
 

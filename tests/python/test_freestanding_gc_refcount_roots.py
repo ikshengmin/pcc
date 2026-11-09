@@ -198,4 +198,8 @@ def test_archive_owns_refcount_scan_and_executes_external_root_semantics(
         [str(executable)], capture_output=True, text=True, timeout=30
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert result.stdout == "internal:1,1,1\nexternal:1,1,2\n"
+    # GC1-GC4 count no references (pcc_gc_set_backend sets
+    # pcc_gc_backend4_no_refcounts for every tracing collector), so a retain
+    # is no external count: the child stays white and only the parent is a
+    # root. Count-free seeds find raw holders conservatively instead.
+    assert result.stdout == "internal:1,1,1\nexternal:1,0,1\n"

@@ -63,7 +63,10 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_finish_tracing_cycle",
     "pcc_gc_drain_all_gray_locked_slice",
     "pcc_gc_gray_current_roots",
-    "pcc_gc_gray_conservative_thread_roots",
+    # One conservative walk also shades listed pinned objects; then only
+    # the registered roots remain.
+    "pcc_gc_gray_conservative_and_listed_pinned_roots",
+    "pcc_gc_gray_registered_roots",
     "pcc_gc_gray_count_decrement_acq_rel",
     "pcc_gc_gray_count_load_acquire",
     "pcc_gc_maybe_start_cms_worker",
