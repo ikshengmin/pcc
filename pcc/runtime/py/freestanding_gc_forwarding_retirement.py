@@ -725,6 +725,18 @@ def pcc_gc_backend4_remap_and_retire_stopped_world() -> i64:
     else:
         valid = 0
     after: i64 = load_i32(global_addr("pcc_gc_forwarding_population"), 0)
+    pending_progress: i64 = 0
+    if valid != 0 and gc3_count_free == 0 and after > 0:
+        # Keep this walk under the graph lock. A pinned source still owns
+        # its bytes, but another immediate epoch cannot advance its grace.
+        # Only an unpinned source can make progress on the next remap.
+        remaining = pcc_gc_forwarding_list_head()
+        while ptr_is_null(remaining) == 0 and pending_progress == 0:
+            source = load_ptr(remaining, 0)
+            if (ptr_is_null(source) == 0 and is_tagged_int(source) == 0
+                    and pcc_gc_object_is_address_pinned(source) == 0):
+                pending_progress = 1
+            remaining = load_ptr(remaining, 16)
     global_store_ptr("pcc_gc_backend4_remap_pending_obj", null())
     store_i32(global_addr("pcc_gc_backend4_remap_active"), 0, 0)
     pcc_py_gc_minor_graph_unlock()
@@ -741,9 +753,9 @@ def pcc_gc_backend4_remap_and_retire_stopped_world() -> i64:
         return 0
     if before > after:
         return before - after
-    if gc3_count_free == 0 and before > 0:
+    if pending_progress != 0:
         return 1
-    # A pinned GC3 source is deferred, not progress. Explicit collection's
+    # A pinned source is deferred, not progress. Explicit collection's
     # idle-round bound must still terminate while a raw alias remains live.
     return 0
 
@@ -811,6 +823,15 @@ def pcc_gc_backend4_remap_and_retire_unlocked(finish) -> None:
             fwd = nxt
             continue
         old_flags: i64 = load_i32(old, 12)
+        if pcc_gc_object_is_address_pinned(old) != 0:
+            # A raw alias can outlive the first rewrite epoch, and a manual
+            # pin or foreign lease can be acquired after forwarding. Keep
+            # its payload, indexes and page ownership together. Once the
+            # pin leaves, require two fresh unpinned rewrite epochs rather
+            # than consuming a grace bit earned before this alias existed.
+            store_i32(old, 12, old_flags & ~131072)
+            fwd = nxt
+            continue
         if (old_flags & 131072) == 0:
             store_i32(old, 12, old_flags | 131072)
             fwd = nxt
