@@ -124,7 +124,7 @@ class FrozenWordMemory(IntervalMemory):
             stack_alloc=lambda size: 0x700000,
             malloc=self.allocate,
             free=self.freed.append,
-            global_load_ptr=lambda name: self.head,
+            global_load_ptr=lambda name: self.head if name == "pcc_gc_object_head" else 0,
             pcc_thread_world_stop_epoch_held=lambda: 1,
             pcc_thread_snapshot_stopped_world_owner=self.snapshot_owner,
             pcc_thread_visit_conservative_words=self.visit,

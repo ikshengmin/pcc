@@ -8,10 +8,12 @@ every possible owner. The world and graph stay stopped throughout the scan.
 """
 from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
+from pcc.runtime.py.py_abi_constants import PY_FLAG_GC_PINNED
 from pcc.unsafe import (
     free,
     global_addr,
     global_load_ptr,
+    global_store_ptr,
     is_tagged_int,
     load_i32,
     load_i64,
@@ -31,7 +33,9 @@ __pcc_freestanding__ = True
 
 pcc_gc_object_index_find = extern("pcc_gc_object_index_find", (c_ptr,), c_ptr)
 pcc_gc_forwarding_index_find = extern("pcc_gc_forwarding_index_find", (c_ptr,), c_ptr)
+pcc_gc_forwarding_target_index_find = extern("pcc_gc_forwarding_target_index_find", (c_ptr,), c_ptr)
 pcc_gc_object_is_address_pinned = extern("pcc_gc_object_is_address_pinned", (c_ptr,), c_int64)
+pcc_gc_static_literal_contains = extern("pcc_gc_static_literal_contains", (c_ptr,), c_int64)
 
 pcc_gc_object_node_is_active = extern("pcc_gc_object_node_is_active", (c_ptr,), c_int64)
 pcc_gc_mark_root_gray_if_known = extern("pcc_gc_mark_root_gray_if_known", (c_ptr,), c_void)
@@ -64,6 +68,7 @@ _WORDS_COUNT: i64 = 8
 _WORDS_CAPACITY: i64 = 16
 _WORDS_CONTEXT_BYTES: i64 = 24
 _WORD_BYTES: i64 = 8
+_STEP_PREVIOUS: i64 = 24
 
 
 @c_abi_export("pcc_gc_conservative_interval_swap")
@@ -319,6 +324,21 @@ def _extent_has_word(words, count: i64, base, size: i64) -> i64:
 
 @c_abi_export("pcc_gc_scan_conservative_thread_roots")
 def _scan_thread_roots(mark: i64) -> None:
+    active = global_load_ptr("pcc_gc_backend3_step_pin_snapshot")
+    if ptr_is_null(active) == 0:
+        # A nested mark may discover roots acquired since the outer step's
+        # snapshot. Keep its remainder nonmoving rather than trust that cut.
+        store_i64(active, _WORDS_CAPACITY, -1)
+    context = stack_alloc(_WORDS_CONTEXT_BYTES)
+    _capture_thread_words(context)
+    words = load_ptr(context, _WORDS_DATA)
+    count: i64 = load_i64(context, _WORDS_COUNT)
+    _pin_snapshot_owners(words, count, mark)
+    free(words)
+
+
+@c_abi_export("pcc_gc_conservative_capture_thread_words")
+def _capture_thread_words(context) -> None:
     if pcc_thread_world_stop_epoch_held() < 0:
         pcc_platform_abort()
         return
@@ -326,7 +346,6 @@ def _scan_thread_roots(mark: i64) -> None:
     if pcc_thread_snapshot_stopped_world_owner() < 0:
         pcc_platform_abort()
         return
-    context = stack_alloc(_WORDS_CONTEXT_BYTES)
     store_ptr(context, _WORDS_DATA, null())
     store_i64(context, _WORDS_COUNT, 0)
     store_i64(context, _WORDS_CAPACITY, 0)
@@ -348,6 +367,81 @@ def _scan_thread_roots(mark: i64) -> None:
         pcc_platform_abort()
         return
     count: i64 = _sort_words(words, capacity)
+    store_i64(context, _WORDS_COUNT, count)
+
+
+@c_abi_export("pcc_gc_conservative_step_pin_begin")
+def pcc_gc_conservative_step_pin_begin(context) -> None:
+    # A bounded GC3 step freezes only stack words, never the object list.
+    # The stack-owned context lives until end(), before the world resumes.
+    # Nested steps restore the enclosing snapshot rather than freeing it.
+    pcc_py_gc_minor_graph_lock()
+    _capture_thread_words(context)
+    store_ptr(context, _STEP_PREVIOUS, global_load_ptr("pcc_gc_backend3_step_pin_snapshot"))
+    global_store_ptr("pcc_gc_backend3_step_pin_snapshot", context)
+    pcc_py_gc_minor_graph_unlock()
+
+
+@c_abi_export("pcc_gc_conservative_step_pin_end")
+def pcc_gc_conservative_step_pin_end(context) -> None:
+    pcc_py_gc_minor_graph_lock()
+    if (pcc_thread_world_stop_epoch_held() < 0
+            or ptr_eq(global_load_ptr("pcc_gc_backend3_step_pin_snapshot"), context) == 0):
+        pcc_platform_abort()
+        return
+    previous = load_ptr(context, _STEP_PREVIOUS)
+    if ptr_is_null(previous) == 0:
+        # Inner callbacks/frames can introduce roots absent from the outer
+        # capture. Invalidate the outer cut in O(1); promote in place for its
+        # remainder. The next independently stopped step takes fresh words.
+        store_i64(previous, _WORDS_CAPACITY, -1)
+    global_store_ptr("pcc_gc_backend3_step_pin_snapshot", previous)
+    free(load_ptr(context, _WORDS_DATA))
+    store_ptr(context, _WORDS_DATA, null())
+    pcc_py_gc_minor_graph_unlock()
+
+
+@c_abi_export("pcc_gc_generational_object_is_address_pinned")
+def pcc_gc_generational_object_is_address_pinned(obj) -> i64:
+    # Only GC3 moving admissions inside a step use this query. Mark/remark,
+    # alias retirement and GC4 still use the materialized pin contract.
+    # Public forwarding can
+    # target a young object: conservatively keep every such target in place
+    # rather than traverse its potentially heap-sized inverse alias closure.
+    context = global_load_ptr("pcc_gc_backend3_step_pin_snapshot")
+    if ptr_is_null(context) != 0:
+        return pcc_gc_object_is_address_pinned(obj)
+    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+        return 0
+    if load_i64(context, _WORDS_CAPACITY) < 0:
+        return 1
+    if pcc_gc_static_literal_contains(obj) != 0:
+        return 1
+    if (load_i32(obj, 12) & PY_FLAG_GC_PINNED) != 0:
+        return 1
+    node = pcc_gc_object_index_find(obj)
+    if ptr_is_null(node) != 0:
+        return 0
+    if load_i64(node, 80) != 0:
+        return 1
+    if ptr_is_null(pcc_gc_forwarding_target_index_find(obj)) == 0:
+        return 1
+    words = load_ptr(context, _WORDS_DATA)
+    count: i64 = load_i64(context, _WORDS_COUNT)
+    if _extent_has_word(words, count, obj, load_i64(node, 8)) != 0:
+        return 1
+    owner = load_ptr(node, 48)
+    if ptr_is_null(owner) == 0:
+        span = load_ptr(owner, 64)
+        while ptr_is_null(span) == 0:
+            if _extent_has_word(words, count, load_ptr(span, 8), load_i64(span, 16)) != 0:
+                return 1
+            span = load_ptr(span, 40)
+    return 0
+
+
+@c_abi_export("pcc_gc_conservative_pin_snapshot_owners")
+def _pin_snapshot_owners(words, count: i64, mark: i64) -> None:
     backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
     count_free: i64 = load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0)
     gc3_count_free: i64 = 1 if backend == 3 and count_free != 0 else 0
@@ -397,7 +491,6 @@ def _scan_thread_roots(mark: i64) -> None:
                 # canonical target; source metadata itself is not a root.
                 _pin_owner_chain(node, mark)
         node = load_ptr(node, 16)
-    free(words)
 
 
 @c_abi_export("pcc_gc_gray_conservative_thread_roots")

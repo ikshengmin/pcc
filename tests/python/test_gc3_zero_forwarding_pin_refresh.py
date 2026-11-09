@@ -19,7 +19,7 @@ SOURCE = Path(__file__).resolve().parents[2] / "pcc/runtime/py/freestanding_gc_c
 def _install_original_scan(state):
     tree = ast.parse(SOURCE.read_text())
     scan = next(node for node in tree.body
-                if isinstance(node, ast.FunctionDef) and node.name == "_scan_thread_roots")
+                if isinstance(node, ast.FunctionDef) and node.name == "_pin_snapshot_owners")
     scan.decorator_list = []
     # Restore the original unconditional GC3 separate pass. The additional
     # specialization is the sole top-level if whose body assigns zero here.

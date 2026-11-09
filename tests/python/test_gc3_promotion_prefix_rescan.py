@@ -64,6 +64,7 @@ class PrefixRescanGC3(PipelineGC3):
         self.owner = 0
         self.owner_node = 0
         self.slot_visits = []
+        self.step_owner_pins = []
         self.slice_starts = []
         self.remembered_handoffs = []
         actual_slot = self.ns["pcc_gc_generational_promote_slot"]
@@ -79,6 +80,9 @@ class PrefixRescanGC3(PipelineGC3):
             assert self.stopped and self.depth > 0
             if obj == self.owner:
                 self.slice_starts.append((self.phase, cursor))
+                self.step_owner_pins.append(
+                    self.ns["pcc_gc_generational_object_is_address_pinned"](obj)
+                )
             return actual_slice(obj, cursor, limit, visitor, context, state)
 
         def observe_remembered_drain(budget, detached):
@@ -208,7 +212,10 @@ def _partially_scanned_owner(pinned):
     assert m.load("pcc_gc_backend3_promotion_head", 0) == m.owner_node
     assert m.load("pcc_gc_backend3_remembered_owner_head", 0) == 0
     assert m.load(m.owner, 12) & REMEMBERED == 0
-    assert m.load(m.owner_node, 56) == 2 * cursor + int(pinned)
+    # GC3 now queries this pause's words at a move, without materializing
+    # conservative pin bits on every heap node for each budgeted step.
+    assert m.load(m.owner_node, 56) == 2 * cursor
+    assert m.step_owner_pins and m.step_owner_pins[-1] == int(pinned)
     original_target = m.load(items, 0)
     assert original_target != original
     assert m.load(original_target, 12) & OLD
@@ -218,8 +225,9 @@ def _partially_scanned_owner(pinned):
 
 
 def _assert_owner_pin_survives(m, pinned):
-    assert m.load(m.owner_node, 56) == int(pinned)
-    assert m.ns["pcc_gc_object_is_address_pinned"](m.owner) == int(pinned)
+    assert m.load(m.owner_node, 56) == 0
+    assert m.step_owner_pins and set(m.step_owner_pins) == {int(pinned)}
+    assert m.load("pcc_gc_backend3_step_pin_snapshot", 0) == 0
 
 
 @pytest.mark.parametrize("resets", [0, 1, 2])

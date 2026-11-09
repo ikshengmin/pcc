@@ -26,11 +26,15 @@ def test_repeated_actual_generational_step_finishes_large_owner_across_pin_scans
         m.words = [owner + 16]
     m.ns['pcc_gc_backend3_enqueue_promotion_owner'](owner)
     cursors = []
+    step_pins = []
     actual_slice = m.ns['pcc_gc_visit_object_slots_slice']
 
     def observe_slice(obj, cursor, limit, visitor, context, state):
         if obj == owner:
             cursors.append(cursor)
+            query = ('pcc_gc_generational_object_is_address_pinned'
+                     if backend == 3 else 'pcc_gc_object_is_address_pinned')
+            step_pins.append(m.ns[query](obj))
         return actual_slice(obj, cursor, limit, visitor, context, state)
 
     m.ns['pcc_gc_visit_object_slots_slice'] = observe_slice
@@ -46,8 +50,9 @@ def test_repeated_actual_generational_step_finishes_large_owner_across_pin_scans
     }
     assert len(cursors) > 2 and cursors[0] == 0
     assert cursors == sorted(set(cursors))
-    assert m.load(node, 56) == int(pinned)
-    assert m.ns['pcc_gc_object_is_address_pinned'](owner) == int(pinned)
+    assert set(step_pins) == {int(pinned)}
+    assert m.load(node, 56) == (int(pinned) if backend == 4 else 0)
+    assert m.load('pcc_gc_backend3_step_pin_snapshot', 0) == 0
 
 
 def test_cursor_alone_is_not_a_pin_and_scans_and_mark_seed_preserve_it():

@@ -434,6 +434,7 @@ define_global_i32("pcc_gc_backend3_scheduler_root_scan_phase", 0)
 # Nonzero while a GC3 step runs with another mutator outside an application
 # gate: oldification then promotes young objects in place instead of copying.
 define_global_i32("pcc_gc_backend3_oldify_suspended", 0)
+define_global_ptr_null("pcc_gc_backend3_step_pin_snapshot")
 define_global_i64("pcc_gc_backend3_scheduler_root_scan_slot", -1)
 define_global_ptr_null("pcc_gc_backend3_scheduler_root_scan_cursor")
 define_global_ptr_null("pcc_gc_object_head")

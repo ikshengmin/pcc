@@ -95,6 +95,11 @@ pcc_thread_all_stopped_at_gates = extern("pcc_thread_all_stopped_at_gates", (), 
 pcc_stop_the_world = extern("pcc_stop_the_world", (), c_int64)
 pcc_resume_world = extern("pcc_resume_world", (), c_int64)
 pcc_gc_pin_conservative_thread_roots = extern("pcc_gc_pin_conservative_thread_roots", (), c_void)
+pcc_gc_conservative_step_pin_begin = extern("pcc_gc_conservative_step_pin_begin", (c_ptr,), c_void)
+pcc_gc_conservative_step_pin_end = extern("pcc_gc_conservative_step_pin_end", (c_ptr,), c_void)
+
+# Sorted words: data/count/capacity; previous context for nested STW steps.
+_STEP_PIN_CONTEXT_BYTES: i64 = 32
 pcc_thread_safepoint = extern("pcc_thread_safepoint", (), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
 py_incref = extern("py_incref", (c_ptr,), c_void)
@@ -424,8 +429,13 @@ def pcc_gc_generational_step(
     oldify_suspended: i64 = load_i32(global_addr("pcc_gc_backend3_oldify_suspended"), 0)
     if pcc_thread_all_stopped_at_gates() == 0:
         store_i32(global_addr("pcc_gc_backend3_oldify_suspended"), 0, 1)
+    pin_snapshot = null()
     if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
-        pcc_gc_pin_conservative_thread_roots()
+        if load_i32(global_addr("pcc_gc_backend_selected"), 0) == 3:
+            pin_snapshot = stack_alloc(_STEP_PIN_CONTEXT_BYTES)
+            pcc_gc_conservative_step_pin_begin(pin_snapshot)
+        else:
+            pcc_gc_pin_conservative_thread_roots()
     batch_budget: i64 = remaining_budget
     if batch_budget > 16:
         batch_budget = 16
@@ -484,6 +494,8 @@ def pcc_gc_generational_step(
         null(),
     )
     store_i32(global_addr("pcc_gc_backend3_oldify_suspended"), 0, oldify_suspended)
+    if ptr_is_null(pin_snapshot) == 0:
+        pcc_gc_conservative_step_pin_end(pin_snapshot)
     if stopped_here != 0:
         pcc_resume_world()
     if local_processed > 0:
