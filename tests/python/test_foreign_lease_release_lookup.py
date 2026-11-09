@@ -80,6 +80,8 @@ class ReleaseModel(Model):
             logical_shift_right_i64=lambda value, shift: (value & MASK64) >> shift,
             wrapping_mul_i64=lambda left, right: ((left * right + (1 << 63)) & MASK64) - (1 << 63),
             atomic_load_i64=self.atomic_load,
+            atomic_fence=lambda order: self.audit.append(("fence", order)),
+            pcc_platform_abort=lambda: (_ for _ in ()).throw(RuntimeError("abort")),
             atomic_rmw_i32=self.atomic_and,
             pcc_gc_forwarding_index_find=self.find_forwarding,
             py_incref=lambda value: self.refcount("incref", value),
@@ -88,6 +90,7 @@ class ReleaseModel(Model):
         _functions(RUNTIME / "freestanding_gc_index_table.py", {
             "pcc_gc_index_py_hash_ptr", "pcc_gc_index_py_find_slot",
             "pcc_gc_index_py_find_published", "pcc_gc_object_index_find",
+            "pcc_gc_object_index_find_unpublished",
         }, self.ns)
         self.raw_find = self.ns["pcc_gc_object_index_find"]
         self.ns["pcc_gc_object_index_find"] = self.find
@@ -164,6 +167,13 @@ class ReleaseModel(Model):
             self.store(slots, index * 16 + 8, node)
         self.store(record, 0, slots)
         self.store(record, 8, capacity)
+        # These synchronous model updates represent completed serialized
+        # writers. Keep the authoritative table even if the optional record
+        # is subsequently suppressed to model publication-record OOM.
+        self.store("pcc_py_gc_object_slots", 0, slots)
+        self.store("pcc_py_gc_object_cap", 0, capacity)
+        sequence = "pcc_gc_object_index_generation"
+        self.store(sequence, 0, self.load(sequence) + 2)
         self.store(PUBLISHED, 0, record)
 
     def object(self, obj=1000, **kwargs):
@@ -399,7 +409,7 @@ def test_stranded_source_lease_cannot_consume_another_owners_count(backend):
     assert current.active() == 1
 
 
-@pytest.mark.parametrize("kind", ("null", "tagged", "unknown", "missing_node", "publication_miss", "freeing", "zero_node"))
+@pytest.mark.parametrize("kind", ("null", "tagged", "unknown", "missing_node", "unindexed_publication_oom", "freeing", "zero_node"))
 def test_failed_identity_guard_does_not_read_unknown_header_or_consume_guard(kind):
     def setup(model):
         slot = model.object()
@@ -413,9 +423,11 @@ def test_failed_identity_guard_does_not_read_unknown_header_or_consume_guard(kin
             del model.nodes[1000]
             model.publish()
             model.unreadable_headers.add(1000)
-        elif kind == "publication_miss":
-            # Authoritative/list node still exists; optional reader record
-            # was not published (e.g. OOM), so exact find must still miss.
+        elif kind == "unindexed_publication_oom":
+            # Stale node storage is not authoritative membership. Even
+            # without a publication record, the exact table must miss it.
+            del model.nodes[1000]
+            model.publish()
             model.store(PUBLISHED, 0, 0)
             model.unreadable_headers.add(1000)
         elif kind == "freeing":
@@ -436,6 +448,23 @@ def test_failed_identity_guard_does_not_read_unknown_header_or_consume_guard(kin
     assert [event for event in before_resolve
             if event[0] == "read" and event[1] == 21000] == [("read", 21000, 0, 1)]
     assert not any(event[0] == "read" and event[2] == 12 for event in before_resolve)
+
+
+@pytest.mark.parametrize("backend", (3, 4))
+def test_publication_oom_keeps_exact_registered_lease_releasable(backend):
+    def setup(model):
+        slot = model.object()
+        assert model.acquire(slot) == 1
+        model.store(PUBLISHED, 0, 0)
+        return slot, 1
+    _, current, status = _paired_release(setup, backend=backend)
+    assert status == 0 and current.count() == current.active() == 0
+    assert _calls(current, "find") == [("find", 1000, 1)]
+    assert not _calls(current, "resolve")
+    assert _calls(current, "fence") == [("fence", "acquire"), ("fence", "acquire")]
+    assert _calls(current, "write") == [
+        ("write", CENTRAL, 0, 0), ("write", 11000, 80, 0),
+    ]
 
 
 @pytest.mark.parametrize("central", (0, -1, -7))

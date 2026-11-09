@@ -242,12 +242,16 @@ def test_known_lookup_closure_is_read_only():
         ),
         RUNTIME / "freestanding_gc_index_table.py": (
             "pcc_gc_object_index_find", "pcc_gc_index_py_find_published",
+            "pcc_gc_object_index_find_unpublished",
             "pcc_gc_index_py_find_slot", "pcc_gc_index_py_hash_ptr",
         ),
     }
     allowed = {"ptr_is_null", "is_tagged_int", "null", "load_i32", "load_i64",
                "load_ptr", "global_addr", "atomic_load_i64", "int_to_ptr",
-               "ptr_eq", "ptr_diff", "logical_shift_right_i64", "wrapping_mul_i64"}
+               "ptr_eq", "ptr_diff", "logical_shift_right_i64", "wrapping_mul_i64",
+               "atomic_fence", "pcc_platform_abort"}
+    # The OOM fallback can fence reads or fail closed on corrupt generation;
+    # it still cannot allocate, park, call back, lock, or mutate graph state.
     allowed.update(name for names in sources.values() for name in names)
     for path, names in sources.items():
         functions = [node for node in ast.parse(path.read_text()).body

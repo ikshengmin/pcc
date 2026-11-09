@@ -28,6 +28,8 @@ import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from pcc.frontends.python import pipeline
 from pcc.frontends.python.pipeline_targets import host_target_triple
 
@@ -43,6 +45,33 @@ HARNESS = r"""
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+
+#ifdef PCC_INDEX_PUBLICATION_OOM
+extern void *pcc_py_gc_object_slots;
+extern void *pcc_py_gc_object_published;
+static _Thread_local int inject_object_record_oom;
+static void *last_failed_object_slots;
+static long failed_object_records;
+
+/* Replace only the raw allocation provider in this standalone component
+   harness. Fail the first 16B request after each object-table replacement:
+   that is its publication record. Retirement records and other tables still
+   allocate normally. Other threads never enter this injection branch. */
+void *calloc(size_t count, size_t size) {
+    if (count != 0 && size > ((size_t)-1) / count) return NULL;
+    size_t bytes = count * size;
+    if (inject_object_record_oom && bytes == 16
+            && pcc_py_gc_object_slots != last_failed_object_slots) {
+        last_failed_object_slots = pcc_py_gc_object_slots;
+        failed_object_records++;
+        return NULL;
+    }
+    void *result = malloc(bytes);
+    if (result != NULL) memset(result, 0, bytes);
+    return result;
+}
+#endif
 
 void *pcc_gc_object_index_find(void *obj);
 int64_t pcc_gc_object_index_insert(void *obj, void *node);
@@ -97,7 +126,11 @@ static void *reader(void *arg) {
             }
             /* Present keys: no removal runs, so the probe finds them in
                the table it loaded, old or new. */
-            if (pcc_gc_object_index_seen(key) != 1) {
+            int64_t expected_seen = 1;
+#ifdef PCC_INDEX_PUBLICATION_OOM
+            expected_seen = 0; /* cheap positive-only probe remains unknown */
+#endif
+            if (pcc_gc_object_index_seen(key) != expected_seen) {
                 atomic_store(&failure, 2);
                 return 0;
             }
@@ -130,6 +163,9 @@ int main(void) {
         keys[i] = (uintptr_t)(arena + i * 16);
         nodes[i] = (uintptr_t)(0x100000 + i * 16);
     }
+#ifdef PCC_INDEX_PUBLICATION_OOM
+    inject_object_record_oom = 1;
+#endif
     for (long i = 0; i < EARLY; i++) {
         if (pcc_gc_object_index_insert((void *)keys[i], (void *)nodes[i]) != 1) return 11;
         if (pcc_gc_managed_pointer_index_insert((void *)keys[i]) != 1) return 12;
@@ -151,6 +187,10 @@ int main(void) {
         pthread_join(threads[r], 0);
     }
     if (atomic_load(&failure) != 0) return 20 + atomic_load(&failure);
+#ifdef PCC_INDEX_PUBLICATION_OOM
+    if (failed_object_records < 2 || pcc_py_gc_object_published != NULL) return 33;
+    inject_object_record_oom = 0;
+#endif
     /* Every replaced table waited for the readers instead of being freed
        under them; with the readers joined they can go. */
     if (pcc_gc_index_reclaim_retired() < 4) return 30;
@@ -181,11 +221,15 @@ def _index_object(tmp_path: Path) -> Path:
     return obj
 
 
-def test_index_lookups_without_the_lock_survive_concurrent_growth(tmp_path: Path):
+@pytest.mark.parametrize('publication_oom', (False, True))
+def test_index_lookups_without_the_lock_survive_concurrent_growth(
+    tmp_path: Path, publication_oom: bool,
+):
     from pcc import build
 
     harness = tmp_path / "unlocked_readers.c"
-    harness.write_text(HARNESS, encoding="utf-8")
+    prefix = '#define PCC_INDEX_PUBLICATION_OOM 1\n' if publication_oom else ''
+    harness.write_text(prefix + HARNESS, encoding="utf-8")
     # Link only this freestanding index and its C stubs. A complete runtime
     # would introduce conflicting allocator/index definitions and change the
     # concurrency experiment. Preprocessing, object emission and linking are

@@ -333,7 +333,9 @@ def _index_table_publish(slots_cell: c_ptr, cap_cell: c_ptr, slots, cap: i64) ->
     reader loads the record once, so it never pairs a table with another
     table's capacity (which would probe the wrong slots or past the end).
     The record it replaces is retired with the replaced table. Without a
-    record (no memory) readers see no table and take the locked lookup.
+    record (no memory) positive-only probes report unknown. The object-node
+    lookup validates the authoritative table through its write generation;
+    other indexes retain their existing no-record behavior.
     """
     write_generation: i64 = 0
     if ptr_eq(slots_cell, global_addr("pcc_py_gc_object_slots")) != 0:
@@ -422,12 +424,15 @@ def pcc_gc_index_py_find_published(published_cell: c_ptr, key: c_ptr) -> c_ptr:
     The table and capacity come from one published record (see
     pcc_gc_index_py_seen). An unlocked caller can still pair a key with a
     node word that a concurrent backward-shift removal is moving; under the
-    lock the answer is exact.
+    lock the answer is exact. The object index also has a generation-checked
+    authoritative fallback when its optional publication record was OOM.
     """
     if ptr_is_null(key) or is_tagged_int(key):
         return null()
     record_bits: i64 = atomic_load_i64(published_cell, 0, "acquire")
     if record_bits == 0:
+        if ptr_eq(published_cell, global_addr("pcc_py_gc_object_published")) != 0:
+            return pcc_gc_object_index_find_unpublished(key)
         return null()
     record = int_to_ptr(record_bits)
     slots = load_ptr(record, 0)
@@ -435,6 +440,53 @@ def pcc_gc_index_py_find_published(published_cell: c_ptr, key: c_ptr) -> c_ptr:
     if result < 0:
         return null()
     return load_ptr(slots, result * 16 + 8)
+
+
+@c_abi_export("pcc_gc_object_index_find_unpublished")
+def pcc_gc_object_index_find_unpublished(obj: c_ptr) -> c_ptr:
+    """Find an object node after publication-record OOM, without another lock.
+
+    Validate slots/capacity before dereferencing either, then validate the
+    key/value pair after probing. The generation and retired-table protocol
+    are the same as seen_stable. Do not dereference the returned node here:
+    its lifetime still belongs to the caller's graph ownership/quiescence or
+    separate guarantee. Unlocked probes remain no-park until they finish.
+    Raw index writers do not poll or invoke managed callbacks, so this lookup
+    must not be reentered inside the same thread's odd write generation.
+    """
+    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+        return null()
+    sequence = global_addr("pcc_gc_object_index_generation")
+    key_bits: i64 = ptr_diff(obj, null())
+    while True:
+        before: i64 = atomic_load_i64(sequence, 0, "acquire")
+        if before < 0:
+            pcc_platform_abort()
+            return null()
+        if (before & 1) != 0:
+            continue
+        slots = int_to_ptr(atomic_load_i64(global_addr("pcc_py_gc_object_slots"), 0, "relaxed"))
+        cap: i64 = atomic_load_i64(global_addr("pcc_py_gc_object_cap"), 0, "relaxed")
+        atomic_fence("acquire")
+        if atomic_load_i64(sequence, 0, "relaxed") != before:
+            continue
+        found = null()
+        if ptr_is_null(slots) == 0 and cap > 0:
+            mask: i64 = cap - 1
+            index: i64 = pcc_gc_index_py_hash_ptr(obj) & mask
+            probes: i64 = 0
+            while probes < cap:
+                candidate: i64 = atomic_load_i64(slots, index * 16, "relaxed")
+                if candidate == key_bits:
+                    found = int_to_ptr(atomic_load_i64(slots, index * 16 + 8, "relaxed"))
+                    break
+                if candidate == 0:
+                    break
+                index = (index + 1) & mask
+                probes = probes + 1
+        atomic_fence("acquire")
+        if atomic_load_i64(sequence, 0, "relaxed") == before:
+            return found
 
 
 @c_abi_export("pcc_gc_index_reclaim_retired")

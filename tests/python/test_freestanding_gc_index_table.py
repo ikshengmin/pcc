@@ -17,6 +17,7 @@ PUBLIC_SYMBOLS = {
     "py_gc_index_insert",
     "py_gc_index_remove",
     "pcc_gc_object_index_find",
+    "pcc_gc_object_index_find_unpublished",
     "pcc_gc_object_index_insert",
     "pcc_gc_object_index_plan_capacity",
     "pcc_gc_object_index_plan_commit",
