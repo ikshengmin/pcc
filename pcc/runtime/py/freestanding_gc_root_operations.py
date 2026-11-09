@@ -700,8 +700,15 @@ def pcc_gc_foreign_lease_release(slot, acquired: i64) -> i64:
     status: i64 = -3
     active: i64 = atomic_load_i64(global_addr("pcc_gc_foreign_lease_active"), 0, "acquire")
     if active > 0:
-        obj = pcc_gc_resolve_root_slot_unlocked(slot, 0)
+        # Reuse exact live identity; forwarding or uncertainty must resolve
+        # and look up again because resolution can rewrite the slot/call RC.
+        obj = load_ptr(slot, 0)
         node = pcc_gc_object_index_find(obj)
+        if (ptr_is_null(node) != 0
+                or load_i64(node, 32) != 0
+                or (load_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET) & (2048 | 524288)) != 0):
+            obj = pcc_gc_resolve_root_slot_unlocked(slot, 0)
+            node = pcc_gc_object_index_find(obj)
         if ptr_is_null(node) == 0 and load_i64(node, 32) == 0:
             count: i64 = load_i64(node, 80)
             if count > 0:
