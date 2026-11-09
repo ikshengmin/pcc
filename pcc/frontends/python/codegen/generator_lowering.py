@@ -70,6 +70,7 @@ _STOP_ITERATION_TAG = 8
 
 
 _GENERATOR_OPERAND_ROOT_GROUP_SIZE = 16
+_GENERATOR_TERMINAL_CLEAR_GROUP_SIZE = 16
 
 
 def generator_operand_root_group(host, slot):
@@ -285,7 +286,45 @@ def emit_generator_terminal_frame_clear(host) -> None:
     test = host.current_function.append_basic_block(host._fresh("gen.terminal.test"))
     clear = host.current_function.append_basic_block(host._fresh("gen.terminal.clear"))
     done = host.current_function.append_basic_block(host._fresh("gen.terminal.done"))
-    host.builder.branch(test)
+    if host._generator_frame_helper("set").name == "py_gen_frame_set":
+        # This try primitive admits ONLY whole nonowning ranges (NULL,
+        # tagged ints and actual None). Any heap cell leaves the original
+        # serial remainder untouched, including its callback/error order.
+        group_test = host.current_function.append_basic_block(host._fresh("gen.terminal.group.test"))
+        group_try = host.current_function.append_basic_block(host._fresh("gen.terminal.group.try"))
+        group_done = host.current_function.append_basic_block(host._fresh("gen.terminal.group.accepted"))
+        host.builder.branch(group_test)
+        host.builder.position_at_end(group_test)
+        group_index = host.builder.load(index_slot)
+        remaining = host.builder.sub(length, group_index, name=host._fresh("gen.terminal.remaining"))
+        host.builder.cbranch(
+            host.builder.icmp_signed(">=", remaining, ir.Constant(_I64, 2)),
+            group_try, test,
+        )
+        host.builder.position_at_end(group_try)
+        limit = ir.Constant(_I64, _GENERATOR_TERMINAL_CLEAR_GROUP_SIZE)
+        count = host.builder.select(
+            host.builder.icmp_signed("<", remaining, limit), remaining, limit,
+            name=host._fresh("gen.terminal.group.count"),
+        )
+        current = host.builder.call(
+            host.runtime["pcc_gc_load_ptr"],
+            [ir.Constant(_CSTR, None), host._as_gc_ptr(keeper)],
+            name=host._fresh("gen.terminal.group.frame.current"),
+        )
+        cleared = host.builder.call(
+            host.runtime["py_gen_frame_clear_group"], [current, group_index, count],
+            name=host._fresh("gen.terminal.group.cleared"),
+        )
+        host.builder.cbranch(
+            host.builder.icmp_signed("==", cleared, ir.Constant(_I64, 1)),
+            group_done, test,
+        )
+        host.builder.position_at_end(group_done)
+        host.builder.store(host.builder.add(group_index, count), index_slot)
+        host.builder.branch(group_test)
+    else:
+        host.builder.branch(test)
     host.builder.position_at_end(test)
     index = host.builder.load(index_slot)
     host.builder.cbranch(host.builder.icmp_signed("<", index, length), clear, done)

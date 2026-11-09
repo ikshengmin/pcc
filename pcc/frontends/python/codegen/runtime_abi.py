@@ -1057,6 +1057,7 @@ def _runtime_signatures_part_23():
     return {
     "py_gen_frame_take": (_PYOBJ, [_PYOBJ, _I64], False),
     "py_gen_frame_take_group": (_I64, [_PYOBJ, _I64, _I64, _PYOBJ], False),
+    "py_gen_frame_clear_group": (_I64, [_PYOBJ, _I64, _I64], False),
     # py_gen_next whose driver consumes the return: (generator, i64 *returned).
     "py_gen_next_direct": (_PYOBJ, [_PYOBJ, _PTR], False),
     "py_virtual_thread_resume_generator": (_I64, [_PYOBJ, _PYOBJ], False),

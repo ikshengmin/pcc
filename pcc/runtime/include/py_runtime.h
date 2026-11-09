@@ -1719,7 +1719,7 @@ void      py_gen_frame_set(PyObject *frame, int64_t index, PyObject *value);
  * Heap-owned ranges decline. Caller keeps a live frame owner.
  * Returns 1 after every cell is replaced, 0 with all cells
  * unchanged. On 0 reload the caller root and retain the serial setter/error
- * sequence. No compiler caller selects this primitive yet. */
+ * sequence. Managed generator terminal lowering may try this primitive. */
 int64_t py_gen_frame_clear_group(PyObject *frame, int64_t start, int64_t count);
 /* Save compiler-owned, rooted local slots. Returns 0 without mutation when
  * the collector/frame is not eligible; callers retain their ordinary path. */

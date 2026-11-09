@@ -366,7 +366,7 @@ def py_gen_frame_clear_group(lst: c_ptr, start: int, count: int) -> int:
     Heap owners decline, including containers with indirect callbacks. The
     caller keeps its frame owner alive. A declined group must reload that
     owner and use the original serial setters, including their error order.
-    This primitive is not yet selected by generator lowering.
+    Managed generator terminal lowering may try this bounded primitive.
     """
     # No implicit poll in this module. Publish the borrowed input before the
     # body's first parking edge, exactly as for the existing take group.
