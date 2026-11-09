@@ -18,11 +18,20 @@ class IntervalMemory:
         self.words = {}
         self.marked = set()
         self.active = set()
+        # This finite extent fixture has no object headers or forwarding
+        # graph. Keep its original single-owner pin/mark protocol explicit;
+        # MovingRoots covers the actual-source GC3/GC4 NoRC chain protocol.
+        self.globals = {
+            "pcc_gc_backend_selected": 4,
+            "pcc_gc_backend4_no_refcounts": 0,
+            "pcc_gc_forwarding_population": 0,
+        }
         self.namespace = {
             "i64": int, "ptr_add": lambda base, offset: base + offset,
             "ptr_is_null": lambda pointer: pointer == 0, "ptr_to_int": int,
             "null": lambda: 0,
-            "load_i64": self.load, "load_ptr": self.load,
+            "global_addr": lambda name: name,
+            "load_i32": self.load, "load_i64": self.load, "load_ptr": self.load,
             "store_i64": self.store, "store_ptr": self.store,
             "pcc_gc_object_node_is_active": lambda node: int(node in self.active),
             "pcc_gc_mark_root_gray_if_known": self.marked.add,
@@ -39,6 +48,9 @@ class IntervalMemory:
         exec(compile(ast.Module(body=selected, type_ignores=[]), str(SOURCE), "exec"), self.namespace)
 
     def load(self, base, offset):
+        if isinstance(base, str):
+            assert offset == 0
+            return self.globals[base]
         # A mistaken dereference of an arbitrary candidate fails here.
         return self.words[base + offset]
 
@@ -107,16 +119,24 @@ class FrozenWordMemory(IntervalMemory):
         self.next_address = 0x800000
         self.head = 0
         self.graph_locks = []
+        self.owner_snapshots = 0
         self.namespace.update(
             stack_alloc=lambda size: 0x700000,
             malloc=self.allocate,
             free=self.freed.append,
             global_load_ptr=lambda name: self.head,
             pcc_thread_world_stop_epoch_held=lambda: 1,
+            pcc_thread_snapshot_stopped_world_owner=self.snapshot_owner,
             pcc_thread_visit_conservative_words=self.visit,
             pcc_py_gc_minor_graph_lock=lambda: self.graph_locks.append(1),
             pcc_py_gc_minor_graph_unlock=lambda: self.graph_locks.pop(),
         )
+
+    def snapshot_owner(self):
+        # Supplied snapshots are the fixture's explicit frozen-word boundary,
+        # including the owner. This does not emulate native register capture.
+        self.owner_snapshots += 1
+        return 1
 
     def allocate(self, size):
         address = self.next_address
@@ -173,6 +193,7 @@ def test_frozen_word_index_matches_independent_heap_membership(word_count, owner
     memory = FrozenWordMemory([words])
     memory.heap(extents)
     memory.scan()
+    assert memory.owner_snapshots == 1
     expected = {
         base for base, size, payloads, active in extents if active
         and any(start <= word < start + length
