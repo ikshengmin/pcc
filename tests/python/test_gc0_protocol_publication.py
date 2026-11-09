@@ -76,6 +76,7 @@ class ProtocolModel:
         )
         _functions(RUNTIME / "py_obj.py", {"pcc_gc_publish_owned_root"}, self.ns)
         _functions(RUNTIME / "freestanding_gc_root_operations.py", {
+            "_resolve_root_slot_mode", "pcc_gc_resolve_borrowed_root_slot_unlocked",
             "pcc_gc_resolve_root_slot_unlocked", "pcc_gc_object_is_known_no_lock",
         }, self.ns)
         _functions(RUNTIME / "py_class.py", {"_special_adopt", "_special_drop"}, self.ns)
@@ -166,6 +167,23 @@ def test_moving_resolution_keeps_the_owning_slot_transfer(backend, known):
     if backend == 3:
         expected += [("incref", _RELOCATED), ("decref", _OBJECT)]
     assert model.events == expected
+
+
+@pytest.mark.parametrize("backend", [3, 4])
+@pytest.mark.parametrize("known", [False, True])
+def test_moving_borrowed_resolution_rewrites_without_owner_transfer(backend, known):
+    model = ProtocolModel(backend)
+    model.store(_OBJECT, 12, 2048 | 64)
+    model.store(_FORWARDING, 8, _RELOCATED)
+    model.known = known
+    model.forwarded = True
+    before = dict(model.memory)
+    assert model.ns["pcc_gc_resolve_borrowed_root_slot_unlocked"](
+        _SLOTS, _INDEX * 8,
+    ) == _RELOCATED
+    assert model.memory == {**before, (_RESULT_SLOT, 0): _RELOCATED}
+    assert model.events == [("object-index", _OBJECT), ("forwarding-index", _OBJECT)]
+    assert model.error == "pending exception"
 
 
 @pytest.mark.parametrize("adopt", ["_special_adopt", "_named_adopt"])

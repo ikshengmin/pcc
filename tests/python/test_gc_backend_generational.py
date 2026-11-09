@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 from unittest import mock
@@ -641,10 +642,7 @@ def test_generational_minor_refill_uses_intrusive_young_worklist():
 
 def _assert_generational_budgeted_young_worklist_advances_without_rescan(
     tmp_path,
-    work_runtime: Path,
-    archive_name: str,
-    *,
-    extra_link_args: list[str] | None = None,
+    runtime_archive: Path,
 ):
     src = tmp_path / "generational_young_worklist_probe.c"
     exe = tmp_path / "generational_young_worklist_probe.out"
@@ -675,19 +673,24 @@ def _assert_generational_budgeted_young_worklist_advances_without_rescan(
             """).lstrip(),
         encoding="utf-8",
     )
-    link = [
-        _cc(),
-        "-std=c11",
-        f"-I{work_runtime / 'include'}",
-        f"-I{work_runtime / 'src'}",
-        str(src),
-        str(work_runtime / archive_name),
-    ]
-    if extra_link_args:
-        link.extend(extra_link_args)
-    link.extend(["-o", str(exe)])
+    # The current threaded runtime owns its startup and platform thread
+    # entry glue. A host-cc link injects a second crt _start on Linux and
+    # omits PCC's thread assembly, so it cannot qualify this collector.
+    # Keep the original probe and ten-second bound; use the public owned
+    # C path with a source/codegen/configuration-verified runtime instead.
+    # Keep the original 30-second compile deadline too. The child is host
+    # PCC's owned frontend/linker; its helper rejects external build tools
+    # and runtime provisioning, rather than delegating the C input to cc.
     build = subprocess.run(
-        link,
+        [
+            sys.executable, "-c",
+            "import sys; from pathlib import Path; "
+            "from tests.owned_c_execution import compile_owned_c_with_runtime; "
+            "compile_owned_c_with_runtime(Path(sys.argv[1]), Path(sys.argv[2]), "
+            "runtime_archive=Path(sys.argv[3]))",
+            str(src), str(exe), str(runtime_archive),
+        ],
+        cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         timeout=30,
@@ -703,22 +706,21 @@ def _assert_generational_budgeted_young_worklist_advances_without_rescan(
     assert result.stdout.strip().splitlines() == ["65536", "0"]
 
 
-def test_generational_budgeted_young_worklist_advances_without_rescan(tmp_path):
+def test_generational_budgeted_young_worklist_advances_without_rescan(
+    tmp_path, pcc_runtime_archive,
+):
     _assert_generational_budgeted_young_worklist_advances_without_rescan(
         tmp_path,
-        _build_runtime(tmp_path),
-        "libpy_runtime_pcc_py.a",
+        pcc_runtime_archive,
     )
 
 
 def test_generational_pcc_python_budgeted_young_worklist_advances_without_rescan(
-    tmp_path,
+    tmp_path, pcc_runtime_archive,
 ):
     _assert_generational_budgeted_young_worklist_advances_without_rescan(
         tmp_path,
-        _build_pcc_runtime(tmp_path),
-        "libpy_runtime_pcc_py.a",
-        extra_link_args=["-pthread"],
+        pcc_runtime_archive,
     )
 
 
