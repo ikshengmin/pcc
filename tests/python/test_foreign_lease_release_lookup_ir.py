@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import re
 
+import pytest
+
 from tests.python.test_foreign_address_leases import RUNTIME
 
 
@@ -69,15 +71,66 @@ def _gep(blocks, base, offset):
 
 
 def _zero_successor(blocks, value):
-    block, _, comparison = _one(blocks, rf"^({SSA}) = icmp (eq|ne) i64 {re.escape(value)}, 0$")
+    block, position, comparison = _one(blocks, rf"^({SSA}) = icmp (eq|ne) i64 {re.escape(value)}, 0$")
     condition, predicate = comparison.groups()
     branch = re.fullmatch(
-        rf"br i1 {re.escape(condition)}, label %([A-Za-z0-9_.$-]+), label %([A-Za-z0-9_.$-]+)",
+        rf"br i1 ({SSA}), label %([A-Za-z0-9_.$-]+), label %([A-Za-z0-9_.$-]+)",
         blocks[block][-1],
     )
     assert branch is not None
-    yes, no = branch.groups()
-    return yes if predicate == "eq" else no
+    branch_condition, yes, no = branch.groups()
+    assert yes != no
+    zero_is_true = predicate == "eq"
+    if branch_condition != condition:
+        # Frontend ptr_is_null comparisons normalize i1 through i64:
+        # icmp -> zext -> eq/ne zero. Accept only this guard-block SSA chain.
+        wide_block, wide_position, wide = _one(blocks,
+            rf"^({SSA}) = zext i1 {re.escape(condition)} to i64$")
+        retest_block, retest_position, retest = _one(blocks,
+            rf"^({SSA}) = icmp (eq|ne) i64 {re.escape(wide.group(1))}, 0$")
+        assert block == wide_block == retest_block
+        assert position < wide_position < retest_position < len(blocks[block]) - 1
+        assert branch_condition == retest.group(1)
+        # zext preserves false=0/true=1; an eq-zero re-test inverts it.
+        if retest.group(2) == "eq":
+            zero_is_true = not zero_is_true
+    return yes if zero_is_true else no
+
+
+@pytest.mark.parametrize("predicate,retest,expected", [
+    ("eq", None, "yes"), ("ne", None, "no"),
+    ("eq", "ne", "yes"), ("eq", "eq", "no"),
+    ("ne", "ne", "no"), ("ne", "eq", "yes"),
+])
+def test_zero_successor_tracks_boolean_polarity(predicate, retest, expected):
+    lines = [f"%test = icmp {predicate} i64 %value, 0"]
+    condition = "%test"
+    if retest is not None:
+        lines += ["%wide = zext i1 %test to i64",
+                  f"%retest = icmp {retest} i64 %wide, 0"]
+        condition = "%retest"
+    lines.append(f"br i1 {condition}, label %yes, label %no")
+    assert _zero_successor({"guard": lines}, "%value") == expected
+
+
+@pytest.mark.parametrize("before,after", [
+    ("br i1 %retest", "br i1 %other"),
+    ("zext i1 %test", "zext i1 %other"),
+    ("icmp ne i64 %wide, 0", "icmp ne i64 %unrelated, 0"),
+    ("icmp ne i64 %wide, 0", "icmp ne i64 %wide, 1"),
+    ("%test = icmp eq i64 %value, 0",
+     "%test = icmp eq i64 %value, 0\n%duplicate = icmp eq i64 %value, 0"),
+])
+def test_zero_successor_rejects_unproved_boolean_chains(before, after):
+    text = "\n".join([
+        "%test = icmp eq i64 %value, 0",
+        "%other = icmp ne i64 %unrelated, 0",
+        "%wide = zext i1 %test to i64",
+        "%retest = icmp ne i64 %wide, 0",
+        "br i1 %retest, label %yes, label %no",
+    ])
+    with pytest.raises(AssertionError):
+        _zero_successor({"guard": text.replace(before, after).splitlines()}, "%value")
 
 
 def test_frontend_ir_release_header_guard_and_fresh_fallback_lookup(tmp_path):
@@ -124,6 +177,7 @@ def test_frontend_ir_release_header_guard_and_fresh_fallback_lookup(tmp_path):
         rf"^({SSA}) = icmp (eq|ne) i64 {re.escape(cast_value)}, 0$")
     null_targets = re.findall(r"label %([A-Za-z0-9_.$-]+)", blocks[null_block][-1])
     zero_target = _zero_successor(blocks, cast_value)
+    assert zero_target == fallback_block
     nonnull_target = next(target for target in null_targets if target != zero_target)
     assert nonnull_target in dominators[free_block]
     assert nonnull_target in dominators[header_block]
