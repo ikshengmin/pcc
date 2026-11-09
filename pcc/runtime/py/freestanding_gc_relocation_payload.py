@@ -1165,6 +1165,25 @@ def _relocate_copy_payload_finish(
 ) -> i64:
     if _relocate_copy_slots(from_obj, to_obj, ctx) == 0:
         return _relocate_copy_payload_fail(ctx)
+    if (
+        tag == abi_constant("object.type.continuation")
+        and ptr_is_null(continuation_src_chunk) == 0
+        and continuation_mounted == 0
+    ):
+        _retarget_continuation_root_slots(
+            load_ptr(continuation_src_chunk, 16),
+            continuation_src_chunk,
+            load_ptr(continuation_dst_chunk, 16),
+            continuation_dst_chunk,
+        )
+    return 1
+
+
+@c_abi_export("pcc_gc_relocation_payload_commit_weakref")
+def pcc_gc_relocation_payload_commit_weakref(from_obj, to_obj, tag: i64) -> None:
+    # The weakref list belongs to the live source until forwarding succeeds. A
+    # prepared target may still be rejected and destroyed by its caller.
+    # This commit is allocation-free and runs under the same graph lock.
     if tag == abi_constant("object.type.weakref"):
         prev = load_ptr(from_obj, 32)
         nxt = load_ptr(from_obj, 40)
@@ -1178,18 +1197,6 @@ def _relocate_copy_payload_finish(
             store_ptr(nxt, 32, to_obj)
         store_ptr(from_obj, 32, from_obj)
         store_ptr(from_obj, 40, null())
-    if (
-        tag == abi_constant("object.type.continuation")
-        and ptr_is_null(continuation_src_chunk) == 0
-        and continuation_mounted == 0
-    ):
-        _retarget_continuation_root_slots(
-            load_ptr(continuation_src_chunk, 16),
-            continuation_src_chunk,
-            load_ptr(continuation_dst_chunk, 16),
-            continuation_dst_chunk,
-        )
-    return 1
 
 
 @c_abi_export("pcc_gc_relocate_copy_payload_prepared_locked")
@@ -1467,5 +1474,9 @@ def pcc_gc_relocate_copy_payload(from_obj, to_obj, tag: i64, size: i64) -> i64:
     result: i64 = pcc_gc_relocate_copy_payload_prepared_locked(
         from_obj, to_obj, tag, size, ctx
     )
+    # Preserve the legacy wrapper's successful-copy contract. GC3's current
+    # scalar/CPY-handle whitelist does not admit weakrefs.
+    if result != 0 and tag == abi_constant("object.type.weakref"):
+        pcc_gc_relocation_payload_commit_weakref(from_obj, to_obj, tag)
     _relocate_slot_pairs_dispose(ctx)
     return result

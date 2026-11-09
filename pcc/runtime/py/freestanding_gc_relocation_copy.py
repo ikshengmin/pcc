@@ -1,6 +1,10 @@
 """Backend 4 single-use relocation copy transaction."""
 from pcc import i64
-from pcc.runtime.py.py_abi_constants import PY_TYPE_CLASS, PY_TYPE_MEMORYVIEW
+from pcc.runtime.py.py_abi_constants import (
+    PY_TYPE_CLASS,
+    PY_TYPE_MEMORYVIEW,
+    PY_TYPE_WEAKREF,
+)
 
 from pcc.extern import c_abi_export, c_int32, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
@@ -98,6 +102,9 @@ pcc_gc_relocation_payload_plan_validate_locked = extern(
 pcc_gc_relocation_payload_plan_finish = extern(
     "pcc_gc_relocation_payload_plan_finish", (c_ptr,), c_void
 )
+pcc_gc_relocation_payload_commit_weakref = extern(
+    "pcc_gc_relocation_payload_commit_weakref", (c_ptr, c_ptr, c_int64), c_void
+)
 pcc_gc_memoryview_refresh_owned_buffer = extern(
     "pcc_gc_memoryview_refresh_owned_buffer", (c_ptr,), c_int64
 )
@@ -193,6 +200,8 @@ def pcc_gc_backend4_relocate_copy_preallocated_unlocked(
         != 0
     ):
         return null()
+    if tag == PY_TYPE_WEAKREF:
+        pcc_gc_relocation_payload_commit_weakref(from_obj, to_obj, tag)
     if load_i32(global_addr("pcc_gc_mark_active"), 0) != 0:
         # GC4 keeps the source shell sweep-visible until remap retirement.
         # Its replacement is a distinct active node and owns its own scan.

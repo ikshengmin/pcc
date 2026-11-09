@@ -2575,6 +2575,10 @@ def _cross_object_signatures_part_5():
         ("c_ptr", "c_ptr", "c_int64", "c_int64", "c_ptr"),
         "c_int64",
     ),
+    "pcc_gc_relocation_payload_commit_weakref": (
+        ("c_ptr", "c_ptr", "c_int64"),
+        "c_void",
+    ),
     "pcc_gc_relocation_payload_slot_count_locked": (
         ("c_ptr",),
         "c_int64",

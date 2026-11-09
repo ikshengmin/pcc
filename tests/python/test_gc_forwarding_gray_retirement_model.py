@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from pcc.frontends.python.codegen.freestanding_abi_constants import ABI_CONSTANTS
+
 
 RUNTIME = Path(__file__).resolve().parents[2] / "pcc/runtime/py"
 WHITE, GRAY, BLACK, OLD, DYING = 8, 16, 32, 256, 524288
@@ -66,6 +68,8 @@ class RetirementState:
         zero = lambda *args: 0
         ns = {
             "i64": int, "c_ptr": int, "PYOBJECTHEADER_FLAGS_OFFSET": 12,
+            "abi_constant": ABI_CONSTANTS.__getitem__,
+            "PY_TYPE_WEAKREF": ABI_CONSTANTS["object.type.weakref"],
             "PY_TYPE_CLASS": 99, "PY_TYPE_MEMORYVIEW": 98,
             "null": lambda: 0, "ptr_is_null": lambda p: int(p == 0),
             "ptr_eq": lambda a, b: int(a == b), "is_tagged_int": zero,
@@ -158,6 +162,9 @@ class RetirementState:
         })
         _functions(ns, "freestanding_gc_relocation_copy.py", {
             "pcc_gc_backend4_relocate_copy_preallocated_unlocked",
+        })
+        _functions(ns, "freestanding_gc_relocation_payload.py", {
+            "pcc_gc_relocation_payload_commit_weakref",
         })
         _functions(ns, "freestanding_gc_common_mark_cycle.py", {
             "pcc_gc_trace_stack_begin", "pcc_gc_trace_stack_end",

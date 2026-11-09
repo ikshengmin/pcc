@@ -25,6 +25,7 @@ MAKEFILE = RUNTIME_DIR / "Makefile"
 OWNED_SYMBOLS = {
     "pcc_gc_relocate_copy_payload",
     "pcc_gc_relocate_copy_payload_prepared_locked",
+    "pcc_gc_relocation_payload_commit_weakref",
     "pcc_gc_relocation_payload_copy_slots",
     "pcc_gc_relocation_payload_clear_destination_owned",
     "pcc_gc_relocation_payload_count_slot",
@@ -130,6 +131,7 @@ def test_relocation_payload_has_one_strict_source_owner() -> None:
         "pcc_gc_backend4_source_side_table_plan_commit",
         "pcc_gc_backend4_source_side_table_plan_finish",
         "pcc_gc_relocate_copy_payload_prepared_locked",
+        "pcc_gc_relocation_payload_commit_weakref",
         "pcc_gc_relocation_payload_slot_count_locked",
         "pcc_gc_relocation_payload_plan_prepare",
         "pcc_gc_relocation_payload_plan_validate_locked",

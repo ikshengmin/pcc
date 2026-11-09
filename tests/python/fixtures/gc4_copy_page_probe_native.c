@@ -149,6 +149,11 @@ int64_t pcc_gc_install_forwarding_preallocated_unlocked(void *from, void *to, vo
     installed_forwarding = to;
     return 0;
 }
+/* A scalar copy must not enter the weakref-only registry commit. */
+void pcc_gc_relocation_payload_commit_weakref(void *from, void *to, int64_t tag) {
+    (void)from; (void)to; (void)tag;
+    stub_errors++;
+}
 void *pcc_gc_backend4_zpage_find(void *p) {
     find_calls++;
     int id = object_id(p);

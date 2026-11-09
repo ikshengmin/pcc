@@ -51,6 +51,7 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_relocation_member_count",
     "pcc_gc_relocation_member_forget",
     "pcc_gc_relocate_copy_payload_prepared_locked",
+    "pcc_gc_relocation_payload_commit_weakref",
     "pcc_gc_relocation_payload_plan_finish",
     "pcc_gc_relocation_payload_plan_prepare",
     "pcc_gc_relocation_payload_plan_validate_locked",
