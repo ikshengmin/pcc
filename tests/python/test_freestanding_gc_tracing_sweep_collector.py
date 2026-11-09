@@ -45,7 +45,7 @@ RAW_FUNCTION_IMPORTS = {
     'pcc_gc_object_node_is_address_pinned',
     'pcc_gc_object_node_is_active',
     'pcc_gc_seed_roots',
-    'pcc_gc_tracing_clear_unreachable',
+    'pcc_gc_tracing_clear_unpinned',
     'pcc_gc_visit_object_slots',
     'pcc_py_gc_minor_graph_lock',
     'pcc_py_gc_minor_graph_unlock',
@@ -152,9 +152,9 @@ def test_tracing_sweep_preserves_pep442_and_two_pass_order():
     assert sweep.index(recheck) < sweep.index("py_user_del_dispatch(obj)")
     assert sweep.index("py_user_del_dispatch(obj)") < sweep.rindex(recheck)
     assert sweep.rindex(recheck) < sweep.index(
-        "pcc_gc_tracing_clear_unreachable(obj)"
+        "pcc_gc_tracing_clear_unpinned(obj)"
     )
-    assert sweep.index("pcc_gc_tracing_clear_unreachable(obj)") < sweep.index(
+    assert sweep.index("pcc_gc_tracing_clear_unpinned(obj)") < sweep.index(
         "pcc_gc_tracing_finalize_unpinned(obj)"
     )
     assert (
@@ -394,7 +394,7 @@ class _SweepModel(_CandidateModel):
             pcc_capi_is_cext_type_tag=lambda tag: 0,
             py_user_del_dispatch=finalizer,
             pcc_gc_tracing_recheck_reachability_after_finalizers=recheck,
-            pcc_gc_tracing_clear_unreachable=lambda obj: model.events.append(("clear", obj[1])),
+            pcc_gc_tracing_clear_unpinned=lambda obj: model.events.append(("clear", obj[1])),
             pcc_gc_tracing_finalize_unreachable=lambda obj: model.events.append(("free", obj[1])),
             pcc_gc_tracing_finalize_unpinned=lambda obj: model.events.append(("free", obj[1])),
             pcc_thread_world_stop_epoch_held=lambda: model.held_epoch,

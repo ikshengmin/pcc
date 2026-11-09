@@ -279,15 +279,34 @@ def pcc_gc_step(budget: i64) -> i64:
                 may_relocate: i64 = 1
                 if pcc_thread_live_count() > 1 and pcc_thread_all_stopped_at_gates() == 0:
                     may_relocate = 0
+                # Selection scores every zpage owner. Page occupancy changes
+                # its answer only when a sweep frees bytes, so select once
+                # per completed mark (as ZGC does per cycle); selected pages
+                # keep draining at every step.
+                marks_finished: i64 = load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0)
+                selection_due: i64 = 0
+                if marks_finished != load_i64(global_addr("pcc_gc_backend4_selection_commit"), 0):
+                    selection_due = 1
                 if processed < budget and may_relocate != 0:
                     # Refresh before selection/copy, which may run before a
-                    # mark seeds roots. Steps that only drain/age need no scan.
-                    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
+                    # mark seeds roots, and before a drain's remap of
+                    # remaining edges. A step with neither needs no scan.
+                    if (
+                        load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
+                        and (
+                            selection_due != 0
+                            or ptr_is_null(
+                                global_load_ptr("pcc_gc_backend4_evacuation_page_head")
+                            ) == 0
+                            or load_i32(global_addr("pcc_gc_forwarding_population"), 0) > 0
+                        )
+                    ):
                         pcc_gc_pin_conservative_thread_roots()
                     processed = processed + pcc_gc_backend4_evacuation_page_drain(
                         budget - processed
                     )
-                if processed < budget and may_relocate != 0:
+                if processed < budget and may_relocate != 0 and selection_due != 0:
+                    store_i64(global_addr("pcc_gc_backend4_selection_commit"), 0, marks_finished)
                     selected: i64 = pcc_gc_backend4_select_relocation_pages(
                         budget - processed
                     )

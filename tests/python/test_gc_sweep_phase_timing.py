@@ -110,7 +110,7 @@ def _timed_boundary(**kwargs):
         ("pcc_gc_seed_roots", 17),
         ("pcc_gc_drain_all_gray_unlocked", 23),
         ("py_user_del_dispatch", 11),
-        ("pcc_gc_tracing_clear_unreachable", 13),
+        ("pcc_gc_tracing_clear_unpinned", 13),
         ("pcc_gc_tracing_finalize_unpinned", 19),
     ):
         providers[name] = clock.wrap(providers[name], duration)

@@ -149,5 +149,12 @@ def pcc_gc_tracing_clear_unreachable(obj) -> None:
         return
     if pcc_gc_object_is_address_pinned(obj) != 0:
         return
+    pcc_gc_tracing_clear_unpinned(obj)
+
+
+@c_abi_export("pcc_gc_tracing_clear_unpinned")
+def pcc_gc_tracing_clear_unpinned(obj) -> None:
+    """Clear a candidate whose caller found it unpinned (its walk read the
+    object's own node), without probing the index again."""
     py_weakref_invalidate(obj)
     pcc_gc_tracing_clear_referents(obj)

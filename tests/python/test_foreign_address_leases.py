@@ -462,6 +462,10 @@ def test_final_copy_rejects_a_lease_acquired_after_plan_preparation():
 def test_gc3_oldification_rejects_live_count_without_touching_payload():
     m=Model(3); slot=m.object(flags=128|4096)
     m.ns.update(pcc_gc_object_is_known_no_lock=lambda p:int(p in m.nodes),pcc_gc_forwarding_find=lambda p:0)
+    # Oldification asks the step's pin query (b95151692); with no step word
+    # snapshot active it is the address-pin answer, which sees the lease.
+    m.ns["pcc_gc_generational_object_is_address_pinned"] = (
+        lambda p: m.ns["pcc_gc_object_is_address_pinned"](p))
     _functions(RUNTIME / "freestanding_gc_generational_oldification.py", {"pcc_gc_generational_oldify_copy"},m.ns)
     assert m.acquire(slot) == 1
     assert m.ns["pcc_gc_generational_oldify_copy"](1000) == 0
@@ -474,7 +478,9 @@ def test_gc3_oldification_rejects_live_count_without_touching_payload():
 ])
 def test_sweep_destructive_entries_refuse_leased_owner(name,file):
     m=Model(4); slot=m.object(flags=1024)
-    _functions(RUNTIME/file,{name},m.ns)
+    # The pin-checking clear delegates to its unpinned half.
+    names = {name, "pcc_gc_tracing_clear_unpinned"} if name.endswith("clear_unreachable") else {name}
+    _functions(RUNTIME/file,names,m.ns)
     assert m.acquire(slot) == 1
     # Destructors/weakref invalidation are intentionally not supplied. A call
     # past the new guard would fail rather than silently pass this model.

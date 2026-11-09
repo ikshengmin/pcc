@@ -1988,6 +1988,7 @@ FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_tracing_finish_claim_epoch',
         'pcc_gc_tracing_finish_commits',
         'pcc_gc_tracing_no_candidate_commit',
+        'pcc_gc_backend4_selection_commit',
         'pcc_gc_backend4_remembered_page_index_cap',
         'pcc_gc_backend4_remembered_page_index_count',
         'pcc_gc_backend4_remembered_page_index_used',
@@ -3252,6 +3253,8 @@ def _cross_object_signatures_part_14():
     return {
         "pcc_gc_gray_conservative_and_listed_pinned_roots": ((), "c_int64"),
         "pcc_gc_gray_registered_roots": ((), "c_void"),
+        "pcc_gc_backend4_remembered_owner_has_entries": (("c_ptr",), "c_int64"),
+        "pcc_gc_tracing_clear_unpinned": (("c_ptr",), "c_void"),
     }
 
 

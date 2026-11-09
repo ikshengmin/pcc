@@ -109,6 +109,10 @@ RAW_GLOBAL_IMPORTS = {
     "pcc_gc_nonmoving_count_free",
     # A GC4 automatic step continues its mark up to the next commit.
     "pcc_gc_tracing_finish_commits",
+    # GC4 selects relocation pages once per completed mark, and refreshes
+    # conservative pins only with selection, pending pages or edges.
+    "pcc_gc_backend4_selection_commit",
+    "pcc_gc_backend4_evacuation_page_head",
 }
 
 
@@ -431,3 +435,86 @@ def test_gc4_locked_heap_helper_has_explicit_runtime_port_abi() -> None:
     assert call.args[0].value == "pcc_gc_backend4_note_heap_store_locked"
     assert tuple(item.id for item in call.args[1].elts) == ("c_ptr", "c_ptr", "c_ptr")
     assert call.args[2].id == "c_void"
+
+
+class _AutoStepModel:
+    """The actual pcc_gc_step body for an automatic GC4 step in a stopped
+    world with every other mutator at a gate; collector callees record."""
+
+    def __init__(self):
+        self.cells = {
+            "pcc_gc_backend_selected": 4,
+            "pcc_gc_config_initialized": 1,
+            "pcc_gc_backend4_no_refcounts": 1,
+            "pcc_gc_backend4_remap_active": 0,
+            "pcc_gc_explicit_collect_active": 0,
+            "pcc_gc_backend4_store_buffer_entries_count": 0,
+            "pcc_gc_metric_step": 0,
+            "pcc_gc_tracing_finish_commits": 0,
+            "pcc_gc_backend4_selection_commit": -1,
+            "pcc_gc_backend4_evacuation_page_head": 0,
+            "pcc_gc_forwarding_population": 0,
+            "pcc_gc_mark_active": 0,
+            "pcc_gc_cycle_requested": 0,
+            "pcc_gc_backend4_parked_head": 0,
+            "pcc_gc_backend4_retained_page_head": 0,
+        }
+        self.events = []
+        tree = ast.parse(STRICT_SOURCE.read_text(encoding="utf-8"))
+        nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef)
+                 and node.name in {"pcc_gc_step", "_selected_backend", "_tracing_work_pending"}]
+        for node in nodes:
+            node.decorator_list = []
+        load = lambda name, offset=0, *order: self.cells[name]
+        record = lambda name, result=0: (lambda *args: self.events.append(name) or result)
+        self.ns = {
+            "i64": int,
+            "global_addr": lambda name: name,
+            "load_i32": load, "load_i64": load, "atomic_load_i32": load,
+            "global_load_ptr": lambda name: self.cells[name],
+            "store_i64": lambda name, offset, value: self.cells.__setitem__(name, value),
+            "store_i32": lambda name, offset, value: self.cells.__setitem__(name, value),
+            "ptr_is_null": lambda value: int(value == 0),
+            "pcc_gc_config_ensure": lambda: 4,
+            "pcc_thread_owns_stopped_world": lambda: 1,
+            "pcc_thread_live_count": lambda: 1,
+            "pcc_thread_all_stopped_at_gates": lambda: 1,
+            "pcc_platform_monotonic_us": lambda: 0,
+            "pcc_gc_precise_stack_diff_if_requested": lambda: None,
+            "pcc_gc_tracing_record_pause": lambda *args: None,
+            "pcc_gc_tracing_has_sweep_candidate": lambda: 0,
+            "pcc_gc_backend4_step_remembered_roots": record("remembered"),
+            "pcc_gc_backend4_step_generation_aging": record("aging"),
+            "pcc_gc_pin_conservative_thread_roots": record("pins"),
+            "pcc_gc_backend4_evacuation_page_drain": record("drain"),
+            "pcc_gc_backend4_select_relocation_pages": record("select"),
+            "pcc_gc_backend4_remap_and_retire_stopped_world": record("retire"),
+        }
+        exec(compile(ast.fix_missing_locations(ast.Module(body=nodes, type_ignores=[])),
+                     str(STRICT_SOURCE), "exec"), self.ns)
+
+    def step(self):
+        self.events.clear()
+        self.ns["pcc_gc_step"](64)
+        return list(self.events)
+
+
+def test_gc4_automatic_steps_select_relocation_pages_once_per_finished_mark():
+    model = _AutoStepModel()
+    # The first step selects; later steps of the same mark only drain.
+    assert model.step() == ["remembered", "aging", "pins", "drain", "select"]
+    assert model.cells["pcc_gc_backend4_selection_commit"] == 0
+    assert model.step() == ["remembered", "aging", "drain"]
+    # Selected pages, or edges left to remap, still refresh pins first.
+    model.cells["pcc_gc_backend4_evacuation_page_head"] = 0x1000
+    assert model.step() == ["remembered", "aging", "pins", "drain"]
+    model.cells["pcc_gc_backend4_evacuation_page_head"] = 0
+    model.cells["pcc_gc_forwarding_population"] = 2
+    # An idle step with edges also retires them (unchanged).
+    assert model.step() == ["remembered", "aging", "pins", "drain", "retire"]
+    model.cells["pcc_gc_forwarding_population"] = 0
+    # A finished mark makes the next step select again, once.
+    model.cells["pcc_gc_tracing_finish_commits"] = 1
+    assert model.step() == ["remembered", "aging", "pins", "drain", "select"]
+    assert model.cells["pcc_gc_backend4_selection_commit"] == 1
+    assert model.step() == ["remembered", "aging", "drain"]

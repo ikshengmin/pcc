@@ -392,6 +392,8 @@ define_global_i64("pcc_gc_tracing_finish_claim_backend", -1)
 define_global_i64("pcc_gc_tracing_finish_commits", 0)
 # The finish commit at which a walk found no sweep candidate; -1: none yet.
 define_global_i64("pcc_gc_tracing_no_candidate_commit", -1)
+# The finish commit at which GC4 last selected relocation pages; -1: none.
+define_global_i64("pcc_gc_backend4_selection_commit", -1)
 # The stopped-world epoch the last mark finished in (-1: the world ran).
 define_global_i64("pcc_gc_tracing_finish_stop_epoch", -1)
 # Finalizers (__del__, generator close) that ran user code; a sweep

@@ -37,6 +37,9 @@ pcc_capi_is_cext_type_tag = extern(
 pcc_gc_backend4_remap_heal_slot = extern(
     "pcc_gc_backend4_remap_heal_slot", (c_ptr, c_int64), c_void
 )
+pcc_gc_backend4_remembered_owner_has_entries = extern(
+    "pcc_gc_backend4_remembered_owner_has_entries", (c_ptr,), c_int64
+)
 pcc_gc_backend4_remembered_set_retarget_slot = extern(
     "pcc_gc_backend4_remembered_set_retarget_slot", (c_ptr, c_ptr, c_ptr, c_ptr), c_void
 )
@@ -638,6 +641,11 @@ def _relocate_copy_slots(from_obj, to_obj, ctx) -> i64:
     if load_i64(ctx, 32) != count or load_i32(ctx, 40) == 0:
         return 0
     entries = load_ptr(ctx, 16)
+    # Each retarget searches from_obj's remembered entries (the whole set
+    # when membership is inexact). Ask once whether it holds any: nothing
+    # in this copy adds an entry for it (healing and the plain slot stores
+    # record none), so an owner without entries needs no per-slot search.
+    retarget: i64 = pcc_gc_backend4_remembered_owner_has_entries(from_obj)
     index: i64 = 0
     while index < count:
         entry = ptr_add(entries, index * 80)
@@ -653,9 +661,10 @@ def _relocate_copy_slots(from_obj, to_obj, ctx) -> i64:
                 ptr_add(entry, 24), value
             )
         store_ptr(to_slot, 0, value)
-        pcc_gc_backend4_remembered_set_retarget_slot(
-            from_obj, to_obj, from_slot, to_slot
-        )
+        if retarget != 0:
+            pcc_gc_backend4_remembered_set_retarget_slot(
+                from_obj, to_obj, from_slot, to_slot
+            )
         index = index + 1
     return 1
 

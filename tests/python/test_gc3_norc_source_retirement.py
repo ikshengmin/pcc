@@ -115,6 +115,7 @@ class GC3(RetirementState):
             'pcc_gc_retain_plan_finish': lambda plan: None,
             'pcc_gc_retire_plan_prepare_locked': lambda *args: 0,
             'pcc_gc_backend4_remembered_set_retarget_slot': lambda *args: None,
+            'pcc_gc_backend4_remembered_owner_has_entries': lambda owner: 1,
             'py_gc_untrack': lambda obj: self.events.append(('untrack', obj)),
             'pcc_refcount_forget': lambda obj: None,
             'pcc_gc_note_load': lambda: None,
@@ -425,6 +426,27 @@ def test_source_target_death_consumes_nursery_occupancy_without_ordinary_decref(
     assert target in m.freed and source not in m.freed
     assert not [event for event in m.events if event[0] in ('incref', 'decref')]
     assert m.load('pcc_gc_forwarding_population', 0) == 0
+
+
+def test_freeing_consults_forwarded_source_liveness_only_for_a_target():
+    # Every target install sets 8192 and GC3 never clears it: an object
+    # without it is no target and frees without the extra graph hold.
+    m = GC3()
+    asked = []
+    may_die = m.ns['_gc3_forwarded_target_may_die']
+    m.ns['_gc3_forwarded_target_may_die'] = lambda obj: asked.append(obj) or may_die(obj)
+    plain, plain_node, _ = m.value()
+    assert not m.load(plain, 12) & 8192
+    m.ns['pcc_gc_note_object_freeing'](plain)
+    m.ns['pcc_gc_free_object_memory'](plain)
+    assert asked == [] and plain in m.freed and plain not in m.index
+    source, _, _ = m.value(nursery=True)
+    target = m.copy(source)
+    assert m.load(target, 12) & 8192
+    m.ns['pcc_gc_note_object_freeing'](target)
+    m.ns['pcc_gc_free_object_memory'](target)
+    # Each freeing step still asks for a target (unchanged).
+    assert asked and set(asked) == {target} and target in m.freed
 
 
 def test_live_target_major_remap_releases_old_nursery_and_heals_roots():

@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -61,6 +62,8 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_capi_is_cext_type_tag",
     "pcc_gc_backend4_remap_heal_slot",
     "pcc_gc_backend4_remembered_set_retarget_slot",
+    # Copies ask once whether the source owner holds remembered entries.
+    "pcc_gc_backend4_remembered_owner_has_entries",
     "pcc_gc_backend4_source_side_table_plan_commit",
     "pcc_gc_backend4_source_side_table_plan_finish",
     "pcc_gc_backend4_source_side_table_plan_prepare",
@@ -183,7 +186,16 @@ def test_relocation_payload_has_exact_strict_object_closure(
         for line in undefined_result.stdout.splitlines()
         if line.strip()
     }
-    assert undefined == RAW_FUNCTION_IMPORTS | RAW_GLOBAL_IMPORTS
+    expected = RAW_FUNCTION_IMPORTS | RAW_GLOBAL_IMPORTS
+    zero_helpers = undefined & {"memset", "bzero"}
+    assert undefined - zero_helpers == expected - {"memset"}
+    if sys.platform == "darwin" and emitter == "llvm":
+        # Only the Darwin LLVM oracle may turn explicit zero-fill calls into
+        # bzero (as in the frame and root registry closures); owned lowering
+        # still requires memset, not an arbitrary libc helper.
+        assert zero_helpers in ({"memset"}, {"bzero"}, {"memset", "bzero"})
+    else:
+        assert zero_helpers == {"memset"}
 
     symbols_result = subprocess.run(
         ["nm", "-g", str(obj)], capture_output=True, text=True, timeout=30
@@ -399,3 +411,94 @@ def test_production_archive_has_one_relocation_payload_owner(
         ]
         assert len(owners) == 1, (symbol, owners)
         assert ":py_gc_backend.o:" in owners[0]
+
+
+def _function_namespace(path: Path, names: set[str], namespace: dict) -> dict:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    selected = []
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name in names:
+            node.decorator_list = []
+            selected.append(node)
+    assert {node.name for node in selected} == names
+    module = ast.fix_missing_locations(ast.Module(body=selected, type_ignores=[]))
+    exec(compile(module, str(path), "exec"), namespace)
+    return namespace
+
+
+@pytest.mark.parametrize("exact", [True, False])
+@pytest.mark.parametrize("holds", [True, False])
+def test_remembered_owner_entry_query_answers_exact_and_inexact_membership(exact, holds):
+    owner, other = 0x1000, 0x2000
+    # Two set entries (owner word at 0, next at 16); the owner holds one of
+    # them only in the holding case. The exact index answers by chain head.
+    memory = {
+        (0x9000, 0): owner if holds else other, (0x9000, 16): 0x9100,
+        (0x9100, 0): other, (0x9100, 16): 0,
+    }
+    probes = []
+
+    def head(obj):
+        probes.append(obj)
+        return 0x9000 if holds and obj == owner else 0
+
+    ns = _function_namespace(MANAGED_SOURCE, {"_backend4_remembered_owner_has_entries"}, {
+        "ptr_is_null": lambda value: int(value == 0),
+        "is_tagged_int": lambda value: value & 1,
+        "ptr_eq": lambda left, right: int(left == right),
+        "load_ptr": lambda base, offset: memory[(base, offset)],
+        "pcc_gc_remembered_member_exact": lambda: int(exact),
+        "pcc_gc_remembered_member_head": head,
+        "_remembered_set_head": lambda: 0x9000,
+    })
+    query = ns["_backend4_remembered_owner_has_entries"]
+    assert query(owner) == int(holds)
+    assert probes == ([owner] if exact else [])
+    assert query(0) == 0 and query(owner | 1) == 0
+
+
+@pytest.mark.parametrize("holds", [0, 1])
+def test_relocated_slots_retarget_only_an_owner_holding_remembered_entries(holds):
+    from_obj, to_obj, ctx, entries = 0x1000, 0x2000, 0x3000, 0x4000
+    pairs = [(0x1010, 0x2010), (0x1018, 0x2018), (0x1020, 0x2020)]
+    memory = {(ctx, 24): len(pairs), (ctx, 16): entries}
+    for index, (from_slot, to_slot) in enumerate(pairs):
+        record = entries + index * 80
+        memory.update({(record, 0): from_slot, (record, 8): 2, (record, 16): to_slot,
+                       (from_slot, 0): 0x7000 + index})
+    asked, retargeted = [], []
+
+    def visit(obj, callback, context):
+        # The pair visitor confirms every recorded pair.
+        memory[(ctx, 32)] = len(pairs)
+        return 1
+
+    def has_entries(owner):
+        asked.append(owner)
+        return holds
+
+    ns = _function_namespace(STRICT_SOURCE, {"_relocate_copy_slots"}, {
+        "i64": int,
+        "ptr_is_null": lambda value: int(value == 0),
+        "ptr_eq": lambda left, right: int(left == right),
+        "ptr_add": lambda base, offset: base + offset,
+        "null": lambda: 0,
+        "load_ptr": lambda base, offset: memory[(base, offset)],
+        "load_i64": lambda base, offset: memory[(base, offset)],
+        "load_i32": lambda base, offset: memory.get((base, offset), 1),
+        "store_ptr": lambda base, offset, value: memory.__setitem__((base, offset), value),
+        "store_i64": lambda base, offset, value: memory.__setitem__((base, offset), value),
+        "store_i32": lambda base, offset, value: memory.__setitem__((base, offset), value),
+        "global_store_ptr": lambda name, value: None,
+        "pcc_gc_visit_object_slots": visit,
+        "_relocate_to_slot": None,
+        "pcc_gc_backend4_remap_heal_slot": lambda slot, offset: None,
+        "pcc_gc_retain_plan_prepare_locked": lambda plan, value: value,
+        "pcc_gc_backend4_remembered_owner_has_entries": has_entries,
+        "pcc_gc_backend4_remembered_set_retarget_slot":
+            lambda *args: retargeted.append(args),
+    })
+    assert ns["_relocate_copy_slots"](from_obj, to_obj, ctx) == 1
+    assert asked == [from_obj]
+    assert [memory[(to_slot, 0)] for _, to_slot in pairs] == [0x7000, 0x7001, 0x7002]
+    assert retargeted == ([(from_obj, to_obj, f, t) for f, t in pairs] if holds else [])

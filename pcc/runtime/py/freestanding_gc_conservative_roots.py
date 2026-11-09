@@ -581,7 +581,10 @@ def _pin_snapshot_owners(words, count: i64, mark: i64) -> i64:
             rooted: i64 = _extent_has_paged_word(
                 pages, words, count, load_ptr(node, 0), load_i64(node, 8)
             )
-            if gc3_count_free != 0 and pcc_gc_object_is_address_pinned(load_ptr(node, 0)) != 0:
+            # The listed node answers for its own address (no index probe).
+            if gc3_count_free != 0 and pcc_gc_object_node_is_address_pinned(
+                node, load_ptr(node, 0)
+            ) != 0:
                 rooted = 1
             owner = load_ptr(node, 48)
             if ptr_is_null(owner) == 0:

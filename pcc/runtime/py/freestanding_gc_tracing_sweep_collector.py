@@ -52,8 +52,8 @@ pcc_gc_mark_root_gray_if_known = extern(
 pcc_gc_drain_all_gray_unlocked = extern(
     "pcc_gc_drain_all_gray_unlocked", (), c_int64
 )
-pcc_gc_tracing_clear_unreachable = extern(
-    "pcc_gc_tracing_clear_unreachable", (c_ptr,), c_void
+pcc_gc_tracing_clear_unpinned = extern(
+    "pcc_gc_tracing_clear_unpinned", (c_ptr,), c_void
 )
 pcc_gc_visit_object_slots = extern(
     "pcc_gc_visit_object_slots", (c_ptr, c_ptr, c_ptr), c_int64
@@ -374,7 +374,7 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
             # instances. Empty owning slots prove clearing already finished;
             # do not spend each slice clearing the same class again.
             if count_free == 0 or is_class == 0 or _class_needs_clear(obj) != 0:
-                pcc_gc_tracing_clear_unreachable(obj)
+                pcc_gc_tracing_clear_unpinned(obj)
                 if count_free != 0 and is_class != 0:
                     pcc_gc_visit_object_slots(obj, _clear_class_layout_slot, null())
                 else:

@@ -2469,6 +2469,25 @@ def _backend4_remembered_set_retarget_slot(
         node = nxt
 
 
+@c_abi_export("pcc_gc_backend4_remembered_owner_has_entries")
+def _backend4_remembered_owner_has_entries(owner) -> int:
+    """0 only when owner holds no remembered-set entry: its exact index
+    chain is empty, or (inexact membership) one walk of the set found none.
+    Retargeting each of a relocated owner's slots searches these entries."""
+    if ptr_is_null(owner) != 0 or is_tagged_int(owner) != 0:
+        return 0
+    if pcc_gc_remembered_member_exact() != 0:
+        if ptr_is_null(pcc_gc_remembered_member_head(owner)) != 0:
+            return 0
+        return 1
+    node = _remembered_set_head()
+    while ptr_is_null(node) == 0:
+        if ptr_eq(load_ptr(node, 0), owner) != 0:
+            return 1
+        node = load_ptr(node, 16)
+    return 0
+
+
 def _backend4_remembered_set_retarget_inline_slot(
     from_owner, to_owner, offset: int
 ) -> None:
@@ -4761,7 +4780,9 @@ def pcc_gc_free_object_memory(o) -> None:
     else:
         backend = load_i32(global_addr("pcc_gc_backend_selected"), 0)
     _object_graph_lock()
+    # As in pcc_gc_note_object_freeing: only a target (8192) can be kept.
     if (backend == 3 and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
+            and (load_i32(o, 12) & 8192) != 0
             and _gc3_forwarded_target_may_die(o) == 0):
         _object_graph_unlock()
         return
@@ -5429,7 +5450,14 @@ def pcc_gc_note_object_freeing(o) -> None:
         backend = load_i32(global_addr("pcc_gc_backend_selected"), 0)
     if ptr_is_null(o) != 0:
         return
-    if backend == 3 and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
+    # Only a forwarding target can be kept by an inactive source. Every
+    # target install sets 8192 and GC3 never clears it, so an object without
+    # it is no target: skip the extra graph hold and target-index probe.
+    if (
+        backend == 3
+        and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
+        and (load_i32(o, 12) & 8192) != 0
+    ):
         _object_graph_lock()
         permitted: int = _gc3_forwarded_target_may_die(o)
         _object_graph_unlock()

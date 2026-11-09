@@ -3280,7 +3280,10 @@ def test_generational_backend_c_runtime_skips_graph_leaf_tracking(tmp_path):
 
     result = _run_backend_three(exe)
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip().splitlines() == ["0", "1"]
+    # Only counted GC3 skipped tracking graph leaves (a count freed them).
+    # Count-free GC3 frees by sweeping, so every object, leaf or container,
+    # must be known to the collector.
+    assert result.stdout.strip().splitlines() == ["1", "1"]
 
 
 def test_generational_backend_c_runtime_reuses_retained_empty_minor_blocks(
@@ -3316,6 +3319,11 @@ def test_generational_backend_c_runtime_reuses_retained_empty_minor_blocks(
                 pcc_gc_release(a1);
                 pcc_gc_release(b0);
                 pcc_gc_release(b1);
+                /* Count-free GC3 frees only by collection, and a raw stack
+                 * word would pin its object: drop the words, then collect so
+                 * the sweep empties both retained blocks. */
+                a0 = a1 = b0 = b1 = 0;
+                (void)pcc_gc_collect(0);
 
                 PyObject *c0 = pcc_gc_alloc(128, PY_TYPE_NONE, 0);
                 PyObject *c1 = pcc_gc_alloc(128, PY_TYPE_NONE, 0);
@@ -3604,7 +3612,13 @@ def test_generational_backend_pcc_python_runtime_uses_minor_bump_arena(
     assert (
         result.returncode == 0
     ), f"rc={result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    assert result.stdout.strip().splitlines() == ["3", "4096", "8", "1", "8", "0"]
+    backend, minor_bit, allocations, refills, bumps, fallbacks = (
+        result.stdout.strip().splitlines()
+    )
+    assert (backend, minor_bit, allocations, bumps, fallbacks) == ("3", "4096", "8", "8", "0")
+    # Runtime start may already have opened the current nursery block;
+    # 512 bytes of bumps in a 1024-byte nursery then need at most one refill.
+    assert refills in ("0", "1")
 
 
 def test_generational_backend_pcc_python_runtime_skips_graph_leaf_tracking(
@@ -3639,7 +3653,10 @@ def test_generational_backend_pcc_python_runtime_skips_graph_leaf_tracking(
     assert (
         result.returncode == 0
     ), f"rc={result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    assert result.stdout.strip().splitlines() == ["0", "1"]
+    # Only counted GC3 skipped tracking graph leaves (a count freed them).
+    # Count-free GC3 frees by sweeping, so every object, leaf or container,
+    # must be known to the collector.
+    assert result.stdout.strip().splitlines() == ["1", "1"]
 
 
 def test_generational_backend_pcc_python_runtime_reuses_retained_empty_minor_blocks(
@@ -3654,9 +3671,9 @@ def test_generational_backend_pcc_python_runtime_reuses_retained_empty_minor_blo
         pcc_gc_release = extern("pcc_gc_release", (c_ptr,), c_void)
         pcc_gc_telemetry = extern("pcc_gc_telemetry", (c_int64,), c_int64)
         pcc_gc_telemetry_reset = extern("pcc_gc_telemetry_reset", (), c_void)
+        pcc_gc_collect = extern("pcc_gc_collect", (c_int32,), c_int64)
 
-        def main() -> None:
-            pcc_gc_telemetry_reset()
+        def fill() -> None:
             a0 = pcc_gc_alloc(128, 0, 0)
             a1 = pcc_gc_alloc(128, 0, 0)
             b0 = pcc_gc_alloc(128, 0, 0)
@@ -3666,6 +3683,13 @@ def test_generational_backend_pcc_python_runtime_reuses_retained_empty_minor_blo
             pcc_gc_release(a1)
             pcc_gc_release(b0)
             pcc_gc_release(b1)
+
+        def main() -> None:
+            pcc_gc_telemetry_reset()
+            # Count-free GC3 frees only by collection: once fill's frame is
+            # gone, a collection empties both retained blocks for reuse.
+            fill()
+            pcc_gc_collect(0)
 
             c0 = pcc_gc_alloc(128, 0, 0)
             c1 = pcc_gc_alloc(128, 0, 0)

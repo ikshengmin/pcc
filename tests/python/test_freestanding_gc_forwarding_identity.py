@@ -56,6 +56,8 @@ OWNED_SYMBOLS = {
 }
 RAW_FUNCTION_IMPORTS = {
     "pcc_gc_object_is_address_pinned",
+    # GC3 forwarding asks the current step's pin snapshot (b95151692).
+    "pcc_gc_generational_object_is_address_pinned",
     "pcc_gc_index_slot_size",
     "calloc",
     "free",
@@ -87,6 +89,8 @@ RAW_FUNCTION_IMPORTS = {
     "py_incref",
 }
 RAW_GLOBAL_IMPORTS = {
+    # GC3 forwarding consults the current step's pin snapshot (b95151692).
+    "pcc_gc_backend3_step_pin_snapshot",
     "pcc_gc_config_initialized",
     "pcc_gc_read_barrier_enabled",
     "pcc_gc_relocation_set_head",

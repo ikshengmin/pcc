@@ -67,7 +67,8 @@ class _SweepBoundary:
             "pcc_gc_drain_all_gray_unlocked": self.drain_roots,
             "py_user_del_dispatch": self.dispatch,
             "pcc_thread_world_stop_epoch_held": lambda: self.held_epoch,
-            "pcc_gc_tracing_clear_unreachable": self.clear,
+            # The sweep's walk already read the candidate's own pin.
+            "pcc_gc_tracing_clear_unpinned": self.clear,
             "pcc_gc_tracing_finalize_unpinned": self.reclaim_unpinned,
             "pcc_gc_visit_object_slots": self.visit_slots,
             "py_weakref_invalidate_tracing_candidates": self.invalidate_candidates,
@@ -134,6 +135,8 @@ class _SweepBoundary:
 
     def forward(self, source, target):
         self.forwardings[id(source)] = {0: source, 8: target}
+        # As pcc_gc_install_forwarding_unlocked: an edge's source carries 2048.
+        source[12] |= 2048
 
     def seed_roots(self):
         self.events.append("seed")

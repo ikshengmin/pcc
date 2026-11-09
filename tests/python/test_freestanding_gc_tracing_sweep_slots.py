@@ -24,6 +24,8 @@ OWNED_SYMBOLS = {
     "pcc_gc_tracing_clear_referents",
     "pcc_gc_tracing_clear_slot",
     "pcc_gc_tracing_clear_unreachable",
+    # The sweep's walk already read the candidate's own pin.
+    "pcc_gc_tracing_clear_unpinned",
     "pcc_gc_tracing_is_sweep_candidate",
 }
 RAW_FUNCTION_IMPORTS = {

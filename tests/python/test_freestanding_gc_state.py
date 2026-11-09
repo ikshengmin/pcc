@@ -212,7 +212,8 @@ def test_freestanding_gc_state_has_complete_raw_abi_and_initial_values(
     # Measurement added 39 counters: collection stopped-world windows (7),
     # contended graph-lock waits by class (12) and the tracing sweep phases
     # (20); GC3 steps publish their stopped-word pin snapshot (1).
-    assert len(expected) == 276
+    # GC4 records the mark commit of its last relocation selection (1).
+    assert len(expected) == 277
     assert expected["pcc_gc_nonmoving_count_free"] == ("define_global_i32", 0)
     assert expected["pcc_gc_cms_finish_pending"] == ("define_global_i32", 0)
     assert expected["pcc_gc_backend4_no_refcounts"] == ("define_global_i32", 0)

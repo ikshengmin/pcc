@@ -29,6 +29,9 @@ RUNTIME_ABI_SOURCE = REPO_ROOT / "pcc" / "frontends" / "python" / "codegen" / "r
 MAKEFILE = RUNTIME_DIR / "Makefile"
 
 OWNED_SYMBOLS = {
+    # Count-free GC3/GC4 retirement admission and external remap root pins.
+    "pcc_gc_forwarding_retirement_backend_admitted",
+    "pcc_gc_backend3_pin_external_remap_root",
     "pcc_gc_backend4_drain_parked_pages",
     "pcc_gc_backend4_finish_remap_retirement",
     "pcc_gc_backend4_finish_retained_page_releases",
@@ -51,6 +54,17 @@ LOCAL_HELPER_SYMBOLS = {
 }
 DEFINED_SYMBOLS = OWNED_SYMBOLS | LOCAL_HELPER_SYMBOLS
 RAW_FUNCTION_IMPORTS = {
+    # Count-free GC3/GC4 retirement: liveness of forwarded sources and
+    # targets, conservative pins and the gate-parked admission of a cut.
+    "pcc_capi_visit_extension_module_state_roots",
+    "pcc_gc_backend3_finish_forwarded_source",
+    "pcc_gc_backend3_forwarded_target_may_die",
+    "pcc_gc_conservative_pin_owner_chain",
+    "pcc_gc_object_is_address_pinned",
+    "pcc_gc_pin_conservative_thread_roots",
+    "pcc_gc_tracing_has_sweep_candidate",
+    "pcc_thread_all_stopped_at_gates",
+    "pcc_thread_live_count",
     "pcc_gc_refresh_read_barrier",
     "free",
     "pcc_gc_gray_count_decrement_acq_rel",
@@ -96,6 +110,10 @@ RAW_FUNCTION_IMPORTS = {
     "py_incref",
 }
 RAW_GLOBAL_IMPORTS = {
+    # Count-free retirement waits for an idle mark and requests the next one.
+    "pcc_gc_cycle_requested",
+    "pcc_gc_backend4_no_refcounts",
+    "pcc_gc_mark_active",
     "pcc_gc_backend4_deferred_recycle_pages",
     "pcc_gc_backend4_remap_active",
     "pcc_gc_backend4_remap_epoch",
@@ -144,6 +162,9 @@ def test_forwarding_retirement_has_one_strict_source_owner() -> None:
     locally_routed = {
         "pcc_gc_backend4_remap_and_retire_unlocked",
         "pcc_gc_backend4_remap_and_retire_stopped_world",
+        # Called only from freestanding retirement/remap objects.
+        "pcc_gc_forwarding_retirement_backend_admitted",
+        "pcc_gc_backend3_pin_external_remap_root",
     }
     for symbol in OWNED_SYMBOLS - locally_routed:
         assert f'"{symbol}"' in managed
@@ -1037,5 +1058,7 @@ def test_forwarding_retirement_across_three_remap_epochs(
             [str(implementation)], capture_output=True, text=True, timeout=30
         )
         assert result.returncode == 0, result.stdout + result.stderr
-        # What the retired C runtime oracle printed.
-        assert result.stdout == "2\n0\n0\n0,1\n2,3,2,1\n"
+        # The retired C runtime oracle printed the same epochs with counted
+        # child references (2,3,2,1). GC1-GC4 count no references, so the
+        # child's count word stays 1 throughout relocation and retirement.
+        assert result.stdout == "2\n0\n0\n0,1\n1,1,1,1\n"

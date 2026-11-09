@@ -223,6 +223,7 @@ def test_real_list_pass1_clears_owned_slots_but_only_successful_claim_frees_item
     _load(RUNTIME / "freestanding_gc_sweep_slots.py", rt.ns, {
         "pcc_gc_tracing_clear_slot", "pcc_gc_clear_container_metadata",
         "pcc_gc_tracing_clear_referents", "pcc_gc_tracing_clear_unreachable",
+        "pcc_gc_tracing_clear_unpinned",
     })
     rt.begin()
     assert rt.enqueue((obj, node)) == 0 and not rt.freed

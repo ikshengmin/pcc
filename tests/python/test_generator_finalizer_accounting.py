@@ -88,7 +88,7 @@ class Finalization:
             pcc_gc_forwarding_index_find=lambda value: 0,
             pcc_gc_tracing_recheck_reachability_after_finalizers=self.recheck,
             py_weakref_invalidate_tracing_candidates=lambda: 0,
-            pcc_gc_tracing_clear_unreachable=lambda value: self.events.append(('clear',)),
+            pcc_gc_tracing_clear_unpinned=lambda value: self.events.append(('clear',)),
             pcc_gc_tracing_finalize_unreachable=self.free,
             pcc_gc_tracing_finalize_unpinned=self.free_unpinned,
             pcc_platform_monotonic_us=lambda: 100,

@@ -67,6 +67,9 @@ def test_step_refreshes_current_raw_roots_before_any_moving_work(
         "global_addr": lambda name: name,
         "load_i32": lambda name, offset: cells.get(name, 0),
         "load_i64": lambda name, offset: cells.get(name, 0),
+        # No evacuation page is pending; the edge alone still asks for pins.
+        "global_load_ptr": lambda name: cells.get(name, 0),
+        "ptr_is_null": lambda value: int(value == 0),
         "store_i32": lambda name, offset, value: cells.__setitem__(name, value),
         "store_i64": lambda name, offset, value: cells.__setitem__(name, value),
         "pcc_thread_owns_stopped_world": lambda: int(world),
