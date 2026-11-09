@@ -34,6 +34,8 @@ RAW_FUNCTION_IMPORTS = {
     "py_decref",
     "py_weakref_invalidate",
 }
+# The count-free collector flag lets a tracing slot skip a no-op release.
+RAW_GLOBAL_IMPORTS = {"pcc_gc_backend4_no_refcounts"}
 
 
 def _exported_symbols(source: str) -> set[str]:
@@ -123,7 +125,7 @@ def test_sweep_slot_object_has_exact_raw_closure(tmp_path: Path, emitter: str):
         for line in undefined_result.stdout.splitlines()
         if line.strip()
     }
-    assert undefined == RAW_FUNCTION_IMPORTS
+    assert undefined == RAW_FUNCTION_IMPORTS | RAW_GLOBAL_IMPORTS
 
     symbols_result = subprocess.run(
         ["nm", "-g", str(obj)], capture_output=True, text=True, timeout=30

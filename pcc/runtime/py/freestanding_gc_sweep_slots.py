@@ -4,6 +4,7 @@ from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.runtime.py.py_abi_constants import PY_TYPE_DICT, PY_TYPE_LIST, PY_TYPE_SET, PY_TYPE_TUPLE, PY_TYPE_VTHREAD_CHANNEL
 from pcc.unsafe import (
+    global_addr,
     is_tagged_int,
     load_i32,
     load_i64,
@@ -62,6 +63,10 @@ def pcc_gc_tracing_clear_slot(slot, role: i64, context) -> None:
         return
     child = load_ptr(slot, 0)
     store_ptr(slot, 0, null())
+    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
+        # Count-free collectors count nothing: py_decref returns at once,
+        # so the child's candidate verdict cannot change this slot's work.
+        return
     if ptr_is_null(child) != 0 or is_tagged_int(child) != 0:
         return
     if pcc_gc_tracing_is_sweep_candidate(child) != 0:
