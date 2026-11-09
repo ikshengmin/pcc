@@ -335,7 +335,8 @@ def _index_table_publish(slots_cell: c_ptr, cap_cell: c_ptr, slots, cap: i64) ->
     The record it replaces is retired with the replaced table. Without a
     record (no memory) positive-only probes report unknown. The object-node
     lookup validates the authoritative table through its write generation;
-    other indexes retain their existing no-record behavior.
+    forwarding growth uses _forwarding_table_publish_prepared instead, since
+    its node readers cannot treat an absent record as an exact miss.
     """
     write_generation: i64 = 0
     if ptr_eq(slots_cell, global_addr("pcc_py_gc_object_slots")) != 0:
@@ -360,6 +361,26 @@ def _index_table_publish(slots_cell: c_ptr, cap_cell: c_ptr, slots, cap: i64) ->
     _index_retire(old_record)
     if write_generation > 0:
         _object_index_write_end(write_generation)
+
+
+@c_abi_export("pcc_gc_forwarding_table_publish_prepared")
+def _forwarding_table_publish_prepared(
+    slots_cell: c_ptr, cap_cell: c_ptr, slots, cap: i64, record
+) -> None:
+    """Publish a forwarding/target table with its already-owned reader record.
+
+    The graph owner prepared a non-NULL record before copying any slots.
+    No fallible allocation remains before publication. Retirement may still
+    leak on OOM, as before, but cannot hide the newly committed table.
+    """
+    store_ptr(record, 0, slots)
+    store_i64(record, 8, cap)
+    store_ptr(slots_cell, 0, slots)
+    store_i64(cap_cell, 0, cap)
+    published_cell = _index_published_cell(slots_cell)
+    old_record = load_ptr(published_cell, 0)
+    atomic_store_i64(published_cell, 0, ptr_diff(record, null()), "release")
+    _index_retire(old_record)
 
 
 @c_abi_export("pcc_gc_index_table_release")
@@ -587,6 +608,16 @@ def pcc_gc_index_py_rehash_slots(
             _object_index_write_end(write_generation)
         return -1
 
+    record = null()
+    if (
+        ptr_eq(slots_cell, global_addr("pcc_py_gc_forwarding_slots")) != 0
+        or ptr_eq(slots_cell, global_addr("pcc_py_gc_forwarding_target_slots")) != 0
+    ):
+        record = calloc(1, 16)
+        if ptr_is_null(record) != 0:
+            free(new_slots)
+            return -1
+
     old_slots = load_ptr(slots_cell, 0)
     old_cap: i64 = load_i64(cap_cell, 0)
     new_used: i64 = 0
@@ -610,7 +641,12 @@ def pcc_gc_index_py_rehash_slots(
                 new_used = new_used + 1
             index = index + 1
 
-    _index_table_publish(slots_cell, cap_cell, new_slots, new_cap)
+    if ptr_is_null(record) == 0:
+        _forwarding_table_publish_prepared(
+            slots_cell, cap_cell, new_slots, new_cap, record
+        )
+    else:
+        _index_table_publish(slots_cell, cap_cell, new_slots, new_cap)
     store_i64(used_cell, 0, new_used)
     _index_table_release(slots_cell, old_slots)
     if write_generation > 0:
@@ -1434,6 +1470,14 @@ def pcc_gc_forwarding_plan_index_commit(
     if ptr_is_null(new_slots) != 0 or prepared_cap < required:
         return -1
 
+    # Failure must leave the caller's zeroed prepared table untouched, so a
+    # retry cannot rehash duplicate keys into negative insertion offsets.
+    record = null()
+    if kind == 0 or kind == 1:
+        record = calloc(1, 16)
+        if ptr_is_null(record) != 0:
+            return -1
+
     old_slots = load_ptr(slots_cell, 0)
     old_cap: i64 = load_i64(cap_cell, 0)
     new_used: i64 = 0
@@ -1454,7 +1498,12 @@ def pcc_gc_forwarding_plan_index_commit(
             )
             new_used = new_used + 1
         index = index + 1
-    _index_table_publish(slots_cell, cap_cell, new_slots, prepared_cap)
+    if ptr_is_null(record) == 0:
+        _forwarding_table_publish_prepared(
+            slots_cell, cap_cell, new_slots, prepared_cap, record
+        )
+    else:
+        _index_table_publish(slots_cell, cap_cell, new_slots, prepared_cap)
     store_i64(used_cell, 0, new_used)
     if ptr_is_null(_index_published_cell(slots_cell)) == 0:
         # Retired for unlocked readers; the caller frees what it gets back.

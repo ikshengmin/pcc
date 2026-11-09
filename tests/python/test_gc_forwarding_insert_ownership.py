@@ -1,9 +1,10 @@
 """New forwarding nodes must acquire exact index ownership before commit.
 
 Actual installer, identity and index bodies run over modeled memory, graph
-exclusion, allocator and counted-reference primitives. Publication-record OOM
-is injected in calloc; no lookup or insert result is replaced. This covers
-rollback ownership, not complete publication-OOM read or collector behavior.
+exclusion, allocator and counted-reference primitives. An absent publication
+is injected after a valid install to exercise defensive duplicate ownership;
+new publication-OOM rejection is covered in test_gc_forwarding_publication_oom.
+No lookup or insert result is replaced. This is not collector qualification.
 """
 from __future__ import annotations
 
@@ -141,13 +142,14 @@ class Install(Index):
 @pytest.mark.parametrize('kind', ('forwarding', 'forwarding_target'))
 def test_hidden_duplicate_rejects_new_node_without_damaging_existing_edge(backend, kind):
     model = Install(backend)
-    model.fail_record = kind
     assert model.install(model.a, model.t) == 0
-    assert model.failed_records == [kind]
+    # Simulate the old invalid/hidden-table state. Valid new installs reject
+    # record OOM before publication, rather than creating this state.
+    model.store('pcc_py_gc_' + kind + '_published', 0, 0)
     assert model.load('pcc_py_gc_' + kind + '_published') == 0
     key = model.a if kind == 'forwarding' else model.t
     assert model.exact(kind, key) != 0
-    # The optional-reader miss is real and remains an open read-path defect.
+    # The published-reader miss is real; the node still belongs to the index.
     assert model.call('pcc_gc_' + kind + '_index_find', key) == 0
     before = model.edge_state()
     allocations_before = len(model.allocations)
@@ -169,10 +171,9 @@ def test_hidden_duplicate_rejects_new_node_without_damaging_existing_edge(backen
 @pytest.mark.parametrize('backend', (3, 4))
 def test_hidden_target_duplicate_does_not_retarget_an_existing_source(backend):
     model = Install(backend)
-    model.fail_record = 'forwarding_target'
     assert model.install(model.a, model.t) == 0
     assert model.install(model.b, model.u) == 0
-    assert model.failed_records == ['forwarding_target']
+    model.store('pcc_py_gc_forwarding_target_published', 0, 0)
     before = model.edge_state()
     rc_before, freed_before = list(model.rc_events), list(model.freed)
 

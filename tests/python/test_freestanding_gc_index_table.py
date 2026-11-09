@@ -38,6 +38,7 @@ PUBLIC_SYMBOLS = {
     "pcc_gc_index_py_seen",
     "pcc_gc_index_reclaim_retired",
     "pcc_gc_forwarding_index_find",
+    "pcc_gc_forwarding_table_publish_prepared",
     "pcc_gc_forwarding_index_insert",
     "pcc_gc_forwarding_index_remove",
     "pcc_gc_forwarding_index_clear",
