@@ -43,6 +43,7 @@ UNIMPLEMENTED_FEATURES = {
     'go.unsupported.predeclared-shadowing': 'go.capability.predeclared-shadowing',
     'go.unsupported.slice-storage': 'go.capability.slice-storage',
     'go.unsupported.string-bounds-panic': 'go.capability.string-bounds-panic',
+    'go.unsupported.unsafe-operations': 'go.capability.unsafe-operations',
 }
 
 

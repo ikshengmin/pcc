@@ -1,4 +1,4 @@
-"""Static blank-import graphs; linkname remains an explicit ownership frontier.
+"""Static blank-import graphs and the //go:linkname ownership frontier.
 
 All execution is UNRUN. Full normal math/bits files are retained, not replaced
 with bootstrap errors or a fake unsafe/runtime package. Go import scope:
@@ -127,13 +127,27 @@ def test_blank_dependencies_keep_full_source_semantics_before_ir(row, monkeypatc
     assert type(caught.value) is GoDiagnostic
 
 
-@pytest.mark.parametrize('row', CORPUS['structural_failures'], ids=lambda row: row['name'])
+# unsafe is now a compiler-owned pseudo-package: its exact original builds.
+GRADUATED_STRUCTURAL = ('unsafe-source-not-fabricated',)
+STRUCTURAL = tuple(row for row in CORPUS['structural_failures'] if row['name'] not in GRADUATED_STRUCTURAL)
+
+
+@pytest.mark.parametrize('row', STRUCTURAL, ids=lambda row: row['name'])
 def test_blank_imports_do_not_ignore_missing_sources_cycles_or_main_packages(row, monkeypatch):
     from pcc.frontends.go.lowering import Lowerer
     monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('incomplete graph reached IR'))
     with pytest.raises(GoDiagnostic, match=row['pcc']) as caught:
         compile_go_packages(graph(row))
     assert type(caught.value) is GoDiagnostic
+
+
+@pytest.mark.parametrize('row', [row for row in CORPUS['structural_failures'] if row['name'] in GRADUATED_STRUCTURAL],
+                         ids=lambda row: row['name'])
+def test_blank_unsafe_import_needs_no_supplied_or_fabricated_source(row, monkeypatch):
+    forbid_external_compiler(monkeypatch)
+    packages = graph(row)
+    assert set(packages) == {'main'}
+    compile_go_packages(packages)
 
 
 @pytest.mark.parametrize('row', CORPUS['frontiers'], ids=lambda row: row['name'])
@@ -153,10 +167,7 @@ def test_linkname_spelling_inside_inert_comments_or_literals_does_not_rewrite_so
 
 @pytest.mark.parametrize('directive', (
     '//go:linkname X', '//go:linkname X dep.X', '//go:linknamestd X dep.X',
-    '//go:linkname  X\u00a0dep.X', '//go:linkname X\x1cY',
-    # Three Go Fields, but four Python split fields: the distinction must not
-    # become a false usage error. This does not certify the local name exists.
-    '//go:linkname X\x1cY Z',
+    '//go:linkname  X\u00a0dep.X',
 ))
 def test_recognized_linker_aliases_cannot_manufacture_ordinary_scalar_globals(directive, monkeypatch):
     from pcc.frontends.go.lowering import Lowerer
@@ -165,6 +176,21 @@ def test_recognized_linker_aliases_cannot_manufacture_ordinary_scalar_globals(di
     with pytest.raises(UnsupportedGo) as caught:
         compile_go(original, 'original.go')
     assert caught.value.code == 'go.unsupported.linkname-directives'
+    assert (caught.value.filename, caught.value.line, caught.value.column) == ('original.go', 3, 1)
+
+
+@pytest.mark.parametrize('directive', (
+    '//go:linkname X\x1cY',
+    # Three Go Fields, but four Python split fields: the distinction must not
+    # become a false usage error. Go White_Space excludes U+001C, so the local
+    # name is X\x1cY, which this package does not declare.
+    '//go:linkname X\x1cY Z',
+))
+def test_linkname_local_names_must_be_declared(directive):
+    original = 'package main\nimport _ "unsafe"\n'+directive+'\nvar X int\nfunc main(){}\n'
+    with pytest.raises(GoDiagnostic, match='must refer to declared function or variable') as caught:
+        compile_go(original, 'original.go')
+    assert type(caught.value) is GoDiagnostic
     assert (caught.value.filename, caught.value.line, caught.value.column) == ('original.go', 3, 1)
 
 
@@ -216,8 +242,11 @@ def test_complete_normal_math_bits_stays_at_real_symbol_ownership_boundary(monke
     monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('runtime-owned math/bits reached IR'))
     with pytest.raises(UnsupportedGo) as caught:
         compile_go_packages(inputs)
-    assert caught.value.code == 'go.unsupported.linkname-directives'
-    assert (caught.value.filename, caught.value.line, caught.value.column) == ('bits_errors.go', 11, 1)
+    # Both directives bind owned runtime error values; the first variable
+    # then needs package interface storage and runtime initialization.
+    assert caught.value.code == 'go.unsupported.interface-types'
+    assert 'runtime-owned runtime.overflowError' in caught.value.message
+    assert (caught.value.filename, caught.value.line, caught.value.column) == ('bits_errors.go', 12, 5)
     assert set(inputs) == {'main', 'math/bits'}  # No unsafe/runtime replacement.
     for name, text in originals:
         assert (UPSTREAM / name).read_bytes() == text.encode('utf-8')

@@ -60,6 +60,8 @@ class Symbol:
     iota: int | None = None
     depth: int = 0
     iteration_binding: bool = False
+    # The owned runtime object a //go:linkname directive bound, if any.
+    linkname: object = None
 
 
 def integer_literal(expr):
@@ -460,6 +462,7 @@ class Analyzer:
         validate_containment_cycles(self.program.types)
         for declaration in self.program.types:
             require_value_type(declaration.resolved, declaration.token, declaration=True)
+        self.bind_linknames()
         for declaration in self.program.constants:
             for symbol in declaration.symbols:
                 self.resolve_constant(symbol)
@@ -781,6 +784,27 @@ class Analyzer:
         finally:
             self.iota = previous
 
+    def bind_linknames(self):
+        """cmd/compile //go:linkname: the local name is a declared package
+        function or variable; only owned runtime objects can be bound."""
+        from pcc.frontends.go.runtime_provider import runtime_object
+        for directive in self.program.linknames:
+            symbol = self.globals.get(directive.local)
+            variable = symbol is not None and symbol.package_variable
+            if not variable and directive.local not in self.functions:
+                raise GoDiagnostic(directive.token, "//go:linkname must refer to declared function or variable")
+            provided = runtime_object(directive.target)
+            if not variable or provided is None:
+                raise UnsupportedGo(directive.token, 'go.unsupported.linkname-directives',
+                                    "linkname directives require owned object-symbol binding and runtime ownership")
+            if symbol.declaration is not None:
+                # The target already owns its definition and initializer.
+                raise GoDiagnostic(symbol.token, "duplicated definition of symbol " + provided.symbol)
+            if not is_error_interface(self.resolve_type(symbol.type)):
+                raise UnsupportedGo(directive.token, 'go.unsupported.linkname-directives',
+                                    "linkname binding requires the runtime object's declared type")
+            symbol.linkname = provided
+
     def _resolve_constant(self, symbol):
         if symbol.resolved:
             return
@@ -791,8 +815,12 @@ class Analyzer:
         if not symbol.package_variable and interface_type(symbol.type) is not None:
             raise GoDiagnostic(symbol.token, "interface-typed initializer is not a constant")
         if symbol.package_variable and interface_type(symbol.type) is not None:
-            # In particular, an ignored go:linkname must never manufacture an
+            # In particular, a linknamed variable must never manufacture an
             # ordinary nil global in place of a runtime-owned error value.
+            if symbol.linkname is not None:
+                raise UnsupportedGo(symbol.token, 'go.unsupported.interface-types',
+                                    "runtime-owned " + symbol.linkname.symbol
+                                    + " requires package interface storage and runtime initialization")
             raise UnsupportedGo(symbol.token, 'go.unsupported.interface-types',
                                 "package interface storage requires runtime initialization and symbol ownership")
         if symbol.package_variable and isinstance(underlying(symbol.type), PointerType):

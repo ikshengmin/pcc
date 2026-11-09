@@ -124,12 +124,15 @@ def test_decoded_import_paths_keep_package_identity_and_initialization_boundarie
     with pytest.raises(GoDiagnostic, match="import cycle"):
         compile_go_packages(packages(r'package main; import "\x6cib"; func main(){_=arithmetic.Base}',
                                      r'package arithmetic; import _ "l\x69b"; const Base=3'))
-    with pytest.raises(GoDiagnostic, match="import source unavailable: unsafe"):
-        compile_go_packages(packages(r'package main; import _ "\x75nsafe"; func main(){}'))
     with pytest.raises(UnsupportedGo) as caught:
         compile_go_packages(packages(r'package main; import _ "\x6cib"; func main(){}',
                                      'package arithmetic; var X=f(); func f()int{return 3}'))
     assert caught.value.code == "go.unsupported.package-initialization"
+
+
+def test_decoded_unsafe_path_names_the_compiler_owned_package():
+    # Formerly "import source unavailable: unsafe"; no unsafe source exists.
+    compile_go_packages(packages(r'package main; import _ "\x75nsafe"; func main(){}'))
 
 
 def test_complete_escaped_import_graph_keeps_single_dependency_owner(monkeypatch):

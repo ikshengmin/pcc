@@ -40,7 +40,8 @@ def parse_package(units, *, require_main):
                       [constant for item in programs for constant in item.constants],
                       [imported for item in programs for imported in item.imports],
                       [variable for item in programs for variable in item.variables],
-                      [dtype for item in programs for dtype in item.types])
+                      [dtype for item in programs for dtype in item.types],
+                      [linkname for item in programs for linkname in item.linknames])
     return program
 
 
@@ -63,6 +64,12 @@ def compile_packages(packages, *, main_package, target_triple):
         active.add(path)
         imports = {}
         for imported in program.imports:
+            if imported.path == "unsafe":
+                # A compiler-owned pseudo-package, never supplied source.
+                if imported.alias != "_":
+                    raise UnsupportedGo(imported.token, "go.unsupported.unsafe-operations",
+                                        "package unsafe operations require pointer and layout semantics, which are not implemented")
+                continue
             dependency = visit(imported.path, imported.token)
             if imported.alias == "_":
                 # Blank imports still visit/check the entire dependency graph,

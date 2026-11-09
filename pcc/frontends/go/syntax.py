@@ -43,7 +43,8 @@ def _digit(char):
     return unicodedata.category(char) == "Nd"
 
 
-def scan(source, filename="<go>"):
+def scan(source, filename="<go>", directives=None):
+    """Tokenize one file; recognized //go:linkname directives go to directives."""
     tokens = []
     pos, line, column = 0, 1, 1
     pending = False
@@ -108,8 +109,11 @@ def scan(source, filename="<go>"):
                 token = Token("comment", comment, filename, line, column)
                 if len(fields) not in (2, 3):
                     raise GoDiagnostic(token, "usage: //" + fields[0] + " localname [linkname]")
-                raise UnsupportedGo(token, 'go.unsupported.linkname-directives',
-                                    "linkname directives require owned object-symbol binding and runtime ownership")
+                if fields[0] != "go:linkname" or directives is None:
+                    # linknamestd is the standard library's own variant.
+                    raise UnsupportedGo(token, 'go.unsupported.linkname-directives',
+                                        "linkname directives require owned object-symbol binding and runtime ownership")
+                directives.append(Linkname(token, fields[1], fields[2] if len(fields) == 3 else None))
             advance(comment)
             continue
         if source.startswith("/*", pos):
@@ -303,6 +307,14 @@ class Import:
 
 
 @dataclass
+class Linkname:
+    """One //go:linkname localname [importpath.name] directive of a file."""
+    token: Token
+    local: str
+    target: str | None
+
+
+@dataclass
 class Program:
     token: Token
     functions: list
@@ -310,6 +322,7 @@ class Program:
     imports: list = field(default_factory=list)
     variables: list = field(default_factory=list)
     types: list = field(default_factory=list)
+    linknames: list = field(default_factory=list)
 
 
 BINARY_PRECEDENCE = {
@@ -322,7 +335,8 @@ BINARY_PRECEDENCE = {
 
 class GoParser:
     def parse(self, source, filename="<go>", *, require_main=True):
-        self.tokens = scan(source, filename)
+        linknames = []
+        self.tokens = scan(source, filename, linknames)
         self.index = 0
         self.named_literals = True
         self.take("package")
@@ -354,7 +368,11 @@ class GoParser:
             else:
                 self.fail(self.current, "unsupported package declaration; expected func, const or var")
             self.end_statement()
-        return Program(package, functions, constants, imports, variables, types)
+        if linknames and not any(imported.path == "unsafe" for imported in imports):
+            # cmd/compile: the directive subverts the type system, so a file
+            # must import unsafe to use it.
+            self.fail(linknames[0].token, '//go:linkname only allowed in Go files that import "unsafe"')
+        return Program(package, functions, constants, imports, variables, types, linknames)
 
     @property
     def current(self):

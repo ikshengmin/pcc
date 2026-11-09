@@ -108,8 +108,8 @@ def test_normal_original_math_bits_file_selection_keeps_error_runtime_dependency
     assert b"//go:build !compiler_bootstrap" in originals[-1][1]
     inputs={"main":[("main.go",'package main;import "math/bits";func main(){_=bits.LeadingZeros(1)}')],
             "math/bits":[(name,data.decode()) for name,data in originals]}
-    with pytest.raises(UnsupportedGo,match="linkname directives require owned object-symbol binding and runtime ownership") as failure:
+    with pytest.raises(UnsupportedGo,match="runtime-owned runtime.overflowError requires package interface storage") as failure:
         compile_go_packages(inputs)
     assert (failure.value.code,failure.value.filename,failure.value.line,failure.value.column)==(
-        "go.unsupported.linkname-directives","bits_errors.go",11,1)
+        "go.unsupported.interface-types","bits_errors.go",12,5)
     assert all((directory/name).read_bytes()==data for name,data in originals)

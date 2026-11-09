@@ -79,6 +79,7 @@ CASES = [
     ('limit-generic-instances', original('func f[T any](x T)T{return x}',
         ';'.join('_=f(['+str(n)+']int{})' for n in range(129)))),
     ('linkname-directives', 'package main\nimport _ "unsafe"\n//go:linkname X\nvar X int\nfunc main(){}\n'),
+    ('unsafe-operations', 'package main;import "unsafe";func main(){_=unsafe.Sizeof(0)}'),
 ]
 
 

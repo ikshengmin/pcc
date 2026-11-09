@@ -122,10 +122,15 @@ def test_linknamed_package_error_cannot_become_a_fabricated_nil_global(monkeypat
     from pcc.frontends.go.lowering import Lowerer
     original = 'package main\n//go:linkname e runtime.overflowError\nvar e error\nfunc main(){_=e}\n'
     monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('runtime-owned error became an ordinary global'))
-    with pytest.raises(UnsupportedGo) as failure:
+    with pytest.raises(GoDiagnostic) as failure:
         compile_go(original, 'original.go')
-    # Preserve the exact original. Its newly recognized compiler directive
-    # fails before the independent package-interface storage frontier.
-    # This early capability boundary does not certify the rest of the source.
-    assert failure.value.code == 'go.unsupported.linkname-directives'
+    # Preserve the exact original. cmd/compile admits //go:linkname only in
+    # files that import unsafe, so this file is invalid, not a capability gap.
+    assert type(failure.value) is GoDiagnostic
+    assert 'only allowed in Go files that import "unsafe"' in failure.value.message
     assert (failure.value.filename, failure.value.line) == ('original.go', 2)
+    with pytest.raises(UnsupportedGo) as bound:
+        compile_go(original.replace('package main\n', 'package main\nimport _ "unsafe"\n'), 'original.go')
+    # With the import, the binding never becomes an ordinary nil global.
+    assert bound.value.code == 'go.unsupported.interface-types'
+    assert (bound.value.line, bound.value.column) == (4, 5)
