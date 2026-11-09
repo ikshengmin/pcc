@@ -30,6 +30,9 @@ OWNED_SYMBOLS = {
 RAW_FUNCTION_IMPORTS = {
     "pcc_capi_is_cext_type_tag",
     "pcc_gc_forwarding_find",
+    "pcc_gc_object_index_find",
+    "pcc_platform_abort",
+    "pcc_gc_forwarding_retirement_backend_admitted",
     "pcc_gc_generational_oldify_supported_tag",
     "pcc_gc_memoryview_refresh_owned_buffer",
     "pcc_gc_visit_object_slots",
@@ -40,7 +43,6 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_backend4_remap_pending_obj",
     "pcc_gc_backend4_reseed_page_revision",
     "pcc_gc_backend4_reseed_relocation_revision",
-    "pcc_gc_backend_selected",
     "pcc_gc_forwarding_head",
     "pcc_gc_forwarding_population",
     "pcc_gc_object_list_revision",
@@ -140,6 +142,11 @@ def test_relocation_remap_uses_shared_slot_contract_and_one_epoch_flags() -> Non
     assert "pcc_gc_backend4_remap_slot" in remap
     assert "pcc_gc_forwarding_find(value)" in heal
     assert "store_ptr(base, offset, target)" in heal
+    assert heal.count("store_ptr(base, offset, target)") == 1
+    assert "while remaining > 0:" in heal
+    assert 'global_addr("pcc_gc_forwarding_population")' in heal
+    assert "pcc_gc_object_index_find(target)" in heal
+    assert "py_incref" not in heal and "py_decref" not in heal
     assert "pcc_capi_is_cext_type_tag(load_i32(obj, 8)) == 0" in retire
     assert "pcc_gc_backend4_remap_referents(obj)" in retire
     assert "old_flags & 131072" in retire

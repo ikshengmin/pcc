@@ -28,6 +28,8 @@ pcc_capi_is_cext_type_tag = extern(
     "pcc_capi_is_cext_type_tag", (c_int64,), c_int64
 )
 pcc_gc_forwarding_find = extern("pcc_gc_forwarding_find", (c_ptr,), c_ptr)
+pcc_gc_object_index_find = extern("pcc_gc_object_index_find", (c_ptr,), c_ptr)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 pcc_gc_generational_oldify_supported_tag = extern(
     "pcc_gc_generational_oldify_supported_tag", (c_int64,), c_int64
 )
@@ -109,11 +111,39 @@ def pcc_gc_backend4_remap_heal_slot(base, offset: i64) -> None:
     node = pcc_gc_forwarding_find(value)
     if ptr_is_null(node) != 0:
         return
-    target = load_ptr(node, 8)
-    if ptr_is_null(target) != 0:
+    # The caller holds the graph lock (or owns the stopped remap epoch).
+    # Public installs may leave arbitrarily long chains. Bound the walk by
+    # the stable edge population; exhausting it cannot publish a cycle or
+    # a partial answer. Keep the original stale-flag/no-edge case a no-op.
+    remaining: i64 = load_i32(global_addr("pcc_gc_forwarding_population"), 0)
+    while remaining > 0:
+        remaining = remaining - 1
+        target = load_ptr(node, 8)
+        if ptr_is_null(target) != 0 or is_tagged_int(target) != 0:
+            break
+        # Edges carry pointer identities, including inactive source shells.
+        # Do not dereference intermediate headers or require live source
+        # provenance. Only a validated terminal can become a field value.
+        node = pcc_gc_forwarding_find(target)
+        if ptr_is_null(node) == 0:
+            continue
+        target_node = pcc_gc_object_index_find(target)
+        if ptr_is_null(target_node) != 0:
+            break
+        if load_i64(target_node, 32) != 0:
+            break
+        flags: i64 = load_i32(target, abi_constant("object.header.flags_offset"))
+        if (flags & 524288) != 0:
+            break
+        # An active owner with no edge is terminal even if FORWARDED is a
+        # stale hint. Do not mutate its header during field healing.
+        # Count-on-NEW: the reference is already represented by the
+        # terminal. No RC updates or forwarding-edge compression.
+        store_ptr(base, offset, target)
         return
-    # Count-on-NEW: the slot's reference is already represented by target.
-    store_ptr(base, offset, target)
+    # A void remap callback cannot decline the subsequent source retirement.
+    # Abort before it can turn the unchanged field into a dangling pointer.
+    pcc_platform_abort()
 
 
 @c_abi_export("pcc_gc_backend4_remap_slot")
