@@ -425,56 +425,52 @@ dropped keyword); the stage 1 commit message lists them. Rerun with
 
 ## Native throughput versus CPython 3.15.0: active, acceptance unmet
 
-### Five-collector screen and GC owners (local Mac, 2026-11-09)
+### Five-collector screen and GC owners (local Mac, 2026-11-10)
 
-Source `fd670f118`; host pcc0, owned self backend, threaded runtime; a native
+Source `2736b5afc`; host pcc0, owned self backend, threaded runtime; native
 handler-batch stats program (concurrency 100, zero delay, 10,000 requests per
-run) on Darwin AArch64. These are screening runs, not HTTP throughput or
-native-pcc1 qualification. QPS at one / four workers: GC0 38,507 / 111,168;
-GC1 14,630 / 14,920; GC2 15,573 / 17,000; GC3 7,445 / 3,237; GC4 5,917 / 3,844.
-The count-free collectors do not scale with workers, and GC3/GC4 lose
-throughput at four.
+run) on Darwin AArch64. Screening only, not HTTP throughput or native-pcc1
+qualification. Paired medians at one / four workers: GC0 ~36,500 / ~72,000;
+GC1 ~13,400 / ~11,400; GC2 ~13,600 / ~11,300; GC3 ~7,500 / ~2,700;
+GC4 ~6,000 / ~2,600. CPython asyncio on the same workload: ~87,000-90,000.
 
-GC1 at four workers over 100,000 requests (11.0 s): 19 pauses total 4.56 s
-(41% of wall, longest 513 ms). The sweep inside them takes 3.17 s (finalizer
-pass 0.41 s, slot clearing 1.01 s, freeing 1.74 s) for 4.17 M dead objects,
-about 660 ns each. Worker samples spend about two thirds parked at stops and
-about a quarter spinning on the graph lock, half of that registering each
-allocation in `pcc_gc_note_object_allocated_sized`. GC1-4 count no references:
-`py_incref`/`py_decref` return at once (0.17% sampled self time on GC1), so
-binding the collector at compile time to drop those calls is not worth losing
-one binary for all five collectors.
+Published since `fd670f118`, each with a same-input paired A/B (five pairs):
+`251b88109` (GC3/GC4 finish CMS-traced marks and sweep in one stop: GC3 w1
++6-9%, pre-sweep recheck 65-160 ms -> 0), `38355ca52` (one stopped-world
+root walk with paged word queries: GC1 w1 +7%, GC2 w1 +9%, stop time
+-10%), `2736b5afc` (GC4 per-copy remembered retarget and per-step page
+selection removed; sweep clear without a repeated pin probe; GC3 target
+gate: GC3 w1 +3.8%, stop time -18%; GC4 w1 +3.2%). Measured without gain and
+not published: GC3/GC4 node pins with forwarding edges, read-barrier
+provenance probe removal, sweep 2048 gate before edge lookups.
 
-Measured in same-input alternating pairs (five per cell): skipping the no-op
-release and its two index probes when count-free sweeps clear slots cuts the
-clearing pass 24-30% and total pause time 6-10%; QPS moves -0.5% to +2.5%,
-within host noise. Rejected: a four times larger GC1/2 scalar-sweep backlog
-(no pause or QPS gain). Not published: GC3 step pins answered from a per-stop
-word snapshot (below).
+Owners left (GC1 w1 ~0.8 s per 10k requests against GC0's ~0.27 s):
 
-Open GC work, in recommended order:
+1. Stopped-world sweep: PASS0-2 walk every node and free each dead object
+   inside the pause (~110 ms per 10k requests on GC1, ~180-230 ms on
+   GC3/GC4). Nonmoving GC1/GC2 can retire white objects off-pause after the
+   final remark (finalizers and weakrefs first); this is the largest owner.
+2. Allocation registration holds the global graph lock (object-list and
+   object-index insert): 53% of GC1 four-worker lock waits. Per-thread
+   publication must keep barriers able to shade an unpublished fresh object.
+3. Mark root discovery still walks every listed node for conservative words
+   (now one probe per page); an address-to-owner lookup (allocator granule
+   spans plus a payload-span owner map) makes it O(roots).
+4. GC3/GC4 mutator getters register root handles and take the graph lock
+   twice per field/list read; count-free collectors pin stack words and move
+   objects only with every other mutator at a gate, so the handles look
+   redundant, but `tests/python/test_runtime_getter_roots.py` models moves
+   at non-gate parks and must be argued and rewritten first.
+5. GC4 runs are bimodal (relocation happens in some runs): measure GC4 with
+   more pairs and both 10k and 30k requests.
 
-1. GC3 generational steps cost O(heap) each: every step's
-   `pcc_gc_pin_conservative_thread_roots` walks every node, so
-   `tests/python/test_gc_backend_generational.py::test_generational_budgeted_young_worklist_advances_without_rescan`
-   times out (1,024 / 4,096 / 16,384 young objects take 0.04 / 0.55 / 9.6 s).
-   Answering pins per move from a sorted word snapshot fixes the complexity
-   but drops the contract that every step materializes pin bits on nodes
-   (`tests/python/test_gc3_promotion_prefix_rescan.py`,
-   `tests/python/test_gc_promotion_pin_cursor.py`). Keeping that contract needs
-   an address-to-owner index maintained on allocation, free and move.
-2. On GC1-4, `values = None; gc.collect()` runs no finalizer:
-   `tests/python/test_bulk_nonterminal_retirement.py::test_native_terminal_order_reentry_and_resurrection_five_gc`
-   fails on GC1-4 (stale conservative stack words are the likely root).
-3. Four-worker scaling: allocation registration (object-list head insert and
-   object-index insert) holds the global graph lock. Batched or per-thread
-   publication must keep index visibility for barriers.
-4. Pause sweep cost: per-dead clearing and freeing dominate; extend off-pause
-   retirement beyond int/float/str/list/generator shells.
-5. Correctness backlog first: on `fd670f118` the GC-related host test set (75
-   files, 3,339 tests) has 167 failures, including
-   `test_gc_backend_generational.py` (48), `test_gc_backend4_production.py`
-   (38) and `test_gc0_protocol_publication.py` (16).
+Known test failures (all classified as test problems so far): GC4
+production (38), generational (7: harness threads that never poll a
+safepoint, counted-release assertions), forwarding retirement payload
+finish (2), private root copy (switches collectors inside one process,
+refused since `4bba76893`; counted refcount checks). Count-free GC1-4 hold
+no counts and pin raw stack words: harnesses must keep moved objects off
+the C stack and let collections, not releases, free objects.
 
 The GC0 weakref lifecycle failure recorded below is fixed by the batch based
 on `1493cc461`. GC0 now tracks weakref callback owners, clears the fixed
