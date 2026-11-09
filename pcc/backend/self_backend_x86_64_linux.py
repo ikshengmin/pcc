@@ -71,6 +71,7 @@ from .self_backend_x86_64_linux_data import (
     validate_x86_tls_globals,
 )
 from .x86_64_frame_registers import (
+    expand_pointer_retirements,
     CALLEE_SAVED_AREA_SIZE,
     keep_frame_slots_in_registers,
 )
@@ -3536,6 +3537,7 @@ def _emit_function(
         # their own target.
         lines = _thread_x86_jumps(_thread_x86_jumps(lines))
         lines = forward_register_copies(retarget_scratch_definitions(lines))
+        lines = expand_pointer_retirements(lines)
     lines.append(stack_map_plan.end_label + ":")
     lines.append(f".size {symbol}, .-{symbol}")
     if _WINDOWS_ABI:

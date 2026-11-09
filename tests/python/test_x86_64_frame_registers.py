@@ -23,7 +23,9 @@ from pcc.backend.self_backend_precise_stackmaps import (
     PlannedRootLocation,
     PlannedSafepoint,
 )
-from pcc.backend.x86_64_frame_registers import keep_frame_slots_in_registers
+from pcc.backend.x86_64_frame_registers import (
+    expand_pointer_retirements, keep_frame_slots_in_registers,
+)
 
 I64 = TypeDesc("int", 64)
 I8 = TypeDesc("int", 8)
@@ -37,7 +39,8 @@ EPILOGUE = ["  mov rbx, QWORD PTR [rsp + 0]", "  add rsp, 80", "  pop rbp", "  r
 def _func(*slots, windows=False):
     value_slots = {f"%v{index}": SlotInfo(offset, ty) for index, (offset, ty) in enumerate(slots)}
     return SimpleNamespace(value_slots=value_slots, is_vararg=False,
-                           platform_frame_extra=(32 + 112 if windows else 48))
+                           platform_frame_extra=(32 + 112 if windows else 48),
+                           alloca_slots={}, hidden_sret_slot=None)
 
 
 def _plan(*root_offsets):
@@ -48,9 +51,9 @@ def _plan(*root_offsets):
 
 def _promote(body, *slots, plan=None, windows=False):
     lines = PROLOGUE + body + EPILOGUE
-    return keep_frame_slots_in_registers(
+    return expand_pointer_retirements(keep_frame_slots_in_registers(
         lines, _func(*slots), plan if plan is not None else _plan(), windows=windows,
-    )
+    ))
 
 
 def test_values_across_calls_live_in_callee_saved_registers():
@@ -68,7 +71,8 @@ def test_values_across_calls_live_in_callee_saved_registers():
     # The heavier slot (three accesses) takes rbx, which every frame already
     # saves; the slot live across its store takes r12, saved at
     # platform_frame_extra - 32 and restored before each return.
-    assert out == PROLOGUE + ["  mov QWORD PTR [rsp + 16], r12"] + [
+    assert out == PROLOGUE[:-1] + ["  mov QWORD PTR [rbp - 16], 0", PROLOGUE[-1],
+                                 "  mov QWORD PTR [rsp + 16], r12"] + [
         "  mov r12, rdi",
         "  call g",
         ".Lsmap_1:",
@@ -77,6 +81,7 @@ def test_values_across_calls_live_in_callee_saved_registers():
         "  mov rsi, rbx",
         "  call h",
         "  mov rax, rbx",
+        "  mov ebx, 0",
     ] + EPILOGUE[:1] + ["  mov r12, QWORD PTR [rsp + 16]"] + EPILOGUE[1:]
 
 
@@ -401,3 +406,150 @@ def test_out_only_cycle_preserves_a_store_read_on_the_back_edge():
     # The slot is read at entry, so remains in memory. The write block kills
     # its incoming bit, but its outgoing bit must still preserve the store.
     assert _promote(body, (8, I64)) == PROLOGUE + body + EPILOGUE
+
+
+def test_pointer_last_read_retires_storage_after_copy_not_before_call():
+    body = ["  mov QWORD PTR [rbp - 8], rdi", "  call before",
+            "  mov rsi, QWORD PTR [rbp - 8]", "  call consume", "  call after"]
+    out = _promote(body, (8, PTR))
+    assert out.index("  mov rsi, rbx") < out.index("  mov ebx, 0") < out.index("  call consume")
+    assert "  mov ebx, 0" not in out[:out.index("  call before")]
+    assert out.index("  mov QWORD PTR [rbp - 8], 0") < out.index("  mov rbx, rdi")
+
+
+def test_pointer_retirement_survives_final_copy_peepholes_without_changing_flags():
+    from pcc.backend.x86_64_register_copies import forward_register_copies, retarget_scratch_definitions
+    body = ["  mov QWORD PTR [rbp - 8], rdi", "  cmp rsi, 7",
+            "  mov r10, QWORD PTR [rbp - 8]", "  sete sil", "  mov rdi, r10", "  call consume"]
+    marked = keep_frame_slots_in_registers(PROLOGUE + body + EPILOGUE,
+                                           _func((8, PTR)), _plan(), windows=False)
+    assert "  pcc_retire_pointer_register rbx" in marked
+    final = expand_pointer_retirements(forward_register_copies(retarget_scratch_definitions(marked)))
+    assert "  mov ebx, 0" in final
+    assert not any("pcc_retire_" in line for line in final)
+    compare, flag_use = final.index("  cmp rsi, 7"), final.index("  sete sil")
+    assert compare < final.index("  mov ebx, 0") < flag_use
+    assert all(not line.strip().startswith(("xor ", "sub ", "add "))
+               for line in final[compare + 1:flag_use])
+
+
+def test_spilled_pointer_last_read_is_cleared_when_all_pool_registers_are_reserved():
+    body = ["  mov QWORD PTR [rbp - 8], rdi"]
+    body += [f"  mov {register}, 7" for register in ("rbx", "r12", "r13", "r14", "r15")]
+    body += ["  mov rdi, QWORD PTR [rbp - 8]", "  call consume"]
+    out = _promote(body, (8, PTR))
+    read = out.index("  mov rdi, QWORD PTR [rbp - 8]")
+    assert out[read + 1] == "  mov QWORD PTR [rbp - 8], 0"
+    assert out[read + 2] == "  call consume"
+
+
+def test_pointer_live_on_loop_backedge_is_not_retired_early():
+    body = ["  mov QWORD PTR [rbp - 8], rdi", ".Lagain:",
+            "  mov rdi, QWORD PTR [rbp - 8]", "  call consume",
+            "  cmp rax, 0", "  jne .Lagain", "  mov rax, QWORD PTR [rbp - 8]"]
+    out = _promote(body, (8, PTR))
+    assert out.count("  mov ebx, 0") == 1
+    assert out.index("  mov rax, rbx") < out.index("  mov ebx, 0")
+
+
+def test_pointer_read_live_on_one_successor_is_not_retired_before_branch():
+    body = ["  mov QWORD PTR [rbp - 8], rdi", "  mov rdi, QWORD PTR [rbp - 8]",
+            "  call consume", "  cmp rax, 0", "  je .Ldone",
+            "  mov rdi, QWORD PTR [rbp - 8]", "  call consume", ".Ldone:"]
+    out = _promote(body, (8, PTR))
+    assert "  mov ebx, 0" not in out[:out.index("  je .Ldone")]
+    assert out.count("  mov ebx, 0") == 1
+
+
+def test_pointer_retirement_preserves_same_color_later_integer_and_partial_width_value():
+    body = ["  mov QWORD PTR [rbp - 8], rdi", "  mov rdi, QWORD PTR [rbp - 8]",
+            "  call consume", "  mov BYTE PTR [rbp - 9], al",
+            "  mov dil, BYTE PTR [rbp - 9]", "  call integer_consumer"]
+    out = _promote(body, (8, PTR), (9, I8))
+    assert out.index("  mov ebx, 0") < out.index("  mov bl, al")
+    assert "  mov ebx, 0" not in out[out.index("  mov bl, al"):]
+
+
+def test_pointer_retirement_excludes_complete_alloca_and_hidden_result_spans():
+    from pcc.backend.self_backend_ir import AllocaInfo
+    body = ["  mov QWORD PTR [rbp - 16], rax", "  mov rdi, QWORD PTR [rbp - 16]"]
+    for allocation, hidden in ((AllocaInfo(24, TypeDesc("array", elem=I8, count=16)), None),
+                               (None, SlotInfo(16, PTR))):
+        function = _func((16, PTR))
+        function.alloca_slots = {"buffer": allocation} if allocation else {}
+        function.hidden_sret_slot = hidden
+        out = keep_frame_slots_in_registers(PROLOGUE + body + EPILOGUE,
+                                            function, _plan(), windows=False)
+        assert not any("pcc_retire_" in line for line in out)
+        assert "  mov QWORD PTR [rbp - 16], 0" not in out
+
+
+def test_pointer_retirement_excludes_reload_destination_metadata():
+    record = PlannedSafepoint(1, ".Lsmap_1", 0, (), reloads=(PlannedManagedReload(-8, -16),))
+    plan = SimpleNamespace(packed_records=None, records=(record,))
+    body = ["  mov QWORD PTR [rbp - 16], rax", "  mov rdi, QWORD PTR [rbp - 16]"]
+    out = keep_frame_slots_in_registers(PROLOGUE + body + EPILOGUE,
+                                       _func((16, PTR)), plan, windows=False)
+    assert not any("pcc_retire_" in line for line in out)
+    assert "  mov QWORD PTR [rbp - 16], 0" not in out
+
+
+def test_final_emitter_retires_pointer_but_keeps_integer_pointer_roundtrip():
+    from pcc.backend.self_backend_dispatch import emit_self_asm
+    source = '''target triple = "x86_64-unknown-linux-gnu"
+declare void @consume(ptr)
+define ptr @roundtrip(ptr %raw) {
+entry:
+  %bits = ptrtoint ptr %raw to i64
+  call void @consume(ptr %raw)
+  %again = inttoptr i64 %bits to ptr
+  ret ptr %again
+}
+'''
+    assembly = emit_self_asm(source, "x86_64-unknown-linux-gnu")
+    assert "pcc_retire_" not in assembly
+    # The final emitter runs scratch retargeting and register-copy DCE. This
+    # check is intentionally on that output, not on the allocator alone.
+    assert any(line.strip() in ("mov ebx, 0", "mov r12d, 0", "mov r13d, 0")
+               for line in assembly.splitlines())
+
+
+def test_many_windows_pointer_cells_initialize_outside_unwind_prologue():
+    from pcc.backend.coff_x86_64 import assemble_object, parse_object
+    count, frame_size, outgoing = 48, 560, 32
+    prologue = [".intel_syntax noprefix", ".text", ".globl f", ".seh_proc f", "f:",
+                "  push rbp", "  .seh_pushreg rbp", "  mov rbp, rsp",
+                f"  sub rsp, {frame_size}", f"  .seh_stackalloc {frame_size}",
+                f"  mov QWORD PTR [rsp + {outgoing}], rbx", f"  .seh_savereg rbx, {outgoing}",
+                f"  mov QWORD PTR [rsp + {outgoing + 8}], rsi", f"  .seh_savereg rsi, {outgoing + 8}",
+                f"  mov QWORD PTR [rsp + {outgoing + 16}], rdi", f"  .seh_savereg rdi, {outgoing + 16}",
+                "  .seh_endprologue"]
+    body = []
+    for index in range(1, count + 1):
+        body += [f"  mov QWORD PTR [rbp - {index * 8}], rcx",
+                 f"  mov rdx, QWORD PTR [rbp - {index * 8}]", "  call consume"]
+    epilogue = [f"  mov rbx, QWORD PTR [rsp + {outgoing}]",
+                f"  mov rsi, QWORD PTR [rsp + {outgoing + 8}]",
+                f"  mov rdi, QWORD PTR [rsp + {outgoing + 16}]",
+                f"  add rsp, {frame_size}", "  pop rbp", "  ret", "  .seh_endproc"]
+    function = _func(*[(index * 8, PTR) for index in range(1, count + 1)], windows=True)
+    out = expand_pointer_retirements(keep_frame_slots_in_registers(
+        prologue + body + epilogue, function, _plan(), windows=True,
+    ))
+    boundary = out.index("  .seh_endprologue")
+    for index in range(1, count + 1):
+        assert out.index(f"  mov QWORD PTR [rbp - {index * 8}], 0") > boundary
+    # The owned COFF writer rejects prologue_size > 255. Initializers for
+    # many disjoint nominal slots must not count toward that one-byte limit.
+    obj = parse_object(assemble_object("\n".join(out) + "\n"))
+    assert any(section.name == ".xdata" for section in obj.sections)
+
+
+def test_narrow_reused_slot_metadata_is_not_cleared_as_a_pointer_cell():
+    # An eliminated pointer SSA can share an offset with the only remaining
+    # byte-valued machine accesses. Do not turn that byte into an 8-byte write.
+    body = ["  mov BYTE PTR [rbp - 8], al", "  mov dil, BYTE PTR [rbp - 8]", "  call consume"]
+    out = keep_frame_slots_in_registers(PROLOGUE + body + EPILOGUE,
+                                       _func((8, PTR), (8, I8)), _plan(), windows=False)
+    assert not any("pcc_retire_" in line for line in out)
+    assert "  mov QWORD PTR [rbp - 8], 0" not in out

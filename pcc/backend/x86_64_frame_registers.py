@@ -24,10 +24,19 @@ becomes a register move.  ``mov`` leaves the flags alone in either form.
 The prologue saves and every epilogue restores the r12-r15 a function uses in
 ``CALLEE_SAVED_AREA_SIZE`` bytes at the top of the platform frame area, which
 both x86-64 targets reserve in every frame.
+
+Eligible pointer cells also have a machine-lifetime side effect: after a
+proven last read, retire the original register/spill without touching its
+scratch or argument copy. This prevents that storage from becoming a stale
+conservative root. Nominal pointer cells wholly promoted out of memory are
+initialized once. Addressable allocas, mapped roots and returned helper
+frames are outside this narrow contract.
 """
 
 CALLEE_SAVED_AREA_SIZE = 32
 SAVED_AREA_REGISTERS = ("r12", "r13", "r14", "r15")
+_RETIRE_REGISTER = "  pcc_retire_pointer_register "
+_RETIRE_SLOT = "  pcc_retire_pointer_slot "
 _SYSV_POOL = ("rbx", "r12", "r13", "r14", "r15")
 _WIN64_POOL = ("rbx", "rsi", "rdi", "r12", "r13", "r14", "r15")
 # Bounds the interference bitsets of very large functions; the heaviest
@@ -78,6 +87,27 @@ def saved_area_offset(platform_frame_extra: int) -> int:
     return platform_frame_extra - CALLEE_SAVED_AREA_SIZE
 
 
+def expand_pointer_retirements(lines: list[str]) -> list[str]:
+    """Lower lifetime side effects after all register-copy peepholes.
+
+    These markers are deliberately unknown instructions to the preceding
+    peepholes: a zero in a machine-dead register is observable to conservative
+    GC even though ordinary program liveness would let a dead-move pass drop
+    it. MOV preserves flags, and a 32-bit destination clears the full register.
+    """
+    result: list[str] = []
+    for line in lines:
+        if line.startswith(_RETIRE_REGISTER):
+            register = line[len(_RETIRE_REGISTER):]
+            result.append("  mov " + _POOL_ALIASES[register][4] + ", 0")
+        elif line.startswith(_RETIRE_SLOT):
+            offset = int(line[len(_RETIRE_SLOT):])
+            result.append(f"  mov QWORD PTR [rbp - {offset}], 0")
+        else:
+            result.append(line)
+    return result
+
+
 def _scalar_value_slot_widths(func) -> dict[int, int]:
     widths: dict[int, int] = {}
     for slot in func.value_slots.values():
@@ -91,6 +121,49 @@ def _scalar_value_slot_widths(func) -> dict[int, int]:
         if width in (1, 2, 4, 8):
             widths[slot.offset] = width
     return widths
+
+
+def _retirable_pointer_slots(func, plan, roots) -> dict[int, bool]:
+    """Ordinary pointer cells, excluding every addressable/mapped span.
+
+    Check metadata too: absence of a textual LEA is not a promise that an
+    alloca, hidden result or reload cell has ceased to own those bytes.
+    Sorting intervals avoids work proportional to a large alloca's size.
+    """
+    spans = [(offset - 8, offset) for offset in roots]
+    for allocation in func.alloca_slots.values():
+        spans.append((allocation.offset - allocation.allocated_type.slot_size,
+                      allocation.offset))
+    if func.hidden_sret_slot is not None:
+        offset = func.hidden_sret_slot.offset
+        spans.append((offset - 8, offset))
+    if plan is not None:
+        packed = plan.packed_records
+        if packed is not None:
+            for index in range(0, len(packed.reload_scalars), 3):
+                offset = -packed.reload_scalars.get_unchecked(index + 1)
+                spans.append((offset - 8, offset))
+        else:
+            for record in plan.records:
+                for reload in record.reloads:
+                    offset = -reload.destination_offset
+                    spans.append((offset - 8, offset))
+    merged: list[tuple[int, int]] = []
+    for low, high in sorted(spans):
+        if merged and low <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], high))
+        else:
+            merged.append((low, high))
+    candidates = {slot.offset: True for slot in func.value_slots.values()
+                  if slot.type.is_ptr}
+    result: dict[int, bool] = {}
+    span = 0
+    for offset in sorted(candidates):
+        while span < len(merged) and merged[span][1] <= offset - 8:
+            span += 1
+        if span == len(merged) or merged[span][0] >= offset:
+            result[offset] = True
+    return result
 
 
 def _stack_map_slot_offsets(plan) -> dict[int, bool]:
@@ -252,6 +325,7 @@ def keep_frame_slots_in_registers(
     if not slot_widths:
         return lines
     roots = _stack_map_slot_offsets(plan)
+    pointer_slots = _retirable_pointer_slots(func, plan, roots)
     frame_lines: dict[str, bool] = {}
     if windows:
         from .self_backend_win64_abi import outgoing_size
@@ -477,6 +551,7 @@ def keep_frame_slots_in_registers(
     # store nothing reads before the next store is dead.
     interference = [0] * len(ranked)
     dead_stores: dict[int, bool] = {}
+    final_pointer_reads: dict[int, int] = {}
     block_id = 0
     while block_id < block_count:
         live = live_out[block_id]
@@ -493,6 +568,9 @@ def keep_frame_slots_in_registers(
                     dead_stores[event] = True
                 interference[bit] |= live
             else:
+                if (not live & mask and access_offsets[event] in pointer_slots
+                        and seen_widths[access_offsets[event]] == 8):
+                    final_pointer_reads[event] = live
                 live |= mask
             event_index -= 1
         block_id += 1
@@ -523,7 +601,19 @@ def keep_frame_slots_in_registers(
                 register_index += 1
         candidate += 1
     if not assigned and not dead_stores:
-        return lines
+        if not final_pointer_reads:
+            return lines
+
+    # A colored slot has no remaining machine access. Its old memory is
+    # nevertheless inside the conservative snapshot of this activation.
+    # Initialize only these proven unaddressed pointer cells, not an alloca,
+    # mapped root, incoming value, caller save or the whole machine frame.
+    cleared_slots = [offset for offset in assigned
+                     if offset in pointer_slots and seen_widths[offset] == 8]
+    register_members: dict[str, int] = {}
+    for offset in assigned:
+        register = assigned[offset]
+        register_members[register] = register_members.get(register, 0) | (1 << bit_of[offset])
 
     used_saved: list[str] = []
     for register in SAVED_AREA_REGISTERS:
@@ -546,6 +636,7 @@ def keep_frame_slots_in_registers(
     rewritten: list[str] = []
     saved = False
     restored = 0
+    initialized = False
     access_index = 0
     index = 0
     while index < count:
@@ -561,16 +652,39 @@ def keep_frame_slots_in_registers(
                 rewritten.append(
                     _rewrite_slot_move(line.strip(), _POOL_ALIASES[register][width])
                 )
+                event = access_index - 1
+                if event in final_pointer_reads:
+                    if not final_pointer_reads[event] & register_members[register]:
+                        rewritten.append(_RETIRE_REGISTER + register)
                 index += 1
                 continue
-        if saves and line == save_anchor and not saved:
-            if windows:
-                rewritten.extend(saves)
+            event = access_index - 1
+            if event in final_pointer_reads:
                 rewritten.append(line)
+                rewritten.append(_RETIRE_SLOT + str(access_offsets[event]))
+                index += 1
+                continue
+        if line == save_anchor and not initialized:
+            # Win64 unwind byte offsets fit only in one byte. Keep its ABI
+            # saves in the prologue, but initialize locals AFTER its end;
+            # parameter materialization still follows this anchor.
+            if not windows:
+                for offset in cleared_slots:
+                    rewritten.append(f"  mov QWORD PTR [rbp - {offset}], 0")
+            if saves and not saved:
+                if windows:
+                    rewritten.extend(saves)
+                    rewritten.append(line)
+                else:
+                    rewritten.append(line)
+                    rewritten.extend(saves)
+                saved = True
             else:
                 rewritten.append(line)
-                rewritten.extend(saves)
-            saved = True
+            if windows:
+                for offset in cleared_slots:
+                    rewritten.append(f"  mov QWORD PTR [rbp - {offset}], 0")
+            initialized = True
             index += 1
             continue
         rewritten.append(line)
@@ -579,5 +693,7 @@ def keep_frame_slots_in_registers(
             restored += 1
         index += 1
     if saves and (not saved or restored != returns):
+        return lines
+    if cleared_slots and not initialized:
         return lines
     return rewritten
