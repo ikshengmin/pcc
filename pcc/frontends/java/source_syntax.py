@@ -454,6 +454,13 @@ class SourceParser:
             if imported_type.text in LABEL_CONTEXTUAL_NAMES:
                 imported_type.error(imported_type.text + " cannot be imported as a type name")
             (static_imports if static else imports).append(tuple(imported))
+        if self.peek().text == "<eof>":
+            # JLS 7.3: a compilation unit may declare no type, as a
+            # package-info.java holding only package documentation does.
+            if imports or static_imports:
+                self.peek().error("imports of a compilation unit without type declarations need project import resolution",
+                                  code="java.unsupported.source-dependency")
+            return None
         program = self.class_declaration(self.modifiers(), "/".join(package),
                                          tuple(imports), tuple(static_imports))
         self.expect("<eof>")

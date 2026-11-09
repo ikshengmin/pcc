@@ -50,6 +50,8 @@ def compile_source(source: str, *, filename: str = "<java>", entry: str = "run",
     try:
         _admit_target(target)
         program = SourceParser(source, filename).parse()
+        if program is None:
+            raise JavaError("source unit declares no class")
         return _compile_programs((program,), program.name, entry, descriptor, target)
     except RecursionError as error:
         raise UnsupportedJava("Java source exceeds the bounded parser/analysis nesting limit", code="java.unsupported.nesting-limit") from error
@@ -75,7 +77,9 @@ def compile_sources(sources: Mapping[str, str], *, entry_class: str, entry: str 
             raise JavaError("source project names and contents must be text")
         if sum(len(text) for text in sources.values()) > 8_388_608:
             raise UnsupportedJava("source project exceeds the 8 MiB aggregate input limit", code="java.unsupported.project-size-limit")
-        programs = [SourceParser(sources[name], name).parse() for name in sorted(sources)]
+        # Units without type declarations contribute no class.
+        programs = [program for program in (SourceParser(sources[name], name).parse() for name in sorted(sources))
+                    if program is not None]
         return _compile_programs(programs, entry_class.replace(".", "/"), entry, descriptor, target)
     except RecursionError as error:
         raise UnsupportedJava("Java source exceeds the bounded parser/analysis nesting limit", code="java.unsupported.nesting-limit") from error
