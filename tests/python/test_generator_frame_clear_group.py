@@ -27,7 +27,8 @@ def test_clear_entry_is_no_poll_and_keeps_native_root_until_all_finishes():
     assert wrapper.index("pcc_gc_native_frame_leave(frame)") < wrapper.rindex("return cleared")
     _, body = _function("py_list.py", "_native_body_py_gen_frame_clear_group")
     lock, unlock = body.index("pcc_py_gc_minor_graph_lock()"), body.index("pcc_py_gc_minor_graph_unlock()")
-    assert body.index("memset(store_plans, 0, 2048)") < lock
+    assert body.count("stack_alloc(128)") == 1
+    assert body.index("memset(store_plan, 0, 128)") < lock
     assert lock < body.index("pcc_gc_backend_frozen") < body.index("pcc_gc_load_ptr")
     assert body.index("start <= length - count") < body.index("pcc_gc_store_ptr_plan_init")
     assert body.index("pcc_gc_store_ptr_plan_commit_locked") < unlock < body.index("pcc_gc_store_ptr_plan_finish")
@@ -48,8 +49,10 @@ class ClearMemory(BatchMemory):
         ns = self.namespace
         # Restore the actual StorePlan functions, replacing take-specific hooks.
         exec(_plan_code(), ns)
+        init = ns["pcc_gc_store_ptr_plan_init"]
         commit = ns["pcc_gc_store_ptr_plan_commit_locked"]
         finish = ns["pcc_gc_store_ptr_plan_finish"]
+        self.plan_calls, self.finish_states = [], []
         ns["global_load_ptr"] = lambda name: self.read(self.global_cell(name), 0)
         ns["_gc_relocation_candidate"] = lambda value: value is not self.none
         def barrier(owner, slot, value):
@@ -57,12 +60,30 @@ class ClearMemory(BatchMemory):
             self.events.append("barrier")
         ns["pcc_gc_note_slot_write_barrier"] = barrier
         ns["pcc_gc_backend4_note_heap_store_locked"] = barrier
+        def checked_init(plan, owner, backend):
+            assert self.depth > 0 and owner is self.lst
+            self.plan_calls.append(("init", self.pointer(plan)))
+            init(plan, owner, backend)
+            assert self.read(plan, 124) == 0
+            assert self.read(plan, 112) == backend and self.read(plan, 120) == 1
+            assert all(self.read(plan, offset) == 0 for offset in range(0, 112, 4))
         def checked_commit(plan, owner, slot, value):
             assert self.depth > 0 and owner is self.lst and value is self.none
+            assert self.plan_calls[-1] == ("init", self.pointer(plan))
+            self.plan_calls.append(("commit", self.pointer(plan)))
             self.events.append("commit")
-            return commit(plan, owner, slot, value)
+            result = commit(plan, owner, slot, value)
+            assert result == 1 and self.read(plan, 124) == 3
+            assert self.read(plan, 0) is self.none
+            assert all(self.read(plan, offset) == 0 for offset in range(8, 112, 4))
+            return result
         def checked_finish(plan):
             assert self.depth == 0 and self.native_frames
+            assert any(self.read(*self.pointer(root)) is self.lst
+                       for key, root in self.handles.items()
+                       if isinstance(key, tuple) and key[0] in self.native_ranges)
+            self.plan_calls.append(("finish", self.pointer(plan)))
+            self.finish_states.append(self.read(plan, 124))
             self.gc("store_finish")
             finish(plan)
             assert self.read(plan, 124) == 7
@@ -72,6 +93,7 @@ class ClearMemory(BatchMemory):
             self.gc("body_entry")
             return body(*args)
         ns.update(pcc_list_body_py_gen_frame_clear_group=body_entry,
+                  pcc_gc_store_ptr_plan_init=checked_init,
                   pcc_gc_store_ptr_plan_commit_locked=checked_commit,
                   pcc_gc_store_ptr_plan_finish=checked_finish)
 
@@ -96,9 +118,69 @@ def test_clear_real_plans_keep_root_and_publish_each_none_with_barrier(backend, 
     assert memory.events.count("store-note") == count
     assert memory.events.count("barrier") == count
     assert memory.events.count("finish") == count
+    assert [kind for kind, _ in memory.plan_calls] == ["init", "commit"] * count + ["finish"] * count
+    assert len({pointer for _, pointer in memory.plan_calls}) == 1
+    assert memory.finish_states == [3] + [7] * (count - 1)
     assert memory.events.index("finish") > max(i for i, value in enumerate(memory.events) if value == "commit")
     assert bool(memory.lst.flags & abi.PY_FLAG_GC_PINNED) == prior_pin
     assert memory.error is sentinel
+    memory.assert_clean()
+
+
+@pytest.mark.parametrize("count", (2, 15, 16))
+def test_entire_requested_range_is_admitted_before_first_plan_init(count):
+    memory = ClearMemory(count=count + 2)
+    memory.items.fields[0] = memory.items.fields[(count + 1) * 8] = memory.item
+    ns = memory.namespace
+    read, init, reads = ns["load_ptr"], ns["pcc_gc_store_ptr_plan_init"], []
+    def checked_read(pointer, offset):
+        owner, base = memory.pointer(pointer)
+        if owner is memory.items:
+            assert not memory.plan_calls, "admission must finish before any mutation"
+            reads.append(base + offset)
+        return read(pointer, offset)
+    def checked_init(*args):
+        assert reads == [cell * 8 for cell in range(1, count + 1)]
+        return init(*args)
+    ns.update(load_ptr=checked_read, pcc_gc_store_ptr_plan_init=checked_init)
+    assert memory.run(start=1, count=count) == 1
+    assert memory.items.fields[0] is memory.items.fields[(count + 1) * 8] is memory.item
+    assert all(memory.items.fields[cell * 8] is memory.none for cell in range(1, count + 1))
+    memory.assert_clean()
+
+
+@pytest.mark.parametrize("decline", (False, True))
+def test_single_dirty_plan_is_fully_zero_before_graph_acquisition(decline):
+    memory = ClearMemory()
+    ns = memory.namespace
+    entry, allocate, lock = (ns[name] for name in (
+        "pcc_list_body_py_gen_frame_clear_group", "stack_alloc", "pcc_py_gc_minor_graph_lock"))
+    scratch = []
+    def dirty_allocate(size):
+        assert size == 128 and not scratch
+        plan = allocate(size)
+        plan.fields.update({offset: object() for offset in range(0, size, 4)})
+        scratch.append(plan)
+        return plan
+    def body_entry(*args):
+        # Do not confuse the wrapper's frame/ranges/inputs with body scratch.
+        ns["stack_alloc"] = dirty_allocate
+        try:
+            return entry(*args)
+        finally:
+            ns["stack_alloc"] = allocate
+    def checked_lock():
+        assert len(scratch) == 1
+        assert scratch[0].fields == dict.fromkeys(range(0, 128, 4), 0)
+        if decline:
+            memory.global_cell("pcc_gc_backend_frozen").fields[0] = 0
+        lock()
+    ns.update(pcc_list_body_py_gen_frame_clear_group=body_entry,
+              pcc_py_gc_minor_graph_lock=checked_lock)
+    assert memory.run() == int(not decline)
+    if decline:
+        assert not memory.plan_calls and not memory.events
+        assert list(memory.items.fields.values()) == memory.values
     memory.assert_clean()
 
 
@@ -214,6 +296,98 @@ def test_alias_payload_replacement_is_reloaded_after_graph_acquisition():
     assert list(old_items.fields.values()) == memory.values
     assert all(memory.items.fields[i * 8] is memory.none for i in range(16))
     memory.assert_clean()
+
+
+@pytest.mark.integration
+def test_emitted_single_plan_keeps_count_bound_finish_and_all_three_poll_edges(tmp_path, monkeypatch):
+    """Real emitted IR, not native parking or machine prologue acceptance."""
+    import re
+
+    from pcc.ir.optimization.ir_mutator import MutableModule
+    from tests.owned_runtime_c_fixture import runtime_ir
+    from tests.python.test_generator_moving_frame_take import RUNTIME
+
+    monkeypatch.setenv("PCC_IMPLICIT_THREAD_SAFEPOINTS", "1")
+    functions = {}
+    for name in ("py_list", "py_obj"):
+        output = runtime_ir(RUNTIME / "py" / (name + ".py"), tmp_path / (name + ".ll"))
+        functions.update({fn.name: fn for fn in MutableModule.parse(output.read_text()).functions})
+
+    def successors(block):
+        return re.findall(r"label %([\w.$-]+)", block.terminator.text)
+
+    def poll(blocks, entry):
+        text = "".join(ins.text for ins in entry.instructions)
+        flags = [re.search(r"%([\w.$-]+) = load atomic i32, ptr @" + name + r" acquire", text)
+                 for name in ("pcc_thread_stop_requested", "pcc_gc_gray_worklist_flush_requested")]
+        assert all(flags), "both stop and gray-flush requests must reach the poll"
+        pending = re.search(r"%([\w.$-]+) = or i32 %" + re.escape(flags[0][1])
+                            + r", %" + re.escape(flags[1][1]), text)
+        assert pending
+        need = re.search(r"%([\w.$-]+) = icmp ne i32 %" + re.escape(pending[1]) + r", 0", text)
+        assert need and entry.terminator.text.strip().startswith("br i1 %" + need[1] + ",")
+        slow, continuation = successors(entry)
+        assert any("@pcc_thread_safepoint()" in ins.text for ins in blocks[slow].instructions)
+        assert successors(blocks[slow]) == [continuation]
+        assert not any(ins.opcode in ("store", "ret") or "@pcc_gc_store_ptr_plan_finish(" in ins.text
+                       for ins in entry.instructions)
+        return blocks[continuation]
+
+    body = functions["pcc_list_body_py_gen_frame_clear_group"]
+    blocks = {block.name: block for block in body.blocks}
+    poll(blocks, body.blocks[0])  # The source zeroing does not precede this entry poll.
+    rows = [(block, ins) for block in body.blocks for ins in block.instructions]
+    scratch = [(block, ins) for block, ins in rows if ins.opcode == "alloca" and " x i8]" in ins.text]
+    assert len(scratch) == 1 and "alloca [128 x i8]" in scratch[0][1].text
+    lock_block = next(block for block, ins in rows if "@pcc_py_gc_minor_graph_lock(" in ins.text)
+    lock_text = "".join(ins.text for ins in lock_block.instructions)
+    zero = re.search(r"@llvm.memset.p0.i64\(ptr (%[\w.$-]+), i8 0, i64 128, i1 0\)", lock_text)
+    assert zero and zero.start() < lock_text.index("@pcc_py_gc_minor_graph_lock(")
+    plan = zero[1]
+    assert re.search(re.escape(plan) + r" = getelementptr inbounds \[128 x i8\], ptr %"
+                     + re.escape(scratch[0][1].result_name) + r", i64 0, i64 0", lock_text)
+    for name in ("init", "commit_locked", "finish"):
+        calls = [(block, ins) for block, ins in rows if "@pcc_gc_store_ptr_plan_" + name + "(" in ins.text]
+        assert len(calls) == 1
+        assert re.search(r"@pcc_gc_store_ptr_plan_" + name + r"\(ptr " + re.escape(plan) + r"[,)]",
+                         calls[0][1].text)
+    finish_block = calls[0][0]
+
+    # The finish loop still starts at zero, compares against count, increments
+    # by one, and crosses its latch poll on every iteration, including state7.
+    condition = next(block for block in body.blocks if successors(block)[:1] == [finish_block.name])
+    condition_text = "".join(ins.text for ins in condition.instructions)
+    compare = re.search(r"icmp slt i64 (%[\w.$-]+), %count", condition_text)
+    assert compare
+    index = compare[1]
+    increment = next(ins for ins in finish_block.instructions if "add i64 " + index + ", 1" in ins.text)
+    latch, = successors(finish_block)
+    back = poll(blocks, blocks[latch])
+    assert successors(back) == [condition.name]
+    phi = next(ins.text for ins in condition.instructions if ins.opcode == "phi" and "%" + ins.result_name == index)
+    assert "[ 0, %" in phi and "[ %" + increment.result_name + ", %" + back.name + " ]" in phi
+
+    # No CFG path can reach any finish before graph unlock.
+    pending, seen = [(body.blocks[0].name, False)], set()
+    while pending:
+        name, unlocked = pending.pop()
+        if (name, unlocked) in seen:
+            continue
+        seen.add((name, unlocked))
+        block = blocks[name]
+        for ins in block.instructions:
+            if "@pcc_py_gc_minor_graph_unlock(" in ins.text:
+                unlocked = True
+            if "@pcc_gc_store_ptr_plan_finish(" in ins.text:
+                assert unlocked
+        pending.extend((target, unlocked) for target in successors(block))
+
+    for name in ("pcc_gc_store_ptr_plan_finish", "user_py_obj__pcc_gc_store_plan_finish"):
+        fn = functions[name]
+        continuation = poll({block.name: block for block in fn.blocks}, fn.blocks[0])
+        if name == "pcc_gc_store_ptr_plan_finish":
+            assert any("@user_py_obj__pcc_gc_store_plan_finish(ptr %plan, i64 0)" in ins.text
+                       for ins in continuation.instructions)
 
 
 NATIVE_SHAPES = r'''
