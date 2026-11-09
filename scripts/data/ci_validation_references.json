@@ -2653,6 +2653,32 @@
           "Calls tests.rust.test_rust_supertraits.test_genuine_rustc_rejects_the_same_invalid_obligations on unchanged non-Try operand originals; requires actual source-attributed rustc rejection."
         ]
       }
+    },
+    "tests/rust/test_rust_self_sized_predicates.py": {
+      "test_actual_same_input_check_precedes_owned_object": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "reason": [
+          "Calls tests.rust.certification_support.certify_source on each unchanged Self: Sized program before its owned object compilation."
+        ]
+      },
+      "test_valid_self_predicate_gaps_remain_certified_gaps": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "reason": [
+          "Calls tests.rust.certification_support.certify_source on valid unsupported Self predicate originals; the owned compilation of each certified source keeps its explicit gap."
+        ]
+      },
+      "test_actual_native_self_sized_originals_match_rustc": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.rust.test_rust_standard_markers.test_actual_native_marker_originals_match_rustc on the unchanged Self: Sized programs; requires actual rustc and system-linker native execution."
+        ]
+      },
+      "test_actual_rustc_rejects_unproven_self_sized_calls": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.rust.test_rust_supertraits.test_genuine_rustc_rejects_the_same_invalid_obligations on an unproven Self: Sized call; requires actual source-attributed rustc rejection."
+        ]
+      }
     }
   },
   "method": "AST/source-reviewed direct reference calls and helper edges; no test bodies or imports executed. Function registry is classification only, never a prerequisite waiver or certification token. Unknown functions remain selected in ordinary/integration.",

@@ -7,6 +7,7 @@ and shared function-instantiation worklist.
 from dataclasses import replace
 
 from .generics import PRIMITIVES, children, substitute
+from .standard_markers import SIZED
 from .types import SharedReference, TypeApplication, TypeParameter
 
 
@@ -24,6 +25,8 @@ class StaticTraits:
         # Calls must retain the required contract without granting those
         # extra assumptions to the implementation's abstract body.
         self.call_bounds = {}
+        # Trait methods declared with `where Self: Sized`, by (trait, name).
+        self.sized_self_methods = set()
         from .associated_types import AssociatedTypes
         self.associated = AssociatedTypes(self)
         from .default_methods import DefaultMethods
@@ -83,12 +86,15 @@ class StaticTraits:
                 marker_bounds = self.prepare_function_bounds(function, method_scope)
                 checker.standard_markers.prepare(replace(function, parameter_bounds=marker_bounds,
                                                           where_predicates=()), method_scope)
+                sized_self = self.self_sized(function, method_scope)
+                if sized_self:
+                    self.sized_self_methods.add((name, function.token.text))
                 self.method_parameters[name, function.token.text] = tuple(method_scope.values())
                 checker.type_scope, checker.abstract_function = scope, True
                 # Unlike ordinary type parameters, trait Self is not implicitly
                 # Sized. Direct Self / &Self signatures are admitted, but a
-                # nested aggregate/application needs bound obligations this
-                # static slice deliberately does not solve.
+                # nested aggregate/application needs the Sized obligation that
+                # only a `where Self: Sized` method declares.
                 for raw in [function.result] + [ty for _, ty, _ in function.params]:
                     normalized = checker.generics.normalize(raw, function.token)
                     if normalized == scope['Self'] or (isinstance(normalized, SharedReference)
@@ -97,7 +103,7 @@ class StaticTraits:
                     pending = [normalized]
                     while pending:
                         item = pending.pop()
-                        if item == scope['Self']:
+                        if item == scope['Self'] and not sized_self:
                             raise function.token.error('nested trait Self types require Sized/bound checking, which is not implemented')
                         pending.extend(children(item))
                 parameter_names = set()
@@ -206,6 +212,27 @@ class StaticTraits:
                 if expected != tuple(ty for _, ty, _ in function.params) or result != function.result:
                     raise function.token.error('trait implementation method signature mismatch')
 
+    def self_sized(self, function, scope):
+        """A trait method's `where Self: Sized` predicate.
+
+        https://doc.rust-lang.org/reference/items/traits.html#dyn-compatibility
+        It holds for every implementing type here: implementations are
+        concrete local nominal types. Abstract owners are checked at calls.
+        """
+        markers = self.checker.standard_markers
+        sized = False
+        for bound in function.self_bounds:
+            if bound.relaxed:
+                raise bound.token.error('relaxed where Self predicates are not implemented')
+            if bound.path in self.traits:
+                raise bound.token.error('where Self predicates naming local traits require supertrait obligations, which are not implemented')
+            if markers.resolve(bound, scope) != SIZED:
+                raise bound.token.error('where Self predicates other than canonical Sized are not implemented')
+            if markers.first_explicit_bound is None:
+                markers.first_explicit_bound = bound.token
+            sized = True
+        return sized
+
     def prepare_function_bounds(self, function, scope):
         marker_bounds = []
         for parameter in scope.values():
@@ -279,6 +306,8 @@ class StaticTraits:
         if entry is None:
             raise token.error('unknown trait associated method')
         self_parameter, signature = entry
+        if (trait, name) in self.sized_self_methods and not self.checker.standard_markers.proves_sized(owner):
+            raise token.error(f'trait method {name} requires Self: Sized, which {owner} does not satisfy')
         bindings = {self_parameter: owner}
         return replace(signature,
             params=[(t, substitute(ty, bindings), mutable) for t, ty, mutable in signature.params],

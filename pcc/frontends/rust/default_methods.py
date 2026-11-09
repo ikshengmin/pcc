@@ -10,6 +10,7 @@ from copy import deepcopy
 from dataclasses import replace
 
 from .generics import substitute
+from .standard_markers import SIZED
 
 
 def reject_uncertified_defaults(traits):
@@ -52,19 +53,22 @@ class DefaultMethods:
         checker = self.traits.checker
         previous_scope, previous_abstract = checker.type_scope, checker.abstract_function
         try:
-            for (trait, _), (scope, signature, body) in self.entries.items():
+            for (trait, name), (scope, signature, body) in self.entries.items():
                 self_parameter = scope['Self']
                 # Unlike a function type parameter, trait Self has no implicit
-                # Sized bound. Lookup needs its trait identities, not storage.
-                checker.standard_markers.constraints[self_parameter] = frozenset()
+                # Sized bound unless the method declares `where Self: Sized`.
+                # Lookup needs its trait identities, not storage.
+                sized_self = (trait, name) in self.traits.sized_self_methods
+                checker.standard_markers.constraints[self_parameter] = (
+                    frozenset({SIZED}) if sized_self else frozenset())
                 self.traits.parameter_bounds[self_parameter] = frozenset(
                     {trait, *self.traits.hierarchy.ancestors[trait]})
                 checker.type_scope, checker.abstract_function = scope, True
                 for token, ty, _ in signature.params:
-                    if ty == self_parameter:
+                    if ty == self_parameter and not sized_self:
                         raise token.error('default trait methods with by-value Self require Sized body obligations, which are not implemented')
                     checker.valid_type(ty, token)
-                if signature.result == self_parameter:
+                if signature.result == self_parameter and not sized_self:
                     raise signature.token.error('default trait methods returning Self require Sized body obligations, which are not implemented')
                 checker.valid_type(signature.result, signature.token, allow_reference=False)
                 checked_body = replace(signature, body=deepcopy(body))

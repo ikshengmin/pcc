@@ -254,6 +254,8 @@ class Function:
     bound_trait: tuple[str, object] | None = None
     where_token: Token | None = None
     where_predicates: tuple[WherePredicate, ...] = ()
+    # Trait method `where Self: ...` bounds; Self is not a method parameter.
+    self_bounds: tuple[TypeBound, ...] = ()
     inline_attributes: tuple[object, ...] = ()
     # Synthesized concrete body inherited from this declaration-owned default.
     default_source: tuple[str, str] | None = None
@@ -595,6 +597,8 @@ class Parser:
             path = self.name().text
             while self.accept('::'):
                 path += '::' + self.name().text
+            if self.token.text == '(':
+                raise self.token.error('parenthesized Fn-family trait bounds require closure traits, which are not implemented')
             if self.token.text == '<':
                 raise self.token.error('generic trait bounds and associated projections are not implemented')
             bounds.append(TypeBound(bound_token, path, relaxed))
@@ -635,11 +639,24 @@ class Parser:
         # continue into a body after the same parameter-only where clause.
         terminators = {'{', ';'} if declaration else {'{'}
         predicates = []
+        self.last_self_bounds = []
         while self.token.text not in terminators:
             if self.token.kind == 'lifetime' or self.token.text == 'for':
                 raise self.token.error('lifetime and higher-ranked where predicates are not implemented')
             if owner_parameters is not None and self.token.text == 'Self':
-                raise self.token.error('where Self predicates require nominal-type obligations, which are not implemented')
+                if not declaration:
+                    raise self.token.error('where Self predicates on implementation methods require concrete-owner obligations, which are not implemented')
+                # A trait method's Self predicate; the trait owner checks it.
+                subject = self.take()
+                if self.token.text != ':':
+                    raise self.token.error('where projections/equality predicates are not implemented; expected a parameter colon')
+                self.take()
+                self.last_self_bounds.extend(self.type_parameter_bounds({','} | terminators))
+                if len(self.last_self_bounds) > 16:
+                    raise subject.error('combined Self bounds exceed implementation limit (16)')
+                if not self.accept(','):
+                    break
+                continue
             if self.token.kind != 'name' or self.token.text not in declared:
                 raise self.token.error('where predicate subjects must be declared type parameters; concrete/compound predicates are not implemented')
             parameter = self.take()
@@ -1212,7 +1229,7 @@ class Parser:
                 if self.accept(")"):
                     break
         result = self.type() if self.accept("->") else "()"
-        where_token, where_predicates = None, ()
+        where_token, where_predicates, self_bounds = None, (), ()
         if self.token.text == "where":
             where_token = self.take()
             if abi != 'Rust' or no_mangle or declaration and not trait_declaration:
@@ -1223,6 +1240,7 @@ class Parser:
             where_predicates = self.function_where_clause(parameters,
                 owner_parameters=implementation.type_parameters if implementation is not None else None,
                 declaration=trait_declaration)
+            self_bounds = tuple(self.last_self_bounds)
         if declaration and not (trait_declaration and self.token.text == "{"):
             self.expect(";")
             body = None
@@ -1234,7 +1252,7 @@ class Parser:
                         lifetime_parameters=lifetime_parameters, explicit_receiver=explicit_receiver, documentation=documentation,
                         parameter_bounds=parameter_bounds,
                         where_token=where_token, where_predicates=where_predicates,
-                        inline_attributes=inline_attributes)
+                        self_bounds=self_bounds, inline_attributes=inline_attributes)
 
     def block(self, *, function_inner_docs=False) -> Expr:
         token = self.expect("{")

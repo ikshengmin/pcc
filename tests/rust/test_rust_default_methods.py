@@ -245,8 +245,8 @@ def test_no_implementation_is_required_for_an_independently_checked_default(text
     assert not checker.function_generics.instances.entries
 
 
+# The former self-sized row is a checked positive in test_rust_self_sized_predicates.
 CAPABILITY = (
-    ('self-sized', 'trait T{fn value(self)->u64 where Self:Sized{42}}', 'where Self predicates'),
     ('reference-return', 'trait T{fn value(&self)->&Self{self}}', 'reference returns'),
     ('generic-trait', 'trait T<U>{fn value(&self,x:U)->U{x}}', 'generic traits'),
 )
