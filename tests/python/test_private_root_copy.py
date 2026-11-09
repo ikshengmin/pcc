@@ -109,8 +109,9 @@ def global_source(key, consume):
     assert "@pcc_gc_foreign_lease_acquire(" in local.group()
 
 
+@pytest.mark.parametrize("backend", range(5))
 def test_private_copy_native_owners_and_mode_transitions(
-    tmp_path, threaded_pcc_runtime_archive,
+    tmp_path, threaded_pcc_runtime_archive, backend,
 ):
     binary = tmp_path / "private_root_copy"
     compile_owned_c_with_runtime(
@@ -118,7 +119,7 @@ def test_private_copy_native_owners_and_mode_transitions(
         runtime_archive=Path(threaded_pcc_runtime_archive),
     )
     run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,
-                         env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND="0"))
+                         env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)))
     assert (run.returncode, run.stdout, run.stderr) == (0, "PRIVATE_ROOT_COPY_OK\n", "")
 
 
