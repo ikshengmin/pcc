@@ -216,7 +216,9 @@ def pcc_gc_backend4_relocate_copy_preallocated_unlocked(
         pcc_gc_set_mark_color(to_obj, 16)
     # Forwarding is the commit point.  Before it succeeds the source still
     # owns its original sweep verdict so every rollback path remains honest.
-    store_i32(from_obj, 12, load_i32(from_obj, 12) & ~1024)
+    # Pins may change without this graph lock, including on a live source
+    # shell. Update only the verdict bit instead of storing a stale header.
+    atomic_rmw_i32("and", from_obj, 12, ~1024, "relaxed")
     # The finite instance-field cache keys raw class addresses.  Invalidate it
     # after forwarding succeeds and before the old shell can be retired and
     # its address reused.  Relocation is rare, so this stays off the hot path.
@@ -238,7 +240,7 @@ def pcc_gc_backend4_relocate_copy_preallocated_unlocked(
     outstanding: i64 = load_i64(from_obj, 0)
     if outstanding > 0:
         store_i64(to_obj, 0, load_i64(to_obj, 0) + outstanding)
-    store_i32(from_obj, 12, load_i32(from_obj, 12) | 1)
+    atomic_rmw_i32("or", from_obj, 12, 1, "relaxed")
     from_page = null()
     from_znode = pcc_gc_backend4_zpage_find(from_obj)
     if ptr_is_null(from_znode) == 0:

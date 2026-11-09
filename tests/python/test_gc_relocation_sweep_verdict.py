@@ -321,6 +321,6 @@ def test_source_sweep_verdict_clears_only_after_forwarding_commit() -> None:
         "pcc_gc_install_forwarding_preallocated_unlocked("
     )
     py_clear = py_body.index(
-        "store_i32(from_obj, 12, load_i32(from_obj, 12) & ~1024)"
+        'atomic_rmw_i32("and", from_obj, 12, ~1024, "relaxed")'
     )
     assert py_commit < py_clear

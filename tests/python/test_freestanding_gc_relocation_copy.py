@@ -199,7 +199,7 @@ def test_relocation_copy_preserves_transaction_contract() -> None:
         "from_obj,to_obj,forwarding_plan)"
     ) in compact
     assert "store_i64(to_obj, 0, load_i64(to_obj, 0) + outstanding)" in body
-    assert "store_i32(from_obj, 12, load_i32(from_obj, 12) | 1)" in body
+    assert 'atomic_rmw_i32("or", from_obj, 12, 1, "relaxed")' in body
     assert "store_ptr(finish_plan, 0, null())" in body
     assert "store_ptr(finish_plan, 8, null())" in body
     assert 'global_store_ptr("pcc_gc_relocation_set_head", nxt)' in body

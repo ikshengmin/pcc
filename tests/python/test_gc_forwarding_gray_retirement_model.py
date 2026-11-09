@@ -227,8 +227,14 @@ class RetirementState:
             hook, self.before_atomic_and = self.before_atomic_and, None
             hook()
         old = self.load(address, offset)
-        assert operation in {"add", "and"}
-        self.store(address, offset, old + value if operation == "add" else old & value)
+        assert operation in {"add", "and", "or"}
+        if operation == "add":
+            updated = old + value
+        elif operation == "and":
+            updated = old & value
+        else:
+            updated = old | value
+        self.store(address, offset, updated)
         self.events.append((operation, address, offset))
         return old
 
