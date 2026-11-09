@@ -124,11 +124,13 @@ class ProtocolModel:
 
     def object_node(self, value):
         self.events.append(("object-index", value))
-        return _NODE if self.known else 0
+        if value == _RELOCATED:
+            return _NODE + 64
+        return _NODE if self.known and value == _OBJECT else 0
 
     def forwarding(self, value):
         self.events.append(("forwarding-index", value))
-        return _FORWARDING if self.forwarded else 0
+        return _FORWARDING if self.forwarded and value == _OBJECT else 0
 
 
 @pytest.mark.parametrize("backend", [0, 1, 2])
@@ -161,9 +163,13 @@ def test_moving_resolution_keeps_the_owning_slot_transfer(backend, known):
     model.store(_FORWARDING, 8, _RELOCATED)
     model.known = known
     model.forwarded = True
+    model.store("pcc_gc_forwarding_population", 0, 1)
     assert model.ns["pcc_gc_resolve_root_slot_unlocked"](_RESULT_SLOT, 0) == _RELOCATED
     assert model.load(_RESULT_SLOT) == _RELOCATED
-    expected = [("object-index", _OBJECT), ("forwarding-index", _OBJECT)]
+    expected = [
+        ("object-index", _OBJECT), ("forwarding-index", _OBJECT),
+        ("forwarding-index", _RELOCATED), ("object-index", _RELOCATED),
+    ]
     if backend == 3:
         expected += [("incref", _RELOCATED), ("decref", _OBJECT)]
     assert model.events == expected
@@ -177,12 +183,16 @@ def test_moving_borrowed_resolution_rewrites_without_owner_transfer(backend, kno
     model.store(_FORWARDING, 8, _RELOCATED)
     model.known = known
     model.forwarded = True
+    model.store("pcc_gc_forwarding_population", 0, 1)
     before = dict(model.memory)
     assert model.ns["pcc_gc_resolve_borrowed_root_slot_unlocked"](
         _SLOTS, _INDEX * 8,
     ) == _RELOCATED
     assert model.memory == {**before, (_RESULT_SLOT, 0): _RELOCATED}
-    assert model.events == [("object-index", _OBJECT), ("forwarding-index", _OBJECT)]
+    assert model.events == [
+        ("object-index", _OBJECT), ("forwarding-index", _OBJECT),
+        ("forwarding-index", _RELOCATED), ("object-index", _RELOCATED),
+    ]
     assert model.error == "pending exception"
 
 

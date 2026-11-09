@@ -166,6 +166,7 @@ class ReleaseModel(Model):
         record = 60000 + source
         self.forwarding[source] = record
         self.store(record, 8, target)
+        self.store("pcc_gc_forwarding_population", 0, len(self.forwarding))
 
 
 def _effects(model):
@@ -353,7 +354,7 @@ def test_fallback_discards_node_across_refcount_callbacks(mutation, hook_kind):
 
 
 @pytest.mark.parametrize("backend", (3, 4))
-def test_acquire_and_release_each_heal_only_one_forwarding_edge(backend):
+def test_acquire_resolves_full_chain_and_release_balances_terminal_lease(backend):
     def setup(model):
         slot = model.object(flags=FORWARDED)
         model.object(2000, flags=FORWARDED)
@@ -361,9 +362,27 @@ def test_acquire_and_release_each_heal_only_one_forwarding_edge(backend):
         model.edge(1000, 2000)
         model.edge(2000, 3000)
         assert model.acquire(slot) == 1
-        assert model.load(slot) == 2000 and model.count(2000) == 1
-        # A malformed two-edge lease does not authorize borrowing another
-        # object's count. The unchanged resolver heals once; tail rejects.
+        assert model.load(slot) == 3000
+        assert [model.count(obj) for obj in (1000, 2000, 3000)] == [0, 0, 1]
+        return slot, 1
+    _, current, status = _paired_release(setup, backend=backend)
+    assert status == 0 and current.load(21000) == 3000
+    assert [current.count(obj) for obj in (1000, 2000, 3000)] == [0, 0, 0]
+    assert current.active() == 0
+
+
+@pytest.mark.parametrize("backend", (3, 4))
+def test_stranded_source_lease_cannot_consume_another_owners_count(backend):
+    # Synthesize the old invalid state explicitly. Acquisition no longer
+    # creates it, but release must still refuse to steal a target's count.
+    def setup(model):
+        slot = model.object()
+        model.object(2000, flags=FORWARDED)
+        model.object(3000)
+        model.store(slot, 0, 2000)
+        model.edge(2000, 3000)
+        model.store(12000, 80, 1)
+        model.store(CENTRAL, 0, 1)
         return slot, 1
     _, current, status = _paired_release(setup, backend=backend)
     assert status == -3 and current.load(21000) == 3000

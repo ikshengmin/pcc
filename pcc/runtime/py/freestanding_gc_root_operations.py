@@ -59,6 +59,7 @@ __pcc_freestanding__ = True
 
 pcc_gc_forwarding_index_find = extern("pcc_gc_forwarding_index_find", (c_ptr,), c_ptr)
 pcc_gc_object_index_find = extern("pcc_gc_object_index_find", (c_ptr,), c_ptr)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
 pcc_gc_trace_stack_push = extern("pcc_gc_trace_stack_push", (c_ptr,), c_void)
 pcc_gc_gray_worklist_note = extern("pcc_gc_gray_worklist_note", (c_ptr,), c_void)
@@ -462,33 +463,44 @@ def _resolve_root_slot_mode(slot_base, slot_offset: i64, borrowed: i64):
         selected: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
         if selected != 3 and selected != 4:
             return value
-    if pcc_gc_object_is_known_no_lock(value) == 0:
-        forwarding_unknown = pcc_gc_forwarding_index_find(value)
-        if ptr_is_null(forwarding_unknown) == 0:
-            resolved_unknown = load_ptr(forwarding_unknown, 8)
-            if (
-                ptr_is_null(resolved_unknown) == 0
-                and ptr_eq(resolved_unknown, value) == 0
-            ):
-                if borrowed != 0 or load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4:
-                    store_ptr(slot_base, slot_offset, resolved_unknown)
-                    return resolved_unknown
-                py_incref(resolved_unknown)
-                store_ptr(slot_base, slot_offset, resolved_unknown)
-                py_decref(value)
-                return resolved_unknown
-        return value
-    flags: i64 = load_i32(value, 12)
-    if (flags & 2048) == 0:
-        return value
+    known: i64 = pcc_gc_object_is_known_no_lock(value)
+    flags: i64 = 0
+    if known != 0:
+        flags = load_i32(value, 12)
+        if (flags & 2048) == 0:
+            return value
     forwarding = pcc_gc_forwarding_index_find(value)
     if ptr_is_null(forwarding) != 0:
-        store_i32(value, 12, flags & ~2048)
+        if known != 0:
+            store_i32(value, 12, flags & ~2048)
         return value
     resolved = load_ptr(forwarding, 8)
     if ptr_is_null(resolved) != 0 or ptr_eq(resolved, value) != 0:
-        store_i32(value, 12, flags & ~2048)
+        # Preserve the historical zero-hop stale-hint repair. Once a valid
+        # hop is followed, malformed metadata must never publish a prefix.
+        if known != 0:
+            store_i32(value, 12, flags & ~2048)
         return value
+    # Callers hold graph exclusion. Validate the entire chain before the
+    # single slot write and ownership transfer; do not compress its edges.
+    # Each hop consumes one indexed edge, so population bounds cycles too.
+    remaining: i64 = load_i32(global_addr("pcc_gc_forwarding_population"), 0)
+    while True:
+        if remaining <= 0 or is_tagged_int(resolved) != 0:
+            pcc_platform_abort()
+            return value
+        remaining -= 1
+        forwarding = pcc_gc_forwarding_index_find(resolved)
+        if ptr_is_null(forwarding) != 0:
+            if pcc_gc_object_is_known_no_lock(resolved) == 0:
+                pcc_platform_abort()
+                return value
+            break
+        target = load_ptr(forwarding, 8)
+        if ptr_is_null(target) != 0 or ptr_eq(target, resolved) != 0:
+            pcc_platform_abort()
+            return value
+        resolved = target
     if borrowed != 0 or load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4:
         store_ptr(slot_base, slot_offset, resolved)
         return resolved
@@ -608,14 +620,7 @@ def _foreign_lease_acquire(slot, borrowed: i64) -> i64:
         return -1
     obj = null()
     if borrowed != 0:
-        obj = load_ptr(slot, 0)
-        if ptr_is_null(obj) == 0 and is_tagged_int(obj) == 0:
-            forwarding = pcc_gc_forwarding_index_find(obj)
-            if ptr_is_null(forwarding) == 0:
-                resolved = load_ptr(forwarding, 8)
-                if ptr_is_null(resolved) == 0 and ptr_eq(resolved, obj) == 0:
-                    store_ptr(slot, 0, resolved)
-                    obj = resolved
+        obj = pcc_gc_resolve_borrowed_root_slot_unlocked(slot, 0)
     else:
         obj = pcc_gc_resolve_root_slot_unlocked(slot, 0)
     status: i64 = -1

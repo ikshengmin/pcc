@@ -61,6 +61,9 @@ def test_borrowed_lease_reloads_after_parking_without_transferring_ownership(bac
     model.store(2000, 0, 9)
     model.store(3000, 8, 2000)
     def parked():
+        # Match published forwarding metadata, not just an index double.
+        model.store(1000, 12, model.load(1000, 12) | 2048)
+        model.store("pcc_gc_forwarding_population", 0, 1)
         model.ns["pcc_gc_forwarding_index_find"] = lambda value: 3000 if value == 1000 else 0
     model.on_lock = parked
     # The owning resolver can transfer counts; a borrowed input cannot use it.

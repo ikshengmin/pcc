@@ -508,7 +508,7 @@ def test_forwarded_immediate_store_serializes_with_actual_shared_root_healer(
     resolver.update(
         load_ptr=reader_load, store_ptr=reader_store,
         ptr_eq=lambda lhs, rhs: lhs == rhs,
-        pcc_gc_object_is_known_no_lock=lambda obj: int(obj == source),
+        pcc_gc_object_is_known_no_lock=lambda obj: int(obj in (source, target)),
         pcc_gc_forwarding_index_find=lambda obj: edge if obj == source else 0,
         # The real count-free retain/release have no ownership effect.
         py_incref=lambda obj: None, py_decref=lambda obj: None,

@@ -385,8 +385,9 @@ class Memory:
         A borrowed load intentionally rewrites without a reference transfer.
         Calling it first therefore makes the old binder fail the count oracle.
         """
-        forwarding, selected = Block(), Block()
+        forwarding, selected, population = Block(), Block(), Block()
         forwarding.fields[8], selected.fields[0] = new, backend
+        population.fields[0] = 1
         old.fields[12], new.fields[12] = 2048, 0
         old.refs, new.refs = (1, 0) if backend == 3 else (0, 1)
         transfers = []
@@ -409,9 +410,9 @@ class Memory:
 
         self.ns.update({
             "i64": int,
-            "pcc_gc_object_is_known_no_lock": lambda value: 0,
+            "pcc_gc_object_is_known_no_lock": lambda value: int(value is new),
             "pcc_gc_forwarding_index_find": lambda value: forwarding if value is old else None,
-            "global_addr": lambda name: selected,
+            "global_addr": lambda name: population if name == "pcc_gc_forwarding_population" else selected,
             "py_incref": lambda value: change_ref(value, 1),
             "py_decref": lambda value: change_ref(value, -1),
             "pcc_gc_load_ptr": borrowed_load,
