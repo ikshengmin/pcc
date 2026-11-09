@@ -9,6 +9,7 @@ from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     atomic_load_i64,
+    atomic_rmw_i32,
     atomic_store_i32,
     atomic_store_i64,
     abi_constant,
@@ -819,7 +820,8 @@ def _note_relocation_read_unlocked(obj: c_ptr) -> c_ptr:
         return obj
     flags: i64 = load_i32(obj, 12)
     if (flags & 2048) != 0:
-        store_i32(obj, 12, flags & ~2048)
+        # Graph exclusion does not serialize lock-free pin/unpin bits.
+        atomic_rmw_i32("and", obj, 12, ~2048, "relaxed")
     return obj
 
 

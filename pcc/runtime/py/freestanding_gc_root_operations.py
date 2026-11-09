@@ -472,14 +472,15 @@ def _resolve_root_slot_mode(slot_base, slot_offset: i64, borrowed: i64):
     forwarding = pcc_gc_forwarding_index_find(value)
     if ptr_is_null(forwarding) != 0:
         if known != 0:
-            store_i32(value, 12, flags & ~2048)
+            # Graph exclusion does not serialize lock-free pin/unpin bits.
+            atomic_rmw_i32("and", value, 12, ~2048, "relaxed")
         return value
     resolved = load_ptr(forwarding, 8)
     if ptr_is_null(resolved) != 0 or ptr_eq(resolved, value) != 0:
         # Preserve the historical zero-hop stale-hint repair. Once a valid
         # hop is followed, malformed metadata must never publish a prefix.
         if known != 0:
-            store_i32(value, 12, flags & ~2048)
+            atomic_rmw_i32("and", value, 12, ~2048, "relaxed")
         return value
     # Callers hold graph exclusion. Validate the entire chain before the
     # single slot write and ownership transfer; do not compress its edges.

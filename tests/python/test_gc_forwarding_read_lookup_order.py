@@ -35,6 +35,7 @@ class State:
                        is_tagged_int=lambda p: int(p & 1), null=lambda: 0,
                        global_addr=lambda n: n, load_ptr=self.load,
                        load_i32=self.load, load_i64=self.load, store_i32=self.store,
+                       atomic_rmw_i32=self.atomic_and,
                        pcc_gc_object_index_find=self.find,
                        pcc_gc_forwarding_index_find=self.find_forward,
                        pcc_py_gc_minor_graph_lock=self.lock,
@@ -51,6 +52,14 @@ class State:
         assert (p, offset) in self.words, ('unsafe write', p, offset)
         self.words[p, offset] = value
         self.writes.append((p, offset, value))
+
+    def atomic_and(self, operation, p, offset, value, order):
+        # One indivisible current-word update; keep the guarded accesses and
+        # write log shared with ordinary stores. No CPU ordering is modeled.
+        assert operation == 'and' and order == 'relaxed'
+        old = self.load(p, offset)
+        self.store(p, offset, (old & value) & 0xffffffff)
+        return old
 
     def find(self, obj):
         self.probes.append(('object', obj))

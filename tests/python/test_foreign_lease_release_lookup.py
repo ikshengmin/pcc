@@ -80,6 +80,7 @@ class ReleaseModel(Model):
             logical_shift_right_i64=lambda value, shift: (value & MASK64) >> shift,
             wrapping_mul_i64=lambda left, right: ((left * right + (1 << 63)) & MASK64) - (1 << 63),
             atomic_load_i64=self.atomic_load,
+            atomic_rmw_i32=self.atomic_and,
             pcc_gc_forwarding_index_find=self.find_forwarding,
             py_incref=lambda value: self.refcount("incref", value),
             py_decref=lambda value: self.refcount("decref", value),
@@ -116,6 +117,14 @@ class ReleaseModel(Model):
     def atomic_load(self, base, offset, order):
         self.audit.append(("atomic_load", base, offset, order))
         return self.load(base, offset)
+
+    def atomic_and(self, operation, base, offset, value, order):
+        # Stale forwarding repair changes only its bit in the current word.
+        # Keep the existing guarded accesses; this does not model CPU ordering.
+        assert operation == "and" and order == "relaxed"
+        old = self.load(base, offset)
+        self.store(base, offset, (old & value) & 0xffffffff)
+        return old
 
     def compare_exchange(self, base, offset, expected, desired, success, failure):
         self.audit.append(("cas_order", base, expected, desired, success, failure))
