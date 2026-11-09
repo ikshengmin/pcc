@@ -225,6 +225,15 @@ def test_exact_live_release_reuses_one_lookup(backend, borrowed, flags,
     assert _calls(current, "incref") == _calls(current, "decref") == []
     assert len([event for event in _calls(current, "atomic_load")
                 if event[1] == PUBLISHED and event[3] == "acquire"]) == 1
+    # The second read of the unchanged slot occurs only after exact live-node
+    # admission, and supplies the header read before the unchanged common tail.
+    guarded_reads = [event for event in _calls(current, "read")
+                     if (event[1], event[2]) in {(21000, 0), (11000, 32), (1000, 12)}]
+    assert guarded_reads == [
+        ("read", 21000, 0, 1), ("read", 11000, 32, 1),
+        ("read", 21000, 0, 1), ("read", 1000, 12, 1),
+        ("read", 11000, 32, 1),
+    ]
     assert current.load(1000, 12) == flags and current.load(21000) == 1000
     assert current.load(1000) == 7 and current.count() == current.active() == 0
     writes = _calls(current, "write")
@@ -239,6 +248,7 @@ def test_release_reloads_only_after_graph_entry_and_keeps_unlock_poll(backend):
         slot = model.object()
         other = model.object(2000)
         assert model.acquire(other) == 1
+        model.unreadable_headers.add(1000)
         model.on_lock = lambda: model.store(slot, 0, 2000)
         model.on_unlock = lambda: model.events.append(("poll", model.load(CENTRAL)))
         return slot, 1
@@ -246,7 +256,7 @@ def test_release_reloads_only_after_graph_entry_and_keeps_unlock_poll(backend):
     assert status == 0 and current.count(1000) == current.count(2000) == 0
     assert _calls(current, "find") == [("find", 2000, 1)]
     assert [(event[1], event[3]) for event in _calls(current, "read")
-            if event[1] == 21000] == [(21000, 1)]
+            if event[1] == 21000] == [(21000, 1), (21000, 1)]
     assert current.events[-2:] == [("unlock", 0), ("poll", 0)]
 
 
@@ -393,6 +403,11 @@ def test_failed_identity_guard_does_not_read_unknown_header_or_consume_guard(kin
     assert status == -3 and current.active() == 1
     assert current.load(11000, 80) == 1 and not _calls(current, "cas_order")
     assert len(_calls(current, "resolve")) == 1
+    before_resolve = current.audit[:next(i for i, event in enumerate(current.audit)
+                                        if event[0] == "resolve")]
+    assert [event for event in before_resolve
+            if event[0] == "read" and event[1] == 21000] == [("read", 21000, 0, 1)]
+    assert not any(event[0] == "read" and event[2] == 12 for event in before_resolve)
 
 
 @pytest.mark.parametrize("central", (0, -1, -7))
@@ -494,19 +509,18 @@ def test_release_guard_ast_preserves_common_tail_and_short_circuit_dominance():
                   and ast.unparse(node.test) == "active > 0")
     old_active = next(node for node in reference.body if isinstance(node, ast.If)
                       and ast.unparse(node.test) == "active > 0")
-    assert ast.unparse(active.body[0]) == "obj = load_ptr(slot, 0)"
-    assert ast.unparse(active.body[1]) == "node = pcc_gc_object_index_find(obj)"
-    guard = active.body[2]
+    assert ast.unparse(active.body[0]) == "node = pcc_gc_object_index_find(load_ptr(slot, 0))"
+    guard = active.body[1]
     expected = ast.parse('''if (ptr_is_null(node) != 0
         or load_i64(node, 32) != 0
-        or (load_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET) & (2048 | 524288)) != 0):
+        or (load_i32(load_ptr(slot, 0), PYOBJECTHEADER_FLAGS_OFFSET) & (2048 | 524288)) != 0):
     obj = pcc_gc_resolve_root_slot_unlocked(slot, 0)
     node = pcc_gc_object_index_find(obj)
 ''').body[0]
     assert ast.dump(guard) == ast.dump(expected)
     # Removing exactly the guarded replacement must reconstruct the entire
     # preimage, including token paths, graph entry, CAS loop and unlock poll.
-    active.body = old_active.body[:2] + active.body[3:]
+    active.body = old_active.body[:2] + active.body[2:]
     actual.decorator_list = []
     assert ast.dump(actual) == ast.dump(reference)
 

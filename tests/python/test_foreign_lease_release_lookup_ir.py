@@ -70,6 +70,15 @@ def _gep(blocks, base, offset):
     return _one(blocks, rf"^({SSA}) = getelementptr(?: inbounds)? i8, ptr {re.escape(base)}, i64 {offset}$")
 
 
+def _slot_load(blocks, value):
+    block, position, load = _one(blocks,
+        rf"^{re.escape(value)} = load ptr, ptr ({SSA}), align [0-9]+$")
+    address_block, address_position, _ = _one(blocks,
+        rf"^{re.escape(load.group(1))} = getelementptr(?: inbounds)? i8, ptr %slot, i64 0$")
+    assert address_block == block and address_position < position
+    return block, position
+
+
 def _zero_successor(blocks, value):
     block, position, comparison = _one(blocks, rf"^({SSA}) = icmp (eq|ne) i64 {re.escape(value)}, 0$")
     condition, predicate = comparison.groups()
@@ -161,13 +170,21 @@ def test_frontend_ir_release_header_guard_and_fresh_fallback_lookup(tmp_path):
     fresh_block, fresh_position, fresh_match = fresh[0]
     assert fresh_block == fallback_block and fresh_position > resolve_position
     first = next(item for item in finds if item != fresh[0])
-    first_block, _, first_match = first
+    first_block, first_position, first_match = first
     tentative, obj = first_match.groups()
     new_node = fresh_match.group(1)
 
+    initial_block, initial_position = _slot_load(blocks, obj)
+    assert initial_block == first_block and initial_position < first_position
+
     # The initial exact lookup dominates every tentative-node/header access.
     free_block, _, free_address = _gep(blocks, tentative, 32)
-    header_block, _, header_address = _gep(blocks, obj, 12)
+    header_block, header_position, header_address = _one(blocks,
+        rf"^({SSA}) = getelementptr(?: inbounds)? i8, ptr ({SSA}), i64 12$")
+    header_obj = header_address.group(2)
+    assert header_obj != obj
+    reload_block, reload_position = _slot_load(blocks, header_obj)
+    assert reload_block == header_block and reload_position < header_position
     assert first_block in dominators[free_block]
     assert first_block in dominators[header_block]
     _, _, cast = _one(blocks, rf"^({SSA}) = ptrtoint ptr {re.escape(tentative)} to i64$")

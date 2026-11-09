@@ -702,11 +702,13 @@ def pcc_gc_foreign_lease_release(slot, acquired: i64) -> i64:
     if active > 0:
         # Reuse exact live identity; forwarding or uncertainty must resolve
         # and look up again because resolution can rewrite the slot/call RC.
-        obj = load_ptr(slot, 0)
-        node = pcc_gc_object_index_find(obj)
+        # Exact lookup neither writes nor polls. Under graph ownership the
+        # stable lease slot is unchanged, so reload instead of retaining its
+        # object pointer across the lookup call.
+        node = pcc_gc_object_index_find(load_ptr(slot, 0))
         if (ptr_is_null(node) != 0
                 or load_i64(node, 32) != 0
-                or (load_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET) & (2048 | 524288)) != 0):
+                or (load_i32(load_ptr(slot, 0), PYOBJECTHEADER_FLAGS_OFFSET) & (2048 | 524288)) != 0):
             obj = pcc_gc_resolve_root_slot_unlocked(slot, 0)
             node = pcc_gc_object_index_find(obj)
         if ptr_is_null(node) == 0 and load_i64(node, 32) == 0:
