@@ -12,6 +12,7 @@ from pcc.unsafe import (
     free,
     global_addr,
     global_load_ptr,
+    is_tagged_int,
     load_i32,
     load_i64,
     load_ptr,
@@ -34,6 +35,8 @@ pcc_gc_object_is_address_pinned = extern("pcc_gc_object_is_address_pinned", (c_p
 
 pcc_gc_object_node_is_active = extern("pcc_gc_object_node_is_active", (c_ptr,), c_int64)
 pcc_gc_mark_root_gray_if_known = extern("pcc_gc_mark_root_gray_if_known", (c_ptr,), c_void)
+pcc_gc_shade_gray_atomic = extern("pcc_gc_shade_gray_atomic", (c_ptr, c_int64), c_void)
+pcc_gc_trace_stack_push = extern("pcc_gc_trace_stack_push", (c_ptr,), c_void)
 pcc_thread_visit_conservative_words = extern(
     "pcc_thread_visit_conservative_words", (c_ptr, c_ptr), c_int64
 )
@@ -126,6 +129,26 @@ def _node_has_live_extent(node) -> i64:
     return 1 if ptr_is_null(pcc_gc_forwarding_index_find(obj)) == 0 else 0
 
 
+@c_abi_export("pcc_gc_mark_canonical_root_gray_with_node")
+def pcc_gc_mark_canonical_root_gray_with_node(obj, node) -> None:
+    """Internal marking entry for an exact indexed, nonforwarded owner.
+
+    The caller just obtained node from the object index and found no
+    forwarding edge for obj, retaining graph-lock or stopped-world ownership
+    throughout. An arbitrary object-list node does not satisfy this contract.
+    Keep the known-object checks: a physical indexed owner may be retiring.
+    """
+    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+        return
+    if ptr_is_null(node) != 0 or load_i64(node, 32) != 0:
+        return
+    if (load_i32(obj, 12) & 524288) != 0:
+        return
+    pcc_gc_shade_gray_atomic(obj, 1)
+    # Even an already-gray root must enter the stopped-world trace stack.
+    pcc_gc_trace_stack_push(obj)
+
+
 @c_abi_export("pcc_gc_conservative_pin_owner_chain")
 def _pin_owner_chain(node, mark: i64) -> None:
     owner = load_ptr(node, 0)
@@ -152,7 +175,9 @@ def _pin_owner_chain(node, mark: i64) -> None:
         edge = pcc_gc_forwarding_index_find(owner)
         if ptr_is_null(edge) != 0:
             if mark != 0:
-                pcc_gc_mark_root_gray_if_known(owner)
+                # Both exact index answers remain valid under the scan's
+                # graph-lock/STW ownership; do not re-probe the terminal owner.
+                pcc_gc_mark_canonical_root_gray_with_node(owner, current)
             return
         target = load_ptr(edge, 8)
         if ptr_is_null(target) != 0 or ptr_eq(target, owner) != 0:

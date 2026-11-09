@@ -264,6 +264,13 @@ void pcc_gc_mark_root_gray_if_known(void *object) {
     if ((long)object == 12288) marked |= 2;
     if ((long)object == 16384) marked |= 4;
 }
+/* This nonmoving fixture must not invoke the trusted moving-root branch. */
+void pcc_gc_shade_gray_atomic(void *object, long allow_black) {
+    (void)object; (void)allow_black; __builtin_trap();
+}
+void pcc_gc_trace_stack_push(void *object) {
+    (void)object; __builtin_trap();
+}
 long pcc_thread_visit_conservative_words(void *callback, void *context) {
     for (long i = 0; i < candidate_count; ++i)
         ((void (*)(void *, void *))callback)((void *)candidates[i], context);

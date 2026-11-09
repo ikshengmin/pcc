@@ -198,6 +198,8 @@ class GC3(RetirementState):
             'pcc_gc_note_relocation_read': self.ns['_note_relocation_read_unlocked'],
             'pcc_gc_visit_registered_root_slots': self.visit_roots,
             'pcc_gc_mark_root_gray_if_known': self.shade,
+            # Match this fixture's existing abstract root-mark boundary.
+            'pcc_gc_mark_canonical_root_gray_with_node': lambda obj, node: self.shade(obj),
             'pcc_gc_load_ptr': lambda owner, slot: self.load(slot, 0),
             'pcc_capi_dealloc_cext_object': lambda obj, tag: 0,
             '_FREE_WATCH_OBJECT': 8, '_FREE_WATCH_NOTED': 16,

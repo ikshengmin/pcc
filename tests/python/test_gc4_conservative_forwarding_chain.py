@@ -22,6 +22,9 @@ class MovingRoots(GC3):
         self.load_bodies("freestanding_gc_root_operations.py", {
             "pcc_gc_mark_root_gray_if_known", "pcc_gc_object_is_known_no_lock",
         })
+        self.load_bodies("freestanding_gc_conservative_roots.py", {
+            "pcc_gc_mark_canonical_root_gray_with_node",
+        })
         self.ns["pcc_gc_trace_stack_push"] = lambda obj: self.events.append(("root", obj))
 
     def chain(self, order=(0, 1, 2)):
@@ -125,3 +128,98 @@ def test_no_forwardings_keep_cycle_pins_separate_from_other_node_metadata(backen
 
     assert state.load(node, 56) == (0 if counted else 4)
     assert not [event for event in state.events if event[0] == "root"]
+
+
+def _record_index_probes(state):
+    probes = []
+    for name, table in (("pcc_gc_object_index_find", state.index),
+                        ("pcc_gc_forwarding_index_find", state.forwardings)):
+        def find(obj, name=name, table=table):
+            assert state.stopped and state.depth > 0
+            probes.append((name, obj))
+            return table.get(obj, 0)
+        state.ns[name] = find
+    return probes
+
+
+@pytest.mark.parametrize("backend", [3, 4])
+@pytest.mark.parametrize("edges", [0, 1, 3])
+@pytest.mark.parametrize("mark", [0, 1])
+def test_terminal_owner_reuses_exact_probes_and_matches_generic_mark(backend, edges, mark):
+    outcomes = []
+    for reuse in (False, True):
+        state = MovingRoots(backend)
+        objects = [state.value()[:2] for _ in range(edges + 1)]
+        with state.locked():
+            for (source, _), (target, _) in zip(objects, objects[1:]):
+                assert state.ns["pcc_gc_install_forwarding_unlocked"](source, target) == 0
+        for _, node in objects:
+            state.store(node, 56, 4)
+        state.events.clear()
+        state.gray_worklist_events.clear()
+        # The generic entry is unchanged production source, and supplies the
+        # pre-change terminal behavior rather than a reimplemented oracle.
+        if not reuse:
+            state.ns["pcc_gc_mark_canonical_root_gray_with_node"] = (
+                lambda obj, node: state.ns["pcc_gc_mark_root_gray_if_known"](obj)
+            )
+        probes = _record_index_probes(state)
+        with state.locked():
+            state.ns["_pin_owner_chain"](objects[0][1], mark)
+        expected = len(objects) + (1 if mark and not reuse else 0)
+        for name in ("pcc_gc_object_index_find", "pcc_gc_forwarding_index_find"):
+            assert sum(kind == name for kind, _ in probes) == expected
+        assert [state.load(node, 56) for _, node in objects] == [5] * len(objects)
+        assert [event for event in state.events if event[0] == "root"] == (
+            [("root", objects[-1][0])] if mark else []
+        )
+        outcomes.append((
+            [state.load(obj, 12) for obj, _ in objects], state.gray,
+            list(state.events), list(state.gray_worklist_events),
+        ))
+    assert outcomes[0] == outcomes[1]
+
+
+@pytest.mark.parametrize("case", ["white", "gray", "black", "retired", "dead",
+                                   "null-object", "tagged-object", "null-node"])
+def test_trusted_terminal_marker_preserves_generic_validity_and_trace_push(case):
+    outcomes = []
+    for reuse in (False, True):
+        state = MovingRoots()
+        obj, node, _ = state.value()
+        state.store(obj, 12, 8 | 1024)
+        state.store("pcc_gc_gray_count", 0, 0)
+        if case == "gray":
+            state.store(obj, 12, 16 | 1024)
+            state.store("pcc_gc_gray_count", 0, 1)
+        elif case == "black":
+            state.store(obj, 12, 32 | 1024)
+        elif case == "retired":
+            state.store(node, 32, 1)
+        elif case == "dead":
+            state.store(obj, 12, 8 | 1024 | 524288)
+        elif case == "null-object":
+            obj = 0
+        elif case == "tagged-object":
+            obj = 3
+        elif case == "null-node":
+            del state.index[obj]
+            node = 0
+        state.events.clear()
+        state.gray_worklist_events.clear()
+        probes = _record_index_probes(state)
+        with state.locked():
+            if reuse:
+                state.ns["pcc_gc_mark_canonical_root_gray_with_node"](obj, node)
+                assert probes == []
+            else:
+                state.ns["pcc_gc_mark_root_gray_if_known"](obj)
+        accepted = case in ("white", "gray", "black")
+        assert [event for event in state.events if event[0] == "root"] == (
+            [("root", obj)] if accepted else []
+        )
+        if accepted:
+            assert state.load(obj, 12) == 16 | 1024
+        outcomes.append((state.load(obj, 12), state.gray,
+                         list(state.events), list(state.gray_worklist_events)))
+    assert outcomes[0] == outcomes[1]
