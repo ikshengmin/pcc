@@ -41,6 +41,19 @@ def _install_original_scan(state):
     exec(compile(module, "9a4f0aeb-two-pass-control", "exec"), state.ns)
 
 
+def _comparison_memory(state, saved_callback, keys):
+    # This fixture installs an instance-bound list.append in one global slot.
+    # Check its exact identity and owner before normalizing only that slot;
+    # independent fixture instances cannot compare their bound owners equal.
+    slot = ("py_cpy_handle_release_fn", 0)
+    assert state.memory[slot] is saved_callback
+    assert saved_callback.__self__ is state.foreign_releases
+    assert saved_callback.__name__ == "append"
+    memory = {key: state.memory[key] for key in keys}
+    memory[slot] = "unchanged fixture foreign_releases.append"
+    return memory
+
+
 def _run_case(*, original, mark, kind, reverse, backend=3, counted=False, population=0):
     state = MovingRoots(backend, counted=counted)
     if original:
@@ -95,6 +108,7 @@ def _run_case(*, original, mark, kind, reverse, backend=3, counted=False, popula
 
     state.ns["_node_has_live_extent"] = checked_extent
     before = dict(state.memory)
+    saved_callback = before[("py_cpy_handle_release_fn", 0)]
     with state.locked():
         state.ns["_scan_thread_roots"](mark)
     assert state.depth == 0 and state.stopped
@@ -104,8 +118,8 @@ def _run_case(*, original, mark, kind, reverse, backend=3, counted=False, popula
     assert state.owner_snapshot_refreshes == 1
     # Compare the complete pre-existing memory, not only observed roots:
     # payload provenance, leases, flags and index-node links must agree too.
-    outcome = ({key: state.memory[key] for key in before}, state.events,
-               state.gray, dict(state.index), state.words)
+    outcome = (_comparison_memory(state, saved_callback, before), state.events,
+               state.gray, dict(state.index), state.words, list(state.foreign_releases))
     if backend == 3 and not counted and population == 0:
         assert [state.load(node, 56) for _, node in objects] == [
             4 | int(index in rooted) if index < 3 else 5 for index in range(5)
@@ -150,6 +164,7 @@ def test_nonzero_forwarding_scan_keeps_two_pass_order_and_expiration(backend, ma
         if original:
             _install_original_scan(state)
         objects = state.chain(order)
+        saved_callback = state.memory[("py_cpy_handle_release_fn", 0)]
         for _, node in objects:
             state.store(node, 56, 5)
         state.words = [objects[0][0] + 9]
@@ -165,7 +180,8 @@ def test_nonzero_forwarding_scan_keeps_two_pass_order_and_expiration(backend, ma
         with state.locked():
             state.ns["_scan_thread_roots"](mark)
         assert [state.load(node, 56) for _, node in objects] == [5, 5, 5]
-        outcomes.append((dict(state.memory), list(state.events)))
+        outcomes.append((_comparison_memory(state, saved_callback, state.memory),
+                         list(state.events), list(state.foreign_releases)))
         # Current cut disappears. Expiration must not depend on source/target
         # order, even for mark=1's GC3 address-pinned query.
         state.words = [0x70000000]
@@ -175,5 +191,6 @@ def test_nonzero_forwarding_scan_keeps_two_pass_order_and_expiration(backend, ma
         assert [state.load(node, 56) for _, node in objects] == [4, 4, 4]
         assert not [event for event in state.events if event[0] == "root"]
         assert len(calls) == 12
-        outcomes.append((dict(state.memory), list(state.events)))
+        outcomes.append((_comparison_memory(state, saved_callback, state.memory),
+                         list(state.events), list(state.foreign_releases)))
     assert outcomes[:2] == outcomes[2:]
