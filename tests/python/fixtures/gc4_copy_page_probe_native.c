@@ -154,6 +154,10 @@ void pcc_gc_relocation_payload_commit_weakref(void *from, void *to, int64_t tag)
     (void)from; (void)to; (void)tag;
     stub_errors++;
 }
+void pcc_gc_relocation_payload_commit_continuation(void *from, void *to) {
+    (void)from; (void)to;
+    stub_errors++;
+}
 void *pcc_gc_backend4_zpage_find(void *p) {
     find_calls++;
     int id = object_id(p);

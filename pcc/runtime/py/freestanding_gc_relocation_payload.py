@@ -1168,18 +1168,29 @@ def _relocate_copy_payload_finish(
 ) -> i64:
     if _relocate_copy_slots(from_obj, to_obj, ctx) == 0:
         return _relocate_copy_payload_fail(ctx)
-    if (
-        tag == abi_constant("object.type.continuation")
-        and ptr_is_null(continuation_src_chunk) == 0
-        and continuation_mounted == 0
-    ):
-        _retarget_continuation_root_slots(
-            load_ptr(continuation_src_chunk, 16),
-            continuation_src_chunk,
-            load_ptr(continuation_dst_chunk, 16),
-            continuation_dst_chunk,
-        )
     return 1
+
+
+@c_abi_export("pcc_gc_relocation_payload_commit_continuation")
+def pcc_gc_relocation_payload_commit_continuation(from_obj, to_obj) -> None:
+    # The GC4 caller has committed forwarding under the graph lock. Before
+    # that point, target rollback must not unregister the live source's root.
+    if load_i64(from_obj, 32) != 0:
+        return
+    source_chunk = load_ptr(from_obj, 24)
+    target_chunk = load_ptr(to_obj, 24)
+    if ptr_is_null(source_chunk) != 0 or ptr_is_null(target_chunk) != 0:
+        return
+    # Handle-disabled callers still have a slots-based registration. Keep
+    # retargeting independent of whether the source cached its node pointer.
+    _retarget_continuation_root_slots(
+        load_ptr(source_chunk, 16),
+        source_chunk,
+        load_ptr(target_chunk, 16),
+        target_chunk,
+    )
+    store_ptr(target_chunk, 24, load_ptr(source_chunk, 24))
+    store_ptr(source_chunk, 24, null())
 
 
 @c_abi_export("pcc_gc_relocation_payload_commit_weakref")
@@ -1478,8 +1489,12 @@ def pcc_gc_relocate_copy_payload(from_obj, to_obj, tag: i64, size: i64) -> i64:
         from_obj, to_obj, tag, size, ctx
     )
     # Preserve the legacy wrapper's successful-copy contract. GC3's current
-    # scalar/CPY-handle whitelist does not admit weakrefs.
+    # scalar/CPY-handle whitelist admits neither weakrefs nor continuations.
     if result != 0 and tag == abi_constant("object.type.weakref"):
         pcc_gc_relocation_payload_commit_weakref(from_obj, to_obj, tag)
+    elif result != 0 and tag == abi_constant("object.type.continuation"):
+        # Preserve this wrapper's payload-success retarget contract. Unlike
+        # GC4's prepared entry, it does not own forwarding admission.
+        pcc_gc_relocation_payload_commit_continuation(from_obj, to_obj)
     _relocate_slot_pairs_dispose(ctx)
     return result

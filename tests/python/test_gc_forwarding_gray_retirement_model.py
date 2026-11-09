@@ -70,6 +70,7 @@ class RetirementState:
             "i64": int, "c_ptr": int, "PYOBJECTHEADER_FLAGS_OFFSET": 12,
             "abi_constant": ABI_CONSTANTS.__getitem__,
             "PY_TYPE_WEAKREF": ABI_CONSTANTS["object.type.weakref"],
+            "PY_TYPE_CONTINUATION": ABI_CONSTANTS["object.type.continuation"],
             "PY_TYPE_CLASS": 99, "PY_TYPE_MEMORYVIEW": 98,
             "null": lambda: 0, "ptr_is_null": lambda p: int(p == 0),
             "ptr_eq": lambda a, b: int(a == b), "is_tagged_int": zero,
@@ -165,6 +166,8 @@ class RetirementState:
         })
         _functions(ns, "freestanding_gc_relocation_payload.py", {
             "pcc_gc_relocation_payload_commit_weakref",
+            "pcc_gc_relocation_payload_commit_continuation",
+            "_retarget_continuation_root_slots",
         })
         _functions(ns, "freestanding_gc_common_mark_cycle.py", {
             "pcc_gc_trace_stack_begin", "pcc_gc_trace_stack_end",
