@@ -147,6 +147,8 @@ def parse_new(parser):
     if not is_class_type(dtype):
         raise CppDiagnostic('cpp.unsupported.placement-object-type', 'placement initialization currently requires a complete class constructor', coord)
     require_complete(dtype, coord)
+    from pcc.frontends.cpp.virtual_functions import require_concrete
+    require_concrete(dtype, coord)
     owner = unqualified(dtype)
     from pcc.frontends.cpp.arrays import require_trivial_member_array
     for member in owner.definition.members:

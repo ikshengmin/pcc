@@ -4,7 +4,8 @@ N4659 [class.mfct], [over.match.funcs], [class.access], [expr.call]; Itanium
 ABI 3.1.2.1 and 5.1.5. For non-static members, the implicit this argument is
 a real first parameter, not part of the source parameter list or its mangled
 encoding. Static members have no object parameter ([class.static.mfct]). No object
-header, second layout engine, virtual dispatch or private runtime is added.
+header, second layout engine or private runtime is added. An unqualified call
+of a virtual member loads its callee through virtual_functions.py.
 
 The first emission boundary is non-inline declarations and out-of-class
 bodies. In-class bodies require C++ inline/ODR emission, not C's TU-local
@@ -108,7 +109,8 @@ def select_member_overload(parser, group, object_expression, arguments, coord):
                                 [arg.lvalue or arg.assignment_result for arg in actuals]).member_origin
 
 
-def call_member(parser, group, object_expression, arguments, coord, address_available=True):
+def call_member(parser, group, object_expression, arguments, coord, address_available=True,
+                virtual_dispatch=True):
     if getattr(parser, 'class_template_method', None) is not None:
         from pcc.frontends.cpp.class_template_members import pattern_call
         return pattern_call(parser, group, object_expression, arguments, coord, False, address_available)
@@ -140,7 +142,12 @@ def call_member(parser, group, object_expression, arguments, coord, address_avai
     if selected.variadic:
         from pcc.frontends.cpp.varargs import convert_ellipsis_arguments
         converted += convert_ellipsis_arguments(parser, arguments[len(selected.parameters):], coord)
-    call = c_ast.FuncCall(c_ast.ID(selected.c_name, coord), c_ast.ExprList(converted, coord), coord)
+    function = c_ast.ID(selected.c_name, coord)
+    if virtual_dispatch and getattr(selected, "method_virtual", False):
+        # [class.virtual]/16: a qualified name suppresses the virtual call.
+        from pcc.frontends.cpp.virtual_functions import callee
+        function = callee(selected, name, coord)
+    call = c_ast.FuncCall(function, c_ast.ExprList(converted, coord), coord)
     # [expr.call]: postfix-expression (including object) precedes every
     # argument. Capture once before evaluating arguments; do not rely on C's
     # argument evaluation order, or repeat an effectful object expression.

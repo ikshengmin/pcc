@@ -25,12 +25,14 @@ def object_layout(dtype, types, coord):
     if is_class_type(plain):
         require_complete(plain, coord)
         # All admitted classes project to this natural record. Unsupported
-        # bases, virtual state, bit-fields and attributes never reach here.
-        # Match ClassDefinition.c_declaration's one-byte empty-class field.
-        record = natural_record_layout(
-            (object_layout(member.dtype, types, member.coord) for member in plain.definition.members),
-            minimum_size=1,
-        )
+        # bases, bit-fields and attributes never reach here. A polymorphic
+        # class's leading table pointer is its first field, as in
+        # ClassDefinition.c_declaration, which also adds the one-byte
+        # empty-class field matched by the minimum size.
+        fields = [object_layout(member.dtype, types, member.coord) for member in plain.definition.members]
+        if plain.definition.polymorphic:
+            fields.insert(0, pointer_scalar_layout())
+        record = natural_record_layout(fields, minimum_size=1)
         return CAbiScalarLayout(record.size, record.alignment)
     if isinstance(plain, ArrayType):
         if plain.bound is None:

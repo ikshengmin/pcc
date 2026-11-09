@@ -969,8 +969,13 @@ class CppParser:
             noreturn = True
         storage = None
         inline_specifiers = [] if member_definition is not None else None
+        virtual_specifier = None
         while (self._peek().value in ("extern", "static")
-               or inline_specifiers is not None and self._peek().value == "inline"):
+               or inline_specifiers is not None and self._peek().value in ("inline", "virtual")):
+            if self._peek().value == "virtual":
+                from pcc.frontends.cpp.virtual_functions import take_virtual
+                virtual_specifier = take_virtual(self, virtual_specifier)
+                continue
             if self._peek().value == "inline":
                 from pcc.frontends.cpp.inline_methods import take_explicit_inline
                 take_explicit_inline(self, inline_specifiers)
@@ -1070,6 +1075,13 @@ class CppParser:
                                                        namespace_function=namespace_owner is not None and is_function)
         finally:
             self.scope = parent
+        virt_specifiers, pure = (), False
+        if member_definition is not None and is_function:
+            from pcc.frontends.cpp.virtual_functions import parse_member_specifiers
+            virt_specifiers, pure = parse_member_specifiers(self)
+        elif virtual_specifier is not None:
+            raise CppDiagnostic("cpp.invalid-virtual", "virtual requires a member function declaration",
+                                virtual_specifier.coord)
         function_scope = namespace_owner if namespace_owner is not None else parent
         access_scope = member_owner.scope if member_owner is not None else parent
         for accessed, access_coord in return_lookup.deferred_member_access:
@@ -1213,6 +1225,9 @@ class CppParser:
             symbol = declare_member_function(member_owner, new_symbol, const,
                                              outside=member_definition is None,
                                              static=storage is not None and storage.value == "static")
+            if member_definition is not None:
+                from pcc.frontends.cpp.virtual_functions import declare_virtual
+                declare_virtual(member_owner, symbol, virtual_specifier, virt_specifiers, pure, name.coord)
         elif namespace_owner is not None:
             from pcc.frontends.cpp.namespace_functions import (
                 declare_function as declare_namespace_function,
@@ -1272,6 +1287,8 @@ class CppParser:
                                           declaration.type, name.coord)
         if symbol.internal_linkage:
             declaration.storage = ["static"]
+        if getattr(symbol, "method_virtual", False) and member_definition is not None:
+            symbol.virtual_prototype = declaration
         if not definition:
             self._expect(";")
             return declaration
@@ -1696,6 +1713,8 @@ class CppParser:
             require_trivial_record_array(dtype, coord)
         require_complete_array(dtype, coord)
         require_complete(dtype, coord)
+        from pcc.frontends.cpp.virtual_functions import require_concrete
+        require_concrete(element, coord)
         if is_enum_type(dtype) and not unqualified(dtype).complete:
             raise CppDiagnostic("cpp.incomplete-enum", "an object requires a complete enum type", coord)
         if unqualified(dtype) == "void":
@@ -2756,7 +2775,8 @@ class CppParser:
                 from pcc.frontends.cpp.members import call_member, call_static_member, is_static_group
                 if is_static_group(symbol):
                     return call_static_member(self, symbol, arguments, token.coord)
-                return call_member(self, symbol, self._implicit_object(symbol.class_owner, token.coord), arguments, token.coord)
+                return call_member(self, symbol, self._implicit_object(symbol.class_owner, token.coord), arguments, token.coord,
+                                   virtual_dispatch=not name.global_scope and len(name.parts) == 1)
             unqualified_call = not name.global_scope and len(name.parts) == 1
             if unqualified_call:
                 if (getattr(self, 'class_template_method', None) is not None

@@ -2620,6 +2620,26 @@
         ]
       }
     },
+    "tests/cpp/test_cpp_virtual_functions_execution.py": {
+      "test_virtual_functions_match_cpp17": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses execute_row_pair on unchanged full translation units, preserving owned artifacts and actual g++ process observations."
+        ]
+      },
+      "test_invalid_virtual_functions_fail_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses syntax_reference on each complete invalid original and requires an actual C++17 compiler rejection."
+        ]
+      },
+      "test_deferred_virtual_functions_remain_valid_cpp17": {
+        "activity": "external-reference",
+        "reason": [
+          "Uses syntax_reference for unchanged valid sources outside this bounded virtual-function slice."
+        ]
+      }
+    },
     "tests/rust/test_rust_try_operator.py": {
       "test_actual_rustc_accepts_question_mark_originals_with_explicit_owned_gap": {
         "activity": "mandatory-same-input-certification-and-owned-contract",

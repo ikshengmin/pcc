@@ -300,6 +300,10 @@ def bind_constructor_body(parser, definition, symbol, parameter_scope, declarati
         stores = lower_member_initializers(parser, definition, this, initializers,
                                           construction_calls=construction_calls)
         body = parser._block(new_scope=False)
+        if definition.polymorphic:
+            # No base subobjects precede it; members see the class's table.
+            from pcc.frontends.cpp.virtual_functions import vptr_store
+            stores.insert(0, vptr_store(definition, this, coord))
         body.block_items = stores + body.block_items
     finally:
         parser.scope = parent

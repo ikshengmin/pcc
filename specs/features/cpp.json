@@ -162,6 +162,16 @@
       "url": "https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2017/n4659.pdf"
     },
     {
+      "id": "class.virtual",
+      "title": "13.3 Virtual functions",
+      "url": "https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2017/n4659.pdf"
+    },
+    {
+      "id": "class.abstract",
+      "title": "13.4 Abstract classes",
+      "url": "https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2017/n4659.pdf"
+    },
+    {
       "id": "special",
       "title": "15 Special member functions",
       "url": "https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2017/n4659.pdf"
@@ -1025,6 +1035,23 @@
       ],
       "diagnostics": [
         "cpp.unsupported.classes"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "cpp.virtual-functions",
+      "title": "Virtual functions \u2014 remaining capability boundary",
+      "chapter_ids": [
+        "class.virtual",
+        "class.abstract"
+      ],
+      "scope": "Only inputs routed to cpp.unsupported.virtual-functions in the pinned frontend; this is an explicit capability boundary, not a claim that the entire corresponding specification feature is absent or implemented.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/cpp/test_cpp_virtual_functions.py"
+      ],
+      "diagnostics": [
+        "cpp.unsupported.virtual-functions"
       ],
       "evidence": []
     },
@@ -4305,6 +4332,14 @@
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
           "sha256": "e0c78dfd6780e4b8798b22be421d41f95ec2d376e3b7429067f332d04b9fbaed"
+        }
+      },
+      {
+        "code": "cpp.unsupported.virtual-functions",
+        "feature_id": "cpp.virtual-functions",
+        "source": {
+          "path": "pcc/frontends/cpp/virtual_functions.py",
+          "sha256": "eaa44e47362ebf3595a4d9c9606541c35c8899ee31a8a98319b8339cac08e021"
         }
       },
       {

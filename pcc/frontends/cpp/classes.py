@@ -7,7 +7,8 @@ constructors use this layout; constructors.py owns explicit construction of
 scalar/pointer subobjects and declared C1 members with bounded closed lifetime
 proofs when destruction is nontrivial.
 destructors.py and lifetimes.py own bounded normal exits and explicitly
-declared member destruction. Bases, virtual functions, unions, implicit
+declared member destruction. virtual_functions.py owns the table pointer and
+dispatch of polymorphic classes without bases. Bases, unions, implicit
 non-trivial special members and exception unwinding remain gaps.
 
 The parser and this module share ``Scope``/``Symbol``. There is no second
@@ -74,7 +75,7 @@ def record_declaration_projection_supported(dtype, types):
         return False
     definition = dtype.definition
     if (not definition.members or definition.constructors.overloads
-            or definition.destructor is not None):
+            or definition.destructor is not None or definition.polymorphic):
         return False
     for member in definition.members:
         plain = unqualified(member.dtype)
@@ -138,6 +139,8 @@ class ClassDefinition:
         self.unnamed_type_count = 0
         self.constructors = Symbol(dtype.name, "function", dtype.coord)
         self.destructor = None
+        # Virtual members in declaration order: the table entry order.
+        self.virtual_functions = []
         self.complete = False
         # The enclosing declaration provides the injected name for the current
         # non-nested/non-template class boundary. A data member can hide it just
@@ -166,6 +169,8 @@ class ClassDefinition:
                 "cpp.invalid-object-type", "a data member cannot have type void", symbol.coord
             )
         require_complete(dtype, symbol.coord)
+        from pcc.frontends.cpp.virtual_functions import require_concrete
+        require_concrete(dtype, symbol.coord)
         from pcc.frontends.cpp.arrays import const_array_elements
         if mutable and const_array_elements(symbol.dtype):
             raise CppDiagnostic(
@@ -195,13 +200,24 @@ class ClassDefinition:
         return self
 
     @property
+    def polymorphic(self):
+        return bool(self.virtual_functions)
+
+    @property
+    def abstract(self):
+        # Without bases every pure virtual member is its own final overrider.
+        return any(getattr(symbol, "method_pure", False) for symbol in self.virtual_functions)
+
+    @property
     def aggregate(self):
         # C++17 excludes user-provided/explicit constructors, not every
         # user-declared constructor. A first-declaration, non-explicit defaulted
         # C1 does not prevent aggregate initialization, even if private/deleted.
-        return (all(not getattr(constructor, "constructor_user_provided", True)
-                    and not getattr(constructor, "constructor_explicit", False)
-                    for constructor in self.constructors.overloads)
+        # [dcl.init.aggr]/1 also excludes classes with virtual functions.
+        return (not self.polymorphic
+                and all(not getattr(constructor, "constructor_user_provided", True)
+                        and not getattr(constructor, "constructor_explicit", False)
+                        for constructor in self.constructors.overloads)
                 and all(member.access == "public" for member in self.members))
 
     @property
@@ -253,6 +269,9 @@ class ClassDefinition:
             )
             for member in self.members
         ]
+        if self.polymorphic:
+            from pcc.frontends.cpp.virtual_functions import vptr_field
+            declarations.insert(0, vptr_field(self))
         if not declarations:
             name = "__pcc_cpp_empty_byte"
             declarations.append(c_ast.Decl(
@@ -386,7 +405,11 @@ def parse_class(parser):
                 if next_token.value in ("operator", "inline", "constexpr", "("):
                     _unsupported(token, "conversion functions and combined/parenthesized constructor specifiers are not implemented")
                 raise CppDiagnostic("cpp.invalid-explicit", "explicit requires a constructor or conversion function", token.coord)
-            if token.value in ("class", "struct", "union", "virtual",
+            if token.value == "virtual":
+                from pcc.frontends.cpp.virtual_functions import parse_virtual_member
+                definition.method_declarations.append(parse_virtual_member(parser, definition))
+                continue
+            if token.value in ("class", "struct", "union",
                                "template", "constexpr", "operator"):
                 _unsupported(token, "non-data class member semantics are not implemented")
             if token.value == "enum":
@@ -460,6 +483,10 @@ def parse_class(parser):
         parser.scope = parent
     parser._expect(";")
     definition.finish()
+    if definition.polymorphic:
+        # After every member prototype and before any published body.
+        from pcc.frontends.cpp.virtual_functions import complete_class
+        definition.method_declarations.extend(complete_class(parser, definition))
     if any(array_type(member.dtype) for member in definition.members):
         from pcc.frontends.cpp.size_queries import sizeof_type
         sizeof_type(dtype, parser.types, dtype.coord)
