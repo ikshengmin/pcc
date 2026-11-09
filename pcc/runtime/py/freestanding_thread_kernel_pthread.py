@@ -1091,6 +1091,9 @@ def pcc_thread_graph_lock_acquire_for(lock_word, site: i64) -> None:
         if pcc_current_thread_id() <= 0:
             pcc_platform_abort()
             return
+        # Registration may change this thread's state. The registered fast
+        # path has no state writer between its initial load and the CAS.
+        state = load_i64(state_slot, 0)
     acquired: int = 0
     queued: int = 0
     contended: int = 0
@@ -1117,7 +1120,8 @@ def pcc_thread_graph_lock_acquire_for(lock_word, site: i64) -> None:
             else:
                 pcc_thread_safepoint()
         wait_finished = i64(pcc_platform_monotonic_us())
-    state = load_i64(state_slot, 0)
+        # Polls and queue entry can change the no-park and queued bits.
+        state = load_i64(state_slot, 0)
     if queued != 0:
         # The queue entered no-park before linking; do not count it twice.
         store_i64(state_slot, 0, state + 16777216)
