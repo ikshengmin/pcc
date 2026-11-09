@@ -152,6 +152,29 @@ def _generator_borrowed_frame_map(host, count: int) -> ir.GlobalVariable:
     return frame_map
 
 
+def emit_generator_borrowed_owner_retirement(host) -> None:
+    """Retire the resume body's private borrowed copies after their last use.
+
+    Unregistering the root group does not erase its stack payload. A later
+    conservative scan can revisit this returned frame and retain a generator
+    through that stale pair. These are borrowed cells, so retirement needs no
+    decref or runtime call. Patch the completed body before activation guards
+    add a failure return that never initialized the pair.
+    """
+    ctx = host._generator_ctx_stack[-1]
+    fn = ctx["resume_function"]
+    for block in fn.blocks:
+        if not block._instrs:
+            continue
+        terminator = block._instrs[-1]
+        if host._instruction_opname_text(terminator) not in ("ret", "ret void", "ret_void"):
+            continue
+        builder = ir.IRBuilder(block)
+        builder.position_before(terminator)
+        builder.store(ir.Constant(_CSTR, None), ctx["gen_root"])
+        builder.store(ir.Constant(_CSTR, None), ctx["frame_root"])
+
+
 def register_generator_operand_root(host, name, slot, flag) -> None:
     """Give one generated operand the same persistent lifetime as a local.
 
@@ -2913,6 +2936,7 @@ class GeneratorLoweringMixin:
             self._emit_generator_finish()
 
         emit_generator_operand_restores(self)
+        emit_generator_borrowed_owner_retirement(self)
         self._instrument_python_activation(fn)
         self.builder = saved_builder
         self.current_function = saved_fn

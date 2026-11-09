@@ -3,10 +3,16 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 from pcc.frontends.python.pipeline import compile_python
 
 
-def test_generator_finalization_under_every_gc(tmp_path, pcc_runtime_archive):
+@pytest.mark.parametrize("inline_frames", ("0", "1"))
+def test_generator_finalization_under_every_gc(
+    tmp_path, monkeypatch, pcc_runtime_archive, inline_frames,
+):
+    monkeypatch.setenv("PCC_INLINE_GENERATOR_FRAMES", inline_frames)
     source = tmp_path / "gen_finalize.py"
     source.write_text('''import gc
 events = []

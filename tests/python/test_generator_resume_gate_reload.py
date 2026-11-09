@@ -117,3 +117,46 @@ def test_generator_resume_reloads_its_generator_and_frame_after_gates(tmp_path: 
         across = _managed_values_live_across_gates(text, r"[^ (]*_" + name + r"__gen_resume")
         assert across, name + ": the resume body has no loop-latch gate to check"
         assert all(values == [] for values in across.values()), (name, across)
+
+
+def test_generator_resume_retires_borrowed_owners_on_every_initialized_exit(tmp_path):
+    from pcc.frontends.python.pipeline import compile_python
+
+    source = tmp_path / "retired_owners.py"
+    source.write_text('''def values():
+    try:
+        yield 1
+        yield 2
+        return 3
+    finally:
+        print("finished")
+''')
+    output = tmp_path / "retired_owners.ll"
+    compile_python(str(source), str(output), emit_llvm_only=True)
+    text = output.read_text()
+    _, blocks, _ = _function_blocks(text, r"[^ (]*_values__gen_resume")
+    slots = set(re.findall(
+        r"(%gen\.(?:frame\.)?borrowed\.slot\.[-.\w]+) = getelementptr",
+        "\n".join(line for lines in blocks.values() for line in lines),
+    ))
+    assert len(slots) == 2
+    exits = failures = 0
+    for label, instructions in blocks.items():
+        if not instructions or not instructions[-1].startswith("ret "):
+            continue
+        if label.startswith("activation.failure"):
+            # The recursion guard can fail before either alloca is initialized.
+            assert not any(slot in line for slot in slots for line in instructions)
+            failures += 1
+            continue
+        exits += 1
+        for slot in slots:
+            clear = "store ptr null, ptr " + slot
+            positions = [index for index, line in enumerate(instructions)
+                         if line == clear]
+            assert len(positions) == 1, (label, slot, instructions)
+            # Retirement follows the last generator/frame use, including a
+            # yielded state update and exception/terminal cleanup.
+            assert not any(slot in line for line in instructions[positions[0] + 1:])
+    assert exits >= 4, "cover both yields, ordinary completion and exceptional exit"
+    assert failures == 1
