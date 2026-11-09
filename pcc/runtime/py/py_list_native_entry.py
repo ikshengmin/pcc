@@ -354,6 +354,48 @@ def py_gen_frame_take_group(lst: c_ptr, start: int, count: int, outputs: c_ptr) 
     return taken
 
 
+pcc_list_body_py_gen_frame_clear_group = extern(
+    "pcc_list_body_py_gen_frame_clear_group", (c_ptr, c_int64, c_int64), c_int64
+)
+
+
+@c_abi_export("py_gen_frame_clear_group")
+def py_gen_frame_clear_group(lst: c_ptr, start: int, count: int) -> int:
+    """Try replacing 2..16 frame cells with None; 0 leaves every cell alone.
+
+    The caller keeps its frame owner alive. A declined group must reload that
+    owner and use the original serial setters, including their error order.
+    This primitive is not yet selected by generator lowering.
+    """
+    # No implicit poll in this module. Publish the borrowed input before the
+    # body's first parking edge, exactly as for the existing take group.
+    if (count < 2 or count > 16 or start < 0
+            or load_i32(global_addr("pcc_gc_config_initialized"), 0) == 0
+            or atomic_load_i32(global_addr("pcc_gc_backend_frozen"), 0, "acquire") == 0
+            or (load_i32(global_addr("pcc_gc_backend_selected"), 0) != 3
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) != 4)
+            or load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0
+            or atomic_load_i32(global_addr("pcc_log_init_state"), 0, "acquire") != 2
+            or load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0
+            or load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) != 0):
+        return 0
+    native_frame_bytes: int = 40
+    native_range_capacity: int = 8
+    native_ranges_bytes: int = 128
+    pcc_thread_no_park_enter()
+    frame = stack_alloc(40)
+    memset(frame, 0, native_frame_bytes)
+    ranges = stack_alloc(128)
+    inputs = stack_alloc(8)
+    store_ptr(inputs, 0, lst)
+    pcc_gc_native_frame_enter(frame, ranges, native_range_capacity)
+    pcc_gc_native_root_bind_range(inputs, -1)
+    pcc_thread_no_park_exit()
+    cleared: int = pcc_list_body_py_gen_frame_clear_group(inputs, start, count)
+    pcc_gc_native_frame_leave(frame)
+    return cleared
+
+
 pcc_list_body_py_list_getitem = extern(
     "pcc_list_body_py_list_getitem", (c_ptr, c_int64), c_ptr
 )
