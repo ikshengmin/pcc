@@ -164,10 +164,14 @@ def _forwarding_target_prepare(target: c_ptr, node: c_ptr) -> c_ptr:
     rc: i64 = 0
     if ptr_is_null(head) != 0:
         rc = pcc_gc_forwarding_target_index_insert(target, node)
+        # A missing optional publication can hide an existing exact key.
+        # Duplicate insertion owns neither that key nor its reverse chain.
+        if rc != 1:
+            return null()
     else:
         rc = pcc_gc_forwarding_target_index_upsert(target, node)
-    if rc < 0:
-        return null()
+        if rc < 0:
+            return null()
     if ptr_is_null(head) != 0:
         return node
     return head
@@ -709,7 +713,8 @@ def pcc_gc_install_forwarding_unlocked(from_obj: c_ptr, to_obj: c_ptr) -> i64:
         if ptr_is_null(old_head) == 0:
             store_ptr(old_head, 24, node)
         _set_forwarding_head(node)
-        if pcc_gc_forwarding_index_insert(from_obj, node) < 0:
+        # This path allocated a new node; a duplicate key did not publish it.
+        if pcc_gc_forwarding_index_insert(from_obj, node) != 1:
             _set_forwarding_head(load_ptr(node, 16))
             nxt = load_ptr(node, 16)
             if ptr_is_null(nxt) == 0:
