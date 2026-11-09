@@ -1066,7 +1066,7 @@ def _has_main(source, path=None, include_dirs=None, cpp_args=None, target_triple
         # boundary. Never invoke C's system-preprocessor/regex fallback here.
         processed = preprocess_cpp(source, base_dir=os.path.dirname(path),
                                    include_dirs=include_dirs, cpp_args=cpp_args,
-                                   target_triple=target_triple)
+                                   target_triple=target_triple, source_name=path)
         parser = CppParser(target_triple=target_triple)
         parser.parse(processed, path)
         # Visibility through using-declarations/directives does not make a

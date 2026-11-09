@@ -564,6 +564,11 @@ class Preprocessor:
         self._line_no = 0
         self._file = "<string>"
         self._physical_file = "<string>"
+        # Opt-in GNU line markers for the shared lexer; C output never has
+        # them. source_name is the main file's presumed name in markers.
+        self.line_markers = False
+        self.source_name = None
+        self._marker_next = None
 
         # Language/platform predefines only. Library names and typedefs come
         # from headers, so an undeclared name cannot acquire a fake definition.
@@ -810,8 +815,28 @@ class Preprocessor:
         prefix = []
         for filename in self.forced_includes:
             self._include('"' + filename + '"', prefix, self.base_dir)
+        if self.line_markers and not self.forced_includes:
+            # A main file that never leaves its own lines needs no marker.
+            self._marker_next = (self._marker_file(self._file), 1)
         prefix.append(self._process_lines(_source_line_records(source), self.base_dir))
         return "\n".join(prefix)
+
+    def _marker_file(self, filename):
+        if filename == "<string>" and self.source_name is not None:
+            return self.source_name
+        return filename
+
+    def _mark(self, text, filename, line):
+        """Prefix a GNU line marker unless text continues the last output line."""
+        filename = self._marker_file(filename)
+        prefix = ""
+        if self._marker_next != (filename, line):
+            # The shared lexer reads the name up to the next quote, unescaped.
+            if '"' in filename or "\n" in filename:
+                raise RuntimeError("owned preprocessor: cannot mark file name " + repr(filename))
+            prefix = "# " + str(line) + ' "' + filename + '"\n'
+        self._marker_next = (filename, line + text.count("\n") + 1)
+        return prefix + text
 
     def _include(self, spelling, output, base_dir):
         spelling = spelling.strip()
@@ -848,6 +873,8 @@ class Preprocessor:
             self._file, self._line_no = old_file, old_line
             self._physical_file = old_physical_file
             self._include_depth -= 1
+        # The including file resumes after an inserted, possibly empty, block.
+        self._marker_next = None
 
     def _invalidate_expand_cache(self):
         self._expand_cache.clear()
@@ -860,6 +887,7 @@ class Preprocessor:
 
         while i < len(lines):
             self._line_no = lines[i].physical_line + line_offset
+            origin_file, origin_line = self._file, self._line_no
             # A function argument may expand an alias of __LINE__/__FILE__.
             # Do not reuse its prescanned numeric/string result on another line.
             self._invalidate_expand_cache()
@@ -921,6 +949,8 @@ class Preprocessor:
                 i += 1
                 line += "\n" + lines[i].text
             self._pragma_snapshot = None
+            if self.line_markers:
+                processed = self._mark(processed, origin_file, origin_line)
             output.append(processed)
             i += 1
 
@@ -1529,7 +1559,14 @@ class Preprocessor:
         return [token for record in pasted for token in record.tokens]
 
 
-def preprocess(source, base_dir=None, defines=None, include_dirs=None, cpp_args=None, target_triple=None, language="c"):
-    """Preprocess source in the explicitly selected language (C by default)."""
+def preprocess(source, base_dir=None, defines=None, include_dirs=None, cpp_args=None, target_triple=None, language="c",
+               line_markers=False, source_name=None):
+    """Preprocess source in the explicitly selected language (C by default).
+
+    line_markers adds a GNU line marker at each discontinuity of presumed file
+    or line; source_name names the main file in those markers.
+    """
     pp = Preprocessor(base_dir=base_dir, defines=defines, include_dirs=include_dirs, cpp_args=cpp_args, target_triple=target_triple, language=language)
+    pp.line_markers = line_markers
+    pp.source_name = source_name
     return pp.preprocess(source)

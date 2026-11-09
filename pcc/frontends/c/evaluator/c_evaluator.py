@@ -1055,7 +1055,7 @@ def _compile_translation_unit_artifact_job(
             raise ValueError("owned C++ input does not support the system preprocessor")
         codestr = preprocess_cpp(
             unit.source, base_dir=unit_base_dir, include_dirs=include_dirs,
-            cpp_args=cpp_args, target_triple=target_triple,
+            cpp_args=cpp_args, target_triple=target_triple, source_name=unit.name,
         )
     else:
         codestr = _preprocess_translation_unit_source(

@@ -10,7 +10,7 @@ def is_cpp_path(path):
 
 
 def preprocess_cpp(source, base_dir=None, include_dirs=None, cpp_args=None,
-                   target_triple=None):
+                   target_triple=None, source_name=None):
     import os
 
     from pcc.driver.paths import resolve_pcc_dir_from_environment
@@ -41,5 +41,8 @@ def preprocess_cpp(source, base_dir=None, include_dirs=None, cpp_args=None,
         if argument.startswith("-std=") or argument == "-ansi":
             raise ValueError("owned C++ frontend requires -std=c++17: " + argument)
         arguments.append(argument)
+    # Line markers keep included and skipped text at its presumed coordinate
+    # for C++ diagnostics; source_name names the main file in them.
     return preprocess(source, base_dir=base_dir, include_dirs=include_dirs,
-                      cpp_args=arguments, target_triple=target_triple, language="c++17")
+                      cpp_args=arguments, target_triple=target_triple, language="c++17",
+                      line_markers=True, source_name=source_name)
