@@ -14,26 +14,40 @@ class _ConfigAbort(Exception):
 def _configured(backend, *, tracing=0, legacy=0):
     cells = {}
     events = []
+    env_names = []
     options = {"PCC_GC_TRACING_ONLY": tracing, "PCC_GC4_TRACING_ONLY": legacy}
 
     def abort():
         raise _ConfigAbort
 
+    def getenv(name):
+        env_names.append(name)
+        return name
+
+    def parse_env_i32(name, default, low, high):
+        env_names.append(name)
+        return options.get(name, default)
+
+    # Single-thread policy model only; configuration races have their own
+    # fixture. Keep the aliases used by the actual read-barrier helper too.
     namespace = {
         "global_addr": lambda name: name,
         "load_i32": lambda name, offset: cells.get(name, 0),
+        "atomic_load_i32": lambda name, offset, order: cells.get(name, 0),
         "store_i32": lambda name, offset, value: cells.__setitem__(name, value),
         "atomic_store_i32": lambda name, offset, value, order: cells.__setitem__(name, value),
         "store_i64": lambda name, offset, value: cells.__setitem__(name, value),
         "cstr": lambda name: name,
-        "pcc_platform_getenv": lambda name: name,
+        "pcc_platform_getenv": getenv,
         "_pcc_gc_config_parse_backend": lambda name, fallback: backend,
-        "pcc_gc_config_parse_env_i32": lambda name, default, low, high: options.get(name, default),
+        "pcc_gc_config_parse_env_i32": parse_env_i32,
         "pcc_platform_write": lambda fd, message, size: events.append(("error", message)),
         "pcc_platform_abort": abort,
         "pcc_thread_enable_conservative_roots": lambda: events.append("snapshots"),
         "pcc_threads_enabled": lambda: 1,
         "pcc_gc_maybe_start_cms_worker": lambda: events.append("worker"),
+        "pcc_py_gc_minor_graph_lock": lambda: None,
+        "pcc_py_gc_minor_graph_unlock": lambda: None,
         "_graph_lock": lambda: None,
         "_graph_unlock": lambda: None,
         "global_load_ptr": lambda name: cells.get(name, 0),
@@ -43,18 +57,19 @@ def _configured(backend, *, tracing=0, legacy=0):
     config = body("freestanding_gc_public_collection.py", "pcc_gc_config_ensure", namespace)
     assert config() == backend
     assert config() == backend
+    assert not set(options).intersection(env_names)
     return cells, events, namespace
 
 
 @pytest.mark.parametrize("backend", [0, 1, 2, 3, 4])
-def test_counted_controls_remain_the_default_for_every_collector(backend):
+def test_collector_identity_selects_counted_gc0_and_count_free_gc1_to_gc4(backend):
     cells, events, _ = _configured(backend)
-    assert cells["pcc_gc_backend4_no_refcounts"] == 0
+    assert cells["pcc_gc_backend4_no_refcounts"] == int(backend != 0)
     assert cells["pcc_gc_refcount_atomic"] == int(backend == 0)
-    assert events == ["worker"]
+    assert events == (["worker"] if backend == 0 else ["snapshots", "worker"])
 
 
-@pytest.mark.parametrize("backend", [1, 2, 4])
+@pytest.mark.parametrize("backend", [1, 2, 3, 4])
 @pytest.mark.parametrize("operation", ["py_incref", "py_decref"])
 def test_count_free_configuration_enables_machine_roots_and_suppresses_updates(backend, operation):
     cells, events, namespace = _configured(backend, tracing=1)
@@ -73,19 +88,23 @@ def test_count_free_configuration_enables_machine_roots_and_suppresses_updates(b
 
 
 @pytest.mark.parametrize("backend", [0, 3])
-def test_unadmitted_tracing_backends_fail_before_worker_start(backend):
-    with pytest.raises(_ConfigAbort):
-        _configured(backend, tracing=1)
+def test_removed_tracing_selector_does_not_override_gc0_or_gc3(backend):
+    cells, events, _ = _configured(backend, tracing=1)
+    default_cells, default_events, _ = _configured(backend)
+    assert (cells, events) == (default_cells, default_events)
 
 
 @pytest.mark.parametrize("backend", [0, 1, 2, 3])
-def test_legacy_gc4_option_keeps_its_original_backend_restriction(backend):
-    with pytest.raises(_ConfigAbort):
-        _configured(backend, legacy=1)
+def test_removed_gc4_selector_does_not_restrict_other_backends(backend):
+    cells, events, _ = _configured(backend, legacy=1)
+    default_cells, default_events, _ = _configured(backend)
+    assert (cells, events) == (default_cells, default_events)
 
 
-def test_legacy_gc4_option_still_enables_the_same_count_free_kernel():
+def test_removed_gc4_selector_leaves_gc4_default_ownership_unchanged():
     cells, events, _ = _configured(4, legacy=1)
+    default_cells, default_events, _ = _configured(4)
+    assert (cells, events) == (default_cells, default_events)
     assert cells["pcc_gc_backend4_no_refcounts"] == 1
     assert events == ["snapshots", "worker"]
 
