@@ -80,6 +80,237 @@ def test_packed_maps_keep_root_and_both_reload_endpoints(monkeypatch):
         packed.close()
 
 
+@pytest.mark.parametrize("count", (64, 256, 1024))
+@pytest.mark.parametrize("shared", (False, True))
+def test_repeated_root_cells_store_only_their_union(monkeypatch, count, shared):
+    from pcc.backend.self_backend_precise_stackmaps import (
+        PlannedManagedReload, PlannedRootLocation, PlannedSafepoint,
+    )
+    monkeypatch.setattr(frame, "get_indexed_function_kernel", lambda function: Layout())
+    roots = tuple(PlannedRootLocation(-8 * (index + 11), True) for index in range(count))
+    records = tuple(PlannedSafepoint(
+        index, ".Lsite" + str(index), 1,
+        roots if shared else tuple(list(roots)),
+        reloads=(PlannedManagedReload(-88, -96),),
+    ) for index in range(count))
+    sorted_sizes = []
+
+    def counted_sorted(spans):
+        sorted_sizes.append(len(spans))
+        return sorted(spans)
+
+    monkeypatch.setattr(frame, "sorted", counted_sorted, raising=False)
+    size = (count + 12) * 8
+    from pcc.backend.self_backend_ir import ParsedFunction
+    from pcc.backend.self_backend_precise_stackmaps import FunctionStackMapPlan
+    function = object.__new__(ParsedFunction)
+    function.frame_size = size
+    plan = FunctionStackMapPlan("probe", 1, size, ".Lend", records, (), (), (), "x86_64-linux")
+    assert frame.fixed_frame_padding(function, plan) == [
+        (8, 15), (16, 24), (48, 55), ((count + 10) * 8, size),
+    ]
+    # n, 4n and 16n records over n distinct cells must not materialize n*n
+    # intervals, even when the location tuples have different identities.
+    assert sorted_sizes == [count + 5]
+
+
+def test_shared_custom_roots_keep_every_offset_read(monkeypatch):
+    monkeypatch.setattr(frame, "get_indexed_function_kernel", lambda function: Layout())
+
+    class ChangingRoot:
+        reads = 0
+
+        @property
+        def offset(self):
+            self.reads += 1
+            return -88 if self.reads == 1 else -104
+
+    root = ChangingRoot()
+    record = SimpleNamespace(locations=(root,), reloads=())
+    plan = SimpleNamespace(packed_records=None, records=(record, record))
+    assert frame.fixed_frame_padding(SimpleNamespace(frame_size=112), plan) == [
+        (8, 15), (16, 24), (48, 55), (88, 96), (104, 112),
+    ]
+    assert root.reads == 2
+
+
+def test_custom_root_revalidates_repeated_cell_after_frame_changes(monkeypatch):
+    from pcc.backend.self_backend_ir import ParsedFunction
+    from pcc.backend.self_backend_precise_stackmaps import (
+        FunctionStackMapPlan, PlannedRootLocation, PlannedSafepoint,
+    )
+    monkeypatch.setattr(frame, "get_indexed_function_kernel", lambda function: Layout())
+    function = object.__new__(ParsedFunction)
+    function.frame_size = 160
+
+    class ChangingRoot:
+        reads = 0
+
+        @property
+        def offset(self):
+            self.reads += 1
+            if self.reads == 2:
+                function.frame_size = 64
+            return -88
+
+    root = ChangingRoot()
+    roots = (root,) + tuple(PlannedRootLocation(-8 * index, True) for index in range(1, 16))
+    record = PlannedSafepoint(1, ".Lsite", 1, roots)
+    plan = FunctionStackMapPlan("probe", 1, 160, ".Lend", (record, record), (), (), (), "x86_64-linux")
+    with pytest.raises(BackendUnavailable, match="invalid x86 fixed frame span"):
+        frame.fixed_frame_padding(function, plan)
+    assert root.reads == 2
+
+
+def test_custom_record_iterator_cannot_reuse_stale_plain_roots(monkeypatch):
+    from pcc.backend.self_backend_ir import ParsedFunction
+    from pcc.backend.self_backend_precise_stackmaps import (
+        FunctionStackMapPlan, PlannedRootLocation, PlannedSafepoint,
+    )
+    monkeypatch.setattr(frame, "get_indexed_function_kernel", lambda function: Layout())
+    function = object.__new__(ParsedFunction)
+    function.frame_size = 112
+    root = PlannedRootLocation(-88, True)
+    record = PlannedSafepoint(1, ".Lsite", 1, (root,))
+
+    def records():
+        yield record
+        object.__setattr__(root, "offset", -104)
+        yield record
+
+    plan = FunctionStackMapPlan("probe", 1, 112, ".Lend", records(), (), (), (), "x86_64-linux")
+    assert frame.fixed_frame_padding(function, plan) == [
+        (8, 15), (16, 24), (48, 55), (88, 96), (104, 112),
+    ]
+
+
+def test_invalid_cell_after_shared_roots_still_fails(monkeypatch):
+    from pcc.backend.self_backend_ir import ParsedFunction
+    from pcc.backend.self_backend_precise_stackmaps import (
+        FunctionStackMapPlan, PlannedManagedReload, PlannedRootLocation, PlannedSafepoint,
+    )
+    monkeypatch.setattr(frame, "get_indexed_function_kernel", lambda function: Layout())
+    roots = tuple(PlannedRootLocation(-8 * index, True) for index in range(1, 17))
+    records = (
+        PlannedSafepoint(1, ".La", 1, roots),
+        PlannedSafepoint(2, ".Lb", 1, roots,
+                         reloads=(PlannedManagedReload(-88, -160),)),
+    )
+    function = object.__new__(ParsedFunction)
+    function.frame_size = 144
+    plan = FunctionStackMapPlan("probe", 1, 144, ".Lend", records, (), (), (), "x86_64-linux")
+    with pytest.raises(BackendUnavailable, match="invalid x86 fixed frame span"):
+        frame.fixed_frame_padding(function, plan)
+
+
+def _byte_union_padding(function, plan):
+    """Bounded independent oracle: mark owned bytes, then enumerate holes."""
+    kernel = frame.get_indexed_function_kernel(function)
+    owned = set()
+
+    def keep(offset, size):
+        assert 0 <= size <= offset <= function.frame_size
+        owned.update(range(offset - size, offset))
+
+    for slot in range(len(kernel.slot_scalars) // 2):
+        keep(kernel.slot_offset(slot), kernel.type_layout(kernel.slot_type_id(slot)).first)
+    for value in range(len(kernel.value_names)):
+        offset = kernel.alloca_offset(value)
+        if offset >= 0:
+            keep(offset, kernel.type_span(kernel.alloca_type_id(value)).third)
+    if kernel.hidden_sret_slot_id >= 0:
+        keep(kernel.slot_offset(kernel.hidden_sret_slot_id), 8)
+    for record in plan.records:
+        for root in record.locations:
+            keep(-root.offset, 8)
+        for reload in record.reloads:
+            keep(-reload.source_offset, 8)
+            keep(-reload.destination_offset, 8)
+    padding = []
+    offset = 0
+    while offset < function.frame_size:
+        if offset in owned:
+            offset += 1
+            continue
+        start = offset
+        while offset < function.frame_size and offset not in owned:
+            offset += 1
+        padding.append((start, offset))
+    return padding
+
+
+def _repeated_mapped_root_program():
+    calls = "\n".join(f"  %checked.{index} = call i1 @check(ptr %root)" for index in range(64))
+    stores = "\n".join(
+        f"  %slot.{index} = getelementptr ptr, ptr %root, i64 {index}\n"
+        f"  store ptr %value, ptr %slot.{index}" for index in range(16)
+    )
+    return '''@frame_map = internal constant i32 16
+define void @pcc_gc_frame_enter(ptr %map, ptr %roots) {
+entry:
+  ret void
+}
+define void @pcc_gc_frame_leave(ptr %roots) {
+entry:
+  ret void
+}
+define i1 @check(ptr %root) {
+entry:
+  %value = load ptr, ptr %root
+  %number = load i64, ptr %value
+  %ok = icmp eq i64 %number, 42
+  ret i1 %ok
+}
+define i32 @main() {
+entry:
+  %value = alloca i64
+  store i64 42, ptr %value
+  %root = alloca [16 x ptr]
+''' + stores + '''
+  call void @pcc_gc_frame_enter(ptr @frame_map, ptr %root)
+''' + calls + '''
+  call void @pcc_gc_frame_leave(ptr %root)
+  %status = select i1 %checked.63, i32 0, i32 91
+  ret i32 %status
+}
+'''
+
+
+def test_repeated_mapped_roots_preserve_assembly_and_object_bytes(monkeypatch):
+    from pcc.backend.target_objects import encode_assembly_object
+
+    ir = 'target triple = "' + TARGETS[0] + '"\n' + _repeated_mapped_root_program()
+    actual = emit_self_asm(ir, TARGETS[0])
+    with monkeypatch.context() as scoped:
+        scoped.setattr(frame, "fixed_frame_padding", _byte_union_padding)
+        reference = emit_self_asm(ir, TARGETS[0])
+    assert actual == reference
+    assert encode_assembly_object(actual, TARGETS[0]) == encode_assembly_object(reference, TARGETS[0])
+
+
+@pytest.mark.pcc_gate(
+    probe=lambda: sys.platform == "linux" and platform.machine().lower() in ("x86_64", "amd64")
+)
+def test_repeated_mapped_roots_execute_with_owned_linker(monkeypatch, tmp_path):
+    from tests.c.test_self_backend_x86_64_aggregate_stores import _run_owned_program
+
+    original = frame.fixed_frame_padding
+    shared_counts = []
+
+    def capture(function, plan):
+        identities = {}
+        for record in plan.records:
+            if len(record.locations) >= 16:
+                key = id(record.locations)
+                identities[key] = identities.get(key, 0) + 1
+        shared_counts.append(max(identities.values(), default=0))
+        return original(function, plan)
+
+    monkeypatch.setattr(frame, "fixed_frame_padding", capture)
+    _run_owned_program(_repeated_mapped_root_program(), tmp_path)
+    assert max(shared_counts) >= 64
+
+
 def test_hidden_sret_storage_is_kept_without_an_ordinary_value_slot(monkeypatch):
     class SretOnly:
         slot_scalars = []
