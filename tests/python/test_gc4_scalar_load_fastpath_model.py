@@ -76,7 +76,7 @@ class _LoadModel:
             "pcc_gc_note_load": self.note_load,
             "pcc_gc_note_relocation_read": self.resolve,
             "pcc_gc_forwarding_find": self.find_forwarding,
-            "pcc_gc_object_is_known_no_lock": self.is_known,
+            "pcc_gc_object_is_known_stable": self.is_known,
             "_gc_relocation_candidate": self.gc3_candidate,
         }
         _load_functions(

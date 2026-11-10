@@ -17,6 +17,7 @@ PUBLIC_SYMBOLS = {
     "py_gc_index_insert",
     "py_gc_index_remove",
     "pcc_gc_object_index_find",
+    "pcc_gc_object_index_find_stable",
     "pcc_gc_object_index_find_unpublished",
     "pcc_gc_object_index_insert",
     "pcc_gc_object_index_plan_capacity",
@@ -135,6 +136,7 @@ void *py_gc_index_find(void *obj);
 int64_t py_gc_index_insert(void *obj, void *node);
 void *py_gc_index_remove(void *obj);
 void *pcc_gc_object_index_find(void *obj);
+void *pcc_gc_object_index_find_stable(void *obj);
 int64_t pcc_gc_object_index_insert(void *obj, void *node);
 int64_t pcc_gc_object_index_plan_capacity(int64_t extra);
 int64_t pcc_gc_object_index_plan_commit(
@@ -360,18 +362,24 @@ int main(void) {
        that wraps around the end of the table. */
     for (i = 0; i < 6; i++) {
         if (pcc_gc_object_index_seen(keys[i]) != 1) return 140;
+        if (pcc_gc_object_index_find_stable(keys[i]) != &nodes[i]) return 190;
     }
     if (pcc_gc_object_index_seen(0) != 0) return 141;
     if (pcc_gc_object_index_seen((void *)(uintptr_t)3) != 0) return 142;
+    if (pcc_gc_object_index_find_stable(0) != 0) return 191;
+    if (pcc_gc_object_index_find_stable((void *)(uintptr_t)3) != 0) return 192;
     if (pcc_gc_object_index_remove(keys[0]) != &nodes[0]) return 62;
     if (pcc_gc_object_index_remove(keys[2]) != &nodes[2]) return 63;
     if (pcc_gc_object_index_find(keys[5]) != &nodes[5]) return 64;
     for (i = 0; i < 6; i++) {
         int64_t expected = (i == 0 || i == 2) ? 0 : 1;
         if (pcc_gc_object_index_seen(keys[i]) != expected) return 143;
+        void *expected_node = expected ? (void *)&nodes[i] : NULL;
+        if (pcc_gc_object_index_find_stable(keys[i]) != expected_node) return 193;
     }
     pcc_gc_object_index_clear();
     if (pcc_gc_object_index_find(keys[5]) != 0) return 65;
+    if (pcc_gc_object_index_find_stable(keys[5]) != 0) return 194;
     if (pcc_gc_object_index_insert(keys[5], &nodes[5]) != 1) return 66;
     if (pcc_gc_object_index_remove(keys[5]) != &nodes[5]) return 67;
     pcc_gc_object_index_clear();

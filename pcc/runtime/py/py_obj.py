@@ -262,6 +262,9 @@ pcc_gc_object_is_known_no_lock = extern(
     (c_ptr,),
     c_int64,
 )
+pcc_gc_object_is_known_stable = extern(
+    "pcc_gc_object_is_known_stable", (c_ptr,), c_int64
+)
 pcc_gc_backend4_slot_needs_resolve = extern(
     "pcc_gc_backend4_slot_needs_resolve",
     (c_ptr,),
@@ -574,7 +577,7 @@ def pcc_gc_release(o) -> None:
     elif backend == 4:
         if _gc_forwarding_population() > 0 and _gc_relocation_candidate(o) != 0:
             resolved = pcc_gc_note_relocation_read(o)
-            if ptr_eq(resolved, o) != 0 and pcc_gc_object_is_known_no_lock(o) == 0:
+            if ptr_eq(resolved, o) != 0 and pcc_gc_object_is_known_stable(o) == 0:
                 return
             o = resolved
     if backend == 3:

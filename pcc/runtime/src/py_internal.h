@@ -483,6 +483,8 @@ PyGcNode *py_gc_index_find(PyObject *obj);
 int64_t py_gc_index_insert(PyObject *obj, PyGcNode *node);
 PyGcNode *py_gc_index_remove(PyObject *obj);
 void *pcc_gc_object_index_find(PyObject *obj);
+/* Stable key/node pairing only; the caller separately owns node lifetime. */
+void *pcc_gc_object_index_find_stable(PyObject *obj);
 int64_t pcc_gc_object_index_insert(PyObject *obj, void *node);
 int64_t pcc_gc_object_index_plan_capacity(int64_t extra);
 int64_t pcc_gc_object_index_plan_commit(
@@ -612,6 +614,8 @@ void *pcc_gc_zpage_page_index_remove(void *page);
 void pcc_gc_zpage_page_index_clear(void);
 int64_t pcc_gc_object_is_known(PyObject *obj);
 int64_t pcc_gc_object_is_known_no_lock(PyObject *obj);
+/* Rooted/leased no-park query, without graph exclusion. */
+int64_t pcc_gc_object_is_known_stable(PyObject *obj);
 int64_t pcc_gc_backend4_slot_needs_resolve(PyObject *value);
 int64_t pcc_gc_slot_is_runtime_root(PyObject **slot);
 

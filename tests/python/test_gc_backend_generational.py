@@ -549,7 +549,7 @@ def test_gc_relocation_read_non_candidate_fast_path_skips_graph_lock():
     py_note = py_src.split('@c_abi_export("pcc_gc_note_relocation_read")', 1)[1].split(
         '@c_abi_export("pcc_gc_object_id")', 1
     )[0]
-    assert "pcc_gc_object_is_known_no_lock(obj)" in py_note
+    assert "pcc_gc_object_is_known_stable(obj)" in py_note
     assert "load_i32(obj, 12) & 2048" in py_note
     assert py_note.index("load_i32(obj, 12) & 2048") < py_note.index("_graph_lock()")
 

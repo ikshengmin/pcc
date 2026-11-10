@@ -38,7 +38,8 @@ def _observe(state):
         state.store(base, offset, value)
     state.ns["store_ptr"] = store
     for name, table in (("pcc_gc_forwarding_index_find", state.forwardings),
-                        ("pcc_gc_object_index_find", state.index)):
+                        ("pcc_gc_object_index_find", state.index),
+                        ("pcc_gc_object_index_find_stable", state.index)):
         def find(obj, name=name, table=table):
             probes.append((name, obj))
             return table.get(obj, 0)

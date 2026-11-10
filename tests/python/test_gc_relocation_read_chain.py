@@ -15,7 +15,7 @@ COUNT = "pcc_gc_relocation_barrier_forwards"
 def _read_chain(backend, counted, edges):
     state, objects, slot = _chain(backend, counted, edges)
     load_functions(PY / "freestanding_gc_root_operations.py",
-                   {"pcc_gc_object_is_known_no_lock"}, state.ns)
+                   {"pcc_gc_object_is_known_no_lock", "pcc_gc_object_is_known_stable"}, state.ns)
     load_functions(PY / "freestanding_gc_forwarding_identity.py",
                    {"pcc_gc_note_relocation_read"}, state.ns)
     state.store(COUNT, 0, 7)
@@ -59,7 +59,8 @@ def test_intermediate_identities_need_no_header_or_object_index(backend, kind):
     _, probes = _observe(state)
     assert state.ns["pcc_gc_note_relocation_read"](objects[0][0]) == objects[-1][0]
     assert not [(name, obj) for name, obj in probes
-                if name == "pcc_gc_object_index_find" and obj in intermediates]
+                if name in ("pcc_gc_object_index_find", "pcc_gc_object_index_find_stable")
+                and obj in intermediates]
     assert state.load(COUNT) == 8
 
 

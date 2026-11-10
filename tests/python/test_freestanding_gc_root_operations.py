@@ -56,6 +56,7 @@ OWNED_SYMBOLS = PIN_SYMBOLS | TRANSFER_SYMBOLS | LEASE_SYMBOLS | HANDLED_SYMBOLS
     "pcc_gc_set_mark_color",
     "pcc_gc_shade_gray_atomic",
     "pcc_gc_object_is_known_no_lock",
+    "pcc_gc_object_is_known_stable",
     "pcc_gc_resolve_root_slot_unlocked",
     "pcc_gc_resolve_root_slot_mode",
     "pcc_gc_resolve_borrowed_root_slot_unlocked",
@@ -71,6 +72,7 @@ OWNED_SYMBOLS = PIN_SYMBOLS | TRANSFER_SYMBOLS | LEASE_SYMBOLS | HANDLED_SYMBOLS
 RAW_ONLY_CROSS_OBJECT_SYMBOLS = {
     "pcc_gc_forwarding_index_find",
     "pcc_gc_object_index_find",
+    "pcc_gc_object_index_find_stable",
     # GC1/GC2 container initialization shades without the graph lock.
     "pcc_gc_count_free_store_shade",
     # A stopped-world remark traces the roots it shades from the stack.
@@ -173,6 +175,8 @@ def test_root_operations_have_one_strict_source_owner():
             caller = strict
         elif symbol == "pcc_gc_resolve_borrowed_root_slot_unlocked":
             caller = (RUNTIME_DIR / "py/freestanding_gc_mapped_roots.py").read_text()
+        elif symbol == "pcc_gc_object_is_known_stable":
+            caller = (RUNTIME_DIR / "py/freestanding_gc_forwarding_identity.py").read_text()
         elif symbol in ("pcc_gc_static_literal_probe", "pcc_gc_static_literal_contains"):
             caller = strict
         elif symbol in ("pcc_gc_metric_pin_balance", "pcc_gc_metric_allocation_count", "pcc_gc_metric_store_count"):

@@ -59,6 +59,9 @@ __pcc_freestanding__ = True
 
 pcc_gc_forwarding_index_find = extern("pcc_gc_forwarding_index_find", (c_ptr,), c_ptr)
 pcc_gc_object_index_find = extern("pcc_gc_object_index_find", (c_ptr,), c_ptr)
+pcc_gc_object_index_find_stable = extern(
+    "pcc_gc_object_index_find_stable", (c_ptr,), c_ptr
+)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
 pcc_gc_trace_stack_push = extern("pcc_gc_trace_stack_push", (c_ptr,), c_void)
@@ -417,8 +420,25 @@ def pcc_gc_shade_gray_atomic(obj, allow_black: i64) -> None:
         old = observed
 
 
+@c_abi_export("pcc_gc_object_is_known_stable")
+def pcc_gc_object_is_known_stable(obj) -> i64:
+    """Known-object query for a rooted/leased caller without graph exclusion.
+
+    Validate the matched key/node before dereferencing the node: a concurrent
+    shift can otherwise substitute a different object's unprotected node.
+    The caller keeps obj and its own node alive through this no-park query.
+    """
+    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+        return 0
+    node = pcc_gc_object_index_find_stable(obj)
+    if ptr_is_null(node) != 0 or load_i64(node, 32) != 0:
+        return 0
+    return 0 if (load_i32(obj, 12) & 524288) != 0 else 1
+
+
 @c_abi_export("pcc_gc_object_is_known_no_lock")
 def pcc_gc_object_is_known_no_lock(obj) -> i64:
+    """Known-object query under the caller's graph exclusion or quiescence."""
     if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
         return 0
     node = pcc_gc_object_index_find(obj)

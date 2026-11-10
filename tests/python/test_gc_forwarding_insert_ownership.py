@@ -44,7 +44,7 @@ class Install(Index):
         self.store('pcc_gc_backend_selected', 0, backend)
         self.store('pcc_gc_config_initialized', 0, 1)
         load_bodies(self.ns, ROOT / 'freestanding_gc_root_operations.py',
-                    {'pcc_gc_object_is_known_no_lock'})
+                    {'pcc_gc_object_is_known_no_lock', 'pcc_gc_object_is_known_stable'})
         load_bodies(self.ns, ROOT / 'freestanding_gc_forwarding_identity.py')
         self.a, self.b, self.t, self.u = [self.object() for _ in range(4)]
 

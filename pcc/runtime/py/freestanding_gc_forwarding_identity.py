@@ -59,6 +59,9 @@ pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void
 pcc_gc_object_is_known_no_lock = extern(
     "pcc_gc_object_is_known_no_lock", (c_ptr,), c_int64
 )
+pcc_gc_object_is_known_stable = extern(
+    "pcc_gc_object_is_known_stable", (c_ptr,), c_int64
+)
 pcc_gc_object_index_find = extern("pcc_gc_object_index_find", (c_ptr,), c_ptr)
 pcc_gc_zpage_owner_index_find = extern(
     "pcc_gc_zpage_owner_index_find", (c_ptr,), c_ptr
@@ -411,7 +414,7 @@ def pcc_gc_backend4_slot_needs_resolve(value: c_ptr) -> i64:
         return 0
     if ptr_is_null(pcc_gc_forwarding_find(value)) == 0:
         return 1
-    if pcc_gc_object_is_known_no_lock(value) != 0:
+    if pcc_gc_object_is_known_stable(value) != 0:
         if (load_i32(value, 12) & 2048) != 0:
             return 1
     return 0
@@ -856,7 +859,7 @@ def pcc_gc_note_relocation_read(obj: c_ptr) -> c_ptr:
     selected: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
     if selected != 3 and selected != 4:
         return obj
-    if pcc_gc_object_is_known_no_lock(obj) != 0:
+    if pcc_gc_object_is_known_stable(obj) != 0:
         if (load_i32(obj, 12) & 2048) == 0:
             return obj
     _graph_lock()

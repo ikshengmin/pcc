@@ -465,7 +465,7 @@ def pcc_gc_index_py_find_published(published_cell: c_ptr, key: c_ptr) -> c_ptr:
 
 @c_abi_export("pcc_gc_object_index_find_unpublished")
 def pcc_gc_object_index_find_unpublished(obj: c_ptr) -> c_ptr:
-    """Find an object node after publication-record OOM, without another lock.
+    """Read an authoritative object node with generation validation.
 
     Validate slots/capacity before dereferencing either, then validate the
     key/value pair after probing. The generation and retired-table protocol
@@ -508,6 +508,18 @@ def pcc_gc_object_index_find_unpublished(obj: c_ptr) -> c_ptr:
         atomic_fence("acquire")
         if atomic_load_i64(sequence, 0, "relaxed") == before:
             return found
+
+
+@c_abi_export("pcc_gc_object_index_find_stable")
+def pcc_gc_object_index_find_stable(obj: c_ptr) -> c_ptr:
+    """Match key and node across concurrent shifts, without acquiring a lock.
+
+    A non-NULL publication record does not stabilize its mutable key/node
+    slots. Use the same versioned protocol as the no-record fallback. The
+    caller must separately keep this object's node alive after the lookup
+    and remain no-park through its use; this is not a node lifetime lease.
+    """
+    return pcc_gc_object_index_find_unpublished(obj)
 
 
 @c_abi_export("pcc_gc_index_reclaim_retired")

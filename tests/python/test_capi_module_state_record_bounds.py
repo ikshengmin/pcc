@@ -56,7 +56,7 @@ class _Memory:
             PyMem_Calloc=self.calloc,
             PyMem_Free=self.free,
             PyErr_NoMemory=lambda: self.errors.append("NoMemory"),
-            pcc_gc_object_is_known_no_lock=self.is_known,
+            pcc_gc_object_is_known_stable=self.is_known,
             pcc_gc_pin=self.pinned.append,
             pcc_runtime_module_class=lambda: self.module_class,
             py_instance_new=self.new_module,

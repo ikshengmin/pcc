@@ -68,7 +68,7 @@ py_raise_owned = extern("py_raise_owned", (c_ptr,), c_void)
 py_exc_new = extern("py_exc_new", (c_int64, c_ptr), c_ptr)
 py_err_occurred = extern("py_err_occurred", (), c_int64)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_object_is_known_no_lock = extern("pcc_gc_object_is_known_no_lock", (c_ptr,), c_int64)
+pcc_gc_object_is_known_stable = extern("pcc_gc_object_is_known_stable", (c_ptr,), c_int64)
 pcc_runtime_module_class = extern("pcc_runtime_module_class", (), c_ptr)
 PyMem_Calloc = extern("PyMem_Calloc", (c_int64, c_int64), c_ptr)
 PyMem_Free = extern("PyMem_Free", (c_ptr,), c_void)
@@ -122,7 +122,7 @@ def pcc_capi_register_module_state(module, def_obj, state) -> int:
     store_ptr(node, 24, load_ptr(head, 0))
     store_ptr(head, 0, node)
     if not ptr_is_null(module) and not is_tagged_int(module):
-        if pcc_gc_object_is_known_no_lock(module) != 0:
+        if pcc_gc_object_is_known_stable(module) != 0:
             pcc_gc_pin(module)
     return 0
 
@@ -200,7 +200,7 @@ def PyType_FromModuleAndSpec(module, spec, bases) -> c_ptr:
         return null()
     py_incref(module)
     if not is_tagged_int(module):
-        if pcc_gc_object_is_known_no_lock(module) != 0:
+        if pcc_gc_object_is_known_stable(module) != 0:
             pcc_gc_pin(module)
     table = global_addr("pcc_capi_cext_type_modules")
     store_ptr(ptr_add(table, offset * 8), 0, module)

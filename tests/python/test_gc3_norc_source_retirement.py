@@ -96,6 +96,9 @@ class GC3(RetirementState):
             'pcc_gc_tracing_has_sweep_candidate': self.candidates,
             'pcc_gc_object_index_insert': self.insert_index,
             'pcc_gc_object_index_find': lambda obj: self.index.get(obj, 0),
+            # One dictionary probe supplies the stable index boundary, not
+            # a native concurrent publication or lifetime proof.
+            'pcc_gc_object_index_find_stable': lambda obj: self.index.get(obj, 0),
             'pcc_gc_pointer_is_managed': lambda obj: int(obj in self.index or obj in self.managed),
             'pcc_gc_managed_pointer_index_insert': self.register_pointer,
             'pcc_gc_managed_pointer_index_remove': lambda obj: self.managed.discard(obj),
@@ -112,6 +115,7 @@ class GC3(RetirementState):
             'pcc_gc_identity_index_insert': self.insert_identity,
             'pcc_gc_identity_index_remove': lambda obj: self.identities.pop(obj, 0),
             'pcc_gc_object_is_known_no_lock': self.known,
+            'pcc_gc_object_is_known_stable': self.known,
             'pcc_gc_object_node_is_active': lambda node: int(self.load(node, 32) == 0 and not self.load(self.load(node, 0), 12) & 524288),
             'pcc_gc_backend4_zpage_payload_span_preflight_locked': lambda obj, size: int(size == 0),
             'pcc_gc_retain_plan_finish': lambda plan: None,

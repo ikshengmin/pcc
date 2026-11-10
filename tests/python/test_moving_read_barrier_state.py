@@ -69,6 +69,9 @@ class Moving:
             pcc_gc_backend=lambda: backend, pcc_current_thread_id=lambda: 7,
             pcc_thread_safepoint=lambda: self.events.append(('poll',)),
             pcc_gc_object_is_known_no_lock=lambda obj: int(obj in self.objects),
+            # This finite predicate supplies stable-known admission only;
+            # native index-publication ordering is outside this model.
+            pcc_gc_object_is_known_stable=lambda obj: int(obj in self.objects),
             pcc_gc_object_is_address_pinned=lambda obj: int(bool(self.load(obj, 12) & 64)),
             pcc_gc_forwarding_head=lambda: self.load(FWD, 0),
             pcc_gc_forwarding_list_head=lambda: self.load(FWD, 0),

@@ -29,6 +29,7 @@ def _fixture(backend, shape):
     state.ns["pcc_gc_backend"] = lambda: backend
     load_functions(ROOTS, {"pcc_gc_pin", "pcc_gc_unpin",
                           "pcc_gc_object_is_known_no_lock",
+                          "pcc_gc_object_is_known_stable",
                           "_resolve_root_slot_mode"}, state.ns)
     load_functions(READS, {"pcc_gc_note_relocation_read"}, state.ns)
     # A fixed synthetic frame gives one reproducible metric shard (offset 128).

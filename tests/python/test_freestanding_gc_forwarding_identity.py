@@ -83,6 +83,7 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_identity_index_remove",
     "pcc_gc_object_index_find",
     "pcc_gc_object_is_known_no_lock",
+    "pcc_gc_object_is_known_stable",
     "pcc_gc_zpage_owner_index_find",
     "pcc_py_gc_minor_graph_lock",
     "pcc_py_gc_minor_graph_unlock",
@@ -223,9 +224,9 @@ def test_forwarding_identity_preserves_locking_and_safe_lookup_order() -> None:
 
     slot = _export_body(strict, "pcc_gc_backend4_slot_needs_resolve")
     assert slot.index("pcc_gc_forwarding_find(value)") < slot.index(
-        "pcc_gc_object_is_known_no_lock(value)"
+        "pcc_gc_object_is_known_stable(value)"
     )
-    assert slot.index("pcc_gc_object_is_known_no_lock(value)") < slot.index(
+    assert slot.index("pcc_gc_object_is_known_stable(value)") < slot.index(
         "load_i32(value, 12)"
     )
 
@@ -238,7 +239,7 @@ def test_forwarding_identity_preserves_locking_and_safe_lookup_order() -> None:
     )
 
     read = _export_body(strict, "pcc_gc_note_relocation_read")
-    assert read.index("pcc_gc_object_is_known_no_lock(obj)") < read.index(
+    assert read.index("pcc_gc_object_is_known_stable(obj)") < read.index(
         "load_i32(obj, 12)"
     )
     assert read.index("_graph_lock()") < read.index(
@@ -295,7 +296,7 @@ def test_relocation_read_barrier_is_gated_on_a_moving_backend() -> None:
     assert 'load_i32(global_addr("pcc_gc_backend_selected"), 0)' in read
     assert "if selected != 3 and selected != 4:" in read
     assert read.index("if selected != 3 and selected != 4:") < read.index(
-        "pcc_gc_object_is_known_no_lock(obj)"
+        "pcc_gc_object_is_known_stable(obj)"
     )
 
 

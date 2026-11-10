@@ -37,10 +37,14 @@ class State:
                        load_i32=self.load, load_i64=self.load, store_i32=self.store,
                        atomic_rmw_i32=self.atomic_and,
                        pcc_gc_object_index_find=self.find,
+                       # Dictionary lookup models the stable index boundary;
+                       # it is not a concurrent index-publication proof.
+                       pcc_gc_object_index_find_stable=self.find,
                        pcc_gc_forwarding_index_find=self.find_forward,
                        pcc_py_gc_minor_graph_lock=self.lock,
                        pcc_py_gc_minor_graph_unlock=lambda: self.locks.append('unlock'))
-        load_functions(KNOWN, {'pcc_gc_object_is_known_no_lock'}, self.ns)
+        load_functions(KNOWN, {'pcc_gc_object_is_known_no_lock',
+                               'pcc_gc_object_is_known_stable'}, self.ns)
         load_functions(FORWARDING, {'pcc_gc_note_relocation_read',
                                    '_note_relocation_read_unlocked'}, self.ns)
 
