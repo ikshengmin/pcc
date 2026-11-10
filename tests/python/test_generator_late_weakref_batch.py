@@ -56,8 +56,8 @@ class GeneratorLateWeakBatch(LateWeakBatch):
             atomic_rmw_i64=self.atomic,
             atomic_rmw_i32=self.atomic,
             py_current_exception=lambda: self.pending,
-            py_clear_exception=lambda: self.set_error(0),
-            py_raise=self.set_error,
+            py_clear_exception=self.clear_error,
+            py_raise=self.raise_error,
             py_tls_exc_set=self.set_error,
             py_tls_exc_swap_slot=self.swap_error,
             pcc_gc_pin=lambda obj: self.pin(obj, True),
@@ -100,7 +100,18 @@ class GeneratorLateWeakBatch(LateWeakBatch):
         self.store(obj, 12, flags | 64 if enabled else flags & ~64)
 
     def set_error(self, error):
+        # Raw TLS assignment transfers the owner without changing refcounts.
         self.pending = error
+
+    def clear_error(self):
+        previous = self.pending
+        self.pending = 0
+        self.decref(previous)
+
+    def raise_error(self, error):
+        self.incref(error)
+        self.clear_error()
+        self.set_error(error)
 
     def swap_error(self, slot):
         assert slot in self.exception_roots
@@ -246,11 +257,14 @@ def test_close_and_callback_errors_preserve_pending_exception(pending):
     original = model.allocate_object(64, 104, 0) if pending else 0
     cleanup_error = model.allocate_object(64, 104, 0)
     model.pending = original
-    model.close_hook = lambda gen: model.set_error(cleanup_error)
-    model.callback_hook = lambda ref: model.set_error(cleanup_error)
+    model.close_hook = lambda gen: model.raise_error(cleanup_error)
+    model.callback_hook = lambda ref: model.raise_error(cleanup_error)
     before = model.refcounts.get(original)
     assert model.sweep() == 2
     assert model.pending == original and model.refcounts.get(original) == before
+    # Error injection borrows our retained fixture owner for both close and
+    # callback; clearing each TLS owner must leave that fixture owner intact.
+    assert model.refcounts[cleanup_error] == 1
     assert model.finalizer_count() == 2
     assert not model.exception_roots and model.no_park == 0
     assert not model.leases and not model.load(model.gen, 12) & 64

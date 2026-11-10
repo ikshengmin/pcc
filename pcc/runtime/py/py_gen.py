@@ -61,6 +61,7 @@ py_raise_owned = extern("py_raise_owned", (c_ptr,), c_void)
 py_coroutine_run = extern("py_coroutine_run", (c_ptr,), c_ptr)
 py_coroutine_send = extern("py_coroutine_send", (c_ptr, c_ptr, c_ptr), c_ptr)
 py_current_exception = extern("py_current_exception", (), c_ptr)
+py_tls_exc_set = extern("py_tls_exc_set", (c_ptr,), c_void)
 py_clear_exception   = extern("py_clear_exception",   (), c_void)
 py_exc_builtin_class = extern("py_exc_builtin_class", (c_int64,), c_ptr)
 py_exc_matches       = extern("py_exc_matches",       (c_ptr, c_ptr), c_int64)
@@ -609,11 +610,13 @@ def _gen_finalize_mode(gen, invalidate_weakrefs: int) -> None:
     # shared diagnostics boundary.
     py_clear_exception()
     if ptr_is_null(saved) == 0:
-        py_raise(saved)
+        # Clearing TLS consumed its original owner. Transfer our saved owner
+        # back without raising again, which would replace its implicit context
+        # with the exception handled outside the finalizing frame.
+        py_tls_exc_set(saved)
         pcc_gc_unpin(saved)
         if saved_pin != 0:
             atomic_rmw_i32("or", saved, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_GC_PINNED, "relaxed")
-        py_decref(saved)
     pcc_gc_unpin(gen)
     # Legacy pins are Boolean, not nested holds. Balance our pin calls, but
     # leave an enclosing caller's pre-existing protection intact.

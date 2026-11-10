@@ -65,8 +65,8 @@ class Finalization:
             pcc_gc_unpin=lambda value: self.pin(value, False),
             py_weakref_invalidate=self.weak,
             py_current_exception=lambda: self.pending,
-            py_clear_exception=lambda: self.set_error(0),
-            py_raise=self.set_error, py_tls_exc_set=self.set_error,
+            py_clear_exception=self.clear_error,
+            py_raise=self.raise_error, py_tls_exc_set=self.set_error,
             py_gen_close=self.close,
             pcc_capi_is_cext_type_tag=lambda tag: 0,
             _load_instance_cls=lambda value: 2000,
@@ -135,7 +135,21 @@ class Finalization:
         return self.load(COUNTER, 0)
 
     def set_error(self, value):
+        # Raw TLS setter transfers ownership; it does not retain or release.
         self.pending = value
+
+    def clear_error(self):
+        previous = self.pending
+        self.pending = 0
+        self.ref(previous, -1)
+
+    def raise_error(self, value):
+        # This accounting-only double normalizes a borrowed exception into
+        # an owned TLS reference. Context semantics are exercised below with
+        # the production raise and implicit-context bodies.
+        self.ref(value, 1)
+        self.clear_error()
+        self.set_error(value)
 
     def weak(self, value):
         self.events.append(('weak', self.count()))
@@ -195,7 +209,7 @@ def test_started_generator_counts_before_callbacks_and_finalizes_once(entry, sce
     if scenario == 'close-reentry':
         model.close_hook = lambda: model.ns['py_gen_finalize'](1000)
     if scenario == 'close-error':
-        model.close_hook = lambda: model.set_error(9100)
+        model.close_hook = lambda: model.raise_error(9100)
     if scenario == 'resurrect':
         model.close_hook = lambda: model.rescued.append(1000)
     model.ns[entry](1000)
@@ -215,7 +229,7 @@ def test_tracing_candidate_close_preserves_accounting_and_pending_error(scenario
     if scenario == 'close-reentry':
         model.close_hook = lambda: model.ns['py_user_del_dispatch'](1000)
     if scenario == 'close-error':
-        model.close_hook = lambda: model.set_error(9100)
+        model.close_hook = lambda: model.raise_error(9100)
     if scenario == 'resurrect':
         model.close_hook = lambda: model.rescued.append(1000)
     model.ns['py_gen_finalize_tracing_candidate'](1000)
@@ -257,7 +271,7 @@ def test_generator_finalizer_preserves_prior_pins(
         model.bits('or', 1000, offset, 128, 'relaxed')
         model.bits('or', 9000, offset, 256, 'relaxed')
         if scenario == 'close-error':
-            model.set_error(9100)
+            model.raise_error(9100)
         if scenario == 'close-reentry':
             model.ns[entry](1000)
 
@@ -340,6 +354,189 @@ def test_instance_finalizer_accounting_is_unchanged():
     model.ns['py_user_del_dispatch'](1000)
     assert model.count() == 1
     assert model.events.count(('instance', 1)) == 1
+
+
+class ContextFinalization(Finalization):
+    """Real finalizer/raise/context bodies; explicit ownership and TLS doubles.
+
+    This models a pending C with context B while caller A remains handled.
+    The ordinary native regression separately proves that error-unwind shape.
+    Collector scheduling, pointer movement and native frames are not modeled.
+    """
+
+    def __init__(self, *, count_free=False, pending=True, suppress=False):
+        super().__init__(count_free=count_free)
+        self.pending = 9000 if pending else 0
+        self.store(9000, 0, int(pending))
+        self.store(9000, 32, 9300)
+        self.store(9000, 40, 9200)
+        self.store(9000, 12, self.ns['PY_FLAG_EXC_SUPPRESS_CONTEXT'] if suppress else 0)
+        self.store(9200, 0, 1)
+        self.store(9300, 0, 1)
+        self.store(9400, 0, 1)
+        self.store(9500, 0, 9400)  # The caller's active handled-exception slot.
+        self.frames = []
+        self.plans = {}
+        self.graph_locked = False
+        self.on_drop = None
+        self.dropped = []
+        self.raw_sets = []
+        self.close_result = 9600
+        self.ns.update(
+            c_ptr=int,
+            ptr_eq=lambda left, right: left == right,
+            ptr_add=lambda base, offset: (base, offset),
+            _type_of=lambda obj: self.ns['PY_TYPE_EXC'],
+            _resolve_current_exception=lambda: self.pending,
+            py_handled_exception_slot=lambda: 9500,
+            pcc_gc_note_relocation_read=lambda value: value,
+            pcc_gc_load_ptr=lambda owner, slot: self.slot_read(slot),
+            pcc_gc_store_root=self.root_store,
+            pcc_gc_frame_enter=self.frame_enter,
+            pcc_gc_frame_leave=self.frame_leave,
+            pcc_gc_take_pinned_slot=self.take_pinned,
+            py_tls_exc_swap_slot=self.swap,
+            pcc_gc_backend=lambda: 4 if self.count_free else 0,
+            pcc_py_gc_minor_graph_lock=self.graph_lock,
+            pcc_py_gc_minor_graph_unlock=self.graph_unlock,
+            pcc_gc_store_ptr_plan_init=self.plan_init,
+            pcc_gc_store_ptr_plan_commit_locked=self.plan_commit,
+            pcc_gc_store_ptr_plan_finish=self.plan_finish,
+        )
+        for value in (9000, 9100, 9200, 9300, 9400):
+            self.store(value, 8, self.ns['PY_TYPE_EXC'])
+        _bodies('py_exc_objects.py', {'py_exc_set_implicit_context_slots'}, self.ns)
+        # Do not stub py_raise as a setter: the old finalizer's py_raise(saved)
+        # must run the real implicit re-chaining logic and fail these checks.
+        _bodies('py_exc_tls.py', {'py_raise'}, self.ns)
+
+    def set_error(self, value):
+        self.raw_sets.append((self.pending, value))
+        super().set_error(value)
+
+    def ref(self, value, delta):
+        super().ref(value, delta)
+        if value and not self.count_free:
+            assert self.load(value, 0) >= 0, 'released an unowned value'
+            if delta < 0 and self.load(value, 0) == 0:
+                assert not self.graph_locked, 'destruction under the graph lock'
+                self.dropped.append(value)
+                if self.on_drop:
+                    self.on_drop(value)
+
+    def slot_read(self, slot):
+        return self.load(*slot) if isinstance(slot, tuple) else self.load(slot, 0)
+
+    def slot_write(self, slot, value):
+        base, offset = slot if isinstance(slot, tuple) else (slot, 0)
+        self.store(base, offset, value)
+
+    def root_store(self, slot, value):
+        old = self.slot_read(slot)
+        self.ref(value, 1)
+        self.slot_write(slot, value)
+        self.ref(old, -1)
+
+    def frame_enter(self, frame_map, slot):
+        assert slot not in self.frames
+        self.frames.append(slot)
+
+    def frame_leave(self, slot):
+        assert self.frames.pop() == slot
+
+    def take_pinned(self, slot, prior):
+        value = self.slot_read(slot)
+        self.slot_write(slot, 0)
+        self.pin(value, False)
+        if prior:
+            self.bits('or', value, 12, prior, 'relaxed')
+        return value
+
+    def swap(self, slot):
+        assert slot in self.frames
+        previous = self.pending
+        self.pending = self.slot_read(slot)
+        self.slot_write(slot, previous)
+
+    def graph_lock(self):
+        assert not self.graph_locked
+        self.graph_locked = True
+
+    def graph_unlock(self):
+        assert self.graph_locked
+        self.graph_locked = False
+
+    def plan_init(self, plan, owner, backend):
+        self.plans[plan] = 0
+
+    def plan_commit(self, plan, owner, slot, value):
+        assert self.graph_locked
+        old = self.slot_read(slot)
+        self.ref(value, 1)
+        self.slot_write(slot, value)
+        self.plans[plan] = old
+
+    def plan_finish(self, plan):
+        assert not self.graph_locked
+        self.ref(self.plans.pop(plan), -1)
+
+    def close(self, value):
+        super().close(value)
+        self.ref(self.close_result, 1)
+        return self.close_result
+
+
+@pytest.mark.parametrize('entry', (
+    'py_user_del_dispatch', 'py_gen_finalize', 'py_gen_finalize_tracing_candidate',
+))
+@pytest.mark.parametrize('count_free', (False, True))
+@pytest.mark.parametrize('pending', (False, True))
+@pytest.mark.parametrize('suppress', (False, True))
+@pytest.mark.parametrize('scenario', ('normal', 'close-error', 'close-reentry'))
+def test_generator_restore_transfers_owner_without_rechaining(
+    entry, count_free, pending, suppress, scenario,
+):
+    model = ContextFinalization(count_free=count_free, pending=pending, suppress=suppress)
+    original_fields = tuple(model.load(9000, offset) for offset in (12, 32, 40))
+    if scenario == 'close-error':
+        model.close_result = 0
+        model.close_hook = lambda: model.raise_error(9100)
+    elif scenario == 'close-reentry':
+        model.close_hook = lambda: model.ns[entry](1000)
+    model.ns[entry](1000)
+    assert model.pending == (9000 if pending else 0)
+    assert tuple(model.load(9000, offset) for offset in (12, 32, 40)) == original_fields
+    assert model.load(9500, 0) == 9400
+    assert model.count() == model.close_count == 1
+    assert not model.frames and not model.plans and not model.graph_locked
+    if pending:
+        assert model.raw_sets[-1] == (0, 9000)
+    if not count_free:
+        assert model.load(9000, 0) == int(pending)
+        assert model.load(1000, 0) == 1
+        assert all(model.load(value, 0) == 1 for value in (9200, 9300, 9400))
+        assert model.load(9100, 0) == model.load(9600, 0) == 0
+
+
+def test_generator_restore_keeps_saved_owner_during_reentrant_error_disposal():
+    model = ContextFinalization()
+    model.close_result = 0
+    model.close_hook = lambda: model.raise_error(9100)
+    observations = []
+
+    def destroy(value):
+        if value == 9100:
+            observations.append((model.pending, model.load(9000, 0)))
+            assert model.load(9000, 12) & model.ns['PY_FLAG_GC_PINNED']
+            model.ns['py_gen_finalize'](1000)
+
+    model.on_drop = destroy
+    model.ns['py_gen_finalize'](1000)
+    assert observations == [(0, 1)]
+    assert model.pending == 9000 and model.load(9000, 0) == 1
+    assert model.load(9000, 40) == 9200
+    assert model.count() == model.close_count == 1
+    assert model.dropped == [9100]
 
 
 NATIVE_PROGRAM = '''import gc
