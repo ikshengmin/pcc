@@ -3271,6 +3271,7 @@ def _cross_object_signatures_part_13():
 
 def _cross_object_signatures_part_14():
     return {
+        "py_weakref_clear_tracing_candidates": ((), "c_int64"),
         "pcc_gc_gray_conservative_and_listed_pinned_roots": ((), "c_int64"),
         "pcc_gc_gray_registered_roots": ((), "c_void"),
         "pcc_gc_backend4_remembered_owner_has_entries": (("c_ptr",), "c_int64"),

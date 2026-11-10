@@ -577,6 +577,34 @@ def py_weakref_invalidate_tracing_candidates() -> int:
     return count
 
 
+@c_abi_export("py_weakref_clear_tracing_candidates")
+def py_weakref_clear_tracing_candidates() -> int:
+    """Silently clear still-dead tracing targets after finalizers/recheck.
+
+    Keep the initial batch's target qualification, but do not prepare holds
+    or run callbacks. This replaces its former second, callback-running scan;
+    no additional weak-chain pass or reachability recompute is needed.
+    """
+    if pcc_gc_backend() == 0:
+        return 0
+    if pcc_thread_owns_stopped_world() == 0:
+        pcc_platform_abort()
+        return -1
+    count: int = 0
+    wr = global_load_ptr("py_weakref_head")
+    while ptr_is_null(wr) == 0:
+        target = pcc_gc_note_relocation_read(load_ptr(wr, 16))
+        if (ptr_is_null(target) == 0 and is_tagged_int(target) == 0
+                and pcc_gc_tracing_is_sweep_candidate(target) != 0
+                and (load_i32(target, 12) & 16384) == 0
+                and pcc_capi_is_cext_type_tag(load_i32(target, 8)) == 0):
+            store_ptr(wr, 16, null())
+            pcc_diagnostics_runtime_log_event_code(4, 2, 0, load_i32(target, 8), target)
+            count += 1
+        wr = load_ptr(wr, 40)
+    return count
+
+
 def _weakref_invalidate_gc0_target(target) -> None:
     """A terminal GC0 target clears all its refs before any callback.
 

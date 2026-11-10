@@ -576,7 +576,7 @@ def py_gen_finalize(gen) -> None:
 def py_gen_finalize_tracing_candidate(gen) -> None:
     # Only count-free tracing PASS0 calls this, after validating its candidate.
     # The collector rechecks resurrection after every finalizer has run, then
-    # clears all still-dead late weakrefs before invoking their callbacks.
+    # silently clears still-dead late weakrefs without invoking callbacks.
     _gen_finalize_mode(gen, 0)
 
 

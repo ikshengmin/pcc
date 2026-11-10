@@ -84,6 +84,9 @@ py_gen_finalize_tracing_candidate = extern(
 py_weakref_invalidate_tracing_candidates = extern(
     "py_weakref_invalidate_tracing_candidates", (), c_int64
 )
+py_weakref_clear_tracing_candidates = extern(
+    "py_weakref_clear_tracing_candidates", (), c_int64
+)
 pcc_capi_is_cext_type_tag = extern(
     "pcc_capi_is_cext_type_tag", (c_int64,), c_int64
 )
@@ -467,7 +470,7 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
                     if count_free != 0 and tag == abi_constant("object.type.gen"):
                         # Per-target generator invalidation would deliver late
                         # weak callbacks before close/resurrection and before
-                        # the collector's all-target late batch below.
+                        # the collector's silent late clear below.
                         py_gen_finalize_tracing_candidate(obj)
                     else:
                         py_user_del_dispatch(obj)
@@ -476,14 +479,12 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
                         load_i64(global_addr("pcc_gc_user_finalizer_runs"), 0) - finalizer_runs)
 
     # Finalizers can resurrect candidates and create new weakrefs. Preserve
-    # those of resurrected targets before batching the remaining dead targets.
+    # those of resurrected targets, then silently clear the remaining refs as
+    # CPython 3.15 does before tp_clear. Late callbacks must not be delivered.
     if load_i64(global_addr("pcc_gc_user_finalizer_runs"), 0) != finalizer_runs:
         pcc_gc_tracing_recheck_reachability_after_finalizers()
         if count_free != 0:
-            if py_weakref_invalidate_tracing_candidates() != 0:
-                # Late callbacks must see every candidate weak target cleared,
-                # and can rescue other candidates before PASS 1 clears fields.
-                pcc_gc_tracing_recheck_reachability_after_finalizers()
+            py_weakref_clear_tracing_candidates()
 
     # PASS 1: clear at most budget candidates without freeing any sibling.
     started = pcc_platform_monotonic_us()

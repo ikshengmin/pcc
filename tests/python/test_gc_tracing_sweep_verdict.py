@@ -74,6 +74,8 @@ class _SweepBoundary:
             "pcc_gc_tracing_finalize_unpinned": self.reclaim_unpinned,
             "pcc_gc_visit_object_slots": self.visit_slots,
             "py_weakref_invalidate_tracing_candidates": self.invalidate_candidates,
+            # This verdict model's weakref boundary has no user callbacks.
+            "py_weakref_clear_tracing_candidates": self.invalidate_candidates,
             # Capture the production phase boundaries independently of the
             # collector event oracle. Atomic storage has its own native test.
             "pcc_platform_monotonic_us": lambda: 100,

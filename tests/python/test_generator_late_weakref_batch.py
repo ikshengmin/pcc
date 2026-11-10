@@ -1,11 +1,14 @@
-"""MODEL: generator PASS0 must leave late weakrefs to the tracing batch.
+"""MODEL: generator PASS0 leaves final-unreachable late refs for silent clear.
 
 Specification: docs/project-intent.md (weakrefs, finalizers, resurrection).
+Late-clear reference: CPython v3.15.0 Python/gc.c:1568-1574.
 Loads the production sweep/recheck, generator finalizers and their common
 helper, user-finalizer dispatcher, and weakref constructor/call/invalidation.
 Memory, root discovery/marking, pin/lease/TLS ownership, class lookup, Python
 user bodies, and slot destruction are explicit boundaries, not native proofs.
-Inherited refcounts balance tuples; leases model count-free callback lifetime.
+In particular, the close double keeps the cycle intact through the late pass;
+native close can break generator-frame cycles and change the death boundary.
+Inherited refcounts balance tuples; leases model early callback lifetime.
 """
 from pathlib import Path
 
@@ -181,24 +184,30 @@ class GeneratorLateWeakBatch(LateWeakBatch):
 
 
 @pytest.mark.parametrize("backend", (1, 2, 3, 4))
-def test_generator_late_siblings_clear_after_close_before_first_callback(backend):
+def test_generator_late_siblings_clear_silently_after_close(backend):
     model = GeneratorLateWeakBatch(backend)
     observations = []
 
-    def callback(ref):
+    def close(gen):
         observations.append([model.read_ref(item) for item in model.refs])
-        assert model.load(model.gen, 40) == 1
-        assert model.load(model.owner, 48) == model.gen
+        assert observations[-1] == [gen, gen]
 
-    model.callback_hook = callback
+    def before_clear(obj):
+        assert [model.read_ref(item) for item in model.refs] == [model.none, model.none]
+        assert model.load(model.gen, 40) == 1
+        if not model.cleared:
+            assert model.load(model.owner, 48) == model.gen
+
+    model.close_hook = close
+    model.clear_hook = before_clear
     assert model.sweep() == 2
-    assert observations == [[model.none, model.none]]
+    assert observations == [[model.gen, model.gen]]
     assert model.lifecycle == [
         ("instance", model.owner), ("close", model.gen),
-        ("callback", model.refs[1]),
     ]
-    assert model.finalizer_count() == 2 and model.rechecks == 2
-    assert model.callback_leased == [True] and not model.leases
+    assert model.finalizer_count() == 2 and model.rechecks == 1
+    assert model.silent_clears == [2]
+    assert model.calls == model.callback_leased == [] and not model.leases
     assert model.destroyed == [model.owner, model.gen]
 
 
@@ -215,15 +224,15 @@ def test_preexisting_refs_keep_the_initial_batch_before_generator_close():
     assert model.sweep() == 2
     assert model.lifecycle == [
         ("early", early), ("instance", model.owner), ("close", model.gen),
-        ("callback", model.refs[1]),
     ]
-    assert model.calls == [early, model.refs[1]]
-    assert model.callback_leased == [True, True] and not model.leases
-    assert model.rechecks == 3
+    assert model.calls == [early]
+    assert [model.read_ref(ref) for ref in model.refs] == [model.none, model.none]
+    assert model.callback_leased == [True] and not model.leases
+    assert model.rechecks == 2 and model.silent_clears == [2]
 
 
 @pytest.mark.parametrize("backend", (1, 2, 3, 4))
-def test_generator_close_resurrection_preserves_every_late_ref(backend):
+def test_generator_resurrection_preserves_late_refs_until_later_death(backend):
     model = GeneratorLateWeakBatch(backend)
 
     def resurrect(gen):
@@ -235,66 +244,113 @@ def test_generator_close_resurrection_preserves_every_late_ref(backend):
     assert [model.read_ref(ref) for ref in model.refs] == [model.gen, model.gen]
     assert model.calls == model.cleared == model.destroyed == []
     assert model.finalizer_count() == 2 and model.rechecks == 1
+    assert model.silent_clears == [0]
     assert not model.leases and not model.load(model.gen, 12) & 64
+
+    def later_callback(ref):
+        assert ref == model.refs[1]
+        assert [model.read_ref(item) for item in model.refs] == [model.none, model.none]
+        assert model.load(model.gen, 40) == 1
+        assert model.load(model.owner, 48) == model.gen
+
+    model.callback_hook = later_callback
+    model.roots.remove(model.gen)
+    # Model a later completed mark after dropping the resurrection owner.
+    for obj in (model.owner, model.gen):
+        model.store(obj, 12, model.load(obj, 12) | 1024 | 8)
+    assert model.sweep() == 2
+    assert model.calls == [model.refs[1]] and model.callback_leased == [True]
+    assert model.finalizer_count() == 2 and model.rechecks == 2
+    assert model.silent_clears == [0] and not model.leases
+    assert model.destroyed == [model.owner, model.gen]
+    assert model.lifecycle == [
+        ("instance", model.owner), ("close", model.gen),
+        ("callback", model.refs[1]),
+    ]
 
 
 @pytest.mark.parametrize("shape", ("unstarted", "completed", "finalized"))
-def test_no_close_guard_still_leaves_late_refs_for_the_global_batch(shape):
+def test_no_close_guard_still_leaves_late_refs_for_silent_clear(shape):
     model = GeneratorLateWeakBatch(shape=shape)
-    model.callback_hook = lambda ref: model.lifecycle.append(
-        ("siblings", [model.read_ref(item) for item in model.refs])
-    )
     assert model.sweep() == 2
     assert model.finalizer_count() == 1
-    assert not any(event[0] == "close" for event in model.lifecycle)
-    assert model.lifecycle[-1] == ("siblings", [model.none, model.none])
-    assert model.callback_leased == [True] and not model.leases
+    assert model.lifecycle == [("instance", model.owner)]
+    assert [model.read_ref(ref) for ref in model.refs] == [model.none, model.none]
+    assert model.calls == model.callback_leased == [] and not model.leases
+    assert model.rechecks == 1 and model.silent_clears == [2]
 
 
 @pytest.mark.parametrize("pending", (False, True))
-def test_close_and_callback_errors_preserve_pending_exception(pending):
+def test_early_callback_and_close_errors_preserve_pending_exception(pending):
     model = GeneratorLateWeakBatch()
+    early = model.weak(model.gen, 0x8002)
     original = model.allocate_object(64, 104, 0) if pending else 0
     cleanup_error = model.allocate_object(64, 104, 0)
     model.pending = original
     model.close_hook = lambda gen: model.raise_error(cleanup_error)
-    model.callback_hook = lambda ref: model.raise_error(cleanup_error)
+    model.callbacks[0x8002] = lambda ref: model.raise_error(cleanup_error)
     before = model.refcounts.get(original)
     assert model.sweep() == 2
     assert model.pending == original and model.refcounts.get(original) == before
-    # Error injection borrows our retained fixture owner for both close and
-    # callback; clearing each TLS owner must leave that fixture owner intact.
+    # Error injection borrows our retained fixture owner for both the early
+    # callback and close; clearing each TLS owner leaves that owner intact.
     assert model.refcounts[cleanup_error] == 1
     assert model.finalizer_count() == 2
+    assert model.calls == [early] and model.callback_leased == [True]
+    assert model.rechecks == 2 and model.silent_clears == [2]
     assert not model.exception_roots and model.no_park == 0
     assert not model.leases and not model.load(model.gen, 12) & 64
     if original:
         assert not model.load(original, 12) & 64
 
 
-def test_late_generator_batch_keeps_queued_callback_when_chain_is_replaced():
+def test_early_generator_batch_keeps_queued_callback_when_chain_is_replaced():
     model = GeneratorLateWeakBatch()
     replacement_target = model.allocate_object(64, 104, 0)
     replacement = []
-
-    def close(gen):
-        model.refs.append(model.weak(gen, 0x8002))
+    early = [model.weak(model.gen, 0x8000), model.weak(model.gen, 0x8002)]
 
     def mutate(ref):
-        assert all(model.read_ref(item) == model.none for item in model.refs)
+        assert all(model.read_ref(item) == model.none for item in early)
+        assert model.refs == [] and model.load(model.gen, 40) == 0
         replacement.append(model.weak(replacement_target))
         # Raw chain mutation is the opaque callback boundary. The fixed
         # pending batch must still deliver the other queued weakref once.
         model.head = replacement[0]
 
-    model.close_hook = close
     model.callbacks[0x8002] = mutate
     model.callback_hook = lambda ref: model.lifecycle.append(("remaining", ref))
     assert model.sweep() == 2
-    assert model.calls == [model.refs[2], model.refs[1]]
+    assert model.calls == [early[1], early[0]]
     assert model.callback_leased == [True, True] and not model.leases
     assert model.read_ref(replacement[0]) == replacement_target
-    assert model.lifecycle[-1] == ("remaining", model.refs[1])
+    assert model.lifecycle == [
+        ("callback", early[0]), ("remaining", early[0]),
+        ("instance", model.owner), ("close", model.gen),
+    ]
+    assert [model.read_ref(ref) for ref in model.refs] == [model.none, model.none]
+    assert model.rechecks == 2 and model.silent_clears == [2]
+
+
+@pytest.mark.parametrize("backend", (1, 2, 3, 4))
+def test_generator_close_created_refs_stay_silent_across_budget_slices(backend):
+    model = GeneratorLateWeakBatch(backend)
+
+    def close(gen):
+        model.refs.append(model.weak(gen, 0x8002))
+        assert [model.read_ref(ref) for ref in model.refs] == [gen, gen, gen]
+
+    model.close_hook = close
+    assert model.sweep(budget=1) == 1
+    assert model.destroyed == [model.owner]
+    assert [model.read_ref(ref) for ref in model.refs] == [model.none] * 3
+    assert model.silent_clears == [3] and model.rechecks == 1
+    assert model.sweep(budget=1) == 1
+    assert model.sweep(budget=1) == 0
+    assert model.destroyed == [model.owner, model.gen]
+    assert model.finalizer_count() == 2 and model.rechecks == 1
+    assert model.silent_clears == [3]
+    assert model.calls == model.callback_leased == [] and not model.leases
 
 
 @pytest.mark.parametrize("entry", ("py_gen_finalize", "py_user_del_dispatch"))
@@ -314,6 +370,7 @@ def test_explicit_generator_finalization_still_invalidates_before_close(entry, b
     assert model.lifecycle == [("callback", model.refs[1]), ("close", model.gen)]
     assert model.finalizer_count() == 1
     assert [model.read_ref(ref) for ref in model.refs] == [model.none, model.none]
+    assert model.silent_clears == []
 
 
 @pytest.mark.parametrize("backend", (0, 1, 2, 3, 4))
@@ -326,6 +383,7 @@ def test_counted_sweep_does_not_enter_the_tracing_candidate_finalizer(backend):
     assert model.sweep() == 2
     assert observations == [0]
     assert model.finalizer_count() == 2 and model.rechecks == 1
+    assert model.silent_clears == []
     assert model.lifecycle[:3] == [
         ("instance", model.owner), ("callback", model.refs[1]), ("close", model.gen),
     ]
