@@ -485,14 +485,7 @@ def py_weakref_invalidate_gc0_candidates() -> int:
             count += 1
         wr = load_ptr(wr, 40)
 
-    wr = global_load_ptr("py_weakref_head")
-    while ptr_is_null(wr) == 0:
-        target = load_ptr(wr, 16)
-        if (ptr_is_null(target) == 0 and is_tagged_int(target) == 0
-                and pcc_gc_backend0_is_weak_candidate(target) != 0):
-            store_ptr(wr, 16, null())
-            pcc_diagnostics_runtime_log_event_code(4, 2, 0, load_i32(target, 8), target)
-        wr = load_ptr(wr, 40)
+    py_weakref_clear_gc0_candidates()
 
     while ptr_is_null(pending) == 0:
         entry = pending
@@ -501,6 +494,32 @@ def py_weakref_invalidate_gc0_candidates() -> int:
         _weakref_run_callback(held)
         py_decref(held)
         free(entry)
+    return count
+
+
+@c_abi_export("py_weakref_clear_gc0_candidates")
+def py_weakref_clear_gc0_candidates() -> int:
+    """Clear this GC0 disposal cut without allocating or invoking callbacks.
+
+    The early batch prepares its callback holds before this shared clear.
+    After finalizers, the collector rebuilds the still-dead target cut and
+    calls this alone: late weakrefs must not expose partially cleared peers.
+    """
+    if pcc_gc_backend() != 0:
+        return 0
+    if pcc_thread_owns_stopped_world() == 0:
+        pcc_platform_abort()
+        return -1
+    count: int = 0
+    wr = global_load_ptr("py_weakref_head")
+    while ptr_is_null(wr) == 0:
+        target = load_ptr(wr, 16)
+        if (ptr_is_null(target) == 0 and is_tagged_int(target) == 0
+                and pcc_gc_backend0_is_weak_candidate(target) != 0):
+            store_ptr(wr, 16, null())
+            pcc_diagnostics_runtime_log_event_code(4, 2, 0, load_i32(target, 8), target)
+            count += 1
+        wr = load_ptr(wr, 40)
     return count
 
 

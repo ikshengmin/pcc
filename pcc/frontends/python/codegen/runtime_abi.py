@@ -3217,6 +3217,7 @@ def _cross_object_signatures_part_12():
 def _cross_object_signatures_part_13():
     return {
         "py_weakref_invalidate_gc0_candidates": ((), "c_int64"),
+        "py_weakref_clear_gc0_candidates": ((), "c_int64"),
         "pcc_gc_backend0_is_weak_candidate": (("c_ptr",), "c_int64"),
         'pcc_gc_shade_gray_atomic': (('c_ptr', 'c_int64'), 'c_void'),
         'pcc_container_lock': (('c_ptr',), 'c_void'),

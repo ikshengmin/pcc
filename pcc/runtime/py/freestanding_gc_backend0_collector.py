@@ -61,6 +61,9 @@ py_weakref_invalidate = extern("py_weakref_invalidate", (c_ptr,), c_void)
 py_weakref_invalidate_gc0_candidates = extern(
     "py_weakref_invalidate_gc0_candidates", (), c_int64
 )
+py_weakref_clear_gc0_candidates = extern(
+    "py_weakref_clear_gc0_candidates", (), c_int64
+)
 pcc_gc_note_object_freeing = extern(
     "pcc_gc_note_object_freeing", (c_ptr,), c_void
 )
@@ -119,7 +122,7 @@ _SUBSET_REACHABLE = 1
 # This cycle collector owns zeros produced by its own finalizers. They are
 # distinct from a mutator parked after a last decrement and before untrack.
 _COLLECTOR_FINALIZED_ZERO = 8
-# The fixed disposal set used only by the pre-finalizer weakref batch.
+# The fixed disposal set for early callbacks and silent late weakref clearing.
 _COLLECTOR_WEAK_CANDIDATE = 16
 
 
@@ -576,6 +579,22 @@ def _collect(pairs, candidate_count: i64) -> i64:
     finalized: i64 = _maybe_finalize_unreachable(unreachable, count)
     if weak_callbacks != 0 or finalized != 0:
         _recompute_reachability()
+        # Finalizers can create new weakrefs. As in CPython 3.15, clear these
+        # silently before any tp_clear-equivalent work can expose a partially
+        # cleared peer through a callback. Recompute erased the batch bit;
+        # rearm only the original disposal set's still-unreachable members.
+        # Resurrected and newly allocated targets do not belong to this cut.
+        i = 0
+        while i < count:
+            node = load_ptr(unreachable, i * 8)
+            if (
+                ptr_is_null(node) == 0
+                and ptr_is_null(load_ptr(node, 0)) == 0
+                and (load_i32(node, 16) & _SUBSET_REACHABLE) == 0
+            ):
+                store_i32(node, 16, load_i32(node, 16) | _COLLECTOR_WEAK_CANDIDATE)
+            i = i + 1
+        py_weakref_clear_gc0_candidates()
 
     i: i64 = 0
     while i < count:

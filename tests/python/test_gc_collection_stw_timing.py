@@ -188,6 +188,7 @@ class CollectionWindow:
             "_prepare_subset": lambda pairs, count: count,
             "_recompute_reachability": lambda: self.advance("mark", 13),
             "py_weakref_invalidate_gc0_candidates": lambda: self.advance("weak", 7) or 0,
+            "py_weakref_clear_gc0_candidates": lambda: pytest.fail("unexpected late weakref pass"),
             "_maybe_finalize_unreachable": lambda unreachable, count: self.advance("finalizers", 11) or 0,
             "malloc": lambda size: None if gc0_exit == "allocation" else "scratch",
             "free": lambda ptr: self.advance("free", 2),

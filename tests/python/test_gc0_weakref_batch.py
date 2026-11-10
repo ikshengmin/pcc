@@ -75,6 +75,7 @@ class WeakBatch:
         )
         names = {"_py_none", "_unlink", "py_weakref_new", "py_dealloc_weakref",
                  "_weakref_run_callback", "py_weakref_invalidate_gc0_candidates",
+                 "py_weakref_clear_gc0_candidates",
                  "py_weakref_invalidate", "py_weakref_call"}
         ns["_weakref_target_is_base_object"] = lambda target: 0
         load_functions(SOURCE, names, ns)
@@ -404,3 +405,54 @@ def test_terminal_null_and_tagged_targets_leave_the_chain_untouched(target):
     model.ns["py_weakref_invalidate"](target)
     assert model.load(ref, 16) == 0x2000
     assert model.calls == [] and model.allocated == []
+
+
+def test_gc0_silent_clear_never_queues_or_retains_callback_owners():
+    model = WeakBatch()
+    target = 0x2000
+    model.candidates.add(target)
+    refs = [model.ref(target, 0x8000), model.ref(target),
+            model.ref(target, 0x8100, candidate=True),
+            model.ref(target, 0x8200, count=0),
+            model.ref(target, 0x8300, dying=True)]
+    untouched = [model.ref(0x3000, 0x8400), model.ref(0), model.ref(1)]
+    words_before = dict(model.words)
+    counts_before = dict(model.refcounts)
+    head_before = model.head
+    next_before = model.next
+    # A callback queue allocation would fail. This phase must not attempt one.
+    model.fail_at = 1
+    assert model.ns["py_weakref_clear_gc0_candidates"]() == len(refs)
+    expected = dict(words_before)
+    expected.update({wr + 16: 0 for wr in refs})
+    assert model.words == expected
+    assert model.head == head_before and model.refcounts == counts_before
+    assert [model.load(wr, 16) for wr in untouched] == [0x3000, 0, 1]
+    assert model.calls == model.events == model.allocated == model.freed == []
+    assert model.malloc_calls == 0
+    assert model.next == next_before
+    assert model.ns["py_weakref_clear_gc0_candidates"]() == 0
+
+
+@pytest.mark.parametrize("backend", (1, 2, 3, 4))
+def test_gc0_silent_clear_does_not_change_tracing_weakrefs(backend):
+    model = WeakBatch(backend)
+    model.stopped = False
+    model.candidates.add(0x2000)
+    wr = model.ref(0x2000, 0x8000)
+    before = dict(model.words)
+    assert model.ns["py_weakref_clear_gc0_candidates"]() == 0
+    assert model.words == before and model.load(wr, 16) == 0x2000
+    assert model.calls == model.events == model.allocated == []
+
+
+def test_gc0_silent_clear_requires_stopped_world_before_any_mutation():
+    model = WeakBatch()
+    model.stopped = False
+    model.candidates.add(0x2000)
+    model.ref(0x2000, 0x8000)
+    before = dict(model.words)
+    with pytest.raises(RuntimeError, match="abort"):
+        model.ns["py_weakref_clear_gc0_candidates"]()
+    assert model.words == before
+    assert model.calls == model.events == model.allocated == []

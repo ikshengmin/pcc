@@ -101,6 +101,7 @@ RAW_IMPORTS = {
     "py_user_del_dispatch",
     "py_weakref_invalidate",
     "py_weakref_invalidate_gc0_candidates",
+    "py_weakref_clear_gc0_candidates",
 }
 
 
@@ -174,6 +175,9 @@ def test_backend0_collector_preserves_ordering_and_graph_contract():
         "_maybe_finalize_unreachable("
     )
     assert collect.index("_maybe_finalize_unreachable(") < collect.index(
+        "py_weakref_clear_gc0_candidates()"
+    )
+    assert collect.index("py_weakref_clear_gc0_candidates()") < collect.index(
         "py_weakref_invalidate(obj)"
     )
     assert collect.index("py_weakref_invalidate(obj)") < collect.index(
