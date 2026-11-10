@@ -3,9 +3,14 @@
 These models do not implement promotion or certify native movement. The
 separate owned-C regression executes real GC3 for that proof. Here allocation,
 root/lease bookkeeping and the CAS boundary are deterministic test doubles.
+Plan allocation ordering is a model assertion, not native frame-layout proof.
+The optimized-IR test separately checks the surviving scratch-frame boundary.
+Native dead-branch scratch contamination plus a collector stop is still a
+missing witness; the cached-buffer native integration does not provide it.
 """
 
 from pathlib import Path
+import re
 
 import pytest
 
@@ -25,6 +30,7 @@ class BufferModel:
         self.freed = []
         self.registered = {}
         self.frames = set()
+        self.plans = {}
         self.owners = {}
         self.leases = {}
         self.events = []
@@ -136,6 +142,12 @@ class BufferModel:
     def stack(self, size):
         pointer = self.stack_next
         self.stack_next += (size + 15) // 16 * 16
+        if size == 128:
+            # This models entry into the scratch helper, not branch-sensitive
+            # native allocation. The IR test must keep that helper separate.
+            assert self.depth == 1
+            self.plans[pointer] = False
+            self.events.append(("plan_alloc", pointer))
         return pointer
 
     def allocate(self, size):
@@ -190,8 +202,11 @@ class BufferModel:
         assert self.no_park >= 0
 
     def lock(self, delta):
+        if delta < 0:
+            assert all(self.plans.values())
         self.depth += delta
         assert self.depth >= 0
+        self.events.append(("graph_lock" if delta > 0 else "graph_unlock",))
 
     def retain(self, obj, delta):
         if obj:
@@ -212,6 +227,7 @@ class BufferModel:
         if persistent:
             assert self.depth > 0
             if self.failure == "persistent-lease":
+                self.events.append(("acquire", slot, obj, -2, True))
                 return -2
         token = 0 if self.is_conservative(slot) else 1
         if token:
@@ -239,8 +255,11 @@ class BufferModel:
 
     def copy_source(self, destination, source):
         assert self.load(destination) == 0
-        # Production copy_lease acquires through SOURCE. A stack source's
-        # token 0 cannot protect a persistent heap metadata slot after return.
+        # This double covers a leased memoryview's real heap base slot.
+        # Ordinary heap values take a source lease; NULL/tagged values are
+        # no-ops. Production's stack-source token-0 destination reacquire is
+        # outside this model's call shape.
+        assert not self.is_conservative(source)
         token = self.acquire(source)
         self.store_root(destination, self.load(source))
         return token
@@ -259,6 +278,10 @@ class BufferModel:
 
     def prepare_owned(self, destination, source, plan):
         assert self.depth > 0 and self.load(destination) == 0
+        assert plan in self.plans and not self.plans[plan]
+        # The real prepare initializes the full plan even on failure. Keep
+        # that cross-object contract explicit rather than modeling a collector.
+        self.plans[plan] = True
         self.events.append(("prepare", destination, source, plan))
         if self.failure == "prepare":
             return -1
@@ -267,6 +290,7 @@ class BufferModel:
 
     def finish_plan(self, plan):
         assert self.depth == 0
+        assert self.plans.pop(plan)
         self.events.append(("finish", plan))
 
     def move(self, destination, source):
@@ -301,6 +325,7 @@ class BufferModel:
     def balanced_temporaries(self):
         assert self.depth == self.no_park == 0
         assert not self.frames
+        assert not self.plans
 
     def assert_no_resources(self):
         self.balanced_temporaries()
@@ -393,7 +418,7 @@ def test_gc3_cache_hit_reuses_pointer_without_another_persistent_owner(conservat
     start = len(model.events)
     assert model.get() == buffer and model.load(buffer, 72) == meta
     assert (model.allocations, model.registered, model.owners, model.leases) == before
-    assert not any(event[0] in ("register", "acquire")
+    assert not any(event[0] in ("register", "acquire", "plan_alloc", "prepare", "finish")
                    for event in model.events[start:])
     model.balanced_temporaries()
     model.dispose(buffer)
@@ -510,3 +535,118 @@ def test_other_collectors_keep_refresh_contract_without_gc3_metadata(backend):
     assert not model.registered and not any(model.leases.values())
     model.dispose(buffer)
     model.assert_no_resources()
+
+
+@pytest.mark.parametrize("conservative", (False, True))
+@pytest.mark.parametrize("failure", (None, "prepare", "persistent-lease", "initialize"))
+def test_exporter_plan_is_prepared_under_lock_and_finished_after_unlock(
+    conservative, failure,
+):
+    model = BufferModel(conservative=conservative, failure=failure)
+    buffer = model.get()
+    assert bool(buffer) == (failure is None)
+    allocations = [event for event in model.events if event[0] == "plan_alloc"]
+    prepares = [event for event in model.events if event[0] == "prepare"]
+    finishes = [event for event in model.events if event[0] == "finish"]
+    assert len(allocations) == len(prepares) == len(finishes) == 1
+    plan = allocations[0][1]
+    assert prepares[0][3] == plan and finishes == [("finish", plan)]
+    lock = model.events.index(("graph_lock",))
+    allocation = model.events.index(allocations[0])
+    prepare = model.events.index(prepares[0])
+    unlock = model.events.index(("graph_unlock",))
+    finish = model.events.index(finishes[0])
+    assert lock < allocation < prepare < unlock < finish
+    meta = prepares[0][1]
+    if failure == "prepare":
+        assert not any(event[0] == "acquire" and event[4]
+                       for event in model.events)
+        assert ("root", meta, model.EXPORTER) not in model.events
+    else:
+        assert prepare < model.events.index(("root", meta, model.EXPORTER)) < unlock
+        token = -2 if failure == "persistent-lease" else 1
+        acquisition = ("acquire", meta, model.EXPORTER, token, True)
+        token_write = ("write", meta + 8, token)
+        assert prepare < model.events.index(acquisition) < model.events.index(token_write) < unlock
+    if failure is None:
+        assert model.owners[model.EXPORTER] == model.leases[model.EXPORTER] == 1
+        assert model.load(meta, 8) == 1
+        model.dispose(buffer)
+    else:
+        assert model.errors and model.load(model.OUTER, 24) == 0
+    model.assert_no_resources()
+
+
+@pytest.mark.parametrize("failure", (
+    "malloc-96", "malloc-24", "register", "frame-borrowed", "frame-owned",
+))
+def test_early_failure_never_enters_exporter_plan_helper(failure):
+    model = BufferModel(conservative=False, failure=failure)
+    assert model.get() == 0 and model.errors
+    assert not any(event[0] in ("plan_alloc", "prepare", "finish", "graph_lock")
+                   for event in model.events)
+    model.assert_no_resources()
+
+
+def test_optimized_buffer_keeps_exporter_plan_in_separate_locked_frame(tmp_path):
+    # Match the final owned runtime-IR pipeline, not a source-only extraction.
+    # A conditional alloca reserves native frame space even on a cache hit.
+    from pcc.frontends.python.pipeline import compile_python
+    from pcc.frontends.python.owned_runtime_build import runtime_ir_passes
+    from pcc.ir.optimization.driver import optimize_ir
+
+    root = Path(__file__).resolve().parents[2]
+    output = tmp_path / "py_capi_buffer_runtime.ll"
+    compile_python(
+        str(RUNTIME / "py_capi_buffer_runtime.py"), str(output),
+        emit_llvm_only=True, python_library=True,
+    )
+    text = optimize_ir(output.read_text(), runtime_ir_passes(str(root / "pcc/runtime")))
+
+    def body(name):
+        found = re.search(
+            r"^define[^\n]*@" + re.escape(name) + r"\([^\n]*\n(.*?)^}",
+            text, re.M | re.S,
+        )
+        assert found is not None, name
+        return found.group(1)
+
+    def allocation_sizes(function):
+        sizes = []
+        for line in function.splitlines():
+            if not re.search(r"\balloca\b", line):
+                continue
+            size = re.search(
+                r"\balloca\s+\[(\d+)\s+x\s+i8\]"
+                r"|\balloca\s+i8,\s+i(?:32|64)\s+(\d+)\b",
+                line,
+            )
+            assert size is not None, line
+            sizes.append(int(size.group(1) or size.group(2)))
+        return sorted(sizes)
+
+    helper_name = "user_py_capi_buffer_runtime__memoryview_lease_exporter_locked"
+    outer = body("user_py_capi_buffer_runtime__memoryview_gc3_owned_buffer")
+    helper = body(helper_name)
+    assert allocation_sizes(outer) == [8, 16]
+    assert allocation_sizes(helper) == [128]
+    calls = list(re.finditer(r"\bcall\b[^\n]*@" + re.escape(helper_name) + r"\(", outer))
+    assert len(calls) == 1
+    assert outer.index("@pcc_py_gc_minor_graph_lock(") < calls[0].start()
+    # The helper inherits the lock. Acquiring it in the helper would expose
+    # its uninitialized native frame while waiting for a collector stop.
+    assert "@pcc_py_gc_minor_graph_lock(" not in helper
+    prepare = helper.index("@pcc_gc_root_copy_owned_prepare_locked(")
+    # The compiler may emit an entry thread poll. The caller's acquired
+    # graph lock includes no-park depth, so that poll returns without parking.
+    # Typed runtime exports must not introduce an application GC gate here.
+    # Reject every other call (including indirect calls) before prepare.
+    before_prepare = helper[:helper.rfind("\n", 0, prepare)]
+    for line in before_prepare.splitlines():
+        if re.search(r"\b(?:call|invoke)\b", line):
+            assert re.search(r"\bcall\b[^\n]*@pcc_thread_safepoint\(", line), line
+    unlock = helper.index("@pcc_py_gc_minor_graph_unlock(")
+    finish = helper.index("@pcc_gc_store_root_plan_finish(")
+    assert prepare < unlock < finish
+    assert helper.count("@pcc_py_gc_minor_graph_unlock(") == 1
+    assert helper.count("@pcc_gc_store_root_plan_finish(") == 1

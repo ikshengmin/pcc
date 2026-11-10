@@ -366,6 +366,25 @@ def pcc_memoryview_free_owned_buffer(buffer_view) -> None:
     PyMem_Free(buffer_view)
 
 
+def _memoryview_lease_exporter_locked(meta, current) -> int:
+    # Consume the caller's graph lock. Enter this frame only after locking:
+    # a branch-local alloca in the outer function would expose dirty plan
+    # words at its earlier no-park exit, even on a cache hit. Prepare clears
+    # the full plan before any failure return or the first parking unlock.
+    plan = stack_alloc(_VIEW_COPY_PLAN_BYTES)
+    status: int = pcc_gc_root_copy_owned_prepare_locked(
+        ptr_add(meta, _EXPORT_OWNER), current, plan
+    )
+    if status == 0:
+        token: int = pcc_gc_foreign_lease_acquire(ptr_add(meta, _EXPORT_OWNER))
+        store_i64(meta, _EXPORT_TOKEN, token)
+        if token < 0:
+            status = -1
+    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_store_root_plan_finish(plan)
+    return status
+
+
 def _memoryview_gc3_owned_buffer(obj) -> c_ptr:
     # Keep the original view rooted through allocation, lease acquisition,
     # CAS-loser cleanup and return. A checked registration cannot silently fail.
@@ -460,18 +479,8 @@ def _memoryview_gc3_owned_buffer(obj) -> c_ptr:
                 # Copy ownership without a source-derived token, then acquire
                 # the persistent lease THROUGH THE HEAP SLOT. A stack source
                 # can receive conservative token 0, which expires on return.
-                plan = stack_alloc(_VIEW_COPY_PLAN_BYTES)
                 pcc_py_gc_minor_graph_lock()
-                status = pcc_gc_root_copy_owned_prepare_locked(
-                    ptr_add(meta, _EXPORT_OWNER), current, plan
-                )
-                if status == 0:
-                    token: int = pcc_gc_foreign_lease_acquire(ptr_add(meta, _EXPORT_OWNER))
-                    store_i64(meta, _EXPORT_TOKEN, token)
-                    if token < 0:
-                        status = -1
-                pcc_py_gc_minor_graph_unlock()
-                pcc_gc_store_root_plan_finish(plan)
+                status = _memoryview_lease_exporter_locked(meta, current)
             if status == 0:
                 if pcc_gc_memoryview_initialize_owned_buffer(load_ptr(borrowed, 0), candidate) == 0:
                     status = -2
