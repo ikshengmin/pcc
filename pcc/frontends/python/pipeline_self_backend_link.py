@@ -961,22 +961,46 @@ def link_ir_texts_run(
         if consume_ir_texts:
             input_ir_texts.clear()
             ir_texts.clear()
+            module_text = ""
             text = ""
             ir_text = ""
     else:
         started = profile_begin(profile)
-        object_results = emit_objects(
-            input_ir_texts,
-            tmp,
-            cc,
-            split_large_modules=split_large_modules and has_large_module,
-            profile=profile,
-            internal_link=signature_owned_by_pcc,
-        )
+        if consume_ir_texts:
+            # Drop dead loop aliases, especially target validation's last
+            # text. The original and normalized batches remain available for
+            # unsupported/in-process fallback until the worker route commits.
+            module_text = ""
+            text = ""
+            ir_text = ""
+
+            def release_owned_ir_texts():
+                ir_texts.clear()
+
+            object_results = emit_objects(
+                input_ir_texts,
+                tmp,
+                cc,
+                split_large_modules=split_large_modules and has_large_module,
+                profile=profile,
+                internal_link=signature_owned_by_pcc,
+                consume_ir_texts=True,
+                release_ir_texts=release_owned_ir_texts,
+            )
+        else:
+            object_results = emit_objects(
+                input_ir_texts,
+                tmp,
+                cc,
+                split_large_modules=split_large_modules and has_large_module,
+                profile=profile,
+                internal_link=signature_owned_by_pcc,
+            )
         profile_end(profile, "link_self_emit_objects_host", started)
         if consume_ir_texts:
             input_ir_texts.clear()
             ir_texts.clear()
+            module_text = ""
             text = ""
             ir_text = ""
         obj_paths: list[str] = []

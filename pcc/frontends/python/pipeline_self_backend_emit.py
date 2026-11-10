@@ -738,6 +738,8 @@ def emit_objects_many_in_process(
     split_large_modules: bool,
     profile: Optional[dict],
     internal_link: bool = False,
+    consume_ir_texts: bool = False,
+    release_ir_texts=None,
     parse_target_triple,
     host_target_triple,
     target_supported,
@@ -767,7 +769,14 @@ def emit_objects_many_in_process(
     join_strings,
     oversized_admission=None,
 ) -> Optional[list[tuple[str, str]]]:
-    """Emit one target's modules through its owned in-process/worker route."""
+    """Emit one target's modules through its owned in-process/worker route.
+
+    By default the caller retains its text list unchanged. With explicit
+    ownership transfer, worker inputs are consumed after materialization and
+    admission, before emission starts; later worker/cache failures may leave
+    that list empty. Unsupported and in-process routes retain the inputs for
+    their caller's fallback. Native split workers still precede this boundary.
+    """
     if not ir_texts:
         return []
     if not internal_link and sys.implementation.name == "pcc":
@@ -1086,6 +1095,16 @@ def emit_objects_many_in_process(
                 else 0
             ),
         )
+        if consume_ir_texts:
+            # Files now own the worker payload. All text-dependent scheduling,
+            # cache planning and profile counters above have completed, so
+            # release both original texts and any source-mode split copies.
+            # Do not collect the heap: dropping these owners is sufficient.
+            inputs.clear()
+            ir_texts.clear()
+            ir_text = ""
+            if release_ir_texts is not None:
+                release_ir_texts()
         oversized_pool_processes = 0
         if oversized_worker_items:
             oversized_emit_t = profile_begin(profile)
@@ -1294,6 +1313,8 @@ def emit_objects_many_via_host_python(
     split_large_modules: bool = False,
     profile: Optional[dict] = None,
     internal_link: bool = False,
+    consume_ir_texts: bool = False,
+    release_ir_texts=None,
     emit_in_process_many,
     profile_begin,
     profile_end,
@@ -1305,14 +1326,26 @@ def emit_objects_many_via_host_python(
     small_int_decimal,
     profile_counter,
 ) -> list[tuple[str, str]]:
-    native_results = emit_in_process_many(
-        ir_texts,
-        tmp_dir,
-        cc,
-        split_large_modules=split_large_modules,
-        profile=profile,
-        internal_link=internal_link,
-    )
+    if consume_ir_texts:
+        native_results = emit_in_process_many(
+            ir_texts,
+            tmp_dir,
+            cc,
+            split_large_modules=split_large_modules,
+            profile=profile,
+            internal_link=internal_link,
+            consume_ir_texts=True,
+            release_ir_texts=release_ir_texts,
+        )
+    else:
+        native_results = emit_in_process_many(
+            ir_texts,
+            tmp_dir,
+            cc,
+            split_large_modules=split_large_modules,
+            profile=profile,
+            internal_link=internal_link,
+        )
     if native_results is not None:
         return native_results
     if sys.implementation.name == "pcc":

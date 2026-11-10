@@ -281,8 +281,15 @@ def test_owned_ir_is_released_after_emission_before_linking(monkeypatch, tmp_pat
     normalized = []
     linked = []
 
-    def emit(values, *_args, **_kwargs):
-        assert values == texts == [first, second]
+    def emit(values, *_args, **kwargs):
+        assert values == [first, second]
+        assert texts == [first, second]
+        assert kwargs.get("consume_ir_texts", False) is consume
+        if consume:
+            kwargs["release_ir_texts"]()
+            assert texts == []
+        else:
+            assert "release_ir_texts" not in kwargs
         normalized.append(values)
         return [("self-aarch64-darwin-v0", str(tmp_path / "module.s"))]
 

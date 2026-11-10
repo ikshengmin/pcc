@@ -1311,6 +1311,8 @@ def _emit_self_objects_many_in_process(
     split_large_modules: bool,
     profile: Optional[dict],
     internal_link: bool = False,
+    consume_ir_texts: bool = False,
+    release_ir_texts=None,
 ) -> Optional[list[tuple[str, str]]]:
     try:
         return _pipeline_self_backend_emit.emit_objects_many_in_process(
@@ -1320,6 +1322,8 @@ def _emit_self_objects_many_in_process(
             split_large_modules=split_large_modules,
             profile=profile,
             internal_link=internal_link,
+            consume_ir_texts=consume_ir_texts,
+            release_ir_texts=release_ir_texts,
             parse_target_triple=_parse_self_backend_target_triple_native,
             host_target_triple=_host_target_triple_for_self_backend,
             target_supported=_is_aarch64_darwin_triple_native,
@@ -1370,6 +1374,8 @@ def _emit_self_objects_many_via_host_python(
     split_large_modules: bool = False,
     profile: Optional[dict] = None,
     internal_link: bool = False,
+    consume_ir_texts: bool = False,
+    release_ir_texts=None,
 ) -> list[tuple[str, str]]:
     try:
         return _pipeline_self_backend_emit.emit_objects_many_via_host_python(
@@ -1379,6 +1385,8 @@ def _emit_self_objects_many_via_host_python(
             split_large_modules=split_large_modules,
             profile=profile,
             internal_link=internal_link,
+            consume_ir_texts=consume_ir_texts,
+            release_ir_texts=release_ir_texts,
             emit_in_process_many=_emit_self_objects_many_in_process,
             profile_begin=_profile_begin,
             profile_end=_profile_end,
