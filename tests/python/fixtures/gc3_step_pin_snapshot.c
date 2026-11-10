@@ -10,16 +10,30 @@ void *pcc_gc_backend3_step_pin_snapshot;
 void *pcc_gc_object_head;
 static long objects[2][4], nodes[2][11], payload[4], owner[9], span[6];
 static long storage[4096], used, freed, locks, snapshots;
+static void *allocations[16];
+static long allocation_count;
 static long candidates[8], candidate_count;
 static void *reverse_target;
 void *malloc(long size) {
     long words = (size + 7) / 8;
-    if (used + words > 4096) return (void *)0;
+    if (used + words > 4096 || allocation_count == 16) return (void *)0;
     long *result = storage + used;
     used += words;
+    allocations[allocation_count++] = result;
     return result;
 }
-void free(void *value) { if (value != (void *)0) freed++; }
+void free(void *value) {
+    if (value == (void *)0) return;
+    for (long i = 0; i < allocation_count; i++) {
+        if (allocations[i] == value) {
+            allocations[i] = (void *)0;
+            freed++;
+            return;
+        }
+    }
+    /* Unknown pointers and double-free are not successful releases. */
+    __builtin_trap();
+}
 void pcc_platform_abort(void) { __builtin_trap(); }
 void pcc_py_gc_minor_graph_lock(void) { locks++; }
 void pcc_py_gc_minor_graph_unlock(void) { locks--; }
@@ -44,6 +58,12 @@ long pcc_gc_object_node_is_active(void *node) { return ((long *)node)[4] == 0; }
 long pcc_gc_object_is_address_pinned(void *object) {
     long *node = pcc_gc_object_index_find(object);
     return node != (void *)0 && ((node[7] & 1) != 0 || node[10] != 0);
+}
+long pcc_gc_object_node_is_address_pinned(void *node, void *object) {
+    /* Finite cross-object boundary: both listed nodes are indexed, with no
+     * forwarding, static literals or header pins in this kernel fixture. */
+    if (node != pcc_gc_object_index_find(object)) __builtin_trap();
+    return pcc_gc_object_is_address_pinned(object);
 }
 void pcc_gc_mark_root_gray_if_known(void *object) { __builtin_trap(); }
 void pcc_gc_shade_gray_atomic(void *object, long allow_black) { __builtin_trap(); }
@@ -87,7 +107,9 @@ int snapshot_probe(void) {
     pcc_gc_pin_conservative_thread_roots();
     if (pcc_gc_generational_object_is_address_pinned(objects[1]) != 1) return 12;
     pcc_gc_conservative_step_pin_end(outer);
-    if (freed != 5 || snapshots != 5 || locks != 0) return 13;
+    /* Full scans also own a word-page table. Check every actual allocation,
+     * rather than assuming the five capture buffers are the only storage. */
+    if (allocation_count < 5 || freed != allocation_count || snapshots != 5 || locks != 0) return 13;
     /* The no-snapshot fallback preserves each collector's existing query. */
     for (int backend = 0; backend < 5; backend++) {
         pcc_gc_backend_selected = backend;

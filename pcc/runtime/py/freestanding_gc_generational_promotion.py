@@ -53,6 +53,9 @@ pcc_gc_object_is_known_no_lock = extern(
 pcc_gc_pointer_is_managed = extern(
     "pcc_gc_pointer_is_managed", (c_ptr,), c_int64
 )
+pcc_gc_resolve_borrowed_root_slot_unlocked = extern(
+    "pcc_gc_resolve_borrowed_root_slot_unlocked", (c_ptr, c_int64), c_ptr
+)
 pcc_gc_visit_object_slots = extern(
     "pcc_gc_visit_object_slots", (c_ptr, c_ptr, c_ptr), c_int64
 )
@@ -176,6 +179,11 @@ def pcc_gc_generational_promote_borrowed_slot_mode(
 def pcc_gc_generational_promote_slot(slot, role: i64, context) -> None:
     if role == 1:
         pcc_gc_generational_promote_owned_slot_mode(slot, 0, 1)
+    elif role == 3:
+        # Weak targets and derived class metadata are update-only aliases,
+        # not strong borrowed edges. Copying here would turn an unrooted
+        # WHITE young object into a GRAY live copy during active marking.
+        pcc_gc_resolve_borrowed_root_slot_unlocked(slot, 0)
     else:
         pcc_gc_generational_promote_borrowed_slot_mode(slot, 0, 1)
 
@@ -184,6 +192,9 @@ def pcc_gc_generational_promote_slot(slot, role: i64, context) -> None:
 def pcc_gc_generational_promote_shallow_slot(slot, role: i64, context) -> None:
     if role == 1:
         pcc_gc_generational_promote_owned_slot_mode(slot, 0, 0)
+    elif role == 3:
+        # The sliced owner walker uses the same update-only slot contract.
+        pcc_gc_resolve_borrowed_root_slot_unlocked(slot, 0)
     else:
         pcc_gc_generational_promote_borrowed_slot_mode(slot, 0, 0)
 
