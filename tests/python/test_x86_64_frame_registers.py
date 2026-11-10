@@ -11,7 +11,10 @@ from __future__ import annotations
 import ast
 import inspect
 import itertools
+import platform
 import random
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -553,3 +556,150 @@ def test_narrow_reused_slot_metadata_is_not_cleared_as_a_pointer_cell():
                                        _func((8, PTR), (8, I8)), _plan(), windows=False)
     assert not any("pcc_retire_" in line for line in out)
     assert "  mov QWORD PTR [rbp - 8], 0" not in out
+
+
+def _loop_pointer_case():
+    # docs/project-intent.md: scalar semantics, callee-save ABI and machine
+    # pointer lifetimes survive retirement of the pass's own scratch state.
+    body = [
+        "  mov QWORD PTR [rbp - 8], 0",
+        "  mov QWORD PTR [rbp - 16], 4",
+        "  mov QWORD PTR [rbp - 24], 99",  # Dead store.
+        "  mov QWORD PTR [rbp - 32], rdi",
+        ".Lsum:",
+        "  mov r10, QWORD PTR [rbp - 8]",
+        "  mov r11, QWORD PTR [rbp - 16]",
+        "  add r10, r11",
+        "  mov QWORD PTR [rbp - 8], r10",
+        "  sub r11, 1",
+        "  mov QWORD PTR [rbp - 16], r11",
+        "  cmp r11, 0",
+        "  jne .Lsum",
+        "  mov rax, QWORD PTR [rbp - 8]",
+        "  mov rdx, QWORD PTR [rbp - 32]",
+        "  mov r10, QWORD PTR [rdx]",
+        "  add rax, r10",
+    ]
+    expected = PROLOGUE[:-1] + [
+        "  mov QWORD PTR [rbp - 32], 0", PROLOGUE[-1],
+        "  mov QWORD PTR [rsp + 16], r12",
+        "  mov QWORD PTR [rsp + 24], r13",
+        "  mov rbx, 0", "  mov r12, 4", "  mov r13, rdi",
+        ".Lsum:", "  mov r10, rbx", "  mov r11, r12",
+        "  add r10, r11", "  mov rbx, r10", "  sub r11, 1",
+        "  mov r12, r11", "  cmp r11, 0", "  jne .Lsum",
+        "  mov rax, rbx", "  mov rdx, r13",
+        "  pcc_retire_pointer_register r13",
+        "  mov r10, QWORD PTR [rdx]", "  add rax, r10",
+    ] + EPILOGUE[:1] + [
+        "  mov r12, QWORD PTR [rsp + 16]",
+        "  mov r13, QWORD PTR [rsp + 24]",
+    ] + EPILOGUE[1:]
+    return (PROLOGUE + body + EPILOGUE,
+            _func((8, I64), (16, I64), (24, I64), (32, PTR)), expected)
+
+
+def test_private_analysis_temporaries_retire_before_later_allocations():
+    # Inspect lengths only: retaining or copying the containers in the tracer
+    # would itself extend the lifetimes this test is intended to verify.
+    scan = ("overlapped", "block_starts", "starts", "end_falls", "falls",
+            "labels", "ends", "end_targets", "depth_delta", "slot_widths",
+            "rejected", "roots", "weights")
+    retired = {
+        "block_events": scan,
+        "live_in": scan + ("block_first",),
+        "interference": scan + ("block_first", "live_in", "successors", "uses", "kills"),
+        "referenced": scan + ("block_first", "live_in", "successors", "uses", "kills",
+                              "live_out", "events", "block_events", "access_stores"),
+    }
+    function = keep_frame_slots_in_registers
+    tree = ast.parse(inspect.getsource(function)).body[0]
+    checkpoints = {}
+    for statement in tree.body:
+        if isinstance(statement, ast.Assign):
+            target = statement.targets[0]
+        elif isinstance(statement, ast.AnnAssign):
+            target = statement.target
+        else:
+            continue
+        if isinstance(target, ast.Name) and target.id in retired:
+            checkpoints[function.__code__.co_firstlineno + statement.lineno - 1] = target.id
+    assert set(checkpoints.values()) == set(retired)
+    observed = {}
+
+    def trace(frame, event, argument):
+        if frame.f_code is function.__code__ and event == "line":
+            stage = checkpoints.get(frame.f_lineno)
+            if stage is not None:
+                observed[stage] = {name: len(frame.f_locals[name]) for name in retired[stage]}
+        return trace
+
+    lines, func, expected = _loop_pointer_case()
+    original_lines = list(lines)
+    original_slots = dict(func.value_slots)
+    plan = _plan(40)
+    original_records = plan.records
+    previous = sys.gettrace()
+    try:
+        sys.settrace(trace)
+        actual = function(lines, func, plan, windows=False)
+    finally:
+        sys.settrace(previous)
+    assert actual == expected
+    assert observed == {stage: dict.fromkeys(names, 0) for stage, names in retired.items()}
+    assert lines == original_lines
+    assert func.value_slots == original_slots
+    assert plan.records is original_records
+    assert plan.records[0].locations[0].offset == -40
+
+
+def _assemble_retired_loop(lines):
+    from pcc.backend.elf_x86_64 import emit_relocatable
+    from pcc.backend.x86_64_asm_driver import assemble_file
+
+    wrapper = [
+        ".intel_syntax noprefix", ".text", ".globl _start", "_start:",
+        "  mov rbx, 101", "  mov r12, 102", "  mov r13, 103",
+        "  lea rdi, .Lvalue[rip]", "  call f",
+        "  cmp rbx, 101", "  jne .Lbad", "  cmp r12, 102", "  jne .Lbad",
+        "  cmp r13, 103", "  jne .Lbad", "  mov rdi, rax", "  jmp .Lexit",
+        ".Lbad:", "  mov rdi, 99", ".Lexit:", "  mov rax, 60", "  syscall",
+    ]
+    tail = [".section .rodata", ".p2align 3", ".Lvalue:", "  .quad 7"]
+    return emit_relocatable(assemble_file("\n".join(wrapper + lines + tail) + "\n"))
+
+
+def test_retired_analysis_preserves_complete_rewrite_and_owned_object_bytes():
+    lines, func, expected = _loop_pointer_case()
+    actual = keep_frame_slots_in_registers(lines, func, _plan(), windows=False)
+    assert actual == expected
+    # Freeze the final pointer-clear instruction independently of the marker
+    # expander too; compare the entire ELF object, not just its text section.
+    final_expected = ["  mov r13d, 0" if line == "  pcc_retire_pointer_register r13"
+                      else line for line in expected]
+    final = expand_pointer_retirements(actual)
+    assert final == final_expected
+    assert _assemble_retired_loop(final) == _assemble_retired_loop(final_expected)
+
+
+@pytest.mark.pcc_gate(unavailable=(
+    None if sys.platform == "linux" and platform.machine() in ("x86_64", "AMD64")
+    else "requires native Linux x86-64 execution"
+))
+def test_retired_analysis_executes_loop_pointer_read_and_callee_saves(tmp_path):
+    from pcc.backend.elf_x86_64 import link_static_executable, parse_relocatable
+
+    lines, func, expected = _loop_pointer_case()
+    rewritten = keep_frame_slots_in_registers(lines, func, _plan(), windows=False)
+    assert rewritten == expected
+    # Both owned images run. The untouched stack-slot program is an execution
+    # oracle for the register rewrite; no external assembler/linker is used.
+    for name, body in (("original", lines),
+                       ("retired", expand_pointer_retirements(rewritten))):
+        executable = tmp_path / name
+        executable.write_bytes(link_static_executable([
+            parse_relocatable(_assemble_retired_loop(body)),
+        ]))
+        executable.chmod(0o755)
+        result = subprocess.run([str(executable)], capture_output=True, timeout=10)
+        assert result.returncode == sum(range(1, 5)) + 7, (name, result.stderr)

@@ -510,6 +510,22 @@ def keep_frame_slots_in_registers(
         bit_of[ranked[candidate]] = candidate
         candidate += 1
 
+    # These private scan/CFG temporaries are dead before the per-block
+    # bitsets grow. Do not retain both representations for large functions.
+    overlapped.clear()
+    block_starts.clear()
+    starts.clear()
+    end_falls.clear()
+    falls.clear()
+    labels.clear()
+    ends.clear()
+    end_targets.clear()
+    depth_delta.clear()
+    slot_widths.clear()
+    rejected.clear()
+    roots.clear()
+    weights.clear()
+
     # Per-block upward-exposed uses and stores; events are access indices.
     block_events: list[list[int]] = []
     block_id = 0
@@ -530,6 +546,7 @@ def keep_frame_slots_in_registers(
             elif not kills[owner] & mask:
                 uses[owner] |= mask
         access_index += 1
+    block_first.clear()
     live_in = [0] * block_count
     live_out = [0] * block_count
     changed = True
@@ -546,6 +563,12 @@ def keep_frame_slots_in_registers(
                 live_in[block_id] = entering
                 changed = True
             block_id -= 1
+
+    entry_live = live_in[0]
+    live_in.clear()
+    successors.clear()
+    uses.clear()
+    kills.clear()
 
     # A candidate interferes with every candidate live after its stores; a
     # store nothing reads before the next store is dead.
@@ -575,6 +598,13 @@ def keep_frame_slots_in_registers(
             event_index -= 1
         block_id += 1
 
+    # Interference owns the remaining liveness facts. Drop its input arrays
+    # before register discovery joins the entire assembly into one string.
+    live_out.clear()
+    events.clear()
+    block_events.clear()
+    access_stores.clear()
+
     referenced = _referenced_pool_registers(lines, frame_lines, windows)
     pool: list[str] = []
     for register in (_WIN64_POOL if windows else _SYSV_POOL):
@@ -583,7 +613,6 @@ def keep_frame_slots_in_registers(
     members = [0] * len(pool)
     forbidden = [0] * len(pool)
     assigned: dict[int, str] = {}
-    entry_live = live_in[0]
     candidate = 0
     while candidate < len(ranked):
         mask = 1 << candidate
