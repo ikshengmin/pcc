@@ -6,23 +6,18 @@ docs/project-intent.md shared GC roots and ordinary object lifetime.
 """
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 
 import pytest
+
+from tests.python.runtime_body_model import load_functions
 
 
 ROOT = Path(__file__).resolve().parents[2] / "pcc/runtime/py"
 
 
 def load_bodies(namespace, path, names=None):
-    tree = ast.parse(path.read_text())
-    selected = []
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and (names is None or node.name in names):
-            node.decorator_list = []
-            selected.append(node)
-    exec(compile(ast.Module(selected, type_ignores=[]), str(path), "exec"), namespace)
+    load_functions(path, names, namespace)
 
 
 class Index:

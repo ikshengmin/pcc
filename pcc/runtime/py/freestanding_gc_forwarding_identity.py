@@ -343,7 +343,10 @@ def pcc_gc_identity_ensure(obj: c_ptr) -> c_ptr:
     store_i32(global_addr("pcc_gc_next_object_id"), 0, stable_id + 1)
     store_ptr(node, 0, obj)
     store_i64(node, 8, stable_id)
-    old_head = pcc_gc_identity_head()
+    # Keep the acquire read inline: forwarding preparation also uses this
+    # helper and must not add a head-accessor call to a budgeted copy step.
+    head_bits: i64 = atomic_load_i64(global_addr("pcc_gc_identity_head"), 0, "acquire")
+    old_head = int_to_ptr(head_bits)
     store_ptr(node, 16, old_head)
     store_ptr(node, 24, null())
     if ptr_is_null(old_head) == 0:
@@ -588,19 +591,23 @@ def pcc_gc_install_forwarding_preallocated_unlocked(
         to_identity = load_ptr(plan, 8)
         if ptr_is_null(to_identity) != 0:
             return -1
+        # Preparation may survive a failed edge commit, but distinct live
+        # objects must retain distinct identities until forwarding succeeds.
+        target_id: i64 = load_i32(global_addr("pcc_gc_next_object_id"), 0)
+        if target_id <= 0:
+            target_id = 1
         store_ptr(to_identity, 0, to_obj)
-        store_i64(to_identity, 8, load_i64(from_identity, 8))
+        store_i64(to_identity, 8, target_id)
         old_identity_head = pcc_gc_identity_head()
         store_ptr(to_identity, 16, old_identity_head)
         store_ptr(to_identity, 24, null())
         if pcc_gc_forwarding_plan_index_insert(2, to_obj, to_identity) != 1:
             return -1
+        store_i32(global_addr("pcc_gc_next_object_id"), 0, target_id + 1)
         if ptr_is_null(old_identity_head) == 0:
             store_ptr(old_identity_head, 24, to_identity)
         _set_identity_head(to_identity)
         store_ptr(plan, 8, null())
-    else:
-        store_i64(to_identity, 8, load_i64(from_identity, 8))
 
     node = load_ptr(plan, 16)
     if ptr_is_null(node) != 0:
@@ -621,6 +628,8 @@ def pcc_gc_install_forwarding_preallocated_unlocked(
         pcc_gc_forwarding_index_remove(from_obj)
         return -1
 
+    # Both indexes own the edge; no recoverable failure remains below.
+    store_i64(to_identity, 8, load_i64(from_identity, 8))
     py_incref(to_obj)
     if ptr_is_null(old_head) == 0:
         store_ptr(old_head, 24, node)
@@ -684,7 +693,9 @@ def pcc_gc_install_forwarding_unlocked(from_obj: c_ptr, to_obj: c_ptr) -> i64:
     from_identity = pcc_gc_identity_ensure(from_obj)
     if ptr_is_null(from_identity) != 0:
         return -1
-    if _identity_assign(to_obj, load_i64(from_identity, 8)) == 0:
+    source_id: i64 = load_i64(from_identity, 8)
+    to_identity = pcc_gc_identity_ensure(to_obj)
+    if ptr_is_null(to_identity) != 0:
         return -1
     node = pcc_gc_forwarding_find(from_obj)
     if ptr_is_null(node) == 0:
@@ -697,7 +708,11 @@ def pcc_gc_install_forwarding_unlocked(from_obj: c_ptr, to_obj: c_ptr) -> i64:
             pcc_gc_forwarding_target_unlink(node)
             store_ptr(node, 8, to_obj)
             _forwarding_target_attach_prepared(node, target_head)
+            # Commit before old-target decref can run reentrant user code.
+            store_i64(to_identity, 8, source_id)
             py_decref(old_target)
+        else:
+            store_i64(to_identity, 8, source_id)
     else:
         node = malloc(56)
         if ptr_is_null(node) != 0:
@@ -732,6 +747,8 @@ def pcc_gc_install_forwarding_unlocked(from_obj: c_ptr, to_obj: c_ptr) -> i64:
             py_decref(to_obj)
             free(node)
             return -1
+        # Do not alias identities until all fallible edge preparation succeeds.
+        store_i64(to_identity, 8, source_id)
         _forwarding_target_attach_prepared(node, target_head)
         population: i64 = load_i32(global_addr("pcc_gc_forwarding_population"), 0)
         store_i32(global_addr("pcc_gc_forwarding_population"), 0, population + 1)
