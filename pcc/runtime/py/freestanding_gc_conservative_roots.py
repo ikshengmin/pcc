@@ -197,6 +197,58 @@ def _pin_owner_chain(node, mark: i64) -> None:
     pcc_platform_abort()
 
 
+# Strict freestanding code requires C ABI declarations even for local helpers.
+@c_abi_export("pcc_gc_conservative_pin_snapshot_owner_chain")
+def _pin_snapshot_owner_chain(node: c_ptr, mark: i64) -> None:
+    """GC4 NoRC only, after the snapshot cleared every old chain pin.
+
+    A set bit belongs to a chain completed by this same snapshot/mark mode.
+    Validate before publishing any bits, so a cycle cannot look like an
+    already completed suffix. Reuse exact indexed nodes, not listed aliases.
+    The general owner-chain entry keeps its independent mark0/mark1 contract.
+    GC4 shells stay active until same-lock index removal/unlink; unlike GC3,
+    no indexed inactive shell can retain a bit from an earlier snapshot.
+    """
+    owner = load_ptr(node, 0)
+    remaining: i64 = load_i32(global_addr("pcc_gc_forwarding_population"), 0) + 1
+    complete: i64 = 0
+    while remaining > 0:
+        current = pcc_gc_object_index_find(owner)
+        if ptr_is_null(current) != 0:
+            pcc_platform_abort()
+            return
+        if (load_i64(current, 56) & 1) != 0:
+            complete = 1
+            break
+        edge = pcc_gc_forwarding_index_find(owner)
+        if ptr_is_null(edge) != 0:
+            if mark != 0:
+                pcc_gc_mark_canonical_root_gray_with_node(owner, current)
+            complete = 1
+            break
+        target = load_ptr(edge, 8)
+        if ptr_is_null(target) != 0 or ptr_eq(target, owner) != 0:
+            pcc_platform_abort()
+            return
+        owner = target
+        remaining -= 1
+    if complete == 0:
+        pcc_platform_abort()
+        return
+    # The graph lock keeps the validated path stable. Each fresh owner is
+    # visited at most twice in this cut, regardless of explicit-pin order.
+    owner = load_ptr(node, 0)
+    while True:
+        current = pcc_gc_object_index_find(owner)
+        if (load_i64(current, 56) & 1) != 0:
+            return
+        store_i64(current, 56, load_i64(current, 56) | 1)
+        edge = pcc_gc_forwarding_index_find(owner)
+        if ptr_is_null(edge) != 0:
+            return
+        owner = load_ptr(edge, 8)
+
+
 @c_abi_export("pcc_gc_conservative_mark_word")
 def pcc_gc_conservative_mark_word(word, context) -> None:
     candidate: i64 = ptr_to_int(word)
@@ -586,6 +638,12 @@ def _pin_snapshot_owners(words, count: i64, mark: i64) -> i64:
                 node, load_ptr(node, 0)
             ) != 0:
                 rooted = 1
+            # An explicit GC4 pin can outlive every raw stack word naming
+            # this forwarding source. Propagated cut bits are not new roots.
+            # Keep the no-forwarding and counted paths unchanged.
+            if (backend == 4 and chain_pin_cut != 0
+                    and (load_i32(load_ptr(node, 0), 12) & PY_FLAG_GC_PINNED) != 0):
+                rooted = 1
             owner = load_ptr(node, 48)
             if ptr_is_null(owner) == 0:
                 span = load_ptr(owner, 64)
@@ -598,7 +656,10 @@ def _pin_snapshot_owners(words, count: i64, mark: i64) -> i64:
             if rooted != 0:
                 # A raw source address retains its bytes and shades the
                 # canonical target; source metadata itself is not a root.
-                _pin_owner_chain(node, mark)
+                if backend == 4 and chain_pin_cut != 0:
+                    _pin_snapshot_owner_chain(node, mark)
+                else:
+                    _pin_owner_chain(node, mark)
         if listed_in_walk != 0 and load_i64(node, 32) == 0:
             listed = load_ptr(node, 0)
             if ptr_is_null(listed) == 0 and is_tagged_int(listed) == 0:
