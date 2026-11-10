@@ -13,7 +13,6 @@ from pcc.unsafe import (
     load_i32,
     load_i64,
     load_ptr,
-    memset,
     ptr_add,
     ptr_eq,
     ptr_is_null,
@@ -40,6 +39,13 @@ pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 
 @c_abi_export("pcc_gc_memoryview_initialize_owned_buffer")
 def pcc_gc_memoryview_initialize_owned_buffer(obj, buffer_view) -> i64:
+    if ptr_is_null(buffer_view) == 0:
+        store_ptr(buffer_view, 72, int_to_ptr(0))  # fresh opaque internal state
+    return _memoryview_write_owned_buffer(obj, buffer_view)
+
+
+@c_abi_export("pcc_gc_memoryview_write_owned_buffer")
+def _memoryview_write_owned_buffer(obj, buffer_view) -> i64:
     # Rebuild a memoryview's non-owning Py_buffer aliases from base@16.
     if ptr_is_null(obj) != 0 or ptr_is_null(buffer_view) != 0:
         return 0
@@ -75,7 +81,9 @@ def pcc_gc_memoryview_initialize_owned_buffer(obj, buffer_view) -> i64:
     length: i64 = load_i64(
         exporter, abi_constant("object.bytes.byte_len_offset")
     )
-    memset(buffer_view, 0, 96)
+    # Every public field is written explicitly. In particular, refresh must
+    # never clear internal@72, even temporarily: concurrent refreshes could
+    # otherwise lose the cache's private exporter root/lease record.
     store_ptr(
         buffer_view,
         0,
@@ -93,7 +101,6 @@ def pcc_gc_memoryview_initialize_owned_buffer(obj, buffer_view) -> i64:
     store_ptr(buffer_view, 48, ptr_add(buffer_view, 80))
     store_ptr(buffer_view, 56, ptr_add(buffer_view, 88))
     store_ptr(buffer_view, 64, int_to_ptr(0))  # suboffsets
-    store_ptr(buffer_view, 72, int_to_ptr(0))  # internal
     store_i64(buffer_view, 80, length)  # inline shape
     store_i64(buffer_view, 88, 1)  # inline stride
     return 1
@@ -110,7 +117,7 @@ def pcc_gc_memoryview_refresh_owned_buffer(obj) -> i64:
     bits: i64 = atomic_load_i64(obj, 24, "acquire")
     if bits == 0:
         return 0
-    return pcc_gc_memoryview_initialize_owned_buffer(obj, int_to_ptr(bits))
+    return _memoryview_write_owned_buffer(obj, int_to_ptr(bits))
 
 
 @c_abi_export("pcc_gc_object_slots_visit_slot")

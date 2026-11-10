@@ -935,6 +935,9 @@ pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
 pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+pcc_memoryview_free_owned_buffer = extern(
+    "pcc_memoryview_free_owned_buffer", (c_ptr,), c_void
+)
 py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
 py_obj_index_slots = extern("py_obj_index_slots", (c_ptr, c_ptr), c_int64)
 
@@ -2573,8 +2576,9 @@ def py_dealloc_memoryview(o) -> None:
     if not ptr_is_null(buffer_view):
         # The embedded Py_buffer.obj is a derived/borrowed alias of base;
         # freeing this raw allocation must not decref it a second time.
+        # Its optional independent exporter root/lease is released separately.
         store_ptr(o, 24, null())
-        py_mem_free(buffer_view)
+        pcc_memoryview_free_owned_buffer(buffer_view)
     base = pcc_gc_load_ptr(o, ptr_add(o, 16))
     if not ptr_is_null(base):
         py_decref(base)

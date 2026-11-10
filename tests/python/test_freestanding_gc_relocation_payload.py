@@ -78,7 +78,7 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_retain_plan_finish",
     "pcc_gc_retain_plan_prepare_locked",
     "py_decref",
-    "py_mem_free",
+    "pcc_memoryview_free_owned_buffer",
 }
 RAW_GLOBAL_IMPORTS = {
     "pcc_gc_backend3_continuation_root_scan_cursor",

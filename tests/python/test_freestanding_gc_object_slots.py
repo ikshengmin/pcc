@@ -22,6 +22,7 @@ MAKEFILE = RUNTIME_DIR / "Makefile"
 OWNED_SYMBOLS = {
     "pcc_gc_memoryview_initialize_owned_buffer",
     "pcc_gc_memoryview_refresh_owned_buffer",
+    "pcc_gc_memoryview_write_owned_buffer",
     "pcc_gc_visit_object_slots",
     "pcc_gc_visit_object_slots_slice",
     "pcc_gc_object_slots_visit_slot",
@@ -34,7 +35,6 @@ OWNED_SYMBOLS = {
     "pcc_gc_object_slots_has_no_pointer_slots",
 }
 RAW_FUNCTION_IMPORTS = {
-    "memset",
     "pcc_capi_is_cext_type_tag",
     "pcc_capi_visit_cext_object_slots_i64",
     "pcc_gc_load_ptr",

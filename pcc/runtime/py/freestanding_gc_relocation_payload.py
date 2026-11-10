@@ -70,7 +70,9 @@ pcc_gc_visit_object_slots = extern(
     "pcc_gc_visit_object_slots", (c_ptr, c_ptr, c_ptr), c_int64
 )
 py_decref = extern("py_decref", (c_ptr,), c_void)
-py_mem_free = extern("py_mem_free", (c_ptr,), c_void)
+pcc_memoryview_free_owned_buffer = extern(
+    "pcc_memoryview_free_owned_buffer", (c_ptr,), c_void
+)
 pcc_gc_retain_plan_prepare_locked = extern(
     "pcc_gc_retain_plan_prepare_locked", (c_ptr, c_ptr), c_ptr
 )
@@ -933,7 +935,7 @@ def pcc_gc_relocation_finish_source_payloads(plans) -> None:
         free(raw1)
         free(raw2)
         free(raw3)
-        py_mem_free(owned_buffer)
+        pcc_memoryview_free_owned_buffer(owned_buffer)
 
         # Store-buffer references are released only after raw storage and all
         # owner metadata are gone. Any decref reentry sees an inert source and

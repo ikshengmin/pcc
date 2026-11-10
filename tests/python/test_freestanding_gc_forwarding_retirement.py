@@ -555,6 +555,7 @@ def test_forwarding_retirement_defers_normal_remap_payload_finish_after_unlock()
     )
     assert "free(raw0)" not in strict_payload_commit
     assert "py_mem_free(owned_buffer)" not in strict_payload_commit
+    assert "pcc_memoryview_free_owned_buffer(owned_buffer)" not in strict_payload_commit
     assert "pcc_gc_backend4_source_side_table_plan_finish(side_plan)" not in (
         strict_payload_commit
     )
@@ -566,13 +567,14 @@ def test_forwarding_retirement_defers_normal_remap_payload_finish_after_unlock()
         "def pcc_gc_relocation_finish_source_payloads(plans)", 1
     )[1].split("\n@c_abi_export", 1)[0]
     assert "free(raw0)" in strict_payload_finish
-    assert "py_mem_free(owned_buffer)" in strict_payload_finish
+    assert "pcc_memoryview_free_owned_buffer(owned_buffer)" in strict_payload_finish
     side_finish = strict_payload_finish.index(
         "pcc_gc_backend4_source_side_table_plan_finish("
     )
     slot_decref = strict_payload_finish.index("py_decref(")
     assert side_finish < slot_decref
     assert strict_payload_finish.index("free(raw3)") < side_finish
+    assert strict_payload_finish.index("pcc_memoryview_free_owned_buffer(owned_buffer)") < side_finish
 
     strict_wrapper = strict.split(
         '@c_abi_export("pcc_gc_backend4_remap_and_retire_stopped_world")', 1

@@ -3010,6 +3010,7 @@ def _cross_object_signatures_part_9():
         "c_int64",
     ),
     "pcc_gc_memoryview_refresh_owned_buffer": (("c_ptr",), "c_int64"),
+    "pcc_memoryview_free_owned_buffer": (("c_ptr",), "c_void"),
     "pcc_errno_location": ((), "c_ptr"),
     "pcc_errno_get": ((), "c_int32"),
     "pcc_errno_linux_c_locale_message": (("c_int32",), "c_ptr"),
