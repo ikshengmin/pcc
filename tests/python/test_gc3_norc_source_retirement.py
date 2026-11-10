@@ -110,7 +110,7 @@ class GC3(RetirementState):
             'pcc_gc_forwarding_index_insert': self.insert_forward,
             'pcc_gc_forwarding_target_index_find': lambda obj: self.reverse.get(obj, 0),
             'pcc_gc_forwarding_target_index_insert': self.insert_reverse,
-            'pcc_gc_forwarding_target_index_upsert': self.insert_reverse,
+            'pcc_gc_forwarding_target_index_upsert': self.upsert_reverse,
             'pcc_gc_identity_index_find': lambda obj: self.identities.get(obj, 0),
             'pcc_gc_identity_index_insert': self.insert_identity,
             'pcc_gc_identity_index_remove': lambda obj: self.identities.pop(obj, 0),
@@ -281,25 +281,39 @@ class GC3(RetirementState):
         node = self.index.get(obj, 0)
         return int(bool(node) and self.load(node, 32) == 0 and not self.load(obj, 12) & 524288)
 
-    def insert_index(self, obj, node):
-        if self.fail_index:
+    # Match the real index leaf contract: 1=new, 0=existing without
+    # replacement, -1=failure. Allocation failure applies only to a new key;
+    # object insert requires a node, while the other three inserts do not.
+    # These dictionaries do not model index publication or concurrency.
+    def _insert_entry(self, table, obj, node, *, fail=False, require_node=False):
+        if not obj or obj & 1 or (require_node and not node):
             return -1
-        self.index[obj] = node
-        return 0
+        if obj in table:
+            return 0
+        if fail:
+            return -1
+        table[obj] = node
+        return 1
+
+    def insert_index(self, obj, node):
+        return self._insert_entry(self.index, obj, node,
+                                  fail=self.fail_index, require_node=True)
 
     def insert_forward(self, obj, edge):
-        if self.fail_forward:
-            return -1
-        self.forwardings[obj] = edge
-        return 0
+        return self._insert_entry(self.forwardings, obj, edge, fail=self.fail_forward)
 
     def insert_reverse(self, obj, edge):
-        self.reverse[obj] = edge
-        return 0
+        return self._insert_entry(self.reverse, obj, edge)
 
     def insert_identity(self, obj, node):
-        self.identities[obj] = node
-        return 0
+        return self._insert_entry(self.identities, obj, node)
+
+    def upsert_reverse(self, obj, edge):
+        if not obj or obj & 1 or not edge:
+            return -1
+        inserted = int(obj not in self.reverse)
+        self.reverse[obj] = edge
+        return inserted
 
     def register_pointer(self, obj):
         self.managed.add(obj)
@@ -405,11 +419,142 @@ class GC3(RetirementState):
         return self.ns['pcc_gc_backend4_remap_and_retire_stopped_world']()
 
 
+@pytest.mark.parametrize('name, table_name', [
+    ('pcc_gc_object_index_insert', 'index'),
+    ('pcc_gc_forwarding_index_insert', 'forwardings'),
+    ('pcc_gc_forwarding_target_index_insert', 'reverse'),
+    ('pcc_gc_identity_index_insert', 'identities'),
+])
+def test_gc3_index_insert_preserves_duplicates_and_rejects_invalid_keys(name, table_name):
+    m = GC3()
+    obj, first, replacement = [m.allocate(32) for _ in range(3)]
+    insert = m.ns[name]
+    table = getattr(m, table_name)
+    assert insert(obj, first) == 1
+    assert insert(obj, replacement) == 0
+    assert insert(0, first) == -1
+    assert insert(obj | 1, first) == -1
+    assert table == {obj: first}
+
+
+@pytest.mark.parametrize('name, table_name, require_node', [
+    ('pcc_gc_object_index_insert', 'index', True),
+    ('pcc_gc_forwarding_index_insert', 'forwardings', False),
+    ('pcc_gc_forwarding_target_index_insert', 'reverse', False),
+    ('pcc_gc_identity_index_insert', 'identities', False),
+])
+def test_gc3_index_insert_matches_null_node_validation(name, table_name, require_node):
+    m = GC3()
+    obj, first, empty = [m.allocate(32) for _ in range(3)]
+    insert = m.ns[name]
+    table = getattr(m, table_name)
+    assert insert(obj, first) == 1
+    # Validation precedes duplicate detection for the object index.
+    assert insert(obj, 0) == (-1 if require_node else 0)
+    assert table == {obj: first}
+    assert insert(empty, 0) == (-1 if require_node else 1)
+    if require_node:
+        assert table == {obj: first}
+    else:
+        # A present key with a null value is still a duplicate, not a miss.
+        assert insert(empty, first) == 0
+        assert table == {obj: first, empty: 0}
+
+
+@pytest.mark.parametrize('name, table_name, failure_flag', [
+    ('pcc_gc_object_index_insert', 'index', 'fail_index'),
+    ('pcc_gc_forwarding_index_insert', 'forwardings', 'fail_forward'),
+])
+def test_gc3_index_failure_preserves_table_and_existing_key(name, table_name, failure_flag):
+    m = GC3()
+    obj, first, replacement, missing = [m.allocate(32) for _ in range(4)]
+    insert = m.ns[name]
+    table = getattr(m, table_name)
+    setattr(m, failure_flag, True)
+    assert insert(obj, first) == -1 and not table
+    setattr(m, failure_flag, False)
+    assert insert(obj, first) == 1
+    setattr(m, failure_flag, True)
+    assert insert(missing, replacement) == -1
+    assert insert(obj, replacement) == 0
+    assert table == {obj: first}
+
+
+def test_gc3_reverse_upsert_replaces_head_and_rejects_invalid_arguments():
+    m = GC3()
+    obj, first, replacement = [m.allocate(32) for _ in range(3)]
+    upsert = m.ns['pcc_gc_forwarding_target_index_upsert']
+    assert upsert(obj, first) == 1
+    assert upsert(obj, replacement) == 0
+    assert upsert(0, first) == -1
+    assert upsert(obj | 1, first) == -1
+    assert upsert(obj, 0) == -1
+    assert m.reverse == {obj: replacement}
+
+
+@pytest.mark.parametrize('fail', [False, True])
+def test_gc3_public_install_observes_forward_insert_result(fail):
+    m = GC3()
+    source, source_node, _ = m.value()
+    target, target_node, _ = m.value()
+    m.fail_forward = fail
+    before = set(m.raw)
+    result = m.ns['pcc_gc_install_forwarding'](source, target)
+    assert result == (-1 if fail else 0)
+    assert m.depth == 0
+    assert m.index == {source: source_node, target: target_node}
+    assert m.load('pcc_gc_forwarding_population', 0) == int(not fail)
+    edges = {ptr for ptr in set(m.raw) - before if m.raw[ptr] == 56}
+    assert len(edges) == 1
+    if fail:
+        assert not m.forwardings and not m.reverse
+        assert m.load('pcc_gc_forwarding_head', 0) == 0
+        assert not m.load(source, 12) & 2048
+        assert not m.load(target, 12) & 8192
+        assert edges <= m.freed
+    else:
+        edge = m.forwardings[source]
+        assert edges == {edge} and not edges & m.freed
+        assert m.reverse == {target: edge}
+        assert m.load('pcc_gc_forwarding_head', 0) == edge
+        assert m.load(edge, 0) == source and m.load(edge, 8) == target
+        assert m.load(source, 12) & 2048 and m.load(target, 12) & 8192
+
+
+def test_gc3_public_install_reverse_chain_survives_retarget():
+    m = GC3()
+    first_source, second_source, target, replacement = [m.value()[0] for _ in range(4)]
+    install = m.ns['pcc_gc_install_forwarding']
+    assert install(first_source, target) == 0
+    first = m.forwardings[first_source]
+    assert install(second_source, target) == 0
+    second = m.forwardings[second_source]
+    assert first != second
+    assert m.reverse == {target: second}
+    assert m.load(second, 32) == first and m.load(first, 40) == second
+    assert m.load(first, 32) == 0 and m.load(second, 40) == 0
+
+    assert install(second_source, replacement) == 0
+    assert m.forwardings == {first_source: first, second_source: second}
+    assert m.reverse == {target: first, replacement: second}
+    assert m.load(first, 8) == target and m.load(second, 8) == replacement
+    for edge in (first, second):
+        assert m.load(edge, 32) == m.load(edge, 40) == 0
+        assert edge not in m.freed
+    assert m.load('pcc_gc_forwarding_head', 0) == second
+    assert m.load(second, 16) == first and m.load(first, 24) == second
+    assert m.load('pcc_gc_forwarding_population', 0) == 2
+    assert m.depth == 0
+
+
 def test_source_target_death_consumes_nursery_occupancy_without_ordinary_decref():
     m = GC3()
     source, source_node, block = m.value(nursery=True)
     target = m.copy(source)
     assert target and m.load(source_node, 32) == 1 and m.load(block, 32) == 1
+    edge = m.forwardings[source]
+    assert edge not in m.freed and m.reverse[target] == edge
+    assert m.load('pcc_gc_forwarding_population', 0) == 1
     m.ns['pcc_gc_note_object_freeing'](target)
     m.ns['pcc_gc_free_object_memory'](target)
     assert source not in m.index and target not in m.index

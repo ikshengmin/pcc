@@ -29,9 +29,9 @@ class MovingRoots(GC3):
         self.ns["pcc_gc_trace_stack_push"] = lambda obj: self.events.append(("root", obj))
         self.ns["pcc_gc_forwarding_target_index_upsert"] = self.upsert_reverse
 
-    # The inherited finite dictionaries predate insert's 1=new / 0=existing
-    # contract. Model that leaf contract locally, including no replacement on
-    # duplicate insert; the real forwarding installer still owns publication,
+    # Keep this model's explicit 1=new / 0=existing leaf contract, including
+    # no replacement on duplicate insert, aligned with the base fixture.
+    # The real forwarding installer still owns publication,
     # reverse links, header flags, population and rollback.
     def _insert_entry(self, table, obj, node, *, fail=False, require_node=False):
         if not obj or obj & 1 or (require_node and not node):
