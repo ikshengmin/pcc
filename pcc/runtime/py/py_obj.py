@@ -1371,6 +1371,19 @@ def pcc_gc_publish_owned_root(slot) -> int:
     return pcc_gc_foreign_lease_release(slot, token)
 
 
+def _gc_root_copy_lease_rollback(plan, destination, backend: int, token: int) -> int:
+    # Cold failure owner: keep this scratch out of the caller's fixed native
+    # frame. A conditional stack_alloc there still reserves uninitialized
+    # conservative words on successful and early-return paths.
+    rollback = stack_alloc(128)
+    pcc_gc_store_root_plan_init(rollback, backend)
+    pcc_gc_store_root_plan_commit_locked(rollback, destination, null())
+    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_store_root_plan_finish(plan)
+    pcc_gc_store_root_plan_finish(rollback)
+    return token
+
+
 @c_abi_export("pcc_gc_root_copy_lease")
 def pcc_gc_root_copy_lease(destination, source) -> int:
     """Retain an authoritative root into an empty root and lease its address.
@@ -1434,6 +1447,15 @@ def pcc_gc_root_copy_lease(destination, source) -> int:
         if pcc_gc_store_root_plan_commit_locked(plan, destination, value) == 0:
             released: int = pcc_gc_foreign_lease_release(source, token)
             token = -4 if released == 0 else -3
+        elif token == 0 and (backend == 3 or backend == 4):
+            # A conservative source stack slot can return token 0. Its
+            # lifetime does not cover a copied heap/global destination after
+            # the source is rebound or leaves the stack. Establish the
+            # destination's own protection before this transaction unlocks.
+            # Tokens 1/2 already transfer independently and must not double.
+            token = pcc_gc_foreign_lease_acquire(destination)
+            if token < 0:
+                return _gc_root_copy_lease_rollback(plan, destination, backend, token)
     pcc_py_gc_minor_graph_unlock()
     # Deferred diagnostics/refcount work runs only after the destination and
     # counted lease have been published, never while a borrowed raw copy is
@@ -1690,6 +1712,11 @@ def pcc_gc_root_copy_lease_prepare_locked(destination, source, source_borrowed: 
             if pcc_gc_foreign_lease_release(source, token) != 0:
                 return -3
             return -4
+        if token == 0 and (backend == 3 or backend == 4):
+            # A source-stack no-op lease is not transferable to a heap root.
+            token = pcc_gc_foreign_lease_acquire(destination)
+            if token < 0:
+                pcc_gc_store_root_plan_commit_locked(rollback, destination, null())
         return token
     value = pcc_gc_load_borrowed_ptr(null(), source)
     if pcc_gc_store_root_plan_commit_locked(plan, destination, value) == 0:
