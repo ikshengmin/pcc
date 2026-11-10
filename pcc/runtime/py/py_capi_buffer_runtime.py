@@ -146,37 +146,27 @@ def _value_error(message) -> None:
     py_raise_owned(py_exc_new(2, message))  # PY_EXC_VALUEERROR
 
 
-def _buffer_data(obj, buf_ptr, len_ptr, ro_ptr) -> int:
+def _buffer_data(obj, buf_ptr, len_ptr, ro_ptr) -> c_ptr:
+    # Return the borrowed leaf that owns these bytes, or NULL on failure.
+    # This is the existing data walk, not a root or an address lease.
     if ptr_is_null(obj) or is_tagged_int(obj):
-        return -1
+        return null()
     tag: int = load_i32(obj, 8)
     if tag == PY_TYPE_BYTES:  # PY_TYPE_BYTES
         store_ptr(buf_ptr, 0, ptr_add(obj, 24))
         store_i64(len_ptr, 0, load_i64(obj, 16))
         store_i32(ro_ptr, 0, 1)
-        return 0
+        return obj
     if tag == PY_TYPE_BYTEARRAY:  # PY_TYPE_BYTEARRAY
         store_ptr(buf_ptr, 0, ptr_add(obj, 24))
         store_i64(len_ptr, 0, load_i64(obj, 16))
         store_i32(ro_ptr, 0, 0)
-        return 0
+        return obj
     if tag == PY_TYPE_MEMORYVIEW:  # PY_TYPE_MEMORYVIEW
         base = pcc_gc_load_ptr(
             obj, ptr_add(obj, 16)
         )  # view->base
         return _buffer_data(base, buf_ptr, len_ptr, ro_ptr)
-    return -1
-
-
-def _buffer_lease_owner(obj):
-    depth: int = 0
-    while depth < 16:
-        if ptr_is_null(obj) or is_tagged_int(obj):
-            return null()
-        if load_i32(obj, 8) != PY_TYPE_MEMORYVIEW:
-            return obj
-        obj = pcc_gc_load_ptr(obj, ptr_add(obj, 16))
-        depth = depth + 1
     return null()
 
 
@@ -202,7 +192,7 @@ def PyObject_CheckBuffer(obj) -> int:
     store_ptr(buf_ptr, 0, null())
     store_i64(len_ptr, 0, 0)
     store_i32(ro_ptr, 0, 1)
-    if _buffer_data(obj, buf_ptr, len_ptr, ro_ptr) == 0:
+    if not ptr_is_null(_buffer_data(obj, buf_ptr, len_ptr, ro_ptr)):
         return 1
     return 0
 
@@ -223,7 +213,8 @@ def PyObject_GetBuffer(obj, view, flags: int) -> int:
     store_ptr(buf_ptr, 0, null())
     store_i64(len_ptr, 0, 0)
     store_i32(ro_ptr, 0, 1)
-    if _buffer_data(obj, buf_ptr, len_ptr, ro_ptr) != 0:
+    lease_owner = _buffer_data(obj, buf_ptr, len_ptr, ro_ptr)
+    if ptr_is_null(lease_owner):
         _type_error(cstr("object does not support buffer protocol"))
         return -1
     buf = load_ptr(buf_ptr, 0)
@@ -232,11 +223,8 @@ def PyObject_GetBuffer(obj, view, flags: int) -> int:
     if (flags & 0x0001) != 0 and readonly != 0:  # PyBUF_WRITABLE
         _type_error(cstr("object is not writable"))
         return -1
-    lease_owner = _buffer_lease_owner(obj)
     meta = PyMem_Malloc(40)
-    if ptr_is_null(lease_owner) or ptr_is_null(meta):
-        if not ptr_is_null(meta):
-            PyMem_Free(meta)
+    if ptr_is_null(meta):
         _runtime_error(cstr("out of memory creating buffer view"))
         return -1
     store_i64(meta, 0, length)  # shape
@@ -305,7 +293,7 @@ def PyMemoryView_FromObject(obj) -> c_ptr:
     store_ptr(buf_ptr, 0, null())
     store_i64(len_ptr, 0, 0)
     store_i32(ro_ptr, 0, 1)
-    if _buffer_data(obj, buf_ptr, len_ptr, ro_ptr) != 0:
+    if ptr_is_null(_buffer_data(obj, buf_ptr, len_ptr, ro_ptr)):
         _type_error(cstr("object does not support buffer protocol"))
         return null()
     return py_memoryview_new(obj)
