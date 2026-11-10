@@ -595,8 +595,10 @@ def _gen_finalize_mode(gen, invalidate_weakrefs: int) -> None:
     if invalidate_weakrefs != 0:
         py_weakref_invalidate(gen)
     saved = py_current_exception()
+    saved_pin: int = 0
     if ptr_is_null(saved) == 0:
         py_incref(saved)
+        saved_pin = load_i32(saved, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
         pcc_gc_pin(saved)
     py_clear_exception()
     closed = py_gen_close(gen)
@@ -609,8 +611,14 @@ def _gen_finalize_mode(gen, invalidate_weakrefs: int) -> None:
     if ptr_is_null(saved) == 0:
         py_raise(saved)
         pcc_gc_unpin(saved)
+        if saved_pin != 0:
+            atomic_rmw_i32("or", saved, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_GC_PINNED, "relaxed")
         py_decref(saved)
     pcc_gc_unpin(gen)
+    # Legacy pins are Boolean, not nested holds. Balance our pin calls, but
+    # leave an enclosing caller's pre-existing protection intact.
+    if (flags & PY_FLAG_GC_PINNED) != 0:
+        atomic_rmw_i32("or", gen, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_GC_PINNED, "relaxed")
     py_decref(gen)
 
 

@@ -33,6 +33,7 @@ class Finalization:
                        ('pcc_gc_tracing_finish_stop_epoch', 0): 7,
                        (3000, 0): 1000, (3000, 16): 0}
         self.events = []
+        self.pin_events = []
         self.phase_observations = []
         self.pending = 0
         self.count_free = count_free
@@ -126,6 +127,7 @@ class Finalization:
 
     def pin(self, value, enabled):
         if value:
+            self.pin_events.append((value, enabled))
             flags = self.load(value, 12)
             self.store(value, 12, flags | 64 if enabled else flags & ~64)
 
@@ -224,6 +226,77 @@ def test_tracing_candidate_close_preserves_accounting_and_pending_error(scenario
     assert model.load(1000, 0) == model.load(9000, 0) == 1
     assert model.load(1000, 12) & 4 and not model.load(1000, 12) & 64
     assert model.rescued == ([1000] if scenario == 'resurrect' else [])
+
+
+@pytest.mark.parametrize('entry', (
+    'py_user_del_dispatch', 'py_gen_finalize', 'py_gen_finalize_tracing_candidate',
+))
+@pytest.mark.parametrize('gen_pinned', (False, True))
+@pytest.mark.parametrize('pending_pinned', (False, True))
+@pytest.mark.parametrize('has_pending', (False, True))
+@pytest.mark.parametrize('scenario', ('normal', 'close-error', 'close-reentry'))
+@pytest.mark.parametrize('count_free', (False, True))
+def test_generator_finalizer_preserves_prior_pins(
+    entry, gen_pinned, pending_pinned, has_pending, scenario, count_free,
+):
+    model = Finalization(count_free=count_free)
+    pin = model.ns['PY_FLAG_GC_PINNED']
+    offset = model.ns['PYOBJECTHEADER_FLAGS_OFFSET']
+    # Keep unrelated incoming flags and a flag added during close. Restoring
+    # the entire old header would preserve the pin but lose the latter.
+    gen_flags = 2 | (pin if gen_pinned else 0)
+    exc_flags = 32 | (pin if pending_pinned else 0)
+    model.store(1000, offset, gen_flags)
+    model.store(9000, offset, exc_flags)
+    model.pending = 9000 if has_pending else 0
+
+    def close():
+        assert model.load(1000, offset) & pin
+        if has_pending:
+            assert model.load(9000, offset) & pin
+        model.bits('or', 1000, offset, 128, 'relaxed')
+        model.bits('or', 9000, offset, 256, 'relaxed')
+        if scenario == 'close-error':
+            model.set_error(9100)
+        if scenario == 'close-reentry':
+            model.ns[entry](1000)
+
+    model.close_hook = close
+    model.ns[entry](1000)
+    assert model.count() == model.close_count == 1
+    assert model.pending == (9000 if has_pending else 0)
+    assert model.load(1000, offset) == gen_flags | 4 | 128
+    assert model.load(9000, offset) == exc_flags | 256
+    assert model.load(1000, 0) == model.load(9000, 0) == 1
+    expected_pins = [(1000, True)]
+    if has_pending:
+        expected_pins += [(9000, True), (9000, False)]
+    expected_pins += [(1000, False)]
+    assert model.pin_events == expected_pins
+    before = dict(model.memory)
+    model.ns[entry](1000)
+    assert model.memory == before
+    assert model.pin_events == expected_pins
+    assert model.count() == model.close_count == 1
+
+
+@pytest.mark.parametrize('entry', (
+    'py_user_del_dispatch', 'py_gen_finalize', 'py_gen_finalize_tracing_candidate',
+))
+@pytest.mark.parametrize('gen_pinned', (False, True))
+@pytest.mark.parametrize('pending_pinned', (False, True))
+def test_already_finalized_generator_does_not_touch_prior_pins(
+    entry, gen_pinned, pending_pinned,
+):
+    model = Finalization(flags=4 | 2 | (64 if gen_pinned else 0))
+    model.pending = 9000
+    model.store(9000, 12, 32 | (64 if pending_pinned else 0))
+    before = dict(model.memory)
+    model.ns[entry](1000)
+    assert model.memory == before
+    assert model.pending == 9000
+    assert model.pin_events == model.events == []
+    assert model.count() == model.close_count == 0
 
 
 @pytest.mark.parametrize('shape,expected', (('completed', 0), ('unstarted', 0), ('finalized', 0), ('suspended', 1)))
@@ -339,6 +412,16 @@ def main():
     assert ref() is None
     dispatch(suspended)
     finalize(suspended)
+    assert count() - before == 1
+    events.clear()
+    pinned = values("pinned")
+    next(pinned)
+    before = count()
+    assert preserve(pinned) == 1
+    assert count() - before == 1
+    assert events == ["pinned"]
+    dispatch(pinned)
+    finalize(pinned)
     assert count() - before == 1
     events.clear()
     bad = failing()
