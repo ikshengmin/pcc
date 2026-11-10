@@ -213,6 +213,22 @@ pcc_gc_shade_gray_atomic = extern(
 pcc_gc_note_safepoint = extern("pcc_gc_note_safepoint", (), c_void)
 pcc_gc_step = extern("pcc_gc_step", (c_int64,), c_int64)
 pcc_gc_tracing_step_cycle = extern("pcc_gc_tracing_step_cycle", (c_int64,), c_int64)
+pcc_gc_dispatch_tracing_work_pending = extern(
+    "pcc_gc_dispatch_tracing_work_pending", (), c_int64
+)
+pcc_gc_backend4_remap_and_retire_stopped_world = extern(
+    "pcc_gc_backend4_remap_and_retire_stopped_world", (), c_int64
+)
+pcc_gc_generational_step = extern(
+    "pcc_gc_generational_step", (c_int64, c_int64), c_int64
+)
+pcc_gc_tracing_record_pause = extern(
+    "pcc_gc_tracing_record_pause", (c_int64, c_int64), c_void
+)
+pcc_thread_live_count = extern("pcc_thread_live_count", (), c_int64)
+pcc_thread_all_stopped_at_gates = extern(
+    "pcc_thread_all_stopped_at_gates", (), c_int64
+)
 pcc_gc_concurrent_sweep_finish_stopped = extern(
     "pcc_gc_concurrent_sweep_finish_stopped", (), c_int64
 )
@@ -1858,6 +1874,64 @@ def pcc_gc_frame_leave_lifo_mapped(slots) -> None:
     return
 
 
+def _gc_tracing_collect_step(budget: int) -> int:
+    # Full-collection owners check sweep_owed before this call. Preserve the
+    # public step dispatcher for every other phase and backend. During a
+    # count-free GC3 mark, promote only required roots/remembered work: bulk
+    # aging can turn otherwise dead white young objects into gray copies.
+    if budget <= 0:
+        return 0
+    if (
+        _gc_backend_fast() != 3
+        or load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0
+        or load_i32(global_addr("pcc_gc_explicit_collect_active"), 0) == 0
+        or pcc_thread_owns_stopped_world() == 0
+        or (
+            load_i32(global_addr("pcc_gc_cycle_requested"), 0) == 0
+            and load_i32(global_addr("pcc_gc_mark_active"), 0) == 0
+        )
+    ):
+        return pcc_gc_step(budget)
+    if load_i32(global_addr("pcc_gc_backend4_remap_active"), 0) != 0:
+        return 0
+    store_i64(
+        global_addr("pcc_gc_metric_step"),
+        0,
+        load_i64(global_addr("pcc_gc_metric_step"), 0) + 1,
+    )
+    start_us: int = pcc_runtime_monotonic_us()
+    oldify_suspended: int = load_i32(
+        global_addr("pcc_gc_backend3_oldify_suspended"), 0
+    )
+    if pcc_thread_live_count() > 1 and pcc_thread_all_stopped_at_gates() == 0:
+        store_i32(global_addr("pcc_gc_backend3_oldify_suspended"), 0, 1)
+    processed: int = pcc_gc_generational_step(budget, 0)
+    # Promotion cleanup can run callbacks. Read the current phase rather
+    # than carrying the admission's requested/active value across it.
+    if (
+        processed < budget
+        and load_i32(global_addr("pcc_gc_explicit_collect_active"), 0) != 0
+        and (
+            load_i32(global_addr("pcc_gc_cycle_requested"), 0) != 0
+            or load_i32(global_addr("pcc_gc_mark_active"), 0) != 0
+        )
+    ):
+        processed = processed + pcc_gc_tracing_step_cycle(budget - processed)
+    store_i32(global_addr("pcc_gc_backend3_oldify_suspended"), 0, oldify_suspended)
+    if (
+        load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
+        and processed == 0
+        and pcc_gc_dispatch_tracing_work_pending() == 0
+        and load_i32(global_addr("pcc_gc_forwarding_population"), 0) > 0
+    ):
+        # A zero-progress all-live finish still owns the dispatcher's idle
+        # retirement opportunity. The automatic owner exits at this commit.
+        # Its authoritative candidate query is allowed at this full-heap cut.
+        processed = processed + pcc_gc_backend4_remap_and_retire_stopped_world()
+    pcc_gc_tracing_record_pause(start_us, pcc_runtime_monotonic_us())
+    return processed
+
+
 def _gc_tracing_automatic_collect(mark: int) -> int:
     # One automatic collection of GC1..GC4 with the world stopped, as an
     # explicit gc.collect() runs it, but a single cycle. With mark 1 (GC3, or
@@ -1898,7 +1972,7 @@ def _gc_tracing_automatic_collect(mark: int) -> int:
         if mark == 2:
             stepped = pcc_gc_tracing_step_cycle(1024)
         else:
-            stepped = pcc_gc_step(1024)
+            stepped = _gc_tracing_collect_step(1024)
         if stepped > 0:
             idle_rounds = 0
         else:
@@ -2234,7 +2308,7 @@ def pcc_gc_collect(reason: int) -> int:
                 else:
                     idle_rounds = 0
             else:
-                stepped: int = pcc_gc_step(1024)
+                stepped: int = _gc_tracing_collect_step(1024)
                 if stepped > 0:
                     idle_rounds = 0
                 else:

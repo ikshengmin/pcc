@@ -97,8 +97,24 @@ def test_actual_collect_finishes_its_idle_bound_with_pinned_forwarding_source():
     m.keep_target(target)
     m.words = [source + 16]
     m.stopped = False
+    # Observe the full owner's step boundary. GC3 marking can use its own
+    # helper while idle completion still delegates to the public dispatcher.
+    # The collector's four-idle bound spans both, without counting fallback
+    # calls twice. Older source models have only the public step owner.
+    step_name = ('_gc_tracing_collect_step'
+                 if '_gc_tracing_collect_step' in m.ns else 'pcc_gc_step')
+    actual_step = m.ns[step_name]
+    collection_steps = []
+
+    def observe_collection_step(budget):
+        result = actual_step(budget)
+        collection_steps.append(result)
+        return result
+
+    m.ns[step_name] = observe_collection_step
     assert m.ns['pcc_gc_collect'](0) == 0
-    assert m.step_results[-4:] == [0, 0, 0, 0]
+    assert collection_steps[-4:] == [0, 0, 0, 0]
+    assert collection_steps.count(0) == 4
     assert m.load('pcc_gc_tracing_finish_commits', 0) >= 1
     assert m.load('pcc_gc_mark_active', 0) == 0
     assert source in m.index and target in m.index and m.load(block, 32) == 1
