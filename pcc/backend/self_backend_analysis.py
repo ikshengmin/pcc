@@ -422,17 +422,10 @@ def _stable_text_bucket_key(text: str) -> int:
         # Negative keys reserve a collision-free lane for the canonical
         # ``.N``/``%.N`` aliases while ordinary polynomial keys stay >= 0.
         return -numeric_id - 1
-    # The owned builder's function-wide name allocator gives every generated value and
-    # block a unique decimal suffix (``name.N``).  The suffix is already the
-    # dense provenance key; hashing the often-long diagnostic prefix one
-    # character at a time merely repeats work.  Equal suffixes remain safe:
-    # the open-addressed tables compare the full spelling before accepting an
-    # entry, exactly as they do for ordinary polynomial collisions.
-    suffix_at = text.rfind(".")
-    if 0 <= suffix_at < len(text) - 1:
-        suffix = text[suffix_at + 1 :]
-        if suffix.isdecimal():
-            return -int(suffix) - 1
+    # Ordinary names need their complete spelling. Generated PHIs can have
+    # different bases but the same final ordinal (``local.N.phi.1``); using
+    # only that suffix makes lookup/insertion quadratic in those names.
+    # Only the canonical numeric aliases above intentionally share a key.
     # 1099511627776 is 2**40, so the modulo is a mask.  A `%` per character is
     # the single most expensive operation in this loop, and under pcc1 an
     # arbitrary-precision modulo is worse still; masking is bit-identical.

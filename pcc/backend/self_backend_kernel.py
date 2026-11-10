@@ -56,6 +56,7 @@ from .self_backend_ir import (
     _OPERAND_INTERN,
     _PARSED_INSTRUCTION_KIND_IDS,
     _EMPTY_SEQUENCE,
+    _dot_numeric_text_key_id,
     text_key_mapping_get,
     text_key_names_equal,
 )
@@ -146,11 +147,31 @@ def _new_text_id_index(size: int) -> tuple[CompilerIntArena, int]:
 
 
 def _text_id_index_start_slot(key: int, capacity: int) -> int:
-    # Numeric suffix keys are dense, and different mem2reg PHI bases may
-    # share an ordinal. Spread adjacent keys before linear probing so those
-    # collisions do not scan a contiguous run of ordinary SSA names. The
-    # odd multiplier permutes power-of-two slots; keys/equality stay intact.
+    # Numeric suffix primary keys are dense. The odd multiplier permutes
+    # power-of-two slots, keeping adjacent ordinals separate. A collision
+    # additionally uses a full-name probe step rather than a linear walk.
     return (key * 131) & (capacity - 1)
+
+
+def _text_id_index_primary_key(name: str) -> int:
+    """Keep generated unique ordinals cheap; collisions use the full name."""
+    numeric_id = _dot_numeric_text_key_id(name)
+    if numeric_id >= 0:
+        return -numeric_id - 1
+    suffix_at = name.rfind(".")
+    if 0 <= suffix_at < len(name) - 1:
+        suffix = name[suffix_at + 1:]
+        if suffix.isdecimal():
+            return -int(suffix) - 1
+    return _stable_text_bucket_key(name)
+
+
+def _text_id_index_probe_step(name: str) -> int:
+    # Power-of-two tables need an odd step to visit every slot. Use the
+    # complete spelling only after a collision, preserving numeric aliases
+    # while distributing different bases that share a final ordinal.
+    key = _stable_text_bucket_key(name)
+    return ((key >> 16) ^ key) | 1
 
 
 def _text_id_index_lookup(
@@ -159,8 +180,9 @@ def _text_id_index_lookup(
     names: list[str],
     name: str,
 ) -> int:
-    key = _stable_text_bucket_key(name)
+    key = _text_id_index_primary_key(name)
     slot = _text_id_index_start_slot(key, capacity)
+    step = 0
     probes = 0
     while probes < capacity:
         entry: CompilerInt2 = index.get2_unchecked(slot)
@@ -169,7 +191,9 @@ def _text_id_index_lookup(
         name_id = entry.second - 1
         if entry.first == key and text_key_names_equal(names[name_id], name):
             return name_id
-        slot = (slot + 1) & (capacity - 1)
+        if step == 0:
+            step = _text_id_index_probe_step(name)
+        slot = (slot + step) & (capacity - 1)
         probes += 1
     return -1
 
@@ -181,8 +205,9 @@ def _text_id_index_insert(
     name_id: int,
 ) -> None:
     name = names[name_id]
-    key = _stable_text_bucket_key(name)
+    key = _text_id_index_primary_key(name)
     slot = _text_id_index_start_slot(key, capacity)
+    step = 0
     probes = 0
     while probes < capacity:
         entry: CompilerInt2 = index.get2_unchecked(slot)
@@ -195,7 +220,9 @@ def _text_id_index_insert(
             name,
         ):
             return
-        slot = (slot + 1) & (capacity - 1)
+        if step == 0:
+            step = _text_id_index_probe_step(name)
+        slot = (slot + step) & (capacity - 1)
         probes += 1
     raise BackendUnavailable("indexed text table has no empty slot")
 
@@ -2883,21 +2910,22 @@ class IndexedFunctionKernel:
         if self.block_name_index_capacity > 0:
             self.block_name_buckets.clear()
             return
-        from .self_backend_analysis import _stable_text_bucket_key
-
         capacity = _text_id_index_capacity(len(self.block_names))
         index = CompilerIntArena(capacity * 2)
         index.append_zeros(capacity * 2)
         name_id = 0
         while name_id < len(self.block_names):
-            key = _stable_text_bucket_key(self.block_names[name_id])
+            key = _text_id_index_primary_key(self.block_names[name_id])
             slot = _text_id_index_start_slot(key, capacity)
+            step = 0
             while True:
                 entry: CompilerInt2 = index.get2_unchecked(slot)
                 if entry.second == 0:
                     index.set2_unchecked(slot * 2, key, name_id + 1)
                     break
-                slot = (slot + 1) & (capacity - 1)
+                if step == 0:
+                    step = _text_id_index_probe_step(self.block_names[name_id])
+                slot = (slot + step) & (capacity - 1)
             name_id += 1
         self.block_name_index = index
         self.block_name_index_capacity = capacity
@@ -2907,31 +2935,31 @@ class IndexedFunctionKernel:
         if self.value_name_index_capacity > 0:
             self.value_name_buckets.clear()
             return
-        from .self_backend_analysis import _stable_text_bucket_key
-
         capacity = _text_id_index_capacity(len(self.value_names))
         index = CompilerIntArena(capacity * 2)
         index.append_zeros(capacity * 2)
         name_id = 0
         while name_id < len(self.value_names):
-            key = _stable_text_bucket_key(self.value_names[name_id])
+            key = _text_id_index_primary_key(self.value_names[name_id])
             slot = _text_id_index_start_slot(key, capacity)
+            step = 0
             while True:
                 entry: CompilerInt2 = index.get2_unchecked(slot)
                 if entry.second == 0:
                     index.set2_unchecked(slot * 2, key, name_id + 1)
                     break
-                slot = (slot + 1) & (capacity - 1)
+                if step == 0:
+                    step = _text_id_index_probe_step(self.value_names[name_id])
+                slot = (slot + step) & (capacity - 1)
             name_id += 1
         self.value_name_index = index
         self.value_name_index_capacity = capacity
         self.value_name_buckets.clear()
 
     def block_id(self, name: str) -> int:
-        from .self_backend_analysis import _stable_text_bucket_key
-
-        key = _stable_text_bucket_key(name)
+        key = _text_id_index_primary_key(name)
         slot = _text_id_index_start_slot(key, self.block_name_index_capacity)
+        step = 0
         while True:
             entry: CompilerInt2 = self.block_name_index.get2_unchecked(slot)
             if entry.second == 0:
@@ -2941,13 +2969,14 @@ class IndexedFunctionKernel:
                 self.block_names[indexed_block_id], name
             ):
                 return indexed_block_id
-            slot = (slot + 1) & (self.block_name_index_capacity - 1)
+            if step == 0:
+                step = _text_id_index_probe_step(name)
+            slot = (slot + step) & (self.block_name_index_capacity - 1)
 
     def value_id(self, name: str) -> int:
-        from .self_backend_analysis import _stable_text_bucket_key
-
-        key = _stable_text_bucket_key(name)
+        key = _text_id_index_primary_key(name)
         slot = _text_id_index_start_slot(key, self.value_name_index_capacity)
+        step = 0
         while True:
             entry: CompilerInt2 = self.value_name_index.get2_unchecked(slot)
             if entry.second == 0:
@@ -2957,7 +2986,9 @@ class IndexedFunctionKernel:
                 self.value_names[indexed_value_id], name
             ):
                 return indexed_value_id
-            slot = (slot + 1) & (self.value_name_index_capacity - 1)
+            if step == 0:
+                step = _text_id_index_probe_step(name)
+            slot = (slot + step) & (self.value_name_index_capacity - 1)
 
     def value_name(self, value_id: int) -> str:
         return self.value_names[value_id]

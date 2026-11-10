@@ -1,10 +1,119 @@
 """Generated suffixes must not turn sparse name indexes into dense probe runs."""
 
+import platform
+import sys
+
 import pytest
 
 from pcc.backend import self_backend_kernel as kernel_module
+from pcc.backend.self_backend_analysis import _stable_text_bucket_key
 from pcc.backend.self_backend_kernel import IndexedFunctionSeed
 from pcc.backend.self_backend_value_arena import CompilerIntArena
+
+
+@pytest.mark.parametrize("size", (64, 256, 1024))
+@pytest.mark.parametrize("kind", ("value", "block"))
+def test_repeated_suffix_index_work_scales_with_names(monkeypatch, size, kind):
+    """Different prefixes remain distinct even when every ordinal is equal."""
+    reads = 0
+    original = CompilerIntArena.get2_unchecked
+
+    def counted(self, record_index):
+        nonlocal reads
+        reads += 1
+        return original(self, record_index)
+
+    monkeypatch.setattr(CompilerIntArena, "get2_unchecked", counted)
+    seed = IndexedFunctionSeed(size, size)
+    intern = seed.intern_value if kind == "value" else seed.register_block
+    lookup = seed.value_id if kind == "value" else seed.block_id
+    names = ["local." + str(index) + ".phi.1" for index in range(size)]
+    for index, name in enumerate(names):
+        assert intern(name) == index
+    for index, name in enumerate(names):
+        assert lookup(name) == index
+        if kind == "value":
+            assert intern(name) == index
+        else:
+            # register_block publishes a new definition, not an interned
+            # alias. Repeated queries must preserve the published block ID.
+            assert lookup(name) == index
+    assert lookup("absent.phi.1") == -1
+    # The three sizes are n, 4n and 16n. Count actual arena probes rather
+    # than timing a shared host, and do not permit a quadratic collision run.
+    assert reads < size * 16, (size, reads)
+
+
+def test_name_indexes_keep_aliases_and_distinct_prefixes_under_collisions(monkeypatch):
+    # Correct equality must not depend on hashes being unique.
+    monkeypatch.setattr(kernel_module, "_stable_text_bucket_key", lambda name: 3)
+    seed = IndexedFunctionSeed()
+    assert seed.intern_value(".7") == seed.intern_value("%.007")
+    names = ["left.7", "right.7", "left.007", "local.phi.7", "local.phi.007"]
+    for index, name in enumerate(names, 1):
+        assert seed.intern_value(name) == index
+    for index in range(128):
+        seed.intern_value("growth." + str(index) + ".7")
+    for index, name in enumerate(names, 1):
+        assert seed.value_id(name) == index
+    assert seed.value_id("%.7") == 0
+    assert seed.value_id("absent.7") == -1
+
+
+def test_bucket_keys_preserve_numeric_aliases_but_hash_ordinary_prefixes():
+    assert _stable_text_bucket_key(".7") == _stable_text_bucket_key("%.007")
+    assert _stable_text_bucket_key(".7") < 0
+    names = ("left.7", "right.7", "left.007", "local.phi.7", "local.phi.007")
+    keys = [_stable_text_bucket_key(name) for name in names]
+    assert all(key >= 0 for key in keys)
+    assert len(set(keys)) == len(names)
+
+
+def test_unique_numeric_suffixes_do_not_hash_full_names(monkeypatch):
+    def forbidden(name):
+        raise AssertionError("collision-free numeric suffix hashed its prefix: " + name)
+
+    monkeypatch.setattr(kernel_module, "_stable_text_bucket_key", forbidden)
+    seed = IndexedFunctionSeed(value_capacity_hint=1024)
+    for index in range(512):
+        assert seed.intern_value("long.generated.prefix." + str(index)) == index
+    for index in range(512):
+        assert seed.value_id("long.generated.prefix." + str(index)) == index
+
+
+def test_numeric_aliases_keep_probe_sequence_after_collision_and_growth():
+    seed = IndexedFunctionSeed()
+    assert seed.intern_value("ordinary.7") == 0
+    assert seed.intern_value(".7") == 1
+    assert seed.intern_value("%.007") == 1
+    for index in range(128):
+        seed.intern_value("growing." + str(index) + ".7")
+    assert seed.value_id(".007") == seed.value_id("%.7") == 1
+    assert seed.value_id("missing.7") == -1
+
+
+@pytest.mark.parametrize("kind", ("block", "value"))
+def test_frozen_indexes_without_seed_keep_aliases_and_missing_queries(kind):
+    from pcc.backend.self_backend_kernel import IndexedFunctionKernel
+
+    # Exercise each legacy/no-seed builder directly, rather than adopting a
+    # seed's already populated table as the ordinary parser does.
+    kernel = object.__new__(IndexedFunctionKernel)
+    names = ["ordinary.7", ".7"]
+    names += ["another." + str(index) + ".7" for index in range(128)]
+    setattr(kernel, kind + "_names", names)
+    setattr(kernel, kind + "_name_index_capacity", 0)
+    setattr(kernel, kind + "_name_buckets", {})
+    getattr(kernel, "_freeze_" + kind + "_name_index")()
+    try:
+        lookup = getattr(kernel, kind + "_id")
+        for index, name in enumerate(names):
+            assert lookup(name) == index
+        assert lookup("%.007") == lookup(".007") == 1
+        assert lookup("missing.7") == -1
+        assert getattr(kernel, kind + "_name_buckets") == {}
+    finally:
+        getattr(kernel, kind + "_name_index").close()
 
 
 def test_repeated_phi_suffixes_do_not_scan_the_numeric_name_cluster(monkeypatch):
@@ -287,3 +396,85 @@ def test_hint_reuse_preserves_small_parser_records_and_errors(monkeypatch, text)
         expected = _small_parser_result(text)
     assert actual == expected
     assert actual[0] == ("error" if "unsupported" in text else "parsed")
+
+
+def _repeated_suffix_phi_program(size=64):
+    lines = [
+        'target triple = "x86_64-unknown-linux-gnu"',
+        "define i64 @choose(i1 %tag) {", "entry:",
+        "  br i1 %tag, label %left.1, label %right.1",
+        "left.1:", "  br label %join.1",
+        "right.1:", "  br label %join.1", "join.1:",
+    ]
+    for index in range(size):
+        lines.append(
+            f"  %local.{index}.phi.1 = phi i64 "
+            f"[ {index + 1}, %left.1 ], [ {index + 2}, %right.1 ]"
+        )
+    previous = "%local.0.phi.1"
+    for index in range(1, size):
+        name = f"%sum.{index}.1"
+        lines.append(f"  {name} = add i64 {previous}, %local.{index}.phi.1")
+        previous = name
+    total = size * (size + 1) // 2
+    lines.extend([
+        f"  ret i64 {previous}", "}", "define i32 @main() {", "entry:",
+        "  %left.1 = call i64 @choose(i1 true)",
+        "  %right.1 = call i64 @choose(i1 false)",
+        f"  %ok.left.1 = icmp eq i64 %left.1, {total}",
+        f"  %ok.right.1 = icmp eq i64 %right.1, {total + size}",
+        "  %ok.1 = and i1 %ok.left.1, %ok.right.1",
+        "  %status.1 = select i1 %ok.1, i32 0, i32 91",
+        "  ret i32 %status.1", "}",
+    ])
+    return "\n".join(lines)
+
+
+def _suffix_only_bucket_key(text):
+    """Previous key function, kept only as a bounded emission oracle."""
+    from pcc.backend.self_backend_ir import _dot_numeric_text_key_id
+
+    numeric_id = _dot_numeric_text_key_id(text)
+    if numeric_id >= 0:
+        return -numeric_id - 1
+    suffix_at = text.rfind(".")
+    if 0 <= suffix_at < len(text) - 1:
+        suffix = text[suffix_at + 1:]
+        if suffix.isdecimal():
+            return -int(suffix) - 1
+    return _stable_text_bucket_key(text)
+
+
+def test_full_name_keys_preserve_emitted_object_bytes(monkeypatch):
+    from pcc.backend import (
+        self_backend_analysis,
+        self_backend_emit,
+        self_backend_precise_stackmaps,
+    )
+    from pcc.backend.self_backend_dispatch import emit_self_asm
+    from pcc.backend.target_objects import encode_assembly_object
+
+    ir = _repeated_suffix_phi_program()
+    actual = emit_self_asm(ir)
+    actual_object = encode_assembly_object(actual, "x86_64-unknown-linux-gnu")
+    with monkeypatch.context() as control:
+        for module in (
+            self_backend_analysis, kernel_module,
+            self_backend_emit, self_backend_precise_stackmaps,
+        ):
+            control.setattr(module, "_stable_text_bucket_key", _suffix_only_bucket_key)
+        control.setattr(kernel_module, "_text_id_index_probe_step", lambda name: 1)
+        expected = emit_self_asm(ir)
+        expected_object = encode_assembly_object(expected, "x86_64-unknown-linux-gnu")
+    assert actual == expected
+    assert actual_object == expected_object
+
+
+@pytest.mark.pcc_gate(
+    probe=lambda: sys.platform == "linux"
+    and platform.machine().lower() in ("x86_64", "amd64")
+)
+def test_repeated_suffix_phi_program_executes_with_owned_linker(tmp_path):
+    from tests.c.test_self_backend_x86_64_aggregate_stores import _run_owned_program
+
+    _run_owned_program(_repeated_suffix_phi_program().split("\n", 1)[1], tmp_path)
