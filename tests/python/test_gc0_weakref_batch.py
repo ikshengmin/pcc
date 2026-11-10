@@ -50,6 +50,7 @@ class WeakBatch:
             ptr_eq=lambda left, right: int(left == right), ptr_add=lambda base, offset: base + offset,
             null=lambda: 0, cstr=lambda text: text,
             malloc=self.malloc, free=self.free,
+            stack_alloc=self.stack_alloc,
             pcc_gc_backend=lambda: self.backend,
             pcc_thread_owns_stopped_world=lambda: int(self.stopped),
             pcc_gc_backend0_is_weak_candidate=lambda obj: int(obj in self.candidates),
@@ -66,6 +67,9 @@ class WeakBatch:
             py_tuple_new=self.tuple_new, py_tuple_set_item=self.tuple_set,
             py_obj_call=self.call,
             py_clear_exception=lambda: self.events.append(("clear_error",)),
+            # This batch model has no pending caller exception. The dedicated
+            # callback-boundary model exercises preservation and nested errors.
+            py_current_exception=lambda: 0,
             py_exc_new=lambda code, message: (code, message),
             py_raise_owned=self.errors.append,
         )
@@ -104,6 +108,11 @@ class WeakBatch:
         address = self.next
         self.next += size + 16
         self.allocated.append(address)
+        return address
+
+    def stack_alloc(self, size):
+        address = self.next
+        self.next += size + 16
         return address
 
     def free(self, address):

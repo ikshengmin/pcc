@@ -1,6 +1,7 @@
 """PEP 442: clear weak targets, run reachable weakrefs, then finalize."""
-import ast
 from pathlib import Path
+
+from tests.python.runtime_body_model import load_functions
 
 
 SOURCE = Path(__file__).resolve().parents[2] / "pcc/runtime/py/py_weakref.py"
@@ -76,6 +77,8 @@ def test_all_targets_are_cleared_before_callbacks_and_unreachable_refs_are_silen
         "pcc_capi_is_cext_type_tag": lambda tag: 0,
         "pcc_diagnostics_runtime_log_event_code": lambda *args: None,
         "malloc": malloc, "free": freed.append,
+        "stack_alloc": lambda size: 0x40000,
+        "py_current_exception": lambda: 0,
         "pcc_gc_foreign_lease_acquire": acquire, "pcc_gc_foreign_lease_release": release,
         "pcc_platform_abort": abort,
         "pcc_gc_load_ptr": lambda owner, slot: words[slot],
@@ -84,18 +87,9 @@ def test_all_targets_are_cleared_before_callbacks_and_unreachable_refs_are_silen
         "py_obj_call": call, "_py_none": lambda: 0,
         "py_decref": released_objects.append, "py_clear_exception": lambda: cleared_errors.append(True),
     }
-    tree = ast.parse(SOURCE.read_text())
-    selected = []
-    for node in tree.body:
-        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            if node.target.id.startswith("_PENDING_WEAK_"):
-                selected.append(node)
-        if isinstance(node, ast.FunctionDef) and node.name in {
-            "_weakref_run_callback", "py_weakref_invalidate_tracing_candidates",
-        }:
-            node.decorator_list = []
-            selected.append(node)
-    exec(compile(ast.Module(body=selected, type_ignores=[]), str(SOURCE), "exec"), namespace)
+    load_functions(SOURCE, {
+        "_weakref_run_callback", "py_weakref_invalidate_tracing_candidates",
+    }, namespace)
     assert namespace["py_weakref_invalidate_tracing_candidates"]() == 2
     assert callbacks == list(refs[:2])
     assert leases == {}

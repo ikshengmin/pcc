@@ -53,6 +53,18 @@ from pcc.unsafe import (
 
 py_handled_exception_slot = extern("py_handled_exception_slot", (), c_ptr)
 py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
+pcc_gc_stack_slot_root_is_conservative = extern(
+    "pcc_gc_stack_slot_root_is_conservative", (c_ptr,), c_int64
+)
+pcc_gc_note_frame_enter_local_checked = extern(
+    "pcc_gc_note_frame_enter_local_checked", (c_ptr, c_ptr), c_int64
+)
+pcc_gc_note_frame_leave_local = extern(
+    "pcc_gc_note_frame_leave_local", (c_ptr,), c_void
+)
+pcc_thread_no_park_enter = extern("pcc_thread_no_park_enter", (), c_void)
+pcc_thread_no_park_exit = extern("pcc_thread_no_park_exit", (), c_void)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 py_exc_set_implicit_context_slots = extern("py_exc_set_implicit_context_slots", (c_ptr, c_ptr), c_void)
 
 py_tls_exc_get         = extern("py_tls_exc_get",         (),        c_ptr)
@@ -251,8 +263,27 @@ def py_clear_exception() -> None:
     cur = _resolve_current_exception()
     if not ptr_is_null(cur):
         pcc_diagnostics_runtime_log_event_code(6, 4, _type_of(cur), 0, cur)
-        py_decref(cur)
-        py_tls_exc_set(null())
+        # Destruction can run finalizers or weakref callbacks. Publish empty
+        # TLS before releasing its owner, so reentrant code cannot retain a
+        # terminal exception. Prove the empty slot is traced before moving
+        # ownership out of TLS; a void registration may silently fail OOM.
+        owned = stack_alloc(_CLEAR_EXCEPTION_BYTES)
+        store_ptr(owned, _CLEAR_EXCEPTION_ROOT, null())
+        registered: int = 0
+        if pcc_gc_stack_slot_root_is_conservative(owned) == 0:
+            pcc_thread_no_park_enter()
+            status: int = pcc_gc_note_frame_enter_local_checked(
+                global_addr("pcc_raise_owned_frame_map"), owned
+            )
+            pcc_thread_no_park_exit()
+            if status != 1:
+                pcc_platform_abort()
+                return
+            registered = 1
+        py_tls_exc_swap_slot(owned)
+        pcc_gc_store_root(owned, null())
+        if registered != 0:
+            pcc_gc_note_frame_leave_local(owned)
 
 
 def _handled_exception():
@@ -289,6 +320,8 @@ pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 define_global_i32("pcc_raise_borrowed_frame_map", -2)
 define_global_i32("pcc_raise_owned_frame_map", 1)
+_CLEAR_EXCEPTION_ROOT = 0
+_CLEAR_EXCEPTION_BYTES = 8
 
 
 @c_abi_export("py_raise")

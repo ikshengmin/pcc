@@ -15,6 +15,7 @@ from pcc.extern import extern, c_abi_export, c_ptr, c_int32, c_int64, c_void
 from pcc.unsafe import (
     calloc,
     cstr,
+    define_global_i32,
     free,
     global_addr,
     global_load_ptr,
@@ -28,6 +29,7 @@ from pcc.unsafe import (
     ptr_add,
     ptr_eq,
     ptr_is_null,
+    stack_alloc,
     store_i32,
     store_i64,
     store_ptr,
@@ -58,6 +60,19 @@ py_tuple_get = extern("py_tuple_get", (c_ptr, c_int64), c_ptr)
 py_tuple_set_item = extern("py_tuple_set_item", (c_ptr, c_int64, c_ptr), c_void)
 py_obj_call = extern("py_obj_call", (c_ptr, c_ptr, c_ptr), c_ptr)
 py_clear_exception = extern("py_clear_exception", (), c_void)
+py_current_exception = extern("py_current_exception", (), c_ptr)
+py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
+pcc_gc_stack_slot_root_is_conservative = extern(
+    "pcc_gc_stack_slot_root_is_conservative", (c_ptr,), c_int64
+)
+pcc_gc_note_frame_enter_local_checked = extern(
+    "pcc_gc_note_frame_enter_local_checked", (c_ptr, c_ptr), c_int64
+)
+pcc_gc_note_frame_leave_local = extern(
+    "pcc_gc_note_frame_leave_local", (c_ptr,), c_void
+)
+pcc_thread_no_park_enter = extern("pcc_thread_no_park_enter", (), c_void)
+pcc_thread_no_park_exit = extern("pcc_thread_no_park_exit", (), c_void)
 py_exc_new = extern("py_exc_new", (c_int64, c_ptr), c_ptr)
 py_raise = extern("py_raise", (c_ptr,), c_void)
 # py_raise increfs; a caller that created the exception must release it.
@@ -86,6 +101,10 @@ _PENDING_WEAK_NEXT: int = 0
 _PENDING_WEAK_ROOT: int = 8
 _PENDING_WEAK_LEASE: int = 16
 _PENDING_WEAK_BYTES: int = 24
+
+_WEAK_CALLBACK_EXCEPTION_ROOT: int = 0
+_WEAK_CALLBACK_EXCEPTION_BYTES: int = 8
+define_global_i32("pcc_weakref_callback_exception_map", 1)
 
 
 def _weakref_target_is_base_object(target) -> int:
@@ -375,18 +394,45 @@ def py_weak_key_dict_len(d) -> int:
 
 
 def _weakref_run_callback(wr) -> None:
-    """The unraisable boundary releases both owned result and argument tuple."""
+    """Discard callback errors, preserving the caller's pending exception."""
     callback = pcc_gc_load_ptr(wr, ptr_add(wr, 24))
     if ptr_is_null(callback) == 0:
+        saved = stack_alloc(_WEAK_CALLBACK_EXCEPTION_BYTES)
+        store_ptr(saved, _WEAK_CALLBACK_EXCEPTION_ROOT, null())
+        registered: int = 0
+        saved_owner: int = 0
+        if ptr_is_null(py_current_exception()) == 0:
+            # TLS remains the only owner until the empty activation-private
+            # slot is known to be traced. Keep no borrowed address across the
+            # registration guard's exit, which permits relocation.
+            if pcc_gc_stack_slot_root_is_conservative(saved) == 0:
+                pcc_thread_no_park_enter()
+                status: int = pcc_gc_note_frame_enter_local_checked(
+                    global_addr("pcc_weakref_callback_exception_map"), saved
+                )
+                pcc_thread_no_park_exit()
+                if status != 1:
+                    pcc_platform_abort()
+                    return
+                registered = 1
+            py_tls_exc_swap_slot(saved)
+            saved_owner = 1
         args = py_tuple_new(1)
         if ptr_is_null(args) == 0:
             pcc_diagnostics_runtime_log_event_code(4, 3, 0, 0, wr)
             py_tuple_set_item(args, 0, wr)
+            # The held weakref owns its callback. Reload after allocations or
+            # checked registration may have relocated that owned reference.
+            callback = pcc_gc_load_ptr(wr, ptr_add(wr, 24))
             result = py_obj_call(callback, args, _py_none())
             if ptr_is_null(result) == 0:
                 py_decref(result)
             py_decref(args)
         py_clear_exception()
+        if saved_owner != 0:
+            py_tls_exc_swap_slot(saved)
+        if registered != 0:
+            pcc_gc_note_frame_leave_local(saved)
 
 
 @c_abi_export("py_weakref_invalidate_gc0_candidates")

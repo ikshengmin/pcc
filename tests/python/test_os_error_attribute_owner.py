@@ -2,44 +2,38 @@
 
 These bounded host checks are not native or collector qualification.
 """
-import ast
-from functools import lru_cache
 import os
 from pathlib import Path
 
 import pytest
 
 from pcc.runtime.py import py_abi_constants as abi
+from tests.python.runtime_body_model import (
+    _module_constants,
+    _module_functions,
+    load_functions,
+)
 from test_exception_constructor_roots import _Object, _Slots
 from test_unicode_decode_error_payload import DecodeMemory
 
 
 ROOT = Path(__file__).resolve().parents[2]
-
-
-@lru_cache(maxsize=32)
-def _compiled_bodies(source, filename, names):
-    # Cache only immutable code. Every exec below creates fresh functions
-    # bound to the caller's fresh model namespace and injected raw leaves.
-    tree = ast.parse(source, filename=filename)
-    nodes = []
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and (names is None or node.name in names):
-            node.decorator_list = []
-            nodes.append(node)
-        elif isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
-            nodes.append(node)
-    return compile(ast.Module(body=nodes, type_ignores=[]), filename, 'exec')
+_BODY_SOURCES = {}
 
 
 def bodies(path, namespace, *, names=None):
-    # Content, filename and selection identify the code. Reading on every
-    # call prevents stale results when a preimage or source file changes.
-    selection = None if names is None else frozenset(names)
-    exec(_compiled_bodies(path.read_text(), str(path), selection), namespace)
+    # These loader-contract tests rewrite a source path. Refresh the shared
+    # parser caches at that boundary; production snapshots use fixed paths.
+    identity = str(path)
+    source = path.read_text()
+    if identity in _BODY_SOURCES and _BODY_SOURCES[identity] != source:
+        _module_functions.cache_clear()
+        _module_constants.cache_clear()
+    _BODY_SOURCES[identity] = source
+    load_functions(path, names, namespace)
 
 
-def test_body_code_cache_isolates_model_namespaces(tmp_path):
+def test_body_loader_isolates_model_namespaces(tmp_path):
     source = tmp_path / 'bodies.py'
     source.write_text('def touch(value):\n    state.append(leaf() + value)\n    return state\n')
     first = {'state': [], 'leaf': lambda: 10}
@@ -47,7 +41,8 @@ def test_body_code_cache_isolates_model_namespaces(tmp_path):
     bodies(source, first)
     bodies(source, second)
     assert first['touch'] is not second['touch']
-    assert first['touch'].__code__ is second['touch'].__code__
+    assert first['touch'].__code__.co_filename == str(source)
+    assert second['touch'].__code__.co_filename == str(source)
     assert first['touch'].__globals__ is first
     assert second['touch'].__globals__ is second
     assert first['touch'](1) == [11]
@@ -56,7 +51,7 @@ def test_body_code_cache_isolates_model_namespaces(tmp_path):
     assert first['state'] == [11]
 
 
-def test_body_code_cache_invalidates_changed_source_and_filename(tmp_path):
+def test_body_loader_invalidates_changed_source_and_filename(tmp_path):
     source = tmp_path / 'bodies.py'
     source.write_text('VALUE = 1\ndef read():\n    return VALUE\n')
     first = {}
@@ -76,7 +71,7 @@ def test_body_code_cache_invalidates_changed_source_and_filename(tmp_path):
     assert third['read'].__code__.co_filename == str(other)
 
 
-def test_body_code_cache_keeps_name_selections_distinct(tmp_path):
+def test_body_loader_keeps_name_selections_distinct(tmp_path):
     source = tmp_path / 'bodies.py'
     source.write_text('VALUE = 1\ndef first():\n    return 1\ndef second():\n    return 2\n')
     names = {'first'}
@@ -92,7 +87,7 @@ def test_body_code_cache_keeps_name_selections_distinct(tmp_path):
     bodies(source, all_names)
     assert first['first']() == 1 and 'second' not in first
     assert second['second']() == 2 and 'first' not in second
-    assert empty['VALUE'] == 1 and 'first' not in empty and 'second' not in empty
+    assert 'VALUE' not in empty and 'first' not in empty and 'second' not in empty
     assert all_names['first']() == 1 and all_names['second']() == 2
 
 
@@ -140,6 +135,14 @@ class ErrorMemory(DecodeMemory):
                  py_tls_exc_get=lambda: self.pending.fields[0],
                  py_tls_exc_set=lambda value: self.pending.fields.__setitem__(0, value),
                  py_tls_exc_swap_slot=self.swap_pending,
+                 pcc_gc_stack_slot_root_is_conservative=lambda slot: 0,
+                 pcc_thread_no_park_enter=lambda: None,
+                 pcc_thread_no_park_exit=lambda: None,
+                 pcc_gc_note_frame_enter_local_checked=lambda frame_map, slot: (
+                     n['pcc_gc_frame_enter'](frame_map, slot), 1
+                 )[1],
+                 pcc_gc_note_frame_leave_local=lambda slot: n['pcc_gc_frame_leave'](slot),
+                 pcc_platform_abort=lambda: pytest.fail('exception root registration failed'),
                  py_handled_exception_slot=lambda: self.handled,
                  pcc_gc_unpin=self.unpin, pcc_gc_note_write_barrier=lambda *_: None,
                  errno_message=self.errno_message)

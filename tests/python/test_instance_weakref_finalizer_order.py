@@ -81,8 +81,9 @@ class DeallocationModel(FinalizerModel):
         if self.weakref_live:
             self.lifecycle.append('weakref')
             self.weakref_live = False
-            # Match the real weakref callback's unraisable TLS boundary.
-            self.pending = 0
+            # Callback errors are unraisable without consuming caller TLS.
+            # The production boundary itself is covered by
+            # test_weakref_pending_exception.py; this double tests ordering.
 
     def dispatch(self, value, tag):
         if tag == 11 or 104 <= tag < 65536:
@@ -114,6 +115,7 @@ def test_actual_deallocation_finalizes_before_weakrefs(backend, pending):
     assert model.lifecycle.index('weakref') < model.lifecycle.index('free')
     assert model.calls == 1 and model.freed and not model.weakref_live
     assert model.load(2000, 0) == 0
+    assert model.pending == (4000 if pending else 0)
     assert model.count() == model.active() == model.depth == 0
 
 
@@ -135,6 +137,7 @@ def test_actual_resurrection_keeps_weakrefs_until_final_drop(backend, pending):
     model.finish()
     assert model.calls == 1 and model.lifecycle.count('weakref') == 1
     assert model.freed and not model.weakref_live and model.load(2000, 0) == 0
+    assert model.pending == (4000 if pending else 0)
 
 
 @pytest.mark.parametrize('backend', range(5))

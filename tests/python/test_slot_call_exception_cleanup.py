@@ -72,6 +72,10 @@ class CleanupModel(CallObjectLoweringMixin):
             py_tuple_new=lambda size: 20000, py_tuple_set_item=lambda *_: None,
             _py_none=lambda: 0, py_obj_call=self.weakref_callback,
             py_decref=lambda *_: None, py_clear_exception=self.clear,
+            # The outer cleanup already transferred pending TLS to its owned
+            # registered slot before this weakref callback can run.
+            py_current_exception=lambda: self.pending,
+            stack_alloc=lambda size: 40000,
         )
         _functions(Path(__file__).resolve().parents[2] / "pcc/runtime/py/py_weakref.py",
                    {"py_weakref_invalidate", "_weakref_run_callback"}, self.weakref_ns)
