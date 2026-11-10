@@ -4,6 +4,7 @@ from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     atomic_load_i64,
+    atomic_rmw_i32,
     atomic_store_i64,
     free,
     global_addr,
@@ -77,12 +78,12 @@ def pcc_gc_backend3_remember_owner(owner: c_ptr, owner_flags: i64) -> None:
         store_i64(
             global_addr("pcc_gc_backend3_remembered_scan_revision"), 0, 0
         )
-        store_i32(owner, 12, owner_flags | 512)
+        atomic_rmw_i32("or", owner, 12, 512, "acq_rel")
         return
     store_ptr(node, 0, owner)
     store_ptr(node, 8, pcc_gc_backend3_remembered_owner_list_head())
     pcc_gc_backend3_remembered_owner_list_set_head(node)
-    store_i32(owner, 12, owner_flags | 512)
+    atomic_rmw_i32("or", owner, 12, 512, "acq_rel")
 
 
 @c_abi_export("pcc_gc_backend3_clear_remembered_owners")

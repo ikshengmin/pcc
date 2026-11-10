@@ -8,10 +8,11 @@ helpers are explicit opaque boundaries and their behavior is not tested here.
 
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 
 import pytest
+
+from tests.python.runtime_body_model import load_functions
 
 
 RUNTIME = Path(__file__).resolve().parents[2] / "pcc/runtime/py"
@@ -19,12 +20,7 @@ YOUNG, OLD, REMEMBERED = 128, 256, 512
 
 
 def install(namespace, filename, names):
-    definitions = [node for node in ast.parse((RUNTIME / filename).read_text()).body
-                   if isinstance(node, ast.FunctionDef) and node.name in names]
-    assert {node.name for node in definitions} == set(names)
-    for node in definitions:
-        node.decorator_list = []
-    exec(compile(ast.Module(body=definitions, type_ignores=[]), filename, "exec"), namespace)
+    return load_functions(RUNTIME / filename, names, namespace)
 
 
 class RememberedReset:
@@ -53,6 +49,7 @@ class RememberedReset:
             "atomic_load_i32": lambda a, o, order: self.load(a, o),
             "atomic_load_i64": lambda a, o, order: self.load(a, o),
             "atomic_store_i64": lambda a, o, v, order: self.store(a, o, v),
+            "atomic_rmw_i32": self.atomic_flags,
             "malloc": self.allocate, "free": self.free,
             "pcc_gc_pointer_is_managed": lambda obj: int(obj in self.known),
             "pcc_gc_object_is_known_no_lock": self.is_known,
@@ -108,6 +105,13 @@ class RememberedReset:
         assert self.depth == 0, "remembered-node free while graph lock held"
         assert address not in self.freed
         self.freed.add(address)
+
+    def atomic_flags(self, operation, address, offset, value, order):
+        assert operation == "or" and offset == 12 and order == "acq_rel"
+        assert self.depth > 0 and address in self.known
+        before = self.load(address, offset)
+        self.store(address, offset, before | value)
+        return before
 
     def lock_for(self, site):
         assert site == 1

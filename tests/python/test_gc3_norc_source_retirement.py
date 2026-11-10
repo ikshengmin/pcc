@@ -79,6 +79,7 @@ class GC3(RetirementState):
             'atomic_load_i64': lambda a, o, order: self.load(a, o),
             'atomic_store_i64': lambda a, o, v, order: self.store(a, o, v),
             'atomic_rmw_i64': self.rmw,
+            'atomic_rmw_i32': self.rmw,
             'atomic_cas_i64': self.cas,
             'atomic_cas_i32': self.cas,
             'pcc_current_thread_id': lambda: 1,

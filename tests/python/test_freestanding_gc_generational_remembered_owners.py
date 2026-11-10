@@ -229,9 +229,17 @@ def test_generational_remembered_owners_preserve_overflow_and_budget_contract() 
     allocation_failure = remember.split("if ptr_is_null(node) != 0:", 1)[1].split(
         "return", 1
     )[0]
-    assert allocation_failure.index("pcc_gc_backend3_remembered_overflow") < (
-        allocation_failure.index("owner_flags | 512")
-    )
+    commit = 'atomic_rmw_i32("or", owner, 12, 512, "acq_rel")'
+    assert remember.count(commit) == 2
+    assert "store_i32(owner, 12, owner_flags | 512)" not in remember
+    for field in ("pcc_gc_backend3_remembered_overflow",
+                  "pcc_gc_backend3_remembered_scan_cursor",
+                  "pcc_gc_backend3_remembered_scan_revision"):
+        assert allocation_failure.index(field) < allocation_failure.index(commit)
+    success = remember.split("store_ptr(node, 0, owner)", 1)[1]
+    assert success.index("store_ptr(node, 8,") < success.index(
+        "pcc_gc_backend3_remembered_owner_list_set_head(node)"
+    ) < success.index(commit)
     assert clear.index("pcc_gc_backend3_remembered_owner_list_set_head(null())") < (
         clear.index("return node")
     )
