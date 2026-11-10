@@ -3110,6 +3110,7 @@ def _cross_object_signatures_part_10():
     "pcc_refcount_forget": (("c_ptr",), "c_void"),
     "py_gc_untrack": (("c_ptr",), "c_void"),
     "py_user_del_dispatch": (("c_ptr",), "c_void"),
+    "py_gen_finalize_tracing_candidate": (("c_ptr",), "c_void"),
     "py_weakref_invalidate": (("c_ptr",), "c_void"),
     }
 

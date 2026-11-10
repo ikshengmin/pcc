@@ -86,9 +86,14 @@ class Finalization:
             pcc_gc_tracing_finalize_unpinned=self.free_unpinned,
             pcc_platform_monotonic_us=lambda: 100,
             _record_sweep_phase=lambda *args: self.phase_observations.append(args),
-            abi_constant=lambda name: self.ns['PY_TYPE_CLASS'],
+            abi_constant=lambda name: {
+                'object.type.class': self.ns['PY_TYPE_CLASS'],
+                'object.type.gen': self.ns['PY_TYPE_GEN'],
+            }[name],
         )
-        _bodies('py_gen.py', {'py_gen_finalize'}, self.ns)
+        _bodies('py_gen.py', {
+            'py_gen_finalize', 'py_gen_finalize_tracing_candidate',
+        }, self.ns)
         _bodies('py_dunder.py', {'py_user_del_dispatch'}, self.ns)
         _bodies('freestanding_gc_tracing_sweep_collector.py',
                 {'pcc_gc_tracing_sweep_unreachable'}, self.ns)
@@ -162,7 +167,9 @@ class Finalization:
         self.free(value)
 
 
-@pytest.mark.parametrize('entry', ('py_user_del_dispatch', 'py_gen_finalize'))
+@pytest.mark.parametrize('entry', (
+    'py_user_del_dispatch', 'py_gen_finalize', 'py_gen_finalize_tracing_candidate',
+))
 @pytest.mark.parametrize('shape', ('completed', 'unstarted', 'finalized'))
 @pytest.mark.parametrize('count_free', (False, True))
 def test_noop_generators_do_not_count_user_finalizers(entry, shape, count_free):
@@ -199,6 +206,26 @@ def test_started_generator_counts_before_callbacks_and_finalizes_once(entry, sce
     assert model.rescued == ([1000] if scenario == 'resurrect' else [])
 
 
+@pytest.mark.parametrize('scenario', ('normal', 'close-reentry', 'close-error', 'resurrect'))
+def test_tracing_candidate_close_preserves_accounting_and_pending_error(scenario):
+    model = Finalization(count_free=True)
+    model.pending = 9000
+    if scenario == 'close-reentry':
+        model.close_hook = lambda: model.ns['py_user_del_dispatch'](1000)
+    if scenario == 'close-error':
+        model.close_hook = lambda: model.set_error(9100)
+    if scenario == 'resurrect':
+        model.close_hook = lambda: model.rescued.append(1000)
+    model.ns['py_gen_finalize_tracing_candidate'](1000)
+    model.ns['py_gen_finalize'](1000)
+    assert model.count() == model.close_count == 1
+    assert model.events == [('count', 1), ('close', 1)]
+    assert model.pending == 9000
+    assert model.load(1000, 0) == model.load(9000, 0) == 1
+    assert model.load(1000, 12) & 4 and not model.load(1000, 12) & 64
+    assert model.rescued == ([1000] if scenario == 'resurrect' else [])
+
+
 @pytest.mark.parametrize('shape,expected', (('completed', 0), ('unstarted', 0), ('finalized', 0), ('suspended', 1)))
 @pytest.mark.parametrize('count_free', (False, True))
 def test_production_sweep_rechecks_only_for_real_generator_finalization(shape, expected, count_free):
@@ -208,6 +235,7 @@ def test_production_sweep_rechecks_only_for_real_generator_finalization(shape, e
     assert model.count() == expected
     assert model.events.count(('recheck',)) == expected
     assert model.close_count == expected
+    assert model.events.count(('weak', 1)) == (expected if not count_free else 0)
 
 
 def test_generator_resurrection_still_triggers_recheck_before_clear():

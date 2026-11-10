@@ -568,6 +568,18 @@ def py_dealloc_gen(o) -> None:
 
 @c_abi_export("py_gen_finalize")
 def py_gen_finalize(gen) -> None:
+    _gen_finalize_mode(gen, 1)
+
+
+@c_abi_export("py_gen_finalize_tracing_candidate")
+def py_gen_finalize_tracing_candidate(gen) -> None:
+    # Only count-free tracing PASS0 calls this, after validating its candidate.
+    # The collector rechecks resurrection after every finalizer has run, then
+    # clears all still-dead late weakrefs before invoking their callbacks.
+    _gen_finalize_mode(gen, 0)
+
+
+def _gen_finalize_mode(gen, invalidate_weakrefs: int) -> None:
     # An unstarted generator has not entered its try/finally body.
     if ptr_is_null(gen) or load_i64(gen, 40) != 0 or load_i64(gen, 32) == 0:
         return
@@ -580,7 +592,8 @@ def py_gen_finalize(gen) -> None:
     # Weak callbacks and close/finally can change reachability. A completed,
     # unstarted or already-finalized generator never reaches this boundary.
     atomic_rmw_i64("add", global_addr("pcc_gc_user_finalizer_runs"), 0, 1, "relaxed")
-    py_weakref_invalidate(gen)
+    if invalidate_weakrefs != 0:
+        py_weakref_invalidate(gen)
     saved = py_current_exception()
     if ptr_is_null(saved) == 0:
         py_incref(saved)

@@ -78,6 +78,9 @@ pcc_gc_forwarding_index_find = extern(
 pcc_refcount_forget = extern("pcc_refcount_forget", (c_ptr,), c_void)
 py_gc_untrack = extern("py_gc_untrack", (c_ptr,), c_void)
 py_user_del_dispatch = extern("py_user_del_dispatch", (c_ptr,), c_void)
+py_gen_finalize_tracing_candidate = extern(
+    "py_gen_finalize_tracing_candidate", (c_ptr,), c_void
+)
 py_weakref_invalidate_tracing_candidates = extern(
     "py_weakref_invalidate_tracing_candidates", (), c_int64
 )
@@ -461,7 +464,13 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
             if (flags & 1024) != 0 and (flags & 16384) == 0 and pcc_gc_object_node_is_address_pinned(node, obj) == 0:
                 tag: i64 = load_i32(obj, 8)
                 if pcc_capi_is_cext_type_tag(tag) == 0:
-                    py_user_del_dispatch(obj)
+                    if count_free != 0 and tag == abi_constant("object.type.gen"):
+                        # Per-target generator invalidation would deliver late
+                        # weak callbacks before close/resurrection and before
+                        # the collector's all-target late batch below.
+                        py_gen_finalize_tracing_candidate(obj)
+                    else:
+                        py_user_del_dispatch(obj)
         node = nxt
     _record_sweep_phase(1, started, pcc_platform_monotonic_us(), visited,
                         load_i64(global_addr("pcc_gc_user_finalizer_runs"), 0) - finalizer_runs)

@@ -63,6 +63,7 @@ RAW_FUNCTION_IMPORTS = {
     'malloc',
     'free',
     'py_gc_untrack',
+    'py_gen_finalize_tracing_candidate',
     'py_user_del_dispatch',
     'py_weakref_invalidate_tracing_candidates',
 }
