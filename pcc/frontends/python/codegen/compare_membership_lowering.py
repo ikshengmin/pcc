@@ -1552,11 +1552,10 @@ class CompareMembershipLoweringMixin:
         rhs = self._emit_as_object(expr.rhs)
         lhs_obj = lhs
         rhs_obj = rhs
-        # Compare pointers as integers so the IR is independent of the
-        # llvmlite version's pointer-compare support.
-        lhs_i = self.builder.ptrtoint(lhs_obj, _I64, name=self._fresh("is.l"))
-        rhs_i = self.builder.ptrtoint(rhs_obj, _I64, name=self._fresh("is.r"))
-        eq = self.builder.icmp_signed("==", lhs_i, rhs_i, name=self._fresh("is"))
+        # Keep addresses in the pointer lane. Integer copies can outlive
+        # the comparison in machine storage and conservatively retain
+        # an otherwise dead object. Owned IR supports pointer equality.
+        eq = self.builder.icmp_signed("==", lhs_obj, rhs_obj, name=self._fresh("is"))
         result = eq
         if expr.op == "is not":
             result = self.builder.not_(eq, name=self._fresh("is_not"))
