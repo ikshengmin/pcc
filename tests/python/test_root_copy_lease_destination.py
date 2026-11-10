@@ -287,10 +287,12 @@ def test_two_heap_copies_keep_independent_leases_after_source_exit(backend):
     assert model.count() == model.active() == model.pinned() == 0
 
 
-def test_optimized_copy_keeps_rollback_scratch_in_separate_cold_frame(tmp_path):
+def test_optimized_copy_keeps_all_plan_scratch_out_of_public_frames(tmp_path):
     # Match the final runtime-IR pipeline used by the refcount layout test.
     # A branch-local alloca still reserves native frame space on every entry;
-    # the rollback helper must remain a real call after optimization.
+    # all three locked helpers and the cold rollback must remain real calls
+    # after optimization. A host body model cannot prove this fixed-frame
+    # property or reproduce a native conservative-stack retention witness.
     from pcc.frontends.python.pipeline import compile_python
     from pcc.frontends.python.owned_runtime_build import runtime_ir_passes
     from pcc.ir.optimization.driver import optimize_ir
@@ -311,16 +313,65 @@ def test_optimized_copy_keeps_rollback_scratch_in_separate_cold_frame(tmp_path):
         assert found is not None, name
         return found.group(1)
 
+    def calls(function, name):
+        return list(re.finditer(
+            r"\b(?:call|invoke)\b[^\n]*@" + re.escape(name) + r"\(",
+            function,
+        ))
+
+    def scratch_sizes(function):
+        sizes = []
+        for line in function.splitlines():
+            array = re.search(r"\balloca\s+\[(\d+)\s+x\s+i8\]", line)
+            counted = re.search(r"\balloca\s+i8,\s+i(?:32|64)\s+(\d+)\b", line)
+            if array or counted:
+                sizes.append(int((array or counted).group(1)))
+        return sizes
+
+    locked = {}
+    for entry, helper, expected_sizes in (
+        ("pcc_gc_root_copy_lease", "_gc_root_copy_lease_locked", [128]),
+        ("pcc_gc_root_copy_borrowed_lease", "_gc_root_copy_borrowed_lease_locked", [128, 128]),
+        ("pcc_gc_root_copy_local", "_gc_root_copy_local_locked", [128]),
+    ):
+        public = body(entry)
+        helper_name = "user_py_obj_" + helper
+        helper_body = body(helper_name)
+        locked[entry] = helper_body
+        # Check the complete optimized public function, including its fast
+        # and invalid-input paths, rather than a separately compiled slice.
+        assert not any(size >= 128 for size in scratch_sizes(public)), entry
+        call = calls(public, helper_name)
+        lock = calls(public, "pcc_py_gc_minor_graph_lock")
+        assert len(call) == len(lock) == 1, entry
+        assert lock[0].start() < call[0].start(), entry
+        assert scratch_sizes(helper_body) == expected_sizes, helper_name
+        allocations = [line for line in helper_body.splitlines() if "alloca " in line]
+        assert len(allocations) == len(expected_sizes), allocations
+        assert not calls(helper_body, "pcc_py_gc_minor_graph_lock"), helper_name
+        # A normal thread-entry poll is suppressed by the held graph lock's
+        # no-park scope; an independent collector gate must not be inserted.
+        assert not calls(helper_body, "pcc_gc_safepoint"), helper_name
+
     cold_name = "user_py_obj__gc_root_copy_lease_rollback"
-    ordinary = body("pcc_gc_root_copy_lease")
+    ordinary = locked["pcc_gc_root_copy_lease"]
     cold = body(cold_name)
-    assert "@" + cold_name + "(" in ordinary
-    for function in (ordinary, cold):
-        allocations = [line for line in function.splitlines() if "alloca " in line]
-        assert len(allocations) == 1, allocations
-        assert re.search(r"\balloca\s+\[128\s+x\s+i8\]", allocations[0]) or re.search(
-            r"\balloca\s+i8,\s+i(?:32|64)\s+128\b", allocations[0]
-        ), allocations
+    assert len(calls(ordinary, cold_name)) == 1
+    assert not calls(body("pcc_gc_root_copy_lease"), cold_name)
+    assert scratch_sizes(cold) == [128]
+    assert len([line for line in cold.splitlines() if "alloca " in line]) == 1
+    assert not calls(cold, "pcc_gc_safepoint")
+    for function, expected in (
+        (ordinary, 1), (locked["pcc_gc_root_copy_borrowed_lease"], 2),
+    ):
+        inits = calls(function, "pcc_gc_store_root_plan_init")
+        unlocks = calls(function, "pcc_py_gc_minor_graph_unlock")
+        assert len(inits) == expected and unlocks
+        assert max(call.start() for call in inits) < min(call.start() for call in unlocks)
+    local = locked["pcc_gc_root_copy_local"]
+    assert len(calls(local, "pcc_gc_root_copy_owned_prepare_locked")) == 1
+    assert len(calls(local, "pcc_gc_store_root_plan_init")) == 1
+    assert not calls(body("pcc_gc_root_copy_local"), "memset")
     init = cold.index("@pcc_gc_store_root_plan_init(")
     clear = cold.index("@pcc_gc_store_root_plan_commit_locked(")
     unlock = cold.index("@pcc_py_gc_minor_graph_unlock(")

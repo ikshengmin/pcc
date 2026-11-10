@@ -1429,9 +1429,16 @@ def pcc_gc_root_copy_lease(destination, source) -> int:
                     store_i64(fast, PYOBJECTHEADER_REFCOUNT_OFFSET, fast_rc + 1)
                     store_ptr(destination, 0, fast)
                 return fast_token
-    plan = stack_alloc(128)
     _gc_backend_fast()
     pcc_py_gc_minor_graph_lock()
+    return _gc_root_copy_lease_locked(destination, source)
+
+
+def _gc_root_copy_lease_locked(destination, source) -> int:
+    # Allocate fixed-frame scratch only after the caller owns the graph lock.
+    # Its no-park depth also covers this helper's entry poll until plan init;
+    # the public entry/lock wait must not expose uninitialized plan words.
+    plan = stack_alloc(128)
     # Configuration may change while acquiring the graph lock, before our
     # first address lease exists. Use the backend of this transaction.
     backend: int = _gc_backend_fast()
@@ -1549,10 +1556,16 @@ def pcc_gc_root_copy_borrowed_lease(destination, source) -> int:
             py_incref(copied)
         store_ptr(destination, 0, copied)
         return 0
-    plan = stack_alloc(128)
-    rollback = stack_alloc(128)
     _gc_backend_fast()
     pcc_py_gc_minor_graph_lock()
+    return _gc_root_copy_borrowed_lease_locked(destination, source)
+
+
+def _gc_root_copy_borrowed_lease_locked(destination, source) -> int:
+    # As above, no plan frame exists during public entry or graph-lock wait.
+    # Both plans are initialized before any outer unlock can admit a stop.
+    plan = stack_alloc(128)
+    rollback = stack_alloc(128)
     backend: int = _gc_backend_fast()
     pcc_gc_store_root_plan_init(plan, backend)
     pcc_gc_store_root_plan_init(rollback, backend)
@@ -1631,7 +1644,6 @@ def pcc_gc_root_copy_local(destination, source, source_borrowed: int) -> int:
             py_incref(value)
         store_ptr(destination, 0, value)
         return 0
-    plan = stack_alloc(128)
     if (
         atomic_load_i32(global_addr("pcc_gc_config_initialized"), 0, "acquire") != 0
         and atomic_load_i32(global_addr("pcc_gc_backend_frozen"), 0, "acquire") != 0
@@ -1647,9 +1659,6 @@ def pcc_gc_root_copy_local(destination, source, source_borrowed: int) -> int:
             # independent of the shared graph lock. Protect every raw load
             # through publication, including the nested publisher's exit.
             pcc_thread_no_park_enter()
-            # The fallback's fixed-frame scratch still exists on this path.
-            # Preserve its zeroing before any outer exit can admit a stop.
-            memset(plan, 0, 128)
             local_status: int = -4
             if ptr_is_null(load_ptr(destination, 0)) != 0:
                 local_value = load_ptr(source, 0)
@@ -1665,6 +1674,13 @@ def pcc_gc_root_copy_local(destination, source, source_borrowed: int) -> int:
             return local_status
     _gc_backend_fast()
     pcc_py_gc_minor_graph_lock()
+    return _gc_root_copy_local_locked(destination, source, source_borrowed)
+
+
+def _gc_root_copy_local_locked(destination, source, source_borrowed: int) -> int:
+    # Keep this fallback's fixed frame out of every public fast/early path.
+    # The held graph lock prevents parking until prepare initializes it.
+    plan = stack_alloc(128)
     status: int = -4
     if source_borrowed == 0:
         status = pcc_gc_root_copy_owned_prepare_locked(destination, source, plan)
