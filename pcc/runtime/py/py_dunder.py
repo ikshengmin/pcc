@@ -147,7 +147,7 @@ def _type_of(obj) -> int:
 
 def _load_instance_cls(o):
     backend: int = pcc_gc_backend()
-    if backend == 3 or backend == 4:
+    if backend == 4:
         return pcc_gc_load_ptr(o, ptr_add(o, PYINSTANCEOBJECT_CLS_OFFSET))
     return load_ptr(o, PYINSTANCEOBJECT_CLS_OFFSET)
 
@@ -505,7 +505,7 @@ def py_obj_id(o) -> int:
     if ptr_is_null(o) or is_tagged_int(o):
         return ptr_to_int(o)
     backend: int = pcc_gc_backend()
-    if backend == 3 or backend == 4:
+    if backend == 4:
         return pcc_gc_object_id(o) * 16
     return ptr_to_int(o)
 
@@ -515,7 +515,7 @@ def _identity_hash(o) -> int:
     # they hash the stable object id instead of the address.
     backend: int = pcc_gc_backend()
     h: int = 0
-    if backend == 3 or backend == 4:
+    if backend == 4:
         h = pcc_gc_object_id(o)
     else:
         h = ptr_to_int(o) >> 4

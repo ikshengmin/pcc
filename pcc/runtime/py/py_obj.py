@@ -514,9 +514,7 @@ def pcc_gc_alloc(size: int, type_tag: int, flags: int):
             or type_tag == PY_TYPE_MEMORYVIEW
         ):
             stored_flags = stored_flags | 16384
-    if backend == 3:
-        obj = pcc_gc_try_minor_alloc(size)
-    elif backend == 4:
+    if backend == 4:
         if _gc_graph_leaf_tag(type_tag) == 0:
             obj = pcc_gc_backend4_try_zpage_alloc(size, flags)
             if ptr_is_null(obj) == 0:
@@ -535,8 +533,6 @@ def pcc_gc_alloc(size: int, type_tag: int, flags: int):
             memset(obj, 0, size)
             if backend == 4:
                 stored_flags = (stored_flags & ~65536) | 262144
-            elif backend == 3:
-                stored_flags = (stored_flags & ~4096) | 262144
     if ptr_is_null(obj):
         return obj
     store_i64(obj, PYOBJECTHEADER_REFCOUNT_OFFSET, 1)
@@ -588,24 +584,14 @@ def pcc_gc_release(o) -> None:
     if ptr_is_null(o) != 0 or is_tagged_int(o) != 0:
         return
     backend: int = _gc_backend_fast()
-    if backend == 3:
-        if _gc_relocation_candidate(o) != 0:
+    if backend == 4:
+        if _gc_forwarding_population() > 0 and _gc_relocation_candidate(o) != 0:
             resolved = pcc_gc_note_relocation_read(o)
             # Identity, not ``!=``: a value comparison retains both operands
             # and drops them through this very function, recursing forever.
-            if ptr_eq(resolved, o) == 0:
-                py_decref(o)
-                return
-    elif backend == 4:
-        if _gc_forwarding_population() > 0 and _gc_relocation_candidate(o) != 0:
-            resolved = pcc_gc_note_relocation_read(o)
             if ptr_eq(resolved, o) != 0 and pcc_gc_object_is_known_stable(o) == 0:
                 return
             o = resolved
-    if backend == 3:
-        flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
-        if (flags & 4096) != 0 and (flags & 256) != 0 and load_i64(o, PYOBJECTHEADER_REFCOUNT_OFFSET) <= 0:
-            return
     py_decref(o)
 
 
@@ -641,7 +627,7 @@ def pcc_gc_load_ptr(owner, slot):
         backend = pcc_gc_backend()
     else:
         backend = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if backend == 3 or backend == 4:
+    if backend == 4:
         # Null and tagged values cannot relocate. Skip GC4 root membership
         # and resolution before counting a read-barrier check.
         if backend == 4 and (ptr_is_null(v) != 0 or is_tagged_int(v) != 0):
@@ -679,7 +665,7 @@ def pcc_gc_load_borrowed_ptr(owner, slot):
     if load_i32(global_addr("pcc_gc_read_barrier_enabled"), 0) == 0:
         return v
     backend: int = _gc_backend_fast()
-    if backend == 3 or backend == 4:
+    if backend == 4:
         # Null and tagged values cannot relocate. Skip GC4 root membership
         # and resolution before counting a read-barrier check.
         if backend == 4 and (ptr_is_null(v) != 0 or is_tagged_int(v) != 0):
@@ -716,7 +702,7 @@ def pcc_gc_resolve_owned_ptr(value):
     if is_tagged_int(value) != 0:
         return value
     backend: int = _gc_backend_fast()
-    if backend != 3 and backend != 4:
+    if backend != 4:
         return value
     if _gc_forwarding_population() <= 0:
         return value
@@ -750,11 +736,9 @@ def pcc_gc_store_ptr(owner, slot, value) -> None:
         store_ptr(slot, 0, value)
         py_decref(old)
         return
-    if (
-        (backend == 1 or backend == 2)
-        and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
-    ):
-        # Count-free GC1/GC2 neither count nor move: the plan would only note
+    if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
+        # The nonmoving count-free tracers (GC1, GC2 and GC3) neither count
+        # nor move: the plan would only note
         # the store, write the slot and shade the value in a cycle. Do that
         # under one no-park scope, as a root store does, without the graph
         # lock that serialized every such store with the marker.
@@ -934,7 +918,7 @@ def _pcc_gc_store_plan_commit_locked(plan, owner, slot, value) -> int:
     backend: int = load_i64(plan, _STORE_PLAN_BACKEND)
     if backend == 1 or backend == 2 or backend == 3 or backend == 4:
         pcc_gc_note_store()
-    if backend == 3 or backend == 4:
+    if backend == 4:
         if _gc_forwarding_population() > 0 and _gc_relocation_candidate(value) != 0:
             value = pcc_gc_note_relocation_read(value)
     if load_i32(plan, _STORE_PLAN_MODE) != 0:
@@ -1036,7 +1020,7 @@ def _pcc_gc_store_plan_commit_sentinel_aware_locked(
         # reset keeps the plan's finish inert.
         _py_refcount_prepared_reset(plan, value)
     else:
-        if backend == 3 or backend == 4:
+        if backend == 4:
             if (
                 _gc_forwarding_population() > 0
                 and _gc_relocation_candidate(value) != 0
@@ -1257,7 +1241,7 @@ def pcc_gc_store_root(slot, value) -> None:
             py_decref(old)
         return
     if (
-        (backend == 1 or backend == 2)
+        (backend == 1 or backend == 2 or backend == 3)
         and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
         and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
         and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
@@ -1265,7 +1249,7 @@ def pcc_gc_store_root(slot, value) -> None:
         _store_root_nonmoving_tracing(slot, value, backend)
         return
     if (
-        (backend == 3 or backend == 4)
+        (backend == 4)
         and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
         and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
         and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
@@ -1299,7 +1283,7 @@ def pcc_gc_store_root_take(slot, value) -> None:
             py_decref(old)
         return
     if (
-        (backend == 1 or backend == 2)
+        (backend == 1 or backend == 2 or backend == 3)
         and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
         and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
         and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
@@ -1307,7 +1291,7 @@ def pcc_gc_store_root_take(slot, value) -> None:
         _store_root_nonmoving_tracing(slot, value, backend)
         return
     if (
-        (backend == 3 or backend == 4)
+        (backend == 4)
         and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
         and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
         and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
@@ -1476,7 +1460,7 @@ def _gc_root_copy_lease_locked(destination, source) -> int:
         if pcc_gc_store_root_plan_commit_locked(plan, destination, value) == 0:
             released: int = pcc_gc_foreign_lease_release(source, token)
             token = -4 if released == 0 else -3
-        elif token == 0 and (backend == 3 or backend == 4):
+        elif token == 0 and (backend == 4):
             # A conservative source stack slot can return token 0. Its
             # lifetime does not cover a copied heap/global destination after
             # the source is rebound or leaves the stack. Establish the
@@ -1672,7 +1656,7 @@ def pcc_gc_root_copy_local(destination, source, source_borrowed: int) -> int:
     ):
         local_backend: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
         if (
-            (local_backend == 1 or local_backend == 2)
+            (local_backend == 1 or local_backend == 2 or local_backend == 3)
             and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
             and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
             and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
@@ -1750,7 +1734,7 @@ def pcc_gc_root_copy_lease_prepare_locked(destination, source, source_borrowed: 
             if pcc_gc_foreign_lease_release(source, token) != 0:
                 return -3
             return -4
-        if token == 0 and (backend == 3 or backend == 4):
+        if token == 0 and (backend == 4):
             # A source-stack no-op lease is not transferable to a heap root.
             token = pcc_gc_foreign_lease_acquire(destination)
             if token < 0:
@@ -1890,6 +1874,7 @@ def _gc_tracing_collect_step(budget: int) -> int:
     if (
         _gc_backend_fast() != 3
         or load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0
+        or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
         or load_i32(global_addr("pcc_gc_explicit_collect_active"), 0) == 0
         or pcc_thread_owns_stopped_world() == 0
         or (
@@ -2031,19 +2016,9 @@ def _gc_maybe_auto_collect() -> None:
     backend: int = _gc_backend_fast()
     if backend == 0:
         pcc_gc_collect(0)
-    elif backend == 3:
-        # GC3's collection finishes the mark in progress. A remark the
-        # collector thread left to it needs only that finish.
-        left: int = atomic_rmw_i32(
-            "xchg", global_addr("pcc_gc_cms_finish_pending"), 0, 0, "acq_rel"
-        )
-        if left != 0 and load_i32(global_addr("pcc_gc_mark_active"), 0) != 0:
-            _gc_tracing_automatic_collect(2)
-        else:
-            _gc_tracing_automatic_collect(1)
     else:
-        # GC1/GC2's collector thread left a traced mark's final remark to
-        # this collection (pcc_gc_cms_finish_pending).
+        # The collector thread of GC1, GC2 and GC3 left a traced mark's
+        # final remark to this collection (pcc_gc_cms_finish_pending).
         finish: int = atomic_rmw_i32(
             "xchg", global_addr("pcc_gc_cms_finish_pending"), 0, 0, "acq_rel"
         )
@@ -2287,7 +2262,7 @@ def pcc_gc_collect(reason: int) -> int:
         pcc_gc_reclaim_retired_index_tables()
         # gc.collect() frees what an automatic sweep deferred, synchronously.
         pcc_gc_concurrent_sweep_finish_stopped()
-        if backend == 3 or backend == 4:
+        if backend == 4:
             # Stack-map step 3: with PCC_GC_STACKMAP_DIFF and a published table,
             # compare the stopped stack's mapped roots with the registered ones.
             pcc_gc_precise_stack_diff_if_requested()
@@ -2438,7 +2413,7 @@ def _py_incref_prepare(o, prepared) -> None:
             store_i64(prepared, 48, 1)
         return
     flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
-    if (backend == 1 or backend == 2) and flags == 0:
+    if (backend == 1 or backend == 2 or backend == 3) and flags == 0:
         if pcc_gc_pointer_is_managed(o) == 0:
             return
     if (
@@ -2614,7 +2589,7 @@ def _py_decref_prepare(o, prepared) -> None:
     ):
         return
     flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
-    if (backend == 1 or backend == 2) and flags == 0:
+    if (backend == 1 or backend == 2 or backend == 3) and flags == 0:
         if pcc_gc_pointer_is_managed(o) == 0:
             return
     if (

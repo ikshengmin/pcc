@@ -527,7 +527,7 @@ def _str_has_backslash(value) -> int:
 def _sub_hold(slots, handles, index: int, value, backend: int) -> int:
     slot = ptr_add(slots, index * 8)
     store_ptr(slot, 0, value)
-    if (backend == 3 or backend == 4) and ptr_is_null(value) == 0:
+    if (backend == 4) and ptr_is_null(value) == 0:
         handle = pcc_gc_scheduler_root_register_handle(slot)
         store_ptr(handles, index * 8, handle)
         if ptr_is_null(handle) != 0:

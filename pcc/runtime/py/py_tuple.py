@@ -434,7 +434,7 @@ def py_tuple_from_list(lst):
     source_pin: int = _tuple_conversion_pin_value(lst)
     count: int = 0
     backend: int = pcc_gc_backend()
-    if backend == 3 or backend == 4:
+    if backend == 4:
         while count < 4:
             handle = pcc_gc_scheduler_root_register_handle(ptr_add(slots, count * 8))
             if ptr_is_null(handle):
@@ -775,7 +775,7 @@ def py_tuple_len(tuple_ptr) -> int:
 def _tuple_method_prepare_root(slot, value, backend: int):
     store_ptr(slot, 0, value)
     if (
-        (backend == 3 or backend == 4)
+        (backend == 4)
         and ptr_is_null(value) == 0
         and is_tagged_int(value) == 0
     ):
@@ -787,7 +787,7 @@ def _tuple_method_prepare_root(slot, value, backend: int):
 
 
 def _tuple_method_root_failed(value, backend: int, handle) -> int:
-    if backend != 3 and backend != 4:
+    if backend != 4:
         return 0
     if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
         return 0

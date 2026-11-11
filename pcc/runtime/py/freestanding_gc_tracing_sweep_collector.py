@@ -342,7 +342,7 @@ def _concurrent_sweep_admitted(count_free: i64) -> i64:
     if count_free == 0:
         return 0
     backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if backend != 1 and backend != 2:
+    if backend != 1 and backend != 2 and backend != 3:
         return 0
     if load_i32(global_addr("pcc_gc_concurrent_sweep_allowed"), 0) == 0:
         return 0
@@ -578,7 +578,7 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
                 else:
                     deferred_scalar: i64 = 0
                     selected: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-                    if selected == 1 or selected == 2:
+                    if selected == 1 or selected == 2 or selected == 3:
                         deferred_scalar = pcc_gc_scalar_sweep_try_enqueue(obj, node)
                     if deferred_scalar == 0:
                         pcc_gc_tracing_finalize_unpinned(obj)

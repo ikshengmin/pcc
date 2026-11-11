@@ -158,7 +158,7 @@ def pcc_gc_frame_node_alloc(root_count: i64):
     node_size: i64 = pcc_gc_frame_node_size(root_count)
     bucket: i64 = pcc_gc_frame_node_bucket(root_count)
     backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if (backend == 3 or backend == 4) and bucket >= 0:
+    if (backend == 4) and bucket >= 0:
         heads = pcc_gc_frame_node_pool_heads_get()
         counts = pcc_gc_frame_node_pool_counts_get()
         if ptr_is_null(heads) == 0 and ptr_is_null(counts) == 0:
@@ -246,7 +246,7 @@ def pcc_gc_frame_node_release(node) -> None:
     root_count: i64 = load_i64(node, 40)
     bucket: i64 = pcc_gc_frame_node_bucket(root_count)
     backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if (backend != 3 and backend != 4) or bucket < 0:
+    if (backend != 4) or bucket < 0:
         free(node)
         return
     heads = pcc_gc_frame_node_pool_heads_get()

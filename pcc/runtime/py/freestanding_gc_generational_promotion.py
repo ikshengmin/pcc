@@ -304,7 +304,7 @@ def _promotion_unlink(node) -> None:
 @c_abi_export("pcc_gc_backend3_enqueue_promotion_owner")
 def _enqueue_promotion_owner(obj) -> None:
     backend: i64 = pcc_gc_config_ensure()
-    if backend != 3 and backend != 4:
+    if backend != 4:
         return
     if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
         return

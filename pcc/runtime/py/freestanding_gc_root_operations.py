@@ -481,7 +481,7 @@ def _resolve_root_slot_mode(slot_base, slot_offset: i64, borrowed: i64):
         # identity here; no object/forwarding-index probe can change it.
         # Keep pre-configuration and diagnostic paths on the checked walk.
         selected: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-        if selected != 3 and selected != 4:
+        if selected != 4:
             return value
     known: i64 = pcc_gc_object_is_known_no_lock(value)
     flags: i64 = 0
@@ -567,14 +567,14 @@ def pcc_gc_borrowed_lease_acquire(slot) -> i64:
 def _foreign_lease_acquire(slot, borrowed: i64) -> i64:
     if ptr_is_null(slot) != 0:
         return -1
-    # Collectors 0-2 never move an object, and none can be replaced once an
+    # Collectors 0-3 never move an object, and none can be replaced once an
     # object exists (pcc_gc_set_backend), so an address lease there guards
     # nothing: its mode reservation only fenced a collector switch. Every
     # value answers 0 there, so decide before reading the slot. The refcount
     # provenance probe keeps the checked path below.
     if (
         load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-        and load_i32(global_addr("pcc_gc_backend_selected"), 0) <= 2
+        and load_i32(global_addr("pcc_gc_backend_selected"), 0) <= 3
         and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
     ):
         return 0
@@ -673,14 +673,14 @@ def _foreign_lease_acquire(slot, borrowed: i64) -> i64:
                   or pcc_gc_managed_pointer_index_contains(obj) != 0):
             backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
             tag: i64 = load_i32(obj, 8)
-            # GC0/1/2 never move. GC3/4 no-node malloc graph leaves are
-            # intentionally refcount-only; nursery/zpage owners are not.
+            # GC0-GC3 never move. GC4 no-node malloc graph leaves are
+            # intentionally refcount-only; zpage owners are not.
             # A no-node immortal (the malloc'd standard streams and object
             # class roots) is stable storage outside the object graph, so
-            # GC3/4 never move it either.
-            if backend >= 0 and backend <= 2:
+            # GC4 never moves it either.
+            if backend >= 0 and backend <= 3:
                 status = 2
-            elif (backend == 3 or backend == 4) and (flags & (4096 | 65536)) == 0:
+            elif backend == 4 and (flags & (4096 | 65536)) == 0:
                 if (
                     tag == PY_TYPE_NONE
                     or tag == PY_TYPE_BOOL
@@ -912,8 +912,8 @@ def pcc_gc_object_node_is_address_pinned(node, obj) -> i64:
     indexed node, so they keep the index's answer.
     """
     backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if backend != 1 and backend != 2:
-        if ((backend != 3 and backend != 4)
+    if backend != 1 and backend != 2 and backend != 3:
+        if ((backend != 4)
                 or load_i32(global_addr("pcc_gc_forwarding_population"), 0) != 0):
             return pcc_gc_object_is_address_pinned(obj)
     if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:

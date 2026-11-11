@@ -882,6 +882,11 @@ def _young_cut_admitted() -> i64:
             or atomic_load_i32(global_addr("pcc_gc_backend3_closed_young_domain"),
                                0, "acquire") != 1):
         return 0
+    # This cut reads the remembered owners that a graph-locked store barrier
+    # recorded. The nonmoving protocol's stores take no graph lock and record
+    # none, so the cut has no complete old-to-young edge set to decide by.
+    if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
+        return 0
     # This is a separate young liveness cut, never a consumer of major colors
     # or partially traced major state. Every admission query is constant-size.
     if (load_i32(global_addr("pcc_gc_mark_active"), 0) != 0

@@ -949,6 +949,10 @@ def pcc_gc_try_minor_alloc(bytes: int):
     _set_pending_minor_block(null())
     if backend != 3:
         return null()
+    # A count-free GC3 never moves an object: it has no nursery block to
+    # copy survivors out of.
+    if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
+        return null()
 
     aligned: int = _align16(bytes)
     max_size: int = load_i32(global_addr("pcc_gc_minor_alloc_max"), 0)
@@ -2696,6 +2700,23 @@ def pcc_gc_reclaim_retired_index_tables_if_alone() -> None:
     pcc_gc_reclaim_retired_index_tables()
 
 
+def _nonmoving_count_free_backend(backend: int) -> int:
+    """1 when the collector being fixed never moves or counts an object.
+
+    GC1, GC2 and GC3 share one mutator protocol: an object keeps its address
+    for its whole life, a load is a plain load, and a store shades its value
+    during a mark. GC3 is the generational member (its reference is OCaml's
+    minor heap): the write barrier records nothing a reader must follow, a
+    minor collection runs in a stopped world and leaves no forwarding state
+    behind, and a survivor is promoted where it is. Only GC4 relocates.
+    """
+    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0:
+        return 0
+    if backend == 1 or backend == 2 or backend == 3:
+        return 1
+    return 0
+
+
 @c_abi_export("pcc_gc_fix_backend")
 def pcc_gc_fix_backend() -> None:
     """Fix the collector at the first managed allocation.
@@ -2720,32 +2741,24 @@ def pcc_gc_fix_backend() -> None:
         return
     # GC0 lists and instance fields lock themselves (py_list, and
     # pcc_gc_store_field_ptr with its readers). So do the nonmoving
-    # count-free tracers GC1/GC2: their marker scans lists and instances
-    # under the same container lock (pcc_gc_trace_referents) and those
-    # stores shade without the graph lock (pcc_gc_note_slot_write_barrier),
-    # so carriers touching different containers no longer serialize on the
-    # graph lock. The relocating collectors GC3/GC4 keep the graph lock for
-    # their copies and remaps, and the provenance probe's checked lease path
-    # takes it inside a list transaction.
+    # count-free tracers: their marker scans lists and instances under the
+    # same container lock (pcc_gc_trace_referents) and those stores shade
+    # without the graph lock (pcc_gc_note_slot_write_barrier), so carriers
+    # touching different containers no longer serialize on the graph lock.
+    # A relocating collector keeps the graph lock for its copies and remaps,
+    # and the provenance probe's checked lease path takes it inside a list
+    # transaction.
     container_backend: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+    nonmoving: int = _nonmoving_count_free_backend(container_backend)
     if (
-        (
-            container_backend == 0
-            or (
-                (container_backend == 1 or container_backend == 2)
-                and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
-            )
-        )
+        (container_backend == 0 or nonmoving != 0)
         and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
     ):
         store_i32(global_addr("pcc_gc_list_container_mode"), 0, 1)
     # The nonmoving count-free tracers find a native entry's raw inputs by
     # their conservative stopped-world stack scans; no activation frame or
     # root binding is needed for them.
-    if (
-        (container_backend == 1 or container_backend == 2)
-        and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
-    ):
+    if nonmoving != 0:
         store_i32(global_addr("pcc_gc_nonmoving_count_free"), 0, 1)
         # Their allocations register in batches (freestanding_gc_alloc_stage).
         pcc_gc_alloc_stage_enable(1)
@@ -3006,7 +3019,7 @@ def pcc_gc_set_backend(backend: int) -> int:
     # joining twice.
     keeps_collector: int = 0
     selected: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if backend == selected and (backend == 1 or backend == 2):
+    if backend == selected and (backend == 1 or backend == 2 or backend == 3):
         keeps_collector = 1
     if pcc_threads_enabled() != 0:
         if pcc_py_gc_minor_graph_lock_depth() > 0:
@@ -3024,7 +3037,7 @@ def pcc_gc_set_backend(backend: int) -> int:
         if _stop_cms_worker() != 0:
             return -1
     # No collector can start between this count and backend publication.
-    if (backend == 3 or backend == 4) and load_i32(global_addr("pcc_gc_backend_selected"), 0) <= 2:
+    if backend == 4 and load_i32(global_addr("pcc_gc_backend_selected"), 0) <= 3:
         if pcc_thread_live_count() > 1:
             _release_cms_worker_pause_unless_kept(keeps_collector)
             return -1
@@ -4816,7 +4829,7 @@ def pcc_gc_free_object_memory(o) -> None:
         _object_graph_unlock()
         return
     lease_node = pcc_gc_object_index_find(o)
-    if ((backend == 1 or backend == 2) and ptr_is_null(lease_node) == 0
+    if ((backend == 1 or backend == 2 or backend == 3) and ptr_is_null(lease_node) == 0
             and load_i64(lease_node, 32) < 0):
         _object_graph_unlock()
         return
@@ -4824,7 +4837,7 @@ def pcc_gc_free_object_memory(o) -> None:
         _object_graph_unlock()
         return
     flags: int = 0
-    if ((backend == 1 or backend == 2)
+    if ((backend == 1 or backend == 2 or backend == 3)
             and ptr_eq(o, global_load_ptr("pcc_gc_last_noted_free")) != 0):
         # The completed note already handled the object graph. Keep this
         # ownership check and provenance retirement in one transaction, even
@@ -4848,19 +4861,19 @@ def pcc_gc_free_object_memory(o) -> None:
             return
     if (flags & 65536) != 0:
         return
-    if (backend == 1 or backend == 2) and flags == 0:
+    if (backend == 1 or backend == 2 or backend == 3) and flags == 0:
         return
     if backend == 4 and (flags & 262144) == 0:
         # Backend 4 publishes either the zpage or malloc allocation-origin
         # flag.  The zpage case returned above.  Unknown/foreign origin must
         # fail closed instead of scanning every page or calling free().
         return
-    if (flags & 4096) == 0 and backend != 3:
-        if (backend == 1 or backend == 2) and pcc_gc_deferred_free_try_enqueue(o, flags) != 0:
+    if (flags & 4096) == 0:
+        if (backend == 1 or backend == 2 or backend == 3) and pcc_gc_deferred_free_try_enqueue(o, flags) != 0:
             return
         free(o)
         return
-    if (flags & 4096) != 0 or backend == 3:
+    if (flags & 4096) != 0:
         _object_graph_lock()
         node = pcc_gc_object_index_find(o)
         if ptr_is_null(node) == 0:
@@ -4941,11 +4954,10 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
     # prepared node is freed after unlock. A prepare that fails here is that
     # round trip's one attempt: the plan takes its existing failure path
     # instead of asking the allocator again, unless the pool was refilled.
-    # Only the nonmoving GC1/GC2 take the hint: measured, GC3 gained nothing
-    # and GC4 lost a little (it prepares zpage resources in that round trip
-    # as well).
+    # The nonmoving GC1-GC3 take the hint: measured, GC4 lost a little (it
+    # prepares zpage resources in that round trip as well).
     node_prepare_failed: int = 0
-    if backend == 1 or backend == 2:
+    if backend == 1 or backend == 2 or backend == 3:
         if _object_node_plan_requires_prepare() != 0:
             prepared_node = _object_node_prepare()
             if ptr_is_null(prepared_node) != 0:
@@ -4955,7 +4967,7 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
         backend = load_i32(global_addr("pcc_gc_backend_selected"), 0)
         graph_leaf: int = 0
         if (
-            (backend == 3 or backend == 4)
+            backend == 4
             and ptr_is_null(pending_block) != 0
             and _backend3_graph_leaf_tag(load_i32(o, 8)) != 0
             and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0
@@ -5299,7 +5311,7 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                     pcc_gc_backend3_revoke_closed_young_domain()
                     return
 
-        if backend == 1 or backend == 2:
+        if backend == 1 or backend == 2 or backend == 3:
             flags: int = load_i32(o, 12)
             color: int = 8
             if load_i32(global_addr("pcc_gc_mark_active"), 0) != 0:
@@ -5529,7 +5541,7 @@ def pcc_gc_note_object_freeing(o) -> None:
     # already required below. Keep this node under the same graph hold, and
     # reject a negative owner before publishing free-watch success.
     lease_node = null()
-    if backend == 1 or backend == 2:
+    if backend == 1 or backend == 2 or backend == 3:
         _object_graph_lock()
         lease_node = pcc_gc_object_index_find(o)
         if ptr_is_null(lease_node) == 0 and load_i64(lease_node, 32) < 0:
@@ -5549,7 +5561,7 @@ def pcc_gc_note_object_freeing(o) -> None:
     # per-free overhead.  Gate the fan-out, not the struct init, and keep the
     # C mirror in py_gc_backend.c the same shape.
     moving: int = 0
-    if backend == 3 or backend == 4:
+    if backend == 4:
         moving = 1
     finish = stack_alloc(48)
     store_ptr(finish, 0, null())
@@ -5558,7 +5570,7 @@ def pcc_gc_note_object_freeing(o) -> None:
     store_ptr(finish, 24, null())
     store_ptr(finish, 32, null())
     store_ptr(finish, 40, null())
-    if backend != 1 and backend != 2:
+    if backend != 1 and backend != 2 and backend != 3:
         _object_graph_lock()
         lease_node = pcc_gc_object_index_find(o)
     if ptr_is_null(lease_node) == 0 and load_i64(lease_node, 80) != 0:
@@ -5599,7 +5611,7 @@ def pcc_gc_note_object_freeing(o) -> None:
     # GC1/2's provenance and identity work does not mutate the object index.
     # Moving backends may detach forwarding metadata and need a fresh lookup.
     node = lease_node
-    if backend != 1 and backend != 2:
+    if backend != 1 and backend != 2 and backend != 3:
         node = pcc_gc_object_index_find(o)
     if ptr_is_null(node) == 0:
         if _object_node_freeing(node) == 0:
@@ -5867,7 +5879,7 @@ def pcc_gc_relocation_set_size() -> int:
 
 def _backend_uses_forwarding() -> int:
     backend: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if backend == 3 or backend == 4:
+    if backend == 4:
         return 1
     return 0
 

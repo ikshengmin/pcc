@@ -134,9 +134,9 @@ def pcc_gc_refresh_read_barrier() -> None:
     enabled: i64 = 1
     if load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0:
         backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-        if backend == 0 or backend == 1 or backend == 2:
+        if backend == 0 or backend == 1 or backend == 2 or backend == 3:
             enabled = 0
-        elif backend == 3 or backend == 4:
+        elif backend == 4:
             if (load_i32(global_addr("pcc_gc_forwarding_population"), 0) == 0
                     and ptr_is_null(global_load_ptr("pcc_gc_forwarding_head")) != 0):
                 if backend == 3 or ptr_is_null(global_load_ptr("pcc_gc_relocation_set_head")) != 0:
@@ -447,7 +447,7 @@ def pcc_gc_forwarding_install_plan_prepare(
     _graph_lock()
     backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
     if (
-        (backend != 3 and backend != 4)
+        (backend != 4)
         or (
             backend == 4
             and load_i64(
@@ -521,7 +521,7 @@ def pcc_gc_install_forwarding_preallocated_unlocked(
     ):
         return -1
     backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if backend != 3 and backend != 4:
+    if backend != 4:
         return -1
     if (
         ptr_is_null(from_obj) != 0
@@ -665,7 +665,7 @@ def pcc_gc_install_forwarding_unlocked(from_obj: c_ptr, to_obj: c_ptr) -> i64:
         global_addr("pcc_gc_backend4_reseed_commit_owner"), 0
     ) != 0:
         return -1
-    if backend != 3 and backend != 4:
+    if backend != 4:
         return -1
     if ptr_is_null(from_obj) != 0 or ptr_is_null(to_obj) != 0:
         return -1
@@ -874,7 +874,7 @@ def pcc_gc_note_relocation_read(obj: c_ptr) -> c_ptr:
     # A pre-config read of 0 is also safe: an install must itself observe 3/4
     # in this same global, so nothing can be forwarded before config runs.
     selected: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if selected != 3 and selected != 4:
+    if selected != 4:
         return obj
     if pcc_gc_object_is_known_stable(obj) != 0:
         if (load_i32(obj, 12) & 2048) == 0:

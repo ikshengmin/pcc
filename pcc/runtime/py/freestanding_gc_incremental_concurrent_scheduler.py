@@ -930,7 +930,8 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
         stopped == 0
         and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
         and (load_i32(global_addr("pcc_gc_backend_selected"), 0) == 1
-             or load_i32(global_addr("pcc_gc_backend_selected"), 0) == 2)
+             or load_i32(global_addr("pcc_gc_backend_selected"), 0) == 2
+             or load_i32(global_addr("pcc_gc_backend_selected"), 0) == 3)
         and (
             cms_worker != 0
             or (load_i32(global_addr("py_gc_enabled"), 0) != 0

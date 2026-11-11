@@ -124,7 +124,7 @@ def pcc_gc_scalar_sweep_begin() -> None:
     pcc_py_gc_minor_graph_lock()
     backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
     if (
-        (backend == 1 or backend == 2)
+        (backend == 1 or backend == 2 or backend == 3)
         and pcc_thread_owns_stopped_world() != 0
         and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
         and atomic_load_i32(global_addr("pcc_gc_backend_frozen"), 0, "acquire") != 0

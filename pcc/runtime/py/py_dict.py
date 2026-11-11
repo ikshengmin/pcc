@@ -191,7 +191,7 @@ def _ptr_is_dict(o) -> bool:
 def _dict_read_prepare_root(slot, value, backend: int):
     store_ptr(slot, 0, value)
     if (
-        (backend == 3 or backend == 4)
+        (backend == 4)
         and ptr_is_null(value) == 0
         and is_tagged_int(value) == 0
     ):
@@ -203,7 +203,7 @@ def _dict_read_prepare_root(slot, value, backend: int):
 
 
 def _dict_read_root_failed(value, backend: int, handle) -> int:
-    if backend != 3 and backend != 4:
+    if backend != 4:
         return 0
     if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
         return 0
@@ -848,7 +848,7 @@ def _rehash(d, new_capacity: int) -> int:
     owner_slot = stack_alloc(8)
     store_ptr(owner_slot, 0, d)
     owner_handle = null()
-    if initial_backend == 3 or initial_backend == 4:
+    if initial_backend == 4:
         owner_handle = pcc_gc_scheduler_root_register_handle(owner_slot)
         if ptr_is_null(owner_handle) != 0:
             return -1

@@ -132,7 +132,7 @@ def pcc_gc_cms_worker_main_py(arg):
         enabled: i64 = load_i32(global_addr("py_gc_enabled"), 0)
         if threshold0 <= 0:
             enabled = 0
-        if enabled == 0 or marking == 0 or (backend != 1 and backend != 2):
+        if enabled == 0 or marking == 0 or (backend != 1 and backend != 2 and backend != 3):
             # Pausing automatic work must not leave every compiled poll on
             # the slow path. No credit/token is removed: a resumed healthy
             # CMS slice requests publication again if its queue is empty.

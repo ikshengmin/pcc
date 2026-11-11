@@ -92,7 +92,7 @@ pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 def pcc_gc_deferred_free_begin(prior_held: i64) -> i64:
     backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
     if (
-        (backend != 1 and backend != 2)
+        (backend != 1 and backend != 2 and backend != 3)
         or load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0
         or prior_held != 0
         or pcc_thread_owns_stopped_world() == 0
@@ -128,7 +128,7 @@ def pcc_gc_deferred_free_try_enqueue(obj, flags: i64) -> i64:
     if (flags & _EXCLUDED) != 0:
         return 0
     backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if (backend != 1 and backend != 2) or pcc_thread_owns_stopped_world() == 0:
+    if (backend != 1 and backend != 2 and backend != 3) or pcc_thread_owns_stopped_world() == 0:
         return 0
     if pcc_capi_is_cext_type_tag(load_i32(obj, 8)) != 0:
         return 0

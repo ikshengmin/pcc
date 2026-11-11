@@ -1340,7 +1340,7 @@ def _attr_res_store_dict_only(cls, name, epoch: int) -> None:
 def _attr_res_method_cacheable() -> int:
     # Methods are cached by address; the forwarding collectors can move them.
     backend: int = pcc_gc_backend()
-    if backend == 3 or backend == 4:
+    if backend == 4:
         return 0
     return 1
 
@@ -2791,7 +2791,6 @@ def py_instance_get_field(inst, idx: int):
     # checks -- provenance probe included -- without calling them.
     if (
         load_i32(global_addr("pcc_gc_read_barrier_enabled"), 0) == 0
-        and load_i32(global_addr("pcc_gc_backend_selected"), 0) != 3
         and load_i32(global_addr("pcc_gc_backend_selected"), 0) != 4
     ):
         if ptr_is_null(inst) != 0 or is_tagged_int(inst) != 0:
@@ -2845,7 +2844,7 @@ def _instance_prepare_moving_root(slot, handle_slot) -> int:
     if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
         return 0
     backend: int = pcc_gc_backend()
-    if backend != 3 and backend != 4:
+    if backend != 4:
         return 0
     handle = pcc_gc_scheduler_root_register_handle(slot)
     if ptr_is_null(handle) != 0:
@@ -2931,7 +2930,7 @@ def _instance_field_load(inst, offset: int, out) -> int:
         return -1
     result_handle = null()
     backend: int = pcc_gc_backend()
-    if (backend == 3 or backend == 4) and pcc_gc_stack_slot_root_is_conservative(out) == 0:
+    if (backend == 4) and pcc_gc_stack_slot_root_is_conservative(out) == 0:
         # Register the empty result root before the transaction stores into
         # it. A count-free collector's conservative stack scan already roots
         # a stack ``out`` and keeps its object in place.
@@ -6027,7 +6026,7 @@ def py_instance_dealloc(o) -> None:
         py_gc_track(o)
         backend: int = _gc_backend_selected_fast()
         metadata_valid: int = 1
-        if backend == 3 or backend == 4:
+        if backend == 4:
             if pcc_gc_pointer_is_managed(o) == 0:
                 metadata_valid = 0
             elif ptr_is_null(pcc_gc_object_index_find(o)) != 0:

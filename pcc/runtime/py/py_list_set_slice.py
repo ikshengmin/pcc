@@ -169,7 +169,7 @@ def _prepare_moving_root(slot, handle_slot) -> int:
     if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
         return 0
     backend: int = pcc_gc_backend()
-    if backend != 3 and backend != 4:
+    if backend != 4:
         return 0
     handle = pcc_gc_scheduler_root_register_handle(slot)
     if ptr_is_null(handle) != 0:

@@ -162,7 +162,7 @@ def pcc_gc_mark_canonical_root_gray_with_node(obj, node) -> None:
 def _pin_owner_chain(node, mark: i64) -> None:
     owner = load_ptr(node, 0)
     backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if ((backend != 3 and backend != 4)
+    if ((backend != 4)
             or load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0):
         if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
             store_i64(node, 56, load_i64(node, 56) | 1)

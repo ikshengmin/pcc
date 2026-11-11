@@ -150,9 +150,10 @@ def pcc_gc_step(budget: i64) -> i64:
         and load_i32(global_addr("pcc_gc_backend4_remap_active"), 0) != 0
     ):
         return 0
-    if backend == 1 or backend == 2:
+    if backend == 1 or backend == 2 or backend == 3:
+        # GC3 copies and remaps nothing: its step is the shared mark step.
         return pcc_gc_incremental_concurrent_step(budget)
-    # GC3 and GC4 steps copy, remap and retire objects only when every other
+    # GC4 steps copy, remap and retire objects only when every other
     # mutator is parked at an application gate, which
     # pcc_thread_all_stopped_at_gates answers for a stopped world. Explicit
     # collects and the automatic GC4 step stop the world before stepping; a
@@ -161,7 +162,7 @@ def pcc_gc_step(budget: i64) -> i64:
     # timing. Stop the world for such a call, as
     # pcc_gc_backend4_remap_and_retire_stopped_world does.
     acquired_world: i64 = 0
-    if (backend == 3 or backend == 4) and pcc_thread_owns_stopped_world() == 0:
+    if (backend == 4) and pcc_thread_owns_stopped_world() == 0:
         if pcc_stop_the_world() != 0:
             return 0
         acquired_world = 1
@@ -514,7 +515,7 @@ def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
 
     if is_tagged_int(owner) != 0:
         return
-    if backend == 1 or backend == 2:
+    if backend == 1 or backend == 2 or backend == 3:
         if pcc_container_lock_held() != 0:
             # Container mode: the store holds the owner's container lock, and
             # the marker scans that owner under the same lock
@@ -565,7 +566,7 @@ def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
             # candidate set, so it reclaimed nothing at all.  Require an active
             # cycle, exactly as the backend-2 arm below already does.
             if (
-                backend == 1
+                (backend == 1 or backend == 3)
                 and load_i32(global_addr("pcc_gc_mark_active"), 0) != 0
                 and (owner_flags & 32) != 0
             ):
@@ -591,7 +592,7 @@ def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
         pcc_py_gc_minor_graph_unlock()
         return
 
-    if backend != 3 and backend != 4:
+    if backend != 4:
         return
     if _ptr_can_have_header(owner) == 0 or _ptr_can_have_header(value) == 0:
         return

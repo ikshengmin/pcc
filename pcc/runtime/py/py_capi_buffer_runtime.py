@@ -509,8 +509,6 @@ def _memoryview_gc3_owned_buffer(obj) -> c_ptr:
 
 
 def _memoryview_owned_buffer(obj) -> c_ptr:
-    if load_i32(global_addr("pcc_gc_backend_selected"), 0) == 3:
-        return _memoryview_gc3_owned_buffer(obj)
     bits: int = atomic_load_i64(
         obj, 24, "acquire"
     )

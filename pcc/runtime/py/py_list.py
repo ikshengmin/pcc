@@ -389,7 +389,7 @@ def _grow_if_needed(l, want: int):
     owner_slot = stack_alloc(8)
     store_ptr(owner_slot, 0, l)
     owner_handle = null()
-    if initial_backend == 3 or initial_backend == 4:
+    if initial_backend == 4:
         owner_handle = pcc_gc_native_root_bind_range(owner_slot, -1)
         if ptr_is_null(owner_handle) != 0:
             return null()
@@ -1075,7 +1075,7 @@ def _list_get_owned_rooted(lst, i: int, raising: int):
     store_ptr(result_slot, 0, null())
     result_handle = null()
     backend: int = pcc_gc_backend()
-    if (backend == 3 or backend == 4) and pcc_gc_stack_slot_root_is_conservative(result_slot) == 0:
+    if (backend == 4) and pcc_gc_stack_slot_root_is_conservative(result_slot) == 0:
         # The relocating collectors bind an empty owning slot before reading
         # the NEW element, so it cannot move before the caller roots it.
         # Binding cannot park; the first object store happens under the
@@ -1174,7 +1174,7 @@ def _native_body_py_list_take_for_gen_frame(_native_inputs, i: int):
     # logging's completed init state excludes its temporary disabled state.
     pcc_py_gc_minor_graph_lock()
     backend: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if ((backend == 3 or backend == 4) and i >= 0
+    if ((backend == 4) and i >= 0
             and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
             and atomic_load_i32(global_addr("pcc_log_init_state"), 0, "acquire") == 2
             and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
@@ -1239,7 +1239,7 @@ def _native_body_py_gen_frame_take_group(_native_inputs, start: int, count: int,
     taken: int = 0
     pcc_py_gc_minor_graph_lock()
     backend: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if ((backend == 3 or backend == 4)
+    if ((backend == 4)
             and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
             and atomic_load_i32(global_addr("pcc_log_init_state"), 0, "acquire") == 2
             and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
@@ -1313,7 +1313,7 @@ def _native_body_py_gen_frame_clear_group(_native_inputs, start: int, count: int
     cleared: int = 0
     pcc_py_gc_minor_graph_lock()
     backend: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if ((backend == 3 or backend == 4)
+    if ((backend == 4)
             and atomic_load_i32(global_addr("pcc_gc_backend_frozen"), 0, "acquire") != 0
             and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
             and atomic_load_i32(global_addr("pcc_log_init_state"), 0, "acquire") == 2
@@ -1527,9 +1527,9 @@ def _native_body_py_list_len(_native_inputs) -> int:
     if ptr_is_null(lst) != 0:
         return 0
     len_backend: int = pcc_gc_backend()
-    if len_backend == 0 or len_backend == 1 or len_backend == 2:
-        # A nonmoving list's length is one word; only GC3/GC4 relocation
-        # needs the rooted reload under the graph lock.
+    if len_backend == 0 or len_backend == 1 or len_backend == 2 or len_backend == 3:
+        # A nonmoving list's length is one word; only GC4 relocation needs
+        # the rooted reload under the graph lock.
         return load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
     list_slot = stack_alloc(8)
     list_handle_slot = stack_alloc(8)
@@ -2408,10 +2408,9 @@ def _native_body_py_list_slice(_native_inputs):
         py_decref(load_ptr(out_slot, 0))
         _finish_moving_root(source_handle_slot)
         return null()
-    # Only the relocating collectors bind this temporary; the nonmoving
-    # count-free GC1/GC2 find it by their conservative stack scans.
-    if (load_i32(global_addr("pcc_gc_backend_selected"), 0) == 3
-            or load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4):
+    # Only the relocating collector binds this temporary; the nonmoving
+    # count-free GC1-GC3 find it by their conservative stack scans.
+    if load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4:
         store_ptr(value_handle_slot, 0, pcc_gc_native_root_bind_range(value_slot, -1))
 
     if step_v > 0:

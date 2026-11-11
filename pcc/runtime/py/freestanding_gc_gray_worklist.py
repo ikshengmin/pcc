@@ -1,4 +1,4 @@
-"""Persistent gray batches for the count-free collectors GC1, GC2 and GC4.
+"""Persistent gray batches for the count-free tracing collectors GC1-GC4.
 
 Successful color transitions append to an owning thread's raw batch. A full
 batch, a safepoint or thread exit publishes it to the shared MPSC list. The
@@ -10,15 +10,15 @@ publication of another running thread's tail instead of searching the object
 list. Paused-automatic explicit steps, stopped drains and a cycle which lost
 a token to allocation failure retain that fallback.
 
+GC3 shares GC1/GC2's mutator and marking protocol, this queue included.
+
 GC4 queues its shades as well. It marks in a stopped world, and its drain
 takes a queued address first and walks the object list only once the queue
 is empty: a root seeded gray used to be found by walking from the list
 head, past every younger object, to wherever the root sat. The walk stays
 the authority for a gray object without a usable token: one the collector
 moved since it was shaded (the token names the old address, which is no
-longer a known object), or one colored without this queue. GC3 marks on the
-collector thread while mutators run and keeps the walk alone: queued there,
-every shade paid for a token and the measured throughput did not move.
+longer a known object), or one colored without this queue.
 """
 
 from pcc import i64
@@ -97,7 +97,7 @@ def pcc_gc_gray_worklist_note(obj) -> None:
     if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0:
         return
     backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if backend != 1 and backend != 2 and backend != 4:
+    if backend < 1 or backend > 4:
         return
     epoch: i64 = atomic_load_i64(
         global_addr("pcc_gc_tracing_cycle_epoch"), 0, "acquire"
@@ -148,7 +148,7 @@ def pcc_gc_gray_worklist_take_locked():
     if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0:
         return null()
     backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if backend != 1 and backend != 2 and backend != 4:
+    if backend < 1 or backend > 4:
         return null()
     epoch: i64 = atomic_load_i64(
         global_addr("pcc_gc_tracing_cycle_epoch"), 0, "acquire"
