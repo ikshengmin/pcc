@@ -31,9 +31,10 @@ PERF = _load()
 WAIT = PERF.LOCK_WAIT
 
 
-def _run(qps, stw=0.0, waits=0, wait_ms=0.0):
+def _run(qps, stw=0.0, waits=0, wait_ms=0.0, cpu=0.0):
     return {"qps": qps, "requests": 10000, "stw_ms": stw, "sweep_ms": 0.0,
-            "lock_waits": waits, "lock_wait_ms": wait_ms, "allocations": 0}
+            "lock_waits": waits, "lock_wait_ms": wait_ms, "allocations": 0,
+            "cpu_us": cpu}
 
 
 def test_pairs_report_medians_change_and_wins():
@@ -48,6 +49,29 @@ def test_pairs_report_medians_change_and_wins():
     assert (row["stw_ms_a"], row["stw_ms_b"]) == (11, 6)
     assert (row["lock_wait_ms_a"], row["lock_wait_ms_b"]) == (2.5, 1.0)
     assert (row["lock_waits_a"], row["lock_waits_b"]) == (5, 2)
+
+
+def test_pairs_report_the_processor_time_of_a_request():
+    first = [_run(100, cpu=30.0), _run(90, cpu=34.0), _run(110, cpu=32.0)]
+    second = [_run(100, cpu=20.0), _run(95, cpu=22.0), _run(105, cpu=24.0)]
+    row = PERF.summarize_pairs(first, second)
+    assert (row["cpu_us_a"], row["cpu_us_b"]) == (32.0, 22.0)
+
+
+def test_a_measured_child_reports_its_own_processor_time():
+    process = PERF.MeasuredPopen(
+        [sys.executable, "-c", "sum(i * i for i in range(300000))"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    process.communicate(timeout=60)
+    assert process.returncode == 0
+    # A fraction of a second of work, and nothing like the parent's total.
+    assert 0.0 < process._pcc_usage < 30.0
+
+
+def test_load_note_says_when_a_rate_cannot_be_trusted(monkeypatch):
+    monkeypatch.setattr(PERF.os, "cpu_count", lambda: 8)
+    assert PERF.load_note(1.5) == "load 1.5 on 8 cores"
+    assert "read the processor time" in PERF.load_note(6.0)
 
 
 def test_counters_named_by_the_tool_are_the_runtime_header_indexes():

@@ -46,6 +46,10 @@ The loop this replaces took ten minutes per question. What makes it short:
 
 A result is a claim only with at least five pairs and an unchanged control
 collector; ``ab`` prints both, and appends every comparison to the ledger.
+Rates are wall-clock and need idle cores: ``ab`` and ``table`` print the
+machine's load, and beside each rate the processor time one request cost,
+which other work on the machine barely moves (it does not see time spent
+waiting for a lock, so it is the cost of the work, not the scaling).
 """
 
 from __future__ import annotations
@@ -368,22 +372,46 @@ def binary_of(name: str, program: str = "native_stats") -> Path:
 
 # ---- runs ----------------------------------------------------------------
 
+def _wait_with_usage(self, *args, **kwargs):
+    """Popen._try_wait replacement that keeps the child's resource usage."""
+    try:
+        pid, status, usage = os.wait4(self.pid, args[0] if args else 0)
+    except ChildProcessError:
+        return self.pid, 0
+    if pid == self.pid:
+        self._pcc_usage = usage.ru_utime + usage.ru_stime
+    return pid, status
+
+
+class MeasuredPopen(subprocess.Popen):
+    _try_wait = _wait_with_usage
+
+
 def run_once(binary: Path, collector: int, workers: int, rounds: int,
              concurrency: int = 100) -> dict:
-    """One handler run: requests per second and the counters it reports."""
-    out = subprocess.run(
+    """One handler run: requests per second, the processor time of one
+    request and the counters it reports."""
+    process = MeasuredPopen(
         [str(binary), str(concurrency), "0", str(rounds), "--summary", str(workers)],
-        capture_output=True, text=True, timeout=600,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         env={"PATH": "/nonexistent", "PCC_GC_BACKEND": str(collector)},
     )
-    if out.returncode != 0:
+    try:
+        stdout, stderr = process.communicate(timeout=600)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.communicate()
+        raise SystemExit(f"{binary} timed out on gc{collector} w{workers}")
+    if process.returncode != 0:
         raise SystemExit(
-            f"{binary} failed on gc{collector} w{workers}: {out.stderr[-400:]}")
-    data = json.loads(out.stdout)
+            f"{binary} failed on gc{collector} w{workers}: {stderr[-400:]}")
+    data = json.loads(stdout)
     counters = {int(key): value for key, value in data.get("gc", {}).items()}
+    executed = data["requests"] + data.get("warmup_requests", 0)
     return {
         "qps": data["requests"] / (data["finished_at"] - data["started_at"]),
         "requests": data["requests"],
+        "cpu_us": 1e6 * getattr(process, "_pcc_usage", 0.0) / executed,
         "stw_ms": counters.get(STW_SUM_US, 0) / 1000.0,
         "sweep_ms": sum(counters.get(index, 0) for index in SWEEP_PHASE_US) / 1000.0,
         "lock_waits": sum(counters.get(index, 0) for index in LOCK_WAIT_COUNT),
@@ -403,6 +431,7 @@ def summarize_pairs(first: list[dict], second: list[dict]) -> dict:
         "qps_a": qps_a, "qps_b": qps_b,
         "change_percent": 100.0 * (qps_b / qps_a - 1.0) if qps_a else 0.0,
         "wins": sum(1 for a, b in zip(first, second) if b["qps"] > a["qps"]),
+        "cpu_us_a": median(first, "cpu_us"), "cpu_us_b": median(second, "cpu_us"),
         "stw_ms_a": median(first, "stw_ms"), "stw_ms_b": median(second, "stw_ms"),
         "lock_wait_ms_a": median(first, "lock_wait_ms"),
         "lock_wait_ms_b": median(second, "lock_wait_ms"),
@@ -429,16 +458,29 @@ def compare(a: str, b: str, pairs: int, collectors, workers, rounds: int) -> lis
             row = summarize_pairs(
                 runs[(collector, count, a)], runs[(collector, count, b)])
             row.update({"gc": collector, "workers": count, "a": a, "b": b,
-                        "requests": rounds * 100, "time": time.time()})
+                        "requests": rounds * 100, "time": time.time(),
+                        "load": os.getloadavg()[0]})
             results.append(row)
     return results
 
 
+def load_note(load: float) -> str:
+    """What the machine's one-minute load says about a wall-clock rate."""
+    cores = os.cpu_count() or 1
+    if load + max(WORKERS) <= cores:
+        return f"load {load:.1f} on {cores} cores"
+    return (f"load {load:.1f} on {cores} cores: other work is using them, "
+            f"read the processor time, not the rate")
+
+
 def print_comparison(rows: list[dict]) -> None:
+    if rows and "load" in rows[0]:
+        print(load_note(max(row["load"] for row in rows)))
     for row in rows:
         print(
             f"gc{row['gc']} w{row['workers']}  {row['qps_a']:8.0f} -> {row['qps_b']:8.0f} "
             f"({row['change_percent']:+6.1f}%, {row['wins']}/{row['pairs']} pairs)  "
+            f"cpu {row['cpu_us_a']:6.1f} -> {row['cpu_us_b']:6.1f} us  "
             f"stopped {row['stw_ms_a']:5.0f} -> {row['stw_ms_b']:5.0f} ms  "
             f"lock wait {row['lock_wait_ms_a']:6.0f} -> {row['lock_wait_ms_b']:6.0f} ms "
             f"({row['lock_waits_a']:.0f} -> {row['lock_waits_b']:.0f})",
@@ -483,8 +525,9 @@ def print_table(name: str, rounds: int, repeats: int) -> None:
     if recorded.is_file():
         asyncio_rate = json.loads(recorded.read_text())["qps"]
     base = {}
+    print(load_note(os.getloadavg()[0]))
     print(f"{'':6s} {'req/s':>9s} {'of GC0':>7s} {'of asyncio':>10s} "
-          f"{'stopped ms':>10s} {'lock wait ms':>12s}")
+          f"{'cpu us':>7s} {'stopped ms':>10s} {'lock wait ms':>12s}")
     for collector in COLLECTORS:
         rates = {}
         for count in WORKERS:
@@ -496,6 +539,7 @@ def print_table(name: str, rounds: int, repeats: int) -> None:
             against = f"{100 * rate / asyncio_rate:9.0f}%" if asyncio_rate else "         -"
             print(
                 f"gc{collector} w{count} {rate:9.0f} {100 * rate / base[count]:6.0f}% {against} "
+                f"{statistics.median(run['cpu_us'] for run in runs):7.1f} "
                 f"{statistics.median(run['stw_ms'] for run in runs):10.0f} "
                 f"{statistics.median(run['lock_wait_ms'] for run in runs):12.0f}",
                 flush=True,
