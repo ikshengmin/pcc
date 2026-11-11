@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -21,6 +22,7 @@ WORKER_MANIFEST_V2 = "pcc.frontends.python.codegen_worker.v2"
 WORKER_MANIFEST_V3 = "pcc.frontends.python.codegen_worker.v3"
 WORKER_MANIFEST_V4 = "pcc.frontends.python.codegen_worker.v4"
 WORKER_MANIFEST_V5 = "pcc.frontends.python.codegen_worker.v5"
+WORKER_MANIFEST_V6 = "pcc.frontends.python.codegen_worker.v6"
 
 # Export batches retain all lifted ASTs until publication. Keep their size
 # independent of the number of active processes. Codegen is one module per
@@ -610,7 +612,19 @@ def write_worker_manifest(
     checkpoint_build_digest: str = "",
     checkpoint_graph_digest: str = "",
     checkpoint_skip_indices=(),
+    closed_young_proof=None,
 ) -> None:
+    closed_young_transport = None
+    if closed_young_proof is not None:
+        if checkpoint_root or job_kind != "codegen":
+            raise FrontendWorkerContractError("closed young proof requires ordinary codegen")
+        from pcc.frontends.python.closed_young_closure import prepare_closed_young_transport
+
+        closed_young_transport, denial = prepare_closed_young_transport(
+            exports_path, ast_dir, assigned_indices,
+        )
+        if denial:
+            raise FrontendWorkerContractError("closed young transport denied: " + denial)
     if checkpoint_root:
         _validate_checkpoint_manifest(
             checkpoint_root,
@@ -623,7 +637,8 @@ def write_worker_manifest(
         )
     with open(path, "w", encoding="utf-8") as stream:
         stream.write(
-            (WORKER_MANIFEST_V5 if checkpoint_root else WORKER_MANIFEST_V4)
+            (WORKER_MANIFEST_V6 if closed_young_proof is not None else
+             WORKER_MANIFEST_V5 if checkpoint_root else WORKER_MANIFEST_V4)
             + "\n"
         )
         stream.write(result_path + "\n")
@@ -659,6 +674,9 @@ def write_worker_manifest(
             stream.write(str(len(checkpoint_skip_indices)) + "\n")
             for index in checkpoint_skip_indices:
                 stream.write(str(index) + "\n")
+        if closed_young_proof is not None:
+            stream.write(json.dumps(closed_young_proof, sort_keys=True, separators=(",", ":")) + "\n")
+            stream.write(json.dumps(closed_young_transport, sort_keys=True, separators=(",", ":")) + "\n")
 
 
 def _validate_checkpoint_manifest(
@@ -701,6 +719,7 @@ def read_worker_manifest(path: str):
         WORKER_MANIFEST_V3,
         WORKER_MANIFEST_V4,
         WORKER_MANIFEST_V5,
+        WORKER_MANIFEST_V6,
     ):
         raise FrontendWorkerContractError(
             "invalid frontend codegen worker manifest"
@@ -723,7 +742,7 @@ def read_worker_manifest(path: str):
             position += 1
             job_kind = lines[position]
             position += 1
-        if version in (WORKER_MANIFEST_V4, WORKER_MANIFEST_V5):
+        if version in (WORKER_MANIFEST_V4, WORKER_MANIFEST_V5, WORKER_MANIFEST_V6):
             exports_path = lines[position]
             position += 1
             job_kind = lines[position]
@@ -755,7 +774,7 @@ def read_worker_manifest(path: str):
                 raise FrontendWorkerContractError(
                     "invalid frontend worker module entry"
                 )
-            if version == WORKER_MANIFEST_V5 and parts[0] != str(index):
+            if version in (WORKER_MANIFEST_V5, WORKER_MANIFEST_V6) and parts[0] != str(index):
                 raise FrontendWorkerContractError("invalid Stage1 checkpoint module ordinal")
             src_paths.append(parts[2])
             module_names.append(parts[1])
@@ -769,6 +788,15 @@ def read_worker_manifest(path: str):
             assigned_indices.append(int(lines[position]))
             position += 1
             index += 1
+        closed_young_proof = None
+        closed_young_transport = None
+        if version == WORKER_MANIFEST_V6:
+            closed_young_proof = json.loads(lines[position])
+            closed_young_transport = json.loads(lines[position + 1])
+            position += 2
+            if (not isinstance(closed_young_proof, dict)
+                    or not isinstance(closed_young_transport, dict) or job_kind != "codegen"):
+                raise ValueError("invalid closed young proof record")
         checkpoint_root = ""
         checkpoint_build_digest = ""
         checkpoint_graph_digest = ""
@@ -804,7 +832,7 @@ def read_worker_manifest(path: str):
         raise FrontendWorkerContractError(
             "frontend codegen worker manifest has trailing records"
         )
-    return {
+    result = {
         "result_path": result_path,
         "ir_dir": ir_dir,
         "exports_path": exports_path,
@@ -822,6 +850,10 @@ def read_worker_manifest(path: str):
         "checkpoint_graph_digest": checkpoint_graph_digest,
         "checkpoint_skip_indices": checkpoint_skip_indices,
     }
+    if closed_young_proof is not None:
+        result["closed_young_proof"] = closed_young_proof
+        result["closed_young_transport"] = closed_young_transport
+    return result
 
 
 def write_worker_error(result_path: str, message: str) -> None:

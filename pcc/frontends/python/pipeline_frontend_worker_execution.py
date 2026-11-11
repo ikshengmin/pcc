@@ -455,6 +455,19 @@ def run_codegen_worker(
         ir_scaffold_mode = str(manifest["ir_scaffold_mode"])
         verbose = bool(manifest["verbose"])
         assigned_indices = manifest["assigned_indices"]
+        closed_young_proof = manifest.get("closed_young_proof")
+        if closed_young_proof is not None:
+            from pcc.frontends.python.closed_young_closure import (
+                validate_closed_young_closure,
+                closed_young_untyped_module_denial,
+                closed_young_typed_module_denial,
+            )
+
+            denial = validate_closed_young_closure(
+                closed_young_proof, src_paths, module_names, entry_module,
+            )
+            if denial:
+                raise _worker_failure("closed young source closure changed: " + denial)
         indexed_sidecar_requested = str(
             os.environ.get("PCC_DIRECT_INDEXED_SIDECAR", "") or ""
         ).strip().lower() in ("1", "true", "yes", "on")
@@ -469,6 +482,44 @@ def run_codegen_worker(
         ir_dir = str(manifest["ir_dir"])
         exports_path = str(manifest.get("exports_path", "") or "")
         ast_dir = str(manifest.get("ast_dir", "") or "")
+        if closed_young_proof is not None:
+            from pcc.frontends.python.closed_young_closure import load_closed_young_transport
+            from pcc.frontends.python.pipeline_exports import (
+                _decode_native_exports_wire,
+                _decode_native_exports_wire_for_module,
+            )
+            from pcc.frontends.python.pipeline_ast_wire import _decode_py_ast_wire
+
+            snapshots, denial = load_closed_young_transport(
+                manifest.get("closed_young_transport"), exports_path, ast_dir, assigned_indices,
+            )
+            if denial:
+                raise _worker_failure("closed young transport changed: " + denial)
+            export_snapshot, ast_snapshots = snapshots
+            ast_by_path = {
+                os.path.realpath(os.path.join(ast_dir, "module_" + str(index) + ".json")): text
+                for index, text in ast_snapshots.items()
+            }
+
+            # Decode exactly the bytes whose producer/consumer identities
+            # matched. A hash followed by a second filesystem read is not a
+            # safe input boundary, even with a later check of the same path.
+            def read_verified_exports(path):
+                if os.path.realpath(path) != os.path.realpath(exports_path):
+                    raise _worker_failure("closed young export path changed")
+                return _decode_native_exports_wire(export_snapshot)
+
+            def read_verified_module_exports(path, module_name):
+                if os.path.realpath(path) != os.path.realpath(exports_path):
+                    raise _worker_failure("closed young export path changed")
+                return _decode_native_exports_wire_for_module(export_snapshot, module_name)
+
+            def read_verified_ast(path):
+                return _decode_py_ast_wire(ast_by_path[os.path.realpath(path)], path)
+
+            read_native_exports_wire = read_verified_exports
+            read_native_exports_wire_for_module = read_verified_module_exports
+            read_ast_wire = read_verified_ast
         worker_timing = worker_timing_enabled()
         checkpoint_root = str(manifest.get("checkpoint_root", "") or "")
         checkpoint_graph = None
@@ -605,6 +656,12 @@ def run_codegen_worker(
                     + "\n"
                 )
             ast_module = parsed_modules[index]
+            if closed_young_proof is not None:
+                denial = closed_young_untyped_module_denial(
+                    closed_young_proof, ast_module, src_paths[index],
+                )
+                if denial:
+                    raise _worker_failure("closed young untyped module changed: " + denial)
             publish_worker_resource("ast:" + str(index))
             needs_native_extension_exports = module_imports_native_extension(
                 ast_module,
@@ -665,6 +722,15 @@ def run_codegen_worker(
                 codegen._module_source_path = os.path.abspath(src_paths[index])
                 codegen._skip_program_main = module_name != entry_module
                 codegen._sibling_module_inits = sibling_inits
+                if closed_young_proof is not None:
+                    denial = closed_young_typed_module_denial(
+                        closed_young_proof, typed_module, src_paths[index],
+                    )
+                    if denial:
+                        raise _worker_failure("closed young typed module changed: " + denial)
+                    codegen._closed_young_closure = closed_young_proof
+                    if module_name == entry_module:
+                        codegen._closed_young_domain_input = typed_module
                 if module_uses_default_native_exports(module_name):
                     codegen_exports = copy_native_module_exports(
                         codegen._native_module_exports

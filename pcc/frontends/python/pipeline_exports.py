@@ -1859,6 +1859,12 @@ def _read_native_exports_wire_for_module(path: str, module_name: str):
 
     with open(path, "r", encoding="utf-8") as stream:
         text = stream.read()
+    return _decode_native_exports_wire_for_module(text, module_name)
+
+
+def _decode_native_exports_wire_for_module(text: str, module_name: str):
+    """Decode one module's export view from an already verified byte snapshot."""
+
     if text.startswith(_NATIVE_EXPORT_INDEXED_SCHEMA + "\n"):
         native_exports, derived_class_map, _uses, unique_class_preload = (
             _read_indexed_native_exports_wire(text, module_name)

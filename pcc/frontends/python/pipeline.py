@@ -73,6 +73,7 @@ from pcc.frontends.python import module_action_dag as _module_action_dag
 from pcc.frontends.python.closed_young_domain import (
     closed_young_module_denial,
     closed_young_request_denial,
+    closed_young_terminal_request_denial,
 )
 
 _bootstrap_append_install_prefix_candidates = (
@@ -3024,6 +3025,7 @@ def _write_python_frontend_worker_manifest(
     checkpoint_build_digest: str = "",
     checkpoint_graph_digest: str = "",
     checkpoint_skip_indices=(),
+    closed_young_proof=None,
 ) -> None:
     _pipeline_frontend_workers.write_worker_manifest(
         path,
@@ -3043,6 +3045,7 @@ def _write_python_frontend_worker_manifest(
         checkpoint_build_digest=checkpoint_build_digest,
         checkpoint_graph_digest=checkpoint_graph_digest,
         checkpoint_skip_indices=checkpoint_skip_indices,
+        closed_young_proof=closed_young_proof,
     )
 
 
@@ -3358,6 +3361,7 @@ def _compile_python_multi_codegen_parallel(
     profile: Optional[dict] = None,
     artifact_dir: str = "",
     coordinator_timing=None,
+    closed_young_proof=None,
 ) -> Optional[
     tuple[
         list[tuple[str, str]],
@@ -3379,6 +3383,7 @@ def _compile_python_multi_codegen_parallel(
             verbose=verbose,
             profile=profile,
             artifact_dir=artifact_dir,
+            closed_young_proof=closed_young_proof,
             can_spawn_worker=_can_spawn_python_frontend_worker,
             worker_command_prefix=_python_frontend_worker_command_prefix,
             compile_uncached=_compile_python_multi_codegen_parallel_uncached,
@@ -3405,6 +3410,7 @@ def _compile_python_multi_codegen_parallel(
             verbose=verbose,
             profile=profile,
             artifact_dir=artifact_dir,
+            closed_young_proof=closed_young_proof,
             can_spawn_worker=_can_spawn_python_frontend_worker,
             worker_command_prefix=_python_frontend_worker_command_prefix,
             compile_uncached=_compile_python_multi_codegen_parallel_uncached,
@@ -3542,6 +3548,7 @@ def _compile_python_multi_codegen_parallel_uncached(
     action_cache_plan=None,
     artifact_dir: str = "",
     coordinator_timing=None,
+    closed_young_proof=None,
 ) -> Optional[
     tuple[
         list[tuple[str, str]],
@@ -3574,6 +3581,7 @@ def _compile_python_multi_codegen_parallel_uncached(
             profile=profile,
             action_cache_plan=action_cache_plan,
             artifact_dir=artifact_dir,
+            closed_young_proof=closed_young_proof,
             can_spawn_worker=_can_spawn_python_frontend_worker,
             worker_command_prefix=_python_frontend_worker_command_prefix,
             chunk_count_for_workers=_python_frontend_codegen_chunk_count,
@@ -3611,6 +3619,7 @@ def _compile_python_multi_codegen_parallel_uncached(
             profile=profile,
             action_cache_plan=action_cache_plan,
             artifact_dir=artifact_dir,
+            closed_young_proof=closed_young_proof,
             can_spawn_worker=_can_spawn_python_frontend_worker,
             worker_command_prefix=_python_frontend_worker_command_prefix,
             chunk_count_for_workers=_python_frontend_codegen_chunk_count,
@@ -3771,10 +3780,6 @@ def compile_python_multi(
         raise PyPipelineError("compile_python_multi requires at least one source file")
     total_start = _profile_begin(profile)
     _profile_counter(profile, "multi_input_files", len(src_paths))
-    # No source-local permission may cross worker/cache or sibling boundaries.
-    # This route needs a closure-wide proof token before it may opt in.
-    _profile_counter(profile, "gc3_closed_young_domain_admitted", 0)
-    _log(verbose, "GC3 closed young domain denied: multi-source/worker route is unverified")
     ir_scaffold_mode = _resolve_ir_scaffold_mode(ir_scaffold_mode)
     src_paths = list(src_paths)
     if module_names is None:
@@ -3828,6 +3833,35 @@ def compile_python_multi(
         raise PyPipelineError(
             f"entry_module {entry_module!r} not among module_names " f"{module_names!r}"
         )
+    from pcc.frontends.python.closed_young_closure import (
+        prepare_closed_young_closure,
+        validate_closed_young_closure,
+        closed_young_untyped_module_denial,
+        closed_young_typed_module_denial,
+    )
+
+    closed_young_proof = None
+    closed_young_denial = closed_young_terminal_request_denial(
+        emit_llvm_only, False, _normalize_native_backend_name(backend), "none",
+        runtime_archive, object_inputs, link_args, os.environ,
+        target_triple or _pipeline_targets.host_target_triple(),
+    )
+    if not closed_young_denial:
+        for override in (
+            "PCC_STAGE1_CHECKPOINT_DIR", "PCC_DEFER_FRONTEND_CODEGEN_PLAN",
+            "PCC_INDEXED_HANDOFF_REQUEST", "PCC_DIRECT_INDEXED_SIDECAR",
+            "PCC_HOST_INDEXED_PROCESS_SPLIT",
+        ):
+            if str(os.environ.get(override, "") or "").strip():
+                closed_young_denial = "unverified artifact override: " + override
+                break
+    if not closed_young_denial:
+        closed_young_proof, closed_young_denial = prepare_closed_young_closure(
+            src_paths, module_names, entry_module,
+        )
+    _profile_counter(profile, "gc3_closed_young_domain_admitted", int(closed_young_proof is not None))
+    if closed_young_denial:
+        _log(verbose, "GC3 closed young domain denied: " + closed_young_denial)
     # Sibling modules whose top-level code the entry must run before
     # its own body. Use dependency order instead of caller order so a
     # child module never initializes before its imported base module.
@@ -3896,6 +3930,7 @@ def compile_python_multi(
                     verbose=verbose,
                     profile=profile,
                     artifact_dir=direct_native_object_dir,
+                    closed_young_proof=closed_young_proof,
                 )
             else:
                 parallel_codegen_result = _compile_python_multi_codegen_parallel(
@@ -3908,6 +3943,7 @@ def compile_python_multi(
                     verbose=verbose,
                     profile=profile,
                     artifact_dir=direct_native_object_dir,
+                    closed_young_proof=closed_young_proof,
                     coordinator_timing=coordinator_timing,
                 )
         except Exception:
@@ -3988,6 +4024,12 @@ def compile_python_multi(
                     source = f.read()
                 ast_mod = _parse_and_lift(source, src, mod_name)
                 _profile_end(profile, "multi_parse_and_lift", t, mod_name)
+            if closed_young_proof is not None:
+                denial = closed_young_untyped_module_denial(
+                    closed_young_proof, ast_mod, src,
+                )
+                if denial:
+                    raise PyPipelineError("closed young untyped module changed: " + denial)
             if _module_imports_pcc_native_extension(
                 ast_mod,
                 native_modules=module_names,
@@ -4042,6 +4084,15 @@ def compile_python_multi(
                 codegen._skip_program_main = not is_entry
                 prep_step = "sibling_module_inits"
                 codegen._sibling_module_inits = sibling_inits
+                if closed_young_proof is not None:
+                    denial = closed_young_typed_module_denial(
+                        closed_young_proof, typed_mod, src,
+                    )
+                    if denial:
+                        raise PyPipelineError("closed young typed module changed: " + denial)
+                    codegen._closed_young_closure = closed_young_proof
+                    if is_entry:
+                        codegen._closed_young_domain_input = typed_mod
                 # Preserve the baseline native export registry and add cross-module
                 # exports from other files, excluding this module to avoid
                 # sibling self-reference during multi-file inference/linking.
@@ -4092,6 +4143,13 @@ def compile_python_multi(
             )
             total_ir_bytes_before_passes += len(ir_text)
             module_ir_texts.append((mod_name, ir_text))
+    if closed_young_proof is not None:
+        denial = validate_closed_young_closure(
+            closed_young_proof, src_paths, module_names, entry_module,
+        )
+        if denial:
+            _remove_direct_native_object_dir(direct_native_object_dir)
+            raise PyPipelineError("closed young source closure changed before link: " + denial)
     if module_direct_artifacts is None and module_native_object_paths is None:
         _remove_direct_native_object_dir(direct_native_object_dir)
         direct_native_object_dir = ""

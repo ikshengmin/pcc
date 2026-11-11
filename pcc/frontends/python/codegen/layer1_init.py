@@ -61,6 +61,8 @@ class Layer1InitMixin:
         # Standalone codegen, workers, libraries and imported modules default
         # to the existing promotion-only young path.
         self._closed_young_domain_input: Optional[Module] = None
+        self._closed_young_closure = None
+        self._closed_young_imports_proved = False
         self._closed_young_domain_enabled = False
         if ir_scaffold_mode not in ("off", "on"):
             raise ValueError(

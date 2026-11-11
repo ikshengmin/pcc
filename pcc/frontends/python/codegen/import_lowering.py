@@ -567,6 +567,11 @@ class ImportLoweringMixin:
         local_name: str,
         extension_path: str,
     ) -> None:
+        if self._closed_young_imports_proved:
+            # Source and extension providers can change between filesystem
+            # proof and lowering. Never publish an enabled main alongside a
+            # foreign provider selected inside any certified sibling.
+            raise RuntimeError("closed young source proof selected a native extension")
         mod_ptr = self._ptr_to_cstr(
             self._cstr_global(module_name, f".pcc.ext.mod.{module_name}")
         )
@@ -640,6 +645,11 @@ class ImportLoweringMixin:
         names: list[tuple[str, Optional[str]]],
         span=None,
     ) -> None:
+        if self._closed_young_imports_proved:
+            # Source and extension providers can change between filesystem
+            # proof and lowering. Never publish an enabled main alongside a
+            # foreign provider selected inside any certified sibling.
+            raise RuntimeError("closed young source proof selected a native extension")
         mod_ptr = self._ptr_to_cstr(
             self._cstr_global(module_name, f".pcc.ext.from.mod.{module_name}")
         )

@@ -944,7 +944,14 @@ def _write_py_ast_wire(path: str, ast_mod) -> None:
 
 def _read_py_ast_wire(path: str):
     with open(path, "r", encoding="utf-8") as f:
-        payload = json.loads(f.read())
+        text = f.read()
+    return _decode_py_ast_wire(text, path)
+
+
+def _decode_py_ast_wire(text: str, path: str = ""):
+    """Decode an AST snapshot without reopening an identity-checked file."""
+
+    payload = json.loads(text)
     schema = payload.get("schema") if isinstance(payload, dict) else None
     if schema != _PY_AST_WIRE_SCHEMA:
         raise PyPipelineError(

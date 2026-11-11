@@ -263,13 +263,8 @@ def test_terminal_driver_resolves_unspecified_target(tmp_path, monkeypatch, host
     )
 
 
-def test_multi_source_worker_routes_have_no_proof_issuer():
-    from pathlib import Path
-    from pcc.frontends.python import pipeline
-    from pcc.frontends.python import pipeline_frontend_worker_execution
-
-    text = Path(pipeline.__file__).read_text()
-    multi = text[text.index("def compile_python_multi("):]
-    assert "_closed_young_domain_input =" not in multi
-    worker = Path(pipeline_frontend_worker_execution.__file__).read_text()
-    assert "_closed_young_domain_input =" not in worker
+def test_multi_source_codegen_needs_more_than_a_local_ast_proof():
+    host, module = _codegen(proof=True)
+    host._sibling_module_inits = ("unproved_dependency",)
+    assert host._closed_young_closure is None
+    assert not _enable_calls(host.generate(module))

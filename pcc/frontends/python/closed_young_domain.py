@@ -1,14 +1,14 @@
 """Fail-closed admission for the first independent GC3 young collection.
 
-This is deliberately not a general closed-world import proof.  Only the
-single-source, import-free executable route can currently issue admission.
-Workers, reusable IR, custom link inputs and imported source closures remain
-denied until their provenance is carried through the whole build/cache route.
+This is deliberately not a general closed-world import proof. Imports require
+an explicit source closure whose provenance survives the build/cache route.
+An import-free caller retains the original single-source admission behavior.
 Denial changes no Python semantics: the existing promotion/major paths remain.
 """
 
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 from pcc.backend.self_backend_target_match import (
@@ -75,10 +75,82 @@ _PLAIN_DUNDER_NAMES = frozenset((
 ))
 
 
-def closed_young_module_denial(module) -> str:
+def _closed_young_raw_namespace(name: str) -> bool:
+    return (name == "pcc" or name.startswith("pcc.")
+            or name == "bootstrap" or name.startswith("bootstrap."))
+
+
+def _closed_young_module_name(name) -> bool:
+    return (isinstance(name, str) and bool(name)
+            and all(part.isidentifier() for part in name.split(".")))
+
+
+def _closed_young_import_provider(node, module_name, module_path):
+    """Resolve a from-import without the normal compiler's permissive fallback."""
+    provider = node.module
+    level = node.level
+    if not isinstance(provider, str) or type(level) is not int or level < 0:
+        return "", "malformed import provider"
+    if level:
+        if not module_path or not _closed_young_module_name(module_name):
+            return "", "relative import requires an actual source identity"
+        parts = module_name.split(".")
+        package = parts if os.path.basename(module_path) == "__init__.py" else parts[:-1]
+        # level == len(package) is the outermost legal package. Removing all
+        # package components must not turn an invalid relative import absolute.
+        if level > len(package):
+            return "", "relative import escapes its source package"
+        base = package[:len(package) - level + 1]
+        provider = ".".join(base + ([provider] if provider else []))
+    if not _closed_young_module_name(provider):
+        return "", "unresolved import provider"
+    return provider, ""
+
+
+def _closed_young_import_denial(node, module_name, module_path, closure_modules):
+    if not closure_modules:
+        return "imports require a complete dependency-closure proof"
+    kind = type(node).__name__.lstrip("_")
+    providers = []
+    if kind == "ImportFrom":
+        provider, reason = _closed_young_import_provider(node, module_name, module_path)
+        if reason:
+            return reason
+        providers.append(provider)
+    if not isinstance(node.names, (tuple, list)) or not node.names:
+        return "malformed import bindings"
+    for binding in node.names:
+        if not isinstance(binding, (tuple, list)) or len(binding) != 2:
+            return "malformed import binding"
+        imported, alias = binding
+        if imported == "*":
+            return "star import has no exact provider proof"
+        if not _closed_young_module_name(imported):
+            return "unresolved import binding"
+        if alias is not None and (not isinstance(alias, str) or not alias.isidentifier()):
+            return "malformed import alias"
+        if kind == "Import":
+            providers.append(imported)
+        elif "." in imported:
+            return "malformed from-import binding"
+        elif imported.startswith("__") or imported in _OPEN_DOMAIN_NAMES:
+            return "dynamic or foreign import binding: " + imported
+    for provider in providers:
+        if _closed_young_raw_namespace(provider):
+            return "raw compiler/runtime import namespace: " + provider
+        # Importing pkg.child also executes pkg. Every prefix is a provider.
+        parts = provider.split(".")
+        for count in range(1, len(parts) + 1):
+            prefix = ".".join(parts[:count])
+            if prefix not in closure_modules:
+                return "import provider outside source closure: " + prefix
+    return ""
+
+
+def closed_young_module_denial(module, *, closure_modules=(), module_path="") -> str:
     """Return an empty string only for the admitted source capability set."""
     name = module.name or ""
-    if name == "pcc" or name.startswith("pcc.") or name == "bootstrap" or name.startswith("bootstrap."):
+    if _closed_young_raw_namespace(name):
         return "raw compiler/runtime module namespace"
     work = [module]
     index = 0
@@ -94,7 +166,10 @@ def closed_young_module_denial(module) -> str:
         if kind.startswith("_"):
             kind = kind[1:]
         if kind in ("Import", "ImportFrom"):
-            return "imports require a complete dependency-closure proof"
+            reason = _closed_young_import_denial(node, name, module_path, closure_modules)
+            if reason:
+                return reason
+            continue
         fields = _SYNTAX_CHILD_FIELDS.get(kind)
         if fields is None:
             return "unverified syntax: " + kind
@@ -144,6 +219,24 @@ def closed_young_request_denial(
     """Prove the terminal link request, independently of its source AST."""
     if source_count != 1:
         return "multiple sources require a dependency-closure proof"
+    return closed_young_terminal_request_denial(
+        emit_llvm_only, python_library, backend, gpu_backend, runtime_archive,
+        object_inputs, link_args, environment, target_triple,
+    )
+
+
+def closed_young_terminal_request_denial(
+    emit_llvm_only: bool,
+    python_library: bool,
+    backend: str,
+    gpu_backend: str,
+    runtime_archive: Optional[str],
+    object_inputs,
+    link_args,
+    environment,
+    target_triple: str,
+) -> str:
+    """Check terminal link ownership; this does not prove any source closure."""
     if emit_llvm_only or python_library:
         return "reusable IR/library output has an unknown final link closure"
     if backend != "self":

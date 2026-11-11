@@ -828,6 +828,7 @@ def compile_parallel(
     profile: Optional[dict] = None,
     artifact_dir: str = "",
     coordinator_timing=None,
+    closed_young_proof=None,
     can_spawn_worker,
     worker_command_prefix,
     compile_uncached,
@@ -844,6 +845,18 @@ def compile_parallel(
     profile_counter,
 ):
     """Run parallel frontend codegen with a pre-pass content cache."""
+    if closed_young_proof is not None:
+        # A proof is not a cache hint. Until both batch and per-module action
+        # caches bind its full source/terminal-link identity, keep these arms
+        # entirely separate from proofless cached IR and checkpoint artifacts.
+        profile_counter(profile, "gc3_closed_young_cache_bypasses", 1)
+        return compile_uncached(
+            src_paths, module_names, jobs=jobs, entry_module=entry_module,
+            sibling_inits=sibling_inits, ir_scaffold_mode=ir_scaffold_mode,
+            verbose=verbose, profile=profile, action_cache_plan=None,
+            artifact_dir=artifact_dir, coordinator_timing=coordinator_timing,
+            closed_young_proof=closed_young_proof,
+        )
     direct_assembly = str(
         os.environ.get("PCC_DIRECT_INDEXED_KERNEL_EMIT", "") or ""
     ).strip().lower() in ("1", "true", "yes", "on")
@@ -980,6 +993,7 @@ def compile_parallel_uncached(
     action_cache_plan=None,
     artifact_dir: str = "",
     coordinator_timing=None,
+    closed_young_proof=None,
     can_spawn_worker,
     worker_command_prefix,
     chunk_count_for_workers,
@@ -1003,6 +1017,16 @@ def compile_parallel_uncached(
     auto_source_lanes: bool = True,
     run_worker_manifest_in_process=None,
 ):
+    if closed_young_proof is not None:
+        if action_cache_plan is not None:
+            raise pipeline_error("closed young source proof cannot reuse action cache")
+        for override in (
+            "PCC_STAGE1_CHECKPOINT_DIR", "PCC_DEFER_FRONTEND_CODEGEN_PLAN",
+            "PCC_DEFER_SELF_LINK_PLAN", "PCC_INDEXED_HANDOFF_REQUEST",
+            "PCC_HOST_INDEXED_PROCESS_SPLIT",
+        ):
+            if str(os.environ.get(override, "") or "").strip():
+                raise pipeline_error("closed young proof cannot cross " + override)
     checkpoint_root = str(
         os.environ.get("PCC_STAGE1_CHECKPOINT_DIR", "") or ""
     )
@@ -1412,6 +1436,7 @@ def compile_parallel_uncached(
                     checkpoint_skip_masks[worker_index]
                     if checkpoint_root else ()
                 ),
+                closed_young_proof=closed_young_proof,
             )
             result_paths.append(result_path)
             manifest_paths.append(manifest_path)

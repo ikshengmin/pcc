@@ -264,6 +264,33 @@ class GenerationLoweringMixin:
         phase_started = time.monotonic() if phase_timing else 0.0
 
         proof_input = self.ast_module if module is None else module
+        closure = self._closed_young_closure
+        if closure is None:
+            source_denial = closed_young_module_denial(proof_input)
+            siblings_proved = not self._sibling_module_inits
+        else:
+            from pcc.frontends.python.closed_young_closure import (
+                closed_young_typed_module_denial,
+            )
+
+            source_denial = closed_young_typed_module_denial(
+                closure, proof_input, self._module_source_path,
+            )
+            # Once any unit in this executable carries a closure proof, a
+            # later denial must abort. Downgrading to ordinary imports could
+            # emit foreign initialization beside an already admitted entry.
+            if source_denial:
+                raise RuntimeError("closed young generation proof changed: " + source_denial)
+            expected_siblings = [
+                unit["name"] for unit in closure["modules"]
+                if unit["name"] != proof_input.name
+            ] if not source_denial else []
+            siblings_proved = (
+                not source_denial
+                and closure["entry_module"] == proof_input.name
+                and sorted(self._sibling_module_inits) == sorted(expected_siblings)
+            )
+        self._closed_young_imports_proved = closure is not None and not source_denial
         self._closed_young_domain_enabled = (
             self._closed_young_domain_input is not None
             and self._closed_young_domain_input is proof_input
@@ -273,12 +300,13 @@ class GenerationLoweringMixin:
             and not self._skip_program_main
             and not self._freestanding_module
             and not self._runtime_port_module
-            and not self._sibling_module_inits
-            and not closed_young_module_denial(proof_input)
+            and siblings_proved
+            and not source_denial
         )
         # Reusing this codegen owner, even for the same AST, needs a new link
         # proof. Consume before hoisting replaces or mutates the input AST.
         self._closed_young_domain_input = None
+        self._closed_young_closure = None
 
         _codegen_log(self, debug_codegen, "start")
         # Proofs belong to this generation, including generate() without an
