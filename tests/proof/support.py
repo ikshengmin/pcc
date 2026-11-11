@@ -58,3 +58,55 @@ def normal_form(session, module, name):
     machine = session.kernel.machine(Context())
     value = machine.evaluate(Const(f"{module}.{name}"), ())
     return show(machine.quote(value, 0))
+
+
+def erased_normal_form(session, module, name):
+    """The normal form of ``module.name`` as the running program sees it.
+
+    Implicit constructor arguments have no run-time counterpart, so they are
+    dropped.  The result is rendered like :func:`render_runtime_value`.
+    """
+    from pcc.proof.terms import App, Const, unapply
+
+    machine = session.kernel.machine(Context())
+    term = machine.quote(machine.evaluate(Const(f"{module}.{name}"), ()), 0)
+
+    def numeral(node):
+        count = 0
+        while True:
+            if isinstance(node, Const) and node.name == "zero":
+                return count
+            if isinstance(node, App) and isinstance(node.fn, Const) and node.fn.name == "suc":
+                count += 1
+                node = node.arg
+                continue
+            return None
+
+    def render(node):
+        number = numeral(node)
+        if number is not None:
+            return str(number)
+        head, args = unapply(node)
+        if not isinstance(head, Const):
+            raise AssertionError(f"{module}.{name} is not a closed constructor form")
+        if head.name in ("true", "false"):
+            return head.name
+        fields = session.fields[head.name]
+        shown = [render(arg) for arg in args[len(args) - fields :]] if fields else []
+        return head.name.rsplit(".", 1)[-1] + "(" + ", ".join(shown) + ")"
+
+    return render(term)
+
+
+def render_runtime_value(value):
+    """A Python value of the checked fragment, rendered for comparison."""
+    import dataclasses
+
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if dataclasses.is_dataclass(value):
+        shown = [render_runtime_value(getattr(value, f.name)) for f in dataclasses.fields(value)]
+        return type(value).__name__ + "(" + ", ".join(shown) + ")"
+    raise AssertionError(f"{value!r} is not a value of the checked fragment")
