@@ -223,7 +223,8 @@ def gep_constant_byte_offset_indexed(
         if value is None or value < -2147483648 or value > 2147483647:
             return None
         if index == 0:
-            total += value * kernel.type_span(current_type_id).third
+            base_span: CompilerInt4 = kernel.type_span(current_type_id)
+            total += value * base_span.third
             index += 1
             continue
         current_header: CompilerInt4 = kernel.type_header(current_type_id)
@@ -231,7 +232,8 @@ def gep_constant_byte_offset_indexed(
             if current_header.fourth < 0:
                 return None
             current_type_id = current_header.fourth
-            total += value * kernel.type_span(current_type_id).third
+            child_span: CompilerInt4 = kernel.type_span(current_type_id)
+            total += value * child_span.third
         elif current_header.first == TYPE_KIND_STRUCT:
             current_span: CompilerInt4 = kernel.type_span(current_type_id)
             if value < 0 or value >= current_span.second:

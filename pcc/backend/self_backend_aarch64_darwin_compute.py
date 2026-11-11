@@ -2056,7 +2056,8 @@ def emit_compute_instruction_by_id(
                 # One 64-bit register index over a power-of-two element:
                 # ``add result, base, index, lsl #k`` straight between homes.
                 index_ref: CompilerInt2 = indexed_kernel.gep_index(gep_header.fourth)
-                element_size = indexed_kernel.type_span(gep_header.first).third
+                element_span: CompilerInt4 = indexed_kernel.type_span(gep_header.first)
+                element_size = element_span.third
                 index_header: CompilerInt4 = indexed_kernel.type_header(index_ref.first)
                 index_register = -1
                 if (

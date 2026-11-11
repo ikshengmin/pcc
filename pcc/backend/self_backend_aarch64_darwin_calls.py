@@ -2390,10 +2390,13 @@ def emit_call_instruction_indexed(
         if (not is_vararg_call and not stack_size
                 and callee.startswith("pcc_gc_")
                 and "__pcc_owned_gc_short_paths_v1" in module_symbols.internal_symbols):
+            arg_kinds: list[int] = []
+            for i in range(arg_count):
+                arg: CompilerInt4 = kernel.call_arg(header.fourth + i)
+                arg_kinds.append(kernel.type_kind_id(arg.first))
             fast_call = gc_short_call_lines(
                 func, callee, call_id, ret_kind_id,
-                tuple(kernel.type_kind_id(kernel.call_arg(header.fourth + i).first)
-                      for i in range(arg_count)), module_symbols,
+                tuple(arg_kinds), module_symbols,
             )
         if fast_call is not None:
             lines.extend(fast_call)
