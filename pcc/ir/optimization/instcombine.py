@@ -45,7 +45,11 @@ from .integer_fold_contract import (
     unsigned_value,
     power_of_two,
 )
-from .simplifycfg import _function_chunk_module, _module_context_for_function
+from .simplifycfg import (
+    _function_chunk_module,
+    _module_context_for_function,
+    _split_functions,
+)
 
 
 _BINOP_RE = re.compile(
@@ -66,35 +70,6 @@ _SEXT_CONST_RE = re.compile(
     r"^(?P<indent>\s*)%(?P<result>[\w.$-]+)\s*=\s*sext\s+i1\s+(?P<cond>true|false)\s+to\s+(?P<ty>i\d+)\s*$"
 )
 _SSA_NAME_RE = re.compile(r"%([\w.$-]+)")
-
-
-def _split_functions(ir_text: str) -> list[tuple[bool, str]]:
-    chunks: list[tuple[bool, str]] = []
-    current: list[str] = []
-    in_function = False
-    brace_depth = 0
-    for line in ir_text.splitlines(keepends=True):
-        stripped = line.lstrip()
-        if not in_function and stripped.startswith("define "):
-            if current:
-                chunks.append((False, "".join(current)))
-                current = []
-            in_function = True
-            brace_depth = line.count("{") - line.count("}")
-            current.append(line)
-            continue
-        if in_function:
-            current.append(line)
-            brace_depth += line.count("{") - line.count("}")
-            if brace_depth <= 0:
-                chunks.append((True, "".join(current)))
-                current = []
-                in_function = False
-            continue
-        current.append(line)
-    if current:
-        chunks.append((in_function, "".join(current)))
-    return chunks
 
 
 def _try_int(token: str) -> object:

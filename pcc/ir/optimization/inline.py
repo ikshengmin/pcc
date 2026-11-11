@@ -34,6 +34,7 @@ import re
 
 from .ir_mutator import BasicBlock, MutableModule
 from .instsimplify import simplify_module_text
+from .simplifycfg import _split_functions
 from .text_tokens import global_name_counts, replace_local_names
 
 
@@ -1049,35 +1050,6 @@ def _apply_value_replacements(text: str, replacements: dict[str, str]) -> str:
 
 def _replace_percent_names(text: str, replacements: dict[str, str]) -> str:
     return replace_local_names(text, replacements)
-
-
-def _split_functions(ir_text: str) -> list[tuple[bool, str]]:
-    chunks: list[tuple[bool, str]] = []
-    current: list[str] = []
-    in_function = False
-    brace_depth = 0
-    for line in ir_text.splitlines(keepends=True):
-        stripped = line.lstrip()
-        if not in_function and stripped.startswith("define "):
-            if current:
-                chunks.append((False, "".join(current)))
-                current = []
-            in_function = True
-            brace_depth = line.count("{") - line.count("}")
-            current.append(line)
-            continue
-        if in_function:
-            current.append(line)
-            brace_depth += line.count("{") - line.count("}")
-            if brace_depth <= 0:
-                chunks.append((True, "".join(current)))
-                current = []
-                in_function = False
-            continue
-        current.append(line)
-    if current:
-        chunks.append((in_function, "".join(current)))
-    return chunks
 
 
 def _drop_dead_internal_callees(ir_text: str, candidates: dict[str, dict]) -> str:

@@ -453,3 +453,27 @@ def test_linear_merging_reuses_predecessor_counts(monkeypatch):
     assert changed and len(result) == 1
     assert result[0].lines == ["  ret i64 7\n"]
     assert calls == [101]
+
+
+def test_text_passes_share_one_function_splitter():
+    """inline, instcombine and foldselect chunk IR with simplifycfg's splitter.
+
+    Three private copies let one pass see different function boundaries than
+    the next one in the same pipeline; the text passes exchange whole-module
+    text, so they must agree on where a ``define`` body ends.
+    """
+    from pcc.ir.optimization import foldselect, inline, instcombine, simplifycfg
+
+    shared = simplifycfg._split_functions
+    assert inline._split_functions is shared
+    assert instcombine._split_functions is shared
+    assert foldselect._split_functions is shared
+    ir = (
+        "@g = global i64 0\n"
+        "define i64 @a() {\nentry:\n  ret i64 1\n}\n"
+        "declare void @ext()\n"
+        "define i64 @b() {\nentry:\n  ret i64 2\n}\n"
+    )
+    chunks = shared(ir)
+    assert [is_function for is_function, _text in chunks] == [False, True, False, True]
+    assert "".join(text for _is_function, text in chunks) == ir
