@@ -217,6 +217,14 @@ void pcc_gc_note_object_allocated(PyObject *o);
 void pcc_gc_note_object_allocated_sized(PyObject *o, int64_t size);
 void pcc_gc_note_object_freeing(PyObject *o);
 void pcc_gc_free_object_memory(PyObject *o);
+/* Internal compiler-issued closed-domain admission. Native embeddings and
+ * reusable objects have no such proof. Revocation is permanent for a process;
+ * a later generated entry must not reopen a dynamically loaded domain. */
+void pcc_gc_backend3_enable_closed_young_domain(void);
+void pcc_gc_backend3_revoke_closed_young_domain(void);
+int64_t pcc_gc_backend3_collect_closed_young(void);
+int64_t pcc_gc_backend3_young_cut_count(void);
+int64_t pcc_gc_backend3_young_cut_reclaimed(void);
 int64_t pcc_capi_is_cext_type_tag(int64_t type_tag);
 int64_t pcc_capi_dealloc_cext_object(PyObject *o, int64_t type_tag);
 PyObject *pcc_capi_call_cext_object(

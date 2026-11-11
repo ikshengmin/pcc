@@ -2,8 +2,15 @@
 
 from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
+from pcc.runtime.py.py_abi_constants import (
+    PY_FLAG_GC_PINNED, PY_FLAG_IMMORTAL, PY_TYPE_INT, PY_TYPE_FLOAT,
+    PY_TYPE_STR, PY_TYPE_BYTES, PY_TYPE_COMPLEX,
+)
 from pcc.unsafe import (
+    cstr,
+    atomic_cas_i32,
     atomic_load_i32,
+    atomic_store_i32,
     atomic_load_i64,
     atomic_rmw_i32,
     free,
@@ -819,3 +826,190 @@ def pcc_gc_backend4_step_generation_aging(remaining_budget: i64) -> i64:
         if batch_examined == 0 or more_work == 0:
             break
     return total_examined
+
+
+# Admission belongs to the linked application proof, not an environment flag.
+# 0 is unproved (including native C hosts); 1 is a proved managed domain;
+# 2 is permanently revoked after any untracked foreign exposure.
+pcc_platform_getenv = extern("pcc_platform_getenv", (c_ptr,), c_ptr)
+
+pcc_thread_no_park_depth = extern("pcc_thread_no_park_depth", (), c_int64)
+pcc_gc_concurrent_sweep_finish_stopped = extern(
+    "pcc_gc_concurrent_sweep_finish_stopped", (), c_int64
+)
+pcc_gc_visit_registered_root_slots = extern(
+    "pcc_gc_visit_registered_root_slots", (c_int64, c_int64), c_int64
+)
+pcc_gc_generational_object_is_address_pinned = extern(
+    "pcc_gc_generational_object_is_address_pinned", (c_ptr,), c_int64
+)
+pcc_gc_object_node_young_next = extern(
+    "pcc_gc_object_node_young_next", (c_ptr,), c_ptr
+)
+pcc_gc_object_index_find = extern("pcc_gc_object_index_find", (c_ptr,), c_ptr)
+pcc_gc_tracing_finalize_unpinned = extern(
+    "pcc_gc_tracing_finalize_unpinned", (c_ptr,), c_void
+)
+
+
+@c_abi_export("pcc_gc_backend3_enable_closed_young_domain")
+def pcc_gc_backend3_enable_closed_young_domain() -> None:
+    # A generated entry cannot reopen a domain revoked by an earlier native
+    # constructor or dynamic load. A native host never calls this entry.
+    if (ptr_is_null(pcc_platform_getenv(cstr("LD_PRELOAD"))) == 0
+            or ptr_is_null(pcc_platform_getenv(cstr("LD_LIBRARY_PATH"))) == 0
+            or ptr_is_null(pcc_platform_getenv(cstr("DYLD_INSERT_LIBRARIES"))) == 0
+            or ptr_is_null(pcc_platform_getenv(cstr("DYLD_LIBRARY_PATH"))) == 0):
+        pcc_gc_backend3_revoke_closed_young_domain()
+        return
+    atomic_cas_i32(global_addr("pcc_gc_backend3_closed_young_domain"),
+                   0, 0, 1, "acq_rel", "acquire")
+
+
+@c_abi_export("pcc_gc_backend3_revoke_closed_young_domain")
+def pcc_gc_backend3_revoke_closed_young_domain() -> None:
+    atomic_store_i32(global_addr("pcc_gc_backend3_closed_young_domain"),
+                     0, 2, "release")
+
+
+@c_abi_export("pcc_gc_backend3_young_cut_admitted")
+def _young_cut_admitted() -> i64:
+    if (load_i32(global_addr("pcc_gc_backend_selected"), 0) != 3
+            or load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0
+            or atomic_load_i32(global_addr("pcc_gc_backend3_closed_young_domain"),
+                               0, "acquire") != 1):
+        return 0
+    # This is a separate young liveness cut, never a consumer of major colors
+    # or partially traced major state. Every admission query is constant-size.
+    if (load_i32(global_addr("pcc_gc_mark_active"), 0) != 0
+            or load_i32(global_addr("pcc_gc_explicit_collect_active"), 0) != 0
+            or load_i32(global_addr("pcc_gc_backend4_remap_active"), 0) != 0
+            or load_i32(global_addr("pcc_gc_cms_sweep_pending"), 0) != 0
+            or load_i32(global_addr("pcc_gc_cms_finish_pending"), 0) != 0
+            or load_i32(global_addr("pcc_gc_concurrent_sweep_state"), 0) != 0
+            or load_i64(global_addr("pcc_gc_tracing_finish_claim_epoch"), 0) != 0
+            or load_i32(global_addr("pcc_gc_backend3_remembered_overflow"), 0) != 0):
+        return 0
+    commits: i64 = load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0)
+    if (commits != 0
+            and load_i64(global_addr("pcc_gc_tracing_no_candidate_commit"), 0) != commits):
+        return 0
+    # The first implementation never invalidates weakrefs or invokes callbacks.
+    # Even a weakref to a noncandidate can resurrect a candidate via a callback,
+    # so keep this conservative process-wide gate until a weak batch owner exists.
+    if ptr_is_null(global_load_ptr("py_weakref_head")) == 0:
+        return 0
+    return 1
+
+
+@c_abi_export("pcc_gc_backend3_young_scalar_tag")
+def _young_scalar_tag(tag: i64) -> i64:
+    # Exact builtin tags only: no subclasses, foreign handles, user finalizers,
+    # or mutable out-of-line buffers are destructed by this first young cut.
+    if (tag == PY_TYPE_INT or tag == PY_TYPE_FLOAT or tag == PY_TYPE_STR
+            or tag == PY_TYPE_BYTES or tag == PY_TYPE_COMPLEX):
+        return 1
+    return 0
+
+
+@c_abi_export("pcc_gc_backend3_collect_closed_young")
+def pcc_gc_backend3_collect_closed_young() -> i64:
+    """Cold complete scalar-young collection, not a budgeted promotion step.
+
+    A stopped cut visits complete roots, young owners and remembered edges,
+    never the old-object list. Promoting survivors in place provides a separate
+    liveness bit without changing major colors or installing forwarding edges.
+    Non-scalar young owners and their referents are retained for the major GC.
+    Returns -1 when not admitted; otherwise the number actually reclaimed.
+    """
+    if (_young_cut_admitted() == 0
+            or load_i32(global_addr("pcc_gc_backend3_young_cut_active"), 0) != 0
+            or pcc_thread_no_park_depth() > 0):
+        return -1
+    stopped_here: i64 = 0
+    if pcc_thread_owns_stopped_world() == 0:
+        if pcc_stop_the_world() != 0:
+            return -1
+        stopped_here = 1
+    # Every collection entry finishes any outstanding detached destruction
+    # before interpreting index/node lifetime. GC3 normally has no such work.
+    pcc_gc_concurrent_sweep_finish_stopped()
+    pcc_py_gc_minor_graph_lock()
+    if (_young_cut_admitted() == 0
+            or load_i32(global_addr("pcc_gc_backend3_young_cut_active"), 0) != 0):
+        pcc_py_gc_minor_graph_unlock()
+        if stopped_here != 0:
+            pcc_resume_world()
+        return -1
+    store_i32(global_addr("pcc_gc_backend3_young_cut_active"), 0, 1)
+    suspended: i64 = load_i32(global_addr("pcc_gc_backend3_oldify_suspended"), 0)
+    store_i32(global_addr("pcc_gc_backend3_oldify_suspended"), 0, 1)
+    root_revision: i64 = atomic_load_i64(global_addr("pcc_gc_root_registry_revision"), 0, "acquire")
+    object_revision: i64 = load_i64(global_addr("pcc_gc_object_list_revision"), 0)
+    pin_snapshot = stack_alloc(_STEP_PIN_CONTEXT_BYTES)
+    pcc_gc_conservative_step_pin_begin(pin_snapshot)
+
+    # Mode 7 always inspects the current value, even when the promotion cache
+    # remembers the same address from an older object lifetime.
+    pcc_gc_visit_registered_root_slots(7, 0)
+    node = pcc_gc_backend3_young_list_head()
+    while ptr_is_null(node) == 0:
+        nxt = pcc_gc_object_node_young_next(node)
+        if pcc_gc_object_node_is_active(node) != 0:
+            obj = load_ptr(node, 0)
+            flags: i64 = load_i32(obj, 12)
+            if (_young_scalar_tag(load_i32(obj, 8)) == 0
+                    or (flags & (PY_FLAG_GC_PINNED | PY_FLAG_IMMORTAL | 1024 | 2048 | 8192 | 524288)) != 0
+                    or pcc_gc_generational_object_is_address_pinned(obj) != 0):
+                pcc_gc_generational_promote_young_if_known(obj)
+        node = nxt
+    detached = stack_alloc(8)
+    store_ptr(detached, 0, null())
+    pcc_gc_backend3_drain_remembered_owners(9223372036854775807, detached)
+    pcc_gc_backend3_finish_detached_remembered_owners(load_ptr(detached, 0))
+    pcc_gc_backend3_drain_promotion_worklist(9223372036854775807)
+
+    freed: i64 = -1
+    # A callback-capable visitor can invalidate the cut. No user object is
+    # freed unless both queues and the complete root/heap publication cut hold.
+    if (_young_cut_admitted() != 0
+            and load_i64(pin_snapshot, 16) >= 0
+            and root_revision == atomic_load_i64(global_addr("pcc_gc_root_registry_revision"), 0, "acquire")
+            and object_revision == load_i64(global_addr("pcc_gc_object_list_revision"), 0)
+            and ptr_is_null(global_load_ptr("pcc_gc_backend3_remembered_owner_head")) != 0
+            and ptr_is_null(global_load_ptr("pcc_gc_backend3_promotion_head")) != 0):
+        freed = 0
+        node = pcc_gc_backend3_young_list_head()
+        while ptr_is_null(node) == 0:
+            nxt = pcc_gc_object_node_young_next(node)
+            if pcc_gc_object_node_is_active(node) != 0:
+                obj = load_ptr(node, 0)
+                flags = load_i32(obj, 12)
+                if ((flags & 128) != 0
+                        and (flags & (PY_FLAG_GC_PINNED | PY_FLAG_IMMORTAL | 1024 | 2048 | 8192 | 524288)) == 0
+                        and _young_scalar_tag(load_i32(obj, 8)) != 0):
+                    pcc_gc_tracing_finalize_unpinned(obj)
+                    if ptr_is_null(pcc_gc_object_index_find(obj)) != 0:
+                        freed = freed + 1
+            node = nxt
+        store_i64(global_addr("pcc_gc_backend3_young_cut_commits"), 0,
+                  load_i64(global_addr("pcc_gc_backend3_young_cut_commits"), 0) + 1)
+        store_i64(global_addr("pcc_gc_backend3_young_cut_freed"), 0,
+                  load_i64(global_addr("pcc_gc_backend3_young_cut_freed"), 0) + freed)
+    pcc_gc_conservative_step_pin_end(pin_snapshot)
+    store_i32(global_addr("pcc_gc_backend3_oldify_suspended"), 0, suspended)
+    store_i32(global_addr("pcc_gc_backend3_young_cut_active"), 0, 0)
+    pcc_py_gc_minor_graph_unlock()
+    if stopped_here != 0:
+        pcc_resume_world()
+    return freed
+
+
+@c_abi_export("pcc_gc_backend3_young_cut_count")
+def pcc_gc_backend3_young_cut_count() -> i64:
+    return load_i64(global_addr("pcc_gc_backend3_young_cut_commits"), 0)
+
+
+@c_abi_export("pcc_gc_backend3_young_cut_reclaimed")
+def pcc_gc_backend3_young_cut_reclaimed() -> i64:
+    return load_i64(global_addr("pcc_gc_backend3_young_cut_freed"), 0)

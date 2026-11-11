@@ -20,6 +20,13 @@ BARRIER_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_barrier_dispatcher.py"
 MAKEFILE = RUNTIME_DIR / "Makefile"
 
 OWNED_SYMBOLS = {
+    "pcc_gc_backend3_collect_closed_young",
+    "pcc_gc_backend3_enable_closed_young_domain",
+    "pcc_gc_backend3_revoke_closed_young_domain",
+    "pcc_gc_backend3_young_cut_admitted",
+    "pcc_gc_backend3_young_cut_count",
+    "pcc_gc_backend3_young_cut_reclaimed",
+    "pcc_gc_backend3_young_scalar_tag",
     "pcc_gc_backend3_frame_root_scan_reset_locked",
     "pcc_gc_backend3_scheduler_root_scan_reset_locked",
     "pcc_gc_backend4_step_generation_aging",
@@ -32,6 +39,44 @@ OWNED_SYMBOLS = {
     "pcc_gc_generational_step",
 }
 RAW_FUNCTION_IMPORTS = {
+    # A complete, compiler-admitted young cut uses the stopped root snapshot
+    # and existing typed disposal owner. Budgeted promotion does not run it.
+    "pcc_gc_backend3_closed_young_domain",
+    "pcc_gc_backend3_oldify_suspended",
+    "pcc_gc_backend3_promotion_head",
+    "pcc_gc_backend3_remembered_overflow",
+    "pcc_gc_backend3_remembered_owner_head",
+    "pcc_gc_backend3_young_cut_active",
+    "pcc_gc_backend3_young_cut_commits",
+    "pcc_gc_backend3_young_cut_freed",
+    "pcc_gc_backend4_no_refcounts",
+    "pcc_gc_backend4_remap_active",
+    "pcc_gc_backend_selected",
+    "pcc_gc_cms_finish_pending",
+    "pcc_gc_cms_sweep_pending",
+    "pcc_gc_concurrent_sweep_finish_stopped",
+    "pcc_gc_concurrent_sweep_state",
+    "pcc_gc_conservative_step_pin_begin",
+    "pcc_gc_conservative_step_pin_end",
+    "pcc_gc_explicit_collect_active",
+    "pcc_gc_generational_object_is_address_pinned",
+    "pcc_gc_mark_active",
+    "pcc_gc_object_index_find",
+    "pcc_gc_object_list_revision",
+    "pcc_gc_object_node_young_next",
+    "pcc_gc_pin_conservative_thread_roots",
+    "pcc_gc_tracing_finalize_unpinned",
+    "pcc_gc_tracing_finish_claim_epoch",
+    "pcc_gc_tracing_finish_commits",
+    "pcc_gc_tracing_no_candidate_commit",
+    "pcc_gc_visit_registered_root_slots",
+    "pcc_platform_getenv",
+    "pcc_resume_world",
+    "pcc_stop_the_world",
+    "pcc_thread_all_stopped_at_gates",
+    "pcc_thread_no_park_depth",
+    "pcc_thread_owns_stopped_world",
+    "py_weakref_head",
     "free",
     # The managed runtime's builtin type root table (slots past the 65 exception
     # classes are scanned from it).

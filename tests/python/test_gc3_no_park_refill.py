@@ -1,5 +1,4 @@
 """A full GC3 nursery must not start STW inside a no-park region."""
-import ast
 import os
 from pathlib import Path
 import subprocess
@@ -7,6 +6,7 @@ import subprocess
 import pytest
 
 from tests.owned_c_execution import compile_owned_c_with_runtime
+from tests.python.runtime_body_model import load_functions
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -50,10 +50,7 @@ def test_minor_refill_preserves_no_park_and_uses_existing_fallback(depth, live, 
         "memset": lambda p, value, size: events.append(("zero", p, size)),
     }
     path = ROOT / "pcc/runtime/py/py_gc_backend.py"
-    node = next(node for node in ast.parse(path.read_text()).body
-                if isinstance(node, ast.FunctionDef) and node.name == "pcc_gc_try_minor_alloc")
-    node.decorator_list = []
-    exec(compile(ast.Module([node], type_ignores=[]), str(path), "exec"), namespace)
+    load_functions(path, {"pcc_gc_try_minor_alloc"}, namespace)
     result = namespace["pcc_gc_try_minor_alloc"](32)
     if used == 48 and live and depth:
         assert result is None and state["pending"] is None
@@ -115,12 +112,8 @@ def test_frame_promotion_drops_graph_lock_before_stopped_stack_walk(phase):
         "pcc_gc_backend3_drain_promotion_worklist": drain,
     }
     path = ROOT / "pcc/runtime/py/freestanding_gc_generational_scheduler.py"
-    node = next(node for node in ast.parse(path.read_text()).body
-                if isinstance(node, ast.FunctionDef)
-                and node.name == "pcc_gc_generational_promote_frame_roots")
-    node.decorator_list = []
-    exec(compile(ast.Module([node], type_ignores=[]), str(path), "exec"), namespace)
-    namespace[node.name](8)
+    load_functions(path, {"pcc_gc_generational_promote_frame_roots"}, namespace)
+    namespace["pcc_gc_generational_promote_frame_roots"](8)
     assert events == ["lock", "reset", "unlock", "walk", "drain"]
 
 

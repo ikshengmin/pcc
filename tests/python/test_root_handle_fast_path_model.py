@@ -7,13 +7,12 @@ does not prove real thread scheduling, native ABI, or stopped-world exclusion.
 
 from __future__ import annotations
 
-import ast
-import copy
-from functools import lru_cache
 import os
 from pathlib import Path
 
 import pytest
+
+from tests.python.runtime_body_model import load_functions
 
 
 REPO = Path(os.environ.get("PCC_ROOT_HANDLE_REPO", Path(__file__).resolve().parents[2])).resolve()
@@ -23,23 +22,6 @@ MAX_REVISION = 9223372036854775807
 REVISION = "pcc_gc_root_registry_revision"
 SPIN = "pcc_py_gc_scheduler_root_spin"
 MODES = [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (4, 1)]
-
-
-@lru_cache(maxsize=None)
-def source_tree(filename):
-    source = RUNTIME / filename
-    return ast.parse(source.read_text(encoding="utf-8"))
-
-
-def load_functions(namespace, filename, names):
-    selected = []
-    for original in source_tree(filename).body:
-        if isinstance(original, ast.FunctionDef) and original.name in names:
-            node = copy.deepcopy(original)
-            node.decorator_list = []
-            selected.append(node)
-    assert {node.name for node in selected} == set(names)
-    exec(compile(ast.Module(body=selected, type_ignores=[]), str(RUNTIME / filename), "exec"), namespace)
 
 
 class RootState:
@@ -82,8 +64,14 @@ class RootState:
             "pcc_py_gc_minor_graph_unlock": self.graph_unlock,
         }
         self.ns = ns
-        load_functions(ns, "freestanding_thread_kernel_pthread.py", {"pcc_thread_is_running"})
-        load_functions(ns, "freestanding_gc_root_registry.py", {
+        load_functions(RUNTIME / "freestanding_thread_kernel_pthread.py",
+                       {"pcc_thread_is_running"}, ns)
+        # These finite root slots live outside a machine stack. The shared
+        # loader supplies its documented conservative-stack boundary default.
+        # OOM still executes the actual cross-object revocation release store.
+        load_functions(RUNTIME / "freestanding_gc_generational_scheduler.py",
+                       {"pcc_gc_backend3_revoke_closed_young_domain"}, ns)
+        load_functions(RUNTIME / "freestanding_gc_root_registry.py", {
             "_scheduler_root_spin_acquire", "_scheduler_root_spin_release",
             "_scheduler_root_node_take", "_scheduler_root_node_give",
             "pcc_gc_cycle_requested_store_release", "_scheduler_handle_needs_graph",
@@ -91,7 +79,7 @@ class RootState:
             "pcc_gc_scheduler_root_link_locked", "_scheduler_root_link",
             "pcc_gc_scheduler_root_unlink_locked", "_scheduler_root_unlink",
             "pcc_gc_scheduler_root_register_handle", "pcc_gc_scheduler_root_unregister_handle",
-        })
+        }, ns)
 
     def allocate_raw(self, size):
         result = self.address
@@ -255,6 +243,7 @@ def test_node_oom_does_not_link_but_recycled_node_does_not_need_malloc(backend, 
     state = RootState(backend, tracing)
     state.oom = True
     assert state.register(0x10000) == 0
+    assert state.read("pcc_gc_backend3_closed_young_domain", 0) == 2
     assert state.linked() == [] and state.revision == 0 and state.graph_entries == 0
     assert state.read(SPIN, 0) == 0 and state.read("pcc_gc_cycle_requested", 0) == 0
     state.oom = False
@@ -358,10 +347,10 @@ def test_generational_readers_use_acquire_and_retry_invalidated_position(kind):
         "pcc_gc_visit_walked_stack_roots": lambda *args: 0,
         "pcc_gc_backend3_drain_promotion_worklist": lambda *args: 0,
     })
-    load_functions(ns, "freestanding_gc_generational_scheduler.py", {
+    load_functions(RUNTIME / "freestanding_gc_generational_scheduler.py", {
         "_reset_frame_root_scan", "_reset_scheduler_root_scan",
         "pcc_gc_generational_promote_frame_roots", "pcc_gc_generational_promote_scheduler_roots",
-    })
+    }, ns)
     node, next_node = 0x4000, 0x5000
     if kind in {"frame", "continuation"}:
         phase = 0 if kind == "frame" else 1

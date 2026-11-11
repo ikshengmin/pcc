@@ -70,6 +70,10 @@ from pcc.frontends.python import pipeline_libpython as _pipeline_libpython
 from pcc.frontends.python import pipeline_dependency_closure as _pipeline_dependency_closure
 from pcc.frontends.python import pipeline_context as _pipeline_context
 from pcc.frontends.python import module_action_dag as _module_action_dag
+from pcc.frontends.python.closed_young_domain import (
+    closed_young_module_denial,
+    closed_young_request_denial,
+)
 
 _bootstrap_append_install_prefix_candidates = (
     _pipeline_paths.bootstrap_append_install_prefix_candidates
@@ -2715,6 +2719,21 @@ def _compile_python_routed(
         codegen.module.triple = target_triple
     codegen._freestanding_module = freestanding_module
     codegen._runtime_port_module = runtime_port_module
+    closed_young_denial = closed_young_request_denial(
+        len(auto_srcs), emit_llvm_only, python_library,
+        _normalize_native_backend_name(backend), gpu_backend_kind,
+        runtime_archive, object_inputs, link_args, os.environ,
+        target_triple or _pipeline_targets.host_target_triple(),
+    )
+    if not closed_young_denial:
+        closed_young_denial = closed_young_module_denial(typed_mod)
+    if not closed_young_denial:
+        codegen._closed_young_domain_input = typed_mod
+    _profile_counter(
+        profile, "gc3_closed_young_domain_admitted", 0 if closed_young_denial else 1,
+    )
+    if closed_young_denial:
+        _log(verbose, "GC3 closed young domain denied: " + closed_young_denial)
     if runtime_port_abi_exports is not None:
         codegen._native_module_exports = runtime_port_abi_exports
     if freestanding_module:
@@ -3752,6 +3771,10 @@ def compile_python_multi(
         raise PyPipelineError("compile_python_multi requires at least one source file")
     total_start = _profile_begin(profile)
     _profile_counter(profile, "multi_input_files", len(src_paths))
+    # No source-local permission may cross worker/cache or sibling boundaries.
+    # This route needs a closure-wide proof token before it may opt in.
+    _profile_counter(profile, "gc3_closed_young_domain_admitted", 0)
+    _log(verbose, "GC3 closed young domain denied: multi-source/worker route is unverified")
     ir_scaffold_mode = _resolve_ir_scaffold_mode(ir_scaffold_mode)
     src_paths = list(src_paths)
     if module_names is None:

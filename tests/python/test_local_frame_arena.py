@@ -8,6 +8,8 @@ import ast
 from pathlib import Path
 import pytest
 
+from tests.python.runtime_body_model import load_functions
+
 ROOT = Path(__file__).resolve().parents[2]
 PY = ROOT / "pcc/runtime/py"
 
@@ -59,15 +61,17 @@ class Arena:
         self.allocations = 0
 
     def load(self, filename, names=(), prefix='', only_local=False):
-        tree = ast.parse((PY/filename).read_text())
-        chosen = []
-        for node in tree.body:
-            if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id.startswith(('_LOCAL_', '_THREAD_', '_NATIVE_')):
-                chosen.append(node)
-            elif isinstance(node, ast.FunctionDef) and (node.name in names or (prefix and node.name.startswith(prefix) and (not only_local or 'local' in node.name))):
-                node.decorator_list=[]
-                chosen.append(node)
-        exec(compile(ast.Module(chosen,type_ignores=[]),str(PY/filename),'exec'),self.ns)
+        path = PY / filename
+        chosen = set(names)
+        if prefix:
+            tree = ast.parse(path.read_text())
+            chosen.update(
+                node.name for node in tree.body
+                if isinstance(node, ast.FunctionDef)
+                and node.name.startswith(prefix)
+                and (not only_local or 'local' in node.name)
+            )
+        load_functions(path, chosen, self.ns)
 
     def get_global(self, name):
         if name == 'pcc_tls_thread_record_py':
@@ -292,12 +296,26 @@ def test_checked_raw_adapter_pair_is_not_unconditional_stackmap_protocol():
         assert classify_call_flags(symbol,False,False)&CALL_FLAG_FRAME_PROTOCOL==0
 
 
-def test_real_library_frontend_selects_local_frame_scope(tmp_path):
+@pytest.mark.parametrize(('target_triple', 'suffix'), [
+    ('x86_64-unknown-linux-gnu', '_local'),
+    ('arm64-apple-darwin', '_local_mapped'),
+], ids=['linux-x64', 'darwin-arm64'])
+def test_real_library_frontend_selects_local_frame_scope(
+    tmp_path, monkeypatch, target_triple, suffix,
+):
     from pcc.frontends.python.pipeline import compile_python
-    source=tmp_path/'private_scope.py'
+
+    # Test the target's default protocol, independent of the test host and
+    # environment override. This is IR cross-generation, not Darwin execution.
+    monkeypatch.delenv('PCC_PRECISE_STACKMAP_TABLES', raising=False)
+    source = tmp_path / 'private_scope.py'
     source.write_text('def keep(value: list) -> list:\n    result = [value]\n    return result\n')
-    output=source.with_suffix('.ll')
-    compile_python(str(source),str(output),backend='self',python_library=True,emit_llvm_only=True,ir_scaffold_mode='on')
-    text=output.read_text();definitions=text[text.index('define '):]
-    assert '@pcc_gc_frame_enter_local_mapped(' in definitions
-    assert '@pcc_gc_frame_leave_local_mapped(' in definitions
+    output = source.with_suffix('.ll')
+    compile_python(
+        str(source), str(output), backend='self', python_library=True,
+        emit_llvm_only=True, ir_scaffold_mode='on', target_triple=target_triple,
+    )
+    text = output.read_text()
+    definitions = text[text.index('define '):]
+    assert '@pcc_gc_frame_enter' + suffix + '(' in definitions
+    assert '@pcc_gc_frame_leave' + suffix + '(' in definitions

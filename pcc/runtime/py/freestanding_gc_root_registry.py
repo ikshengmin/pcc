@@ -39,6 +39,10 @@ from pcc.unsafe import (
 
 __pcc_freestanding__ = True
 
+pcc_gc_backend3_revoke_closed_young_domain = extern(
+    "pcc_gc_backend3_revoke_closed_young_domain", (), c_void
+)
+
 
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern(
@@ -328,6 +332,8 @@ def pcc_gc_scheduler_root_register_handle(slot) -> c_ptr:
     # allocation through the same path used by cold/counting callers.
     node = _scheduler_root_node_take(slot)
     if ptr_is_null(node) != 0:
+        # Unchecked wrappers can otherwise hide a missing persistent root.
+        pcc_gc_backend3_revoke_closed_young_domain()
         return null()
     if (
         backend == 0
@@ -437,6 +443,8 @@ def pcc_gc_register_continuation_root_node(frame_map, slots):
     node_size: i64 = 56 + root_count * 8
     node = malloc(node_size)
     if ptr_is_null(node) != 0:
+        # Unchecked wrappers can otherwise hide a missing persistent root.
+        pcc_gc_backend3_revoke_closed_young_domain()
         return null()
     memset(node, 0, node_size)
     store_ptr(node, 0, frame_map)

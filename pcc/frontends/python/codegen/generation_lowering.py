@@ -23,6 +23,7 @@ from pcc.frontends.python.codegen.vthread_effect_analysis import classify_vthrea
 from pcc.frontends.python.codegen.vthread_effect_analysis import _lexical_scope_nodes
 from pcc.frontends.python.codegen.module_global_lowering import _predeclare_owned_builtin_import_globals
 from pcc.frontends.python.codegen.str_default_cells import emit_module_str_default_cells
+from pcc.frontends.python.closed_young_domain import closed_young_module_denial
 
 _UNSAFE_SCAFFOLD_MODULES = frozenset({"pcc.unsafe"})
 _TYPE_SCAFFOLD_MODULES = frozenset({"pcc"})
@@ -261,6 +262,23 @@ class GenerationLoweringMixin:
             os.environ.get("PCC_PY_FRONTEND_WORKER_TIMING", "") or ""
         ).strip().lower() in ("1", "true", "yes", "on")
         phase_started = time.monotonic() if phase_timing else 0.0
+
+        proof_input = self.ast_module if module is None else module
+        self._closed_young_domain_enabled = (
+            self._closed_young_domain_input is not None
+            and self._closed_young_domain_input is proof_input
+            and self._strict_no_libpython
+            and not self.emit_cpy_main_exitcode
+            and not self._python_library
+            and not self._skip_program_main
+            and not self._freestanding_module
+            and not self._runtime_port_module
+            and not self._sibling_module_inits
+            and not closed_young_module_denial(proof_input)
+        )
+        # Reusing this codegen owner, even for the same AST, needs a new link
+        # proof. Consume before hoisting replaces or mutates the input AST.
+        self._closed_young_domain_input = None
 
         _codegen_log(self, debug_codegen, "start")
         # Proofs belong to this generation, including generate() without an

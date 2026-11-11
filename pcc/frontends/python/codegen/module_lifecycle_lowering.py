@@ -461,6 +461,14 @@ class ModuleLifecycleLoweringMixin:
         # The explicit host-cc oracle does not synthesize the owned table.
         # Without publication the mapped frame entries keep registering their
         # slots; requiring this symbol would make that valid route fail link.
+        if (
+            self._closed_young_domain_enabled
+            and not self._module_has_c_abi_export
+            and not self._module_uses_raw_int_scaffold
+        ):
+            self.builder.call(
+                self.runtime["pcc_gc_backend3_enable_closed_young_domain"], [],
+            )
         self._emit_thread_safepoint()
 
         self.builder.call(

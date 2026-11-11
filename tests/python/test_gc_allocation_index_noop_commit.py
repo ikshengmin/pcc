@@ -45,6 +45,7 @@ class Registration(Index):
             self.store(name, 0, value)
         self.ns.update({
             'store_i32': self.store,
+            'atomic_store_i32': self.store,
             'stack_alloc': lambda size: self.calloc(1, size),
             'malloc': self.prepare,
             'free': self.release,
@@ -87,6 +88,10 @@ class Registration(Index):
         self.ns['pcc_gc_object_index_plan_capacity'] = self.plan
         self.ns['pcc_gc_object_index_plan_commit'] = self.commit
         self.ns['pcc_gc_zpage_owner_index_plan_commit'] = self.commit_zpage
+        # Registration failure revokes the independently proved young domain;
+        # execute that cross-object body rather than stubbing the new boundary.
+        load_bodies(self.ns, ROOT / 'freestanding_gc_generational_scheduler.py',
+                    {'pcc_gc_backend3_revoke_closed_young_domain'})
         load_bodies(self.ns, ROOT / 'py_gc_backend.py',
                     {'pcc_gc_note_object_allocated_sized'})
 

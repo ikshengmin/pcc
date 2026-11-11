@@ -768,10 +768,19 @@ def _gc_ptr_can_have_header(o) -> bool:
     return pcc_gc_pointer_is_managed(o) != 0
 
 
+pcc_gc_backend3_collect_closed_young = extern(
+    "pcc_gc_backend3_collect_closed_young", (), c_int64
+)
+pcc_gc_backend3_revoke_closed_young_domain = extern(
+    "pcc_gc_backend3_revoke_closed_young_domain", (), c_void
+)
+
+
 def _minor_collect_reset() -> None:
     _atomic_i32_add_fetch(global_addr("pcc_gc_minor_collections"), 1)
     if load_i32(global_addr("pcc_gc_backend_selected"), 0) == 3:
-        _step_generational_promotion(1024, 0)
+        if pcc_gc_backend3_collect_closed_young() < 0:
+            _step_generational_promotion(1024, 0)
     _atomic_i32_store(global_addr("pcc_gc_minor_bytes"), 0)
 
 
@@ -4981,6 +4990,7 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                     free(prepared_zpage)
                 _set_pending_minor_block(null())
                 global_store_ptr("pcc_gc_last_alloc", o)
+                pcc_gc_backend3_revoke_closed_young_domain()
                 return
             if (
                 (need_node != 0 and ptr_is_null(prepared_node) != 0)
@@ -5034,6 +5044,7 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                             free(prepared_zpage)
                         _set_pending_minor_block(null())
                         global_store_ptr("pcc_gc_last_alloc", o)
+                        pcc_gc_backend3_revoke_closed_young_domain()
                         return
                 if (
                     required > 0
@@ -5071,6 +5082,7 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                             free(prepared_zpage)
                         _set_pending_minor_block(null())
                         global_store_ptr("pcc_gc_last_alloc", o)
+                        pcc_gc_backend3_revoke_closed_young_domain()
                         return
                     memset(prepared_slots, 0, required * pcc_gc_index_slot_size())
                     prepared_cap = required
@@ -5106,6 +5118,7 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                             free(prepared_zpage)
                         _set_pending_minor_block(null())
                         global_store_ptr("pcc_gc_last_alloc", o)
+                        pcc_gc_backend3_revoke_closed_young_domain()
                         return
                 if (
                     zpage_required > 0
@@ -5143,6 +5156,7 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                             free(prepared_zpage)
                         _set_pending_minor_block(null())
                         global_store_ptr("pcc_gc_last_alloc", o)
+                        pcc_gc_backend3_revoke_closed_young_domain()
                         return
                     memset(prepared_zpage_slots, 0, zpage_required * pcc_gc_index_slot_size())
                     prepared_zpage_cap = zpage_required
@@ -5158,6 +5172,7 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                         free(prepared_zpage_slots)
                         _set_pending_minor_block(null())
                         global_store_ptr("pcc_gc_last_alloc", o)
+                        pcc_gc_backend3_revoke_closed_young_domain()
                         return
                     prepared_zpage_ready = 1
                 continue
@@ -5205,6 +5220,7 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                     free(prepared_zpage)
                 _set_pending_minor_block(null())
                 global_store_ptr("pcc_gc_last_alloc", o)
+                pcc_gc_backend3_revoke_closed_young_domain()
                 return
             if backend == 4:
                 store_ptr(zpage_slots_owner, 0, prepared_zpage_slots)
@@ -5241,6 +5257,7 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                         free(prepared_zpage)
                     _set_pending_minor_block(null())
                     global_store_ptr("pcc_gc_last_alloc", o)
+                    pcc_gc_backend3_revoke_closed_young_domain()
                     return
 
         if backend == 1 or backend == 2:
@@ -5323,6 +5340,7 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                 free(prepared_zpage)
             _set_pending_minor_block(null())
             global_store_ptr("pcc_gc_last_alloc", o)
+            pcc_gc_backend3_revoke_closed_young_domain()
             return
         old_head = _object_head()
         store_ptr(node, 0, o)
@@ -5342,6 +5360,11 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
         if index_result >= 0:
             if pcc_gc_granule_is_object_start(o) != 1:
                 pcc_gc_managed_pointer_index_remove(o)
+        else:
+            # An unindexed owner may acquire new young referents after this
+            # function returns. Never issue a young-only liveness verdict
+            # after publication lost its exact owner/index relationship.
+            pcc_gc_backend3_revoke_closed_young_domain()
         final_generation: int = load_i32(o, 12) & 384
         if final_generation == 128:
             _backend3_young_link_head(node)

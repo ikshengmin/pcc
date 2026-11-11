@@ -48,6 +48,9 @@ pcc_thread_no_park_exit = extern("pcc_thread_no_park_exit", (), c_void)
 pcc_thread_no_park_depth = extern("pcc_thread_no_park_depth", (), c_int64)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 pcc_gc_cycle_requested_store_release = extern("pcc_gc_cycle_requested_store_release", (c_int64,), c_void)
+pcc_gc_backend3_revoke_closed_young_domain = extern(
+    "pcc_gc_backend3_revoke_closed_young_domain", (), c_void
+)
 
 pcc_gc_root_slot_count_from_map = extern("pcc_gc_root_slot_count_from_map", (c_ptr,), c_int64)
 pcc_gc_root_map_is_borrowed = extern("pcc_gc_root_map_is_borrowed", (c_ptr,), c_int64)
@@ -315,6 +318,9 @@ def pcc_gc_note_frame_enter(frame_map, slots) -> None:
     pcc_thread_no_park_enter()
     node = pcc_gc_frame_node_create(frame_map, slots, root_count, 0)
     if ptr_is_null(node) != 0:
+        # Legacy module/global slots have no checked failure return.
+        # Their absence invalidates the independent young-root closure.
+        pcc_gc_backend3_revoke_closed_young_domain()
         pcc_thread_no_park_exit()
         return
     prepared = null()
@@ -324,6 +330,7 @@ def pcc_gc_note_frame_enter(frame_map, slots) -> None:
         pcc_py_gc_minor_graph_lock()
         required: i64 = pcc_gc_frame_index_plan_capacity(1)
         if required < 0:
+            pcc_gc_backend3_revoke_closed_young_domain()
             pcc_py_gc_minor_graph_unlock()
             if ptr_is_null(prepared) == 0:
                 free(prepared)
@@ -338,6 +345,7 @@ def pcc_gc_note_frame_enter(frame_map, slots) -> None:
                 free(prepared)
             prepared = malloc(required * pcc_gc_index_slot_size())
             if ptr_is_null(prepared) != 0:
+                pcc_gc_backend3_revoke_closed_young_domain()
                 pcc_gc_frame_node_release(node)
                 pcc_thread_no_park_exit()
                 return
@@ -366,6 +374,7 @@ def pcc_gc_note_frame_enter(frame_map, slots) -> None:
         pcc_gc_root_registry_note_mutation_locked()
         duplicate = pcc_gc_frame_index_replace_preallocated(slots, node)
         if ptr_eq(duplicate, node) != 0:
+            pcc_gc_backend3_revoke_closed_young_domain()
             pcc_gc_frame_node_unlink(node)
             pcc_py_gc_minor_graph_unlock()
             if ptr_is_null(prepared) == 0:
@@ -476,6 +485,8 @@ def pcc_gc_note_frame_enter_lifo(frame_map, slots) -> None:
         if load_i32(global_addr("pcc_gc_explicit_collect_active"), 0) == 0:
             pcc_gc_cycle_requested_store_release(1)
         pcc_py_gc_minor_graph_unlock()
+    else:
+        pcc_gc_backend3_revoke_closed_young_domain()
     pcc_thread_no_park_exit()
 
 

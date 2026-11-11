@@ -119,6 +119,7 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_mark_root_gray_if_known",
     "pcc_gc_pointer_is_managed",
     "pcc_gc_promote_cached_frame_slot",
+    "pcc_gc_generational_promote_young_if_known",
     "pcc_gc_resolve_root_slot_unlocked",
     "pcc_gc_resolve_borrowed_root_slot_unlocked",
     "pcc_gc_root_map_is_borrowed",
@@ -131,6 +132,8 @@ RAW_FUNCTION_IMPORTS = {
     "write",
 }
 RAW_GLOBAL_IMPORTS = {
+    "pcc_gc_backend_selected",
+    "pcc_gc_backend4_no_refcounts",
     "pcc_gc_backend3_oldify_suspended",
     "pcc_gc_continuation_root_head",
     "pcc_gc_frame_head",
@@ -273,9 +276,12 @@ def test_mapped_root_object_has_exact_raw_closure(tmp_path: Path, emitter: str):
         for line in undefined_result.stdout.splitlines()
         if line.strip()
     }
-    assert undefined == (
-        RAW_FUNCTION_IMPORTS | RAW_GLOBAL_IMPORTS | MANAGED_ROOT_TABLE_IMPORTS
-    )
+    expected = RAW_FUNCTION_IMPORTS | RAW_GLOBAL_IMPORTS | MANAGED_ROOT_TABLE_IMPORTS
+    from pcc.backend.self_backend_target_match import target_os_name
+    if target_os_name(pipeline._host_target_triple_for_self_backend()) == "linux":
+        # Owned Linux write lowers to the syscall intrinsic, not libc.
+        expected = expected - {"write"}
+    assert undefined == expected
 
     symbols_result = subprocess.run(
         ["nm", "-g", str(obj)], capture_output=True, text=True, timeout=30

@@ -57,6 +57,11 @@ class Layer1InitMixin:
         self._owned_cpy_values = set()
         self.emit_cpy_main_exitcode = emit_cpy_main_exitcode
         self._strict_no_libpython = False
+        # Only the terminal executable driver may issue this single-use proof.
+        # Standalone codegen, workers, libraries and imported modules default
+        # to the existing promotion-only young path.
+        self._closed_young_domain_input: Optional[Module] = None
+        self._closed_young_domain_enabled = False
         if ir_scaffold_mode not in ("off", "on"):
             raise ValueError(
                 "invalid ir_scaffold_mode "

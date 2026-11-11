@@ -82,6 +82,10 @@ _MI_OUTPUT = 4
 _MI_CACHE = 5
 _MI_COUNT = 6
 define_global_i32("pcc_extension_module_frame_map", _MI_COUNT)
+pcc_gc_backend3_revoke_closed_young_domain = extern(
+    "pcc_gc_backend3_revoke_closed_young_domain", (), c_void
+)
+
 define_global_ptr_null("pcc_extension_modules")
 define_global_ptr_null("pcc_extension_code_owners")
 
@@ -306,6 +310,10 @@ def _native_extension_import_into(module_name, path, slots, tokens) -> None:
         _runtime_error(cstr("native extension reinitialization unavailable after prior initialization attempt"), module_name)
         return
 
+    # Constructors run inside dlopen, before module/type registries exist.
+    # A managed executable's young-root proof ends before that first foreign
+    # instruction, even if the import later fails or unloads its module.
+    pcc_gc_backend3_revoke_closed_young_domain()
     handle = dynamic_library_open_global(path)
     if ptr_is_null(handle) != 0:
         _runtime_error(cstr("dlopen failed"), dlerror())

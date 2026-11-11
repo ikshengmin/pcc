@@ -107,6 +107,11 @@ def _runtime_signatures_part_0():
 
 def _runtime_signatures_part_1():
     return {
+    "pcc_gc_backend3_enable_closed_young_domain": (_VOID, [], False),
+    "pcc_gc_backend3_revoke_closed_young_domain": (_VOID, [], False),
+    "pcc_gc_backend3_collect_closed_young": (_I64, [], False),
+    "pcc_gc_backend3_young_cut_count": (_I64, [], False),
+    "pcc_gc_backend3_young_cut_reclaimed": (_I64, [], False),
     "pcc_gc_store_root_known": (_VOID, [_PTR, _PYOBJ], False),
     "pcc_gc_store_root_take_known": (_VOID, [_PTR, _PYOBJ], False),
     "pcc_gc_root_move": (_I64, [_PTR, _PTR], False),
@@ -1731,6 +1736,8 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_frame_registry_inactive',
         'pcc_gc_backend3_frame_root_scan_phase',
         'pcc_gc_backend3_oldify_suspended',
+        'pcc_gc_backend3_closed_young_domain',
+        'pcc_gc_backend3_young_cut_active',
         'pcc_gc_backend3_remembered_overflow',
         'pcc_gc_backend3_scheduler_root_scan_phase',
         'pcc_gc_backend4_evacuated_bytes_count',
@@ -1862,6 +1869,8 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
 
 FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
     {
+        "pcc_gc_backend3_young_cut_commits",
+        "pcc_gc_backend3_young_cut_freed",
         "pcc_gc_scalar_sweep_state",
         "pcc_gc_scalar_sweep_token",
         "pcc_gc_scalar_sweep_count",
@@ -3103,6 +3112,7 @@ def _cross_object_signatures_part_10():
     "pcc_gc_maybe_start_cms_worker": ((), "c_void"),
     "pcc_gc_tracing_clear_unreachable": (("c_ptr",), "c_void"),
     "pcc_gc_tracing_finalize_unreachable": (("c_ptr",), "c_void"),
+    "pcc_gc_tracing_finalize_unpinned": (("c_ptr",), "c_void"),
     "pcc_gc_tracing_recheck_reachability_after_finalizers": ((), "c_void"),
     "pcc_gc_seed_roots": ((), "c_void"),
     "pcc_gc_drain_all_gray_unlocked": ((), "c_int64"),
@@ -3271,6 +3281,11 @@ def _cross_object_signatures_part_13():
 
 def _cross_object_signatures_part_14():
     return {
+        "pcc_gc_backend3_enable_closed_young_domain": ((), "c_void"),
+        "pcc_gc_backend3_revoke_closed_young_domain": ((), "c_void"),
+        "pcc_gc_backend3_collect_closed_young": ((), "c_int64"),
+        "pcc_gc_backend3_young_cut_count": ((), "c_int64"),
+        "pcc_gc_backend3_young_cut_reclaimed": ((), "c_int64"),
         "py_weakref_clear_tracing_candidates": ((), "c_int64"),
         "pcc_gc_gray_conservative_and_listed_pinned_roots": ((), "c_int64"),
         "pcc_gc_gray_registered_roots": ((), "c_void"),

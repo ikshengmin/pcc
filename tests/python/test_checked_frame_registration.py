@@ -1,11 +1,13 @@
 """Checked root-registration host fault model; not native collector execution."""
-import ast
 from pathlib import Path
 
 import pytest
 
+from tests.python.runtime_body_model import load_functions
+
 
 SOURCE = Path(__file__).resolve().parents[2] / "pcc/runtime/py/freestanding_gc_frame_registry.py"
+DOMAIN = "pcc_gc_backend3_closed_young_domain"
 
 
 class RegistryModel:
@@ -36,11 +38,8 @@ class RegistryModel:
             "load_i64": self.load,
             "pcc_platform_abort": lambda: (_ for _ in ()).throw(RuntimeError("corrupt registration")),
         }
-        node = next(node for node in ast.parse(SOURCE.read_text()).body
-                    if isinstance(node, ast.FunctionDef) and node.name == "pcc_gc_note_frame_enter_checked")
-        node.decorator_list = []
-        exec(compile(ast.Module(body=[node], type_ignores=[]), str(SOURCE), "exec"), namespace)
-        self.run = namespace[node.name]
+        load_functions(SOURCE, {"pcc_gc_note_frame_enter_checked"}, namespace)
+        self.run = namespace["pcc_gc_note_frame_enter_checked"]
         self.namespace = namespace
 
     def lock(self):
@@ -149,7 +148,7 @@ class ActualEntryModel(RegistryModel):
     def __init__(self, failure=None):
         super().__init__()
         self.failure = failure
-        self.globals = {"pcc_gc_frame_head": 0}
+        self.globals = {"pcc_gc_frame_head": 0, DOMAIN: 1}
         self.memory = {300: self.node, 400: {}, 500: {}}
         self.released = []
         self.freed = []
@@ -171,20 +170,28 @@ class ActualEntryModel(RegistryModel):
             "global_store_ptr": lambda name, value: self.globals.__setitem__(name, value),
             "global_addr": lambda name: name,
             "load_i32": lambda base, offset: 0,
+            "atomic_store_i32": self.atomic_store_domain,
             "store_ptr": lambda base, offset, value: self.memory[base].__setitem__(offset, value),
             "pcc_gc_frame_index_replace_preallocated": self.replace,
             "pcc_gc_root_registry_note_mutation_locked": lambda: None,
             "pcc_gc_cycle_requested_store_release": lambda value: None,
         })
-        node = next(node for node in ast.parse(SOURCE.read_text()).body
-                    if isinstance(node, ast.FunctionDef) and node.name == "pcc_gc_note_frame_enter")
-        node.decorator_list = []
-        exec(compile(ast.Module(body=[node], type_ignores=[]), str(SOURCE), "exec"), self.namespace)
+        # Exercise the actual cross-object failure publication, not a no-op
+        # stub. Only its atomic memory primitive is a finite boundary double.
+        load_functions(SOURCE.parent / "freestanding_gc_generational_scheduler.py",
+                       {"pcc_gc_backend3_revoke_closed_young_domain"}, self.namespace)
+        load_functions(SOURCE, {"pcc_gc_note_frame_enter"}, self.namespace)
+
+    def atomic_store_domain(self, base, offset, value, order):
+        assert (base, offset, value, order) == (DOMAIN, 0, 2, "release")
+        assert self.depth == 2, "revoke before releasing the inner no-park guard"
+        self.globals[base] = value
 
     def enter_guard(self):
         self.depth += 1
 
     def exit_guard(self):
+        assert self.globals[DOMAIN] == (1 if self.failure is None else 2)
         self.depth -= 1
         if self.depth == 0:
             self.parked = True
@@ -207,6 +214,7 @@ def test_checked_entry_runs_real_registration_failure_paths_without_parking(fail
     model = ActualEntryModel(failure)
     assert model.run(100, 200) == (1 if failure is None else 0)
     assert model.depth == 1 and model.locks == 0 and not model.parked
+    assert model.globals[DOMAIN] == (1 if failure is None else 2)
     assert model.current == (300 if failure is None else 0)
     assert model.globals["pcc_gc_frame_head"] == (300 if failure is None else 0)
     assert model.released == ([300] if failure in {"capacity", "allocation", "insertion"} else [])

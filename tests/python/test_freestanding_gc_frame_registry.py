@@ -91,6 +91,7 @@ RAW_ONLY_CROSS_OBJECT_SYMBOLS = {
     "pcc_thread_is_running",
 }
 RAW_FUNCTION_IMPORTS = RAW_ONLY_CROSS_OBJECT_SYMBOLS | {
+    "pcc_gc_backend3_revoke_closed_young_domain",
     "free",
     "malloc",
     "memset",
@@ -196,9 +197,16 @@ def test_frame_registry_has_one_strict_source_owner():
         "pcc_gc_frame_index_replace_preallocated",
     ):
         assert symbol in internal_header
-    # Collector identity and GC pressure admission have independent TLS owners.
+    # Collector identity, pressure and deferred work have independent TLS owners.
+    # Keep the complete current inventory, not the earlier pre-deferred-sweep set.
     assert FREESTANDING_GC_THREAD_LOCAL_GLOBALS - TLS_STORAGE_SYMBOLS == {
-        "pcc_gc_cms_worker_current", "pcc_gc_pressure_image_depth", "pcc_gc_pressure_owner"
+        "pcc_gc_cms_worker_current", "pcc_gc_pressure_image_depth", "pcc_gc_pressure_owner",
+        "pcc_gc_trace_stack_owner", "pcc_gc_gray_local_batch",
+        "pcc_gc_scalar_sweep_producer_token",
+        "pcc_gc_deferred_free_active", "pcc_gc_deferred_free_head",
+        "pcc_gc_deferred_free_tail", "pcc_gc_deferred_free_pending_count",
+        "pcc_gc_deferred_free_pending_bytes", "pcc_gc_deferred_free_local_attempts",
+        "pcc_gc_deferred_free_local_fallbacks",
     }
     assert 'define_thread_local_ptr_null("pcc_gc_frame_node_pool_heads")' in strict
     assert 'define_thread_local_ptr_null("pcc_gc_frame_node_pool_counts")' in strict

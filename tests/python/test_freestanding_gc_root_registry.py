@@ -56,6 +56,7 @@ OWNED_GLOBALS = {
     "pcc_py_gc_scheduler_root_stack_handle",
 }
 RAW_FUNCTION_IMPORTS = {
+    "pcc_gc_backend3_revoke_closed_young_domain",
     "pcc_thread_is_running",
     "pcc_thread_stack_high",
     "free",
