@@ -6,10 +6,15 @@ There is no Objective-C source, no prebuilt bridge and no external compiler.
 Device code is Metal Shading Language text compiled by the operating system
 (``newLibraryWithSource:options:error:``).
 
+The language version is always passed explicitly. With no compile options
+the default depends on the executable: the simdgroup kernels were accepted from
+a clang-built bridge and rejected from a program linked by the owned linker.
+
 C ABI, all exported as ``pcc_metal_device_*``:
 
   open(context_out) -> status
   close(context) -> status
+  set_language_version(context, version) -> status
   name(context, out, capacity) -> bytes copied
   buffer_create(context, nbytes, buffer_out) -> status
   buffer_contents(context, buffer) -> address
@@ -105,7 +110,9 @@ CONTEXT_POOL_POP = 40
 CONTEXT_STRING_CLASS = 48
 CONTEXT_DEVICE = 56
 CONTEXT_QUEUE = 64
-CONTEXT_BYTES = 72
+CONTEXT_OPTIONS_CLASS = 72
+CONTEXT_LANGUAGE_VERSION = 80
+CONTEXT_BYTES = 88
 
 # One launch binding. A zeroed record is invalid: both kinds are nonzero.
 BINDING_KIND = 0
@@ -139,7 +146,9 @@ PACKET_FUNCTION_BYTES = 16
 PACKET_BINDING_COUNT = 24
 PACKET_GRID = 32
 PACKET_THREADS = 56
-PACKET_HEADER_BYTES = 80
+# Zero selects DEFAULT_LANGUAGE_VERSION.
+PACKET_LANGUAGE_VERSION = 80
+PACKET_HEADER_BYTES = 88
 PACKET_BINDING_KIND = 0
 PACKET_BINDING_INDEX = 8
 PACKET_BINDING_NBYTES = 16
@@ -157,9 +166,10 @@ RESULT_STATUS = 16
 RESULT_MAX_THREADS = 24
 RESULT_EXECUTION_WIDTH = 32
 RESULT_READBACK_COUNT = 40
-RESULT_HEADER_BYTES = 48
+RESULT_LANGUAGE_VERSION = 48
+RESULT_HEADER_BYTES = 56
 RESULT_DIAGNOSTIC_BYTES = 512
-RESULT_FIXED_BYTES = 560
+RESULT_FIXED_BYTES = 568
 RESULT_RECORD_INDEX = 0
 RESULT_RECORD_NBYTES = 8
 RESULT_RECORD_HEADER_BYTES = 16
@@ -176,6 +186,11 @@ STAGE_DISPATCH = 5
 PROCESS_OK = 0
 PROCESS_INPUT_FAILED = 2
 PROCESS_OUTPUT_FAILED = 3
+
+# MTLLanguageVersion values are (major << 16) + minor. Version 3.0 is the
+# default; a caller or a packet may name another one.
+LANGUAGE_VERSION_3_0 = 196608
+DEFAULT_LANGUAGE_VERSION = 196608
 
 # MTLResourceStorageModeShared with the default CPU cache mode.
 STORAGE_MODE_SHARED = 0
@@ -255,6 +270,15 @@ def _send_void1(context, target, name, arg0) -> i64:
     call_c_abi(
         load_ptr(context, CONTEXT_SEND), "void", ("ptr", "ptr", "ptr"),
         (target, _selector(context, name), arg0), None,
+    )
+    return 0
+
+
+@c_abi_export("pcc_metal_device_objc_send_void_word")
+def _send_void_word(context, target, name, value: i64) -> i64:
+    call_c_abi(
+        load_ptr(context, CONTEXT_SEND), "void", ("ptr", "ptr", "i64"),
+        (target, _selector(context, name), value), None,
     )
     return 0
 
@@ -388,6 +412,12 @@ def pcc_metal_device_open(context_out) -> i64:
         _dispose(context)
         return STATUS_SYMBOL_UNAVAILABLE
     store_ptr(context, CONTEXT_STRING_CLASS, load_ptr(slot, 0))
+    call_c_abi(get_class, "ptr", ("ptr",), (cstr("MTLCompileOptions"),), slot)
+    if ptr_is_null(load_ptr(slot, 0)):
+        _dispose(context)
+        return STATUS_SYMBOL_UNAVAILABLE
+    store_ptr(context, CONTEXT_OPTIONS_CLASS, load_ptr(slot, 0))
+    store_i64(context, CONTEXT_LANGUAGE_VERSION, DEFAULT_LANGUAGE_VERSION)
 
     call_c_abi(create_device, "ptr", (), (), slot)
     if ptr_is_null(load_ptr(slot, 0)):
@@ -411,6 +441,15 @@ def pcc_metal_device_close(context) -> i64:
     if ptr_is_null(context):
         return STATUS_BAD_ARGUMENT
     return _dispose(context)
+
+
+@c_abi_export("pcc_metal_device_set_language_version")
+def pcc_metal_device_set_language_version(context, version: i64) -> i64:
+    """Select the Metal language version for later pipeline_create calls."""
+    if ptr_is_null(context) or version <= 0:
+        return STATUS_BAD_ARGUMENT
+    store_i64(context, CONTEXT_LANGUAGE_VERSION, version)
+    return STATUS_OK
 
 
 @c_abi_export("pcc_metal_device_name")
@@ -493,12 +532,25 @@ def pcc_metal_device_pipeline_create(
         return STATUS_BAD_ARGUMENT
     device = load_ptr(context, CONTEXT_DEVICE)
     pool = _pool_push(context)
+    options = _send(
+        context,
+        _send(context, load_ptr(context, CONTEXT_OPTIONS_CLASS), cstr("alloc")),
+        cstr("init"),
+    )
+    if ptr_is_null(options):
+        _pool_pop(context, pool)
+        return STATUS_OUT_OF_MEMORY
+    _send_void_word(
+        context, options, cstr("setLanguageVersion:"),
+        load_i64(context, CONTEXT_LANGUAGE_VERSION),
+    )
     error_slot = stack_alloc(8)
     store_ptr(error_slot, 0, null())
     library = _send3(
         context, device, cstr("newLibraryWithSource:options:error:"),
-        _string(context, source), null(), error_slot,
+        _string(context, source), options, error_slot,
     )
+    _send_void(context, options, cstr("release"))
     if ptr_is_null(library):
         _describe_error(
             context, load_ptr(error_slot, 0), diagnostic, diagnostic_capacity
@@ -716,6 +768,8 @@ def pcc_metal_device_packet_result_bytes(packet, packet_bytes: i64) -> i64:
         return 0
     if count < 0 or count > MAX_BINDING_INDEX + 1:
         return 0
+    if load_i64(packet, PACKET_LANGUAGE_VERSION) < 0:
+        return 0
     source_at: i64 = PACKET_HEADER_BYTES + count * PACKET_BINDING_BYTES
     function_at: i64 = source_at + _align8(source_bytes)
     offset: i64 = function_at + _align8(function_bytes)
@@ -803,6 +857,14 @@ def pcc_metal_device_launch_packet(
     if status != STATUS_OK:
         return _packet_fail(result, STAGE_OPEN, status)
     context = load_ptr(context_slot, 0)
+    if load_i64(packet, PACKET_LANGUAGE_VERSION) != 0:
+        pcc_metal_device_set_language_version(
+            context, load_i64(packet, PACKET_LANGUAGE_VERSION)
+        )
+    store_i64(
+        result, RESULT_LANGUAGE_VERSION,
+        load_i64(context, CONTEXT_LANGUAGE_VERSION),
+    )
 
     pipeline_slot = stack_alloc(8)
     status = pcc_metal_device_pipeline_create(

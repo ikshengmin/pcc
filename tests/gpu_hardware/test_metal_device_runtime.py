@@ -455,7 +455,8 @@ def test_runtime_object_binds_only_libsystem_symbols(tmp_path):
         if symbol["n_sect"] != 0
     }
     for name in (
-        "open", "close", "name", "buffer_create", "buffer_contents",
+        "open", "close", "set_language_version", "name",
+        "buffer_create", "buffer_contents",
         "buffer_length", "buffer_release", "pipeline_create",
         "pipeline_limits", "pipeline_release", "dispatch_sync",
         "packet_result_bytes", "launch_packet", "packet_main",

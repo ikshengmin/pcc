@@ -61,6 +61,7 @@ class MetalPacketResult:
     execution_width: int
     diagnostic: str
     readback: Mapping[int, bytes] = field(default_factory=dict)
+    language_version: int = 0
 
     @property
     def completed(self) -> bool:
@@ -79,6 +80,7 @@ class MetalPacketResult:
             "completed": self.completed,
             "max_threads_per_threadgroup": self.max_threads,
             "thread_execution_width": self.execution_width,
+            "metal_language_version": self.language_version,
             "diagnostic": self.diagnostic,
             "readback": {
                 str(index): hashlib.sha256(data).hexdigest()
@@ -136,8 +138,16 @@ def encode_launch_packet(
     bindings: Sequence[MetalBinding],
     grid: Sequence[int],
     threads: Sequence[int],
+    *,
+    language_version: int = 0,
 ) -> bytes:
-    """Encode one launch as the packet ``pcc_metal_device_launch_packet`` reads."""
+    """Encode one launch as the packet ``pcc_metal_device_launch_packet`` reads.
+
+    ``language_version`` is a ``MTLLanguageVersion`` value; zero selects the
+    runtime's default.
+    """
+    if language_version < 0:
+        raise MetalHostError("Metal language version must not be negative")
     source_bytes = _text("Metal source", source)
     function_bytes = _text("kernel entry name", function)
     grid_extent = _extent("grid", grid)
@@ -170,8 +180,8 @@ def encode_launch_packet(
         )
         payload += _pad8(data)
     header = struct.pack(
-        "<10q", abi.PACKET_MAGIC, len(source_bytes), len(function_bytes),
-        len(bindings), *grid_extent, *threads_extent,
+        "<11q", abi.PACKET_MAGIC, len(source_bytes), len(function_bytes),
+        len(bindings), *grid_extent, *threads_extent, language_version,
     )
     assert len(header) == abi.PACKET_HEADER_BYTES
     assert len(descriptors) == len(bindings) * abi.PACKET_BINDING_BYTES
@@ -189,7 +199,9 @@ def decode_launch_result(data: bytes) -> MetalPacketResult:
         raise MetalHostError(
             f"launch result is {len(data)} bytes, shorter than its fixed part"
         )
-    magic, stage, status, max_threads, width, records = struct.unpack_from("<6q", data)
+    magic, stage, status, max_threads, width, records, language = (
+        struct.unpack_from("<7q", data)
+    )
     if magic != abi.RESULT_MAGIC:
         raise MetalHostError("launch result has the wrong magic")
     region = data[abi.RESULT_HEADER_BYTES:abi.RESULT_FIXED_BYTES]
@@ -212,6 +224,7 @@ def decode_launch_result(data: bytes) -> MetalPacketResult:
     return MetalPacketResult(
         stage=stage, status=status, max_threads=max_threads,
         execution_width=width, diagnostic=diagnostic, readback=readback,
+        language_version=language,
     )
 
 

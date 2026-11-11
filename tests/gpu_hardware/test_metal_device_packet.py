@@ -37,10 +37,19 @@ from pcc.kernel_ir.metal_device_launch import (
     launch_packet_from_plan,
     launch_plan_on_device,
 )
-from pcc.kernel_ir.metal_finalize import emit_metal_source
+from pcc.kernel_ir.metal_finalize import (
+    emit_metal_simdgroup_gemm_source,
+    emit_metal_source,
+)
 from pcc.kernel_ir.metal_launch import MetalLaunchError, plan_metal_launch
 from pcc.kernel_ir.tilelang_import import import_tilelang_source
-from tests.gpu_hardware.test_metal_claim_levels import TILELANG_METAL_MATMUL
+from tests.gpu_hardware.test_metal_claim_levels import (
+    TILELANG_METAL_MATMUL,
+    _gemm_inputs,
+    _gemm_inputs_transposed,
+    _simdgroup_gemm_module,
+    _simdgroup_micro_gemm_module,
+)
 
 
 _IS_ARM64_DARWIN = (
@@ -107,8 +116,10 @@ def runner(tmp_path_factory):
 
 def test_packet_layout_matches_the_runtime_constants():
     packet = _probe_packet(8, 4)
-    header = struct.unpack_from("<10q", packet)
+    header = struct.unpack_from("<11q", packet)
+    assert len(header) * 8 == abi.PACKET_HEADER_BYTES
     assert header[0] == abi.PACKET_MAGIC
+    assert header[abi.PACKET_LANGUAGE_VERSION // 8] == 0
     assert header[abi.PACKET_BINDING_COUNT // 8] == 3
     assert header[abi.PACKET_GRID // 8:abi.PACKET_GRID // 8 + 3] == (2, 1, 1)
     assert header[abi.PACKET_THREADS // 8:abi.PACKET_THREADS // 8 + 3] == (4, 1, 1)
@@ -134,6 +145,18 @@ def test_packet_layout_matches_the_runtime_constants():
     assert abi.RESULT_FIXED_BYTES == (
         abi.RESULT_HEADER_BYTES + abi.RESULT_DIAGNOSTIC_BYTES
     )
+    explicit = metal_host.encode_launch_packet(
+        PROBE_SOURCE, "pcc_probe", [], (1, 1, 1), (1, 1, 1),
+        language_version=abi.LANGUAGE_VERSION_3_0,
+    )
+    assert struct.unpack_from("<q", explicit, abi.PACKET_LANGUAGE_VERSION) == (
+        abi.LANGUAGE_VERSION_3_0,
+    )
+    assert abi.DEFAULT_LANGUAGE_VERSION == abi.LANGUAGE_VERSION_3_0 == (3 << 16)
+    with pytest.raises(MetalHostError, match="must not be negative"):
+        metal_host.encode_launch_packet(
+            PROBE_SOURCE, "pcc_probe", [], (1, 1, 1), (1, 1, 1), language_version=-1,
+        )
 
 
 @pytest.mark.parametrize("bindings,grid,threads,message", [
@@ -153,12 +176,16 @@ def test_encoder_rejects_malformed_launches(bindings, grid, threads, message):
 
 
 def test_result_decoder_rejects_everything_but_one_exact_result():
-    fixed = struct.pack("<6q", abi.RESULT_MAGIC, abi.STAGE_DONE, 0, 1024, 32, 1)
+    fixed = struct.pack(
+        "<7q", abi.RESULT_MAGIC, abi.STAGE_DONE, 0, 1024, 32, 1, 196608,
+    )
+    assert len(fixed) == abi.RESULT_HEADER_BYTES
     fixed += bytes(abi.RESULT_DIAGNOSTIC_BYTES)
     record = struct.pack("<2q", 1, 5) + b"hello" + bytes(3)
     decoded = metal_host.decode_launch_result(fixed + record)
     assert decoded.completed and decoded.readback == {1: b"hello"}
     assert (decoded.max_threads, decoded.execution_width) == (1024, 32)
+    assert decoded.language_version == 196608
     for broken, message in (
         (fixed[:100], "shorter than its fixed part"),
         (b"\0" * 8 + fixed[8:] + record, "wrong magic"),
@@ -168,7 +195,7 @@ def test_result_decoder_rejects_everything_but_one_exact_result():
     ):
         with pytest.raises(MetalHostError, match=message):
             metal_host.decode_launch_result(broken)
-    failed = struct.pack("<6q", abi.RESULT_MAGIC, abi.STAGE_DISPATCH, 41, 0, 0, 0)
+    failed = struct.pack("<7q", abi.RESULT_MAGIC, abi.STAGE_DISPATCH, 41, 0, 0, 0, 0)
     failed += bytes(abi.RESULT_DIAGNOSTIC_BYTES)
     assert not metal_host.decode_launch_result(failed).completed
     with pytest.raises(MetalHostError, match="carries read-back records"):
@@ -233,6 +260,7 @@ def test_runner_executes_a_packet_and_matches_the_cpu_oracle(runner):
     assert result.completed, (result.stage, result.status, result.diagnostic)
     assert result.readback == {1: _probe_oracle(count)}
     assert probe.readback == result.readback
+    assert result.language_version == abi.DEFAULT_LANGUAGE_VERSION
 
 
 @_needs_arm64_darwin
@@ -383,3 +411,99 @@ def test_tilelang_scalar_gemm_plan_matches_the_cpu_reference(runner, m, n, k):
     oracle = tuple(float(v) for row in cpu.outputs["C"] for v in row)
     assert device == pytest.approx(oracle, abs=1e-5)
     assert any(value != 0.0 for value in oracle)
+
+
+
+def _pack_f16(matrix) -> bytes:
+    values = [value for row in matrix for value in row]
+    return struct.pack("<%de" % len(values), *values)
+
+
+def _simdgroup_micro_case():
+    module = _simdgroup_micro_gemm_module()
+    a, b = _gemm_inputs(8, 8, 8)
+    return module, a, b, (8, 8)
+
+
+def _simdgroup_split_k_transposed_edge_case():
+    # 32x64 tiles of four simdgroups, 1024 threads, split-k atomic output,
+    # both operands transposed, M/N edge tiles and a K tail.
+    m, n, k = 31, 63, 17
+    module = _simdgroup_gemm_module(
+        m=m, n=n, k=k, block_m=32, block_n=64, threads=1024, split_k=4,
+        split_k_span_mode="ceildiv", output_atomic=True,
+        transpose_a=True, transpose_b=True,
+    )
+    a, b = _gemm_inputs_transposed(m=m, n=n, k=k)
+    return module, a, b, (m, n)
+
+
+@_needs_arm64_darwin
+@pytest.mark.parametrize(
+    "case",
+    [_simdgroup_micro_case, _simdgroup_split_k_transposed_edge_case],
+    ids=["micro-8x8", "split-k-transposed-edge-1024-threads"],
+)
+def test_simdgroup_gemm_plan_matches_the_cpu_reference(runner, case):
+    module, a, b, (m, n) = case()
+    cpu = execute_scalar_tiled_gemm_reference(module, {"A": a, "B": b})
+    a_bytes, b_bytes = _pack_f16(a), _pack_f16(b)
+    args = PccPackedArgs(launch_device="metal:0")
+    args.add_buffer(PccBufferHandle(nbytes=len(a_bytes), dtype="f16", device="metal:0"))
+    args.add_buffer(PccBufferHandle(nbytes=len(b_bytes), dtype="f16", device="metal:0"))
+    args.add_buffer(PccBufferHandle(nbytes=m * n * 4, dtype="f32", device="metal:0"))
+    plan = plan_metal_launch(module, args)
+    launch = launch_plan_on_device(
+        runner,
+        plan,
+        emit_metal_simdgroup_gemm_source(module),
+        {"A": a_bytes, "B": b_bytes, "C": bytes(m * n * 4)},
+        readback=("C",),
+    )
+    if not _executed(launch.result):
+        return
+    assert launch.result.completed, launch.result.to_dict()
+    threads = plan.dispatch.threads_per_threadgroup
+    assert threads[0] * threads[1] * threads[2] <= launch.result.max_threads
+    device = struct.unpack("<%df" % (m * n), launch.output("C"))
+    oracle = tuple(float(v) for row in cpu.outputs["C"] for v in row)
+    assert device == pytest.approx(oracle, abs=1e-5)
+    assert any(value != 0.0 for value in oracle)
+
+
+
+@_needs_arm64_darwin
+def test_packet_language_version_selects_the_metal_dialect(runner):
+    # The simdgroup matrix types do not exist in Metal 2.0. The same source
+    # must be rejected when the packet names that version and must run under
+    # the default, which proves the packet's version reaches the compiler.
+    module, a, b, (m, n) = _simdgroup_micro_case()
+    a_bytes, b_bytes = _pack_f16(a), _pack_f16(b)
+    args = PccPackedArgs(launch_device="metal:0")
+    args.add_buffer(PccBufferHandle(nbytes=len(a_bytes), dtype="f16", device="metal:0"))
+    args.add_buffer(PccBufferHandle(nbytes=len(b_bytes), dtype="f16", device="metal:0"))
+    args.add_buffer(PccBufferHandle(nbytes=m * n * 4, dtype="f32", device="metal:0"))
+    plan = plan_metal_launch(module, args)
+    source = emit_metal_simdgroup_gemm_source(module)
+    bindings = [
+        MetalBinding(0, metal_host.KIND_BUFFER, a_bytes),
+        MetalBinding(1, metal_host.KIND_BUFFER, b_bytes),
+        MetalBinding(2, metal_host.KIND_BUFFER, bytes(m * n * 4), readback=True),
+    ]
+    metal_2_0 = 2 << 16
+    old = metal_host.run_launch_packet(runner, metal_host.encode_launch_packet(
+        source, plan.kernel_entry, bindings,
+        plan.dispatch.threadgroups_per_grid, plan.dispatch.threads_per_threadgroup,
+        language_version=metal_2_0,
+    ))
+    if not _executed(old):
+        return
+    assert (old.stage, old.status) == (abi.STAGE_PIPELINE, abi.STATUS_SOURCE_REJECTED)
+    assert old.language_version == metal_2_0
+    assert "simdgroup" in old.diagnostic
+    current = metal_host.run_launch_packet(runner, metal_host.encode_launch_packet(
+        source, plan.kernel_entry, bindings,
+        plan.dispatch.threadgroups_per_grid, plan.dispatch.threads_per_threadgroup,
+    ))
+    assert current.completed, current.to_dict()
+    assert current.language_version == abi.DEFAULT_LANGUAGE_VERSION
