@@ -437,12 +437,19 @@ def test_runtime_status_and_layout_constants_are_distinct():
     assert abi.MAX_BINDING_INDEX == 30
 
 
-def test_runtime_object_binds_only_loader_and_allocator_symbols(tmp_path):
+def test_runtime_object_binds_only_libsystem_symbols(tmp_path):
     obj = _runtime_object(tmp_path)
     undefined = _undefined_symbols(obj)
     # Objective-C and Metal entry points are resolved through the dynamic
-    # loader at run time; none may become a link-time dependency.
-    assert undefined == {"_dlopen", "_dlsym", "_dlclose", "_calloc", "_free"}
+    # loader at run time; none may become a link-time dependency. What remains
+    # is the loader, the allocator, byte copies and the packet entry's two
+    # descriptor calls, all from libSystem.
+    assert undefined == {
+        "_dlopen", "_dlsym", "_dlclose",
+        "_calloc", "_realloc", "_free",
+        "_memcpy", "_memset",
+        "_read", "_write",
+    }
     defined = {
         symbol["name"] for symbol in parse_object(obj).symbols()
         if symbol["n_sect"] != 0
@@ -451,6 +458,7 @@ def test_runtime_object_binds_only_loader_and_allocator_symbols(tmp_path):
         "open", "close", "name", "buffer_create", "buffer_contents",
         "buffer_length", "buffer_release", "pipeline_create",
         "pipeline_limits", "pipeline_release", "dispatch_sync",
+        "packet_result_bytes", "launch_packet", "packet_main",
     ):
         assert "_pcc_metal_device_" + name in defined
 

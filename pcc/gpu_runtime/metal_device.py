@@ -32,6 +32,16 @@ when the threadgroup is larger than the pipeline allows. Metal does not execute
 such a dispatch and reports no error, so accepting it would return stale
 output as a result.
 
+A complete launch can also travel as one self-describing byte packet:
+
+  packet_result_bytes(packet, packet_bytes) -> result size, 0 if malformed
+  launch_packet(packet, packet_bytes, result, capacity) -> bytes written
+  packet_main() -> process status; packet on fd 0, result on fd 1
+
+``packet_main`` is a process entry point, so one object file is also a
+complete launcher executable. The packet and result layouts are the
+``PACKET_*`` and ``RESULT_*`` constants below.
+
 Storage is shared (CPU-visible). Buffers and pipelines are owned by the caller
 and are released explicitly; this module keeps no table of them.
 """
@@ -50,13 +60,18 @@ from pcc.unsafe import (
     load_i64,
     load_ptr,
     logical_shift_left_i64,
+    memcpy,
+    memset,
     null,
     ptr_add,
     ptr_is_null,
+    read,
+    realloc,
     stack_alloc,
     store_i8,
     store_i64,
     store_ptr,
+    write,
 )
 
 
@@ -113,6 +128,54 @@ LIMITS_BYTES = 24
 EXTENT_X = 0
 EXTENT_Y = 8
 EXTENT_Z = 16
+
+# Launch packet: a header, ``binding count`` descriptors, the NUL-terminated
+# Metal source, the NUL-terminated entry name, then each binding's bytes in
+# descriptor order. Every variable-length region is padded to eight bytes.
+PACKET_MAGIC = 3553424030952538960
+PACKET_MAGIC_AT = 0
+PACKET_SOURCE_BYTES = 8
+PACKET_FUNCTION_BYTES = 16
+PACKET_BINDING_COUNT = 24
+PACKET_GRID = 32
+PACKET_THREADS = 56
+PACKET_HEADER_BYTES = 80
+PACKET_BINDING_KIND = 0
+PACKET_BINDING_INDEX = 8
+PACKET_BINDING_NBYTES = 16
+PACKET_BINDING_READBACK = 24
+PACKET_BINDING_BYTES = 32
+PACKET_MAX_BYTES = 1073741824
+
+# Launch result: a header, a fixed diagnostic text region, then one record per
+# read-back buffer: its binding index, its byte count, its bytes padded to
+# eight. Records are present only when RESULT_STAGE is STAGE_DONE.
+RESULT_MAGIC = 3553986980905960272
+RESULT_MAGIC_AT = 0
+RESULT_STAGE = 8
+RESULT_STATUS = 16
+RESULT_MAX_THREADS = 24
+RESULT_EXECUTION_WIDTH = 32
+RESULT_READBACK_COUNT = 40
+RESULT_HEADER_BYTES = 48
+RESULT_DIAGNOSTIC_BYTES = 512
+RESULT_FIXED_BYTES = 560
+RESULT_RECORD_INDEX = 0
+RESULT_RECORD_NBYTES = 8
+RESULT_RECORD_HEADER_BYTES = 16
+
+# The stage that produced RESULT_STATUS.
+STAGE_DONE = 0
+STAGE_PACKET = 1
+STAGE_OPEN = 2
+STAGE_PIPELINE = 3
+STAGE_BUFFER = 4
+STAGE_DISPATCH = 5
+
+# packet_main() process statuses.
+PROCESS_OK = 0
+PROCESS_INPUT_FAILED = 2
+PROCESS_OUTPUT_FAILED = 3
 
 # MTLResourceStorageModeShared with the default CPU cache mode.
 STORAGE_MODE_SHARED = 0
@@ -624,3 +687,277 @@ def pcc_metal_device_dispatch_sync(
     if state != COMMAND_BUFFER_COMPLETED:
         return STATUS_COMMAND_FAILED
     return STATUS_OK
+
+
+@c_abi_export("pcc_metal_device_align8")
+def _align8(size: i64) -> i64:
+    return size + 7 - (size + 7) % 8
+
+
+@c_abi_export("pcc_metal_device_packet_result_bytes")
+def pcc_metal_device_packet_result_bytes(packet, packet_bytes: i64) -> i64:
+    """Result size for a well-formed packet, or 0 when it is malformed.
+
+    Every length is bounded by ``packet_bytes`` before it is added, and the
+    regions must end exactly at the end of the packet.
+    """
+    if ptr_is_null(packet) or packet_bytes < PACKET_HEADER_BYTES:
+        return 0
+    if packet_bytes > PACKET_MAX_BYTES:
+        return 0
+    if load_i64(packet, PACKET_MAGIC_AT) != PACKET_MAGIC:
+        return 0
+    source_bytes: i64 = load_i64(packet, PACKET_SOURCE_BYTES)
+    function_bytes: i64 = load_i64(packet, PACKET_FUNCTION_BYTES)
+    count: i64 = load_i64(packet, PACKET_BINDING_COUNT)
+    if source_bytes < 2 or source_bytes > packet_bytes:
+        return 0
+    if function_bytes < 2 or function_bytes > packet_bytes:
+        return 0
+    if count < 0 or count > MAX_BINDING_INDEX + 1:
+        return 0
+    source_at: i64 = PACKET_HEADER_BYTES + count * PACKET_BINDING_BYTES
+    function_at: i64 = source_at + _align8(source_bytes)
+    offset: i64 = function_at + _align8(function_bytes)
+    if offset > packet_bytes:
+        return 0
+    if load_i8(packet, source_at + source_bytes - 1) != 0:
+        return 0
+    if load_i8(packet, function_at + function_bytes - 1) != 0:
+        return 0
+    result: i64 = RESULT_FIXED_BYTES
+    index: i64 = 0
+    while index < count:
+        record = ptr_add(
+            packet, PACKET_HEADER_BYTES + index * PACKET_BINDING_BYTES
+        )
+        kind: i64 = load_i64(record, PACKET_BINDING_KIND)
+        nbytes: i64 = load_i64(record, PACKET_BINDING_NBYTES)
+        readback: i64 = load_i64(record, PACKET_BINDING_READBACK)
+        if kind != BINDING_KIND_BUFFER and kind != BINDING_KIND_BYTES:
+            return 0
+        if nbytes <= 0 or nbytes > packet_bytes:
+            return 0
+        if readback != 0 and readback != 1:
+            return 0
+        if readback == 1 and kind != BINDING_KIND_BUFFER:
+            return 0
+        offset = offset + _align8(nbytes)
+        if offset > packet_bytes:
+            return 0
+        if readback == 1:
+            result = result + RESULT_RECORD_HEADER_BYTES + _align8(nbytes)
+        index = index + 1
+    if offset != packet_bytes:
+        return 0
+    return result
+
+
+@c_abi_export("pcc_metal_device_packet_fail")
+def _packet_fail(result, stage: i64, status: i64) -> i64:
+    store_i64(result, RESULT_STAGE, stage)
+    store_i64(result, RESULT_STATUS, status)
+    return RESULT_FIXED_BYTES
+
+
+@c_abi_export("pcc_metal_device_packet_release_buffers")
+def _packet_release_buffers(context, bindings, binding_count: i64) -> i64:
+    index: i64 = 0
+    while index < binding_count:
+        record = ptr_add(bindings, index * BINDING_BYTES)
+        if load_i64(record, BINDING_KIND) == BINDING_KIND_BUFFER:
+            if not ptr_is_null(load_ptr(record, BINDING_POINTER)):
+                pcc_metal_device_buffer_release(
+                    context, load_ptr(record, BINDING_POINTER)
+                )
+        index = index + 1
+    return STATUS_OK
+
+
+@c_abi_export("pcc_metal_device_launch_packet")
+def pcc_metal_device_launch_packet(
+    packet,
+    packet_bytes: i64,
+    result,
+    result_capacity: i64,
+) -> i64:
+    """Run one launch packet and return the number of result bytes written.
+
+    Zero means that no result could be written at all. Otherwise the result
+    names the stage and status; read-back records follow only for STAGE_DONE.
+    """
+    if ptr_is_null(result) or result_capacity < RESULT_FIXED_BYTES:
+        return 0
+    memset(result, 0, RESULT_FIXED_BYTES)
+    store_i64(result, RESULT_MAGIC_AT, RESULT_MAGIC)
+    needed: i64 = pcc_metal_device_packet_result_bytes(packet, packet_bytes)
+    if needed == 0 or result_capacity < needed:
+        return _packet_fail(result, STAGE_PACKET, STATUS_BAD_ARGUMENT)
+    count: i64 = load_i64(packet, PACKET_BINDING_COUNT)
+    source_at: i64 = PACKET_HEADER_BYTES + count * PACKET_BINDING_BYTES
+    function_at: i64 = source_at + _align8(load_i64(packet, PACKET_SOURCE_BYTES))
+    data_at: i64 = function_at + _align8(load_i64(packet, PACKET_FUNCTION_BYTES))
+
+    context_slot = stack_alloc(8)
+    status: i64 = pcc_metal_device_open(context_slot)
+    if status != STATUS_OK:
+        return _packet_fail(result, STAGE_OPEN, status)
+    context = load_ptr(context_slot, 0)
+
+    pipeline_slot = stack_alloc(8)
+    status = pcc_metal_device_pipeline_create(
+        context, ptr_add(packet, source_at), ptr_add(packet, function_at),
+        pipeline_slot, ptr_add(result, RESULT_HEADER_BYTES),
+        RESULT_DIAGNOSTIC_BYTES,
+    )
+    if status != STATUS_OK:
+        pcc_metal_device_close(context)
+        return _packet_fail(result, STAGE_PIPELINE, status)
+    pipeline = load_ptr(pipeline_slot, 0)
+    limits = stack_alloc(24)
+    pcc_metal_device_pipeline_limits(context, pipeline, limits)
+    store_i64(result, RESULT_MAX_THREADS, load_i64(limits, LIMIT_MAX_THREADS))
+    store_i64(
+        result, RESULT_EXECUTION_WIDTH, load_i64(limits, LIMIT_EXECUTION_WIDTH)
+    )
+
+    bindings = calloc(count + 1, BINDING_BYTES)
+    if ptr_is_null(bindings):
+        pcc_metal_device_pipeline_release(context, pipeline)
+        pcc_metal_device_close(context)
+        return _packet_fail(result, STAGE_BUFFER, STATUS_OUT_OF_MEMORY)
+    buffer_slot = stack_alloc(8)
+    cursor: i64 = data_at
+    index: i64 = 0
+    while index < count and status == STATUS_OK:
+        descriptor = ptr_add(
+            packet, PACKET_HEADER_BYTES + index * PACKET_BINDING_BYTES
+        )
+        record = ptr_add(bindings, index * BINDING_BYTES)
+        nbytes: i64 = load_i64(descriptor, PACKET_BINDING_NBYTES)
+        store_i64(record, BINDING_INDEX, load_i64(descriptor, PACKET_BINDING_INDEX))
+        if load_i64(descriptor, PACKET_BINDING_KIND) == BINDING_KIND_BUFFER:
+            store_i64(record, BINDING_KIND, BINDING_KIND_BUFFER)
+            status = pcc_metal_device_buffer_create(context, nbytes, buffer_slot)
+            if status == STATUS_OK:
+                store_ptr(record, BINDING_POINTER, load_ptr(buffer_slot, 0))
+                store_i64(record, BINDING_EXTENT, 0)
+                memcpy(
+                    pcc_metal_device_buffer_contents(
+                        context, load_ptr(buffer_slot, 0)
+                    ),
+                    ptr_add(packet, cursor),
+                    nbytes,
+                )
+        else:
+            store_i64(record, BINDING_KIND, BINDING_KIND_BYTES)
+            store_ptr(record, BINDING_POINTER, ptr_add(packet, cursor))
+            store_i64(record, BINDING_EXTENT, nbytes)
+        cursor = cursor + _align8(nbytes)
+        index = index + 1
+
+    written: i64 = RESULT_FIXED_BYTES
+    if status != STATUS_OK:
+        _packet_fail(result, STAGE_BUFFER, status)
+    else:
+        status = pcc_metal_device_dispatch_sync(
+            context, pipeline, bindings, count,
+            ptr_add(packet, PACKET_GRID), ptr_add(packet, PACKET_THREADS),
+        )
+        if status != STATUS_OK:
+            _packet_fail(result, STAGE_DISPATCH, status)
+        else:
+            records: i64 = 0
+            index = 0
+            while index < count:
+                descriptor = ptr_add(
+                    packet, PACKET_HEADER_BYTES + index * PACKET_BINDING_BYTES
+                )
+                if load_i64(descriptor, PACKET_BINDING_READBACK) == 1:
+                    nbytes = load_i64(descriptor, PACKET_BINDING_NBYTES)
+                    out = ptr_add(result, written)
+                    memset(out, 0, RESULT_RECORD_HEADER_BYTES + _align8(nbytes))
+                    store_i64(
+                        out, RESULT_RECORD_INDEX,
+                        load_i64(descriptor, PACKET_BINDING_INDEX),
+                    )
+                    store_i64(out, RESULT_RECORD_NBYTES, nbytes)
+                    memcpy(
+                        ptr_add(out, RESULT_RECORD_HEADER_BYTES),
+                        pcc_metal_device_buffer_contents(
+                            context,
+                            load_ptr(
+                                ptr_add(bindings, index * BINDING_BYTES),
+                                BINDING_POINTER,
+                            ),
+                        ),
+                        nbytes,
+                    )
+                    written = (
+                        written + RESULT_RECORD_HEADER_BYTES + _align8(nbytes)
+                    )
+                    records = records + 1
+                index = index + 1
+            store_i64(result, RESULT_READBACK_COUNT, records)
+            store_i64(result, RESULT_STAGE, STAGE_DONE)
+            store_i64(result, RESULT_STATUS, STATUS_OK)
+
+    _packet_release_buffers(context, bindings, count)
+    free(bindings)
+    pcc_metal_device_pipeline_release(context, pipeline)
+    pcc_metal_device_close(context)
+    return written
+
+
+@c_abi_export("pcc_metal_device_packet_main")
+def pcc_metal_device_packet_main() -> i64:
+    """Process entry: read one launch packet from fd 0, write its result to fd 1."""
+    capacity: i64 = 65536
+    packet = calloc(1, capacity)
+    if ptr_is_null(packet):
+        return PROCESS_INPUT_FAILED
+    size: i64 = 0
+    done: i64 = 0
+    while done == 0:
+        if size == capacity:
+            if capacity >= PACKET_MAX_BYTES:
+                free(packet)
+                return PROCESS_INPUT_FAILED
+            capacity = capacity * 2
+            grown = realloc(packet, capacity)
+            if ptr_is_null(grown):
+                free(packet)
+                return PROCESS_INPUT_FAILED
+            packet = grown
+        got: i64 = read(0, ptr_add(packet, size), capacity - size)
+        if got < 0:
+            free(packet)
+            return PROCESS_INPUT_FAILED
+        if got == 0:
+            done = 1
+        else:
+            size = size + got
+
+    result_capacity: i64 = pcc_metal_device_packet_result_bytes(packet, size)
+    if result_capacity < RESULT_FIXED_BYTES:
+        result_capacity = RESULT_FIXED_BYTES
+    result = calloc(1, result_capacity)
+    if ptr_is_null(result):
+        free(packet)
+        return PROCESS_OUTPUT_FAILED
+    written: i64 = pcc_metal_device_launch_packet(
+        packet, size, result, result_capacity
+    )
+    status: i64 = PROCESS_OK
+    if written == 0:
+        status = PROCESS_OUTPUT_FAILED
+    offset: i64 = 0
+    while offset < written and status == PROCESS_OK:
+        sent: i64 = write(1, ptr_add(result, offset), written - offset)
+        if sent <= 0:
+            status = PROCESS_OUTPUT_FAILED
+        else:
+            offset = offset + sent
+    free(result)
+    free(packet)
+    return status
