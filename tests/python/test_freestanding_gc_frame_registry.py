@@ -202,6 +202,8 @@ def test_frame_registry_has_one_strict_source_owner():
     assert FREESTANDING_GC_THREAD_LOCAL_GLOBALS - TLS_STORAGE_SYMBOLS == {
         "pcc_gc_cms_worker_current", "pcc_gc_pressure_image_depth", "pcc_gc_pressure_owner",
         "pcc_gc_trace_stack_owner", "pcc_gc_gray_local_batch",
+        # The allocation staging ring of freestanding_gc_alloc_stage.
+        "pcc_gc_alloc_stage_local_ring",
         "pcc_gc_scalar_sweep_producer_token",
         "pcc_gc_deferred_free_active", "pcc_gc_deferred_free_head",
         "pcc_gc_deferred_free_tail", "pcc_gc_deferred_free_pending_count",

@@ -163,6 +163,9 @@ sched_yield = extern("sched_yield", (), c_int64)
 pcc_platform_wall_time_us = extern("pcc_platform_wall_time_us", (), c_int64)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 pcc_gc_gray_worklist_flush = extern("pcc_gc_gray_worklist_flush", (), c_void)
+pcc_gc_alloc_stage_drain_stopped = extern(
+    "pcc_gc_alloc_stage_drain_stopped", (), c_int64
+)
 pcc_gc_thread_unregister_buffers = extern(
     "pcc_gc_thread_unregister_buffers", (), c_void
 )
@@ -1642,6 +1645,9 @@ def pcc_stop_the_world() -> int:
     pthread_mutex_unlock(lock)
     _flush_suspend_trace(trace_records, trace_count, trace_epoch, self_id)
     _thread_trace(17, epoch, live, null())
+    # Every parked thread's staged allocations enter the object list and
+    # index before the holder walks either.
+    pcc_gc_alloc_stage_drain_stopped()
     return 0
 
 

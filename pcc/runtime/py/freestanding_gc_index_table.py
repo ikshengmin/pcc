@@ -65,6 +65,9 @@ pcc_allocator_granule_object_slot = extern(
 pcc_gc_tracked_primary_index_cells = extern(
     "pcc_gc_tracked_primary_index_cells", (c_ptr,), c_ptr
 )
+pcc_gc_alloc_stage_miss_drain = extern(
+    "pcc_gc_alloc_stage_miss_drain", (), c_int64
+)
 
 # Offsets within the 32-byte primary-index record supplied by tracking.
 _PRIMARY_SLOTS: i64 = 0
@@ -1240,6 +1243,20 @@ def py_gc_index_remove(obj: c_ptr) -> c_ptr:
 
 @c_abi_export("pcc_gc_object_index_find")
 def pcc_gc_object_index_find(obj: c_ptr) -> c_ptr:
+    node = pcc_gc_index_py_find_published(
+        global_addr("pcc_py_gc_object_published"), obj
+    )
+    if ptr_is_null(node) == 0:
+        return node
+    # A count-free GC1/GC2 allocation may still be staged in its thread's
+    # ring. The lock holder registers the staged objects and looks again;
+    # any other miss stands (freestanding_gc_alloc_stage). A collector that
+    # does not stage reads the one enable word and keeps its miss: a
+    # stopped mark or sweep misses once for every immortal referent.
+    if load_i32(global_addr("pcc_gc_alloc_stage_enabled"), 0) == 0:
+        return node
+    if pcc_gc_alloc_stage_miss_drain() == 0:
+        return node
     return pcc_gc_index_py_find_published(
         global_addr("pcc_py_gc_object_published"), obj
     )

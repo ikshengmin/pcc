@@ -208,6 +208,13 @@ void *pcc_allocator_object_side_slot(void *ptr, int64_t create) {
     (void)create;
     return NULL;
 }
+/* No allocation is staged in a standalone index: staging is off, so an
+ * object-index miss stands without asking the rings
+ * (freestanding_gc_alloc_stage). */
+int32_t pcc_gc_alloc_stage_enabled = 0;
+int64_t pcc_gc_alloc_stage_miss_drain(void) {
+    return 0;
+}
 void *pcc_allocator_granule_object_slot(void *ptr) {
     /* Model an exact cell whose side-array allocation failed. */
     return ptr == TEST_OOM_OBJECT_CELL ? ptr : NULL;
@@ -770,6 +777,8 @@ def test_freestanding_gc_index_table_ir_is_raw_and_exports_complete_abi(tmp_path
         "free",
         "pcc_allocator_granule_object_slot",
         "pcc_allocator_object_side_slot",
+        "pcc_gc_alloc_stage_enabled",
+        "pcc_gc_alloc_stage_miss_drain",
         "pcc_gc_tracked_primary_index_cells",
         "pcc_platform_abort",
     }

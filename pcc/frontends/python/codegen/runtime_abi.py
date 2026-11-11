@@ -1822,6 +1822,8 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_gray_count',
         'pcc_gc_gray_worklist_flush_requested',
         'pcc_gc_gray_worklist_fallback_required',
+        'pcc_gc_alloc_stage_enabled',
+        'pcc_gc_alloc_stage_draining',
         'pcc_gc_in_auto_step',
         'pcc_gc_backend4_auto_step_pending',
         'pcc_gc_last_alloc_bytes',
@@ -2020,6 +2022,8 @@ FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_static_literal_high',
         'pcc_gc_trace_stack_count',
         'pcc_gc_gray_worklist_allocation_failures',
+        'pcc_gc_alloc_stage_published',
+        'pcc_gc_alloc_stage_full_drains',
     }
 )
 
@@ -2099,6 +2103,7 @@ FREESTANDING_GC_PTR_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_trace_cursor',
         'pcc_gc_gray_published_batches',
         'pcc_gc_gray_pending_batches',
+        'pcc_gc_alloc_stage_rings',
         'pcc_gc_trace_cext_pending_obj',
         'py_gc_callbacks',
         'py_gc_head',
@@ -2126,6 +2131,7 @@ FREESTANDING_GC_THREAD_LOCAL_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_frame_node_pool_total',
         'pcc_gc_trace_stack_owner',
         'pcc_gc_gray_local_batch',
+        'pcc_gc_alloc_stage_local_ring',
     }
 )
 
@@ -3295,6 +3301,14 @@ def _cross_object_signatures_part_14():
         "pcc_gc_concurrent_sweep_slice": (("c_int64",), "c_int64"),
         "pcc_gc_concurrent_sweep_finish_stopped": ((), "c_int64"),
         "pcc_gc_stack_slot_root_is_conservative": (("c_ptr",), "c_int64"),
+        "pcc_gc_note_object_allocated_sized": (("c_ptr", "c_int64"), "c_void"),
+        "pcc_gc_alloc_stage_enable": (("c_int64",), "c_void"),
+        "pcc_gc_alloc_stage_note": (("c_ptr", "c_int64"), "c_int64"),
+        "pcc_gc_alloc_stage_pending": ((), "c_int64"),
+        "pcc_gc_alloc_stage_drain_locked": ((), "c_int64"),
+        "pcc_gc_alloc_stage_drain_stopped": ((), "c_int64"),
+        "pcc_gc_alloc_stage_miss_drain": ((), "c_int64"),
+        "pcc_gc_alloc_stage_thread_exit": ((), "c_void"),
     }
 
 

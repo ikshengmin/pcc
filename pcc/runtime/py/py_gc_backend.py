@@ -514,6 +514,9 @@ pcc_gc_frame_node_tls_pool_drain = extern(
     (),
     c_void,
 )
+pcc_gc_alloc_stage_enable = extern(
+    "pcc_gc_alloc_stage_enable", (c_int64,), c_void
+)
 pcc_gc_zpage_owner_index_find = extern(
     "pcc_gc_zpage_owner_index_find",
     (c_ptr,),
@@ -2730,6 +2733,8 @@ def pcc_gc_fix_backend() -> None:
         and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
     ):
         store_i32(global_addr("pcc_gc_nonmoving_count_free"), 0, 1)
+        # Their allocations register in batches (freestanding_gc_alloc_stage).
+        pcc_gc_alloc_stage_enable(1)
     # GC0 builds cycle candidates from TRACKED flags. Count-free GC1/2 keep
     # their independent ObjectNode graph for tracing and need tracked nodes
     # only for cold snapshots. Freeze both representations with this policy;
@@ -6770,12 +6775,16 @@ def pcc_gc_scheduler_queue_len(queue) -> int:
 pcc_gc_gray_worklist_unregister = extern(
     "pcc_gc_gray_worklist_unregister", (), c_void
 )
+pcc_gc_alloc_stage_thread_exit = extern(
+    "pcc_gc_alloc_stage_thread_exit", (), c_void
+)
 
 
 @c_abi_export("pcc_gc_thread_unregister_buffers")
 def pcc_gc_thread_unregister_buffers() -> None:
     pcc_gc_frame_node_tls_pool_drain()
     pcc_gc_gray_worklist_unregister()
+    pcc_gc_alloc_stage_thread_exit()
     # Called from pcc_threads.c::pcc_thread_trampoline on thread exit. The C
     # runtime (py_gc_backend.c) flushes+frees a PER-THREAD backend-4 medium
     # store-buffer state here. The pcc-Python runtime mirror keeps the

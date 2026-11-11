@@ -40,6 +40,14 @@ EXTERN_DEFAULTS = {
     # their conservative scan; models of registered roots and leases model
     # slots outside it, which keep the full protocol.
     "pcc_gc_stack_slot_root_is_conservative": lambda slot: 0,
+    # Count-free GC1/GC2 stage allocation registrations in per-thread rings
+    # (freestanding_gc_alloc_stage). Models without the rings run as a
+    # collector that never stages: nothing is drained or released.
+    "pcc_gc_alloc_stage_enable": lambda enabled: None,
+    "pcc_gc_alloc_stage_note": lambda obj, size: 0,
+    "pcc_gc_alloc_stage_miss_drain": lambda: 0,
+    "pcc_gc_alloc_stage_drain_stopped": lambda: 0,
+    "pcc_gc_alloc_stage_thread_exit": lambda: None,
 }
 
 

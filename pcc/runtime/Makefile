@@ -87,6 +87,7 @@ FREESTANDING_PY_MODULES += freestanding_gateway_control
 FREESTANDING_PY_MODULES += freestanding_time_calendar
 FREESTANDING_PY_MODULES += freestanding_runtime_traps
 FREESTANDING_PY_MODULES += freestanding_gc_deferred_free freestanding_gc_scalar_sweep
+FREESTANDING_PY_MODULES += freestanding_gc_alloc_stage
 FREESTANDING_OBJS_PY = $(patsubst %,$(OBJDIR_PY)/%.o,$(FREESTANDING_PY_MODULES))
 # Keep the explicit host/Make reference builder on the same target-specific
 # membership contract as the in-process owned builder. In particular Linux

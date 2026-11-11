@@ -29,6 +29,7 @@ MARK_CYCLE_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_common_mark_cycle.py"
 DEFERRED_FREE_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_deferred_free.py"
 SCALAR_SWEEP_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_scalar_sweep.py"
 GRAY_WORKLIST_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_gray_worklist.py"
+ALLOC_STAGE_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_alloc_stage.py"
 SUBSTRATE_SOURCE = RUNTIME_DIR / "py" / "py_substrate.py"
 
 
@@ -215,7 +216,9 @@ def test_freestanding_gc_state_has_complete_raw_abi_and_initial_values(
     # GC4 records the mark commit of its last relocation selection (1).
     # GC1/GC2 deferred sweeps: allowed, state, the recorded objects, their
     # count and next index, kept classes and freed objects (7).
-    assert len(expected) == 284
+    # GC3's closed young domain: its proof state, the cut in progress and
+    # the cuts committed and objects freed (4, f2227175c).
+    assert len(expected) == 288
     assert expected["pcc_gc_nonmoving_count_free"] == ("define_global_i32", 0)
     assert expected["pcc_gc_cms_finish_pending"] == ("define_global_i32", 0)
     assert expected["pcc_gc_backend4_no_refcounts"] == ("define_global_i32", 0)
@@ -306,6 +309,7 @@ def test_gc_state_storage_types_are_registered_in_runtime_abi():
         DEFERRED_FREE_SOURCE,
         SCALAR_SWEEP_SOURCE,
         GRAY_WORKLIST_SOURCE,
+        ALLOC_STAGE_SOURCE,
     ):
         owner_definitions = _state_definitions(owner_source)
         assert set(definitions).isdisjoint(owner_definitions)

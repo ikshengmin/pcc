@@ -29,6 +29,8 @@ def _namespace(filename):
         gray_worklist_events = []
         namespace["gray_worklist_events"] = gray_worklist_events
         namespace["pcc_gc_gray_worklist_flush"] = lambda: gray_worklist_events.append("flush")
+        # Nor allocation staging rings: a stopped world registers nothing.
+        namespace["pcc_gc_alloc_stage_drain_stopped"] = lambda: 0
     exec(compile(module, filename, "exec", flags=__future__.annotations.compiler_flag), namespace)
     return namespace
 

@@ -253,6 +253,43 @@ def test_known_lookup_closure_is_read_only():
     # The OOM fallback can fence reads or fail closed on corrupt generation;
     # it still cannot allocate, park, call back, lock, or mutate graph state.
     allowed.update(name for names in sources.values() for name in names)
+    # A miss asks the allocation staging rings, which only count-free
+    # GC1/GC2 enable: for GC4 (and GC0/GC3) the lookup reads the one enable
+    # word and keeps its miss without a call, and the hook itself returns
+    # on the same word before anything else.
+    allowed.add("pcc_gc_alloc_stage_miss_drain")
+    index_find = next(
+        node for node in ast.parse(
+            (RUNTIME / "freestanding_gc_index_table.py").read_text()
+        ).body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "pcc_gc_object_index_find"
+    )
+    gate, hook = (
+        position for position, statement in enumerate(index_find.body)
+        if "pcc_gc_alloc_stage" in ast.unparse(statement)
+    )
+    assert ast.unparse(index_find.body[gate]) == (
+        "if load_i32(global_addr('pcc_gc_alloc_stage_enabled'), 0) == 0:\n"
+        "    return node"
+    )
+    assert "pcc_gc_alloc_stage_miss_drain()" in ast.unparse(index_find.body[hook])
+    stage = ast.parse(
+        (RUNTIME / "freestanding_gc_alloc_stage.py").read_text()
+    )
+    miss_drain = next(
+        node for node in stage.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "pcc_gc_alloc_stage_miss_drain"
+    )
+    first = next(
+        statement for statement in miss_drain.body
+        if not isinstance(statement, ast.Expr)
+    )
+    assert ast.unparse(first) == (
+        "if load_i32(global_addr('pcc_gc_alloc_stage_enabled'), 0) == 0:\n"
+        "    return 0"
+    )
     for path, names in sources.items():
         functions = [node for node in ast.parse(path.read_text()).body
                      if isinstance(node, ast.FunctionDef) and node.name in names]

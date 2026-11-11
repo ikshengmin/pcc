@@ -125,6 +125,7 @@ def _seeding_harness_source() -> str:
 extern void pcc_gc_prepare_object_list_mark(int64_t explicit_collect);
 extern void pcc_gc_gray_current_roots(void);
 extern int64_t pcc_gc_gray_count_load_acquire(void);
+extern int64_t pcc_gc_alloc_stage_drain_stopped(void);
 
 typedef struct {
     PyObjectHeader h;
@@ -151,6 +152,11 @@ int main(void) {
     ProbeListObject *fresh = new_probe();
     ProbeListObject *registered = new_probe();
     if (pinned == NULL || fresh == NULL || registered == NULL) return 3;
+    /* GC1 stages allocation registrations in the allocating thread's ring;
+     * a stopped world registers them before any object-list walk. This
+     * probe calls the walks directly, so it registers them first, as the
+     * stopped world does. */
+    if (pcc_gc_alloc_stage_drain_stopped() != 3) return 4;
 
     pinned->h.flags = PY_FLAG_GC_TRACKED | PY_FLAG_GC_PINNED;
     fresh->h.flags = PY_FLAG_GC_TRACKED | PY_FLAG_GC_FRESH_ALLOC;

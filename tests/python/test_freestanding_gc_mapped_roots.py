@@ -381,7 +381,11 @@ int main(void) {
     int32_t continuation_map[1] = {-1};
     PyObject *frame_slots[2] = {NULL, NULL};
     PyObject *continuation_slots[1] = {NULL};
-    PyObject *scheduler_root = NULL;
+    /* A count-free collector roots a slot in the running thread's stack by
+       its conservative scan and registers nothing for it
+       (pcc_gc_stack_slot_root_is_conservative): keep the registered
+       scheduler root off the stack. */
+    static PyObject *scheduler_root = NULL;
     pcc_gc_frame_enter(frame_map, frame_slots);
     pcc_gc_register_continuation_root(continuation_map, continuation_slots);
     pcc_gc_scheduler_root_register(&scheduler_root);

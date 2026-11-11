@@ -31,6 +31,8 @@ class ConfigRace(FreezeRace):
                        pcc_py_gc_minor_graph_lock=self.lock, pcc_py_gc_minor_graph_unlock=self.unlock,
                        pcc_gc_maybe_start_cms_worker=lambda:None,
                        pcc_thread_enable_conservative_roots=lambda:self.events.append('conservative'),
+                       # Count-free GC1/GC2 fix allocation staging in the freeze.
+                       pcc_gc_alloc_stage_enable=lambda enabled:self.events.append('alloc-stage'),
                        atomic_cas_i32=self.cas,
                        _init_config=lambda:self.ns['pcc_gc_config_ensure']())
         tree=ast.parse(SOURCE.read_text(),filename=str(SOURCE))

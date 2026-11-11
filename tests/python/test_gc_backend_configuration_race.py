@@ -45,6 +45,8 @@ class Setter:
             "_init_config": lambda: self.words[SELECTED],
             "pcc_thread_enable_conservative_roots": lambda: self.events.append("enable-conservative"),
             "pcc_gc_tracking_enter_flag_mode": lambda: self.events.append("tracking-flag-mode"),
+            # Count-free GC1/GC2 also fix allocation staging in the freeze.
+            "pcc_gc_alloc_stage_enable": lambda enabled: self.events.append("alloc-stage"),
             "pcc_threads_enabled": lambda: threads,
             "pcc_py_gc_minor_graph_lock_depth": lambda: self.depth,
             "pcc_thread_no_park_depth": lambda: 0,

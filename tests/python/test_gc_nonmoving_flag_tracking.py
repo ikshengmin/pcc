@@ -66,15 +66,24 @@ def test_backend_freeze_selects_only_gc0_or_count_free_nonmoving_tracking(
         assert model.depth == 1 and model.words["pcc_gc_backend_frozen"] == 0
         model.events.append("tracking-flag-mode")
 
+    def stage(enabled):
+        # Allocation staging is fixed with the collector, under the same
+        # lock and before the freeze is published.
+        assert model.depth == 1 and model.words["pcc_gc_backend_frozen"] == 0
+        model.events.append(("alloc-stage", enabled))
+
     model.ns["pcc_gc_tracking_enter_flag_mode"] = enable
+    model.ns["pcc_gc_alloc_stage_enable"] = stage
     model.ns["pcc_gc_fix_backend"]()
     assert model.events.count("tracking-flag-mode") == expected
-    assert model.words.get("pcc_gc_nonmoving_count_free", 0) == int(
-        backend in (1, 2) and no_refcounts != 0
-    )
+    count_free_nonmoving = int(backend in (1, 2) and no_refcounts != 0)
+    assert model.words.get("pcc_gc_nonmoving_count_free", 0) == count_free_nonmoving
+    # Only the count-free nonmoving tracers stage their registrations.
+    assert model.events.count(("alloc-stage", 1)) == count_free_nonmoving
     assert model.words["pcc_gc_backend_frozen"] == 1 and model.depth == 0
     model.ns["pcc_gc_fix_backend"]()
     assert model.events.count("tracking-flag-mode") == expected
+    assert model.events.count(("alloc-stage", 1)) == count_free_nonmoving
 
 
 @pytest.mark.parametrize("backend", (1, 2))

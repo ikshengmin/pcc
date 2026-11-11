@@ -369,6 +369,7 @@ _CMS_COLOR_HELPERS = """
     #include "py_internal.h"
     #include <stdint.h>
     #include <stdio.h>
+    #include <unistd.h>
 
     static int all_have_color(PyObject **objs, int count, int32_t color) {
         for (int i = 0; i < count; i++) {
@@ -444,6 +445,15 @@ def test_concurrent_backend_barrier_grays_root_stores_inside_graph_lock_scope(
             black = all_have_color(children, 40, PY_FLAG_GC_BLACK);
         }
         if (!black) return 10;
+        /* The worker adds a batch to its trace count after the batch that
+         * blackened the last child. A mutator that waited for the graph
+         * lock on every allocation saw both at once; count-free GC2 stages
+         * allocations without it, so let the worker finish its batch. */
+        for (int wait = 0; wait < 20000
+                && pcc_gc_telemetry(PCC_GC_COUNTER_CMS_WORKER_TRACES) <= 0;
+                wait++) {
+            usleep(100);
+        }
         if (pcc_gc_telemetry(PCC_GC_COUNTER_CMS_WORKER_TRACES) <= 0) return 11;
         for (int i = 0; i < 40; i++) pcc_gc_store_root(&roots[i], 0);
         pcc_gc_unpin(anchor);

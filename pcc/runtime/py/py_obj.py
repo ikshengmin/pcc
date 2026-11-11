@@ -166,6 +166,9 @@ pcc_gc_note_object_allocated = extern(
     (c_ptr,),
     c_void,
 )
+pcc_gc_alloc_stage_note = extern(
+    "pcc_gc_alloc_stage_note", (c_ptr, c_int64), c_int64
+)
 pcc_gc_note_object_allocated_sized = extern(
     "pcc_gc_note_object_allocated_sized",
     (c_ptr, c_int64),
@@ -548,8 +551,11 @@ def pcc_gc_alloc(size: int, type_tag: int, flags: int):
     if pcc_gc_pointer_register(obj) < 0:
         return null()
     # The tracing collectors index the new object; GC0 keeps no index.
+    # Count-free GC1/GC2 stage it in this thread's ring and the next
+    # graph-lock holder that needs the index registers the batch.
     if backend != 0:
-        pcc_gc_note_object_allocated_sized(obj, size)
+        if pcc_gc_alloc_stage_note(obj, size) == 0:
+            pcc_gc_note_object_allocated_sized(obj, size)
     # Tracking may rehash the object index, which is read without the lock;
     # with one thread the replaced table can go now.
     if ptr_is_null(global_load_ptr("pcc_py_gc_index_retired_tables")) == 0:
