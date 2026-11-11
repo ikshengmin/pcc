@@ -572,6 +572,25 @@ def pcc_thread_is_running() -> int:
     return 1 if load_i64(record, 16) == 0 else 0
 
 
+def _running_thread_record_for(state: int):
+    """pcc_thread_is_running's verdict for an already loaded thread-state
+    word, as the record it read: this thread's record while it participates
+    as running, else null. A caller that needs the record next reads each
+    thread-local once (on Darwin every lookup is a _tlv_get_addr call)."""
+    if (state & 562949953421312) == 0:
+        return null()
+    record = global_load_ptr("pcc_tls_thread_record_py")
+    if ptr_is_null(record) != 0:
+        return null()
+    if load_i64(record, 16) != 0:
+        return null()
+    return record
+
+
+def _running_thread_record():
+    return _running_thread_record_for(load_i64(global_addr("pcc_tls_thread_state_py"), 0))
+
+
 def _outermost_frame_pointer() -> int:
     frame = frame_address()
     outer: int = ptr_to_int(frame)
@@ -1986,14 +2005,22 @@ _NATIVE_RANGE_BYTES: int = 16
 @c_abi_export("pcc_gc_native_frame_enter")
 def pcc_gc_native_frame_enter(frame, ranges, capacity: int) -> int:
     if (ptr_is_null(frame) or ptr_is_null(ranges) or capacity <= 0
-            or capacity > 576460752303423487 or pcc_thread_no_park_depth() <= 0
-            or pcc_thread_is_running() == 0):
+            or capacity > 576460752303423487):
+        pcc_platform_abort()
+        return -1
+    # One state load serves the no-park depth (its low 24 bits, as in
+    # pcc_thread_no_park_depth) and the running check.
+    state: int = load_i64(global_addr("pcc_tls_thread_state_py"), 0)
+    if (state & 16777215) == 0:
+        pcc_platform_abort()
+        return -1
+    record = _running_thread_record_for(state)
+    if ptr_is_null(record) != 0:
         pcc_platform_abort()
         return -1
     if load_i64(frame, _NATIVE_FRAME_OWNER) != 0:
         pcc_platform_abort()
         return -1
-    record = global_load_ptr("pcc_tls_thread_record_py")
     memset(ranges, 0, capacity * _NATIVE_RANGE_BYTES)
     store_ptr(frame, _NATIVE_FRAME_PREVIOUS, load_ptr(record, _THREAD_NATIVE_FRAME_HEAD))
     store_ptr(frame, _NATIVE_FRAME_RANGES, ranges)
@@ -2008,10 +2035,13 @@ def pcc_gc_native_frame_enter(frame, ranges, capacity: int) -> int:
 def pcc_gc_native_frame_leave(frame) -> int:
     # No poll, callback, allocation or deallocation after the last root leaves.
     # A raw result is captured/transferred by the enclosing no-poll adapter.
-    if ptr_is_null(frame) or pcc_thread_is_running() == 0:
+    if ptr_is_null(frame):
         pcc_platform_abort()
         return -1
-    record = global_load_ptr("pcc_tls_thread_record_py")
+    record = _running_thread_record()
+    if ptr_is_null(record) != 0:
+        pcc_platform_abort()
+        return -1
     if (ptr_to_int(load_ptr(record, _THREAD_NATIVE_FRAME_HEAD)) != ptr_to_int(frame)
             or load_i64(frame, _NATIVE_FRAME_OWNER) != load_i64(record, 8)):
         pcc_platform_abort()
@@ -2025,10 +2055,13 @@ def pcc_gc_native_frame_leave(frame) -> int:
 @c_abi_export("pcc_gc_native_root_bind_range")
 def pcc_gc_native_root_bind_range(slots, signed_count: int):
     if (ptr_is_null(slots) or signed_count == 0 or signed_count < -1152921504606846975
-            or signed_count > 1152921504606846975 or pcc_thread_is_running() == 0):
+            or signed_count > 1152921504606846975):
         pcc_platform_abort()
         return null()
-    record = global_load_ptr("pcc_tls_thread_record_py")
+    record = _running_thread_record()
+    if ptr_is_null(record) != 0:
+        pcc_platform_abort()
+        return null()
     frame = load_ptr(record, _THREAD_NATIVE_FRAME_HEAD)
     if ptr_is_null(frame) or load_i64(frame, _NATIVE_FRAME_OWNER) != load_i64(record, 8):
         pcc_platform_abort()
@@ -2057,10 +2090,10 @@ def pcc_gc_native_root_bind_range(slots, signed_count: int):
 def pcc_gc_native_root_unbind(entry) -> None:
     if ptr_is_null(entry):
         return
-    if pcc_thread_is_running() == 0:
+    record = _running_thread_record()
+    if ptr_is_null(record) != 0:
         pcc_platform_abort()
         return
-    record = global_load_ptr("pcc_tls_thread_record_py")
     frame = load_ptr(record, _THREAD_NATIVE_FRAME_HEAD)
     while ptr_is_null(frame) == 0:
         ranges = load_ptr(frame, _NATIVE_FRAME_RANGES)
@@ -2081,10 +2114,10 @@ def pcc_gc_native_root_unbind(entry) -> None:
 def pcc_gc_native_root_unbind_slots(slots) -> None:
     if ptr_is_null(slots):
         return
-    if pcc_thread_is_running() == 0:
+    record = _running_thread_record()
+    if ptr_is_null(record) != 0:
         pcc_platform_abort()
         return
-    record = global_load_ptr("pcc_tls_thread_record_py")
     frame = load_ptr(record, _THREAD_NATIVE_FRAME_HEAD)
     while ptr_is_null(frame) == 0:
         ranges = load_ptr(frame, _NATIVE_FRAME_RANGES)

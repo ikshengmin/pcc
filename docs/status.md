@@ -498,6 +498,23 @@ Requests/s: GC0 ~34,500; GC1 ~12,600; GC2 ~12,700; GC3 ~7,900; GC4 ~6,100.
   run, so the registration share overstates the collecting case (~7%
   there, excluding lock waits).
 
+- GC3/GC4 without any cycle run at ~10,400 / ~9,300: their gap to GC0 is
+  mostly mutator protocol, not collection. `_tlv_get_addr` is 16% of
+  GC3 main-thread samples in that run. Published with a same-input paired
+  A/B: native root frame enter/leave/bind/unbind read each thread-local
+  once (they called `pcc_thread_is_running`, two lookups, then loaded the
+  record again; enter also reloaded the state word for the no-park
+  depth). Five alternating pairs, medians: GC3 7,980 -> 8,163 (+2.30%,
+  5/5), GC4 6,201 -> 6,280 (+1.29%, 5/5), GC0 control +0.08% (2/5); ten
+  pairs: GC3 +2.48% (8/10), GC1 -0.26% (5/10), GC2 +0.39% (7/10). Other
+  per-operation lookups left: `pcc_thread_no_park_enter/exit` around each
+  count-free root store, graph lock acquire/release, `pcc_thread_stack_high`.
+- Failing on the unchanged parent as well (this Mac, CPython 3.15.0):
+  `test_native_frame_source_contract.py::test_public_native_entries_use_local_literal_layouts_and_keep_gc0_bypass`
+  (32 wrappers, the test expects 31) and
+  `test_freestanding_gc_frame_registry.py::test_frame_registry_survives_threaded_mutation_and_observation`
+  (30 s timeout).
+
 Known test failures (all classified as test problems so far): GC4
 production (38), generational (7: harness threads that never poll a
 safepoint, counted-release assertions), forwarding retirement payload
