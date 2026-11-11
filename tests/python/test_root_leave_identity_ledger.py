@@ -24,6 +24,8 @@ METHODS = {
     "shared": ("return_lowering.py", "_shared_return_exit", "emitted", "base"),
     "register": ("ownership_lowering.py", "_ensure_local_gc_frame_root", "", ""),
     "patch": ("ownership_lowering.py", "_insert_gc_frame_leave_before_terminator", "", ""),
+    "frame_entry": ("ownership_lowering.py", "_gc_frame_entry", "", ""),
+    "private_address": ("private_frame_scopes.py", "record_private_root_address", "", ""),
 }
 
 
@@ -76,6 +78,8 @@ def load_method(kind, *, reference=False, counts=None):
     def import_stub(name, globals=None, locals=None, fromlist=(), level=0):
         if name == "__future__":
             return builtins.__import__(name, globals, locals, fromlist, level)
+        if name == "pcc.frontends.python.codegen.private_frame_scopes":
+            return SimpleNamespace(**{name: namespace[name] for name in fromlist})
         assert name == "pcc.frontends.python.codegen.frame_root_groups"
         return SimpleNamespace(frame_root_group=lambda host, value: host.group(value))
 
@@ -90,12 +94,19 @@ def load_method(kind, *, reference=False, counts=None):
 
     namespace = {
         "__builtins__": dict(vars(builtins), __import__=import_stub),
-        "ir": SimpleNamespace(VoidType=VoidType, PointerType=PointerType, Constant=lambda ty, value: ("constant", value)),
+        "ir": recording_ir(),
         "_CSTR": PointerType(),
         "id": stable_id,
         "compare_identity": compare_identity,
     }
-    module = ast.Module(body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0), method], type_ignores=[])
+    support = []
+    if kind == "frame_entry":
+        # Run the selector's actual provenance and pairing closure with the
+        # same recording IR sink, without importing compiler/runtime modules.
+        support = [node for node in ast.parse((CODEGEN / "private_frame_scopes.py").read_text()).body
+                   if isinstance(node, ast.FunctionDef)]
+    module = ast.Module(body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0),
+                              *support, method], type_ignores=[])
     exec(compile(ast.fix_missing_locations(module), str(CODEGEN / filename), "exec"), namespace)
     return namespace[name]
 
@@ -106,6 +117,33 @@ class VoidType:
 
 class PointerType:
     pass
+
+
+class IntType:
+    def __init__(self, width):
+        self.width = width
+
+
+class Constant(tuple):
+    def __new__(cls, ty, value):
+        constant = super().__new__(cls, ("constant", value))
+        constant.type, constant.value = ty, value
+        return constant
+
+
+class GlobalVariable:
+    def __init__(self, module, ty, name):
+        self.value_type, self.name = ty, name
+        self.global_constant = True
+        self.initializer = Constant(ty, 1)
+        module.globals[name] = self
+
+
+def recording_ir():
+    return SimpleNamespace(
+        VoidType=VoidType, PointerType=PointerType, IntType=IntType,
+        Constant=Constant, GlobalVariable=GlobalVariable,
+    )
 
 
 class Slot:
@@ -168,7 +206,8 @@ class Builder:
 
 
 class Host:
-    def __init__(self, registry, *, groups=None, payload=(), module=False, return_type=None):
+    def __init__(self, registry, *, groups=None, payload=(), module=False,
+                 return_type=None, mapped=False, root_capacity=1, resume=False):
         self.events = []
         self.builder = Builder(self.events)
         self.current_function = SimpleNamespace(name="f", function_type=SimpleNamespace(return_type=return_type or VoidType()))
@@ -179,7 +218,11 @@ class Host:
         self._shared_return_exits = {}
         self._gc_rooted_local_names = set()
         self._gc_rooted_local_order = []
-        self.frame_map = object()
+        self.module = SimpleNamespace(globals={})
+        self.frame_map = GlobalVariable(self.module, IntType(32), "frame.map.one")
+        self._precise_stack_frames_mapped = mapped
+        self.root_capacity = root_capacity
+        self._generator_ctx_stack = [{"resume_function": self.current_function}] if resume else []
         self.patches = []
         self._return_handoff_sites = []
         self.env = {}
@@ -194,6 +237,14 @@ class Host:
 
     def _gc_one_slot_frame_map(self):
         return self.frame_map
+
+    def _gc_frame_entry(self, name, slot, frame_map=None):
+        selected = load_method("frame_entry")(self, name, slot, frame_map)
+        self.events.append(("frame_entry", name, label(slot), selected))
+        return selected
+
+    def _mark_walked_frames(self):
+        self.events.append(("mark_walked_frames",))
 
     def _emit_entry_gc_frame_enter(self, frame_map, slot):
         assert frame_map is self.frame_map
@@ -237,13 +288,16 @@ class Host:
 
     def _alloca_in_entry(self, ty, name, init_null):
         self.events.append(("alloca", name, init_null))
-        return Slot(name)
+        slot = Slot(name)
+        load_method("private_address")(self, slot, self.root_capacity)
+        return slot
 
     def _as_gc_ptr(self, slot, name=""):
         self.events.append(("as_ptr", label(slot), name))
         return "slot_ptr"
 
     def _emit_gc_frame_leave_lifo_for_slot(self, slot):
+        self._gc_frame_entry("pcc_gc_frame_leave_lifo", slot)
         self.events.append(("leave_lifo", label(slot)))
 
 
@@ -427,10 +481,40 @@ def test_owned_shared_exit_and_module_bypasses_are_unchanged():
 @pytest.mark.parametrize("rooted", [False, True])
 def test_shared_exit_preserves_value_and_cleanup_calls(rooted):
     slot = Slot("local")
-    events, error = outcome("shared", lambda: registered_host([("local", slot)], return_type=PointerType()), rooted=rooted)
-    assert error is None
-    assert ("leave", "local") in events
-    assert ("leave_lifo", "ret.shared") in events if rooted else ("load", "ret.shared", "ret.shared.value") in events
+    for mapped in (False, True):
+        for root_capacity in (0, 1):
+            for resume in (False, True):
+                events, error = outcome("shared", lambda: registered_host(
+                    [("local", slot)], return_type=PointerType(), mapped=mapped,
+                    root_capacity=root_capacity, resume=resume,
+                ), rooted=rooted)
+                assert error is None
+                assert ("leave", "local") in events
+                choices = [event for event in events if event[0] == "frame_entry"]
+                if not rooted:
+                    assert ("load", "ret.shared", "ret.shared.value") in events
+                    assert ("ret", "loaded") in events
+                    assert not choices
+                    assert not any(event[0] in ("call", "leave_lifo") for event in events)
+                    continue
+                suffix = "_local" if root_capacity else ""
+                if mapped and (root_capacity or not resume):
+                    suffix += "_mapped"
+                assert choices == [
+                    ("frame_entry", "pcc_gc_frame_enter_lifo", "ret.shared",
+                     "pcc_gc_frame_enter_lifo" + suffix),
+                    ("frame_entry", "pcc_gc_frame_leave_lifo", "ret.shared",
+                     "pcc_gc_frame_leave_lifo" + suffix),
+                ]
+                assert events.index(choices[0]) < events.index(("position", "ret.shared.leave"))
+                calls = [event for event in events if event[0] == "call"]
+                assert calls == [
+                    ("call", "load_ptr", [("constant", None), "slot_ptr"], "ret.shared.value"),
+                    ("call", "store_root", ["slot_ptr", ("constant", None)], ""),
+                ]
+                assert events.index(calls[1]) < events.index(choices[1])
+                assert ("leave_lifo", "ret.shared") in events
+                assert events.index(choices[1]) < events.index(("ret", "called"))
 
 
 def test_shared_exit_cache_and_invocation_local_owned_ledger():

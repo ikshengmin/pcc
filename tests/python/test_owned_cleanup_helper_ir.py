@@ -8,7 +8,11 @@ from pcc.backend.self_backend_call_flags import classify_call_flags
 from pcc.backend.self_backend_precise_stackmaps import build_stack_map_plans
 from pcc.backend.self_backend_prepare import prepare_module_for_target
 from pcc.backend.self_backend_x86_64_linux import _aggregate_returned_indirect
+from pcc.frontends.python.codegen.ownership_lowering import OwnershipLoweringMixin
+from pcc.frontends.python.codegen.private_frame_scopes import record_private_root_address
+from pcc.frontends.python.codegen.runtime_abi import declare_runtime
 from pcc.frontends.python.owned_runtime_build import _compile_runtime_module, runtime_modules
+from pcc.ir.compat import ir
 from tests.owned_ir_validation import verify_ir_text
 from tests.python.test_slot_call_cleanup_reuse import setup_roots, IdentityOnly
 from tests.python.test_slot_call_lexical_roots import _emit
@@ -17,6 +21,83 @@ ROOT = Path(__file__).resolve().parents[2]
 ROOT_HELPER = 'py_cleanup_one_root_preserving_exception'
 TWO_ROOT_HELPER = 'py_cleanup_two_roots_preserving_exception'
 LEASE_HELPER = 'py_cleanup_one_lease_preserving_exception'
+FRAME_SUFFIXES = ('', '_local', '_mapped', '_local_mapped')
+
+
+def _lifo_calls(text, operation):
+    prefix = 'pcc_gc_frame_' + operation + '_lifo'
+    calls = re.findall(r'\bcall\b[^\n]*@(' + prefix + r'[\w]*)\(([^\n]*)\)', text)
+    parsed = []
+    for symbol, arguments in calls:
+        assert symbol in {prefix + suffix for suffix in FRAME_SUFFIXES}
+        signature = r'ptr ([%@][\w.]+)'
+        if operation == 'enter':
+            signature += r', ptr ([%@][\w.]+)'
+        match = re.fullmatch(signature, arguments)
+        assert match, (symbol, arguments)
+        parsed.append((symbol, match.groups()))
+    return parsed
+
+
+def _slot_resolver(text):
+    aliases = dict(re.findall(r'(%[\w.]+) = bitcast ptr ([%@][\w.]+) to ptr', text))
+
+    def resolve(value):
+        seen = set()
+        while value in aliases:
+            assert value not in seen, 'cyclic root alias'
+            seen.add(value)
+            value = aliases[value]
+        return value
+
+    return resolve
+
+
+class FrameABIModel(OwnershipLoweringMixin):
+    """Use real frame emitters, runtime declarations and IR for every ABI."""
+
+    def __init__(self, mapped):
+        self.module = ir.Module('helper_frame_abi')
+        self.current_function = ir.Function(
+            self.module, ir.FunctionType(ir.VoidType(), []), 'frame_probe',
+        )
+        self.builder = ir.IRBuilder(self.current_function.append_basic_block('entry'))
+        self.runtime = declare_runtime(self.module)
+        self._precise_stack_frames_mapped = mapped
+        self._python_library = True
+
+    def _fresh(self, name):
+        return name
+
+
+def _assert_real_frame_abi_calls():
+    for mapped in (False, True):
+        for private in (False, True):
+            model = FrameABIModel(mapped)
+            pointer = ir.IntType(8).as_pointer()
+            slot = model.builder.alloca(pointer, name='root')
+            model.builder.store(ir.Constant(pointer, None), slot)
+            if private:
+                record_private_root_address(model, slot, 1)
+            frame_map = model._gc_one_slot_frame_map()
+            model._emit_current_gc_frame_enter_lifo(frame_map, slot)
+            model._emit_gc_frame_leave_lifo_for_slot(slot)
+            model.builder.ret_void()
+            text = model.current_function.render()
+            resolve = _slot_resolver(text)
+            suffix = ('_local' if private else '') + ('_mapped' if mapped else '')
+            enters = _lifo_calls(text, 'enter')
+            leaves = _lifo_calls(text, 'leave')
+            assert len(enters) == len(leaves) == 1
+            assert enters[0][0] == 'pcc_gc_frame_enter_lifo' + suffix
+            assert leaves[0][0] == 'pcc_gc_frame_leave_lifo' + suffix
+            assert tuple(map(resolve, enters[0][1])) == (str(frame_map), str(slot))
+            assert tuple(map(resolve, leaves[0][1])) == (str(slot),)
+            verify_stackmaps(str(model.module))
+            with pytest.raises(AssertionError):
+                _lifo_calls(text.replace(leaves[0][0], leaves[0][0] + '_unknown'), 'leave')
+            with pytest.raises(AssertionError):
+                _lifo_calls('call void @' + enters[0][0] + '(ptr %root)', 'enter')
 
 
 def verify_stackmaps(text):
@@ -80,6 +161,7 @@ def test_exact_single_shapes_have_no_caller_exception_alloca():
     token = IdentityOnly()
     model._slot_call_cleanup_block((), target, ((second, token),))
     assert model.events == [(LEASE_HELPER, (second, token)), ('branch', target)]
+    _assert_real_frame_abi_calls()
 
 
 def test_exact_two_roots_keep_reverse_caller_retirement_visible():
@@ -148,25 +230,33 @@ def test_ineligible_shapes_keep_inline_tls_protocol(shape):
 def test_real_caller_cleanup_root_provenance_and_stackmaps(source):
     _, text = _emit(source)
     verify_stackmaps(text)
-    blocks = re.findall(r'^call.slot.cleanup[^:]*:\n(.*?)(?=^[\w.]+:|^})', text, re.M | re.S)
-    assert blocks
-    for block in blocks:
-        if '@' + ROOT_HELPER + '(' in block:
-            assert '@pcc_gc_frame_leave_lifo(' in block
-            assert block.index('@' + ROOT_HELPER) < block.index('@pcc_gc_frame_leave_lifo')
-            assert '@py_tls_exc_swap_slot(' not in block
-        if '@' + TWO_ROOT_HELPER + '(' in block:
-            owners = re.search(
-                r'@' + TWO_ROOT_HELPER + r'\(ptr (%[\w.]+), ptr (%[\w.]+)\)', block,
-            )
-            assert owners
-            aliases = dict(re.findall(r'(%[\w.]+) = bitcast ptr (%[\w.]+) to ptr', block))
-            resolve = lambda value: aliases.get(value, value)
-            leaves = re.findall(r'@pcc_gc_frame_leave_lifo\(ptr (%[\w.]+)\)', block)
-            assert list(map(resolve, leaves)) == list(map(resolve, reversed(owners.groups())))
-            assert block.index('@' + TWO_ROOT_HELPER) < block.index('@pcc_gc_frame_leave_lifo')
-            assert '@py_tls_exc_swap_slot(' not in block
-            assert '@pcc_gc_store_root(' not in block
-        if '@' + LEASE_HELPER + '(' in block:
-            assert '@pcc_gc_frame_leave_lifo(' not in block
-            assert '@pcc_gc_store_root(' not in block
+    checked = 0
+    for function in re.findall(r'^define[^\n]*\{\n.*?^}', text, re.M | re.S):
+        resolve = _slot_resolver(function)
+        enters = {}
+        for symbol, (_frame_map, slot) in _lifo_calls(function, 'enter'):
+            enters.setdefault(resolve(slot), set()).add(symbol)
+        blocks = re.findall(r'^call.slot.cleanup[^:]*:\n(.*?)(?=^[\w.]+:|^})', function, re.M | re.S)
+        for block in blocks:
+            checked += 1
+            leaves = _lifo_calls(block, 'leave')
+            for helper, signature in (
+                (ROOT_HELPER, r'ptr (%[\w.]+)'),
+                (TWO_ROOT_HELPER, r'ptr (%[\w.]+), ptr (%[\w.]+)'),
+            ):
+                if '@' + helper + '(' not in block:
+                    continue
+                owners = re.search(r'@' + helper + r'\(' + signature + r'\)', block)
+                assert owners
+                assert [resolve(args[0]) for _symbol, args in leaves] == [
+                    resolve(slot) for slot in reversed(owners.groups())
+                ]
+                for symbol, (slot,) in leaves:
+                    assert enters[resolve(slot)] == {symbol.replace('_leave_', '_enter_', 1)}
+                    assert block.index('@' + helper) < block.index('@' + symbol)
+                assert '@py_tls_exc_swap_slot(' not in block
+                assert '@pcc_gc_store_root(' not in block
+            if '@' + LEASE_HELPER + '(' in block:
+                assert not leaves
+                assert '@pcc_gc_store_root(' not in block
+    assert checked

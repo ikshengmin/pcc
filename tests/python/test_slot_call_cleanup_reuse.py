@@ -4,6 +4,8 @@ import gc
 import weakref
 
 from pcc.frontends.python.codegen.call_object_lowering import CallObjectLoweringMixin
+from pcc.frontends.python.codegen.ownership_lowering import OwnershipLoweringMixin
+from pcc.ir.compat import ir
 
 
 class IdentityOnly:
@@ -15,6 +17,9 @@ class IdentityOnly:
 
 
 class Recorder(CallObjectLoweringMixin):
+    _note_never_gc_object = OwnershipLoweringMixin._note_never_gc_object
+    _value_is_never_gc_object = OwnershipLoweringMixin._value_is_never_gc_object
+
     def __init__(self):
         self.blocks = []
         self.events = []
@@ -76,6 +81,35 @@ def test_identical_cleanup_is_shared_without_reemission():
     assert model._slot_call_cleanup_block((first, second), target) is block
     assert len(model.events) == events
     assert model.builder._block is saved
+
+    # Use real identity-hashed IR values for the production never-GC ledger.
+    # Equal operand spellings must not turn an unknown owner into an exclusion.
+    model = Recorder()
+    first, immediate, borrowed, second = (
+        ir.Value(ir.IntType(8).as_pointer(), "%same") for _ in range(4)
+    )
+    model._slot_call_root_records = [(first, None, True), (second, None, True)]
+    model._note_never_gc_object(immediate)
+    model._slot_call_borrowed_operands = {id(borrowed): borrowed, id(second): borrowed}
+    assert model._value_is_never_gc_object(immediate)
+    assert not model._value_is_never_gc_object(first)
+    assert not model._value_is_never_gc_object(second)
+    block = model._slot_call_cleanup_block((first, immediate, borrowed, second), target)
+    assert model.events == [
+        ("py_cleanup_two_roots_preserving_exception", (first, second)),
+        ("leave", second), ("leave", first), ("branch", target),
+    ]
+    events = list(model.events)
+    assert model._slot_call_cleanup_block((first, second), target) is block
+    assert model._slot_call_cleanup_block((immediate, borrowed), target) is target
+    assert model.events == events
+    model.events.clear()
+    model._release_slot_call_roots((first, immediate, borrowed, second))
+    assert [event[0] for event in model.events] == [
+        "pcc_gc_store_root", "leave", "pcc_gc_store_root", "leave",
+    ]
+    assert model.events[0][1][0] is second and model.events[1][1] is second
+    assert model.events[2][1][0] is first and model.events[3][1] is first
 
 
 def test_root_order_destination_registration_and_function_stay_distinct():

@@ -18,9 +18,11 @@ from pcc.backend.self_backend_precise_stackmaps import build_stack_map_plans
 from pcc.backend.self_backend_prepare import prepare_module_for_target
 from pcc.backend.self_backend_x86_64_linux import _aggregate_returned_indirect
 from pcc.frontends.python.codegen.call_object_lowering import CallObjectLoweringMixin
+from pcc.frontends.python.codegen.ownership_lowering import OwnershipLoweringMixin
 from pcc.frontends.python.py_ast import DynType, Name, SourceSpan, TupleExpr
 from pcc.frontends.python.py_lift import parse_and_lift
 from pcc.frontends.python.type_infer import infer_module
+from pcc.ir.compat import ir
 from tests.python.owned_regression_support import explicit_owned_runtime
 from tests.python.test_slot_call_operand_roots import (
     SlotProbeCodegen,
@@ -159,12 +161,24 @@ class ModelFailure(Exception):
     pass
 
 
+class ModelSlot(list):
+    """Mutable modeled storage with an IR value's identity-only membership."""
+
+    __hash__ = object.__hash__
+
+    def __eq__(self, other):
+        raise AssertionError("IR slots must not be compared by equality")
+
+
 class TupleModel(CallObjectLoweringMixin):
     """Run the real dispatcher, fixed/streaming emitters and root release.
 
     Runtime allocation, retaining stores and error-edge execution are modeled;
     real emitted error joins are independently checked by _verified_ir above.
     """
+    _note_never_gc_object = OwnershipLoweringMixin._note_never_gc_object
+    _value_is_never_gc_object = OwnershipLoweringMixin._value_is_never_gc_object
+
     def __init__(self, evaluators, fail_at=None):
         self.evaluators = evaluators
         self.fail_at = fail_at
@@ -205,7 +219,7 @@ class TupleModel(CallObjectLoweringMixin):
         pass
 
     def _new_slot_call_root(self, label):
-        slot = [None]
+        slot = ModelSlot([None])
         self.stack.append(slot)
         self._slot_call_root_records.append((slot, None, True))
         return slot
@@ -331,7 +345,15 @@ def test_literal_model_preserves_aliases_and_owners_across_later_evaluation():
     assert model.events[:4] == ["eval:first", "eval:alias", "eval:later", "py_tuple_new"]
     assert "py_list_new" not in model.events and "py_tuple_from_list" not in model.events
     assert len(model.stack) == 1 and model.stack[0] is output
-    model._release_slot_call_roots((output,))
+    immediate = ir.Constant(ir.IntType(8).as_pointer(), None)
+    model._note_never_gc_object(immediate)
+    borrowed = ModelSlot([binding[0]])
+    model._slot_call_borrowed_operands = {id(borrowed): borrowed, id(output): borrowed}
+    assert model._value_is_never_gc_object(immediate)
+    assert not model._value_is_never_gc_object(output)
+    model._release_slot_call_roots((immediate, output, borrowed))
+    assert output[0] is None and borrowed[0] is binding[0]
+    assert shared.refs == 0 and binding[0].refs == 1
     model.release(binding[0])
     assert all(value.refs == 0 for value in model.live)
     assert not model.stack
