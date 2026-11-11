@@ -10,6 +10,7 @@ import ast
 import ctypes
 import importlib.util
 import random
+import re
 import struct
 
 import pytest
@@ -136,7 +137,7 @@ def test_prelude_is_python_with_runtime_offsets_and_one_launcher_per_kernel():
     assert [a.arg for a in functions["__pcc_gpu_launch_saxpy"].args.args] == [
         "__pcc_a0", "__pcc_a1", "__pcc_a2", "__pcc_a3", "__pcc_a4", "count",
     ]
-    assert "@" not in prelude
+    assert re.search(r"@[A-Z_]+@", prelude) is None
     assert f"store_i64(packet, {abi.PACKET_MAGIC_AT}, {abi.PACKET_MAGIC})" in prelude
     assert f"load_i64(result, {abi.RESULT_STAGE})" in prelude
     assert f"cursor = {abi.RESULT_FIXED_BYTES}" in prelude
@@ -217,9 +218,15 @@ def test_launch_calls_become_launcher_calls_and_keep_their_lines(tmp_path):
     assert artifacts[0].metal_path.read_text() == artifacts[0].launch.source
     assert len(artifacts[0].source_sha256) == 64
     assert host_source_launches_gpu(host)
-    assert "gpu.launch" not in host and "@gpu.kernel" not in host
+    module = ast.parse(host)
+    assert not any(
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "gpu"
+        and node.attr in {"launch", "kernel"}
+        for node in ast.walk(module)
+    )
     assert "from pcc import gpu" not in host
-    ast.parse(host)
     tail = host.split("# --- end of generated GPU host launch ---\n", 1)[1]
     removed = len(ADD_KERNEL.splitlines()) + 1
     # Only the kernel and the import were removed; the launch call still spans

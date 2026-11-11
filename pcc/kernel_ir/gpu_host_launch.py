@@ -159,6 +159,10 @@ def __pcc_gpu_f32_bytes(value) -> bytes:
 
 
 def __pcc_gpu_buffer_bytes(value, element_bytes: int, name: str) -> bytes:
+    if not isinstance(value, bytes) and not isinstance(value, bytearray):
+        raise TypeError(
+            "gpu.launch: buffer '" + name + "' must be bytes or bytearray"
+        )
     data = bytes(value)
     size: int = len(data)
     if size == 0:
@@ -353,6 +357,25 @@ def _kernel_launcher_source(kernel: GpuKernelLaunch) -> str:
                 f"{kernel.name}: parameter {binding.name!r} has unsupported "
                 f"kind {binding.kind!r}"
             )
+    # The packet owns a separate copy per binding, not a shared-buffer table.
+    # Preserving a writable alias needs that table; never silently break the
+    # kernel's pointer identity by giving the same host buffer two copies.
+    for left, first in enumerate(kernel.bindings):
+        if first.kind != "buffer":
+            continue
+        for right in range(left + 1, len(kernel.bindings)):
+            second = kernel.bindings[right]
+            if second.kind != "buffer" or not (first.written or second.written):
+                continue
+            lines += [
+                f"    if {names[left]} is {names[right]}:",
+                "        raise ValueError("
+                + repr(
+                    f"gpu.launch: aliased buffers '{first.name}' and "
+                    f"'{second.name}' are not supported when either is written"
+                )
+                + ")",
+            ]
     lines += [
         "    __pcc_outputs = __pcc_gpu_launch(",
         f"        {_bytes_literal(kernel.source)},",

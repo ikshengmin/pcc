@@ -20,6 +20,9 @@ A kernel runs once per thread id::
 number of thread ids as ``count``. A ``ptr_f32`` argument is ``bytes`` or
 ``bytearray`` holding little-endian f32 elements; a buffer the kernel writes
 must be a ``bytearray`` and is updated in place when the launch has completed.
+Passing the same buffer to multiple parameters is rejected if any of those
+parameters is written: the current copy-based launch packet cannot preserve
+writable aliases. Reusing a buffer for read-only parameters is allowed.
 Threads are launched in whole groups, so thread ids may exceed ``count``; a
 kernel must guard its accesses as ``add`` does.
 """
