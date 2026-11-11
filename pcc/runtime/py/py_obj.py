@@ -567,6 +567,12 @@ def pcc_gc_publish_initialized(obj) -> None:
         return
     if _gc_backend_fast() != 4:
         return
+    if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
+        # Nothing reads the pending bit while a mutator runs: selection and
+        # the sweep read it in a stopped world. One atomic clear replaces
+        # the graph-lock round trip every container allocation paid.
+        atomic_rmw_i32("and", obj, PYOBJECTHEADER_FLAGS_OFFSET, ~16384, "acq_rel")
+        return
     pcc_py_gc_minor_graph_lock_for(2)
     flags: int = load_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET)
     store_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET, flags & ~16384)
@@ -933,7 +939,7 @@ def _pcc_gc_store_plan_commit_locked(plan, owner, slot, value) -> int:
         # for the root case while this same outer lock keeps the phase stable.
         if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
             if ptr_is_null(owner) == 0 or load_i32(global_addr("pcc_gc_mark_active"), 0) != 0:
-                if backend == 4 and ptr_is_null(owner) == 0:
+                if backend == 4 and ptr_is_null(owner) == 0 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0:
                     pcc_gc_backend4_note_heap_store_locked(owner, slot, value)
                 else:
                     pcc_gc_note_slot_write_barrier(owner, slot, value)
@@ -946,7 +952,7 @@ def _pcc_gc_store_plan_commit_locked(plan, owner, slot, value) -> int:
         # run, but no slot publication or old-value release occurs.
         return 0
     if backend == 1 or backend == 2 or backend == 3 or backend == 4:
-        if backend == 4 and ptr_is_null(owner) == 0:
+        if backend == 4 and ptr_is_null(owner) == 0 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0:
             pcc_gc_backend4_note_heap_store_locked(owner, slot, load_ptr(plan, 0))
         else:
             pcc_gc_note_slot_write_barrier(owner, slot, load_ptr(plan, 0))
@@ -1008,7 +1014,7 @@ def _pcc_gc_store_plan_commit_sentinel_aware_locked(
         # for the root case while this same outer lock keeps the phase stable.
         if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
             if ptr_is_null(owner) == 0 or load_i32(global_addr("pcc_gc_mark_active"), 0) != 0:
-                if backend == 4 and ptr_is_null(owner) == 0:
+                if backend == 4 and ptr_is_null(owner) == 0 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0:
                     pcc_gc_backend4_note_heap_store_locked(owner, slot, value)
                 else:
                     pcc_gc_note_slot_write_barrier(owner, slot, value)
@@ -1030,7 +1036,7 @@ def _pcc_gc_store_plan_commit_sentinel_aware_locked(
         if load_i64(plan, 48) != 0:
             return 0
     if backend == 1 or backend == 2 or backend == 3 or backend == 4:
-        if backend == 4 and ptr_is_null(owner) == 0:
+        if backend == 4 and ptr_is_null(owner) == 0 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0:
             pcc_gc_backend4_note_heap_store_locked(owner, slot, load_ptr(plan, 0))
         else:
             pcc_gc_note_slot_write_barrier(owner, slot, load_ptr(plan, 0))
@@ -1241,7 +1247,7 @@ def pcc_gc_store_root(slot, value) -> None:
             py_decref(old)
         return
     if (
-        (backend == 1 or backend == 2 or backend == 3)
+        (backend == 1 or backend == 2 or backend == 3 or backend == 4)
         and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
         and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
         and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
@@ -1283,7 +1289,7 @@ def pcc_gc_store_root_take(slot, value) -> None:
             py_decref(old)
         return
     if (
-        (backend == 1 or backend == 2 or backend == 3)
+        (backend == 1 or backend == 2 or backend == 3 or backend == 4)
         and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
         and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
         and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
@@ -1460,7 +1466,7 @@ def _gc_root_copy_lease_locked(destination, source) -> int:
         if pcc_gc_store_root_plan_commit_locked(plan, destination, value) == 0:
             released: int = pcc_gc_foreign_lease_release(source, token)
             token = -4 if released == 0 else -3
-        elif token == 0 and (backend == 4):
+        elif token == 0 and backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0:
             # A conservative source stack slot can return token 0. Its
             # lifetime does not cover a copied heap/global destination after
             # the source is rebound or leaves the stack. Establish the
@@ -1656,7 +1662,7 @@ def pcc_gc_root_copy_local(destination, source, source_borrowed: int) -> int:
     ):
         local_backend: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
         if (
-            (local_backend == 1 or local_backend == 2 or local_backend == 3)
+            (local_backend == 1 or local_backend == 2 or local_backend == 3 or local_backend == 4)
             and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
             and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
             and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
@@ -1734,7 +1740,7 @@ def pcc_gc_root_copy_lease_prepare_locked(destination, source, source_borrowed: 
             if pcc_gc_foreign_lease_release(source, token) != 0:
                 return -3
             return -4
-        if token == 0 and (backend == 4):
+        if token == 0 and backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0:
             # A source-stack no-op lease is not transferable to a heap root.
             token = pcc_gc_foreign_lease_acquire(destination)
             if token < 0:

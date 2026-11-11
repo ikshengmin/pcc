@@ -67,6 +67,8 @@ pcc_py_gc_minor_graph_unlock = extern(
 pcc_thread_owns_stopped_world = extern(
     "pcc_thread_owns_stopped_world", (), c_int64
 )
+pcc_gc_reset_relocation_set = extern("pcc_gc_reset_relocation_set", (), c_void)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 pcc_thread_live_count = extern("pcc_thread_live_count", (), c_int64)
 pcc_thread_all_stopped_at_gates = extern("pcc_thread_all_stopped_at_gates", (), c_int64)
 pcc_stop_the_world = extern("pcc_stop_the_world", (), c_int64)
@@ -760,6 +762,44 @@ def pcc_gc_backend4_remap_and_retire_stopped_world() -> i64:
     return 0
 
 
+@c_abi_export("pcc_gc_relocation_settle_stopped")
+def pcc_gc_relocation_settle_stopped() -> i64:
+    """Before a stopped world resumes: rewrite what the stop moved.
+
+    Under the nonmoving protocol a running thread loads a slot without
+    asking whether its value was forwarded, so a stop that installed a
+    forwarding edge must rewrite every heap and root reference before any
+    mutator runs again. What a thread's stack or registers name was pinned
+    before the move and stayed where it is. Candidates the stop did not
+    reach leave the relocation set (a later selection takes them again):
+    the rewrite is admitted only without one. Returns 1 when a rewrite ran.
+    The caller owns the stopped world (pcc_resume_world).
+    """
+    if load_i32(global_addr("pcc_gc_backend4_remap_owed"), 0) == 0:
+        return 0
+    if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0:
+        return 0
+    if pcc_thread_owns_stopped_world() == 0:
+        return 0
+    attempts: i64 = 0
+    while (load_i32(global_addr("pcc_gc_backend4_remap_owed"), 0) != 0
+           and attempts < 4):
+        if ptr_is_null(global_load_ptr("pcc_gc_relocation_set_head")) == 0:
+            pcc_gc_reset_relocation_set()
+        pcc_gc_backend4_remap_and_retire_stopped_world()
+        attempts = attempts + 1
+    if load_i32(global_addr("pcc_gc_backend4_remap_owed"), 0) != 0:
+        # Never resume with a reference a plain load would follow to a
+        # forwarded source.
+        pcc_py_gc_defer_tripwire(
+            cstr("a relocating stop cannot rewrite its references before resuming"),
+            cstr("pcc/runtime/py/freestanding_gc_forwarding_retirement.py"),
+            0,
+        )
+        pcc_platform_abort()
+    return 1
+
+
 @c_abi_export("pcc_gc_backend4_remap_and_retire_unlocked")
 def pcc_gc_backend4_remap_and_retire_unlocked(finish) -> None:
     if ptr_is_null(finish) != 0:
@@ -773,6 +813,7 @@ def pcc_gc_backend4_remap_and_retire_unlocked(finish) -> None:
         store_ptr(finish, 0, _release_retained_pages())
         pcc_gc_backend4_drain_parked_pages()
     if ptr_is_null(pcc_gc_forwarding_list_head()) != 0:
+        store_i32(global_addr("pcc_gc_backend4_remap_owed"), 0, 0)
         return
     node = pcc_gc_object_list_head()
     while ptr_is_null(node) == 0:
@@ -783,6 +824,9 @@ def pcc_gc_backend4_remap_and_retire_unlocked(finish) -> None:
                 pcc_gc_backend4_remap_referents(obj)
         node = nxt
     pcc_gc_visit_registered_root_slots(3, 0)
+    # Every heap slot, C-extension referent (the caller's walk) and root slot
+    # now names the current address of what it referred to.
+    store_i32(global_addr("pcc_gc_backend4_remap_owed"), 0, 0)
 
     if gc3_count_free != 0:
         fwd = pcc_gc_forwarding_list_head()

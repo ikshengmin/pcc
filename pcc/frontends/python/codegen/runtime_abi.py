@@ -1753,6 +1753,7 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_backend4_medium_page_candidate_zpage_bytes_count',
         'pcc_gc_backend4_medium_page_candidates',
         'pcc_gc_backend4_remap_active',
+        'pcc_gc_backend4_remap_owed',
         'pcc_gc_backend4_selector_page_allow_large',
         'pcc_gc_backend4_selector_page_seed_pending',
         'pcc_gc_backend4_selector_scan_allow_large',
@@ -3310,6 +3311,8 @@ def _cross_object_signatures_part_14():
         "pcc_gc_alloc_stage_drain_stopped": ((), "c_int64"),
         "pcc_gc_alloc_stage_miss_drain": ((), "c_int64"),
         "pcc_gc_alloc_stage_thread_exit": ((), "c_void"),
+        "pcc_gc_relocation_settle_stopped": ((), "c_int64"),
+        "pcc_gc_reset_relocation_set": ((), "c_void"),
     }
 
 

@@ -136,6 +136,10 @@ def pcc_gc_refresh_read_barrier() -> None:
         backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
         if backend == 0 or backend == 1 or backend == 2 or backend == 3:
             enabled = 0
+        elif load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
+            # No running thread can name a forwarded address: the stop that
+            # moved an object rewrote every reference to it.
+            enabled = 0
         elif backend == 4:
             if (load_i32(global_addr("pcc_gc_forwarding_population"), 0) == 0
                     and ptr_is_null(global_load_ptr("pcc_gc_forwarding_head")) != 0):
@@ -638,6 +642,7 @@ def pcc_gc_install_forwarding_preallocated_unlocked(
     store_ptr(plan, 16, null())
     population: i64 = load_i32(global_addr("pcc_gc_forwarding_population"), 0)
     store_i32(global_addr("pcc_gc_forwarding_population"), 0, population + 1)
+    store_i32(global_addr("pcc_gc_backend4_remap_owed"), 0, 1)
     if backend == 4 and (flags & 65536) != 0:
         znode = _zpage_node_for_owner(from_obj)
         if ptr_is_null(znode) == 0:
@@ -752,6 +757,7 @@ def pcc_gc_install_forwarding_unlocked(from_obj: c_ptr, to_obj: c_ptr) -> i64:
         _forwarding_target_attach_prepared(node, target_head)
         population: i64 = load_i32(global_addr("pcc_gc_forwarding_population"), 0)
         store_i32(global_addr("pcc_gc_forwarding_population"), 0, population + 1)
+        store_i32(global_addr("pcc_gc_backend4_remap_owed"), 0, 1)
         if backend == 4 and (flags & 65536) != 0:
             znode = _zpage_node_for_owner(from_obj)
             if ptr_is_null(znode) == 0:

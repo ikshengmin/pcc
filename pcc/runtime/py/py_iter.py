@@ -157,7 +157,7 @@ def _type_of(obj) -> int:
 def _iter_prepare_moving_root(slot, value, backend: int):
     store_ptr(slot, 0, value)
     if (
-        (backend == 4)
+        (backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0)
         and ptr_is_null(value) == 0
         and is_tagged_int(value) == 0
     ):
@@ -169,7 +169,7 @@ def _iter_prepare_moving_root(slot, value, backend: int):
 
 
 def _iter_moving_root_failed(value, backend: int, handle) -> int:
-    if backend != 4:
+    if (backend != 4 or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0):
         return 0
     if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
         return 0
@@ -892,7 +892,7 @@ def py_enumerate_list(iterable, start: int):
     store_ptr(item_slot, 0, null())
     store_ptr(index_slot, 0, null())
     it_handle = null()
-    if moving_backend == 4:
+    if (moving_backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0):
         it_handle = pcc_gc_scheduler_root_register_handle(it_slot)
         if ptr_is_null(it_handle) != 0:
             py_decref(it)
@@ -932,7 +932,7 @@ def py_enumerate_list(iterable, start: int):
         else:
             store_ptr(item_slot, 0, item)
             item_handle = null()
-            if moving_backend == 4:
+            if (moving_backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0):
                 item_handle = pcc_gc_scheduler_root_register_handle(item_slot)
                 if ptr_is_null(item_handle) != 0:
                     py_decref(item)
@@ -969,7 +969,7 @@ def py_enumerate_list(iterable, start: int):
                 return null()
             store_ptr(index_slot, 0, index_obj)
             index_handle = null()
-            if moving_backend == 4:
+            if (moving_backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0):
                 index_handle = pcc_gc_scheduler_root_register_handle(index_slot)
                 if ptr_is_null(index_handle) != 0:
                     py_decref(index_obj)

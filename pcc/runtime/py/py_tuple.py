@@ -434,7 +434,7 @@ def py_tuple_from_list(lst):
     source_pin: int = _tuple_conversion_pin_value(lst)
     count: int = 0
     backend: int = pcc_gc_backend()
-    if backend == 4:
+    if (backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0):
         while count < 4:
             handle = pcc_gc_scheduler_root_register_handle(ptr_add(slots, count * 8))
             if ptr_is_null(handle):
@@ -681,7 +681,7 @@ def py_tuple_set_item(tuple_ptr, i: int, item) -> None:
     # backend read above answers without a call once configuration ran.
     if backend < 0:
         backend = pcc_gc_backend()
-    if backend != 4:
+    if (backend != 4 or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0):
         return
     # Nothing waits on a published tuple (publication only clears the
     # pending bit, PY_FLAG_GC_FRESH_ALLOC = 16384).  While pending, probe the last slot before the prefix
@@ -775,7 +775,7 @@ def py_tuple_len(tuple_ptr) -> int:
 def _tuple_method_prepare_root(slot, value, backend: int):
     store_ptr(slot, 0, value)
     if (
-        (backend == 4)
+        (backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0)
         and ptr_is_null(value) == 0
         and is_tagged_int(value) == 0
     ):
@@ -787,7 +787,7 @@ def _tuple_method_prepare_root(slot, value, backend: int):
 
 
 def _tuple_method_root_failed(value, backend: int, handle) -> int:
-    if backend != 4:
+    if (backend != 4 or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0):
         return 0
     if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
         return 0

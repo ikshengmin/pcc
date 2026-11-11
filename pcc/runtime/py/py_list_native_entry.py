@@ -330,7 +330,7 @@ def py_gen_frame_take_group(lst: c_ptr, start: int, count: int, outputs: c_ptr) 
     # or invoking a configuration getter that could park with a raw input.
     if (count < 2 or count > 16 or start < 0 or ptr_is_null(outputs) != 0
             or load_i32(global_addr("pcc_gc_config_initialized"), 0) == 0
-            or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 4
+            or (load_i32(global_addr("pcc_gc_backend_selected"), 0) != 4 or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0)
             or load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0
             or atomic_load_i32(global_addr("pcc_log_init_state"), 0, "acquire") != 2
             or load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0
@@ -372,7 +372,7 @@ def py_gen_frame_clear_group(lst: c_ptr, start: int, count: int) -> int:
     if (count < 2 or count > 16 or start < 0
             or load_i32(global_addr("pcc_gc_config_initialized"), 0) == 0
             or atomic_load_i32(global_addr("pcc_gc_backend_frozen"), 0, "acquire") == 0
-            or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 4
+            or (load_i32(global_addr("pcc_gc_backend_selected"), 0) != 4 or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0)
             or load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0
             or atomic_load_i32(global_addr("pcc_log_init_state"), 0, "acquire") != 2
             or load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0
@@ -1177,7 +1177,7 @@ def pcc_list_native_prepare_root(slot: c_ptr, handle_slot: c_ptr, owned: int) ->
     if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
         return 0
     backend: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if backend != 4:
+    if (backend != 4 or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0):
         # GC0 and the counted modes keep their owners' counts. The nonmoving
         # count-free GC1/GC2 rescan every thread's registers and stack
         # conservatively at each stopped-world seed and remark, which finds a

@@ -13,6 +13,7 @@ from pcc.extern import c_abi_export, c_int32, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     cstr,
     free,
+    global_addr,
     global_load_ptr,
     is_tagged_int,
     load_i32,
@@ -169,7 +170,7 @@ def _prepare_moving_root(slot, handle_slot) -> int:
     if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
         return 0
     backend: int = pcc_gc_backend()
-    if backend != 4:
+    if (backend != 4 or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0):
         return 0
     handle = pcc_gc_scheduler_root_register_handle(slot)
     if ptr_is_null(handle) != 0:

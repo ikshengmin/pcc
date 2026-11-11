@@ -2069,7 +2069,7 @@ def py_str_concat(a, b):
     if ptr_is_null(b) != 0:
         return null()
     backend: int = pcc_gc_backend()
-    moving_inputs: bool = backend == 4
+    moving_inputs: bool = (backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0)
     if moving_inputs:
         a = pcc_gc_note_relocation_read(a)
         b = pcc_gc_note_relocation_read(b)

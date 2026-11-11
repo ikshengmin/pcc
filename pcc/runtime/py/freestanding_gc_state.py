@@ -491,6 +491,11 @@ define_global_ptr_null("pcc_gc_trace_cext_pending_obj")
 define_global_i64("pcc_gc_trace_cext_pending_epoch", 0)
 define_global_i64("pcc_gc_trace_cext_pending_backend", -1)
 define_global_i32("pcc_gc_backend4_remap_active", 0)
+# 1 from the moment a forwarding edge is installed until a pass has rewritten
+# every heap and root reference (pcc_gc_backend4_remap_and_retire_unlocked).
+# No world resumes while it is set (pcc_gc_relocation_settle_stopped): a
+# running thread loads a slot without asking whether its value moved.
+define_global_i32("pcc_gc_backend4_remap_owed", 0)
 define_global_i64("pcc_gc_backend4_remap_epoch", 0)
 define_global_ptr_null("pcc_gc_backend4_remap_pending_obj")
 define_global_ptr_null("pcc_gc_backend3_young_head")

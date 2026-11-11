@@ -515,7 +515,10 @@ def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
 
     if is_tagged_int(owner) != 0:
         return
-    if backend == 1 or backend == 2 or backend == 3:
+    if backend == 1 or backend == 2 or backend == 3 or (
+        backend == 4
+        and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+    ):
         if pcc_container_lock_held() != 0:
             # Container mode: the store holds the owner's container lock, and
             # the marker scans that owner under the same lock

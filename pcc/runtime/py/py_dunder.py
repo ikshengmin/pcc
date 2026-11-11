@@ -147,7 +147,7 @@ def _type_of(obj) -> int:
 
 def _load_instance_cls(o):
     backend: int = pcc_gc_backend()
-    if backend == 4:
+    if (backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0):
         return pcc_gc_load_ptr(o, ptr_add(o, PYINSTANCEOBJECT_CLS_OFFSET))
     return load_ptr(o, PYINSTANCEOBJECT_CLS_OFFSET)
 

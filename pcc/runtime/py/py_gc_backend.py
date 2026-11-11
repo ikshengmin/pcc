@@ -2701,18 +2701,21 @@ def pcc_gc_reclaim_retired_index_tables_if_alone() -> None:
 
 
 def _nonmoving_count_free_backend(backend: int) -> int:
-    """1 when the collector being fixed never moves or counts an object.
+    """1 when no object of the collector being fixed moves while a mutator
+    runs, and none is counted.
 
-    GC1, GC2 and GC3 share one mutator protocol: an object keeps its address
-    for its whole life, a load is a plain load, and a store shades its value
-    during a mark. GC3 is the generational member (its reference is OCaml's
-    minor heap): the write barrier records nothing a reader must follow, a
-    minor collection runs in a stopped world and leaves no forwarding state
-    behind, and a survivor is promoted where it is. Only GC4 relocates.
+    The four tracing collectors share one mutator protocol: an object keeps
+    its address for as long as any running thread can name it, a load is a
+    plain load, and a store shades its value during a mark. GC3 is the
+    generational member (its reference is OCaml's minor heap) and promotes
+    a survivor where it is. GC4 is the relocating member: it moves objects
+    only inside a stopped world, rewrites every heap and root reference to
+    them before the world resumes (pcc_gc_relocation_settle_stopped), and
+    leaves in place whatever a thread's stack or registers name.
     """
     if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0:
         return 0
-    if backend == 1 or backend == 2 or backend == 3:
+    if backend >= 1 and backend <= 4:
         return 1
     return 0
 

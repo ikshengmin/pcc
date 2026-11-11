@@ -954,7 +954,7 @@ def py_obj_hash(o) -> int:
         # A member hash may run user code and start relocation. Moving
         # backends must recheck each slot; GC0 keeps its fixed plain-load loop.
         barrier_backend: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-        if barrier_backend == 4:
+        if (barrier_backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0):
             read_barrier_enabled = 1
         i: int = 0
         while i < n:
@@ -1322,7 +1322,7 @@ def py_builtin_any_all(iterable, want_all: int) -> int:
     it_slot = stack_alloc(8)
     store_ptr(it_slot, 0, it)
     it_handle = null()
-    if moving_backend == 4:
+    if (moving_backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0):
         it_handle = pcc_gc_scheduler_root_register_handle(it_slot)
         if ptr_is_null(it_handle) != 0:
             py_decref(it)
@@ -1371,7 +1371,7 @@ def py_obj_min_max(iterable, want_max: int):
     it_slot = stack_alloc(8)
     store_ptr(it_slot, 0, it)
     it_handle = null()
-    if moving_backend == 4:
+    if (moving_backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0):
         it_handle = pcc_gc_scheduler_root_register_handle(it_slot)
         if ptr_is_null(it_handle) != 0:
             py_decref(it)
@@ -1406,7 +1406,7 @@ def py_obj_min_max(iterable, want_max: int):
     store_ptr(best_slot, 0, best)
     store_ptr(element_slot, 0, null())
     best_handle = null()
-    if moving_backend == 4:
+    if (moving_backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0):
         best_handle = pcc_gc_scheduler_root_register_handle(best_slot)
         if ptr_is_null(best_handle) != 0:
             py_decref(best)
@@ -1444,7 +1444,7 @@ def py_obj_min_max(iterable, want_max: int):
         else:
             store_ptr(element_slot, 0, element)
             element_handle = null()
-            if moving_backend == 4:
+            if (moving_backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0):
                 element_handle = pcc_gc_scheduler_root_register_handle(element_slot)
                 if ptr_is_null(element_handle) != 0:
                     py_decref(element)
@@ -2716,7 +2716,7 @@ def py_obj_sorted(x):
     x_slot = stack_alloc(8)
     store_ptr(x_slot, 0, x)
     x_handle = null()
-    if moving_backend == 4:
+    if (moving_backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0):
         x_handle = pcc_gc_scheduler_root_register_handle(x_slot)
         if ptr_is_null(x_handle) != 0:
             return null()
@@ -2781,7 +2781,7 @@ def py_obj_sorted(x):
             it_slot = stack_alloc(8)
             store_ptr(it_slot, 0, it)
             it_handle = null()
-            if moving_backend == 4:
+            if (moving_backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0):
                 it_handle = pcc_gc_scheduler_root_register_handle(it_slot)
                 if ptr_is_null(it_handle) != 0:
                     py_decref(it)

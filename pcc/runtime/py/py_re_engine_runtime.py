@@ -16,6 +16,7 @@ from pcc.unsafe import (
     cstr,
     define_global_ptr_null,
     function_addr,
+    global_addr,
     global_load_ptr,
     global_store_ptr,
     is_tagged_int,
@@ -527,7 +528,7 @@ def _str_has_backslash(value) -> int:
 def _sub_hold(slots, handles, index: int, value, backend: int) -> int:
     slot = ptr_add(slots, index * 8)
     store_ptr(slot, 0, value)
-    if (backend == 4) and ptr_is_null(value) == 0:
+    if (backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0) and ptr_is_null(value) == 0:
         handle = pcc_gc_scheduler_root_register_handle(slot)
         store_ptr(handles, index * 8, handle)
         if ptr_is_null(handle) != 0:

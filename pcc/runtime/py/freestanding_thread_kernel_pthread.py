@@ -180,6 +180,9 @@ pcc_gc_gray_worklist_flush = extern("pcc_gc_gray_worklist_flush", (), c_void)
 pcc_gc_alloc_stage_drain_stopped = extern(
     "pcc_gc_alloc_stage_drain_stopped", (), c_int64
 )
+pcc_gc_relocation_settle_stopped = extern(
+    "pcc_gc_relocation_settle_stopped", (), c_int64
+)
 pcc_gc_thread_unregister_buffers = extern(
     "pcc_gc_thread_unregister_buffers", (), c_void
 )
@@ -1673,6 +1676,15 @@ def pcc_resume_world() -> int:
     lock = global_load_ptr("pcc_world_lock_py")
     cond = global_load_ptr("pcc_world_cond_py")
     _thread_trace(19, 0, 0, null())
+    # A stop that moved objects rewrites every reference to them before any
+    # mutator runs again: running threads load slots without asking whether
+    # a value was forwarded. Only the owner writes these words while it owns
+    # the world, and only its outermost resume releases it.
+    if load_i32(global_addr("pcc_gc_backend4_remap_owed"), 0) != 0:
+        if (load_i32(global_addr("pcc_thread_world_stop_py"), 0) != 0
+                and _world_i64(global_addr("pcc_stop_owner_thread_id_py")) == self_id
+                and _world_i64(global_addr("pcc_stop_depth_py")) == 1):
+            pcc_gc_relocation_settle_stopped()
     pthread_mutex_lock(lock)
     epoch = _world_i64(global_addr("pcc_stop_epoch_py"))
     if load_i32(global_addr("pcc_thread_world_stop_py"), 0) == 0 or _world_i64(
