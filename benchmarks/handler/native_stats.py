@@ -24,7 +24,7 @@ import pcc.virtual_thread as vt
 from pcc_gateway.structured import TaskScope, run_until_complete
 from pcc.extern import extern, c_int64
 
-import primitives
+from primitives import primitive_benchmark
 
 _idle_sleep_ns = extern("pcc_platform_sleep_ns", (c_int64,), c_int64)
 _telemetry = extern("pcc_gc_telemetry", (c_int64,), c_int64)
@@ -96,15 +96,11 @@ def benchmark():
             "started_at": started, "finished_at": started + elapsed_ms / 1000.0}
 
 
-def primitive_benchmark():
-    return primitives.benchmark(
-        sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5]))
-
-
 def main():
     primitive = sys.argv[1] == "prim"
     if primitive:
-        thread = vt.spawn(primitive_benchmark)
+        thread = vt.spawn(primitive_benchmark, sys.argv[2], int(sys.argv[3]),
+                          int(sys.argv[4]), int(sys.argv[5]))
     else:
         thread = vt.spawn(benchmark)
     workers = int(sys.argv[5])

@@ -4,7 +4,7 @@ A module of native_stats.py, which runs
 
     native_stats prim NAME BATCH MILLISECONDS WORKERS
 
-as ``benchmark(NAME, BATCH, MILLISECONDS, WORKERS)``: primitive NAME in
+as ``primitive_benchmark(NAME, BATCH, MILLISECONDS, WORKERS)``: primitive NAME in
 WORKERS virtual threads, each repeating batches of BATCH operations until
 MILLISECONDS have passed (one batch when it is 0). The result holds the
 operations done, the seconds they took and the sum of the batches'
@@ -23,17 +23,17 @@ from pcc_gateway.structured import TaskScope
 import primitive_ops
 
 
-def child(delay_ms: int):
+def primitive_child(delay_ms: int):
     vt.sleep_current(delay_ms)
     return 1
 
 
-def fetch_profile(delay_ms: int):
+def primitive_profile(delay_ms: int):
     vt.sleep_current(delay_ms)
     return {"name": "Ada", "plan": "pro"}
 
 
-def fetch_notifications(delay_ms: int):
+def primitive_notifications(delay_ms: int):
     vt.sleep_current(delay_ms)
     return ["Your report is ready"]
 
@@ -64,7 +64,7 @@ def op_spawn(count: int) -> int:
     while index < count:
         scope = TaskScope("primitive")
         try:
-            handle = scope.fork(vt.spawn(child, 0))
+            handle = scope.fork(vt.spawn(primitive_child, 0))
             scope.join()
             total += scope.result(handle)
         finally:
@@ -80,8 +80,8 @@ def op_request(count: int) -> int:
     while index < count:
         scope = TaskScope("request")
         try:
-            profile = scope.fork(vt.spawn(fetch_profile, 0))
-            notifications = scope.fork(vt.spawn(fetch_notifications, 0))
+            profile = scope.fork(vt.spawn(primitive_profile, 0))
+            notifications = scope.fork(vt.spawn(primitive_notifications, 0))
             scope.join()
             data = {"profile": scope.result(profile),
                     "notifications": scope.result(notifications)}
@@ -107,7 +107,7 @@ def run_batch(name: str, count: int) -> int:
     return primitive_ops.OPS[name](count)
 
 
-def worker(name: str, batch: int, milliseconds: int):
+def primitive_worker(name: str, batch: int, milliseconds: int):
     deadline = time.perf_counter() + milliseconds / 1000.0
     done = 0
     checksum = 0
@@ -118,7 +118,7 @@ def worker(name: str, batch: int, milliseconds: int):
             return [done, checksum]
 
 
-def benchmark(name: str, batch: int, milliseconds: int, workers: int):
+def primitive_benchmark(name: str, batch: int, milliseconds: int, workers: int):
     # One untimed batch: first-use initialisation is not the primitive.
     run_batch(name, batch)
     started = time.perf_counter()
@@ -126,7 +126,7 @@ def benchmark(name: str, batch: int, milliseconds: int, workers: int):
     try:
         index = 0
         while index < workers:
-            scope.fork(vt.spawn(worker, name, batch, milliseconds))
+            scope.fork(vt.spawn(primitive_worker, name, batch, milliseconds))
             index += 1
         scope.join()
         operations = 0
