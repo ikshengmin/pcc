@@ -92,10 +92,23 @@ define_global_i64_array(
 )
 define_global_ptr_null("pcc_gc_backend4_parked_head")
 define_global_i32("pcc_gc_forwarding_population", 0)
+# GC0 adds to and subtracts from the tracked count for every container it
+# allocates and frees, from every thread. Whatever shared its cache line
+# missed on each of those updates, and which words did depended on where
+# the linker happened to place this module's data. Keep the count, and the
+# growth baseline read with it, on lines of their own.
+define_global_i64_array(
+    "pcc_gc_tracked_count_isolation_before",
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+)
 define_global_i32("py_gc_tracked_count", 0)
 # Tracked objects left after the last automatic collection (GC0..GC3): the
 # next is scheduled once tracking has grown by max(threshold0, this) since.
 define_global_i64("pcc_gc_tracked_after_collect", 0)
+define_global_i64_array(
+    "pcc_gc_tracked_count_isolation_after",
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+)
 define_global_i32("py_gc_collecting", 0)
 # Collector-private candidate context; nonzero only under stopped-world GC0.
 define_global_i32("pcc_gc_backend0_subset_active", 0)
@@ -440,9 +453,22 @@ define_global_i32("pcc_gc_stackmap_roots_setting", -1)
 # validated index stays valid and a published table that fails validation
 # aborts, so a published 1 never changes.
 define_global_i32("pcc_gc_stackmap_walk_state", 0)
+# Every task registers and unregisters its continuation and scheduler
+# roots: these three words are written under the graph lock by every
+# thread. The stack-map words above are read at each mapped frame entry and
+# the scan cursors below belong to collections. Keep the registry heads on
+# lines of their own.
+define_global_i64_array(
+    "pcc_gc_root_registry_isolation_before",
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+)
 define_global_ptr_null("pcc_gc_continuation_root_head")
 define_global_ptr_null("pcc_gc_scheduler_root_head")
 define_global_i64("pcc_gc_root_registry_revision", 0)
+define_global_i64_array(
+    "pcc_gc_root_registry_isolation_after",
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+)
 define_global_i32("pcc_gc_backend3_frame_root_scan_phase", 0)
 define_global_i64("pcc_gc_backend3_frame_root_scan_slot", -1)
 define_global_ptr_null("pcc_gc_backend3_frame_root_scan_cursor")

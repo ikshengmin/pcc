@@ -27,6 +27,7 @@ from pcc.unsafe import (
     capture_gc_registers,
     define_global_i32,
     define_global_i64,
+    define_global_i64_array,
     define_global_null_ptr_array,
     define_global_ptr_null,
     define_thread_local_i32,
@@ -59,10 +60,23 @@ from pcc.unsafe import (
 # must come to a safepoint. Set with the stop request and cleared once
 # every other mutator is parked or exited, so the owner's own polls while
 # it holds the world take the fast path.
+#
+# Every poll of every thread reads these two words and only a stop writes
+# them. The world counters after them change whenever a thread parks or
+# blocks, and the words before them belong to whichever module the linker
+# placed there. Keep the poll flags on lines of their own.
+define_global_i64_array(
+    "pcc_thread_stop_flags_isolation_before",
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+)
 define_global_i32("pcc_thread_stop_requested", 0)
 # Whether a stopped-world epoch is active, from the request to the resume;
 # registration, blocking leaves and the locked safepoint loop wait on it.
 define_global_i32("pcc_thread_world_stop_py", 0)
+define_global_i64_array(
+    "pcc_thread_stop_flags_isolation_after",
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+)
 define_thread_local_i32("pcc_native_thread_identity_token", 0)
 define_thread_local_ptr_null("pcc_tls_thread_id_py")
 # This thread's lock, lease and stop state in one word, so the object-graph
