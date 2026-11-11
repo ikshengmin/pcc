@@ -31,7 +31,8 @@ def prepare(product, monkeypatch):
     return directory, root, manifest, originals, checked
 
 
-@pytest.mark.parametrize('domain,lane', [('shared', lane) for lane in planner.LANES] + [('cpp', 'integration')])
+@pytest.mark.parametrize('domain,lane', [('shared', lane) for lane in planner.LANES] + [
+    ('cpp', 'integration'), ('ci-contracts', 'integration')])
 def test_native_source_adopts_exact_existing_stage1_and_runtime_without_global_routing(product, monkeypatch, domain, lane):
     directory, root, manifest, originals, checked = prepare(product, monkeypatch)
     state, updates = native.admit(root, directory, domain=domain, lane=lane, environ=environment())
@@ -52,6 +53,8 @@ def test_native_source_adopts_exact_existing_stage1_and_runtime_without_global_r
 
 @pytest.mark.parametrize('domain,lane,directory', [
     ('shared', 'ordinary', None), ('cpp', 'integration', None),
+    ('ci-contracts', 'integration', None),
+    ('ci-contracts', 'ordinary', Path('.')), ('ci-contracts', 'reference', Path('.')),
     ('cpp', 'ordinary', Path('.')), ('cpp', 'reference', Path('.')),
     ('rust', 'integration', Path('.')), ('shared', 'unknown', Path('.')),
 ])
@@ -65,38 +68,42 @@ def test_missing_or_wrong_lane_never_admits_or_provisions(domain, lane, director
     'PCC_CURRENT_PCC1', 'PCC_TEST_COMPILER', 'PCC_PLATFORM_TEST_COMPILER', 'PCC_RUNTIME_ARCHIVE',
     'PCC_THREADED_RUNTIME_ARCHIVE', 'PCC_CI_STAGE1_MANIFEST', 'PCC_CI_STAGE1_MANIFEST_SHA256',
 ])
-def test_inherited_native_inputs_cannot_replace_this_run_bundle(name, tmp_path, monkeypatch):
+@pytest.mark.parametrize('domain,lane', [('shared', 'ordinary'), ('ci-contracts', 'integration')])
+def test_inherited_native_inputs_cannot_replace_this_run_bundle(name, tmp_path, monkeypatch, domain, lane):
     monkeypatch.setattr(native.bundle, 'host_platform', lambda: 'linux-x86_64')
     monkeypatch.setattr(native.bundle, 'import_bundle', lambda *a: pytest.fail('override reached admission'))
     with pytest.raises(ValueError, match='inherited native source-test input overrides'):
-        native.admit(tmp_path, tmp_path, domain='shared', lane='ordinary', environ={name: 'unverified'})
+        native.admit(tmp_path, tmp_path, domain=domain, lane=lane, environ={name: 'unverified'})
 
 
 @pytest.mark.parametrize('field,value', [
     ('GITHUB_SHA', 'c' * 40), ('GITHUB_RUN_ID', '999'), ('GITHUB_RUN_ATTEMPT', '99'),
     ('GITHUB_REPOSITORY', 'other/pcc'),
 ])
-def test_bundle_from_another_source_run_attempt_or_repository_is_rejected(field, value, product, monkeypatch):
+@pytest.mark.parametrize('domain,lane', [('shared', 'ordinary'), ('ci-contracts', 'integration')])
+def test_bundle_from_another_source_run_attempt_or_repository_is_rejected(field, value, product, monkeypatch, domain, lane):
     directory, root, _manifest, _originals, checked = prepare(product, monkeypatch)
     env = dict(environment(), **{field: value})
     with pytest.raises(ValueError):
-        native.admit(root, directory, domain='shared', lane='ordinary', environ=env)
+        native.admit(root, directory, domain=domain, lane=lane, environ=env)
     assert checked == []
 
 
-def test_runtime_provenance_failure_cannot_publish_fixture_environment(product, monkeypatch):
+@pytest.mark.parametrize('domain,lane', [('shared', 'ordinary'), ('ci-contracts', 'integration')])
+def test_runtime_provenance_failure_cannot_publish_fixture_environment(product, monkeypatch, domain, lane):
     directory, root, _manifest, _originals, _checked = prepare(product, monkeypatch)
     def reject(_archive):
         raise ValueError('authored stale runtime provenance control')
     monkeypatch.setattr(native, 'verify_runtime', reject)
     with pytest.raises(ValueError, match='stale runtime provenance'):
-        native.admit(root, directory, domain='shared', lane='ordinary', environ=environment())
+        native.admit(root, directory, domain=domain, lane=lane, environ=environment())
 
 
 @pytest.mark.parametrize('target', ['manifest', 'runtime', 'compiler', 'source'])
-def test_consumed_native_inputs_cannot_change_during_source_campaign(target, product, monkeypatch):
+@pytest.mark.parametrize('domain,lane', [('shared', 'ordinary'), ('ci-contracts', 'integration')])
+def test_consumed_native_inputs_cannot_change_during_source_campaign(target, product, monkeypatch, domain, lane):
     directory, root, manifest, _originals, _checked = prepare(product, monkeypatch)
-    state, _updates = native.admit(root, directory, domain='shared', lane='ordinary', environ=environment())
+    state, _updates = native.admit(root, directory, domain=domain, lane=lane, environ=environment())
     if target == 'manifest':
         path = directory / 'manifest.json'
         path.write_bytes(path.read_bytes() + b'\n')
@@ -107,6 +114,17 @@ def test_consumed_native_inputs_cannot_change_during_source_campaign(target, pro
         path.write_bytes(path.read_bytes() + b'changed')
     with pytest.raises(ValueError):
         native.verify_after(root, state)
+
+
+@pytest.mark.parametrize('field,value', [
+    ('commit', 'c' * 40), ('clean_commit', False), ('source_sha256', 'c' * 64),
+])
+def test_ci_contract_native_inputs_require_matching_clean_source(field, value, product, monkeypatch):
+    directory, root, manifest, _originals, checked = prepare(product, monkeypatch)
+    monkeypatch.setattr(native, 'source_identity', lambda: dict(manifest['source'], **{field: value}))
+    with pytest.raises(ValueError):
+        native.admit(root, directory, domain='ci-contracts', lane='integration', environ=environment())
+    assert checked == []
 
 
 def test_native_runner_admits_before_collection_and_keeps_existing_resource_contracts():
@@ -139,7 +157,8 @@ def test_source_job_matrices_are_an_exact_disjoint_partition(changes, scope):
     assert len(identity(complete)) == len(set(identity(complete)))
     assert set(identity(independent)).isdisjoint(identity(native_rows))
     assert sorted(identity(independent) + identity(native_rows)) == sorted(identity(complete))
-    required = {('shared', lane) for lane in planner.LANES} | {('cpp', 'integration')}
+    required = {('shared', lane) for lane in planner.LANES} | {
+        ('cpp', 'integration'), ('ci-contracts', 'integration')}
     assert independent == [row for row in complete if (row['domain'], row['lane']) not in required]
     assert native_rows == [row for row in complete if (row['domain'], row['lane']) in required]
     assert result['source_independent'] is bool(independent)

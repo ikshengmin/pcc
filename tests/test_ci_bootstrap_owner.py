@@ -129,6 +129,9 @@ def test_owner_and_remainder_preserve_original_watchdog_caps(tmp_path, platform)
             assert cmd[cmd.index("--max-tree-rss-bytes") + 1] == "17179869184"
 
 
+# A second six-worker pytest tree must not overlap the real allocation probes.
+# Use their existing group without reducing either outer or nested worker count.
+@pytest.mark.xdist_group(name="worker_resource_fixtures")
 def test_actual_six_worker_partition_runs_five_bodies_once_then_remainder(tmp_path):
     """Actual harmless pytest bodies, not importing or running the GC fixtures."""
     corpus = tmp_path / "corpus"

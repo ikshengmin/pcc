@@ -317,6 +317,39 @@ def test_batches_preserve_exact_union_modules_and_transitive_xdist_groups():
     assert set(actual) == {entry["canonical_nodeid"] for entry in rows if entry["selected_by_repository"] and entry["lane"] == "ordinary"}
 
 
+@pytest.mark.parametrize("members,expected_group", [
+    ((
+        ("tests.test_ci_bootstrap_owner", "test_actual_six_worker_partition_runs_five_bodies_once_then_remainder"),
+        ("tests.python.test_worker_resource_plan", "test_live_peak_growth_backs_off_until_worker_retires"),
+    ), "worker_resource_fixtures"),
+    ((
+        ("tests.test_ci_pytest_markers", "test_complete_marker_entry_real_six_worker_execution"),
+        ("tests.test_ci_pytest_markers", "test_current_host_watchdog_executes_real_pytest_body"),
+    ), "ci_marker_pytest_fixtures"),
+    ((("tests.test_xdist_cpu_budget", "test_real_xdist_budget_contract"),), "pcc_xdist_budget_contract"),
+], ids=["resource-pressure", "marker-watchdog", "cpu-budget"])
+def test_nested_ci_process_trees_keep_resource_exclusion_groups(members, expected_group):
+    """Concurrent real process trees need one loadgroup, not just one batch."""
+    import importlib
+
+    rows = []
+    for module_name, function_name in members:
+        module = importlib.import_module(module_name)
+        function = getattr(module, function_name)
+        module_marks = getattr(module, "pytestmark", [])
+        if not isinstance(module_marks, list):
+            module_marks = [module_marks]
+        marks = [*module_marks, *getattr(function, "pytestmark", [])]
+        groups = sorted(str(mark.kwargs.get("name", mark.args[0] if mark.args else ""))
+                        for mark in marks if mark.name == "xdist_group")
+        # Extra groups change xdist's combined group key and break exclusion.
+        assert groups == [expected_group]
+        path = Path(module.__file__).relative_to(ROOT).as_posix()
+        rows.append(row(path, function_name, group=groups))
+    rows.extend(row(rows[0]["file"], index) for index in range(250))
+    assert run.batches(rows, "ordinary") == [rows]
+
+
 def test_shared_scope_refreshes_new_elf_macho_odr_modules_without_old_counts():
     shared = json.loads((ROOT / "scripts/data/ci_validation_shared.json").read_text())
     assert set(shared["refresh_globs"]) == {"tests/**/test_elf_*.py", "tests/**/test_macho_*.py", "tests/**/test_*odr_definition*.py"}
@@ -887,7 +920,9 @@ def test_campaign_saves_failed_batch_before_deciding_independent_continuation(tm
         assert not receipt["batches"][0]["continue_independent_batches"]
 
 
-@pytest.mark.parametrize("domain,lane", [("shared", "ordinary"), ("cpp", "integration")])
+@pytest.mark.parametrize("domain,lane", [
+    ("shared", "ordinary"), ("cpp", "integration"), ("ci-contracts", "integration"),
+])
 @pytest.mark.parametrize("fault", ["resource", "missing-finish", "missing-module"])
 def test_collection_abort_keeps_completed_shards_and_never_admits_test_bodies(tmp_path, monkeypatch, fault, domain, lane):
     """Orchestration model only: guard and identities are not executed."""

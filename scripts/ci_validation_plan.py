@@ -29,7 +29,9 @@ NATIVE_PLATFORMS = (
 
 def requires_native_inputs(domain, lane):
     """Only these source lanes consume the existing same-run native artifacts."""
-    return lane in LANES and (domain == "shared" or (domain, lane) == ("cpp", "integration"))
+    return lane in LANES and (
+        domain == "shared" or (lane == "integration" and domain in {"cpp", "ci-contracts"})
+    )
 
 
 def dispatch_full_chain(inputs):

@@ -128,6 +128,7 @@ def test_frozen_baseline_guard_refuses_inherited_runtime_config_without_values(t
     assert all(path.read_bytes() == data for path, data in config_bytes.items())
 
 
+@pytest.mark.xdist_group(name="ci_marker_pytest_fixtures")
 def test_complete_marker_entry_real_six_worker_execution(tmp_path, monkeypatch):
     # Real pytest processes: default six workers, actual test bodies, and both
     # explicit markers. Never invoke a PCC compiler, runtime builder or probe.
@@ -342,6 +343,7 @@ def test_platform_watchdogs_keep_original_limits_and_propagate_failure(tmp_path,
     assert json.loads((tmp_path / 'result.json').read_text())['status'] == 'FAIL'
 
 
+@pytest.mark.xdist_group(name="ci_marker_pytest_fixtures")
 def test_current_host_watchdog_executes_real_pytest_body(tmp_path, monkeypatch):
     """Each CI OS exercises its real watchdog, not just a mocked OS branch."""
     corpus = tmp_path / 'corpus'
