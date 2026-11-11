@@ -145,7 +145,9 @@ class LateWeakrefCollection(WeakBatch):
 
     def add_node(self, obj, edges):
         assert obj not in self.index
-        node = self.stack_alloc(40)
+        # Production tracking obtains a 40-byte heap node from its pool or
+        # malloc, and the collector frees it after unlinking the dead object.
+        node = self.malloc(40)
         self.index[obj] = self.nodes[obj] = node
         self.edges[obj] = list(edges)
         self.store(node, 0, obj)

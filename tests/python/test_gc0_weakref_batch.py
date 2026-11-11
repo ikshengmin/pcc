@@ -30,8 +30,12 @@ class WeakBatch:
         self.refcounts = {}
         self.tuples = {}
         self.events = []
-        self.allocated = []
-        self.freed = []
+        self.allocated = []  # Raw malloc allocations, not managed objects.
+        self.raw_freed = []
+        self.managed_allocated = []
+        self.managed_freed = []
+        self.tuple_allocated = []
+        self.freed = []  # Both domains, also used by the stale-read poison.
         self.poison_freed = False
         self.malloc_calls = 0
         self.fail_at = 0
@@ -117,19 +121,25 @@ class WeakBatch:
         return address
 
     def free(self, address):
+        assert address in self.allocated
         assert address not in self.freed
+        self.raw_freed.append(address)
         self.freed.append(address)
 
     def allocate_object(self, size, tag, flags):
         address = self.next
         self.next += size + 16
+        self.managed_allocated.append(address)
         self.refcounts[address] = 1
         self.words[address + 8] = tag
         self.words[address + 12] = flags
         return address
 
     def free_object(self, address):
-        self.free(address)
+        assert address in self.managed_allocated
+        assert address not in self.freed
+        self.managed_freed.append(address)
+        self.freed.append(address)
 
     def incref(self, obj):
         if obj == 0 or obj == self.none or obj & 1:
@@ -157,6 +167,7 @@ class WeakBatch:
     def tuple_new(self, length):
         assert length == 1
         address = self.allocate_object(32, abi.PY_TYPE_TUPLE, 0)
+        self.tuple_allocated.append(address)
         self.tuples[address] = 0
         return address
 
@@ -324,10 +335,22 @@ def test_terminal_target_clears_all_refs_before_callback_without_a_cycle():
     model.ns["py_weakref_invalidate"](target)
     assert model.calls == [newer, older]
     assert not model.candidates  # Immediate terminal death, not GC0's batch.
-    assert all(model.refcounts[ref] == 1 for ref in (older, silent, newer))
-    assert model.freed == model.allocated
+    refs = (older, silent, unrelated, newer)
+    assert all(model.refcounts[ref] == 1 and ref not in model.freed for ref in refs)
+    assert model.raw_freed == model.allocated
+    assert len(model.allocated) == len(model.tuple_allocated) == 2
+    assert model.managed_allocated == [*refs, *model.tuple_allocated]
+    assert model.managed_freed == model.tuple_allocated
+    assert not model.tuples
+    assert model.freed == [
+        model.tuple_allocated[0], model.allocated[0],
+        model.tuple_allocated[1], model.allocated[1],
+    ]
+    events_before = list(model.events)
+    freed_before = list(model.freed)
     model.ns["py_weakref_invalidate"](target)
     assert model.calls == [newer, older]
+    assert model.events == events_before and model.freed == freed_before
 
 
 def test_terminal_callback_can_drop_the_next_ref_and_replace_the_chain():

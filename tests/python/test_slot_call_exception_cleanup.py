@@ -22,13 +22,14 @@ from tests.python.owned_regression_support import (
     assert_reference_program,
     explicit_owned_runtime,
 )
-from tests.python.test_foreign_address_leases import _functions
+from tests.python.runtime_body_model import RUNTIME, load_functions
+from tests.python.test_gc0_weakref_batch import WeakBatch
 
 
 class CleanupModel(CallObjectLoweringMixin):
     _value_is_never_gc_object = OwnershipLoweringMixin._value_is_never_gc_object
 
-    def __init__(self, owners, callback, move, pending=True):
+    def __init__(self, owners, callback, move, pending=True, *, backend=0):
         self.pending = 900 if pending else 0
         self.original = self.pending
         # py_exc_pending_threads: this thread counts while its slot is set.
@@ -58,27 +59,21 @@ class CleanupModel(CallObjectLoweringMixin):
             "py_cleanup_one_lease_preserving_exception",
         )}
         self._slot_call_root_records = [(name, None, True) for name in owners]
-        self.weakref_memory = {}
-        self.weakref_ns = dict(
-            ptr_is_null=lambda value: int(value == 0), is_tagged_int=lambda value: 0,
-            null=lambda: 0, ptr_eq=lambda left, right: int(left == right),
-            global_load_ptr=lambda name: 10000,
-            load_ptr=lambda base, offset: self.weakref_memory.get((base, offset), 0),
-            load_i32=lambda *_: 104, store_ptr=self.weakref_store,
-            pcc_gc_note_relocation_read=lambda value: value,
-            pcc_diagnostics_runtime_log_event_code=lambda *_: None,
-            ptr_add=lambda base, offset: base + offset,
-            pcc_gc_load_ptr=lambda base, slot: 30000,
-            py_tuple_new=lambda size: 20000, py_tuple_set_item=lambda *_: None,
-            _py_none=lambda: 0, py_obj_call=self.weakref_callback,
-            py_decref=lambda *_: None, py_clear_exception=self.clear,
-            # The outer cleanup already transferred pending TLS to its owned
-            # registered slot before this weakref callback can run.
+        # Reuse the raw-memory/RC model that loads py_weakref.py through the
+        # shared runtime_body_model loader. Its production GC0 queue retains
+        # weakrefs; tracing collectors instead use the relocation-aware scan.
+        self.weakrefs = WeakBatch(backend)
+        self.weakref_forwarding = {}
+        self.weakref_relocation_reads = []
+        self.weakref_ns = self.weakrefs.ns
+        self.weakref_ns.update(
+            py_clear_exception=self.clear,
+            # Cleanup transfers pending TLS to its registered owner before
+            # disposal. An unexpected nonempty TLS must not be hidden here.
             py_current_exception=lambda: self.pending,
-            stack_alloc=lambda size: 40000,
+            pcc_gc_note_relocation_read=self.weakref_resolve,
+            py_tuple_new=self.weakref_tuple_new,
         )
-        _functions(Path(__file__).resolve().parents[2] / "pcc/runtime/py/py_weakref.py",
-                   {"py_weakref_invalidate", "_weakref_run_callback"}, self.weakref_ns)
         self.swap_ns = dict(
             global_load_ptr=lambda name: (
                 self.pending if name == "py_tls_current_exc_storage" else self.tls_handle
@@ -98,8 +93,7 @@ class CleanupModel(CallObjectLoweringMixin):
             store_ptr=lambda slot, offset, value: self.roots.__setitem__(slot, value),
             atomic_rmw_i64=self.count_pending,
         )
-        _functions(Path(__file__).resolve().parents[2] / "pcc/runtime/py/py_substrate.py",
-                   {"py_tls_exc_swap_slot", "_exc_pending_transition"}, self.swap_ns)
+        load_functions(RUNTIME / "py_substrate.py", {"py_tls_exc_swap_slot"}, self.swap_ns)
 
     def position(self, block):
         self.builder._block = block
@@ -169,8 +163,65 @@ class CleanupModel(CallObjectLoweringMixin):
         assert (op, base, offset, order) == ("add", "py_exc_pending_threads", 192, "relaxed")
         self.pending_threads += value
 
-    def weakref_store(self, base, offset, value):
-        self.weakref_memory[base, offset] = value
+    def weakref_resolve(self, value):
+        self.weakref_relocation_reads.append(value)
+        return self.weakref_forwarding.get(value, value)
+
+    def weakref_tuple_new(self, size):
+        args = self.weakrefs.tuple_new(size)
+        if self.move:
+            # Allocation invalidates the callback borrowed before tuple_new.
+            # The production callback boundary must reload its owner's slot.
+            self.weakrefs.store(self.live_weakref, 24, 0x8100)
+            self.weakrefs.callbacks[0x8000] = lambda _wr: pytest.fail(
+                "weakref callback was not reloaded after allocation"
+            )
+            self.collect()
+        return args
+
+    def prepare_weakrefs(self, target):
+        self.weakref_target = target
+        self.unrelated_target = target + 2
+        self.unrelated_weakref = self.weakrefs.ref(self.unrelated_target)
+        self.silent_weakref = self.weakrefs.ref(target)
+        self.live_weakref = self.weakrefs.ref(target, 0x8000)
+        self.weakrefs.callbacks.update({
+            0x8000: self.weakref_callback,
+            0x8100: self.weakref_callback,
+        })
+        if self.move and self.weakrefs.backend != 0:
+            stale = target + 0x200000
+            self.weakrefs.store(self.live_weakref, 16, stale)
+            self.weakref_forwarding[stale] = target
+            self.weakref_forwarding[self.unrelated_target] = self.unrelated_target + 1000
+
+    def assert_weakrefs_retired(self):
+        weakrefs = self.weakrefs
+        assert weakrefs.calls == [self.live_weakref]
+        assert weakrefs.load(self.live_weakref, 16) == 0
+        assert weakrefs.load(self.silent_weakref, 16) == 0
+        unrelated = self.unrelated_target
+        if self.move and weakrefs.backend != 0:
+            unrelated += 1000
+        assert weakrefs.load(self.unrelated_weakref, 16) == unrelated
+        assert all(weakrefs.refcounts[wr] == 1 for wr in (
+            self.live_weakref, self.silent_weakref, self.unrelated_weakref,
+        ))
+        assert not weakrefs.tuples
+        assert len(weakrefs.tuple_allocated) == 1
+        assert weakrefs.raw_freed == weakrefs.allocated
+        assert weakrefs.managed_freed == weakrefs.tuple_allocated
+        assert weakrefs.freed == weakrefs.tuple_allocated + weakrefs.allocated
+        # GC0 must prepare and free a counted callback queue, whereas tracing
+        # must actually take the old relocation-aware chain walk.
+        if weakrefs.backend == 0:
+            assert weakrefs.malloc_calls == 1
+            assert self.weakref_relocation_reads == []
+            assert weakrefs.events.count(("retain", self.live_weakref)) == 2
+        else:
+            assert weakrefs.malloc_calls == 0
+            assert len(self.weakref_relocation_reads) == 3
+            assert weakrefs.events.count(("retain", self.live_weakref)) == 1
 
     def collect(self):
         if not self.move:
@@ -186,7 +237,15 @@ class CleanupModel(CallObjectLoweringMixin):
         self.original = old + 1000 if old else 0
         self.events.append(("collect",))
 
-    def weakref_callback(self, *_args):
+    def weakref_callback(self, wr):
+        assert wr == self.live_weakref
+        assert self.pending == 0
+        assert self.weakrefs.load(wr, 16) == 0
+        # Only GC0 clears the whole target cut before invoking the callback.
+        assert self.weakrefs.load(self.silent_weakref, 16) == (
+            0 if self.weakrefs.backend == 0 else self.weakref_target
+        )
+        assert self.weakrefs.load(self.unrelated_weakref, 16) == self.unrelated_target
         self.callback_count += 1
         self.collect()
         self.set_pending(-1)  # The real weakref boundary clears an unraisable error.
@@ -208,7 +267,7 @@ class CleanupModel(CallObjectLoweringMixin):
                 pcc_gc_store_root=lambda slot, value: self.call("pcc_gc_store_root", [slot, ir.Constant(ir.IntType(8).as_pointer(), None)]),
                 pcc_gc_foreign_lease_release=lambda slot, token: self.call("pcc_gc_foreign_lease_release", [slot, token]),
             )
-            _functions(Path(__file__).resolve().parents[2] / "pcc/runtime/py/py_cleanup_runtime.py", {runtime}, namespace)
+            load_functions(RUNTIME / "py_cleanup_runtime.py", {runtime}, namespace)
             return namespace[runtime](*arguments)
         if runtime == "py_tls_exc_swap_slot":
             self.swap_ns[runtime](arguments[0])
@@ -238,8 +297,9 @@ class CleanupModel(CallObjectLoweringMixin):
         if not old or self.callback_count:
             return
         if self.callback == "weakref":
-            self.weakref_memory[10000, 16] = old
+            self.prepare_weakrefs(old)
             self.weakref_ns["py_weakref_invalidate"](old)
+            self.assert_weakrefs_retired()
         else:
             self.callback_count += 1
             saved = self.pending
@@ -259,18 +319,44 @@ class CleanupModel(CallObjectLoweringMixin):
 @pytest.mark.parametrize("move", [False, True])
 @pytest.mark.parametrize("pending", [False, True])
 def test_real_cleanup_preserves_exception_and_retires_owners(owners, callback, move, pending):
-    model = CleanupModel(owners, callback, move, pending)
-    model._slot_call_cleanup_block(owners, "handler")
-    assert model.pending == model.original, "root disposal lost the selecting exception"
-    assert model.pending_threads == int(bool(model.pending))
-    assert model.callback_count == 1
-    assert model.retired == list(reversed(owners))
-    kinds = [event[0] for event in model.events]
-    assert max(i for i, kind in enumerate(kinds) if kind == "dispose") < kinds.index("retire-exception")
-    assert kinds.index("retire-exception") < kinds.index("retire-owner")
-    assert model.registered == [] and not any(model.roots.values())
-    assert model.events[-1] == ("branch", "handler")
-    assert model.builder._block == "entry"
+    # Keep the existing pytest node matrix while exercising both production
+    # invalidation branches for every pending-exception/relocation scenario.
+    for backend in range(5):
+        model = CleanupModel(owners, callback, move, pending, backend=backend)
+        model._slot_call_cleanup_block(owners, "handler")
+        assert model.pending == model.original, "root disposal lost the selecting exception"
+        assert model.pending_threads == int(bool(model.pending))
+        assert model.callback_count == 1
+        assert model.retired == list(reversed(owners))
+        kinds = [event[0] for event in model.events]
+        assert max(i for i, kind in enumerate(kinds) if kind == "dispose") < kinds.index("retire-exception")
+        assert kinds.index("retire-exception") < kinds.index("retire-owner")
+        assert model.registered == [] and not any(model.roots.values())
+        assert model.events[-1] == ("branch", "handler")
+        assert model.builder._block == "entry"
+
+        if callback == "weakref":
+            # A failed queue allocation must abort GC0 before clearing any
+            # weak target or calling user code. Tracing has no such allocation
+            # and must finish normally with the same allocator failure armed.
+            failure = CleanupModel(owners, callback, move, pending, backend=backend)
+            failure.weakrefs.fail_at = 1
+            if backend == 0:
+                with pytest.raises(RuntimeError, match="^abort$"):
+                    failure._slot_call_cleanup_block(owners, "handler")
+                assert failure.weakrefs.malloc_calls == 1
+                assert failure.callback_count == 0
+                assert failure.weakrefs.calls == []
+                assert failure.weakrefs.load(failure.live_weakref, 16) == failure.weakref_target
+                assert failure.weakrefs.load(failure.silent_weakref, 16) == failure.weakref_target
+                assert failure.pending == 0
+                assert failure.roots[failure.saved] == failure.original
+                assert failure.registered[-1] == failure.saved
+            else:
+                failure._slot_call_cleanup_block(owners, "handler")
+                assert failure.pending == failure.original
+                assert failure.callback_count == 1
+                assert failure.registered == [] and not any(failure.roots.values())
 
 
 def test_lease_only_cleanup_preserves_exception_with_balanced_helper_owner():
@@ -504,7 +590,7 @@ def _assert_two_root_program_error_edge():
     from tests.python.test_shared_call_binding import _function
     from tests.python.test_slot_call_lexical_roots import _emit
 
-    _codegen, text = _emit(TWO_ROOT_PROGRAM, "two_root_cleanup")
+    codegen, text = _emit(TWO_ROOT_PROGRAM, "two_root_cleanup")
     verify_stackmaps(text)
     body = _function(text, "user_two_root_cleanup_probe")
     assert "@py_list_new(" not in body and "@py_tuple_from_list(" not in body
@@ -527,8 +613,35 @@ def _assert_two_root_program_error_edge():
         roots = tuple(original(slot) for slot in call.groups())
         if not (".args.operand." in roots[0] and ".args.item.operand." in roots[1]):
             continue
-        leaves = re.findall(r"@pcc_gc_frame_leave_lifo\(ptr (%[\w.]+)\)", block)
-        assert tuple(original(slot) for slot in leaves) == tuple(reversed(roots))
+        # These exact stack cells have production private-root provenance.
+        # The leave must pair with the actual enter's local/mapped choice;
+        # accepting a spelling without checking its owner would mask ABI drift.
+        suffix = "_local_mapped" if codegen._precise_stack_frames_mapped else "_local"
+        enter_symbol = "pcc_gc_frame_enter_lifo" + suffix
+        leave_symbol = "pcc_gc_frame_leave_lifo" + suffix
+        proofs = codegen._private_frame_scopes["user_two_root_cleanup_probe"]
+        for root in roots:
+            proof = [record for record in proofs.values() if str(record[1]) == root]
+            assert len(proof) == 1 and proof[0][2] & 2
+            assert proof[0][3][2] == enter_symbol
+            frame_map, count, capacity = proof[0][4][2]
+            assert count == capacity == 1 and frame_map.global_constant
+            entries = re.findall(
+                r"@" + enter_symbol + r"\(ptr ([%@][\w.]+), ptr (%[\w.]+)\)", body,
+            )
+            entries = [(mapping, slot) for mapping, slot in entries if original(slot) == root]
+            assert len(entries) == 1
+            # Resolve the map's cast too, including a direct global operand.
+            map_aliases = dict(re.findall(r"(%[\w.]+) = bitcast ptr (@[\w.]+) to ptr", body))
+            mapping = map_aliases.get(entries[0][0], entries[0][0])
+            assert mapping == "@" + frame_map.name
+        leaves = re.findall(
+            r"@(pcc_gc_frame_leave_lifo(?:_local_mapped|_mapped|_local)?)\(ptr (%[\w.]+)\)",
+            block,
+        )
+        assert tuple(original(slot) for _symbol, slot in leaves) == tuple(reversed(roots))
+        assert all(symbol == leave_symbol for symbol, _slot in leaves)
+        assert call.end() < block.index("@" + leave_symbol + "(")
         assert "@py_tls_exc_swap_slot(" not in block and "@pcc_gc_store_root(" not in block
         exact_edges.add(name)
     assert len(exact_edges) == 1
