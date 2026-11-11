@@ -401,12 +401,29 @@ class Elaborator:
         machine = self.machine(local)
         if self.unify(machine, actual, expected, local.depth):
             return
-        if self.has_metas(machine, actual, local.depth) or self.has_metas(
-            machine, expected, local.depth
+        if not self._rigid_clash(machine, actual, expected) and (
+            self.has_metas(machine, actual, local.depth)
+            or self.has_metas(machine, expected, local.depth)
         ):
             self.pending.append((local, actual, expected, line, what))
             return
         self.mismatch(local, actual, expected, line, what)
+
+    @staticmethod
+    def _rigid_clash(machine, left, right):
+        """Whether two types differ at their heads, whatever metas stand for."""
+        left = machine.force(left)
+        right = machine.force(right)
+        rigid = (VData, VPi, VSort)
+        if not (isinstance(left, rigid) and isinstance(right, rigid)):
+            return False
+        if type(left) is not type(right):
+            return True
+        if isinstance(left, VData):
+            return left.name != right.name
+        if isinstance(left, VSort):
+            return left.level != right.level
+        return False
 
     def mismatch(self, local, actual, expected, line, what):
         self.fail(

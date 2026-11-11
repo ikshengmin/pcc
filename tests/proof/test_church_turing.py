@@ -52,7 +52,7 @@ def test_every_module_is_checked(session):
     assert counts == {
         "lambda_de_bruijn": 19,
         "lambda_untyped": 14,
-        "lambda_weak_head": 12,
+        "lambda_weak_head": 19,
         "demo": 18,
     }
     assert session.kernel.idle
@@ -188,3 +188,13 @@ def test_a_wrong_reduct_is_rejected(tmp_path):
         "ONE_STEP: Step[App(IDENTITY, Var(7)), Var(8)] = Beta()",
     )
     _check_rejects(path, "is required")
+
+
+def test_a_bound_cannot_be_lowered(tmp_path):
+    path = _tampered(
+        tmp_path,
+        "lambda_weak_head",
+        "def whn_in_weaken(n: Nat, m: Term, h: WHNIn(n, m)) -> WHNIn(suc(n), m):",
+        "def whn_in_weaken(n: Nat, m: Term, h: WHNIn(suc(n), m)) -> WHNIn(n, m):",
+    )
+    _check_rejects(path, "is required|cannot match|does not cover")

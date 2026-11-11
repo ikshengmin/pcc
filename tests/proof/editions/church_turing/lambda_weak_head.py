@@ -1,8 +1,9 @@
 """Weak head reduction.
 
-Python edition of the first part of the Agda module ``LambdaWeakHead``: the
-weak head step relation, its determinism, its inclusion in beta reduction, and
-the weak head normal forms of variables and abstractions.
+Python edition of part of the Agda module ``LambdaWeakHead``: the weak head
+step relation, its determinism, its inclusion in beta reduction, the weak head
+normal forms of variables and abstractions, and explicit evaluation bounds.
+A bound is data: no excluded middle or termination oracle is used.
 """
 
 from __future__ import annotations
@@ -10,9 +11,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from church_turing.lambda_de_bruijn import App, Lam, Term, Var, subst1
-from church_turing.lambda_untyped import App1, Beta, Step
-from pcc.proof.prelude import Empty, Eq, Not, Refl
-from pcc.proof.runtime import Data, Nat, Pi, Type, impossible
+from church_turing.lambda_untyped import App1, Beta, BetaRefl, BetaStep, Step, Steps
+from pcc.proof.prelude import And, Both, Empty, Eq, Exists, Inl, Inr, Not, Or, Pair, Refl
+from pcc.proof.runtime import Data, Nat, Pi, Type, impossible, suc
 
 
 class WhStep[t: Term, u: Term](Data):
@@ -79,3 +80,67 @@ def whnf_lam(b: Term) -> IsWhnf(Lam(b)):
 def whnf_app_function(m: Term, n: Term, nf: IsWhnf(App(m, n))) -> IsWhnf(m):
     """If an application is in weak head normal form, so is its function."""
     return lambda mp: lambda r: nf(App(mp, n))(WhApp(r))
+
+
+# -- an explicit bound on weak head evaluation --------------------------------
+
+def WHNIn(n: Nat, m: Term) -> Type:
+    """``m`` reaches a weak head normal form in at most ``n`` weak head steps."""
+    match n:
+        case 0:
+            return IsWhnf(m)
+        case _:
+            return Or[IsWhnf(m), Exists[Term, lambda k: And[WhStep[m, k], WHNIn(n - 1, k)]]]
+
+
+def HasWhnfEval(m: Term) -> Type:
+    return Exists[Nat, lambda n: WHNIn(n, m)]
+
+
+def whn_in_from_whnf(n: Nat, m: Term, nf: IsWhnf(m)) -> WHNIn(n, m):
+    match n:
+        case 0:
+            return nf
+        case _:
+            return Inl(nf)
+
+
+def whn_in_weaken(n: Nat, m: Term, h: WHNIn(n, m)) -> WHNIn(suc(n), m):
+    """A bound can always be raised by one."""
+    match n:
+        case 0:
+            return Inl(h)
+        case _:
+            match h:
+                case Inl(nf):
+                    return Inl(nf)
+                case Inr(Pair(k, Both(step, rest))):
+                    return Inr(Pair(k, Both(step, whn_in_weaken(n - 1, k, rest))))
+
+
+def has_whnf_eval_from_whnf(m: Term, nf: IsWhnf(m)) -> HasWhnfEval(m):
+    return Pair(0, nf)
+
+
+def has_whnf_eval_prepend[m: Term, k: Term](step: WhStep[m, k], e: HasWhnfEval(k)) -> HasWhnfEval(m):
+    """One weak head step before an evaluation is an evaluation."""
+    match e:
+        case Pair(n, rest):
+            return Pair(suc(n), Inr(Pair(k, Both(step, rest))))
+
+
+def whnf_reduct_from_bound(n: Nat, m: Term, h: WHNIn(n, m)) -> Exists[
+    Term, lambda j: And[Steps[m, j], IsWhnf(j)]
+]:
+    """A bounded evaluation reaches a weak head normal form by beta steps."""
+    match n:
+        case 0:
+            return Pair(m, Both(BetaRefl(), h))
+        case _:
+            match h:
+                case Inl(nf):
+                    return Pair(m, Both(BetaRefl(), nf))
+                case Inr(Pair(k, Both(step, rest))):
+                    match whnf_reduct_from_bound(n - 1, k, rest):
+                        case Pair(j, Both(steps, nf)):
+                            return Pair(j, Both(BetaStep(wh_to_beta(step), steps), nf))
