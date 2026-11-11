@@ -332,6 +332,16 @@ def test_matching_on_an_expression_generalizes_the_goal(tmp_path):
         tmp_path,
         LAMBDA
         + """
+def lift_keeps_small_variables(c: Nat, i: Nat, small: Eq[i < c, True]) -> Eq[lift(c, Var(i)), Var(i)]:
+    match i < c:
+        case True:
+            return Refl()
+
+def lift_shifts_large_variables(c: Nat, i: Nat, large: Eq[i < c, False]) -> Eq[lift(c, Var(i)), Var(suc(i))]:
+    if i < c:
+        return impossible(large)
+    return Refl()
+
 def lift_of_variable_agrees_with_its_test(c: Nat, i: Nat) -> Eq[
     lift(c, Var(i)), Var(i) if i < c else Var(i + 1)
 ]:

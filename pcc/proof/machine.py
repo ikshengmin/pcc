@@ -156,7 +156,8 @@ class Machine:
                 env = env + scrutinee.args[constructor.nparams :]
                 tree = subtree
             elif isinstance(tree, With):
-                env = env + (self.evaluate(tree.scrutinee, env),)
+                copies = tuple(env[level] for level, _ in tree.rebinds)
+                env = env + (self.evaluate(tree.scrutinee, env),) + copies
                 tree = tree.body
             else:
                 raise MachineError(f"malformed case tree in {name}")
@@ -187,6 +188,41 @@ class Machine:
         if isinstance(value, VLam):
             body = self.apply_closure(value.closure, var(depth))
             return Lam(value.name, self.quote(value.domain, depth), self.quote(body, depth + 1))
+        raise MachineError(f"cannot read back {value!r}")
+
+    def quote_renamed(self, value, depth, renaming):
+        """Like :meth:`quote`, sending each level in ``renaming`` to its image."""
+        value = self.force(value)
+        if isinstance(value, VNeutral):
+            head = value.head
+            if isinstance(head, HVar):
+                term = Var(depth - 1 - renaming.get(head.level, head.level))
+            elif isinstance(head, HMeta):
+                term = Meta(head.ident)
+            else:
+                term = Const(head.name)
+            return apps(term, [self.quote_renamed(arg, depth, renaming) for arg in value.spine])
+        if isinstance(value, (VCon, VData)):
+            return apps(
+                Const(value.name),
+                [self.quote_renamed(arg, depth, renaming) for arg in value.args],
+            )
+        if isinstance(value, VSort):
+            return Sort(value.level)
+        if isinstance(value, VPi):
+            body = self.apply_closure(value.closure, var(depth))
+            return Pi(
+                value.name,
+                self.quote_renamed(value.domain, depth, renaming),
+                self.quote_renamed(body, depth + 1, renaming),
+            )
+        if isinstance(value, VLam):
+            body = self.apply_closure(value.closure, var(depth))
+            return Lam(
+                value.name,
+                self.quote_renamed(value.domain, depth, renaming),
+                self.quote_renamed(body, depth + 1, renaming),
+            )
         raise MachineError(f"cannot read back {value!r}")
 
     # -- conversion ----------------------------------------------------------

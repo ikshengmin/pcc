@@ -420,7 +420,7 @@ class Kernel:
                 ctx = ctx.extend(goal.name, goal.domain)
                 goal = machine.force(machine.apply_closure(goal.closure, var(ctx.size - 1)))
             sites = []
-            self._check_tree(name, ctx, tree, goal, sites)
+            self._check_tree(name, ctx, tree, goal, sites, ctx.env())
             self._check_termination(name, info.arity, sites)
         except Exception:
             self.abort()
@@ -448,7 +448,12 @@ class Kernel:
         self.sig.datas[name] = DataInfo(name, type_term, 0, count)
         self._pending = ("data", name)
 
-    def _check_tree(self, name, ctx, tree, goal, sites):
+    def _check_tree(self, name, ctx, tree, goal, sites, params):
+        """Check a case tree against ``goal``.
+
+        ``params`` gives the function's parameters as values over the current
+        context.  Termination compares recursive calls against them.
+        """
         if isinstance(tree, Leaf):
             if self._escapes(tree.body, ctx.size):
                 raise KernelError(f"{name}: body refers outside its context")
@@ -459,7 +464,7 @@ class Kernel:
                     f"{self.show_value(ctx, actual)} but {self.show_value(ctx, goal)} "
                     f"is required"
                 )
-            sites.append((ctx, tree.body))
+            sites.append((ctx, tree.body, params))
             return
         if isinstance(tree, Split):
             if not 0 <= tree.level < ctx.size:
@@ -493,30 +498,69 @@ class Kernel:
                     raise KernelError(
                         f"{name}: missing case {cname} for {ctx.names[tree.level]}"
                     )
-                self._check_tree(name, refined, subtree, goal, sites)
+                self._check_tree(name, refined, subtree, goal, sites, params)
             return
         if isinstance(tree, With):
             if self._escapes(tree.scrutinee, ctx.size):
                 raise KernelError(f"{name}: scrutinee refers outside its context")
             scrutinee_type = self.infer(ctx, tree.scrutinee)
-            sites.append((ctx, tree.scrutinee))
+            sites.append((ctx, tree.scrutinee, params))
+            machine = self.machine(ctx)
+            scrutinee = machine.evaluate(tree.scrutinee, ctx.env())
             inner = ctx.extend("_with", scrutinee_type)
+            # ``instance`` reads a term over the new variables back in the old
+            # context: the scrutinee for ``w`` and each original for its copy.
+            instance = ctx.env() + (scrutinee,)
+            renaming = {}
+            for level, type_term in tree.rebinds:
+                if not 0 <= level < ctx.size or level in renaming:
+                    raise KernelError(f"{name}: malformed generalization")
+                if self._flexible(ctx, machine.force(var(level))) is None:
+                    raise KernelError(
+                        f"{name}: {ctx.names[level]} is determined and cannot be generalized"
+                    )
+                if self._escapes(type_term, inner.size):
+                    raise KernelError(f"{name}: generalized type refers outside its context")
+                self.sort_of(inner, type_term)
+                sites.append((inner, type_term, params))
+                if not machine.conv(
+                    machine.evaluate(type_term, instance), ctx.types[level], ctx.size
+                ):
+                    raise KernelError(
+                        f"{name}: the generalized type of {ctx.names[level]} "
+                        f"is not its type"
+                    )
+                renaming[level] = inner.size
+                inner = inner.extend(
+                    ctx.names[level], self.machine(inner).evaluate(type_term, inner.env())
+                )
+                instance = instance + (var(level),)
             if self._escapes(tree.motive, inner.size):
                 raise KernelError(f"{name}: motive refers outside its context")
             self.sort_of(inner, tree.motive)
-            sites.append((inner, tree.motive))
-            machine = self.machine(ctx)
-            scrutinee = machine.evaluate(tree.scrutinee, ctx.env())
-            instance = machine.evaluate(tree.motive, ctx.env() + (scrutinee,))
-            if not machine.conv(instance, goal, ctx.size):
+            sites.append((inner, tree.motive, params))
+            given = machine.evaluate(tree.motive, instance)
+            if not machine.conv(given, goal, ctx.size):
                 raise KernelError(
-                    f"{name}: abstracted goal {self.show_value(ctx, instance)} "
+                    f"{name}: abstracted goal {self.show_value(ctx, given)} "
                     f"is not the goal {self.show_value(ctx, goal)}"
                 )
             new_goal = self.machine(inner).evaluate(tree.motive, inner.env())
-            self._check_tree(name, inner, tree.body, new_goal, sites)
+            new_params = tuple(self.rename(inner, value, renaming) for value in params)
+            self._check_tree(name, inner, tree.body, new_goal, sites, new_params)
             return
         raise KernelError(f"{name}: malformed case tree")
+
+    def rename(self, ctx, value, renaming):
+        """``value`` with each level in ``renaming`` replaced by its image.
+
+        Used when a copy stands for its original from here on: the copy holds
+        the same thing at run time, so the renamed value denotes the same.
+        """
+        if not renaming:
+            return value
+        machine = self.machine(ctx)
+        return machine.evaluate(machine.quote_renamed(value, ctx.size, renaming), ctx.env())
 
     # -- splitting and index unification -------------------------------------
 
@@ -671,8 +715,8 @@ class Kernel:
 
     def _check_termination(self, name, arity, sites):
         calls = []
-        for ctx, term in sites:
-            self._collect_calls(name, arity, ctx, term, ctx.env(), ctx.size, calls)
+        for ctx, term, params in sites:
+            self._collect_calls(name, arity, ctx, term, ctx.env(), ctx.size, params, calls)
         if not calls:
             return
         if arity == 0:
@@ -695,7 +739,7 @@ class Kernel:
             unused.discard(chosen)
             remaining = [index for index in remaining if relations[index][chosen] != "<"]
 
-    def _collect_calls(self, name, arity, ctx, term, env, depth, calls):
+    def _collect_calls(self, name, arity, ctx, term, env, depth, params, calls):
         head, args = unapply(term)
         if isinstance(head, Const) and head.name == name:
             if len(args) < arity:
@@ -704,24 +748,26 @@ class Kernel:
                 )
             machine = self.machine(ctx)
             values = tuple(machine.evaluate(arg, env) for arg in args[:arity])
-            calls.append((ctx, depth, values))
+            calls.append((ctx, depth, values, params))
         elif isinstance(head, Lam):
-            self._collect_calls(name, arity, ctx, head.domain, env, depth, calls)
-            self._collect_calls(name, arity, ctx, head.body, env + (var(depth),), depth + 1, calls)
-        elif isinstance(head, Pi):
-            self._collect_calls(name, arity, ctx, head.domain, env, depth, calls)
+            self._collect_calls(name, arity, ctx, head.domain, env, depth, params, calls)
             self._collect_calls(
-                name, arity, ctx, head.codomain, env + (var(depth),), depth + 1, calls
+                name, arity, ctx, head.body, env + (var(depth),), depth + 1, params, calls
+            )
+        elif isinstance(head, Pi):
+            self._collect_calls(name, arity, ctx, head.domain, env, depth, params, calls)
+            self._collect_calls(
+                name, arity, ctx, head.codomain, env + (var(depth),), depth + 1, params, calls
             )
         for arg in args:
-            self._collect_calls(name, arity, ctx, arg, env, depth, calls)
+            self._collect_calls(name, arity, ctx, arg, env, depth, params, calls)
 
     def _call_relation(self, arity, call):
-        ctx, depth, values = call
+        ctx, depth, values, params = call
         machine = self.machine(ctx)
         relation = []
         for position in range(arity):
-            parameter = var(position)
+            parameter = params[position]
             if machine.conv(values[position], parameter, depth):
                 relation.append("=")
             elif self._smaller(machine, values[position], parameter, depth):

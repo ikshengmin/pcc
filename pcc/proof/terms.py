@@ -104,14 +104,20 @@ class Split:
 class With:
     """Abstraction over an expression.
 
-    Appends one variable ``w`` of the scrutinee's type to the clause context.
-    ``motive`` is the goal type as a term over ``w``; instantiating ``w`` with
-    the scrutinee must give back the goal.
+    Appends one variable ``w`` of the scrutinee's type to the clause context,
+    then one copy of each context variable listed in ``rebinds``.  A rebind is
+    ``(level, type)``: the copy's type is a term over ``w`` and the earlier
+    copies, and must give back the original variable's type when ``w`` is the
+    scrutinee and each copy is its original.  ``motive`` is the goal over
+    ``w`` and the copies, with the same requirement.
+
+    At run time ``w`` holds the scrutinee and each copy holds its original.
     """
 
     scrutinee: object
     motive: object
     body: object
+    rebinds: tuple = ()  # of (level, type term)
 
 
 # -- values ------------------------------------------------------------------
@@ -257,5 +263,7 @@ def tree_terms(tree):
         elif isinstance(node, With):
             found.append(node.scrutinee)
             found.append(node.motive)
+            for _, type_term in node.rebinds:
+                found.append(type_term)
             stack.append(node.body)
     return found

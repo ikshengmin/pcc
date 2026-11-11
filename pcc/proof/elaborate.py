@@ -914,40 +914,83 @@ class Elaborator:
                 if self._context_variable(local, forced) is not None or self._saturated(forced):
                     value = candidate
             if value is None:
-                term, type_value = self.standalone(local, subject)
-                scrutinee = self.kernel.machine(local.ctx).evaluate(term, local.env)
-                motive = self.abstract(local, goal, scrutinee)
-                level = local.depth
-                local = local.with_ctx(local.ctx.extend("_with", type_value))
-                goal = self.kernel.machine(local.ctx).evaluate(motive, local.env)
-                wrappers.append((term, motive))
-                value = var(level)
+                local, goal, columns, wrapper = self.generalize(local, subject, goal, columns)
+                wrappers.append(wrapper)
+                value = var(wrapper[3])
             columns.append(value)
         rows = [
             _Row([self.pattern(pattern) for pattern in case.patterns], case.body, {}, case.line)
             for case in node.cases
         ]
         tree = self.compile(local, columns, rows, goal, node.line)
-        for term, motive in reversed(wrappers):
-            tree = With(term, motive, tree)
+        for term, motive, rebinds, _ in reversed(wrappers):
+            tree = With(term, motive, tree, rebinds)
         return tree
+
+    def generalize(self, local, subject, goal, columns):
+        """Abstract the goal and the context over the expression ``subject``.
+
+        A new variable stands for the expression.  Every undetermined context
+        variable whose type mentions the expression, or mentions a variable
+        already copied, gets a copy with the generalized type; names in scope
+        then refer to the copies.
+        """
+        term, type_value = self.standalone(local, subject)
+        machine = self.kernel.machine(local.ctx)
+        target = machine.evaluate(term, local.env)
+        with_level = local.depth
+        inner = local.ctx.extend("_with", type_value)
+        renaming = {}
+        rebinds = []
+        for level in range(local.depth):
+            if self._context_variable(local, var(level)) is None:
+                continue
+            type_term, changed = self.abstract(
+                local, local.ctx.types[level], target, with_level, renaming, inner.size
+            )
+            if not changed:
+                continue
+            rebinds.append((level, type_term))
+            renaming[level] = inner.size
+            copy_type = self.kernel.machine(inner).evaluate(type_term, inner.env())
+            inner = inner.extend(local.ctx.names[level], copy_type)
+        motive, _ = self.abstract(local, goal, target, with_level, renaming, inner.size)
+        new_goal = self.kernel.machine(inner).evaluate(motive, inner.env())
+        scope = {
+            name: (self.kernel.rename(inner, value, renaming), None)
+            for name, (value, _) in local.scope.items()
+        }
+        new_columns = [self.kernel.rename(inner, column, renaming) for column in columns]
+        wrapper = (term, motive, tuple(rebinds), with_level)
+        return Local(inner, scope), new_goal, new_columns, wrapper
 
     def _saturated(self, value):
         return isinstance(value, VCon) and len(value.args) == self.sig.constructors[value.name].arity
 
-    def abstract(self, local, goal, target):
-        """The goal as a term over a new variable standing for ``target``."""
+    def abstract(self, local, value, target, with_level, renaming, depth):
+        """``value`` as a term at ``depth`` over the generalized context.
+
+        Parts convertible to ``target`` become the variable at ``with_level``
+        and each level in ``renaming`` becomes its copy.  Returns the term and
+        whether anything was replaced.
+        """
         machine = self.kernel.machine(local.ctx)
-        new_level = local.depth
+        changed = [False]
 
         def go(value, depth):
             value = machine.force(value)
             if machine.conv(value, target, depth):
-                return Var(depth - 1 - new_level)
+                changed[0] = True
+                return Var(depth - 1 - with_level)
             if isinstance(value, VNeutral):
                 head = value.head
                 if isinstance(head, HVar):
-                    term = Var(depth - 1 - head.level)
+                    image = renaming.get(head.level)
+                    if image is None:
+                        image = head.level
+                    else:
+                        changed[0] = True
+                    term = Var(depth - 1 - image)
                 else:
                     term = Const(head.name)
                 return apps(term, [go(arg, depth) for arg in value.spine])
@@ -963,7 +1006,7 @@ class Elaborator:
                 return Lam(value.name, go(value.domain, depth), go(inner, depth + 1))
             raise ElabError("cannot abstract over this goal")
 
-        return go(goal, new_level + 1)
+        return go(value, depth), changed[0]
 
     def pattern(self, pattern):
         """Resolve a surface pattern to ``wild``, ``var``, ``con`` or ``as``."""

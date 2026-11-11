@@ -76,8 +76,9 @@ def split(name, *branches):
     return ("split", name, branches)
 
 
-def with_(expr, name, motive, body):
-    return ("with", expr, name, motive, body)
+def with_(expr, name, motive, body, rebinds=()):
+    """``rebinds`` is ``[(variable, copy name, generalized type)]``."""
+    return ("with", expr, name, motive, body, tuple(rebinds))
 
 
 def tree(node, names):
@@ -99,10 +100,23 @@ def tree(node, names):
         )
         return Split(level, branches)
     if kind == "with":
+        inner = names + [node[2]]
+        rebinds = []
+        for original, copy, type_expr in node[5]:
+            level = None
+            for position in range(len(names) - 1, -1, -1):
+                if names[position] == original:
+                    level = position
+                    break
+            if level is None:
+                raise KeyError(f"unbound test variable {original}")
+            rebinds.append((level, core(type_expr, inner)))
+            inner = inner + [copy]
         return With(
             core(node[1], names),
-            core(node[3], names + [node[2]]),
-            tree(node[4], names + [node[2]]),
+            core(node[3], inner),
+            tree(node[4], inner),
+            tuple(rebinds),
         )
     raise ValueError(f"unknown test tree {node!r}")
 

@@ -565,3 +565,134 @@ def test_an_open_family_must_be_closed_before_it_is_declared():
     assert kernel.sig.kind("Open") is None
     data(kernel, "Open", [], [], [("only", [], [])])
     assert kernel.sig.datas["Open"].constructors == ("only",)
+
+
+# -- abstraction that also generalizes the context ---------------------------
+
+def _is_zero(kernel):
+    function(
+        kernel,
+        "is_zero",
+        [("n", NAT)],
+        C("Bool"),
+        split("n", ("zero", [], leaf(C("true"))), ("suc", ["k"], leaf(C("false")))),
+    )
+
+
+def test_abstraction_generalizes_a_hypothesis():
+    """With ``h : is_zero n = true`` generalized, the false case is empty."""
+    kernel = base_kernel()
+    _is_zero(kernel)
+    bool_eq = lambda left, right: eq(C("Bool"), left, right)
+    function(
+        kernel,
+        "zero_when_tested",
+        [("n", NAT), ("h", bool_eq(A(C("is_zero"), V("n")), C("true")))],
+        C("Bool"),
+        with_(
+            A(C("is_zero"), V("n")),
+            "w",
+            C("Bool"),
+            split("w", ("false", [], split("h1")), ("true", [], leaf(C("true")))),
+            rebinds=[("h", "h1", bool_eq(V("w"), C("true")))],
+        ),
+    )
+
+
+def test_rejects_a_generalized_type_that_is_not_the_original():
+    kernel = base_kernel()
+    _is_zero(kernel)
+    bool_eq = lambda left, right: eq(C("Bool"), left, right)
+    with pytest.raises(KernelError, match="is not its type"):
+        function(
+            kernel,
+            "cheat",
+            [("n", NAT), ("h", bool_eq(A(C("is_zero"), V("n")), C("true")))],
+            C("Empty"),
+            with_(
+                A(C("is_zero"), V("n")),
+                "w",
+                C("Empty"),
+                split("h1"),
+                rebinds=[("h", "h1", bool_eq(C("false"), C("true")))],
+            ),
+        )
+
+
+def test_rejects_generalizing_a_determined_variable():
+    kernel = base_kernel()
+    _is_zero(kernel)
+    with pytest.raises(KernelError, match="is determined"):
+        function(
+            kernel,
+            "bad",
+            [("n", NAT)],
+            NAT,
+            split(
+                "n",
+                ("zero", [], leaf(ZERO)),
+                (
+                    "suc",
+                    ["k"],
+                    with_(C("true"), "w", NAT, leaf(ZERO), rebinds=[("n", "n1", NAT)]),
+                ),
+            ),
+        )
+
+
+def test_rejects_generalizing_a_variable_twice():
+    kernel = base_kernel()
+    with pytest.raises(KernelError, match="malformed generalization"):
+        function(
+            kernel,
+            "bad",
+            [("n", NAT)],
+            NAT,
+            with_(
+                C("true"), "w", NAT, leaf(ZERO),
+                rebinds=[("n", "n1", NAT), ("n", "n2", NAT)],
+            ),
+        )
+
+
+def test_recursion_descends_through_a_generalized_copy():
+    """A copy stands for its original when calls are compared."""
+    kernel = base_kernel()
+    _is_zero(kernel)
+    function(
+        kernel,
+        "drain",
+        [("n", NAT), ("m", NAT)],
+        NAT,
+        with_(
+            A(C("is_zero"), V("m")),
+            "w",
+            NAT,
+            split(
+                "n1",
+                ("zero", [], leaf(V("m"))),
+                ("suc", ["k"], leaf(A(C("drain"), V("k"), V("m")))),
+            ),
+            rebinds=[("n", "n1", NAT)],
+        ),
+    )
+    assert convertible(kernel, A(C("drain"), numeral(3), numeral(5)), numeral(5))
+
+
+def test_rejects_a_loop_through_a_generalized_copy():
+    kernel = base_kernel()
+    _is_zero(kernel)
+    with pytest.raises(KernelError, match="not structurally decreasing"):
+        function(
+            kernel,
+            "spin",
+            [("n", NAT), ("m", NAT)],
+            NAT,
+            with_(
+                A(C("is_zero"), V("m")),
+                "w",
+                NAT,
+                leaf(A(C("spin"), V("n1"), V("m"))),
+                rebinds=[("n", "n1", NAT)],
+            ),
+        )
