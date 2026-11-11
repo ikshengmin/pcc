@@ -10,6 +10,7 @@ from pcc.frontends.python.pipeline_targets import host_target_triple
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_DIR = REPO_ROOT / "pcc" / "runtime"
 INDEX_SOURCE = RUNTIME_DIR / "py" / "freestanding_gc_index_table.py"
+INDEX_DEPENDENCIES = Path(__file__).with_name("fixtures") / "gc_index_native_dependencies.c"
 
 PUBLIC_SYMBOLS = {
     "pcc_gc_index_slot_size",
@@ -119,7 +120,9 @@ def _harness_source() -> str:
 #include <stdio.h>
 #include <stdlib.h>
 
+#ifndef PCC_INDEX_STANDALONE_STORAGE
 void pcc_platform_abort(void) { abort(); }
+#endif
 
 int64_t pcc_gc_index_slot_size(void);
 int64_t pcc_gc_index_py_hash_ptr(void *key);
@@ -207,13 +210,6 @@ void *pcc_allocator_object_side_slot(void *ptr, int64_t create) {
     (void)ptr;
     (void)create;
     return NULL;
-}
-/* No allocation is staged in a standalone index: staging is off, so an
- * object-index miss stands without asking the rings
- * (freestanding_gc_alloc_stage). */
-int32_t pcc_gc_alloc_stage_enabled = 0;
-int64_t pcc_gc_alloc_stage_miss_drain(void) {
-    return 0;
 }
 void *pcc_allocator_granule_object_slot(void *ptr) {
     /* Model an exact cell whose side-array allocation failed. */
@@ -738,6 +734,7 @@ def _build_and_run_harness(
             f"-I{RUNTIME_DIR / 'include'}",
             f"-I{RUNTIME_DIR / 'src'}",
             str(harness),
+            *([str(INDEX_DEPENDENCIES)] if standalone else []),
             *implementation,
             "-o",
             str(executable),

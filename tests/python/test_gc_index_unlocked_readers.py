@@ -38,6 +38,7 @@ from tests.owned_c_execution import compile_owned_c_with_runtime
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 INDEX_SOURCE = REPO_ROOT / "pcc" / "runtime" / "py" / "freestanding_gc_index_table.py"
+INDEX_DEPENDENCIES = Path(__file__).with_name("fixtures") / "gc_index_native_dependencies.c"
 
 HARNESS = r"""
 #include <pthread.h>
@@ -241,7 +242,7 @@ def test_index_lookups_without_the_lock_survive_concurrent_growth(
     ):
         obj = _index_object(tmp_path)
         artifact = build(
-            harness, backend="self", kind="exe", optimize=1,
+            [harness, INDEX_DEPENDENCIES], backend="self", kind="exe", optimize=1,
             include_dirs=[REPO_ROOT / "utils/fake_libc_include"],
             link_args=[str(obj)], out_dir=tmp_path / "owned",
             use_compile_cache=False,

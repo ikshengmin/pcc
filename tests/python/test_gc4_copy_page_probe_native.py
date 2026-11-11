@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import platform
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -285,7 +286,8 @@ def emitted_copy(tmp_path_factory):
     assert remaining > 0, "two-module fixture exhausted its 30-second build budget"
     link = subprocess.run(
         ["cc", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-I", str(build),
-         str(FIXTURES / "gc4_copy_page_probe_native.c"), str(obj), str(index_obj),
+         str(FIXTURES / "gc4_copy_page_probe_native.c"),
+         str(FIXTURES / "gc_index_native_dependencies.c"), str(obj), str(index_obj),
          str(build / "primary-index-provider.o"),
          "-Wl,--wrap=calloc", "-Wl,--wrap=free", "-o", str(executable)],
         cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=remaining,
@@ -319,6 +321,33 @@ def test_current_native_membership_state_machine(emitted_copy, case):
     assert observed == MEMBERSHIP_CASES[case]
 
 
+def test_current_native_index_miss_does_not_require_disabled_staging(emitted_copy):
+    _build, _obj, _index_obj, executable = emitted_copy
+    result = subprocess.run(
+        [str(executable), "index-stage-disabled"], capture_output=True, text=True, timeout=5,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(result.stdout) == {"staging_enabled": 0, "found": 0}
+
+
+@pytest.mark.parametrize("case", (
+    "platform-abort", "index-stage-unavailable", "index-invalid-generation",
+))
+def test_isolated_index_dependencies_fail_closed(emitted_copy, case):
+    _build, _obj, _index_obj, executable = emitted_copy
+    # Unavailable providers and a real index invariant violation must abort.
+    # Disable core files only in this child, without changing pytest's limits.
+    result = subprocess.run(
+        [sys.executable, "-c",
+         "import os,resource,sys; resource.setrlimit(resource.RLIMIT_CORE,(0,0)); "
+         "os.execv(sys.argv[1],sys.argv[1:])", str(executable), case],
+        capture_output=True, text=True, timeout=5,
+    )
+    assert result.returncode == -signal.SIGABRT, result.stdout + result.stderr
+    if case == "index-stage-unavailable":
+        assert "no allocation staging provider" in result.stderr
+
+
 def _owned_elf_symbol_names(path: Path) -> tuple[set[str], set[str]]:
     # Inspect the emitted bytes without a separately scheduled nm process.
     # Unlike archive resolution, exact closure includes weak undefined names.
@@ -346,6 +375,7 @@ def test_current_owned_copy_has_exact_strict_closure(emitted_copy):
     assert index_undefined == {
         "calloc", "free", "pcc_allocator_object_side_slot", "pcc_allocator_granule_object_slot",
         "pcc_gc_tracked_primary_index_cells",
+        "pcc_platform_abort", "pcc_gc_alloc_stage_enabled", "pcc_gc_alloc_stage_miss_drain",
     }
     index_source = contract.STRICT_SOURCE.with_name("freestanding_gc_index_table.py")
     source_tree = ast.parse(index_source.read_text())

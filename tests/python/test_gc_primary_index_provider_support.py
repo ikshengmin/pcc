@@ -93,10 +93,20 @@ def test_owned_provider_object_has_exact_independent_abi_closure(tmp_path):
     assert "define external ptr @pcc_gc_tracked_primary_index_cells(ptr " in ir
 
 
-def test_remembered_membership_fixture_links_canonical_provider_object():
+@pytest.mark.parametrize("filename,function_name", [
+    ("test_gc_remembered_membership_native.py",
+     "test_remembered_membership_real_self_emitted_index_object"),
+    ("test_gc_store_buffer_membership_native.py",
+     "test_store_buffer_membership_real_self_emitted_index_object"),
+    ("test_gc_store_buffer_membership_native.py",
+     "test_store_buffer_entry_index_real_self_emitted_index_object"),
+])
+def test_membership_fixtures_link_canonical_provider_and_isolated_dependencies(
+    filename, function_name,
+):
     # Inspect only source wiring. Do not import, compile, link or execute the
-    # remembered-membership C harness or its index operations.
-    path = RUNTIME.parents[1] / "tests/python/test_gc_remembered_membership_native.py"
+    # membership C harnesses or their index operations.
+    path = RUNTIME.parents[1] / "tests/python" / filename
     tree = ast.parse(path.read_text())
     imports = [node for node in tree.body if isinstance(node, ast.ImportFrom)
                and node.module == "tests.python.gc_primary_index_provider_support"]
@@ -105,7 +115,7 @@ def test_remembered_membership_fixture_links_canonical_provider_object():
         ("emit_provider_object", None)
     ]
     function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
-                    and node.name == "test_remembered_membership_real_self_emitted_index_object")
+                    and node.name == function_name)
     assignments = {node.targets[0].id: node for node in function.body
                    if isinstance(node, ast.Assign) and len(node.targets) == 1
                    and isinstance(node.targets[0], ast.Name)}
@@ -121,6 +131,56 @@ def test_remembered_membership_fixture_links_canonical_provider_object():
     assert isinstance(argv, ast.List)
     assert [ast.unparse(value) for value in argv.elts] == [
         "compiler", "'-std=c11'", "'-fno-builtin'", "str(assembly)",
-        "str(provider)", "str(harness)", "'-o'", "str(binary)",
+        "str(provider)", "str(harness)", "str(INDEX_DEPENDENCIES)", "'-o'", "str(binary)",
     ]
     assert provider.lineno < built.lineno
+
+
+def test_isolated_dependencies_match_the_current_index_and_staging_abi():
+    index = ast.parse((RUNTIME / "py/freestanding_gc_index_table.py").read_text())
+    stage = ast.parse((RUNTIME / "py/freestanding_gc_alloc_stage.py").read_text())
+    imports = {node.targets[0].id: ast.unparse(node.value)
+               for node in index.body if isinstance(node, ast.Assign)
+               and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)}
+    assert imports["pcc_gc_alloc_stage_miss_drain"] == (
+        "extern('pcc_gc_alloc_stage_miss_drain', (), c_int64)"
+    )
+    assert imports["pcc_platform_abort"] == "extern('pcc_platform_abort', (), c_void)"
+    enabled = [node for node in stage.body if isinstance(node, ast.Expr)
+               and isinstance(node.value, ast.Call) and node.value.args
+               and isinstance(node.value.args[0], ast.Constant)
+               and node.value.args[0].value == "pcc_gc_alloc_stage_enabled"]
+    assert len(enabled) == 1
+    assert ast.unparse(enabled[0]) == "define_global_i32('pcc_gc_alloc_stage_enabled', 0)"
+    drain = next(node for node in stage.body if isinstance(node, ast.FunctionDef)
+                 and node.name == "pcc_gc_alloc_stage_miss_drain")
+    assert not drain.args.args
+    assert ast.unparse(drain.returns) == "i64"
+    header = (Path(__file__).with_name("fixtures") / "gc_index_native_dependencies.h").read_text()
+    assert "extern int32_t pcc_gc_alloc_stage_enabled;" in header
+    assert "_Noreturn void pcc_platform_abort(void);" in header
+    assert "int64_t pcc_gc_alloc_stage_miss_drain(void);" in header
+
+
+@pytest.mark.parametrize("standalone", (False, True))
+def test_only_standalone_index_harness_links_isolated_dependencies(
+    tmp_path, monkeypatch, standalone,
+):
+    import subprocess
+
+    from tests.python import test_freestanding_gc_index_table as harness
+
+    commands = []
+
+    def record_command(argv, **kwargs):
+        commands.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "gc-index-ok\n", "")
+
+    monkeypatch.setattr(harness.subprocess, "run", record_command)
+    harness._build_and_run_harness(
+        tmp_path, "index", ["index-or-runtime.o"], standalone=standalone,
+    )
+    assert (str(harness.INDEX_DEPENDENCIES) in commands[0]) is standalone
+    assert ("-DPCC_INDEX_STANDALONE_STORAGE=1" in commands[0]) is standalone
+    assert commands[0].count("index-or-runtime.o") == 1
+    assert len(commands) == 2

@@ -15,6 +15,7 @@ from tests.python.gc_primary_index_provider_support import emit_provider_object
 
 
 ROOT = Path(__file__).resolve().parents[2]
+INDEX_DEPENDENCIES = Path(__file__).with_name("fixtures") / "gc_index_native_dependencies.c"
 
 
 def test_remembered_membership_real_self_emitted_index_object(tmp_path):
@@ -184,7 +185,7 @@ int main(void) {
     binary = tmp_path / "remembered"
     built = subprocess.run(
         [compiler, "-std=c11", "-fno-builtin", str(assembly), str(provider), str(harness),
-         "-o", str(binary)],
+         str(INDEX_DEPENDENCIES), "-o", str(binary)],
         capture_output=True, text=True, timeout=30,
     )
     assert built.returncode == 0, built.stdout + built.stderr

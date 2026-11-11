@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "harness_globals.h"
+#include "gc_index_native_dependencies.h"
 
 #ifndef CAP
 #define CAP 96
@@ -45,6 +46,8 @@ extern int64_t pcc_gc_relocation_member_count(void *);
 extern int64_t pcc_gc_relocation_member_maybe(void *);
 extern int64_t pcc_gc_index_py_hash_ptr(void *);
 extern int64_t pcc_gc_index_py_find_slot(void *, int64_t, void *);
+extern void *pcc_gc_object_index_find(void *);
+extern void pcc_gc_object_index_write_end(int64_t);
 extern void *pcc_py_gc_relocation_member_slots;
 extern int64_t pcc_py_gc_relocation_member_cap;
 extern int64_t pcc_py_gc_relocation_member_count;
@@ -480,6 +483,16 @@ static int membership_state_case(const char *mode) {
 
 int main(int argc, char **argv) {
     if (argc != 2) return 2;
+    if (!strcmp(argv[1], "platform-abort")) pcc_platform_abort();
+    if (!strcmp(argv[1], "index-invalid-generation")) pcc_gc_object_index_write_end(2);
+    if (!strcmp(argv[1], "index-stage-disabled") ||
+        !strcmp(argv[1], "index-stage-unavailable")) {
+        if (!strcmp(argv[1], "index-stage-unavailable")) pcc_gc_alloc_stage_enabled = 1;
+        void *node = pcc_gc_object_index_find(&objects[0]);
+        printf("{\"staging_enabled\":%d,\"found\":%d}\n",
+            pcc_gc_alloc_stage_enabled, node != NULL);
+        return node != NULL;
+    }
     if (!strncmp(argv[1], "member-", 7)) return membership_state_case(argv[1]);
     const char *mode = argv[1];
     int corrupt_local = 0, bad_owner_index = 0;

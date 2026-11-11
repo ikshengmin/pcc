@@ -280,7 +280,6 @@ void *calloc(size_t count, size_t size) {
     return result;
 }
 
-void pcc_platform_abort(void) { abort(); }
 void *pcc_allocator_object_side_slot(void *key, int64_t create) {
     (void)key; (void)create; return NULL;
 }
@@ -422,7 +421,11 @@ def test_owned_native_forwarding_publication_oom(tmp_path):
     from unittest.mock import patch
 
     from pcc import build
-    from tests.python.test_gc_index_unlocked_readers import REPO_ROOT, _index_object
+    from tests.python.test_gc_index_unlocked_readers import (
+        INDEX_DEPENDENCIES,
+        REPO_ROOT,
+        _index_object,
+    )
 
     harness = tmp_path / 'forwarding_publication_oom.c'
     harness.write_text(NATIVE_HARNESS, encoding='utf-8')
@@ -433,7 +436,7 @@ def test_owned_native_forwarding_publication_oom(tmp_path):
     ):
         obj = _index_object(tmp_path)
         artifact = build(
-            harness, backend='self', kind='exe', optimize=1,
+            [harness, INDEX_DEPENDENCIES], backend='self', kind='exe', optimize=1,
             include_dirs=[REPO_ROOT / 'utils/fake_libc_include'],
             link_args=[str(obj)], out_dir=tmp_path / 'owned', use_compile_cache=False,
         )
