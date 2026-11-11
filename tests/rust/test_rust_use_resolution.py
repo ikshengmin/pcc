@@ -44,6 +44,27 @@ def compile_source(text, **options):
     return compile_rust(text, experimental_rustc_checked=True, **options)
 
 
+def assert_associated_items_before_fn_bound(parser, monkeypatch, declarations, location):
+    associated_types = []
+    parse_associated_type = parser.associated_type
+
+    def retain_associated_type(**options):
+        item = parse_associated_type(**options)
+        associated_types.append(item)
+        return item
+
+    monkeypatch.setattr(parser, 'associated_type', retain_associated_type)
+    line, column = location
+    with pytest.raises(RustError, match=(
+            rf'^{line}:{column}: parenthesized Fn-family trait bounds require closure traits, '
+            r'which are not implemented$')):
+        parser.parse()
+    assert [(item.token.text, item.token.line, item.token.column, item.value,
+             [(bound.path, bound.relaxed) for bound in item.bounds])
+            for item in associated_types] == declarations
+    assert (parser.token.text, parser.token.line, parser.token.column) == ('(', line, column)
+
+
 def test_use_syntax_retains_tokens_docs_and_original_codepoint_span():
     text = 'mod target{pub fn value(){}}\n/// original import\nuse self::target::value as read;'
     parser = Parser(text, source_path='src/lib.rs')
@@ -55,6 +76,29 @@ def test_use_syntax_retains_tokens_docs_and_original_codepoint_span():
     assert (item.token.line, item.token.column, item.token.source_path) == (3, 1, 'src/lib.rs')
     assert text[slice(*item.source_span)] == 'use self::target::value as read;'
     assert parser.modules[0].body.uses == []
+
+
+def test_use_parser_advances_associated_types_but_keeps_fn_bounds_explicit(monkeypatch):
+    # Independent parser controls, not a rewritten or certified upstream crate.
+    prefix = ('mod owner{pub fn value(){}}\nuse owner::value;\n'
+              'trait Iter{type Item:?Sized;type Error;')
+    parser = Parser(prefix + '}')
+    parser.parse()
+    trait, = parser.traits
+    assert trait.token.text == 'Iter'
+    assert [(item.token.text, item.value,
+             [(bound.path, bound.relaxed) for bound in item.bounds])
+            for item in trait.associated_types] == [
+        ('Item', None, [('Sized', True)]), ('Error', None, []),
+    ]
+    assert ['::'.join(token.text for token in item.path) for item in parser.uses] == [
+        'owner::value']
+    parser = Parser(prefix +
+        '\nfn all<F>(&mut self,f:F) where F:FnMut(&Self::Item)->bool;}')
+    assert_associated_items_before_fn_bound(parser, monkeypatch, [
+        ('Item', 3, 17, None, [('Sized', True)]),
+        ('Error', 3, 34, None, []),
+    ], (4, 39))
 
 
 def test_single_use_binds_both_modeled_namespaces_to_the_canonical_owner():
@@ -302,8 +346,12 @@ def test_original_project_keeps_both_use_items_before_the_next_parser_gap(tmp_pa
     checked = check_rust_source(original.decode(), toolchain=toolchain(),
         evidence_directory=tmp_path / 'actual-check', edition=2015)
     parser = Parser(original.decode(), edition=2015, rustc_check=checked)
-    with pytest.raises(RustError, match='associated types/constants'):
-        parser.parse()
+    # Keep the whole authenticated source. Observe the real parser's former
+    # boundary without accepting a rewritten prefix or a discarded declaration.
+    assert_associated_items_before_fn_bound(parser, monkeypatch, [
+        ('Item', 28, 10, None, [('Sized', True)]),
+        ('Error', 31, 10, None, []),
+    ], (67, 17))
     assert ['::'.join(token.text for token in item.path) for item in parser.uses] == [
         'core::cmp', 'core::marker::PhantomData']
     assert [original.decode()[slice(*item.source_span)] for item in parser.uses] == [
