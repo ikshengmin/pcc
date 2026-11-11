@@ -63,6 +63,9 @@ pcc_gc_tracing_finish_claim_clear_unlocked = extern(
 pcc_thread_owns_stopped_world = extern(
     "pcc_thread_owns_stopped_world", (), c_int64
 )
+pcc_thread_world_stop_epoch_held = extern(
+    "pcc_thread_world_stop_epoch_held", (), c_int64
+)
 pcc_stop_the_world = extern("pcc_stop_the_world", (), c_int64)
 pcc_resume_world = extern("pcc_resume_world", (), c_int64)
 pcc_gc_reclaim_retired_index_tables = extern(
@@ -262,6 +265,12 @@ def _pcc_gc_complete_mark_cycle_seed(
         store_i32(global_addr("pcc_gc_cycle_requested"), 0, 0)
         store_i32(
             global_addr("pcc_gc_trace_extension_roots_pending"), 0, 1
+        )
+        # A remark in this same stopped world has these roots already.
+        store_i64(
+            global_addr("pcc_gc_tracing_seed_stop_epoch"),
+            0,
+            pcc_thread_world_stop_epoch_held(),
         )
         global_store_ptr(
             "pcc_gc_trace_cursor",
@@ -485,15 +494,30 @@ def pcc_gc_complete_claimed_tracing_cycle(
         # closure leaves no gray count, the drain below needs no walk.
         pcc_gc_trace_stack_begin()
         listed_pins_shaded: i64 = 0
+        seeded_in_this_stop: i64 = 0
         if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
-            # Raw runtime/C locals can become roots after the initial seed.
-            # The final verdict must include this stopped-world snapshot:
-            # a same-epoch sweep is allowed to use it without another seed.
-            listed_pins_shaded = pcc_gc_gray_conservative_and_listed_pinned_roots()
-        if listed_pins_shaded != 0:
-            pcc_gc_gray_registered_roots()
-        else:
-            pcc_gc_gray_current_roots()
+            # A count-free mark seeded in this same stopped world (a GC4
+            # gate collection, an explicit collect) took its conservative
+            # and registered roots from exactly these parked stacks: no
+            # mutator ran since, and the owner's own frames only hold
+            # objects this mark reached. Walking every listed object a
+            # second time finds nothing new.
+            held_stop: i64 = pcc_thread_world_stop_epoch_held()
+            if held_stop >= 0 and held_stop == load_i64(
+                global_addr("pcc_gc_tracing_seed_stop_epoch"), 0
+            ):
+                seeded_in_this_stop = 1
+        if seeded_in_this_stop == 0:
+            if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
+                # Raw runtime/C locals can become roots after the initial
+                # seed. The final verdict must include this stopped-world
+                # snapshot: a same-epoch sweep is allowed to use it without
+                # another seed.
+                listed_pins_shaded = pcc_gc_gray_conservative_and_listed_pinned_roots()
+            if listed_pins_shaded != 0:
+                pcc_gc_gray_registered_roots()
+            else:
+                pcc_gc_gray_current_roots()
         pcc_gc_trace_stack_drain(9223372036854775807)
         pcc_gc_trace_stack_end()
     else:

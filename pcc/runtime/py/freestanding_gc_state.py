@@ -408,6 +408,9 @@ define_global_i64("pcc_gc_concurrent_sweep_remaining", 0)
 define_global_i64("pcc_gc_concurrent_sweep_freed", 0)
 # The stopped-world epoch the last mark finished in (-1: the world ran).
 define_global_i64("pcc_gc_tracing_finish_stop_epoch", -1)
+# The stopped-world epoch the current mark's roots were seeded in. A final
+# remark in that same stop already has those roots.
+define_global_i64("pcc_gc_tracing_seed_stop_epoch", -1)
 # Finalizers (__del__, generator close) that ran user code; a sweep
 # rechecks reachability after PASS 0 only when this moved.
 define_global_i64("pcc_gc_user_finalizer_runs", 0)

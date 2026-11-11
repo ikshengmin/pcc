@@ -90,6 +90,9 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_resume_world",
     "pcc_stop_the_world",
     "pcc_thread_owns_stopped_world",
+    # A seed records its stopped world; a remark in the same one skips its
+    # second root snapshot.
+    "pcc_thread_world_stop_epoch_held",
     "pcc_threads_enabled",
     "pcc_thread_join",
     "py_decref",
@@ -159,6 +162,7 @@ RAW_GLOBAL_IMPORTS = {
     "pcc_gc_tracing_marked_bytes",
     "pcc_gc_tracing_finish_claim_backend",
     "pcc_gc_tracing_finish_claim_epoch",
+    "pcc_gc_tracing_seed_stop_epoch",
 }
 
 

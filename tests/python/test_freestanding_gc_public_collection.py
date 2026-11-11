@@ -419,6 +419,10 @@ int64_t pcc_resume_world(void) {
     return 0;
 }
 int64_t pcc_thread_owns_stopped_world(void) { return world_owned; }
+/* Each stop of this harness is a new stopped world: stop_calls names it. */
+int64_t pcc_thread_world_stop_epoch_held(void) {
+    return world_owned != 0 ? stop_calls : -1;
+}
 int64_t pcc_gc_tracing_has_sweep_candidate(void) { return 0; }
 int64_t pcc_gc_tracing_sweep_unreachable(int64_t budget) {
     (void)budget;

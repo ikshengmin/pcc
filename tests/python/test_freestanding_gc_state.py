@@ -218,7 +218,8 @@ def test_freestanding_gc_state_has_complete_raw_abi_and_initial_values(
     # count and next index, kept classes and freed objects (7).
     # GC3's closed young domain: its proof state, the cut in progress and
     # the cuts committed and objects freed (4, f2227175c).
-    assert len(expected) == 288
+    # The stopped-world epoch a mark's roots were seeded in (1).
+    assert len(expected) == 289
     assert expected["pcc_gc_nonmoving_count_free"] == ("define_global_i32", 0)
     assert expected["pcc_gc_cms_finish_pending"] == ("define_global_i32", 0)
     assert expected["pcc_gc_backend4_no_refcounts"] == ("define_global_i32", 0)

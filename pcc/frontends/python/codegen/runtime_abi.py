@@ -2010,6 +2010,7 @@ FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_backend4_remembered_page_index_count',
         'pcc_gc_backend4_remembered_page_index_used',
         'pcc_gc_tracing_finish_stop_epoch',
+        'pcc_gc_tracing_seed_stop_epoch',
         'pcc_gc_user_finalizer_runs',
         'pcc_gc_object_list_revision',
         'pcc_gc_root_registry_revision',

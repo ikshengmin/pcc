@@ -14,10 +14,13 @@ SOURCE = (Path(__file__).resolve().parents[2] / "pcc/runtime/py"
 
 class RemarkModel:
     def __init__(self, tracing, *, owned=False, stop_failure=False, invalidate=False,
-                 chain_cut=False):
+                 chain_cut=False, seed_stop=None, held_stop=41):
         self.events = []
         self.owned = owned
         self.chain_cut = chain_cut
+        # The stop this remark runs in, and the one the mark was seeded in
+        # (by default an earlier stop: mutators ran in between).
+        self.held_stop = held_stop
         self.depth = 0
         self.invalidate = invalidate
         self.cells = {
@@ -27,10 +30,12 @@ class RemarkModel:
             "pcc_gc_tracing_cycle_epoch": 7,
             "pcc_gc_backend_selected": 4,
             "pcc_gc_mark_active": 1,
+            "pcc_gc_tracing_seed_stop_epoch": 40 if seed_stop is None else seed_stop,
         }
         self.ns = dict(
             i64=int,
             pcc_thread_owns_stopped_world=lambda: int(self.owned),
+            pcc_thread_world_stop_epoch_held=lambda: self.held_stop if self.owned else -1,
             pcc_stop_the_world=lambda: self.stop(stop_failure),
             pcc_resume_world=self.resume,
             pcc_py_gc_minor_graph_lock=lambda: self.lock(1),
@@ -123,6 +128,122 @@ def test_final_snapshot_roots_precede_drain_and_verdict_under_valid_world(tracin
     expected = (["extensions", "stack_begin"] + roots
                 + ["stack_drain", "stack_end", "drain", "finish"])
     assert model.events == (expected if owned else ["stop"] + expected + ["resume"])
+
+
+@pytest.mark.parametrize("chain_cut", [False, True])
+def test_a_mark_seeded_in_this_same_stop_is_not_rescanned_for_roots(chain_cut):
+    # A GC4 gate collection or an explicit collect seeds, traces and
+    # remarks inside one stopped world: the parked stacks are the ones the
+    # seed read, so the remark walks no object list for roots again.
+    model = RemarkModel(True, owned=True, chain_cut=chain_cut, seed_stop=41, held_stop=41)
+    assert model.complete() == 1
+    assert model.events == [
+        "extensions", "stack_begin", "stack_drain", "stack_end", "drain", "finish",
+    ]
+
+
+@pytest.mark.parametrize("seed_stop", [-1, 0, 40, 42])
+def test_a_mark_seeded_in_another_stop_takes_the_final_root_snapshot(seed_stop):
+    model = RemarkModel(True, owned=True, seed_stop=seed_stop, held_stop=41)
+    assert model.complete() == 1
+    assert model.events == [
+        "extensions", "stack_begin", "raw+listed", "registered",
+        "stack_drain", "stack_end", "drain", "finish",
+    ]
+
+
+def test_a_remark_that_stops_the_world_itself_always_takes_the_snapshot():
+    # The stop it acquires is a new one: mutators ran since the seed, even
+    # when the recorded epoch number happens to match the model's.
+    model = RemarkModel(True, owned=False, seed_stop=40, held_stop=41)
+    assert model.complete() == 1
+    assert model.events == [
+        "stop", "extensions", "stack_begin", "raw+listed", "registered",
+        "stack_drain", "stack_end", "drain", "finish", "resume",
+    ]
+
+
+def test_a_counted_collector_keeps_its_listed_roots_in_the_same_stop():
+    model = RemarkModel(False, owned=True, seed_stop=41, held_stop=41)
+    assert model.complete() == 1
+    assert model.events == [
+        "extensions", "stack_begin", "listed+registered",
+        "stack_drain", "stack_end", "drain", "finish",
+    ]
+
+
+def _seed(*, owned, requested=1):
+    """Run the production mark seed over a dict of cells; return them."""
+    from tests.python.runtime_body_model import load_functions
+
+    cells = {
+        "pcc_gc_trace_extension_roots_pending": 4,
+        "pcc_gc_trace_extension_roots_epoch": 7,
+        "pcc_gc_trace_extension_roots_backend": 4,
+        "pcc_gc_tracing_cycle_epoch": 7,
+        "pcc_gc_backend_selected": 4,
+        "pcc_gc_mark_active": 0,
+        "pcc_gc_cycle_requested": requested,
+        "pcc_gc_tracing_seed_stop_epoch": -1,
+        "pcc_gc_object_head": 0x5000,
+        "pcc_gc_trace_cursor": 0,
+    }
+    world = {"owned": owned, "epoch": 41 if owned else 0, "events": []}
+
+    def stop():
+        world["owned"] = True
+        world["epoch"] = 42
+        world["events"].append("stop")
+        return 0
+
+    def resume():
+        world["owned"] = False
+        world["events"].append("resume")
+
+    namespace = dict(
+        i64=int,
+        global_addr=lambda name: name,
+        global_load_ptr=lambda name: cells[name],
+        global_store_ptr=lambda name, value: cells.__setitem__(name, value),
+        load_i32=lambda name, offset: cells[name],
+        load_i64=lambda name, offset: cells[name],
+        store_i32=lambda name, offset, value: cells.__setitem__(name, value),
+        store_i64=lambda name, offset, value: cells.__setitem__(name, value),
+        atomic_store_i32=lambda name, offset, value, order: cells.__setitem__(name, value),
+        null=lambda: 0,
+        pcc_thread_owns_stopped_world=lambda: int(world["owned"]),
+        pcc_thread_world_stop_epoch_held=lambda: world["epoch"] if world["owned"] else -1,
+        pcc_stop_the_world=stop,
+        pcc_resume_world=resume,
+        pcc_py_gc_minor_graph_lock=lambda: None,
+        pcc_py_gc_minor_graph_unlock=lambda: None,
+        pcc_gc_seed_roots=lambda: world["events"].append("seed"),
+        pcc_gc_gray_count_load_acquire=lambda: 1,
+    )
+    load_functions(SOURCE, {"_pcc_gc_complete_mark_cycle_seed"}, namespace)
+    result = namespace["_pcc_gc_complete_mark_cycle_seed"](7, 4)
+    return result, cells, world["events"]
+
+
+def test_a_seed_records_the_stopped_world_it_read_its_roots_in():
+    # The caller's stop (a GC4 gate collection): the remark that follows in
+    # it may skip its own root snapshot.
+    result, cells, events = _seed(owned=True)
+    assert result == 1 and events == ["seed"]
+    assert cells["pcc_gc_mark_active"] == 1
+    assert cells["pcc_gc_tracing_seed_stop_epoch"] == 41
+    # A stop the seed takes and releases itself (the collector thread): any
+    # later remark runs in another stop and never matches this epoch.
+    result, cells, events = _seed(owned=False)
+    assert result == 1 and events == ["stop", "seed", "resume"]
+    assert cells["pcc_gc_tracing_seed_stop_epoch"] == 42
+
+
+def test_a_seed_that_does_not_start_the_mark_records_no_stop():
+    result, cells, events = _seed(owned=True, requested=0)
+    assert result == 0 and events == []
+    assert cells["pcc_gc_mark_active"] == 0
+    assert cells["pcc_gc_tracing_seed_stop_epoch"] == -1
 
 
 def test_failed_world_stop_never_scans_or_publishes_a_verdict():
