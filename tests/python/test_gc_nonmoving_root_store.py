@@ -187,9 +187,10 @@ def test_checked_or_logged_roots_keep_the_original_plan(backend, probe, logging)
     assert not model.events
 
 
-# GC3/GC4 (count-free, moving): with no forwarded object a root store is the
-# same lock-free publication; a white value is shaded in a cycle as by every
-# tracing root barrier. These tests hold the modeled forwarding phase fixed.
+# GC3/GC4 share the publication of GC1/GC2. No object moves while a mutator
+# runs: relocation happens inside a stopped world and its references are
+# rewritten before the world resumes (pcc_gc_relocation_settle_stopped), so
+# a root store consults no forwarding state and takes no graph lock.
 @pytest.mark.parametrize("backend", (3, 4))
 @pytest.mark.parametrize("entry", ("pcc_gc_store_root", "pcc_gc_store_root_take"))
 @pytest.mark.parametrize("value_kind", ("object", "null", "tagged", "foreign"))
@@ -217,24 +218,21 @@ def test_moving_root_barrier_shades_only_white(backend, color):
     assert model.words[model.obj, 12] == color
 
 
-@pytest.mark.parametrize("backend", (3, 4))
-def test_forwarded_phase_keeps_the_relocating_plan(backend):
+@pytest.mark.parametrize("backend", (1, 2, 3, 4))
+@pytest.mark.parametrize("entry", ("pcc_gc_store_root", "pcc_gc_store_root_take"))
+@pytest.mark.parametrize("forwarding", (1, 17))
+def test_a_forwarding_population_does_not_change_root_publication(backend, entry, forwarding):
+    # The model's graph lock, plan allocation and refcount calls all fail
+    # the test: a count of forwarded objects selects none of them.
     model = RootStore(backend)
-    model.globals["pcc_gc_forwarding_population"] = 1
-    events = []
-    model.ns.update(
-        stack_alloc=lambda size: 0x3000,
-        pcc_gc_store_root_plan_init=lambda plan, selected: events.append(("init", selected)),
-        pcc_py_gc_minor_graph_lock=lambda: events.append("lock"),
-        pcc_gc_store_root_plan_commit_locked=lambda *args: events.append("commit"),
-        pcc_py_gc_minor_graph_unlock=lambda: events.append("unlock"),
-        pcc_gc_store_root_plan_finish=lambda plan: events.append("finish"),
-    )
-    model.ns["pcc_gc_store_root"](model.slot, model.obj)
-    assert events == [("init", backend), "lock", "commit", "unlock", "finish"]
-    # The population test ran inside one no-park interval and stored nothing.
-    assert model.events == ["enter", "exit"] and model.notes == 0
-    assert model.words[model.slot, 0] == 0xBAD0
+    model.globals["pcc_gc_forwarding_population"] = forwarding
+    model.ns[entry](model.slot, model.obj)
+    assert model.events == ["enter", "store", "shade", "exit"]
+    assert model.words[model.slot, 0] == model.obj and model.notes == 1
+    assert model.stopped_roots == [(model.obj, 1)]
+    assert ("pcc_gc_forwarding_population", 0) not in model.reads
+    # The old root is released by no count and is never dereferenced.
+    assert not any(base == 0xBAD0 for base, _ in model.reads)
 
 
 # The shared pointer ABI has one immediate tag: low bit one means signed
@@ -250,26 +248,21 @@ IMMEDIATE_ROOTS = [
 ROOT_ENTRIES = ("pcc_gc_store_root", "pcc_gc_store_root_take")
 
 
-class GraphWait(Exception):
-    """Model a writer suspended at a graph lock held by a root healer."""
-
-
 class ImmediateRootStore(RootStore):
+    """A graph lock that records its use; a root store must not take it."""
+
     def __init__(self, backend, active=1):
         super().__init__(backend, active)
         self.graph_depth = 0
         self.graph_events = []
-        self.reader_holds_graph = False
         self.ns.update(
             pcc_py_gc_minor_graph_lock=self.lock,
             pcc_py_gc_minor_graph_unlock=self.unlock,
         )
 
     def lock(self):
-        # The rejected no-park probe must have exited before a graph wait.
+        # A graph wait can park: it never starts inside a no-park interval.
         assert self.depth == 0
-        if self.reader_holds_graph:
-            raise GraphWait
         self.enter()
         self.graph_depth = 1
         self.graph_events.append("lock")
@@ -280,18 +273,13 @@ class ImmediateRootStore(RootStore):
         self.graph_events.append("unlock")
         self.exit()
 
-    def write(self, base, offset, value):
-        if base == self.slot and self.globals["pcc_gc_forwarding_population"]:
-            assert self.graph_depth == 1
-        super().write(base, offset, value)
 
-
-@pytest.mark.parametrize("backend", (3, 4))
+@pytest.mark.parametrize("backend", (1, 2, 3, 4))
 @pytest.mark.parametrize("entry", ROOT_ENTRIES)
 @pytest.mark.parametrize("value", IMMEDIATE_ROOTS)
 @pytest.mark.parametrize("active", (0, 1))
 @pytest.mark.parametrize("forwarding", (0, 1, 17))
-def test_moving_immediate_roots_skip_plan_but_keep_forwarded_graph_lock(
+def test_immediate_roots_publish_in_one_no_park_interval_without_the_graph_lock(
     backend, entry, value, active, forwarding,
 ):
     model = ImmediateRootStore(backend, active)
@@ -302,35 +290,38 @@ def test_moving_immediate_roots_skip_plan_but_keep_forwarded_graph_lock(
     assert model.notes == 1 and model.depth == model.graph_depth == 0
     assert model.gray == 7 and not model.gray_worklist_notes and not model.lookups
     assert not any(base in (model.slot, model.obj) for base, _ in model.reads)
+    # An immediate is no object: neither the mark phase nor a forwarding
+    # count is read for it.
     assert ("pcc_gc_mark_active", 0) not in model.reads
-    assert ("pcc_gc_forwarding_population", 0) in model.reads
-    if forwarding:
-        assert model.events == ["enter", "exit", "enter", "store", "exit"]
-        assert model.graph_events == ["lock", "unlock"]
-        assert model.stopped_roots == [(0xBAD0, 7), (value, 7)]
-    else:
-        assert model.events == ["enter", "store", "exit"]
-        assert not model.graph_events and model.stopped_roots == [(value, 7)]
+    assert ("pcc_gc_forwarding_population", 0) not in model.reads
+    assert model.events == ["enter", "store", "exit"]
+    assert not model.graph_events and model.stopped_roots == [(value, 7)]
 
 
-@pytest.mark.parametrize("backend", (3, 4))
+@pytest.mark.parametrize("backend", (1, 2, 3, 4))
+@pytest.mark.parametrize("entry", ROOT_ENTRIES)
 @pytest.mark.parametrize("active", (0, 1))
 @pytest.mark.parametrize("value", (2, 6, 0xCAFE, 0x2000, 1 << 63))
-def test_forwarded_phase_rejects_every_non_immediate_before_header_or_store(
-    backend, active, value,
+def test_non_immediate_roots_publish_under_a_forwarding_population(
+    backend, entry, active, value,
 ):
-    model = RootStore(backend, active)
+    model = ImmediateRootStore(backend, active)
     model.globals["pcc_gc_forwarding_population"] = 1
     model.gray = 7
-    assert model.ns["_store_root_count_free_unforwarded"](model.slot, value) == 0
-    assert model.events == ["enter", "exit"]
-    assert model.words[model.slot, 0] == 0xBAD0
-    assert model.notes == model.lookups == model.depth == 0
-    assert model.gray == 7 and not model.gray_worklist_notes
-    assert model.reads == [("pcc_gc_forwarding_population", 0)]
+    model.ns[entry](model.slot, value)
+    member = int(value == model.obj)
+    assert model.words[model.slot, 0] == value and model.notes == 1
+    assert model.depth == model.graph_depth == 0 and not model.graph_events
+    # Index membership decides whether the value has a header to shade; an
+    # address the collector does not own is stored and never dereferenced.
+    assert model.lookups == active
+    assert model.gray == 7 + (active and member)
+    assert ((value, 12) in model.reads) == bool(active and member)
+    assert ("pcc_gc_forwarding_population", 0) not in model.reads
+    assert model.stopped_roots == [(value, 7 + (active and member))]
 
 
-@pytest.mark.parametrize("backend", (3, 4))
+@pytest.mark.parametrize("backend", (1, 2, 3, 4))
 @pytest.mark.parametrize("entry", ROOT_ENTRIES)
 @pytest.mark.parametrize("value", IMMEDIATE_ROOTS)
 @pytest.mark.parametrize("gate,setting", (
@@ -341,7 +332,7 @@ def test_forwarded_phase_rejects_every_non_immediate_before_header_or_store(
     ("pcc_diagnostics_runtime_log_fast_state", -1),
     ("pcc_diagnostics_runtime_log_fast_state", 1),
 ))
-def test_moving_immediates_preserve_counted_and_diagnostic_plan_gates(
+def test_immediates_preserve_counted_and_diagnostic_plan_gates(
     backend, entry, value, gate, setting,
 ):
     model = RootStore(backend)
@@ -376,6 +367,10 @@ class ImmediatePlanRootStore(ImmediateRootStore):
             "pcc_gc_backend_selected": backend,
             "pcc_gc_read_barrier_enabled": 1,
             "pcc_gc_metric_load": 0,
+            # The collector is fixed: no mutator can observe a forwarded
+            # object, and none is owed a remap outside a stop.
+            "pcc_gc_nonmoving_count_free": 1,
+            "pcc_gc_backend4_remap_owed": 0,
         })
         self.ns.update(
             stack_alloc=self.allocate_plan,
@@ -422,7 +417,9 @@ class ImmediatePlanRootStore(ImmediateRootStore):
         assert (operation, base, offset, value, order) == (
             "add", "pcc_gc_metric_shards", 272, 1, "relaxed",
         )
-        assert self.depth == self.graph_depth == 1
+        # Counted inside the store's no-park interval, with or without the
+        # graph lock of the diagnostic plan.
+        assert self.depth == 1
         old = self.metrics.get((base, offset), 0)
         self.metrics[base, offset] = old + value
         self.notes += 1
@@ -434,7 +431,7 @@ class ImmediatePlanRootStore(ImmediateRootStore):
 @pytest.mark.parametrize("value", IMMEDIATE_ROOTS)
 @pytest.mark.parametrize("active", (0, 1))
 @pytest.mark.parametrize("fallback", ("probe", "log"))
-def test_moving_immediate_direct_and_actual_plan_match_publication_and_store_metrics(
+def test_immediate_direct_and_actual_plan_match_publication_and_store_metrics(
     backend, entry, value, active, fallback,
 ):
     direct = ImmediatePlanRootStore(backend, active)
@@ -449,21 +446,19 @@ def test_moving_immediate_direct_and_actual_plan_match_publication_and_store_met
         assert model.notes == 1 and model.depth == model.graph_depth == 0
         assert model.gray == 7
         assert model.metrics == {("pcc_gc_metric_shards", 272): 1}
-        assert model.graph_events == ["lock", "unlock"]
         assert not model.gray_worklist_notes and not model.lookups
         assert (0xBAD0, 12) not in model.reads
-    assert not direct.plan_events and not direct.logs
+        assert model.stopped_roots == [(value, 7)]
+    # Only the checked or logged store goes through the plan and its lock.
+    assert not direct.plan_events and not direct.logs and not direct.graph_events
     assert planned.plan_events == ["plan"]
-    assert direct.stopped_roots == [(0xBAD0, 7), (value, 7)]
-    assert planned.stopped_roots == [(value, 7)]
-    # Count-free direct take no longer reloads a tagged root merely to skip
-    # decref. Execute the real load helper: GC3 counts that read with forwarding
-    # active; GC4 skips immediate read telemetry. NULL already skips reload.
-    # Store metrics match, load metrics need not.
+    assert planned.graph_events == ["lock", "unlock"]
+    # The planned take reloads a tagged root to skip its release; NULL
+    # skips the reload. No collector counts a read of an immediate.
     reloads = int(entry == "pcc_gc_store_root_take" and value != 0)
     assert not direct.load_calls and direct.globals["pcc_gc_metric_load"] == 0
     assert planned.load_calls == ([(0, planned.slot)] if reloads else [])
-    assert planned.globals["pcc_gc_metric_load"] == int(backend == 3 and reloads)
+    assert planned.globals["pcc_gc_metric_load"] == 0
     assert planned.logs == ([(2, 3, backend, 0, 0)] if fallback == "log" else [])
     assert planned.words[planned.plan, 124] == 7
     planned.ns["pcc_gc_store_root_plan_finish"](planned.plan)
@@ -474,9 +469,12 @@ def test_moving_immediate_direct_and_actual_plan_match_publication_and_store_met
 @pytest.mark.parametrize("entry", ROOT_ENTRIES)
 @pytest.mark.parametrize("value", (0, 35))
 @pytest.mark.parametrize("writer_first", (False, True))
-def test_forwarded_immediate_store_serializes_with_actual_shared_root_healer(
+def test_immediate_store_and_the_stopped_root_healer_never_interleave(
     backend, entry, value, writer_first,
 ):
+    # A forwarded root is healed only by a stopped world. A store is one
+    # no-park interval, so the stop sees the slot before the store or after
+    # it; the graph lock plays no part.
     model = ImmediateRootStore(backend)
     model.globals.update({
         "pcc_gc_forwarding_population": 1,
@@ -488,25 +486,18 @@ def test_forwarded_immediate_store_serializes_with_actual_shared_root_healer(
                         (edge, 8): target})
     heals = []
 
-    def reader_load(base, offset):
-        captured = model.read(base, offset)
-        if base == model.slot and not writer_first:
-            # Reader owns graph and has captured P, before its eventual Q
-            # heal. A writer cannot complete its NULL/tagged publication now.
-            with pytest.raises(GraphWait):
-                model.ns[entry](model.slot, value)
-            assert model.words[model.slot, 0] == source and model.notes == 0
-            assert model.depth == 0
-        return captured
+    def stopped_load(base, offset):
+        assert model.depth == 0, "the healer ran inside a root store"
+        return model.read(base, offset)
 
-    def reader_store(base, offset, stored):
-        assert model.reader_holds_graph and base == model.slot
+    def stopped_store(base, offset, stored):
+        assert model.depth == 0 and base == model.slot
         heals.append(stored)
         model.words[base, offset] = stored
 
     resolver = dict(model.ns)
     resolver.update(
-        load_ptr=reader_load, store_ptr=reader_store,
+        load_ptr=stopped_load, store_ptr=stopped_store,
         ptr_eq=lambda lhs, rhs: lhs == rhs,
         pcc_gc_object_is_known_no_lock=lambda obj: int(obj in (source, target)),
         pcc_gc_forwarding_index_find=lambda obj: edge if obj == source else 0,
@@ -516,38 +507,41 @@ def test_forwarded_immediate_store_serializes_with_actual_shared_root_healer(
     load_functions(resolver, "freestanding_gc_root_operations.py", {"_resolve_root_slot_mode"})
     if writer_first:
         model.ns[entry](model.slot, value)
-    model.reader_holds_graph = True
     resolved = resolver["_resolve_root_slot_mode"](model.slot, 0, 0)
-    model.reader_holds_graph = False
     if writer_first:
         assert resolved == value and not heals
     else:
-        assert resolved == target and heals == [target]
-        # Resume the suspended writer at an available lock. Repeating its
-        # side-effect-free probe models admission, not a second publication.
+        # Only the relocating collector has a forwarded source to heal.
+        assert resolved == (target if backend == 4 else source)
+        assert heals == ([target] if backend == 4 else [])
         model.ns[entry](model.slot, value)
     assert model.words[model.slot, 0] == value and model.notes == 1
     assert model.depth == model.graph_depth == 0
-    assert model.graph_events == ["lock", "unlock"]
+    assert not model.graph_events
+    assert model.events == ["enter", "store", "exit"]
 
 
-@pytest.mark.parametrize("backend", (3, 4))
+@pytest.mark.parametrize("backend", (1, 2, 3, 4))
 @pytest.mark.parametrize("entry", ROOT_ENTRIES)
 @pytest.mark.parametrize("value", (0, 35))
 @pytest.mark.parametrize("outer", ("none", "lease", "graph"))
 @pytest.mark.parametrize("pending_stop,pending_flush", ((0, 0), (1, 0), (0, 1), (1, 1)))
 @pytest.mark.parametrize("tripwire", (False, True))
-def test_forwarded_immediate_store_keeps_real_graph_lock_and_stop_boundaries(
+def test_immediate_store_keeps_real_no_park_and_stop_boundaries(
     backend, entry, value, outer, pending_stop, pending_flush, tripwire,
 ):
+    # The kernel's own no-park and graph-lock bodies. The store takes one
+    # no-park lease and leaves the graph lock as it found it; a pending stop
+    # or flush is admitted once, when the outermost lease is released.
     model = RootStore(backend)
     registered, graph_level, tripwire_bit = 562949953421312, 16777216, 2251799813685248
     outer_lease = 2 if outer == "lease" else int(outer == "graph")
     initial = registered + outer_lease + (graph_level if outer == "graph" else 0)
+    held = int(outer == "graph")
     model.globals.update({
         "pcc_gc_forwarding_population": 1,
         "pcc_tls_thread_state_py": initial,
-        "g_pcc_py_gc_minor_graph_lock": int(outer == "graph"),
+        "g_pcc_py_gc_minor_graph_lock": held,
         "pcc_thread_stop_requested": pending_stop,
         "pcc_gc_gray_worklist_flush_requested": pending_flush,
     })
@@ -562,14 +556,17 @@ def test_forwarded_immediate_store_keeps_real_graph_lock_and_stop_boundaries(
             model.globals[base] = stored
         else:
             assert base == model.slot
-            assert state() & 16777215 and state() & 281474959933440
-            assert model.globals["g_pcc_py_gc_minor_graph_lock"] == 1
+            # Inside this store's lease, one deeper than the caller's.
+            assert (state() & 16777215) == outer_lease + 1
+            assert model.globals["g_pcc_py_gc_minor_graph_lock"] == held
             model.words[base, offset] = stored
 
     def note():
-        assert state() & 16777215 and state() & 281474959933440
+        assert (state() & 16777215) == outer_lease + 1
         model.notes += 1
-        if tripwire:
+        # Only a graph-lock owner defers a tripwire (pcc_py_gc_defer_tripwire);
+        # its outermost unlock reports it.
+        if tripwire and held:
             model.globals["pcc_tls_thread_state_py"] |= tripwire_bit
 
     def safepoint():
@@ -582,17 +579,11 @@ def test_forwarded_immediate_store_keeps_real_graph_lock_and_stop_boundaries(
         assert state() & 16777215
         finished.append(model.words[model.slot, 0])
 
-    def lock_cas(base, offset, expected, desired, success, failure):
-        assert base == "g_pcc_py_gc_minor_graph_lock" and offset == 0
-        old = model.globals[base]
-        assert old == expected == 0
-        model.globals[base] = desired
-        return old
-
     model.ns.update(
         store_i64=kernel_write, store_ptr=kernel_write,
         atomic_store_i32=lambda base, offset, stored, order: kernel_write(base, offset, stored),
-        atomic_cas_i32=lock_cas, _GRAPH_QUEUED_BIT=4503599627370496,
+        atomic_cas_i32=lambda *args: pytest.fail("a root store took the graph lock"),
+        _GRAPH_QUEUED_BIT=4503599627370496,
         pcc_gc_note_store=note, pcc_thread_safepoint=safepoint,
         _finish_deferred_tripwire=finish_tripwire,
         pcc_platform_abort=lambda: pytest.fail("graph/no-park imbalance"),
@@ -608,6 +599,7 @@ def test_forwarded_immediate_store_keeps_real_graph_lock_and_stop_boundaries(
     model.ns[entry](model.slot, value)
     assert model.words[model.slot, 0] == value and model.notes == 1
     assert (state() & ~tripwire_bit) == initial
+    assert model.globals["g_pcc_py_gc_minor_graph_lock"] == held
     assert model.gray == 7 and not model.gray_worklist_notes
     if outer != "none":
         assert not polled
@@ -616,16 +608,15 @@ def test_forwarded_immediate_store_keeps_real_graph_lock_and_stop_boundaries(
         else:
             for _ in range(outer_lease):
                 model.ns["pcc_thread_no_park_exit"]()
-    expected_polls = [(0xBAD0, 7), (value, 7)] if outer == "none" else [(value, 7)]
-    assert polled == (expected_polls if pending_stop or pending_flush else [])
-    assert finished == ([value] if tripwire else [])
+    assert polled == ([(value, 7)] if pending_stop or pending_flush else [])
+    assert finished == ([value] if tripwire and held else [])
     assert state() == registered
     assert model.globals["g_pcc_py_gc_minor_graph_lock"] == 0
 
 
-@pytest.mark.parametrize("backend", (3, 4))
+@pytest.mark.parametrize("backend", (1, 2, 3, 4))
 @pytest.mark.parametrize("entry", ROOT_ENTRIES)
-def test_forwarded_immediate_cleanup_never_reads_old_root_or_adds_gray(backend, entry):
+def test_immediate_cleanup_never_reads_old_root_or_adds_gray(backend, entry):
     model = ImmediateRootStore(backend)
     model.globals["pcc_gc_forwarding_population"] = 1
     model.gray = 7
@@ -634,6 +625,6 @@ def test_forwarded_immediate_cleanup_never_reads_old_root_or_adds_gray(backend, 
         model.ns[entry](model.slot, value)
     assert model.words[model.slot, 0] == 0 and model.notes == 4
     assert model.depth == model.graph_depth == 0 and model.gray == 7
-    assert model.graph_events == ["lock", "unlock"] * 4
+    assert not model.graph_events
     assert not model.lookups and not model.gray_worklist_notes
     assert not any(base == model.slot for base, _ in model.reads)
