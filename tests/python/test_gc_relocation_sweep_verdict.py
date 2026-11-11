@@ -73,6 +73,13 @@ static PyObject *probe_del(PyObject *self) {
 }
 
 extern int64_t pcc_gc_object_is_known_no_lock(PyObject *);
+/* Existing internal C ABI exports; no private object-node layout mirror. */
+extern int64_t pcc_gc_alloc_stage_pending(void);
+extern int64_t pcc_gc_object_node_freeing(void *);
+extern int64_t pcc_gc_object_node_size(void *);
+extern void *pcc_gc_forwarding_find(PyObject *);
+extern int64_t pcc_gc_forwarding_target_exists(PyObject *);
+extern int64_t pcc_gc_object_is_address_pinned(PyObject *);
 
 static int64_t instance_payload_size(PyObject *inst) {
     /* Mirror of the relocation validator's own size computation
@@ -124,6 +131,70 @@ static int fail_state(
     return code;
 }
 
+static int fail_relocation_state(
+    int code,
+    const char *what,
+    PyObject *source,
+    PyObject *copy,
+    int64_t requested_size
+) {
+    /* Keep the original failure line before any diagnostic graph-lock entry.
+     * These are post-failure observations, NOT the first rejected copy phase.
+     * Even acquiring the graph lock can service a pending stop. */
+    int result = fail_state(code, what, source, copy);
+    pcc_py_gc_minor_graph_lock();
+    int64_t pending_before = pcc_gc_alloc_stage_pending();
+    int64_t selected = pcc_gc_relocation_set_contains(source);
+    int64_t selection_size = pcc_gc_relocation_set_size();
+    /* Stable lookup does not drain a staged allocation on an index miss.
+     * The enclosing graph lock owns the node lifetime through these reads. */
+    void *node = pcc_gc_object_index_find_stable(source);
+    int published = node != 0;
+    int64_t freeing = node ? pcc_gc_object_node_freeing(node) : -1;
+    /* Raw node size, even if freeing; not the object-known-size predicate. */
+    int64_t published_size = node ? pcc_gc_object_node_size(node) : 0;
+    void *forwarding_record = pcc_gc_forwarding_find(source);
+    int64_t is_forwarding_target = pcc_gc_forwarding_target_exists(source);
+    int32_t source_flags = flags_of(source);
+    int32_t source_tag = py_header(source)->type_tag;
+    int64_t pending_after = pcc_gc_alloc_stage_pending();
+    pcc_py_gc_minor_graph_unlock();
+    fprintf(
+        stderr,
+        "relocation_context=post-failure-stable-index code=%d "
+        "pending_before=%lld selected=%lld selection_size=%lld "
+        "published_node=%d node_freeing=%lld published_node_size=%lld "
+        "forwarding_record=%p source_is_forwarding_target=%lld "
+        "src_flags=0x%x header_pinned=%d src_tag=%d "
+        "requested_size=%lld pending_after=%lld\n",
+        code, (long long)pending_before, (long long)selected,
+        (long long)selection_size, published, (long long)freeing,
+        (long long)published_size, forwarding_record,
+        (long long)is_forwarding_target, (unsigned)source_flags,
+        (source_flags & PY_FLAG_GC_PINNED) != 0, source_tag,
+        (long long)requested_size, (long long)pending_after
+    );
+
+    /* This secondary predicate can drain staging through an ordinary index
+     * miss. Print the stable snapshot first; never retry selection or copy.
+     * A zero published size above does not prove no staged allocation exists. */
+    pcc_py_gc_minor_graph_lock();
+    int64_t pin_pending_before = pcc_gc_alloc_stage_pending();
+    int64_t address_pinned = pcc_gc_object_is_address_pinned(source);
+    int pin_published = pcc_gc_object_index_find_stable(source) != 0;
+    int64_t pin_pending_after = pcc_gc_alloc_stage_pending();
+    pcc_py_gc_minor_graph_unlock();
+    fprintf(
+        stderr,
+        "relocation_context=post-failure-secondary-may-drain code=%d "
+        "pending_before=%lld address_pinned=%lld published_node=%d "
+        "pending_after=%lld\n",
+        code, (long long)pin_pending_before, (long long)address_pinned,
+        pin_published, (long long)pin_pending_after
+    );
+    return result;
+}
+
 int main(void) {
     const int32_t backend = @BACKEND@;
     if (pcc_threads_enabled() != @EXPECTED_THREADS@) return 6;
@@ -153,16 +224,18 @@ int main(void) {
 
     pcc_gc_reset_relocation_set();
     if (pcc_gc_select_relocation_set(1) != 1)
-        return fail_state(13, "select", source, 0);
+        /* Size was not requested on this path; -1 means not evaluated. */
+        return fail_relocation_state(13, "select", source, 0, -1);
+    int64_t requested_size = instance_payload_size(source);
     PyObject *copy = pcc_gc_relocate_copy(
-        source, instance_payload_size(source)
+        source, requested_size
     );
     if (copy != 0) {
         /* relocate_copy hands back a caller-owned transfer ref. */
         py_decref(copy);
     }
     if (copy == 0 || copy == source)
-        return fail_state(14, "relocate", source, copy);
+        return fail_relocation_state(14, "relocate", source, copy, requested_size);
     watched_copy = copy;
 
     /* THE CONTRACT: no published copy carries a finished-cycle verdict. */
