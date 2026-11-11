@@ -2641,6 +2641,20 @@ def pcc_gc_pointer_is_managed(o) -> int:
         return 1
     if pcc_gc_managed_pointer_index_seen(o) != 0:
         return 1
+    # The immortal singletons are in none of those indexes, so every probe
+    # of None, True or False ended in the graph lock: a barrier asks about
+    # each stored value, and four mutators storing them queued on the lock
+    # for it. The locked chain answers 1 for them by the same five address
+    # compares; make them here, after the probes a heap object answers (the
+    # 2026-09-06 measurement kept them off that path), instead of under it.
+    if (
+        ptr_eq(o, global_load_ptr("py_None")) != 0
+        or ptr_eq(o, global_load_ptr("py_True")) != 0
+        or ptr_eq(o, global_load_ptr("py_False")) != 0
+        or ptr_eq(o, global_load_ptr("py_NotImplemented")) != 0
+        or ptr_eq(o, global_load_ptr("py_Ellipsis")) != 0
+    ):
+        return 1
     _object_graph_lock()
     managed: int = _pointer_is_managed_no_lock(o)
     _object_graph_unlock()
