@@ -43,7 +43,13 @@ def _func(*slots, windows=False):
     value_slots = {f"%v{index}": SlotInfo(offset, ty) for index, (offset, ty) in enumerate(slots)}
     return SimpleNamespace(value_slots=value_slots, is_vararg=False,
                            platform_frame_extra=(32 + 112 if windows else 48),
-                           alloca_slots={}, hidden_sret_slot=None)
+                           alloca_slots={}, hidden_sret_slot=None,
+                           frame_size=max([32] + [offset for offset, _ in slots]))
+
+
+def _initialized_prologue(*offsets):
+    return PROLOGUE[:-1] + [f"  mov QWORD PTR [rbp - {offset}], 0"
+                           for offset in offsets] + PROLOGUE[-1:]
 
 
 def _plan(*root_offsets):
@@ -74,8 +80,7 @@ def test_values_across_calls_live_in_callee_saved_registers():
     # The heavier slot (three accesses) takes rbx, which every frame already
     # saves; the slot live across its store takes r12, saved at
     # platform_frame_extra - 32 and restored before each return.
-    assert out == PROLOGUE[:-1] + ["  mov QWORD PTR [rbp - 16], 0", PROLOGUE[-1],
-                                 "  mov QWORD PTR [rsp + 16], r12"] + [
+    assert out == _initialized_prologue(16, 8) + ["  mov QWORD PTR [rsp + 16], r12"] + [
         "  mov r12, rdi",
         "  call g",
         ".Lsmap_1:",
@@ -98,7 +103,7 @@ def test_disjoint_values_share_one_register_and_widths_keep_their_alias():
         "  mov rax, QWORD PTR [rbp - 24]",
     ]
     out = _promote(body, (1, I8), (12, TypeDesc("int", 32)), (24, I64))
-    assert out == PROLOGUE + [
+    assert out == _initialized_prologue(24) + [
         "  mov bl, al", "  mov r10b, bl",
         "  mov ebx, -7", "  mov r10d, ebx",
         "  mov rbx, 5", "  mov rax, rbx",
@@ -147,7 +152,9 @@ def test_stores_nothing_reads_are_dropped_in_registers_and_in_memory():
         "  mov BYTE PTR [rbp - 17], al",
     ]
     out = _promote(body, (8, I64), (16, I64), (17, I8))
-    assert out == PROLOGUE + ["  mov rbx, rdi", "  mov rax, rbx", body[3], body[5], body[6]] + EPILOGUE
+    assert out == _initialized_prologue(8) + [
+        "  mov rbx, rdi", "  mov rax, rbx", body[3], body[5], body[6],
+    ] + EPILOGUE
 
 
 def test_packed_stack_map_roots_and_reload_sources_stay_in_memory():
@@ -174,7 +181,7 @@ def test_registers_the_body_names_are_not_used():
         "  mov rax, QWORD PTR [rbp - 8]",
     ]
     out = _promote(body, (8, I64))
-    assert out == PROLOGUE + ["  mov QWORD PTR [rsp + 16], r12", "  mov r12, rdi",
+    assert out == _initialized_prologue(8) + ["  mov QWORD PTR [rsp + 16], r12", "  mov r12, rdi",
                               *body[1:4], "  mov rax, r12"] + EPILOGUE[:1] + [
         "  mov r12, QWORD PTR [rsp + 16]"] + EPILOGUE[1:]
 
@@ -196,7 +203,7 @@ def test_loop_carried_value_interferes_across_the_back_edge():
         "  mov rax, QWORD PTR [rbp - 8]",
     ]
     out = _promote(body, (8, I64), (16, I64))
-    assert out == PROLOGUE + ["  mov QWORD PTR [rsp + 16], r12"] + [
+    assert out == _initialized_prologue(8, 16) + ["  mov QWORD PTR [rsp + 16], r12"] + [
         "  mov rbx, 0",
         ".Lf_head:",
         "  call g",
@@ -228,7 +235,7 @@ def test_value_dead_between_its_load_and_next_store_shares_its_register():
         "  mov rax, QWORD PTR [rbp - 8]",
     ]
     out = _promote(body, (8, I64), (16, I64))
-    assert out == PROLOGUE + [line.replace("QWORD PTR [rbp - 8]", "rbx").replace(
+    assert out == _initialized_prologue(8, 16) + [line.replace("QWORD PTR [rbp - 8]", "rbx").replace(
         "QWORD PTR [rbp - 16]", "rbx") for line in body] + EPILOGUE
 
 
@@ -255,7 +262,9 @@ def test_windows_saves_are_described_for_unwinding():
     registers = ("rbx", "rsi", "rdi", "r12")
     assert out == prologue[:-1] + [
         f"  mov QWORD PTR [rsp + {area}], r12", f"  .seh_savereg r12, {area}", "  .seh_endprologue",
-    ] + [f"  mov {register}, rcx" for register in registers] + ["  call g"] + [
+    ] + [f"  mov QWORD PTR [rbp - {8 * index}], 0" for index in range(1, 5)] + [
+        f"  mov {register}, rcx" for register in registers
+    ] + ["  call g"] + [
         f"  mov rdx, {register}" for register in registers
     ] + epilogue[:3] + [f"  mov r12, QWORD PTR [rsp + {area}]"] + epilogue[3:]
 
@@ -517,7 +526,8 @@ entry:
                for line in assembly.splitlines())
 
 
-def test_many_windows_pointer_cells_initialize_outside_unwind_prologue():
+@pytest.mark.parametrize("ty", [PTR, I64])
+def test_many_windows_qword_cells_initialize_outside_unwind_prologue(ty):
     from pcc.backend.coff_x86_64 import assemble_object, parse_object
     count, frame_size, outgoing = 48, 560, 32
     prologue = [".intel_syntax noprefix", ".text", ".globl f", ".seh_proc f", "f:",
@@ -535,7 +545,7 @@ def test_many_windows_pointer_cells_initialize_outside_unwind_prologue():
                 f"  mov rsi, QWORD PTR [rsp + {outgoing + 8}]",
                 f"  mov rdi, QWORD PTR [rsp + {outgoing + 16}]",
                 f"  add rsp, {frame_size}", "  pop rbp", "  ret", "  .seh_endproc"]
-    function = _func(*[(index * 8, PTR) for index in range(1, count + 1)], windows=True)
+    function = _func(*[(index * 8, ty) for index in range(1, count + 1)], windows=True)
     out = expand_pointer_retirements(keep_frame_slots_in_registers(
         prologue + body + epilogue, function, _plan(), windows=True,
     ))
@@ -556,6 +566,126 @@ def test_narrow_reused_slot_metadata_is_not_cleared_as_a_pointer_cell():
                                        _func((8, PTR), (8, I8)), _plan(), windows=False)
     assert not any("pcc_retire_" in line for line in out)
     assert "  mov QWORD PTR [rbp - 8], 0" not in out
+
+
+def test_promoted_integer_home_initializes_without_retiring_its_register():
+    body = ["  mov QWORD PTR [rbp - 8], rdi", "  call before",
+            "  mov rsi, QWORD PTR [rbp - 8]", "  call consume", "  call after"]
+    marked = keep_frame_slots_in_registers(PROLOGUE + body + EPILOGUE,
+                                           _func((8, I64)), _plan(), windows=False)
+    assert marked == _initialized_prologue(8) + [
+        "  mov rbx, rdi", "  call before", "  mov rsi, rbx",
+        "  call consume", "  call after",
+    ] + EPILOGUE
+    assert not any("pcc_retire_" in line for line in marked)
+
+
+@pytest.mark.parametrize("kind", ["root", "reload_source", "reload_destination"])
+@pytest.mark.parametrize("packed", [False, True])
+def test_integer_initialization_excludes_overlapping_stack_map_spans(kind, packed):
+    # None of these metadata locations has a textual access at offset 20.
+    # Its eight-byte range nevertheless overlaps the promoted home at 16.
+    locations = (PlannedRootLocation(-20, True),) if kind == "root" else ()
+    reloads = (() if kind == "root" else
+               (PlannedManagedReload(-20, -40) if kind == "reload_source"
+                else PlannedManagedReload(-40, -20),))
+    if packed:
+        records = PackedPlannedSafepoints(1)
+        records.append(1, ".Lsmap_1", 0, locations, 0, "", 0, reloads)
+        plan = SimpleNamespace(packed_records=records, records=())
+    else:
+        record = PlannedSafepoint(1, ".Lsmap_1", 0, locations, reloads=reloads)
+        plan = SimpleNamespace(packed_records=None, records=(record,))
+    body = ["  mov QWORD PTR [rbp - 16], rax", "  mov rdi, QWORD PTR [rbp - 16]",
+            "  mov QWORD PTR [rbp - 32], rax", "  mov rsi, QWORD PTR [rbp - 32]"]
+    out = _promote(body, (16, I64), (32, I64), plan=plan)
+    assert "  mov QWORD PTR [rbp - 16], 0" not in out
+    assert out.count("  mov QWORD PTR [rbp - 32], 0") == 1
+
+
+@pytest.mark.parametrize("hidden", [False, True])
+def test_integer_initialization_excludes_alloca_and_hidden_result_metadata(hidden):
+    from pcc.backend.self_backend_ir import AllocaInfo
+    function = _func((16, I64), (32, I64))
+    if hidden:
+        function.hidden_sret_slot = SlotInfo(20, PTR)
+    else:
+        function.alloca_slots = {"buffer": AllocaInfo(24, TypeDesc("array", elem=I8, count=16))}
+    body = ["  mov QWORD PTR [rbp - 16], rax", "  mov rdi, QWORD PTR [rbp - 16]",
+            "  mov QWORD PTR [rbp - 32], rax", "  mov rsi, QWORD PTR [rbp - 32]"]
+    out = keep_frame_slots_in_registers(PROLOGUE + body + EPILOGUE,
+                                       function, _plan(), windows=False)
+    assert "  mov QWORD PTR [rbp - 16], 0" not in out
+    assert out.count("  mov QWORD PTR [rbp - 32], 0") == 1
+
+
+@pytest.mark.parametrize("other", [(12, I64), (20, I64), (16, F64), (16, I8)])
+def test_integer_initialization_excludes_other_nominal_owners_without_accesses(other):
+    body = ["  mov QWORD PTR [rbp - 16], rdi", "  mov rax, QWORD PTR [rbp - 16]"]
+    out = _promote(body, (16, I64), other)
+    assert "  mov QWORD PTR [rbp - 16], 0" not in out
+
+
+@pytest.mark.parametrize("width,size,register", [
+    (8, "BYTE", "al"), (16, "WORD", "ax"), (32, "DWORD", "eax"),
+])
+@pytest.mark.parametrize("wide_metadata", [False, True])
+def test_narrow_promoted_scalar_homes_are_not_initialized(width, size, register, wide_metadata):
+    body = [f"  mov {size} PTR [rbp - 16], {register}",
+            f"  mov {register}, {size} PTR [rbp - 16]"]
+    out = _promote(body, (16, I64 if wide_metadata else TypeDesc("int", width)))
+    assert not any("[rbp - 16]" in line for line in out)
+    assert not any("pcc_retire_" in line for line in out)
+
+
+@pytest.mark.parametrize("offset,frame_size", [(4, 32), (40, 32)])
+def test_scalar_home_initialization_stays_within_the_fixed_local_frame(offset, frame_size):
+    function = _func((offset, I64))
+    function.frame_size = frame_size
+    body = [f"  mov QWORD PTR [rbp - {offset}], rdi",
+            f"  mov rax, QWORD PTR [rbp - {offset}]"]
+    out = keep_frame_slots_in_registers(PROLOGUE + body + EPILOGUE,
+                                       function, _plan(), windows=False)
+    assert f"  mov QWORD PTR [rbp - {offset}], 0" not in out
+
+
+def test_unpromoted_integer_storage_is_neither_initialized_nor_retired():
+    body = ["  mov QWORD PTR [rbp - 8], rdi"]
+    body += [f"  mov {register}, 7" for register in ("rbx", "r12", "r13", "r14", "r15")]
+    body += ["  mov rax, QWORD PTR [rbp - 8]"]
+    assert _promote(body, (8, I64)) == PROLOGUE + body + EPILOGUE
+
+
+def test_missing_initialization_anchor_preserves_the_original_function():
+    body = ["  mov QWORD PTR [rbp - 8], rdi", "  mov rax, QWORD PTR [rbp - 8]"]
+    lines = PROLOGUE[:-1] + body + EPILOGUE
+    assert keep_frame_slots_in_registers(lines, _func((8, I64)), _plan(), windows=False) == lines
+
+
+@pytest.mark.parametrize("types", [(I64, I64), (PTR, I64), (I64, PTR)])
+def test_reused_complete_qword_home_initializes_only_once(types):
+    body = ["  mov QWORD PTR [rbp - 8], rdi", "  mov rax, QWORD PTR [rbp - 8]"]
+    out = _promote(body, (8, types[0]), (8, types[1]))
+    retirement = ["  mov ebx, 0"] if PTR in types else []
+    assert out == _initialized_prologue(8) + [
+        "  mov rbx, rdi", "  mov rax, rbx",
+    ] + retirement + EPILOGUE
+
+
+def test_sysv_vararg_initialization_preserves_incoming_register_saves():
+    function = _func((8, I64))
+    function.is_vararg = True
+    function.platform_frame_extra = 224
+    saves = [f"  mov QWORD PTR [rsp + {index * 8}], {register}"
+             for index, register in enumerate(("rdi", "rsi", "rdx", "rcx", "r8", "r9"))]
+    prologue = PROLOGUE[:-2] + ["  sub rsp, 256", "  mov QWORD PTR [rsp + 176], rbx"] + saves
+    epilogue = ["  mov rbx, QWORD PTR [rsp + 176]", "  add rsp, 256", "  pop rbp", "  ret"]
+    body = ["  mov QWORD PTR [rbp - 8], rdi", "  mov rax, QWORD PTR [rbp - 8]"]
+    out = keep_frame_slots_in_registers(prologue + body + epilogue,
+                                       function, _plan(), windows=False)
+    assert out == prologue[:9] + ["  mov QWORD PTR [rbp - 8], 0"] + prologue[9:] + [
+        "  mov rbx, rdi", "  mov rax, rbx",
+    ] + epilogue
 
 
 def _loop_pointer_case():
@@ -580,8 +710,7 @@ def _loop_pointer_case():
         "  mov r10, QWORD PTR [rdx]",
         "  add rax, r10",
     ]
-    expected = PROLOGUE[:-1] + [
-        "  mov QWORD PTR [rbp - 32], 0", PROLOGUE[-1],
+    expected = _initialized_prologue(8, 16, 32, 24) + [
         "  mov QWORD PTR [rsp + 16], r12",
         "  mov QWORD PTR [rsp + 24], r13",
         "  mov rbx, 0", "  mov r12, 4", "  mov r13, rdi",

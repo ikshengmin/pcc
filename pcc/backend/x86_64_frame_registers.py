@@ -28,9 +28,10 @@ both x86-64 targets reserve in every frame.
 Eligible pointer cells also have a machine-lifetime side effect: after a
 proven last read, retire the original register/spill without touching its
 scratch or argument copy. This prevents that storage from becoming a stale
-conservative root. Nominal pointer cells wholly promoted out of memory are
-initialized once. Addressable allocas, mapped roots and returned helper
-frames are outside this narrow contract.
+conservative root. Nominal eight-byte scalar homes wholly promoted out of
+memory are initialized once, without retiring integer register values.
+Addressable allocas, mapped roots and returned helper frames are outside
+this narrow contract.
 """
 
 CALLEE_SAVED_AREA_SIZE = 32
@@ -123,8 +124,8 @@ def _scalar_value_slot_widths(func) -> dict[int, int]:
     return widths
 
 
-def _retirable_pointer_slots(func, plan, roots) -> dict[int, bool]:
-    """Ordinary pointer cells, excluding every addressable/mapped span.
+def _unaddressed_qword_slots(func, plan, roots) -> dict[int, bool]:
+    """Ordinary pointer/i64 cells, excluding addressable/mapped spans.
 
     Check metadata too: absence of a textual LEA is not a promise that an
     alloca, hidden result or reload cell has ceased to own those bytes.
@@ -155,7 +156,7 @@ def _retirable_pointer_slots(func, plan, roots) -> dict[int, bool]:
         else:
             merged.append((low, high))
     candidates = {slot.offset: True for slot in func.value_slots.values()
-                  if slot.type.is_ptr}
+                  if slot.type.is_ptr or (slot.type.is_int and slot.type.width == 64)}
     result: dict[int, bool] = {}
     span = 0
     for offset in sorted(candidates):
@@ -164,6 +165,33 @@ def _retirable_pointer_slots(func, plan, roots) -> dict[int, bool]:
         if span == len(merged) or merged[span][0] >= offset:
             result[offset] = True
     return result
+
+
+def _promoted_qword_homes(func, assigned, unaddressed, seen_widths) -> list[int]:
+    """Complete local homes only, never a narrow cell or another slot's bytes.
+
+    Same-span pointer/i64 SSA aliases can reuse a home: coloring removes all
+    its accesses together. Any differently sized or non-scalar nominal owner
+    prevents initialization, even when that owner has no emitted access.
+    """
+    spans: set[tuple[int, int]] = set()
+    other_owners: dict[int, bool] = {}
+    for slot in func.value_slots.values():
+        spans.add((slot.offset - slot.type.value_slot_size, slot.offset))
+        if not (slot.type.is_ptr or (slot.type.is_int and slot.type.width == 64)):
+            other_owners[slot.offset] = True
+    ordered = sorted(spans)
+    complete: dict[int, bool] = {}
+    occupied_until = 0
+    for index, (low, high) in enumerate(ordered):
+        if (high in assigned and high in unaddressed
+                and high not in other_owners and seen_widths[high] == 8
+                and high - low == 8 and 0 <= low and high <= func.frame_size
+                and occupied_until <= low
+                and (index + 1 == len(ordered) or ordered[index + 1][0] >= high)):
+            complete[high] = True
+        occupied_until = max(occupied_until, high)
+    return [offset for offset in assigned if offset in complete]
 
 
 def _stack_map_slot_offsets(plan) -> dict[int, bool]:
@@ -325,7 +353,9 @@ def keep_frame_slots_in_registers(
     if not slot_widths:
         return lines
     roots = _stack_map_slot_offsets(plan)
-    pointer_slots = _retirable_pointer_slots(func, plan, roots)
+    unaddressed_slots = _unaddressed_qword_slots(func, plan, roots)
+    pointer_slots = {slot.offset: True for slot in func.value_slots.values()
+                     if slot.type.is_ptr and slot.offset in unaddressed_slots}
     frame_lines: dict[str, bool] = {}
     if windows:
         from .self_backend_win64_abi import outgoing_size
@@ -635,10 +665,10 @@ def keep_frame_slots_in_registers(
 
     # A colored slot has no remaining machine access. Its old memory is
     # nevertheless inside the conservative snapshot of this activation.
-    # Initialize only these proven unaddressed pointer cells, not an alloca,
-    # mapped root, incoming value, caller save or the whole machine frame.
-    cleared_slots = [offset for offset in assigned
-                     if offset in pointer_slots and seen_widths[offset] == 8]
+    # Initialize only complete unaddressed eight-byte scalar homes, not an
+    # alloca, mapped root, incoming value, caller save or the whole frame.
+    # Integer values can carry raw addresses: do NOT retire their registers.
+    cleared_slots = _promoted_qword_homes(func, assigned, unaddressed_slots, seen_widths)
     register_members: dict[str, int] = {}
     for offset in assigned:
         register = assigned[offset]
