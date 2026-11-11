@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from pcc.frontends.c.ast import c_ast
 from pcc.frontends.c.ssa import LatticeKind, SSAReturn
-from pcc.frontends.c.passes.ast_utils import ASTTransformer
+from pcc.frontends.c.passes.ast_utils import (
+    ASTTransformer,
+    collect_function_types,
+    decl_type_name,
+    normalize_type_name,
+)
 from pcc.frontends.c.passes.base import ASTPass
 from pcc.frontends.c.passes.context import PassContext
 from pcc.frontends.c.passes.ssa_sccp import SSASCCPPass
@@ -39,10 +44,10 @@ class _SSASCCPRewriter(ASTTransformer):
         old_returns = self._return_constants
 
         self._current_func_name = func_name
-        self._current_return_type = self._decl_type_name(
+        self._current_return_type = decl_type_name(
             getattr(getattr(node, "decl", None), "type", None)
         )
-        self._current_types = self._collect_function_types(node)
+        self._current_types = collect_function_types(node)
         decisions = self._decisions_for_function(func_name)
         self._decl_constants = decisions["decl_init"]
         self._assign_constants = decisions["assign"]
@@ -182,17 +187,8 @@ class _SSASCCPRewriter(ASTTransformer):
         return decisions
 
     @classmethod
-    def _normalize_type_name(cls, type_name: str) -> str:
-        tokens = [
-            token
-            for token in type_name.replace("\t", " ").split()
-            if token not in {"const", "volatile", "restrict", "__restrict", "register"}
-        ]
-        return " ".join(tokens)
-
-    @classmethod
     def _is_safe_target_type(cls, type_name: str) -> bool:
-        return cls._normalize_type_name(type_name) in cls._INT_TYPES
+        return normalize_type_name(type_name) in cls._INT_TYPES
 
     @classmethod
     def _is_safe_constant_lattice(cls, lattice) -> bool:
@@ -250,44 +246,7 @@ class _SSASCCPRewriter(ASTTransformer):
         var_info = func_info.var_infos.get(var_name)
         if var_info is None:
             return ""
-        return self._normalize_type_name(var_info.type_name or "")
-
-    def _decl_type_name(self, node) -> str:
-        if isinstance(node, c_ast.FuncDecl):
-            return self._decl_type_name(node.type)
-        if isinstance(node, c_ast.TypeDecl):
-            return self._decl_type_name(node.type)
-        if isinstance(node, c_ast.IdentifierType):
-            return self._normalize_type_name(" ".join(node.names))
-        return ""
-
-    def _collect_function_types(self, funcdef) -> dict[str, str]:
-        types: dict[str, str] = {}
-        func_type = getattr(getattr(funcdef, "decl", None), "type", None)
-        params = getattr(getattr(func_type, "args", None), "params", None) or ()
-        for param in params:
-            if isinstance(param, c_ast.Decl) and param.name:
-                type_name = self._decl_type_name(param.type)
-                if type_name:
-                    types[param.name] = type_name
-
-        def _walk(node):
-            if node is None:
-                return
-            if isinstance(node, c_ast.Decl) and node.name:
-                type_name = self._decl_type_name(node.type)
-                if type_name:
-                    types.setdefault(node.name, type_name)
-            for _, child in node.children():
-                if isinstance(child, c_ast.Node):
-                    _walk(child)
-                elif isinstance(child, list):
-                    for item in child:
-                        if isinstance(item, c_ast.Node):
-                            _walk(item)
-
-        _walk(getattr(funcdef, "body", None))
-        return types
+        return normalize_type_name(var_info.type_name or "")
 
 
 class SSASCCPRewritePass(ASTPass):

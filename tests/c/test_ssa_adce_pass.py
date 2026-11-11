@@ -100,3 +100,54 @@ def test_ssa_adce_pass_keeps_initializer_used_via_call_argument():
     assert isinstance(decl.init, c_ast.Constant)
     assert decl.init.value == "7"
     assert "ssa_adce.drop_init" not in ctx.stats
+
+
+def test_ssa_rewriters_share_one_declared_type_collector():
+    """ADCE, DSE, GVN and SCCP read declared types through ast_utils.
+
+    Each rewriter used to carry its own copy of the collector; they all key
+    SSA facts by the same normalized type names, so they must agree on them.
+    """
+    from pcc.frontends.c.passes import ast_utils
+    from pcc.frontends.c.passes import ssa_adce, ssa_dse, ssa_gvn_rewrite, ssa_sccp_rewrite
+
+    owners = (
+        ssa_adce._SSAADCETransformer,
+        ssa_dse._SSADSERewriter,
+        ssa_gvn_rewrite._SSAGVNRewriter,
+        ssa_sccp_rewrite._SSASCCPRewriter,
+    )
+    for owner in owners:
+        for private in ("_normalize_type_name", "_decl_type_name", "_collect_function_types"):
+            assert private not in vars(owner), (owner.__name__, private)
+
+    ast = _get_parser().parse(
+        """
+        typedef unsigned long size_t;
+        long f(const int a, char *p, size_t n) {
+            unsigned int b = 1;
+            { volatile long c = 2; register short d = 3; }
+            for (int i = 0; i < a; i++) { long long e = i; }
+            int b2[4];
+            return a;
+        }
+        """
+    )
+    func = ast.ext[1]
+    # Parameters first, then body declarations in source order; pointers and
+    # arrays have no identifier type and are left out.
+    assert list(ast_utils.collect_function_types(func).items()) == [
+        ("a", "int"),
+        ("n", "size_t"),
+        ("b", "unsigned int"),
+        ("c", "long"),
+        ("d", "short"),
+        ("i", "int"),
+        ("e", "long long"),
+    ]
+    assert ast_utils.decl_type_name(func.decl.type) == "long"
+    assert ast_utils.decl_type_name(None) == ""
+    assert (
+        ast_utils.normalize_type_name("const\tunsigned  int restrict __restrict register volatile")
+        == "unsigned int"
+    )

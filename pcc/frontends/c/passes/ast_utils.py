@@ -504,6 +504,61 @@ def collect_ids(node) -> set[str]:
     return names
 
 
+def normalize_type_name(type_name: str) -> str:
+    """Drop qualifiers and storage words so equal C types compare equal."""
+    tokens = [
+        token
+        for token in type_name.replace("\t", " ").split()
+        if token not in {"const", "volatile", "restrict", "__restrict", "register"}
+    ]
+    return " ".join(tokens)
+
+
+def decl_type_name(node) -> str:
+    """Normalized identifier type of a declaration; "" for pointers, arrays and structs."""
+    if isinstance(node, c_ast.FuncDecl):
+        return decl_type_name(node.type)
+    if isinstance(node, c_ast.TypeDecl):
+        return decl_type_name(node.type)
+    if isinstance(node, c_ast.IdentifierType):
+        return normalize_type_name(" ".join(node.names))
+    return ""
+
+
+def _collect_declared_types(node, types: dict[str, str]) -> None:
+    if node is None:
+        return
+    if isinstance(node, c_ast.Decl) and node.name:
+        type_name = decl_type_name(node.type)
+        if type_name:
+            types.setdefault(node.name, type_name)
+    for _, child in node.children():
+        if isinstance(child, c_ast.Node):
+            _collect_declared_types(child, types)
+        elif isinstance(child, list):
+            for item in child:
+                if isinstance(item, c_ast.Node):
+                    _collect_declared_types(item, types)
+
+
+def collect_function_types(funcdef) -> dict[str, str]:
+    """Map each parameter and local of ``funcdef`` to its normalized type name.
+
+    Parameters win over a body declaration of the same name; the first body
+    declaration wins over later ones.
+    """
+    types: dict[str, str] = {}
+    func_type = getattr(getattr(funcdef, "decl", None), "type", None)
+    params = getattr(getattr(func_type, "args", None), "params", None) or ()
+    for param in params:
+        if isinstance(param, c_ast.Decl) and param.name:
+            type_name = decl_type_name(param.type)
+            if type_name:
+                types[param.name] = type_name
+    _collect_declared_types(getattr(funcdef, "body", None), types)
+    return types
+
+
 def contains_node_type(node, node_types) -> bool:
     """Return True if a subtree contains any node of the given type(s)."""
     if node is None:

@@ -6,7 +6,12 @@ from dataclasses import dataclass
 
 from pcc.frontends.c.ast import c_ast
 from pcc.frontends.c.ssa import SSAADCEAnalyzer
-from pcc.frontends.c.passes.ast_utils import ASTTransformer, is_side_effect_free
+from pcc.frontends.c.passes.ast_utils import (
+    ASTTransformer,
+    collect_function_types,
+    is_side_effect_free,
+    normalize_type_name,
+)
 from pcc.frontends.c.passes.base import ASTPass
 from pcc.frontends.c.passes.context import PassContext
 from pcc.frontends.c.passes.ssa_bootstrap import SSABootstrapPass
@@ -123,7 +128,7 @@ class _SSAADCETransformer(ASTTransformer):
         old_dead = self._dead_binding_kinds
 
         self._current_func_name = func_name
-        self._current_types = self._collect_function_types(node)
+        self._current_types = collect_function_types(node)
         self._dead_binding_kinds = self._decisions_for_function(func_name)
         if isinstance(node.body, c_ast.Compound):
             self._rewrite_compound(node.body, ())
@@ -222,18 +227,9 @@ class _SSAADCETransformer(ASTTransformer):
             return False
         return self._is_scalar_type_name(self._current_types.get(name, ""))
 
-    @staticmethod
-    def _normalize_type_name(type_name: str) -> str:
-        tokens = [
-            token
-            for token in type_name.replace("\t", " ").split()
-            if token not in {"const", "volatile", "restrict", "__restrict", "register"}
-        ]
-        return " ".join(tokens)
-
     @classmethod
     def _is_scalar_type_name(cls, type_name: str) -> bool:
-        normalized = cls._normalize_type_name(type_name)
+        normalized = normalize_type_name(type_name)
         if not normalized:
             return False
         if any(ch in normalized for ch in "*[]()"):
@@ -241,43 +237,6 @@ class _SSAADCETransformer(ASTTransformer):
         if normalized.startswith(("struct ", "union ", "enum ")):
             return False
         return True
-
-    def _decl_type_name(self, node) -> str:
-        if isinstance(node, c_ast.FuncDecl):
-            return self._decl_type_name(node.type)
-        if isinstance(node, c_ast.TypeDecl):
-            return self._decl_type_name(node.type)
-        if isinstance(node, c_ast.IdentifierType):
-            return self._normalize_type_name(" ".join(node.names))
-        return ""
-
-    def _collect_function_types(self, funcdef) -> dict[str, str]:
-        types: dict[str, str] = {}
-        func_type = getattr(getattr(funcdef, "decl", None), "type", None)
-        params = getattr(getattr(func_type, "args", None), "params", None) or ()
-        for param in params:
-            if isinstance(param, c_ast.Decl) and param.name:
-                type_name = self._decl_type_name(param.type)
-                if type_name:
-                    types[param.name] = type_name
-
-        def _walk(node):
-            if node is None:
-                return
-            if isinstance(node, c_ast.Decl) and node.name:
-                type_name = self._decl_type_name(node.type)
-                if type_name:
-                    types.setdefault(node.name, type_name)
-            for _, child in node.children():
-                if isinstance(child, c_ast.Node):
-                    _walk(child)
-                elif isinstance(child, list):
-                    for item in child:
-                        if isinstance(item, c_ast.Node):
-                            _walk(item)
-
-        _walk(getattr(funcdef, "body", None))
-        return types
 
 
 class SSAADCEPass(ASTPass):
