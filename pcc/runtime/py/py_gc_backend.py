@@ -4913,6 +4913,24 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
     zpage_node_owner = stack_alloc(8)
     zpage_slots_owner = stack_alloc(8)
     zpage_owner = stack_alloc(8)
+    # The node pool keeps at most 8192 nodes, so between sweeps it is empty
+    # and the locked plan below used to find that out, unlock, prepare a node
+    # and take the graph lock a second time for every allocation. Read the
+    # pool head once without the lock, as a hint only: a node prepared here
+    # is what that round trip would have prepared. The locked plan stays the
+    # authority: a pool refilled meanwhile is used first and the unused
+    # prepared node is freed after unlock. A prepare that fails here is that
+    # round trip's one attempt: the plan takes its existing failure path
+    # instead of asking the allocator again, unless the pool was refilled.
+    # Only the nonmoving GC1/GC2 take the hint: measured, GC3 gained nothing
+    # and GC4 lost a little (it prepares zpage resources in that round trip
+    # as well).
+    node_prepare_failed: int = 0
+    if backend == 1 or backend == 2:
+        if _object_node_plan_requires_prepare() != 0:
+            prepared_node = _object_node_prepare()
+            if ptr_is_null(prepared_node) != 0:
+                node_prepare_failed = 1
     while 1:
         pcc_py_gc_minor_graph_lock_for(2)
         backend = load_i32(global_addr("pcc_gc_backend_selected"), 0)
@@ -5017,7 +5035,8 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
             ):
                 _object_graph_unlock()
                 if need_node != 0 and ptr_is_null(prepared_node) != 0:
-                    prepared_node = _object_node_prepare()
+                    if node_prepare_failed == 0:
+                        prepared_node = _object_node_prepare()
                     if ptr_is_null(prepared_node) != 0:
                         free(prepared_slots)
                         free(prepared_zpage_node)

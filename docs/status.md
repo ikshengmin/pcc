@@ -509,7 +509,26 @@ Requests/s: GC0 ~34,500; GC1 ~12,600; GC2 ~12,700; GC3 ~7,900; GC4 ~6,100.
   pairs: GC3 +2.48% (8/10), GC1 -0.26% (5/10), GC2 +0.39% (7/10). Other
   per-operation lookups left: `pcc_thread_no_park_enter/exit` around each
   count-free root store, graph lock acquire/release, `pcc_thread_stack_high`.
+- Allocation registration found the 8192-node pool empty under the graph
+  lock, unlocked, prepared a node and locked again: two acquisitions per
+  allocation between sweeps. Published for GC1/GC2 only: the node is
+  prepared before the first acquisition on an unlocked pool-head hint.
+  Twelve alternating pairs, medians, on battery power with a loaded host
+  (noisier than the rows above): GC1 +0.59% (8/12) and, with the final
+  source under load average ~8, +4.23% (8/12); GC2 +2.00% (8/12) and
+  +2.16% (8/12); GC0 control -0.17% / -0.18%. The quietest batch measured
+  the hint for every count-free collector: GC1 +1.40% (12/12), GC3 -0.20%
+  (5/12), GC4 -0.30% (2/12), GC0 +0.49%; GC3/GC4 therefore keep the planned
+  round trip.
+- Measured without gain and not published: native root frame leave/bind/
+  unbind deriving the running verdict from the thread record alone (one
+  lookup instead of two): ten pairs, GC3 -0.61% (4/10), GC4 -1.18% (4/10),
+  GC0 +0.05%. The remaining thread-local lookups (graph lock, no-park) are
+  one per call already.
 - Failing on the unchanged parent as well (this Mac, CPython 3.15.0):
+  eleven cases in `test_freestanding_gc_zpage_allocation.py` (4),
+  `test_foreign_address_leases.py` (2), `test_gc_granule_map.py` (4) and
+  `test_runtime_pointer_provenance.py` (1), and
   `test_native_frame_source_contract.py::test_public_native_entries_use_local_literal_layouts_and_keep_gc0_bypass`
   (32 wrappers, the test expects 31) and
   `test_freestanding_gc_frame_registry.py::test_frame_registry_survives_threaded_mutation_and_observation`

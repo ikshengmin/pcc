@@ -189,9 +189,19 @@ def test_object_registration_prepares_node_and_index_before_graph_lock() -> None
             "_object_graph_unlock()",
         ),):
         assert lock in registration
-        prepare_at = registration.index(prepare)
-        assert registration[:prepare_at].rfind(unlock) > (
-            registration[:prepare_at].rfind(lock)
+        # No node is prepared while the graph lock is held: the unlocked
+        # pool-empty hint runs before the first acquisition, and the plan's
+        # own preparation after its unlock.
+        prepare_sites = [
+            index for index in range(len(registration))
+            if registration.startswith(prepare, index)
+        ]
+        assert len(prepare_sites) == 2
+        hint_at, plan_at = prepare_sites
+        assert lock not in registration[:hint_at]
+        assert unlock not in registration[:hint_at]
+        assert registration[:plan_at].rfind(unlock) > (
+            registration[:plan_at].rfind(lock)
         )
         assert "object_node_plan_requires_prepare" in registration
         assert "pcc_gc_object_index_plan_capacity" in registration

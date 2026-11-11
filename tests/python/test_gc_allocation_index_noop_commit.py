@@ -256,6 +256,65 @@ def test_preparation_and_commit_failures_do_not_publish_partial_object(failure):
     assert model.generation() & 1 == 0
 
 
+@pytest.mark.parametrize('backend,acquires', ((1, 1), (2, 1), (3, 2)))
+def test_empty_node_pool_registers_nonmoving_objects_in_one_graph_acquisition(
+    backend, acquires
+):
+    # The pool keeps at most 8192 nodes and is empty between sweeps. GC1/GC2
+    # prepare the node before the first acquisition (unlocked pool-head
+    # hint); the moving collectors keep the planned unlock/prepare/relock.
+    model = Registration(backend, pooled_node=False)
+    model.register()
+    model.assert_published()
+    assert model.acquires == acquires
+    node = model.call('pcc_gc_object_index_find', model.object)
+    assert model.prepared == [node] and model.freed == []
+
+
+def test_pool_refilled_after_the_hint_wins_and_the_prepared_node_is_freed():
+    # The hint is not the authority: the locked plan uses a node pooled
+    # meanwhile, and the node prepared for nothing is freed after unlock.
+    model = Registration(1, pooled_node=False)
+    pooled = model.calloc(1, 88)
+    original_lock = model.lock
+
+    def lock_after_refill(kind):
+        if model.acquires == 0:
+            model.store('pcc_gc_object_node_free_head', 0, pooled)
+            model.store('pcc_gc_object_node_free_count', 0, 1)
+        original_lock(kind)
+
+    model.ns['pcc_py_gc_minor_graph_lock_for'] = lock_after_refill
+    model.register()
+    model.assert_published()
+    assert model.acquires == 1
+    assert model.call('pcc_gc_object_index_find', model.object) == pooled
+    assert len(model.prepared) == 1 and model.freed == model.prepared
+    assert model.load('pcc_gc_object_node_free_head') == 0
+
+
+def test_failed_hint_still_registers_from_a_refilled_pool_without_a_retry():
+    # A failed hint is the round trip's one attempt (the 'node' case above
+    # fails as before). It must not fail a registration the plan can serve.
+    model = Registration(2, pooled_node=False)
+    model.fail_malloc = 88
+    pooled = model.calloc(1, 88)
+    original_lock = model.lock
+
+    def lock_after_refill(kind):
+        if model.acquires == 0:
+            model.store('pcc_gc_object_node_free_head', 0, pooled)
+            model.store('pcc_gc_object_node_free_count', 0, 1)
+        original_lock(kind)
+
+    model.ns['pcc_py_gc_minor_graph_lock_for'] = lock_after_refill
+    model.register()
+    model.assert_published()
+    assert model.acquires == 1 and model.fail_malloc == 0
+    assert model.call('pcc_gc_object_index_find', model.object) == pooled
+    assert model.prepared == [] and model.freed == []
+
+
 @pytest.mark.parametrize('generation', (-2, -1, 9223372036854775806))
 def test_bad_generation_still_aborts_before_any_object_publication(generation):
     model = Registration()
