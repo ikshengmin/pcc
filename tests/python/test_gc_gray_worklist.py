@@ -40,7 +40,11 @@ PENDING = "pcc_gc_gray_pending_batches"
 FAILURES = "pcc_gc_gray_worklist_allocation_failures"
 REQUEST = "pcc_gc_gray_worklist_flush_requested"
 FALLBACK = "pcc_gc_gray_worklist_fallback_required"
-MODE = "pcc_gc_nonmoving_count_free"
+# The count-free collectors GC1, GC2 and GC4 queue their shades. Only the
+# nonmoving ones (GC1/GC2) may run a slice from the queue alone; GC3 marks
+# concurrently and keeps the object-list walk.
+MODE = "pcc_gc_backend4_no_refcounts"
+NONMOVING = "pcc_gc_nonmoving_count_free"
 BACKEND = "pcc_gc_backend_selected"
 EPOCH = "pcc_gc_tracing_cycle_epoch"
 NEXT, BATCH_EPOCH, COUNT, READ, ITEMS, CAPACITY, BYTES = 0, 8, 16, 24, 32, 64, 544
@@ -69,6 +73,7 @@ class _BatchMemory:
         self.tls = {}
         self.cells = {
             MODE: bytearray((1).to_bytes(4, "little")),
+            NONMOVING: bytearray((1).to_bytes(4, "little")),
             BACKEND: bytearray((2).to_bytes(4, "little")),
             EPOCH: bytearray((17).to_bytes(8, "little")),
             PUBLISHED: bytearray(8), PENDING: bytearray(8), FAILURES: bytearray(8),
@@ -350,7 +355,7 @@ def test_batch_layout_exports_and_storage_owners_are_explicit():
     assert exports == {name: name for name in FUNCTIONS}
 
 
-@pytest.mark.parametrize("backend,enabled", [(backend, 0) for backend in range(5)] + [(0, 1), (3, 1), (4, 1)])
+@pytest.mark.parametrize("backend,enabled", [(backend, 0) for backend in range(5)] + [(0, 1), (3, 1)])
 def test_unselected_collectors_do_not_allocate_or_take(backend, enabled):
     memory = _BatchMemory()
     memory.set_scalar(BACKEND, backend)
@@ -361,7 +366,7 @@ def test_unselected_collectors_do_not_allocate_or_take(backend, enabled):
     assert memory.scalar(FAILURES) == 0
 
 
-@pytest.mark.parametrize("backend", [1, 2])
+@pytest.mark.parametrize("backend", [1, 2, 4])
 def test_full_batch_publishes_exactly_at_64_without_replacement_allocation(backend):
     memory = _BatchMemory()
     memory.set_scalar(BACKEND, backend)
@@ -744,7 +749,7 @@ NATIVE_SOURCE = r'''
 #include <stdint.h>
 #include <stdio.h>
 
-extern int32_t pcc_gc_nonmoving_count_free;
+extern int32_t pcc_gc_backend4_no_refcounts;
 extern int32_t pcc_gc_backend_selected;
 extern int64_t pcc_gc_tracing_cycle_epoch;
 extern int32_t pcc_gc_gray_worklist_fallback_required;
@@ -1008,10 +1013,10 @@ static int finish_main(int status) {
 int main(int argc, char **argv) {
     if (argc != 2 || pcc_threads_enabled() != 1) return 1;
     int backend = argv[1][0] - '0';
-    if (backend != 1 && backend != 2) return 2;
+    if (backend != 1 && backend != 2 && backend != 4) return 2;
     pcc_current_thread_id();
     /* Set the real queue controls quiescently; no collector is started here. */
-    pcc_gc_nonmoving_count_free = 1;
+    pcc_gc_backend4_no_refcounts = 1;
     pcc_gc_backend_selected = backend;
     pcc_gc_tracing_cycle_epoch = 17;
     int initial = sequential_boundaries();
@@ -1228,9 +1233,15 @@ class _RawCollectorMemory(_BatchMemory):
                 self.thread.graph_owned = False
 
 
+@pytest.mark.parametrize("backend", [1, 2, 4])
 @pytest.mark.parametrize("walk", ["drain_all_gray_unlocked", "drain_all_gray_locked_slice"])
-def test_actual_common_consumer_traces_a_queued_root_and_live_child_without_list_fallback(walk):
+def test_actual_common_consumer_traces_a_queued_root_and_live_child_without_list_fallback(
+    walk, backend,
+):
     memory = _RawCollectorMemory()
+    # GC4 queues its shades as GC1/GC2 do: a seeded root is taken from the
+    # queue instead of being searched for from the object-list head.
+    memory.set_scalar(BACKEND, backend)
     root, child, borrowed = [memory.object(name) for name in ("root", "child", "borrowed")]
     memory.object_data[root]["edges"] = [child, child, root]
     memory.object_data[root]["borrowed"] = [borrowed]
@@ -1300,6 +1311,43 @@ def test_actual_consumer_object_list_fallback_finishes_a_successful_shade_lost_t
     assert memory.mark(walk) == 2
     assert memory.traces == {"root": 1, "child": 1} and memory.gray == 0
     assert memory.gray_changes == [1, 1, -1, -1]
+    memory.locked_call("clear_stopped")
+    memory.call("unregister")
+
+
+@pytest.mark.parametrize("walk", ["drain_all_gray_unlocked", "drain_all_gray_locked_slice"])
+def test_gc3_shades_take_no_token_and_its_drain_finds_them_by_the_walk(walk):
+    memory = _RawCollectorMemory()
+    memory.set_scalar(BACKEND, 3)
+    root, child = memory.object("root"), memory.object("child")
+    memory.object_data[root]["edges"] = [child]
+    memory.shade(root)
+    assert memory.gray == 1 and not memory.allocations and memory.local() == 0
+    assert memory.mark(walk) == 2
+    assert memory.traces == {"root": 1, "child": 1} and memory.gray == 0
+
+
+@pytest.mark.parametrize("walk", ["drain_all_gray_unlocked", "drain_all_gray_locked_slice"])
+def test_a_moved_objects_stale_token_is_dropped_and_the_walk_traces_its_gray_copy(walk):
+    memory = _RawCollectorMemory()
+    memory.set_scalar(BACKEND, 4)
+    source, child = memory.object("source"), memory.object("child")
+    memory.shade(source)
+    # A moving collector copied the shaded object: the old address is no
+    # longer a known object, and the copy carries the gray color without a
+    # token of its own.
+    memory.retire(source)
+    copy = memory.object("copy")
+    memory.object_data[copy]["edges"] = [child]
+    memory.store(copy, 12, (memory.load(copy, 12, 4) & ~56) | GRAY, 4)
+    memory.change_gray(1)
+    lookups = len(memory.index_lookups)
+    assert memory.mark(walk) == 2
+    # The token was checked against the index and never dereferenced; the
+    # object-list walk found the copy.
+    assert source in memory.index_lookups[lookups:]
+    assert memory.traces == {"copy": 1, "child": 1} and memory.gray == 0
+    assert memory.load(copy, 12, 4) & 56 == BLACK
     memory.locked_call("clear_stopped")
     memory.call("unregister")
 

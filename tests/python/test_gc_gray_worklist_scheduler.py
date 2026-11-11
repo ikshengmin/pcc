@@ -15,8 +15,8 @@ import pytest
 
 from pcc.frontends.python.codegen.freestanding_abi_constants import ABI_CONSTANTS
 from tests.python.test_gc_gray_worklist import (
-    BACKEND, BLACK, COUNT, EPOCH, FALLBACK, GRAY, MODE, PENDING, PUBLISHED, READ, REQUEST,
-    SOURCE, WHITE, _RawCollectorMemory, _install,
+    BACKEND, BLACK, COUNT, EPOCH, FALLBACK, GRAY, MODE, NONMOVING, PENDING, PUBLISHED, READ,
+    REQUEST, SOURCE, WHITE, _RawCollectorMemory, _install,
 )
 
 
@@ -55,6 +55,8 @@ class _SchedulerMemory(_RawCollectorMemory):
             THRESHOLD0: bytearray(4),
         })
         self.set_scalar(BACKEND, backend)
+        # Queue-only slices are the count-free nonmoving collectors' (GC1/GC2).
+        self.set_scalar(NONMOVING, int(backend in (1, 2)))
         self.set_scalar(ENABLED, 1)
         self.set_scalar(THRESHOLD0, 700)
         self.set_scalar("pcc_gc_cms_worker_current", int(cms_worker))
@@ -622,7 +624,9 @@ def test_unpublished_tail_retains_original_fallback_outside_eligible_consumer(ba
     with memory.as_thread("producer"):
         memory.shade(target)
     if mode == "disabled-queue":
+        # A counted collector neither queues nor runs queue-only slices.
         memory.set_scalar(MODE, 0)
+        memory.set_scalar(NONMOVING, 0)
     before = len(memory.accesses)
     assert memory.step(2) == 1
     assert memory.node_next_reads(before) and memory.gray == 0
@@ -721,6 +725,7 @@ def test_eligible_consumer_clears_obsolete_request_without_gray_credit(backend, 
 def test_other_mutator_modes_keep_cursor_and_do_not_store_publication_request(backend, count_free):
     memory = _SchedulerMemory(backend)
     memory.set_scalar(MODE, count_free)
+    memory.set_scalar(NONMOVING, int(count_free and backend in (1, 2)))
     target = memory.leaf("tail")
     with memory.as_thread("producer"):
         memory.shade(target)
