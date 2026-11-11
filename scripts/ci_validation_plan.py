@@ -20,11 +20,41 @@ LANES = ("ordinary", "integration", "reference")
 SCOPES = ("auto", "frontends", "cpp", "rust", "java", "go", "shared", "legacy", "all")
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 CI_FILES = ("scripts/ci_validation", "scripts/data/ci_validation", ".github/workflows/")
+NATIVE_PLATFORMS = (
+    {"platform": "linux-x86_64", "runner": "ubuntu-24.04", "docker_platform": "linux/amd64"},
+    {"platform": "linux-aarch64", "runner": "ubuntu-24.04-arm", "docker_platform": "linux/arm64"},
+    {"platform": "windows-x86_64", "runner": "windows-2022"},
+)
 
 
-def select(changes, *, scope="auto", before=None, after=None):
+def requires_native_inputs(domain, lane):
+    """Only these source lanes consume the existing same-run native artifacts."""
+    return lane in LANES and (domain == "shared" or (domain, lane) == ("cpp", "integration"))
+
+
+def dispatch_full_chain(inputs):
+    """Validate explicit fixed-point ownership before scheduling any producer."""
+    value = inputs.get("full_chain", "false")
+    if type(value) is bool:
+        requested = value
+    elif isinstance(value, str) and value in {"true", "false"}:
+        requested = value == "true"
+    else:
+        raise ValueError("full_chain must be a boolean")
+    selection = inputs.get("pytest_selection", "both")
+    if selection not in {"both", "integration", "not integration"}:
+        raise ValueError("unknown complete pytest selection")
+    if requested and selection != "not integration":
+        raise ValueError('full_chain=true requires pytest_selection="not integration"; '
+                         'Linux/Windows producers own Stage2/3, with macOS integration mandatory')
+    return requested
+
+
+def select(changes, *, scope="auto", before=None, after=None, full_chain=False):
     if scope not in SCOPES:
         raise ValueError("unknown validation scope")
+    if type(full_chain) is not bool:
+        raise ValueError("full_chain must be a validated boolean")
     domains, reasons = set(), []
     legacy = False
     for status, path in changes:
@@ -66,15 +96,24 @@ def select(changes, *, scope="auto", before=None, after=None):
     elif scope in {"legacy", "all"}:
         legacy = True
         domains.update((*LANGUAGES, "shared", "ci-contracts"))
+    if full_chain:
+        # An explicit fixed-point request owns every original platform even if
+        # the changed paths alone would select only a source frontend.
+        legacy = True
+        domains.update((*LANGUAGES, "shared", "ci-contracts"))
     # Explicit manual selection may add obligations, never subtract changes.
     matrix = [{"domain": domain, "lane": lane} for domain in sorted(domains) for lane in LANES]
-    independent = [row for row in matrix if row["domain"] != "shared"]
-    shared = [row for row in matrix if row["domain"] == "shared"]
+    independent = [row for row in matrix if not requires_native_inputs(**row)]
+    native = [row for row in matrix if requires_native_inputs(**row)]
+    # A frontend project may require Stage1 without owning legacy qualification.
+    # Reuse the existing producer; legacy work retains every original platform.
+    producers = list(NATIVE_PLATFORMS) if legacy else list(NATIVE_PLATFORMS[:1]) if native else []
     return {"schema": 1, "before": before, "after": after, "scope": scope,
-            "changes": reasons, "domains": sorted(domains), "legacy": legacy,
+            "full_chain": full_chain, "changes": reasons, "domains": sorted(domains), "legacy": legacy,
             "cpp_platform": "cpp" in domains, "source": bool(matrix), "matrix": {"include": matrix},
             "source_independent": bool(independent), "matrix_independent": {"include": independent},
-            "source_shared": bool(shared), "matrix_shared": {"include": shared}}
+            "source_native": bool(native), "matrix_native": {"include": native},
+            "native_stage1": bool(producers), "matrix_native_stage1": {"include": producers}}
 
 
 def git(*args):
@@ -146,6 +185,7 @@ def main():
     if not SHA.fullmatch(after) or git("rev-parse", "HEAD") != after:
         raise ValueError("checkout is not the exact event revision")
     name = os.environ["GITHUB_EVENT_NAME"]
+    full_chain = dispatch_full_chain(event.get("inputs", {})) if name == "workflow_dispatch" else False
     before = None
     baseline = None
     baseline_error = None
@@ -173,10 +213,10 @@ def main():
     except (ValueError, subprocess.SubprocessError) as error:
         # New branch/unavailable parent cannot narrow the campaign.
         changes = [("UNKNOWN", "__unavailable_exact_base__")]
-        plan = select(changes, scope=scope, before=before, after=after)
+        plan = select(changes, scope=scope, before=before, after=after, full_chain=full_chain)
         plan["base_error"] = str(error)
     else:
-        plan = select(changes, scope=scope, before=before, after=after)
+        plan = select(changes, scope=scope, before=before, after=after, full_chain=full_chain)
     plan["event_before_not_coverage_base"] = event.get("before")
     plan["qualified_baseline"] = baseline
     if baseline_error:
@@ -185,7 +225,8 @@ def main():
     args.out.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n")
     with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
         for key in ("legacy", "source", "cpp_platform", "matrix",
-                    "source_independent", "matrix_independent", "source_shared", "matrix_shared"):
+                    "source_independent", "matrix_independent", "source_native", "matrix_native",
+                    "native_stage1", "matrix_native_stage1"):
             output.write(key + "=" + json.dumps(plan[key], separators=(",", ":")) + "\n")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:

@@ -266,6 +266,8 @@ def run(args):
                "memory_policy": "Darwin: auto 2-4 GiB, 512 MiB reserve; Linux/Windows: 16 GiB",
                "lock_owner": "selected tests retain their existing bootstrap/build locks"}
     try:
+        require(not os.environ.get("PCC_PLATFORM_TEST_COMPILER"),
+                "refuse inherited platform compiler override")
         require(args.platform == host_platform(), "runner platform differs from matrix")
         source = source_identity()
         admit = admit_in_place if partition == "bootstrap" else import_bundle
@@ -284,6 +286,7 @@ def run(args):
         env.update(PCC_RUNTIME_ARCHIVE=str(runtime), PCC_THREADED_RUNTIME_ARCHIVE=str(runtime),
                    PCC_CURRENT_PCC1=str(compiler), PCC_REQUIRE_CURRENT_PCC1="1", PCC_NO_AUTO_PCC1="1",
                    PCC_TEST_COMPILER=str(compiler), PCC_TEST_COMPILER_STRICT="1",
+                   PCC_PLATFORM_TEST_COMPILER=str(compiler),
                    PCC_TEST_COMPILER_LOG=str(out / "pytest" / "pcc1-routing.jsonl"),
                    PCC_TEST_NO_NATIVE_PROVISIONING="1", UV_PYTHON_DOWNLOADS="never",
                    PCC_CI_STAGE1_MANIFEST=str((args.bundle / "manifest.json").resolve()),

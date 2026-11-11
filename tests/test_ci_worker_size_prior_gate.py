@@ -15,6 +15,7 @@ import pytest
 from tests.ci_validation_support import has_only_validation_plan_dependency
 
 from scripts import ci_worker_size_prior_gate as gate
+from scripts import ci_validation_plan
 from tests.integration.test_worker_size_prior_closed_world import require_definition
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,6 +38,13 @@ def put(directory, rows):
     (directory / "live.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
 
 
+def parameter_case_count(values):
+    """Count explicit cases without evaluating parameter values or calls."""
+    assert isinstance(values, (ast.List, ast.Tuple)), "dynamic parameter sequence"
+    assert not any(isinstance(value, ast.Starred) for value in values.elts), "expanded parameter sequence"
+    return len(values.elts)
+
+
 def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[10:14] == (
         "tests/python/test_host_indexed_process_split.py",
@@ -50,7 +58,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS[:72] == (106, 3, 291, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 4, 85, 11, 111, 177, 9, 12, 26, 54, 30, 9, 76, 39, 31, 17)
+    assert gate.HOST_COUNTS[:72] == (106, 3, 291, 0, 6, 29, 25, 7, 25, 49, 19, 21, 433, 17, 4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 117, 11, 128, 177, 9, 12, 26, 54, 30, 9, 76, 39, 35, 23)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
@@ -106,7 +114,7 @@ def test_default_command_retains_project_xdist(tmp_path):
         'tests/test_ci_native_find_protocol.py',
         'tests/python/test_str_len_protocol.py',
     )
-    assert gate.HOST_COUNTS[72:] == (36, 29, 4, 29, 5, 19, 10, 65, 7, 92, 1, 2)
+    assert gate.HOST_COUNTS[72:] == (36, 29, 4, 29, 11, 23, 10, 65, 7, 92, 1, 2)
     assert "tests/python/test_precise_stackmap_abi.py" not in gate.HOST_FILES
     assert gate.GC_MARK_COLOR_ATOMIC_TEST == "tests/python/test_gc_mark_color_atomic.py"
     assert (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text().count(
@@ -117,42 +125,50 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text().count(
         '      - "tests/python/test_runtime_abi_chunking.py"') == 2
     assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 84
-    assert sum(gate.HOST_COUNTS) == 3558 and sum(gate.HOST_COUNTS[:72]) == 3259
-    assert sum(gate.HOST_COUNTS[:70]) == 3211
-    assert sum(gate.HOST_COUNTS[:65]) == 3003
-    assert sum(gate.HOST_COUNTS[:63]) == 2965
-    assert sum(gate.HOST_COUNTS[:62]) == 2956
-    assert sum(gate.HOST_COUNTS[:61]) == 2779
-    assert sum(gate.HOST_COUNTS[:60]) == 2668
-    assert sum(gate.HOST_COUNTS[:59]) == 2657
-    assert sum(gate.HOST_COUNTS[:58]) == 2572
-    assert sum(gate.HOST_COUNTS[:57]) == 2568
-    assert sum(gate.HOST_COUNTS[:53]) == 2455
-    assert sum(gate.HOST_COUNTS[:52]) == 2430
-    assert sum(gate.HOST_COUNTS[:51]) == 2399
-    assert sum(gate.HOST_COUNTS[:50]) == 2357 and sum(gate.HOST_COUNTS[:49]) == 2311
-    assert sum(gate.HOST_COUNTS[:48]) == 2270
-    assert sum(gate.HOST_COUNTS[:47]) == 2227
-    assert sum(gate.HOST_COUNTS[:43]) == 2135
-    assert sum(gate.HOST_COUNTS[:42]) == 2019
-    assert sum(gate.HOST_COUNTS[:40]) == 2010
-    assert sum(gate.HOST_COUNTS[:38]) == 2000
-    assert sum(gate.HOST_COUNTS[:36]) == 1991
-    assert sum(gate.HOST_COUNTS[:34]) == 1973
-    assert sum(gate.HOST_COUNTS[:32]) == 1938
-    assert sum(gate.HOST_COUNTS[:30]) == 1778
-    assert sum(gate.HOST_COUNTS[:28]) == 1682
-    assert sum(gate.HOST_COUNTS[:27]) == 1627
-    assert sum(gate.HOST_COUNTS[:25]) == 1487
-    assert sum(gate.HOST_COUNTS[:23]) == 1332
-    assert sum(gate.HOST_COUNTS[:22]) == 1316
-    assert sum(gate.HOST_COUNTS[:21]) == 1261
-    assert sum(gate.HOST_COUNTS[:20]) == 1172
-    assert sum(gate.HOST_COUNTS[:18]) == 1135
-    assert sum(gate.HOST_COUNTS[:17]) == 1068 and sum(gate.HOST_COUNTS[:16]) == 1007
-    assert sum(gate.HOST_COUNTS[:14]) == 998
+    assert sum(gate.HOST_COUNTS) == 3664 and sum(gate.HOST_COUNTS[:72]) == 3355
+    assert sum(gate.HOST_COUNTS[:70]) == 3297
+    assert sum(gate.HOST_COUNTS[:65]) == 3089
+    assert sum(gate.HOST_COUNTS[:63]) == 3051
+    assert sum(gate.HOST_COUNTS[:62]) == 3042
+    assert sum(gate.HOST_COUNTS[:61]) == 2865
+    assert sum(gate.HOST_COUNTS[:60]) == 2737
+    assert sum(gate.HOST_COUNTS[:59]) == 2726
+    assert sum(gate.HOST_COUNTS[:58]) == 2609
+    assert sum(gate.HOST_COUNTS[:57]) == 2601
+    assert sum(gate.HOST_COUNTS[:53]) == 2488
+    assert sum(gate.HOST_COUNTS[:52]) == 2463
+    assert sum(gate.HOST_COUNTS[:51]) == 2432
+    assert sum(gate.HOST_COUNTS[:50]) == 2390 and sum(gate.HOST_COUNTS[:49]) == 2344
+    assert sum(gate.HOST_COUNTS[:48]) == 2303
+    assert sum(gate.HOST_COUNTS[:47]) == 2260
+    assert sum(gate.HOST_COUNTS[:43]) == 2168
+    assert sum(gate.HOST_COUNTS[:42]) == 2052
+    assert sum(gate.HOST_COUNTS[:40]) == 2043
+    assert sum(gate.HOST_COUNTS[:38]) == 2033
+    assert sum(gate.HOST_COUNTS[:36]) == 2024
+    assert sum(gate.HOST_COUNTS[:34]) == 2006
+    assert sum(gate.HOST_COUNTS[:32]) == 1971
+    assert sum(gate.HOST_COUNTS[:30]) == 1811
+    assert sum(gate.HOST_COUNTS[:28]) == 1715
+    assert sum(gate.HOST_COUNTS[:27]) == 1660
+    assert sum(gate.HOST_COUNTS[:25]) == 1520
+    assert sum(gate.HOST_COUNTS[:23]) == 1365
+    assert sum(gate.HOST_COUNTS[:22]) == 1349
+    assert sum(gate.HOST_COUNTS[:21]) == 1294
+    assert sum(gate.HOST_COUNTS[:20]) == 1205
+    assert sum(gate.HOST_COUNTS[:18]) == 1168
+    assert sum(gate.HOST_COUNTS[:17]) == 1101 and sum(gate.HOST_COUNTS[:16]) == 1040
+    assert sum(gate.HOST_COUNTS[:14]) == 1031
+    # Counting never evaluates data expressions, imports fixtures, or calls
+    # their functions. Expansion/dynamic sequences need an actual inventory.
+    value_tree = ast.parse("[-(1 << 63), (1 << 63) - 1, must_not_execute()]", mode="eval").body
+    assert parameter_case_count(value_tree) == 3
+    assert parameter_case_count(ast.parse("(must_not_execute(),)", mode="eval").body) == 1
+    for expression in ("cases", "tuple(cases)", "[*cases]", "(*cases,)", "[x for x in cases]"):
+        with pytest.raises(AssertionError, match="parameter sequence"):
+            parameter_case_count(ast.parse(expression, mode="eval").body)
     for filename, expected_count in ((gate.MANAGED_SCRATCH_TEST, 34), (gate.MANAGED_MEMORY_TEST, 1),
-                                     (gate.GC_RELOCATION_PAGE_CURSOR_MODEL_TEST, 85),
+                                     (gate.GC_RELOCATION_PAGE_CURSOR_MODEL_TEST, 117),
                                      (gate.IR_BUILDER_CALL9_TEST, 9)):
         count = 0
         for node in ast.parse((ROOT / filename).read_text()).body:
@@ -161,7 +177,7 @@ def test_default_command_retains_project_xdist(tmp_path):
                 for decorator in node.decorator_list:
                     assert isinstance(decorator, ast.Call)
                     assert ast.unparse(decorator.func) == "pytest.mark.parametrize"
-                    cases *= len(ast.literal_eval(decorator.args[1]))
+                    cases *= parameter_case_count(decorator.args[1])
                 count += cases
         assert count == expected_count
     dirty_tree = ast.parse((ROOT / gate.MANAGED_DIRTY_ROWS_TEST).read_text())
@@ -269,7 +285,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     # The default host phase executes these cases, not their native gates.
     for path, expected_count in zip(
         (*gate.TUPLE_OWNED_ROOT_HOST_TESTS, *gate.AARCH64_STACKMAP_RETIREMENT_HOST_TESTS),
-        (54, 30, 9, 76, 39, 31, 17),
+        (54, 30, 9, 76, 39, 35, 23),
     ):
         assert push_filters.count('      - "' + path + '"') == 1
         assert pull_request_filters.count('      - "' + path + '"') == 1
@@ -406,7 +422,7 @@ def test_default_command_retains_project_xdist(tmp_path):
                 assert isinstance(values, (ast.List, ast.Tuple))
                 cases *= len(values.elts)
         direct_cases += cases
-    assert direct_cases == gate.HOST_COUNTS[60] == 111
+    assert direct_cases == gate.HOST_COUNTS[60] == 128
     assert gate.CONSUMED_UNSAFE_INPUTS == (
         "tests/python/test_consumed_unsafe_dependency.py",
         "pcc/frontends/python/pipeline_dependency_closure.py",
@@ -1217,6 +1233,14 @@ def workflow_job(text, name):
     return match.group(1)
 
 
+def workflow_native_platforms(body, *, legacy):
+    assert 'matrix: ${{ fromJSON(needs.validation-plan.outputs.matrix_native_stage1) }}' in body
+    path = 'pcc/runtime/py/owner.py' if legacy else 'pcc/frontends/cpp/parser.py'
+    plan = ci_validation_plan.select([('M', path)])
+    assert plan['legacy'] is legacy and plan['native_stage1']
+    return plan['matrix_native_stage1']['include']
+
+
 def assert_workflow_marker_permissions(text):
     # Global scope is contents-read only. The planner and two same-run artifact
     # consumers alone add Actions read; no original producer gains permissions.
@@ -1270,11 +1294,18 @@ def test_x86_jump_threading_uses_existing_three_platform_host_gate():
         assert paths.count(jump_test) == 1, event
 
     other = workflow_job(workflow, "other-platform-native-wheel")
-    for platform in ("linux-x86_64", "linux-aarch64", "windows-x86_64"):
-        assert other.count("- { platform: " + platform + ",") == 1
+    assert workflow_native_platforms(other, legacy=True) == [
+        {"platform": "linux-x86_64", "runner": "ubuntu-24.04", "docker_platform": "linux/amd64"},
+        {"platform": "linux-aarch64", "runner": "ubuntu-24.04-arm", "docker_platform": "linux/arm64"},
+        {"platform": "windows-x86_64", "runner": "windows-2022"},
+    ]
+    assert workflow_native_platforms(other, legacy=False) == workflow_native_platforms(other, legacy=True)[:1]
     step_name = "Verify host Stage2 export-retention, AArch64 call-emission, and ELF assembly contracts"
     step = other.split("      - name: " + step_name + "\n", 1)[1].split("      - name:", 1)[0]
-    assert not re.search(r"(?m)^        if:", step)
+    expression = re.search(r"(?m)^        if: \$\{\{ (.+) \}\}$", step).group(1)
+    for legacy in (False, True):
+        rendered = expression.replace("needs.validation-plan.outputs.legacy", repr(str(legacy).lower()))
+        assert eval(rendered, {"__builtins__": {}}, {}) is legacy
     command = step.split("        run: ", 1)[1].split("\n", 1)[0]
     unconditional = command.split(" ${{", 1)[0].split()
     assert unconditional[:9] == [
@@ -1377,7 +1408,8 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
         "pcc/frontends/python/pipeline_import_scan.py",
     )
     assert "timeout-minutes: 360" in other and "timeout-minutes: 200" in mac
-    assert other.count("- { platform:") == 3
+    assert len(workflow_native_platforms(other, legacy=True)) == 3
+    assert len(workflow_native_platforms(other, legacy=False)) == 1
     assert "uv sync --frozen --dev\n" in other
     assert "uv sync --frozen --dev\n" in mac
     for body in (other, mac):
@@ -1518,7 +1550,8 @@ def test_other_platform_entry_runs_the_five_gc_matrix_once(tmp_path, monkeypatch
     other = workflow_job(workflow, "other-platform-native-wheel")
     name = "Verify GC4 relocation with one mutator in the admitted threaded runtime"
     step = other.split("      - name: " + name + "\n", 1)[1].split("      - name:", 1)[0]
-    assert "!cancelled() && startsWith(matrix.platform, 'linux-')" in step
+    assert "!cancelled()" in step and "startsWith(matrix.platform, 'linux-')" in step
+    assert "needs.validation-plan.outputs.legacy == 'true'" in step
     assert "steps.platform_runtime.outputs.ready == 'true'" in step
     assert "timeout-minutes: 6" in step
     assert "shell: uv run --frozen --no-sync python {0}" in step
@@ -1724,7 +1757,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (106, 3, 291, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 4, 85, 11, 111, 177, 9, 12, 26, 54, 30, 9, 76, 39, 31, 17) + (36, 29, 4, 29, 5, 19, 10, 65, 7, 92, 1, 2) and not integration
+            assert nodes == gate.HOST_FILES and counts == (106, 3, 291, 0, 6, 29, 25, 7, 25, 49, 19, 21, 433, 17, 4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 117, 11, 128, 177, 9, 12, 26, 54, 30, 9, 76, 39, 35, 23) + (36, 29, 4, 29, 11, 23, 10, 65, 7, 92, 1, 2) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
@@ -3062,7 +3095,11 @@ def test_parser_input_lifetimes_release_only_after_successful_freeze(monkeypatch
     # Resolve relative imports normally, but inside a synthetic package so
     # extracting this traversal cannot import the real parser/arena closure.
     # These headers have no attachment; invoking the debug parser is a bug.
+    from pcc.backend import definition_linkage
+
     package = ModuleType("_pure_parser_input_lifetimes")
+    package.__spec__ = importlib.util.spec_from_file_location(
+        package.__name__, __file__, submodule_search_locations=[])
     package.__path__ = []
     debug_module = ModuleType(package.__name__ + ".self_backend_debug")
     def unexpected_debug_attachment(header):
@@ -3070,6 +3107,7 @@ def test_parser_input_lifetimes_release_only_after_successful_freeze(monkeypatch
     debug_module.debug_attachment = unexpected_debug_attachment
     monkeypatch.setitem(sys.modules, package.__name__, package)
     monkeypatch.setitem(sys.modules, debug_module.__name__, debug_module)
+    monkeypatch.setitem(sys.modules, package.__name__ + ".definition_linkage", definition_linkage)
     scope = {
         "__name__": package.__name__ + ".self_backend_parse",
         "__package__": package.__name__,
@@ -3324,6 +3362,8 @@ def test_arm_packed_width_cache_source_and_observation_contract():
     import copy
     import hashlib
 
+    from tests.elf_external_odr_preimage import without_external_odr
+
     oracle_tree = ast.parse((ROOT / "tests/elf_validate_object_preimage.py").read_text())
     original = ast.literal_eval(next(node.value for node in oracle_tree.body
                                     if isinstance(node, ast.Assign)
@@ -3332,7 +3372,9 @@ def test_arm_packed_width_cache_source_and_observation_contract():
                                     and next(iter(node.targets)).id == "ORIGINAL_VALIDATE_OBJECT_SOURCE"))
     assert hashlib.sha256(original.encode()).hexdigest() == (
         "77c35a2eca9f99889622a6423b294885c0df22feeabce0694b61499b9d9533ae")
-    source = (ROOT / "pcc/backend/elf_x86_64.py").read_text()
+    # Authenticate the complete later ODR delta before applying this older
+    # width-cache proof. The helper never imports or executes either validator.
+    source = without_external_odr((ROOT / "pcc/backend/elf_x86_64.py").read_text())
     tree = ast.parse(source)
     candidate = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
                      and node.name == "_validate_object")
@@ -3480,6 +3522,15 @@ else:
     categories = frozenset(ast.literal_eval(one(categories.args)))
     key = "owned_elf_inputs.py:_ClassificationProof"
     assert contract[key] == "semantic_record"
+    frame_key = "self_backend_aarch64_frame.py:PhysicalFrameLayout"
+    assert contract[frame_key] == "phase_shell"
+    projection_contract = ast.literal_eval(one(
+        node.value for node in inventory_tree.body
+        if isinstance(node, ast.AnnAssign)
+        and named(node.target, "DIAGNOSTIC_PROJECTION_SITE_CONTRACT")))
+    for family, count in (("SlotInfo", 2), ("AllocaInfo", 1)):
+        site = "self_backend_aarch64_frame.py:_refresh_legacy_slots:" + family
+        assert projection_contract[site] == (count, "legacy_or_unsupported")
     input_tree = ast.parse((ROOT / "pcc/backend/owned_elf_inputs.py").read_text())
     proof = one(node for node in input_tree.body if isinstance(node, ast.ClassDef)
                 and node.name == "_ClassificationProof")
@@ -3512,13 +3563,14 @@ class _ClassificationProof:
     report = namespace["data_plane_class_contract_report"](ROOT / "pcc/backend")
     assert report["unclassified"] == report["stale_classifications"] == report["invalid_classifications"] == []
     assert report["discovered_class_count"] == report["classified_class_count"]
-    missing = dict(contract)
-    del missing[key]
-    namespace["DATA_PLANE_CLASS_CONTRACT"] = missing
-    missing_report = namespace["data_plane_class_contract_report"](ROOT / "pcc/backend")
-    assert missing_report["unclassified"] == [key]
-    assert missing_report["stale_classifications"] == missing_report["invalid_classifications"] == []
-    assert missing_report["discovered_class_count"] == missing_report["classified_class_count"] + 1
+    for missing_key in (key, frame_key):
+        missing = dict(contract)
+        del missing[missing_key]
+        namespace["DATA_PLANE_CLASS_CONTRACT"] = missing
+        missing_report = namespace["data_plane_class_contract_report"](ROOT / "pcc/backend")
+        assert missing_report["unclassified"] == [missing_key]
+        assert missing_report["stale_classifications"] == missing_report["invalid_classifications"] == []
+        assert missing_report["discovered_class_count"] == missing_report["classified_class_count"] + 1
 
     elf_tests = ast.parse((ROOT / gate.ELF_FORMAT_TEST).read_text())
     observation = next(node for node in elf_tests.body if isinstance(node, ast.FunctionDef)

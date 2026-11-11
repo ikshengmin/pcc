@@ -1,4 +1,4 @@
-"""Admit this run's existing Stage1 inputs for shared source tests; never build."""
+"""Admit this run's existing Stage1 inputs for native-dependent source lanes; never build."""
 from __future__ import annotations
 
 import hashlib
@@ -7,8 +7,10 @@ from pathlib import Path
 
 try:
     from . import ci_stage1_bundle as bundle
+    from .ci_validation_plan import requires_native_inputs
 except ImportError:
     import ci_stage1_bundle as bundle
+    from ci_validation_plan import requires_native_inputs
 
 
 def source_identity():
@@ -29,19 +31,19 @@ def digest(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
-def admit(root, directory, *, domain, environ=None):
+def admit(root, directory, *, domain, lane, environ=None):
     """Reuse strict transport admission, then expose only explicit fixture inputs.
 
     PCC_TEST_COMPILER is deliberately not set: the host-PCC source lane and its
     explicit module/pcc1 parameters must retain their distinct execution owners.
     """
     env = os.environ if environ is None else environ
-    if domain != 'shared' or directory is None:
-        raise ValueError('shared source validation requires an explicit same-run Stage1 bundle')
+    if not requires_native_inputs(domain, lane) or directory is None:
+        raise ValueError('native-dependent source validation requires an explicit same-run Stage1 bundle')
     if bundle.host_platform() != 'linux-x86_64':
-        raise ValueError('shared source native inputs require Linux x86-64')
+        raise ValueError('source native inputs require Linux x86-64')
     if any(env.get(name) for name in (
-            'PCC_CURRENT_PCC1', 'PCC_TEST_COMPILER', 'PCC_RUNTIME_ARCHIVE',
+            'PCC_CURRENT_PCC1', 'PCC_TEST_COMPILER', 'PCC_PLATFORM_TEST_COMPILER', 'PCC_RUNTIME_ARCHIVE',
             'PCC_THREADED_RUNTIME_ARCHIVE', 'PCC_CI_STAGE1_MANIFEST',
             'PCC_CI_STAGE1_MANIFEST_SHA256')):
         raise ValueError('refuse inherited native source-test input overrides')
@@ -64,7 +66,8 @@ def admit(root, directory, *, domain, environ=None):
              'manifest_sha256': manifest_sha, 'compiler': str(compiler),
              'runtime': str(runtime), 'owner': 'same_workflow_stage1_producer'}
     updates = {'PCC_RUNTIME_ARCHIVE': str(runtime), 'PCC_THREADED_RUNTIME_ARCHIVE': str(runtime),
-               'PCC_CURRENT_PCC1': str(compiler), 'PCC_REQUIRE_CURRENT_PCC1': '1',
+               'PCC_CURRENT_PCC1': str(compiler), 'PCC_PLATFORM_TEST_COMPILER': str(compiler),
+               'PCC_REQUIRE_CURRENT_PCC1': '1',
                'PCC_NO_AUTO_PCC1': '1', 'PCC_TEST_NO_NATIVE_PROVISIONING': '1',
                'PCC_CI_STAGE1_MANIFEST': str(manifest_path),
                'PCC_CI_STAGE1_MANIFEST_SHA256': manifest_sha}

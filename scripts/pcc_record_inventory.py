@@ -91,6 +91,9 @@ DATA_PLANE_CLASS_CONTRACT = {
     # One native module emission scope. Borrowed capture/scratch arenas are
     # packed; only explicitly counted residual encoder lines may be retained.
     "self_backend_aarch64_darwin.py:_NativeAArch64Emission": "phase_shell",
+    # One function's physical layout owns the original slot/alloca/reload
+    # coordinates until emission ends and the prepared layout is restored.
+    "self_backend_aarch64_frame.py:PhysicalFrameLayout": "phase_shell",
     # One scope owner for raw records, span roots/cursor and traced symbols.
     "self_backend_aarch64_fragments.py:AArch64EmissionFragments": "native_arena",
     "self_backend_module_symbols.py:PreparedModuleSymbols": "phase_shell",
@@ -172,6 +175,15 @@ DATA_PLANE_CLASS_CONTRACT = {
     ),
 }
 DIAGNOSTIC_PROJECTION_SITE_CONTRACT: dict[str, tuple[int, str]] = {
+    # Indexed slot projections return before these legacy map refreshes.
+    "self_backend_aarch64_frame.py:_refresh_legacy_slots:SlotInfo": (
+        2,
+        "legacy_or_unsupported",
+    ),
+    "self_backend_aarch64_frame.py:_refresh_legacy_slots:AllocaInfo": (
+        1,
+        "legacy_or_unsupported",
+    ),
     "self_backend_ir.py:CompactParsedInstrArena.__getitem__:CompactParsedInstrView": (
         2,
         "diagnostic_adapter",

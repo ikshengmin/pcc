@@ -424,13 +424,13 @@ def run(args):
         save(args.out / "source-before.json", original)
         native_updates = {}
         native_bundle = getattr(args, "stage1_bundle", None)
-        if args.domain == "shared" or native_bundle is not None:
-            try:
-                from . import ci_validation_native_inputs
-            except ImportError:
-                import ci_validation_native_inputs
+        try:
+            from . import ci_validation_native_inputs
+        except ImportError:
+            import ci_validation_native_inputs
+        if ci_validation_native_inputs.requires_native_inputs(args.domain, args.lane) or native_bundle is not None:
             native_inputs, native_updates = ci_validation_native_inputs.admit(
-                ROOT, native_bundle, domain=args.domain)
+                ROOT, native_bundle, domain=args.domain, lane=args.lane)
             receipt["native_inputs"] = native_inputs
             receipt["claim"] = ("bounded source tests retain explicit host-PCC/native-pcc1 ownership; "
                                 "admitted Stage1 inputs are not fixed-point or whole-project qualification")
@@ -559,7 +559,7 @@ def main():
     parser.add_argument("--lane", required=True, choices=LANES)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--stage1-bundle", type=Path,
-                        help="Same-run Linux x86-64 Stage1 bundle required by the shared source domain")
+                        help="Same-run Linux x86-64 Stage1 bundle required by native-dependent source lanes")
     return run(parser.parse_args())
 
 

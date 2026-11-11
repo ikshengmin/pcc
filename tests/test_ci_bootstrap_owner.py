@@ -176,15 +176,17 @@ def test_workflow_keeps_local_owner_exclusive_and_old_postcheck_prerequisites():
         assert "bootstrap_owner" not in prior
         expression = re.search(r"if: \$\{\{ (.+) \}\}", prior).group(1)
         prerequisites = re.findall(r"steps\.([a-z0-9_]+)\.outcome", expression)
-        def eligible(failed):
+        def eligible(failed, legacy=True):
             rendered = re.sub(r"steps\.([a-z0-9_]+)\.outcome",
                               lambda match: repr("failure" if match.group(1) == failed else "success"),
                               expression)
+            rendered = rendered.replace("needs.validation-plan.outputs.legacy", repr(str(legacy).lower()))
             rendered = rendered.replace("!cancelled()", "True").replace("&&", " and ").replace("||", " or ")
             # Only the source-owned boolean expression above, no external code.
             return eval(rendered, {"__builtins__": {}}, {})
         assert eligible("bootstrap_owner") and eligible("bootstrap_owner_upload")
         assert all(not eligible(name) for name in prerequisites)
+        assert eligible("bootstrap_owner", legacy=False) is (block == mac)
         wheel = block.split("      - name: " + ("Build, install, and execute the native wheel" if block == mac else "Hand the Stage1 pcc1 to the wheel build"), 1)[1].split("\n      - ", 1)[0]
         assert "steps.native_prior.outcome == 'success'" in wheel
         assert "steps.bound_find.outcome == 'success'" in wheel

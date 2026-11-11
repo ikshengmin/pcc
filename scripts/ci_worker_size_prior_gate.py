@@ -334,9 +334,17 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               'tests/python/test_str_method_slot_models.py',
               'tests/test_ci_native_find_protocol.py',
               'tests/python/test_str_len_protocol.py')
-# Existing behavioral coverage remains. Thirty-five finite facts controls
-# and one CI-only helper A/B share the same default-xdist invocation.
-HOST_COUNTS = (106, 3, 291, 0, 6, 29, 25, 7, 11, 49, 20, 21, 413, 17, 4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 4, 85, 11, 111, 177, 9, 12, 26, 54, 30, 9, 76, 39, 31, 17, 36, 29, 4, 29, 5, 19, 10, 65, 7, 92, 1, 2)
+# Exact default-marker collection: 84 modules, 3664 unique selected nodes.
+# Keep all paths and explicit counts. Reconcile source hashes and actual node
+# identities before updating this receipt; collection is not execution evidence.
+HOST_COUNTS = (
+    106, 3, 291, 0, 6, 29, 25, 7, 25, 49, 19, 21, 433, 17,
+    4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55,
+    84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1,
+    116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6,
+    43, 8, 117, 11, 128, 177, 9, 12, 26, 54, 30, 9, 76, 39,
+    35, 23, 36, 29, 4, 29, 11, 23, 10, 65, 7, 92, 1, 2,
+)
 PHASES = ("preflight", "stage1", "pcc1")
 
 

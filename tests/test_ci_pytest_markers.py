@@ -240,7 +240,7 @@ def test_unified_workflow_covers_both_groups_on_four_native_platforms(tmp_path, 
     # manual configuration rejection before any existing heavy job can start.
     existing = workflow.split('\n  macos-pcc0-regressions:\n', 1)[1].split('\n  pytest-markers:\n', 1)[0]
     assert re.findall(r'^    needs: (.+)$', existing, re.M) == ['validation-plan'] * 7
-    assert existing.count("if: ${{ needs.validation-plan.outputs.legacy == 'true' && (!inputs.full_chain || inputs.pytest_selection == 'not integration') }}") == 7
+    assert existing.count("if: ${{ needs.validation-plan.outputs.legacy == 'true' && (!inputs.full_chain || inputs.pytest_selection == 'not integration') }}") == 6
     expected_jobs = {
         'macos-pcc0-regressions', 'macos-pcc0-float-doc-regressions',
         'macos-pcc0-indexed-split', 'worker-prior-preflight',
@@ -255,7 +255,8 @@ def test_unified_workflow_covers_both_groups_on_four_native_platforms(tmp_path, 
     for name in expected_jobs:
         # Job-level if is independent of ci-plan status and precedes all steps.
         block = workflow.split('\n  ' + name + ':\n', 1)[1]
-        assert block.splitlines()[:2] == ["    needs: validation-plan", predicate]
+        expected_predicate = predicate.replace("outputs.legacy", "outputs.native_stage1") if name == 'other-platform-native-wheel' else predicate
+        assert block.splitlines()[:2] == ["    needs: validation-plan", expected_predicate]
     for selection in ('both', 'integration'):
         assert not (not True or selection == 'not integration')
     nonmac = workflow.split('\n  other-platform-native-wheel:', 1)[1].split('\n  pcc1-package-parity:', 1)[0]
@@ -529,3 +530,52 @@ def test_manual_full_chain_keeps_shared_export_stage1_only(tmp_path, monkeypatch
     assert exported_shared == shared and exported_shared['stages'] == [{'stage': 1}]
     assert all([stage['stage'] for stage in chain['stages']] == [1, 2, 3]
                for chain in result['chains'])
+
+
+@pytest.mark.parametrize('inherited', [False, True])
+def test_marker_platform_compiler_uses_only_admitted_bundle(tmp_path, monkeypatch, inherited):
+    """Exercise routing with inert artifacts, not native compiler qualification."""
+    from types import SimpleNamespace
+    from scripts import bootstrap_platform, ci_worker_size_prior_gate
+    from tests import runtime_fixture_provenance
+
+    monkeypatch.setattr(os, 'environ', {'PCC_PLATFORM_TEST_COMPILER': 'unverified'} if inherited else {})
+    monkeypatch.setattr(gate, 'ROOT', tmp_path)
+    source = {'commit': 'a' * 40, 'source_sha256': 'b' * 64, 'clean_commit': True}
+    bundle = tmp_path / 'bundle'
+    bundle.mkdir()
+    (bundle / 'manifest.json').write_text('{}')
+    compiler, runtime = tmp_path / 'compiler', tmp_path / 'runtime'
+    compiler.write_bytes(b'inert admitted compiler fixture')
+    runtime.write_bytes(b'inert admitted runtime fixture')
+    manifest = {'source': source, 'producer': {},
+                'paths': {'compiler': compiler.name, 'runtime': runtime.name},
+                'files': {path.name: {'sha256': gate.digest(path)} for path in (compiler, runtime)}}
+    monkeypatch.setattr(gate, 'host_platform', lambda: 'linux-x86_64')
+    monkeypatch.setattr(bootstrap_platform, 'source_identity', lambda: source)
+    admitted, executions = [], []
+    def admit(*args):
+        admitted.append(args)
+        return manifest
+    monkeypatch.setattr(gate, 'admit_in_place', admit)
+    monkeypatch.setattr(gate, 'workflow_lease', lambda: {})
+    monkeypatch.setattr(ci_worker_size_prior_gate, 'environment', lambda: dict(os.environ))
+    monkeypatch.setattr(runtime_fixture_provenance, '_verified_test_runtime_archive', lambda *a, **kw: None)
+    monkeypatch.setattr(gate, 'prepare_shared_input', lambda *a: None)
+    def guarded(directory, marker, env, platform, **options):
+        assert env['PCC_PLATFORM_TEST_COMPILER'] == env['PCC_TEST_COMPILER'] == str(compiler)
+        assert env['PCC_CURRENT_PCC1'] == str(compiler)
+        assert env['PCC_TEST_NO_NATIVE_PROVISIONING'] == env['PCC_NO_AUTO_PCC1'] == '1'
+        executions.append(env)
+    monkeypatch.setattr(gate, 'run_guarded', guarded)
+    monkeypatch.setattr(gate, 'summarize', lambda *a: {'status': 'PASS'})
+    args = SimpleNamespace(marker='integration', partition='bootstrap', in_place=True,
+                           platform='linux-x86_64', bundle=bundle, out=tmp_path / 'report',
+                           research_source=None)
+    if inherited:
+        with pytest.raises(ValueError, match='inherited platform compiler override'):
+            gate.run(args)
+        assert not admitted and not executions
+    else:
+        assert gate.run(args)['status'] == 'PASS'
+        assert len(admitted) == len(executions) == 1

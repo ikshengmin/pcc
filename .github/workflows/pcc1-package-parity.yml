@@ -612,8 +612,10 @@ jobs:
       matrix: ${{ steps.select.outputs.matrix }}
       source_independent: ${{ steps.select.outputs.source_independent }}
       matrix_independent: ${{ steps.select.outputs.matrix_independent }}
-      source_shared: ${{ steps.select.outputs.source_shared }}
-      matrix_shared: ${{ steps.select.outputs.matrix_shared }}
+      source_native: ${{ steps.select.outputs.source_native }}
+      matrix_native: ${{ steps.select.outputs.matrix_native }}
+      native_stage1: ${{ steps.select.outputs.native_stage1 }}
+      matrix_native_stage1: ${{ steps.select.outputs.matrix_native_stage1 }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -696,9 +698,9 @@ jobs:
   shared-source-validation:
     name: Source / ${{ matrix.domain }} / ${{ matrix.lane }}
     needs: [validation-plan, other-platform-native-wheel]
-    # Only shared consumers wait for native inputs. A completed Stage1 export
-    # remains valid if an unrelated later producer gate fails.
-    if: ${{ !cancelled() && needs.validation-plan.result == 'success' && needs.validation-plan.outputs.source_shared == 'true' }}
+    # Only native-dependent source lanes wait for the existing Stage1 inputs.
+    # A completed export remains valid if an unrelated later producer gate fails.
+    if: ${{ !cancelled() && needs.validation-plan.result == 'success' && needs.validation-plan.outputs.source_native == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -706,7 +708,7 @@ jobs:
       actions: read
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.validation-plan.outputs.matrix_shared) }}
+      matrix: ${{ fromJSON(needs.validation-plan.outputs.matrix_native) }}
     env:
       PCC_NO_AUTO_PCC1: "1"
       PCC_TEST_NO_NATIVE_PROVISIONING: "1"
@@ -729,6 +731,7 @@ jobs:
       - name: Install frozen host test dependencies only
         run: uv sync --frozen --dev --no-install-project
       - name: Install the pinned official Rust compiler and both checked targets
+        if: ${{ matrix.domain == 'shared' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -738,7 +741,7 @@ jobs:
           echo "PCC_CI_RUST_TOOLCHAIN=1.91.1" >> "$GITHUB_ENV"
       - name: Bind actual available reference tools and Rust target sysroot
         run: uv run --frozen --no-sync python scripts/ci_validation_tools.py --domain "${{ matrix.domain }}" --out "$RUNNER_TEMP/reference-tools"
-      - name: Download this run attempt's existing shared-source native inputs
+      - name: Download this run attempt's existing source native inputs
         uses: actions/download-artifact@v7
         with:
           name: stage1-native-linux-x86_64-${{ github.sha }}-${{ github.run_attempt }}
@@ -1201,7 +1204,7 @@ jobs:
 
   other-platform-native-wheel:
     needs: validation-plan
-    if: ${{ needs.validation-plan.outputs.legacy == 'true' && (!inputs.full_chain || inputs.pytest_selection == 'not integration') }}
+    if: ${{ needs.validation-plan.outputs.native_stage1 == 'true' && (!inputs.full_chain || inputs.pytest_selection == 'not integration') }}
     name: Native wheel / ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 360
@@ -1213,11 +1216,7 @@ jobs:
       PCC_PY_FRONTEND_WORKER_TIMING: "1"
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - { platform: linux-x86_64, runner: ubuntu-24.04, docker_platform: linux/amd64 }
-          - { platform: linux-aarch64, runner: ubuntu-24.04-arm, docker_platform: linux/arm64 }
-          - { platform: windows-x86_64, runner: windows-2022 }
+      matrix: ${{ fromJSON(needs.validation-plan.outputs.matrix_native_stage1) }}
     steps:
       - uses: actions/checkout@v5
 
@@ -1227,6 +1226,7 @@ jobs:
           python-version-file: .python-version
 
       - name: Install wheel-build tools
+        if: ${{ needs.validation-plan.outputs.legacy == 'true' }}
         run: python -m pip install build hatchling
 
       - name: Set up uv
@@ -1240,6 +1240,7 @@ jobs:
         run: uv sync --frozen --dev
 
       - name: Verify host Stage2 export-retention, AArch64 call-emission, and ELF assembly contracts
+        if: ${{ needs.validation-plan.outputs.legacy == 'true' }}
         run: uv run --frozen --no-sync python -m pytest -x -q tests/python/test_stage2_export_capture.py tests/python/test_aarch64_call_target_reuse.py tests/python/test_x86_jump_threading.py tests/python/test_owned_elf_assembler_dispatch.py tests/python/test_elf_arm_branch_slot_defaults.py tests/python/test_gc_phase_attribution.py tests/python/test_gc_phase_counter_widths.py tests/test_ci_native_object_regressions.py tests/test_ci_native_ordering_gate.py tests/python/test_user_ordering_exhaustion.py ${{ matrix.platform == 'linux-x86_64' && 'tests/test_ci_stage1_artifact_export.py tests/python/test_gc4_copy_page_probe_native.py tests/python/test_gc_relocation_membership_lifecycle.py tests/python/test_gc_remembered_membership_lifecycle.py tests/python/test_gc_remembered_membership_native.py tests/python/test_owned_runtime_pass_prefix.py tests/python/test_pipeline_ir_split.py tests/python/test_pipeline_ir_frame_maps.py tests/python/test_x86_64_branch_syntax_cache.py tests/python/test_x86_64_instruction_encoding_cache.py tests/python/test_x86_64_instruction_encoding_cache_lowering.py tests/python/test_x86_64_operand_cache.py' || '' }}
 
       # Stage1 is built once. The local five-node owner below exposes later
@@ -1366,11 +1367,11 @@ jobs:
       # immutable Stage1 bytes are admitted in place; no native provisioning.
       - name: Stage2 to Stage3 / five original bootstrap owners
         id: bootstrap_owner
-        if: ${{ !cancelled() && steps.stage1_export.outcome == 'success' && !inputs.full_chain && inputs.pytest_selection != 'not integration' }}
+        if: ${{ !cancelled() && needs.validation-plan.outputs.legacy == 'true' && steps.stage1_export.outcome == 'success' && !inputs.full_chain && inputs.pytest_selection != 'not integration' }}
         run: uv run --frozen --no-sync python scripts/ci_pytest_markers.py --marker integration --partition bootstrap --in-place --platform ${{ matrix.platform }} --bundle build/stage1-native-export --out build/bootstrap-owner
 
       - name: Preserve platform-local bootstrap owner and consumed budget
-        if: ${{ !cancelled() && (steps.bootstrap_owner.outcome == 'success' || steps.bootstrap_owner.outcome == 'failure') }}
+        if: ${{ !cancelled() && needs.validation-plan.outputs.legacy == 'true' && (steps.bootstrap_owner.outcome == 'success' || steps.bootstrap_owner.outcome == 'failure') }}
         uses: actions/upload-artifact@v6
         with:
           name: bootstrap-owner-${{ matrix.platform }}-${{ github.sha }}-${{ github.run_attempt }}
@@ -1380,7 +1381,7 @@ jobs:
 
       - name: Verify the compiled sibling platform machine provider
         id: machine_provider
-        if: ${{ !cancelled() && steps.platform_runtime.outputs.ready == 'true' }}
+        if: ${{ !cancelled() && needs.validation-plan.outputs.legacy == 'true' && steps.platform_runtime.outputs.ready == 'true' }}
         env:
           PCC_RUNTIME_ARCHIVE: ${{ steps.platform_runtime.outputs.archive }}
           PCC_TEST_NO_NATIVE_PROVISIONING: "1"
@@ -1388,7 +1389,7 @@ jobs:
 
       - name: Verify GC4 relocation with one mutator in the admitted threaded runtime
         id: gc4_relocation
-        if: ${{ !cancelled() && startsWith(matrix.platform, 'linux-') && steps.platform_runtime.outputs.ready == 'true' }}
+        if: ${{ !cancelled() && needs.validation-plan.outputs.legacy == 'true' && startsWith(matrix.platform, 'linux-') && steps.platform_runtime.outputs.ready == 'true' }}
         timeout-minutes: 6
         shell: uv run --frozen --no-sync python {0}
         env:
@@ -1420,7 +1421,7 @@ jobs:
         id: native_objects
         # A terminal Stage1 attempt is enough to reuse its admitted runtime.
         # Missing admission is a hard failure in this separate pcc0 gate.
-        if: ${{ !cancelled() && (steps.platform_qualification.outcome == 'success' || steps.platform_qualification.outcome == 'failure') }}
+        if: ${{ !cancelled() && needs.validation-plan.outputs.legacy == 'true' && (steps.platform_qualification.outcome == 'success' || steps.platform_qualification.outcome == 'failure') }}
         timeout-minutes: 6
         env:
           PCC_RUNTIME_ARCHIVE: ${{ steps.platform_runtime.outputs.archive }}
@@ -1436,7 +1437,7 @@ jobs:
         id: native_ordering
         # This is host-pcc0-emitted execution, not a pcc1 compiler result.
         # Admission/receipt failures remain failures; no runtime is rebuilt.
-        if: ${{ !cancelled() && (steps.platform_qualification.outcome == 'success' || steps.platform_qualification.outcome == 'failure') }}
+        if: ${{ !cancelled() && needs.validation-plan.outputs.legacy == 'true' && (steps.platform_qualification.outcome == 'success' || steps.platform_qualification.outcome == 'failure') }}
         timeout-minutes: 6
         env:
           PCC_RUNTIME_ARCHIVE: ${{ steps.platform_runtime.outputs.archive }}
@@ -1449,7 +1450,7 @@ jobs:
         run: uv run --frozen --no-sync python scripts/ci_native_ordering_gate.py --out-dir build/worker-prior-gate
 
       - name: Verify the new pcc1 on native prior worker shapes
-        if: ${{ !cancelled() && steps.platform_qualification.outcome == 'success' && steps.platform_runtime.outcome == 'success' && steps.stage1_export.outcome == 'success' && steps.stage1_bundle.outcome == 'success' && steps.machine_provider.outcome == 'success' && (steps.gc4_relocation.outcome == 'success' || steps.gc4_relocation.outcome == 'skipped') && steps.native_objects.outcome == 'success' && steps.native_ordering.outcome == 'success' }}
+        if: ${{ !cancelled() && needs.validation-plan.outputs.legacy == 'true' && steps.platform_qualification.outcome == 'success' && steps.platform_runtime.outcome == 'success' && steps.stage1_export.outcome == 'success' && steps.stage1_bundle.outcome == 'success' && steps.machine_provider.outcome == 'success' && (steps.gc4_relocation.outcome == 'success' || steps.gc4_relocation.outcome == 'skipped') && steps.native_objects.outcome == 'success' && steps.native_ordering.outcome == 'success' }}
         id: native_prior
         run: uv run --frozen --no-sync python scripts/ci_worker_size_prior_gate.py --out-dir build/worker-prior-gate --phase pcc1
 
@@ -1457,7 +1458,7 @@ jobs:
         id: bound_find
         # Prior retains its original budget and runs first. Its failure does
         # not suppress this separate shape qualification after Stage1 passes.
-        if: ${{ !cancelled() && steps.platform_qualification.outcome == 'success' }}
+        if: ${{ !cancelled() && needs.validation-plan.outputs.legacy == 'true' && steps.platform_qualification.outcome == 'success' }}
         timeout-minutes: 6
         env:
           PCC_TEST_NO_NATIVE_PROVISIONING: "1"
@@ -1525,19 +1526,19 @@ jobs:
       # a 10-minute budget that a Stage1 build cannot fit. GITHUB_ENV reaches
       # only later steps, so the handoff is its own step.
       - name: Hand the Stage1 pcc1 to the wheel build
-        if: ${{ !cancelled() && steps.native_prior.outcome == 'success' && steps.bound_find.outcome == 'success' && steps.qualification_evidence.outcome == 'success' }}
+        if: ${{ !cancelled() && needs.validation-plan.outputs.legacy == 'true' && steps.native_prior.outcome == 'success' && steps.bound_find.outcome == 'success' && steps.qualification_evidence.outcome == 'success' }}
         id: wheel_handoff
         run: uv run --frozen --no-sync python scripts/ci_stage1_compiler.py
 
       - name: Build this machine's native wheel
-        if: ${{ !cancelled() && steps.wheel_handoff.outcome == 'success' }}
+        if: ${{ !cancelled() && needs.validation-plan.outputs.legacy == 'true' && steps.wheel_handoff.outcome == 'success' }}
         id: build
         run: python -m build --wheel --no-isolation --outdir dist
 
       # The images install the wheel on the requires-python floor (3.13);
       # every other step runs the interpreter .python-version names.
       - name: Install and execute the Linux wheel inside Docker
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && startsWith(matrix.platform, 'linux-') }}
+        if: ${{ !cancelled() && needs.validation-plan.outputs.legacy == 'true' && steps.build.outcome == 'success' && startsWith(matrix.platform, 'linux-') }}
         shell: bash
         run: |
           docker info --format '{{.OSType}} {{.Architecture}}'
@@ -1549,7 +1550,7 @@ jobs:
             python scripts/ci_native_wheel_gate.py dist
 
       - name: Install and execute the Windows wheel inside Docker
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.platform == 'windows-x86_64' }}
+        if: ${{ !cancelled() && needs.validation-plan.outputs.legacy == 'true' && steps.build.outcome == 'success' && matrix.platform == 'windows-x86_64' }}
         shell: pwsh
         run: |
           $service = Get-Service docker -ErrorAction SilentlyContinue
@@ -1562,7 +1563,7 @@ jobs:
             python scripts/ci_native_wheel_gate.py dist
 
       - name: Install wheel and execute native output on the runner
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && needs.validation-plan.outputs.legacy == 'true' && steps.build.outcome == 'success' }}
         run: python scripts/ci_native_wheel_gate.py dist
 
   pcc1-package-parity:

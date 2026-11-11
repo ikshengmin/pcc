@@ -887,13 +887,22 @@ def test_campaign_saves_failed_batch_before_deciding_independent_continuation(tm
         assert not receipt["batches"][0]["continue_independent_batches"]
 
 
+@pytest.mark.parametrize("domain,lane", [("shared", "ordinary"), ("cpp", "integration")])
 @pytest.mark.parametrize("fault", ["resource", "missing-finish", "missing-module"])
-def test_collection_abort_keeps_completed_shards_and_never_admits_test_bodies(tmp_path, monkeypatch, fault):
+def test_collection_abort_keeps_completed_shards_and_never_admits_test_bodies(tmp_path, monkeypatch, fault, domain, lane):
     """Orchestration model only: guard and identities are not executed."""
     from scripts import ci_validation_native_inputs as native
     native_state = {"fixture": "transport admission is separately tested"}
-    monkeypatch.setattr(native, "admit", lambda *a, **k: (native_state, {}))
-    monkeypatch.setattr(native, "verify_after", lambda *a: native_state)
+    admissions, verified = [], []
+    def admit(root, bundle, **options):
+        admissions.append(options)
+        return native_state, {"PCC_PLATFORM_TEST_COMPILER": "verified-stage1-fixture"}
+    def verify_after(root, state):
+        verified.append(state)
+        return state
+    monkeypatch.setattr(native, "admit", admit)
+    monkeypatch.setattr(native, "verify_after", verify_after)
+    monkeypatch.delenv("PCC_TEST_COMPILER", raising=False)
     root = tmp_path / "source"
     root.mkdir()
     (root / "pyproject.toml").write_text(
@@ -916,6 +925,8 @@ def test_collection_abort_keeps_completed_shards_and_never_admits_test_bodies(tm
         attempts.append(directory.name)
         assert directory.name.startswith("collection-")
         assert "PCC_VALIDATION_SELECTION" not in environment
+        assert environment["PCC_PLATFORM_TEST_COMPILER"] == "verified-stage1-fixture"
+        assert "PCC_TEST_COMPILER" not in environment
         assert "--collect-only" in command and "-n0" in command
         shard = json.loads(Path(environment["PCC_VALIDATION_COLLECTION"]).read_text())
         witness, events, code = _collection_reports(directory, shard, [row(path, 0) for path in shard])
@@ -931,8 +942,10 @@ def test_collection_abort_keeps_completed_shards_and_never_admits_test_bodies(tm
 
     monkeypatch.setattr(run, "run_guard", guarded)
     out = tmp_path / "campaign"
-    assert run.run(SimpleNamespace(domain="shared", lane="ordinary", out=out,
+    assert run.run(SimpleNamespace(domain=domain, lane=lane, out=out,
                                    stage1_bundle=tmp_path / "modeled-stage1-bundle")) == 1
+    assert admissions == [{"domain": domain, "lane": lane}] and verified == [native_state]
+    assert json.loads((out / "native-inputs-after.json").read_text()) == native_state
     receipt = json.loads((out / "receipt.json").read_text())
     assert attempts == ["collection-000", "collection-001"]
     assert receipt["status"] == "INFRASTRUCTURE_OR_RESOURCE_FAILURE" and receipt["batches"] == []
@@ -1087,3 +1100,22 @@ def test_pinned_rust_selection_precedes_any_default_proxy_observation(monkeypatc
     monkeypatch.setattr(tools, "execute", execute)
     assert tools.selected_rustc_invocation() == "/toolchains/1.91.1/bin/rustc"
     assert calls == [["rustup", "which", "--toolchain", "1.91.1", "rustc"]]
+
+
+@pytest.mark.parametrize("domain,lane", [("shared", lane) for lane in plan.LANES] + [("cpp", "integration")])
+def test_native_source_lane_without_bundle_stops_before_tools_or_collection(tmp_path, monkeypatch, domain, lane):
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "pyproject.toml").write_text(
+        '[tool.pytest.ini_options]\naddopts="-n 6 --dist=loadgroup -m \'not integration\'"\n')
+    monkeypatch.setattr(run, "ROOT", root)
+    monkeypatch.setattr(run, "identity", lambda: {"sha": "fixture-source", "files": {}})
+    monkeypatch.setenv("GITHUB_SHA", "fixture-source")
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.setattr(run, "modules", lambda *a: pytest.fail("missing bundle reached collection"))
+    out = tmp_path / "campaign"
+    assert run.run(SimpleNamespace(domain=domain, lane=lane, out=out)) == 1
+    receipt = json.loads((out / "receipt.json").read_text())
+    assert receipt["status"] == "INFRASTRUCTURE_OR_RESOURCE_FAILURE"
+    assert "requires an explicit same-run Stage1 bundle" in receipt["error"]
+    assert receipt["collections"] == receipt["batches"] == []
