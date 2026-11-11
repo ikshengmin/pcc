@@ -1,13 +1,27 @@
 from __future__ import annotations
 
-"""Frontend extraction for the first pcc GPU kernel subset."""
+"""Frontend extraction and host launch wiring for ``@gpu.kernel`` functions.
+
+A kernel is lowered to validated Kernel IR and from there to Metal source.
+The host side of the module loses the kernel definitions and gains generated
+launchers that call the owned Metal device runtime; see ``gpu_host_launch``.
+No Metal toolchain, metallib or Objective-C bridge is involved.
+"""
 
 import ast
+import hashlib
 import math
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Sequence
 
-from pcc.backend.metal import compile_air_to_metallib, compile_metal_source_to_air
+from pcc.kernel_ir.gpu_host_launch import (
+    GpuHostLaunchError,
+    GpuKernelLaunch,
+    GpuLaunchBinding,
+    launcher_name,
+    render_launch_prelude,
+)
 from pcc.kernel_ir.ir import (
     BufferParam,
     KernelFunc,
@@ -17,7 +31,11 @@ from pcc.kernel_ir.ir import (
     ScalarType,
     validate_kernel,
 )
-from pcc.kernel_ir.metal_finalize import emit_metal_source
+from pcc.kernel_ir.metal_finalize import (
+    emit_metal_source,
+    metal_device_entry_name,
+    metal_kernel_bindings,
+)
 
 
 class GpuKernelError(ValueError):
@@ -26,10 +44,12 @@ class GpuKernelError(ValueError):
 
 @dataclass(frozen=True)
 class GpuKernelArtifact:
+    """One lowered kernel: its inspectable Metal source and launch record."""
+
     name: str
     metal_path: Path
-    air_path: Path
-    metallib_path: Path
+    source_sha256: str
+    launch: GpuKernelLaunch
 
 
 _TYPE_MAP = {
@@ -39,6 +59,37 @@ _TYPE_MAP = {
     "f32": "f32",
 }
 
+_LAUNCH_MARKER = "pcc_metal_device_launch_packet"
+_DEMO_MARKER = "gpu.run_add_f32_demo()"
+
+
+def host_source_launches_gpu(source: str) -> bool:
+    """Whether prepared host source calls the device runtime and must link it."""
+    return _LAUNCH_MARKER in source
+
+
+def lower_function_to_launch(fn: ast.FunctionDef) -> GpuKernelLaunch:
+    """Lower one kernel and describe how the host launches it."""
+    kernel_ir = lower_function_to_kernel_ir(fn)
+    func = kernel_ir.funcs[0]
+    bindings = tuple(
+        GpuLaunchBinding(
+            name=record["name"],
+            kind=record["kind"],
+            dtype=record["dtype"],
+            index=record["index"],
+            written=record["written"],
+        )
+        for record in metal_kernel_bindings(kernel_ir, func.name)
+    )
+    return GpuKernelLaunch(
+        name=fn.name,
+        entry=metal_device_entry_name(func.name),
+        source="// pcc route: Kernel IR -> TIRx -> Metal\n" + emit_metal_source(kernel_ir),
+        bindings=bindings,
+        threads=func.threads,
+    )
+
 
 def prepare_gpu_kernels_for_source(
     source: str,
@@ -46,8 +97,12 @@ def prepare_gpu_kernels_for_source(
     *,
     backend: str,
     artifact_dir: str | Path,
-    metallib_path: str | Path,
 ) -> tuple[str, list[GpuKernelArtifact]]:
+    """Lower every kernel and return the host source that launches them.
+
+    Each kernel's Metal source is also written to ``artifact_dir`` for
+    inspection; the program itself carries the source and needs no sidecar.
+    """
     if backend != "metal":
         return source, []
     module = ast.parse(source, filename=src_path)
@@ -60,29 +115,29 @@ def prepare_gpu_kernels_for_source(
 
     out_dir = Path(artifact_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    staged = []
+    artifacts = []
     for kernel in kernels:
-        metal_source = lower_function_to_metal(kernel)
+        launch = lower_function_to_launch(kernel)
         metal_path = out_dir / (kernel.name + ".metal")
-        air_path = out_dir / (kernel.name + ".air")
-        metal_path.write_text(metal_source, encoding="utf-8")
-        compile_metal_source_to_air(metal_source, air_path)
-        staged.append((kernel.name, metal_path, air_path))
-
-    library_path = compile_air_to_metallib(
-        [air_path for _name, _metal_path, air_path in staged],
-        metallib_path,
-    )
-    artifacts = [
-        GpuKernelArtifact(
-            name=name,
-            metal_path=metal_path,
-            air_path=air_path,
-            metallib_path=library_path,
+        metal_path.write_text(launch.source, encoding="utf-8")
+        artifacts.append(
+            GpuKernelArtifact(
+                name=kernel.name,
+                metal_path=metal_path,
+                source_sha256=hashlib.sha256(
+                    launch.source.encode("utf-8")
+                ).hexdigest(),
+                launch=launch,
+            )
         )
-        for name, metal_path, air_path in staged
-    ]
-    return strip_gpu_kernel_host_source(source, module), artifacts
+    host = strip_gpu_kernel_host_source(source, module)
+    try:
+        host = rewrite_gpu_host_launch_calls(
+            host, [artifact.launch for artifact in artifacts]
+        )
+    except GpuHostLaunchError as exc:
+        raise GpuKernelError(str(exc)) from exc
+    return host, artifacts
 
 
 def source_contains_gpu_kernel(source: str, src_path: str = "<string>") -> bool:
@@ -94,6 +149,7 @@ def source_contains_gpu_kernel(source: str, src_path: str = "<string>") -> bool:
 
 
 def strip_gpu_kernel_host_source(source: str, module: ast.Module) -> str:
+    """Remove kernel definitions and ``pcc.gpu`` imports from host source."""
     remove_ranges = []
     for node in module.body:
         if isinstance(node, ast.FunctionDef) and _is_gpu_kernel(node):
@@ -113,21 +169,88 @@ def strip_gpu_kernel_host_source(source: str, module: ast.Module) -> str:
     for line_no, line in enumerate(source.splitlines(), 1):
         if line_no not in remove:
             kept.append(line)
-    stripped = "\n".join(kept) + "\n"
-    return rewrite_gpu_host_launch_calls(stripped)
+    return "\n".join(kept) + "\n"
 
 
-def rewrite_gpu_host_launch_calls(source: str) -> str:
-    marker = "gpu.run_add_f32_demo()"
-    if marker not in source:
-        return source
-    rewritten = source.replace(marker, "__pcc_gpu_run_add_f32_demo()")
-    prelude = (
-        "from pcc.extern import extern, c_int64\n"
-        "__pcc_gpu_run_add_f32_demo = extern("
-        "\"pcc_metal_demo_add_f32\", (), c_int64)\n"
+def _launch_call_edit(
+    call: ast.Call,
+    encoded: bytes,
+    line_starts: list[int],
+    kernels: dict[str, GpuKernelLaunch],
+) -> tuple[int, int, bytes]:
+    """The byte span ``gpu.launch(<kernel>,`` and the launcher call head for it."""
+    if not call.args or not isinstance(call.args[0], ast.Name):
+        raise GpuKernelError(
+            "gpu.launch: the first argument must name a @gpu.kernel function "
+            "defined in this module"
+        )
+    name = call.args[0].id
+    kernel = kernels.get(name)
+    if kernel is None:
+        raise GpuKernelError(
+            f"gpu.launch: {name!r} is not a @gpu.kernel function in this module"
+        )
+    if any(isinstance(arg, ast.Starred) for arg in call.args):
+        raise GpuKernelError("gpu.launch: starred arguments are not supported")
+    if len(call.keywords) != 1 or call.keywords[0].arg != "count":
+        raise GpuKernelError(
+            "gpu.launch: pass the number of threads as the only keyword, count=..."
+        )
+    supplied = len(call.args) - 1
+    if supplied != len(kernel.bindings):
+        raise GpuKernelError(
+            f"gpu.launch: kernel {name!r} takes {len(kernel.bindings)} "
+            f"arguments, {supplied} were given"
+        )
+    first = call.args[0]
+    start = line_starts[call.func.lineno - 1] + call.func.col_offset
+    end = line_starts[(first.end_lineno or first.lineno) - 1] + (
+        first.end_col_offset or 0
     )
-    return prelude + rewritten
+    while encoded[end:end + 1] in (b" ", b"\t", b"\r", b"\n"):
+        end += 1
+    if encoded[end:end + 1] != b",":
+        raise GpuKernelError(
+            "gpu.launch: write the kernel name directly followed by a comma"
+        )
+    end += 1
+    # Keep the removed newlines so later host lines keep their numbers.
+    newlines = b"\n" * encoded[start:end].count(b"\n")
+    return start, end, launcher_name(name).encode("utf-8") + b"(" + newlines
+
+
+def rewrite_gpu_host_launch_calls(
+    source: str, kernels: Sequence[GpuKernelLaunch] = ()
+) -> str:
+    """Turn ``gpu.launch`` calls into generated launcher calls.
+
+    Source that launches nothing is returned unchanged. Otherwise the launch
+    helper and one launcher per kernel are prepended, so the result is still a
+    single module.
+    """
+    uses_demo = _DEMO_MARKER in source
+    calls = [
+        node for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call) and _is_gpu_attr(node.func, "launch")
+    ]
+    if not calls and not uses_demo:
+        return source
+    by_name = {kernel.name: kernel for kernel in kernels}
+    encoded = source.encode("utf-8")
+    line_starts = [0]
+    for index, byte in enumerate(encoded):
+        if byte == 10:
+            line_starts.append(index + 1)
+    edits = sorted(
+        (_launch_call_edit(call, encoded, line_starts, by_name) for call in calls),
+        reverse=True,
+    )
+    for start, end, replacement in edits:
+        encoded = encoded[:start] + replacement + encoded[end:]
+    rewritten = encoded.decode("utf-8")
+    if uses_demo:
+        rewritten = rewritten.replace(_DEMO_MARKER, "__pcc_gpu_run_add_f32_demo()")
+    return render_launch_prelude(kernels, add_demo=uses_demo) + rewritten
 
 
 def lower_function_to_metal(fn: ast.FunctionDef) -> str:

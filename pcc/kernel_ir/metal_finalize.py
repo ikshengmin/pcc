@@ -2042,6 +2042,46 @@ def emit_metal_simdgroup_gemm_source(module: KernelModule | PlainTirModule) -> s
     return "\n".join(lines)
 
 
+def metal_kernel_bindings(
+    module: KernelModule | PlainTirModule,
+    entry: str,
+) -> tuple[dict[str, Any], ...]:
+    """Buffer-table bindings of one kernel as ``emit_metal_source`` declares them.
+
+    One record per parameter, in order: ``name``, ``kind`` (``buffer`` or
+    ``scalar``), ``dtype``, the ``index`` of its ``[[buffer(index)]]`` slot and
+    whether the kernel writes it. A host launcher must bind exactly these.
+    """
+    plain = (
+        module if isinstance(module, PlainTirModule)
+        else lower_to_plain_tir(module, target="metal")
+    )
+    for func in plain.funcs:
+        if func.get("name") != entry:
+            continue
+        written = _written_buffer_names(func)
+        records = []
+        for index, param in enumerate(_func_param_dicts(func)):
+            kind = param.get("kind")
+            name = param.get("name")
+            dtype = param.get("dtype")
+            if (
+                kind not in ("buffer", "scalar")
+                or not isinstance(name, str)
+                or not isinstance(dtype, str)
+            ):
+                raise MetalFinalizeError(f"bad parameter record {param!r}")
+            records.append({
+                "name": name,
+                "kind": kind,
+                "dtype": dtype,
+                "index": index,
+                "written": kind == "buffer" and name in written,
+            })
+        return tuple(records)
+    raise MetalFinalizeError(f"kernel {entry!r} is not in the module")
+
+
 def emit_metal_source(module: KernelModule | PlainTirModule) -> str:
     """Emit minimal, compilable Metal source for the supported plain-TIR subset.
 

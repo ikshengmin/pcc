@@ -255,8 +255,8 @@ def _load_pcc_kernel_ir_entry_module():
     return importlib.import_module("pcc.kernel_ir.entry")
 
 
-def _load_pcc_backend_metal_module():
-    return importlib.import_module("pcc.backend.metal")
+def _load_pcc_gpu_runtime_host_module():
+    return importlib.import_module("pcc.gpu_runtime.metal_host")
 
 
 def _resolve_pcc_dir_from_environment() -> str:
@@ -2507,7 +2507,7 @@ def _compile_python_routed(
     gpu_source = None
     gpu_source_has_kernels = False
     gpu_artifact_dir: Optional[str] = None
-    gpu_metallib_path: Optional[str] = None
+    gpu_links_device_runtime = False
     if gpu_backend_kind == "metal":
         with open(src_path, "r", encoding="utf-8") as f:
             gpu_source = f.read()
@@ -2655,20 +2655,20 @@ def _compile_python_routed(
 
         artifact_dir = str(out_path) + ".gpu"
         gpu_artifact_dir = artifact_dir
-        metallib_path = str(out_path) + ".metallib"
-        gpu_metallib_path = metallib_path
         try:
             source, gpu_artifacts = prepare_gpu_kernels_for_source(
                 source,
                 src_path,
                 backend=gpu_backend_kind,
                 artifact_dir=artifact_dir,
-                metallib_path=metallib_path,
             )
         except Exception as exc:
             raise PyPipelineError(
                 "Metal GPU kernel lowering failed: " + str(exc)
             ) from exc
+        # The generated host launchers call the owned device runtime by this
+        # symbol; a module that only defines kernels links nothing extra.
+        gpu_links_device_runtime = "pcc_metal_device_launch_packet" in source
         _profile_counter(profile, "gpu_kernels", len(gpu_artifacts))
         _profile_end(profile, "gpu_kernel_lowering", t)
 
@@ -2804,41 +2804,29 @@ def _compile_python_routed(
     _profile_end(profile, "ensure_runtime", t)
     extra_link_inputs: tuple[str, ...] = object_inputs
     extra_link_args: tuple[str, ...] = tuple(link_args)
-    if gpu_source_has_kernels and gpu_backend_kind == "metal":
+    if gpu_links_device_runtime and gpu_backend_kind == "metal":
+        # The device runtime is a freestanding pcc-Python module compiled to
+        # one object here. It reaches Metal through the dynamic loader, so the
+        # link needs no framework, metallib section or external tool.
         if gpu_artifact_dir is None:
             gpu_artifact_dir = str(out_path) + ".gpu"
         t = _profile_begin(profile)
-        compile_metal_runtime_bridge = getattr(
-            _load_pcc_backend_metal_module(),
-            "compile_metal_runtime_bridge",
+        build_device_runtime_object = getattr(
+            _load_pcc_gpu_runtime_host_module(),
+            "build_device_runtime_object",
         )
 
         try:
-            metal_bridge_obj = compile_metal_runtime_bridge(
-                os.path.join(gpu_artifact_dir, "pcc_metal_runtime.o"),
+            metal_device_obj = build_device_runtime_object(
+                gpu_artifact_dir,
+                target_triple=target_triple or _pipeline_targets.host_target_triple(),
             )
         except Exception as exc:
             raise PyPipelineError(
-                "Metal GPU host bridge compile failed: " + str(exc)
+                "Metal device runtime build failed: " + str(exc)
             ) from exc
-        extra_link_inputs = extra_link_inputs + (str(metal_bridge_obj),)
-        if gpu_metallib_path is None:
-            gpu_metallib_path = str(out_path) + ".metallib"
-        extra_link_args = extra_link_args + (
-            "-Xlinker",
-            "-sectcreate",
-            "-Xlinker",
-            "__PCCMETAL",
-            "-Xlinker",
-            "__metallib",
-            "-Xlinker",
-            str(gpu_metallib_path),
-            "-framework",
-            "Foundation",
-            "-framework",
-            "Metal",
-        )
-        _profile_end(profile, "gpu_metal_bridge_compile", t)
+        extra_link_inputs = extra_link_inputs + (str(metal_device_obj),)
+        _profile_end(profile, "gpu_metal_device_runtime", t)
     if native_backend == "self" and _self_backend_skip_ll_temp():
         if verbose:
             _log(
