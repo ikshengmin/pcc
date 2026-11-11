@@ -1,6 +1,6 @@
 # PCC current status
 
-Updated 2026-11-03. Source: `ikshengmin/pcc` master (`shenming` remote).
+Updated 2026-11-12. Source: `ikshengmin/pcc` master (`shenming` remote).
 Durable receipts for this period (patches, profiles, A/B scripts, repros):
 `/Users/jiamo/pcc-recovery-archive/2026-10-13/README.md`; the 2026-10-21
 handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10-07 status
@@ -12,7 +12,8 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 Metal is the first GPU device. `pcc/gpu_runtime/metal_device.py` is a
 freestanding pcc-Python host runtime that reaches Metal through
 `objc_msgSend` typed C ABI calls: no Objective-C source, prebuilt bridge,
-`ctypes` adapter or external compiler. Source: `9f3357d1e` (device contract),
+`ctypes` adapter or external host compiler. Device compilation still uses
+Apple's system Metal compiler. Source: `9f3357d1e` (device contract),
 `d51b2bb30` (launch packets, launcher process, Kernel IR adapter),
 `69c9c6f02` (explicit Metal language version, simdgroup GEMM).
 
@@ -42,6 +43,68 @@ were not run. Asynchronous launch with a fence, no-copy buffers, the remaining
 Kernel IR shapes on this path and any model runtime are open. The older
 `pcc-metal` path still uses its Objective-C bridge. Design and milestones:
 [local-model architecture](design/pcc-local-model-architecture.md).
+
+### Public annotated-kernel CLI (local Mac, 2026-11-12)
+
+Source: `8c4e17e79` wires `@gpu.kernel` / `gpu.launch` into the owned device;
+`acad51eff` fixes argument validation and adds executed regression gates;
+`4be097a7b` migrates the old CLI tests to the embedded-source route.
+The actual route is `pcc/kernel_ir/entry.py` -> generated host wrappers in
+`gpu_host_launch.py` -> `pipeline.py` linking `metal_device.o` -> synchronous
+`pcc_metal_device_launch_packet` in the same native executable. It embeds MSL,
+not an offline `.air` or `.metallib`; inspection `.metal` files are not runtime
+inputs. This does not replace pcc-gui's render bridge or the legacy reference
+runners, and is not owned GPU machine-code generation.
+
+Executed with host-pcc0/self, a provenance-verified isolated runtime and strict
+hardware checks on Darwin arm64:
+
+- `tests/gpu_hardware/test_gpu_kernel_launch.py`: **5 passed**, each binary run
+  under observed GC0–4. SAXPY covers scalar f32, branches, a 257-element partial
+  threadgroup, bytearray readback and a tail canary, against a CPU oracle.
+  The binary also runs after hiding its inspection sidecars, and its linked
+  libraries exclude libpython/LLVM.
+- Rejected arguments include unsupported buffer types, immutable outputs,
+  empty/misaligned buffers, out-of-range u32 and nonpositive launch counts.
+  Writable aliases are rejected before dispatch; read-only aliases work.
+  Independent copied bindings do not preserve writable aliasing.
+- The real compile/link test denies `subprocess.Popen` with an already verified
+  runtime. Native f32 packing matches `ctypes.c_float`, including signed zero,
+  infinities, overflow, subnormals and halfway rounding.
+- The final selected affected-directory run is **561 passed**, six workers,
+  with durable node logs and the shared-lock process-tree guard (600 s, 3 GiB).
+  It includes the offline Metal reference, ten metallib-package tests, both
+  executable TileLang loop cases and the TileLang row-reduction case. These
+  legacy external-tool references are not owned-route qualification.
+  Only the MLX DLPack node is collection-gated (MLX is not installed); four
+  pcc1-dependent files were explicitly left unrun. This is not an all-gates
+  or full-Python-suite result.
+- The initial missing-toolchain failure and the subsequent old-linker/new-SDK
+  mismatch are resolved, not waived. The final reference run uses matching
+  Xcode 27.2 (27B52), macOS SDK 27.2 and the officially installed Metal Toolchain
+  27B47 (metalfe 32023.922.4), selected with `DEVELOPER_DIR` and `SDKROOT`.
+  The owned route passed both before and after that installation.
+
+Focused repro (set `RUNTIME` to a provenance-verified owned archive; the run
+must retain the shared performance lock and process-tree RSS/time guard):
+
+```bash
+PCC_NO_AUTO_PCC1=1 PCC_TEST_NO_NATIVE_PROVISIONING=1 \
+PCC_GPU_HARDWARE_STRICT=1 PCC_RUNTIME_ARCHIVE="$RUNTIME" \
+uv run pytest -x -vv -rP -m integration tests/gpu_hardware/test_gpu_kernel_launch.py
+```
+
+The directory selection was `tests/kernel tests/gpu_hardware
+ tests/python/test_gpu_metal.py tests/python/test_direct_indexed_route_default.py`
+and the two `test_gpu_backend_metal_*` CLI nodes, with `-m ''`. It explicitly
+ignored `test_metal_pcc1_launch_real.py`, `test_metal_5gc_lifetime_real.py`,
+`test_metal_dlpack_pcc1.py` and `test_metal_dlpack_5gc.py` under
+`tests/gpu_hardware/`. The final run includes the formerly failing offline
+reference; reproducing its external-tool lane requires the matching Xcode/SDK
+selection above, unlike the owned focused gate.
+No pcc1 bootstrap was run for this batch. Synchronous execution under five
+collectors is **not** pcc1 compilation, moving-resource stress or asynchronous
+fence-lifetime qualification. M2 and later local-model milestones remain open.
 
 ## Gateway Web Frameworks Benchmark: native request path
 

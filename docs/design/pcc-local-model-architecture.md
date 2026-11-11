@@ -1,8 +1,8 @@
 # Local-model mode: architecture for Harness, Strata compatibility and the device layer
 
-Status: proposed architecture, 2026-11-12. Layer 0 and the Kernel IR launch
-path of milestone M1 exist and are executed on a real device; every other
-layer is a specification with no implementation.
+Status: proposed architecture, 2026-11-12. Layer 0, the Kernel IR packet path
+of M1 and the public annotated-kernel CLI of M1a execute on a real device with
+host pcc0. Layers 2–6 remain specifications, not implemented local-model modes.
 Maintainer direction of 2026-11-12, translated: Metal is the first GPU device,
 and the architecture for a local-model mode that supports Strata and Harness
 must be built.
@@ -67,6 +67,11 @@ A whole launch can also travel as one self-describing packet
 and runs the launcher as a child process; `pcc/kernel_ir/metal_device_launch.py`
 encodes a validated Kernel IR launch plan. The packet is the serialized form of
 the packed-argument contract and the unit a result manifest hashes.
+The annotated-kernel CLI instead calls `pcc_metal_device_launch_packet` directly
+inside its native executable; it does not need that child-process adapter.
+The owned host runtime still calls Apple's `newLibraryWithSource:options:error:`:
+`device_owner=pcc-metal-device` names the host adapter, not ownership of the
+system's shader compiler or GPU machine-code generation.
 
 Missing at L0 and required by the layers above: asynchronous launch with a
 completion fence, no-copy buffers over existing pages, a queue per stream, and
@@ -84,6 +89,30 @@ Device code has two legal sources, and a result must say which one ran:
 Either way a kernel is admitted only as a record: source hash, entry function,
 binding signature (index, kind, element type, access), thread and grid policy,
 and a CPU oracle. No CPU oracle means no correctness claim, as today.
+
+#### Public annotated-kernel entry (M1a)
+
+`@gpu.kernel` / `gpu.launch` is a bounded Python frontend to Kernel IR, not
+whole-program GPU execution. `pcc/kernel_ir/entry.py` extracts kernels and
+rewrites launch calls into `gpu_host_launch.py` helpers. The normal Python
+pipeline compiles those helpers and links the owned `metal_device.o`; MSL is
+embedded in the executable, while `.gpu/*.metal` remains inspectable evidence.
+No `.air`, `.metallib`, Objective-C bridge or external host compiler is used
+on this route. The CLI's inspection sidecars may be removed before execution.
+
+The current pointer surface accepts `bytes` and `bytearray` containing f32
+values; writes require `bytearray`. A synchronous launch copies buffers into
+and out of Metal storage. The same buffer may be passed to multiple read-only
+bindings, but any writable alias is rejected: this packet does not yet contain
+an alias-preserving buffer table. These are not no-copy tensor handles.
+
+`tests/gpu_hardware/test_gpu_kernel_launch.py` executes five gates: public-CLI
+SAXPY/readback against a CPU oracle, writable-alias rejection, invalid arguments
+and read-only aliases, real compile/link with subprocess creation denied, and
+native f32 packing against `ctypes.c_float`. Each binary also verifies its
+actual GC0–4 identity. This is host-pcc0/self evidence, not M2 lifetime or pcc1
+qualification. See [current status](../status.md) for the source identities,
+selected-directory results and explicitly unrun/blocked checks.
 
 ### L2 tensors and weights
 
@@ -223,7 +252,8 @@ higher.
 |---|---|---|
 | M0 | Owned Metal device runtime, synchronous launch | `tests/gpu_hardware/test_metal_device_runtime.py` under `PCC_GPU_HARDWARE_STRICT=1`: real launches equal a CPU oracle, including the Kernel IR copy source. Host-pcc0, local Apple silicon. Done 2026-11-12. |
 | M1 | Launch packet and runner; Kernel IR kernels through the owned device | `tests/gpu_hardware/test_metal_device_packet.py` under `PCC_GPU_HARDWARE_STRICT=1`: the copy kernel, the imported scalar GEMM and two simdgroup GEMM shapes run from their validated launch plans with `device_owner=pcc-metal-device` and equal the CPU reference. Host-pcc0. Done 2026-11-12 for those kernels; the other Kernel IR shapes are not yet run on this path. |
-| M2 | pcc1-native and five-GC handle lifetime on the owned device | The same workload from a pcc1-built program and under `PCC_GC_BACKEND=0..4`. |
+| M1a | Public `@gpu.kernel` / `gpu.launch` through the owned device | `tests/gpu_hardware/test_gpu_kernel_launch.py`: five executed gates, CPU/binary32 references and observed GC0–4 identities; embedded-source binaries run without inspection sidecars. Host-pcc0/self, local Darwin arm64, 2026-11-12. No external host compiler with a verified prebuilt runtime. Not pcc1 or asynchronous lifetime evidence. |
+| M2 | pcc1-native and five-GC handle lifetime on the owned device | The workload from a pcc1-built program plus resource-handle lifetime checks under observed GC0–4; merely selecting a collector or running synchronous copies is insufficient. |
 | M3 | Harness local route to an external engine (S1) | One prompt and one tool call through the pcc1-built Harness against a running local server; stopped engine gives `model-unavailable`; no cloud request is made. |
 | M4 | Asynchronous fence, no-copy weights, foreign kernel assets (S4) | A fence-ordered release test; one foreign kernel equal to its CPU oracle. |
 | M5 | One small model in an engine process (topology C) | Token-exact against a CPU oracle; Harness uses it through the M3 client unchanged. |

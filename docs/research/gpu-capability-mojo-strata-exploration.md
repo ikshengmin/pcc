@@ -1,9 +1,11 @@
 # GPU capability exploration: Mojo's route, pcc's current state, and a local-model mode for Harness
 
-Status: exploration, 2026-11-12. Documentation only. No source, test or
-workflow file was changed, and nothing was compiled or executed for this
-document. Every statement about behavior is a source or document reading at
-the revisions listed below, not an execution result.
+Status: historical baseline exploration plus a subsequent owned-route update,
+2026-11-12. The original exploration was documentation-only at `7545dce5a`;
+its source readings and proposed probes are preserved below, not renewed
+execution evidence. Section 2.5 records the later implementation and real-device
+checks. The original "today/current" comparisons in sections 2.1–2.4 and 3
+refer to the baseline, not the current annotated-kernel CLI.
 
 This document does not reorder priorities. `docs/project-intent.md` places
 accelerator execution as breadth that must not displace the self-host, five-GC,
@@ -28,11 +30,11 @@ frontends and the GC program as the active work.
    excludes. Vendor breadth beyond Metal would need pcc-owned emitters for a
    documented device format, not an LLVM backend.
 2. **A narrow, real Metal path with honest claim levels.** pcc lowers a finite
-   kernel subset to Metal Shading Language text and has recorded on-device
-   results for small fixed-shape kernels. It does not own device code
-   generation, its launcher still depends on Objective-C bridges compiled by an
-   external clang, only Metal is modeled, and nothing resembling a model
-   runtime exists.
+   kernel subset to Metal Shading Language text. The later owned runtime and
+   public annotated-kernel CLI execute on-device without the clang-built
+   Objective-C launcher (section 2.5); legacy reference paths still use it.
+   Apple's system compiler still owns GPU machine-code generation. Only Metal
+   is modeled, and no model runtime exists.
 3. **Start at the protocol boundary, move ownership inward in stages.** Strata
    already runs the same upstream Harness against a local engine through an
    OpenAI-compatible loopback route. The first local-model mode for the pcc
@@ -94,7 +96,7 @@ top-level `LICENSE` says portions of MAX are under a separate MAX License.
 Check which license governs a file before reusing source or format tables
 from it.
 
-## 2. pcc today
+## 2. pcc at the baseline, with a later owned-route update
 
 ### 2.1 What exists
 
@@ -166,7 +168,39 @@ emitters do not mention it. The CPU-oracle readback in pcc's gates would expose
 a skipped dispatch, but a launch without an oracle would not. This is a reading
 of source, not a reproduced failure.
 
-## 3. Layer comparison
+### 2.5 Subsequent owned runtime and public CLI evidence
+
+The baseline bridge limitation is no longer true of every route. The owned
+`pcc/gpu_runtime/metal_device.py` calls the Objective-C runtime through typed
+C ABI intrinsics. `8c4e17e79` connects `@gpu.kernel` / `gpu.launch` to it through
+`pcc/kernel_ir/gpu_host_launch.py` and the normal Python pipeline. The resulting
+native program embeds MSL and calls the packet runtime directly, without an
+Objective-C source bridge, `.air`/`.metallib` or subprocess launcher. It checks
+the pipeline's threadgroup limit; the older observation in 2.4 concerns the
+legacy bridge emitters, not this runtime.
+
+`acad51eff` rejects writable buffer aliases and buffer types outside the
+published bytes/bytearray contract. On local Darwin arm64, the five new gates
+in `tests/gpu_hardware/test_gpu_kernel_launch.py` execute their binaries under
+observed GC0–4: SAXPY and readback, invalid arguments, allowed read-only aliases,
+no-subprocess compilation/linking with a verified prebuilt runtime, and native
+f32 packing against `ctypes.c_float`. With the CLI test migration `4be097a7b`,
+the final selected affected-directory run is 561 passed. The initial offline
+reference/toolchain failures were resolved by installing the official component
+and matching Xcode 27.2, SDK 27.2 and Metal Toolchain 27B47. The legacy metallib
+and TileLang reference checks now run too; they do not establish owned execution.
+The MLX DLPack node remains collection-gated for its missing dependency, and
+four pcc1-dependent files were not run. [Current status](../status.md) names
+those boundaries and the repro. This is not an all-gates pass.
+
+This proves the selected host-pcc0/self route and synchronous native execution,
+not pcc1-native compilation, async/five-GC resource lifetime, Strata engine
+support or owned GPU machine-code emission. Metal still compiles MSL through
+`newLibraryWithSource:options:error:`. Acceptance of that platform boundary
+under the pcc1 contract remains a maintainer decision. The legacy `pcc-metal`
+and pcc-gui bridge paths are not replaced by this evidence.
+
+## 3. Layer comparison (baseline `7545dce5a`)
 
 | Layer | Mojo | pcc today | Reachable for pcc | Route |
 |---|---|---|---|---|
@@ -202,17 +236,21 @@ bundled ones. The options, with their honest status:
   was not verified here; Mojo itself compiles PTX to a cubin through a bundled
   or system compiler.
 - **D. Owned SPIR-V emission.** SPIR-V is a documented binary format accepted
-  by Vulkan compute on NVIDIA, AMD and Intel. It is the one multi-vendor route
-  that needs no vendor compiler, at the price of a new emitter and a Vulkan
-  host runtime. Not explored further.
+  by Vulkan compute on NVIDIA, AMD and Intel. It can avoid an external
+  command-line shader compiler, at the price of a new emitter and a Vulkan
+  host runtime; the driver still translates IR to vendor-native instructions.
+  Owned SPIR-V emission is not proof of owned GPU machine-code generation.
+  Not explored further.
 - **E. Labeled external provider.** `docs/design/pcc-gpu-owner-backends.md`
   already allows an explicitly selected, pinned provider to own execution
   while pcc keeps semantic, ABI and lifetime ownership. A vendor runtime
   compiler would have to enter through that door, never as a silent default.
 
-Recommendation, labeled as the author's: treat A as the Metal boundary, own
-everything on the host side of it, defer B, and record C and D as the only
-contract-compatible routes to other vendors.
+Recommendation, labeled as the author's, not a maintainer decision: treat A
+as the Metal boundary, own everything on the host side of it and defer B.
+C and D are candidate emission routes to other vendors, not established
+contract-compatible end-to-end pipelines; driver-side code-generation ownership
+also needs an explicit decision.
 
 ## 5. Strata
 
@@ -354,7 +392,7 @@ These belong to the maintainer. Each recommendation is the author's.
 5. Where do stages 1 to 4 sit relative to the frontend and GC work? Stage 0 is
    Harness-side only; every later stage competes with the spine.
 
-## 8. Smallest next probes
+## 8. Original proposed probes (historical, not the active task queue)
 
 Proposed only; none was run.
 
@@ -373,9 +411,12 @@ Proposed only; none was run.
 
 - It does not claim that pcc has Mojo's GPU capability, whole-program GPU
   execution, or any model runtime.
-- It does not renew any GPU claim level; the July results remain dated
-  evidence.
+- Only the executed cases named in section 2.5 and current status are renewed;
+  this is not blanket renewal of GPU claim levels. Older July results remain
+  dated evidence.
 - It does not claim that Strata's engine, kernels or performance figures were
   verified.
-- It does not establish that an owned Objective-C runtime launcher, PTX
-  loading without a vendor compiler, or a SPIR-V route works for pcc.
+- The original baseline reading did not establish an owned Objective-C runtime
+  launcher; section 2.5 now supplies narrow host-pcc0 execution evidence.
+  Neither the original reading nor that update establishes that PTX loads
+  without a vendor compiler or that a SPIR-V route works for pcc.
