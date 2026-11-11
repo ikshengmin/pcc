@@ -7,6 +7,36 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
 
+## Owned Metal device runtime (local Mac, 2026-11-12)
+
+Metal is the first GPU device. `pcc/gpu_runtime/metal_device.py` is a
+freestanding pcc-Python host runtime that reaches Metal through
+`objc_msgSend` typed C ABI calls: no Objective-C source, prebuilt bridge,
+`ctypes` adapter or external compiler. Source: `9f3357d1e` (device contract),
+`d51b2bb30` (launch packets, launcher process, Kernel IR adapter).
+
+Executed, host pcc0, Apple silicon, `PCC_GPU_HARDWARE_STRICT=1`:
+
+- Synchronous launches equal a CPU oracle: a probe kernel, the Kernel IR copy
+  source, and the imported scalar GEMM through its validated launch plan.
+- A malformed packet, an over-wide threadgroup, a rejected shader and a
+  missing entry are refused in band, with no read-back.
+- The launcher is one object linked by the owned Mach-O linker; it imports
+  ten libSystem symbols and nothing from Objective-C or Metal at link time.
+
+```bash
+PCC_NO_AUTO_PCC1=1 PCC_GPU_HARDWARE_STRICT=1 gtimeout 500 uv run pytest -x -n0 \
+  tests/gpu_hardware/test_metal_device_runtime.py \
+  tests/gpu_hardware/test_metal_device_packet.py
+```
+
+Not done: no pcc1 built from current source was available, so there is no
+pcc1-native result and the pcc1 and five-GC gates under `tests/gpu_hardware/`
+were not run. Asynchronous launch with a fence, no-copy buffers, simdgroup
+kernels on this path and any model runtime are open. The older `pcc-metal`
+path still uses its Objective-C bridge. Design and milestones:
+[local-model architecture](design/pcc-local-model-architecture.md).
+
 ## Gateway Web Frameworks Benchmark: native request path
 
 The next queue-pressure probe uses 400 yielding tasks on a persistent carrier.

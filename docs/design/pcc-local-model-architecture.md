@@ -1,7 +1,8 @@
 # Local-model mode: architecture for Harness, Strata compatibility and the device layer
 
-Status: proposed architecture, 2026-11-12. Layer 0 exists and is executed on a
-real device; every other layer is a specification with no implementation.
+Status: proposed architecture, 2026-11-12. Layer 0 and the Kernel IR launch
+path of milestone M1 exist and are executed on a real device; every other
+layer is a specification with no implementation.
 Maintainer direction of 2026-11-12, translated: Metal is the first GPU device,
 and the architecture for a local-model mode that supports Strata and Harness
 must be built.
@@ -57,6 +58,12 @@ Rules that are part of the contract, not of the Metal implementation:
   packet or a threadgroup wider than the pipeline allows is refused.
 - The caller owns buffers and pipelines; the device layer keeps no table.
 - No signature carries a managed object. Buffers are raw device handles.
+
+A whole launch can also travel as one self-describing packet
+(`launch_packet`, `packet_main`). `pcc/gpu_runtime/metal_host.py` encodes it
+and runs the launcher as a child process; `pcc/kernel_ir/metal_device_launch.py`
+encodes a validated Kernel IR launch plan. The packet is the serialized form of
+the packed-argument contract and the unit a result manifest hashes.
 
 Missing at L0 and required by the layers above: asynchronous launch with a
 completion fence, no-copy buffers over existing pages, a queue per stream, and
@@ -212,7 +219,7 @@ higher.
 | | Milestone | Exit evidence |
 |---|---|---|
 | M0 | Owned Metal device runtime, synchronous launch | `tests/gpu_hardware/test_metal_device_runtime.py` under `PCC_GPU_HARDWARE_STRICT=1`: real launches equal a CPU oracle, including the Kernel IR copy source. Host-pcc0, local Apple silicon. Done 2026-11-12. |
-| M1 | Launch packet and runner; Kernel IR kernels through the owned device | The existing copy and GEMM kernels reach a device result with `device_owner=pcc-metal-device` and no external tool on the launch path. |
+| M1 | Launch packet and runner; Kernel IR kernels through the owned device | `tests/gpu_hardware/test_metal_device_packet.py` under `PCC_GPU_HARDWARE_STRICT=1`: the copy kernel and the imported scalar GEMM run from their validated launch plans with `device_owner=pcc-metal-device` and equal the CPU reference. Host-pcc0. Done 2026-11-12 for those two kernels; the simdgroup GEMM and the other Kernel IR shapes are not yet run on this path. |
 | M2 | pcc1-native and five-GC handle lifetime on the owned device | The same workload from a pcc1-built program and under `PCC_GC_BACKEND=0..4`. |
 | M3 | Harness local route to an external engine (S1) | One prompt and one tool call through the pcc1-built Harness against a running local server; stopped engine gives `model-unavailable`; no cloud request is made. |
 | M4 | Asynchronous fence, no-copy weights, foreign kernel assets (S4) | A fence-ordered release test; one foreign kernel equal to its CPU oracle. |
