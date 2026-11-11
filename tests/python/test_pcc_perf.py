@@ -270,3 +270,53 @@ def test_primitive_changes_star_only_agreed_moves(capsys):
     lines = capsys.readouterr().out.splitlines()
     assert lines[0].split() == ["primitive", "gc1w1", "gc1w4"]
     assert lines[1].split() == ["dict", "+12.0%*", "+12.0%"]
+
+
+def test_an_arm_takes_head_and_only_the_named_working_tree_paths(tmp_path, monkeypatch):
+    repository = tmp_path / "repository"
+    (repository / "pcc/runtime").mkdir(parents=True)
+    (repository / "scripts").mkdir()
+    (repository / "docs").mkdir()
+
+    def git(*args):
+        subprocess.run(["git", *args], cwd=repository, check=True, capture_output=True)
+
+    def write(relative, text):
+        (repository / relative).write_text(text)
+
+    git("init", "-q")
+    git("config", "user.email", "perf@example.invalid")
+    git("config", "user.name", "perf")
+    write("pcc/runtime/mine.py", "committed\n")
+    write("pcc/runtime/gone.py", "committed\n")
+    write("pcc/other.py", "committed\n")
+    write("scripts/tool.py", "committed\n")
+    write("docs/notes.md", "outside the sealed set\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "base")
+    write("pcc/runtime/mine.py", "my edit\n")          # named by --with
+    write("pcc/runtime/new.py", "my new file\n")        # named, untracked
+    (repository / "pcc/runtime/gone.py").unlink()       # named, deleted
+    write("pcc/other.py", "another session's edit\n")   # not named
+    write("scripts/unfinished.py", "another session's file\n")
+
+    monkeypatch.setattr(PERF, "HOME", tmp_path / "home")
+    arm = PERF.seal("probe", ("pcc/runtime",), root=repository)
+    source = arm / "source"
+    assert (source / "pcc/runtime/mine.py").read_text() == "my edit\n"
+    assert (source / "pcc/runtime/new.py").read_text() == "my new file\n"
+    assert not (source / "pcc/runtime/gone.py").exists()
+    assert (source / "pcc/other.py").read_text() == "committed\n"
+    assert (source / "scripts/tool.py").read_text() == "committed\n"
+    assert not (source / "scripts/unfinished.py").exists()
+    assert not (source / "docs").exists()
+    identity = json.loads((arm / "source.json").read_text())
+    assert identity["overlaid"] == [
+        "pcc/runtime/gone.py", "pcc/runtime/mine.py", "pcc/runtime/new.py"]
+    assert sorted(identity["left_out"]) == ["pcc/other.py", "scripts/unfinished.py"]
+    assert set(identity["files"]) == {
+        "pcc/runtime/mine.py", "pcc/runtime/new.py", "pcc/other.py", "scripts/tool.py"}
+    assert b"my edit" in (arm / "worktree.diff").read_bytes()
+    assert b"another session" not in (arm / "worktree.diff").read_bytes()
+    with pytest.raises(SystemExit):
+        PERF.seal("probe", (), root=repository)

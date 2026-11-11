@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """One entry for building, measuring and explaining runtime performance.
 
-    arm NAME            seal the working tree (uncommitted edits included),
-                        build its runtime and the handler benchmark, and run
-                        the smoke program on all five collectors
+    arm NAME            seal the committed tree, with the working tree's
+                        version of each --with PATH (your own uncommitted
+                        edits; other sessions' stay out), build its runtime
+                        and the benchmark program, and run every primitive
+                        on all five collectors
     ab A B              alternating paired runs of two arms: medians, pair
                         wins, stopped time and graph-lock waits per collector
     table NAME          every collector with one and four workers, against
@@ -21,8 +23,10 @@
 
 Arms, the object cache and the ledger live outside the repository, under
 PCC_PERF_HOME (default ~/.cache/pcc/perf). An arm is a sealed copy of the
-tracked source, so two arms differ by exactly their recorded diffs and an
-edit to the working tree cannot change a measurement in progress.
+source, so two arms differ by exactly their recorded diffs and an edit to
+the working tree cannot change a measurement in progress. The workspace is
+shared: an arm takes HEAD, and uncommitted files only where --with names
+them, so another session's unfinished edit never enters a build.
 
 The loop this replaces took ten minutes per question. What makes it short:
 
@@ -130,31 +134,57 @@ def arm_dir(name: str) -> Path:
     return HOME / "arms" / name
 
 
-def seal(name: str) -> Path:
-    """Copy the tracked files of the working tree into the arm."""
+def seal(name: str, with_paths: tuple[str, ...] = (), root: Path | None = None) -> Path:
+    """Copy HEAD's files into the arm, then the working tree's version of
+    every file under ``with_paths`` (tracked or new; a file deleted there
+    is deleted in the arm). Returns the arm directory."""
+    root = REPO_ROOT if root is None else root
     arm = arm_dir(name)
     source = arm / "source"
     if source.exists():
         raise SystemExit(f"arm {name} already exists: {arm}")
-    head = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], text=True, cwd=REPO_ROOT).strip()
-    diff = subprocess.check_output(["git", "diff", "HEAD", "--", *SEALED], cwd=REPO_ROOT)
-    names = subprocess.check_output(
-        ["git", "ls-files", "-z", "--", *SEALED], cwd=REPO_ROOT).split(b"\0")
+    source.mkdir(parents=True)
+
+    def git(*args: str) -> bytes:
+        return subprocess.check_output(["git", *args], cwd=root)
+
+    head = git("rev-parse", "HEAD").decode().strip()
+    sealed = [path for path in SEALED if (root / path).exists()]
+    archive = subprocess.Popen(
+        ["git", "archive", "--format=tar", head, "--", *sealed],
+        cwd=root, stdout=subprocess.PIPE)
+    subprocess.run(["tar", "-x", "-C", str(source)], stdin=archive.stdout, check=True)
+    if archive.wait() != 0:
+        raise SystemExit("git archive failed")
+
+    overlaid = []
+    for path in with_paths:
+        listed = git("ls-files", "-z", "--cached", "--others", "--exclude-standard",
+                     "--", path).split(b"\0")
+        for raw in listed:
+            if not raw:
+                continue
+            relative = raw.decode()
+            origin, target = root / relative, source / relative
+            if origin.is_file():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(origin, target)
+            elif target.exists():
+                target.unlink()
+            overlaid.append(relative)
+    diff = git("diff", head, "--", *with_paths) if with_paths else b""
+    # What the working tree has changed that this arm does not contain.
+    dirty = [line[3:] for line in git("status", "--porcelain", "--", *sealed)
+             .decode().splitlines() if line[3:] not in overlaid]
+
     files = {}
-    for raw in names:
-        if not raw:
-            continue
-        relative = raw.decode()
-        origin = REPO_ROOT / relative
-        if not origin.is_file():
-            continue
-        target = source / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(origin, target)
-        files[relative] = hashlib.sha256(target.read_bytes()).hexdigest()
+    for target in sorted(source.rglob("*")):
+        if target.is_file():
+            files[str(target.relative_to(source))] = hashlib.sha256(
+                target.read_bytes()).hexdigest()
     (arm / "source.json").write_text(json.dumps({
-        "revision": head, "arm": name,
+        "revision": head, "arm": name, "with": list(with_paths),
+        "overlaid": sorted(set(overlaid)), "left_out": dirty,
         "dirty_diff_sha256": hashlib.sha256(diff).hexdigest(),
         "dirty_diff_bytes": len(diff), "files": files,
     }, indent=1) + "\n")
@@ -866,6 +896,8 @@ def main(argv: list[str] | None = None) -> int:
 
     arm = commands.add_parser("arm")
     arm.add_argument("name")
+    arm.add_argument("--with", dest="with_paths", action="append", default=[],
+                     metavar="PATH", help="take PATH from the working tree, not HEAD")
     arm.add_argument("--timeout", type=int, default=900)
     # The handler program's largest module emits in one worker of about
     # 2.4 GiB beside a 1.1 GiB coordinator; the approved build maximum is
@@ -933,7 +965,12 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     if args.command == "arm":
-        seal(args.name)
+        sealed = seal(args.name, tuple(args.with_paths))
+        identity = json.loads((sealed / "source.json").read_text())
+        print(f"arm {args.name}: {identity['revision'][:9]} with "
+              f"{len(identity['overlaid'])} working-tree files", flush=True)
+        for path in identity["left_out"]:
+            print(f"  left out (uncommitted, not named by --with): {path}", flush=True)
         code = build(args.name, args.timeout, args.max_tree_rss)
         report = arm_dir(args.name) / "build.json"
         complete = report.is_file() and json.loads(report.read_text())["complete"]
