@@ -89,6 +89,27 @@ def _emit_prepared(prepared, route, optimize, timing=None):
     )
 
 
+def _track_private_plans(patch, plans, current):
+    """Observe eager plans and their frame/tail-call replacements alike."""
+    build = emitter.build_stack_map_plans
+    rebuild = emitter.build_function_stack_map_plan
+
+    def observe_plans(*args, **kwargs):
+        result = build(*args, **kwargs)
+        plans.extend(result)
+        current.update((plan.function_name, plan) for plan in result)
+        return result
+
+    def observe_rebuild(*args, **kwargs):
+        plan = rebuild(*args, **kwargs)
+        plans.append(plan)
+        current[plan.function_name] = plan
+        return plan
+
+    patch.setattr(emitter, "build_stack_map_plans", observe_plans)
+    patch.setattr(emitter, "build_function_stack_map_plan", observe_rebuild)
+
+
 @pytest.mark.parametrize("triple", _TARGETS)
 @pytest.mark.parametrize("route,optimize", _ROUTES)
 @pytest.mark.parametrize("factory", (_stale_managed_ssa_ir, _target_final_stackmap_ir))
@@ -171,15 +192,10 @@ def test_retirement_waits_for_all_bodies_capture_and_callbacks(monkeypatch, fail
     source = _source(_stale_managed_ssa_ir, _TARGETS[0])
     prepared = _prepare(source)
     plans = []
-    build = emitter.build_stack_map_plans
+    current = {}
     emit = emitter._emit_function
     release = emitter._NativeAArch64Emission.release_captured_function
     count = 0
-
-    def observe_plans(*args, **kwargs):
-        result = build(*args, **kwargs)
-        plans.extend(result)
-        return result
 
     def fail_emit(func, plan, **kwargs):
         nonlocal count
@@ -207,15 +223,21 @@ def test_retirement_waits_for_all_bodies_capture_and_callbacks(monkeypatch, fail
 
     try:
         with monkeypatch.context() as patch:
-            patch.setattr(emitter, "build_stack_map_plans", observe_plans)
+            _track_private_plans(patch, plans, current)
             patch.setattr(emitter, "_emit_function", fail_emit)
             patch.setattr(emitter._NativeAArch64Emission, "release_captured_function", fail_release)
             with pytest.raises(BackendUnavailable, match="injected .* failure"):
                 _emit_prepared(prepared, "native-sink", False, FailTiming())
-        assert count == len(plans) == 2
+        assert count == len(current) == 2
+        assert len(plans) > len(current)  # Real frame compaction replaced a plan.
         assert all(
             not getattr(plan.packed_records, field)._closed
-            for plan in plans for field in _EMISSION + _METADATA
+            for plan in current.values() for field in _EMISSION + _METADATA
+        )
+        assert all(
+            getattr(plan.packed_records, field)._closed
+            for plan in plans if plan is not current[plan.function_name]
+            for field in _EMISSION + _METADATA
         )
         assert not emitter._AARCH64_EMISSION_ACTIVE
         assert not emitter.direct_instruction_capture_active()
@@ -250,27 +272,26 @@ def test_public_plans_stay_complete_until_explicit_retirement():
 def test_final_layout_failure_keeps_metadata_and_releases_emitter_scope(monkeypatch):
     prepared = _prepare(_source(_stale_managed_ssa_ir, _TARGETS[0]))
     plans = []
-    build = emitter.build_stack_map_plans
-
-    def observe_plans(*args, **kwargs):
-        result = build(*args, **kwargs)
-        plans.extend(result)
-        return result
+    current = {}
 
     def fail_layout(builder):
         raise BackendUnavailable("injected final layout failure")
 
     try:
         with monkeypatch.context() as patch:
-            patch.setattr(emitter, "build_stack_map_plans", observe_plans)
+            _track_private_plans(patch, plans, current)
             patch.setattr(emitter.AArch64ModuleBuilder, "finalize_text_layout", fail_layout)
             with pytest.raises(BackendUnavailable, match="injected final layout failure"):
                 _emit_prepared(prepared, "native-sink", False, _Timing())
-        assert len(plans) == 2
+        assert len(current) == 2
+        assert len(plans) > len(current)
         for plan in plans:
             packed = plan.packed_records
             assert all(getattr(packed, field)._closed for field in _EMISSION)
-            assert all(not getattr(packed, field)._closed for field in _METADATA)
+            if plan is current[plan.function_name]:
+                assert all(not getattr(packed, field)._closed for field in _METADATA)
+            else:
+                assert all(getattr(packed, field)._closed for field in _METADATA)
         assert not emitter._AARCH64_EMISSION_ACTIVE
         assert not emitter.direct_instruction_capture_active()
         # The nonconsuming kernel option allows a fresh successful invocation;
@@ -285,8 +306,9 @@ def test_final_layout_failure_keeps_metadata_and_releases_emitter_scope(monkeypa
 
 @pytest.mark.parametrize("rename_in_callback", (False, True))
 @pytest.mark.parametrize("route", ("text", "native-sink"))
+@pytest.mark.parametrize("compact_frames", (False, True))
 def test_reused_name_keeps_emission_storage_and_original_error(
-    monkeypatch, rename_in_callback, route,
+    monkeypatch, rename_in_callback, route, compact_frames,
 ):
     # The eager dictionary intentionally keeps the last plan for a repeated
     # name. The verifier does not reject this module-wide shape. Do not consume
@@ -302,18 +324,17 @@ entry:
   ret i64 %value
 }
 '''
+    if not compact_frames:
+        # No scalar homes means no physical-frame replacement. Retain this
+        # aliasing case as well as the original frame-compaction input.
+        source = source.replace("(i64 %value)", "()").replace("ret i64 %value", "ret i64 7")
     if not rename_in_callback:
         source = source.replace("@second", "@first")
-    build, emit = emitter.build_stack_map_plans, emitter._emit_function
+    emit = emitter._emit_function
     outcomes = []
     for delayed in (True, False):
         prepared = _prepare(source)
         plans, consumed = [], []
-
-        def observe_plans(*args, **kwargs):
-            result = build(*args, **kwargs)
-            plans.extend(result)
-            return result
 
         def observe_emit(func, plan, **kwargs):
             assert all(not getattr(plan.packed_records, field)._closed for field in _EMISSION)
@@ -328,13 +349,21 @@ entry:
 
         try:
             with monkeypatch.context() as patch:
-                patch.setattr(emitter, "build_stack_map_plans", observe_plans)
+                _track_private_plans(patch, plans, {})
                 patch.setattr(emitter, "_emit_function", observe_emit)
                 if delayed:
                     patch.setattr(maps.PackedPlannedSafepoints, "retire_emission_state", lambda self: None)
                 with pytest.raises(Exception) as caught:
                     _emit_prepared(prepared, route, False, RenameTiming())
-            assert len(consumed) == 2 and consumed[0] is consumed[1]
+            assert len(consumed) == 2
+            if compact_frames:
+                assert consumed[0] is not consumed[1]
+                assert all(
+                    getattr(consumed[0].packed_records, field)._closed
+                    for field in _EMISSION + _METADATA
+                )
+            else:
+                assert consumed[0] is consumed[1]
             assert "duplicate" in str(caught.value)
             outcomes.append((type(caught.value), str(caught.value)))
             assert not emitter._AARCH64_EMISSION_ACTIVE

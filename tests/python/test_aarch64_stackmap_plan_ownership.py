@@ -70,32 +70,69 @@ def _emit(source, route):
 
 @pytest.mark.parametrize("triple", _TARGETS)
 @pytest.mark.parametrize("route", _ROUTES)
+@pytest.mark.parametrize("tail_call", (False, True))
 def test_table_policy_closes_real_packed_plans_and_preserves_code(
-    monkeypatch, triple, route,
+    monkeypatch, triple, route, tail_call,
 ):
     build_plans = emitter.build_stack_map_plans
+    rebuild_plan = emitter.build_function_stack_map_plan
     emit_function = emitter._emit_function
     close_packed = PackedPlannedSafepoints.close
+    source = _source(triple)
+    if tail_call:
+        source = source.replace(
+            "define i64 @after(i64 %value)",
+            "declare i64 @callee(i64)\n\ndefine i64 @after(i64 %value)",
+        ).replace("%result = add i64 %value, 1", "%result = call i64 @callee(i64 %value)")
     results = []
     for setting in (None, "0", "1"):
         captured = []
+        rebuilt = []
+        replaced = []
+        current = {}
+        emitted = []
         closed = []
 
         def observe_plans(*args, **kwargs):
             plans = build_plans(*args, **kwargs)
             captured.extend(plans)
+            current.update((plan.function_name, plan) for plan in plans)
             assert len(plans) == 2
             assert all(plan.packed_records is not None for plan in plans)
             assert any(len(plan.packed_records.reload_scalars) for plan in plans)
             return plans
 
+        def observe_rebuild(func, *args, **kwargs):
+            plan = rebuild_plan(func, *args, **kwargs)
+            replaced.append(current[func.name])
+            rebuilt.append(plan)
+            current[func.name] = plan
+            return plan
+
         def observe_function(func, plan, **kwargs):
+            assert plan is current[func.name]
+            # Frame compaction and tail-call planning replace private plans
+            # before emission. Their storage must already be fully closed.
+            assert all(
+                arena._closed
+                for old in replaced for arena in _arenas(old.packed_records)
+            )
             assert all(not arena._closed for arena in _arenas(plan.packed_records))
+            if func.name == "after":
+                expected_tail = tail_call and route == "text" and "apple-darwin" in triple
+                assert bool(func.aarch64_tail_call_ids) is expected_tail
+            emitted.append(plan)
             return emit_function(func, plan, **kwargs)
 
         def observe_close(packed):
-            assert all(getattr(packed, field)._closed for field in _EMISSION_ARENAS)
-            assert sum(arena._closed for arena in _arenas(packed)) == 7
+            if any(plan.packed_records is packed for plan in replaced):
+                # An unused plan has no later metadata consumer. Closing it
+                # directly is different from retiring an emitted plan.
+                assert all(not arena._closed for arena in _arenas(packed))
+            else:
+                assert any(plan.packed_records is packed for plan in emitted)
+                assert all(getattr(packed, field)._closed for field in _EMISSION_ARENAS)
+                assert sum(arena._closed for arena in _arenas(packed)) == 7
             closed.append(packed)
             close_packed(packed)
 
@@ -106,11 +143,14 @@ def test_table_policy_closes_real_packed_plans_and_preserves_code(
                 else:
                     patch.setenv(PRECISE_STACKMAP_TABLES_ENV, setting)
                 patch.setattr(emitter, "build_stack_map_plans", observe_plans)
+                patch.setattr(emitter, "build_function_stack_map_plan", observe_rebuild)
                 patch.setattr(emitter, "_emit_function", observe_function)
                 patch.setattr(PackedPlannedSafepoints, "close", observe_close)
-                sections, undefined = _emit(_source(triple), route)
-            packed_plans = [plan.packed_records for plan in captured]
-            assert len(closed) == len(packed_plans) == 2
+                sections, undefined = _emit(source, route)
+            packed_plans = [plan.packed_records for plan in captured + rebuilt]
+            assert replaced  # This fixture must exercise real frame replanning.
+            assert len(emitted) == len(captured) == 2
+            assert len(closed) == len(packed_plans) == 2 + len(replaced)
             assert {id(packed) for packed in closed} == {
                 id(packed) for packed in packed_plans
             }
@@ -128,7 +168,7 @@ def test_table_policy_closes_real_packed_plans_and_preserves_code(
             ))
         finally:
             # Keep a failing baseline control from retaining its test-owned plans.
-            for plan in captured:
+            for plan in captured + rebuilt:
                 packed = plan.packed_records
                 if packed is not None and any(not arena._closed for arena in _arenas(packed)):
                     close_packed(packed)
