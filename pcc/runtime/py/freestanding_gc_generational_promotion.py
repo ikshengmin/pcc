@@ -1,6 +1,9 @@
 """Shared generational slot promotion and stable-root rewriting."""
 from pcc import i64
-from pcc.runtime.py.py_abi_constants import PY_TYPE_MEMORYVIEW
+from pcc.runtime.py.py_abi_constants import (
+    PY_TYPE_MEMORYVIEW, PY_TYPE_INT, PY_TYPE_FLOAT, PY_TYPE_STR,
+    PY_TYPE_BYTES, PY_TYPE_COMPLEX,
+)
 
 from pcc.extern import c_abi_export, c_int32, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
@@ -121,6 +124,46 @@ def pcc_gc_generational_promote_young_if_known(obj) -> None:
     store_i32(obj, 12, (promoted_flags & ~128) | 256)
     if backend == 3:
         pcc_gc_trace_referents_for_promotion(obj)
+
+
+@c_abi_export("pcc_gc_generational_retain_closed_young")
+def pcc_gc_generational_retain_closed_young(obj) -> None:
+    """Retain a cold-cut scalar without copying or empty referent work.
+
+    The caller owns the stopped graph and has suspended relocation. An exact
+    scalar has no managed child slots, so retaining it closes its entire
+    outgoing edge set. Other types and forwarding states keep the ordinary
+    promotion contract. This entry is not used by budgeted promotion steps.
+    """
+    if (load_i32(global_addr("pcc_gc_backend_selected"), 0) != 3
+            or load_i32(global_addr("pcc_gc_backend3_young_cut_active"), 0) == 0
+            or load_i32(global_addr("pcc_gc_backend3_oldify_suspended"), 0) == 0):
+        pcc_gc_generational_promote_young_if_known(obj)
+        return
+    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+        return
+    node = pcc_gc_object_index_find(obj)
+    if pcc_gc_object_node_is_active(node) == 0:
+        return
+    flags: i64 = load_i32(obj, 12)
+    if (flags & 128) == 0:
+        return
+    tag: i64 = load_i32(obj, 8)
+    if ((flags & (256 | 2048)) != 0
+            or (tag != PY_TYPE_INT and tag != PY_TYPE_FLOAT
+                and tag != PY_TYPE_STR and tag != PY_TYPE_BYTES
+                and tag != PY_TYPE_COMPLEX)
+            or ptr_is_null(pcc_gc_forwarding_find(obj)) == 0):
+        pcc_gc_generational_promote_young_if_known(obj)
+        return
+    # Preserve pins, major colors, finalization/identity flags and ownership.
+    # Nursery promotion already clears its obsolete remembered bit. No pin
+    # lookup is necessary: this live scalar is retained at its current address.
+    pcc_gc_backend3_young_unlink(node)
+    if (flags & 4096) != 0:
+        store_i32(obj, 12, (flags & ~(128 | 512)) | 256)
+    else:
+        store_i32(obj, 12, (flags & ~128) | 256)
 
 
 @c_abi_export("pcc_gc_generational_promote_owned_slot_mode")

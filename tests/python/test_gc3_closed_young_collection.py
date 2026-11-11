@@ -310,6 +310,7 @@ def native_young_cut(tmp_path_factory, pcc_runtime_archive):
 @pytest.mark.parametrize('backend, case', (
     *((backend, 'unproved') for backend in range(5)),
     *((backend, 'dead') for backend in range(5)),
+    *((backend, 'scalars') for backend in range(5)),
     *((3, case) for case in ('stack', 'old-edge', 'weak', 'revoked', 'thread')),
 ))
 def test_native_closed_young_cut(native_young_cut, backend, case):

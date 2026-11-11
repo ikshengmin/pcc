@@ -49,7 +49,7 @@ pcc_gc_root_map_is_borrowed = extern(
 pcc_gc_mark_root_gray_if_known = extern(
     "pcc_gc_mark_root_gray_if_known", (c_ptr,), c_void
 )
-pcc_gc_generational_promote_young_if_known = extern("pcc_gc_generational_promote_young_if_known", (c_ptr,), c_void)
+pcc_gc_generational_retain_closed_young = extern("pcc_gc_generational_retain_closed_young", (c_ptr,), c_void)
 pcc_gc_promote_cached_frame_slot = extern("pcc_gc_promote_cached_frame_slot", (c_ptr, c_int64, c_ptr, c_int64), c_void)
 pcc_gc_resolve_root_slot_unlocked = extern(
     "pcc_gc_resolve_root_slot_unlocked", (c_ptr, c_int64), c_ptr
@@ -107,7 +107,7 @@ def pcc_gc_visit_mapped_root_slot(
     if mode == 7:  # complete uncached, nonmoving young liveness cut
         # The cold owner suspends copying for this entire stopped boundary.
         # A stable-cache hit is not evidence for this object's current lifetime.
-        pcc_gc_generational_promote_young_if_known(load_ptr(slot_base, slot_offset))
+        pcc_gc_generational_retain_closed_young(load_ptr(slot_base, slot_offset))
         return 0
     if mode == 6:  # GC0 reachability (frame roots enabled)
         pcc_gc_backend0_mark_root_slot(slot_base, slot_offset)

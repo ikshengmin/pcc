@@ -6,6 +6,7 @@
 #include "py_runtime.h"
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 extern void pcc_gc_backend3_enable_closed_young_domain(void);
@@ -17,6 +18,7 @@ extern int64_t pcc_gc_object_is_known_no_lock(PyObject *);
 extern void pcc_gc_generational_promote_young_if_known(PyObject *);
 extern int64_t pcc_gc_backend3_drain_promotion_worklist(int64_t);
 extern int64_t pcc_thread_start(void *, void *, void *);
+extern void *pcc_gc_scheduler_root_head;
 extern int64_t pcc_thread_join(void *, void *);
 extern int32_t pcc_gc_backend3_oldify_suspended;
 extern int32_t pcc_gc_mark_active;
@@ -25,6 +27,16 @@ extern int64_t pcc_gc_tracing_finish_commits;
 /* Release compiler temporaries in a returned frame before the native stack
  * snapshot. The test requires some unreachable objects, not an exact count:
  * conservative machine words may legitimately keep the last allocation. */
+static int scheduler_root_count(void) {
+    int count = 0;
+    void *node = pcc_gc_scheduler_root_head;
+    while (node != NULL) {
+        count++;
+        node = ((void **)node)[1];
+    }
+    return count;
+}
+
 static void discard_scalars(void) {
     for (int i = 0; i < 512; i++) {
         PyObject *obj = py_float_from_f64((double)i + 0.5);
@@ -75,6 +87,28 @@ int main(int argc, char **argv) {
     PyObject *owner = NULL;
     PyObject *weak = NULL;
     void *thread = NULL;
+    PyObject **scalars = NULL;
+    PyObject *original_scalars[5] = {NULL, NULL, NULL, NULL, NULL};
+    void *scalar_handles[5] = {NULL, NULL, NULL, NULL, NULL};
+    if (strcmp(kind, "scalars") == 0) {
+        scalars = (PyObject **)calloc(5, sizeof(PyObject *));
+        if (scalars == NULL) return 5;
+        scalars[0] = py_int_from_i64(9223372036854775807LL);
+        scalars[1] = py_float_from_f64(83.5);
+        scalars[2] = py_str_new("young-owned-scalar", 18);
+        scalars[3] = py_bytes_new("abc\0xyz", 7);
+        scalars[4] = py_complex_new(3.5, 7.25);
+        int roots_before = scheduler_root_count();
+        for (int i = 0; i < 5; i++) {
+            if (scalars[i] == NULL) return 5;
+            original_scalars[i] = scalars[i];
+            if (backend == 3 && (((int32_t *)scalars[i])[3] & 384) != 128) return 7;
+            scalar_handles[i] = pcc_gc_scheduler_root_register_handle(&scalars[i]);
+            if (scalar_handles[i] == NULL) return 6;
+        }
+        /* Heap slots must publish five actual records, not stack sentinels. */
+        if (scheduler_root_count() != roots_before + 5) return 8;
+    }
     if (strcmp(kind, "stack") == 0) root = py_float_from_f64(83.5);
     if (strcmp(kind, "old-edge") == 0) {
         owner = py_list_new(1);
@@ -98,6 +132,39 @@ int main(int argc, char **argv) {
     int good = admitted ? reclaimed > 0 : reclaimed == -1;
     if (strcmp(kind, "stack") == 0)
         good = good && py_float_value_of(root) == 83.5 && pcc_gc_object_is_known_no_lock(root);
+    if (strcmp(kind, "scalars") == 0) {
+        const int tags[5] = {PY_TYPE_INT, PY_TYPE_FLOAT, PY_TYPE_STR, PY_TYPE_BYTES, PY_TYPE_COMPLEX};
+        for (int i = 0; i < 5; i++) {
+            good = good && scalars[i] == original_scalars[i];
+            /* GC0 deliberately does not index pointer-free scalar allocations. */
+            if (backend != 0)
+                good = good && pcc_gc_object_is_known_no_lock(scalars[i]);
+            good = good && ((int32_t *)scalars[i])[2] == tags[i];
+            if (backend == 3)
+                good = good && (((int32_t *)scalars[i])[3] & 384) == 256;
+        }
+        PyObject *decimal = py_int_format_decimal(scalars[0], 0, 0, 0);
+        good = good && decimal != NULL &&
+            strcmp(py_str_utf8(decimal), "9223372036854775807") == 0;
+        py_decref(decimal);
+        good = good && py_float_value_of(scalars[1]) == 83.5;
+        good = good && strcmp(py_str_utf8(scalars[2]), "young-owned-scalar") == 0;
+        PyObject *needle = py_bytes_new("xyz", 3);
+        good = good && py_bytes_len(scalars[3]) == 7 &&
+            py_bytes_find(scalars[3], needle) == 4;
+        py_decref(needle);
+        PyObject *real = py_complex_real(scalars[4]);
+        PyObject *imag = py_complex_imag(scalars[4]);
+        good = good && py_float_value_of(real) == 3.5 &&
+            py_float_value_of(imag) == 7.25;
+        py_decref(real);
+        py_decref(imag);
+        for (int i = 0; i < 5; i++) {
+            pcc_gc_scheduler_root_unregister_handle(scalar_handles[i]);
+            py_decref(scalars[i]);
+        }
+        free(scalars);
+    }
     if (strcmp(kind, "old-edge") == 0)
         good = good && py_float_value_of(py_list_get(owner, 0)) == 91.5;
     if (strcmp(kind, "weak") == 0)

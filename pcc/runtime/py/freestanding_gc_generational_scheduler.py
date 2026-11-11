@@ -64,6 +64,9 @@ pcc_gc_generational_oldify_copy = extern(
 pcc_gc_generational_promote_young_if_known = extern(
     "pcc_gc_generational_promote_young_if_known", (c_ptr,), c_void
 )
+pcc_gc_generational_retain_closed_young = extern(
+    "pcc_gc_generational_retain_closed_young", (c_ptr,), c_void
+)
 pcc_gc_object_node_is_active = extern(
     "pcc_gc_object_node_is_active", (c_ptr,), c_int64
 )
@@ -961,7 +964,7 @@ def pcc_gc_backend3_collect_closed_young() -> i64:
             if (_young_scalar_tag(load_i32(obj, 8)) == 0
                     or (flags & (PY_FLAG_GC_PINNED | PY_FLAG_IMMORTAL | 1024 | 2048 | 8192 | 524288)) != 0
                     or pcc_gc_generational_object_is_address_pinned(obj) != 0):
-                pcc_gc_generational_promote_young_if_known(obj)
+                pcc_gc_generational_retain_closed_young(obj)
         node = nxt
     detached = stack_alloc(8)
     store_ptr(detached, 0, null())

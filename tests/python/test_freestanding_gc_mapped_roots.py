@@ -119,7 +119,7 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_mark_root_gray_if_known",
     "pcc_gc_pointer_is_managed",
     "pcc_gc_promote_cached_frame_slot",
-    "pcc_gc_generational_promote_young_if_known",
+    "pcc_gc_generational_retain_closed_young",
     "pcc_gc_resolve_root_slot_unlocked",
     "pcc_gc_resolve_borrowed_root_slot_unlocked",
     "pcc_gc_root_map_is_borrowed",

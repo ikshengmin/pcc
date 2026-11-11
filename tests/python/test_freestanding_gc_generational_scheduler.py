@@ -119,6 +119,7 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_generational_oldify_copy",
     "pcc_gc_generational_promote_owned_slot_mode",
     "pcc_gc_generational_promote_young_if_known",
+    "pcc_gc_generational_retain_closed_young",
     "pcc_gc_object_is_known_no_lock",
     "pcc_gc_object_node_is_active",
     "pcc_gc_root_registry_revision",

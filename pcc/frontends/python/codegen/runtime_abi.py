@@ -2687,6 +2687,7 @@ def _cross_object_signatures_part_7():
     ),
     "pcc_gc_backend3_promotion_probe_state": ((), "c_int64"),
     "pcc_gc_generational_promote_young_if_known": (("c_ptr",), "c_void"),
+    "pcc_gc_generational_retain_closed_young": (("c_ptr",), "c_void"),
     "pcc_gc_generational_promote_owned_slot_mode": (
         ("c_ptr", "c_int64", "c_int64"),
         "c_void",
