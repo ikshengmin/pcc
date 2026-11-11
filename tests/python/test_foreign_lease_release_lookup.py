@@ -62,7 +62,7 @@ def pcc_gc_foreign_lease_release(slot, acquired: i64) -> i64:
 class ReleaseModel(Model):
     """Model primitives only; resolver, known predicate and lookup are real."""
 
-    def __init__(self, backend=3, *, reference=False, initialized=True,
+    def __init__(self, backend=4, *, reference=False, initialized=True,
                  probe=0, logging=0):
         self.audit = []
         self.unreadable_headers = set()
@@ -193,7 +193,7 @@ def _effects(model):
             {"write", "incref", "decref", "cas_order"}]
 
 
-def _paired_release(setup, *, backend=3, initialized=True, probe=0, logging=0):
+def _paired_release(setup, *, backend=4, initialized=True, probe=0, logging=0):
     results = []
     for reference in (True, False):
         model = ReleaseModel(backend, reference=reference, initialized=initialized,
@@ -219,7 +219,7 @@ def _calls(model, kind):
     return [event for event in model.audit if event[0] == kind]
 
 
-@pytest.mark.parametrize("backend", (3, 4))
+@pytest.mark.parametrize("backend", (4,))
 @pytest.mark.parametrize("borrowed", (False, True))
 @pytest.mark.parametrize("flags", (0, 1, 64, 128 | 4096, 65536, 262144))
 @pytest.mark.parametrize("initialized,probe,logging", (
@@ -262,7 +262,7 @@ def test_exact_live_release_reuses_one_lookup(backend, borrowed, flags,
     assert current.events == [("lock", 1), ("cas", CENTRAL, 1, 0, 1), ("unlock", 0)]
 
 
-@pytest.mark.parametrize("backend", (3, 4))
+@pytest.mark.parametrize("backend", (4,))
 def test_release_reloads_only_after_graph_entry_and_keeps_unlock_poll(backend):
     def setup(model):
         slot = model.object()
@@ -280,7 +280,7 @@ def test_release_reloads_only_after_graph_entry_and_keeps_unlock_poll(backend):
     assert current.events[-2:] == [("unlock", 0), ("poll", 0)]
 
 
-@pytest.mark.parametrize("backend", (3, 4))
+@pytest.mark.parametrize("backend", (4,))
 @pytest.mark.parametrize("source_state", ("live", "inactive", "freeing", "dying"))
 def test_forwarding_fallback_heals_slot_with_original_rc_rules(backend, source_state):
     def setup(model):
@@ -324,9 +324,12 @@ def test_missing_null_or_self_forwarding_preserves_flag_cleanup(flags, target):
     assert not _calls(current, "incref") and not _calls(current, "decref")
 
 
-@pytest.mark.parametrize("mutation", ("replace", "remove", "freeing", "empty_count", "rewrite_slot"))
-@pytest.mark.parametrize("hook_kind", ("incref", "decref"))
-def test_fallback_discards_node_across_refcount_callbacks(mutation, hook_kind):
+def test_release_heals_a_forwarded_source_without_a_refcount_callback():
+    # The relocating collector counts no reference. Healing the leased slot
+    # calls neither py_incref nor py_decref, so no user code can replace,
+    # remove or retire the target's node between the resolver and the lookup
+    # that releases its lease (the window the counted heal had to re-find
+    # across).
     def setup(model):
         slot = model.object(flags=FORWARDED)
         model.object(2000)
@@ -336,43 +339,38 @@ def test_fallback_discards_node_across_refcount_callbacks(mutation, hook_kind):
         model.store(13000, 80, 7)
         model.store(CENTRAL, 0, 1)
         model.edge(1000, 2000)
+
         def callback(value):
-            assert value == (2000 if hook_kind == "incref" else 1000)
-            if mutation == "replace":
-                model.nodes[2000] = 42000
-                model.store(42000, 80, 1)
-                model.publish()
-            elif mutation == "remove":
-                del model.nodes[2000]
-                model.publish()
-            elif mutation == "freeing":
-                model.store(12000, 32, 1)
-            elif mutation == "empty_count":
-                model.store(12000, 80, 0)
-            else:
-                model.store(slot, 0, 3000)
-        if hook_kind == "incref":
-            model.on_incref = callback
-        else:
-            model.on_decref = callback
+            raise AssertionError("refcount callback during a count-free heal")
+
+        model.on_incref = model.on_decref = callback
         return slot, 1
     _, current, status = _paired_release(setup)
-    assert status == (-3 if mutation in {"remove", "freeing", "empty_count"} else 0)
+    assert status == 0
     assert current.load(11000, 80) == 9 and current.load(13000, 80) == 7
+    assert current.load(12000, 80) == 4 and current.active() == 0
     assert _calls(current, "find")[-1] == ("find", 2000, 1)
-    last_rc = max(i for i, event in enumerate(current.audit) if event[0] in {"incref", "decref"})
-    last_find = max(i for i, event in enumerate(current.audit) if event[0] == "find")
-    assert last_find > last_rc
-    if mutation == "replace":
-        assert current.load(12000, 80) == 5 and current.load(42000, 80) == 0
-    if mutation == "rewrite_slot":
-        # The resolver returns its resolved object even when a decrement
-        # callback rewrites the root again; do not invent an extra reload.
-        assert current.load(21000) == (3000 if hook_kind == "decref" else 2000)
-        assert current.load(12000, 80) == 4
+    assert len(_calls(current, "resolve")) == 1
+    assert not _calls(current, "incref") and not _calls(current, "decref")
+    assert current.load(21000) == 2000
 
 
-@pytest.mark.parametrize("backend", (3, 4))
+@pytest.mark.parametrize("backend", (0, 1, 2, 3))
+def test_a_nonmoving_collector_leases_no_address(backend):
+    # Collectors 0-3 never move an object: acquire answers the no-op token
+    # before it reads the slot, and releasing that token changes nothing.
+    model = ReleaseModel(backend)
+    slot = model.object()
+    model.audit.clear()
+    assert model.acquire(slot) == 0
+    assert not _calls(model, "find") and not _calls(model, "resolve")
+    assert not any(event[1] in {21000, 1000, 11000} for event in _calls(model, "read"))
+    assert model.release(slot, 0) == 0
+    assert model.count() == 0 and model.active() == 0
+    assert not _calls(model, "write")
+
+
+@pytest.mark.parametrize("backend", (4,))
 def test_acquire_resolves_full_chain_and_release_balances_terminal_lease(backend):
     def setup(model):
         slot = model.object(flags=FORWARDED)
@@ -390,7 +388,7 @@ def test_acquire_resolves_full_chain_and_release_balances_terminal_lease(backend
     assert current.active() == 0
 
 
-@pytest.mark.parametrize("backend", (3, 4))
+@pytest.mark.parametrize("backend", (4,))
 def test_stranded_source_lease_cannot_consume_another_owners_count(backend):
     # Synthesize the old invalid state explicitly. Acquisition no longer
     # creates it, but release must still refuse to steal a target's count.
@@ -450,7 +448,7 @@ def test_failed_identity_guard_does_not_read_unknown_header_or_consume_guard(kin
     assert not any(event[0] == "read" and event[2] == 12 for event in before_resolve)
 
 
-@pytest.mark.parametrize("backend", (3, 4))
+@pytest.mark.parametrize("backend", (4,))
 def test_publication_oom_keeps_exact_registered_lease_releasable(backend):
     def setup(model):
         slot = model.object()
@@ -538,7 +536,7 @@ def test_central_cas_retry_keeps_acquire_release_order_and_decrement_sequence(ob
         assert _calls(current, "write")[-2:] == [("write", CENTRAL, 0, 1), ("write", 11000, 80, 0)]
 
 
-@pytest.mark.parametrize("backend", (3, 4))
+@pytest.mark.parametrize("backend", (4,))
 def test_overlapping_release_legacy_pin_and_double_release(backend):
     def setup(model):
         slot = model.object(flags=64)
@@ -597,7 +595,7 @@ def test_mode_token_keeps_shard_balance_after_node_registration(backend):
     assert not any(event[0] == "lock" for event in current.events)
 
 
-@pytest.mark.parametrize("backend", (0, 1, 2))
+@pytest.mark.parametrize("backend", (0, 1, 2, 3))
 def test_configured_nonmoving_acquire_remains_noop(backend):
     def setup(model):
         slot = model.object()

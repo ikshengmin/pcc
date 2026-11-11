@@ -47,7 +47,7 @@ class LeaseRoots(MovingRoots):
         return [event for event in self.events if event[0] in ("incref", "decref")]
 
 
-@pytest.mark.parametrize("backend", [3, 4])
+@pytest.mark.parametrize("backend", [4])
 @pytest.mark.parametrize("counted", [False, True])
 @pytest.mark.parametrize("borrowed", [False, True])
 @pytest.mark.parametrize("edges", [0, 1, 2, 4])
@@ -93,7 +93,7 @@ def test_installed_chain_leases_only_terminal_and_releases_cleanly(backend, coun
     assert state.depth == 0
 
 
-@pytest.mark.parametrize("backend", [3, 4])
+@pytest.mark.parametrize("backend", [4])
 @pytest.mark.parametrize("counted", [False, True])
 @pytest.mark.parametrize("borrowed", [False, True])
 @pytest.mark.parametrize("invalid", [
@@ -134,11 +134,14 @@ def test_invalid_chain_aborts_before_slot_rc_or_lease_publication(backend, count
     assert state.ns["pcc_gc_foreign_lease_count_quiescent"]() == 0
 
 
+@pytest.mark.parametrize("backend", [3, 4])
 @pytest.mark.parametrize("borrowed", [False, True])
 @pytest.mark.parametrize("known", [False, True])
 @pytest.mark.parametrize("edge_kind", ["missing", "null", "self"])
-def test_zero_hop_stale_hint_and_unknown_original_keep_historical_identity(borrowed, known, edge_kind):
-    state = LeaseRoots(3, counted=True)
+def test_zero_hop_stale_hint_and_unknown_original_keep_historical_identity(
+    backend, borrowed, known, edge_kind,
+):
+    state = LeaseRoots(backend, counted=True)
     source, node, _ = state.value()
     if edge_kind != "missing":
         edge = state.allocate(56)
@@ -155,11 +158,14 @@ def test_zero_hop_stale_hint_and_unknown_original_keep_historical_identity(borro
     with state.locked():
         assert state.ns[name](slot, 0) == source
     assert state.load(slot, 0) == source
-    assert state.load(source, 12) == (flags & ~2048 if known else flags)
+    # The relocating collector repairs a stale forwarded hint on an object it
+    # knows. GC3 forwards nothing: its resolver is the identity and reads no
+    # header.
+    assert state.load(source, 12) == (flags & ~2048 if known and backend == 4 else flags)
     assert state.rc_events() == [] and state.load(node, 80) == 0
 
 
-@pytest.mark.parametrize("backend", [3, 4])
+@pytest.mark.parametrize("backend", [4])
 @pytest.mark.parametrize("borrowed", [False, True])
 def test_unknown_original_follows_installed_chain_to_known_terminal(backend, borrowed):
     state = LeaseRoots(backend, counted=True)
@@ -194,7 +200,7 @@ def test_terminal_stale_hint_is_not_mutated_during_chain_publication(borrowed):
     assert state.ns["pcc_gc_foreign_lease_count_quiescent"]() == 0
 
 
-@pytest.mark.parametrize("backend", [0, 1, 2])
+@pytest.mark.parametrize("backend", [0, 1, 2, 3])
 @pytest.mark.parametrize("borrowed", [False, True])
 def test_nonmoving_production_lease_still_skips_resolution(backend, borrowed):
     state = LeaseRoots(backend)

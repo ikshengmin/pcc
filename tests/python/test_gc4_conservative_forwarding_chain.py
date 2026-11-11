@@ -180,7 +180,7 @@ def test_actual_forwarding_install_observes_finite_insert_failure(fail):
     assert state.index[source] == source_node
 
 
-@pytest.mark.parametrize("backend", [3, 4])
+@pytest.mark.parametrize("backend", [4])
 @pytest.mark.parametrize("mark", [0, 1])
 @pytest.mark.parametrize("order", list(permutations(range(3))))
 def test_raw_source_pins_full_chain_independently_of_object_list_order(backend, mark, order):
@@ -205,7 +205,7 @@ def test_raw_source_pins_full_chain_independently_of_object_list_order(backend, 
         assert state.ns["pcc_gc_install_forwarding_unlocked"](canonical, replacement) == -2
 
 
-@pytest.mark.parametrize("backend", [3, 4])
+@pytest.mark.parametrize("backend", [4])
 @pytest.mark.parametrize("order", [(0, 1, 2), (2, 1, 0)])
 def test_chain_pins_expire_with_the_frozen_raw_root_cut(backend, order):
     state = MovingRoots(backend)
@@ -280,7 +280,7 @@ def _record_index_probes(state):
     return probes
 
 
-@pytest.mark.parametrize("backend", [3, 4])
+@pytest.mark.parametrize("backend", [4])
 @pytest.mark.parametrize("edges", [0, 1, 3])
 @pytest.mark.parametrize("mark", [0, 1])
 def test_terminal_owner_reuses_exact_probes_and_matches_generic_mark(backend, edges, mark):
@@ -327,7 +327,7 @@ class ExplicitPins(MovingRoots):
         }, self.ns)
 
 
-@pytest.mark.parametrize("backend", [3, 4])
+@pytest.mark.parametrize("backend", [4])
 @pytest.mark.parametrize("mark", [0, 1])
 @pytest.mark.parametrize("order", list(permutations(range(3))))
 @pytest.mark.parametrize("pinned", [0, 1, 2])
@@ -410,7 +410,7 @@ def test_gc4_explicit_pin_validates_before_publishing_cut_bits(invalid):
     assert not [event for event in state.events if event[0] == "root"]
 
 
-@pytest.mark.parametrize("backend", [3, 4])
+@pytest.mark.parametrize("backend", [4])
 @pytest.mark.parametrize("order", [(0, 1, 2), (2, 1, 0)])
 def test_explicit_pin_mark_refreshes_a_prior_pin_only_snapshot(backend, order):
     state = ExplicitPins(backend)
@@ -428,7 +428,7 @@ def test_explicit_pin_mark_refreshes_a_prior_pin_only_snapshot(backend, order):
     }
 
 
-@pytest.mark.parametrize("backend", [3, 4])
+@pytest.mark.parametrize("backend", [4])
 def test_independent_chain_pin_then_mark_still_shades_terminal(backend):
     state = ExplicitPins(backend)
     objects = state.chain()
@@ -463,7 +463,8 @@ def test_gc4_snapshot_chain_does_not_trust_a_listed_node_as_indexed(mark):
     (0, False, False), (1, False, False), (2, False, False),
     (4, False, False), (0, True, False), (1, True, False),
     (2, True, False), (3, True, False), (4, True, False),
-    (3, True, True), (4, True, True),
+    # Only the relocating collector can hold a forwarding edge.
+    (4, True, True),
 ])
 def test_explicit_pin_does_not_expand_unaffected_scan_paths(backend, counted, edges):
     state = ExplicitPins(backend, counted=counted)
@@ -536,7 +537,7 @@ class ExplicitPinCycle(ExplicitPins):
         raise AssertionError("same-stop scalar sweep must use the completed verdict")
 
 
-@pytest.mark.parametrize("backend", [3, 4])
+@pytest.mark.parametrize("backend", [4])
 @pytest.mark.parametrize("order", list(permutations(range(3))))
 def test_explicit_source_pin_survives_actual_same_stop_mark_and_sweep(backend, order):
     state = ExplicitPinCycle(backend)

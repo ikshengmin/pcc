@@ -102,7 +102,7 @@ class IdentityInstall(Publication):
         assert self.call('pcc_gc_note_relocation_read', source) == target
 
 
-@pytest.mark.parametrize('backend', (3, 4))
+@pytest.mark.parametrize('backend', (4,))
 @pytest.mark.parametrize('target_observed', (False, True))
 @pytest.mark.parametrize('failure', ('edge_malloc', 'source_record', 'reverse_record'))
 def test_public_install_oom_preserves_independent_identity_then_retry_commits(
@@ -150,7 +150,7 @@ def test_public_install_oom_preserves_independent_identity_then_retry_commits(
     assert model.identity(model.u) == independent_id
 
 
-@pytest.mark.parametrize('backend', (3, 4))
+@pytest.mark.parametrize('backend', (4,))
 @pytest.mark.parametrize('target_observed', (False, True))
 def test_retarget_record_oom_preserves_old_edge_and_ids_until_retry(
     backend, target_observed,
@@ -225,7 +225,7 @@ def test_retarget_record_oom_preserves_old_edge_and_ids_until_retry(
     assert model.load('pcc_gc_forwarding_population') == population
 
 
-@pytest.mark.parametrize('backend', (3, 4))
+@pytest.mark.parametrize('backend', (4,))
 @pytest.mark.parametrize('target_observed', (False, True))
 @pytest.mark.parametrize('failed_record', (0, 1))
 def test_preallocated_record_oom_precedes_identity_change_and_allows_retry(
@@ -253,7 +253,7 @@ def test_preallocated_record_oom_precedes_identity_change_and_allows_retry(
     assert model.freed.count(plan) == 1
 
 
-@pytest.mark.parametrize('backend', (3, 4))
+@pytest.mark.parametrize('backend', (4,))
 @pytest.mark.parametrize('hidden_kind,target_observed', (
     ('forwarding', False),
     ('forwarding', True),

@@ -24,7 +24,7 @@ def _read_chain(backend, counted, edges):
     return state, objects, slot
 
 
-@pytest.mark.parametrize("backend", [3, 4])
+@pytest.mark.parametrize("backend", [4])
 @pytest.mark.parametrize("counted", [False, True])
 @pytest.mark.parametrize("edges", [1, 2, 3, 16])
 @pytest.mark.parametrize("entry", ["_note_relocation_read_unlocked", "pcc_gc_note_relocation_read"])
@@ -42,7 +42,7 @@ def test_one_read_returns_validated_terminal_once(backend, counted, edges, entry
     assert not [event for event in state.events if event[0] in ("incref", "decref")]
 
 
-@pytest.mark.parametrize("backend", [3, 4])
+@pytest.mark.parametrize("backend", [4])
 @pytest.mark.parametrize("kind", ["inactive", "index-only"])
 def test_intermediate_identities_need_no_header_or_object_index(backend, kind):
     state, objects, _ = _read_chain(backend, False, 3)
@@ -64,7 +64,7 @@ def test_intermediate_identities_need_no_header_or_object_index(backend, kind):
     assert state.load(COUNT) == 8
 
 
-@pytest.mark.parametrize("backend", [3, 4])
+@pytest.mark.parametrize("backend", [4])
 @pytest.mark.parametrize("invalid", ["null", "tagged", "unknown", "inactive", "dying",
                                     "missing-edge", "self-cycle", "cycle", "short-population"])
 def test_invalid_chain_aborts_without_returning_prefix_or_counting(backend, invalid):
@@ -105,7 +105,7 @@ def test_invalid_chain_aborts_without_returning_prefix_or_counting(backend, inva
         state.load("pcc_gc_forwarding_population") + 1)
 
 
-@pytest.mark.parametrize("backend", [3, 4])
+@pytest.mark.parametrize("backend", [4])
 def test_removed_edge_leaves_live_terminal_hint_untouched(backend):
     state, objects, _ = _read_chain(backend, False, 2)
     terminal = objects[1][0]
@@ -119,7 +119,7 @@ def test_removed_edge_leaves_live_terminal_hint_untouched(backend):
     assert state.load(COUNT) == 8
 
 
-@pytest.mark.parametrize("backend", [3, 4])
+@pytest.mark.parametrize("backend", [4])
 @pytest.mark.parametrize("entry", ["pcc_gc_load_ptr", "pcc_gc_load_borrowed_ptr",
                                   "pcc_gc_resolve_owned_ptr", "py_weakref_call"])
 def test_actual_callers_consume_terminal_in_one_barrier(backend, entry):
@@ -148,7 +148,7 @@ def test_actual_callers_consume_terminal_in_one_barrier(backend, entry):
     assert [state.load(obj, 0) for obj, _ in objects] == counts
 
 
-@pytest.mark.parametrize("backend", [3, 4])
+@pytest.mark.parametrize("backend", [4])
 @pytest.mark.parametrize("kind", ["inactive", "index-only", "dying"])
 @pytest.mark.parametrize("entry", ["_note_relocation_read_unlocked", "pcc_gc_note_relocation_read"])
 def test_retired_original_source_still_resolves_by_identity(backend, kind, entry):

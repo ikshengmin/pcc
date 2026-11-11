@@ -189,11 +189,12 @@ class Moving:
 def test_refresh_never_disables_a_window_with_possible_moving_work(backend,initialized,population,head,selected):
     m=Moving(backend);m.memory.update({'pcc_gc_config_initialized':initialized,POP:population,FWD:head,SELECTED:selected})
     m.refresh()
-    expected=1 if not initialized else int(backend in (3,4) and (population!=0 or head!=0 or backend==4 and selected!=0))
+    # Only the relocating collector has moving work to keep the window open for.
+    expected=1 if not initialized else int(backend==4 and (population!=0 or head!=0 or selected!=0))
     assert m.load(FLAG)==expected
 
 
-@pytest.mark.parametrize('backend',(3,4))
+@pytest.mark.parametrize('backend',(4,))
 @pytest.mark.parametrize('kind',('public','unlocked','preallocated'))
 @pytest.mark.parametrize('entry',('pcc_gc_load_ptr','pcc_gc_load_borrowed_ptr'))
 def test_first_forwarding_is_enabled_before_publication_and_last_detach_retires_it(backend,kind,entry):
@@ -253,7 +254,7 @@ def test_failed_install_can_keep_conservative_slow_path_without_publishing_an_ed
     assert not m.forward and m.load(POP)==0 and m.load(FLAG)==1
 
 
-@pytest.mark.parametrize('backend',(0,3,4))
+@pytest.mark.parametrize('backend',(0,4))
 def test_tuple_hash_rechecks_later_slots_after_user_hash_starts_forwarding(backend):
     m=Moving(backend);outer=m.object(m.ns['PY_TYPE_TUPLE']);trigger=m.object(m.ns['PY_TYPE_USER_CLASS_START']);old=m.object(m.ns['PY_TYPE_USER_CLASS_START']);new=m.object(m.ns['PY_TYPE_USER_CLASS_START'])
     m.store(outer,16,2);m.store(outer,24,trigger);m.store(outer,32,old);m.store(FLAG,0,0)
@@ -289,7 +290,7 @@ def test_actual_configuration_initializes_the_idle_gate(backend):
     assert m.load(FLAG)==0 and m.depth==0
 
 
-@pytest.mark.parametrize('backend',(3,4))
+@pytest.mark.parametrize('backend',(4,))
 @pytest.mark.parametrize('population,selected',((0,0),(1,0),(0,9000)))
 def test_actual_same_backend_reset_republishes_current_work_state(backend,population,selected):
     m=Moving(backend);m.store(POP,0,population);m.store(SELECTED,0,selected)
@@ -336,7 +337,7 @@ def test_all_authoritative_population_and_selected_head_writers_are_enumerated()
     assert text.index('pcc_gc_install_forwarding_preallocated_unlocked(') < text.index('global_store_ptr("pcc_gc_relocation_set_head", nxt)')
 
 
-@pytest.mark.parametrize('backend', (3, 4))
+@pytest.mark.parametrize('backend', (4,))
 @pytest.mark.parametrize('operation', ('empty-detach', 'empty-target', 'unmatched-target'))
 def test_noop_forwarding_removal_does_not_refresh_or_reenter_graph_lock(backend, operation):
     m = Moving(backend)
@@ -379,7 +380,7 @@ def test_noop_selected_removal_does_not_refresh_or_reenter_graph_lock(nonempty):
     assert m.load(FLAG) == 1
 
 
-@pytest.mark.parametrize('backend', (3, 4))
+@pytest.mark.parametrize('backend', (4,))
 @pytest.mark.parametrize('operation', ('detach', 'target'))
 def test_nonlast_forwarding_removal_keeps_gate_without_refresh(backend, operation):
     m = Moving(backend)

@@ -47,7 +47,7 @@ def _observe(state):
     return writes, probes
 
 
-@pytest.mark.parametrize("backend", [3, 4])
+@pytest.mark.parametrize("backend", [4])
 @pytest.mark.parametrize("counted", [False, True])
 @pytest.mark.parametrize("installer", ["public", "unlocked"])
 @pytest.mark.parametrize("edges", [1, 2, 3, 16])
@@ -67,7 +67,7 @@ def test_remap_publishes_only_canonical_terminal(backend, counted, installer, ed
     assert len(probes) == edges + 2
 
 
-@pytest.mark.parametrize("backend", [3, 4])
+@pytest.mark.parametrize("backend", [4])
 @pytest.mark.parametrize("invalid", [
     "null", "tagged", "missing-target", "inactive-terminal", "dying-terminal",
     "missing-edge", "self-cycle", "long-cycle", "short-population",
@@ -118,7 +118,7 @@ def test_fast_paths_do_not_add_index_calls_or_stores(value_kind):
                       if value_kind == "stale-flag" else [])
 
 
-@pytest.mark.parametrize("backend", [3, 4])
+@pytest.mark.parametrize("backend", [4])
 def test_inactive_intermediate_shells_still_reach_active_terminal(backend):
     state, objects, slot = _chain(backend, False, 3)
     for _, node in objects[:-1]:
@@ -175,24 +175,52 @@ def test_invalid_target_is_rejected_before_header_dereference(invalid):
     assert state.load(slot, 16) == source
 
 
-def test_gc3_one_remap_keeps_heap_field_valid_after_all_source_retirement():
-    state, objects, slot = _chain(3, False, 2)
-    # The fixture allocates the full 40-byte list; its data points at our
-    # existing source slot, reached through the real descriptor visitor.
+@pytest.mark.parametrize("backend", [0, 1, 2, 3])
+@pytest.mark.parametrize("installer", ["public", "unlocked"])
+def test_only_the_relocating_collector_installs_forwarding(backend, installer):
+    # GC1-GC3 never move an object and GC0 never forwards one. The installer
+    # refuses before it reads or writes either object or any index.
+    state = GC3(counted=False)
+    state.store("pcc_gc_backend_selected", 0, backend)
+    state.ns["pcc_gc_config_ensure"] = lambda: backend
+    state.ns["pcc_gc_backend"] = lambda: backend
+    (source, _), (target, _) = state.value()[:2], state.value()[:2]
+    headers = [state.load(obj, 12) for obj in (source, target)]
+    counts = [state.load(obj, 0) for obj in (source, target)]
+    writes, probes = _observe(state)
+    name = ("pcc_gc_install_forwarding" if installer == "public"
+            else "pcc_gc_install_forwarding_unlocked")
+    with state.locked():
+        assert state.ns[name](source, target) == -1
+    assert writes == [] and probes == []
+    assert not state.forwardings and not state.reverse
+    assert state.load("pcc_gc_forwarding_population", 0) == 0
+    assert [state.load(obj, 12) for obj in (source, target)] == headers
+    assert [state.load(obj, 0) for obj in (source, target)] == counts
+
+
+def test_gc3_remap_has_no_forwarding_to_heal_and_no_source_to_retire():
+    # GC3 promotes a survivor where it is. With no forwarding installed, a
+    # stopped-world remap leaves every heap field, root and object as it is.
+    state = GC3(counted=False)
+    state.store("pcc_gc_backend_selected", 0, 3)
+    state.ns["pcc_gc_config_ensure"] = lambda: 3
+    state.ns["pcc_gc_backend"] = lambda: 3
+    objects = [state.value()[:2] for _ in range(3)]
+    slot = state.allocate(24)
+    state.store(slot, 16, objects[0][0])
     from pcc.runtime.py.py_abi_constants import PY_TYPE_LIST
     owner, _, _ = state.value(PY_TYPE_LIST)
     state.store(owner, 16, 1)  # length
     state.store(owner, 24, 1)  # capacity
     state.store(owner, 32, slot + 16)  # items
-    # Registered roots contain only nonforwarded owners; the forwarded
-    # reference remains an ordinary heap data slot.
     for live in (owner, objects[-1][0]):
         root = state.allocate(8)
         state.store(root, 0, live)
         state.root_cells.append(root)
-    assert state.remap() > 0
-    assert state.load(slot, 16) == objects[-1][0]
-    assert owner in state.index
+    state.events.clear()
+    assert state.remap() == 0
+    assert state.load(slot, 16) == objects[0][0]
     assert [state.load(root, 0) for root in state.root_cells] == [owner, objects[-1][0]]
-    assert objects[-1][0] in state.index
-    assert all(obj not in state.index for obj, _ in objects[:-1])
+    assert all(obj in state.index for obj, _ in objects) and owner in state.index
+    assert not state.forwardings

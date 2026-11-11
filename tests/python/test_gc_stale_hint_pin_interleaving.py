@@ -61,7 +61,7 @@ def _call(state, entry, source, slot):
             slot, 16, int(entry == "borrowed-root"))
 
 
-@pytest.mark.parametrize("backend", [3, 4])
+@pytest.mark.parametrize("backend", [4])
 @pytest.mark.parametrize("entry,shape", [
     ("read", "missing"),
     ("owning-root", "missing"), ("borrowed-root", "missing"),

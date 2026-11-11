@@ -86,7 +86,7 @@ def _install(state, installer, source, target, plan):
             source, target, plan)
 
 
-@pytest.mark.parametrize("backend", [3, 4])
+@pytest.mark.parametrize("backend", [4])
 @pytest.mark.parametrize("installer", ["public", "preallocated"])
 @pytest.mark.parametrize("role", ["source", "target"])
 @pytest.mark.parametrize("operation", ["pin", "unpin"])
@@ -164,7 +164,7 @@ def test_install_preserves_completed_pin_operation(backend, installer, role, ope
         state.ns["pcc_gc_forwarding_install_plan_finish"](plan)
 
 
-@pytest.mark.parametrize("backend", [3, 4])
+@pytest.mark.parametrize("backend", [4])
 @pytest.mark.parametrize("installer", ["public", "preallocated"])
 def test_pin_present_at_admission_still_rejects_without_publication(backend, installer):
     state, source, target, plan = _fixture(backend, installer)
@@ -180,24 +180,18 @@ def test_pin_present_at_admission_still_rejects_without_publication(backend, ins
         state.ns["pcc_gc_forwarding_install_plan_finish"](plan)
 
 
-def test_retarget_preserves_pin_from_old_target_release_boundary():
-    state, source, old_target, _ = _fixture(3, "public")
+def test_a_pinned_source_refuses_a_retarget_and_keeps_its_edge():
+    # The relocating collector counts no reference, so a retarget has no
+    # refcount tail in which a pin could arrive: a pin either follows the
+    # retarget or precedes it, and a pinned source is not retargeted.
+    state, source, old_target, _ = _fixture(4, "public")
     assert _install(state, "public", source, old_target, 0) == 0
     target, _, _ = state.value()
-    released = []
-
-    def release(obj):
-        assert obj == old_target and state.depth > 0
-        state.counted_decref(obj)
-        # This fixture's checked RC tail is the explicit reentrancy boundary;
-        # the installer and pin operation remain real production bodies.
-        state.ns["pcc_gc_pin"](source)
-        released.append(obj)
-
-    state.ns["_py_decref_checked_tail"] = release
-    assert _install(state, "public", source, target, 0) == 0
-    assert released == [old_target]
-    assert state.load(state.forwardings[source], 8) == target
+    state.ns["pcc_gc_pin"](source)
+    state.ns["_py_decref_checked_tail"] = lambda obj: pytest.fail(
+        "a count-free retarget released a count")
+    assert _install(state, "public", source, target, 0) == -2
+    assert state.load(state.forwardings[source], 8) == old_target
     assert state.load(source, 12) & (FORWARDED | PINNED) == FORWARDED | PINNED
     assert state.ns["pcc_gc_object_is_address_pinned"](source) == 1
     assert state.depth == 0 and not state.stopped
