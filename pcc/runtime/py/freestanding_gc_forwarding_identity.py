@@ -882,6 +882,13 @@ def pcc_gc_note_relocation_read(obj: c_ptr) -> c_ptr:
     selected: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
     if selected != 4:
         return obj
+    # Under the nonmoving protocol a forwarded address is reachable only
+    # inside the stop that moved it, until its references are rewritten.
+    # Outside that window this is the identity: asking the index instead
+    # took the graph lock for every object not yet in a registration batch.
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            and load_i32(global_addr("pcc_gc_backend4_remap_owed"), 0) == 0):
+        return obj
     if pcc_gc_object_is_known_stable(obj) != 0:
         if (load_i32(obj, 12) & 2048) == 0:
             return obj

@@ -426,6 +426,14 @@ def _gc_relocation_candidate(o) -> int:
 
 
 def _gc_forwarding_population() -> int:
+    """Whether a value this thread holds may be a forwarded address.
+
+    Under the nonmoving protocol that is only inside the stop that moved
+    it, until its references are rewritten (pcc_gc_backend4_remap_owed):
+    edges kept for their grace epochs name sources nothing reaches.
+    """
+    if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
+        return load_i32(global_addr("pcc_gc_backend4_remap_owed"), 0)
     return load_i32(global_addr("pcc_gc_forwarding_population"), 0)
 
 
@@ -515,7 +523,13 @@ def pcc_gc_alloc(size: int, type_tag: int, flags: int):
         ):
             stored_flags = stored_flags | 16384
     if backend == 4:
-        if _gc_graph_leaf_tag(type_tag) == 0:
+        # The page allocator bumps a shared active page under the graph
+        # lock, and a page object's provenance is a locked index insert:
+        # two lock round trips for every container, which put four workers
+        # below one. Under the nonmoving protocol every object comes from
+        # the allocator's per-thread object cells; relocation copies cells.
+        if (_gc_graph_leaf_tag(type_tag) == 0
+                and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0):
             obj = pcc_gc_backend4_try_zpage_alloc(size, flags)
             if ptr_is_null(obj) == 0:
                 stored_flags = stored_flags | 65536

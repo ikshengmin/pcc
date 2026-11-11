@@ -3961,6 +3961,12 @@ def pcc_gc_backend4_zpage_register_owner_payload_span(
     backend: int = _init_config()
     if backend != 4:
         return -1
+    # A span indexes the slots of an owner's payload for the store buffer.
+    # Stores under the nonmoving protocol fill no store buffer, and a new
+    # owner has no page node until its registration batch runs: the lock
+    # was taken for every list, dict and frame to record nothing.
+    if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
+        return -1
     _object_graph_lock()
     offset: int = _backend4_zpage_register_owner_payload_span_locked(
         owner, base, size_bytes
@@ -4054,6 +4060,9 @@ def pcc_gc_backend4_zpage_unregister_owner_payload_span(owner, base) -> int:
     if ptr_is_null(base) != 0:
         return -1
     _init_config()
+    if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
+        # No span was registered (pcc_gc_backend4_zpage_register_owner_payload_span).
+        return 0
     _object_graph_lock()
     removed: int = 0
     node = _backend4_zpage_find(owner)
@@ -4074,6 +4083,8 @@ def pcc_gc_backend4_zpage_retarget_owner_payload_span(
     if size_bytes <= 0:
         return -1
     _init_config()
+    if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
+        return -1
     _object_graph_lock()
     offset: int = _backend4_zpage_retarget_owner_payload_span_locked(
         owner, old_base, new_base, size_bytes
@@ -4193,6 +4204,10 @@ def pcc_gc_backend4_retarget_mutator_payload_locked(
     pair_count: int,
 ) -> int:
     if load_i32(global_addr("pcc_gc_backend_selected"), 0) != 4:
+        return 1
+    # Under the nonmoving protocol no store buffer entry or payload span
+    # names the old array: there is nothing to move to the new one.
+    if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
         return 1
     if ptr_is_null(owner) != 0 or is_tagged_int(owner) != 0:
         return 0
