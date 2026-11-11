@@ -306,6 +306,106 @@ SUPPORTED_CASES: tuple[FeatureCase, ...] = (
         """,
     ),
     FeatureCase(
+        # Language reference 8.2/8.3: a ``break`` executed in the loop body
+        # skips the ``else`` clause, however deeply the body nests it.
+        "loop_else_break_inside_with",
+        """
+        class Scope:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, kind, value, trace):
+                return False
+
+        def for_scan(limit):
+            for i in range(4):
+                with Scope():
+                    if i == limit:
+                        break
+            else:
+                return "else"
+            return "break"
+
+        def while_scan(limit):
+            i = 0
+            while i < 4:
+                with Scope():
+                    try:
+                        if i == limit:
+                            break
+                    finally:
+                        i = i + 1
+            else:
+                return "else"
+            return "break"
+
+        def nested_with(limit):
+            for i in range(4):
+                with Scope():
+                    with Scope() as inner:
+                        if i == limit:
+                            break
+            else:
+                return "else"
+            return "break"
+
+        def main() -> None:
+            print(for_scan(2), for_scan(9))
+            print(while_scan(2), while_scan(9))
+            print(nested_with(0), nested_with(9))
+        if __name__ == "__main__":
+            main()
+        """,
+    ),
+    FeatureCase(
+        # A ``break`` in the ``else`` clause of an inner loop is outside that
+        # loop: it terminates the enclosing loop and skips its ``else``.
+        "loop_else_break_in_inner_loop_else",
+        """
+        def for_outer(limit):
+            for i in range(4):
+                for j in range(2):
+                    if j == 5:
+                        break
+                else:
+                    if i == limit:
+                        break
+            else:
+                return "else"
+            return "break"
+
+        def while_outer(limit):
+            i = 0
+            while i < 4:
+                j = 0
+                while j < 2:
+                    j = j + 1
+                else:
+                    if i == limit:
+                        break
+                i = i + 1
+            else:
+                return "else"
+            return "break"
+
+        def inner_break_stays_inner(limit):
+            for i in range(4):
+                for j in range(4):
+                    if j == limit:
+                        break
+            else:
+                return "else"
+            return "break"
+
+        def main() -> None:
+            print(for_outer(1), for_outer(9))
+            print(while_outer(1), while_outer(9))
+            print(inner_break_stays_inner(1), inner_break_stays_inner(9))
+        if __name__ == "__main__":
+            main()
+        """,
+    ),
+    FeatureCase(
         "enumerate_zip_loop",
         """
         def main() -> None:

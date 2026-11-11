@@ -12,6 +12,7 @@ from pcc.frontends.python.py_ast import Assign, Attr, BoolLit, BoolType, Break, 
 from pcc.frontends.python.py_ast import ListExpr
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.builtin_exceptions import BUILTIN_EXC_TAG as _BUILTIN_EXC_TAG
+from pcc.frontends.python.codegen.control_flow_lowering import _tag_loop_breaks
 from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.local_bound_lowering import mark_bound_target
 
@@ -2431,10 +2432,9 @@ class ForLoopLoweringMixin:
             #   if not __forelse_broke__<k>:
             #       <else_body>
             #
-            # Every ``break`` stmt inside ``<body>`` gets rewritten to
-            # ``<broke> = True; break``. We don't descend into nested
-            # For/While because those have their own iteration scope;
-            # a break in a nested loop breaks the inner, not outer.
+            # Every ``break`` that leaves this loop is rewritten to
+            # ``<broke> = True; break`` by ``_tag_loop_breaks``, the one
+            # walk shared with ``while``/``else``.
             from dataclasses import replace as _replace
 
             broke_name = self._fresh("forelse_broke")
@@ -2453,45 +2453,6 @@ class ForLoopLoweringMixin:
                 annotation=BoolType(name="bool"),
             )
 
-            def tag_breaks(stmts):
-                out = []
-                for s in stmts:
-                    if isinstance(s, Break):
-                        out.append(set_broke_true)
-                        out.append(s)
-                        continue
-                    if isinstance(s, If):
-                        out.append(
-                            _replace(
-                                s,
-                                body=tag_breaks(s.body),
-                                else_body=tag_breaks(s.else_body),
-                            )
-                        )
-                        continue
-                    if isinstance(s, Try):
-                        # Avoid generator expression — pcc-py self-host
-                        # mis-hoists ``for h in ...`` here, leaving ``h``
-                        # unbound in the synthesized closure.
-                        new_handlers_list = []
-                        for h in s.handlers:
-                            new_handlers_list.append(
-                                _replace(h, body=tag_breaks(h.body))
-                            )
-                        new_handlers = tuple(new_handlers_list)
-                        out.append(
-                            _replace(
-                                s,
-                                body=tag_breaks(s.body),
-                                else_body=tag_breaks(s.else_body),
-                                finally_body=tag_breaks(s.finally_body),
-                                handlers=new_handlers,
-                            )
-                        )
-                        continue
-                    out.append(s)
-                return tuple(out)
-
             # Initialise the broke flag in the enclosing scope.
             ir_ty = self._map_type(BoolType(name="bool"))
             alloca = self._alloca_in_entry(
@@ -2503,7 +2464,7 @@ class ForLoopLoweringMixin:
 
             new_stmt = _replace(
                 stmt,
-                body=tag_breaks(stmt.body),
+                body=_tag_loop_breaks(stmt.body, set_broke_true),
                 else_body=(),
             )
             self._emit_for(new_stmt)

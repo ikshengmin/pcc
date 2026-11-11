@@ -1,6 +1,7 @@
 """Basic statement and expression control-flow lowering for L1CodeGen."""
 from __future__ import annotations
 
+from dataclasses import replace as _replace
 import os
 
 from pcc.ir.compat import ir
@@ -16,6 +17,7 @@ from pcc.frontends.python.py_ast import (
     Break,
     Compare,
     DynType,
+    For,
     If,
     IfExpr,
     IntLit,
@@ -26,6 +28,7 @@ from pcc.frontends.python.py_ast import (
     Try,
     TupleExpr,
     While,
+    With,
 )
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.cpy_import_state import live_import_name_slot
@@ -50,6 +53,62 @@ def _jumping_conditions_enabled() -> bool:
     restores the ``cond.end`` phi lowering."""
     value = str(os.environ.get("PCC_JUMPING_CONDITIONS", "") or "").strip().lower()
     return value not in ("0", "false", "no", "off")
+
+
+def _tag_loop_breaks(stmts, set_broke_true):
+    """Put ``set_broke_true`` before each ``break`` that leaves this loop.
+
+    ``stmts`` is the body of a ``while``/``for`` that has an ``else`` clause;
+    the clause is lowered as a flag the body sets before it breaks. A
+    ``break`` belongs to the nearest enclosing loop, so the walk enters
+    ``if``, ``try`` and ``with`` bodies and the ``else`` clause of a nested
+    loop, which runs outside that loop. It does not enter a nested loop's
+    body: a ``break`` there leaves the nested loop only.
+    """
+    out = []
+    for s in stmts:
+        if isinstance(s, Break):
+            out.append(set_broke_true)
+            out.append(s)
+            continue
+        if isinstance(s, If):
+            out.append(
+                _replace(
+                    s,
+                    body=_tag_loop_breaks(s.body, set_broke_true),
+                    else_body=_tag_loop_breaks(s.else_body, set_broke_true),
+                )
+            )
+            continue
+        if isinstance(s, Try):
+            # An explicit loop, not a generator expression: the self-hosted
+            # compiler mis-hoisted ``for h in ...`` here and left ``h`` unbound.
+            new_handlers_list = []
+            for h in s.handlers:
+                new_handlers_list.append(
+                    _replace(h, body=_tag_loop_breaks(h.body, set_broke_true))
+                )
+            new_handlers = tuple(new_handlers_list)
+            out.append(
+                _replace(
+                    s,
+                    body=_tag_loop_breaks(s.body, set_broke_true),
+                    else_body=_tag_loop_breaks(s.else_body, set_broke_true),
+                    finally_body=_tag_loop_breaks(s.finally_body, set_broke_true),
+                    handlers=new_handlers,
+                )
+            )
+            continue
+        if isinstance(s, With):
+            out.append(_replace(s, body=_tag_loop_breaks(s.body, set_broke_true)))
+            continue
+        if (isinstance(s, While) or isinstance(s, For)) and s.else_body:
+            out.append(
+                _replace(s, else_body=_tag_loop_breaks(s.else_body, set_broke_true))
+            )
+            continue
+        out.append(s)
+    return tuple(out)
 
 
 class ControlFlowLoweringMixin:
@@ -644,8 +703,6 @@ class ControlFlowLoweringMixin:
 
     def _emit_while(self, stmt: While) -> None:
         if stmt.else_body:
-            from dataclasses import replace as _replace
-
             broke_name = self._fresh("whileelse_broke")
             span = stmt.span
             broke_lit_false = BoolLit(
@@ -670,42 +727,6 @@ class ControlFlowLoweringMixin:
                 annotation=BoolType(name="bool"),
             )
 
-            def tag_breaks(stmts):
-                out = []
-                for s in stmts:
-                    if isinstance(s, Break):
-                        out.append(set_broke_true)
-                        out.append(s)
-                        continue
-                    if isinstance(s, If):
-                        out.append(
-                            _replace(
-                                s,
-                                body=tag_breaks(s.body),
-                                else_body=tag_breaks(s.else_body),
-                            )
-                        )
-                        continue
-                    if isinstance(s, Try):
-                        new_handlers_list = []
-                        for h in s.handlers:
-                            new_handlers_list.append(
-                                _replace(h, body=tag_breaks(h.body))
-                            )
-                        new_handlers = tuple(new_handlers_list)
-                        out.append(
-                            _replace(
-                                s,
-                                body=tag_breaks(s.body),
-                                else_body=tag_breaks(s.else_body),
-                                finally_body=tag_breaks(s.finally_body),
-                                handlers=new_handlers,
-                            )
-                        )
-                        continue
-                    out.append(s)
-                return tuple(out)
-
             ir_ty = self._map_type(BoolType(name="bool"))
             alloca = self._alloca_in_entry(
                 ir_ty,
@@ -716,7 +737,7 @@ class ControlFlowLoweringMixin:
 
             new_stmt = _replace(
                 stmt,
-                body=tag_breaks(stmt.body),
+                body=_tag_loop_breaks(stmt.body, set_broke_true),
                 else_body=(),
             )
             self._emit_while(new_stmt)
