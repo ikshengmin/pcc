@@ -340,17 +340,16 @@ def test_host_source_stack_diff_callback_requires_table_and_opt_in(
         return 0
 
     namespace = {
+        "i64": int,
         "global_load_ptr": table_pointer,
         "ptr_is_null": lambda value: int(value is None),
         "cstr": lambda value: value,
         "pcc_platform_getenv": getenv,
         "pcc_gc_precise_stack_diff": compare,
     }
-    function = _function(MAPPED_ROOTS, "pcc_gc_precise_stack_diff_if_requested")
-    function.decorator_list = []
-    module = ast.Module(body=[function], type_ignores=[])
-    exec(compile(module, str(MAPPED_ROOTS), "exec"), namespace)
-    assert namespace[function.name]() is None
+    symbol = "pcc_gc_precise_stack_diff_if_requested"
+    load_functions(MAPPED_ROOTS, (symbol,), namespace)
+    assert namespace[symbol]() is None
     assert tables == ["pcc_gc_precise_stackmap_table"]
     assert lookups == (["PCC_GC_STACKMAP_DIFF"] if table_present else [])
     assert calls == ([1] if table_present and diff_requested else [])
@@ -371,10 +370,65 @@ def test_host_source_step_stack_diff_callback_routing(
     memory.set("pcc_gc_backend4_remap_active", remap_active)
     assert functions["pcc_gc_step"](budget) == 0
     automatic_step = (
-        budget > 0 and not explicit_collect and backend in (0, 3, 4)
+        budget > 0 and not explicit_collect and backend in (0, 4)
         and not (backend == 4 and remap_active)
     )
     assert calls == ([1] if automatic_step else [])
+
+
+@pytest.mark.parametrize("backend", (1, 2, 3))
+@pytest.mark.parametrize("budget", (-1, 0, 7))
+@pytest.mark.parametrize("explicit_collect", (0, 1))
+@pytest.mark.parametrize("mark_active,cycle_requested", ((0, 0), (1, 0), (0, 1), (1, 1)))
+def test_host_source_nonmoving_steps_share_scheduler_and_wide_telemetry(
+    backend, budget, explicit_collect, mark_active, cycle_requested,
+):
+    # Execute both production entries: GC1/2/3 dispatch to the shared mark
+    # scheduler. Its tracing result pays debt and its step/pause writers own
+    # the counters exactly once, without the dispatcher's moving work.
+    memory, functions = _host_functions()
+    memory.set("pcc_gc_backend_selected", backend)
+    memory.set("pcc_gc_explicit_collect_active", explicit_collect)
+    memory.set("pcc_gc_mark_active", mark_active)
+    memory.set("pcc_gc_cycle_requested", cycle_requested)
+    before = (1 << 32) + 13
+    debt = (1 << 40) + 7
+    memory.set("pcc_gc_metric_step", before)
+    memory.set("pcc_gc_metric_pause_count", before)
+    memory.set("pcc_gc_metric_pause_sum_us", before)
+    memory.set("pcc_gc_debt_bytes", debt)
+    events = []
+    functions["pcc_gc_tracing_step_cycle"] = (
+        lambda amount: events.append(("trace", amount)) or 3
+    )
+    functions["pcc_gc_tracing_discharge_debt"] = (
+        lambda amount: events.append(("discharge", amount))
+    )
+
+    def unexpected(*args):
+        pytest.fail("nonmoving step reached a moving/stack-diff provider")
+
+    for symbol in (
+        "pcc_thread_owns_stopped_world", "pcc_stop_the_world", "pcc_resume_world",
+        "pcc_gc_precise_stack_diff_if_requested", "pcc_gc_generational_step",
+        "pcc_gc_backend3_drain_promotion_worklist",
+        "pcc_gc_backend4_step_remembered_roots",
+        "pcc_gc_backend4_step_generation_aging",
+        "pcc_gc_backend4_evacuation_page_drain",
+        "pcc_gc_backend4_select_relocation_pages",
+        "pcc_gc_backend4_remap_and_retire_stopped_world",
+    ):
+        functions[symbol] = unexpected
+
+    stepped = int(budget > 0)
+    assert functions["pcc_gc_step"](budget) == 3 * stepped
+    assert events == ([("trace", budget), ("discharge", 3)] if stepped else [])
+    telemetry = functions["pcc_gc_telemetry"]
+    assert telemetry(5) == telemetry(32) == telemetry(33) == before + stepped
+    assert telemetry(7) == stepped
+    assert memory.get("pcc_gc_debt_bytes") == (
+        0 if stepped and not mark_active and not cycle_requested else debt
+    )
 
 
 @pytest.mark.parametrize("other_mutators,may_relocate", [
@@ -389,13 +443,18 @@ def test_host_source_step_stack_diff_callback_routing(
     pytest.param((("parked", True), ("parked", False)), False, id="mixed-parks"),
 ])
 @pytest.mark.parametrize("explicit_collect", [0, 1])
+@pytest.mark.parametrize("selection_due", [False, True])
 def test_host_source_gc4_relocation_requires_other_mutators_at_application_gates(
-    other_mutators, may_relocate, explicit_collect,
+    other_mutators, may_relocate, explicit_collect, selection_due,
 ):
     memory, functions = _host_functions(other_mutators=other_mutators)
     memory.set("pcc_gc_backend_selected", 4)
     memory.set("pcc_gc_explicit_collect_active", explicit_collect)
     memory.set("pcc_gc_forwarding_population", 1)
+    marks_finished = (1 << 32) + 9
+    selection_commit = marks_finished - int(selection_due)
+    memory.set("pcc_gc_tracing_finish_commits", marks_finished)
+    memory.set("pcc_gc_backend4_selection_commit", selection_commit)
     calls = []
 
     def work(name, result=0):
@@ -430,26 +489,29 @@ def test_host_source_gc4_relocation_requires_other_mutators_at_application_gates
             ("pcc_gc_backend4_step_generation_aging", (7,)),
         ]
         if may_relocate:
-            expected += [
-                ("pcc_gc_backend4_evacuation_page_drain", (7,)),
-                ("pcc_gc_backend4_select_relocation_pages", (7,)),
-            ]
+            expected.append(("pcc_gc_backend4_evacuation_page_drain", (7,)))
+            if selection_due:
+                expected.append(("pcc_gc_backend4_select_relocation_pages", (7,)))
     if may_relocate:
         expected.append((retire, ()))
     # Unsafe records block every moving operation, not the non-moving work.
     # This executes the production dispatcher body, including both retirement
     # paths, rather than replacing its quiescence condition in the test.
     assert calls == expected
+    # Selection is owed once per finished mark, and only an automatic step
+    # allowed to relocate consumes it. Preserve the full-width commit value.
+    assert memory.get("pcc_gc_backend4_selection_commit") == (
+        marks_finished if not explicit_collect and may_relocate else selection_commit
+    )
 
 
-
-@pytest.mark.parametrize("backend", (0, 3, 4))
+@pytest.mark.parametrize("backend", range(5))
 @pytest.mark.parametrize("stopped", (0, -1))
 def test_host_source_direct_moving_step_owns_its_stopped_world(backend, stopped):
     # pcc_thread_all_stopped_at_gates answers only for a stopped world. A
-    # direct GC3/GC4 step (no stopped world of its caller) stops it for the
-    # step and resumes it after; a refused stop does no work. Other
-    # collectors' steps take no world.
+    # direct GC4 step (no stopped world of its caller) stops it for the
+    # step and resumes it after; a refused stop does no work. GC0 and the
+    # shared GC1/2/3 mark-step dispatcher take no world of their own.
     memory, functions = _host_functions(other_mutators=(("parked", 1),))
     memory.set("pcc_gc_backend_selected", backend)
     memory.set("pcc_gc_forwarding_population", 1)
@@ -460,14 +522,12 @@ def test_host_source_direct_moving_step_owns_its_stopped_world(backend, stopped)
     retire = "pcc_gc_backend4_remap_and_retire_stopped_world"
     functions[retire] = lambda: events.append("retire") or 1
     result = functions["pcc_gc_step"](7)
-    if backend == 0:
+    if backend != 4:
         assert events == [] and result == 0
     elif stopped != 0:
         assert events == ["stop"] and result == 0
-    elif backend == 4:
-        assert events == ["stop", "retire", "resume"] and result == 1
     else:
-        assert events == ["stop", "resume"]
+        assert events == ["stop", "retire", "resume"] and result == 1
 
 
 @pytest.mark.parametrize("auto_step", (0, 1))
