@@ -13,6 +13,7 @@ module               Agda module            contents
 ===================  =====================  ================================
 ``lambda_de_bruijn``  ``LambdaDeBruijn``     terms, lifting, substitution
 ``lambda_untyped``    ``LambdaUntyped``      beta reduction and its closure
+``lambda_weak_head``  ``LambdaWeakHead``     weak head steps (first part)
 ``demo``              ``Demo`` (part)        closed examples and their values
 ===================  =====================  ================================
 """
