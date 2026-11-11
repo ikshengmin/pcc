@@ -38,7 +38,7 @@ PROVIDERS = (
     ("pcc.frontends.python.compiled_default_passes", "_has_py_cpy_call", "i1", ("ptr",)),
     ("pcc.frontends.python.compiled_default_passes", "_mem2reg_function", "ptr", ("ptr",)),
     ("pcc.frontends.python.compiled_default_passes", "_sroa_function", "ptr", ("ptr",)),
-    ("pcc.frontends.python.compiled_default_passes", "run_compiled_default_tier", "ptr", ("ptr", "ptr", "i1")),
+    ("pcc.frontends.python.compiled_default_passes", "run_compiled_default_tier", "ptr", ("ptr", "ptr")),
 )
 
 
@@ -94,8 +94,17 @@ def test_defaults_are_literal_nodes_and_required_keyword_stays_required():
         assert arg["kind"] == "kw_only" and arg["has_default"]
         assert isinstance(arg["default"], BoolLit) and arg["default"].value is False
     tier = exports["pcc.frontends.python.compiled_default_passes"]["run_compiled_default_tier"]["call_sig"]
-    assert tier[-1]["kind"] == "kw_only" and not tier[-1]["has_default"]
-    assert tier[-1]["default"] is None
+    # The tier's strict flag was its only required keyword; the strict rule is
+    # unconditional now and the flag is gone, so the property is checked on a
+    # parsed signature instead.
+    assert [arg["kind"] for arg in tier] == ["pos", "pos"]
+    assert not any(arg["has_default"] for arg in tier)
+    required = parse_and_lift(
+        "def f(a, *, flag: bool):\n    return a\n", "<required-keyword>", "required_keyword"
+    )
+    signature = _export_call_sig(required.body[0].args, "required_keyword")
+    assert signature[-1]["name"] == "flag" and signature[-1]["kind"] == "kw_only"
+    assert not signature[-1]["has_default"] and signature[-1]["default"] is None
     assert _default_native_module_exports("ordinary_user_module") is None
 
 
