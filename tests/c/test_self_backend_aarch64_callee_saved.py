@@ -358,11 +358,13 @@ def test_name_referenced_operand_reads_its_allocated_register(monkeypatch):
 
 @pytest.mark.parametrize("mode", ("default", "function", "local"))
 def test_scan_reuse_preserves_callee_saved_assembly_and_frames(monkeypatch, mode):
-    from pcc.backend import self_backend_aarch64_darwin_prologue as prologue
     from pcc.backend import self_backend_aarch64_darwin_regalloc as regalloc
     from pcc.backend.self_backend_aarch64_darwin import emit_aarch64_darwin_asm
     from tests.aarch64_regalloc_scan_reference import (
-        allocation_state, counted_function_facts, old_scan_allocator, select_mode,
+        AllocatorEmissionCapture,
+        counted_function_facts,
+        old_scan_allocator,
+        select_mode,
     )
 
     from tests.scalar_arena_projection_ci_reference import disable_scalar_projections
@@ -373,25 +375,20 @@ def test_scan_reuse_preserves_callee_saved_assembly_and_frames(monkeypatch, mode
     reference = old_scan_allocator(facts_counts=graph_counts[0])
     counted_facts = counted_function_facts(regalloc._function_level_facts, graph_counts[1])
     for index, allocator in enumerate((reference, regalloc.allocate_aarch64_block_registers)):
-        states = {}
-
-        def allocate(func):
-            allocator(func)
-            states[func.name] = allocation_state(func)
-
         with monkeypatch.context() as patch:
-            patch.setattr(prologue, "allocate_aarch64_block_registers", allocate)
+            capture = AllocatorEmissionCapture(patch, allocator)
             if index == 0:
                 disable_scalar_projections(patch, allocator)
             if index == 1:
                 patch.setattr(regalloc, "_function_level_facts", counted_facts)
             assembly = emit_aarch64_darwin_asm(IR, optimize=False)
-        assert set(states) == {"pressure", "loop_calls", "fib", "narrow", "tagged"}
+        capture.assert_complete({"pressure", "loop_calls", "fib", "narrow", "tagged"})
+        states = capture.allocation_states
         if mode == "default":
             assert states["fib"]["callee_saved"]
         else:
             assert not any(state["callee_saved"] for state in states.values())
-        outputs.append((assembly, states))
+        outputs.append((assembly, states, capture.physical_frame_states))
     assert outputs[0] == outputs[1]
     if mode != "local":
         assert graph_counts[1]["hits"] > 0

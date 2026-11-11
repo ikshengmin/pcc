@@ -15,7 +15,11 @@ import pytest
 from pcc.backend import self_backend_aarch64_darwin_regalloc as regalloc
 from pcc.backend.self_backend_kernel import get_indexed_function_kernel
 from pcc.backend.self_backend_precise_stackmaps import PackedPlannedSafepoints
-from tests.aarch64_regalloc_scan_reference import allocation_state, select_mode
+from tests.aarch64_regalloc_scan_reference import (
+    AllocatorEmissionCapture,
+    allocation_state,
+    select_mode,
+)
 from tests.c.test_self_backend_aarch64_regalloc import (
     _SCAN_SHAPES,
     _scan_reuse_function,
@@ -242,7 +246,6 @@ def test_retained_error_has_only_function_local_index_lifetime(monkeypatch):
 @pytest.mark.parametrize("mode", ("default", "function", "local"))
 def test_reload_index_preserves_emitted_bytes_and_frames(monkeypatch, shape, route, mode):
     from pcc.backend import self_backend_aarch64_darwin as backend
-    from pcc.backend import self_backend_aarch64_darwin_prologue as prologue
     from pcc.backend.native_object import encode_native_object_from_sections
     from pcc.backend.self_backend_parse import parse_self_backend_module
     from tests.c.test_self_backend_aarch64_callee_saved import IR
@@ -250,20 +253,18 @@ def test_reload_index_preserves_emitted_bytes_and_frames(monkeypatch, shape, rou
 
     select_mode(monkeypatch, mode)
     source = IR if shape == "calls-phi" else _stale_managed_ssa_ir("arm64-apple-darwin")
+    function_names = (
+        {"pressure", "loop_calls", "fib", "narrow", "tagged"}
+        if shape == "calls-phi" else {"refresh"}
+    )
     results = []
     for note, allocator in (
         (_list_note, _list_allocator()),
         (regalloc.note_aarch64_reload_destinations, regalloc.allocate_aarch64_block_registers),
     ):
-        states = {}
-
-        def allocate(func):
-            allocator(func)
-            states[func.name] = allocation_state(func)
-
         with monkeypatch.context() as patch:
             patch.setattr(backend, "note_aarch64_reload_destinations", note)
-            patch.setattr(prologue, "allocate_aarch64_block_registers", allocate)
+            capture = AllocatorEmissionCapture(patch, allocator)
             if route == "assembly":
                 output = backend.emit_aarch64_darwin_asm(source, optimize=False)
             else:
@@ -272,7 +273,9 @@ def test_reload_index_preserves_emitted_bytes_and_frames(monkeypatch, shape, rou
                 )
                 sections, undefined = transport.assemble_sections()
                 output = encode_native_object_from_sections(sections, undefined=undefined)
-        results.append((output, states))
+        capture.assert_complete(function_names)
+        results.append((output, capture.allocation_states, capture.physical_frame_states))
     assert results[0] == results[1]
     if shape == "managed-derived":
         assert results[1][1]["refresh"]["reload_offsets"]
+        assert results[1][2]["refresh"]["reload_offsets"]

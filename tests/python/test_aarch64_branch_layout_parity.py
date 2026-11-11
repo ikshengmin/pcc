@@ -253,13 +253,14 @@ def test_no_suffix_parts_are_not_sliced_or_extended_twice(monkeypatch):
 def test_regalloc_scan_reuse_preserves_assembly_native_sections_and_stackmaps(
     monkeypatch, shape, mode,
 ):
-    from pcc.backend import self_backend_aarch64_darwin_prologue as prologue
     from pcc.backend import self_backend_aarch64_darwin_regalloc as regalloc
     from pcc.backend.native_object import encode_native_object_from_sections
     from pcc.backend.precise_stackmap import decode_stack_map
     from pcc.backend.self_backend_parse import parse_self_backend_module
     from tests.aarch64_regalloc_scan_reference import (
-        allocation_state, old_scan_allocator, select_mode,
+        AllocatorEmissionCapture,
+        old_scan_allocator,
+        select_mode,
     )
     from tests.python.test_precise_stackmap_abi import _stale_managed_ssa_ir
 
@@ -274,26 +275,31 @@ def test_regalloc_scan_reuse_preserves_assembly_native_sections_and_stackmaps(
 
     from tests.scalar_arena_projection_ci_reference import disable_scalar_projections
 
+    function_names = (
+        {"true_next", "false_next", "true_phi", "false_phi", "both_phi", "loop_sum"}
+        if shape == "branches" else {"refresh"}
+    )
     outputs = []
     for index, allocator in enumerate((old_scan_allocator(), regalloc.allocate_aarch64_block_registers)):
-        states = []
-
-        def allocate(func):
-            allocator(func)
-            states.append((func.name, allocation_state(func)))
-
         with monkeypatch.context() as patch:
-            patch.setattr(prologue, "allocate_aarch64_block_registers", allocate)
+            assembly_capture = AllocatorEmissionCapture(patch, allocator)
             if index == 0:
                 disable_scalar_projections(patch, allocator)
             assembly = emit_aarch64_darwin_indexed_module(module(), optimize=False)
-            assembly_states = list(states)
-            states.clear()
+        assembly_capture.assert_complete(function_names)
+        with monkeypatch.context() as patch:
+            native_capture = AllocatorEmissionCapture(patch, allocator)
+            if index == 0:
+                disable_scalar_projections(patch, allocator)
             transport = emit_aarch64_darwin_indexed_transport(module(), optimize=False)
+        native_capture.assert_complete(function_names)
+        states = list(native_capture.allocation_states.items())
+        physical_frames = list(native_capture.physical_frame_states.items())
         sections, undefined = transport.assemble_sections()
         assert transport.native_finalized
         assert transport.fallback_instruction_count == 0
-        assert states == assembly_states
+        assert states == list(assembly_capture.allocation_states.items())
+        assert physical_frames == list(assembly_capture.physical_frame_states.items())
         assert (sections, undefined) == assemble_file(assembly)
         encoded = encode_native_object_from_sections(sections, undefined=undefined)
         if shape == "root-reloads":
@@ -302,7 +308,35 @@ def test_regalloc_scan_reuse_preserves_assembly_native_sections_and_stackmaps(
             assert any(record.locations for function in decoded.functions for record in function.records)
             assert any(state["reload_offsets"] for _, state in states)
             assert undefined
-        outputs.append((assembly, states, sections, undefined, encoded))
+        outputs.append((assembly, states, physical_frames, sections, undefined, encoded))
     # Complete sections include instruction words, symbols, relocations, unwind
     # and stackmaps. This compares two allocators, not just two emitter routes.
     assert outputs[0] == outputs[1]
+
+    if shape == "branches" and mode == "default":
+        # An unchanged output cannot prove that the selected allocator ran.
+        # Reproduce both an absent hook and the obsolete prologue-only hook;
+        # the same coverage assertion used above must reject each route.
+        from pcc.backend import self_backend_aarch64_darwin_prologue as prologue
+
+        original_allocator = darwin_backend.allocate_aarch64_block_registers
+        for emit in (
+            emit_aarch64_darwin_indexed_module,
+            emit_aarch64_darwin_indexed_transport,
+        ):
+            for hook in ("missing", "prologue-only"):
+                with monkeypatch.context() as patch:
+                    capture = AllocatorEmissionCapture(patch, old_scan_allocator())
+                    injected_allocator = darwin_backend.allocate_aarch64_block_registers
+                    patch.setattr(
+                        darwin_backend, "allocate_aarch64_block_registers", original_allocator,
+                    )
+                    if hook == "prologue-only":
+                        patch.setattr(
+                            prologue, "allocate_aarch64_block_registers", injected_allocator,
+                        )
+                    emit(module(), optimize=False)
+                assert set(capture.physical_frame_states) == function_names
+                assert capture.allocation_calls == []
+                with pytest.raises(AssertionError, match="^allocator call coverage$"):
+                    capture.assert_complete(function_names)

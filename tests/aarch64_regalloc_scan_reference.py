@@ -1,6 +1,7 @@
 """Test-only old-scan control; all real liveness and allocation still execute."""
 
 import ast
+from collections import Counter
 import inspect
 
 from pcc.backend import self_backend_aarch64_darwin_regalloc as regalloc
@@ -83,6 +84,48 @@ def allocation_state(func):
         "madd_fusions": tuple(func.aarch64_madd_fusions),
         "reload_offsets": tuple(func.aarch64_reload_slot_offsets),
     }
+
+
+class AllocatorEmissionCapture:
+    """Observe the selected allocator and the later physical-frame boundary.
+
+    Normal emission owns allocation before frame compaction and stack-map
+    replanning. Patching the prologue's direct-caller fallback no longer
+    selects an allocator for this path. Keep both state snapshots: allocation
+    offsets are not the final physical offsets consumed by the emitter.
+    """
+
+    def __init__(self, patch, allocator):
+        from pcc.backend import self_backend_aarch64_darwin as backend
+
+        self.allocation_calls = []
+        self.emission_calls = []
+        self.allocation_states = {}
+        self.physical_frame_states = {}
+        emit_function = backend._emit_function
+
+        def allocate(func):
+            allocator(func)
+            self.allocation_calls.append(func.name)
+            self.allocation_states[func.name] = allocation_state(func)
+
+        def emit(func, *args, **kwargs):
+            self.emission_calls.append(func.name)
+            state = allocation_state(func)
+            state["frame_padding"] = tuple(kwargs.get("frame_padding", ()))
+            self.physical_frame_states[func.name] = state
+            return emit_function(func, *args, **kwargs)
+
+        patch.setattr(backend, "allocate_aarch64_block_registers", allocate)
+        patch.setattr(backend, "_emit_function", emit)
+
+    def assert_complete(self, function_names):
+        expected = dict.fromkeys(function_names, 1)
+        assert expected, "allocator comparison needs a nonempty function set"
+        assert Counter(self.allocation_calls) == expected, "allocator call coverage"
+        assert Counter(self.emission_calls) == expected, "physical-frame call coverage"
+        assert set(self.allocation_states) == set(expected)
+        assert set(self.physical_frame_states) == set(expected)
 
 
 def removed_metadata_reads(func):
