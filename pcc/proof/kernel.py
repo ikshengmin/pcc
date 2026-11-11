@@ -160,6 +160,26 @@ class Context:
 class Kernel:
     def __init__(self):
         self.sig = Signature()
+        self._pending = None  # (kind, name) of the declaration being built
+
+    @property
+    def idle(self):
+        return self._pending is None
+
+    def _require_idle(self):
+        if self._pending is not None:
+            raise KernelError(f"{self._pending[1]} is still being declared")
+
+    def abort(self):
+        """Drop the declaration that is being built, if any."""
+        if self._pending is None:
+            return
+        kind, name = self._pending
+        if kind == "function":
+            del self.sig.functions[name]
+        else:
+            del self.sig.datas[name]
+        self._pending = None
 
     def machine(self, ctx):
         return Machine(self.sig, ctx.defs)
@@ -267,6 +287,7 @@ class Kernel:
         ``type_term`` is ``Pi params. Pi indices. Sort 0``.  Each constructor
         is ``(name, type)`` with type ``Pi params. Pi args. D params indices``.
         """
+        self._require_idle()
         self._fresh_name(name)
         self._closed_type(name, type_term)
         machine = self.machine(Context())
@@ -365,29 +386,67 @@ class Kernel:
 
     def add_function(self, name, type_term, arity, tree):
         """Declare a function by a case tree over its first ``arity`` arguments."""
+        self.begin_function(name, type_term, arity)
+        self.finish_function(name, tree)
+
+    def begin_function(self, name, type_term, arity):
+        """Announce a function so that its own body can refer to it.
+
+        Until :meth:`finish_function` accepts a body the function does not
+        compute, and nothing else can be declared.
+        """
+        self._require_idle()
         self._fresh_name(name)
         self._closed_type(name, type_term)
-        for term in tree_terms(tree):
-            if contains_meta(term):
-                raise KernelError(f"{name}: unsolved metavariable in the body")
-        info = FunInfo(name, type_term, arity, None)
-        self.sig.functions[name] = info
+        if arity < 0:
+            raise KernelError(f"{name}: negative arity")
+        self.sig.functions[name] = FunInfo(name, type_term, arity, None)
+        self._pending = ("function", name)
+
+    def finish_function(self, name, tree):
+        if self._pending != ("function", name):
+            raise KernelError(f"{name} was not announced")
+        info = self.sig.functions[name]
         try:
+            for term in tree_terms(tree):
+                if contains_meta(term):
+                    raise KernelError(f"{name}: unsolved metavariable in the body")
             machine = self.machine(Context())
             ctx = Context()
-            goal = machine.force(machine.evaluate(type_term, ()))
-            for _ in range(arity):
+            goal = machine.force(machine.evaluate(info.type, ()))
+            for _ in range(info.arity):
                 if not isinstance(goal, VPi):
                     raise KernelError(f"{name}: more arguments than its type has")
                 ctx = ctx.extend(goal.name, goal.domain)
                 goal = machine.force(machine.apply_closure(goal.closure, var(ctx.size - 1)))
             sites = []
             self._check_tree(name, ctx, tree, goal, sites)
-            self._check_termination(name, arity, sites)
+            self._check_termination(name, info.arity, sites)
         except Exception:
-            del self.sig.functions[name]
+            self.abort()
             raise
         info.tree = tree
+        self._pending = None
+
+    def open_data(self, name, type_term):
+        """Make a family's name and type visible while its constructors are read.
+
+        The family has no constructors yet and nothing else can be declared.
+        Call :meth:`abort` and then :meth:`add_data` with the real declaration.
+        """
+        self._require_idle()
+        self._fresh_name(name)
+        self._closed_type(name, type_term)
+        machine = self.machine(Context())
+        telescope = machine.force(machine.evaluate(type_term, ()))
+        count = 0
+        while isinstance(telescope, VPi):
+            telescope = machine.force(machine.apply_closure(telescope.closure, var(count)))
+            count += 1
+        if not (isinstance(telescope, VSort) and telescope.level == 0):
+            raise KernelError(f"{name}: a data type must end in Type")
+        self.sig.datas[name] = DataInfo(name, type_term, 0, count)
+        self._pending = ("data", name)
 
     def _check_tree(self, name, ctx, tree, goal, sites):
         if isinstance(tree, Leaf):

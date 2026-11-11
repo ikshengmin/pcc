@@ -512,3 +512,56 @@ def test_a_rejected_declaration_leaves_the_signature_unchanged():
         )
     after = (set(kernel.sig.datas), set(kernel.sig.constructors), set(kernel.sig.functions))
     assert before == after
+
+
+# -- declarations that are being built ---------------------------------------
+
+def test_nothing_else_can_be_declared_while_a_function_is_pending():
+    kernel = base_kernel()
+    kernel.begin_function("pending", core(fn(NAT, NAT)), 1)
+    assert not kernel.idle
+    with pytest.raises(KernelError, match="still being declared"):
+        function(kernel, "other", [("n", NAT)], NAT, leaf(V("n")))
+    with pytest.raises(KernelError, match="still being declared"):
+        data(kernel, "Other", [], [], [])
+    kernel.abort()
+    assert kernel.idle
+    assert kernel.sig.kind("pending") is None
+
+
+def test_a_pending_function_does_not_compute():
+    kernel = base_kernel()
+    kernel.begin_function("later", core(NAT), 0)
+    machine = kernel.machine(Context())
+    value = machine.evaluate(core(C("later")), ())
+    assert not machine.conv(value, machine.evaluate(core(ZERO), ()), 0)
+    kernel.finish_function("later", Leaf(core(ZERO)))
+    assert kernel.idle
+    assert convertible(kernel, C("later"), ZERO)
+
+
+def test_a_rejected_body_withdraws_the_announcement():
+    kernel = base_kernel()
+    kernel.begin_function("wrong", core(NAT), 0)
+    with pytest.raises(KernelError, match="is required"):
+        kernel.finish_function("wrong", Leaf(core(C("true"))))
+    assert kernel.idle
+    assert kernel.sig.kind("wrong") is None
+
+
+def test_finishing_needs_an_announcement():
+    kernel = base_kernel()
+    with pytest.raises(KernelError, match="was not announced"):
+        kernel.finish_function("nobody", Leaf(core(ZERO)))
+
+
+def test_an_open_family_must_be_closed_before_it_is_declared():
+    kernel = base_kernel()
+    kernel.open_data("Open", core(TYPE))
+    assert kernel.sig.kind("Open") == "data"
+    with pytest.raises(KernelError, match="still being declared"):
+        function(kernel, "from_open", [("x", C("Open"))], C("Empty"), split("x"))
+    kernel.abort()
+    assert kernel.sig.kind("Open") is None
+    data(kernel, "Open", [], [], [("only", [], [])])
+    assert kernel.sig.datas["Open"].constructors == ("only",)
