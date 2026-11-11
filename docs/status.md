@@ -13,12 +13,18 @@ Metal is the first GPU device. `pcc/gpu_runtime/metal_device.py` is a
 freestanding pcc-Python host runtime that reaches Metal through
 `objc_msgSend` typed C ABI calls: no Objective-C source, prebuilt bridge,
 `ctypes` adapter or external compiler. Source: `9f3357d1e` (device contract),
-`d51b2bb30` (launch packets, launcher process, Kernel IR adapter).
+`d51b2bb30` (launch packets, launcher process, Kernel IR adapter),
+`69c9c6f02` (explicit Metal language version, simdgroup GEMM).
 
 Executed, host pcc0, Apple silicon, `PCC_GPU_HARDWARE_STRICT=1`:
 
 - Synchronous launches equal a CPU oracle: a probe kernel, the Kernel IR copy
-  source, and the imported scalar GEMM through its validated launch plan.
+  source, and through their validated launch plans the imported scalar GEMM,
+  the 8x8 simdgroup GEMM and the split-k, transposed, edge-tile simdgroup
+  shape with 1024 threads per threadgroup.
+- The Metal language version is always explicit (3.0 by default). With no
+  compile options the simdgroup source was rejected from a program linked by
+  the owned linker, and a gate shows the packet's version reaches the compiler.
 - A malformed packet, an over-wide threadgroup, a rejected shader and a
   missing entry are refused in band, with no read-back.
 - The launcher is one object linked by the owned Mach-O linker; it imports
@@ -32,9 +38,9 @@ PCC_NO_AUTO_PCC1=1 PCC_GPU_HARDWARE_STRICT=1 gtimeout 500 uv run pytest -x -n0 \
 
 Not done: no pcc1 built from current source was available, so there is no
 pcc1-native result and the pcc1 and five-GC gates under `tests/gpu_hardware/`
-were not run. Asynchronous launch with a fence, no-copy buffers, simdgroup
-kernels on this path and any model runtime are open. The older `pcc-metal`
-path still uses its Objective-C bridge. Design and milestones:
+were not run. Asynchronous launch with a fence, no-copy buffers, the remaining
+Kernel IR shapes on this path and any model runtime are open. The older
+`pcc-metal` path still uses its Objective-C bridge. Design and milestones:
 [local-model architecture](design/pcc-local-model-architecture.md).
 
 ## Gateway Web Frameworks Benchmark: native request path

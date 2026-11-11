@@ -58,6 +58,9 @@ Rules that are part of the contract, not of the Metal implementation:
   packet or a threadgroup wider than the pipeline allows is refused.
 - The caller owns buffers and pipelines; the device layer keeps no table.
 - No signature carries a managed object. Buffers are raw device handles.
+- The device-code dialect is an explicit input and is echoed in the result.
+  A default chosen by the platform from properties of the executable is not
+  acceptable: the same kernel must compile the same way from any launcher.
 
 A whole launch can also travel as one self-describing packet
 (`launch_packet`, `packet_main`). `pcc/gpu_runtime/metal_host.py` encodes it
@@ -219,7 +222,7 @@ higher.
 | | Milestone | Exit evidence |
 |---|---|---|
 | M0 | Owned Metal device runtime, synchronous launch | `tests/gpu_hardware/test_metal_device_runtime.py` under `PCC_GPU_HARDWARE_STRICT=1`: real launches equal a CPU oracle, including the Kernel IR copy source. Host-pcc0, local Apple silicon. Done 2026-11-12. |
-| M1 | Launch packet and runner; Kernel IR kernels through the owned device | `tests/gpu_hardware/test_metal_device_packet.py` under `PCC_GPU_HARDWARE_STRICT=1`: the copy kernel and the imported scalar GEMM run from their validated launch plans with `device_owner=pcc-metal-device` and equal the CPU reference. Host-pcc0. Done 2026-11-12 for those two kernels; the simdgroup GEMM and the other Kernel IR shapes are not yet run on this path. |
+| M1 | Launch packet and runner; Kernel IR kernels through the owned device | `tests/gpu_hardware/test_metal_device_packet.py` under `PCC_GPU_HARDWARE_STRICT=1`: the copy kernel, the imported scalar GEMM and two simdgroup GEMM shapes run from their validated launch plans with `device_owner=pcc-metal-device` and equal the CPU reference. Host-pcc0. Done 2026-11-12 for those kernels; the other Kernel IR shapes are not yet run on this path. |
 | M2 | pcc1-native and five-GC handle lifetime on the owned device | The same workload from a pcc1-built program and under `PCC_GC_BACKEND=0..4`. |
 | M3 | Harness local route to an external engine (S1) | One prompt and one tool call through the pcc1-built Harness against a running local server; stopped engine gives `model-unavailable`; no cloud request is made. |
 | M4 | Asynchronous fence, no-copy weights, foreign kernel assets (S4) | A fence-ordered release test; one foreign kernel equal to its CPU oracle. |
