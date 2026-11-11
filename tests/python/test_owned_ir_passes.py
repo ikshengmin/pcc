@@ -477,3 +477,46 @@ def test_text_passes_share_one_function_splitter():
     chunks = shared(ir)
     assert [is_function for is_function, _text in chunks] == [False, True, False, True]
     assert "".join(text for _is_function, text in chunks) == ir
+
+
+@pytest.mark.parametrize(
+    "body,expected",
+    [
+        # add: operands built from one base
+        (["%n = xor i64 %x, -1", "%a = add i64 %x, 5", "%r = add i64 %n, %a"], ["ret i64 4"]),
+        # add: an operand cancels the other
+        (["%n = xor i64 %x, -1", "%r = add i64 %x, %n"], ["ret i64 -1"]),
+        (["%d = sub i64 %y, %x", "%r = add i64 %x, %d"], ["ret i64 %y"]),
+        # add: complement plus constant
+        (["%n = xor i64 %x, -1", "%r = add i64 %n, 7"], ["%r = sub i64 6, %x", "ret i64 %r"]),
+        # add: zero and reassociation with a constant
+        (["%r = add i64 %x, 0"], ["ret i64 %x"]),
+        (["%a = add i64 %x, 3", "%r = add i64 %a, 4"], ["%r = add i64 %x, 7", "ret i64 %r"]),
+        # sub
+        (["%r = sub i64 %x, %x"], ["ret i64 0"]),
+        (["%a = add i64 %x, 9", "%b = add i64 %x, 4", "%r = sub i64 %a, %b"], ["ret i64 5"]),
+        # mul
+        (["%r = mul i64 %x, 8"], ["%r = shl i64 %x, 3", "ret i64 %r"]),
+        (["%r = mul i64 %x, -1"], ["%r = sub i64 0, %x", "ret i64 %r"]),
+        # xor / or / and
+        (["%r = xor i64 %x, %x"], ["ret i64 0"]),
+        (["%n = xor i64 %x, -1", "%r = xor i64 %n, -1"], ["ret i64 %x"]),
+        (["%r = or i64 %x, -1"], ["ret i64 -1"]),
+        (["%n = xor i64 %x, -1", "%r = or i64 %x, %n"], ["ret i64 -1"]),
+        (["%r = and i64 %x, 0"], ["ret i64 0"]),
+        (["%n = xor i64 %x, -1", "%r = and i64 %x, %n"], ["ret i64 0"]),
+    ],
+)
+def test_instcombine_binop_peepholes_per_opcode(body, expected):
+    """One executed identity for each per-opcode helper of the binop rewriter."""
+    from pcc.ir.optimization.instcombine import instcombine_text
+
+    ir = (
+        "define i64 @f(i64 %x, i64 %y) {\nentry:\n"
+        + "".join(f"  {line}\n" for line in body)
+        + "  ret i64 %r\n}\n"
+    )
+    out, changed = instcombine_text(ir)
+    assert changed
+    assert [line.strip() for line in out.splitlines()[2:-1]] == expected
+    verify_ir_text(out)
