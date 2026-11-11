@@ -1397,19 +1397,6 @@ def pcc_gc_publish_owned_root(slot) -> int:
     return pcc_gc_foreign_lease_release(slot, token)
 
 
-def _gc_root_copy_lease_rollback(plan, destination, backend: int, token: int) -> int:
-    # Cold failure owner: keep this scratch out of the caller's fixed native
-    # frame. A conditional stack_alloc there still reserves uninitialized
-    # conservative words on successful and early-return paths.
-    rollback = stack_alloc(128)
-    pcc_gc_store_root_plan_init(rollback, backend)
-    pcc_gc_store_root_plan_commit_locked(rollback, destination, null())
-    pcc_py_gc_minor_graph_unlock()
-    pcc_gc_store_root_plan_finish(plan)
-    pcc_gc_store_root_plan_finish(rollback)
-    return token
-
-
 @c_abi_export("pcc_gc_root_copy_lease")
 def pcc_gc_root_copy_lease(destination, source) -> int:
     """Retain an authoritative root into an empty root and lease its address.
@@ -1455,6 +1442,50 @@ def pcc_gc_root_copy_lease(destination, source) -> int:
                     store_i64(fast, PYOBJECTHEADER_REFCOUNT_OFFSET, fast_rc + 1)
                     store_ptr(destination, 0, fast)
                 return fast_token
+    if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0:
+        if load_i32(global_addr("pcc_gc_refcount_atomic"), 0) != 0:
+            # Threaded GC0 without the probe. The source owner keeps its
+            # object alive, so one atomic reference and a plain store are the
+            # whole transaction, and no collector below GC4 leases an
+            # address: the token is the no-op one. No graph lock, so
+            # carriers copying their own roots do not serialize.
+            if ptr_is_null(load_ptr(destination, 0)) == 0:
+                return -4
+            shared = load_ptr(source, 0)
+            if ptr_is_null(shared) != 0 or is_tagged_int(shared) != 0:
+                store_ptr(destination, 0, shared)
+                return 0
+            shared_tag: int = load_i32(shared, PYOBJECTHEADER_TYPE_TAG_OFFSET)
+            if (
+                (shared_tag >= PY_TYPE_NONE and shared_tag < PY_TYPE_CONTINUATION)
+                or shared_tag == PY_TYPE_CPY_HANDLE
+                or (shared_tag >= PY_TYPE_USER and shared_tag < PY_TYPE_CEXT_TAG_BASE)
+            ):
+                if (load_i32(shared, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_IMMORTAL) != 0:
+                    store_ptr(destination, 0, shared)
+                    return 0
+                if atomic_load_i64(shared, PYOBJECTHEADER_REFCOUNT_OFFSET, "relaxed") >= 0:
+                    atomic_rmw_i64("add", shared, PYOBJECTHEADER_REFCOUNT_OFFSET, 1, "relaxed")
+                    store_ptr(destination, 0, shared)
+                    return 0
+        elif (
+            load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
+        ):
+            # The four tracing collectors. Reachability through the
+            # destination is the retain, and no object moves while a mutator
+            # runs, so no address is leased. One no-park interval covers the
+            # emptiness test, the load and the publication with its barrier.
+            pcc_thread_no_park_enter()
+            traced_status: int = -4
+            if ptr_is_null(load_ptr(destination, 0)) != 0:
+                _store_root_nonmoving_tracing(
+                    destination, load_ptr(source, 0),
+                    load_i32(global_addr("pcc_gc_backend_selected"), 0),
+                )
+                traced_status = 0
+            pcc_thread_no_park_exit()
+            return traced_status
     _gc_backend_fast()
     pcc_py_gc_minor_graph_lock()
     return _gc_root_copy_lease_locked(destination, source)
@@ -1480,15 +1511,6 @@ def _gc_root_copy_lease_locked(destination, source) -> int:
         if pcc_gc_store_root_plan_commit_locked(plan, destination, value) == 0:
             released: int = pcc_gc_foreign_lease_release(source, token)
             token = -4 if released == 0 else -3
-        elif token == 0 and backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0:
-            # A conservative source stack slot can return token 0. Its
-            # lifetime does not cover a copied heap/global destination after
-            # the source is rebound or leaves the stack. Establish the
-            # destination's own protection before this transaction unlocks.
-            # Tokens 1/2 already transfer independently and must not double.
-            token = pcc_gc_foreign_lease_acquire(destination)
-            if token < 0:
-                return _gc_root_copy_lease_rollback(plan, destination, backend, token)
     pcc_py_gc_minor_graph_unlock()
     # Deferred diagnostics/refcount work runs only after the destination and
     # counted lease have been published, never while a borrowed raw copy is
@@ -1582,6 +1604,23 @@ def pcc_gc_root_copy_borrowed_lease(destination, source) -> int:
             py_incref(copied)
         store_ptr(destination, 0, copied)
         return 0
+    if (
+        load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+        and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
+        and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
+    ):
+        # As pcc_gc_root_copy_lease: the tracing collectors publish the
+        # copy in one no-park interval and lease no address.
+        pcc_thread_no_park_enter()
+        borrowed_status: int = -4
+        if ptr_is_null(load_ptr(destination, 0)) != 0:
+            _store_root_nonmoving_tracing(
+                destination, load_ptr(source, 0),
+                load_i32(global_addr("pcc_gc_backend_selected"), 0),
+            )
+            borrowed_status = 0
+        pcc_thread_no_park_exit()
+        return borrowed_status
     _gc_backend_fast()
     pcc_py_gc_minor_graph_lock()
     return _gc_root_copy_borrowed_lease_locked(destination, source)
@@ -1754,11 +1793,6 @@ def pcc_gc_root_copy_lease_prepare_locked(destination, source, source_borrowed: 
             if pcc_gc_foreign_lease_release(source, token) != 0:
                 return -3
             return -4
-        if token == 0 and backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0:
-            # A source-stack no-op lease is not transferable to a heap root.
-            token = pcc_gc_foreign_lease_acquire(destination)
-            if token < 0:
-                pcc_gc_store_root_plan_commit_locked(rollback, destination, null())
         return token
     value = pcc_gc_load_borrowed_ptr(null(), source)
     if pcc_gc_store_root_plan_commit_locked(plan, destination, value) == 0:

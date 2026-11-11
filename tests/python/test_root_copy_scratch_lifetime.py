@@ -1,8 +1,7 @@
 """Production root-copy body ordering, not a native fixed-frame proof.
 
 HandoffModel supplies deterministic graph/lease/store-plan doubles; the shared
-loader supplies the real public, locked, rollback and nonmoving-publisher
-bodies. Allocation events are host calls, not native stack reservations. The
+loader supplies the real public, locked and nonmoving-publisher bodies. Allocation events are host calls, not native stack reservations. The
 whole-module optimized-IR regression in test_root_copy_lease_destination.py
 separately checks frame separation. Neither test is a native stale-stack or
 concurrent stop-the-world witness, and neither replaces that acceptance gate.
@@ -21,7 +20,6 @@ LOCKED_HELPERS = (
     "_gc_root_copy_borrowed_lease_locked",
     "_gc_root_copy_local_locked",
 )
-ROLLBACK_HELPER = "_gc_root_copy_lease_rollback"
 
 
 class ScratchLifetimeModel(HandoffModel):
@@ -42,10 +40,9 @@ class ScratchLifetimeModel(HandoffModel):
         load_functions(RUNTIME / "py_obj.py", {
             "pcc_gc_root_copy_lease", "pcc_gc_root_copy_borrowed_lease",
             "pcc_gc_root_copy_local", "pcc_gc_root_copy_owned_prepare_locked",
-            "_store_root_nonmoving_tracing", ROLLBACK_HELPER,
-            *LOCKED_HELPERS,
+            "_store_root_nonmoving_tracing", *LOCKED_HELPERS,
         }, self.ns)
-        for name in (*LOCKED_HELPERS, ROLLBACK_HELPER):
+        for name in LOCKED_HELPERS:
             body = self.ns[name]
 
             def observed(*args, _name=name, _body=body):
@@ -269,33 +266,38 @@ def test_failed_lease_preserves_owners_and_initializes_borrowed_rollback(backend
 
 
 @pytest.mark.parametrize("backend", (3, 4))
-@pytest.mark.parametrize("failure", ("overflow", "unproven", "frozen"))
-def test_cold_destination_rollback_allocates_only_under_the_original_lock(backend, failure):
+@pytest.mark.parametrize("lease_state", ("overflow", "unproven", "frozen"))
+def test_owned_copy_leases_no_destination_and_has_no_rollback_plan(backend, lease_state):
+    # No collector moves an object while a mutator runs, so a copy from a
+    # stack source leases neither end: a node count at its limit, an unproven
+    # source or a frozen lease table cannot fail it, and the locked form has
+    # one plan and no rollback.
     model = ScratchLifetimeModel(backend)
-    source = model.object(node=failure != "unproven", proven=failure != "unproven")
+    source = model.object(node=lease_state != "unproven", proven=lease_state != "unproven")
     destination = model.empty()
     model.store("pcc_gc_refcount_provenance_probe", 0, 0)
     model.ns["pcc_gc_stack_slot_root_is_conservative"] = lambda slot: int(slot == source)
-    if failure == "overflow":
+    if lease_state == "overflow":
         model.store(model.nodes[1000], 80, 2**63 - 1)
-    elif failure == "frozen":
+    elif lease_state == "frozen":
         model.store("pcc_gc_foreign_lease_active", 0, -1)
     pending = model.pending_exception
     observed = []
     model.on_unlock = lambda: observed.append((model.load(destination), model.references[1000]))
-    assert model.copy(destination, source) == (-2 if failure == "overflow" else -1)
-    assert [owner for _, _, owner in model.allocations] == [LOCKED_HELPERS[0], ROLLBACK_HELPER]
-    plan, rollback = (address for address, _, _ in model.allocations)
-    assert plan + 128 <= rollback or rollback + 128 <= plan
+    assert model.copy(destination, source) == 0
+    assert [owner for _, _, owner in model.allocations] == [LOCKED_HELPERS[0]]
+    (plan, _, _), = model.allocations
     commits = [event[1:] for event in model.events if event[0] == "plan_commit"]
-    assert commits == [(plan, destination, 1000), (rollback, destination, 0)]
+    assert commits == [(plan, destination, 1000)]
     unlock = model.events.index(("unlock", 0))
     assert all(index < unlock for index, event in enumerate(model.events)
                if event[0] in ("allocate", "plan_init", "plan_commit", "helper_entry"))
-    assert [event[1] for event in model.events if event[0] == "finish"] == [plan, rollback]
+    assert [event[1] for event in model.events if event[0] == "finish"] == [plan]
     assert all(index > unlock for index, event in enumerate(model.events) if event[0] == "finish")
-    assert observed == [(0, 1)] and model.load(source) == 1000
-    assert model.active() == (-1 if failure == "frozen" else 0)
+    assert observed == [(1000, 2)] and model.load(source) == 1000
+    assert model.active() == (-1 if lease_state == "frozen" else 0)
+    if lease_state == "overflow":
+        assert model.count() == 2**63 - 1
     assert model.pending_exception is pending and model.depth == 0
 
 

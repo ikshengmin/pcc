@@ -175,8 +175,9 @@ def test_no_node_heap_immortal_nonleaf_has_mode_guard(backend,tag):
     assert m.release(slot,2) == 0 and m.active() == 0
 
 
-@pytest.mark.parametrize("backend",(3,4))
-@pytest.mark.parametrize("flags",[1|4096,1|65536,1|524288])
+# Only the relocating collector has a moving state; a dying object fails
+# closed on GC3 as well.
+@pytest.mark.parametrize("backend,flags",[(4,1|4096),(4,1|65536),(4,1|524288),(3,1|524288)])
 def test_no_node_immortal_in_a_moving_or_dying_state_fails_closed(backend,flags):
     m=Model(backend); slot=m.object(node=False,flags=flags,tag=abi.PY_TYPE_FILE)
     assert m.acquire(slot) == -1 and m.active() == 0
@@ -184,7 +185,7 @@ def test_no_node_immortal_in_a_moving_or_dying_state_fails_closed(backend,flags)
 
 @pytest.mark.parametrize("flags,tag,proven",[(0,4,False),(4096,4,True),(65536,4,True),(0,5,True),(524288,4,True)])
 def test_unknown_or_potentially_moving_no_node_fails_closed(flags,tag,proven):
-    m=Model(); slot=m.object(node=False,flags=flags,tag=tag,proven=proven)
+    m=Model(4); slot=m.object(node=False,flags=flags,tag=tag,proven=proven)
     assert m.acquire(slot) == -1 and m.active() == 0
 
 
@@ -419,7 +420,7 @@ def test_node_fresh_prepare_reuse_and_live_promotion_preserve_count_contract():
 
 def test_lease_count_is_not_copied_or_reset_during_forwarding():
     # Execute the exact final forwarding rejection before any graph mutation.
-    m=Model(); source=m.object(); m.object(2000)
+    m=Model(4); source=m.object(); m.object(2000)
     assert m.acquire(source) == 1
     ns=m.ns
     ns.update(pcc_gc_object_is_known_no_lock=lambda p:int(p in m.nodes))
@@ -916,10 +917,10 @@ def test_uncertain_non_granule_lease_checks_current_index_under_graph_lock():
     assert model.release(slot, 2) == 0 and model.active() == 0
 
 
-@pytest.mark.parametrize("backend", (0, 1, 2))
+@pytest.mark.parametrize("backend", (0, 1, 2, 3))
 def test_a_production_lease_on_a_non_moving_collector_is_a_no_op(backend):
     # The collector is fixed once an object exists (pcc_gc_set_backend) and
-    # GC0-2 never move one: the lease takes no mode reservation, graph lock,
+    # GC0-3 never move one: the lease takes no mode reservation, graph lock,
     # provenance lookup or count.
     m = Model(backend)
     m.store("pcc_gc_refcount_provenance_probe", 0, 0)
@@ -941,7 +942,7 @@ def test_checked_runs_and_moving_collectors_keep_the_counted_lease(backend, chec
     assert m.release(slot, token) == 0 and m.active() == 0
 
 
-@pytest.mark.parametrize("backend", (3, 4))
+@pytest.mark.parametrize("backend", (4,))
 def test_a_production_lease_on_a_moving_collector_still_counts(backend):
     m = Model(backend)
     m.store("pcc_gc_refcount_provenance_probe", 0, 0)
@@ -950,7 +951,7 @@ def test_a_production_lease_on_a_moving_collector_still_counts(backend):
     assert m.release(slot, 1) == 0 and m.count() == 0
 
 
-@pytest.mark.parametrize("backend", (3, 4))
+@pytest.mark.parametrize("backend", (4,))
 @pytest.mark.parametrize("probe", (0, 1))
 def test_a_count_free_stack_slot_lease_is_held_by_the_conservative_scan(backend, probe):
     # The slot stays stable for the whole lease and lies in this thread's

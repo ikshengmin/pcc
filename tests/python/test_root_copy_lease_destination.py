@@ -1,10 +1,15 @@
-"""A copied heap root must own its lease after a stack source disappears.
+"""A copied root leases no address: its destination keeps the object.
+
+No collector moves an object while a mutator runs (a relocation settles
+inside its stop), so a root copy returns the no-op token on every collector:
+the destination root keeps the object alive after the source is rebound or
+leaves the stack, and nothing has to be pinned for it. The fixed tracing
+collectors publish the copy without the graph lock, threaded GC0 takes one
+atomic reference, and the checked forms keep their source lease.
 
 Exercise the production copy/acquire/release bodies through the existing
 runtime_body_model loader used by HandoffModel. Stack membership and root
 store plans are deterministic doubles, not a native collector simulation.
-This is a direct exported-ABI regression, not a claim that an existing caller
-already releases or rebinds its source before releasing the copied lease.
 """
 
 from pathlib import Path
@@ -12,6 +17,7 @@ import re
 
 import pytest
 
+from pcc.runtime.py import py_abi_constants as abi
 from test_foreign_address_leases import RUNTIME
 from test_runtime_entry_handoff import HandoffModel
 from tests.python.runtime_body_model import load_functions
@@ -38,6 +44,59 @@ class DestinationLeaseModel(HandoffModel):
             return token
 
         self.ns["pcc_gc_foreign_lease_acquire"] = observed_acquire
+        self.no_park = 0
+        self.publications = []
+        self.atomic_adds = []
+        self.ns.update(
+            pcc_thread_no_park_enter=self.no_park_enter,
+            pcc_thread_no_park_exit=self.no_park_exit,
+            _store_root_nonmoving_tracing=self.publish_traced,
+            atomic_rmw_i64=self.atomic_add,
+            PYOBJECTHEADER_TYPE_TAG_OFFSET=abi.PYOBJECTHEADER_TYPE_TAG_OFFSET,
+            PYOBJECTHEADER_REFCOUNT_OFFSET=abi.PYOBJECTHEADER_REFCOUNT_OFFSET,
+            PY_FLAG_IMMORTAL=abi.PY_FLAG_IMMORTAL,
+        )
+
+    def fix(self):
+        """The collector as pcc_gc_fix_backend and the configuration leave
+        it once an object exists: threaded GC0 counts atomically, the four
+        tracing collectors are count-free and move nothing under a mutator."""
+        backend = self.load("pcc_gc_backend_selected")
+        if backend == 0:
+            self.store("pcc_gc_refcount_atomic", 0, 1)
+        else:
+            self.store("pcc_gc_backend4_no_refcounts", 0, 1)
+            self.store("pcc_gc_nonmoving_count_free", 0, 1)
+        return self
+
+    def no_park_enter(self):
+        assert self.depth == 0, "no-park interval opened under the graph lock"
+        self.no_park += 1
+        self.events.append(("no_park_enter", self.no_park))
+
+    def no_park_exit(self):
+        assert self.no_park > 0
+        self.no_park -= 1
+        self.events.append(("no_park_exit", self.no_park))
+
+    def publish_traced(self, slot, value, backend):
+        # The real publisher is one no-park interval of its own
+        # (test_gc_nonmoving_root_store.py); here it nests in the copy's.
+        assert self.no_park == 1 and self.depth == 0 and slot in self.roots
+        self.publications.append((slot, value, backend))
+        self.events.append(("publish", slot, value))
+        self.store(slot, 0, value)
+
+    def atomic_add(self, operation, base, offset, value, order):
+        assert (operation, offset, value, order) == ("add", 0, 1, "relaxed")
+        assert self.depth == 0
+        self.atomic_adds.append(base)
+        old = self.load(base, 0)
+        self.store(base, 0, old + 1)
+        return old
+
+    def graph_locked(self):
+        return [event for event in self.events if event[0] in ("lock", "unlock")]
 
     def plan_commit(self, plan, destination, value):
         self.commits.append((plan, destination, value))
@@ -75,126 +134,141 @@ class DestinationLeaseModel(HandoffModel):
             self.store(source, 0, 7)
 
 
-@pytest.mark.parametrize("backend", (3, 4))
-@pytest.mark.parametrize("entry", ("ordinary", "split"))
+TRACING = (1, 2, 3, 4)
+
+
+@pytest.mark.parametrize("backend", TRACING)
+@pytest.mark.parametrize("copy", ("owned", "borrowed"))
+@pytest.mark.parametrize("source_kind", ("stack", "heap"))
 @pytest.mark.parametrize("source_exits", (False, True))
-def test_heap_destination_owns_lease_after_stack_source_lifetime(
-    backend, entry, source_exits,
+def test_tracing_copy_publishes_without_graph_lock_or_lease(
+    backend, copy, source_kind, source_exits,
 ):
+    model = DestinationLeaseModel(backend).fix()
+    source, destination = model.object(), model.empty()
+    if source_kind == "stack":
+        model.stack_slots.add(source)
+    pending = model.pending_exception
+    entry = model.copy if copy == "owned" else model.copy_borrowed
+
+    assert entry(destination, source) == 0
+    assert model.publications == [(destination, 1000, backend)]
+    assert not model.acquisitions and not model.commits
+    assert not model.graph_locked() and model.no_park == 0
+    assert [event[0] for event in model.events] == [
+        "no_park_enter", "publish", "no_park_exit",
+    ]
+    assert model.pending_exception is pending
+    assert model.count() == model.active() == model.pinned() == 0
+
+    # The source is rebound or leaves the stack: the destination root alone
+    # keeps the object, with nothing to release but the no-op token.
+    if source_exits:
+        model.stack_slots.discard(source)
+        model.roots.remove(source)
+    model.store(source, 0, 7)
+    assert model.load(destination) == 1000
+    assert model.release(destination, 0) == 0
+    assert model.count() == model.active() == model.pinned() == 0
+
+
+@pytest.mark.parametrize("backend", TRACING)
+@pytest.mark.parametrize("copy", ("owned", "borrowed"))
+@pytest.mark.parametrize("value", (0, 7))
+def test_tracing_copy_of_an_immediate_is_the_same_publication(backend, copy, value):
+    model = DestinationLeaseModel(backend).fix()
+    source, destination = model.empty(90008), model.empty()
+    model.store(source, 0, value)
+    entry = model.copy if copy == "owned" else model.copy_borrowed
+    assert entry(destination, source) == 0
+    assert model.publications == [(destination, value, backend)]
+    assert not model.acquisitions and not model.graph_locked()
+
+
+@pytest.mark.parametrize("backend", TRACING)
+@pytest.mark.parametrize("copy", ("owned", "borrowed"))
+def test_tracing_copy_into_a_full_destination_changes_nothing(backend, copy):
+    model = DestinationLeaseModel(backend).fix()
+    source, destination = model.object(), model.object(2000)
+    entry = model.copy if copy == "owned" else model.copy_borrowed
+    assert entry(destination, source) == -4
+    assert model.load(source) == 1000 and model.load(destination) == 2000
+    assert not model.publications and not model.acquisitions
+    assert not model.graph_locked() and model.no_park == 0
+    assert [event[0] for event in model.events] == ["no_park_enter", "no_park_exit"]
+
+
+@pytest.mark.parametrize("flags,counted", ((0, True), (abi.PY_FLAG_IMMORTAL, False)))
+def test_threaded_gc0_copy_takes_one_atomic_reference_and_no_graph_lock(flags, counted):
+    model = DestinationLeaseModel(0).fix()
+    source, destination = model.object(flags=flags), model.empty()
+    model.store(1000, 0, 5)
+    assert model.copy(destination, source) == 0
+    assert model.load(destination) == 1000
+    assert model.load(1000, 0) == (6 if counted else 5)
+    assert model.atomic_adds == ([1000] if counted else [])
+    assert not model.acquisitions and not model.commits and not model.events
+    assert model.release(destination, 0) == 0
+
+
+@pytest.mark.parametrize("value", (0, 7))
+def test_threaded_gc0_copy_of_an_immediate_counts_nothing(value):
+    model = DestinationLeaseModel(0).fix()
+    source, destination = model.empty(90008), model.empty()
+    model.store(source, 0, value)
+    assert model.copy(destination, source) == 0
+    assert model.load(destination) == value
+    assert not model.atomic_adds and not model.events
+
+
+def test_threaded_gc0_copy_into_a_full_destination_changes_nothing():
+    model = DestinationLeaseModel(0).fix()
+    source, destination = model.object(), model.object(2000)
+    model.store(1000, 0, 5)
+    assert model.copy(destination, source) == -4
+    assert model.load(1000, 0) == 5 and model.load(destination) == 2000
+    assert not model.atomic_adds and not model.events
+
+
+@pytest.mark.parametrize("count,tag", ((-1, 4), (5, 99)))
+def test_threaded_gc0_copy_leaves_a_dying_or_foreign_header_to_the_locked_form(count, tag):
+    # A negative count is a dying object and tag 99 is no managed kind: the
+    # atomic path touches neither, and the graph-locked form decides.
+    model = DestinationLeaseModel(0).fix()
+    source, destination = model.object(tag=tag), model.empty()
+    model.store(1000, 0, count)
+    assert model.copy(destination, source) == 0
+    assert not model.atomic_adds and model.load(1000, 0) == count
+    assert model.acquisitions == [(source, 0)]
+    assert [call[1:] for call in model.commits] == [(destination, 1000)]
+    assert model.graph_locked() == [("lock", 1), ("unlock", 0)]
+
+
+@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("entry", ("ordinary", "split"))
+def test_locked_copy_does_not_lease_the_destination(backend, entry):
+    # The graph-locked forms (an unfixed collector, the split entry) lease
+    # the source as before and never the destination.
     model = DestinationLeaseModel(backend)
     source, destination = model.object(), model.empty()
     model.stack_slots.add(source)
-    assert destination not in model.stack_slots
-    observed = []
-    model.on_unlock = lambda: observed.append((
-        model.load(destination), model.count(), model.references[1000],
-    ))
-    pending = model.pending_exception
-
-    token = model.copy_entry(entry, destination, source)
-    assert token == 1
-    assert model.acquisitions == [(source, 0), (destination, 1)]
-    assert observed == [(1000, 1, 2)]
-    assert model.pending_exception is pending
-    model.clear_source(source, exits=source_exits)
-    assert model.load(source) == (0 if source_exits else 7)
-    assert model.load(destination) == 1000
-    assert model.references[1000] == 1
-    assert model.count() == model.active() == model.pinned() == 1
-
-    # This is the actual forwarding commit guard, not a fake "move" whose
-    # answer is computed directly from the expected lease count.
-    model.object(2000)
-    model.ns["pcc_gc_object_is_known_no_lock"] = (
-        lambda value: int(value in model.nodes)
-    )
-    load_functions(RUNTIME / "freestanding_gc_forwarding_identity.py", {
-        "pcc_gc_install_forwarding_unlocked",
-    }, model.ns)
-    model.lock()
-    assert model.ns["pcc_gc_install_forwarding_unlocked"](1000, 2000) == -2
-    model.unlock()
-    assert model.count(1000) == 1 and model.count(2000) == 0
-    assert model.load(destination) == 1000
-    assert model.release(destination, token) == 0
-    assert model.count() == model.active() == model.pinned() == 0
-    assert model.references[1000] == 1  # release consumes the lease, not root
-
-
-@pytest.mark.parametrize("entry", ("ordinary", "split"))
-def test_copied_destination_lease_blocks_gc3_oldification_after_source_exit(entry):
-    model = DestinationLeaseModel(3)
-    source = model.object(flags=128 | 4096)
-    destination = model.empty()
-    model.stack_slots.add(source)
-    token = model.copy_entry(entry, destination, source)
-    assert token == 1
+    assert model.copy_entry(entry, destination, source) == 0
+    assert model.acquisitions == [(source, 0)]
+    assert model.count() == model.active() == 0
+    assert model.references[1000] == 2
     model.clear_source(source, exits=True)
-    model.ns.update(
-        pcc_gc_object_is_known_no_lock=lambda value: int(value in model.nodes),
-        pcc_gc_forwarding_find=lambda value: 0,
-        pcc_gc_generational_object_is_address_pinned=model.pinned,
-    )
-    load_functions(RUNTIME / "freestanding_gc_generational_oldification.py", {
-        "pcc_gc_generational_oldify_copy",
-    }, model.ns)
-    model.lock()
-    assert model.ns["pcc_gc_generational_oldify_copy"](1000) == 0
-    model.unlock()
-    assert model.load(destination) == 1000 and model.count() == 1
-    assert model.release(destination, token) == 0
+    assert model.load(destination) == 1000 and model.references[1000] == 1
+    assert model.release(destination, 0) == 0
 
 
-@pytest.mark.parametrize("backend", (3, 4))
+@pytest.mark.parametrize("backend", range(5))
 @pytest.mark.parametrize("entry", ("ordinary", "split"))
-@pytest.mark.parametrize("failure", ("overflow", "unproven", "frozen"))
-def test_destination_acquire_failure_rolls_back_before_outer_unlock(
-    backend, entry, failure,
-):
-    model = DestinationLeaseModel(backend)
-    source = model.object(node=failure != "unproven", proven=failure != "unproven")
-    destination = model.empty()
-    model.stack_slots.add(source)
-    if failure == "overflow":
-        model.store(model.nodes[1000], 80, 2**63 - 1)
-    elif failure == "frozen":
-        model.store("pcc_gc_foreign_lease_active", 0, -1)
-    expected = -2 if failure == "overflow" else -1
-    pending = model.pending_exception
-    observed = []
-    model.on_unlock = lambda: observed.append((
-        model.load(destination), model.references[1000],
-    ))
-
-    assert model.copy_entry(entry, destination, source) == expected
-    assert model.acquisitions == [(source, 0), (destination, expected)]
-    assert model.load(source) == 1000 and model.load(destination) == 0
-    assert model.references[1000] == 1 and observed == [(0, 1)]
-    assert model.pending_exception is pending
-    assert [call[1:] for call in model.commits] == [
-        (destination, 1000), (destination, 0),
-    ]
-    first_plan, rollback_plan = (call[0] for call in model.commits)
-    assert first_plan != rollback_plan
-    assert [event[1] for event in model.events if event[0] == "finish"] == [
-        first_plan, rollback_plan,
-    ]
-    outer_unlock = model.events.index(("unlock", 0))
-    assert all(index > outer_unlock for index, event in enumerate(model.events)
-               if event[0] == "finish")
-    assert model.active() == (-1 if failure == "frozen" else 0)
-    if failure != "unproven":
-        assert model.count() == (2**63 - 1 if failure == "overflow" else 0)
-
-
-@pytest.mark.parametrize("backend", (3, 4))
-@pytest.mark.parametrize("entry", ("ordinary", "split"))
-def test_two_conservative_stack_roots_keep_noop_token(backend, entry):
+def test_two_stack_roots_keep_noop_token(backend, entry):
     model = DestinationLeaseModel(backend)
     source, destination = model.object(), model.empty()
     model.stack_slots.update((source, destination))
     assert model.copy_entry(entry, destination, source) == 0
-    assert model.acquisitions == [(source, 0), (destination, 0)]
+    assert model.acquisitions == [(source, 0)]
     assert model.load(destination) == 1000 and model.references[1000] == 2
     assert model.count() == model.active() == 0
     assert model.release(destination, 0) == 0
@@ -218,11 +292,24 @@ def test_checked_source_tokens_transfer_once_without_destination_reacquire(
     assert model.active() == 0
 
 
-@pytest.mark.parametrize("backend", (3, 4))
+@pytest.mark.parametrize("backend", TRACING)
+@pytest.mark.parametrize("probe", (1, 2))
+def test_the_probe_keeps_a_fixed_tracing_copy_on_the_checked_form(backend, probe):
+    model = DestinationLeaseModel(backend, probe=probe).fix()
+    source = model.object(flags=262144)
+    destination = model.empty()
+    assert model.copy(destination, source) == 1
+    assert model.acquisitions == [(source, 1)] and not model.publications
+    # The checked lease nests its own graph transaction in the copy's.
+    locked = model.graph_locked()
+    assert locked[0] == ("lock", 1) and locked[-1] == ("unlock", 0)
+    assert model.release(destination, 1) == 0 and model.active() == 0
+
+
 @pytest.mark.parametrize("entry", ("ordinary", "split"))
 @pytest.mark.parametrize("node,expected", ((True, 1), (False, 2)))
-def test_production_heap_source_tokens_transfer_once(backend, entry, node, expected):
-    model = DestinationLeaseModel(backend)
+def test_unfixed_relocating_heap_source_token_transfers_once(entry, node, expected):
+    model = DestinationLeaseModel(4)
     source = model.object(node=node, flags=262144)
     destination = model.empty()
     assert model.copy_entry(entry, destination, source) == expected
@@ -232,22 +319,9 @@ def test_production_heap_source_tokens_transfer_once(backend, entry, node, expec
     assert model.active() == 0
 
 
-@pytest.mark.parametrize("backend", (0, 1, 2))
 @pytest.mark.parametrize("entry", ("ordinary", "split"))
-def test_nonmoving_production_copy_does_not_acquire_destination(backend, entry):
-    model = DestinationLeaseModel(backend)
-    source, destination = model.object(), model.empty()
-    model.stack_slots.add(source)
-    assert model.copy_entry(entry, destination, source) == 0
-    assert model.acquisitions == [(source, 0)]
-    assert model.count() == model.active() == 0
-    assert model.references[1000] == 2
-
-
-@pytest.mark.parametrize("backend", (3, 4))
-@pytest.mark.parametrize("entry", ("ordinary", "split"))
-def test_failed_source_acquire_never_publishes_or_acquires_destination(backend, entry):
-    model = DestinationLeaseModel(backend)
+def test_failed_source_acquire_never_publishes_or_acquires_destination(entry):
+    model = DestinationLeaseModel(4)
     source = model.object(node=False, proven=False)
     destination = model.empty()
     assert model.copy_entry(entry, destination, source) == -1
@@ -257,7 +331,7 @@ def test_failed_source_acquire_never_publishes_or_acquires_destination(backend, 
     assert model.references[1000] == 1 and model.active() == 0
 
 
-@pytest.mark.parametrize("backend", (3, 4))
+@pytest.mark.parametrize("backend", range(5))
 @pytest.mark.parametrize("entry", ("ordinary", "split"))
 def test_failed_publication_does_not_attempt_destination_acquire(backend, entry):
     model = DestinationLeaseModel(backend)
@@ -270,28 +344,26 @@ def test_failed_publication_does_not_attempt_destination_acquire(backend, entry)
     assert model.references[1000] == 1 and model.count() == model.active() == 0
 
 
-@pytest.mark.parametrize("backend", (3, 4))
-def test_two_heap_copies_keep_independent_leases_after_source_exit(backend):
-    model = DestinationLeaseModel(backend)
+@pytest.mark.parametrize("backend", TRACING)
+def test_two_copies_are_two_roots_and_no_lease(backend):
+    model = DestinationLeaseModel(backend).fix()
     source = model.object()
     first, second = model.empty(90000), model.empty(90008)
     model.stack_slots.add(source)
-    first_token = model.copy(first, source)
-    second_token = model.copy(second, source)
-    assert first_token == second_token == 1
-    model.clear_source(source, exits=True)
-    assert model.references[1000] == model.count() == model.active() == 2
-    assert model.release(first, first_token) == 0
-    assert model.count() == model.active() == model.pinned() == 1
-    assert model.release(second, second_token) == 0
+    assert model.copy(first, source) == model.copy(second, source) == 0
+    model.stack_slots.discard(source)
+    model.roots.remove(source)
+    model.store(source, 0, 0)
+    assert model.load(first) == model.load(second) == 1000
     assert model.count() == model.active() == model.pinned() == 0
+    assert not model.acquisitions and not model.graph_locked()
+    assert model.release(first, 0) == model.release(second, 0) == 0
 
 
 def test_optimized_copy_keeps_all_plan_scratch_out_of_public_frames(tmp_path):
     # Match the final runtime-IR pipeline used by the refcount layout test.
     # A branch-local alloca still reserves native frame space on every entry;
-    # all three locked helpers and the cold rollback must remain real calls
-    # after optimization. A host body model cannot prove this fixed-frame
+    # all three locked helpers must remain real calls after optimization. A host body model cannot prove this fixed-frame
     # property or reproduce a native conservative-stack retention witness.
     from pcc.frontends.python.pipeline import compile_python
     from pcc.frontends.python.owned_runtime_build import runtime_ir_passes
@@ -353,14 +425,7 @@ def test_optimized_copy_keeps_all_plan_scratch_out_of_public_frames(tmp_path):
         # no-park scope; an independent collector gate must not be inserted.
         assert not calls(helper_body, "pcc_gc_safepoint"), helper_name
 
-    cold_name = "user_py_obj__gc_root_copy_lease_rollback"
     ordinary = locked["pcc_gc_root_copy_lease"]
-    cold = body(cold_name)
-    assert len(calls(ordinary, cold_name)) == 1
-    assert not calls(body("pcc_gc_root_copy_lease"), cold_name)
-    assert scratch_sizes(cold) == [128]
-    assert len([line for line in cold.splitlines() if "alloca " in line]) == 1
-    assert not calls(cold, "pcc_gc_safepoint")
     for function, expected in (
         (ordinary, 1), (locked["pcc_gc_root_copy_borrowed_lease"], 2),
     ):
@@ -372,11 +437,3 @@ def test_optimized_copy_keeps_all_plan_scratch_out_of_public_frames(tmp_path):
     assert len(calls(local, "pcc_gc_root_copy_owned_prepare_locked")) == 1
     assert len(calls(local, "pcc_gc_store_root_plan_init")) == 1
     assert not calls(body("pcc_gc_root_copy_local"), "memset")
-    init = cold.index("@pcc_gc_store_root_plan_init(")
-    clear = cold.index("@pcc_gc_store_root_plan_commit_locked(")
-    unlock = cold.index("@pcc_py_gc_minor_graph_unlock(")
-    finishes = [match.start() for match in re.finditer(
-        r"@pcc_gc_store_root_plan_finish\(", cold,
-    )]
-    assert init < clear < unlock
-    assert len(finishes) == 2 and all(position > unlock for position in finishes)

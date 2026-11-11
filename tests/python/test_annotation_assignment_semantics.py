@@ -442,7 +442,11 @@ def test_dataclass_default_values_publish_once_and_capture_class_names(tmp_path)
     definition = next(item for item in module.body if isinstance(item, ClassDef) and item.name == 'Shared')
     expanded = codegen.class_lowering._maybe_expand_dataclass(definition)
     assignments = {item.targets[0].ident: item for item in expanded.body if isinstance(item, Assign)}
-    assert set(assignments) == {'optional', 'token', 'wrapped'}
+    # CPython's @dataclass also defines __match_args__ as the init fields in order.
+    assert set(assignments) == {'optional', 'token', 'wrapped', '__match_args__'}
+    assert [item.value for item in assignments['__match_args__'].value.elems] == [
+        'required', 'optional', 'token', 'wrapped', 'factory', 'custom_factory',
+    ]
     assert isinstance(assignments['optional'].value, NoneLit)
     assert assignments['token'].value.func.ident == 'make'
     assert assignments['wrapped'].value.func.ident == 'make'

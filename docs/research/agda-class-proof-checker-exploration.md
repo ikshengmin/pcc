@@ -1,8 +1,10 @@
 # An Agda-class proof checker in pcc: driving a Python edition of church-turing
 
-Assessment: 2026-11-12. **Research-only exploration. No code, test, CLI,
-workflow or priority change.** pcc compiled and executed nothing for this note;
-the only execution is one host-CPython run of the syntax sketch below.
+Assessment: 2026-11-12. The maintainer then selected this work the same day.
+The implementation is `pcc/proof/`, with tests and the Python edition under
+`tests/proof/`; see "Implementation state" at the end. The assessment below is
+kept as written, including its source-reading claim about `match`, which was
+then confirmed by native execution and fixed.
 
 ## Question
 
@@ -375,6 +377,52 @@ checker accepts wrong proofs, so the negative corpus has to exist from Stage 1.
 - Not executed: any pcc compilation, any Agda or Lean check, any export.
 - External facts are search summaries from 2026-11-12 and are marked where
   they were not read first-hand.
+
+## Implementation state
+
+Stage 1 of the route above exists, under host CPython. Nothing here has been
+compiled by pcc1.
+
+Layers in `pcc/proof/`, trusted first:
+
+- `terms`, `machine`: de Bruijn terms, values with closures, case trees;
+  evaluation, readback and conversion with eta for functions.
+- `kernel`: the trusted checker. Inductive families must be strictly positive,
+  live in `Type`, and take small arguments and indices. A function is a case
+  tree: splits must cover exactly the constructors whose indices unify
+  (deletion, solution, injectivity, conflict, cycle), and recursion must
+  decrease in a lexicographic order of arguments. A `With` node abstracts the
+  goal and chosen hypotheses over an expression and is re-checked against the
+  original types. No axiom can be declared.
+- `surface`: the only module that reads Python syntax; anything outside the
+  fragment is rejected with its position.
+- `elaborate`, `session`: untrusted elaboration of implicit arguments, match
+  statements, operators and module imports; every result is re-checked by the
+  kernel.
+- `runtime`, `prelude`: the run-time meaning of the primitives, and 36 checked
+  declarations that are also plain importable Python.
+
+Entry point: `python -m pcc.proof check PATH...`.
+
+The edition in `tests/proof/editions/church_turing` has four modules so far,
+following `LambdaDeBruijn`, `LambdaUntyped`, the first part of
+`LambdaWeakHead`, and part of `Demo`. The tests compare its two readings: for
+every closed constant, the kernel's normal form with implicit arguments erased
+equals the value CPython computes when it imports the module.
+
+The surface keeps both readings in agreement by rejecting what would diverge:
+calls must pass every parameter, function values are unary, `n - k` is
+accepted only where `n` is known to be at least `k`, and every `match` is
+exhaustive. Known limits: no universe polymorphism, no records with
+projections, no `rewrite`, numerals above 4096, and indices in a constructor's
+base class are evaluated by CPython at class creation, which is harmless only
+because the result is discarded.
+
+The `match` gap from item 4 of the assessment was confirmed: natively compiled
+`case App(f, a)` on a dataclass raised `TypeError: object of type 'App' has
+no len()`, where CPython matched. The owned parser now lowers class patterns
+through `__match_args__` and keyword attributes, and compile-time `@dataclass`
+expansion defines `__match_args__`; see `tests/python/test_match_class_patterns.py`.
 
 [arena]: https://arena.lean-lang.org/
 [rpylean]: https://arena.lean-lang.org/checker/rpylean/

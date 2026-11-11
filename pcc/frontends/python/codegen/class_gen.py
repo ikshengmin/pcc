@@ -2591,6 +2591,38 @@ class ClassLowering:
             elems=elems,
         )
 
+    def _dataclass_match_args(
+        self,
+        cd: ClassDef,
+        options: dict,
+        body: list,
+        field_names: list[str],
+    ) -> tuple:
+        """``__match_args__`` as CPython's ``@dataclass`` defines it.
+
+        The field names in constructor order, unless the decorator says
+        ``match_args=False`` or the class body assigns the name itself.
+        A ``@valueclass`` is not a dataclass and gets nothing.
+        """
+        if not _class_has_dataclass_decorator(cd) or not options.get("match_args", True):
+            return ()
+        for stmt in body:
+            if _is_ast_node(stmt, Assign) and any(
+                _is_ast_node(target, Name) and target.ident == "__match_args__"
+                for target in stmt.targets
+            ):
+                return ()
+        span = cd.span
+        str_ty = StrType(name="str")
+        elems = tuple(StrLit(span=span, ty=str_ty, value=name) for name in field_names)
+        value = TupleExpr(
+            span=span,
+            ty=TupleType(name="tuple", elems=tuple(str_ty for _ in elems)),
+            elems=elems,
+        )
+        target = Name(span=span, ty=DynType(name="dyn"), ident="__match_args__")
+        return (Assign(span=span, targets=(target,), value=value, annotation=None),)
+
     def _dataclass_synthetic_repr(
         self,
         cd: ClassDef,
@@ -2904,7 +2936,7 @@ class ClassLowering:
                 bases=cd.bases,
                 keywords=cd.keywords,
                 decorators=(),
-                body=cd.body,
+                body=tuple(cd.body) + self._dataclass_match_args(cd, options, remaining_body, []),
             )
 
         # Build synthetic __init__(self, <fields>): self.<f> = <f>.
@@ -3023,6 +3055,7 @@ class ClassLowering:
         self._dataclass_init_args[cd.name] = tuple(init_args)
         self._dataclass_generated_init[cd.name] = not user_has_init
         new_body = list(remaining_body)
+        new_body.extend(self._dataclass_match_args(cd, options, remaining_body, field_names))
         if not user_has_init:
             new_body.append(synthetic_init)
         existing_methods = {s.name for s in new_body if _is_ast_node(s, FuncDef)}
@@ -9213,6 +9246,8 @@ def _dataclass_options(cd: ClassDef) -> dict:
                 opts["frozen"] = bool(value.value)
             elif _classgen_str_eq(name, "order") and _is_ast_node(value, BoolLit):
                 opts[name] = bool(value.value)
+            elif _classgen_str_eq(name, "match_args") and _is_ast_node(value, BoolLit):
+                opts["match_args"] = bool(value.value)
     return opts
 
 

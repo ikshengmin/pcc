@@ -875,37 +875,7 @@ class Parser:
                 )
             ]
         if isinstance(pattern, _Call) and self._is_match_class_pattern(pattern):
-            conds: list = [
-                _Call(
-                    func=_Name("isinstance", line),
-                    args=[subject, pattern.func],
-                    line=line,
-                )
-            ]
-            bindings: list = []
-            if len(pattern.args) == 1:
-                arg = pattern.args[0]
-                elem_cond, elem_bindings = self._match_pattern_condition_bindings(
-                    subject,
-                    arg,
-                    line,
-                )
-                if elem_cond is not None:
-                    conds.append(elem_cond)
-                bindings.extend(elem_bindings)
-            elif len(pattern.args) > 1:
-                tuple_pattern = _Tuple(elems=pattern.args, line=line)
-                elem_cond, elem_bindings = self._match_pattern_condition_bindings(
-                    subject,
-                    tuple_pattern,
-                    line,
-                )
-                if elem_cond is not None:
-                    conds.append(elem_cond)
-                bindings.extend(elem_bindings)
-            if len(conds) == 1:
-                return conds[0], bindings
-            return _BoolOp(op="and", values=conds, line=line), bindings
+            return self._match_class_condition_bindings(subject, pattern, line)
         if isinstance(pattern, (_Tuple, _List)):
             conds: list = [
                 _Compare(
@@ -941,6 +911,94 @@ class Parser:
 
     def _is_match_class_pattern(self, pattern: _Call) -> bool:
         return isinstance(pattern.func, (_Name, _Attr))
+
+    def _match_class_condition_bindings(
+        self,
+        subject,
+        pattern: _Call,
+        line: int,
+    ) -> tuple[object | None, list]:
+        """Lower ``case C(p0, ..., k=q)`` (Python reference 8.6.4.9).
+
+        The subject must be an instance of ``C``.  Positional sub-pattern
+        ``i`` reads ``getattr(subject, C.__match_args__[i])``; keyword
+        sub-pattern ``k`` reads ``subject.k`` and fails the match when the
+        attribute is missing.  The built-in types that match themselves take
+        one positional sub-pattern matched against the subject itself.  A
+        class without ``__match_args__`` does the same for a single
+        positional sub-pattern, which is what subclasses of those built-ins
+        do; for any other class CPython rejects that pattern with TypeError.
+        """
+        positional: list = []
+        keywords: list = []
+        for arg in pattern.args:
+            if isinstance(arg, tuple) and len(arg) == 4 and arg[0] == "__pcc_kwarg__":
+                keywords.append((arg[1], arg[2]))
+            else:
+                positional.append(arg)
+        cls = pattern.func
+        conds: list = [_Call(func=_Name("isinstance", line), args=[subject, cls], line=line)]
+        items: list = []
+        self_matching = (
+            isinstance(cls, _Name)
+            and cls.ident in (
+                "bool", "bytearray", "bytes", "dict", "float", "frozenset",
+                "int", "list", "set", "str", "tuple",
+            )
+            and len(positional) == 1
+        )
+        for index in range(len(positional)):
+            if self_matching:
+                items.append(subject)
+                continue
+            name = _Subscript(
+                obj=_Attr(obj=cls, name="__match_args__", line=line),
+                idx=_Num(str(index), line, True),
+                line=line,
+            )
+            attribute = _Call(func=_Name("getattr", line), args=[subject, name], line=line)
+            conds.append(_Call(func=_Name("hasattr", line), args=[subject, name], line=line))
+            if len(positional) == 1:
+                has_match_args = _Call(
+                    func=_Name("hasattr", line),
+                    args=[cls, _Str(parts=(("__match_args__", False),), line=line)],
+                    line=line,
+                )
+                conds[-1] = _BoolOp(
+                    op="or",
+                    values=[_UnaryOp(op="not", operand=has_match_args, line=line), conds[-1]],
+                    line=line,
+                )
+                attribute = _Ternary(
+                    then_expr=attribute,
+                    cond=has_match_args,
+                    else_expr=subject,
+                    line=line,
+                )
+            items.append(attribute)
+        for name, _ in keywords:
+            conds.append(
+                _Call(
+                    func=_Name("hasattr", line),
+                    args=[subject, _Str(parts=((name, False),), line=line)],
+                    line=line,
+                )
+            )
+            items.append(_Attr(obj=subject, name=name, line=line))
+        bindings: list = []
+        sub_patterns = positional + [value for _, value in keywords]
+        for index in range(len(sub_patterns)):
+            elem_cond, elem_bindings = self._match_pattern_condition_bindings(
+                items[index],
+                sub_patterns[index],
+                line,
+            )
+            if elem_cond is not None:
+                conds.append(elem_cond)
+            bindings.extend(elem_bindings)
+        if len(conds) == 1:
+            return conds[0], bindings
+        return _BoolOp(op="and", values=conds, line=line), bindings
 
     def _parse_simple_stmt(self):
         """Expression statement OR ``name (: ann)? = value`` assign OR
