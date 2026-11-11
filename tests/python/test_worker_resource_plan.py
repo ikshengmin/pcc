@@ -17,9 +17,16 @@ from pcc.frontends.python import worker_process_pool as pool
 from pcc.frontends.python import worker_resource_plan as policy
 from tests.python.owned_regression_support import explicit_owned_runtime
 from tests.python.process_timeout import run_process_group_timeout
+from tests.python.resource_worker_fixture import (
+    live_forecast_pressure_plan,
+    start_resource_worker_and_wait,
+)
 
 
 MIB = 1024 ** 2
+# These tests deliberately create memory pressure in real child processes.
+# Keep their fixtures from overlapping while retaining the default six workers.
+pytestmark = pytest.mark.xdist_group(name="worker_resource_fixtures")
 
 
 def task(report, *, estimate=0, inputs=(1,), execution_class="host:test"):
@@ -39,6 +46,43 @@ def child_code(marker, allocated=4 * MIB, delay=0.05, *, write_pid=False):
         f"payload=bytearray({allocated});Path({str(marker)!r}).write_text({marker_value});"
         f"report('allocated');time.sleep({delay});report('complete')"
     )
+
+
+@pytest.mark.parametrize("failure", ("timeout", "predicate"))
+def test_startup_wait_failure_stops_and_reaps_unreturned_child(tmp_path, monkeypatch, failure):
+    monkeypatch.delenv(policy.TREE_STATE_ENV, raising=False)
+    original_start = pool._start_resource_worker
+    children = []
+
+    def start(specs, index):
+        pid = original_start(specs, index)
+        children.append(pool._HOST_WORKERS[pid])
+        return pid
+
+    def ready():
+        if failure == "predicate":
+            raise RuntimeError("startup predicate failed")
+        return False
+
+    def wait_for_report(specs, index):
+        return start_resource_worker_and_wait(start, specs, index, ready, timeout=0)
+
+    monkeypatch.setattr(pool, "_start_resource_worker", wait_for_report)
+    error = AssertionError if failure == "timeout" else RuntimeError
+    message = "worker startup report timed out" if failure == "timeout" else "startup predicate failed"
+    with pytest.raises(error, match=message):
+        pool.run_resource_worker_processes(
+            [command("import time;time.sleep(30)")],
+            [task(tmp_path / "rss", estimate=8 * MIB)], 1,
+            workers._coordinator_rss_bytes() + policy.RSS_HEADROOM_BYTES + 64 * MIB,
+            observations=[],
+        )
+    assert len(children) == 1
+    assert children[0].returncode is not None
+    assert pool._HOST_WORKERS == {}
+    if os.name == "posix":
+        with pytest.raises(ChildProcessError):
+            os.waitpid(children[0].pid, os.WNOHANG)
 
 
 def test_oversized_bytes_refuse_before_any_real_child_starts(tmp_path, monkeypatch):
@@ -89,13 +133,10 @@ def test_live_peak_growth_backs_off_until_worker_retires(tmp_path, monkeypatch):
     original_start = pool._start_resource_worker
 
     def wait_for_report(specs, index):
-        pid = original_start(specs, index)
-        if index == 0:
-            deadline = time.monotonic() + 3
-            while not Path(tasks[index]["report_path"]).exists():
-                assert time.monotonic() < deadline
-                time.sleep(0.005)
-        return pid
+        return start_resource_worker_and_wait(
+            original_start, specs, index,
+            lambda: index != 0 or Path(tasks[index]["report_path"]).exists(), timeout=3,
+        )
 
     monkeypatch.setattr(pool, "_start_resource_worker", wait_for_report)
     budget = workers._coordinator_rss_bytes() + policy.RSS_HEADROOM_BYTES + 250 * MIB
@@ -110,6 +151,23 @@ def test_live_peak_growth_backs_off_until_worker_retires(tmp_path, monkeypatch):
     assert any(row[0] == "backoff" for row in rows)
     assert first_retired < second_started
     assert pool._HOST_WORKERS == {}
+
+
+@pytest.mark.parametrize("measured_limit", (False, True))
+def test_live_forecast_pressure_uses_measured_cold_tail_reservations(measured_limit):
+    owner = 46 * MIB
+    peaks = [49324032, 49496064]
+    # The clean, bytecode-free publisher run exceeded the old 512 MiB plan.
+    assert sum(policy.peak_reservation(peak) for peak in peaks) > policy.available_worker_bytes(
+        512 * MIB, owner,
+    )
+    plan = live_forecast_pressure_plan(owner, peaks, measured_limit=measured_limit)
+    assert plan["budget"] <= 640 * MIB
+    assert plan["target_peak"] < plan["available"] < policy.peak_reservation(plan["target_peak"])
+    capacity = max(plan["tail_reservations"]) if measured_limit else sum(plan["tail_reservations"])
+    assert capacity < plan["available"]
+    if measured_limit:
+        assert plan["limit_payload"] == plan["available"]
 
 
 @pytest.mark.pcc_gate(probe=lambda: os.name == "posix")
@@ -130,24 +188,40 @@ import time
 from pcc.frontends.python import pipeline_frontend_workers as workers
 from pcc.frontends.python import worker_process_pool as pool
 from pcc.frontends.python import worker_resource_plan as policy
+from tests.python.resource_worker_fixture import start_resource_worker_and_wait
 
 root = Path(sys.argv[1])
 case = sys.argv[2]
+phase = sys.argv[3]
 mib = 1024 ** 2
 budget = int(os.environ["PCC_WORKER_TREE_BUDGET_BYTES"])
-if case == "no-state":
-    os.environ.pop(policy.TREE_STATE_ENV)
 trace = root / "admission.tsv"
-allocated = 512 * mib if case == "measured-limit" else 300 * mib
-commands = []
-tasks = []
-for index, allocation in enumerate((allocated, 4 * mib, 4 * mib, 4 * mib)):
+
+def child_command(index, allocation, target_peak=0):
     code = (
-        "import os,time;from pathlib import Path;"
-        "from pcc.frontends.python.worker_resource_plan import publish_worker_resource as report;"
-        + "payload=bytearray(" + str(allocation) + ");"
-        + "Path(" + repr(str(root / ("started" + str(index)))) + ").write_text(str(os.getpid()));"
-        + "report('allocated');"
+        "import os,time\\nfrom pathlib import Path\\n"
+        "from pcc.frontends.python.worker_resource_plan import publish_worker_resource as report\\n"
+    )
+    if target_peak:
+        code += (
+            "from pcc.frontends.python.pipeline_frontend_workers import _worker_peak_rss_bytes as peak\\n"
+            "payloads=[];allocated=0\\n"
+            + "while peak()<" + str(target_peak) + ":\\n"
+            + " payload=bytearray(1024**2)\\n"
+            + " for offset in range(0,len(payload),4096): payload[offset]=1\\n"
+            + " payloads.append(payload);allocated+=len(payload)\\n"
+            + " assert allocated<=" + str(target_peak + mib) + "\\n"
+            + "assert allocated>0\\n"
+        )
+    else:
+        code += (
+            "allocated=" + str(allocation) + ";payload=bytearray(allocated)\\n"
+            + "for offset in range(0,len(payload),4096): payload[offset]=1\\n"
+        )
+    code += (
+        "Path(" + repr(str(root / ("allocated" + str(index)))) + ").write_text(str(allocated))\\n"
+        + "Path(" + repr(str(root / ("started" + str(index)))) + ").write_text(str(os.getpid()))\\n"
+        + "report('allocated')\\n"
     )
     if index >= 2:
         peer = root / ("started" + str(5 - index))
@@ -173,12 +247,53 @@ for index, allocation in enumerate((allocated, 4 * mib, 4 * mib, 4 * mib)):
         "report('complete');"
         + "Path(" + repr(str(root / ("completed" + str(index)))) + ").touch()"
     )
-    commands.append(shlex.join([sys.executable, "-B", "-c", code]))
+    return shlex.join([sys.executable, "-B", "-c", code])
+
+if phase == "probe":
+    probe_tasks = [
+        {"class": "tail-probe", "inputs": [1], "estimate_bytes": 64 * mib,
+         "report_path": str(root / ("rss" + str(index))), "restartable": True}
+        for index in (2, 3)
+    ]
+    measured = []
+    pool.run_resource_worker_processes(
+        [child_command(index, 4 * mib) for index in (2, 3)], probe_tasks, 2, budget,
+        observations=measured, trace_path=str(trace),
+    )
+    assert len(measured) == 2 and pool._HOST_WORKERS == {}
+    for index in (2, 3):
+        assert (root / ("completed" + str(index))).exists()
+        assert (root / ("overlap" + str(index))).exists()
+        try:
+            os.kill(int((root / ("started" + str(index))).read_text()), 0)
+        except ProcessLookupError:
+            pass
+        else:
+            raise AssertionError("probe survived retirement")
+    (root / "calibration.json").write_text(json.dumps({
+        "owner_peak": workers._coordinator_rss_bytes(),
+        "tail_peaks": [sample[2] for sample in measured], "observations": measured,
+    }))
+    print("LIVE_FORECAST_PROBE_OK")
+    sys.exit(0)
+
+plan = json.loads((root / "pressure-plan.json").read_text())
+assert budget == plan["budget"]
+if case == "no-state":
+    os.environ.pop(policy.TREE_STATE_ENV)
+commands = []
+tasks = []
+for index in range(4):
+    commands.append(child_command(
+        index, plan["limit_payload"] if index == 0 else 4 * mib,
+        plan["target_peak"] if index == 0 and case != "measured-limit" else 0,
+    ))
     tasks.append({"class": "live-forecast" if index < 2 else "fitting-tail", "inputs": [4 - index],
                   "estimate_bytes": 0 if case == "calibration" and index == 0 else 64 * mib,
                   "report_path": str(root / ("rss" + str(index))), "restartable": True})
     if index >= 2:
         tasks[index]["depends_on"] = 1
+        tasks[index]["estimate_bytes"] = plan["tail_reservations"][index - 2]
 if case == "calibration":
     tasks[1]["depends_on"] = 0
 
@@ -203,14 +318,12 @@ if case == "stale-state":
 # This makes the live forecast cross before the independent tail can launch.
 original_start = pool._start_resource_worker
 def start(specs, index):
-    pid = original_start(specs, index)
-    if index == 0:
-        deadline = time.monotonic() + 5
-        while (not Path(tasks[index]["report_path"]).exists()
-               or (case == "stale-state" and not (root / "holding0").exists())):
-            assert time.monotonic() < deadline
-            time.sleep(0.005)
-    return pid
+    return start_resource_worker_and_wait(
+        original_start, specs, index,
+        lambda: index != 0 or (Path(tasks[index]["report_path"]).exists()
+                and (case != "stale-state" or (root / "holding0").exists())),
+        timeout=5,
+    )
 pool._start_resource_worker = start
 observations = []
 error = None
@@ -221,7 +334,8 @@ except policy.WorkerMemoryError as exc:
     error = str(exc)
 rows = [line.split("\\t") for line in trace.read_text().splitlines()]
 record = {"case": case, "budget": budget, "error": error, "events": rows,
-          "observations": observations, "owner_peak": workers._coordinator_rss_bytes()}
+          "observations": observations, "owner_peak": workers._coordinator_rss_bytes(),
+          "pressure_plan": plan}
 (root / "outcome.json").write_text(json.dumps(record, indent=2) + "\\n")
 assert pool._HOST_WORKERS == {}, record
 for marker in root.glob("started*"):
@@ -243,14 +357,20 @@ if case in ("forecast", "calibration"):
     assert retired < tail, record
     assert rows[tail][0] == "calibrate" and int(rows[tail][3]) > int(rows[tail][4]), record
     first = rows[0]
-    assert observations[0][2] > 300 * mib, record
+    allocated = int((root / "allocated0").read_text())
+    assert observations[0][2] > allocated, record
     assert policy.peak_reservation(observations[0][2]) > int(first[4]), record
     if case == "forecast":
         promoted = next(row for row in rows if row[0] == "exclusive")
         assert int(promoted[3]) == policy.peak_reservation(int(promoted[5])), record
-        assert int(promoted[3]) > int(promoted[4]), record
+        assert int(promoted[5]) <= int(promoted[4]) < int(promoted[3]), record
     else:
         assert first[0] == "calibrate", record
+    tail_peaks = [sample[2] for sample in observations if sample[0] == "fitting-tail"]
+    tail_available = min(int(row[4]) for row in rows
+                         if row[0] == "start" and row[1] in ("2", "3"))
+    assert len(tail_peaks) == 2, record
+    assert sum(policy.peak_reservation(peak) for peak in tail_peaks) <= tail_available, record
 elif case == "measured-limit":
     assert error and "live worker current subtree exceeds safe worker space" in error, record
     assert not (root / "completed0").exists() and not (root / "started1").exists(), record
@@ -268,26 +388,45 @@ else:
     (root / "release0").touch()
 print("LIVE_FORECAST_OK " + case)
 ''')
-    guard = tmp_path / "guard.json"
     env = dict(os.environ)
     env.pop("LC_ALL", None)
     env["PYTHONPATH"] = str(source)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["PCC_NO_AUTO_PCC1"] = "1"
     env["PCC_TEST_NO_NATIVE_PROVISIONING"] = "1"
-    result = run_process_group_timeout([
-        sys.executable, "-B", str(source / "scripts" / "run_process_tree_sample.py"),
-        "--result", str(guard), "--samples", str(tmp_path / "samples.tsv"),
-        "--stdout", str(tmp_path / "driver.stdout"), "--stderr", str(tmp_path / "driver.stderr"),
-        "--cwd", str(source), "--timeout", "12", "--interval", "0.01",
-        "--no-performance-lock", "--max-tree-rss-bytes", str(640 * MIB),
-        "--", sys.executable, "-B", str(driver), str(tmp_path), case,
-    ], env=env, timeout=15)
-    assert result.returncode == 0, (result, (tmp_path / "driver.stderr").read_text())
-    receipt = json.loads(guard.read_text())
-    assert receipt["status"] == "COMPLETE" and receipt["returncode"] == 0
-    assert receipt["max_tree_rss_bytes"] == 640 * MIB
-    assert 0 < receipt["peak_tree_rss_bytes"] < 640 * MIB
+    started = time.monotonic()
+    guard_deadline, wait_deadline = started + 12, started + 15
+
+    def run_guard(directory, budget, phase):
+        # Calibration consumes the original timeout; it does not buy a second
+        # twelve-second attempt. Both trees retain independently recorded caps.
+        remaining = guard_deadline - time.monotonic()
+        assert remaining > 0, "live forecast fixture exhausted its guard deadline"
+        guard = directory / "guard.json"
+        result = run_process_group_timeout([
+            sys.executable, "-B", str(source / "scripts" / "run_process_tree_sample.py"),
+            "--result", str(guard), "--samples", str(directory / "samples.tsv"),
+            "--stdout", str(directory / "driver.stdout"), "--stderr", str(directory / "driver.stderr"),
+            "--cwd", str(source), "--timeout", str(remaining), "--interval", "0.01",
+            "--no-performance-lock", "--max-tree-rss-bytes", str(budget),
+            "--", sys.executable, "-B", str(driver), str(directory), case, phase,
+        ], env=env, timeout=wait_deadline - time.monotonic())
+        assert result.returncode == 0, (result, (directory / "driver.stderr").read_text())
+        receipt = json.loads(guard.read_text())
+        assert receipt["status"] == "COMPLETE" and receipt["returncode"] == 0
+        assert receipt["max_tree_rss_bytes"] == budget <= 640 * MIB
+        assert 0 < receipt["peak_tree_rss_bytes"] < budget
+
+    probe = tmp_path / "tail-probe"
+    probe.mkdir()
+    run_guard(probe, 640 * MIB, "probe")
+    assert (probe / "driver.stdout").read_text() == "LIVE_FORECAST_PROBE_OK\n"
+    measured = json.loads((probe / "calibration.json").read_text())
+    plan = live_forecast_pressure_plan(
+        measured["owner_peak"], measured["tail_peaks"], measured_limit=case == "measured-limit",
+    )
+    (tmp_path / "pressure-plan.json").write_text(json.dumps(plan))
+    run_guard(tmp_path, plan["budget"], "scenario")
     assert (tmp_path / "driver.stdout").read_text() == "LIVE_FORECAST_OK " + case + "\n"
 
 
@@ -369,7 +508,9 @@ def _progressive_retry_pressure_plan(available, leader_peak, peer_peak):
     peer = policy.peak_reservation(peer_peak)
     assert leader + peer <= available, ("initial pair must fit", leader, peer, available)
     lower = max(leader, peer, available - peer)
-    target = lower + (available - lower) // 2
+    # Cross the cancellation threshold by a bounded margin, not half of all
+    # spare capacity: historical parent RSS can make that spare space huge.
+    target = lower + min(8 * MIB, (available - lower) // 2)
     target_peak = (target - policy.RSS_HEADROOM_BYTES) * 4 // 5
     target_charge = policy.peak_reservation(target_peak)
     assert max(leader, peer) < target_charge < available
@@ -394,6 +535,7 @@ def test_progressive_retry_pressure_uses_child_reports_not_parent_history(parent
     peer = policy.peak_reservation(peer_peak)
     assert policy.peak_reservation(leader_peak) + peer <= available
     assert grown <= available < grown + peer
+    assert grown - max(policy.peak_reservation(leader_peak), peer, available - peer) <= 8 * MIB
     assert policy.peak_reservation(plan["target_peak"] + plan["chunk_bytes"]) < available
     assert 0 < plan["chunk_bytes"] <= 8 * MIB < plan["max_payload_bytes"]
     if parent_peak >= 256 * MIB:
@@ -405,7 +547,7 @@ def test_progressive_retry_pressure_uses_child_reports_not_parent_history(parent
 
 @pytest.mark.pcc_gate(probe=lambda: os.name == "posix")
 @pytest.mark.parametrize(
-    "parent_history", [0, 256 * MIB], ids=["fresh-parent", "retired-parent-rss"],
+    "parent_history", [0, 128 * MIB], ids=["fresh-parent", "retired-parent-rss"],
 )
 def test_progressive_retry_drains_peers_then_restores_concurrency(
     tmp_path, monkeypatch, parent_history,
@@ -413,6 +555,8 @@ def test_progressive_retry_drains_peers_then_restores_concurrency(
     monkeypatch.delenv(policy.TREE_STATE_ENV, raising=False)
     # Exercise a genuine parent high-water mark, not a fabricated RSS reader.
     # Release it before starting fresh children; no second full-sized copy.
+    # Bound the history too: its inherited peak sets the minimum real growth
+    # needed below, alongside all six pytest workers inside the 1 GiB gate.
     history = bytearray(parent_history)
     for offset in range(0, len(history), 4096):
         history[offset] = 1
@@ -565,7 +709,20 @@ publish("complete." + str(index) + "." + str(attempt),
 """)
     owner = workers._coordinator_rss_bytes()
     startup_peak = max(owner, workers._worker_peak_rss_bytes())
-    available = 2 * policy.peak_reservation(startup_peak + 32 * MIB) + 32 * MIB
+    startup_budget = (owner + policy.RSS_HEADROOM_BYTES
+                      + 2 * policy.peak_reservation(startup_peak + 32 * MIB) + 32 * MIB)
+    # Calibrate the actual child envelope, including any inherited high-water
+    # mark. Keep the pair's launch margin outside that measured reservation;
+    # padding the parent again forced hundreds of unnecessary MiB of growth.
+    startup_observations = []
+    pool.run_resource_worker_processes(
+        [command(child_code(tmp_path / "startup-probe"))],
+        [task(tmp_path / "startup-probe.rss")], 1, startup_budget,
+        observations=startup_observations, trace_path=str(tmp_path / "startup-probe.tsv"),
+    )
+    assert len(startup_observations) == 1 and startup_observations[0][2] > 0
+    assert pool._HOST_WORKERS == {}
+    available = 2 * policy.peak_reservation(startup_observations[0][2]) + 32 * MIB
     budget = owner + policy.RSS_HEADROOM_BYTES + available
     (tmp_path / "configured-budget").write_text(str(budget))
     tasks = [task(tmp_path / ("rss" + str(index)), estimate=8 * MIB,
@@ -1072,6 +1229,33 @@ def test_resource_acceptance_driver_matches_cpython(case, tmp_path):
         [sys.executable, "-B", str(RESOURCE_NATIVE_DRIVER)],
         case, tmp_path / case, "cpython", 0,
     )
+
+
+@pytest.mark.pcc_gate(probe=lambda: os.name == "posix")
+def test_resource_acceptance_growth_uses_child_not_retired_parent_peak(tmp_path):
+    # Establish history in the driver itself: POSIX does not promise that an
+    # exec will inherit pytest's high-water RSS on every supported platform.
+    launcher = (
+        "import runpy,sys\n"
+        "history=bytearray(256*1024**2)\n"
+        "for offset in range(0,len(history),4096): history[offset]=1\n"
+        "del history\n"
+        "sys.argv=sys.argv[1:]\n"
+        "runpy.run_path(sys.argv[0],run_name='__main__')\n"
+    )
+    directory = tmp_path / "growth"
+    _execute_resource_driver(
+        [sys.executable, "-B", "-c", launcher, str(RESOURCE_NATIVE_DRIVER)],
+        "growth", directory, "cpython", 0,
+    )
+    budget, owner, peak = [int(value) for value in
+                           (directory / "budget.tsv").read_text().split("\t")[:3]]
+    assert owner >= 256 * MIB
+    measured = int((directory / "growth-probe" / "budget.tsv").read_text().split("\t")[2])
+    # Real grown children fit one at a time, but never as a simultaneous pair.
+    available = policy.available_worker_bytes(budget, owner)
+    assert available == policy.peak_reservation(measured) + 32 * MIB
+    assert policy.peak_reservation(peak) <= available < 2 * policy.peak_reservation(peak)
 
 
 @pytest.mark.integration

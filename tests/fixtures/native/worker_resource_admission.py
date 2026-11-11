@@ -225,7 +225,7 @@ def child(root, mode, index):
         assert_alive(peer)
         write(root, "failure-overlap", str(peer) + " " + str(os.getpid()))
         sys.exit(7)
-    payload = allocate(PAYLOAD_BYTES if mode == "grow" else 4 * MIB)
+    payload = allocate(PAYLOAD_BYTES if mode in ("grow", "growth-probe") else 4 * MIB)
     if mode == "grow" and attempt == 1:
         confirm_overlap(root, index, [0, 1])
         wait_for(root, "overlap" + str(1 - index))
@@ -298,7 +298,25 @@ def calibration(root):
 
 def growth(root):
     owner = workers._coordinator_rss_bytes()
-    available = policy.peak_reservation(owner + PAYLOAD_BYTES) + 32 * MIB
+    # The driver may retain a large historical RSS after exec. It is still
+    # charged as owner overhead, but is not the fresh child's working set.
+    # Measure that child's actual allocation before setting cancellation
+    # pressure. Keep the probe separate from the scenario's attempts/trace.
+    probe = root + "/growth-probe"
+    os.mkdir(probe)
+    probe_budget = owner + policy.RSS_HEADROOM_BYTES + policy.peak_reservation(
+        owner + PAYLOAD_BYTES,
+    ) + 32 * MIB
+    measured = []
+    run_tasks(probe, [child_command(probe, "growth-probe", 0)],
+              [task(probe, 0)], 1, probe_budget, measured)
+    check_attempt(probe, 0, 1)
+    empty_inventory()
+    assert len(measured) == 1 and measured[0][2] >= PAYLOAD_BYTES
+    reservation = policy.peak_reservation(measured[0][2])
+    available = reservation + 32 * MIB
+    assert reservation <= available < 2 * reservation
+    record_budget(probe, probe_budget, owner, measured)
     budget = owner + policy.RSS_HEADROOM_BYTES + available
     tasks = [task(root, index, estimate=8 * MIB, inputs=2 - index) for index in range(2)]
     observations = []
