@@ -464,6 +464,40 @@ Owners left (GC1 w1 ~0.8 s per 10k requests against GC0's ~0.27 s):
 5. GC4 runs are bimodal (relocation happens in some runs): measure GC4 with
    more pairs and both 10k and 30k requests.
 
+Screen of 2026-11-11 (second local Mac, Darwin AArch64, 10 cores; source
+`f235c25e`; host pcc0 under CPython 3.13.11 because 3.15.0 was not yet
+installed there; `../pcc-gateway/benchmark_native.py 100 0 100 --summary`,
+one binary, collector chosen by `PCC_GC_BACKEND`). Screening only: two or
+three runs per row, no five-pair A/B, no suites, pcc1 or bootstrap.
+Requests/s: GC0 ~34,500; GC1 ~12,600; GC2 ~12,700; GC3 ~7,900; GC4 ~6,100.
+
+- GC1 main-thread samples (5 s, `sample`): stopped sweep 20%, spinning in
+  `_graph_wait_acquire` 15% (callers: allocation registration, against the
+  collector thread's off-pause sweep slice), parked for the collector
+  thread's stopped root seed 11%, `pcc_gc_finish_tracing_cycle` 5%. The
+  mutator waits about as long as the sweep slice holds the graph lock, so
+  with one mutator the off-pause sweep is serialized, not concurrent.
+- Measured without gain and not published: the sweep slice asking after
+  each destruction whether a thread is queued on the graph lock and staying
+  off the word until the queue drained (new kernel query on the wait
+  context tail). GC1 ~12,600 -> ~10,900 requests/s, 0/3 pairs: more
+  handoffs put every allocation on the contended slow path. Batch shape
+  cannot remove this owner; owner 2 above (registration without the global
+  graph lock) is the fix.
+- Pacing sensitivity, GC1, `PCC_GC_DEBT_THRESHOLD` (requests/s, peak RSS):
+  default 12,800 / 85 MB; 4 MiB 12,000 / 60 MB; 16 MiB 16,800 / 156 MB;
+  64 MiB and above 21,900 / 229 MB (no cycle completes in the run). Peak
+  RSS at the default is about twenty times the 4 MiB floor: garbage is
+  allocated faster than a cycle retires it, and a finished cycle forgives
+  the debt accrued while it ran. The default is unchanged; a larger floor
+  trades memory for throughput and is a maintainer decision.
+- GC1 without any cycle still runs at ~21,900 against GC0's ~34,500: in
+  that run allocation registration is 24% of main-thread samples
+  (`pcc_gc_object_index_insert_preallocated` 8% self, node `malloc` 5%)
+  and `_tlv_get_addr` 10%. The index tables are never trimmed in that
+  run, so the registration share overstates the collecting case (~7%
+  there, excluding lock waits).
+
 Known test failures (all classified as test problems so far): GC4
 production (38), generational (7: harness threads that never poll a
 safepoint, counted-release assertions), forwarding retirement payload
