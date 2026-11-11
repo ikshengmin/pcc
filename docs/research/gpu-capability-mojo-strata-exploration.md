@@ -314,6 +314,13 @@ level 6. This is the prerequisite for every in-process stage. Feasibility of
 the required call shapes and of Objective-C blocks from pcc-Python is not
 established.
 
+Update, same day: the block-free synchronous path now exists as
+`pcc/gpu_runtime/metal_device.py` and is executed on a real device by
+`tests/gpu_hardware/test_metal_device_runtime.py` (host-pcc0 evidence). The
+statements above and in section 2.3 describe the tree before that change.
+Blocks, the pcc-gui bridge, level 5 and level 6 remain open; the follow-on
+design is [the local-model architecture](../design/pcc-local-model-architecture.md).
+
 **Stage 2: foreign kernels as assets.**
 Load unmodified MSL kernel sources through the pcc launcher, each with a CPU
 oracle, zero-copy weight buffers through the external-resource seam, and a
