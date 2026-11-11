@@ -1448,7 +1448,6 @@ def _backend4_store_buffer_enqueue(owner, slot, value) -> int:
             skips + 1,
         )
         return 0
-    flags: int = load_i32(owner, 12)
     if (
         _backend4_store_buffer_medium_count()
         >= _backend4_store_buffer_medium_capacity()
@@ -1473,7 +1472,9 @@ def _backend4_store_buffer_enqueue(owner, slot, value) -> int:
     pcc_gc_store_buffer_member_note(owner)
     pcc_gc_store_buffer_entry_note(owner, slot)
     _backend4_remembered_set_add(owner, slot)
-    store_i32(owner, 12, flags | 512)
+    # Root shading and explicit pin changes do not take the graph lock.
+    # Publish the work first, then merge only REMEMBERED into the current word.
+    atomic_rmw_i32("or", owner, 12, 512, "acq_rel")
     pending: int = load_i32(
         global_addr("pcc_gc_backend4_store_buffer_entries_count"), 0
     )

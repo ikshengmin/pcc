@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.python.runtime_body_model import gc_state_initial_values, load_functions
 
 ROOT = Path(__file__).resolve().parents[2]
 BACKEND = ROOT / "pcc/runtime/py/py_gc_backend.py"
@@ -21,18 +22,12 @@ MEMBERS = "pcc_py_gc_store_buffer_member_"
 
 
 def _load_functions(path, namespace, names):
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    functions = [node for node in tree.body
-                 if isinstance(node, ast.FunctionDef) and node.name in names]
-    assert {node.name for node in functions} == names
-    for node in functions:
-        node.decorator_list = []
-    exec(compile(ast.Module(body=functions, type_ignores=[]), str(path), "exec"), namespace)
+    load_functions(path, names, namespace)
 
 
 class _Memory:
     def __init__(self):
-        self.cells = {}
+        self.cells = {(name, 0): value for name, value in gc_state_initial_values().items()}
         self.blocks = {}
         self.next_pointer = 0x10000
         self.known = set()
@@ -146,9 +141,9 @@ class _Memory:
         self.cells[self._address(base, offset)] = value
 
     def atomic_rmw(self, operation, base, offset, value, ordering):
-        assert operation == "and" and ordering == "acq_rel"
+        assert operation in ("and", "or") and ordering == "acq_rel"
         old = self.read(base, offset)
-        self.write(base, offset, old & value)
+        self.write(base, offset, old & value if operation == "and" else old | value)
         return old
 
     def incref(self, value):
