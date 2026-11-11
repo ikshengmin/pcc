@@ -179,12 +179,12 @@ Objective-C source bridge, `.air`/`.metallib` or subprocess launcher. It checks
 the pipeline's threadgroup limit; the older observation in 2.4 concerns the
 legacy bridge emitters, not this runtime.
 
-`acad51eff` rejects writable buffer aliases and buffer types outside the
+`48b912bd8` rejects writable buffer aliases and buffer types outside the
 published bytes/bytearray contract. On local Darwin arm64, the five new gates
 in `tests/gpu_hardware/test_gpu_kernel_launch.py` execute their binaries under
 observed GC0–4: SAXPY and readback, invalid arguments, allowed read-only aliases,
 no-subprocess compilation/linking with a verified prebuilt runtime, and native
-f32 packing against `ctypes.c_float`. With the CLI test migration `4be097a7b`,
+f32 packing against `ctypes.c_float`. With the CLI test migration `b8aefaeff`,
 the final selected affected-directory run is 561 passed. The initial offline
 reference/toolchain failures were resolved by installing the official component
 and matching Xcode 27.2, SDK 27.2 and Metal Toolchain 27B47. The legacy metallib

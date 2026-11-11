@@ -47,8 +47,8 @@ Kernel IR shapes on this path and any model runtime are open. The older
 ### Public annotated-kernel CLI (local Mac, 2026-11-12)
 
 Source: `8c4e17e79` wires `@gpu.kernel` / `gpu.launch` into the owned device;
-`acad51eff` fixes argument validation and adds executed regression gates;
-`4be097a7b` migrates the old CLI tests to the embedded-source route.
+`48b912bd8` fixes argument validation and adds executed regression gates;
+`b8aefaeff` migrates the old CLI tests to the embedded-source route.
 The actual route is `pcc/kernel_ir/entry.py` -> generated host wrappers in
 `gpu_host_launch.py` -> `pipeline.py` linking `metal_device.o` -> synchronous
 `pcc_metal_device_launch_packet` in the same native executable. It embeds MSL,
