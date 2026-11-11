@@ -79,8 +79,12 @@ def gc_walked_frame_call_elided(callee, module_symbols) -> bool:
             and _owned_runtime_import(callee, module_symbols))
 
 
-def gc_short_call_lines(func, callee, call_id, ret_kind, arg_kinds, module_symbols):
-    """Return a guarded ABI expansion, or None when its proof is absent."""
+def gc_short_call_lines(func, callee, label_serial, ret_kind, arg_kinds, module_symbols):
+    """Return a guarded ABI expansion with an emission-order label serial.
+
+    The caller reserves the serial only when this returns an expansion, not
+    None. A call-record payload ID is not stable across indexed and text IR.
+    """
     if not _owned_runtime_import(callee, module_symbols):
         return None
     load = callee in _LOADS
@@ -98,7 +102,7 @@ def gc_short_call_lines(func, callee, call_id, ret_kind, arg_kinds, module_symbo
             or any(kind != TYPE_KIND_PTR for kind in arg_kinds)):
         return None
     prefix = "L" + asm_symbol_prevalidated(func.name, module_symbols)
-    prefix += ".gc.short." + str(call_id)
+    prefix += ".gc.short." + str(label_serial)
     slow, done, empty = prefix + ".slow", prefix + ".done", prefix + ".empty"
     lines = []
     if load or frame:

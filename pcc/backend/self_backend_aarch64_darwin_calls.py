@@ -2395,10 +2395,13 @@ def emit_call_instruction_indexed(
                 arg: CompilerInt4 = kernel.call_arg(header.fourth + i)
                 arg_kinds.append(kernel.type_kind_id(arg.first))
             fast_call = gc_short_call_lines(
-                func, callee, call_id, ret_kind_id,
+                func, callee, func.platform_intrinsic_labels + 1, ret_kind_id,
                 tuple(arg_kinds), module_symbols,
             )
         if fast_call is not None:
+            # Call payload IDs follow construction order, which need not match
+            # final block order. Labels follow emission on both indexed routes.
+            func.platform_intrinsic_labels += 1
             lines.extend(fast_call)
         else:
             lines.append(

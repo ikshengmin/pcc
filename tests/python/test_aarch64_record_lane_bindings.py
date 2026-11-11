@@ -162,6 +162,9 @@ def test_gc_argument_kind_queries_are_ordered_and_admission_is_lazy(
         assert [index for name, index in events if name == "call_arg"] == expected_arg_ids
         assert any("blr x12" in line if shape == "indirect" else "bl " in line for line in lines)
         assert ("  ldr x15, [x1]" in lines) == (admitted and shape == "load" and target == TARGETS[0])
+        assert function.platform_intrinsic_labels == int(
+            admitted and shape == "load" and target == TARGETS[0]
+        )
     finally:
         kernel.close_native_tables()
 
