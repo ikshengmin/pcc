@@ -15,7 +15,7 @@ from tests.proof.support import erased_normal_form, render_runtime_value
 
 EDITIONS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "editions")
 PACKAGE = os.path.join(EDITIONS, "church_turing")
-MODULES = ("lambda_de_bruijn", "lambda_untyped", "lambda_weak_head", "demo")
+MODULES = ("lambda_de_bruijn", "lambda_untyped", "lambda_weak_head", "lambda_size", "demo")
 
 
 @pytest.fixture(scope="module")
@@ -53,6 +53,7 @@ def test_every_module_is_checked(session):
         "lambda_de_bruijn": 19,
         "lambda_untyped": 14,
         "lambda_weak_head": 19,
+        "lambda_size": 14,
         "demo": 18,
     }
     assert session.kernel.idle
@@ -198,3 +199,23 @@ def test_a_bound_cannot_be_lowered(tmp_path):
         "def whn_in_weaken(n: Nat, m: Term, h: WHNIn(suc(n), m)) -> WHNIn(n, m):",
     )
     _check_rejects(path, "is required|cannot match|does not cover")
+
+
+def test_sizes_agree_with_python(session, running):
+    sizes = running["lambda_size"]
+    for count in range(8):
+        numeral = sizes.church(count)
+        assert sizes.size(numeral) == 3 * count + 3
+        assert sizes.nodes(numeral) == 2 * count + 3
+    term = sizes.App(sizes.Var(4), sizes.Lam(sizes.Var(0)))
+    assert sizes.nodes(running["lambda_de_bruijn"].rename(lambda x: x + 7, term)) == sizes.nodes(term)
+
+
+def test_a_wrong_numeral_size_is_rejected(tmp_path):
+    path = _tampered(
+        tmp_path,
+        "lambda_size",
+        "def size_church(n: Nat) -> Eq[size(church(n)), 3 * n + 3]:",
+        "def size_church(n: Nat) -> Eq[size(church(n)), 3 * n + 2]:",
+    )
+    _check_rejects(path, "is required")
