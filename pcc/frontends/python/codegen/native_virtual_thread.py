@@ -2002,9 +2002,10 @@ class NativeVirtualThreadLoweringMixin:
         if len(value_args) != len(runtime_formals):
             return None
 
-        generator = target.ident in getattr(
-            self, "_generator_func_names", set(),
-        ) or self._funcdef_has_yield_sentinel(ast_func_def)
+        generator = (
+            target.ident in self._generator_func_names
+            or self._funcdef_has_yield_sentinel(ast_func_def)
+        )
         return self._emit_virtual_thread_owned_spawn(
             target.ident, fn, ast_func_def, value_args, runtime_formals,
             call_expr, generator,

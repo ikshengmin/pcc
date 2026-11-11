@@ -465,9 +465,10 @@ class OwnershipLoweringMixin:
                     except Exception:
                         ast_func_def = None
                     if ast_func_def is not None:
-                        if callee in getattr(
-                            self, "_generator_func_names", set()
-                        ) or self._funcdef_has_yield_sentinel(ast_func_def):
+                        if (
+                            callee in self._generator_func_names
+                            or self._funcdef_has_yield_sentinel(ast_func_def)
+                        ):
                             return True
                         return self._user_return_type_is_owned_object(
                             ast_func_def.return_ty

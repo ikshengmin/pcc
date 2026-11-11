@@ -229,12 +229,8 @@ class UserFunctionDeclLoweringMixin:
             not is_generator
             and fd.name not in self._duplicate_module_function_names
         ):
-            is_generator = fd.name in getattr(
-                self, "_generator_func_names", set()
-            )
+            is_generator = fd.name in self._generator_func_names
         if is_generator:
-            if not hasattr(self, "_generator_func_names"):
-                self._generator_func_names = set()
             self._generator_func_names.add(fd.name)
         return_is_none = _is_none_semantic_type(fd.return_ty)
         if c_abi_typed_signature is not None:

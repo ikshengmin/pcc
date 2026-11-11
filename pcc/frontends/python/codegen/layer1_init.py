@@ -166,6 +166,9 @@ class Layer1InitMixin:
         self._vthread_binding_cache: dict = {}
         self._generator_ctx_stack: list = []
         self._generator_with_context_names: list = []
+        # One constructor-owned classification set for every mixin. Module
+        # overrides replace it; readers must not invent None/empty defaults
+        # or lazily initialize a declared-but-NULL self-host slot.
         self._generator_func_names: set[str] = set()
         # Closed-world virtual-thread effect analysis fills these before
         # function declaration.  Keep exact FuncDef identities separate from

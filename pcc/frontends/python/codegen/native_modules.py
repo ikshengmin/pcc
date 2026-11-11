@@ -1775,7 +1775,7 @@ class NativeModuleAliasMixin:
         func_defs = self._cross_module_func_defs
         extension_modules = self._native_extension_modules()
         identity = self._cross_module_identity_decorators
-        generators = getattr(self, "_generator_func_names", None)
+        generators = self._generator_func_names
         undo.append((
             local_name,
             local_name in self.functions,
@@ -1788,7 +1788,7 @@ class NativeModuleAliasMixin:
             extension_modules.get(local_name),
             local_name in identity,
             identity.get(local_name),
-            generators is not None and local_name in generators,
+            local_name in generators,
         ))
 
     def _restore_function_import_aliases(self, undo: list) -> None:
@@ -1809,12 +1809,11 @@ class NativeModuleAliasMixin:
             _restore_alias_entry(
                 self._cross_module_identity_decorators, name, entry[9], entry[10],
             )
-            generators = getattr(self, "_generator_func_names", None)
-            if generators is not None:
-                if entry[11]:
-                    generators.add(name)
-                else:
-                    generators.discard(name)
+            generators = self._generator_func_names
+            if entry[11]:
+                generators.add(name)
+            else:
+                generators.discard(name)
 
     def _bind_native_cross_module_export(
         self,

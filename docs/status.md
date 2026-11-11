@@ -7,6 +7,44 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
 
+## Compiler refactoring batch (local Mac, 2026-11-12)
+
+Source baseline: `f695b3a91`. The first slice makes `_generator_func_names`
+constructor-owned across the codegen mixins: six `None`/empty-set defensive
+reads and two lazy initialization guards now use the existing fixed-layout
+state directly. Initialization and module-override reset retain their owners.
+`tests/python/test_generator_name_state.py` checks independent instances,
+module reset, the no-defensive-read invariant, and local imports shadowing a
+generator with an ordinary function and vice versa. Both native scaffold modes
+match CPython under observed GC0–4 with a newly built, provenance-verified
+isolated runtime. The new file is **5 passed** (three host checks and two native
+variants); the affected generator/virtual-thread selection is **27 passed**,
+and the mixin/state contract selection is **9 passed**. These are host-pcc0/self
+results, not performance or pcc1 qualification.
+
+Remaining batch scope: other inconsistent defensive state reads, the remaining
+module-name guards through `self_module_contracts.py`, cohesive extraction from
+large functions, environment-read consolidation, and a fresh bootstrap chain.
+The supplied older `1b4731f9c` bootstrap receipt ended after a successful Stage1:
+Stage2 had no runtime archive, so it has no Stage2/3 fixed-point result. Its
+separate native C SSA probe also failed to import `pcc.frontends.c.parse.c_lex`;
+that is not evidence of an executed C pass. The new chain will select a matching
+verified runtime explicitly; it has **not yet run**. Whole-Python and full
+five-GC bootstrap qualification are also unrun. Bootstrap wiring is tracked in
+[#200](https://github.com/allstoalls/pcc/issues/200).
+
+Focused repro, using a verified archive from the selected source:
+
+```bash
+PCC_NO_AUTO_PCC1=1 PCC_TEST_NO_NATIVE_PROVISIONING=1 PCC_RUNTIME_ARCHIVE="$RUNTIME" \
+uv run pytest -x -vv -m '' tests/python/test_generator_name_state.py
+```
+
+The bounded affected-file selection also includes `test_generator_protocol.py`,
+`test_generator_import_binding_lifetime.py`, `test_dynamic_generator_bound_methods.py`,
+`test_virtual_thread_frontend.py` and `test_vthread_direct_return.py` under
+`tests/python/`; it retains six workers and the shared-lock process-tree guard.
+
 ## Owned Metal device runtime (local Mac, 2026-11-12)
 
 Metal is the first GPU device. `pcc/gpu_runtime/metal_device.py` is a

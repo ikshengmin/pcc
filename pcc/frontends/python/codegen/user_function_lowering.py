@@ -1323,17 +1323,11 @@ class UserFunctionLoweringMixin:
                 and not is_factory
                 and fd.name not in self._duplicate_module_function_names
             ):
-                is_generator = fd.name in getattr(
-                    self,
-                    "_generator_func_names",
-                    set(),
-                )
+                is_generator = fd.name in self._generator_func_names
             if is_generator:
                 _func_codegen_log(
                     self, debug_codegen, fd.name, "generator wrapper begin"
                 )
-                if not hasattr(self, "_generator_func_names"):
-                    self._generator_func_names = set()
                 self._generator_func_names.add(fd.name)
                 # Mirror the normal-function reset (~line 1053): the generator
                 # path returns early and skips that reset, so each new
