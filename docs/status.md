@@ -20,10 +20,24 @@ match CPython under observed GC0–4 with a newly built, provenance-verified
 isolated runtime. The new file is **5 passed** (three host checks and two native
 variants); the affected generator/virtual-thread selection is **27 passed**,
 and the mixin/state contract selection is **9 passed**. These are host-pcc0/self
-results, not performance or pcc1 qualification.
+results, not performance or pcc1 qualification. This slice is published as
+`ee6401de1`; its rebase changed only unrelated peer test/CI inputs.
 
-Remaining batch scope: other inconsistent defensive state reads, the remaining
-module-name guards through `self_module_contracts.py`, cohesive extraction from
+The next slice, anchored at `ee6401de1`, declares the existing static AST
+full-field constructor policy in `self_module_contracts.py`, including its
+closed-world export metadata. Capability/argument-count dispatch and emitted
+metadata checks are **75 passed** with six workers under a 90-second/1-GiB tree
+guard. Two stale dynamic-call assertions also failed on the preceding source;
+they now require the emitted load-method/call-loaded-method pair, retaining the
+checks against accidental IR-receiver admission and CPython calls. Ordinary
+live imports do not enter the static constructor shortcut; the new tests keep
+that boundary separate. Native constructor execution on this slice is **unrun**:
+the baseline six-worker native probe was rejected by the owned Mach-O archive
+parser's memory admission under the same 1-GiB tree cap. That resource failure
+has not been waived or repaired, and the host/IR checks are not native evidence.
+
+Remaining batch scope: other inconsistent defensive state reads, other
+module-name guards, cohesive extraction from
 large functions, environment-read consolidation, and a fresh bootstrap chain.
 The supplied older `1b4731f9c` bootstrap receipt ended after a successful Stage1:
 Stage2 had no runtime archive, so it has no Stage2/3 fixed-point result. Its

@@ -1505,6 +1505,9 @@ def _populate_static_native_exports_5(out):
         "PY_AST_FIELD_ORDER_CONTRACT": _str_constant_export(
             "py-ast-field-order"
         ),
+        "PY_AST_FIELD_CONSTRUCTOR_CONTRACT": _str_constant_export(
+            "py-ast-field-constructor"
+        ),
         "L1_CODEGEN_HOST_ATTR_CONTRACT": _str_constant_export(
             "l1-codegen-host-attrs"
         ),

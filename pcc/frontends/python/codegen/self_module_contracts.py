@@ -22,6 +22,9 @@ Contracts:
 - PY_AST_FIELD_OVERRIDE_MODULE — the py_ast dataclasses whose field ORDER is
   pinned by PY_AST_FIELD_NAME_OVERRIDES (see py_ast_contract.py); the pinned
   order must match the real dataclass field order byte-for-byte.
+- PY_AST_FIELD_CONSTRUCTOR_CONTRACT — static AST record calls may initialize
+  a complete field list directly. The call site still checks argument count,
+  and live import bindings keep their normal class lookup and binder.
 - L1_CODEGEN_HOST_ATTR_MODULE — layer1's L1CodeGen class carries extra host
   attributes appended to its field set.
 
@@ -32,6 +35,7 @@ IR_SCAFFOLD_CONTRACT = "ir-scaffold-forced"
 IR_PROVIDER_BINDING_CONTRACT = "ir-provider-binding"
 CLASS_LOWERING_RECEIVER_CONTRACT = "class-lowering-receivers"
 PY_AST_FIELD_ORDER_CONTRACT = "py-ast-field-order"
+PY_AST_FIELD_CONSTRUCTOR_CONTRACT = "py-ast-field-constructor"
 L1_CODEGEN_HOST_ATTR_CONTRACT = "l1-codegen-host-attrs"
 
 PY_AST_FIELD_OVERRIDE_MODULE = "pcc.frontends.python.py_ast"
@@ -48,7 +52,10 @@ SELF_MODULE_CONTRACTS = {
         IR_SCAFFOLD_CONTRACT,
         CLASS_LOWERING_RECEIVER_CONTRACT,
     ),
-    PY_AST_FIELD_OVERRIDE_MODULE: (PY_AST_FIELD_ORDER_CONTRACT,),
+    PY_AST_FIELD_OVERRIDE_MODULE: (
+        PY_AST_FIELD_ORDER_CONTRACT,
+        PY_AST_FIELD_CONSTRUCTOR_CONTRACT,
+    ),
 }
 
 

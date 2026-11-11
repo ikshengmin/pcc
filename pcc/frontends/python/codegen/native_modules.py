@@ -30,6 +30,10 @@ from pcc.frontends.python.codegen.hoist_analysis import (
 from pcc.frontends.python.codegen.hoist_boxing import (
     function_import_conflict_names,
 )
+from pcc.frontends.python.codegen.self_module_contracts import (
+    PY_AST_FIELD_CONSTRUCTOR_CONTRACT,
+    module_has_contract,
+)
 from pcc.frontends.python.codegen.vthread_effect_analysis import (
     vthread_proven_suspension_module_alias,
     vthread_proven_value_alias,
@@ -3802,7 +3806,7 @@ class NativeModuleAliasMixin:
                 + "\n"
             )
         if (
-            module_name == "pcc.frontends.python.py_ast"
+            module_has_contract(module_name, PY_AST_FIELD_CONSTRUCTOR_CONTRACT)
             and len(expr.args) + len(expr.kwargs)
             >= len(tuple(class_info.field_names))
         ):

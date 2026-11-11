@@ -11,6 +11,7 @@ from pcc.frontends.python.codegen.self_module_contracts import (
     IR_PROVIDER_BINDING_CONTRACT,
     IR_SCAFFOLD_CONTRACT,
     L1_CODEGEN_HOST_ATTR_CONTRACT,
+    PY_AST_FIELD_CONSTRUCTOR_CONTRACT,
     PY_AST_FIELD_ORDER_CONTRACT,
     SELF_MODULE_CONTRACTS,
     module_for_class_symbol_contract,
@@ -33,6 +34,12 @@ def test_self_module_capabilities_are_declared_as_registry_data():
     assert module_has_contract(
         "pcc.frontends.python.py_ast",
         PY_AST_FIELD_ORDER_CONTRACT,
+    )
+    assert module_has_contract(
+        "pcc.frontends.python.py_ast", PY_AST_FIELD_CONSTRUCTOR_CONTRACT,
+    )
+    assert not module_has_contract(
+        "third_party.module", PY_AST_FIELD_CONSTRUCTOR_CONTRACT,
     )
     assert not module_has_contract("third_party.module", IR_SCAFFOLD_CONTRACT)
     assert module_has_contract("pcc.ir.ir", IR_PROVIDER_BINDING_CONTRACT)
@@ -68,6 +75,11 @@ def test_codegen_sites_request_capabilities_instead_of_naming_owners():
     assert '== "pcc.frontends.python.py_ast"' not in class_gen
     assert "module_has_contract(" in scaffold
     assert " in IR_SCAFFOLD_FORCED_MODULES" not in scaffold
+    native_modules = (
+        ROOT / "pcc/frontends/python/codegen/native_modules.py"
+    ).read_text()
+    assert 'module_name == "pcc.frontends.python.py_ast"' not in native_modules
+    assert "module_has_contract(" in native_modules
 
     codegen_root = ROOT / "pcc/frontends/python/codegen"
     direct_source_guards = []
@@ -156,6 +168,52 @@ def test_class_lowering_receiver_facts_follow_capability_and_call_shape(
     assert codegen._scaffold_local_kind(name) == (expected if enabled else "")
 
 
+@pytest.mark.parametrize("module_name", [
+    "pcc.frontends.python.py_ast", "relocated.ast_records",
+])
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("argument_count", [1, 2])
+@pytest.mark.xdist_group(name="full_field_constructor")
+def test_static_field_constructor_uses_capability_and_complete_argument_guard(
+    monkeypatch, module_name, enabled, argument_count,
+):
+    """The static call seam is distinct from a live Python import binding."""
+    monkeypatch.setitem(
+        SELF_MODULE_CONTRACTS, module_name,
+        (PY_AST_FIELD_CONSTRUCTOR_CONTRACT,) if enabled else (),
+    )
+    arguments = ", ".join(str(value) for value in range(argument_count))
+    codegen = _scaffold_contract_codegen(
+        "constructor_consumer", "provider.Record(" + arguments + ")\n",
+    )
+    expression = codegen.ast_module.body[0].expr
+    record = SimpleNamespace(
+        name="Record", field_names=("first", "second"),
+        methods={}, valueclass=False,
+    )
+    monkeypatch.setattr(
+        codegen, "_native_module_expr_export_info",
+        lambda *_: (module_name, {"kind": "class"}),
+    )
+    monkeypatch.setattr(
+        codegen, "_ensure_native_module_alias_class_export", lambda *_: record,
+    )
+    monkeypatch.setattr(codegen, "_resolve_method_mro", lambda *_: None)
+    monkeypatch.setattr(codegen, "_native_class_method_def", lambda *_: None)
+    monkeypatch.setattr(
+        codegen, "_ordinary_call_needs_runtime_binding", lambda *_: False,
+    )
+    projected = object()
+    ordinary = object()
+
+    def field_result(*_args, force=False, **_kwargs):
+        return projected if force else ordinary
+
+    monkeypatch.setattr(codegen, "_emit_no_init_field_instance", field_result)
+    result = codegen._maybe_emit_native_module_alias_call(expression)
+    assert result is (projected if enabled and argument_count == 2 else ordinary)
+
+
 def test_provider_capability_does_not_type_unknown_or_shadowed_receivers(monkeypatch):
     from pcc.frontends.python.py_ast import ClassType, DynType, Name
 
@@ -213,7 +271,10 @@ def test_class_lowering_capability_controls_emitted_receiver_dispatch(
     assert bool(direct_call) is enabled
     assert not re.search(r"\bcall [^\n]*@py_cpy_", body)
     if not enabled:
-        assert re.search(r"\bcall [^\n]*@py_obj_(call_method|call)\(", body)
+        # The dynamic owner resolves the method once into a rooted slot, then
+        # calls that loaded method; it no longer uses the old combined entry.
+        assert re.search(r"\bcall [^\n]*@py_obj_load_method\(", body)
+        assert re.search(r"\bcall [^\n]*@py_obj_call_loaded_method\(", body)
 
 
 @pytest.mark.parametrize("contextual", [False, True])
@@ -234,11 +295,14 @@ def test_scaffold_capabilities_lift_and_emit_with_native_export_metadata(
     consumer = tmp_path / "capabilities.py"
     consumer.write_text(
         "from " + provider_name + " import (IR_PROVIDER_BINDING_CONTRACT, "
-        "CLASS_LOWERING_RECEIVER_CONTRACT, module_has_contract)\n"
+        "CLASS_LOWERING_RECEIVER_CONTRACT, PY_AST_FIELD_CONSTRUCTOR_CONTRACT, "
+        "module_has_contract)\n"
         "def provider_enabled(name: str) -> bool:\n"
         "    return module_has_contract(name, IR_PROVIDER_BINDING_CONTRACT)\n"
         "def receivers_enabled(name: str) -> bool:\n"
         "    return module_has_contract(name, CLASS_LOWERING_RECEIVER_CONTRACT)\n"
+        "def fields_enabled(name: str) -> bool:\n"
+        "    return module_has_contract(name, PY_AST_FIELD_CONSTRUCTOR_CONTRACT)\n"
     )
     modules, exports, derived = build_closed_world_context(
         [str(provider), str(consumer)], [provider_name, "capabilities"],
@@ -247,6 +311,7 @@ def test_scaffold_capabilities_lift_and_emit_with_native_export_metadata(
     for name, value in (
         ("IR_PROVIDER_BINDING_CONTRACT", IR_PROVIDER_BINDING_CONTRACT),
         ("CLASS_LOWERING_RECEIVER_CONTRACT", CLASS_LOWERING_RECEIVER_CONTRACT),
+        ("PY_AST_FIELD_CONSTRUCTOR_CONTRACT", PY_AST_FIELD_CONSTRUCTOR_CONTRACT),
     ):
         expected = {"kind": "constant", "value_kind": "str", "value": value}
         contextual_constant = exports[provider_name][name]
@@ -267,7 +332,7 @@ def test_scaffold_capabilities_lift_and_emit_with_native_export_metadata(
         (tmp_path / (module.name + ".ll")).write_text(text)
         assert not re.search(r"\bcall [^\n]*@py_cpy_", text)
         if module.name == "capabilities":
-            for function in ("provider_enabled", "receivers_enabled"):
+            for function in ("provider_enabled", "receivers_enabled", "fields_enabled"):
                 body = re.search(
                     r"^define [^\n]*@user_capabilities_" + function
                     + r"\([^\n]*\).*?^}", text, re.M | re.S,
