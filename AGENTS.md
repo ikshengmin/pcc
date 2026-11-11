@@ -192,6 +192,34 @@ These are required outcomes, not assertions that migration is complete. See
   The [memory-pass audit](docs/knowledge/2026-09-08-optimizer-pipeline-audit.md)
   is a dated example, not extra mandatory startup reading.
 
+## Runtime performance: measure with `scripts/pcc_perf.py`, and keep it current
+
+[`scripts/pcc_perf.py`](scripts/pcc_perf.py) is the entry for runtime and
+collector performance work; its docstring is the manual. Arms, caches and the
+ledger live under `PCC_PERF_HOME`, outside the repository.
+
+- `arm NAME` seals the tracked tree, builds the runtime and the benchmark
+  program under the process-tree guard, and accepts the build only when every
+  primitive gives CPython's result on all five collectors. Measure sealed
+  arms, never the working tree.
+- Localize before profiling by hand. `prim NAME` gives, per primitive
+  operation ([one source](benchmarks/handler/primitive_ops.py) for CPython
+  and for compiled code), the cost against CPython and GC0 under every
+  collector, the four-worker scaling and the objects allocated;
+  `prim A --against B` is the per-primitive A/B. `top`, `gap`, `locks` and
+  `layout` then name the functions, the category, the lock callers and the
+  cache-line neighbours.
+- `ab A B` is the result: five alternating pairs, medians, pair wins and an
+  unchanged control collector; fewer pairs is a screen. `table` reports every
+  collector with one and four workers against GC0 and the recorded asyncio
+  figure. Four workers below one worker is a defect for any collector.
+- Extend the tool instead of writing a one-off script. A newly found hot
+  operation becomes a primitive with its CPython sum in
+  `tests/python/test_pcc_perf.py`; a hot shared word joins the table of
+  `scripts/pcc_hot_layout.py`; a new question becomes a subcommand with a
+  test. A slow build, measurement or attribution step is a defect of the
+  tool: fix it there.
+
 ## Validation
 
 - Use `uv run ...`; the checked-in `.python-version` is the host
@@ -255,7 +283,7 @@ gtimeout 1800s uv run pytest -x -vv -m integration tests/python/gc/test_pcc_boot
 | Passes/self codegen | `pcc/frontends/python/pipeline_pass_driver.py`, `pcc/ir/optimization/`, `pcc/backend/`; performance rules above |
 | C semantics | `pcc/frontends/c/codegen/c_codegen.py`, `pcc/frontends/c/parse/`, `tests/c/`; check signedness and constant evaluation separately |
 | GC/ABI | `pcc/runtime/py/`, `tests/python/gc/`; verify layouts/barriers in code, consult relevant upstream reference |
-| Bootstrap/performance | `scripts/run_pcc_*`, current receipts and tests; [tool index](docs/development-tools.md) |
+| Bootstrap/performance | `scripts/run_pcc_*`, `scripts/pcc_perf.py` (runtime and collectors), current receipts and tests; [tool index](docs/development-tools.md) |
 | Investigation history | Search [INDEX](docs/investigations/INDEX.md); use [investigation workflow](docs/investigation-workflow.md) when recording an experiment |
 | Domain vocabulary | [CONTEXT.md](CONTEXT.md) is a glossary only; requirements stay in [Project Intent](docs/project-intent.md) and [compiler-contract.md](docs/compiler-contract.md) |
 | Review/certify a commit or claimed fix | The diff and its tests, not the message; execute each changed shape and read the result; list the shapes you did not execute |
