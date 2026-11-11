@@ -113,6 +113,46 @@ def test_signature_chunks_preserve_flat_literal_values_and_order(
     assert list(signatures.items()) == list(expected.items())
 
 
+def test_cross_object_chunks_are_applied_once_in_declaration_order() -> None:
+    # Specification: docs/project-intent.md, ordinary Python dictionary semantics.
+    # Duplicate declarations currently agree, so mapping equality alone cannot
+    # detect reversed updates. Check the real assembly order, then call the
+    # imported production helpers to verify last-write-wins and insertion order.
+    tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
+    table = "FREESTANDING_GC_CROSS_OBJECT_SIGNATURES"
+    declared = [
+        node.name for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name.startswith("_cross_object_signatures_part_")
+    ]
+    applied = []
+    constructors = 0
+    for node in tree.body:
+        if (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name) and node.target.id == table
+        ):
+            constructors += 1
+            applied.append(ast.unparse(node.value))
+        elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+            call = node.value
+            function = call.func
+            if (
+                isinstance(function, ast.Attribute)
+                and isinstance(function.value, ast.Name) and function.value.id == table
+            ):
+                assert function.attr == "update" and len(call.args) == 1 and not call.keywords
+                applied.append(ast.unparse(call.args[0]))
+
+    assert constructors == 1
+    assert len(declared) == len(set(declared))
+    assert applied == [name + "()" for name in declared]
+    pairs = [item for name in declared for item in getattr(runtime_abi, name)().items()]
+    expected = dict(pairs)
+    assert len(pairs) > len(expected)  # Exercise existing duplicate declarations.
+    assert list(FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.items()) == list(expected.items())
+
+
 # Discover every bounded helper family, so a newly added family cannot escape
 # the same native-literal contract by missing a hand-maintained parameter list.
 _CHUNK_FAMILIES = tuple(sorted({

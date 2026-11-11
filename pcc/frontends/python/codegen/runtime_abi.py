@@ -2641,13 +2641,13 @@ def _cross_object_signatures_part_5():
         ("c_int64", "c_ptr"),
         "c_int64",
     ),
-    "pcc_gc_trace_referents_for_promotion": (("c_ptr",), "c_void"),
-    "pcc_gc_backend3_promotion_worklist_unlink": (("c_ptr",), "c_void"),
     }
 
 
 def _cross_object_signatures_part_6():
     return {
+    "pcc_gc_trace_referents_for_promotion": (("c_ptr",), "c_void"),
+    "pcc_gc_backend3_promotion_worklist_unlink": (("c_ptr",), "c_void"),
     "pcc_gc_relocation_member_count": (("c_ptr",), "c_int64"),
     "pcc_gc_relocation_member_forget": (("c_ptr",), "c_void"),
     "pcc_gc_remembered_member_note": (("c_ptr",), "c_void"),
@@ -2802,12 +2802,12 @@ def _cross_object_signatures_part_7():
     "pcc_gc_backend4_zpage_clear_reusable_state": (("c_ptr",), "c_void"),
     "pcc_gc_backend4_zpage_cache": (("c_ptr",), "c_void"),
     "pcc_gc_backend4_zpage_destroy": (("c_ptr",), "c_void"),
-    "pcc_gc_backend4_zpage_recycle": (("c_ptr",), "c_void"),
     }
 
 
 def _cross_object_signatures_part_8():
     return {
+    "pcc_gc_backend4_zpage_recycle": (("c_ptr",), "c_void"),
     "pcc_gc_backend4_zpage_set_page_head": (
         ("c_ptr", "c_ptr"),
         "c_void",
@@ -2914,15 +2914,15 @@ def _cross_object_signatures_part_8():
         "c_ptr",
     ),
     "pcc_gc_relocation_payload_slot_pairs_dispose": (("c_ptr",), "c_void"),
-    "pcc_gc_relocation_payload_count_slot": (
-        ("c_ptr", "c_int64", "c_ptr"),
-        "c_void",
-    ),
     }
 
 
 def _cross_object_signatures_part_9():
     return {
+    "pcc_gc_relocation_payload_count_slot": (
+        ("c_ptr", "c_int64", "c_ptr"),
+        "c_void",
+    ),
     "pcc_gc_relocation_payload_from_slot": (
         ("c_ptr", "c_int64", "c_ptr"),
         "c_void",
@@ -3023,6 +3023,11 @@ def _cross_object_signatures_part_9():
     "pcc_memoryview_free_owned_buffer": (("c_ptr",), "c_void"),
     "pcc_errno_location": ((), "c_ptr"),
     "pcc_errno_get": ((), "c_int32"),
+    }
+
+
+def _cross_object_signatures_part_10():
+    return {
     "pcc_errno_linux_c_locale_message": (("c_int32",), "c_ptr"),
     "pcc_errno_message_into": (
         ("c_int32", "c_ptr", "c_int64"),
@@ -3030,11 +3035,6 @@ def _cross_object_signatures_part_9():
     ),
     "pcc_gc_load_ptr": (("c_ptr", "c_ptr"), "c_ptr"),
     "pcc_gc_note_object_freeing": (("c_ptr",), "c_void"),
-    }
-
-
-def _cross_object_signatures_part_10():
-    return {
     "pcc_gc_trace_continuation_roots": ((), "c_int64"),
     "pcc_stop_the_world": ((), "c_int64"),
     "pcc_resume_world": ((), "c_int64"),
@@ -3117,17 +3117,17 @@ def _cross_object_signatures_part_10():
     "pcc_gc_tracing_recheck_reachability_after_finalizers": ((), "c_void"),
     "pcc_gc_seed_roots": ((), "c_void"),
     "pcc_gc_drain_all_gray_unlocked": ((), "c_int64"),
+    }
+
+
+def _cross_object_signatures_part_11():
+    return {
     "pcc_gc_drain_all_gray_locked_slice": ((), "c_int64"),
     "pcc_refcount_forget": (("c_ptr",), "c_void"),
     "py_gc_untrack": (("c_ptr",), "c_void"),
     "py_user_del_dispatch": (("c_ptr",), "c_void"),
     "py_gen_finalize_tracing_candidate": (("c_ptr",), "c_void"),
     "py_weakref_invalidate": (("c_ptr",), "c_void"),
-    }
-
-
-def _cross_object_signatures_part_11():
-    return {
     "py_dealloc_float": (("c_ptr",), "c_void"),
     "py_dealloc_str": (("c_ptr",), "c_void"),
     "py_dealloc_list": (("c_ptr",), "c_void"),
