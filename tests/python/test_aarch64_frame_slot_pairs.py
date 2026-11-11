@@ -10,12 +10,15 @@ object path, linked by pcc's owned linker and executed.
 """
 
 import platform
+import re
+import struct
 import subprocess
 import sys
 
 import pytest
 
 from pcc.backend.macho_exec import link_executable
+from pcc.backend.macho_spec import parse_object
 from pcc.backend.owned_object_emit import emit_owned_object
 from pcc.backend.self_backend_aarch64_darwin import emit_aarch64_darwin_asm
 
@@ -108,11 +111,54 @@ def _body(text: str, name: str) -> str:
 
 
 def test_slot_clearing_pairs_descending_zero_stores():
-    body = _body(emit_aarch64_darwin_asm(_PROGRAM, optimize=True), "clear_slots")
-    assert body.count("stp xzr, xzr, [x29, #-") == 2
-    assert body.count("stur xzr, [x29, #-") == 1
-    unpaired = _body(emit_aarch64_darwin_asm(_PROGRAM, optimize=False), "clear_slots")
-    assert unpaired.count("stur xzr, [x29, #-") == 5
+    slot_offsets = (8, 16, 24, 32, 40)
+    paired_stores = [
+        "stp xzr, xzr, [x29, #-16]",  # slots -16 and -8
+        "stp xzr, xzr, [x29, #-32]",  # slots -32 and -24
+        "stur xzr, [x29, #-40]",
+    ]
+    for optimize in (True, False):
+        body = _body(emit_aarch64_darwin_asm(_PROGRAM, optimize=optimize), "clear_slots")
+        initialization, call, _ = body.partition("  bl _touch\n")
+        assert call  # All five actual slot addresses must be passed after clearing.
+        for argument, offset in enumerate(slot_offsets):
+            assert f"  sub x{argument}, x29, #{offset}\n" in initialization
+        zero_stores = [line.strip() for line in initialization.splitlines()
+                       if re.fullmatch(r"\s+(?:stp xzr, xzr|stur xzr), \[x29, #-\d+\]", line)]
+        # The 48-byte aligned frame has five 8-byte slots. Its remaining
+        # alignment word is cleared in the prologue, independently of the
+        # body-store pairing pass, so conservative capture sees no stale root.
+        assert zero_stores[:1] == ["stur xzr, [x29, #-48]"]
+        expected = paired_stores if optimize else [
+            f"stur xzr, [x29, #-{offset}]" for offset in slot_offsets
+        ]
+        assert zero_stores[1:] == expected
+
+    # Cross-emitted production object bytes must retain the same stores;
+    # assembly text alone does not exercise the structured instruction route.
+    data = emit_owned_object(_PROGRAM, "arm64-apple-darwin")
+    obj = parse_object(data)
+    sections = obj.sections()
+    text = next(section for section in sections if section["sectname_str"] == "__text")
+    symbols = {symbol["name"]: symbol["n_value"] - text["addr"]
+               for symbol in obj.symbols() if symbol["n_sect"] == sections.index(text) + 1}
+    start = symbols["_clear_slots"]
+    end = min(offset for offset in symbols.values() if offset > start)
+    words = [word for word, in struct.iter_unpack(
+        "<I", data[text["offset"] + start:text["offset"] + end],
+    )]
+    first_call = next(index for index, word in enumerate(words) if word & 0xFC000000 == 0x94000000)
+    stores = []
+    for word in words[:first_call]:
+        # ARM STP (64-bit, signed offset) and STUR (64-bit): xzr source(s),
+        # x29 base, with the signed displacement decoded from the object.
+        if word & 0xFFC07FFF == 0xA9007FBF:
+            immediate = (word >> 15) & 0x7F
+            stores.append(("stp", (immediate - 128 if immediate >= 64 else immediate) * 8))
+        elif word & 0xFFE00FFF == 0xF80003BF:
+            immediate = (word >> 12) & 0x1FF
+            stores.append(("stur", immediate - 512 if immediate >= 256 else immediate))
+    assert stores == [("stur", -48), ("stp", -16), ("stp", -32), ("stur", -40)]
 
 
 @_NATIVE

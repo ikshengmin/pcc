@@ -14,15 +14,32 @@ SOURCE = Path(__file__).resolve().parents[2] / "pcc/backend/self_backend_aarch64
 # an IR optimizer. Current entry-local inventory emits empty roots even for
 # a statically inactive suite. Those roots have real native bookkeeping cost.
 _OBSERVER_LOCALS = ("observer", "sample", "query", "more")
-_OWNED_PROBE_CALLS = {
-    "py_recursion_enter", "py_recursion_leave", "pcc_gc_frame_enter",
-    "pcc_gc_frame_leave", "pcc_gc_frame_enter_lifo", "pcc_gc_frame_leave_lifo",
-    "pcc_gc_store_root", "pcc_gc_load_ptr", "pcc_gc_retain", "pcc_gc_safepoint",
-    "pcc_thread_safepoint_gate", "pcc_gc_frame_enter_mapped",
-    "pcc_gc_frame_leave_mapped", "pcc_gc_frame_enter_lifo_mapped",
-    "pcc_gc_frame_leave_lifo_mapped",
-    "py_exc_new", "py_raise", "py_current_exception", "py_exc_append_frame_source",
+_FRAME_ENTER_CALLS = {
+    "pcc_gc_frame_enter", "pcc_gc_frame_enter_mapped",
+    "pcc_gc_frame_enter_local", "pcc_gc_frame_enter_local_mapped",
+    "pcc_gc_frame_enter_lifo", "pcc_gc_frame_enter_lifo_mapped",
+    "pcc_gc_frame_enter_lifo_local", "pcc_gc_frame_enter_lifo_local_mapped",
 }
+_FRAME_LEAVE_CALLS = {
+    "pcc_gc_frame_leave", "pcc_gc_frame_leave_mapped",
+    "pcc_gc_frame_leave_local", "pcc_gc_frame_leave_local_mapped",
+    "pcc_gc_frame_leave_lifo", "pcc_gc_frame_leave_lifo_mapped",
+    "pcc_gc_frame_leave_lifo_local", "pcc_gc_frame_leave_lifo_local_mapped",
+}
+# Observer locals have ordinary all-exit scopes, never lexical LIFO scopes.
+# Keep the concrete ABI names explicit: an unknown suffix is not bookkeeping.
+_OBSERVER_FRAME_PAIRS = (
+    ("pcc_gc_frame_enter", "pcc_gc_frame_leave"),
+    ("pcc_gc_frame_enter_mapped", "pcc_gc_frame_leave_mapped"),
+    ("pcc_gc_frame_enter_local", "pcc_gc_frame_leave_local"),
+    ("pcc_gc_frame_enter_local_mapped", "pcc_gc_frame_leave_local_mapped"),
+)
+_OWNED_PROBE_CALLS = {
+    "py_recursion_enter", "py_recursion_leave",
+    "pcc_gc_store_root", "pcc_gc_load_ptr", "pcc_gc_retain", "pcc_gc_safepoint",
+    "pcc_thread_safepoint_gate",
+    "py_exc_new", "py_raise", "py_current_exception", "py_exc_append_frame_source",
+} | _FRAME_ENTER_CALLS | _FRAME_LEAVE_CALLS
 _SSA = r"%[-a-zA-Z0-9_.$]+"
 
 
@@ -46,11 +63,11 @@ def _assert_native_observer_pruned(body):
             # not observer work. Admit only their concrete runtime ABI.
             if call[1] == "pcc_thread_safepoint_gate":
                 assert line == "call void () @pcc_thread_safepoint_gate()"
-            elif call[1] in ("pcc_gc_frame_enter_mapped", "pcc_gc_frame_enter_lifo_mapped"):
+            elif call[1] in _FRAME_ENTER_CALLS:
                 assert re.fullmatch(r"call void \(ptr, ptr\) @" + call[1]
                                     + r"\(ptr (?:" + _SSA + r"|@[-a-zA-Z0-9_.$]+), ptr "
                                     + _SSA + r"\)", line)
-            elif call[1] in ("pcc_gc_frame_leave_mapped", "pcc_gc_frame_leave_lifo_mapped"):
+            elif call[1] in _FRAME_LEAVE_CALLS:
                 assert re.fullmatch(r"call void \(ptr\) @" + call[1]
                                     + r"\(ptr " + _SSA + r"\)", line)
     slots, flags = set(), set()
@@ -132,14 +149,15 @@ def _assert_native_observer_pruned(body):
                                     + r", ptr " + _SSA, rhs))
             continue
         # The frame map is a global, passed directly or through an alias.
-        enter = re.fullmatch(r"call void \(ptr, ptr\) @pcc_gc_frame_enter(?:_mapped)?\(ptr (" + _SSA
+        enter = re.fullmatch(r"call void \(ptr, ptr\) @([-a-zA-Z0-9_.$]+)\(ptr (" + _SSA
                              + r"|@[-a-zA-Z0-9_.$]+), ptr (" + _SSA + r")\)", line)
         assert any(line == allowed for address in used for allowed in (
             "store ptr null, ptr " + address,
-            "call void (ptr) @pcc_gc_frame_leave(ptr " + address + ")",
-            "call void (ptr) @pcc_gc_frame_leave_mapped(ptr " + address + ")",
             "call void (ptr, ptr) @pcc_gc_store_root(ptr " + address + ", ptr null)",
-        )) or (enter is not None and enter[1] not in addresses and used == {enter[2]})
+            *("call void (ptr) @" + leave + "(ptr " + address + ")"
+              for _, leave in _OBSERVER_FRAME_PAIRS),
+        )) or (enter is not None and enter[1] in {name for name, _ in _OBSERVER_FRAME_PAIRS}
+               and enter[2] not in addresses and used == {enter[3]})
     assert "inttoptr i64 35 to ptr" in body
 
 
@@ -193,12 +211,12 @@ def test_current_guarded_suites_type_and_prune_in_real_native_ir(monkeypatch):
     assert match is not None
     body = result[match.start():].split("\n}\n", 1)[0]
     assert "call void () @pcc_thread_safepoint_gate()" in body
-    assert "@pcc_gc_frame_enter_mapped(" in body
-    assert "@pcc_gc_frame_leave_mapped(" in body
+    assert "@pcc_gc_frame_enter_local_mapped(" in body
+    assert "@pcc_gc_frame_leave_local_mapped(" in body
     _assert_native_observer_pruned(body)
 
 
-def _inert_observer_probe_ir(*, mapped=False):
+def _inert_observer_probe_ir(*, mapped=False, local=False):
     """Small hand-written IR control, not a saved compiler transcript."""
     lines = ["define ptr @native_probe() {", "entry:",
              "  %facts_observe.addr.90 = alloca i1",
@@ -226,17 +244,19 @@ def _inert_observer_probe_ir(*, mapped=False):
     lines.extend(["  call void () @pcc_thread_safepoint_gate()",
                   "  %seventeen = inttoptr i64 35 to ptr", "  ret ptr %seventeen", "}"])
     body = "\n".join(lines)
-    if mapped:
-        body = body.replace("@pcc_gc_frame_enter(", "@pcc_gc_frame_enter_mapped(")
-        body = body.replace("@pcc_gc_frame_leave(", "@pcc_gc_frame_leave_mapped(")
+    suffix = ("_local" if local else "") + ("_mapped" if mapped else "")
+    for operation in ("enter", "leave"):
+        name = "@pcc_gc_frame_" + operation
+        body = body.replace(name + "(", name + suffix + "(")
     return body
 
 
 def test_native_observer_ir_contract_accepts_only_inert_null_roots():
     for mapped in (False, True):
-        body = _inert_observer_probe_ir(mapped=mapped)
-        assert "_facts_observer" in body
-        _assert_native_observer_pruned(body)
+        for local in (False, True):
+            body = _inert_observer_probe_ir(mapped=mapped, local=local)
+            assert "_facts_observer" in body
+            _assert_native_observer_pruned(body)
 
 
 @pytest.mark.parametrize("violation", [
@@ -250,9 +270,17 @@ def test_native_observer_ir_contract_rejects_active_or_escaping_state(violation)
             "  %boxed = call ptr (i64) @py_int_from_i64(i64 17)",
             "  call void (ptr) @pcc_thread_safepoint_gate(ptr null)",
             "  %gate = call ptr () @pcc_thread_safepoint_gate()",
-            "  call void () @pcc_gc_frame_leave_mapped()",
-            "  call void (ptr) @pcc_gc_frame_enter_mapped(ptr %gc.map)",
-        ),
+            "  call void (ptr, ptr) @pcc_gc_frame_enter_local_mapped_unknown(ptr %gc.map, ptr %observer.root)",
+            "  call void (ptr) @pcc_gc_frame_leave_local_mapped_unknown(ptr %observer.root)",
+        ) + tuple(invalid for enter in sorted(_FRAME_ENTER_CALLS) for invalid in (
+            "  call void (ptr) @" + enter + "(ptr %gc.map)",
+            "  call void (ptr, i64) @" + enter + "(ptr %gc.map, i64 0)",
+            "  %invalid = call ptr (ptr, ptr) @" + enter + "(ptr %gc.map, ptr %observer.root)",
+        )) + tuple(invalid for leave in sorted(_FRAME_LEAVE_CALLS) for invalid in (
+            "  call void () @" + leave + "()",
+            "  call void (i64) @" + leave + "(i64 0)",
+            "  %invalid = call ptr (ptr) @" + leave + "(ptr %observer.root)",
+        )),
         "indirect": ("  call void () %callback()",),
         "hook_capture": (
             "  %captured = load ptr, ptr @_HOST_FACTS_STRUCTURE_OBSERVER",
@@ -268,11 +296,13 @@ def test_native_observer_ir_contract_rejects_active_or_escaping_state(violation)
         # argument positions; both select arms remain subject to the contract.
         "root_escape": (
             "  %escaped = call ptr (ptr) @pcc_gc_retain(ptr %observer.root)",
-            "  call void (ptr, ptr) @pcc_gc_frame_enter(ptr %observer.root, ptr %observer.root)",
-            "  call void (ptr, ptr) @pcc_gc_frame_enter_mapped(ptr %observer.root, ptr %observer.root)",
-            "  call void (ptr, ptr) @pcc_gc_frame_enter_lifo_mapped(ptr %gc.map, ptr %observer.root)",
             "  store ptr %observer.root, ptr @escaped_root",
-        ),
+        ) + tuple("  call void (ptr, ptr) @" + enter + "(ptr %observer.root, ptr %observer.root)"
+                  for enter in sorted(_FRAME_ENTER_CALLS))
+        + tuple("  call void (ptr, ptr) @" + enter + "(ptr %gc.map, ptr %observer.root)"
+                for enter in sorted(_FRAME_ENTER_CALLS - {name for name, _ in _OBSERVER_FRAME_PAIRS}))
+        + tuple("  call void (ptr) @" + leave + "(ptr %observer.root)"
+                for leave in sorted(_FRAME_LEAVE_CALLS - {name for _, name in _OBSERVER_FRAME_PAIRS})),
         "owned_true": (
             "  store i1 1, ptr %_facts_observer.owned.1",
             "  store i1 1, ptr %.bound._facts_observer.owned.1",
@@ -285,8 +315,9 @@ def test_native_observer_ir_contract_rejects_active_or_escaping_state(violation)
         ),
     }
     for mapped in (False, True):
-        body = _inert_observer_probe_ir(mapped=mapped)
-        for insertion in insertions[violation]:
-            mutated = body.replace("  %seventeen =", insertion + "\n  %seventeen =", 1)
-            with pytest.raises(AssertionError):
-                _assert_native_observer_pruned(mutated)
+        for local in (False, True):
+            body = _inert_observer_probe_ir(mapped=mapped, local=local)
+            for insertion in insertions[violation]:
+                mutated = body.replace("  %seventeen =", insertion + "\n  %seventeen =", 1)
+                with pytest.raises(AssertionError):
+                    _assert_native_observer_pruned(mutated)
