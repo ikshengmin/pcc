@@ -12,6 +12,8 @@ from pcc.backend import BackendUnavailable
 from pcc.backend import indexed_phase_timing as timing_module
 from pcc.backend import target_objects
 from pcc.backend.indexed_phase_timing import CoarsePhaseTiming, ModulePhaseTiming
+from pcc.frontends.python.pipeline_modes import PyPipelineError
+from tests.python.runtime_body_model import load_functions
 
 
 TARGETS = (
@@ -1070,17 +1072,24 @@ def test_mock_direct_artifact_branch_keeps_runtime_link_cleanup_order(
 
     namespace = dict(
         emit_llvm_only=False, native_backend="self", any_needs_libpython=False,
+        libpython_modules=[],
         any_needs_native_extension_exports=False, runtime_archive="runtime", target_triple=None,
         module_direct_artifacts=artifacts, module_ir_texts=[("sample", "")],
         object_inputs=object_inputs,
         total_ir_bytes_before_passes=7, out_path="out", verbose=False, link_args=["flag"],
         profile=None, total_start=0, direct_native_object_dir="work", coordinator_timing=timer,
-        PyPipelineError=RuntimeError, _reject_mixed_extension_object_models=lambda **kwargs: None,
+        PyPipelineError=PyPipelineError,
         _explicit_runtime_archive=verify, _validate_stage1_checkpoint_link=lambda *args: None,
         _profile_counter=lambda *args: None, _profile_end=lambda *args: None,
         _link_with_self_backend_direct_artifacts=link,
         _remove_direct_native_object_dir=lambda path: operation("cleanup"),
         os=types.SimpleNamespace(environ={}, path=types.SimpleNamespace(getsize=lambda path: 5)),
+    )
+    # Keep the existing branch-only timing model, but run admission through
+    # the real production guard and its local helpers, never a no-op double.
+    load_functions(
+        Path(__file__).resolve().parents[2] / "pcc/frontends/python/pipeline.py",
+        {"_reject_cpython_bridge_modules"}, namespace,
     )
     invoke = _mocked_source_body(branch.body, namespace)
     if failure is None:
@@ -1103,6 +1112,44 @@ def test_mock_direct_artifact_branch_keeps_runtime_link_cleanup_order(
             expected_events.append(("artifact_cleanup", "complete"))
     assert [(row["phase"], row["event"]) for row in _events(sink)] == expected_events
     assert len(ticks) == len(expected_events)
+
+    # A worker's bridge verdict must reject before runtime/link work, with or
+    # without module names. Exercise this in every existing timing/error case
+    # so admission cannot be stubbed out to repair the model's dependencies.
+    for modules in ([], ["sample", "dependency"]):
+        operations.clear()
+        ticks.clear()
+        sink.lines.clear()
+        sink.flushes = 0
+        namespace.update(
+            any_needs_libpython=True, libpython_modules=modules,
+            coordinator_timing=CoarsePhaseTiming() if enabled else None,
+        )
+        cleanup_error = secondary_error if secondary == "cleanup" else (
+            error if failure == "cleanup" else None
+        )
+        with pytest.raises(type(cleanup_error) if cleanup_error is not None else PyPipelineError) as caught:
+            invoke()
+        rejection = caught.value
+        if cleanup_error is not None:
+            assert caught.value is cleanup_error
+            rejection = caught.value.__context__
+        assert type(rejection) is PyPipelineError
+        expected_message = (
+            "Python pipeline cannot compile the program (direct indexed artifact mode)"
+            " natively: generated IR still calls py_cpy_* CPython bridge helpers"
+        )
+        if modules:
+            expected_message += " (modules: sample, dependency)"
+        assert str(rejection) == rejection.pcc_message == expected_message
+        assert operations == ["cleanup"]
+        expected_events = []
+        if enabled:
+            expected_events = [("artifact_cleanup", "begin")]
+            if cleanup_error is None:
+                expected_events.append(("artifact_cleanup", "complete"))
+        assert [(row["phase"], row["event"]) for row in _events(sink)] == expected_events
+        assert len(ticks) == len(expected_events)
 
 
 @pytest.mark.parametrize("platform", ("linux", "darwin", "win32"))
