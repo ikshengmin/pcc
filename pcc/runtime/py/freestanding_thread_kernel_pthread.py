@@ -7,6 +7,10 @@ contracts formerly mixed into ``pcc_threads.c``.
 """
 
 __pcc_runtime_port__ = True
+# The layout offsets and masks below are compile-time constants: their uses
+# in the lock, no-park and native-frame paths take immediates instead of
+# loading module variables that share cache lines with lock words.
+__pcc_fold_private_int_constants__ = True
 
 from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern

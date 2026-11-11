@@ -1,4 +1,4 @@
-"""Compile-time integer constants for freestanding runtime modules.
+"""Compile-time integer constants for freestanding and runtime-port modules.
 
 A freestanding module (``__pcc_freestanding__ = True``) has no module init, so
 it cannot hold a runtime global: every module-scope statement is rejected, and
@@ -24,6 +24,22 @@ substituted. A name whose value is not a plain integer literal, or that is
 assigned more than once, is not a constant and is left for the ordinary
 module-scope rejection to report.
 
+A runtime port (``__pcc_runtime_port__ = True``) does have module state: a
+module-scope ``_NAME = 5`` or ``_NAME: i64 = 5`` there is a module variable,
+and every use of it was a load from memory (the thread kernel's lock and
+native-frame paths made 250 of them, from words next to a container lock
+stripe). A runtime port that also declares
+``__pcc_fold_private_int_constants__ = True`` has its private integer
+constants substituted into their uses in the same way, and each variable
+keeps its definition for any other object that reads it. A name qualifies
+only when the whole module binds it once, to an integer literal, at module
+scope: a public name, one a function rebinds through ``global``, or one
+bound again by any other statement stays an ordinary variable. The
+declaration is per module because folding changes the IR a module emits:
+each port is rebuilt and run when it opts in. An ordinary module is never
+folded; there a module global has assignable semantics for every other
+module.
+
 Reflection goes through the wire schema rather than ``dataclasses``: this
 module is inside the self-host closure, which has no host dataclass
 implementation to reflect over.
@@ -32,9 +48,11 @@ implementation to reflect over.
 from __future__ import annotations
 
 from pcc.frontends.python.pipeline_ast_wire import _py_ast_field_names, _py_ast_field_value, _py_ast_node_replace
-from pcc.frontends.python.py_ast import Assign, AugAssign, Delete, DynType, ExceptHandler, For, FuncDef, Global, IntLit, IntType, ListExpr, Module, Name, Nonlocal, TupleExpr, UnaryOp, With
+from pcc.frontends.python.py_ast import Assign, AugAssign, ClassDef, Delete, DynType, ExceptHandler, For, FuncDef, Global, IntLit, IntType, ListExpr, Module, Name, Nonlocal, TupleExpr, UnaryOp, With
 
 _FREESTANDING_MARKER = "__pcc_freestanding__"
+_RUNTIME_PORT_MARKER = "__pcc_runtime_port__"
+_FOLD_PRIVATE_MARKER = "__pcc_fold_private_int_constants__"
 # Type and position fields hold ``Type``/``SourceSpan`` nodes, which are not
 # code and must never be rewritten or descended into.
 _NON_CODE_FIELDS = ("span", "ty", "annotation", "return_ty")
@@ -160,7 +178,7 @@ def _substitute(node, constants):
         if node.ident in constants:
             return _literal_expr(constants[node.ident], node)
         return node
-    if isinstance(node, FuncDef):
+    if isinstance(node, FuncDef) or isinstance(node, ClassDef):
         bound = set()
         _collect_bound_names(node, bound)
         live = {}
@@ -183,16 +201,96 @@ def _substitute(node, constants):
     return _py_ast_node_replace(node, changes)
 
 
-def _declares_freestanding(module: Module) -> bool:
+def _declares_marker(module: Module, marker: str) -> bool:
     for stmt in module.body:
         if (
             isinstance(stmt, Assign)
             and len(stmt.targets) == 1
             and isinstance(stmt.targets[0], Name)
-            and stmt.targets[0].ident == _FREESTANDING_MARKER
+            and stmt.targets[0].ident == marker
         ):
             return True
     return False
+
+
+def _declares_freestanding(module: Module) -> bool:
+    return _declares_marker(module, _FREESTANDING_MARKER)
+
+
+def _collect_global_names(node, out) -> None:
+    """Every name a ``global`` statement under ``node`` declares."""
+    if isinstance(node, Global):
+        for bound in node.names:
+            out.add(bound)
+    for field_name in _py_ast_field_names(node):
+        if field_name in _NON_CODE_FIELDS:
+            continue
+        _collect_global_names_in(_py_ast_field_value(node, field_name, None), out)
+
+
+def _collect_global_names_in(value, out) -> None:
+    if isinstance(value, tuple):
+        for item in value:
+            _collect_global_names_in(item, out)
+        return
+    if _is_ast_node(value):
+        _collect_global_names(value, out)
+
+
+def _is_integer_storage(annotation) -> bool:
+    """An unannotated name, ``int``, or a fixed-width machine integer."""
+    if annotation is None:
+        return True
+    return isinstance(annotation, IntType)
+
+
+def collect_runtime_port_int_constants(module: Module):
+    """An opted-in runtime port's private integer constants, by name.
+
+    The module declares both ``__pcc_runtime_port__`` and
+    ``__pcc_fold_private_int_constants__``; without either, nothing folds.
+    A name qualifies when the module binds it exactly once: at module scope,
+    as the single target of an assignment whose value is an integer literal
+    and whose annotation, if any, is an integer type. Any other binding of
+    the name disqualifies it: a second module-scope statement that assigns,
+    augments, deletes or loops over it, or a ``global`` declaration in any
+    function. A function or class that only binds a local of the same name
+    shadows it there and nowhere else. Public names are left alone.
+    """
+    constants = {}
+    if not _declares_marker(module, _RUNTIME_PORT_MARKER):
+        return constants
+    if not _declares_marker(module, _FOLD_PRIVATE_MARKER):
+        return constants
+    disqualified = set()
+    for stmt in module.body:
+        if isinstance(stmt, FuncDef) or isinstance(stmt, ClassDef):
+            _collect_global_names(stmt, disqualified)
+            continue
+        if (
+            isinstance(stmt, Assign)
+            and len(stmt.targets) == 1
+            and isinstance(stmt.targets[0], Name)
+        ):
+            ident = stmt.targets[0].ident
+            value = _literal_int_value(stmt.value)
+            if (
+                value is not None
+                and stmt.has_value
+                and ident.startswith("_")
+                and ident != _RUNTIME_PORT_MARKER
+                and ident not in constants
+                and _is_integer_storage(stmt.annotation)
+            ):
+                constants[ident] = value
+                continue
+            disqualified.add(ident)
+            continue
+        _collect_bound_names(stmt, disqualified)
+    for name in disqualified:
+        if name in constants:
+            del constants[name]
+    return constants
 
 
 def collect_module_int_constants(module: Module):
@@ -219,14 +317,18 @@ def collect_module_int_constants(module: Module):
 
 
 def fold_module_int_constants(module: Module) -> Module:
-    """Replace a freestanding module's integer constants with their values.
+    """Replace a module's compile-time integer constants with their values.
 
-    A module that is not freestanding is returned untouched: elsewhere a
-    module-scope ``NAME = 5`` is a real global with assignable semantics, and
-    folding it would silently change what the program means.
+    A freestanding module has no module state: its constants fold and their
+    statements go. A runtime port that opts in folds the uses of its private
+    integer constants and keeps the variables
+    (collect_runtime_port_int_constants).
+    Every other module is returned untouched: there a module-scope
+    ``NAME = 5`` is a real global with assignable semantics, and folding it
+    would silently change what the program means.
     """
     if not _declares_freestanding(module):
-        return module
+        return _fold_runtime_port_int_constants(module)
     constants = collect_module_int_constants(module)
     if not constants:
         return module
@@ -238,6 +340,25 @@ def fold_module_int_constants(module: Module) -> Module:
             and isinstance(stmt.targets[0], Name)
             and stmt.targets[0].ident in constants
         ):
+            continue
+        body.append(_substitute(stmt, constants))
+    return _py_ast_node_replace(module, {"body": tuple(body)})
+
+
+def _fold_runtime_port_int_constants(module: Module) -> Module:
+    constants = collect_runtime_port_int_constants(module)
+    if not constants:
+        return module
+    body = []
+    for stmt in module.body:
+        if (
+            isinstance(stmt, Assign)
+            and len(stmt.targets) == 1
+            and isinstance(stmt.targets[0], Name)
+            and stmt.targets[0].ident in constants
+        ):
+            # The variable keeps its definition: only its uses fold.
+            body.append(stmt)
             continue
         body.append(_substitute(stmt, constants))
     return _py_ast_node_replace(module, {"body": tuple(body)})
