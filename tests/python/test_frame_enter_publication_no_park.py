@@ -40,6 +40,8 @@ class _Registry:
             "ptr_eq": lambda left, right: int(left is right),
             "null": lambda: None,
             "pcc_gc_frame_roots_disabled_fast": lambda: 0,
+            # Heap-backed slots: no stack scan roots them, so they register.
+            "pcc_gc_frame_slots_conservative": lambda slots: 0,
             "gc_backend_current": lambda: 3,
             "pcc_gc_should_track_frame_roots": lambda: 1,
             "pcc_gc_root_slot_count_from_map": lambda frame_map: 2,

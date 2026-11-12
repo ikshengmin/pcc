@@ -94,6 +94,30 @@ def pcc_gc_frame_slots_walked(slots) -> i64:
     return 1
 
 
+@c_abi_export("pcc_gc_frame_slots_conservative")
+def pcc_gc_frame_slots_conservative(slots) -> i64:
+    """Whether a count-free collector's stack scan already roots ``slots``.
+
+    The slots live in a caller frame on this registered thread's stack.
+    Every count-free collector reads each word of every thread's stack at
+    the stops that seed and finish its marks, and keeps in place what those
+    words name, so the frame needs no registry node: neither the node nor
+    the graph lock around its link adds a root. Counted collectors scan no
+    stack and keep registering. The answer depends only on the address and
+    on the collector, fixed before any frame enters (gc_backend_current), so
+    a frame's enter and leave agree.
+    """
+    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0:
+        return 0
+    address: i64 = ptr_to_int(slots)
+    if address <= ptr_to_int(frame_address()):
+        return 0
+    high: i64 = pcc_thread_stack_high()
+    if high == 0 or address >= high:
+        return 0
+    return 1
+
+
 @c_abi_export("pcc_gc_frame_roots_disabled_fast")
 def pcc_gc_frame_roots_disabled_fast() -> i64:
     if load_i32(global_addr("pcc_gc_config_initialized"), 0) == 0:
@@ -308,6 +332,8 @@ def pcc_gc_note_frame_enter(frame_map, slots) -> None:
         return
     if ptr_is_null(frame_map) != 0 or ptr_is_null(slots) != 0:
         return
+    if pcc_gc_frame_slots_conservative(slots) != 0:
+        return
     root_count: i64 = pcc_gc_root_slot_count_from_map(frame_map)
     if root_count <= 0:
         return
@@ -466,6 +492,8 @@ def pcc_gc_note_frame_enter_lifo(frame_map, slots) -> None:
         return
     if ptr_is_null(frame_map) != 0 or ptr_is_null(slots) != 0:
         return
+    if pcc_gc_frame_slots_conservative(slots) != 0:
+        return
     root_count: i64 = pcc_gc_root_slot_count_from_map(frame_map)
     if root_count <= 0:
         return
@@ -501,6 +529,9 @@ def pcc_gc_note_frame_leave_lifo(slots) -> None:
         # No registry node exists at all, so this frame (walked or not)
         # has none to unlink: skip the graph lock.
         return
+    if pcc_gc_frame_slots_conservative(slots) != 0:
+        # Its enter registered no node.
+        return
     released = null()
     pcc_py_gc_minor_graph_lock()
     node = global_load_ptr("pcc_gc_frame_head")
@@ -527,6 +558,9 @@ def pcc_gc_note_frame_leave(slots) -> None:
         return
     if ptr_is_null(global_load_ptr("pcc_gc_frame_head")) != 0:
         # No registry node exists (walked frames register none).
+        return
+    if pcc_gc_frame_slots_conservative(slots) != 0:
+        # Its enter registered no node.
         return
     released = null()
     pcc_py_gc_minor_graph_lock()

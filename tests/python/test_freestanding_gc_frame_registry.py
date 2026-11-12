@@ -48,6 +48,8 @@ INTERNAL_SYMBOLS = {
     "pcc_gc_should_track_frame_roots",
     # Whether the precise stack walk roots a mapped frame's slots.
     "pcc_gc_frame_slots_walked",
+    # Whether a count-free collector's stack scan roots a frame's slots.
+    "pcc_gc_frame_slots_conservative",
     # Explicit activation-private scopes are owned by the same raw module.
     "pcc_gc_local_frame_find",
     "pcc_gc_local_frame_take",
@@ -110,6 +112,8 @@ RAW_FUNCTION_IMPORTS = RAW_ONLY_CROSS_OBJECT_SYMBOLS | {
 }
 RAW_GLOBAL_IMPORTS = {
     "pcc_gc_backend0_frame_roots_enabled",
+    # Count-free collectors scan stacks: their stack frames need no node.
+    "pcc_gc_backend4_no_refcounts",
     "pcc_gc_backend3_frame_root_scan_cursor",
     "pcc_gc_backend3_frame_root_scan_slot",
     "pcc_gc_backend_selected",
@@ -344,18 +348,27 @@ extern int64_t pcc_gc_frame_node_tls_pool_cached_count(void);
 extern void pcc_gc_frame_node_tls_pool_drain(void);
 extern int64_t pcc_gc_slot_is_runtime_root(PyObject **slot);
 
+/* Registered slots live in static storage: a count-free collector roots a
+ * frame in the entering thread's own stack through its conservative scan
+ * and links no node for it (pcc_gc_frame_slots_conservative), so a stack
+ * frame would not exercise the registry. */
+static PyObject *slots[2];
+static PyObject *other[2];
+static PyObject *small_slots[16];
+static PyObject *wide_slots[17];
+static PyObject *cap_slots[1031][16];  /* POOL_PROBE_FRAMES below */
+
 int main(void) {
     int64_t backend = pcc_gc_backend();
     if (pcc_gc_set_backend(backend) != 0) return 2;
-    int pool_enabled = backend == 3 || backend == 4;
+    /* Only the relocating collector pools frame nodes. */
+    int pool_enabled = backend == 4;
 
     int32_t owned_map[1] = {2};
     int32_t borrowed_map[1] = {-2};
     int32_t zero_map[1] = {0};
     int32_t min_map[1] = {(int32_t)0x80000000u};
     int32_t huge_map[1] = {100001};
-    PyObject *slots[2] = {NULL, NULL};
-    PyObject *other[2] = {NULL, NULL};
 
     pcc_gc_frame_enter(owned_map, slots);
     void *first = pcc_gc_frame_index_find(slots);
@@ -391,7 +404,6 @@ int main(void) {
     pcc_gc_frame_node_tls_pool_drain();
     int small_pool_ok = 1;
     int32_t small_map[1] = {0};
-    PyObject *small_slots[16] = {NULL};
     for (int root_count = 0; root_count <= 16; root_count++) {
         small_map[0] = root_count;
         pcc_gc_frame_enter(small_map, small_slots);
@@ -406,7 +418,6 @@ int main(void) {
     if (!small_pool_ok) return 10;
 
     int32_t wide_map[1] = {17};
-    PyObject *wide_slots[17] = {NULL};
     pcc_gc_frame_enter(wide_map, wide_slots);
     pcc_gc_frame_leave(wide_slots);
     int64_t large_cached = pcc_gc_frame_node_tls_pool_cached_count();
@@ -415,7 +426,6 @@ int main(void) {
 
     enum { POOL_LIMIT = 1024, POOL_PROBE_FRAMES = 1031 };
     int32_t cap_maps[POOL_PROBE_FRAMES][1];
-    PyObject *cap_slots[POOL_PROBE_FRAMES][16] = {{NULL}};
     for (int i = 0; i < POOL_PROBE_FRAMES; i++) {
         cap_maps[i][0] = (i % 16) + 1;
         pcc_gc_frame_enter(cap_maps[i], cap_slots[i]);
@@ -448,6 +458,7 @@ extern void pcc_gc_thread_unregister_buffers(void);
 enum { THREADS = 4, ROUNDS = 512 };
 static int32_t maps[THREADS][1] = {{-2}, {-2}, {-2}, {-2}};
 static PyObject *slots[THREADS][2];
+static PyObject *extra_slots_all[THREADS][THREADS][2];
 static pthread_mutex_t pool_gate_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t pool_gate_cond = PTHREAD_COND_INITIALIZER;
 static int pool_gate_arrived = 0;
@@ -471,7 +482,9 @@ static void *mutate(void *raw) {
         pcc_gc_frame_leave(slots[index]);
     }
     int32_t extra_maps[THREADS][1];
-    PyObject *extra_slots[THREADS][2] = {{NULL}};
+    /* Static, as the shared slots: a stack frame registers no node under a
+     * count-free collector. */
+    PyObject *(*extra_slots)[2] = extra_slots_all[index];
     for (int i = 0; i <= index; i++) {
         extra_maps[i][0] = 2;
         pcc_gc_frame_enter(extra_maps[i], extra_slots[i]);
@@ -481,7 +494,7 @@ static void *mutate(void *raw) {
     }
     pool_gate_wait();
     int64_t backend = pcc_gc_backend();
-    int64_t expected = (backend == 3 || backend == 4) ? index + 1 : 0;
+    int64_t expected = backend == 4 ? index + 1 : 0;
     if (pcc_gc_frame_node_tls_pool_cached_count() != expected) {
         return (void *)(intptr_t)101;
     }
@@ -558,8 +571,8 @@ def _run_ok(implementation: Path, env: dict[str, str]) -> str:
 
 
 def _frame_expected(pool_cap: int) -> str:
-    # What the harness printed against the retired C runtime oracle; GC3/GC4
-    # keep a thread-local pool of 1024 cached frame nodes.
+    # What the harness printed against the retired C runtime oracle; GC4
+    # keeps a thread-local pool of 1024 cached frame nodes.
     return (
         "duplicate:4,1,1\n"
         "duplicate-pop:2,1\n"
@@ -607,7 +620,7 @@ def test_archive_owns_frame_registry_gc0_to_gc4(
     )
     for backend in range(5):
         output = _run_ok(implementation, {**os.environ, "PCC_GC_BACKEND": str(backend)})
-        assert output == _frame_expected(1024 if backend in {3, 4} else 0)
+        assert output == _frame_expected(1024 if backend == 4 else 0)
 
 
 def test_frame_registry_survives_threaded_mutation_and_observation(
