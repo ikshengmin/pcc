@@ -1,31 +1,16 @@
 """Execute runtime getter producers with relocation at their actual park gates."""
 
 import ast
-from functools import cache
 from pathlib import Path
 
 import pytest
 
 from pcc.runtime.py import py_abi_constants as abi
+from tests.python.runtime_body_model import load_functions
 from test_exception_constructor_roots import _Object, _Slots
 
 
 ROOT = Path(__file__).resolve().parents[2]
-
-
-@cache
-def _production_body_code(relative):
-    """Share immutable production code, keeping each case's memory independent."""
-    path = ROOT / relative
-    parsed = ast.parse(path.read_text(), filename=str(path))
-    functions = [
-        node for node in parsed.body
-        if isinstance(node, ast.FunctionDef)
-        or (isinstance(node, ast.Assign) and len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Name) and node.targets[0].id.isupper()
-            and isinstance(node.value, (ast.Constant, ast.UnaryOp, ast.BinOp)))
-    ]
-    return compile(ast.Module(body=functions, type_ignores=[]), str(path), "exec")
 
 
 class _FieldWord:
@@ -73,8 +58,6 @@ class _GetterMemory:
                                 abi.PYLISTOBJECT_ITEMS_OFFSET: self.items})
         self.namespace = self._namespace()
         self.load("pcc/runtime/py/py_list.py")
-        for name in ("py_list_get", "py_list_getitem", "py_list_get_for_frame"):
-            self.namespace["pcc_list_body_" + name] = self.namespace["_native_body_" + name]
         self.load("pcc/runtime/py/py_list_native_entry.py")
         self.namespace["_prepare_moving_root"] = self.namespace["pcc_list_native_prepare_root"]
         self.global_cell("pcc_gc_config_initialized").fields[0] = 1
@@ -82,9 +65,9 @@ class _GetterMemory:
         self.global_cell("pcc_gc_backend4_no_refcounts").fields[0] = int(count_free)
 
     def load(self, relative):
-        # Functions plus the module's constant assignments they read (for
-        # example py_class's _INSTANCE_LOOKUP_VARS); nothing else executes.
-        exec(_production_body_code(relative), self.namespace)
+        # Load real bodies, their constants and cross-object export aliases
+        # through the shared runtime model loader.
+        load_functions(ROOT / relative, None, self.namespace)
 
     def global_cell(self, name):
         # A data-segment global starts zeroed: the backend is not yet
@@ -324,6 +307,39 @@ class _GetterMemory:
             "load_i8": lambda text, offset: ord(text[offset]) if offset < len(text) else 0,
         })
         return namespace
+
+
+def test_getter_model_loads_real_list_body_exports():
+    memory = _GetterMemory(backend=0)
+    source = ROOT / "pcc/runtime/py/py_list.py"
+    exports = {}
+    for node in ast.parse(source.read_text()).body:
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        for decorator in node.decorator_list:
+            if (isinstance(decorator, ast.Call)
+                    and isinstance(decorator.func, ast.Name)
+                    and decorator.func.id == "c_abi_export"
+                    and decorator.args
+                    and isinstance(decorator.args[0], ast.Constant)
+                    and isinstance(decorator.args[0].value, str)
+                    and decorator.args[0].value.startswith("pcc_list_body_")):
+                exports[decorator.args[0].value] = node
+    assert "pcc_list_body_py_list_len" in exports
+    for exported, node in exports.items():
+        body = memory.namespace[exported]
+        assert body is memory.namespace[node.name]
+        assert body.__globals__ is memory.namespace
+        assert body.__code__.co_filename == str(source)
+        assert body.__code__.co_firstlineno == node.lineno
+
+    for length in (0, 1):
+        memory.lst.fields[abi.PYLISTOBJECT_LENGTH_OFFSET] = length
+        assert memory.namespace["py_list_len"](memory.lst) == length
+    assert memory.lst.references == 1 and memory.item.references == 1
+    assert memory.depth == memory.pins == 0
+    assert not memory.native_frames and not memory.native_ranges
+    assert not memory.handles and memory.error is None
 
 
 @pytest.mark.parametrize("name", ("py_list_get", "py_list_getitem", "py_list_get_for_frame"))
