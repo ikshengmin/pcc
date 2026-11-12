@@ -21,6 +21,10 @@ _LOCAL_FRAME_ENTRIES = frozenset((
     "pcc_gc_frame_enter_local", "pcc_gc_frame_leave_local",
     "pcc_gc_frame_enter_lifo_local", "pcc_gc_frame_leave_lifo_local",
 ))
+_PLAIN_FRAME_ENTRIES = frozenset((
+    "pcc_gc_frame_enter", "pcc_gc_frame_leave",
+    "pcc_gc_frame_enter_lifo", "pcc_gc_frame_leave_lifo",
+))
 
 
 class RootSlotContract:
@@ -78,6 +82,30 @@ class RootSlotContract:
                     raise AssertionError("root GEP indexes a scalar cell")
             value = ins.data[3]
         return value, offset
+
+    @staticmethod
+    def frame_abi(ins):
+        """Recognize only the declared frame ABIs, retaining pairing details.
+
+        Local frames have activation-private storage; mapped frames defer to
+        the stack walk when available. Neither changes the slot's ownership,
+        but both choices must agree between registration and retirement.
+        """
+        if ins.kind != "call":
+            return None
+        callee = ins.data[2]
+        mapped = callee in _MAPPED_FRAME_ENTRIES
+        if mapped:
+            callee = callee[:-len("_mapped")]
+        local = callee in _LOCAL_FRAME_ENTRIES
+        if local:
+            callee = callee[:-len("_local")]
+        if callee not in _PLAIN_FRAME_ENTRIES:
+            return None
+        count = 2 if callee in ("pcc_gc_frame_enter", "pcc_gc_frame_enter_lifo") else 1
+        assert (ins.data[1].describe() == "void" and len(ins.data[4]) == count
+                and all(ty.is_ptr for ty, _ in ins.data[4])), "invalid frame call signature"
+        return callee, local, mapped
 
     @staticmethod
     def called(ins, name):
@@ -178,13 +206,17 @@ class RootSlotContract:
             self.require_owning(root)
         return roots
 
-    def assert_frame_exits(self, expected_group_bases=()):
+    def assert_frame_exits(self, expected_group_bases=(), *, exact_abi=False):
         """Prove every reachable return has retired every entered frame.
 
         Ordinary, borrowed and special frames share the regular ledger;
         lexical frames have an independent LIFO stack. Map ownership signs
         are deliberately irrelevant to lifetime. A historical entry bit
         identifies rooted returns without depending on leave instructions.
+
+        Opt into exact_abi to also validate signatures and require matching
+        local/mapped registrations. Existing callers retain the same lifetime
+        checks and ABI-family normalization when this option is false.
         """
         expected_group_bases = set(expected_group_bases)
         by_name = {block.name: block for block in self.blocks}
@@ -208,7 +240,9 @@ class RootSlotContract:
                 leave_lifo = self.called(ins, "pcc_gc_frame_leave_lifo")
                 if not (enter or leave or enter_lifo or leave_lifo):
                     continue
+                abi = self.frame_abi(ins) if exact_abi else None
                 identity = self.slot(self.args(ins)[1 if enter or enter_lifo else 0])
+                frame = (identity, *abi[1:]) if exact_abi else identity
                 base, offset = identity
                 if base in expected_group_bases:
                     assert offset == 0, "operand group retirement must use its registered base"
@@ -216,15 +250,21 @@ class RootSlotContract:
                     if enter:
                         entered_groups.add(base)
                 if enter:
-                    assert identity not in active, "root frame entered twice on one path"
-                    active.add(identity)
+                    assert not (any(item[0] == identity for item in active) if exact_abi
+                                else identity in active), "root frame entered twice on one path"
+                    active.add(frame)
                 elif leave:
-                    assert identity in active, "frame leave has no active registration"
-                    active.remove(identity)
+                    assert (any(item[0] == identity for item in active) if exact_abi
+                            else identity in active), "frame leave has no active registration"
+                    if exact_abi:
+                        assert frame in active, "frame leave ABI does not match registration"
+                    active.remove(frame)
                 elif enter_lifo:
-                    lifo.append(identity)
+                    lifo.append(frame)
                 else:
-                    assert lifo and lifo[-1] == identity, "lexical frame leave violates LIFO order"
+                    assert lifo and (lifo[-1][0] if exact_abi else lifo[-1]) == identity, "lexical frame leave violates LIFO order"
+                    if exact_abi:
+                        assert lifo[-1] == frame, "frame leave ABI does not match registration"
                     lifo.pop()
                 ever_entered = ever_entered or enter or enter_lifo
             term = block.terminator

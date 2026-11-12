@@ -22,6 +22,63 @@ from pcc.frontends.python.pipeline_ast_wire import (
 )
 from pcc.ir.compat import ir
 from tests.python.root_copy_ir import root_copy_calls
+from tests.python.root_slot_contract import RootSlotContract
+
+
+def _function_roots(module, function):
+    from pcc.backend.self_backend_kernel import get_indexed_function_kernel
+
+    blocks = get_indexed_function_kernel(function).materialize_legacy_blocks(function)
+    return RootSlotContract(blocks, module.globals_)
+
+
+def _attribute_frame_counts(module):
+    roots = [_function_roots(module, function) for function in module.functions
+             if function.name.startswith("user_attribute_borrow_probe")]
+    assert roots
+    return tuple(sum(owner.called(ins, helper) for owner in roots for _, _, ins in owner.rows)
+                 for helper in ("pcc_gc_frame_enter", "pcc_gc_frame_leave",
+                                "pcc_gc_frame_enter_lifo", "pcc_gc_frame_leave_lifo"))
+
+
+def _lifo_slots(roots):
+    """Count all exact lexical registrations, independent of seed location.
+
+    Some unchanged owners (for example call.ret.root) have entry allocas but
+    are NULL-seeded at their call site before publishing a value and entering
+    the frame. The entry-seeded operand contract is checked separately for
+    the receiver owner whose removal this regression actually measures.
+    """
+    slots = [roots.slot(roots.args(ins)[1]) for _, _, ins in roots.rows
+             if roots.called(ins, "pcc_gc_frame_enter_lifo")]
+    assert slots, "expected actual lexical registrations, not an empty ABI counter"
+    return slots
+
+
+def _assert_lexical_take(roots, block, index, take):
+    """The final take consumes the exact owner whose last parking call left."""
+    assert roots.called(take, "pcc_gc_take_pinned_slot")
+    assert (take.data[1].is_ptr and len(take.data[4]) == 2
+            and take.data[4][0][0].is_ptr
+            and take.data[4][1][0].describe() == "i64"), "invalid pinned take signature"
+    slot = roots.slot(roots.args(take)[0])
+    assert roots.require_owning(slot, allow_lifo=True) == (*slot, 1)
+    enters = [ins for _, _, ins in roots.rows
+              if roots.called(ins, "pcc_gc_frame_enter_lifo")
+              and roots.slot(roots.args(ins)[1]) == slot]
+    assert len(enters) == 1, "take needs its exact lexical registration"
+    calls = [(position, ins) for position, ins in enumerate(block.instructions[:index])
+             if ins.kind == "call"]
+    assert calls, "take needs a preceding frame leave"
+    position, leave = calls[-1]
+    assert roots.called(leave, "pcc_gc_frame_leave_lifo"), "frame leave must be the last call before take"
+    assert roots.slot(roots.args(leave)[0]) == slot, "take must leave the same physical slot"
+    assert roots.frame_abi(leave)[1:] == roots.frame_abi(enters[0])[1:], "frame leave ABI does not match registration"
+    assert not any(ins.kind == "store" and roots.slot(ins.data[3]) == slot
+                   for ins in block.instructions[position + 1:index]), "owner overwritten between leave and take"
+    # Includes all success/error returns and enforces physical identities,
+    # matched ABI variants and reverse lexical retirement, not textual order.
+    roots.assert_frame_exits(exact_abi=True)
 
 
 class UnborrowedAttributeCodegen(L1CodeGen):
@@ -93,13 +150,15 @@ def test_attribute_receiver_reuses_parameter_with_live_lookup_and_leases():
     "shared = None\ndef probe():\n    return shared.data + 1\n",
 ])
 def test_attribute_unstable_receivers_keep_the_original_owning_policy(source):
-    before, _ = _attribute_emit(source, before=True)
-    after, _ = _attribute_emit(source)
+    before, before_module = _attribute_emit(source, before=True)
+    after, after_module = _attribute_emit(source)
     assert _calls(after, "py_obj_getattr")
     assert not _calls(after, "pcc_gc_borrowed_lease_acquire")
-    for helper in ("pcc_gc_root_copy_lease", "pcc_gc_root_copy_borrowed_lease",
-                   "pcc_gc_frame_enter_lifo", "pcc_gc_frame_leave_lifo", "py_obj_getattr"):
+    for helper in ("pcc_gc_root_copy_lease", "pcc_gc_root_copy_borrowed_lease", "py_obj_getattr"):
         assert len(_calls(before, helper)) == len(_calls(after, helper)), helper
+    before_frames = _attribute_frame_counts(before_module)
+    assert before_frames[0] + before_frames[2] > 0
+    assert _attribute_frame_counts(after_module) == before_frames
     for borrowed in (False, True):
         assert len(root_copy_calls(before, local=True, borrowed=borrowed)) == len(
             root_copy_calls(after, local=True, borrowed=borrowed)
@@ -196,7 +255,7 @@ def test_actual_packed_relocation_reader_elides_one_receiver_owner():
         or isinstance(node, py_ast.FuncDef) and node.name in functions
         or isinstance(node, py_ast.ClassDef) and node.name in classes
     )))
-    bodies = []
+    bodies, owners = [], []
     for implementation in (UnborrowedAttributeCodegen, L1CodeGen):
         generator = implementation(selected, ir_scaffold_mode="on")
         generator._strict_no_libpython = True
@@ -208,10 +267,13 @@ def test_actual_packed_relocation_reader_elides_one_receiver_owner():
         generator._native_function_object_exports = _closed_world_function_object_exports(exports, names[0])
         generator._native_boxed_int_functions = _closed_world_boxed_int_functions(exports, names[0])
         text = str(generator._generate_initial_module())
-        verify_ir_text(text)
+        verified = verify_ir_text(text)
         found = re.findall(r"^define [^\n]*@user_pcc_backend_native_object__packed_relocation_fields_at\([^\n]*\).*?^}", text, re.M | re.S)
         assert len(found) == 1 and "strict.nolib.stub:" not in found[0] and "@py_cpy_" not in found[0]
         bodies.append(found[0])
+        function = next(fn for fn in verified.functions
+                        if fn.name == "user_pcc_backend_native_object__packed_relocation_fields_at")
+        owners.append(_function_roots(verified, function))
     before, after = bodies
     assert len(_calls(before, "py_obj_getattr")) == len(_calls(after, "py_obj_getattr")) == 2
     assert len(root_copy_calls(before, local=True, borrowed=True)) == 2
@@ -219,15 +281,27 @@ def test_actual_packed_relocation_reader_elides_one_receiver_owner():
     borrowed = _calls(after, "pcc_gc_borrowed_lease_acquire")
     assert len(borrowed) == 1 and "section.addr" in borrowed[0]
     assert not _calls(before, "pcc_gc_borrowed_lease_acquire")
-    # Precise stack-map mode uses the mapped entry for the same owning slot.
-    # Count both exact ABI spellings, not declarations or similarly named calls.
-    for helpers in (
-        ("pcc_gc_frame_enter_lifo", "pcc_gc_frame_enter_lifo_mapped"),
-        ("pcc_gc_store_root",),
-    ):
-        before_count = sum(len(_calls(before, helper)) for helper in helpers)
-        after_count = sum(len(_calls(after, helper)) for helper in helpers)
-        assert after_count == before_count - 1, helpers
+    # Count every exact lexical frame, including unchanged call-site-seeded
+    # return roots. Prove the specific removed receiver's entry-seeded owner
+    # separately, rather than imposing that policy on unrelated roots.
+    before_slots, after_slots = map(_lifo_slots, owners)
+    assert len(after_slots) == len(before_slots) - 1
+    section_copies = [copy for copy in root_copy_calls(before, local=True, borrowed=True)
+                      if copy.source.startswith("%section.addr")]
+    assert len(section_copies) == 1
+    copied = owners[0].slot(section_copies[0].destination.lstrip("%"))
+    assert before_slots.count(copied) == 1
+    assert owners[0].require_owning(copied, allow_lifo=True) == (*copied, 1)
+    assert not any(copy.source.startswith("%section.addr")
+                   for copy in root_copy_calls(after, local=True, borrowed=True))
+    leases = [ins for _, _, ins in owners[1].rows
+              if owners[1].called(ins, "pcc_gc_borrowed_lease_acquire")]
+    assert len(leases) == 1
+    section = owners[1].slot(owners[1].args(leases[0])[0])
+    assert section not in after_slots, "borrowed parameter must not acquire a second lexical owner"
+    for owner in owners:
+        owner.assert_frame_exits(exact_abi=True)
+    assert len(_calls(after, "pcc_gc_store_root")) == len(_calls(before, "pcc_gc_store_root")) - 1
     _assert_attribute_parameter_not_cleared(after, "section")
 
 
@@ -489,12 +563,228 @@ def test_stale_owned_result_fails_closed():
 
 
 def test_module_operand_leaves_root_before_nonparking_take():
+    from tests.owned_ir_validation import verify_ir_text
+
     text = _emit("slot_operand_probe([1])\n")
-    take = _calls(text, "pcc_gc_take_pinned_slot")[-1]
-    prefix = text[:text.index(take)]
-    assert (_calls(prefix, "pcc_gc_frame_leave_lifo")
-            or _calls(prefix, "pcc_gc_frame_leave_lifo_mapped"))
-    assert prefix.rfind("@pcc_gc_frame_leave_lifo") > prefix.rfind("@pcc_py_gc_minor_graph_unlock")
+    module = verify_ir_text(text)
+    takes = []
+    for function in module.functions:
+        roots = _function_roots(module, function)
+        takes.extend((roots, block, index, ins) for block, index, ins in roots.rows
+                     if roots.called(ins, "pcc_gc_take_pinned_slot")
+                     and roots.slot(roots.args(ins)[0])[0].startswith("probe.operand"))
+    assert len(takes) == 1
+    _assert_lexical_take(*takes[0])
+
+
+def _frame_contract_fixture(*, lifo=True, suffix=""):
+    from tests.owned_ir_validation import verify_ir_text
+
+    kind = "_lifo" if lifo else ""
+    enter = "pcc_gc_frame_enter" + kind + suffix
+    leave = "pcc_gc_frame_leave" + kind + suffix
+    module = verify_ir_text(f'''target triple = "x86_64-unknown-linux-gnu"
+@map = internal constant i32 1
+declare void @{enter}(ptr, ptr)
+declare void @{leave}(ptr)
+declare i64 @pcc_gc_pin_slot_for_take(ptr, i64)
+declare ptr @pcc_gc_take_pinned_slot(ptr, i64)
+define ptr @control() {{
+entry:
+  %owner = alloca ptr
+  %other = alloca ptr
+  store ptr null, ptr %owner
+  store ptr null, ptr %other
+  %alias = bitcast ptr %owner to ptr
+  call void @{enter}(ptr @map, ptr %owner)
+  %prior = call i64 @pcc_gc_pin_slot_for_take(ptr %alias, i64 0)
+  call void @{leave}(ptr %alias)
+  %value = call ptr @pcc_gc_take_pinned_slot(ptr %owner, i64 %prior)
+  ret ptr %value
+}}
+''')
+    return _function_roots(module, module.functions[0])
+
+
+def _mutated_frame_contract(roots, mutate, *, block_name="entry"):
+    from types import SimpleNamespace
+
+    blocks = [SimpleNamespace(name=block.name, instructions=list(block.instructions),
+                              terminator=block.terminator) for block in roots.blocks]
+    mutate(next(block.instructions for block in blocks if block.name == block_name))
+    return RootSlotContract(blocks, roots.globals.values())
+
+
+def _changed_instruction(ins, **fields):
+    from types import SimpleNamespace
+
+    data = list(ins.data)
+    for key, value in fields.items():
+        data[{"result_type": 1, "callee": 2, "arguments": 4}[key]] = value
+    return SimpleNamespace(kind=ins.kind, data=tuple(data))
+
+
+def test_frame_contract_checks_exact_family_signature_and_balanced_exits():
+    for lifo in (False, True):
+        for suffix in ("", "_mapped", "_local", "_local_mapped"):
+            roots = _frame_contract_fixture(lifo=lifo, suffix=suffix)
+            assert roots.assert_frame_exits(exact_abi=True) == {"entry": {True}}
+            frames = [(index, ins) for _, index, ins in roots.rows
+                      if roots.frame_abi(ins) is not None]
+            assert len(frames) == 2
+            (enter_index, enter), (leave_index, leave) = frames
+            assert roots.frame_abi(enter) == (
+                "pcc_gc_frame_enter" + ("_lifo" if lifo else ""),
+                "_local" in suffix, "_mapped" in suffix,
+            )
+            for changed, diagnostic in (
+                (_changed_instruction(leave, callee=leave.data[2] + "_not_an_abi"),
+                 "return reached with active root frames"),
+                (_changed_instruction(leave, arguments=()), "invalid frame call signature"),
+                (_changed_instruction(leave, result_type=roots.blocks[0].instructions[-1].data[1]),
+                 "invalid frame call signature"),
+                (_changed_instruction(leave, arguments=((leave.data[4][0][0], "other"),)),
+                 "LIFO order" if lifo else "no active registration"),
+            ):
+                mutated = _mutated_frame_contract(
+                    roots, lambda instructions: instructions.__setitem__(leave_index, changed),
+                )
+                with pytest.raises(AssertionError, match=diagnostic):
+                    mutated.assert_frame_exits(exact_abi=True)
+            for other_suffix in ("", "_mapped", "_local", "_local_mapped"):
+                if other_suffix == suffix:
+                    continue
+                other = "pcc_gc_frame_leave" + ("_lifo" if lifo else "") + other_suffix
+                changed = _changed_instruction(leave, callee=other)
+                mutated = _mutated_frame_contract(
+                    roots, lambda instructions: instructions.__setitem__(leave_index, changed),
+                )
+                # Existing consumers opt into the old normalized-family
+                # lifetime contract unless they explicitly request strict ABI.
+                assert mutated.assert_frame_exits() == {"entry": {True}}
+                with pytest.raises(AssertionError, match="ABI does not match registration"):
+                    mutated.assert_frame_exits(exact_abi=True)
+            missing = _mutated_frame_contract(roots, lambda instructions: instructions.pop(leave_index))
+            with pytest.raises(AssertionError, match="return reached with active root frames"):
+                missing.assert_frame_exits(exact_abi=True)
+            duplicate = _mutated_frame_contract(roots, lambda instructions: instructions.insert(enter_index, enter))
+            with pytest.raises(AssertionError, match="active root frames|entered twice"):
+                duplicate.assert_frame_exits(exact_abi=True)
+    _check_receiver_owner_with_callsite_seeded_return()
+
+
+def _check_receiver_owner_with_callsite_seeded_return():
+    """A real producer shape, not a claim about the un-attributed v2 slot.
+
+    unary_call_lowering._call_user allocates call.ret.root in entry, seeds it
+    at the call site, then publishes with store_root before lexical entry.
+    Counting that frame must not call it an entry-seeded operand. The removed
+    section receiver still needs the full original NULL/map/physical-slot
+    proof, and both frames still need exact ABI pairing on every exit.
+    """
+    from types import SimpleNamespace
+    from tests.owned_ir_validation import verify_ir_text
+
+    module = verify_ir_text('''target triple = "x86_64-unknown-linux-gnu"
+@map = internal constant i32 1
+declare void @pcc_gc_frame_enter_lifo_local(ptr, ptr)
+declare void @pcc_gc_frame_leave_lifo_local(ptr)
+declare void @pcc_gc_store_root(ptr, ptr)
+define void @control(ptr %value) {
+entry:
+  %receiver = alloca ptr
+  %call.ret.root = alloca ptr
+  %other = alloca ptr
+  store ptr null, ptr %receiver
+  store ptr null, ptr %other
+  call void @pcc_gc_frame_enter_lifo_local(ptr @map, ptr %receiver)
+  br label %body
+body:
+  store ptr null, ptr %call.ret.root
+  call void @pcc_gc_store_root(ptr %call.ret.root, ptr %value)
+  call void @pcc_gc_frame_enter_lifo_local(ptr @map, ptr %call.ret.root)
+  call void @pcc_gc_store_root(ptr %call.ret.root, ptr null)
+  call void @pcc_gc_frame_leave_lifo_local(ptr %call.ret.root)
+  call void @pcc_gc_frame_leave_lifo_local(ptr %receiver)
+  ret void
+}
+''')
+    roots = _function_roots(module, module.functions[0])
+    assert _lifo_slots(roots) == [("receiver", 0), ("call.ret.root", 0)]
+    assert roots.require_owning("receiver", allow_lifo=True) == ("receiver", 0, 1)
+    roots.assert_frame_exits(exact_abi=True)
+    # Preserve the entry-only helper's boundary for all existing consumers.
+    with pytest.raises(AssertionError, match="NULL initialization before entry"):
+        roots.require_owning("call.ret.root", allow_lifo=True)
+    entry = roots.blocks[0].instructions
+    seed = next(index for index, ins in enumerate(entry)
+                if ins.kind == "store" and roots.slot(ins.data[3]) == ("receiver", 0))
+    registration = next(index for index, ins in enumerate(entry)
+                        if roots.called(ins, "pcc_gc_frame_enter_lifo"))
+    enter = entry[registration]
+    for mutation, diagnostic in (
+        (lambda instructions: instructions.pop(seed), "NULL initialization before entry"),
+        (lambda instructions: instructions.insert(registration, instructions.pop(seed)),
+         "NULL initialization before entry"),
+        (lambda instructions: instructions.__setitem__(seed, SimpleNamespace(
+            kind="store", data=entry[seed].data[:3] + ("other",))), "NULL initialization before entry"),
+        (lambda instructions: instructions.__setitem__(registration, _changed_instruction(
+            enter, arguments=((enter.data[4][0][0], "@missing"), enter.data[4][1]))),
+         "constant i32 owning map"),
+        (lambda instructions: instructions.__setitem__(registration, _changed_instruction(
+            enter, arguments=(enter.data[4][0], (enter.data[4][1][0], "other")))),
+         "exactly one covering owning registration"),
+    ):
+        mutated = _mutated_frame_contract(roots, mutation)
+        with pytest.raises(AssertionError, match=diagnostic):
+            mutated.require_owning("receiver", allow_lifo=True)
+    frame_map = roots.globals["map"]
+    for count in (0, -1, 2):
+        altered = SimpleNamespace(name=frame_map.name, is_constant=True,
+                                  type=frame_map.type, initializer=str(count))
+        mutated = RootSlotContract(roots.blocks, (altered,))
+        with pytest.raises(AssertionError, match="positive owning map|outside its alloca"):
+            mutated.require_owning("receiver", allow_lifo=True)
+    for position in (4, 5):
+        mutated = _mutated_frame_contract(
+            roots, lambda instructions: instructions.pop(position), block_name="body",
+        )
+        with pytest.raises(AssertionError, match="LIFO order|active root frames"):
+            mutated.assert_frame_exits(exact_abi=True)
+    mutated = _mutated_frame_contract(
+        roots, lambda instructions: instructions.__setitem__(4, _changed_instruction(
+            instructions[4], callee="pcc_gc_frame_leave_lifo_local_mapped")), block_name="body",
+    )
+    with pytest.raises(AssertionError, match="ABI does not match registration"):
+        mutated.assert_frame_exits(exact_abi=True)
+
+
+def test_lexical_take_contract_rejects_wrong_owner_and_parking_order():
+    for suffix in ("", "_mapped", "_local", "_local_mapped"):
+        roots = _frame_contract_fixture(suffix=suffix)
+        block, index, take = next(row for row in roots.rows
+                                 if roots.called(row[2], "pcc_gc_take_pinned_slot"))
+        _assert_lexical_take(roots, block, index, take)
+        leave_index = index - 1
+        leave = block.instructions[leave_index]
+        pin = block.instructions[leave_index - 1]
+        for mutation, diagnostic in (
+            (lambda instructions: instructions.pop(leave_index), "last call before take"),
+            (lambda instructions: instructions.insert(index, pin), "last call before take"),
+            (lambda instructions: instructions.__setitem__(leave_index, _changed_instruction(
+                leave, arguments=((leave.data[4][0][0], "other"),))), "same physical slot"),
+            (lambda instructions: instructions.__setitem__(index, _changed_instruction(
+                take, arguments=((take.data[4][0][0], "other"), take.data[4][1]))),
+             "exactly one covering owning registration"),
+            (lambda instructions: instructions.insert(index, block.instructions[2]),
+             "owner overwritten between leave and take"),
+            (lambda instructions: instructions.__setitem__(index, _changed_instruction(
+                take, arguments=(take.data[4][0],))), "invalid pinned take signature"),
+        ):
+            mutated = _mutated_frame_contract(roots, mutation)
+            target = next(row for row in mutated.rows if mutated.called(row[2], "pcc_gc_take_pinned_slot"))
+            with pytest.raises(AssertionError, match=diagnostic):
+                _assert_lexical_take(mutated, *target)
 
 
 def test_constructor_call_uses_slot_dispatch():

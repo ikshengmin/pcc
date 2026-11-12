@@ -57,13 +57,14 @@ def _static_constructor_contract(module, function, status, output_slot):
     def frame_event(ins, entering):
         names = (("pcc_gc_frame_enter", "pcc_gc_frame_enter_lifo") if entering
                  else ("pcc_gc_frame_leave", "pcc_gc_frame_leave_lifo"))
-        return (any(roots.called(ins, name) for name in names)
+        abi = roots.frame_abi(ins)
+        return (abi is not None and abi[0] in names
                 and roots.slot(roots.args(ins)[1 if entering else 0]) == frame)
 
     registrations = [ins for _, _, ins in roots.rows if frame_event(ins, True)]
     require(len(registrations) == 1, "Static output needs one frame registration")
-    lifo = roots.called(registrations[0], "pcc_gc_frame_enter_lifo")
-    leave_protocol = "pcc_gc_frame_leave_lifo" if lifo else "pcc_gc_frame_leave"
+    entered_abi = roots.frame_abi(registrations[0])
+    leave_abi = (entered_abi[0].replace("_enter", "_leave", 1), *entered_abi[1:])
 
     # Module initializers also register process-lifetime GLOBAL roots. Audit
     # this constructor's local output frame, not those unrelated registrations.
@@ -82,7 +83,8 @@ def _static_constructor_contract(module, function, status, output_slot):
                 require(not active, "Static output frame entered twice")
                 active = True
             elif frame_event(ins, False):
-                require(roots.called(ins, leave_protocol), "Static output frame retirement uses the wrong protocol")
+                require(roots.frame_abi(ins) == leave_abi,
+                        "Static output frame retirement uses the wrong protocol")
                 require(active, "Static output frame retired without registration")
                 active = False
             if name == producer.name and index == position:

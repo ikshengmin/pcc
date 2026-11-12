@@ -91,6 +91,7 @@ def _static_site(text, persistent=False):
     "wrong-status", "callback-before-status", "unregistered-output",
     "mutable-descriptor", "cleared-output-success", "wrong-take-owner",
     "safepoint-after-frame-retirement", "wrong-frame-protocol", "missing-success-leave",
+    "wrong-frame-locality", "wrong-frame-mapping",
 ])
 def test_native_static_constructor_audit_rejects_corruption(static_ir, mutation):
     text = static_ir
@@ -139,13 +140,29 @@ def test_native_static_constructor_audit_rejects_corruption(static_ir, mutation)
         assert take is not None
         take_start = end + take.start()
         block = list(re.finditer(r"(?m)^[-a-zA-Z0-9_.$]+:\n", text[:take_start]))[-1]
-        leave = re.search(r"(?m)^\s*call void[^\n]*@pcc_gc_frame_leave_lifo(?:_mapped)?\(ptr "
+        leave = re.search(r"(?m)^\s*call void[^\n]*@(?P<callee>pcc_gc_frame_leave"
+                          r"(?:_lifo)?(?:_local)?(?:_mapped)?)\(ptr "
                           + re.escape(output) + r"\)\n", text[block.end():take_start])
         assert leave is not None and "@pcc_gc_safepoint(" in text
         leave_start, leave_end = block.end() + leave.start(), block.end() + leave.end()
-        if mutation == "wrong-frame-protocol":
+        if mutation.startswith("wrong-frame-"):
+            callee = leave.group("callee")
+            if mutation == "wrong-frame-protocol":
+                replacement = (callee.replace("_lifo", "", 1) if "_lifo" in callee
+                               else callee.replace("_leave", "_leave_lifo", 1))
+            elif mutation == "wrong-frame-locality":
+                replacement = (callee.replace("_local", "", 1) if "_local" in callee
+                               else callee.removesuffix("_mapped") + "_local"
+                               + ("_mapped" if callee.endswith("_mapped") else ""))
+            else:
+                replacement = (callee.removesuffix("_mapped") if callee.endswith("_mapped")
+                               else callee + "_mapped")
+            # Change one real callee to another declared ABI. The subsequent
+            # audit must reject its pairing, not a failed mutation or parser.
+            assert replacement != callee
+            assert re.search(r"(?m)^declare[^\n]*@" + replacement + r"\(ptr\)", text)
             text = (text[:leave_start] + text[leave_start:leave_end].replace(
-                "@pcc_gc_frame_leave_lifo", "@pcc_gc_frame_leave", 1) + text[leave_end:])
+                "@" + callee + "(", "@" + replacement + "(", 1) + text[leave_end:])
         elif mutation == "missing-success-leave":
             text = text[:leave_start] + text[leave_end:]
         else:
@@ -156,7 +173,7 @@ def test_native_static_constructor_audit_rejects_corruption(static_ir, mutation)
     elif mutation == "safepoint-after-frame-retirement":
         with pytest.raises(RuntimeError, match="Static output frame retired before its final take"):
             _audit(text)
-    elif mutation == "wrong-frame-protocol":
+    elif mutation.startswith("wrong-frame-"):
         with pytest.raises(RuntimeError, match="Static output frame retirement uses the wrong protocol"):
             _audit(text)
     elif mutation == "missing-success-leave":
