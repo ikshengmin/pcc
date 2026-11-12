@@ -4,6 +4,15 @@ Probe sources and executables remain in each test's ``tmp_path``.  Only a
 builder's copied runtime directory/archive is reused when its explicit
 arguments and build-relevant environment are identical.  A failed builder is
 never cached.
+
+A failed source-addressed runtime build (``cached_pcc_python_runtime``)
+reports its compiler and linker diagnostics first and keeps the full Make
+log in a file. A compiler diagnostic (``error: PCC-...``) is a property of
+the cache key's sources and compiler, so it is recorded for the rest of the
+pytest run: every other dependent test, in every xdist worker, fails with
+the same diagnosis at once instead of repeating a minutes-long build. The
+next run builds again; a failure without a compiler diagnostic is never
+recorded.
 """
 
 from __future__ import annotations
@@ -13,6 +22,7 @@ from functools import lru_cache, wraps
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
 import subprocess
@@ -339,6 +349,110 @@ def _pcc_runtime_cache_key(
     return digest.hexdigest()[:24] + "-" + variant
 
 
+_PCC_RUNTIME_BUILD_FAILURE_SCHEMA = "pcc.runtime-build-failure.v1"
+# Lines of a failed build worth reading: compiler/linker/Make errors and
+# Python failures, not the hundreds of commands Make echoes.
+_BUILD_DIAGNOSTIC = re.compile(
+    r"\berror\b|\*\*\*|undefined|can't open|no such file|not found|traceback",
+    re.IGNORECASE,
+)
+_COMPILER_DIAGNOSTIC = re.compile(r"\berror: PCC-[A-Z0-9-]+")
+_BUILD_DIAGNOSTIC_LINES = 40
+
+
+class RuntimeBuildFailed(AssertionError):
+    """A runtime archive build failed; the message leads with its diagnostics."""
+
+
+def runtime_build_diagnostics(output: str) -> list[str]:
+    """The diagnostic lines of a failed build, in order, without repeats."""
+    picked: list[str] = []
+    for line in output.splitlines():
+        text = line.strip()
+        if not text or text in picked:
+            continue
+        if _BUILD_DIAGNOSTIC.search(text) or text.startswith("note:"):
+            picked.append(text)
+            if len(picked) == _BUILD_DIAGNOSTIC_LINES:
+                break
+    return picked
+
+
+def _build_run_identity() -> str:
+    """One pytest run: xdist gives all of its workers one test-run id."""
+    run = os.environ.get("PYTEST_XDIST_TESTRUNUID", "")
+    return run if run else "pid-" + str(os.getpid())
+
+
+def _runtime_build_failure_paths(cache_root: Path, key: str) -> tuple[Path, Path]:
+    return cache_root / (key + ".failed.json"), cache_root / (key + ".failed.log")
+
+
+def _runtime_build_failure_message(
+    headline: str, diagnostics: list[str], log: Path,
+) -> str:
+    return "\n".join(
+        [headline, *(diagnostics or ["(no diagnostic line; see the log)"]),
+         "full build log: " + str(log)]
+    )
+
+
+def _record_runtime_build_failure(cache_root: Path, key: str, output: str) -> str:
+    """Keep ``output`` as the key's build log and return the failure message;
+    a compiler diagnostic is recorded for the rest of this run."""
+    record, log = _runtime_build_failure_paths(cache_root, key)
+    log.write_text(output, encoding="utf-8")
+    diagnostics = runtime_build_diagnostics(output)
+    if _COMPILER_DIAGNOSTIC.search(output):
+        record.write_text(
+            json.dumps(
+                {
+                    "schema": _PCC_RUNTIME_BUILD_FAILURE_SCHEMA,
+                    "key": key,
+                    "run": _build_run_identity(),
+                    "diagnostics": diagnostics,
+                    "log": str(log),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    else:
+        record.unlink(missing_ok=True)
+    return _runtime_build_failure_message(
+        "runtime archive build failed (cache key " + key + "):", diagnostics, log,
+    )
+
+
+def _recorded_runtime_build_failure(cache_root: Path, key: str) -> str | None:
+    """This run's recorded compiler failure for ``key``, as a message."""
+    record, _log = _runtime_build_failure_paths(cache_root, key)
+    try:
+        value = json.loads(record.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if (
+        not isinstance(value, dict)
+        or value.get("schema") != _PCC_RUNTIME_BUILD_FAILURE_SCHEMA
+        or value.get("key") != key
+        or value.get("run") != _build_run_identity()
+    ):
+        return None
+    return _runtime_build_failure_message(
+        "runtime archive build failed earlier in this run (cache key " + key
+        + "), not rebuilt:",
+        [str(line) for line in value.get("diagnostics", [])],
+        Path(str(value.get("log", ""))),
+    )
+
+
+def _clear_runtime_build_failure(cache_root: Path, key: str) -> None:
+    for path in _runtime_build_failure_paths(cache_root, key):
+        path.unlink(missing_ok=True)
+
+
 def _make_runtime_staging_writable(runtime: Path) -> None:
     """Change only the copied tree; frozen source snapshots stay read-only."""
     runtime.chmod(stat.S_IMODE(runtime.stat().st_mode) | stat.S_IRWXU)
@@ -390,6 +504,9 @@ def _cached_pcc_python_runtime(
                 key=key,
             ):
                 return runtime
+            recorded = _recorded_runtime_build_failure(cache_root, key)
+            if recorded is not None:
+                raise RuntimeBuildFailed(recorded)
             require_native_provisioning_allowed()
             if runtime.exists():
                 shutil.rmtree(runtime)
@@ -430,7 +547,12 @@ def _cached_pcc_python_runtime(
                 text=True,
                 timeout=900,
             )
-            assert result.returncode == 0, result.stdout + result.stderr
+            if result.returncode != 0:
+                raise RuntimeBuildFailed(
+                    _record_runtime_build_failure(
+                        cache_root, key, result.stdout + result.stderr
+                    )
+                )
             work_archive = work_runtime / archive.name
             verified = verify_runtime_archive_manifest(
                 work_archive,
@@ -456,6 +578,7 @@ def _cached_pcc_python_runtime(
                 archive=work_archive,
             )
             os.replace(work_runtime, runtime)
+            _clear_runtime_build_failure(cache_root, key)
             return runtime
         finally:
             if staging_root is not None:

@@ -231,3 +231,115 @@ def test_every_thread_setting_selects_the_one_threaded_cache_entry(runtime_sourc
     with pytest.raises(ValueError, match="single-thread runtime was removed"):
         cache.cached_pcc_python_runtime(runtime_source=sources.external)
     assert builds == ["PCC_WITH_THREADS=1"]
+
+
+_MAKE_NOISE = "\n".join(
+    "PYTHONPATH=/repo pcc --python-library --emit-llvm=build_py/m%d.ll py/m%d.py" % (i, i)
+    for i in range(200)
+)
+_COMPILE_ERROR = (
+    "Error: py/freestanding_allocator.py:0:0: error: PCC-PY-COMPILE-001: "
+    "[python-frontend] freestanding module functions require @c_abi_export: _walk\n"
+    "  note: exception_type=RuntimeError\n"
+    "make[1]: *** [build_py/freestanding_allocator.o] Error 1\n"
+)
+
+
+def _failing_make(builds, output):
+    def fake_make(command, **kwargs):
+        builds.append(Path(command[2]))
+        return SimpleNamespace(returncode=2, stdout=_MAKE_NOISE + "\n", stderr=output)
+
+    return fake_make
+
+
+def test_failed_runtime_build_leads_with_its_compiler_diagnostic(runtime_sources, monkeypatch):
+    # A broken runtime module used to fail every dependent test with the whole
+    # Make log, its one error line buried after hundreds of command lines.
+    monkeypatch.setenv("PYTEST_XDIST_TESTRUNUID", "run-a")
+    builds = []
+    monkeypatch.setattr(
+        cache, "subprocess",
+        SimpleNamespace(run=_failing_make(builds, _COMPILE_ERROR)),
+    )
+    with pytest.raises(cache.RuntimeBuildFailed) as failure:
+        cache.cached_pcc_python_runtime(runtime_source=runtime_sources.external)
+    message = str(failure.value)
+    first_lines = message.splitlines()[:3]
+    assert any("error: PCC-PY-COMPILE-001" in line for line in first_lines), message
+    assert "freestanding module functions require @c_abi_export: _walk" in message
+    assert "note: exception_type=RuntimeError" in message
+    assert "pcc --python-library" not in message
+    log = Path(message.rsplit("full build log: ", 1)[1].strip())
+    assert log.read_text(encoding="utf-8") == _MAKE_NOISE + "\n" + _COMPILE_ERROR
+    assert len(builds) == 1
+
+
+def test_compiler_error_fails_the_rest_of_the_run_without_rebuilding(
+    runtime_sources, monkeypatch,
+):
+    # The same sources and compiler give the same compiler error: the rest of
+    # this run's dependents (every xdist worker) report it at once instead of
+    # each repeating a minutes-long build. The next run builds again.
+    builds = []
+    monkeypatch.setattr(
+        cache, "subprocess",
+        SimpleNamespace(run=_failing_make(builds, _COMPILE_ERROR)),
+    )
+    monkeypatch.setenv("PYTEST_XDIST_TESTRUNUID", "run-a")
+    with pytest.raises(cache.RuntimeBuildFailed) as first:
+        cache.cached_pcc_python_runtime(runtime_source=runtime_sources.external)
+    with pytest.raises(cache.RuntimeBuildFailed) as again:
+        cache.cached_pcc_python_runtime(runtime_source=runtime_sources.external)
+    assert len(builds) == 1
+    assert "not rebuilt" in str(again.value)
+    assert "error: PCC-PY-COMPILE-001" in str(again.value).splitlines()[1]
+    assert str(first.value).rsplit("full build log: ", 1)[1] == (
+        str(again.value).rsplit("full build log: ", 1)[1]
+    )
+    monkeypatch.setenv("PYTEST_XDIST_TESTRUNUID", "run-b")
+    with pytest.raises(cache.RuntimeBuildFailed):
+        cache.cached_pcc_python_runtime(runtime_source=runtime_sources.external)
+    assert len(builds) == 2
+
+
+def test_failure_without_a_compiler_diagnostic_is_retried(runtime_sources, monkeypatch):
+    # An environmental failure (here a launcher replaced mid-build) may pass
+    # on the next attempt; only compiler diagnostics are recorded.
+    builds = []
+    output = (
+        "python: can't open file '/repo/.venv/bin/pcc': [Errno 2] No such file\n"
+        "make: *** [libpy_runtime_pcc_py.a] Error 2\n"
+    )
+    monkeypatch.setattr(cache, "subprocess", SimpleNamespace(run=_failing_make(builds, output)))
+    monkeypatch.setenv("PYTEST_XDIST_TESTRUNUID", "run-a")
+    for _ in range(2):
+        with pytest.raises(cache.RuntimeBuildFailed) as failure:
+            cache.cached_pcc_python_runtime(runtime_source=runtime_sources.external)
+        assert "can't open file" in str(failure.value).splitlines()[1]
+    assert len(builds) == 2
+
+
+def test_successful_build_clears_an_earlier_runs_failure_record(runtime_sources, monkeypatch):
+    builds = []
+    monkeypatch.setattr(
+        cache, "subprocess",
+        SimpleNamespace(run=_failing_make(builds, _COMPILE_ERROR)),
+    )
+    monkeypatch.setenv("PYTEST_XDIST_TESTRUNUID", "run-a")
+    with pytest.raises(cache.RuntimeBuildFailed):
+        cache.cached_pcc_python_runtime(runtime_source=runtime_sources.external)
+
+    def fake_make(command, **kwargs):
+        builds.append(Path(command[2]))
+        _write_valid_runtime_archive(Path(command[2]))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(cache, "subprocess", SimpleNamespace(run=fake_make))
+    monkeypatch.setenv("PYTEST_XDIST_TESTRUNUID", "run-b")
+    runtime = cache.cached_pcc_python_runtime(runtime_source=runtime_sources.external)
+    assert len(builds) == 2
+    assert not list(runtime.parent.glob("*.failed.json"))
+    monkeypatch.setenv("PYTEST_XDIST_TESTRUNUID", "run-a")
+    assert cache.cached_pcc_python_runtime(runtime_source=runtime_sources.external) == runtime
+    assert len(builds) == 2
