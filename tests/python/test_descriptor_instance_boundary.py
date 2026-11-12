@@ -25,6 +25,14 @@ def test_reserved_descriptor_tags_never_enter_instance_layout_dispatch():
         ("py_obj.py", "pcc_gc_store_root"),
         ("py_obj.py", "pcc_gc_root_copy_lease"),
         ("py_tuple.py", "_tuple_item_can_participate_in_cycle"),
+        # The checked slow tails split out of py_incref/py_decref repeat the
+        # same refcount header check.
+        ("py_obj.py", "_py_incref_checked_tail"),
+        ("py_obj.py", "_py_decref_checked_tail"),
+        # A private-field initialization retains its value, and a
+        # non-terminal release drops one, after the same header check.
+        ("freestanding_gc_root_operations.py", "pcc_gc_try_init_ptr_locked"),
+        ("freestanding_gc_root_operations.py", "pcc_gc_release_nonterminal_tail"),
     }
     py_seen: list[tuple[str, str]] = []
     py_violations: list[str] = []
@@ -73,13 +81,26 @@ def test_every_refcount_and_gc_dispatch_owns_descriptor_deallocation():
     py_dispatchers = (
         "py_obj_dealloc.py",
         "freestanding_gc_backend0_collector.py",
-        "freestanding_gc_tracing_sweep_collector.py",
     )
     for filename in py_dispatchers:
         source = (RUNTIME / "py" / filename).read_text(encoding="utf-8")
         for tag in ("property", "classmethod", "staticmethod"):
             assert tag in source.lower(), filename + " omits " + tag
         assert "py_descriptor_dealloc" in source
+    # The tracing sweep destroys through the shared typed dispatcher
+    # (pcc_gc_dealloc_typed, 8429b6671), whose descriptor branch is checked
+    # above with py_obj_dealloc.py.
+    sweep = (RUNTIME / "py" / "freestanding_gc_tracing_sweep_collector.py").read_text(
+        encoding="utf-8"
+    )
+    assert "pcc_gc_dealloc_typed(obj, tag)" in sweep
+    dealloc = (RUNTIME / "py" / "py_obj_dealloc.py").read_text(encoding="utf-8")
+    typed = dealloc.split('@c_abi_export("pcc_gc_dealloc_typed")', 1)[1].split(
+        "\n@c_abi_export", 1
+    )[0]
+    for tag in ("PY_TYPE_PROPERTY", "PY_TYPE_CLASSMETHOD", "PY_TYPE_STATICMETHOD"):
+        assert tag in typed
+    assert "py_descriptor_dealloc(o)" in typed
 
     py_class = (RUNTIME / "py" / "py_class.py").read_text(encoding="utf-8")
     py_release = py_class.split("def _descriptor_release_slot", 1)[1]

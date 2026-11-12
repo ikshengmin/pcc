@@ -628,11 +628,11 @@ def test_gc_alloc_fallback_tails_preserve_publication_order_by_runtime_mode() ->
     py_header_publish = py_alloc.index(
         "store_i64(obj, PYOBJECTHEADER_REFCOUNT_OFFSET, 1)"
     )
-    for flag_transition in (
-        "(stored_flags & ~65536) | 262144",
-        "(stored_flags & ~4096) | 262144",
-    ):
-        assert py_fallback_alloc < py_alloc.index(flag_transition) < py_header_publish
+    # GC3's nursery (the MINOR 4096 fallback) is retired (03cbd1849): only
+    # GC4's zpage origin falls back to an object cell.
+    flag_transition = "(stored_flags & ~65536) | 262144"
+    assert py_fallback_alloc < py_alloc.index(flag_transition) < py_header_publish
+    assert "(stored_flags & ~4096)" not in py_alloc
 
 
 def _build_threaded_object_publication_harness(
