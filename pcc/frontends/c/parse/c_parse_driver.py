@@ -148,10 +148,15 @@ class CParseDriver:
         sym_stack: list[_Symbol] = []
 
         lookahead: _Symbol | None = None
+        action_rows = _tab.ACTION
+        goto_rows = _tab.GOTO
+        productions = _tab.PRODUCTIONS
+        next_token = lexer.token
+        empty_row: dict = {}
 
         while True:
             if lookahead is None:
-                tok = lexer.token()
+                tok = next_token()
                 if tok is None:
                     lookahead = _Symbol(type="$end", value=None, lineno=0)
                 else:
@@ -162,8 +167,7 @@ class CParseDriver:
                 actions._last_yielded_token = lookahead
 
             state = state_stack[-1]
-            row = _tab.ACTION.get(state, {})
-            act = row.get(lookahead.type)
+            act = action_rows.get(state, empty_row).get(lookahead.type)
             if act is None:
                 # Try to recover via PLY's "error" token — minimal: raise.
                 self._syntax_error(lookahead, state, actions)
@@ -182,7 +186,7 @@ class CParseDriver:
 
             # Reduce by production -act
             prod_idx = -act
-            lhs, rlen, action_name, _str = _tab.PRODUCTIONS[prod_idx]
+            lhs, rlen, action_name, _str = productions[prod_idx]
 
             # Collect RHS symbols (rlen items from top of stack).
             if rlen > 0:
@@ -217,8 +221,7 @@ class CParseDriver:
 
             # Push the reduced nonterminal and look up GOTO.
             sym_stack.append(lhs_sym)
-            goto_row = _tab.GOTO.get(state_stack[-1], {})
-            next_state = goto_row.get(lhs)
+            next_state = goto_rows.get(state_stack[-1], empty_row).get(lhs)
             if next_state is None:
                 raise ParseError(
                     f"no GOTO[{state_stack[-1]}][{lhs!r}] after reducing "

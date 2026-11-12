@@ -98,6 +98,13 @@ _MULTI_CHAR_OPS: tuple[tuple[str, str], ...] = (
     ("^=", "XOREQUAL"),
 )
 
+# The multi-character operators grouped by first character, in table order,
+# so a scan tries only the candidates that can match at this character.
+_MULTI_CHAR_OPS_BY_FIRST: dict[str, tuple[tuple[str, str], ...]] = {}
+for _op, _tok_type in _MULTI_CHAR_OPS:
+    _MULTI_CHAR_OPS_BY_FIRST[_op[0]] = _MULTI_CHAR_OPS_BY_FIRST.get(_op[0], ()) + ((_op, _tok_type),)
+del _op, _tok_type
+
 _SINGLE_CHAR_OPS: dict[str, str] = {
     "+": "PLUS", "-": "MINUS", "*": "TIMES", "/": "DIVIDE",
     "%": "MOD", "|": "OR", "&": "AND", "~": "NOT", "^": "XOR",
@@ -472,12 +479,12 @@ class CLexer:
     def _scan_operator(self) -> Token:
         src = self._src
         start = self._pos
+        ch = src[start]
         # Longest-match multi-char first
-        for op, tok_type in _MULTI_CHAR_OPS:
-            if src.startswith(op, self._pos):
+        for op, tok_type in _MULTI_CHAR_OPS_BY_FIRST.get(ch, ()):
+            if src.startswith(op, start):
                 self._pos += len(op)
                 return Token(tok_type, op, self.lineno, start)
-        ch = src[self._pos]
         tok_type = _SINGLE_CHAR_OPS.get(ch)
         if tok_type is None:
             self._error(self._pos, f"stray character {ch!r}")
