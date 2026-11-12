@@ -130,7 +130,8 @@ UNSUPPORTED_CONSTRUCTORS = (
     'struct S{S(int);};int f(){S s(int(a[1]));return 0;}',
     'struct S{S(int);};int f(){S s(int(a[1+1]));return 0;}',
     'struct S{S();};S::S():S(){}',
-    'struct B{};struct S:B{S();};',
+    # A single base is owned now; a virtual base keeps the lifetime boundary.
+    'struct B{};struct S:virtual B{S();};',
     'struct A{int x;};struct S{A a;S();};',
     'struct S{S();};S::S(){}int f(){S s;S t=s;return 0;}',
     'struct S{S();};struct A{S s;};int f(){A a;return 0;}',

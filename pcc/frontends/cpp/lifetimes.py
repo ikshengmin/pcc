@@ -68,10 +68,13 @@ class AutomaticLifetimes:
         calls = []
         for frame in reversed(self.frames[boundary:]):
             for symbol, destructor, this in reversed(frame):
-                object_node = c_ast.ID(symbol.c_name, coord)
-                if this is not None:
-                    object_node = c_ast.StructRef(c_ast.ID(this.c_name, coord), "->", object_node, coord)
-                address = c_ast.UnaryOp("&", object_node, coord)
+                if this is not None and hasattr(symbol, "subobject_address"):
+                    address = symbol.subobject_address(this, coord)  # A base subobject.
+                else:
+                    object_node = c_ast.ID(symbol.c_name, coord)
+                    if this is not None:
+                        object_node = c_ast.StructRef(c_ast.ID(this.c_name, coord), "->", object_node, coord)
+                    address = c_ast.UnaryOp("&", object_node, coord)
                 call = c_ast.FuncCall(c_ast.ID(destructor.c_name, coord),
                                      c_ast.ExprList([address], coord), coord)
                 if self.cleanup_destructors is not None:

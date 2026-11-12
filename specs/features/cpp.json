@@ -1103,7 +1103,7 @@
     },
     {
       "id": "cpp.single-inheritance",
-      "title": "Single non-virtual bases of non-polymorphic classes",
+      "title": "Single non-virtual bases of non-polymorphic classes, with base construction and destruction",
       "chapter_ids": [
         "class.derived",
         "class.member.lookup",
@@ -1113,7 +1113,7 @@
         "dcl.init.ref",
         "over.ics.rank"
       ],
-      "scope": "One direct non-virtual base per class (public, protected or private), at offset 0 as a leading C field or, when empty, with no storage (Itanium empty-base optimization). Member lookup, unqualified names in member functions and C::m qualified lookup follow the base chain; access follows [class.access.base]/5 and [class.protected]. Derived-to-base pointer conversion and direct reference binding to the base subobject are admitted, ranked by [over.ics.rank]/4.4. sizeof includes the base field. Only layouts the natural C record reproduces exactly are admitted (a POD base, a base without tail padding, or a derived class without data members). Source revision is sha256 of the sorted compact JSON source list.",
+      "scope": "One direct non-virtual base per class (public, protected or private), at offset 0 as a leading C field or, when empty, with no storage (Itanium empty-base optimization). Member lookup, unqualified names in member functions and C::m qualified lookup follow the base chain; access follows [class.access.base]/5 and [class.protected]. Derived-to-base pointer conversion and direct reference binding to the base subobject are admitted, ranked by [over.ics.rank]/4.4. sizeof includes the base field. A declared derived constructor constructs the base first (a Base(args) mem-initializer or default construction through a declared base constructor); a declared derived destructor destroys it after the members. Only layouts the natural C record reproduces exactly are admitted (a POD base, a base without tail padding, or a derived class without data members). Source revision is sha256 of the sorted compact JSON source list.",
       "tests": [
         "tests/cpp/test_cpp_single_inheritance.py::test_inheritance_originals_lower_to_ir",
         "tests/cpp/test_cpp_single_inheritance.py::test_nonempty_base_is_the_leading_field_and_empty_base_has_no_storage",
@@ -1126,15 +1126,35 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:7bbb3191541b85295e8d1947ab4a40cbed9d6f623d4581e5f775a0073f4b320e",
+        "source_revision": "sha256:ddc4e6d37cac7c883270ba0c9c740a93ee17423023d0e29952cbe09543ce0379",
         "sources": [
           {
             "path": "pcc/frontends/cpp/classes.py",
-            "sha256": "60134f4cb8f455bfc451362356aa5f47ae763a4f20d09ede2714ee47887f9bd6"
+            "sha256": "7ca909e1b3be76e844392695a1b5d0b57b27be9b2e09376f64219f91bbaf800a"
+          },
+          {
+            "path": "pcc/frontends/cpp/constructors.py",
+            "sha256": "e1a08e46f4ed491adad795e3dc7b393bd6b67ca75be973fb5bd818c120ea7896"
+          },
+          {
+            "path": "pcc/frontends/cpp/default_constructors.py",
+            "sha256": "5f241b0bb343de5aaeace18b523202fa317a1ef970f4b2b2fe452eb44ee27387"
+          },
+          {
+            "path": "pcc/frontends/cpp/destructors.py",
+            "sha256": "3a565a9a175323529231ae27803f4656720f6bc5d80923943789bdd11e51bb37"
           },
           {
             "path": "pcc/frontends/cpp/inheritance.py",
-            "sha256": "5c8c6231687de20a1215cd4d7e9a218557f24f993c04f67db4d46a9a311bd2f7"
+            "sha256": "9f55a3d71f7eab3ecc01990cbd2c3050097fe5724e50058b51600c642d39ac67"
+          },
+          {
+            "path": "pcc/frontends/cpp/lifetimes.py",
+            "sha256": "a5db3b348e44b98f43032e25ff89d2d12dcb118871f387a54735f8444e41d46c"
+          },
+          {
+            "path": "pcc/frontends/cpp/member_initialization.py",
+            "sha256": "f9eb701a90b9fd9aa82e3f92e03644c38c57e21528aa84d367df9dd7798ff0bb"
           },
           {
             "path": "pcc/frontends/cpp/parser.py",
@@ -1166,7 +1186,7 @@
         "class.derived",
         "class.member.lookup"
       ],
-      "scope": "Only inputs routed to cpp.unsupported.base-classes: virtual and multiple bases, polymorphic bases and derived classes with virtual functions, base subobject construction/destruction (user-declared constructors or destructors), tail-padding reuse of a non-POD base, an empty base at a same-typed member's address, and x.C::m qualified member access.",
+      "scope": "Only inputs routed to cpp.unsupported.base-classes: virtual and multiple bases, polymorphic bases and derived classes with virtual functions, implicit synthesis of derived special members, value-initialization of a constructor-less base, a base with default member initializers, tail-padding reuse of a non-POD base, an empty base at a same-typed member's address, and x.C::m qualified member access.",
       "status": "explicitly_unimplemented",
       "tests": [
         "tests/cpp/test_cpp_single_inheritance.py::test_unmodeled_inheritance_keeps_an_explicit_capability_code"
@@ -3505,7 +3525,7 @@
         "feature_id": "cpp.constructors.complete-object",
         "source": {
           "path": "pcc/frontends/cpp/constructors.py",
-          "sha256": "b07663611a536e0174b65a5b8bb637371f72528d52e8a99c19bbdb68359e0d23"
+          "sha256": "e1a08e46f4ed491adad795e3dc7b393bd6b67ca75be973fb5bd818c120ea7896"
         }
       },
       {
@@ -3577,7 +3597,7 @@
         "feature_id": "cpp.class-array-members",
         "source": {
           "path": "pcc/frontends/cpp/classes.py",
-          "sha256": "60134f4cb8f455bfc451362356aa5f47ae763a4f20d09ede2714ee47887f9bd6"
+          "sha256": "7ca909e1b3be76e844392695a1b5d0b57b27be9b2e09376f64219f91bbaf800a"
         }
       },
       {
@@ -3657,7 +3677,7 @@
         "feature_id": "cpp.classes",
         "source": {
           "path": "pcc/frontends/cpp/classes.py",
-          "sha256": "60134f4cb8f455bfc451362356aa5f47ae763a4f20d09ede2714ee47887f9bd6"
+          "sha256": "7ca909e1b3be76e844392695a1b5d0b57b27be9b2e09376f64219f91bbaf800a"
         }
       },
       {
@@ -3673,7 +3693,7 @@
         "feature_id": "cpp.const-class-initialization",
         "source": {
           "path": "pcc/frontends/cpp/classes.py",
-          "sha256": "60134f4cb8f455bfc451362356aa5f47ae763a4f20d09ede2714ee47887f9bd6"
+          "sha256": "7ca909e1b3be76e844392695a1b5d0b57b27be9b2e09376f64219f91bbaf800a"
         }
       },
       {
@@ -3689,7 +3709,7 @@
         "feature_id": "cpp.constructors.complete-object",
         "source": {
           "path": "pcc/frontends/cpp/classes.py",
-          "sha256": "60134f4cb8f455bfc451362356aa5f47ae763a4f20d09ede2714ee47887f9bd6"
+          "sha256": "7ca909e1b3be76e844392695a1b5d0b57b27be9b2e09376f64219f91bbaf800a"
         }
       },
       {
@@ -3697,7 +3717,7 @@
         "feature_id": "cpp.constructors.complete-object",
         "source": {
           "path": "pcc/frontends/cpp/classes.py",
-          "sha256": "60134f4cb8f455bfc451362356aa5f47ae763a4f20d09ede2714ee47887f9bd6"
+          "sha256": "7ca909e1b3be76e844392695a1b5d0b57b27be9b2e09376f64219f91bbaf800a"
         }
       },
       {
@@ -3737,7 +3757,7 @@
         "feature_id": "cpp.constructors.complete-object",
         "source": {
           "path": "pcc/frontends/cpp/constructors.py",
-          "sha256": "b07663611a536e0174b65a5b8bb637371f72528d52e8a99c19bbdb68359e0d23"
+          "sha256": "e1a08e46f4ed491adad795e3dc7b393bd6b67ca75be973fb5bd818c120ea7896"
         }
       },
       {
@@ -3785,7 +3805,7 @@
         "feature_id": "cpp.destructors.normal-exit",
         "source": {
           "path": "pcc/frontends/cpp/classes.py",
-          "sha256": "60134f4cb8f455bfc451362356aa5f47ae763a4f20d09ede2714ee47887f9bd6"
+          "sha256": "7ca909e1b3be76e844392695a1b5d0b57b27be9b2e09376f64219f91bbaf800a"
         }
       },
       {
@@ -3793,7 +3813,7 @@
         "feature_id": "cpp.discarded-class-expression",
         "source": {
           "path": "pcc/frontends/cpp/classes.py",
-          "sha256": "60134f4cb8f455bfc451362356aa5f47ae763a4f20d09ede2714ee47887f9bd6"
+          "sha256": "7ca909e1b3be76e844392695a1b5d0b57b27be9b2e09376f64219f91bbaf800a"
         }
       },
       {
@@ -4033,7 +4053,7 @@
         "feature_id": "cpp.member-pointers",
         "source": {
           "path": "pcc/frontends/cpp/classes.py",
-          "sha256": "60134f4cb8f455bfc451362356aa5f47ae763a4f20d09ede2714ee47887f9bd6"
+          "sha256": "7ca909e1b3be76e844392695a1b5d0b57b27be9b2e09376f64219f91bbaf800a"
         }
       },
       {
@@ -4393,7 +4413,7 @@
         "feature_id": "cpp.tag-hiding",
         "source": {
           "path": "pcc/frontends/cpp/classes.py",
-          "sha256": "60134f4cb8f455bfc451362356aa5f47ae763a4f20d09ede2714ee47887f9bd6"
+          "sha256": "7ca909e1b3be76e844392695a1b5d0b57b27be9b2e09376f64219f91bbaf800a"
         }
       },
       {
@@ -4505,7 +4525,7 @@
         "feature_id": "cpp.base-classes",
         "source": {
           "path": "pcc/frontends/cpp/inheritance.py",
-          "sha256": "5c8c6231687de20a1215cd4d7e9a218557f24f993c04f67db4d46a9a311bd2f7"
+          "sha256": "9f55a3d71f7eab3ecc01990cbd2c3050097fe5724e50058b51600c642d39ac67"
         }
       },
       {

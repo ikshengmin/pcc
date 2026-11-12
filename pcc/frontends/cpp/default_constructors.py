@@ -39,6 +39,15 @@ def bind_defaulted_definitions(parser, definition):
         raise CppDiagnostic('cpp.unsupported.constructor-subobjects',
                             'defaulted C1 subobjects require recursive special-member deletion and initialization',
                             definition.dtype.coord)
+    base = getattr(definition, 'base', None)
+    if base is not None:
+        from pcc.frontends.cpp.default_member_initializers import has_initializers
+        from pcc.frontends.cpp.inheritance import base_chain
+        chain = [base.dtype, *base_chain(base.dtype)]
+        if any(item.definition.constructors.overloads or has_initializers(item.definition) for item in chain):
+            raise CppDiagnostic('cpp.unsupported.constructor-subobjects',
+                                'defaulted C1 base subobjects require recursive special-member initialization',
+                                definition.dtype.coord)
     from pcc.frontends.cpp.constructors import (
         closed_construction_body,
         lower_member_initializers,

@@ -232,6 +232,8 @@ class ClassDefinition:
     def const_default_constructible(self):
         # Scalar DMI initializes its member; remaining subobjects recurse.
         # Empty classes satisfy this vacuously; scalar members do not.
+        if self.base is not None and not self.base.dtype.definition.const_default_constructible:
+            return False
         return all(
             getattr(member, "default_initializer_tokens", None) is not None
             or (is_class_type(member.dtype)
@@ -242,6 +244,8 @@ class ClassDefinition:
     @property
     def default_constructor_deleted(self):
         from pcc.frontends.cpp.arrays import const_array_elements
+        if self.base is not None and self.base.dtype.definition.default_constructor_deleted:
+            return True
         for member in self.members:
             if getattr(member, "default_initializer_tokens", None) is not None:
                 continue
@@ -260,6 +264,8 @@ class ClassDefinition:
     @property
     def copy_assignment_deleted(self):
         from pcc.frontends.cpp.arrays import const_array_elements
+        if self.base is not None and self.base.dtype.definition.copy_assignment_deleted:
+            return True
         return any(
             const_array_elements(member.dtype)
             or is_class_type(member.dtype)
@@ -682,6 +688,9 @@ def default_initialize(dtype, coord):
                                 "implicit subobject construction requires lifetime integration", coord)
         children = [unqualified(member.dtype).definition for member in current.members
                     if is_class_type(member.dtype)]
+        if current.base is not None:
+            # The base subobject is default-initialized like a member subobject.
+            children.append(current.base.dtype.definition)
         from pcc.frontends.cpp.default_member_initializers import has_initializers, unsupported
         if any(has_initializers(child) for child in children):
             unsupported(coord)

@@ -116,12 +116,8 @@ def parse_base_clause(parser, definition_keyword, dtype):
     if parser._peek().value == "...":
         unsupported("base pack expansions are not implemented", parser._peek().coord)
     definition = base.definition
-    if definition.polymorphic or any(getattr(item, "polymorphic_bases", False) for item in base_chain(base)):
+    if definition.polymorphic or any(item.definition.polymorphic for item in base_chain(base)):
         unsupported("polymorphic base classes and overriding are not implemented", name.coord)
-    if (definition.constructors.overloads or definition.destructor is not None
-            or any(item.definition.constructors.overloads or item.definition.destructor is not None
-                   for item in base_chain(base))):
-        unsupported("base subobject construction and destruction are not implemented", name.coord)
     del colon
     return BaseSpecifier(base, access, name.coord)
 
@@ -165,9 +161,6 @@ def check_derived_definition(definition):
     coord = specifier.coord
     if definition.polymorphic:
         unsupported("virtual functions of derived classes require overriding semantics", coord)
-    if definition.constructors.overloads or definition.destructor is not None:
-        unsupported("constructors and destructors of derived classes require base subobject construction",
-                    coord)
     from pcc.frontends.cpp.classes import is_class_type
     base = specifier.dtype
     if is_empty_class(base):
@@ -194,6 +187,30 @@ def base_field(definition, project_type):
     coord = specifier.coord
     return c_ast.Decl(BASE_FIELD, [], [], [], c_class_type(BASE_FIELD, specifier.dtype, coord),
                       None, None, coord)
+
+
+class BaseSlot:
+    """The base subobject as a construction/destruction target of `this`."""
+
+    def __init__(self, definition):
+        specifier = base_specifier(definition)
+        self.dtype = specifier.dtype
+        self.coord = specifier.coord
+        self.name = self.dtype.name
+        self.c_name = BASE_FIELD
+        self.empty = is_empty_class(self.dtype)
+
+    def subobject_address(self, this, coord):
+        this_node = c_ast.ID(this.c_name, coord)
+        if self.empty:
+            from pcc.frontends.cpp.classes import c_class_type
+            typename = c_ast.Typename(None, [], c_ast.PtrDecl([], c_class_type(None, self.dtype, coord), coord), coord)
+            return c_ast.Cast(typename, this_node, coord)
+        return c_ast.UnaryOp("&", c_ast.StructRef(this_node, "->", c_ast.ID(BASE_FIELD, coord), coord), coord)
+
+
+def base_slot(definition):
+    return None if base_specifier(definition) is None else BaseSlot(definition)
 
 
 def find_member(dtype, name):

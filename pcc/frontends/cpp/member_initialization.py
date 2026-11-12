@@ -31,9 +31,11 @@ def requires_destruction(dtype):
     if not is_class_type(dtype):
         return False
     definition = unqualified(dtype).definition
+    base = getattr(definition, "base", None)
     return (definition.destructor is not None
             and not getattr(definition.destructor, 'destructor_trivial', False)) or any(
-        requires_destruction(member.dtype) for member in definition.members)
+        requires_destruction(member.dtype) for member in definition.members) or (
+        base is not None and requires_destruction(base.dtype))
 
 
 def require_declared_constructor(member):

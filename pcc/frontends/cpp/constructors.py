@@ -199,6 +199,30 @@ def parse_member_initializers(parser, definition):
                     and unqualified(target.dtype) is owner):
                 raise CppDiagnostic("cpp.unsupported.delegating-constructors",
                                     "delegation requires constructor lifetime integration", member.coord)
+            base = getattr(definition, "base", None)
+            if (base is not None and target is not None and target.kind == "type"
+                    and unqualified(target.dtype) is base.dtype):
+                # [class.base.init]/2: a mem-initializer naming the direct base.
+                if getattr(parser, 'class_template_method', None) is not None:
+                    raise CppDiagnostic("cpp.unsupported.class-templates",
+                                        "base construction patterns require dependent lifetime semantics", member.coord)
+                if base in initializers:
+                    raise CppDiagnostic("cpp.duplicate-member-initializer", "base class initialized more than once", member.coord)
+                if parser._peek().value != "(":
+                    raise CppDiagnostic("cpp.unsupported.constructor-list-initialization", "braced base initialization requires direct-list conversion rules", parser._peek().coord)
+                parser._expect("(")
+                from pcc.frontends.cpp.member_initialization import MemberArguments
+                arguments = []
+                if parser._peek().value != ")":
+                    while True:
+                        arguments.append(parse_constructor_argument(parser))
+                        if not parser._accept(","):
+                            break
+                parser._expect(")")
+                initializers[base] = MemberArguments(arguments)
+                if not parser._accept(","):
+                    break
+                continue
             if target is None or target.kind != "member" or target.class_owner is not owner:
                 raise CppDiagnostic("cpp.invalid-member-initializer", "initializer must name a direct non-static data member", member.coord)
             if target in initializers:
@@ -242,6 +266,11 @@ def parse_member_initializers(parser, definition):
 def lower_member_initializers(parser, definition, this, initializers, *, construction_calls=None):
     """Initialize concrete fields in declaration order, without zeroing omissions."""
     stores = []
+    base = getattr(definition, "base", None)
+    if base is not None:
+        # [class.base.init]/13: the direct base is initialized before members.
+        stores.extend(lower_base_initializer(parser, definition, this, initializers.get(base),
+                                             construction_calls=construction_calls))
     for member in definition.members:
         if array_type(member.dtype):
             from pcc.frontends.cpp.arrays import const_array_elements, zero_array_member
@@ -280,6 +309,37 @@ def lower_member_initializers(parser, definition, this, initializers, *, constru
         # This is construction, not C++ assignment to a live const object.
         stores.append(c_ast.Assignment("=", field, value, member.coord))
     return stores
+
+
+def lower_base_initializer(parser, definition, this, initializer, *, construction_calls=None):
+    """Construct the base subobject at its address; never copy or zero it."""
+    from pcc.frontends.cpp.inheritance import base_slot
+    from pcc.frontends.cpp.member_initialization import requires_destruction
+    slot = base_slot(definition)
+    base = slot.dtype
+    if not base.definition.constructors.overloads:
+        if initializer is not None:
+            raise CppDiagnostic("cpp.unsupported.base-classes",
+                                "value-initializing a base without constructors is not implemented", slot.coord)
+        from pcc.frontends.cpp.inheritance import base_chain
+        from pcc.frontends.cpp.default_member_initializers import has_initializers
+        if any(has_initializers(item.definition) for item in [base, *base_chain(base)]):
+            # Its implicit default constructor is nontrivial: it runs the DMIs.
+            raise CppDiagnostic("cpp.unsupported.base-classes",
+                                "a base with default member initializers requires implicit constructor synthesis",
+                                slot.coord)
+        # Default-initialization of a constructor-less base: only trivial work.
+        from pcc.frontends.cpp.classes import default_initialize
+        default_initialize(base, slot.coord)
+        return []
+    if requires_destruction(base) and construction_calls is None:
+        raise CppDiagnostic("cpp.unsupported.destructor-subobjects",
+                            "base construction requires an enclosing closed-construction proof", slot.coord)
+    arguments = [] if initializer is None else list(initializer.expressions)
+    return [constructor_call(parser, base, arguments, slot.subobject_address(this, slot.coord), slot.coord,
+                             construction_calls=construction_calls,
+                             initialization_kind="value" if initializer is not None and not arguments else "default",
+                             object_type=base)]
 
 
 def bind_constructor_body(parser, definition, symbol, parameter_scope, declaration, this, coord):

@@ -167,6 +167,27 @@ def member_destructors(definition, scope=None, *, parser=None):
     """Select declared member D1s in construction order, without synthesis."""
     from pcc.frontends.cpp.member_initialization import requires_destruction
     selected = []
+    from pcc.frontends.cpp.inheritance import base_slot
+    slot = base_slot(definition)
+    if slot is not None:
+        # [class.dtor]/9: the base subobject is destroyed after every member.
+        base_definition = slot.dtype.definition
+        destructor = base_definition.destructor
+        if destructor is not None and scope is not None:
+            # Named from the derived class: its implicit object is the derived this.
+            scope.check_named_member_access(destructor, slot.coord)
+            from pcc.frontends.cpp.default_destructors import require_usable
+            require_usable(destructor, slot.coord)
+        elif scope is not None:
+            from pcc.frontends.cpp.default_destructors import require_implicit_usable
+            require_implicit_usable(base_definition, slot.coord)
+        if requires_destruction(slot.dtype):
+            if destructor is None:
+                raise CppDiagnostic("cpp.unsupported.destructor-subobjects",
+                                    "implicit base destruction requires special-member synthesis", slot.coord)
+            if parser is not None:
+                request_body(parser, destructor, slot.coord)
+            selected.append((slot, destructor))
     for member in definition.members:
         owner = unqualified(member.dtype)
         destructor = owner.definition.destructor if is_class_type(owner) else None
