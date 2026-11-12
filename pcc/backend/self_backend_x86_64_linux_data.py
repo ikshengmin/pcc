@@ -396,7 +396,8 @@ def emit_globals(
         alignment = (
             global_.alignment or global_.type.align
             if global_.tls_model
-            else global_.type.align
+            # An explicit IR `align N` (C _Alignas, GNU aligned) may exceed the type's.
+            else max(global_.alignment or 0, global_.type.align)
         )
         lines.append(f".p2align {max(alignment.bit_length() - 1, 0)}")
         symbol = asm_symbol(global_.name, module_symbols)

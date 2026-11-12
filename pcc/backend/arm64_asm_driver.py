@@ -400,7 +400,9 @@ class AArch64ModuleBuilder:
             if self.current is None:
                 raise EncodeError(".p2align before any .section")
             n = _parse_int(line.split()[1])
-            if n is None or n < 0 or n > 4:
+            # Data may be over-aligned (C _Alignas, GNU aligned) up to a page;
+            # the linker aligns each section to its recorded alignment.
+            if n is None or n < 0 or n > (4 if self.current.is_text else 12):
                 raise EncodeError(f"bad .p2align {line!r}")
             self.current.align_log2 = max(self.current.align_log2, n)
             if self.current.is_text:

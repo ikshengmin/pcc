@@ -496,7 +496,8 @@ class CParser(PLYParser):
                     type=decl['decl'],
                     init=decl.get('init'),
                     bitsize=decl.get('bitsize'),
-                    coord=decl['decl'].coord)
+                    coord=decl['decl'].coord,
+                    align=spec.get('alignment', ()))
 
             if isinstance(declaration.type,
                     (c_ast.Struct, c_ast.Union, c_ast.IdentifierType)):
@@ -886,6 +887,12 @@ class CParser(PLYParser):
         """ specifier_qualifier_list    : type_specifier specifier_qualifier_list_opt
         """
         p[0] = self._add_declaration_specifier(p[2], p[1], 'type')
+
+    def p_specifier_qualifier_list_alignment(self, p):
+        """ specifier_qualifier_list    : alignment_specifier specifier_qualifier_list_opt
+        """
+        # C17 6.7.2.1: a member declaration may carry an alignment specifier.
+        p[0] = self._add_declaration_specifier(p[2], p[1], 'alignment')
 
     # TYPEID is allowed here (and in other struct/enum related tag names), because
     # struct/enum tags reside in their own namespace and can be named the same as types

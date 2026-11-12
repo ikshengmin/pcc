@@ -3388,6 +3388,53 @@ class CCodeGenerator(
             return value
         return (value + align - 1) & ~(align - 1)
 
+    def _declared_alignment(self, decl):
+        """C17 6.7.5: the strictest alignment specifier of a declaration, or None.
+
+        A zero alignment has no effect (6.7.5p6); any other value must be a
+        power of two. The type form denotes that type's alignment.
+        """
+        values = []
+        for specifier in getattr(decl, "align", ()) or ():
+            value = specifier.alignment
+            if isinstance(value, c_ast.Typename):
+                values.append(self._ir_type_align(self._resolve_ast_type(value.type)))
+                continue
+            alignment = self._eval_const_expr(value)
+            if alignment == 0:
+                continue
+            if alignment < 0 or alignment & (alignment - 1):
+                raise SemanticError(f"alignment {alignment} is not a positive power of two")
+            values.append(alignment)
+        return max(values) if values else None
+
+    @staticmethod
+    def _backend_frame_alignment(ir_type):
+        """Alignment the self backend gives a frame slot: its IR body's natural alignment.
+
+        Layout-backed records whose recorded alignment exceeds eight bytes use
+        a byte-array body, so the backend cannot see their alignment.
+        """
+        from pcc.frontends.c.codegen.c_layout import ir_type_align
+        custom = getattr(ir_type, "custom_align", None)
+        if custom is not None and custom > 8:
+            return 1
+        if isinstance(ir_type, ir.ArrayType):
+            return CCodeGenerator._backend_frame_alignment(ir_type.element)
+        return ir_type_align(ir_type)
+
+    def _member_needs_explicit_layout(self, decl):
+        """A member whose alignment the natural IR record cannot express."""
+        if getattr(decl, "align", ()):
+            return True
+        if decl.bitsize is not None:
+            return False
+        member_type = self._resolve_struct_member_ir_type(decl)
+        while isinstance(member_type, ir.ArrayType):
+            member_type = member_type.element
+        custom = getattr(member_type, "custom_align", None)
+        return custom is not None and custom > 8
+
     def _resolve_struct_member_ir_type(self, decl):
         if isinstance(decl.type, c_ast.Struct):
             return self.codegen_Struct(decl.type)
@@ -3612,6 +3659,8 @@ class CCodeGenerator(
         field_layouts_by_index = []
 
         for decl in node.decls:
+            if decl.bitsize is not None and getattr(decl, "align", ()):
+                raise SemanticError("an alignment specifier cannot apply to a bit-field")
             if decl.bitsize is not None:
                 storage_ir_type = self._bitfield_storage_ir_type(decl)
                 storage_bits = storage_ir_type.width
@@ -3648,9 +3697,16 @@ class CCodeGenerator(
                 continue
 
             semantic_ir_type = self._resolve_struct_member_ir_type(decl)
-            align_bits = self._ir_type_align(semantic_ir_type) * 8
+            member_align = self._ir_type_align(semantic_ir_type)
+            requested = self._declared_alignment(decl)
+            if requested is not None:
+                if requested < member_align:
+                    raise SemanticError(f"alignment {requested} of member '{decl.name}' is less strict "
+                                        f"than its type's {member_align}")
+                member_align = requested
+            align_bits = member_align * 8
             current_bit = self._align_up(current_bit, align_bits)
-            max_align = max(max_align, self._ir_type_align(semantic_ir_type))
+            max_align = max(max_align, member_align)
             layout = StructFieldLayout(
                 name=decl.name,
                 byte_offset=current_bit // 8,
@@ -7155,7 +7211,8 @@ class CCodeGenerator(
             self.define(tag_key, (opaque, None))
             return opaque
 
-        if any(decl.bitsize is not None for decl in node.decls):
+        if any(decl.bitsize is not None for decl in node.decls) or any(
+                self._member_needs_explicit_layout(decl) for decl in node.decls):
             return self._build_layout_backed_struct(node)
 
         member_types = []
@@ -7231,6 +7288,14 @@ class CCodeGenerator(
                 named_member_indices[decl.name] = field_index
             sz = self._ir_type_size(ir_t)
             al = self._ir_type_align(ir_t)
+            requested = self._declared_alignment(decl)
+            if requested is not None:
+                if decl.bitsize is not None:
+                    raise SemanticError("an alignment specifier cannot apply to a bit-field")
+                if requested < al:
+                    raise SemanticError(f"alignment {requested} of member '{decl.name}' is less strict "
+                                        f"than its type's {al}")
+                al = requested
             if sz > max_size:
                 max_size = sz
             if al > max_align:
@@ -7240,7 +7305,10 @@ class CCodeGenerator(
         # Pick an alignment element: i64 for 8, i32 for 4, i16 for 2, i8 for 1
         align_map = {8: int64_t, 4: int32_t, 2: int16_t, 1: int8_t}
         align_type = align_map.get(max_align, int64_t)
-        align_size = max_align
+        align_size = min(max_align, 8)
+        if max_align > 8:
+            # Body bytes equal the rounded C size so array strides agree.
+            max_size = self._align_up(max_size, max_align)
         pad_size = max_size - align_size
         if pad_size > 0:
             union_body = [align_type, ir.ArrayType(int8_t, pad_size)]
@@ -7258,6 +7326,10 @@ class CCodeGenerator(
         )
         union_type.is_union = True
         union_type.bitfield_member_indices = frozenset(bitfield_member_indices)
+        if max_align > 8:
+            # The IR body cannot carry this alignment; record the C layout.
+            union_type.custom_align = max_align
+            union_type.custom_size = self._align_up(max_size, max_align)
 
         if node.name:
             self.define(self._tag_type_key(node.name), (union_type, None))

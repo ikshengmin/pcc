@@ -188,7 +188,7 @@ class CParserActions(PLYParser):
             if is_typedef:
                 declaration = c_ast.Typedef(name=None, quals=spec['qual'], storage=spec['storage'], type=decl['decl'], coord=decl['decl'].coord)
             else:
-                declaration = c_ast.Decl(name=None, quals=spec['qual'], storage=spec['storage'], funcspec=spec['function'], type=decl['decl'], init=decl.get('init'), bitsize=decl.get('bitsize'), coord=decl['decl'].coord)
+                declaration = c_ast.Decl(name=None, quals=spec['qual'], storage=spec['storage'], funcspec=spec['function'], type=decl['decl'], init=decl.get('init'), bitsize=decl.get('bitsize'), coord=decl['decl'].coord, align=spec.get('alignment', ()))
             if isinstance(declaration.type, (c_ast.Struct, c_ast.Union, c_ast.IdentifierType)):
                 fixed_decl = declaration
             else:
@@ -439,6 +439,11 @@ class CParserActions(PLYParser):
         """ specifier_qualifier_list    : type_specifier specifier_qualifier_list_opt
             """
         p[0] = self._add_declaration_specifier(p[2], p[1], 'type')
+
+    def p_specifier_qualifier_list_alignment(self, p):
+        """ specifier_qualifier_list    : alignment_specifier specifier_qualifier_list_opt
+            """
+        p[0] = self._add_declaration_specifier(p[2], p[1], 'alignment')
 
     def p_struct_or_union_specifier_1(self, p):
         """ struct_or_union_specifier   : struct_or_union ID

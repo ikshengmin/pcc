@@ -10,6 +10,31 @@ from pcc.frontends.c.ast import c_ast as c_ast
 
 class CDeclarationLoweringMixin:
     def codegen_Decl(self, node):
+        """Lower a declaration, then apply C17 6.7.5 object alignment to its storage."""
+        requested = self._declared_alignment(node)
+        result = self._codegen_Decl_impl(node)
+        if node.name is None or isinstance(node.type, c_ast.FuncDecl) or (node.storage and "typedef" in node.storage):
+            return result
+        binding = self.env.get(node.name)
+        storage = binding[1] if isinstance(binding, tuple) and len(binding) > 1 else None
+        ir_type = binding[0] if isinstance(binding, tuple) else None
+        if storage is None or ir_type is None or isinstance(ir_type, ir.FunctionType):
+            return result
+        natural = self._ir_type_align(ir_type)
+        if requested is not None and requested < natural:
+            from pcc.frontends.c.codegen.c_codegen import SemanticError
+            raise SemanticError(f"alignment {requested} of '{node.name}' is less strict than its type's {natural}")
+        strictest = max(natural, requested or 1)
+        if isinstance(storage, ir.GlobalVariable):
+            if strictest > 1 and (requested is not None or getattr(ir_type, "custom_align", None) is not None
+                                  or self._ir_type_align(ir_type) > 8):
+                storage.align = max(storage.align or 0, strictest)
+        elif strictest > self._backend_frame_alignment(ir_type):
+            raise CodegenError(f"over-aligned automatic object '{node.name}' ({strictest} bytes) requires "
+                               "frame realignment, which is not implemented")
+        return result
+
+    def _codegen_Decl_impl(self, node):
 
         type_str = ""
 

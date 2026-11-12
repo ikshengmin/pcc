@@ -319,9 +319,13 @@ class Continue(Node):
     attr_names = ()
 
 class Decl(Node):
-    __slots__ = ('name', 'quals', 'storage', 'funcspec', 'type', 'init', 'bitsize', 'coord', '__weakref__', 'definition_linkage')
-    def __init__(self, name, quals, storage, funcspec, type, init, bitsize, coord=None, definition_linkage='external'):
+    __slots__ = ('name', 'quals', 'storage', 'funcspec', 'type', 'init', 'bitsize', 'coord', '__weakref__',
+                 'definition_linkage', 'align')
+    def __init__(self, name, quals, storage, funcspec, type, init, bitsize, coord=None, definition_linkage='external',
+                 align=()):
         self.name = name
+        # C17 6.7.5 alignment specifiers (Alignas nodes) of this declaration.
+        self.align = tuple(align)
         self.quals = quals
         self.storage = storage
         self.funcspec = funcspec

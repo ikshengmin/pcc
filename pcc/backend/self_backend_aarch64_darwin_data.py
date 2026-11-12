@@ -151,7 +151,8 @@ def emit_globals(
             else ".section __DATA,__data"
         )
         lines.append(section)
-        lines.append(f".p2align {align_pow2(global_.type.align)}")
+        # An explicit IR `align N` (C _Alignas, GNU aligned) may exceed the type's.
+        lines.append(f".p2align {align_pow2(max(global_.alignment or 0, global_.type.align))}")
         if not global_.is_internal:
             lines.append(f".globl {asm_symbol(global_.name, module_symbols)}")
         lines.append(f"{asm_symbol(global_.name, module_symbols)}:")
