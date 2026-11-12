@@ -1,7 +1,8 @@
-"""Marking and generation barriers must compose while mutators keep running.
+"""The store barrier composes with marking while mutators keep running.
 
-These execute the production barrier body with explicit colors and lock checks;
-they do not establish native collector-worker progress by themselves.
+These execute the production store barrier and its count-free shade with
+explicit colors, phases, index membership and container-lock state; they
+do not establish native collector-worker progress by themselves.
 """
 import ast
 from pathlib import Path
@@ -11,127 +12,134 @@ import pytest
 
 SOURCE = Path(__file__).resolve().parents[2] / 'pcc/runtime/py/freestanding_gc_barrier_dispatcher.py'
 WHITE, GRAY, BLACK, YOUNG, OLD, REMEMBERED = 8, 16, 32, 128, 256, 512
+TERMINAL = 524288
 
 
 class BarrierState:
-    def __init__(self, backend, active=True, owner_flags=BLACK | OLD, value_flags=WHITE | OLD):
+    def __init__(self, backend, active=True, value_flags=WHITE, container=False, indexed=True):
         self.backend = backend
-        self.globals = {'pcc_gc_mark_active': int(active), 'pcc_gc_cms_wb_flushes': 0,
-                        'pcc_gc_backend4_genzgc_store_barriers': 0}
-        self.flags = {'owner': owner_flags, 'value': value_flags}
-        self.gray_count = int(bool(value_flags & GRAY))
-        self.depth = 0
-        self.remembered = set()
-        self.before_lock = None
-        tree = ast.parse(SOURCE.read_text())
-        function = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
-                        and n.name == 'pcc_gc_note_slot_write_barrier')
-        function.decorator_list = []
-        namespace = {'i64': int, 'null': lambda: None, 'ptr_is_null': lambda p: p is None,
+        self.globals = {'pcc_gc_mark_active': int(active), 'pcc_gc_backend_selected': backend,
+                        'pcc_gc_cms_wb_flushes': 0}
+        self.flags = {'owner': BLACK | OLD, 'value': value_flags}
+        self.container = container
+        self.indexed = indexed
+        self.shades = []
+        self.no_park = 0
+        names = {'pcc_gc_note_slot_write_barrier', 'pcc_gc_count_free_barrier_shade'}
+        nodes = [n for n in ast.parse(SOURCE.read_text()).body
+                 if isinstance(n, ast.FunctionDef) and n.name in names]
+        assert {n.name for n in nodes} == names
+        for node in nodes:
+            node.decorator_list = []
+        namespace = {'i64': int, 'ptr_is_null': lambda p: p is None,
                      'is_tagged_int': lambda p: isinstance(p, int),
                      '_selected_backend': lambda: self.backend,
-                     '_ptr_can_have_header': lambda p: p in self.flags,
-                     'global_addr': lambda name: name, 'load_i32': self.load,
-                     'store_i32': self.store,
-                     'pcc_py_gc_minor_graph_lock': self.lock,
-                     'pcc_py_gc_minor_graph_lock_for': self.lock_for,
-                     'pcc_py_gc_minor_graph_unlock': self.unlock,
-                     'pcc_gc_object_is_known_no_lock': self.known,
-                     'pcc_gc_gray_count_increment_acq_rel': self.increment,
-                     'pcc_gc_set_mark_color': self.color,
-                     'pcc_gc_backend4_store_buffer_enqueue': self.enqueue}
-        exec(compile(ast.Module(body=[function], type_ignores=[]), str(SOURCE), 'exec'), namespace)
+                     'global_addr': lambda name: name,
+                     'load_i32': self.load,
+                     'atomic_load_i32': lambda address, offset, order: self.load(address, offset),
+                     'atomic_rmw_i32': self.rmw,
+                     'pcc_container_lock_held': lambda: int(self.container),
+                     'pcc_gc_object_index_seen_stable': lambda p: int(self.indexed and p in self.flags),
+                     'pcc_gc_shade_gray_atomic': self.shade,
+                     'pcc_thread_no_park_enter': self.no_park_enter,
+                     'pcc_thread_no_park_exit': self.no_park_exit}
+        exec(compile(ast.Module(body=nodes, type_ignores=[]), str(SOURCE), 'exec'), namespace)
         self.barrier = namespace['pcc_gc_note_slot_write_barrier']
 
     def load(self, address, offset):
-        return self.flags[address] if address in self.flags and offset == 12 else self.globals[address]
+        if address in self.flags:
+            assert offset == 12
+            return self.flags[address]
+        return self.globals[address]
 
-    def store(self, address, offset, value):
-        self.globals[address] = value
+    def rmw(self, op, address, offset, delta, order):
+        assert op == 'add' and offset == 0
+        self.globals[address] += delta
 
-    def lock_for(self, site):
-        assert site == 1
-        self.lock()
+    def shade(self, pointer, count):
+        self.shades.append((pointer, count))
+        self.flags[pointer] = self.flags[pointer] & ~(WHITE | GRAY | BLACK) | GRAY
 
-    def lock(self):
-        if self.before_lock:
-            hook, self.before_lock = self.before_lock, None
-            hook()
-        self.depth += 1
+    def no_park_enter(self):
+        self.no_park += 1
 
-    def unlock(self):
-        assert self.depth > 0
-        self.depth -= 1
+    def no_park_exit(self):
+        assert self.no_park > 0
+        self.no_park -= 1
 
-    def known(self, pointer):
-        assert self.depth > 0
-        return pointer in self.flags
 
-    def increment(self):
-        assert self.depth > 0
-        self.gray_count += 1
+OWNERS = [None, 'owner']
 
-    def color(self, pointer, color):
-        assert self.depth > 0
-        self.flags[pointer] = self.flags[pointer] & ~(WHITE | GRAY | BLACK) | color
 
-    def enqueue(self, owner, slot, value):
-        assert self.depth > 0
-        entry = (owner, slot, value)
-        if entry in self.remembered:
-            return 0
-        self.remembered.add(entry)
-        self.flags[owner] |= REMEMBERED
-        return 1
+@pytest.mark.parametrize('owner', OWNERS)
+@pytest.mark.parametrize('active', [False, True])
+def test_gc0_store_owes_no_barrier_work(owner, active):
+    state = BarrierState(0, active=active)
+    state.barrier(owner, 'slot', 'value')
+    assert state.shades == [] and state.no_park == 0
+    assert state.globals['pcc_gc_cms_wb_flushes'] == 0
 
 
 @pytest.mark.parametrize('backend', [1, 2, 3, 4])
-@pytest.mark.parametrize('owner', [None, 'owner'])
-def test_live_reference_to_white_object_is_counted_once(backend, owner):
+@pytest.mark.parametrize('owner', OWNERS)
+@pytest.mark.parametrize('container', [False, True])
+def test_inactive_marking_does_not_fabricate_a_cycle(backend, owner, container):
+    state = BarrierState(backend, active=False, container=container)
+    state.barrier(owner, 'slot', 'value')
+    assert state.shades == [] and state.flags['value'] == WHITE
+    assert state.globals['pcc_gc_mark_active'] == 0 and state.no_park == 0
+
+
+@pytest.mark.parametrize('backend', [1, 3, 4])
+@pytest.mark.parametrize('owner', OWNERS)
+@pytest.mark.parametrize('container', [False, True])
+def test_white_value_gets_marking_work_once(backend, owner, container):
+    state = BarrierState(backend, container=container)
+    state.barrier(owner, 'slot', 'value')
+    assert state.shades == [('value', 0)] and state.flags['value'] == GRAY
+    state.barrier(owner, 'slot', 'value')
+    assert state.shades == [('value', 0)]
+    assert state.no_park == 0
+
+
+@pytest.mark.parametrize('owner', OWNERS)
+@pytest.mark.parametrize('container', [False, True])
+def test_gc2_shades_and_counts_unshaded_values(owner, container):
+    state = BarrierState(2, container=container)
+    state.barrier(owner, 'slot', 'value')
+    assert state.shades == [('value', 1)]
+    # The unlocked count-free path counts a shade of a value not yet gray;
+    # a store under the owner's container lock shades without counting.
+    expected = 0 if container and owner is not None else 1
+    assert state.globals['pcc_gc_cms_wb_flushes'] == expected
+
+
+@pytest.mark.parametrize('backend', [1, 2, 3, 4])
+@pytest.mark.parametrize('owner', OWNERS)
+@pytest.mark.parametrize('container', [False, True])
+@pytest.mark.parametrize('case', ['terminal', 'staged', 'null', 'tagged'])
+def test_values_that_owe_no_marking_work_are_skipped(backend, owner, container, case):
+    state = BarrierState(backend, container=container,
+                         value_flags=WHITE | TERMINAL if case == 'terminal' else WHITE,
+                         indexed=case != 'staged')
+    value = {'null': None, 'tagged': 7}.get(case, 'value')
+    state.barrier(owner, 'slot', value)
+    assert state.shades == [] and state.no_park == 0
+
+
+@pytest.mark.parametrize('backend', [1, 2, 3, 4])
+def test_tagged_owner_owes_nothing(backend):
     state = BarrierState(backend)
-    state.barrier(owner, 'slot', 'value')
-    assert state.flags['value'] & GRAY
-    assert state.gray_count == 1
-    state.barrier(owner, 'slot', 'value')
-    assert state.gray_count == 1 and state.depth == 0
+    state.barrier(7, 'slot', 'value')
+    assert state.shades == []
 
 
-@pytest.mark.parametrize('backend', [3, 4])
-@pytest.mark.parametrize('owner_generation,value_generation', [(OLD, OLD), (YOUNG, OLD), (YOUNG, YOUNG), (OLD, YOUNG)])
-def test_major_marking_is_independent_of_generation_direction(backend, owner_generation, value_generation):
-    state = BarrierState(backend, owner_flags=BLACK | owner_generation,
-                         value_flags=WHITE | value_generation)
+@pytest.mark.parametrize('backend', [1, 3, 4])
+@pytest.mark.parametrize('color', [GRAY, BLACK])
+def test_already_shaded_value_is_left_alone(backend, color):
+    state = BarrierState(backend, value_flags=color)
     state.barrier('owner', 'slot', 'value')
-    assert state.flags['value'] & GRAY and state.gray_count == 1
-    assert bool(state.remembered) == (owner_generation == OLD and value_generation == YOUNG)
-    assert state.depth == 0
-
-
-@pytest.mark.parametrize('backend', range(5))
-@pytest.mark.parametrize('owner', [None, 'owner'])
-def test_inactive_marking_does_not_fabricate_a_cycle(backend, owner):
-    state = BarrierState(backend, active=False)
-    state.barrier(owner, 'slot', 'value')
-    assert state.flags['value'] & WHITE and state.gray_count == 0
-    assert state.globals['pcc_gc_mark_active'] == 0 and state.depth == 0
-
-
-@pytest.mark.parametrize('backend', [3, 4])
-def test_inactive_old_to_young_store_keeps_generation_recording(backend):
-    state = BarrierState(backend, active=False, value_flags=WHITE | YOUNG)
-    state.barrier('owner', 'slot', 'value')
-    assert state.remembered and state.flags['owner'] & REMEMBERED
-    assert state.flags['value'] & WHITE and state.gray_count == 0
-
-
-@pytest.mark.parametrize('backend', [3, 4])
-def test_mark_verdict_uses_colors_after_lock_acquisition(backend):
-    state = BarrierState(backend)
-    state.before_lock = lambda: state.flags.update(value=GRAY | OLD)
-    state.gray_count = 1
-    state.barrier('owner', 'slot', 'value')
-    assert state.flags['value'] & GRAY and state.gray_count == 1
-    assert state.before_lock is None and state.depth == 0
+    assert state.shades == []
 
 
 NATIVE_SOURCE = r'''

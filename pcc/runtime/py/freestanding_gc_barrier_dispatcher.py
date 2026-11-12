@@ -75,26 +75,11 @@ pcc_resume_world = extern("pcc_resume_world", (), c_int64)
 pcc_py_gc_minor_graph_lock = extern(
     "pcc_py_gc_minor_graph_lock", (), c_void
 )
-pcc_py_gc_minor_graph_lock_for = extern(
-    "pcc_py_gc_minor_graph_lock_for", (c_int64,), c_void
-)
-pcc_py_gc_minor_graph_unlock = extern(
-    "pcc_py_gc_minor_graph_unlock", (), c_void
-)
-pcc_gc_object_is_known_no_lock = extern(
-    "pcc_gc_object_is_known_no_lock", (c_ptr,), c_int64
-)
 pcc_gc_gray_count_increment_acq_rel = extern(
     "pcc_gc_gray_count_increment_acq_rel", (), c_void
 )
-pcc_gc_pointer_is_managed = extern(
-    "pcc_gc_pointer_is_managed", (c_ptr,), c_int64
-)
 pcc_gc_pin_conservative_thread_roots = extern(
     "pcc_gc_pin_conservative_thread_roots", (), c_void
-)
-pcc_gc_backend4_store_buffer_enqueue = extern(
-    "pcc_gc_backend4_store_buffer_enqueue", (c_ptr, c_ptr, c_ptr), c_int64
 )
 
 
@@ -103,11 +88,6 @@ def _selected_backend() -> i64:
     if load_i32(global_addr("pcc_gc_config_initialized"), 0) == 0:
         return pcc_gc_config_ensure()
     return load_i32(global_addr("pcc_gc_backend_selected"), 0)
-
-
-@c_abi_export("pcc_gc_dispatch_ptr_can_have_header")
-def _ptr_can_have_header(obj) -> i64:
-    return pcc_gc_pointer_is_managed(obj)
 
 
 @c_abi_export("pcc_gc_dispatch_tracing_work_pending")
@@ -397,55 +377,23 @@ def pcc_gc_count_free_barrier_shade(value) -> None:
 
 @c_abi_export("pcc_gc_note_slot_write_barrier")
 def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
+    """The store barrier of every tracing collector; GC0 owes none.
+
+    GC1-GC4 share one count-free mutator protocol: no object a running
+    thread names moves, so a store owes only the marking work of an active
+    cycle. A cycle's mark_active changes only in a stopped world, so a 0
+    read here is the answer a locked read would give. Since GC4 joined that
+    protocol (pcc_gc_fix_backend sets pcc_gc_nonmoving_count_free for every
+    tracing collector) it records no old-to-young edge here either.
+    """
     if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
         return
     backend: i64 = _selected_backend()
-
-    if ptr_is_null(owner) != 0:
-        if backend != 1 and backend != 2 and backend != 3 and backend != 4:
-            return
-        # A root store only shades during an active cycle. The cycle's
-        # mark_active becomes 1 under the graph lock, but the caller's store
-        # is not inside this barrier's lock section either way: reading 0
-        # here is the answer the locked read would give, so skip the lock and
-        # both index probes outside a cycle.
-        if atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") == 0:
-            return
-        if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
-            pcc_gc_count_free_barrier_shade(value)
-            return
-        pcc_py_gc_minor_graph_lock_for(1)
-        if (
-            pcc_gc_object_is_known_no_lock(value) != 0
-            and load_i32(global_addr("pcc_gc_mark_active"), 0) != 0
-        ):
-            value_flags: i64 = load_i32(value, 12)
-            should_gray: i64 = 0
-            if (value_flags & 8) != 0:
-                should_gray: i64 = 1
-            if backend == 2 and (value_flags & 16) == 0:
-                should_gray: i64 = 1
-            if should_gray != 0:
-                # A root introduces marking work for every tracing backend.
-                # Count only the actual non-GRAY -> GRAY transition; a
-                # container barrier may shade the same object without this
-                # lock.
-                pcc_gc_shade_gray_atomic(value, 1)
-                if backend == 2:
-                    store_i32(
-                        global_addr("pcc_gc_cms_wb_flushes"),
-                        0,
-                        load_i32(global_addr("pcc_gc_cms_wb_flushes"), 0) + 1,
-                    )
-        pcc_py_gc_minor_graph_unlock()
+    if backend == 0:
         return
-
-    if is_tagged_int(owner) != 0:
-        return
-    if backend == 1 or backend == 2 or backend == 3 or (
-        backend == 4
-        and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
-    ):
+    if ptr_is_null(owner) == 0:
+        if is_tagged_int(owner) != 0:
+            return
         if pcc_container_lock_held() != 0:
             # Container mode: the store holds the owner's container lock, and
             # the marker scans that owner under the same lock
@@ -466,100 +414,9 @@ def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
             elif (load_i32(value, 12) & 8) != 0:
                 pcc_gc_shade_gray_atomic(value, 0)
             return
-        # As for roots: GC1/GC2 heap barriers shade only during a cycle, and
-        # a 0 read here is what the locked read would answer for a store
-        # that lands after this barrier returns. A caller already inside a
-        # graph transaction keeps that ordering through its own lock.
-        if atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") == 0:
-            return
-        # Count-free GC1/GC2 never move or count, so the graph lock orders
-        # nothing a phase-stable shade does not: the marker blackens an owner
-        # after reading its slots, and the shade covers a store it missed.
-        if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
-            pcc_gc_count_free_barrier_shade(value)
-            return
-        pcc_py_gc_minor_graph_lock_for(1)
-        if (
-            pcc_gc_object_is_known_no_lock(owner) != 0
-            and pcc_gc_object_is_known_no_lock(value) != 0
-        ):
-            owner_flags: i64 = load_i32(owner, 12)
-            value_flags = load_i32(value, 12)
-            should_shade: i64 = 0
-            # Backend 1 shades a black owner's new white referent to keep the
-            # tricolor invariant DURING a marking cycle.  Outside a cycle there
-            # is no invariant to keep, and shading there used to also store
-            # mark_active=1 below - fabricating a cycle with no epoch, no
-            # whitening pass and no seeded roots.  The next explicit collect
-            # then saw an active cycle, skipped pcc_gc_begin_mark_cycle, traced
-            # nothing, finished that phantom cycle and computed an empty
-            # candidate set, so it reclaimed nothing at all.  Require an active
-            # cycle, exactly as the backend-2 arm below already does.
-            if (
-                (backend == 1 or backend == 3)
-                and load_i32(global_addr("pcc_gc_mark_active"), 0) != 0
-                and (owner_flags & 32) != 0
-            ):
-                should_shade: i64 = 1
-            if (
-                backend == 2
-                and load_i32(global_addr("pcc_gc_mark_active"), 0) != 0
-            ):
-                should_shade: i64 = 1
-            should_gray_value: i64 = 0
-            if (value_flags & 8) != 0:
-                should_gray_value: i64 = 1
-            if backend == 2 and (value_flags & 16) == 0:
-                should_gray_value: i64 = 1
-            if should_shade != 0 and should_gray_value != 0:
-                pcc_gc_shade_gray_atomic(value, 1)
-                if backend == 2:
-                    store_i32(
-                        global_addr("pcc_gc_cms_wb_flushes"),
-                        0,
-                        load_i32(global_addr("pcc_gc_cms_wb_flushes"), 0) + 1,
-                    )
-        pcc_py_gc_minor_graph_unlock()
+    if atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") == 0:
         return
-
-    if backend != 4:
-        return
-    if _ptr_can_have_header(owner) == 0 or _ptr_can_have_header(value) == 0:
-        return
-    owner_flags = load_i32(owner, 12)
-    value_flags = load_i32(value, 12)
-    if load_i32(global_addr("pcc_gc_mark_active"), 0) == 0:
-        if (owner_flags & 256) == 0 or (value_flags & 128) == 0:
-            return
-    pcc_py_gc_minor_graph_lock_for(1)
-    if (
-        pcc_gc_object_is_known_no_lock(owner) != 0
-        and pcc_gc_object_is_known_no_lock(value) != 0
-    ):
-        owner_flags = load_i32(owner, 12)
-        value_flags = load_i32(value, 12)
-        # Major marking and generation recording are independent obligations.
-        # A black young owner can acquire a white old child as well.
-        if (
-            load_i32(global_addr("pcc_gc_mark_active"), 0) != 0
-            and (owner_flags & 32) != 0
-            and (value_flags & 8) != 0
-        ):
-            pcc_gc_shade_gray_atomic(value, 0)
-        if (owner_flags & 256) != 0 and (value_flags & 128) != 0:
-            if pcc_gc_backend4_store_buffer_enqueue(owner, slot, value) != 0:
-                store_i32(
-                    global_addr("pcc_gc_backend4_genzgc_store_barriers"),
-                    0,
-                    load_i32(
-                        global_addr("pcc_gc_backend4_genzgc_store_barriers"),
-                        0,
-                    )
-                    + 1,
-                )
-    pcc_py_gc_minor_graph_unlock()
-
-
+    pcc_gc_count_free_barrier_shade(value)
 @c_abi_export("pcc_gc_note_write_barrier")
 def pcc_gc_note_write_barrier(owner, value) -> None:
     pcc_gc_note_slot_write_barrier(owner, null(), value)

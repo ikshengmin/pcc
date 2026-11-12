@@ -246,7 +246,6 @@ def test_graph_wait_read_and_reset_are_individually_atomic_i64_slots():
 
 def test_classified_callsites_name_the_outer_acquisition_operation():
     expected = {
-        ("freestanding_gc_barrier_dispatcher.py", "pcc_gc_note_slot_write_barrier"): [1] * 3,
         ("py_gc_backend.py", "pcc_gc_pointer_register"): [2],
         ("py_gc_backend.py", "pcc_gc_note_object_allocated_sized"): [2] * 5,
         # A full staging ring registers its batch for the allocation.

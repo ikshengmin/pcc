@@ -34,8 +34,8 @@ class _SlotBoundary(_MarkBoundary):
         self.cells.update({
             "pcc_gc_backend_selected": {0: backend},
             "pcc_gc_list_container_mode": {0: container_mode},
-            # This fixture preserves the graph/container budget contracts.
-            # Count-free shading has its own production-helper tests.
+            # The marker keeps its graph/container budget contracts here;
+            # a store shades through the production count-free helper.
             "pcc_gc_nonmoving_count_free": {0: 0},
             "pcc_gc_config_initialized": {0: 1},
             "pcc_gc_mark_active": {0: 1},
@@ -57,6 +57,9 @@ class _SlotBoundary(_MarkBoundary):
             "pcc_container_lock": self.container_lock,
             "pcc_container_unlock": self.container_unlock,
             "pcc_container_lock_held": lambda: int(self.container_owner is not None),
+            "pcc_thread_no_park_enter": lambda: None,
+            "pcc_thread_no_park_exit": lambda: None,
+            "atomic_rmw_i32": self.atomic_add,
             "pcc_gc_object_index_seen_stable": self.is_known,
             "pcc_gc_pointer_is_managed": self.is_known,
             "pcc_thread_owns_stopped_world": lambda: 0,
@@ -74,9 +77,13 @@ class _SlotBoundary(_MarkBoundary):
             "pcc_gc_tracing_step_cycle",
         }, self.namespace)
         _load_bodies("freestanding_gc_barrier_dispatcher.py", {
-            "_selected_backend", "_ptr_can_have_header",
-            "pcc_gc_note_slot_write_barrier",
+            "_selected_backend", "pcc_gc_note_slot_write_barrier",
+            "pcc_gc_count_free_barrier_shade",
         }, self.namespace)
+
+    def atomic_add(self, op, cell, offset, delta, order):
+        assert op == "add"
+        cell[offset] += delta
 
     def lock_for(self, site):
         assert site == 1
@@ -248,8 +255,9 @@ def test_gray_owner_prefix_write_needs_more_than_a_resume_cursor(backend, contai
         else:
             state.unlock()
     assert state.slice(parent, 4, 100) == (1, -1, 7)
-    expected = GRAY if backend == 2 or container_mode else WHITE
-    assert fresh[12] & 56 == expected
+    # Every tracing collector's store shades a white value during a cycle,
+    # whatever the owner's color (pcc_gc_count_free_barrier_shade).
+    assert fresh[12] & 56 == GRAY
     # Graph-mode GC1/3/4 are correct for today's atomic whole-owner scan;
     # they do not promise the extra partial-gray state this caller invented.
     assert parent[12] & 56 == GRAY

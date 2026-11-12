@@ -3,7 +3,6 @@ from __future__ import annotations
 import ast
 import re
 import subprocess
-import textwrap
 from pathlib import Path
 
 import pytest
@@ -40,7 +39,6 @@ OWNED_SYMBOLS = PUBLIC_SYMBOLS | {
     "pcc_gc_count_free_store_shade",
     # Their unlocked heap/root stores shade under a no-park scope instead.
     "pcc_gc_count_free_barrier_shade",
-    "pcc_gc_dispatch_ptr_can_have_header",
     "pcc_gc_dispatch_selected_backend",
     "pcc_gc_dispatch_tracing_work_pending",
     # Mark-complete predicate the allocator (py_obj, not the managed backend)
@@ -50,7 +48,6 @@ OWNED_SYMBOLS = PUBLIC_SYMBOLS | {
 RAW_PROVIDER_SYMBOLS = {
     "pcc_gc_backend4_step_generation_aging",
     "pcc_gc_backend4_step_remembered_roots",
-    "pcc_gc_backend4_store_buffer_enqueue",
 }
 RAW_FUNCTION_IMPORTS = {
     # One counted gray transition, beside lock-free container barriers.
@@ -63,16 +60,12 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_backend4_select_relocation_pages",
     "pcc_gc_config_ensure",
     "pcc_gc_incremental_concurrent_step",
-    "pcc_gc_object_is_known_no_lock",
-    "pcc_gc_pointer_is_managed",
     "pcc_gc_pin_conservative_thread_roots",
     "pcc_gc_precise_stack_diff_if_requested",
     "pcc_gc_tracing_has_sweep_candidate",
     "pcc_gc_tracing_record_pause",
     "pcc_gc_tracing_step_cycle",
     "pcc_platform_monotonic_us",
-    "pcc_py_gc_minor_graph_lock_for",
-    "pcc_py_gc_minor_graph_unlock",
     "pcc_resume_world",
     "pcc_stop_the_world",
     # GC4 relocates and retires only while every other mutator is parked at
@@ -92,7 +85,6 @@ RAW_GLOBAL_IMPORTS = {
     "pcc_gc_backend4_parked_head",
     "pcc_gc_backend4_retained_page_head",
     "pcc_gc_backend4_no_refcounts",
-    "pcc_gc_backend4_genzgc_store_barriers",
     "pcc_gc_backend4_remap_active",
     "pcc_gc_backend4_store_buffer_entries_count",
     "pcc_gc_backend_selected",
@@ -104,7 +96,6 @@ RAW_GLOBAL_IMPORTS = {
     "pcc_gc_mark_active",
     "pcc_gc_metric_step",
     # Fixed with the collector: GC1/GC2 heap and root barriers skip the lock.
-    "pcc_gc_nonmoving_count_free",
     # A GC4 automatic step continues its mark up to the next commit.
     "pcc_gc_tracing_finish_commits",
     # GC4 selects relocation pages once per completed mark, and refreshes
@@ -250,17 +241,15 @@ def test_barrier_dispatcher_preserves_backend_order_and_lock_contract() -> None:
     assert "pcc_gc_backend4_remap_and_retire_stopped_world()" in step
     assert "pcc_gc_tracing_record_pause(" in step
 
-    assert "_ptr_can_have_header(owner)" in barrier
-    assert "_ptr_can_have_header(value)" in barrier
-    generational = barrier.split("if backend != 4:\n", 1)[1]
-    assert generational.index("value_flags & 128") < generational.index(
-        "pcc_py_gc_minor_graph_lock_for(1)"
-    )
-    assert "pcc_gc_object_is_known_no_lock(owner)" in barrier
-    assert "pcc_gc_object_is_known_no_lock(value)" in barrier
-    # Only GC4 allocates YOUNG objects, so only it records an old-to-young edge.
+    # Every tracing collector follows the count-free protocol: a store owes
+    # only an active cycle's marking work, without the graph lock, and no
+    # collector records a generation edge in the store barrier.
+    assert "pcc_py_gc_minor_graph_lock" not in barrier
+    assert "pcc_gc_backend4_store_buffer_enqueue" not in barrier
     assert "pcc_gc_backend3_remember_owner" not in barrier
-    assert "pcc_gc_backend4_store_buffer_enqueue(owner, slot, value)" in barrier
+    assert barrier.index("pcc_container_lock_held()") < barrier.rindex(
+        "pcc_gc_count_free_barrier_shade(value)"
+    )
 
 
 def test_strict_cms_barrier_has_no_tls_wb_queue_lock_contract() -> None:
@@ -289,12 +278,16 @@ def test_strict_cms_barrier_has_no_tls_wb_queue_lock_contract() -> None:
     ):
         assert c_only_mechanism not in combined
 
+    # GC2 counts its shades in place: no thread-local write-barrier queue,
+    # no lock and no poll on the store path.
     barrier = _export_body(strict, "pcc_gc_note_slot_write_barrier")
-    assert "pcc_py_gc_minor_graph_lock_for(1)" in barrier
-    assert "pcc_py_gc_minor_graph_unlock()" in barrier
-    assert "pcc_gc_cms_wb_flushes" in barrier
-    assert "pcc_gc_cms_flush_wb_buffer" not in barrier
-    assert "pcc_thread_safepoint" not in barrier
+    shade = _export_body(strict, "pcc_gc_count_free_barrier_shade")
+    assert "pcc_py_gc_minor_graph_lock" not in barrier
+    assert "pcc_gc_count_free_barrier_shade(value)" in barrier
+    assert "pcc_gc_cms_wb_flushes" in shade
+    for body in (barrier, shade):
+        assert "pcc_gc_cms_flush_wb_buffer" not in body
+        assert "pcc_thread_safepoint" not in body
 
 
 def test_production_archive_has_one_barrier_dispatcher_owner(
@@ -318,94 +311,6 @@ def test_production_archive_has_one_barrier_dispatcher_owner(
         assert len(owners) == 1, (symbol, owners)
         assert ":freestanding_gc_barrier_dispatcher.o:" in owners[0]
         assert ":py_gc_backend.o:" not in owners[0]
-
-
-def _link_barrier_probe(
-    tmp_path: Path, name: str, archive: Path, backend_kind: int
-) -> Path:
-    source = tmp_path / (name + ".c")
-    executable = tmp_path / name
-    source.write_text(
-        textwrap.dedent(
-            f"""
-            #include "py_runtime.h"
-            #include <stdio.h>
-
-            enum {{
-                PY_FLAG_GC_YOUNG = 0x80,
-                PY_FLAG_GC_OLD = 0x100,
-                PY_FLAG_GC_REMEMBERED = 0x200
-            }};
-
-            int main(void) {{
-                if (pcc_gc_set_backend({backend_kind}) != 0) return 2;
-                pcc_gc_telemetry_reset();
-                PyObject *owner = pcc_gc_alloc(32, PY_TYPE_LIST, 0);
-                PyObject *value = py_list_new(0);
-                PyObject *slot = 0;
-                if (owner == 0 || value == 0) return 3;
-                ((PyObjectHeader *)owner)->flags =
-                    (((PyObjectHeader *)owner)->flags &
-                     ~(PY_FLAG_GC_YOUNG | PY_FLAG_GC_REMEMBERED)) |
-                    PY_FLAG_GC_OLD;
-                if ((((PyObjectHeader *)value)->flags & PY_FLAG_GC_YOUNG) == 0)
-                    return 4;
-
-                pcc_gc_note_slot_write_barrier(owner, &slot, value);
-                printf("%d,%lld,%lld\\n",
-                       ((((PyObjectHeader *)owner)->flags &
-                         PY_FLAG_GC_REMEMBERED) != 0),
-                       (long long)pcc_gc_backend4_generation_barrier_score(),
-                       (long long)pcc_gc_backend4_store_buffer_entries());
-                return 0;
-            }}
-            """
-        ).lstrip(),
-        encoding="utf-8",
-    )
-    result = subprocess.run(
-        [
-            "clang",
-            "-std=c11",
-            f"-I{RUNTIME_DIR / 'include'}",
-            f"-I{RUNTIME_DIR / 'src'}",
-            str(source),
-            str(archive),
-            "-pthread",
-            "-lm",
-            "-o",
-            str(executable),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    return executable
-
-
-@pytest.mark.parametrize(
-    ("backend_kind", "expected"),
-    [(4, "1,1,1\n")],
-)
-def test_barrier_dispatcher_records_old_to_young_edges(
-    tmp_path: Path,
-    pcc_runtime_archive: Path,
-    backend_kind: int,
-    expected: str,
-) -> None:
-    # ``expected`` is what the retired C runtime oracle printed.
-    implementation = _link_barrier_probe(
-        tmp_path,
-        "barrier_pcc_python_" + str(backend_kind),
-        pcc_runtime_archive,
-        backend_kind,
-    )
-    result = subprocess.run(
-        [str(implementation)], capture_output=True, text=True, timeout=30
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert result.stdout == expected
 
 
 class _AutoStepModel:
