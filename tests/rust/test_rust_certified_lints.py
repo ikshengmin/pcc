@@ -215,10 +215,15 @@ def test_unchanged_project_retains_lint_before_the_next_source_boundary(tmp_path
     _, checked = certify_original(files, tmp_path / 'actual-check')
     source = files['src/lib.rs'].decode()
     parser = Parser(source, source_path='src/lib.rs', edition=2015, rustc_check=checked)
-    # Source-predicted next boundary, not a newly observed project result.
-    # The exact former cfg failure is now a retained inactive declaration.
-    with pytest.raises(RustError, match="src/lib.rs: 22:1: expected 'fn', found 'use'"):
+    # Keep the exact current capability boundary after retained use items.
+    # This lint-retention observation is not successful whole-crate compilation.
+    with pytest.raises(RustError, match=(
+            r"^src/lib\.rs: 306:1: generic traits and blanket/generic trait impls are not implemented$")):
         parser.parse()
+    assert ['::'.join(token.text for token in item.path) for item in parser.uses] == [
+        'core::cmp', 'core::marker::PhantomData']
+    assert [source[slice(*item.source_span)] for item in parser.uses] == [
+        'use core::cmp;', 'use core::marker::PhantomData;']
     lint, = parser.crate_lint_attributes
     assert lint.level == 'warn' and lint.lints[0].name == 'missing_docs'
     assert source[slice(*lint.source_span)] == '#![warn(missing_docs)]'
