@@ -173,7 +173,7 @@ INVALID_UNUSED = [
     ('type C interface{};'+EQUAL+';func Bad[T C](x T)bool{return Equal[T](x,x)}',
      'does not satisfy comparable', 'does not satisfy comparable'),
     ('type C interface{};func Bad[C C](){}', 'cannot be used as a constraint', 'cannot use a type parameter as constraint'),
-    ('const C=3;func Bad[T C](){}', 'constraint must denote a type', 'C is not a type'),
+    ('const C=3;func Bad[T C](){}', 'constraint must denote a type', r'C (?:\(constant\) )?is not a type'),
 ]
 
 

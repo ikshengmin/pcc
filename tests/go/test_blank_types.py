@@ -99,7 +99,7 @@ INVALID_GRAPHS = (
     ({'main': (('main.go', 'package main;import "q";type _ int;func main(){}'),),
       'q': (('q.go', 'package q;type T int'),)}, 'imported and not used', 'imported and not used'),
     ({'main': (('main.go', 'package main;import "q";type _ q.hidden;func main(){}'),),
-      'q': (('q.go', 'package q;type hidden int'),)}, 'unexported package member', 'name hidden not exported|not exported'),
+      'q': (('q.go', 'package q;type hidden int'),)}, 'unexported package member', r'name hidden not exported|not exported|undefined: q\.hidden'),
     ({'main': (('main.go', 'package main;import "q";type _ q.T;func main(){}'),
                ('sibling.go', 'package main;type _ q.T')),
       'q': (('q.go', 'package q;type T int'),)}, 'undefined imported package q', 'undefined: q'),

@@ -147,14 +147,15 @@ INVALID_LITERALS = (
 )
 INVALID = tuple((source('_=' + literal), message, reference)
                 for literal, message, reference in INVALID_LITERALS) + (
-    (source("r:='a';var i int=r;_=i"), 'cannot use int32 as int', r'cannot use.*r.*int32.*as int'),
-    (source("r:='A'<<40;_=r"), 'overflows int32', r'overflows rune|overflows int32'),
+    # Go 1.27.3 names the rune type and reports "... as rune value in ... (overflows)".
+    (source("r:='a';var i int=r;_=i"), 'cannot use int32 as int', r'cannot use.*r.*(?:int32|rune).*as int'),
+    (source("r:='A'<<40;_=r"), 'overflows int32', r'overflows rune|overflows int32|as rune value in .*\(overflows\)'),
     (source("_=uint8('界')"), 'overflows uint8', r'overflows uint8|overflows byte'),
     (source("_='a'<<-'a'"), 'negative shift count', r'negative shift count'),
     (source("_=f('a',true)", 'func f[T any](a,b T)T{return a}'),
      'cannot infer type argument', r'mismatched types|cannot infer'),
     (source("_=f('a',1<<40)", 'func f[T any](a,b T)T{return a}'),
-     'overflows int32', r'overflows rune|overflows int32'),
+     'overflows int32', r'overflows rune|overflows int32|as rune value in .*\(overflows\)'),
 )
 
 

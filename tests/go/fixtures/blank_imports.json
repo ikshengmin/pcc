@@ -87,7 +87,7 @@
     {
       "name": "unused-named-alongside-blank",
       "pcc": "imported and not used",
-      "reference": "imported and not used",
+      "reference": "imported (?:as unused )?and not used",
       "packages": {
         "main": {
           "main.go": "package main;import(_ \"dep\";unused \"other\");func main(){}"

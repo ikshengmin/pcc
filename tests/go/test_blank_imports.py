@@ -395,6 +395,8 @@ def test_identical_noninitial_bom_originals_have_official_source_rejections(row,
     record_diagnostic(tmp_path / 'pcc-diagnostic.json', {'main': (('original.go', original),)}, caught.value)
     receipt = compile_reference_rejection((('original.go', original),), tmp_path / 'reference',
         compiler=os.environ['PCC_GO_REFERENCE'], cache=os.environ['PCC_GO_REFERENCE_CACHE'],
-        diagnostics='invalid BOM in the middle of the file')
+        # Go 1.27.3 reports "illegal byte order mark"; earlier releases used
+        # the "invalid BOM" wording. Both are official source rejections.
+        diagnostics='invalid BOM in the middle of the file|illegal byte order mark')
     assert receipt['classification'] == 'normal_source_rejection'
     assert (tmp_path / 'reference/original.go').read_bytes() == original.encode('utf-8')
