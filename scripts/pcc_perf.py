@@ -230,7 +230,15 @@ def build(name: str, timeout: int, max_tree_rss: int) -> int:
     )
     os.environ.update(environment)
     (REPO_ROOT / "build").mkdir(exist_ok=True)
-    with exclusive_file_lock(str(REPO_ROOT / "build/.pcc-performance.lock"), blocking=False):
+    lock = REPO_ROOT / "build/.pcc-performance.lock"
+    try:
+        with exclusive_file_lock(str(lock), blocking=False):
+            pass
+    except OSError:
+        # Another heavy build or measurement owns the machine (a bootstrap,
+        # another arm): wait for it rather than contend with it.
+        print(f"waiting for {lock} (another build or measurement holds it)", flush=True)
+    with exclusive_file_lock(str(lock), blocking=True):
         return run_process_tree_sample.main([
             "--result", str(arm / "guard.json"), "--samples", str(arm / "rss.tsv"),
             "--stdout", str(arm / "build.stdout"), "--stderr", str(arm / "build.stderr"),
