@@ -45,6 +45,10 @@ from pcc.frontends.python.py_ast import (
     ValueArrayType,
 )
 from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.codegen.builtin_exceptions import (
+    BUILTIN_EXC_TAG as _BUILTIN_EXC_TAG,
+    builtin_exception_uses_module_lookup,
+)
 from pcc.frontends.python.codegen.static_object_operands import (
     emit_borrowed_runtime_operand,
     emit_nonmoving_literal_operand,
@@ -895,7 +899,7 @@ class CallObjectLoweringMixin:
         return BinOp(span=expr.span, ty=expr.ty, op="**",
                      lhs=expr.args[0], rhs=expr.args[1])
 
-    def _emit_slot_call_operand(self, expr: Expr, label: str, borrow_stable=False):
+    def _emit_slot_call_operand(self, expr: Expr, label: str, borrow_stable=False, callee=False):
         """Capture an owner, or explicitly borrow an unchanged parameter input."""
         # This opt-in is only for non-consuming input users. A parameter
         # whose binding never changes is already traced and borrowed from
@@ -1009,7 +1013,12 @@ class CallObjectLoweringMixin:
         self._try_err_block = self._slot_call_cleanup_block((slot,), target)
         self._cpy_operand_cleanup_block = self._try_err_block
         try:
-            source = self._slot_call_name_source(expr) if isinstance(expr, Name) else None
+            module_callee = (callee and isinstance(expr, Name)
+                             and builtin_exception_uses_module_lookup(self, expr.ident))
+            if module_callee:
+                check_local_bound(self, expr)
+            source = (self._slot_call_name_source(expr)
+                      if isinstance(expr, Name) and not module_callee else None)
             if source is not None:
                 self._slot_call_copy_source(slot, source[0], source[1], expr.span)
             else:
@@ -1026,7 +1035,12 @@ class CallObjectLoweringMixin:
                     self._slot_call_result_sinks = []
                 self._slot_call_result_sinks.append((expr, slot, False))
                 try:
-                    value = self._emit_call_arg_object(expr)
+                    if module_callee:
+                        value = self._emit_owned_module_name_lookup(
+                            expr, _BUILTIN_EXC_TAG[expr.ident],
+                        )
+                    else:
+                        value = self._emit_call_arg_object(expr)
                 finally:
                     _candidate, _output, published = self._slot_call_result_sinks.pop()
                 if published:
@@ -2044,7 +2058,13 @@ class CallObjectLoweringMixin:
                     self.builder.load(callable_root), expr.func.name, expr.func.span,
                 )
             elif module_name is None:
-                callable_root = self._emit_slot_call_operand(expr.func, label + ".callable")
+                if (isinstance(expr.func, Name)
+                        and builtin_exception_uses_module_lookup(self, expr.func.ident)):
+                    callable_root = self._emit_slot_call_operand(
+                        expr.func, label + ".callable", callee=True,
+                    )
+                else:
+                    callable_root = self._emit_slot_call_operand(expr.func, label + ".callable")
             else:
                 callable_root = self._emit_slot_call_module_value(
                     module_name, attr_name, expr.span, label + ".callable",

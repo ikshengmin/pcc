@@ -82,3 +82,26 @@ def builtin_exc_tag_or_missing(name: str) -> int:
     if name in BUILTIN_EXC_TAG:
         return BUILTIN_EXC_TAG[name]
     return -1
+
+
+def builtin_exception_uses_module_lookup(host, name: str) -> bool:
+    """Use the live namespace for ordinary Python globals with builtin fallback.
+
+    Local storage still has its own UnboundLocalError contract. Raw ABI,
+    foreign and value-payload globals do not publish ordinary module objects.
+    """
+    if name not in BUILTIN_EXC_TAG:
+        return False
+    entry = host._module_globals.get(name)
+    if entry is None:
+        return False
+    local = host.env.get(name)
+    if local is not None and local[0] is not entry[0]:
+        return False
+    if (getattr(host, "_freestanding_module", False)
+            or getattr(host, "_runtime_port_module", False)
+            or getattr(host, "_module_has_c_abi_export", False)
+            or getattr(host, "_cpy_module_flags", {}).get(name, False)
+            or host._is_valueclass_payload_type(entry[1])):
+        return False
+    return True

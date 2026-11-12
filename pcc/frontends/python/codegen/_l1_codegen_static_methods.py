@@ -188,7 +188,7 @@ def _part_12(out):
 
 
 def _part_13(out):
-    _append_method(out, '_emit_owned_module_name_lookup', (('self', 'pos', False), ('expr', 'pos', False)))
+    _append_method(out, '_emit_owned_module_name_lookup', (('self', 'pos', False), ('expr', 'pos', False), ('builtin_fallback_tag', 'pos', True)))
     _append_method(out, '_emit_owned_literal_attribute_mutation', (('self', 'pos', False), ('expr', 'pos', False), ('runtime_name', 'pos', False)))
     _append_method(out, '_emit_native_builtin_callable_type_error', (('self', 'pos', False), ('builder', 'pos', False), ('message', 'pos', False), ('name', 'pos', False), ('suffix', 'pos', False)))
     _append_method(out, '_emit_native_builtin_callable_value', (('self', 'pos', False), ('name', 'pos', False), ('expr', 'pos', True)))
@@ -598,9 +598,9 @@ def _part_50(out):
     _append_method(out, '_slot_call_copy_source', (('self', 'pos', False), ('destination', 'pos', False), ('source', 'pos', False), ('borrowed', 'pos', True), ('span', 'pos', True)))
     _append_method(out, '_slot_call_name_source', (('self', 'pos', False), ('expr', 'pos', False)))
     _append_method(out, '_publish_slot_call_owned', (('self', 'pos', False), ('slot', 'pos', False), ('value', 'pos', False), ('', 'kw_only', False), ('label', 'pos', True)))
-    _append_method(out, '_emit_slot_call_operand', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False), ('borrow_stable', 'pos', True)))
+    _append_method(out, '_emit_slot_call_operand', (('self', 'pos', False), ('expr', 'pos', False), ('label', 'pos', False), ('borrow_stable', 'pos', True), ('callee', 'pos', True)))
     _append_method(out, '_ordinary_call_needs_runtime_binding', (('self', 'pos', False), ('expr', 'pos', False), ('fd', 'pos', False), ('skip_self', 'pos', True), ('require_object_result', 'pos', True)))
-    _append_method(out, '_emit_runtime_bound_user_call', (('self', 'pos', False), ('expr', 'pos', False), ('name', 'pos', False), ('fn', 'pos', False)))
+    _append_method(out, '_emit_runtime_bound_user_call', (('self', 'pos', False), ('expr', 'pos', False), ('name', 'pos', False), ('fn', 'pos', False), ('return_type', 'pos', True)))
     _append_method(out, '_emit_direct_user_function_call', (('self', 'pos', False), ('', 'kw_only', False), ('display_name', 'pos', False), ('fn', 'pos', False), ('ast_func_def', 'pos', False), ('args', 'pos', False), ('kwargs', 'pos', False), ('hoist_capture_name', 'pos', True)))
     _append_method(out, '_native_class_method_def', (('self', 'pos', False), ('class_info', 'pos', False), ('method_name', 'pos', False)))
 

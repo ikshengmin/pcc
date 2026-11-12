@@ -49,7 +49,10 @@ from pcc.frontends.python.codegen.call_object_lowering import (
     pin_rooted_direct_call_arguments,
 )
 from pcc.frontends.python.codegen.method_call_lowering import _method_pointer_provenance
-from pcc.frontends.python.codegen.builtin_exceptions import BUILTIN_EXC_TAG as _BUILTIN_EXC_TAG
+from pcc.frontends.python.codegen.builtin_exceptions import (
+    BUILTIN_EXC_TAG as _BUILTIN_EXC_TAG,
+    builtin_exception_uses_module_lookup,
+)
 from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.generator_lowering import emit_generator_may_park_call, emit_generator_may_park_sync, funcdef_has_source_yield
 from pcc.frontends.python.codegen.guarded_loop_lowering import emit_guarded_i64_dot, emit_guarded_loop_counter, emit_i64_buffer_constructor
@@ -852,13 +855,15 @@ class CallExpressionLoweringMixin:
         """Compatibility entry for the shared, side-effect-free classifier."""
         return self._ordinary_call_needs_runtime_binding(expr, ast_func_def)
 
-    def _emit_runtime_bound_user_call(self, expr: Call, name: str, fn) -> ir.Value:
+    def _emit_runtime_bound_user_call(self, expr: Call, name: str, fn, return_type=None) -> ir.Value:
         """Bind once from the original Call, retaining the direct return ABI."""
         # An enclosing object consumer owns its output slot and deliberately
         # wants the boxed callable ABI, even when the native body is scalar.
         if self._slot_call_result_sink(expr) is not None:
             return self._emit_slot_call_object(expr, name + ".bound")
-        ret_ty = fn.function_type.return_type
+        ret_ty = return_type
+        if ret_ty is None:
+            ret_ty = fn.function_type.return_type
         scalar_ty = None
         if isinstance(ret_ty, ir.DoubleType):
             scalar_ty = FloatType(name="float")
@@ -1136,6 +1141,12 @@ class CallExpressionLoweringMixin:
                 )
             return value
         if name in _BUILTIN_EXC_TAG and name not in self.env:
+            if builtin_exception_uses_module_lookup(self, name):
+                # A module binding is a runtime value, including its absence
+                # before assignment or after del. Resolve it into a call root.
+                return self._emit_runtime_bound_user_call(
+                    expr, name, None, self._storage_ir_type(expr.ty),
+                )
             return self._build_exception_value(expr)
         if name == "__await__":
             return self._emit_await_expr(expr)

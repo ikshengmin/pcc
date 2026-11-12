@@ -816,7 +816,7 @@ class NameLoweringMixin:
             return ann.ident
         return type(ann).__name__
 
-    def _emit_owned_module_name_lookup(self, expr):
+    def _emit_owned_module_name_lookup(self, expr, builtin_fallback_tag=-1):
         """Read a live module binding into a NEW owner, preserving NameError."""
         sink = self._slot_call_result_sink(expr)
         output = sink
@@ -861,6 +861,22 @@ class NameLoweringMixin:
             self.builder.cbranch(missing, err_bb, ok_bb)
 
             self.builder.position_at_end(err_bb)
+            if builtin_fallback_tag >= 0:
+                # A failed lookup must preserve its TLS exception. Only a
+                # successful missing/deleted binding falls through to builtin.
+                self._emit_post_call_err_check(expr.span)
+                if not hasattr(self, "_slot_call_result_sinks"):
+                    self._slot_call_result_sinks = []
+                self._slot_call_result_sinks.append((expr, output, False))
+                try:
+                    self._emit_owned_builtin_exception_class(builtin_fallback_tag, expr)
+                finally:
+                    self._slot_call_result_sinks.pop()
+                self.builder.branch(ok_bb)
+                self.builder.position_at_end(ok_bb)
+                if sink is not None:
+                    return self.builder.load(output, name=self._fresh("name.dynamic.current"))
+                return self._take_slot_call_root(output)
             msg = self._pooled_cstr_ptr(
                 "name '" + expr.ident + "' is not defined",
                 ".name_error",

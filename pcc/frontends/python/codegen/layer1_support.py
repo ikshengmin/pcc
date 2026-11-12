@@ -684,6 +684,11 @@ def _populate_static_native_exports_1(out):
             (("str",),),
             (_export_arg("name", ("str",)),),
         ),
+        "builtin_exception_uses_module_lookup": _function_export(
+            ("bool",),
+            (("dyn",), ("str",)),
+            (_export_arg("host", ("dyn",)), _export_arg("name", ("str",))),
+        ),
     }
     out["pcc.ir.ir"] = {
         "IRBuilder_current_instruction_count": _function_export(
