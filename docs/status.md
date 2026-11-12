@@ -143,6 +143,105 @@ the same standard integration guard. Require two native exec records **and**
 the two generator tests' completed compile/execute assertions; an exec attempt
 alone is not completion evidence.
 
+## Duplication, stale-authority and defensive-state slices (local Mac, 2026-11-12)
+
+Published on `shenming/master`, host pcc0 evidence unless stated:
+
+- `95727e450` one function splitter for the IR text passes; `88b0eaa89` and
+  `a6a5c15bf` one owner for the C SSA type collector, `is_scalar_type_name`,
+  `emit_byte_data`, `_hoist_cache_key4`, the Metal `_c_identifier` and
+  `_sha256_file`, and a `FunctionAnalysisPass` base for three C passes.
+  Copies that cannot share code are pinned by
+  `test_float_bits_copies_contract.py` and `test_cli_shared_helpers_contract.py`.
+- `0378ae063` splits instcombine's 1745-line binop rewriter into nine
+  per-opcode helpers; output is byte-identical on 135,088 generated functions
+  and 194 runtime IR files.
+- `0395c8980` reads fourteen constructor-owned `L1CodeGen` attributes directly
+  (261 `getattr`/`hasattr` sites with conflicting defaults before, 0 after).
+  With the 93ed2fe9c and a6a5c15bf compilers, 65 compiler modules compile
+  standalone to byte-identical IR (29,446 `py_cpy` calls each); the other 74
+  fail standalone with identical errors on both and were not compared.
+- `1b4731f9c` fixes `for`/`while` `else` running after a `break` inside `with`
+  or inside an inner loop's `else` (language reference 8.2, 8.3).
+- `15a3383ed`, `fe7f05ca8` and the `py_dict.py` docstring follow-up remove
+  comments that cited deleted C files as mirrors or oracles, and stale
+  plan-phase labels (one user-facing message).
+- `b0c7526c3` and `53a4eb9f1` remove the two Stage2 blockers described below.
+
+Stage2 blocker 1, pre-existing since `c37f5e233`: pcc lowers `with f():`
+statically only for module-level `@contextmanager` generators. A decorated
+method is applied at class definition through `pcc/stdlib/contextlib.py`,
+which raises NotImplementedError, so a native pcc1 failed in every codegen
+worker once `ir_scaffold_lowering._scaffold_field_owner_roots` imported the C
+code generator (two such methods in `c_unevaluated_types.py`). Four replayed
+Stage2 workers for untouched modules failed identically, and a minimal
+contextmanager-method program fails at class definition under both the
+93ed2fe9c and the a6a5c15bf compiler. The methods are explicit context classes
+in `c_scope_context.py` now; `test_selfhost_method_contextmanager.py` scans
+the 570-module closure. Method-level `@contextmanager` in user programs is
+still unsupported (open language gap).
+
+Stage2 blocker 2, pre-existing type inference: an `if`'s `else` arm was
+inferred after the `then` arm in the same scope, so it read the `then` arm's
+rebindings, and the representation widening at the join retargeted only
+top-level assignments. In `format_lowering` an `elif` arm saw `ref` as `int`,
+`int(ref)` folded to `ref`, and the native c_codegen worker raised
+`'<' not supported between instances of 'str' and 'int'`. A 45-line program of
+the same shape fails natively under both the 93ed2fe9c and the b0c7526c3
+compiler and matches CPython after `53a4eb9f1`. Of the 65 standalone compiler
+modules, 62 keep byte-identical IR; `format_lowering`, `dce` and
+`user_function_decl_lowering` change where an `else` arm now reads the
+pre-`if` binding. `test_if_join_nested_rebinding.py` and the alignment case
+`if_join_widens_nested_rebinding` cover it.
+
+Open inference gap, pre-existing and unchanged by these commits: `while` and
+`for` bodies are inferred once with the pre-loop bindings, without a join over
+the loop back edge. A local bound to `int` before the loop and rebound to `str`
+at the end of the body is still typed `int` at the top of the next iteration:
+`ref = 0; while i < 2: out.append(int(ref) * 10); ref = "5"; i += 1` lowers
+`int(ref) * 10` to `py_int_mul(ref, 10)` and the native program ends with
+`Unhandled non-exception object (null)` under both the 93ed2fe9c and the
+53a4eb9f1-inference compiler (CPython prints `[0, 50]`). The same-type loop
+and the unrolled straight-line form both match CPython.
+
+Bootstrap: `a6a5c15bf` Stage1 passed in 2,125 s (CPU 8,478 s) and Stage2
+failed on blocker 1. `93ed2fe9c` and the first `b0c7526c3` Stage1 hit the
+unchanged 2,400 s cap at load averages of 120–230 and about 40. The second
+`b0c7526c3` Stage1 passed in 2,215 s (CPU 9,303 s); its Stage2 stopped once
+on the worker tree-RSS state guard (stale snapshot under load, 382 s) and
+then on blocker 2 (815 s). `53a4eb9f1` has not been bootstrapped yet.
+
+Pre-existing failures seen on an unmodified 93ed2fe9c snapshot while sweeping
+the affected files (not repaired): `test_fallback_baseline.py` is red for 136
+modules, including every C pass module "baseline implicitly 0" (the receipt
+predates the C frontend in the closure); Metal level-5 pcc1 hardware cases;
+`test_owned_optimizer_driver_dispatch.py`; `test_c_address_only.py` VLA
+byte-stability cases; `test_c_target_abi_contract.py`;
+`test_character_literal_semantics.py`; `test_self_backend.py` direct-call and
+branch-phi subsets; two TinyXML-shaped C++ reference cases
+(`test_cpp_class_reference_results.py`, `test_cpp_local_lvalue_references.py`);
+`test_class_method_foreign_provenance_scope.py`;
+`test_checked_extern_integer_edges.py`; `test_class_init_outlining.py`;
+`test_extern_c_string_arguments.py`; `test_c_pass_registry.py`;
+`test_freestanding_no_builtins_attribute.py`;
+`test_hoist_source_callable_bindings.py`;
+`test_native_local_from_import_values.py`; `test_owned_ir_identifier_names.py`;
+`test_py_lift_helper_exports.py` (standalone lifter).
+
+Not done, each needing design rather than mechanical edits: the closure-heavy
+`_hoist_nested_funcdefs` (1,798 lines, 14 nested functions sharing about 30
+captured names) and simplifycfg's 917-line conditional-block rewriter;
+per-module native emitters in `native_modules.py` (removing them needs each
+module's general implementation proven native, equal and fast enough);
+environment-variable consolidation (244 names, 640 reads); text IR, the
+87-mixin code generator and the CPython bridge state. Runtime-port duplicates
+are a consequence of standalone port compilation and need a performance A/B
+before any sharing.
+
+```bash
+uv run pytest -x tests/python/test_codegen_constructor_owned_state.py tests/python/test_shared_helper_owners.py tests/python/test_float_bits_copies_contract.py tests/python/test_cli_shared_helpers_contract.py tests/python/test_loop_else_break_tagging.py tests/python/test_selfhost_method_contextmanager.py tests/python/test_pipeline_missing_frontend_module.py tests/python/test_if_join_nested_rebinding.py
+```
+
 ## Owned Metal device runtime (local Mac, 2026-11-12)
 
 Metal is the first GPU device. `pcc/gpu_runtime/metal_device.py` is a

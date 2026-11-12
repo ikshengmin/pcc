@@ -1,4 +1,4 @@
-"""Phase 4c.12: pcc-Python port of py_dict.c.
+"""pcc-Python runtime ported from the removed C file py_dict.c.
 
 Compact-dict: indices[] is the open-addressing probe table holding
 i64 slots that are either PY_DICT_EMPTY (-1), PY_DICT_TOMBSTONE (-2),
@@ -1381,8 +1381,8 @@ def py_dict_get_default(d, key, default_value):
 @c_abi_export("py_dict_getitem")
 def py_dict_getitem(d, key):
     # d[key] subscript: like py_dict_get but raises KeyError (carrying the key)
-    # when absent, so try/except can catch it. Mirrors py_dict_getitem in
-    # py_dict.c; py_dict_get stays non-raising for dict.get()/setdefault().
+    # when absent, so try/except can catch it. py_dict_get stays non-raising
+    # for dict.get()/setdefault().
     v = py_dict_get(d, key)
     if ptr_is_null(v) == 0:
         return v
@@ -1397,8 +1397,7 @@ def py_dict_getitem(d, key):
 def py_dict_fromkeys(iterable, value):
     # dict.fromkeys(iterable, value): new dict, each element -> value (caller
     # passes None when omitted). Iterator protocol; clears a terminal
-    # StopIteration. Mirrors py_dict_fromkeys in py_dict.c. No break -> use a
-    # done flag.
+    # StopIteration. No break -> use a done flag.
     d = py_dict_new()
     if ptr_is_null(d) != 0:
         return null()
