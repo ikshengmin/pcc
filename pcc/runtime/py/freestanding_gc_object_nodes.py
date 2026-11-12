@@ -33,9 +33,6 @@ pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 # belong to their retirement chain. Their first-death live debit already ran.
 
 pcc_gc_object_index_find = extern("pcc_gc_object_index_find", (c_ptr,), c_ptr)
-pcc_gc_object_node_is_active = extern(
-    "pcc_gc_object_node_is_active", (c_ptr,), c_int64
-)
 pcc_thread_owns_stopped_world = extern("pcc_thread_owns_stopped_world", (), c_int64)
 pcc_gc_granule_is_object_start = extern("pcc_gc_granule_is_object_start", (c_ptr,), c_int64)
 
@@ -397,20 +394,6 @@ def pcc_gc_object_node_unlink(node: c_ptr) -> None:
         store_i64(global_addr("pcc_gc_object_list_revision"), 0, revision)
     if ptr_is_null(nxt) == 0:
         pcc_gc_object_node_set_prev(nxt, prev)
-
-
-@c_abi_export("pcc_gc_backend3_young_rebuild")
-def pcc_gc_backend3_young_rebuild() -> None:
-    pcc_gc_backend3_young_set_head(null())
-    node = pcc_gc_object_list_head()
-    while ptr_is_null(node) == 0:
-        pcc_gc_object_node_set_young_next(node, null())
-        pcc_gc_object_node_set_young_prev(node, null())
-        if pcc_gc_object_node_is_active(node) != 0:
-            obj = load_ptr(node, 0)
-            if (load_i32(obj, 12) & 128) != 0:
-                pcc_gc_backend3_young_link_head(node)
-        node = pcc_gc_object_node_next(node)
 
 
 @c_abi_export("pcc_gc_object_known_size")

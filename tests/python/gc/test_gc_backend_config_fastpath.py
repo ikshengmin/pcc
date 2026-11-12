@@ -102,7 +102,6 @@ def test_gc_backend_environment_is_exact_and_fails_closed() -> None:
 
 def test_hot_gc_paths_reuse_init_config_backend_value() -> None:
     hot_functions = {
-        "pcc_gc_try_minor_alloc": ("pcc_gc_try_minor_alloc", _GC_BACKEND_PY),
         "pcc_gc_backend4_try_zpage_alloc": (
             "pcc_gc_backend4_try_zpage_alloc",
             _GC_ZPAGE_ALLOCATION_PY,

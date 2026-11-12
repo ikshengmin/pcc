@@ -83,57 +83,6 @@ def test_backend2_production_score_moves_under_alloc_and_step(tmp_path):
     assert values[3] == values[1]
 
 
-def test_backend3_minor_productivity_and_remembered_update_score(tmp_path):
-    proc = _compile_and_run(
-        tmp_path,
-        '''
-        #include "py_runtime.h"
-        #include <stdio.h>
-
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_GENERATIONAL_MINOR_MAJOR) != 0) return 2;
-            pcc_gc_telemetry_reset();
-
-            PyObject *root = 0;
-            pcc_gc_scheduler_root_register(&root);
-            PyObject *lst = py_list_new(0);
-            if (lst == 0) return 3;
-            pcc_gc_store_root(&root, lst);
-            pcc_gc_release(lst);
-
-            for (int i = 0; i < 512; i++) {
-                PyObject *s = py_str_new("gen-object", 10);
-                if (s == 0) return 4;
-                py_list_append(root, s);
-                pcc_gc_release(s);
-                if ((i % 8) == 0) (void)pcc_gc_step(32);
-            }
-
-            (void)pcc_gc_step(1024);
-            printf("%lld\\n", (long long)pcc_gc_backend3_minor_productivity_score());
-            printf("%lld\\n", (long long)pcc_gc_backend3_remembered_update_score());
-            printf("%lld\\n", (long long)pcc_gc_telemetry(PCC_GC_COUNTER_GEN_MINOR_PRODUCTIVITY_SCORE));
-            printf("%lld\\n", (long long)pcc_gc_telemetry(PCC_GC_COUNTER_GEN_REMEMBERED_UPDATE_SCORE));
-
-            pcc_gc_store_root(&root, 0);
-            pcc_gc_scheduler_root_unregister(&root);
-            return 0;
-        }
-        ''',
-        env={
-            "PCC_GC_MINOR_HEAP_SIZE": "2048",
-            "PCC_GC_MINOR_ALLOC_MAX": "256",
-        },
-    )
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    values = [int(x) for x in proc.stdout.strip().splitlines()]
-    assert len(values) == 4
-    assert values[0] > 0
-    assert values[1] > 0
-    assert values[2] == values[0]
-    assert values[3] == values[1]
-
-
 def test_backend23_public_symbols_are_wired():
     header = (RUNTIME_DIR / "include" / "py_runtime.h").read_text(encoding="utf-8")
     py_src = (RUNTIME_DIR / "py" / "py_gc_telemetry.py").read_text(encoding="utf-8")
@@ -142,6 +91,4 @@ def test_backend23_public_symbols_are_wired():
     assert "PCC_GC_COUNTER_CMS_PRODUCTION_SCORE" in header
     assert "PCC_GC_COUNTER_GEN_MINOR_PRODUCTIVITY_SCORE" in header
     assert '@c_abi_export("pcc_gc_backend2_production_score")' in py_src
-    assert '@c_abi_export("pcc_gc_backend3_minor_productivity_score")' in py_src
     assert '"pcc_gc_backend2_production_score": (_I64, [], False)' in abi
-    assert '"pcc_gc_backend3_minor_productivity_score": (_I64, [], False)' in abi

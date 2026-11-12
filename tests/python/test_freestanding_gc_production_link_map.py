@@ -14,6 +14,9 @@ PY_RUNTIME_DIR = RUNTIME_DIR / "py"
 # member-name allowlist.
 PCC_PY_GC_SUBSTRATE_SYMBOLS = {
     "g_pcc_py_gc_minor_graph_lock",
+    # Cache-line isolation around the graph lock word.
+    "g_pcc_py_gc_minor_graph_lock_isolation_after",
+    "g_pcc_py_gc_minor_graph_lock_isolation_before",
     "g_tls_pcc_py_gc_deferred_tripwire_file",
     "g_tls_pcc_py_gc_deferred_tripwire_file$tlv$init",
     "g_tls_pcc_py_gc_deferred_tripwire_line",
@@ -28,7 +31,6 @@ PCC_PY_GC_SUBSTRATE_SYMBOLS = {
     "g_tls_pcc_py_gc_pending_minor_block$tlv$init",
     "pcc_py_gc_defer_tripwire",
     "pcc_py_gc_finish_deferred_tripwire",
-    "pcc_py_gc_minor_current_get",
     "pcc_py_gc_minor_current_set",
     "pcc_py_gc_minor_graph_lock",
     "pcc_py_gc_minor_graph_lock_for",

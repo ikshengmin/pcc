@@ -71,17 +71,3 @@ def test_native_frame_other_thread_exited_stack_is_rewritten(tmp_path, pcc_runti
     assert (result.returncode, result.stdout, result.stderr) == (
         0, "native-frame-parked-ok\n", ""
     ), result
-
-
-def test_native_frame_gc3_owned_and_borrowed_healing(tmp_path, pcc_runtime_archive):
-    executable = _compile(tmp_path, pcc_runtime_archive, "native_frame_gc3_roles")
-    # The 52-byte string must enter the nursery (64 bytes after alignment).
-    # A producer thread exits before the real conservative-pin/promotion
-    # cut. Native cells live in raw storage, so movement cannot be replaced
-    # by pinning a naked C stack alias. Conservative roots and NoRC stay on.
-    result = _run(executable, backend=3, minor_alloc_max=256)
-    assert (result.returncode, result.stdout, result.stderr) == (
-        0,
-        "native-frame-gc3-count-free-healing-ok\n",
-        "",
-    ), result

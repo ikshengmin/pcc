@@ -130,29 +130,6 @@ def test_public_forwarding_young_target_is_not_copied_away_from_raw_source():
         assert m.ns['pcc_gc_generational_oldify_copy'](target) == 0
 
 
-@pytest.mark.parametrize('count', [64, 256, 1024])
-def test_budget_one_does_not_visit_unrelated_object_nodes(count):
-    m = PipelineGC3()
-    objects = [m.value() for _ in range(count)]
-    obj, node, _ = objects[-1]
-    m.ns['pcc_gc_backend3_young_link_head'](node)
-    m.stopped = False
-    original_load = m.ns['load_ptr']
-    linked_nodes = {item[1] for item in objects}
-    link_reads = []
-
-    def observe(address, offset=0):
-        if address in linked_nodes and offset == 16:
-            link_reads.append(address)
-        return original_load(address, offset)
-
-    m.ns['load_ptr'] = observe
-    assert m.ns['pcc_gc_generational_step'](1, 1) == 1
-    assert len(link_reads) <= 2
-    assert m.load('pcc_gc_backend3_step_pin_snapshot', 0) == 0
-    assert not m.stopped
-
-
 def _linux_x86_64():
     import platform
     return platform.system() == 'Linux' and platform.machine().lower() in ('x86_64', 'amd64')

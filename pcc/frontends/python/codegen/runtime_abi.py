@@ -109,9 +109,6 @@ def _runtime_signatures_part_1():
     return {
     "pcc_gc_backend3_enable_closed_young_domain": (_VOID, [], False),
     "pcc_gc_backend3_revoke_closed_young_domain": (_VOID, [], False),
-    "pcc_gc_backend3_collect_closed_young": (_I64, [], False),
-    "pcc_gc_backend3_young_cut_count": (_I64, [], False),
-    "pcc_gc_backend3_young_cut_reclaimed": (_I64, [], False),
     "pcc_gc_store_root_known": (_VOID, [_PTR, _PYOBJ], False),
     "pcc_gc_store_root_take_known": (_VOID, [_PTR, _PYOBJ], False),
     "pcc_gc_root_move": (_I64, [_PTR, _PTR], False),
@@ -149,11 +146,6 @@ def _runtime_signatures_part_2():
         False,
     ),
     "pcc_gc_backend4_reseed_plan_probe_state": (_I64, [], False),
-    "pcc_gc_backend3_remembered_scan_probe_config": (
-        _VOID,
-        [_I64],
-        False,
-    ),
     "pcc_gc_backend4_remap_and_retire_unlocked": (_VOID, [_PTR], False),
     "pcc_gc_backend4_remap_and_retire_stopped_world": (_I64, [], False),
     "pcc_gc_backend4_finish_retained_page_releases": (_VOID, [_PTR], False),
@@ -329,8 +321,6 @@ def _runtime_signatures_part_5():
     "pcc_gc_backend4_large_page_live_bytes": (_I64, [], False),
     "pcc_gc_backend2_production_score": (_I64, [], False),
     "pcc_gc_backend2_worker_buffer_score": (_I64, [], False),
-    "pcc_gc_backend3_minor_productivity_score": (_I64, [], False),
-    "pcc_gc_backend3_remembered_update_score": (_I64, [], False),
     "pcc_gc_scheduler_root_count": (_I64, [], False),
     "pcc_gc_frame_root_slot_count": (_I64, [], False),
     "pcc_gc_continuation_root_slot_count": (_I64, [], False),
@@ -2554,7 +2544,6 @@ def _cross_object_signatures_part_5():
     "pcc_gc_object_node_unlink": (("c_ptr",), "c_void"),
     "pcc_gc_backend3_young_link_head": (("c_ptr",), "c_void"),
     "pcc_gc_backend3_young_unlink": (("c_ptr",), "c_void"),
-    "pcc_gc_backend3_young_rebuild": ((), "c_void"),
     "pcc_gc_object_known_size": (("c_ptr",), "c_int64"),
     "pcc_gc_live_bytes_subtract": (("c_int64",), "c_void"),
     "pcc_gc_forwarding_find": (("c_ptr",), "c_ptr"),
@@ -2641,16 +2630,6 @@ def _cross_object_signatures_part_5():
     "pcc_gc_backend3_remembered_owner_list_head": ((), "c_ptr"),
     "pcc_gc_backend3_remembered_owner_list_set_head": (("c_ptr",), "c_void"),
     "pcc_gc_backend3_remember_owner": (("c_ptr", "c_int64"), "c_void"),
-    "pcc_gc_backend3_clear_remembered_owners": ((), "c_ptr"),
-    "pcc_gc_backend3_finish_detached_remembered_owners": (
-        ("c_ptr",),
-        "c_void",
-    ),
-    "pcc_gc_backend3_scan_remembered_owners": (("c_int64",), "c_int64"),
-    "pcc_gc_backend3_drain_remembered_owners": (
-        ("c_int64", "c_ptr"),
-        "c_int64",
-    ),
     }
 
 
@@ -2687,15 +2666,15 @@ def _cross_object_signatures_part_6():
 
 def _cross_object_signatures_part_7():
     return {
-    "pcc_gc_backend3_drain_promotion_worklist": (
-        ("c_int64",),
-        "c_int64",
-    ),
     "pcc_gc_backend3_promotion_probe_config": (
         ("c_int64",),
         "c_void",
     ),
     "pcc_gc_backend3_promotion_probe_state": ((), "c_int64"),
+    "pcc_gc_backend3_drain_promotion_worklist": (
+        ("c_int64",),
+        "c_int64",
+    ),
     "pcc_gc_generational_promote_young_if_known": (("c_ptr",), "c_void"),
     "pcc_gc_generational_retain_closed_young": (("c_ptr",), "c_void"),
     "pcc_gc_generational_promote_owned_slot_mode": (
@@ -2716,19 +2695,6 @@ def _cross_object_signatures_part_7():
         "c_void",
     ),
     "pcc_gc_backend4_zpage_note_owner_promoted": (("c_ptr",), "c_void"),
-    "pcc_gc_generational_promote_frame_roots": (("c_int64",), "c_void"),
-    "pcc_gc_generational_promote_scheduler_roots": (
-        ("c_int64",),
-        "c_void",
-    ),
-    "pcc_gc_generational_promote_tls_exception_root": (
-        ("c_ptr",),
-        "c_void",
-    ),
-    "pcc_gc_generational_step": (
-        ("c_int64", "c_int64"),
-        "c_int64",
-    ),
     "pcc_gc_incremental_concurrent_step": (("c_int64",), "c_int64"),
     "pcc_gc_precise_stack_diff_if_requested": ((), "c_void"),
     "pcc_gc_step": (("c_int64",), "c_int64"),
@@ -3294,9 +3260,6 @@ def _cross_object_signatures_part_14():
     return {
         "pcc_gc_backend3_enable_closed_young_domain": ((), "c_void"),
         "pcc_gc_backend3_revoke_closed_young_domain": ((), "c_void"),
-        "pcc_gc_backend3_collect_closed_young": ((), "c_int64"),
-        "pcc_gc_backend3_young_cut_count": ((), "c_int64"),
-        "pcc_gc_backend3_young_cut_reclaimed": ((), "c_int64"),
         "py_weakref_clear_tracing_candidates": ((), "c_int64"),
         "pcc_gc_gray_conservative_and_listed_pinned_roots": ((), "c_int64"),
         "pcc_gc_gray_registered_roots": ((), "c_void"),

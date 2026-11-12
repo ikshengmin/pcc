@@ -60,13 +60,3 @@ def test_native_mutations_use_no_global_registry_or_collection_request():
     for filename in ("py_list.py", "py_list_native_entry.py"):
         calls = set(named_calls(parsed(filename)))
         assert not {"pcc_gc_scheduler_root_register_handle", "pcc_gc_scheduler_root_unregister_handle", "pcc_gc_frame_enter", "pcc_gc_frame_leave"}.intersection(calls)
-
-
-def test_generational_admission_covers_every_moving_source():
-    fn = functions(parsed("freestanding_gc_generational_scheduler.py"))["pcc_gc_generational_step"]
-    calls = [(n.lineno, n.func.id) for n in ast.walk(fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)]
-    stop = min(line for line, name in calls if name == "pcc_stop_the_world")
-    resume = max(line for line, name in calls if name == "pcc_resume_world")
-    sources = {"pcc_gc_generational_promote_frame_roots", "pcc_gc_generational_promote_scheduler_roots", "pcc_gc_generational_promote_tls_exception_root", "pcc_gc_backend3_drain_remembered_owners", "pcc_gc_backend3_drain_promotion_worklist", "pcc_capi_visit_extension_module_state_roots"}
-    for name in sources:
-        assert any(stop < line < resume for line, candidate in calls if candidate == name), name

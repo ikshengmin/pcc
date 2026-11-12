@@ -602,13 +602,3 @@ def pcc_gc_backend2_worker_buffer_score() -> i64:
 @c_abi_export("pcc_gc_backend2_production_score")
 def pcc_gc_backend2_production_score() -> i64:
     return pcc_gc_telemetry(28)
-
-
-@c_abi_export("pcc_gc_backend3_minor_productivity_score")
-def pcc_gc_backend3_minor_productivity_score() -> i64:
-    return pcc_gc_telemetry(30)
-
-
-@c_abi_export("pcc_gc_backend3_remembered_update_score")
-def pcc_gc_backend3_remembered_update_score() -> i64:
-    return pcc_gc_telemetry(31)

@@ -211,7 +211,6 @@ void pcc_vthread_effect_note_waiter_root_leave(void);
 
 /* ---- GC backend selector/telemetry internals ------------------------- */
 void pcc_gc_note_alloc(int64_t bytes);
-void *pcc_gc_try_minor_alloc(int64_t bytes);
 void *pcc_gc_backend4_try_zpage_alloc(int64_t bytes, int32_t flags);
 void pcc_gc_note_object_allocated(PyObject *o);
 void pcc_gc_note_object_allocated_sized(PyObject *o, int64_t size);
@@ -222,9 +221,6 @@ void pcc_gc_free_object_memory(PyObject *o);
  * a later generated entry must not reopen a dynamically loaded domain. */
 void pcc_gc_backend3_enable_closed_young_domain(void);
 void pcc_gc_backend3_revoke_closed_young_domain(void);
-int64_t pcc_gc_backend3_collect_closed_young(void);
-int64_t pcc_gc_backend3_young_cut_count(void);
-int64_t pcc_gc_backend3_young_cut_reclaimed(void);
 int64_t pcc_capi_is_cext_type_tag(int64_t type_tag);
 int64_t pcc_capi_dealloc_cext_object(PyObject *o, int64_t type_tag);
 PyObject *pcc_capi_call_cext_object(

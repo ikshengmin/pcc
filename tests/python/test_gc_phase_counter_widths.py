@@ -216,7 +216,6 @@ def _host_functions(*, other_mutators=()):
         # These width tests publish no stack map and do not opt into the
         # differential walk. The real callback is inert in that configuration.
         "pcc_gc_precise_stack_diff_if_requested": lambda: None,
-        "pcc_gc_generational_step": lambda budget, automatic: 0,
         "pcc_gc_backend3_drain_promotion_worklist": lambda budget: 0,
         "pcc_gc_backend4_step_remembered_roots": lambda budget: 0,
         "pcc_gc_backend4_step_generation_aging": lambda budget: 0,
@@ -410,7 +409,7 @@ def test_host_source_nonmoving_steps_share_scheduler_and_wide_telemetry(
 
     for symbol in (
         "pcc_thread_owns_stopped_world", "pcc_stop_the_world", "pcc_resume_world",
-        "pcc_gc_precise_stack_diff_if_requested", "pcc_gc_generational_step",
+        "pcc_gc_precise_stack_diff_if_requested",
         "pcc_gc_backend3_drain_promotion_worklist",
         "pcc_gc_backend4_step_remembered_roots",
         "pcc_gc_backend4_step_generation_aging",

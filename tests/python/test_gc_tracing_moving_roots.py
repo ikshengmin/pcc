@@ -19,7 +19,8 @@ SOURCE = Path(__file__).resolve().parents[2] / (
         (0, 0, 0, 0, []),
         (1, 0, 0, 0, ["incremental"]),
         (2, 0, 0, 0, ["incremental"]),
-        (3, 0, 0, 0, ["stop", "moving", "resume"]),
+        # GC3 marks with the shared step since it stopped moving objects.
+        (3, 0, 0, 0, ["incremental"]),
         (4, 0, 0, 0, ["stop", "moving", "resume"]),
         (4, 1, 0, 0, ["stop", "pins", "moving", "resume"]),
         (4, 1, 1, 0, ["pins", "moving"]),
@@ -81,7 +82,6 @@ def test_step_refreshes_current_raw_roots_before_any_moving_work(
         "pcc_platform_monotonic_us": lambda: 10,
         "pcc_gc_tracing_record_pause": lambda start, end: None,
         "pcc_gc_incremental_concurrent_step": lambda budget: events.append("incremental") or budget,
-        "pcc_gc_generational_step": move,
         "pcc_gc_backend4_step_remembered_roots": lambda budget: 0,
         "pcc_gc_backend3_drain_promotion_worklist": lambda budget: 0,
         "pcc_gc_tracing_step_cycle": lambda budget: 0,

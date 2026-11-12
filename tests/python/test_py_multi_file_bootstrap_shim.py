@@ -3882,8 +3882,8 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             pcc_gc_backend2_worker_buffer_score = extern(
                 "pcc_gc_backend2_worker_buffer_score", (), c_int64
             )
-            pcc_gc_backend3_minor_productivity_score = extern(
-                "pcc_gc_backend3_minor_productivity_score", (), c_int64
+            pcc_gc_backend2_production_score = extern(
+                "pcc_gc_backend2_production_score", (), c_int64
             )
 
 
@@ -3892,7 +3892,7 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
                 print(pcc_gc_telemetry(0))
                 print(pcc_gc_telemetry(29))
                 print(pcc_gc_backend2_worker_buffer_score())
-                print(pcc_gc_backend3_minor_productivity_score())
+                print(pcc_gc_backend2_production_score())
                 print(pcc_gc_telemetry(999))
 
 
@@ -3932,8 +3932,6 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             '@c_abi_export("pcc_gc_telemetry")',
             '@c_abi_export("pcc_gc_backend2_worker_buffer_score")',
             '@c_abi_export("pcc_gc_backend2_production_score")',
-            '@c_abi_export("pcc_gc_backend3_minor_productivity_score")',
-            '@c_abi_export("pcc_gc_backend3_remembered_update_score")',
         ):
             self.assertNotIn(needle, backend_text)
             self.assertIn(needle, telemetry_text)

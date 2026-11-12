@@ -85,15 +85,8 @@ def test_root_reads_preserve_null_immediates_and_relocation(
     result = ns[name](200, slot)
     if not slot:
         assert result == 0 and events == []
-    elif barrier and forwarding and value == 42 and backend == 3:
-        # A GC3 field (owner 200) moves its reference from the shell to the
-        # copy as collector promotion does (test_gc3_forwarded_field_heal.py).
-        assert result == 242 and memory[slot] == 242
-        assert events == [
-            ("read", slot, 0), ("note",), ("resolve", value),
-            ("incref", 242), ("swap", slot, 0, value, 242), ("decref", value),
-        ]
-    elif barrier and forwarding and value == 42:
+    elif barrier and forwarding and value == 42 and backend == 4:
+        # Only the relocating collector forwards; GC3 reads plainly.
         assert result == 242 and memory[slot] == 242
         assert events == [
             ("read", slot, 0), ("note",), ("resolve", value),

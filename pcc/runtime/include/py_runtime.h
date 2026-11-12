@@ -808,9 +808,6 @@ int64_t   pcc_gc_backend4_reseed_plan_probe_state(void);
 /* Deterministic Backend-3 remembered-owner OOM seam.  -1 is the production
  * default, 0 forces overflow fallback, and positive values allow that many
  * remembered-node allocations before forcing fallback. */
-void      pcc_gc_backend3_remembered_scan_probe_config(
-    int64_t allocation_limit
-);
 int64_t   pcc_gc_backend4_evacuation_page_candidate_bytes(void);
 int64_t   pcc_gc_backend4_evacuation_page_dirty_cards(void);
 int64_t   pcc_gc_backend4_store_buffer_drain_batches(void);
@@ -891,8 +888,6 @@ int64_t   pcc_gc_backend4_medium_page_live_bytes(void);
 int64_t   pcc_gc_backend4_large_page_live_bytes(void);
 int64_t   pcc_gc_backend2_production_score(void);
 int64_t   pcc_gc_backend2_worker_buffer_score(void);
-int64_t   pcc_gc_backend3_minor_productivity_score(void);
-int64_t   pcc_gc_backend3_remembered_update_score(void);
 int64_t   pcc_gc_scheduler_root_count(void);
 int64_t   pcc_gc_frame_root_slot_count(void);
 int64_t   pcc_gc_continuation_root_slot_count(void);
@@ -982,7 +977,6 @@ int64_t pcc_resume_world(void);
 int64_t pcc_runtime_now_us(void);
 int64_t pcc_runtime_monotonic_us(void);
 int64_t pcc_runtime_sleep_ns(int64_t delay_ns);
-void   *pcc_py_gc_minor_current_get(void);
 void    pcc_py_gc_minor_current_set(void *block);
 void   *pcc_py_gc_pending_minor_block_get(void);
 void    pcc_py_gc_pending_minor_block_set(void *block);

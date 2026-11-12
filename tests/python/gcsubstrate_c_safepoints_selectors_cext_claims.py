@@ -304,19 +304,6 @@ def test_refcount_cycle_gc_collect_wraps_stw_gate_in_c_and_pcc_python_runtime():
     )
 
 
-def test_generational_backend_step_polls_thread_safepoint_in_c_and_pcc_python_runtime():
-
-    py_src = PY_GC_BARRIER_DISPATCHER.read_text(encoding="utf-8")
-    py_body = py_src.split("def pcc_gc_step(budget: i64) -> i64:", 1)[1]
-    py_body = py_body.split("def pcc_gc_note_alloc", 1)[0]
-    py_body = py_body.split("if backend == 3:", 1)[1]
-    py_body = py_body.split("elif backend == 4:", 1)[0]
-    py_helper = PY_GC_GENERATIONAL_SCHEDULER.read_text(encoding="utf-8")
-    assert 'extern("pcc_thread_safepoint"' in py_helper
-    assert "pcc_gc_generational_step(budget, 1)" in py_body
-    assert "pcc_thread_safepoint()" in py_helper
-
-
 @pytest.mark.parametrize("kind", ["pcc_python"])
 def test_colored_generation_aging_polls_only_after_releasing_graph_lock(
     tmp_path: Path,

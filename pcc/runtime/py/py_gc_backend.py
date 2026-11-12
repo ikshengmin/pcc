@@ -469,12 +469,6 @@ pcc_gc_note_write_barrier = extern(
 _backend3_remember_owner = extern(
     "pcc_gc_backend3_remember_owner", (c_ptr, c_int64), c_void
 )
-_backend3_clear_remembered_owners = extern(
-    "pcc_gc_backend3_clear_remembered_owners", (), c_ptr
-)
-_backend3_finish_detached_remembered_owners = extern(
-    "pcc_gc_backend3_finish_detached_remembered_owners", (c_ptr,), c_void
-)
 _promote_young_if_known = extern(
     "pcc_gc_generational_promote_young_if_known", (c_ptr,), c_void
 )
@@ -493,9 +487,6 @@ _trace_referents_for_promotion_mode = extern(
 )
 _trace_referents_for_promotion = extern(
     "pcc_gc_trace_referents_for_promotion", (c_ptr,), c_void
-)
-_step_generational_promotion = extern(
-    "pcc_gc_generational_step", (c_int64, c_int64), c_int64
 )
 pcc_gc_frame_index_insert = extern(
     "pcc_gc_frame_index_insert",
@@ -607,7 +598,6 @@ pcc_thread_safepoint = extern("pcc_thread_safepoint", (), c_void)
 pcc_stop_the_world = extern("pcc_stop_the_world", (), c_int64)
 pcc_resume_world = extern("pcc_resume_world", (), c_int64)
 pcc_runtime_now_us = extern("pcc_platform_monotonic_us", (), c_int64)
-pcc_py_gc_minor_current_get = extern("pcc_py_gc_minor_current_get", (), c_ptr)
 pcc_py_gc_minor_current_set = extern("pcc_py_gc_minor_current_set", (c_ptr,), c_void)
 pcc_py_gc_pending_minor_block_get = extern(
     "pcc_py_gc_pending_minor_block_get", (), c_ptr
@@ -771,28 +761,9 @@ def _gc_ptr_can_have_header(o) -> bool:
     return pcc_gc_pointer_is_managed(o) != 0
 
 
-pcc_gc_backend3_collect_closed_young = extern(
-    "pcc_gc_backend3_collect_closed_young", (), c_int64
-)
 pcc_gc_backend3_revoke_closed_young_domain = extern(
     "pcc_gc_backend3_revoke_closed_young_domain", (), c_void
 )
-
-
-def _minor_collect_reset() -> None:
-    _atomic_i32_add_fetch(global_addr("pcc_gc_minor_collections"), 1)
-    if load_i32(global_addr("pcc_gc_backend_selected"), 0) == 3:
-        if pcc_gc_backend3_collect_closed_young() < 0:
-            _step_generational_promotion(1024, 0)
-    _atomic_i32_store(global_addr("pcc_gc_minor_bytes"), 0)
-
-
-def _note_minor_alloc(bytes: int) -> None:
-    max_size: int = load_i32(global_addr("pcc_gc_minor_alloc_max"), 0)
-    if bytes <= 0 or bytes > max_size:
-        return
-    _atomic_i32_add_fetch(global_addr("pcc_gc_minor_allocations"), 1)
-    _atomic_i32_add_fetch(global_addr("pcc_gc_minor_bytes"), bytes)
 
 
 def _align16(bytes: int) -> int:
@@ -803,14 +774,6 @@ def _align16(bytes: int) -> int:
 
 def _minor_blocks_head():
     return global_load_ptr("pcc_gc_minor_blocks")
-
-
-def _set_minor_blocks_head(head) -> None:
-    global_store_ptr("pcc_gc_minor_blocks", head)
-
-
-def _minor_current():
-    return pcc_py_gc_minor_current_get()
 
 
 def _set_minor_current(block) -> None:
@@ -829,14 +792,6 @@ def _minor_block_base(block):
     return load_ptr(block, 0)
 
 
-def _minor_block_used(block) -> int:
-    return load_i64(block, 8)
-
-
-def _set_minor_block_used(block, used: int) -> None:
-    store_i64(block, 8, used)
-
-
 def _minor_block_size(block) -> int:
     return load_i64(block, 16)
 
@@ -845,50 +800,8 @@ def _minor_block_next(block):
     return load_ptr(block, 24)
 
 
-def _set_minor_block_next(block, nxt) -> None:
-    store_ptr(block, 24, nxt)
-
-
-def _minor_block_live(block) -> int:
-    return _atomic_i64_load(ptr_add(block, 32))
-
-
-def _set_minor_block_live(block, live: int) -> None:
-    _atomic_i64_store(ptr_add(block, 32), live)
-
-
 def _minor_block_owner(block) -> int:
     return load_i64(block, 40)
-
-
-def _minor_new_block(min_bytes: int):
-    block_bytes: int = load_i32(global_addr("pcc_gc_minor_heap_size"), 0)
-    if block_bytes < min_bytes:
-        block_bytes = min_bytes
-    block_bytes = _align16(block_bytes)
-    if block_bytes <= 0:
-        return null()
-
-    block = malloc(48)
-    if ptr_is_null(block) != 0:
-        return null()
-    base = malloc(block_bytes)
-    if ptr_is_null(base) != 0:
-        free(block)
-        return null()
-    memset(base, 0, block_bytes)
-    store_ptr(block, 0, base)
-    store_i64(block, 8, 0)
-    store_i64(block, 16, block_bytes)
-    store_i64(block, 32, 0)
-    store_i64(block, 40, pcc_current_thread_id())
-    pcc_py_gc_minor_graph_lock()
-    store_ptr(block, 24, _minor_blocks_head())
-    _set_minor_blocks_head(block)
-    pcc_py_gc_minor_graph_unlock()
-    _set_minor_current(block)
-    _atomic_i32_add_fetch(global_addr("pcc_gc_minor_arena_refills"), 1)
-    return block
 
 
 def _minor_release_block(block) -> None:
@@ -917,89 +830,6 @@ def _minor_block_containing(ptr):
             return node
         node = _minor_block_next(node)
     return null()
-
-
-def _minor_find_reusable_block(min_bytes: int):
-    owner: int = pcc_current_thread_id()
-    pcc_py_gc_minor_graph_lock()
-    node = _minor_blocks_head()
-    while ptr_is_null(node) == 0:
-        if (
-            _minor_block_owner(node) == owner
-            and _minor_block_live(node) == 0
-            and _minor_block_size(node) >= min_bytes
-        ):
-            _set_minor_block_used(node, 0)
-            pcc_py_gc_minor_graph_unlock()
-            _set_minor_current(node)
-            _atomic_i32_store(global_addr("pcc_gc_minor_bytes"), 0)
-            return node
-        node = _minor_block_next(node)
-    pcc_py_gc_minor_graph_unlock()
-    return null()
-
-
-@c_abi_export("pcc_gc_try_minor_alloc")
-def pcc_gc_try_minor_alloc(bytes: int):
-    backend: int = 0
-    if load_i32(global_addr("pcc_gc_config_initialized"), 0) == 0:
-        backend = _init_config()
-    else:
-        backend = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    _set_pending_minor_block(null())
-    if backend != 3:
-        return null()
-    # A count-free GC3 never moves an object: it has no nursery block to
-    # copy survivors out of.
-    if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
-        return null()
-
-    aligned: int = _align16(bytes)
-    max_size: int = load_i32(global_addr("pcc_gc_minor_alloc_max"), 0)
-    if aligned <= 0 or aligned > max_size:
-        _atomic_i32_add_fetch(global_addr("pcc_gc_minor_arena_fallbacks"), 1)
-        return null()
-
-    block = _minor_current()
-    if ptr_is_null(block) == 0:
-        used: int = _minor_block_used(block)
-        total: int = _minor_block_size(block)
-        if total - used < aligned:
-            if (
-                _minor_block_owner(block) == pcc_current_thread_id()
-                and _minor_block_live(block) == 0
-                and total >= aligned
-            ):
-                _set_minor_block_used(block, 0)
-                _atomic_i32_store(global_addr("pcc_gc_minor_bytes"), 0)
-            else:
-                # A refill may stop the world to promote stack roots. A
-                # caller holding a graph/no-park region cannot suspend;
-                # use the existing non-nursery allocation fallback instead.
-                # Leave the full nursery pending for the next permitted
-                # refill, without clearing the caller's ownership markers.
-                if pcc_thread_no_park_depth() > 0:
-                    _atomic_i32_add_fetch(global_addr("pcc_gc_minor_arena_fallbacks"), 1)
-                    return null()
-                _minor_collect_reset()
-                block = _minor_find_reusable_block(aligned)
-    if ptr_is_null(block) != 0:
-        block = _minor_find_reusable_block(aligned)
-    if ptr_is_null(block) != 0:
-        block = _minor_new_block(aligned)
-        if ptr_is_null(block) != 0:
-            _atomic_i32_add_fetch(global_addr("pcc_gc_minor_arena_fallbacks"), 1)
-            return null()
-
-    used2: int = _minor_block_used(block)
-    mem = ptr_add(_minor_block_base(block), used2)
-    _set_minor_block_used(block, used2 + aligned)
-    _atomic_i64_add_fetch(ptr_add(block, 32), 1)
-    _set_pending_minor_block(block)
-    _atomic_i32_add_fetch(global_addr("pcc_gc_minor_arena_bumps"), 1)
-    _note_minor_alloc(aligned)
-    memset(mem, 0, bytes)
-    return mem
 
 
 def _counter_global(metric: int):
@@ -2876,14 +2706,6 @@ def _mark_gray_if_known(o) -> None:
         if (flags & 16) == 0:
             _inc_gray_count()
         store_i32(o, 12, (flags & ~56) | 16)
-
-
-def _promote_young_slot(slot_base, slot_offset: int) -> None:
-    _promote_young_slot_mode(slot_base, slot_offset, 1)
-
-
-def _promote_young_borrowed_slot(slot_base, slot_offset: int) -> None:
-    _promote_young_borrowed_slot_mode(slot_base, slot_offset, 1)
 
 
 def _gray_exists() -> int:

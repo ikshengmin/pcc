@@ -182,10 +182,10 @@ class GC3(RetirementState):
         self.load_bodies('py_gc_backend.py', {
             '_gc3_forwarded_target_may_die', 'pcc_gc_backend3_finish_forwarded_source',
             'pcc_gc_note_object_freeing', 'pcc_gc_free_object_memory',
-            '_minor_release_block', '_minor_block_containing', '_minor_find_reusable_block',
-            '_minor_blocks_head', '_set_minor_blocks_head', '_minor_current', '_set_minor_current',
-            '_minor_block_base', '_minor_block_size', '_minor_block_used', '_set_minor_block_used',
-            '_minor_block_next', '_minor_block_live', '_minor_block_owner',
+            '_minor_release_block', '_minor_block_containing',
+            '_minor_blocks_head', '_set_minor_current',
+            '_minor_block_base', '_minor_block_size',
+            '_minor_block_next', '_minor_block_owner',
             '_atomic_i64_dec_if_positive', '_atomic_i64_load', '_atomic_i64_store', '_atomic_i32_store',
         })
         self.load_bodies('py_obj_dealloc.py', {
@@ -378,27 +378,15 @@ class GC3(RetirementState):
         callback(obj + 24, 1, context)
         return 1
 
-    def value(self, tag=abi.PY_TYPE_FLOAT, nursery=False):
+    def value(self, tag=abi.PY_TYPE_FLOAT):
         size = 40 if tag in (abi.PY_TYPE_STR, abi.PY_TYPE_BYTES, abi.PY_TYPE_BYTEARRAY, abi.PY_TYPE_LIST) else 32
         block = 0
-        if nursery:
-            block = self.allocate(48)
-            base = self.malloc(33554432)
-            obj = base
-            self.store(block, 0, base)
-            self.store(block, 8, size)
-            self.store(block, 16, 33554432)
-            self.store(block, 24, self.ns['_minor_blocks_head']())
-            self.store(block, 32, 1)
-            self.store(block, 40, 1)
-            self.ns['_set_minor_blocks_head'](block)
-        else:
-            obj = self.malloc(size)
+        obj = self.malloc(size)
         node = self.ns['pcc_gc_object_node_alloc']()
         self.zero(node, 0, 88)
         self.store(obj, 0, 1)
         self.store(obj, 8, tag)
-        self.store(obj, 12, 8 | 128 | (4096 if nursery else 262144))
+        self.store(obj, 12, 8 | 128 | 262144)
         self.store(obj, 16, 271828)
         self.store(node, 0, obj)
         self.store(node, 8, size)
@@ -548,93 +536,6 @@ def test_gc3_public_install_reverse_chain_survives_retarget():
     assert m.depth == 0
 
 
-def test_source_target_death_consumes_nursery_occupancy_without_ordinary_decref():
-    m = GC3()
-    source, source_node, block = m.value(nursery=True)
-    target = m.copy(source)
-    assert target and m.load(source_node, 32) == 1 and m.load(block, 32) == 1
-    edge = m.forwardings[source]
-    assert edge not in m.freed and m.reverse[target] == edge
-    assert m.load('pcc_gc_forwarding_population', 0) == 1
-    m.ns['pcc_gc_note_object_freeing'](target)
-    m.ns['pcc_gc_free_object_memory'](target)
-    assert source not in m.index and target not in m.index
-    assert m.load(block, 32) == 0 and m.load(block, 8) == 0
-    assert target in m.freed and source not in m.freed
-    assert not [event for event in m.events if event[0] in ('incref', 'decref')]
-    assert m.load('pcc_gc_forwarding_population', 0) == 0
-
-
-def test_freeing_consults_forwarded_source_liveness_only_for_a_target():
-    # Every target install sets 8192 and GC3 never clears it: an object
-    # without it is no target and frees without the extra graph hold.
-    m = GC3()
-    asked = []
-    may_die = m.ns['_gc3_forwarded_target_may_die']
-    m.ns['_gc3_forwarded_target_may_die'] = lambda obj: asked.append(obj) or may_die(obj)
-    plain, plain_node, _ = m.value()
-    assert not m.load(plain, 12) & 8192
-    m.ns['pcc_gc_note_object_freeing'](plain)
-    m.ns['pcc_gc_free_object_memory'](plain)
-    assert asked == [] and plain in m.freed and plain not in m.index
-    source, _, _ = m.value(nursery=True)
-    target = m.copy(source)
-    assert m.load(target, 12) & 8192
-    m.ns['pcc_gc_note_object_freeing'](target)
-    m.ns['pcc_gc_free_object_memory'](target)
-    # Each freeing step still asks for a target (unchanged).
-    assert asked and set(asked) == {target} and target in m.freed
-
-
-def test_live_target_major_remap_releases_old_nursery_and_heals_roots():
-    m = GC3()
-    source, source_node, block = m.value(nursery=True)
-    target = m.copy(source)
-    slot = m.allocate(8)
-    m.store(slot, 0, source)
-    m.root_cells.append(slot)
-    identity = m.load(m.identities[target], 8)
-    assert m.remap() > 0
-    assert m.load(slot, 0) == target and target in m.index
-    assert m.load(m.identities[target], 8) == identity
-    assert source not in m.index and m.load(block, 32) == 0
-    assert m.ns['_minor_find_reusable_block'](32) == block
-    assert m.load('pcc_gc_forwarding_population', 0) == 0
-
-
-@pytest.mark.parametrize('root_kind', ['raw', 'module'])
-def test_old_raw_or_byvalue_module_alias_defers_shell_retirement(root_kind):
-    m = GC3()
-    source, source_node, block = m.value(nursery=True)
-    target = m.copy(source)
-    if root_kind == 'raw':
-        m.words = [source + 16]
-    else:
-        m.module_roots = [source]
-    m.remap()
-    assert source in m.index and m.forwardings[source]
-    assert m.load(source_node, 56) == 1 and m.load(block, 32) == 1
-    m.ns['pcc_gc_note_object_freeing'](target)
-    m.ns['pcc_gc_free_object_memory'](target)
-    assert source in m.index and target in m.index
-    m.words.clear()
-    m.module_roots.clear()
-    assert m.remap() > 0
-    assert source not in m.index and target in m.index and m.load(block, 32) == 0
-
-
-def test_inactive_raw_source_is_a_conservative_liveness_root_for_canonical_target():
-    m = GC3()
-    source, source_node, block = m.value(nursery=True)
-    target = m.copy(source)
-    m.words = [source + 8]
-    m.ns['pcc_gc_gray_conservative_thread_roots']()
-    assert m.load(source_node, 56) == 1 and m.load(target, 12) & 16
-    m.words.clear()
-    m.ns['pcc_gc_pin_conservative_thread_roots']()
-    assert m.load(source_node, 56) == 0 and m.load(m.index[target], 56) == 0
-
-
 @pytest.mark.parametrize('tag', [abi.PY_TYPE_INT, abi.PY_TYPE_FLOAT, abi.PY_TYPE_STR,
                                 abi.PY_TYPE_COMPLEX, abi.PY_TYPE_BYTES,
                                 abi.PY_TYPE_BYTEARRAY, abi.PY_TYPE_CPY_HANDLE])
@@ -661,30 +562,3 @@ def test_every_oldify_failure_prefix_keeps_source_payload_and_discards_only_copy
     # borrowed until the real move helper, and forward rollback moves it back.
     copied = next(ptr for ptr in m.raw if ptr not in raw_before)
     assert m.raw[copied] == m.load(node, 8) and copied in m.freed
-
-
-def test_cpy_handle_source_retirement_does_not_release_transferred_foreign_owner():
-    m = GC3()
-    source, node, block = m.value(abi.PY_TYPE_CPY_HANDLE, nursery=True)
-    foreign = m.load(source, 16)
-    target = m.copy(source)
-    assert m.load(source, 16) == 0 and m.load(target, 16) == foreign
-    assert m.remap() > 0
-    assert not m.foreign_releases and m.load(block, 32) == 0
-    m.ns['pcc_gc_dealloc_typed'](target, abi.PY_TYPE_CPY_HANDLE)
-    assert m.foreign_releases == [foreign]
-
-
-def test_unfinished_major_or_pending_disposal_never_retires_source():
-    m = GC3()
-    source, node, block = m.value(nursery=True)
-    target = m.copy(source)
-    for flag in ('pcc_gc_mark_active', 'pcc_gc_cycle_requested'):
-        m.store(flag, 0, 1)
-        assert m.remap() == 0 and source in m.index
-        m.store(flag, 0, 0)
-    m.store(target, 12, m.load(target, 12) | 1024)
-    assert m.remap() == 0 and m.load(block, 32) == 1
-    m.store(target, 12, m.load(target, 12) & ~1024)
-    m.gated = False
-    assert m.remap() == 0 and source in m.index

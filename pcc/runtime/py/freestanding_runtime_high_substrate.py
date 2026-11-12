@@ -122,11 +122,6 @@ def pcc_gc_tripwire_defer_or_fail(msg, file, line: i64) -> i64:
     return 0
 
 
-@c_abi_export("pcc_py_gc_minor_current_get")
-def pcc_py_gc_minor_current_get() -> c_ptr:
-    return global_load_ptr("g_tls_pcc_py_gc_minor_current")
-
-
 @c_abi_export("pcc_py_gc_minor_current_set")
 def pcc_py_gc_minor_current_set(block: c_ptr) -> None:
     global_store_ptr("g_tls_pcc_py_gc_minor_current", block)

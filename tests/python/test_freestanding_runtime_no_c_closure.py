@@ -1948,7 +1948,6 @@ def test_runtime_high_substrate_is_owned_by_freestanding_pcc_python(
     owners = _defined_symbol_owners(pcc_runtime_archive)
     expected_owner = {"freestanding_runtime_high_substrate.o"}
     for symbol in (
-        "pcc_py_gc_minor_current_get",
         "pcc_py_gc_minor_current_set",
         "pcc_py_gc_pending_minor_block_get",
         "pcc_py_gc_pending_minor_block_set",
@@ -1976,8 +1975,6 @@ def test_runtime_high_substrate_tls_and_reentrant_lock_behavior(
 #include <stdint.h>
 #include <stddef.h>
 
-void *pcc_py_gc_minor_current_get(void);
-void pcc_py_gc_minor_current_set(void *block);
 void *pcc_py_gc_pending_minor_block_get(void);
 void pcc_py_gc_pending_minor_block_set(void *block);
 void pcc_py_gc_minor_graph_lock(void);
@@ -1989,9 +1986,7 @@ static int errors = 0;
 
 static void *worker(void *raw) {
     intptr_t token = (intptr_t)raw;
-    if (pcc_py_gc_minor_current_get() != NULL) errors++;
     if (pcc_py_gc_pending_minor_block_get() != NULL) errors++;
-    pcc_py_gc_minor_current_set((void *)token);
     pcc_py_gc_pending_minor_block_set((void *)(token + 100));
     for (int i = 0; i < 1000; i++) {
         pcc_py_gc_minor_graph_lock();
@@ -2003,14 +1998,12 @@ static void *worker(void *raw) {
         pcc_py_gc_minor_graph_unlock();
         pcc_py_gc_minor_graph_unlock();
     }
-    if (pcc_py_gc_minor_current_get() != (void *)token) errors++;
     if (pcc_py_gc_pending_minor_block_get() != (void *)(token + 100)) errors++;
     return NULL;
 }
 
 int main(void) {
     pthread_t threads[4];
-    pcc_py_gc_minor_current_set((void *)(intptr_t)11);
     pcc_py_gc_pending_minor_block_set((void *)(intptr_t)22);
     for (intptr_t i = 0; i < 4; i++) {
         if (pthread_create(&threads[i], NULL, worker, (void *)(1000 + i)) != 0)
@@ -2020,7 +2013,6 @@ int main(void) {
         if (pthread_join(threads[i], NULL) != 0) return 2;
     }
     if (errors != 0 || counter != 4000 || in_critical != 0) return 3;
-    if (pcc_py_gc_minor_current_get() != (void *)(intptr_t)11) return 4;
     if (pcc_py_gc_pending_minor_block_get() != (void *)(intptr_t)22) return 5;
     return 0;
 }

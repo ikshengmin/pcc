@@ -23,7 +23,6 @@ MAKEFILE = RUNTIME_DIR / "Makefile"
 OWNED_SYMBOLS = {
     "pcc_gc_backend3_young_link_head",
     "pcc_gc_backend3_young_list_head",
-    "pcc_gc_backend3_young_rebuild",
     "pcc_gc_backend3_young_set_head",
     "pcc_gc_backend3_young_unlink",
     "pcc_gc_backend3_promotion_unlink",
@@ -65,7 +64,6 @@ RAW_FUNCTION_IMPORTS = {
     "free",
     "malloc",
     "pcc_gc_object_index_find",
-    "pcc_gc_object_node_is_active",
     "pcc_thread_owns_stopped_world",
     "pcc_gc_granule_is_object_start",
 }
@@ -278,14 +276,6 @@ def test_object_nodes_preserve_pool_list_and_young_invariants() -> None:
     )
     assert unlink.index("pcc_gc_backend3_young_unlink(node)") < unlink.index(
         "pcc_gc_object_set_list_head(nxt)"
-    )
-
-    rebuild = _export_body(strict, "pcc_gc_backend3_young_rebuild")
-    assert rebuild.index("pcc_gc_object_node_is_active(node)") < rebuild.index(
-        "load_i32(obj, 12) & 128"
-    )
-    assert rebuild.index("load_i32(obj, 12) & 128") < rebuild.index(
-        "pcc_gc_backend3_young_link_head(node)"
     )
 
     known_size = _export_body(strict, "pcc_gc_object_known_size")

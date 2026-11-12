@@ -23,8 +23,6 @@ PUBLIC_SYMBOLS = {
     "pcc_gc_telemetry",
     "pcc_gc_backend2_worker_buffer_score",
     "pcc_gc_backend2_production_score",
-    "pcc_gc_backend3_minor_productivity_score",
-    "pcc_gc_backend3_remembered_update_score",
 }
 VERIFIED_INTRINSIC_FUNCTIONS = {"pcc_gc_backend"}
 
@@ -314,8 +312,6 @@ def test_production_archive_owns_and_runs_freestanding_gc_telemetry(
         "  }\n"
         "  if (pcc_gc_backend2_worker_buffer_score() != pcc_gc_telemetry(29)) return 117;\n"
         "  if (pcc_gc_backend2_production_score() != pcc_gc_telemetry(28)) return 118;\n"
-        "  if (pcc_gc_backend3_minor_productivity_score() != pcc_gc_telemetry(30)) return 119;\n"
-        "  if (pcc_gc_backend3_remembered_update_score() != pcc_gc_telemetry(31)) return 120;\n"
         "  if (pcc_gc_telemetry(-1) != -1) return 121;\n"
         f"  if (pcc_gc_telemetry({last_metric + 1}) != -1) return 122;\n"
         "  return 0;\n"

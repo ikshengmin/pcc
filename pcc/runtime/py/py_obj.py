@@ -178,7 +178,6 @@ pcc_gc_pointer_register = extern(
     c_int64,
 )
 pcc_gc_fix_backend = extern("pcc_gc_fix_backend", (), c_void)
-pcc_gc_try_minor_alloc = extern("pcc_gc_try_minor_alloc", (c_int64,), c_ptr)
 pcc_allocator_alloc_object = extern(
     "pcc_allocator_alloc_object", (c_int64,), c_ptr
 )
@@ -219,9 +218,6 @@ pcc_gc_dispatch_tracing_work_pending = extern(
 )
 pcc_gc_backend4_remap_and_retire_stopped_world = extern(
     "pcc_gc_backend4_remap_and_retire_stopped_world", (), c_int64
-)
-pcc_gc_generational_step = extern(
-    "pcc_gc_generational_step", (c_int64, c_int64), c_int64
 )
 pcc_gc_tracing_record_pause = extern(
     "pcc_gc_tracing_record_pause", (c_int64, c_int64), c_void

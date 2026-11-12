@@ -611,7 +611,6 @@ def test_gc_alloc_fallback_tails_preserve_publication_order_by_runtime_mode() ->
         '@c_abi_export("pcc_gc_retain")', 1
     )[0]
     py_tokens = [
-        "obj = pcc_gc_try_minor_alloc(size)",
         "pcc_gc_backend4_try_zpage_alloc(size, flags)",
         "if ptr_is_null(obj) != 0:",
         "obj = pcc_allocator_alloc_object(size)",
