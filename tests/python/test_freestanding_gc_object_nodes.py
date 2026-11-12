@@ -68,7 +68,6 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_granule_is_object_start",
 }
 RAW_GLOBAL_IMPORTS = {
-    "pcc_gc_backend3_remembered_scan_cursor",
     "pcc_gc_backend3_promotion_head",
     "pcc_gc_backend3_promotion_tail",
     "pcc_gc_backend3_young_head",

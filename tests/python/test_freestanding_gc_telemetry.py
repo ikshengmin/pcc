@@ -347,3 +347,14 @@ def test_production_archive_owns_and_runs_freestanding_gc_telemetry(
         assert result.returncode == 0, (
             f"GC backend {backend}: " + result.stdout + result.stderr
         )
+
+
+def test_telemetry_reset_keeps_the_gc4_epoch_contract() -> None:
+    managed = (RUNTIME_DIR / "py" / "py_gc_backend.py").read_text(encoding="utf-8")
+    reset = managed.split('@c_abi_export("pcc_gc_telemetry_reset")', 1)[1].split(
+        "\n@c_abi_export", 1
+    )[0]
+    assert "_backend4_reset_store_buffer_epoch_state()" in reset
+    assert "_backend4_reset_remembered_set_epoch_state()" in reset
+    assert "_backend4_reseed_relocation_epoch_state()" in reset
+    assert "_backend4_clear_large_deferred_flags()" in reset

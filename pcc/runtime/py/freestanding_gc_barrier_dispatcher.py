@@ -93,9 +93,6 @@ pcc_gc_pointer_is_managed = extern(
 pcc_gc_pin_conservative_thread_roots = extern(
     "pcc_gc_pin_conservative_thread_roots", (), c_void
 )
-pcc_gc_backend3_remember_owner = extern(
-    "pcc_gc_backend3_remember_owner", (c_ptr, c_int64), c_void
-)
 pcc_gc_backend4_store_buffer_enqueue = extern(
     "pcc_gc_backend4_store_buffer_enqueue", (c_ptr, c_ptr, c_ptr), c_int64
 )
@@ -550,19 +547,16 @@ def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
         ):
             pcc_gc_shade_gray_atomic(value, 0)
         if (owner_flags & 256) != 0 and (value_flags & 128) != 0:
-            if backend == 4:
-                if pcc_gc_backend4_store_buffer_enqueue(owner, slot, value) != 0:
-                    store_i32(
+            if pcc_gc_backend4_store_buffer_enqueue(owner, slot, value) != 0:
+                store_i32(
+                    global_addr("pcc_gc_backend4_genzgc_store_barriers"),
+                    0,
+                    load_i32(
                         global_addr("pcc_gc_backend4_genzgc_store_barriers"),
                         0,
-                        load_i32(
-                            global_addr("pcc_gc_backend4_genzgc_store_barriers"),
-                            0,
-                        )
-                        + 1,
                     )
-            else:
-                pcc_gc_backend3_remember_owner(owner, owner_flags)
+                    + 1,
+                )
     pcc_py_gc_minor_graph_unlock()
 
 

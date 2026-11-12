@@ -466,9 +466,6 @@ pcc_gc_note_slot_write_barrier = extern(
 pcc_gc_note_write_barrier = extern(
     "pcc_gc_note_write_barrier", (c_ptr, c_ptr), c_void
 )
-_backend3_remember_owner = extern(
-    "pcc_gc_backend3_remember_owner", (c_ptr, c_int64), c_void
-)
 _promote_young_if_known = extern(
     "pcc_gc_generational_promote_young_if_known", (c_ptr,), c_void
 )
@@ -930,8 +927,6 @@ def _frame_roots_disabled_fast() -> int:
 def _clear_object_list() -> None:
     _object_graph_lock()
     global_store_ptr("pcc_gc_backend4_reset_object_cursor", null())
-    global_store_ptr("pcc_gc_backend3_remembered_scan_cursor", null())
-    store_i64(global_addr("pcc_gc_backend3_remembered_scan_revision"), 0, 0)
     node = _object_head()
     while ptr_is_null(node) == 0:
         nxt = _object_node_next(node)

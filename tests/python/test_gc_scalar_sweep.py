@@ -619,8 +619,7 @@ def test_claim_uses_actual_unlink_cursor_updates_before_private_link_reuse(which
     by_position = dict(head=pairs[2], middle=pairs[1], tail=pairs[0])
     obj, node = by_position[which]
     nxt = rt.read(node, 16)
-    for name in ("pcc_gc_trace_cursor", "pcc_gc_backend4_reset_object_cursor",
-                 "pcc_gc_backend3_remembered_scan_cursor"):
+    for name in ("pcc_gc_trace_cursor", "pcc_gc_backend4_reset_object_cursor"):
         rt.define_global(name, node)
     rt.define_global("pcc_gc_object_list_revision", 0)
     rt.ns.update(pcc_gc_trace_cursor_load=lambda: rt.scalar("pcc_gc_trace_cursor"),
@@ -637,8 +636,7 @@ def test_claim_uses_actual_unlink_cursor_updates_before_private_link_reuse(which
         rt.live_nodes.remove(value)
     rt.ns["pcc_gc_object_node_unlink"] = unlink
     rt.begin(); assert rt.enqueue((obj, node)) == 1
-    for name in ("pcc_gc_trace_cursor", "pcc_gc_backend4_reset_object_cursor",
-                 "pcc_gc_backend3_remembered_scan_cursor"):
+    for name in ("pcc_gc_trace_cursor", "pcc_gc_backend4_reset_object_cursor"):
         assert rt.scalar(name) == nxt
     assert rt.scalar("pcc_gc_object_list_revision") == 1
     assert rt.read(node, 16) == 0 and rt.read(node, 40) == 64

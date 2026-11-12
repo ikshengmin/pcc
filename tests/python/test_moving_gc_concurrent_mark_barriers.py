@@ -39,7 +39,6 @@ class BarrierState:
                      'pcc_gc_object_is_known_no_lock': self.known,
                      'pcc_gc_gray_count_increment_acq_rel': self.increment,
                      'pcc_gc_set_mark_color': self.color,
-                     'pcc_gc_backend3_remember_owner': self.remember,
                      'pcc_gc_backend4_store_buffer_enqueue': self.enqueue}
         exec(compile(ast.Module(body=[function], type_ignores=[]), str(SOURCE), 'exec'), namespace)
         self.barrier = namespace['pcc_gc_note_slot_write_barrier']
@@ -75,11 +74,6 @@ class BarrierState:
     def color(self, pointer, color):
         assert self.depth > 0
         self.flags[pointer] = self.flags[pointer] & ~(WHITE | GRAY | BLACK) | color
-
-    def remember(self, owner, flags):
-        assert self.depth > 0
-        self.remembered.add(owner)
-        self.flags[owner] |= REMEMBERED
 
     def enqueue(self, owner, slot, value):
         assert self.depth > 0

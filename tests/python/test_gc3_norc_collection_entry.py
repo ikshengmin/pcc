@@ -8,7 +8,6 @@ class PipelineGC3(GC3):
         for name in ('freestanding_gc_common_mark_cycle.py',
                      'freestanding_gc_object_root_seeding.py',
                      'freestanding_gc_incremental_concurrent_scheduler.py',
-                     'freestanding_gc_generational_remembered_owners.py',
                      'freestanding_gc_generational_scheduler.py',
                      'freestanding_gc_barrier_dispatcher.py'):
             self.load_bodies(name)

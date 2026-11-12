@@ -374,10 +374,6 @@ def pcc_gc_object_node_unlink(node: c_ptr) -> None:
         global_load_ptr("pcc_gc_backend4_reset_object_cursor"), node
     ) != 0:
         global_store_ptr("pcc_gc_backend4_reset_object_cursor", nxt)
-    if ptr_eq(
-        global_load_ptr("pcc_gc_backend3_remembered_scan_cursor"), node
-    ) != 0:
-        global_store_ptr("pcc_gc_backend3_remembered_scan_cursor", nxt)
     _promotion_unlink(node)
     pcc_gc_backend3_young_unlink(node)
     if ptr_is_null(prev) != 0:

@@ -58,7 +58,6 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_container_lock_held",
     "pcc_gc_object_index_seen_stable",
     "pcc_gc_backend3_drain_promotion_worklist",
-    "pcc_gc_backend3_remember_owner",
     "pcc_gc_backend4_evacuation_page_drain",
     "pcc_gc_backend4_remap_and_retire_stopped_world",
     "pcc_gc_backend4_select_relocation_pages",
@@ -259,7 +258,8 @@ def test_barrier_dispatcher_preserves_backend_order_and_lock_contract() -> None:
     )
     assert "pcc_gc_object_is_known_no_lock(owner)" in barrier
     assert "pcc_gc_object_is_known_no_lock(value)" in barrier
-    assert "pcc_gc_backend3_remember_owner(owner, owner_flags)" in barrier
+    # Only GC4 allocates YOUNG objects, so only it records an old-to-young edge.
+    assert "pcc_gc_backend3_remember_owner" not in barrier
     assert "pcc_gc_backend4_store_buffer_enqueue(owner, slot, value)" in barrier
 
 
@@ -386,7 +386,7 @@ def _link_barrier_probe(
 
 @pytest.mark.parametrize(
     ("backend_kind", "expected"),
-    [(3, "1,0,0\n"), (4, "1,1,1\n")],
+    [(4, "1,1,1\n")],
 )
 def test_barrier_dispatcher_records_old_to_young_edges(
     tmp_path: Path,
