@@ -45,10 +45,14 @@ def main(argv: list[str] | None = None) -> int:
         [compiler, "--pcc-native-deferred-worker", "--check"], check=False
     )
     if check.returncode != 0:
+        # No nonzero status uniquely identifies an unsupported capability.
+        # Preserve the check outcome without copying argv or child output.
+        detail = f"returncode={check.returncode}"
+        if check.returncode < 0:
+            detail += f" signal={-check.returncode}"
         print(
-            "native deferred execution is unavailable in "
-            + compiler
-            + "; rebuild stage1 from current sources (host Python fallback is forbidden)",
+            f"native deferred capability check failed ({detail}); "
+            "host Python fallback is forbidden",
             file=sys.stderr,
         )
         return 2

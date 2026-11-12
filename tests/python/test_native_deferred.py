@@ -81,6 +81,110 @@ def test_wrapper_rejects_old_compiler_before_starting_compile(tmp_path):
     assert not touched.exists()
 
 
+@pytest.mark.parametrize(
+    "returncode,detail",
+    [
+        (2, "returncode=2"),
+        (1, "returncode=1"),
+        (134, "returncode=134"),
+        (-6, "returncode=-6 signal=6"),
+        (-11, "returncode=-11 signal=11"),
+        (3221225477, "returncode=3221225477"),
+    ],
+)
+def test_wrapper_reports_failed_check_without_guessing_capability(
+    monkeypatch, capsys, returncode, detail,
+):
+    from scripts import run_pcc_native_deferred as wrapper
+
+    compiler = "private compiler path"
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(
+            command, returncode, stdout="private stdout", stderr="private stderr",
+        )
+
+    def forbidden(*args):
+        pytest.fail("a failed check must stop before plan lookup or continuation")
+
+    monkeypatch.setattr(wrapper.subprocess, "run", fake_run)
+    monkeypatch.setattr(wrapper, "_plan_to_resume", forbidden)
+    monkeypatch.setattr(wrapper.os, "execv", forbidden)
+    assert wrapper.main([compiler, "codegen", "link", "--", "coordinator"]) == 2
+    assert calls == [
+        ([compiler, "--pcc-native-deferred-worker", "--check"], {"check": False}),
+    ]
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == (
+        f"native deferred capability check failed ({detail}); "
+        "host Python fallback is forbidden\n"
+    )
+
+
+@pytest.mark.parametrize("returncode", [0, 23, -15])
+def test_wrapper_preserves_coordinator_status_after_successful_check(
+    monkeypatch, capsys, returncode,
+):
+    from scripts import run_pcc_native_deferred as wrapper
+
+    calls = []
+    plans = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0 if len(calls) == 1 else returncode)
+
+    def no_plan(*paths):
+        plans.append(paths)
+        return ""
+
+    monkeypatch.setattr(wrapper.subprocess, "run", fake_run)
+    monkeypatch.setattr(wrapper, "_plan_to_resume", no_plan)
+    assert wrapper.main(["compiler", "codegen", "link", "--", "coordinator"]) == returncode
+    assert calls == [
+        (["compiler", "--pcc-native-deferred-worker", "--check"], {"check": False}),
+        (["coordinator"], {"check": False}),
+    ]
+    assert plans == ([("codegen", "link")] if returncode == 0 else [])
+    assert capsys.readouterr() == ("", "")
+
+
+def test_wrapper_preserves_same_compiler_continuation_after_successful_check(
+    tmp_path, monkeypatch, capsys,
+):
+    from scripts import run_pcc_native_deferred as wrapper
+
+    codegen = tmp_path / "codegen plan"
+    link = tmp_path / "link plan"
+    codegen.write_text("unchanged codegen plan")
+    link.write_text("unchanged link plan")
+    resumed = []
+
+    class ContinuationReached(Exception):
+        pass
+
+    def fake_execv(executable, arguments):
+        resumed.append((executable, arguments))
+        raise ContinuationReached
+
+    monkeypatch.setattr(
+        wrapper.subprocess, "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(command, 0),
+    )
+    monkeypatch.setattr(wrapper.os, "execv", fake_execv)
+    with pytest.raises(ContinuationReached):
+        wrapper.main(["compiler", str(codegen), str(link), "--", "coordinator"])
+    assert resumed == [
+        ("compiler", ["compiler", "--pcc-native-deferred-worker", str(codegen)]),
+    ]
+    assert codegen.read_text() == "unchanged codegen plan"
+    assert link.read_text() == "unchanged link plan"
+    assert capsys.readouterr() == ("", "")
+
+
 def test_bootstrap_rejects_missing_deferred_runtime_before_compilation(tmp_path):
     environment = dict(
         os.environ,
