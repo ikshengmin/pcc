@@ -978,6 +978,30 @@ def _compile_preprocessed_translation_unit_artifact(
         from pcc.frontends.c.codegen.c_asm import rewrite_empty_templates
         rewrite_empty_templates(ast)
 
+    # The parsed unit, and later its IR module, live until this unit is
+    # done; CPython's cycle collector re-traversed them in every collection
+    # (about 9% of a sqlite3.c compile). Exclude them while this call owns
+    # the process's frozen set. pcc's runtime records the calls.
+    import gc
+    owns_frozen_heap = gc.isenabled() and gc.get_freeze_count() == 0
+    if owns_frozen_heap:
+        gc.freeze()
+    try:
+        return _compile_parsed_translation_unit(
+            unit_name, ast, selected_target, emit_debug, pass_pipeline, pass_ctx,
+            frontend_opt_level, fsanitize, evaluation_entry, owns_frozen_heap,
+        )
+    finally:
+        if owns_frozen_heap:
+            gc.unfreeze()
+
+
+def _compile_parsed_translation_unit(
+    unit_name, ast, selected_target, emit_debug, pass_pipeline, pass_ctx,
+    frontend_opt_level, fsanitize, evaluation_entry, owns_frozen_heap,
+):
+    from pcc.frontends.c.passes import PassContext, PassPipeline
+
     # --- Pass Framework Integration ---
     if pass_pipeline is None:
         pass_pipeline = PassPipeline.default()
@@ -1007,6 +1031,9 @@ def _compile_preprocessed_translation_unit_artifact(
     if fsanitize:
         codegen.configure_ubsan(fsanitize, mode="trap")
     codegen.generate_code(ast)
+    if owns_frozen_heap:
+        import gc
+        gc.freeze()
 
     ir_text = postprocess_ir_text(str(codegen.module))
 
