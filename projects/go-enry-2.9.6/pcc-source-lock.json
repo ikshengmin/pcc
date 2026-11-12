@@ -1,0 +1,208 @@
+{
+  "schema_version": 1,
+  "project": "go-enry-tokenizer",
+  "version": "2.9.6",
+  "repository": "https://github.com/go-enry/go-enry",
+  "revision": "71719e4bdde528496011d030354a97b7f3ed4ff6",
+  "release_tag": "v2.9.6",
+  "module": "github.com/go-enry/go-enry/v2",
+  "license": "Apache-2.0",
+  "go_version_directive": "1.14",
+  "complete_module_source_closure": false,
+  "complete_package_source_closure": true,
+  "complete_upstream_test_source_closure": true,
+  "complete_build_closure": false,
+  "selection": "Every file of the module's regex and internal/tokenizer packages (the flex subpackage, a separate package used only under the flex build tag, is not selected), plus root LICENSE, README.md, go.mod and go.sum. The default build (no tags) uses regex/regex.go, regex/standard.go, internal/tokenizer/common.go and internal/tokenizer/tokenize.go; oniguruma.go and tokenize_c.go are retained build-tag alternatives. No original source or test is rewritten or removed.",
+  "packages": {
+    "github.com/go-enry/go-enry/v2/regex": {
+      "default_build": [
+        "regex/regex.go",
+        "regex/standard.go"
+      ],
+      "tagged": {
+        "oniguruma": [
+          "regex/regex.go",
+          "regex/oniguruma.go"
+        ]
+      }
+    },
+    "github.com/go-enry/go-enry/v2/internal/tokenizer": {
+      "default_build": [
+        "internal/tokenizer/common.go",
+        "internal/tokenizer/tokenize.go"
+      ],
+      "tagged": {
+        "flex": [
+          "internal/tokenizer/common.go",
+          "internal/tokenizer/tokenize_c.go"
+        ]
+      }
+    }
+  },
+  "production_units": [
+    "regex/regex.go",
+    "regex/standard.go",
+    "regex/oniguruma.go",
+    "internal/tokenizer/common.go",
+    "internal/tokenizer/tokenize.go",
+    "internal/tokenizer/tokenize_c.go"
+  ],
+  "upstream_test_units": [
+    "regex/standard_test.go",
+    "internal/tokenizer/tokenize_test.go"
+  ],
+  "total_bytes": 43555,
+  "dependencies": {
+    "state": "MISSING_SOURCE_AND_TOOL_CLOSURE",
+    "standard_library": {
+      "packages": [
+        "bytes",
+        "regexp",
+        "fmt",
+        "testing"
+      ],
+      "go_release": "go1.27.3",
+      "owned_closure_present": false
+    },
+    "testify": {
+      "coordinate": "github.com/stretchr/testify v1.8.1",
+      "license": "MIT",
+      "required_by": [
+        "regex/standard_test.go",
+        "internal/tokenizer/tokenize_test.go"
+      ],
+      "source_closure_present": false
+    },
+    "go-oniguruma": {
+      "coordinate": "github.com/go-enry/go-oniguruma v1.2.1",
+      "license": "MIT",
+      "required_by": [
+        "regex/oniguruma.go (oniguruma tag only)"
+      ],
+      "source_closure_present": false
+    }
+  },
+  "historical_frontiers": [],
+  "files": [
+    {
+      "path": "LICENSE",
+      "role": "license-notice",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE (Apache-2.0); go-enry README license section.",
+      "sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
+      "size": 11357,
+      "git_blob": "7a4a3ea2424c09fbe48d455aed1eaa94d9124835",
+      "url": "https://raw.githubusercontent.com/go-enry/go-enry/71719e4bdde528496011d030354a97b7f3ed4ff6/LICENSE"
+    },
+    {
+      "path": "README.md",
+      "role": "upstream-metadata",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE (Apache-2.0); go-enry README license section.",
+      "sha256": "77943f5904fcef4d46ee8c20678bd2bb349305871617c1d918e020867789aceb",
+      "size": 14985,
+      "git_blob": "533648bec796e799e3f524bb36e5308c8517902d",
+      "url": "https://raw.githubusercontent.com/go-enry/go-enry/71719e4bdde528496011d030354a97b7f3ed4ff6/README.md"
+    },
+    {
+      "path": "go.mod",
+      "role": "upstream-metadata",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE (Apache-2.0); go-enry README license section.",
+      "sha256": "ec4dc2fe14186840fb10fd6159cc0fefa3daf348acefbd472ce47b92f6c2f532",
+      "size": 160,
+      "git_blob": "c4fb1aa802de6f04dde4cd02e5ee3843e2a7064e",
+      "url": "https://raw.githubusercontent.com/go-enry/go-enry/71719e4bdde528496011d030354a97b7f3ed4ff6/go.mod"
+    },
+    {
+      "path": "go.sum",
+      "role": "upstream-metadata",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE (Apache-2.0); go-enry README license section.",
+      "sha256": "744ce69088369b2022219428c502072b759edd25b0020b3b03b32b421b01a39b",
+      "size": 1850,
+      "git_blob": "f2da5aa4306a45613da335ffe797bfc44058fcbf",
+      "url": "https://raw.githubusercontent.com/go-enry/go-enry/71719e4bdde528496011d030354a97b7f3ed4ff6/go.sum"
+    },
+    {
+      "path": "regex/regex.go",
+      "role": "production-source",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE (Apache-2.0); go-enry README license section.",
+      "sha256": "b9f438a8e642aea8bf5c5d942e0045c1b3044f62b8b3d8e77512911ef4e47ddd",
+      "size": 177,
+      "git_blob": "6d38f3f7728f29323aff3341cc70867600279d3e",
+      "url": "https://raw.githubusercontent.com/go-enry/go-enry/71719e4bdde528496011d030354a97b7f3ed4ff6/regex/regex.go"
+    },
+    {
+      "path": "regex/standard.go",
+      "role": "production-source",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE (Apache-2.0); go-enry README license section.",
+      "sha256": "4c2e72a09de1720c21440e913e0e183edd0e438f875e0c39ef740a2bb950788e",
+      "size": 958,
+      "git_blob": "e9ccdb9caabfd8b9be45d93acc93cb604193c8c9",
+      "url": "https://raw.githubusercontent.com/go-enry/go-enry/71719e4bdde528496011d030354a97b7f3ed4ff6/regex/standard.go"
+    },
+    {
+      "path": "regex/oniguruma.go",
+      "role": "production-source",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE (Apache-2.0); go-enry README license section.",
+      "sha256": "404380f245654639900438e724a8014629c225d261db2e8a08044da345a8b7c4",
+      "size": 530,
+      "git_blob": "c152739114d7735c085940c80ebe21dd236ea601",
+      "url": "https://raw.githubusercontent.com/go-enry/go-enry/71719e4bdde528496011d030354a97b7f3ed4ff6/regex/oniguruma.go"
+    },
+    {
+      "path": "internal/tokenizer/common.go",
+      "role": "production-source",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE (Apache-2.0); go-enry README license section.",
+      "sha256": "6648e9cca79a04ad27e4fda18d96cacc3814531ee15720d8447b37f443c69237",
+      "size": 313,
+      "git_blob": "1c47ee33270c877a1d9374756f7bfb2f1b4086e4",
+      "url": "https://raw.githubusercontent.com/go-enry/go-enry/71719e4bdde528496011d030354a97b7f3ed4ff6/internal/tokenizer/common.go"
+    },
+    {
+      "path": "internal/tokenizer/tokenize.go",
+      "role": "production-source",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE (Apache-2.0); go-enry README license section.",
+      "sha256": "7c41efda7cbbb65508f0f30168bc4e94ebe409f0038fb26556ccd075c6820cfd",
+      "size": 6885,
+      "git_blob": "9e39f499267121e2315336bae1afa8c52189f8af",
+      "url": "https://raw.githubusercontent.com/go-enry/go-enry/71719e4bdde528496011d030354a97b7f3ed4ff6/internal/tokenizer/tokenize.go"
+    },
+    {
+      "path": "internal/tokenizer/tokenize_c.go",
+      "role": "production-source",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE (Apache-2.0); go-enry README license section.",
+      "sha256": "53bff450830721435b3c4e9f34ce9586187636219ec1af275dbb7170538aff64",
+      "size": 417,
+      "git_blob": "0fb8d4d4d2b2f74ce29a65ea3a967957429b60b6",
+      "url": "https://raw.githubusercontent.com/go-enry/go-enry/71719e4bdde528496011d030354a97b7f3ed4ff6/internal/tokenizer/tokenize_c.go"
+    },
+    {
+      "path": "regex/standard_test.go",
+      "role": "original-upstream-test",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE (Apache-2.0); go-enry README license section.",
+      "sha256": "94d3324d6c98305b3dbc61f3a837f00b7838642a8ff0e6510984d4ac12e93f8b",
+      "size": 485,
+      "git_blob": "9e7755b158258ea24a8ab27ddea91e7d10bed251",
+      "url": "https://raw.githubusercontent.com/go-enry/go-enry/71719e4bdde528496011d030354a97b7f3ed4ff6/regex/standard_test.go"
+    },
+    {
+      "path": "internal/tokenizer/tokenize_test.go",
+      "role": "original-upstream-test",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE (Apache-2.0); go-enry README license section.",
+      "sha256": "df32d945af630dd5969f4c9343540266e6796042c751406860db618b4f9970fd",
+      "size": 5438,
+      "git_blob": "eeda3b7d245191fe6f7ec9195dd7bd3d7ed2eeaf",
+      "url": "https://raw.githubusercontent.com/go-enry/go-enry/71719e4bdde528496011d030354a97b7f3ed4ff6/internal/tokenizer/tokenize_test.go"
+    }
+  ]
+}

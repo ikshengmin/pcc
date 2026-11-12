@@ -264,6 +264,14 @@
         ]
       }
     },
+    "tests/go/test_go_enry_tokenizer_project.py": {
+      "test_original_tokenizer_packages_build_with_the_official_go_toolchain": {
+        "activity": "external-reference",
+        "reason": [
+          "Explicit official Go 1.27.3 go list/build through raw subprocesses on the unchanged originals in GOPATH mode without module downloads; it never supplies or qualifies PCC output, and testify-based test execution stays UNRUN"
+        ]
+      }
+    },
     "tests/java/test_source_managed_contracts.py": {
       "test_exact_managed_field_array_and_utf16_original_against_independent_jdk_only": {
         "activity": "external-reference",
