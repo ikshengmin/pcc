@@ -217,6 +217,7 @@ def test_terminal_gray_clear_preserves_mutator_header_update(initial, operation)
         "pcc_gc_scalar_sweep_state": {0: 0},
     }
     counts, retired, released, locks = [], [], [], []
+    retired_links = []
 
     def decrement():
         counts.append(-1)
@@ -243,8 +244,10 @@ def test_terminal_gray_clear_preserves_mutator_header_update(initial, operation)
         "_object_node_size": lambda obj: 64,
         "_live_bytes_subtract": lambda size: retired.append(size),
         "_set_object_node_freeing": lambda obj, value: released.append(value),
-        # A minor-block node remains linked, exactly like production's branch.
-        "_object_node_minor_block": lambda obj: node,
+        # The retired node then leaves the index and the object list.
+        "pcc_gc_object_index_remove": lambda obj: retired_links.append("index"),
+        "_unlink_object_node": lambda obj: retired_links.append("unlink"),
+        "_object_node_release": lambda obj: retired_links.append("release"),
     })
     freeing = _load(MANAGED, "pcc_gc_note_object_freeing", namespace)
     freeing(memory.obj)
@@ -253,6 +256,7 @@ def test_terminal_gray_clear_preserves_mutator_header_update(initial, operation)
     assert memory.obj[12] == expected & ~GRAY
     assert memory.writes == ["and"]
     assert counts == [-1] and retired == [64] and released == [1]
+    assert retired_links == ["index", "unlink", "release"]
     assert locks == ["lock", "unlock"]
 
 

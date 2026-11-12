@@ -2508,7 +2508,6 @@ def _cross_object_signatures_part_3():
 
 def _cross_object_signatures_part_4():
     return {
-    "pcc_gc_object_node_minor_block": (("c_ptr",), "c_ptr"),
     "pcc_gc_object_node_freeing": (("c_ptr",), "c_int64"),
     "pcc_gc_object_node_set_freeing": (("c_ptr", "c_int64"), "c_void"),
     "pcc_gc_object_node_prev": (("c_ptr",), "c_ptr"),

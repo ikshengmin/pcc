@@ -29,6 +29,8 @@ pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 # Internal object-node tail: i64 foreign-address lease count at byte 80.
 # This is not a PyObjectHeader field. Live promotion state never resets it.
 # freeing@32: 0 active, 1 retired, negative = scalar-sweep batch token owner.
+# Word 24 is NULL (it once named a GC3 minor-arena block, which nothing
+# allocates any more).
 # Pending scalar nodes are detached/indexed; next@16, prev@40 and young-next@64
 # belong to their retirement chain. Their first-death live debit already ran.
 #
@@ -128,11 +130,6 @@ def pcc_gc_object_node_next(node: c_ptr) -> c_ptr:
 @c_abi_export("pcc_gc_object_node_set_next")
 def pcc_gc_object_node_set_next(node: c_ptr, nxt: c_ptr) -> None:
     store_ptr(node, 16, nxt)
-
-
-@c_abi_export("pcc_gc_object_node_minor_block")
-def pcc_gc_object_node_minor_block(node: c_ptr) -> c_ptr:
-    return load_ptr(node, 24)
 
 
 @c_abi_export("pcc_gc_object_node_freeing")

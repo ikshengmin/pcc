@@ -219,42 +219,6 @@ def test_nested_free_overwriting_last_note_requires_original_public_path(backend
 
 
 @pytest.mark.parametrize("backend", (1, 2))
-def test_retained_minor_owner_releases_block_only_after_terminal_unlock(backend):
-    rt = TerminalRuntime(backend)
-    obj = rt.object("raw", flags=TERMINAL | 4096)
-    node = rt.owner(obj, freeing=1)
-    block = 987654
-    rt.write(node, 24, block)
-
-    def remove(obj):
-        assert rt.graph == 1
-        rt.events.append(("remove-node", obj))
-        return rt.nodes.pop(obj)
-
-    def release(node):
-        assert rt.graph == 1
-        rt.events.append(("release-node", node))
-        rt.memory[node] = {}  # Reuse poison: the block was captured earlier.
-
-    def release_block(value):
-        assert rt.graph == 0 and value == block
-        rt.events.append(("release-block", value))
-
-    rt.ns.update({
-        "_object_node_minor_block": lambda node: rt.read(node, 24),
-        "_object_node_freeing": lambda node: rt.read(node, 32),
-        "pcc_gc_object_index_remove": remove,
-        "_unlink_object_node": lambda node: rt.events.append(("unlink", node)),
-        "_object_node_release": release,
-        "_minor_release_block": release_block,
-    })
-    rt.terminal(obj)
-    assert rt.kinds() == ["lock", "find", "retire", "exact", "unlock", "lock", "find",
-                          "remove-node", "unlink", "release-node", "unlock", "release-block"]
-    assert not rt.nodes and not rt.freed and rt.graph == 0
-
-
-@pytest.mark.parametrize("backend", (1, 2))
 def test_origin_flags_are_captured_before_retirement_and_queue_runs_unlocked(backend):
     rt = TerminalRuntime(backend)
     obj = rt.object()

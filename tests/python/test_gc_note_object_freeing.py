@@ -150,18 +150,6 @@ def test_positive_lease_is_rejected_after_watch_without_retiring_metadata(backen
 
 
 @pytest.mark.parametrize("backend", (1, 2))
-def test_retained_minor_node_is_debited_only_on_first_note(backend):
-    rt = NoteRuntime(backend, state=3, minor=999)
-    rt.note(rt.obj)
-    rt.assert_one_transaction()
-    assert rt.memory[rt.node][32] == 1 and rt.live_bytes == 0
-    rt.note(rt.obj)
-    assert rt.lookups == 2 and rt.kinds().count("debit") == 1
-    assert rt.index == {rt.obj: rt.node} and rt.live_bytes == 0
-    assert rt.end(rt.record) == 1
-
-
-@pytest.mark.parametrize("backend", (1, 2))
 def test_gray_retirement_preserves_other_header_flags(backend):
     rt = NoteRuntime(backend, state=1)
     rt.memory[rt.obj][12] = 16 | 64 | 1024

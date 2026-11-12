@@ -148,7 +148,7 @@ class RetirementState:
             "pcc_gc_trace_cursor_load", "pcc_gc_trace_cursor_store",
             "pcc_gc_object_node_size", "pcc_gc_object_node_next", "pcc_gc_object_node_set_next",
             "pcc_gc_object_node_prev", "pcc_gc_object_node_set_prev", "pcc_gc_object_node_freeing",
-            "pcc_gc_object_node_set_freeing", "pcc_gc_object_node_minor_block",
+            "pcc_gc_object_node_set_freeing",
             "pcc_gc_object_node_unlink", "pcc_gc_live_bytes_subtract",
         })
         _functions(ns, "freestanding_gc_forwarding_retirement.py", {
@@ -189,7 +189,6 @@ class RetirementState:
             "_object_node_freeing": ns["pcc_gc_object_node_freeing"],
             "_set_object_node_freeing": ns["pcc_gc_object_node_set_freeing"],
             "_object_node_size": ns["pcc_gc_object_node_size"],
-            "_object_node_minor_block": ns["pcc_gc_object_node_minor_block"],
             "_gc_gray_count_decrement_acq_rel": ns["pcc_gc_gray_count_decrement_acq_rel"],
             "_live_bytes_subtract": ns["pcc_gc_live_bytes_subtract"],
             "_unlink_object_node": ns["pcc_gc_object_node_unlink"],

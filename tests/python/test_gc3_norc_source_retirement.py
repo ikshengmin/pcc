@@ -182,11 +182,7 @@ class GC3(RetirementState):
         self.load_bodies('py_gc_backend.py', {
             '_gc3_forwarded_target_may_die', 'pcc_gc_backend3_finish_forwarded_source',
             'pcc_gc_note_object_freeing', 'pcc_gc_free_object_memory',
-            '_minor_release_block', '_minor_block_containing',
-            '_minor_blocks_head', '_set_minor_current',
-            '_minor_block_base', '_minor_block_size',
-            '_minor_block_next', '_minor_block_owner',
-            '_atomic_i64_dec_if_positive', '_atomic_i64_load', '_atomic_i64_store', '_atomic_i32_store',
+            '_atomic_i32_store',
         })
         self.load_bodies('py_obj_dealloc.py', {
             '_dealloc_dispatch', 'py_dealloc_int', 'py_dealloc_float', 'py_dealloc_str',
@@ -198,7 +194,6 @@ class GC3(RetirementState):
             '_object_node_freeing': self.ns['pcc_gc_object_node_freeing'],
             '_set_object_node_freeing': self.ns['pcc_gc_object_node_set_freeing'],
             '_object_node_size': self.ns['pcc_gc_object_node_size'],
-            '_object_node_minor_block': self.ns['pcc_gc_object_node_minor_block'],
             '_object_node_release': self.ns['pcc_gc_object_node_release'],
             '_unlink_object_node': self.ns['pcc_gc_object_node_unlink'],
             '_forwarding_detach_into_finish': self.ns['pcc_gc_forwarding_detach_into_finish'],

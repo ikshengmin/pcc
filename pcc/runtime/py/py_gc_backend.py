@@ -244,9 +244,6 @@ _object_node_next = extern("pcc_gc_object_node_next", (c_ptr,), c_ptr)
 _set_object_node_next = extern(
     "pcc_gc_object_node_set_next", (c_ptr, c_ptr), c_void
 )
-_object_node_minor_block = extern(
-    "pcc_gc_object_node_minor_block", (c_ptr,), c_ptr
-)
 _object_node_freeing = extern("pcc_gc_object_node_freeing", (c_ptr,), c_int64)
 _set_object_node_freeing = extern(
     "pcc_gc_object_node_set_freeing", (c_ptr, c_int64), c_void
@@ -610,13 +607,6 @@ pcc_thread_safepoint = extern("pcc_thread_safepoint", (), c_void)
 pcc_stop_the_world = extern("pcc_stop_the_world", (), c_int64)
 pcc_resume_world = extern("pcc_resume_world", (), c_int64)
 pcc_runtime_now_us = extern("pcc_platform_monotonic_us", (), c_int64)
-pcc_py_gc_minor_current_set = extern("pcc_py_gc_minor_current_set", (c_ptr,), c_void)
-pcc_py_gc_pending_minor_block_get = extern(
-    "pcc_py_gc_pending_minor_block_get", (), c_ptr
-)
-pcc_py_gc_pending_minor_block_set = extern(
-    "pcc_py_gc_pending_minor_block_set", (c_ptr,), c_void
-)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_lock_for = extern(
     "pcc_py_gc_minor_graph_lock_for", (c_int64,), c_void
@@ -731,42 +721,11 @@ def _atomic_i32_add_fetch(slot, delta: int) -> int:
     return old + delta
 
 
-def _atomic_i64_load(slot) -> int:
-    if ptr_is_null(slot) != 0:
-        return 0
-    return atomic_load_i64(slot, 0, "acquire")
-
-
-def _atomic_i64_store(slot, value: int) -> None:
-    if ptr_is_null(slot) != 0:
-        return
-    atomic_store_i64(slot, 0, value, "release")
-
-
 def _atomic_i64_add_fetch(slot, delta: int) -> int:
     if ptr_is_null(slot) != 0:
         return 0
     old: int = atomic_rmw_i64("add", slot, 0, delta, "acq_rel")
     return old + delta
-
-
-def _atomic_i64_dec_if_positive(slot) -> int:
-    if ptr_is_null(slot) != 0:
-        return 0
-    live: int = atomic_load_i64(slot, 0, "acquire")
-    while live > 0:
-        observed: int = atomic_cas_i64(
-            slot,
-            0,
-            live,
-            live - 1,
-            "acq_rel",
-            "acquire",
-        )
-        if observed == live:
-            return live - 1
-        live = observed
-    return live
 
 
 def _gc_ptr_can_have_header(o) -> bool:
@@ -782,66 +741,6 @@ def _align16(bytes: int) -> int:
     if bytes <= 0:
         return 0
     return (bytes + 15) & ~15
-
-
-def _minor_blocks_head():
-    return global_load_ptr("pcc_gc_minor_blocks")
-
-
-def _set_minor_current(block) -> None:
-    pcc_py_gc_minor_current_set(block)
-
-
-def _pending_minor_block():
-    return pcc_py_gc_pending_minor_block_get()
-
-
-def _set_pending_minor_block(block) -> None:
-    pcc_py_gc_pending_minor_block_set(block)
-
-
-def _minor_block_base(block):
-    return load_ptr(block, 0)
-
-
-def _minor_block_size(block) -> int:
-    return load_i64(block, 16)
-
-
-def _minor_block_next(block):
-    return load_ptr(block, 24)
-
-
-def _minor_block_owner(block) -> int:
-    return load_i64(block, 40)
-
-
-def _minor_release_block(block) -> None:
-    if ptr_is_null(block) != 0:
-        return
-    live: int = _atomic_i64_dec_if_positive(ptr_add(block, 32))
-    if live != 0:
-        return
-    # Span-retain empty minor blocks so stale SSA/root pointers stay
-    # recognizable by the free-path span fallback.
-    if _minor_block_owner(block) == pcc_current_thread_id():
-        _atomic_i64_store(ptr_add(block, 8), 0)
-        _set_minor_current(block)
-        _atomic_i32_store(global_addr("pcc_gc_minor_bytes"), 0)
-    return
-
-
-def _minor_block_containing(ptr):
-    if ptr_is_null(ptr) != 0:
-        return null()
-    node = _minor_blocks_head()
-    while ptr_is_null(node) == 0:
-        base = _minor_block_base(node)
-        delta: int = ptr_diff(ptr, base)
-        if delta >= 0 and delta < _minor_block_size(node):
-            return node
-        node = _minor_block_next(node)
-    return null()
 
 
 def _counter_global(metric: int):
@@ -4722,48 +4621,8 @@ def pcc_gc_free_object_memory(o) -> None:
         # flag.  The zpage case returned above.  Unknown/foreign origin must
         # fail closed instead of scanning every page or calling free().
         return
-    if (flags & 4096) == 0:
-        if (backend == 1 or backend == 2 or backend == 3) and pcc_gc_deferred_free_try_enqueue(o, flags) != 0:
-            return
-        free(o)
+    if (backend == 1 or backend == 2 or backend == 3) and pcc_gc_deferred_free_try_enqueue(o, flags) != 0:
         return
-    if (flags & 4096) != 0:
-        _object_graph_lock()
-        node = pcc_gc_object_index_find(o)
-        if ptr_is_null(node) == 0:
-            block = _object_node_minor_block(node)
-            if _object_node_freeing(node) == 0:
-                live: int = load_i64(global_addr("pcc_gc_live_bytes"), 0)
-                size: int = _object_node_size(node)
-                if size >= live:
-                    store_i64(global_addr("pcc_gc_live_bytes"), 0, 0)
-                else:
-                    store_i64(global_addr("pcc_gc_live_bytes"), 0, live - size)
-            if backend == 4:
-                _backend4_zpage_remove(o)
-            pcc_gc_object_index_remove(o)
-            _unlink_object_node(node)
-            _object_node_release(node)
-            if ptr_is_null(block) == 0 or (flags & 4096) != 0:
-                _object_graph_unlock()
-                _minor_release_block(block)
-                return
-            _object_graph_unlock()
-            if backend == 3 and (flags & 262144) == 0:
-                return
-            free(o)
-            return
-        _object_graph_unlock()
-    if backend == 3:
-        _object_graph_lock()
-        owner_block = _minor_block_containing(o)
-        _object_graph_unlock()
-        if ptr_is_null(owner_block) == 0:
-            _minor_release_block(owner_block)
-            return
-        # Only an explicit allocation-origin bit authorizes system free().
-        if (flags & 262144) == 0:
-            return
     free(o)
 
 
@@ -4782,9 +4641,6 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
         size = 16
     if backend == 0:
         return
-    pending_block = null()
-    if backend == 3:
-        pending_block = _pending_minor_block()
     prepared_node = null()
     prepared_slots = null()
     prepared_cap: int = 0
@@ -4817,7 +4673,6 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
     # be mapped is not registered, as when no node can be prepared.
     record = pcc_allocator_object_node_record_ensure(o)
     if ptr_is_null(record) != 0 and ptr_is_null(pcc_allocator_granule_object_slot(o)) == 0:
-        _set_pending_minor_block(null())
         global_store_ptr("pcc_gc_last_alloc", o)
         pcc_gc_backend3_revoke_closed_young_domain()
         return
@@ -4832,7 +4687,6 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
         graph_leaf: int = 0
         if (
             backend == 4
-            and ptr_is_null(pending_block) != 0
             and _backend3_graph_leaf_tag(load_i32(o, 8)) != 0
             and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0
         ):
@@ -4905,7 +4759,6 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                 if ptr_is_null(prepared_zpage) == 0:
                     free(load_ptr(prepared_zpage, 72))
                     free(prepared_zpage)
-                _set_pending_minor_block(null())
                 global_store_ptr("pcc_gc_last_alloc", o)
                 pcc_gc_backend3_revoke_closed_young_domain()
                 return
@@ -4960,7 +4813,6 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                         if ptr_is_null(prepared_zpage) == 0:
                             free(load_ptr(prepared_zpage, 72))
                             free(prepared_zpage)
-                        _set_pending_minor_block(null())
                         global_store_ptr("pcc_gc_last_alloc", o)
                         pcc_gc_backend3_revoke_closed_young_domain()
                         return
@@ -4998,7 +4850,6 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                         if ptr_is_null(prepared_zpage) == 0:
                             free(load_ptr(prepared_zpage, 72))
                             free(prepared_zpage)
-                        _set_pending_minor_block(null())
                         global_store_ptr("pcc_gc_last_alloc", o)
                         pcc_gc_backend3_revoke_closed_young_domain()
                         return
@@ -5034,7 +4885,6 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                         if ptr_is_null(prepared_zpage) == 0:
                             free(load_ptr(prepared_zpage, 72))
                             free(prepared_zpage)
-                        _set_pending_minor_block(null())
                         global_store_ptr("pcc_gc_last_alloc", o)
                         pcc_gc_backend3_revoke_closed_young_domain()
                         return
@@ -5072,7 +4922,6 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                         if ptr_is_null(prepared_zpage) == 0:
                             free(load_ptr(prepared_zpage, 72))
                             free(prepared_zpage)
-                        _set_pending_minor_block(null())
                         global_store_ptr("pcc_gc_last_alloc", o)
                         pcc_gc_backend3_revoke_closed_young_domain()
                         return
@@ -5088,7 +4937,6 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                         free(prepared_slots)
                         free(prepared_zpage_node)
                         free(prepared_zpage_slots)
-                        _set_pending_minor_block(null())
                         global_store_ptr("pcc_gc_last_alloc", o)
                         pcc_gc_backend3_revoke_closed_young_domain()
                         return
@@ -5139,7 +4987,6 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                 if ptr_is_null(prepared_zpage) == 0:
                     free(load_ptr(prepared_zpage, 72))
                     free(prepared_zpage)
-                _set_pending_minor_block(null())
                 global_store_ptr("pcc_gc_last_alloc", o)
                 pcc_gc_backend3_revoke_closed_young_domain()
                 return
@@ -5176,7 +5023,6 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                     if ptr_is_null(prepared_zpage) == 0:
                         free(load_ptr(prepared_zpage, 72))
                         free(prepared_zpage)
-                    _set_pending_minor_block(null())
                     global_store_ptr("pcc_gc_last_alloc", o)
                     pcc_gc_backend3_revoke_closed_young_domain()
                     return
@@ -5220,7 +5066,6 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
             if ptr_is_null(prepared_zpage) == 0:
                 free(load_ptr(prepared_zpage, 72))
                 free(prepared_zpage)
-            _set_pending_minor_block(null())
             global_store_ptr("pcc_gc_last_alloc", o)
             return
 
@@ -5255,7 +5100,6 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
             if ptr_is_null(prepared_zpage) == 0:
                 free(load_ptr(prepared_zpage, 72))
                 free(prepared_zpage)
-            _set_pending_minor_block(null())
             global_store_ptr("pcc_gc_last_alloc", o)
             pcc_gc_backend3_revoke_closed_young_domain()
             return
@@ -5263,7 +5107,7 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
         store_ptr(node, 0, o)
         store_i64(node, 8, size)
         store_ptr(node, 16, old_head)
-        store_ptr(node, 24, pending_block)
+        store_ptr(node, 24, null())
         store_i64(node, 32, 0)
         store_ptr(node, 40, null())
         store_ptr(node, 48, null())
@@ -5325,7 +5169,6 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
         if ptr_is_null(prepared_zpage) == 0:
             free(load_ptr(prepared_zpage, 72))
             free(prepared_zpage)
-        _set_pending_minor_block(null())
         global_store_ptr("pcc_gc_last_alloc", o)
         return
 
@@ -5493,12 +5336,6 @@ def pcc_gc_note_object_freeing(o) -> None:
                     atomic_rmw_i32("and", o, 12, ~16, "acq_rel")
             _live_bytes_subtract(_object_node_size(node))
         _set_object_node_freeing(node, 1)
-        if ptr_is_null(_object_node_minor_block(node)) == 0:
-            _object_graph_unlock()
-            global_store_ptr("pcc_gc_last_noted_free", o)
-            if moving != 0:
-                _backend4_finish_remap_retirement(finish)
-            return
         pcc_gc_object_index_remove(o)
         _unlink_object_node(node)
         _object_node_release(node)
