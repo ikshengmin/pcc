@@ -145,6 +145,34 @@ Call graph:
     assert tool._allocation_amount_bytes("128 bytes") == 128
 
 
+def test_named_native_frames_use_program_counters_not_sampler_symbols():
+    tool = _load_tool()
+    report = """\
+Call graph:
+    10 wrong_root  (in pcc1) + 1234  [0x1100]
+    + 6 wrong_child  (in pcc1) + 4,8  [0x1124,0x1128]
+    + 2 foreign_name  (in system.dylib) + 4  [0x1124]
+"""
+    symbols = [(0x100, "real_root"), (0x120, "real_child")]
+    assert tool._fold(report, "pcc1", symbols, 0x1000) == collections.Counter({
+        "real_root": 2,
+        "real_root;real_child": 6,
+        "real_root;foreign_name [system.dylib]": 2,
+    })
+
+
+def test_grouped_native_pcs_do_not_invent_per_function_weights():
+    tool = _load_tool()
+    report = """\
+Call graph:
+    7 misleading_name  (in pcc1) + 4,36  [0x1104,0x1124]
+"""
+    symbols = [(0x100, "first"), (0x120, "second")]
+    assert tool._fold(report, "pcc1", symbols, 0x1000) == collections.Counter({
+        "<multiple native symbols: first | second>": 7,
+    })
+
+
 def test_cpu_capture_precedes_symbol_loading_and_allows_short_lived_target(
     monkeypatch, tmp_path
 ):

@@ -164,6 +164,7 @@ _ROW = re.compile(
     r"^(?P<lead>[\s+!:|]*)(?P<count>\d+)(?:\s+\((?P<amount>[^)]*)\))?\s+(?P<rest>\S.*)$"
 )
 _ADDR = re.compile(r"load address 0x(?P<load>[0-9a-f]+) \+ 0x(?P<off>[0-9a-f]+)")
+_ABS_ADDRS = re.compile(r"\[(0x[0-9a-fA-F]+(?:,\s*0x[0-9a-fA-F]+)*)\]")
 _IN_IMAGE = re.compile(r"\(in ([^)]+)\)")
 _IMAGE_ROW = re.compile(r"^\s*0x([0-9a-f]+)\s+-\s+0x[0-9a-f]+\s+\+?(\S+)")
 _ALLOC_AMOUNT = re.compile(
@@ -239,7 +240,18 @@ def _fold(
         rest = match.group("rest")
         in_image = _IN_IMAGE.search(rest)
         addr = _ADDR.search(rest)
-        if addr and in_image and in_image.group(1) == image:
+        absolute = _ABS_ADDRS.search(rest)
+        if absolute and in_image and in_image.group(1) == image:
+            # sample may print an incorrect symbol even when it has the exact
+            # PC. Resolve named frames from this executable just like ??? frames.
+            # A grouped row has no per-PC weights: keep ambiguous groups intact.
+            labels = sorted({
+                _resolve(symbols, int(pc.strip(), 16) - slide)[0]
+                for pc in absolute.group(1).split(",")
+            })
+            label = (labels[0] if len(labels) == 1 else
+                     "<multiple native symbols: " + " | ".join(labels) + ">")
+        elif addr and in_image and in_image.group(1) == image:
             static = int(addr.group("load"), 16) + int(addr.group("off"), 16) - slide
             label, _ = _resolve(symbols, static)
         elif in_image:
