@@ -1310,6 +1310,14 @@
         ]
       }
     },
+    "tests/go/test_runtime_error_panics.py": {
+      "test_official_go_reports_the_same_status_and_panic_prefix": {
+        "activity": "external-reference",
+        "reason": [
+          "Official Go external reference via tests.go.owned_execution.compile_reference"
+        ]
+      }
+    },
     "tests/go/test_builtin_io.py": {
       "test_complete_original_and_output_programs_match_full_raw_streams": {
         "activity": "external-reference",

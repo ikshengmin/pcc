@@ -1,5 +1,8 @@
 """Typed bootstrap output and terminal uncaught panic for the closed Go subset.
 
+Runtime error panics (a runtime-owned error operand of panic, or a dynamic
+integer division by zero) report the Error() text of runtime/panic.go.
+
 This is frontend lowering to existing public IR/syscall machinery, not a Go
 allocator or runtime. No defer, recover, goroutine, interface-payload or foreign
 callback route is admitted. Full Go panicking/unwind remains unimplemented.
@@ -171,10 +174,26 @@ class BuiltinIO:
                 value = (b.sext if signed else b.zext)(value, I64)
             b.call(self.integer_helper(), [value, ir.Constant(ir.IntType(1), int(signed))])
 
+    def runtime_panic(self, runtime_error):
+        """Uncaught terminal panic with a runtime error: its Error() text, status 2.
+
+        No admitted source can install deferred cleanup or recovery, so this
+        is the actual uncaught case, as for the scalar payloads below.
+        """
+        self.text(b'panic: ' + runtime_error.error_text.encode() + b'\n')
+        self.syscall(self.owner.builder, self.exit_number, number(2))
+        self.owner.builder.unreachable()
+
     def emit(self, expr):
         if 'linux' not in self.owner.module.triple.split('-'):
             raise UnsupportedGo(expr.token, 'go.unsupported.builtin-io',
                                 'bootstrap output and terminal panic currently require owned Linux I/O')
+        runtime_error = (getattr(expr.args[0], 'runtime_error', None)
+                         if expr.value == 'panic' and len(expr.args) == 1 else None)
+        if runtime_error is not None:
+            # The runtime-owned name has no storage and no evaluation effect.
+            self.runtime_panic(runtime_error)
+            return None
         # Evaluate and capture every argument before producing any output.
         values = self.owner.values(expr.args)
         types = (result_types(expr.args[0].type) if len(expr.args) == 1 and

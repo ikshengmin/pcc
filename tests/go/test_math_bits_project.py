@@ -74,11 +74,12 @@ def test_only_source_admission_is_attempted_by_the_owned_stage(tmp_path):
     report = project.initial_report()
     project.run_owned(report, files, tmp_path)
     row = report["owned"]["package_frontend"]
-    assert row["status"] == "UNSUPPORTED"
-    assert row["code"] == "go.unsupported.interface-types"
-    assert (row["filename"], row["line"], row["column"]) == ("bits.go", 507, 9)
-    assert "runtime-owned runtime.overflowError values require the owned runtime error object" in row["diagnostic"]
-    assert not (tmp_path / "package.ll").exists()
+    # Every normal production file lowers to owned IR: panic(overflowError)
+    # and the dynamic divisions of Div32/Div64/Rem* are terminal runtime
+    # error panics. IR only; not upstream tests or project acceptance.
+    assert row["status"] == "PASS"
+    assert row["ir_sha256"] == sha256((tmp_path / "package.ll").read_bytes())
+    assert row["claim"] == "all normal production source files to IR only; NOT upstream tests"
     assert report["project_accepted"] is False
     assert all(report["owned"][name]["status"] == "UNRUN" for name in (
         "dependency_closure", "test_entry", "test_build", "tests_and_examples",

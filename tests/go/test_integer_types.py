@@ -66,11 +66,15 @@ def test_byte_and_rune_are_aliases_not_new_named_types():
     ("_ = f(1)", "func f(n uint) bool{return (18446744073709551615 >> n)>0}", "overflows int"),
     ("_ = 1 << 18446744073709551616", "", "shift count overflows uint64"),
     ("_ = f(1,2)", "func f(x uint64,n int) uint64{return x<<n}", "negative-count panic support"),
-    ("_ = f(1,2)", "func f(x,y uint64) uint64{return x/y}", "division-by-zero panic support"),
 ])
 def test_integer_unsupported_or_invalid_boundaries_stay_diagnostic(body, helpers, message):
     with pytest.raises(GoDiagnostic, match=message):
         compile_go(program(body, helpers))
+
+
+def test_former_dynamic_unsigned_division_boundary_now_lowers_with_its_panic_check():
+    # Exact former boundary original; test_runtime_error_panics.py executes the shape.
+    assert "division_by_zero:" in str(compile_go(program("_ = f(1,2)", "func f(x,y uint64) uint64{return x/y}")))
 
 
 def test_dynamic_unsigned_shift_is_clamped_before_the_ir_shift():

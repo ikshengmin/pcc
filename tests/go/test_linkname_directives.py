@@ -5,9 +5,10 @@ the directive only in files that import unsafe, and its local name must be a
 declared package function or variable. The only bindable targets are the
 owned runtime error values of runtime/panic.go. The runtime owns the bound
 variable's storage, so the package declares only a reference (no global, no
-initializer); each value use needs the owned runtime error object and
-interface values, an explicit gap. Every other target, the one-name form and
-function aliases stay explicit gaps.
+initializer). The whole operand of a terminal panic reports the runtime
+object's Error() text (test_runtime_error_panics.py); every other value use
+needs the owned runtime error object and interface values, an explicit gap.
+Every other target, the one-name form and function aliases stay explicit gaps.
 The unchanged math/bits bits_errors.go is the first project input.
 """
 import pytest
@@ -69,7 +70,7 @@ def test_bound_variable_never_becomes_an_ordinary_nil_global(monkeypatch):
         compile_go(HEADER + '//go:linkname e runtime.overflowError\nvar e error\nfunc main(){_=e}\n', 'original.go')
 
 
-@pytest.mark.parametrize('use', ['_=e', 'if e!=nil{}', 'var f error=e;_=f', 'panic(e)'])
+@pytest.mark.parametrize('use', ['_=e', 'if e!=nil{}', 'var f error=e;_=f', 'panic(e!=nil)'])
 def test_every_value_use_of_a_runtime_owned_error_is_an_explicit_gap(use, monkeypatch):
     from pcc.frontends.go.lowering import Lowerer
     monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('runtime-owned error reached IR'))

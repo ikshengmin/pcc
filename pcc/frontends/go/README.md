@@ -709,7 +709,7 @@ renew that historical qualification.
 | `go.capability.blank-struct-fields` | Explicitly unimplemented boundary: blank struct fields | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.blank-type-declarations` | Explicitly unimplemented boundary: blank type declarations | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.complex-types` | Explicitly unimplemented boundary: complex types | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
-| `go.capability.division-panic` | Explicitly unimplemented boundary: division panic | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.division-panic` | Implemented on Linux: dynamic divisor check with the terminal `runtime.divideError` panic, signed MIN/-1, and runtime-owned error panic operands | `test_runtime_error_panics.py`; local Linux container execution and official Go status/prefix comparison | `supported` |
 | `go.capability.dot-imports` | File-scoped exported declaration lookup implemented | Authored source/native/reference obligations; all execution unrun | `missing` |
 | `go.capability.dynamic-string-concatenation` | Explicitly unimplemented boundary: dynamic string concatenation | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.dynamic-string-conversion` | Explicitly unimplemented boundary: dynamic string conversion | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |

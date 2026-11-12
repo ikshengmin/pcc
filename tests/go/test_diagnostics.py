@@ -99,6 +99,9 @@ GRADUATED_AGGREGATE_CASES = (
     ('aggregate-comparison', original(body='var a [1]int;_=a==a')),
     ('aggregate-switch', original(body='var a [1]int;switch a{case a:}')),
 )
+# Linux targets now check a dynamic divisor at run time (test_runtime_error_panics);
+# other targets reach the builtin-io target boundary of the terminal panic.
+GRADUATED_DIVISION_CASE = ('division-panic', original('func f(a,b int)int{return a/b}'))
 RETIRED_DOT_IMPORT_CASE = ('dot-imports', 'package main;import . "local";func main(){}')
 # Exact historical input/index retained. It now reaches missing supplied source
 # (or unused import with that source), not positive program acceptance.
@@ -108,7 +111,7 @@ RETIRED_CASES = (RETIRED_DOT_IMPORT_CASE,)
 GRADUATED_CASES = (GRADUATED_RECEIVER_CASE, GRADUATED_ARRAY_RANGE_CASE,
                   GRADUATED_POINTER_SWITCH_CASE, GRADUATED_STRING_RANGE_CASE,
                   GRADUATED_STRUCT_TAG_CASE, GRADUATED_BLANK_FUNCTION_CASE, GRADUATED_BLANK_TYPE_CASE,
-                  GRADUATED_RECORD_ARRAY_CASE, *GRADUATED_AGGREGATE_CASES)
+                  GRADUATED_RECORD_ARRAY_CASE, *GRADUATED_AGGREGATE_CASES, GRADUATED_DIVISION_CASE)
 assert all(CASES.count(case) == 1 for case in GRADUATED_CASES)
 assert all(CASES.count(case) == 1 for case in RETIRED_CASES)
 ACTIVE_CASES = [(i, name, text) for i, (name, text) in enumerate(CASES)

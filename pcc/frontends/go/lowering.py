@@ -8,6 +8,7 @@ ordinary public IR, handled by the existing optimizer and self backend.
 
 from pcc.ir.compat import ir
 from pcc.frontends.go.branches import walk
+from pcc.frontends.go.diagnostics import UnsupportedGo
 from pcc.frontends.go.managed_objects import static_string_plan
 from pcc.frontends.go.records import StructType, underlying
 from pcc.frontends.go.types import (
@@ -558,6 +559,8 @@ class Lowerer:
             if op in ("/", "%") and expr.args[1].constant == -1:
                 # Go defines MIN_INT / -1 == MIN_INT, unlike LLVM sdiv.
                 return self.builder.neg(left) if op == "/" else ir.Constant(left.type, 0)
+            if op in ("/", "%") and expr.args[1].constant is None:
+                return self.checked_division(expr, op, left, right)
             if op == "&^":
                 return self.builder.and_(left, self.builder.not_(right))
             # The shared machine emitter's scalar multiply/divide lane is at
@@ -625,6 +628,41 @@ class Lowerer:
             safe = self.builder.trunc(safe, left.type)
         value = emitter(left, safe)
         return self.builder.select(in_range, value, overflow)
+
+    def checked_division(self, expr, op, left, right):
+        """Go spec Integer operators/Run-time panics for a dynamic divisor.
+
+        Both operands are already evaluated. A zero divisor causes the
+        runtime.divideError panic; for signed types MIN / -1 == MIN and
+        MIN % -1 == 0, so -1 never reaches a trapping machine division.
+        """
+        if 'linux' not in self.module.triple.split('-'):
+            raise UnsupportedGo(expr.token, 'go.unsupported.builtin-io',
+                                'the dynamic division-by-zero panic currently requires owned Linux I/O')
+        from pcc.frontends.go.runtime_provider import runtime_object
+        panic_block = self.function.append_basic_block("division_by_zero")
+        divide_block = self.function.append_basic_block("division")
+        self.builder.cbranch(self.builder.icmp_unsigned("==", right, ir.Constant(right.type, 0)),
+                             panic_block, divide_block)
+        self.builder.position_at_end(panic_block)
+        self.builtin_io.runtime_panic(runtime_object("runtime.divideError"))
+        self.builder.position_at_end(divide_block)
+        # The shared emitter's divide lane is at least i32 (see binary).
+        narrow = integer_bits(expr.type) < 32
+        signed = integer_signed(expr.type)
+        if narrow:
+            extend = self.builder.sext if signed else self.builder.zext
+            left, right = extend(left, ir.IntType(32)), extend(right, ir.IntType(32))
+        if signed:
+            minus_one = self.builder.icmp_signed("==", right, ir.Constant(right.type, -1))
+            divisor = self.builder.select(minus_one, ir.Constant(right.type, 1), right)
+            if op == "/":
+                value = self.builder.select(minus_one, self.builder.neg(left), self.builder.sdiv(left, divisor))
+            else:
+                value = self.builder.srem(left, divisor)
+        else:
+            value = (self.builder.udiv if op == "/" else self.builder.urem)(left, right)
+        return self.builder.trunc(value, ir_type(expr.type)) if narrow else value
 
     def short_circuit(self, expr):
         left = self.expression(expr.args[0])

@@ -4,6 +4,8 @@ import json
 import os
 from pathlib import Path
 
+import re
+
 import pytest
 
 from pcc.frontends.go import UnsupportedGo, compile_go_packages, function_symbol
@@ -108,8 +110,10 @@ def test_normal_original_math_bits_file_selection_keeps_error_runtime_dependency
     assert b"//go:build !compiler_bootstrap" in originals[-1][1]
     inputs={"main":[("main.go",'package main;import "math/bits";func main(){_=bits.LeadingZeros(1)}')],
             "math/bits":[(name,data.decode()) for name,data in originals]}
-    with pytest.raises(UnsupportedGo,match="runtime-owned runtime.overflowError values require the owned runtime error object") as failure:
-        compile_go_packages(inputs)
-    assert (failure.value.code,failure.value.filename,failure.value.line,failure.value.column)==(
-        "go.unsupported.interface-types","bits.go",507,9)
+    # The runtime-owned error values reach IR only as terminal panic operands.
+    module=compile_go_packages(inputs)
+    constants={re.sub(rb"\\([0-9A-Fa-f]{2})",lambda m:bytes([int(m.group(1),16)]),text.encode())
+               for text in re.findall(r'c"([^"]*)"',str(module))}
+    assert b"panic: runtime error: integer overflow\n" in constants
+    assert b"panic: runtime error: integer divide by zero\n" in constants
     assert all((directory/name).read_bytes()==data for name,data in originals)

@@ -15,7 +15,6 @@ UNIMPLEMENTED_FEATURES = {
     'go.unsupported.blank-struct-fields': 'go.capability.blank-struct-fields',
     'go.unsupported.builtin-io': 'go.capability.builtin-io',
     'go.unsupported.complex-types': 'go.capability.complex-types',
-    'go.unsupported.division-panic': 'go.capability.division-panic',
     'go.unsupported.dynamic-string-concatenation': 'go.capability.dynamic-string-concatenation',
     'go.unsupported.dynamic-string-conversion': 'go.capability.dynamic-string-conversion',
     'go.unsupported.embedded-fields': 'go.capability.embedded-fields',

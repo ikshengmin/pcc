@@ -26,7 +26,8 @@ from tests.go.test_packages import GRADUATED_STATIC_BLANK_IMPORT as PACKAGE_ORIG
 
 ROOT = Path(__file__).parent
 FIXTURE = ROOT / 'fixtures/blank_imports.json'
-FIXTURE_SHA256 = '9b382ab6616faeb3487944b60772d05e17670fa5edd9ca356eb9de1f181f8481'
+# The reference pattern of unused-named-alongside-blank also accepts Go 1.27.3 wording.
+FIXTURE_SHA256 = '9196c23f3b1f75c2e4097634eb7e6fda8e001134501ad2aa67b53d3fc8c8ea15'
 CORPUS = json.loads(FIXTURE.read_bytes().decode('utf-8'))
 PLACEMENT_FIXTURE = ROOT / 'fixtures/directive_placement.json'
 PLACEMENT_SHA256 = '315fbfcc2452c7b8d31abafbb4d2c0285559cf47eee9e8bc98de9f38e110c044'
@@ -239,14 +240,13 @@ def test_complete_normal_math_bits_stays_at_real_symbol_ownership_boundary(monke
     originals = tuple((name, (UPSTREAM / name).read_bytes().decode('utf-8')) for name in NORMAL_SHA256)
     inputs = {'main': (('admission-main.go', 'package main;import "math/bits";func main(){_=bits.LeadingZeros(1)}'),),
               'math/bits': originals}
-    monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('runtime-owned math/bits reached IR'))
-    with pytest.raises(UnsupportedGo) as caught:
-        compile_go_packages(inputs)
+    del Lowerer
     # Both directives bind owned runtime error values whose storage the runtime
-    # owns; the first value use, panic(overflowError) in Div32, is the gap.
-    assert caught.value.code == 'go.unsupported.interface-types'
-    assert 'runtime-owned runtime.overflowError values' in caught.value.message
-    assert (caught.value.filename, caught.value.line, caught.value.column) == ('bits.go', 507, 9)
+    # owns: no package global. Their only uses are terminal panic operands
+    # (test_runtime_error_panics.py), so the complete normal package lowers.
+    module = compile_go_packages(inputs)
+    names = ('overflowError', 'divideError')
+    assert not any(item in name or item.encode().hex() in name for item in names for name in module.globals)
     assert set(inputs) == {'main', 'math/bits'}  # No unsafe/runtime replacement.
     for name, text in originals:
         assert (UPSTREAM / name).read_bytes() == text.encode('utf-8')

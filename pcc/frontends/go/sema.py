@@ -849,12 +849,23 @@ class Analyzer:
         symbol.resolved = True
         symbol.resolving = False
 
-    @staticmethod
-    def require_runtime_owned_value(symbol, token):
-        if getattr(symbol, 'linkname', None) is not None:
-            raise UnsupportedGo(token, 'go.unsupported.interface-types',
-                                "runtime-owned " + symbol.linkname.symbol
-                                + " values require the owned runtime error object and interface values")
+    def require_runtime_owned_value(self, symbol, expr):
+        """A runtime-owned error value has no interface representation yet.
+
+        Its only admitted use is the whole operand of a terminal panic: the
+        uncaught panic reports Error() of the runtime object, the fixed text
+        of runtime/panic.go, so no interface value is materialized.
+        """
+        if getattr(symbol, 'linkname', None) is None:
+            return
+        from .runtime_provider import runtime_object
+        value = runtime_object(symbol.linkname.symbol)
+        if value is not None and expr is getattr(self, 'panic_operand', None):
+            expr.runtime_error = value
+            return
+        raise UnsupportedGo(expr.token, 'go.unsupported.interface-types',
+                            "runtime-owned " + symbol.linkname.symbol
+                            + " values require the owned runtime error object and interface values")
 
     def lookup(self, token):
         for scope in reversed(self.scopes):
@@ -1445,7 +1456,7 @@ class Analyzer:
             else:
                 symbol = self.lookup(expr.token)
                 symbol.used = True
-                self.require_runtime_owned_value(symbol, expr.token)
+                self.require_runtime_owned_value(symbol, expr)
                 expr.type, expr.constant, expr.symbol = symbol.type, symbol.constant, symbol
                 expr.addressable = symbol.constant is None
                 expr.storage_depth, expr.iteration_binding = symbol.depth, symbol.iteration_binding
@@ -1467,7 +1478,7 @@ class Analyzer:
                 if symbol is None:
                     raise GoDiagnostic(expr.token, "undefined imported constant or variable " + expr.value)
                 imported.resolve_constant(symbol)
-                self.require_runtime_owned_value(symbol, expr.token)
+                self.require_runtime_owned_value(symbol, expr)
                 expr.type, expr.constant, expr.symbol = symbol.type, symbol.constant, symbol
                 expr.addressable = symbol.constant is None
                 return
@@ -1616,7 +1627,13 @@ class Analyzer:
                     raise GoDiagnostic(expr.token, name + " requires an admitted array" + (" or string" if name == "len" else ""))
                 return
             if name in ("print", "println", "panic"):
-                values = self.values(expr.args)
+                # Parentheses are a flag on the same node, so (e) is the operand too.
+                operand = expr.args[0] if name == "panic" and len(expr.args) == 1 else None
+                previous, self.panic_operand = getattr(self, 'panic_operand', None), operand
+                try:
+                    values = self.values(expr.args)
+                finally:
+                    self.panic_operand = previous
                 if name == "panic" and len(values) != 1:
                     raise GoDiagnostic(expr.token, "panic requires exactly one argument")
                 for argument in values:
@@ -1624,6 +1641,8 @@ class Analyzer:
                         raise GoDiagnostic(argument.token, "void function call used as a value")
                     if argument.type == "untyped nil" and name != "panic":
                         raise GoDiagnostic(argument.token, "cannot print untyped nil")
+                    if getattr(argument, 'runtime_error', None) is not None:
+                        continue
                     if not (is_integer(argument.type) or is_boolean(argument.type) or is_string(argument.type)):
                         raise UnsupportedGo(argument.token, 'go.unsupported.builtin-io',
                                             "non-scalar or nil builtin payload requires shared interface/runtime support")
@@ -1976,8 +1995,8 @@ class Analyzer:
         if op in ("/", "%"):
             if right.constant == 0:
                 raise GoDiagnostic(expr.token, "division by zero")
-            if right.constant is None:
-                raise UnsupportedGo(expr.token, 'go.unsupported.division-panic', "dynamic division requires shared-runtime division-by-zero panic support")
+            # A dynamic divisor is checked at run time: zero panics with
+            # runtime.divideError (lowering), never a hardware trap.
         if left.constant is not None and right.constant is not None:
             a, b = left.constant, right.constant
             if op == "<<" and b > MAX_CONSTANT_BITS:

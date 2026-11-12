@@ -95,7 +95,6 @@ SEMANTIC_BOUNDARIES = [
     ("int(1)", "", "only function calls"),
     ("_ = bool(1)", "", "invalid conversion"),
     ("_ = int64()", "", "one argument"),
-    ("_ = f(2, 0)", "func f(x, y int) int { return x/y }", "dynamic division"),
     ("_ = f(2, 0)", "func f(x, y int) int { return x<<y }", "dynamic signed shift"),
     ("_ = 3/0", "", "division by zero"),
     ("_ = 1 << -1", "", "negative shift"),
@@ -118,6 +117,12 @@ def test_go_rejects_invalid_or_unimplemented_semantics(body, helpers, message):
         compile_go(source(body, helpers), "negative.go")
     assert error.value.filename == "negative.go"
     assert error.value.line >= 1 and error.value.column >= 1
+
+
+def test_former_dynamic_division_boundary_now_lowers_with_its_panic_check():
+    # Exact former negative original; test_runtime_error_panics.py executes the shape.
+    assert "division_by_zero:" in str(compile_go(source("_ = f(2, 0)", "func f(x, y int) int { return x/y }"),
+                                                "negative.go"))
 
 
 @pytest.mark.parametrize("text,message", [
