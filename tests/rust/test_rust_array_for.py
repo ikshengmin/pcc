@@ -77,8 +77,6 @@ def test_noncopy_nominal_element_can_have_proven_empty_destruction():
     ('struct R<T>{n:T}fn f<T>(a:[R<T>;2]){for _ in a{}}', 'unknown generic element destruction'),
     ('fn f(a:&[u64;2]){for _ in a{}}', 'concrete owned arrays only'),
     ('fn f(a:&mut [u64;2]){for _ in a{}}', 'concrete owned arrays only'),
-    ('fn f(){for x in 0..3{}}', 'range iterators'),
-    ('fn f(){for x in 0..=3{}}', 'range iterators'),
     ('fn f(){for (x,y) in [(1u64,2u64)]{}}', 'destructuring/refutable patterns'),
     ('fn f(){for () in [();1]{}}', 'destructuring/refutable patterns'),
     ('fn f(){for x in [1u64]{x=2;}}', 'immutable'),
@@ -97,6 +95,13 @@ def test_noncopy_nominal_element_can_have_proven_empty_destruction():
 def test_for_model_preserves_type_scope_destruction_and_panic_capability_gaps(source, message):
     with pytest.raises(RustError, match=message):
         model(source)
+
+
+@pytest.mark.parametrize('source', ['fn f(){for x in 0..3{}}', 'fn f(){for x in 0..=3{}}'])
+def test_former_range_iterator_gaps_are_integer_range_loops(source):
+    # Integer ranges have their own owner (tests/rust/test_rust_range_iteration.py).
+    function, = model(source).functions
+    assert any(node.kind in {'for_range', 'for_range_inclusive'} for node in nodes(function.body))
 
 
 @pytest.mark.parametrize('name', PROGRAMS)
@@ -140,7 +145,6 @@ def test_original_iterator_ownership_rejections_belong_to_actual_checker(source,
 @pytest.mark.parametrize('source,message', [
     ('fn f<T>(a:[T;2]){for _ in a{}}', 'unknown generic element destruction'),
     ('fn f(a:&[u64;2]){for _ in a{}}', 'concrete owned arrays only'),
-    ('fn f(){for x in 0..3{}}', 'range iterators'),
     ('fn f(){for (x,y) in [(1u64,2u64)]{}}', 'destructuring/refutable patterns'),
     ('fn f(d:u64){for x in [10u64]{x/d;}}', 'panic-capable division'),
     ('fn f(x:i64){for _ in [1]{x%-1;}}', 'panic-capable division'),

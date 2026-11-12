@@ -2738,6 +2738,20 @@
         ]
       }
     },
+    "tests/rust/test_rust_range_iteration.py": {
+      "test_actual_native_range_originals_match_rustc": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "reason": [
+          "Calls tests.rust.test_rust_standard_markers.test_actual_native_marker_originals_match_rustc for the five unchanged integer range programs; each is certified before owned compilation and compared with the actual rustc native result"
+        ]
+      },
+      "test_actual_rustc_rejects_exact_invalid_range_originals": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.rust.test_rust_supertraits.test_genuine_rustc_rejects_the_same_invalid_obligations on unchanged invalid range originals; requires actual source-attributed rustc rejection (E0308, E0277, E0425, E0382)"
+        ]
+      }
+    },
     "tests/rust/test_rust_self_sized_predicates.py": {
       "test_actual_same_input_check_precedes_owned_object": {
         "activity": "mandatory-same-input-certification-and-owned-contract",

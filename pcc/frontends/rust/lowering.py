@@ -154,6 +154,14 @@ class Lowerer:
                 self.allocate(expr.binding)
             self.temps[("for_array", id(expr))] = self.builder.alloca(self.type(expr.value.array_type), name="for.array")
             self.temps[("for_cursor", id(expr))] = self.builder.alloca(self.type("usize"), name="for.cursor")
+        if expr.kind in {"for_range", "for_range_inclusive"}:
+            if expr.binding is not None:
+                self.allocate(expr.binding)
+            bound = self.type(expr.children[0].ty)
+            self.temps[("range_cursor", id(expr))] = self.builder.alloca(bound, name="range.cursor")
+            self.temps[("range_end", id(expr))] = self.builder.alloca(bound, name="range.end")
+            if expr.kind == "for_range_inclusive":
+                self.temps[("range_exhausted", id(expr))] = self.builder.alloca(ir.IntType(1), name="range.exhausted")
         if expr.kind in {"match", "while_let"}:
             from .patterns import pattern_bindings
             patterns = expr.value if expr.kind == "match" else (expr.value,)
@@ -342,6 +350,8 @@ class Lowerer:
             return self.conditional(expr)
         if kind == "for":
             return self.array_iteration(expr)
+        if kind in {"for_range", "for_range_inclusive"}:
+            return self.range_iteration(expr)
         if kind == "loop":
             body_block = self.function.append_basic_block("loop.body")
             done = self.function.append_basic_block("loop.end")
@@ -430,6 +440,62 @@ class Lowerer:
             assert scope.plan.identity is StandardIterator.OWNED_ARRAY
             if scope.cursor is not None:
                 self.builder.store(ir.Constant(self.type("usize"), scope.plan.array_type.length), scope.cursor)
+
+    def range_iteration(self, expr):
+        """Range::next / RangeInclusive::next over one integer type.
+
+        `a..b` yields a, a+1, ..., b-1; the increment follows `cursor < end`,
+        so it cannot overflow. `a..=b` yields b last through an exhausted flag
+        instead of incrementing past it (no overflow at the type maximum).
+        """
+        start = self.expression(expr.children[0])
+        if self.builder.block.is_terminated:
+            return None
+        end = self.expression(expr.children[1])
+        if self.builder.block.is_terminated:
+            return None
+        ty = expr.children[0].ty
+        compare = self.builder.icmp_signed if ty.startswith("i") else self.builder.icmp_unsigned
+        cursor = self.temps[("range_cursor", id(expr))]
+        bound = self.temps[("range_end", id(expr))]
+        self.builder.store(start, cursor)
+        self.builder.store(end, bound)
+        inclusive = expr.kind == "for_range_inclusive"
+        if inclusive:
+            exhausted = self.temps[("range_exhausted", id(expr))]
+            self.builder.store(ir.Constant(ir.IntType(1), 0), exhausted)
+        condition = self.function.append_basic_block("range.next")
+        body = self.function.append_basic_block("range.body")
+        done = self.function.append_basic_block("range.end")
+        self.builder.branch(condition)
+        self.builder.position_at_end(condition)
+        current = self.builder.load(cursor)
+        limit = self.builder.load(bound)
+        if inclusive:
+            has_next = self.builder.and_(self.builder.not_(self.builder.load(exhausted)),
+                                         compare("<=", current, limit))
+        else:
+            has_next = compare("<", current, limit)
+        self.builder.cbranch(has_next, body, done)
+        self.builder.position_at_end(body)
+        # next() yields the current value and advances before the body runs.
+        if inclusive:
+            self.builder.store(compare("==", current, limit), exhausted)
+            below = compare("<", current, limit)
+            one = ir.Constant(current.type, 1)
+            self.builder.store(self.builder.select(below, self.builder.add(current, one), current), cursor)
+        else:
+            self.builder.store(self.builder.add(current, ir.Constant(current.type, 1)), cursor)
+        if expr.binding is not None and expr.binding.ty != "()":
+            self.builder.store(current, self.slots[expr.binding.serial])
+        depth = len(self.iteration_scopes)
+        self.loops.append(LoopTargets(condition, done, depth, depth))
+        self.expression(expr.children[2])
+        self.loops.pop()
+        if not self.builder.block.is_terminated:
+            self.builder.branch(condition)
+        self.builder.position_at_end(done)
+        return None
 
     def array_iteration(self, expr):
         plan = expr.value

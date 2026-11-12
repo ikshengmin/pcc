@@ -1354,7 +1354,7 @@ class Parser:
             elif self.token.text == "}":
                 tail = expr
                 break
-            elif expr.kind in {"if", "if_let", "block", "while", "while_let", "for", "loop", "unsafe", "match"}:
+            elif expr.kind in {"if", "if_let", "block", "while", "while_let", "for", "for_range", "for_range_inclusive", "loop", "unsafe", "match"}:
                 statements.append(Expr("statement", expr.token, children=[expr]))
             else:
                 raise self.token.error("expected ';' or end of block")
@@ -1453,8 +1453,16 @@ class Parser:
             self.expect("in")
             source = self.expression(allow_struct=False)
             if self.token.text in {"..", "..="}:
-                raise self.token.error("range iterators are not implemented")
-            expr = Expr("for", token, pattern, [source, self.block()])
+                # Rust Reference range expressions: `start..end` / `start..=end`.
+                # Both bounds are evaluated once, start first, before the loop.
+                operator = self.take()
+                if self.token.text == "{":
+                    raise operator.error("unbounded range iteration (RangeFrom) is not implemented")
+                end = self.expression(allow_struct=False)
+                kind = "for_range_inclusive" if operator.text == "..=" else "for_range"
+                expr = Expr(kind, operator, pattern, [source, end, self.block()])
+            else:
+                expr = Expr("for", token, pattern, [source, self.block()])
         elif text == "match":
             scrutinee = self.expression(allow_struct=False)
             self.expect("{")
@@ -1468,7 +1476,7 @@ class Parser:
                 arms.append(arm)
                 if self.accept("}"):
                     break
-                if not self.accept(",") and arm.kind not in {"if", "if_let", "block", "while", "while_let", "for", "loop", "unsafe", "match"}:
+                if not self.accept(",") and arm.kind not in {"if", "if_let", "block", "while", "while_let", "for", "for_range", "for_range_inclusive", "loop", "unsafe", "match"}:
                     raise self.token.error("expected ',' between match arms")
             expr = Expr("match", token, patterns, [scrutinee] + arms)
         elif text in {"return", "break", "continue"}:
@@ -1511,7 +1519,7 @@ class Parser:
             # access cannot begin a new expression and remains a continuation.
             # Grouped expressions and initializer/operand value contexts do
             # not have this restriction. Keep else-if under the same context.
-            if (complete_block and expr.kind in {"if", "if_let", "block", "while", "while_let", "for", "loop", "unsafe", "match"}
+            if (complete_block and expr.kind in {"if", "if_let", "block", "while", "while_let", "for", "for_range", "for_range_inclusive", "loop", "unsafe", "match"}
                     and self.token.text != "."):
                 break
             if self.token.text == "::" and expr.kind in {"field", "variant", "trait_path"}:

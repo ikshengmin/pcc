@@ -194,6 +194,7 @@ def test_original_project_lines_are_unchanged():
     assert lines[68] == '        while let Some(e) = self.next()? {'
     assert lines[83] == '        self.all(|e| !f(e)).map(|r| !r)'
     assert lines[207] == '        for _ in 0..n {'
+    assert lines[305] == "impl<'a, I: ?Sized> FallibleStreamingIterator for &'a mut I"
 
 
 @pytest.mark.integration

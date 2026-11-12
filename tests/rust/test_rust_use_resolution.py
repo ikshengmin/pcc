@@ -361,9 +361,10 @@ def test_original_project_keeps_both_use_items_before_the_next_parser_gap(tmp_pa
     parser = Parser(original.decode(), edition=2015, rustc_check=checked)
     # Keep the whole authenticated source. Observe the real parser's next
     # boundary without accepting a rewritten prefix or a discarded declaration:
-    # every earlier Fn-family bound, `Some(e)` pattern and closure is parsed.
+    # every earlier Fn-family bound, `Some(e)` pattern, closure and integer
+    # range loop is parsed.
     assert parse_retaining_associated_types(parser, monkeypatch, (
-        208, 19, 'range iterators are not implemented', '..')) == [
+        306, 6, 'lifetime parameters on data/impl declarations are not implemented', "'a")) == [
         ('Item', 28, 10, None, [('Sized', True)]),
         ('Error', 31, 10, None, []),
     ]

@@ -857,6 +857,23 @@ class Checker:
                 self.loops.pop()
                 self.scopes.pop()
             ty = "()"
+        elif kind in {"for_range", "for_range_inclusive"}:
+            # core::ops::Range / RangeInclusive iteration over one integer type
+            # (Step). Bounds are evaluated once, start first; the binding takes
+            # the unified type. Validation requires a resolved integer type.
+            bound = unify(self.expression(children[0]), self.expression(children[1]), expr.token)
+            pattern = expr.value
+            self.scopes.append({})
+            if pattern.kind == "binding":
+                expr.binding = self.bind(pattern.token, bound, pattern.value)
+            from .loops import LoopContext
+            self.loops.append(LoopContext('for'))
+            try:
+                unify("()", self.expression(children[2]), children[2].token)
+            finally:
+                self.loops.pop()
+                self.scopes.pop()
+            ty = "()"
         elif kind == "while":
             unify("bool", self.expression(children[0]), children[0].token)
             from .loops import LoopContext
@@ -946,6 +963,9 @@ class Checker:
         if kind == "for":
             from .iteration import validate_iteration
             validate_iteration(self, expr)
+        if kind in {"for_range", "for_range_inclusive"} and expr.children[0].ty not in INTEGERS:
+            raise expr.token.error("range iteration over " + str(expr.children[0].ty)
+                                   + " requires a Step implementation; only integer ranges are implemented")
         if kind == "match":
             from .patterns import validate_match
 

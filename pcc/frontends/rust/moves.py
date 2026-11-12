@@ -232,6 +232,28 @@ class MoveChecker:
                 return backs, exits
 
             return solve_loop(state, transfer)
+        if kind in {"for_range", "for_range_inclusive"}:
+            # Integer bounds are copied once; the loop then behaves like while.
+            current = state
+            for child in children[:2]:
+                if current is not None:
+                    current = self.expression(child, current)
+            if current is None:
+                return None
+            visible = set(current)
+
+            def transfer(header):
+                entry = clone(header)
+                if expr.binding is not None:
+                    entry[expr.binding.serial] = set()
+                edges = LoopEdges(visible)
+                self.loops.append(edges)
+                body = self.expression(children[2], entry)
+                self.loops.pop()
+                backs = edges.continues + ([edges.outer(body)] if body is not None else [])
+                return backs, edges.breaks + [edges.outer(header)]
+
+            return solve_loop(current, transfer)
         if kind in {"while", "loop"}:
             visible = set(state)
 
