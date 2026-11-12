@@ -1,11 +1,39 @@
 # PCC current status
 
-Updated 2026-11-12. Source: `ikshengmin/pcc` master (`shenming` remote).
+Updated 2026-11-13. Source: `ikshengmin/pcc` master (`shenming` remote).
 Durable receipts for this period (patches, profiles, A/B scripts, repros):
 `/Users/jiamo/pcc-recovery-archive/2026-10-13/README.md`; the 2026-10-21
 handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10-07 status
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
+
+## C frontend: GNU extensions and frontend speed (local Mac, 2026-11-13)
+
+Commits `04ffd12e` (asm), `2ccee683` and `3bfde933` (attributes), `1dc8792d`,
+`98cb7308`, `307adcb2`, `c8a4cbb3` (speed). The owned C path no longer defines
+`__attribute__`/`asm` away: it parses them and honors aligned, packed (records,
+members, bit-fields), integer mode (also on typedef/enum types), aligned
+typedefs for objects and members, weak/constructor/destructor function
+definitions and empty-template asm; everything else is an explicit
+"not implemented" error. A packed-record static-initializer miscompile and the
+removal of unreferenced static constructors/`used` functions by GlobalDCE were
+fixed. 37 gcc-torture cases reached such a gap; 15 pass again
+(`runtime_exact_match`) and 22 remain in `runtime_build_or_execution_failure`,
+the refresh classifier's category for a pcc build failure. Still gaps:
+vector_size, scalar_storage_order, alias, asm labels and real asm templates,
+weak objects, `__builtin_va_arg_pack`; cross-object weak coalescing stops at the
+owned Mach-O linker's stack-map identity check. Constructor lowering ran on
+arm64 Darwin only; the Linux lowering is unrun.
+
+Speed (separate same-input A/Bs, five alternating pairs each, sqlite3.c,
+medians in the commit messages): owned preprocessing 3.12 s → 1.10 s over three
+changes; parse → passes → codegen 26.39 s → 24.35 s (visitor binding) and
+23.22 s → 22.41 s (GC freeze); LR parse alone 3.70 s → 3.44 s. AST passes are
+still ~60% of a unit compile (about 100 full-tree passes). C ordinary stays at
+the same 44 pre-existing Darwin failures. Native pcc1 speed is still unmeasured: `uv run python
+scripts/bootstrap.py --stage 1` is refused by its own admission on this 16 GiB
+Mac (reclaimable 5.68 GiB, swap 3.06 GiB used, budget −5.16 GiB after the 8 GiB
+host reserve); it needs a host with more free memory, not a lower reserve.
 
 ## Compiler refactoring batch (local Mac, 2026-11-12)
 
