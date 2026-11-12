@@ -1,0 +1,182 @@
+{
+  "schema_version": 1,
+  "project": "zxing-core-reedsolomon",
+  "version": "3.5.4",
+  "repository": "https://github.com/zxing/zxing",
+  "revision": "f651b0a0375676e47144f73397dddff8868b0e4c",
+  "release_tag": "zxing-3.5.4",
+  "release_tag_object": "3116a1970d66973475352d8161f2c42bf0a0ea7f",
+  "license": "Apache-2.0",
+  "java_source_level": "8",
+  "complete_module_source_closure": true,
+  "complete_upstream_test_source_closure": true,
+  "complete_build_closure": false,
+  "selection": "Every file of the pinned com.google.zxing.common.reedsolomon package and its upstream test package, plus root LICENSE, NOTICE, AUTHORS, README.md, pom.xml and core/pom.xml. The package depends only on java.lang/java.util. No original source or test is rewritten or removed.",
+  "production_units": [
+    "core/src/main/java/com/google/zxing/common/reedsolomon/GenericGF.java",
+    "core/src/main/java/com/google/zxing/common/reedsolomon/GenericGFPoly.java",
+    "core/src/main/java/com/google/zxing/common/reedsolomon/ReedSolomonDecoder.java",
+    "core/src/main/java/com/google/zxing/common/reedsolomon/ReedSolomonEncoder.java",
+    "core/src/main/java/com/google/zxing/common/reedsolomon/ReedSolomonException.java"
+  ],
+  "upstream_test_units": [
+    "core/src/test/java/com/google/zxing/common/reedsolomon/GenericGFPolyTestCase.java",
+    "core/src/test/java/com/google/zxing/common/reedsolomon/ReedSolomonTestCase.java"
+  ],
+  "upstream_test_classes": [
+    "com.google.zxing.common.reedsolomon.GenericGFPolyTestCase",
+    "com.google.zxing.common.reedsolomon.ReedSolomonTestCase"
+  ],
+  "total_bytes": 107926,
+  "dependencies": {
+    "state": "MISSING_SOURCE_AND_TOOL_CLOSURE",
+    "junit": {
+      "coordinate": "junit:junit:4.13.2",
+      "license": "EPL-1.0",
+      "declared_in": "pom.xml",
+      "source_closure_present": false,
+      "binary_reference_closure_present": false,
+      "reference_console_sha256": null
+    },
+    "hamcrest": {
+      "coordinate": "org.hamcrest:hamcrest-core:1.3",
+      "license": "BSD-3-Clause",
+      "required_by": "junit:junit:4.13.2",
+      "source_closure_present": false,
+      "binary_reference_closure_present": false
+    }
+  },
+  "historical_frontiers": [],
+  "files": [
+    {
+      "path": "LICENSE",
+      "role": "license-notice",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "3f62881f0566227a24b12e5a754cc79f39aaa94883038e95c94812e1f50af42f",
+      "size": 13320,
+      "git_blob": "510991edab065c65cbbad6a78355f230542348dc",
+      "url": "https://raw.githubusercontent.com/zxing/zxing/f651b0a0375676e47144f73397dddff8868b0e4c/LICENSE"
+    },
+    {
+      "path": "AUTHORS",
+      "role": "upstream-metadata",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "6da188b29f190fd45fdd587efe65b33d5a6fd02d4d7e58c14bea04fc365dd300",
+      "size": 2516,
+      "git_blob": "85099ebfb0b6baac6e6944099421c6ee018de209",
+      "url": "https://raw.githubusercontent.com/zxing/zxing/f651b0a0375676e47144f73397dddff8868b0e4c/AUTHORS"
+    },
+    {
+      "path": "NOTICE",
+      "role": "license-notice",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "4db4b60aace29ec6c5c4f13ca9cac1930d3c0c54bcc67dceead0c10771120e66",
+      "size": 664,
+      "git_blob": "70d46cb44a1afdc47187c0c7bb1aa213819d435e",
+      "url": "https://raw.githubusercontent.com/zxing/zxing/f651b0a0375676e47144f73397dddff8868b0e4c/NOTICE"
+    },
+    {
+      "path": "README.md",
+      "role": "upstream-metadata",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "55bbd57d07ee11f0710c1ac474b68a511807eef592015bcf08b83cea2f2e7291",
+      "size": 6590,
+      "git_blob": "759e397599ce32516ce93df2bd5a5cd91726d7cf",
+      "url": "https://raw.githubusercontent.com/zxing/zxing/f651b0a0375676e47144f73397dddff8868b0e4c/README.md"
+    },
+    {
+      "path": "pom.xml",
+      "role": "upstream-metadata",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "9133f322d86101c5c478c08ea3d6734dc376423937ddab1aa2a06aae24fc85c9",
+      "size": 27796,
+      "git_blob": "d4b25acb0e15a47a496e501c9c9e9a72a1951d82",
+      "url": "https://raw.githubusercontent.com/zxing/zxing/f651b0a0375676e47144f73397dddff8868b0e4c/pom.xml"
+    },
+    {
+      "path": "core/pom.xml",
+      "role": "upstream-metadata",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "502c7368ae869f15428c020a2432eec9dde7436454f3edd1816e0d4b3d0609bf",
+      "size": 2806,
+      "git_blob": "6f4a35a8fddbcaffa94e183a68fc30773f7942ae",
+      "url": "https://raw.githubusercontent.com/zxing/zxing/f651b0a0375676e47144f73397dddff8868b0e4c/core/pom.xml"
+    },
+    {
+      "path": "core/src/main/java/com/google/zxing/common/reedsolomon/GenericGF.java",
+      "role": "production-source",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "512a921b17327a5f4228a203e8dc73cb8c9dff9d6f9a8a9094afd5654aa4a982",
+      "size": 4892,
+      "git_blob": "3532904e7fe721dba7b82513caae8e3db7f09ca2",
+      "url": "https://raw.githubusercontent.com/zxing/zxing/f651b0a0375676e47144f73397dddff8868b0e4c/core/src/main/java/com/google/zxing/common/reedsolomon/GenericGF.java"
+    },
+    {
+      "path": "core/src/main/java/com/google/zxing/common/reedsolomon/GenericGFPoly.java",
+      "role": "production-source",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "1bc19810c16dd63c2aed81c5829431cc08e9c07adfc3723bbdc94f1b8924ad89",
+      "size": 8542,
+      "git_blob": "03f67430d6adb55fc84b1e680f2bab4b62258601",
+      "url": "https://raw.githubusercontent.com/zxing/zxing/f651b0a0375676e47144f73397dddff8868b0e4c/core/src/main/java/com/google/zxing/common/reedsolomon/GenericGFPoly.java"
+    },
+    {
+      "path": "core/src/main/java/com/google/zxing/common/reedsolomon/ReedSolomonDecoder.java",
+      "role": "production-source",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "ba67961204db0f09c00cd7663d4424f9a64b9b7d071978dac5fb97aeef070f36",
+      "size": 7722,
+      "git_blob": "2a2dc5278484729ce82eff867b84c471668a3c21",
+      "url": "https://raw.githubusercontent.com/zxing/zxing/f651b0a0375676e47144f73397dddff8868b0e4c/core/src/main/java/com/google/zxing/common/reedsolomon/ReedSolomonDecoder.java"
+    },
+    {
+      "path": "core/src/main/java/com/google/zxing/common/reedsolomon/ReedSolomonEncoder.java",
+      "role": "production-source",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "a28b5b5572b6f1f37836f45f40fdb71ed83cf84c8f7586c435c97a4bf02cf23c",
+      "size": 2660,
+      "git_blob": "2e2b2f0a6727ba3649cce897b83af485c3042fc4",
+      "url": "https://raw.githubusercontent.com/zxing/zxing/f651b0a0375676e47144f73397dddff8868b0e4c/core/src/main/java/com/google/zxing/common/reedsolomon/ReedSolomonEncoder.java"
+    },
+    {
+      "path": "core/src/main/java/com/google/zxing/common/reedsolomon/ReedSolomonException.java",
+      "role": "production-source",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "4d5678ed280fb0607b71e47f8944742ec9d5a0f1983c4f8a08699bea40683378",
+      "size": 938,
+      "git_blob": "d5b45a612aaa616cff18a269392416c87961ed58",
+      "url": "https://raw.githubusercontent.com/zxing/zxing/f651b0a0375676e47144f73397dddff8868b0e4c/core/src/main/java/com/google/zxing/common/reedsolomon/ReedSolomonException.java"
+    },
+    {
+      "path": "core/src/test/java/com/google/zxing/common/reedsolomon/GenericGFPolyTestCase.java",
+      "role": "original-upstream-test",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "99b8e3d3513c55f51c208ca0f13fc98c54c94c67688f27e70922014e2f657e8c",
+      "size": 1536,
+      "git_blob": "9174b8464948264dcd7b8ab15c2afe9c2c81755d",
+      "url": "https://raw.githubusercontent.com/zxing/zxing/f651b0a0375676e47144f73397dddff8868b0e4c/core/src/test/java/com/google/zxing/common/reedsolomon/GenericGFPolyTestCase.java"
+    },
+    {
+      "path": "core/src/test/java/com/google/zxing/common/reedsolomon/ReedSolomonTestCase.java",
+      "role": "original-upstream-test",
+      "license": "Apache-2.0",
+      "license_evidence": "Root LICENSE and NOTICE; original Apache source headers retained.",
+      "sha256": "a9f4aa0cb52af4fd272cb22e77d1ad930a6b19feceb530d3e660b983b8cefe2d",
+      "size": 27944,
+      "git_blob": "5d6207208c125351ea64318ba3b6e9e6821d26ab",
+      "url": "https://raw.githubusercontent.com/zxing/zxing/f651b0a0375676e47144f73397dddff8868b0e4c/core/src/test/java/com/google/zxing/common/reedsolomon/ReedSolomonTestCase.java"
+    }
+  ]
+}

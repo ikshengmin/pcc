@@ -1644,6 +1644,14 @@
         ]
       }
     },
+    "tests/java/test_source_zxing_reedsolomon_project.py": {
+      "test_original_reedsolomon_package_compiles_with_the_selected_jdk": {
+        "activity": "external-reference",
+        "reason": [
+          "Selected JDK javac --release 8 through a recorded raw subprocess on the unchanged originals; it never supplies or qualifies PCC output, and JUnit test execution stays UNRUN"
+        ]
+      }
+    },
     "tests/java/test_source_labels.py": {
       "test_exact_labeled_originals_jdk_raw_and_rejections": {
         "activity": "external-reference",
