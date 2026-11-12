@@ -14,6 +14,7 @@ import argparse
 import importlib.util
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -145,3 +146,129 @@ def test_stage1_only_arm_needs_no_stage2_envelope():
     stage_ab.assert_stage_envelope_parity(
         {"stage1": {"resource_envelope": stage1}}, arm="baseline"
     )
+
+
+def test_stage1_command_propagates_the_external_admission_budget(tmp_path, monkeypatch):
+    stage_ab = _load_stage_ab()
+    cap = 3 * 1024 * 1024 * 1024
+    args = _args(max_tree_rss_bytes=cap)
+    args.stage1_timeout = 360
+    args.smoke_timeout = 60
+    captured = {}
+
+    def capture_sampler_args(sampler, **kwargs):
+        captured.update(kwargs)
+        return kwargs
+
+    def stop_before_execution(sampler_args):
+        assert sampler_args == captured
+        raise RuntimeError("mock stops before any process runs")
+
+    monkeypatch.setattr(stage_ab, "_sampler_args", capture_sampler_args)
+    with pytest.raises(RuntimeError, match="mock stops before any process runs"):
+        stage_ab._run_stage1(
+            arm="baseline", source_root=tmp_path / "source",
+            runtime_archive=tmp_path / "runtime.a", arm_root=tmp_path / "arm",
+            args=args, ab=None, stage1=None,
+            sampler=SimpleNamespace(run=stop_before_execution),
+        )
+    command = captured["command"]
+    assert command[command.index("--memory-budget-bytes") + 1] == str(cap)
+    assert command.count("--memory-budget-bytes") == 1
+    assert captured["max_tree_rss_bytes"] == cap
+    assert command[command.index("--jobs") + 1] == str(args.frontend_jobs)
+    assert command[command.index("--with-threads") + 1] == "1"
+    # Exercise the real consumer parser, not a duplicate list of its options.
+    # Loading this tool does not build or invoke the captured command.
+    builder = stage_ab._load_module(stage_ab.STAGE1_TOOL, "stage_ab_builder_contract")
+    parsed = builder._parser().parse_args(command[2:])
+    assert parsed.with_threads == 1
+    assert parsed.memory_budget_bytes == cap
+    environment = {}
+    builder._set_stage1_build_modes(environment, with_threads=parsed.with_threads)
+    assert environment["PCC_WITH_THREADS"] == "1"
+    stage2_environment = dict(environment)
+    stage2_environment.update(stage_ab._stage2_environment_overrides(
+        pair_index=1, arm="baseline", self_backend_jobs=args.self_backend_jobs,
+        max_tree_rss_bytes=cap,
+    ))
+    assert stage2_environment["PCC_WITH_THREADS"] == "1"
+    assert "PCC_REFCOUNT_KIND" not in stage2_environment
+    removed_mode = list(command[2:])
+    removed_mode[removed_mode.index("--with-threads") + 1] = "0"
+    with pytest.raises(SystemExit):
+        builder._parser().parse_args(removed_mode)
+
+
+def test_stage2_receipt_environment_is_copied_without_thread_override():
+    # Keep the inheritance assertion tied to the production source path.
+    source = STAGE_AB.read_text(encoding="utf-8")
+    start = source.index("def _run_stage2(")
+    end = source.index("\ndef run(", start)
+    stage2_source = source[start:end]
+    assert 'receipt["environment"].items()' in stage2_source
+    assert "_stage2_environment_overrides(" in stage2_source
+    assert "PCC_WITH_THREADS" not in stage2_source
+    assert "PCC_REFCOUNT_KIND" not in stage2_source
+
+
+@pytest.mark.parametrize("selected,advertised", [
+    (None, None), (8 * 1024**3, str(3 * 1024**3)),
+    (3 * 1024**3, str(8 * 1024**3)), (True, str(3 * 1024**3)),
+])
+def test_stage1_admission_receipt_rejects_missing_or_mixed_budgets(selected, advertised):
+    stage_ab = _load_stage_ab()
+    with pytest.raises(stage_ab.StageABError, match="admission budget"):
+        stage_ab._assert_stage1_admission_budget(
+            {"memory_budget_selection": {"max_tree_rss_bytes": selected},
+             "environment": {"PCC_WORKER_TREE_BUDGET_BYTES": advertised}},
+            expected=3 * 1024**3, arm="candidate",
+        )
+
+
+@pytest.mark.parametrize("receipt", [{}, {"memory_budget_selection": {}}])
+def test_stage1_admission_receipt_requires_both_producer_records(receipt):
+    stage_ab = _load_stage_ab()
+    with pytest.raises(stage_ab.StageABError, match="missing its admission budget"):
+        stage_ab._assert_stage1_admission_budget(
+            receipt, expected=3 * 1024**3, arm="candidate"
+        )
+
+
+def test_stage1_admission_receipt_accepts_the_actual_matching_budget():
+    stage_ab = _load_stage_ab()
+    cap = 3 * 1024**3
+    stage_ab._assert_stage1_admission_budget(
+        {"memory_budget_selection": {"max_tree_rss_bytes": cap},
+         "environment": {"PCC_WORKER_TREE_BUDGET_BYTES": str(cap)}},
+        expected=cap, arm="baseline",
+    )
+
+
+def test_frontend_policy_reports_auto_without_relabelling_requested_width():
+    stage_ab = _load_stage_ab()
+    args = _args()
+    host_env = dict(_ENV, PCC_PY_FRONTEND_JOBS="2",
+                    PCC_BOOTSTRAP_STAGE1_PY_FRONTEND_JOBS="2")
+    native_env = dict(host_env)
+    native_env.update(stage_ab._stage2_environment_overrides(
+        pair_index=1, arm="baseline", self_backend_jobs=2,
+        max_tree_rss_bytes=args.max_tree_rss_bytes,
+    ))
+    host = stage_ab._resource_envelope(args=args, environment=host_env, process=_proc())
+    native = stage_ab._resource_envelope(args=args, environment=native_env, process=_proc())
+    assert host["frontend_jobs"] == native["frontend_jobs"] == 2
+    assert native["frontend_jobs_scope"] == "requested_cli_width"
+    assert host["effective_frontend_policy"]["PCC_PY_FRONTEND_JOBS"] == "2"
+    assert set(native["effective_frontend_policy"].values()) == {"auto"}
+    assert native["frontend_policy_parity"] == "not_checked"
+    # The old v1 keys keep their meaning; observations do not waive or replace
+    # any existing cap, width, GC, CPU or cache comparison.
+    assert stage_ab.envelope_parity_key(host) == stage_ab.envelope_parity_key(native)
+
+
+def test_missing_frontend_policy_is_reported_as_missing_not_inferred():
+    stage_ab = _load_stage_ab()
+    envelope = stage_ab._resource_envelope(args=_args(), environment={}, process={})
+    assert set(envelope["effective_frontend_policy"].values()) == {""}
+    assert envelope["frontend_policy_parity"] == "not_checked"

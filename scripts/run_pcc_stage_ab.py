@@ -290,14 +290,28 @@ def _resource_envelope(
 ) -> dict[str, Any]:
     """Bind the external resource envelope and the observations inside it.
 
-    The envelope (cap/CPU/jobs/gc/cache) is what makes a Stage2/Stage1 ratio
-    same-resource; ``observed_*`` records what actually happened so a huge
-    worker or a memory trip is attributable without another run.
+    The envelope checks the requested cap/CPU/jobs/gc/cache contract, not
+    equality of effective frontend policy. Record that policy separately:
+    numeric host and native auto policies are intentionally different.
+    ``observed_*`` records what happened inside the requested envelope.
     """
     return {
         "max_tree_rss_bytes": int(args.max_tree_rss_bytes),
         "cpu_count": int(os.cpu_count() or 0),
         "frontend_jobs": int(args.frontend_jobs),
+        # Keep the v1 requested-width field for existing receipt consumers.
+        # It is not the effective policy: native Stage2 intentionally uses
+        # auto, while the host Stage1 command receives a numeric width.
+        "frontend_jobs_scope": "requested_cli_width",
+        "effective_frontend_policy": {
+            key: str(environment.get(key, ""))
+            for key in (
+                "PCC_PY_FRONTEND_JOBS",
+                "PCC_BOOTSTRAP_PY_FRONTEND_JOBS",
+                "PCC_BOOTSTRAP_STAGE1_PY_FRONTEND_JOBS",
+            )
+        },
+        "frontend_policy_parity": "not_checked",
         "self_backend_jobs": int(args.self_backend_jobs),
         "macho_link_jobs": int(environment.get("PCC_MACHO_LINK_JOBS", "0")),
         "gc_backend": int(args.gc_backend),
@@ -431,6 +445,22 @@ def _sampler_args(
     )
 
 
+def _assert_stage1_admission_budget(
+    receipt: dict[str, Any], *, expected: int, arm: str
+) -> None:
+    selection = receipt.get("memory_budget_selection")
+    environment = receipt.get("environment")
+    if not isinstance(selection, dict) or not isinstance(environment, dict):
+        raise StageABError(arm + " Stage1 is missing its admission budget receipt")
+    selected = selection.get("max_tree_rss_bytes")
+    if (
+        type(selected) is not int
+        or selected != expected
+        or environment.get("PCC_WORKER_TREE_BUDGET_BYTES") != str(expected)
+    ):
+        raise StageABError(arm + " Stage1 admission budget differs from the external cap")
+
+
 def _run_stage1(
     *,
     arm: str,
@@ -462,10 +492,12 @@ def _run_stage1(
         str(args.frontend_jobs),
         "--self-backend-jobs",
         str(args.self_backend_jobs),
+        "--memory-budget-bytes",
+        str(args.max_tree_rss_bytes),
         "--gc-backend",
         str(args.gc_backend),
         "--with-threads",
-        "0",
+        "1",
         "--direct-indexed-emit",
         "--no-performance-lock",
     ]
@@ -483,6 +515,9 @@ def _run_stage1(
         raise StageABError(arm + " Stage1 did not complete")
     result = _read_json(output / "stage1-result.json")
     receipt = _read_json(output / "build-receipt.json")
+    _assert_stage1_admission_budget(
+        receipt, expected=args.max_tree_rss_bytes, arm=arm
+    )
     if result.get("metric_scopes") != stage1.STAGE1_METRIC_SCOPES:
         raise StageABError(arm + " Stage1 metric scope mismatch")
     if result.get("comparison_contract") != stage1.STAGE1_COMPARISON_CONTRACT:
