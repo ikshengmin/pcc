@@ -1,4 +1,4 @@
-"""Forwarding publication is part of the table's fallible commit, not a hint.
+"""Forwarding publication metadata is prepared before allocation-free commit.
 
 Contract: docs/project-intent.md requires shared GC roots, ordinary object
 lifetimes and recoverable allocation failure. These models run the production
@@ -7,13 +7,20 @@ exclusion and counted-reference primitives are modeled, not native collectors.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import pytest
 
 from tests.python.test_gc_forwarding_insert_ownership import Install
 
 
+PLAN_POINTERS = (0, 8, 16, 24, 40, 56, 72, 80, 88, 96, 104, 112)
+PLAN_METADATA = (72, 80, 88, 96, 104, 112)
+
+
 class Publication(Install):
     def __init__(self, backend=4):
+        self.guard_allocators = False
         self.record_failure_after = None
         self.record_failures = 0
         self.record_attempts = 0
@@ -23,7 +30,26 @@ class Publication(Install):
         # that table once. Start this component's retirement checks clean.
         assert self.call('pcc_gc_index_reclaim_retired') == 2
 
+    @contextmanager
+    def allocation_free_commit(self):
+        self.guard_allocators = True
+        self.lock()
+        try:
+            yield
+        finally:
+            self.unlock()
+            self.guard_allocators = False
+
+    def allocate(self, size):
+        assert not (self.guard_allocators and self.depth), 'malloc under graph lock'
+        return super().allocate(size)
+
+    def release(self, block):
+        assert not (self.guard_allocators and self.depth), 'free under graph lock'
+        return super().release(block)
+
     def allocate_zeroed(self, count, size):
+        assert not (self.guard_allocators and self.depth), 'calloc under graph lock'
         if count * size == 16:
             self.record_attempts += 1
             if self.record_failure_after is not None:
@@ -107,47 +133,82 @@ def test_record_oom_keeps_old_table_and_releases_private_rehash(kind, growing):
 
 @pytest.mark.parametrize('kind_id,kind', ((0, 'forwarding'), (1, 'forwarding_target')))
 @pytest.mark.parametrize('growing', (False, True))
-def test_plan_record_oom_leaves_zero_buffer_for_safe_same_plan_retry(kind_id, kind, growing):
+@pytest.mark.parametrize('missing', (None, 0, 8, 16))
+def test_plan_missing_metadata_keeps_zero_buffer_for_same_plan_retry(
+    kind_id, kind, growing, missing,
+):
     model = Publication()
     entries = model.fill_small(kind) if growing else []
     cap = model.call('pcc_gc_forwarding_plan_index_capacity', kind_id, 1)
     prepared = model.calloc(cap, 16)
     io = model.calloc(1, 8)
+    metadata = model.calloc(3, 8)
+    nodes = [model.calloc(1, 16) for _ in range(3)]
+    for offset, node in zip((0, 8, 16), nodes):
+        model.store(metadata, offset, node)
     model.store(io, 0, prepared)
     before = model.state(kind)
     freed = list(model.freed)
-    model.record_failure_after = 0
-
-    assert model.call('pcc_gc_forwarding_plan_index_commit', kind_id, io, cap, 1) == -1
-    assert model.record_failures == 1
+    if missing is not None:
+        model.store(metadata, missing, 0)
+    metadata_before = tuple(model.load(metadata, i) for i in (0, 8, 16))
+    with model.allocation_free_commit():
+        assert model.call('pcc_gc_forwarding_plan_index_commit', kind_id, io,
+                          cap, 1, 0 if missing is None else metadata) == -1
     assert model.load(io) == prepared
     assert model.state(kind) == before and model.freed == freed
+    assert tuple(model.load(metadata, i) for i in (0, 8, 16)) == metadata_before
     assert all(model.load(prepared, offset) == 0 for offset in range(0, cap * 16, 8))
-
-    assert model.call('pcc_gc_forwarding_plan_index_commit', kind_id, io, cap, 1) == 1
+    if missing is not None:
+        model.store(metadata, missing, nodes[missing // 8])
+    with model.allocation_free_commit():
+        assert model.call('pcc_gc_forwarding_plan_index_commit', kind_id, io,
+                          cap, 1, metadata) == 1
     assert model.load(io) == 0
     assert model.load(model.cells(kind)[0]) == prepared
-    assert model.load('pcc_py_gc_' + kind + '_published') != 0
+    assert model.load('pcc_py_gc_' + kind + '_published') == nodes[0]
+    assert model.load(metadata) == 0
+    assert tuple(model.load(metadata, i) for i in (8, 16)) == (
+        (0, 0) if growing else tuple(nodes[1:])
+    )
     for key, node in entries:
         assert model.find(kind, key) == node
     assert model.call('pcc_gc_forwarding_plan_index_insert', kind_id, 0xA0000, 0xB0000) == 1
     assert model.find(kind, 0xA0000) == 0xB0000
     assert prepared not in model.freed
     assert model.call('pcc_gc_index_reclaim_retired') == (2 if growing else 0)
+    for offset in (0, 8, 16):
+        model.release(model.load(metadata, offset))
+    model.release(metadata)
+    model.release(io)
 
 
 @pytest.mark.parametrize('kind_id,kind', ((0, 'forwarding'), (1, 'forwarding_target')))
-def test_warm_insert_and_noop_plan_do_not_request_a_record(kind_id, kind):
+@pytest.mark.parametrize('metadata_present', (False, True))
+def test_warm_insert_and_noop_plan_leave_all_private_storage_untouched(
+    kind_id, kind, metadata_present,
+):
     model = Publication()
     assert model.raw_insert(kind, 0x80000, 0x90000) == 1
     io = model.calloc(1, 8)
     unused = model.calloc(8, 16)
+    metadata = model.calloc(3, 8) if metadata_present else 0
+    nodes = [model.calloc(1, 16) for _ in range(3)] if metadata else []
+    for offset, node in zip((0, 8, 16), nodes):
+        model.store(metadata, offset, node)
     model.store(io, 0, unused)
     attempts = model.record_attempts
     model.record_failure_after = 0
     assert model.raw_insert(kind, 0x80010, 0x90010) == 1
-    assert model.call('pcc_gc_forwarding_plan_index_commit', kind_id, io, 8, 1) == 0
+    before = model.state(kind)
+    with model.allocation_free_commit():
+        assert model.call('pcc_gc_forwarding_plan_index_commit', kind_id, io,
+                          8, 1, metadata) == 0
+    assert model.state(kind) == before
     assert model.load(io) == unused and unused not in model.freed
+    assert all(model.load(unused, i) == 0 for i in range(0, 128, 8))
+    if metadata:
+        assert [model.load(metadata, i) for i in (0, 8, 16)] == nodes
     assert model.record_attempts == attempts and model.record_failures == 0
 
 
@@ -172,29 +233,33 @@ def test_public_installer_rejects_record_oom_before_exposing_an_edge(backend, fa
         assert model.call('pcc_gc_backend4_slot_needs_resolve', model.a) == 1
 
 
-@pytest.mark.parametrize('backend', (3, 4))
-@pytest.mark.parametrize('failed_kind', (0, 1))
-def test_preallocated_installer_can_retry_after_record_oom(backend, failed_kind):
+@pytest.mark.parametrize('backend', (4,))
+@pytest.mark.parametrize('failed_metadata', range(6))
+def test_prepare_metadata_oom_releases_every_private_allocation(backend, failed_metadata):
     model = Publication(backend)
-    plan = model.call('pcc_gc_forwarding_install_plan_prepare', model.a, model.t)
-    assert plan and model.depth == 0
     before = model.edge_state()
-    model.record_failure_after = failed_kind
-    model.lock()
+    tables = [model.state(kind) for kind in ('forwarding', 'forwarding_target')]
+    blocks = set(model.blocks)
+    model.record_failure_after = failed_metadata
+    # Guard allocation/free only while the graph lock is held. Preparation
+    # must allocate and unwind outside it, even for initially empty indexes.
+    model.guard_allocators = True
     try:
-        assert model.call('pcc_gc_install_forwarding_preallocated_unlocked',
-                          model.a, model.t, plan) == -1
+        assert model.call('pcc_gc_forwarding_install_plan_prepare', model.a, model.t) == 0
     finally:
-        model.unlock()
-    assert model.record_failures == 1 and model.edge_state() == before
-    # The first successful capacity commits may remain and consume their IO;
-    # retry must accept those no-op capacities and the still-zero failed IO.
-    model.lock()
-    try:
+        model.guard_allocators = False
+    assert model.depth == 0 and model.record_failures == 1
+    assert model.edge_state() == before
+    assert [model.state(kind) for kind in ('forwarding', 'forwarding_target')] == tables
+    for block in set(model.blocks) - blocks:
+        assert model.freed.count(block) == 1
+    plan = model.call('pcc_gc_forwarding_install_plan_prepare', model.a, model.t)
+    assert plan and model.blocks[plan] == 120
+    metadata = [model.load(plan, offset) for offset in PLAN_METADATA]
+    assert len(set(metadata)) == 6 and all(model.blocks[node] == 16 for node in metadata)
+    with model.allocation_free_commit():
         assert model.call('pcc_gc_install_forwarding_preallocated_unlocked',
                           model.a, model.t, plan) == 0
-    finally:
-        model.unlock()
     model.call('pcc_gc_forwarding_install_plan_finish', plan)
     assert model.freed.count(plan) == 1
     for kind, key in (('forwarding', model.a), ('forwarding_target', model.t)):
@@ -205,22 +270,29 @@ def test_preallocated_installer_can_retry_after_record_oom(backend, failed_kind)
     assert model.call('pcc_gc_note_relocation_read', model.a) == model.t
 
 
-@pytest.mark.parametrize('backend', (3, 4))
-@pytest.mark.parametrize('failed_kind', (0, 1))
-def test_failed_preallocated_install_can_finish_without_retry(backend, failed_kind):
+@pytest.mark.parametrize('backend', (4,))
+@pytest.mark.parametrize('missing_offset', PLAN_METADATA)
+@pytest.mark.parametrize('retry', (False, True))
+def test_missing_plan_metadata_can_retry_or_finish(backend, missing_offset, retry):
     model = Publication(backend)
     plan = model.call('pcc_gc_forwarding_install_plan_prepare', model.a, model.t)
     assert plan and model.depth == 0
     before = model.edge_state()
-    model.record_failure_after = failed_kind
-    model.lock()
-    try:
+    saved = model.load(plan, missing_offset)
+    assert saved
+    model.store(plan, missing_offset, 0)
+    with model.allocation_free_commit():
         assert model.call('pcc_gc_install_forwarding_preallocated_unlocked',
                           model.a, model.t, plan) == -1
-    finally:
-        model.unlock()
-    assert model.record_failures == 1 and model.edge_state() == before
-    owned = [model.load(plan, offset) for offset in (0, 8, 16, 24, 40, 56)]
+    assert model.record_failures == 0 and model.edge_state() == before
+    model.store(plan, missing_offset, saved)
+    if retry:
+        with model.allocation_free_commit():
+            assert model.call('pcc_gc_install_forwarding_preallocated_unlocked',
+                              model.a, model.t, plan) == 0
+        assert model.call('pcc_gc_note_relocation_read', model.a) == model.t
+        assert model.load('pcc_gc_forwarding_population') == 1
+    owned = [model.load(plan, offset) for offset in PLAN_POINTERS]
     model.call('pcc_gc_forwarding_install_plan_finish', plan)
     for block in [plan] + [block for block in owned if block]:
         assert model.freed.count(block) == 1
@@ -232,6 +304,130 @@ def test_failed_preallocated_install_can_finish_without_retry(backend, failed_ki
         record = model.load('pcc_py_gc_' + kind + '_published')
         if record:
             assert record not in model.freed
+
+
+@pytest.mark.parametrize('backend', (0, 1, 2, 3))
+def test_nonmoving_backends_reject_forwarding_plan_without_side_effects(backend):
+    model = Publication(backend)
+    # A private plan proves rejection does not depend on a null plan. Every
+    # non-GC4 backend rejects before consuming any ownership cell.
+    plan = model.calloc(1, 120)
+    before = model.edge_state()
+    kinds = ('identity', 'forwarding', 'forwarding_target')
+    tables = [model.state(kind) for kind in kinds]
+    words = dict(model.words)
+    blocks, freed = dict(model.blocks), list(model.freed)
+
+    def forbidden_allocator(*args):
+        pytest.fail('non-GC4 early rejection allocated or freed')
+
+    allocators = {name: model.ns[name] for name in ('malloc', 'calloc', 'free')}
+    model.ns.update({name: forbidden_allocator for name in allocators})
+    try:
+        assert model.call('pcc_gc_forwarding_install_plan_prepare',
+                          model.a, model.t) == 0
+        assert model.depth == 0
+        assert model.words == words and model.blocks == blocks
+        assert model.freed == freed
+        assert model.edge_state() == before
+        assert [model.state(kind) for kind in kinds] == tables
+        model.lock()
+        try:
+            assert model.call('pcc_gc_install_forwarding_preallocated_unlocked',
+                              model.a, model.t, plan) == -1
+        finally:
+            model.unlock()
+    finally:
+        model.ns.update(allocators)
+    assert model.depth == 0
+    assert model.words == words and model.blocks == blocks
+    assert model.freed == freed
+    assert model.edge_state() == before
+    assert [model.state(kind) for kind in kinds] == tables
+    model.call('pcc_gc_forwarding_install_plan_finish', plan)
+    assert model.freed == freed + [plan]
+
+
+@pytest.mark.parametrize('initially_empty', (False, True))
+def test_reader_snapshots_survive_plan_finish_and_intervening_writer(initially_empty):
+    model = Publication()
+    if not initially_empty:
+        for kind in ('forwarding', 'forwarding_target'):
+            model.fill_small(kind)
+    plan = model.call('pcc_gc_forwarding_install_plan_prepare', model.a, model.t)
+    assert plan
+    if initially_empty:
+        # A serialized writer creates small tables after the empty snapshot.
+        # The prepared plan must still own both retirement nodes per index.
+        for kind in ('forwarding', 'forwarding_target'):
+            model.fill_small(kind)
+    snapshots = [model.state(kind) for kind in ('forwarding', 'forwarding_target')]
+    with model.allocation_free_commit():
+        assert model.call('pcc_gc_install_forwarding_preallocated_unlocked',
+                          model.a, model.t, plan) == 0
+    model.call('pcc_gc_forwarding_install_plan_finish', plan)
+    for state in snapshots:
+        slots, cap, _, _, record, words, record_words, _ = state
+        assert slots not in model.freed and record not in model.freed
+        assert tuple(model.load(slots, i) for i in range(0, cap * 16, 8)) == words
+        assert (model.load(record), model.load(record, 8)) == record_words
+    assert model.call('pcc_gc_note_relocation_read', model.a) == model.t
+    # Explicitly model all readers stopping before reclamation, not finish.
+    assert model.call('pcc_gc_index_reclaim_retired') == 4
+    for state in snapshots:
+        assert model.freed.count(state[0]) == model.freed.count(state[4]) == 1
+
+
+@pytest.mark.parametrize('kind_id,kind', ((0, 'forwarding'), (1, 'forwarding_target')))
+def test_stale_capacity_rejects_before_touching_plan_metadata(kind_id, kind):
+    model = Publication()
+    plan = model.call('pcc_gc_forwarding_install_plan_prepare', model.a, model.t)
+    assert plan
+    slots_offset, cap_offset, metadata_offset = ((40, 48, 72) if kind_id == 0 else (56, 64, 96))
+    cap = model.load(plan, cap_offset)
+    prepared = model.load(plan, slots_offset)
+    for i in range(cap // 2):
+        assert model.raw_insert(kind, 0x80000 + i * 16, 0x90000 + i * 16) == 1
+    assert model.call('pcc_gc_forwarding_plan_index_capacity', kind_id, 1) > cap
+    before = model.state(kind)
+    metadata = tuple(model.load(plan, metadata_offset + i) for i in (0, 8, 16))
+    with model.allocation_free_commit():
+        assert model.call('pcc_gc_forwarding_plan_index_commit', kind_id,
+                          plan + slots_offset, cap, 1, plan + metadata_offset) == -1
+    assert model.state(kind) == before and model.load(plan, slots_offset) == prepared
+    assert tuple(model.load(plan, metadata_offset + i) for i in (0, 8, 16)) == metadata
+    assert all(model.load(prepared, i) == 0 for i in range(0, cap * 16, 8))
+    model.call('pcc_gc_forwarding_install_plan_finish', plan)
+    assert model.freed.count(plan) == model.freed.count(prepared) == 1
+    assert all(model.freed.count(node) == 1 for node in metadata)
+
+
+def test_identity_growth_returns_old_slots_for_free_after_unlock():
+    model = Publication()
+    entries = model.fill_small('identity')
+    old_slots = model.load(model.cells('identity')[0])
+    cap = model.call('pcc_gc_forwarding_plan_index_capacity', 2, 1)
+    prepared = model.calloc(cap, 16)
+    io = model.calloc(1, 8)
+    model.store(io, 0, prepared)
+    freed = list(model.freed)
+    with model.allocation_free_commit():
+        assert model.call('pcc_gc_forwarding_plan_index_commit',
+                          2, io, cap, 1, 0) == 1
+        assert model.load(io) == old_slots
+        assert model.freed == freed
+        assert model.load(model.cells('identity')[0]) == prepared
+    assert model.depth == 0
+    model.release(model.load(io))
+    model.store(io, 0, 0)
+    assert model.freed == freed + [old_slots]
+    assert prepared not in model.freed
+    for key, node in entries:
+        assert model.exact('identity', key) == node
+    assert model.call('pcc_gc_forwarding_plan_index_insert', 2, 0xA0000, 0xB0000) == 1
+    assert model.exact('identity', 0xA0000) == 0xB0000
+    assert model.load(model.cells('identity')[0]) == prepared
+    model.release(io)
 
 
 @pytest.mark.parametrize('kind', ('forwarding', 'forwarding_target'))
@@ -261,10 +457,43 @@ NATIVE_HARNESS = r"""
 
 static int fail_after = -1;
 static int failures;
+static int commit_locked;
+static int locked_allocator_calls;
+/* This standalone harness owns its raw allocator. No linker wrapping or
+   platform allocator symbols are required. Storage is bounded and aligned;
+   free records the forbidden lock boundary but does not recycle the arena. */
+static union { int64_t align; unsigned char bytes[8388608]; } arena;
+static size_t arena_used;
+static void *freed_pointers[4096];
+static size_t freed_count;
+static int free_count(void *pointer) {
+    int count = 0;
+    for (size_t n = 0; n < freed_count; n++) {
+        if (freed_pointers[n] == pointer) count++;
+    }
+    return count;
+}
+void *malloc(size_t size) {
+    if (commit_locked) locked_allocator_calls++;
+    if (size > sizeof(arena.bytes) - 16) return NULL;
+    size_t rounded = (size + 15) & ~(size_t)15;
+    if (rounded > sizeof(arena.bytes) - arena_used) return NULL;
+    void *result = arena.bytes + arena_used;
+    arena_used += rounded ? rounded : 16;
+    return result;
+}
+void free(void *pointer) {
+    if (commit_locked) locked_allocator_calls++;
+    if (pointer) {
+        if (freed_count >= 4096) abort();
+        freed_pointers[freed_count++] = pointer;
+    }
+}
 
 /* Standalone raw allocator fault only. Lookups, table commits and retirement
    use the emitted production index object. This is not a collector harness. */
 void *calloc(size_t count, size_t size) {
+    if (commit_locked) locked_allocator_calls++;
     if (count && size > ((size_t)-1) / count) return NULL;
     size_t bytes = count * size;
     if (bytes == 16 && fail_after >= 0) {
@@ -311,7 +540,8 @@ int64_t pcc_gc_managed_pointer_index_insert(void *key);
 int64_t pcc_gc_managed_pointer_index_contains(void *key);
 int64_t pcc_gc_managed_pointer_index_seen(void *key);
 int64_t pcc_gc_forwarding_plan_index_capacity(int64_t kind, int64_t extra);
-int64_t pcc_gc_forwarding_plan_index_commit(int64_t kind, void **io, int64_t cap, int64_t extra);
+int64_t pcc_gc_forwarding_plan_index_commit(int64_t kind, void **io, int64_t cap,
+                                            int64_t extra, void **metadata);
 int64_t pcc_gc_index_py_rehash_slots(void **slots, int64_t *cap, int64_t *used, int64_t requested);
 int64_t pcc_gc_index_reclaim_retired(void);
 
@@ -363,20 +593,50 @@ static int check_kind(int kind) {
     CHECK(prepared && needed > *cap, 23);
     old_slots = *slots;
     old_record = *published;
-    fail_after = 0;
-    CHECK(pcc_gc_forwarding_plan_index_commit(kind, &io, needed, extra) == -1, 24);
-    CHECK(io == prepared && *slots == old_slots && *published == old_record, 25);
-    CHECK(*cap == 512 && *count == 129 && *used == 129, 26);
-    for (int64_t n = 0; n < needed * 2; n++) CHECK(((uintptr_t *)prepared)[n] == 0, 27);
-    CHECK(pcc_gc_forwarding_plan_index_commit(kind, &io, needed, extra) == 1, 28);
+    void *metadata[3];
+    for (int n = 0; n < 3; n++) {
+        metadata[n] = calloc(1, 16);
+        CHECK(metadata[n], 24);
+    }
+    fail_after = 0; /* Commit must not consume even one allocator request. */
+    commit_locked = 1;
+    int64_t status = pcc_gc_forwarding_plan_index_commit(kind, &io, needed, extra, NULL);
+    commit_locked = 0;
+    CHECK(status == -1 && !locked_allocator_calls && fail_after == 0, 24);
+    for (int missing = 0; missing < 3; missing++) {
+        void *saved = metadata[missing];
+        metadata[missing] = NULL;
+        commit_locked = 1;
+        status = pcc_gc_forwarding_plan_index_commit(kind, &io, needed, extra, metadata);
+        commit_locked = 0;
+        CHECK(status == -1 && !locked_allocator_calls && fail_after == 0, 24);
+        CHECK(!metadata[missing], 25);
+        metadata[missing] = saved;
+        CHECK(io == prepared && *slots == old_slots && *published == old_record, 25);
+        CHECK(*cap == 512 && *count == 129 && *used == 129, 26);
+        for (int64_t n = 0; n < needed * 2; n++) CHECK(((uintptr_t *)prepared)[n] == 0, 27);
+    }
+    commit_locked = 1;
+    status = pcc_gc_forwarding_plan_index_commit(kind, &io, needed, extra, metadata);
+    commit_locked = 0;
+    CHECK(status == 1 && !locked_allocator_calls && fail_after == 0, 28);
+    CHECK(!metadata[0] && !metadata[1] && !metadata[2], 28);
     CHECK(!io && *slots == prepared && *cap == needed && *published, 29);
     for (int n = 1; n <= 129; n++) CHECK(find(kind, n) == node_for(n), 30);
+    CHECK(((void **)old_record)[0] == old_slots && ((int64_t *)old_record)[1] == 512, 30);
+    CHECK(!free_count(old_record) && !free_count(old_slots), 30);
     CHECK(pcc_gc_index_reclaim_retired() == 2, 31);
+    CHECK(free_count(old_record) == 1 && free_count(old_slots) == 1, 31);
+    CHECK(!free_count(prepared) && !free_count(*published), 31);
+    fail_after = -1;
 
     prepared = calloc(8, 16);
     io = prepared;
     fail_after = 0;
-    CHECK(pcc_gc_forwarding_plan_index_commit(kind, &io, 8, 1) == 0, 32);
+    commit_locked = 1;
+    status = pcc_gc_forwarding_plan_index_commit(kind, &io, 8, 1, NULL);
+    commit_locked = 0;
+    CHECK(status == 0 && !locked_allocator_calls, 32);
     CHECK(io == prepared && fail_after == 0, 33);
     CHECK(insert(kind, 130) == 1 && fail_after == 0, 34);
     fail_after = -1;
@@ -411,7 +671,7 @@ int main(void) {
     CHECK(!pcc_py_gc_managed_pointer_published, 54);
     CHECK(pcc_gc_managed_pointer_index_contains(key_for(2)) == 1, 55);
     CHECK(pcc_gc_managed_pointer_index_seen(key_for(2)) == 0, 56);
-    CHECK(failures == 12, 57);
+    CHECK(failures == 10, 57);
     puts("forwarding-publication-oom-ok");
     return 0;
 }

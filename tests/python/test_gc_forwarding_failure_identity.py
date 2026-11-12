@@ -8,7 +8,7 @@ operations are finite doubles. The decref hook is an observation boundary,
 not execution of a finalizer. This is not native ABI or collector proof.
 
 Ordinary allocator failures exercise the public raw installer. Preallocated
-record OOM precedes identity preparation; its later duplicate-insert cases
+metadata OOM during preparation precedes identity mutation; its later duplicate-insert cases
 explicitly inject a defensive hidden-publication state, not normal OOM.
 The identity-sequence checks use small values, not counter-exhaustion cases.
 """
@@ -22,7 +22,10 @@ from tests.python.runtime_body_model import (
     gc_state_initial_values,
     load_functions,
 )
-from tests.python.test_gc_forwarding_publication_oom import Publication
+from tests.python.test_gc_forwarding_publication_oom import (
+    PLAN_METADATA,
+    Publication,
+)
 from tests.python.test_gc_stable_object_membership import ROOT
 
 
@@ -227,19 +230,24 @@ def test_retarget_record_oom_preserves_old_edge_and_ids_until_retry(
 
 @pytest.mark.parametrize('backend', (4,))
 @pytest.mark.parametrize('target_observed', (False, True))
-@pytest.mark.parametrize('failed_record', (0, 1))
-def test_preallocated_record_oom_precedes_identity_change_and_allows_retry(
-    backend, target_observed, failed_record,
+@pytest.mark.parametrize('failed_metadata', range(6))
+def test_prepare_metadata_oom_precedes_identity_change_and_allows_retry(
+    backend, target_observed, failed_metadata,
 ):
     model = IdentityInstall(backend)
     source_id = model.identity(model.a)
     target_id = model.identity(model.t) if target_observed else None
     target_node = model.exact('identity', model.t)
-    plan = model.call('pcc_gc_forwarding_install_plan_prepare', model.a, model.t)
-    assert plan and model.depth == 0
     before = model.edge_state()
-    model.record_failure_after = failed_record
-    assert model.preallocated_install(model.a, model.t, plan) == -1
+    next_id = model.load('pcc_gc_next_object_id')
+    model.record_failure_after = failed_metadata
+    model.guard_allocators = True
+    try:
+        assert model.call('pcc_gc_forwarding_install_plan_prepare', model.a, model.t) == 0
+    finally:
+        model.guard_allocators = False
+    assert model.depth == 0
+    assert model.load('pcc_gc_next_object_id') == next_id
     assert model.record_failures == 1 and model.edge_state() == before
     assert model.identity(model.a) == source_id
     assert model.exact('identity', model.t) == target_node
@@ -247,7 +255,45 @@ def test_preallocated_record_oom_precedes_identity_change_and_allows_retry(
         assert model.identity(model.t) == target_id != source_id
     # For an unobserved target no metadata has been installed yet. Keep it
     # unobserved through retry so the production fresh-target branch runs.
-    assert model.preallocated_install(model.a, model.t, plan) == 0
+    plan = model.call('pcc_gc_forwarding_install_plan_prepare', model.a, model.t)
+    assert plan
+    with model.allocation_free_commit():
+        assert model.call('pcc_gc_install_forwarding_preallocated_unlocked',
+                          model.a, model.t, plan) == 0
+    model.assert_committed(model.a, model.t, source_id)
+    model.call('pcc_gc_forwarding_install_plan_finish', plan)
+    assert model.freed.count(plan) == 1
+
+
+@pytest.mark.parametrize('target_observed', (False, True))
+@pytest.mark.parametrize('missing_offset', PLAN_METADATA)
+def test_missing_metadata_retry_preserves_independent_target_identity(
+    target_observed, missing_offset,
+):
+    model = IdentityInstall(4)
+    source_id = model.identity(model.a)
+    target_id = model.identity(model.t) if target_observed else None
+    target_node = model.exact('identity', model.t)
+    plan = model.call('pcc_gc_forwarding_install_plan_prepare', model.a, model.t)
+    assert plan
+    saved = model.load(plan, missing_offset)
+    assert saved
+    model.store(plan, missing_offset, 0)
+    before = model.edge_state()
+    next_id = model.load('pcc_gc_next_object_id')
+    with model.allocation_free_commit():
+        assert model.call('pcc_gc_install_forwarding_preallocated_unlocked',
+                          model.a, model.t, plan) == -1
+    assert model.edge_state() == before
+    assert model.load('pcc_gc_next_object_id') == next_id
+    assert model.identity(model.a) == source_id
+    assert model.exact('identity', model.t) == target_node
+    if target_observed:
+        assert model.identity(model.t) == target_id != source_id
+    model.store(plan, missing_offset, saved)
+    with model.allocation_free_commit():
+        assert model.call('pcc_gc_install_forwarding_preallocated_unlocked',
+                          model.a, model.t, plan) == 0
     model.assert_committed(model.a, model.t, source_id)
     model.call('pcc_gc_forwarding_install_plan_finish', plan)
     assert model.freed.count(plan) == 1

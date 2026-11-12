@@ -381,6 +381,16 @@ def _index_retire(block) -> None:
         # A block that cannot be retired leaks: freeing it could free memory
         # a reader is probing.
         return
+    _index_retire_prepared(block, node)
+
+
+@c_abi_export("pcc_gc_index_retire_prepared")
+def _index_retire_prepared(block: c_ptr, node: c_ptr) -> None:
+    """Link an owned block and retirement node without allocating or freeing.
+
+    The caller holds the graph lock and supplies two non-NULL allocations.
+    Both remain owned by the retired list until stopped-world reclamation.
+    """
     store_ptr(node, 0, global_load_ptr("pcc_py_gc_index_retired_tables"))
     store_ptr(node, 8, block)
     global_store_ptr("pcc_py_gc_index_retired_tables", node)
@@ -428,11 +438,26 @@ def _index_table_publish(slots_cell: c_ptr, cap_cell: c_ptr, slots, cap: i64) ->
 def _forwarding_table_publish_prepared(
     slots_cell: c_ptr, cap_cell: c_ptr, slots, cap: i64, record
 ) -> None:
-    """Publish a forwarding/target table with its already-owned reader record.
+    """Ordinary rehash owns a reader record; retirement may allocate or leak.
+
+    Strict preallocated commits call the same publication core, but supply
+    their retirement nodes rather than entering this allocating wrapper.
+    """
+    old_record = _forwarding_table_publish_record(
+        slots_cell, cap_cell, slots, cap, record
+    )
+    _index_retire(old_record)
+
+
+@c_abi_export("pcc_gc_forwarding_table_publish_record")
+def _forwarding_table_publish_record(
+    slots_cell: c_ptr, cap_cell: c_ptr, slots: c_ptr, cap: i64, record: c_ptr
+) -> c_ptr:
+    """Publish an owned reader record and return the still-live old record.
 
     The graph owner prepared a non-NULL record before copying any slots.
-    No fallible allocation remains before publication. Retirement may still
-    leak on OOM, as before, but cannot hide the newly committed table.
+    Its immutable {slots, cap} pair becomes visible in one release store.
+    The caller must retire, never immediately free, the returned record.
     """
     store_ptr(record, 0, slots)
     store_i64(record, 8, cap)
@@ -441,7 +466,7 @@ def _forwarding_table_publish_prepared(
     published_cell = _index_published_cell(slots_cell)
     old_record = load_ptr(published_cell, 0)
     atomic_store_i64(published_cell, 0, ptr_diff(record, null()), "release")
-    _index_retire(old_record)
+    return old_record
 
 
 @c_abi_export("pcc_gc_index_table_release")
@@ -1560,12 +1585,20 @@ def pcc_gc_forwarding_plan_index_capacity(kind: i64, extra: i64) -> i64:
     return capacity
 
 
+# Three pointer cells shared with forwarding_install_plan's source/target
+# metadata: a reader record, an old-record retire node, an old-slots retire node.
+_FORWARDING_META_RECORD: i64 = 0
+_FORWARDING_META_RETIRE_RECORD: i64 = 8
+_FORWARDING_META_RETIRE_SLOTS: i64 = 16
+
+
 @c_abi_export("pcc_gc_forwarding_plan_index_commit")
 def pcc_gc_forwarding_plan_index_commit(
     kind: i64,
     prepared_slots_io: c_ptr,
     prepared_cap: i64,
     extra: i64,
+    prepared_metadata_io: c_ptr,
 ) -> i64:
     if ptr_is_null(prepared_slots_io) != 0:
         return -1
@@ -1595,12 +1628,27 @@ def pcc_gc_forwarding_plan_index_commit(
     if ptr_is_null(new_slots) != 0 or prepared_cap < required:
         return -1
 
-    # Failure must leave the caller's zeroed prepared table untouched, so a
-    # retry cannot rehash duplicate keys into negative insertion offsets.
+    # Validate every fallible prerequisite before touching the zeroed table.
+    # Both retirement nodes are required even for an initially empty index:
+    # another writer may have published while this plan was being prepared.
     record = null()
+    retire_record = null()
+    retire_slots = null()
     if kind == 0 or kind == 1:
-        record = calloc(1, 16)
-        if ptr_is_null(record) != 0:
+        if ptr_is_null(prepared_metadata_io) != 0:
+            return -1
+        record = load_ptr(prepared_metadata_io, _FORWARDING_META_RECORD)
+        retire_record = load_ptr(
+            prepared_metadata_io, _FORWARDING_META_RETIRE_RECORD
+        )
+        retire_slots = load_ptr(
+            prepared_metadata_io, _FORWARDING_META_RETIRE_SLOTS
+        )
+        if (
+            ptr_is_null(record) != 0
+            or ptr_is_null(retire_record) != 0
+            or ptr_is_null(retire_slots) != 0
+        ):
             return -1
 
     old_slots = load_ptr(slots_cell, 0)
@@ -1624,18 +1672,30 @@ def pcc_gc_forwarding_plan_index_commit(
             new_used = new_used + 1
         index = index + 1
     if ptr_is_null(record) == 0:
-        _forwarding_table_publish_prepared(
+        old_record = _forwarding_table_publish_record(
             slots_cell, cap_cell, new_slots, prepared_cap, record
         )
-    else:
-        _index_table_publish(slots_cell, cap_cell, new_slots, prepared_cap)
-    store_i64(used_cell, 0, new_used)
-    if ptr_is_null(_index_published_cell(slots_cell)) == 0:
-        # Retired for unlocked readers; the caller frees what it gets back.
-        _index_table_release(slots_cell, old_slots)
+        store_ptr(prepared_metadata_io, _FORWARDING_META_RECORD, null())
+        if ptr_is_null(old_record) == 0:
+            _index_retire_prepared(old_record, retire_record)
+            store_ptr(
+                prepared_metadata_io, _FORWARDING_META_RETIRE_RECORD, null()
+            )
+        if ptr_is_null(old_slots) == 0:
+            _index_retire_prepared(old_slots, retire_slots)
+            store_ptr(
+                prepared_metadata_io, _FORWARDING_META_RETIRE_SLOTS, null()
+            )
+        # Reader-visible memory is owned by publication or the retired list.
+        # Unused retirement nodes stay in the plan for unlocked finish.
         store_ptr(prepared_slots_io, 0, null())
     else:
+        # Identity has no unlocked readers or publication record. Hand its
+        # replaced table back to the plan for release after graph unlock.
+        store_ptr(slots_cell, 0, new_slots)
+        store_i64(cap_cell, 0, prepared_cap)
         store_ptr(prepared_slots_io, 0, old_slots)
+    store_i64(used_cell, 0, new_used)
     return 1
 
 

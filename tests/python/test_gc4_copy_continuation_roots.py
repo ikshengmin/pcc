@@ -195,10 +195,11 @@ def test_rejected_forwarding_preserves_source_registration(handle, failure):
 
     commits = []
 
-    def reject_first(kind, slots_io, capacity, extra):
+    def reject_first(kind, slots_io, capacity, extra, metadata_io):
         assert observed and m.depth > 0
         commits.append(kind)
         assert kind == 2 and capacity == 0 and extra == 2
+        assert metadata_io == 0
         assert m.load(slots_io) == 0
         return -1
 

@@ -10,6 +10,12 @@ import subprocess
 
 import pytest
 
+from pcc.runtime.py import py_abi_constants as abi
+from tests.python.runtime_body_model import (
+    gc_state_initial_values,
+    load_functions,
+)
+
 ROOT = Path(os.environ.get('PCC_MOVING_BARRIER_SOURCE_ROOT', str(Path(__file__).resolve().parents[2])))
 FLAG = 'pcc_gc_read_barrier_enabled'
 POP = 'pcc_gc_forwarding_population'
@@ -17,24 +23,19 @@ FWD = 'pcc_gc_forwarding_head'
 SELECTED = 'pcc_gc_relocation_set_head'
 
 
-def functions(module, names, namespace, optional=()):
-    p = ROOT / 'pcc/runtime/py' / module
-    nodes = [n for n in ast.parse(p.read_text()).body
-             if isinstance(n, ast.FunctionDef) and n.name in set(names) | set(optional)]
-    assert set(names) <= {n.name for n in nodes}
-    for n in nodes: n.decorator_list = []
-    tree = ast.Module(body=[ast.ImportFrom(module='__future__', names=[ast.alias(name='annotations')], level=0), *nodes], type_ignores=[])
-    for n in ast.walk(tree):
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
-            namespace.setdefault(n.func.id, lambda *args: 0)
-    exec(compile(ast.fix_missing_locations(tree), str(p), 'exec'), namespace)
+def functions(module, names, namespace):
+    # Preserve the source-root override used by paired runtime experiments;
+    # the shared loader owns helpers, exports and module-local constants.
+    return load_functions(ROOT / 'pcc/runtime/py' / module, names, namespace)
 
 
 class Moving:
     def __init__(self, backend=4):
         self.backend = backend
-        self.memory = {FLAG: 1, POP: 0, FWD: 0, SELECTED: 0,
-                       'pcc_gc_backend_selected': backend, 'pcc_gc_config_initialized': 1}
+        self.memory = gc_state_initial_values()
+        self.memory.update({FLAG: 1, POP: 0, FWD: 0, SELECTED: 0,
+                            'pcc_gc_backend_selected': backend,
+                            'pcc_gc_config_initialized': 1})
         self.forward = {}
         self.target = {}
         self.identities = {}
@@ -46,20 +47,20 @@ class Moving:
         self.roots = []
         self.reads = []
         self.fail_insert = False
-        self.ns = {}
-        for node in ast.parse((ROOT / 'pcc/runtime/py/py_abi_constants.py').read_text()).body:
-            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
-                for target in node.targets:
-                    if isinstance(target, ast.Name): self.ns[target.id] = node.value.value
+        self.ns = {name: value for name, value in vars(abi).items()
+                   if name.isupper()}
         self.ns.update(
+            i64=int, c_ptr=int,
             null=lambda: 0, ptr_is_null=lambda x: int(x == 0),
             is_tagged_int=lambda x: x & 1, ptr_eq=lambda a,b: int(a == b),
-            ptr_add=lambda a,b: a+b, ptr_to_int=int, int_to_ptr=int,
+            ptr_add=lambda a,b: a+b, ptr_diff=lambda a,b: a-b,
+            ptr_to_int=int, int_to_ptr=int,
             global_addr=lambda name: name,
             global_load_ptr=lambda name: self.load(name, 0),
             global_store_ptr=lambda name,value: self.store(name, 0, value),
-            load_i32=self.load, load_i64=self.load, load_ptr=self.load,
-            atomic_load_i64=self.load, store_i32=self.store, store_i64=self.store,
+            load_i8=self.load, load_i32=self.load, load_i64=self.load, load_ptr=self.load,
+            atomic_load_i32=self.load, atomic_load_i64=self.load,
+            store_i32=self.store, store_i64=self.store,
             store_ptr=self.store, atomic_store_i32=self.store, atomic_store_i64=self.store,
             atomic_rmw_i32=self.rmw, malloc=self.alloc, stack_alloc=self.alloc,
             free=lambda obj: self.events.append(('free', obj)), cstr=str,
@@ -68,6 +69,22 @@ class Moving:
             pcc_gc_config_ensure=lambda: backend, _init_config=lambda: backend,
             pcc_gc_backend=lambda: backend, pcc_current_thread_id=lambda: 7,
             pcc_thread_safepoint=lambda: self.events.append(('poll',)),
+            # One modeled mutator; configuration tests explicitly override
+            # this provider when they exercise the threaded policy branch.
+            pcc_threads_enabled=lambda: 0,
+            # Record enabling conservative roots. Actual stack scanning is
+            # outside this explicit-root-slot model.
+            pcc_thread_enable_conservative_roots=lambda: self.events.append(('conservative-roots',)),
+            # No collector thread exists to stop/join or launch. The tested
+            # same-backend reset still runs its real publication/lock code.
+            _stop_cms_worker=lambda: 0,
+            _maybe_start_cms_worker=lambda: None,
+            # No mode-only foreign leases exist. The real central lease CAS
+            # and reset owner checks still execute against modeled memory.
+            _mode_leases_freeze=lambda: 0,
+            _mode_leases_thaw=lambda: None,
+            # Raw counter storage is modeled, not discarded as a void stub.
+            _gc_gray_count_store_release=lambda value: self.store('pcc_gc_gray_count', 0, value),
             pcc_gc_object_is_known_no_lock=lambda obj: int(obj in self.objects),
             # This finite predicate supplies stable-known admission only;
             # native index-publication ordering is outside this model.
@@ -123,9 +140,10 @@ class Moving:
         )
         functions('freestanding_gc_forwarding_identity.py', {
             '_graph_lock','_graph_unlock','_set_forwarding_head',
+            'pcc_gc_refresh_read_barrier',
             'pcc_gc_forwarding_unlink_main','pcc_gc_forwarding_clear_all',
             'pcc_gc_install_forwarding_unlocked','pcc_gc_install_forwarding_preallocated_unlocked',
-            'pcc_gc_install_forwarding'}, self.ns, ('pcc_gc_refresh_read_barrier',))
+            'pcc_gc_install_forwarding'}, self.ns)
         functions('freestanding_gc_forwarding_retirement.py', {
             'pcc_gc_forwarding_detach','pcc_gc_forwarding_remove_target',
             'pcc_gc_backend4_remap_and_retire_unlocked'}, self.ns)
@@ -177,7 +195,7 @@ class Moving:
         self.lock()
         try:
             if kind=='preallocated':
-                plan=self.alloc(72);self.store(plan,16,self.alloc(56))
+                plan=self.alloc(120);self.store(plan,16,self.alloc(56))
                 return self.ns['pcc_gc_install_forwarding_preallocated_unlocked'](old,new,plan)
             return self.ns['pcc_gc_install_forwarding_unlocked'](old,new)
         finally:self.unlock()

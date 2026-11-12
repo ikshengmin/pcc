@@ -108,7 +108,7 @@ pcc_gc_forwarding_plan_index_capacity = extern(
 )
 pcc_gc_forwarding_plan_index_commit = extern(
     "pcc_gc_forwarding_plan_index_commit",
-    (c_int64, c_ptr, c_int64, c_int64), c_int64
+    (c_int64, c_ptr, c_int64, c_int64, c_ptr), c_int64
 )
 pcc_gc_forwarding_plan_index_insert = extern(
     "pcc_gc_forwarding_plan_index_insert", (c_int64, c_ptr, c_ptr), c_int64
@@ -427,16 +427,43 @@ def pcc_gc_backend4_slot_needs_resolve(value: c_ptr) -> i64:
     return 0
 
 
+# Forwarding install plan: the original node/table cells keep their offsets.
+# The six trailing cells own separate allocations, not inline reader/retire
+# records: publication and stopped-world reclamation can outlive this plan.
+_FORWARDING_PLAN_SOURCE_IDENTITY: i64 = 0
+_FORWARDING_PLAN_TARGET_IDENTITY: i64 = 8
+_FORWARDING_PLAN_EDGE: i64 = 16
+_FORWARDING_PLAN_IDENTITY_SLOTS: i64 = 24
+_FORWARDING_PLAN_IDENTITY_CAP: i64 = 32
+_FORWARDING_PLAN_SOURCE_SLOTS: i64 = 40
+_FORWARDING_PLAN_SOURCE_CAP: i64 = 48
+_FORWARDING_PLAN_TARGET_SLOTS: i64 = 56
+_FORWARDING_PLAN_TARGET_CAP: i64 = 64
+_FORWARDING_PLAN_SOURCE_RECORD: i64 = 72
+_FORWARDING_PLAN_SOURCE_RETIRE_RECORD: i64 = 80
+_FORWARDING_PLAN_SOURCE_RETIRE_SLOTS: i64 = 88
+_FORWARDING_PLAN_TARGET_RECORD: i64 = 96
+_FORWARDING_PLAN_TARGET_RETIRE_RECORD: i64 = 104
+_FORWARDING_PLAN_TARGET_RETIRE_SLOTS: i64 = 112
+_FORWARDING_PLAN_BYTES: i64 = 120
+
+
 @c_abi_export("pcc_gc_forwarding_install_plan_finish")
 def pcc_gc_forwarding_install_plan_finish(plan: c_ptr) -> None:
     if ptr_is_null(plan) != 0:
         return
-    free(load_ptr(plan, 0))
-    free(load_ptr(plan, 8))
-    free(load_ptr(plan, 16))
-    free(load_ptr(plan, 24))
-    free(load_ptr(plan, 40))
-    free(load_ptr(plan, 56))
+    free(load_ptr(plan, _FORWARDING_PLAN_SOURCE_IDENTITY))
+    free(load_ptr(plan, _FORWARDING_PLAN_TARGET_IDENTITY))
+    free(load_ptr(plan, _FORWARDING_PLAN_EDGE))
+    free(load_ptr(plan, _FORWARDING_PLAN_IDENTITY_SLOTS))
+    free(load_ptr(plan, _FORWARDING_PLAN_SOURCE_SLOTS))
+    free(load_ptr(plan, _FORWARDING_PLAN_TARGET_SLOTS))
+    free(load_ptr(plan, _FORWARDING_PLAN_SOURCE_RECORD))
+    free(load_ptr(plan, _FORWARDING_PLAN_SOURCE_RETIRE_RECORD))
+    free(load_ptr(plan, _FORWARDING_PLAN_SOURCE_RETIRE_SLOTS))
+    free(load_ptr(plan, _FORWARDING_PLAN_TARGET_RECORD))
+    free(load_ptr(plan, _FORWARDING_PLAN_TARGET_RETIRE_RECORD))
+    free(load_ptr(plan, _FORWARDING_PLAN_TARGET_RETIRE_SLOTS))
     free(plan)
 
 
@@ -480,28 +507,64 @@ def pcc_gc_forwarding_install_plan_prepare(
     if valid == 0:
         return null()
 
-    plan = calloc(1, 72)
+    plan = calloc(1, _FORWARDING_PLAN_BYTES)
     if ptr_is_null(plan) != 0:
         return null()
-    store_ptr(plan, 0, calloc(1, 32))
-    store_ptr(plan, 8, calloc(1, 32))
-    store_ptr(plan, 16, calloc(1, 56))
-    store_i64(plan, 32, identity_cap)
-    store_i64(plan, 48, forwarding_cap)
-    store_i64(plan, 64, target_cap)
+    store_ptr(plan, _FORWARDING_PLAN_SOURCE_IDENTITY, calloc(1, 32))
+    store_ptr(plan, _FORWARDING_PLAN_TARGET_IDENTITY, calloc(1, 32))
+    store_ptr(plan, _FORWARDING_PLAN_EDGE, calloc(1, 56))
+    store_i64(plan, _FORWARDING_PLAN_IDENTITY_CAP, identity_cap)
+    store_i64(plan, _FORWARDING_PLAN_SOURCE_CAP, forwarding_cap)
+    store_i64(plan, _FORWARDING_PLAN_TARGET_CAP, target_cap)
     if identity_cap > 0:
-        store_ptr(plan, 24, calloc(identity_cap, pcc_gc_index_slot_size()))
+        store_ptr(
+            plan, _FORWARDING_PLAN_IDENTITY_SLOTS,
+            calloc(identity_cap, pcc_gc_index_slot_size()),
+        )
     if forwarding_cap > 0:
-        store_ptr(plan, 40, calloc(forwarding_cap, pcc_gc_index_slot_size()))
+        store_ptr(
+            plan, _FORWARDING_PLAN_SOURCE_SLOTS,
+            calloc(forwarding_cap, pcc_gc_index_slot_size()),
+        )
+        store_ptr(plan, _FORWARDING_PLAN_SOURCE_RECORD, calloc(1, 16))
+        store_ptr(plan, _FORWARDING_PLAN_SOURCE_RETIRE_RECORD, calloc(1, 16))
+        store_ptr(plan, _FORWARDING_PLAN_SOURCE_RETIRE_SLOTS, calloc(1, 16))
     if target_cap > 0:
-        store_ptr(plan, 56, calloc(target_cap, pcc_gc_index_slot_size()))
+        store_ptr(
+            plan, _FORWARDING_PLAN_TARGET_SLOTS,
+            calloc(target_cap, pcc_gc_index_slot_size()),
+        )
+        store_ptr(plan, _FORWARDING_PLAN_TARGET_RECORD, calloc(1, 16))
+        store_ptr(plan, _FORWARDING_PLAN_TARGET_RETIRE_RECORD, calloc(1, 16))
+        store_ptr(plan, _FORWARDING_PLAN_TARGET_RETIRE_SLOTS, calloc(1, 16))
     if (
-        ptr_is_null(load_ptr(plan, 0)) != 0
-        or ptr_is_null(load_ptr(plan, 8)) != 0
-        or ptr_is_null(load_ptr(plan, 16)) != 0
-        or (identity_cap > 0 and ptr_is_null(load_ptr(plan, 24)) != 0)
-        or (forwarding_cap > 0 and ptr_is_null(load_ptr(plan, 40)) != 0)
-        or (target_cap > 0 and ptr_is_null(load_ptr(plan, 56)) != 0)
+        ptr_is_null(load_ptr(plan, _FORWARDING_PLAN_SOURCE_IDENTITY)) != 0
+        or ptr_is_null(load_ptr(plan, _FORWARDING_PLAN_TARGET_IDENTITY)) != 0
+        or ptr_is_null(load_ptr(plan, _FORWARDING_PLAN_EDGE)) != 0
+        or (
+            identity_cap > 0
+            and ptr_is_null(load_ptr(plan, _FORWARDING_PLAN_IDENTITY_SLOTS)) != 0
+        )
+        or (forwarding_cap > 0 and (
+            ptr_is_null(load_ptr(plan, _FORWARDING_PLAN_SOURCE_SLOTS)) != 0
+            or ptr_is_null(load_ptr(plan, _FORWARDING_PLAN_SOURCE_RECORD)) != 0
+            or ptr_is_null(load_ptr(
+                plan, _FORWARDING_PLAN_SOURCE_RETIRE_RECORD
+            )) != 0
+            or ptr_is_null(load_ptr(
+                plan, _FORWARDING_PLAN_SOURCE_RETIRE_SLOTS
+            )) != 0
+        ))
+        or (target_cap > 0 and (
+            ptr_is_null(load_ptr(plan, _FORWARDING_PLAN_TARGET_SLOTS)) != 0
+            or ptr_is_null(load_ptr(plan, _FORWARDING_PLAN_TARGET_RECORD)) != 0
+            or ptr_is_null(load_ptr(
+                plan, _FORWARDING_PLAN_TARGET_RETIRE_RECORD
+            )) != 0
+            or ptr_is_null(load_ptr(
+                plan, _FORWARDING_PLAN_TARGET_RETIRE_SLOTS
+            )) != 0
+        ))
     ):
         pcc_gc_forwarding_install_plan_finish(plan)
         return null()
@@ -550,15 +613,20 @@ def pcc_gc_install_forwarding_preallocated_unlocked(
         return -1
     if (
         pcc_gc_forwarding_plan_index_commit(
-            2, ptr_add(plan, 24), load_i64(plan, 32), 2
+            2, ptr_add(plan, _FORWARDING_PLAN_IDENTITY_SLOTS),
+            load_i64(plan, _FORWARDING_PLAN_IDENTITY_CAP), 2, null()
         )
         < 0
         or pcc_gc_forwarding_plan_index_commit(
-            0, ptr_add(plan, 40), load_i64(plan, 48), 1
+            0, ptr_add(plan, _FORWARDING_PLAN_SOURCE_SLOTS),
+            load_i64(plan, _FORWARDING_PLAN_SOURCE_CAP), 1,
+            ptr_add(plan, _FORWARDING_PLAN_SOURCE_RECORD)
         )
         < 0
         or pcc_gc_forwarding_plan_index_commit(
-            1, ptr_add(plan, 56), load_i64(plan, 64), 1
+            1, ptr_add(plan, _FORWARDING_PLAN_TARGET_SLOTS),
+            load_i64(plan, _FORWARDING_PLAN_TARGET_CAP), 1,
+            ptr_add(plan, _FORWARDING_PLAN_TARGET_RECORD)
         )
         < 0
     ):
@@ -566,7 +634,7 @@ def pcc_gc_install_forwarding_preallocated_unlocked(
 
     from_identity = _identity_find(from_obj)
     if ptr_is_null(from_identity) != 0:
-        from_identity = load_ptr(plan, 0)
+        from_identity = load_ptr(plan, _FORWARDING_PLAN_SOURCE_IDENTITY)
         if ptr_is_null(from_identity) != 0:
             return -1
         stable_id: i64 = load_i32(global_addr("pcc_gc_next_object_id"), 0)
@@ -588,11 +656,11 @@ def pcc_gc_install_forwarding_preallocated_unlocked(
         if ptr_is_null(old_identity_head) == 0:
             store_ptr(old_identity_head, 24, from_identity)
         _set_identity_head(from_identity)
-        store_ptr(plan, 0, null())
+        store_ptr(plan, _FORWARDING_PLAN_SOURCE_IDENTITY, null())
 
     to_identity = _identity_find(to_obj)
     if ptr_is_null(to_identity) != 0:
-        to_identity = load_ptr(plan, 8)
+        to_identity = load_ptr(plan, _FORWARDING_PLAN_TARGET_IDENTITY)
         if ptr_is_null(to_identity) != 0:
             return -1
         # Preparation may survive a failed edge commit, but distinct live
@@ -611,9 +679,9 @@ def pcc_gc_install_forwarding_preallocated_unlocked(
         if ptr_is_null(old_identity_head) == 0:
             store_ptr(old_identity_head, 24, to_identity)
         _set_identity_head(to_identity)
-        store_ptr(plan, 8, null())
+        store_ptr(plan, _FORWARDING_PLAN_TARGET_IDENTITY, null())
 
-    node = load_ptr(plan, 16)
+    node = load_ptr(plan, _FORWARDING_PLAN_EDGE)
     if ptr_is_null(node) != 0:
         return -1
     store_ptr(node, 0, from_obj)
@@ -639,7 +707,7 @@ def pcc_gc_install_forwarding_preallocated_unlocked(
         store_ptr(old_head, 24, node)
     _set_forwarding_head(node)
     _forwarding_target_attach_prepared(node, node)
-    store_ptr(plan, 16, null())
+    store_ptr(plan, _FORWARDING_PLAN_EDGE, null())
     population: i64 = load_i32(global_addr("pcc_gc_forwarding_population"), 0)
     store_i32(global_addr("pcc_gc_forwarding_population"), 0, population + 1)
     store_i32(global_addr("pcc_gc_backend4_remap_owed"), 0, 1)

@@ -211,7 +211,7 @@ def test_uncommitted_copy_does_not_publish_target_mark(
     if failure == "forwarding-plan":
         # Exercise the real plan allocator's OOM path, not a success/failure
         # replacement for the public-copy transaction.
-        m.fail_size = 72
+        m.fail_size = 120
     elif failure == "validation":
         m.ns["pcc_gc_relocation_payload_plan_validate_locked"] = lambda *args: 0
     elif failure == "payload":

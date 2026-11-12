@@ -324,6 +324,46 @@ def test_relocation_copy_defers_source_zpage_free_after_graph_unlock() -> None:
     assert "free(node)" in strict_detach_finish
 
 
+def _assert_forwarding_commit_has_no_allocator(source: str) -> None:
+    """Inspect the actual local helper closure, not only the entry's spelling."""
+    functions = {
+        node.name: node for node in ast.parse(source).body
+        if isinstance(node, ast.FunctionDef)
+    }
+    pending = ["pcc_gc_forwarding_plan_index_commit"]
+    seen = set()
+    forbidden = {"malloc", "calloc", "realloc", "free"}
+    while pending:
+        name = pending.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        references = {
+            node.id for node in ast.walk(functions[name])
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+        }
+        assert not references & forbidden, (name, references & forbidden)
+        pending.extend(references & functions.keys() - seen)
+
+
+@pytest.mark.parametrize("helper", (
+    "_forwarding_table_publish_record", "_index_retire_prepared",
+))
+@pytest.mark.parametrize("operation", ("calloc(1, 16)", "malloc(16)", "free(record)"))
+def test_forwarding_commit_allocation_audit_rejects_transitive_calls(
+    helper, operation,
+) -> None:
+    source = INDEX_SOURCE.read_text(encoding="utf-8")
+    _assert_forwarding_commit_has_no_allocator(source)
+    tree = ast.parse(source)
+    function = next(node for node in tree.body
+                    if isinstance(node, ast.FunctionDef) and node.name == helper)
+    # This is an in-memory negative control, never a production file edit.
+    function.body.append(ast.parse(operation).body[0])
+    with pytest.raises(AssertionError):
+        _assert_forwarding_commit_has_no_allocator(ast.unparse(tree))
+
+
 def test_relocation_copy_preallocates_forwarding_indexes_outside_graph_lock(
 ) -> None:
     strict = STRICT_SOURCE.read_text(encoding="utf-8")
@@ -345,7 +385,7 @@ def test_relocation_copy_preallocates_forwarding_indexes_outside_graph_lock(
             "c_int64",
         ),
         "pcc_gc_forwarding_plan_index_commit": (
-            ("c_int64", "c_ptr", "c_int64", "c_int64"),
+            ("c_int64", "c_ptr", "c_int64", "c_int64", "c_ptr"),
             "c_int64",
         ),
         "pcc_gc_forwarding_plan_index_insert": (
@@ -394,7 +434,7 @@ def test_relocation_copy_preallocates_forwarding_indexes_outside_graph_lock(
         '@c_abi_export("pcc_gc_forwarding_install_plan_prepare")', 1
     )[1].split("\n@c_abi_export", 1)[0]
     prepare_unlock = strict_prepare.index("_graph_unlock()")
-    assert prepare_unlock < strict_prepare.index("plan = calloc(1, 72)")
+    assert prepare_unlock < strict_prepare.index("plan = calloc(1, _FORWARDING_PLAN_BYTES)")
     assert "calloc(" not in strict_prepare[:prepare_unlock]
 
     strict_index_commit = index_source.split(
@@ -402,6 +442,20 @@ def test_relocation_copy_preallocates_forwarding_indexes_outside_graph_lock(
     )[1].split("\n@c_abi_export", 1)[0]
     for forbidden in ("malloc(", "calloc(", "free("):
         assert forbidden not in strict_index_commit
+    _assert_forwarding_commit_has_no_allocator(index_source)
+
+    constants = {
+        node.target.id: ast.literal_eval(node.value)
+        for node in ast.parse(forwarding).body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id.startswith("_FORWARDING_PLAN_")
+    }
+    assert constants["_FORWARDING_PLAN_BYTES"] == 120
+    assert [constants["_FORWARDING_PLAN_" + name] for name in (
+        "SOURCE_RECORD", "SOURCE_RETIRE_RECORD", "SOURCE_RETIRE_SLOTS",
+        "TARGET_RECORD", "TARGET_RETIRE_RECORD", "TARGET_RETIRE_SLOTS",
+    )] == [72, 80, 88, 96, 104, 112]
 
 
 def test_relocation_copy_prepares_slot_retains_outside_graph_lock() -> None:

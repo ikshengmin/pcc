@@ -46,9 +46,14 @@ def _fixture(backend, installer):
             assert extra > 0 and len(tables[kind]) + extra <= 4
             return 0  # A finite four-entry reservation already exists.
 
-        def commit(kind, slots_io, cap, extra):
+        def commit(kind, slots_io, cap, extra, metadata_io):
             assert state.depth > 0 and cap == 0
             assert state.load(slots_io, 0) == 0
+            if kind == 2:
+                assert metadata_io == 0
+            else:
+                assert all(state.load(metadata_io, offset) == 0
+                           for offset in (0, 8, 16))
             return capacity(kind, extra)
 
         def insert(kind, obj, node):

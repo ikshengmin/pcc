@@ -551,11 +551,17 @@ int64_t pcc_gc_identity_index_insert(PyObject *obj, void *node);
 void *pcc_gc_identity_index_remove(PyObject *obj);
 void pcc_gc_identity_index_clear(void);
 int64_t pcc_gc_forwarding_plan_index_capacity(int64_t kind, int64_t extra);
+/* Graph-locked, allocation/free-free commit. For forwarding kinds 0/1,
+ * metadata owns three independent allocations: reader record, old-record
+ * retire node, old-slots retire node. Consumed cells become NULL; finish
+ * releases only unused cells after unlock. Kind 2 ignores metadata and
+ * hands its replaced identity table back through prepared_slots_io. */
 int64_t pcc_gc_forwarding_plan_index_commit(
     int64_t kind,
     void **prepared_slots_io,
     int64_t prepared_cap,
-    int64_t extra
+    int64_t extra,
+    void **prepared_metadata_io
 );
 int64_t pcc_gc_forwarding_plan_index_insert(
     int64_t kind,

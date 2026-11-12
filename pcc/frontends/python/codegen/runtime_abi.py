@@ -2572,7 +2572,7 @@ def _cross_object_signatures_part_5():
         "c_int64",
     ),
     "pcc_gc_forwarding_plan_index_commit": (
-        ("c_int64", "c_ptr", "c_int64", "c_int64"),
+        ("c_int64", "c_ptr", "c_int64", "c_int64", "c_ptr"),
         "c_int64",
     ),
     "pcc_gc_forwarding_plan_index_insert": (

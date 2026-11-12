@@ -41,6 +41,8 @@ PUBLIC_SYMBOLS = {
     "pcc_gc_index_reclaim_retired",
     "pcc_gc_forwarding_index_find",
     "pcc_gc_forwarding_table_publish_prepared",
+    "pcc_gc_forwarding_table_publish_record",
+    "pcc_gc_index_retire_prepared",
     "pcc_gc_forwarding_index_insert",
     "pcc_gc_forwarding_index_remove",
     "pcc_gc_forwarding_index_clear",
@@ -192,11 +194,30 @@ int64_t pcc_gc_zpage_owner_index_upsert_preallocated(
 int64_t pcc_gc_zpage_page_index_upsert(void *key, void *node);
 int64_t pcc_gc_forwarding_plan_index_capacity(int64_t kind, int64_t extra);
 int64_t pcc_gc_forwarding_plan_index_commit(
-    int64_t kind, void **prepared_slots, int64_t prepared_cap, int64_t extra
+    int64_t kind, void **prepared_slots, int64_t prepared_cap, int64_t extra,
+    void **prepared_metadata
 );
 int64_t pcc_gc_forwarding_plan_index_insert(
     int64_t kind, void *key, void *node
 );
+
+/* Metadata allocations are prepared and released outside the commit. */
+static int prepare_forwarding_metadata(void **metadata) {
+    for (int j = 0; j < 3; j++) {
+        metadata[j] = calloc(1, 16);
+        if (!metadata[j]) {
+            for (int k = 0; k < j; k++) free(metadata[k]);
+            return 0;
+        }
+    }
+    return 1;
+}
+static void finish_forwarding_metadata(void **metadata) {
+    for (int j = 0; j < 3; j++) {
+        free(metadata[j]);
+        metadata[j] = NULL;
+    }
+}
 
 /* Standalone raw-index tests provide the kernel storage/allocator ABI.
  * Production-archive tests do not define these symbols: a weak stub must
@@ -412,14 +433,18 @@ int main(void) {
     }
 
     {
+        void *metadata[3] = {0};
+        if (!prepare_forwarding_metadata(metadata)) return 200;
         int64_t cap = pcc_gc_forwarding_plan_index_capacity(0, 1);
         if (cap != 256) return 110;
         void *prepared = calloc((size_t)cap, (size_t)pcc_gc_index_slot_size());
         if (prepared == 0) return 111;
         if (
-            pcc_gc_forwarding_plan_index_commit(0, &prepared, cap, 1) != 1
+            pcc_gc_forwarding_plan_index_commit(0, &prepared, cap, 1, metadata) != 1
         ) return 112;
         if (prepared != 0) return 113;
+        if (metadata[0] || !metadata[1] || !metadata[2]) return 201;
+        finish_forwarding_metadata(metadata);
         for (i = 0; i < 128; i++) {
             void *key = (void *)(uintptr_t)(0x9000000u + (uintptr_t)i * 16u);
             if (
@@ -438,23 +463,25 @@ int main(void) {
         }
         cap = pcc_gc_forwarding_plan_index_capacity(0, 1);
         if (cap <= 256) return 117;
+        if (!prepare_forwarding_metadata(metadata)) return 202;
         prepared = calloc((size_t)(cap / 2), (size_t)pcc_gc_index_slot_size());
         if (prepared == 0) return 118;
         {
             void *undersized = prepared;
             if (
                 pcc_gc_forwarding_plan_index_commit(
-                    0, &prepared, cap / 2, 1
+                    0, &prepared, cap / 2, 1, metadata
                 )
                 != -1
             ) return 119;
             if (prepared != undersized) return 120;
+            if (!metadata[0] || !metadata[1] || !metadata[2]) return 203;
             free(prepared);
         }
         prepared = calloc((size_t)cap, (size_t)pcc_gc_index_slot_size());
         if (prepared == 0) return 121;
         if (
-            pcc_gc_forwarding_plan_index_commit(0, &prepared, cap, 1) != 1
+            pcc_gc_forwarding_plan_index_commit(0, &prepared, cap, 1, metadata) != 1
         ) return 122;
         /* The forwarding index is probed without the graph lock (the GC4
            load barrier), so a commit retires the table it replaces instead
@@ -462,6 +489,8 @@ int main(void) {
            retired tables. The object, forwarding and target clears above
            retired theirs too. */
         if (prepared != 0) return 123;
+        if (metadata[0] || metadata[1] || metadata[2]) return 204;
+        finish_forwarding_metadata(metadata);
         if (pcc_gc_index_reclaim_retired() < 1) return 131;
         if (pcc_gc_index_reclaim_retired() != 0) return 132;
         {
@@ -482,13 +511,15 @@ int main(void) {
             if (cap != 256) return 127;
             prepared = calloc((size_t)cap, (size_t)pcc_gc_index_slot_size());
             if (prepared == 0) return 128;
+            if (i == 1 && !prepare_forwarding_metadata(metadata)) return 205;
             if (
                 pcc_gc_forwarding_plan_index_commit(
-                    i, &prepared, cap, 1
+                    i, &prepared, cap, 1, i == 1 ? metadata : NULL
                 )
                 != 1
             ) return 129;
             if (prepared != 0) return 130;
+            if (i == 1) finish_forwarding_metadata(metadata);
             if (
                 pcc_gc_forwarding_plan_index_insert(
                     i, (void *)(uintptr_t)(0xa000000u + (uintptr_t)i * 16u),
