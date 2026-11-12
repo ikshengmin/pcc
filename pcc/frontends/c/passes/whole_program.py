@@ -1,4 +1,4 @@
-"""Phase 6 whole-program / cross-TU analysis.
+"""Whole-program / cross-TU analysis.
 
 Takes a list of translation-unit ASTs and derives:
   - function definitions by name (with their linkage),

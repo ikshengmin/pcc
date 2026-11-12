@@ -1,4 +1,4 @@
-"""Phase 5 SSA-backed loop-phi analysis pass (analysis-only)."""
+"""SSA-backed loop-phi analysis pass (analysis-only)."""
 
 from __future__ import annotations
 

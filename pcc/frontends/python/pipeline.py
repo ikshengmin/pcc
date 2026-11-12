@@ -9,10 +9,8 @@ Orchestrates the full pipeline for a single ``.py`` file:
       -> write .ll to a temp file
       -> link .o + pcc/runtime/libpy_runtime_pcc_py.a -> native exe
 
-This is the Phase 1 MVP dispatcher. See
-``docs/plans/python-frontend-interfaces.md`` for the frozen v0.1
-interface contract and ``docs/plans/python-frontend-plan.md`` for the
-Phase 1 scope.
+See ``docs/plans/python-frontend-interfaces.md`` for the v0.1 interface
+contract.
 """
 
 from __future__ import annotations
@@ -2495,9 +2493,7 @@ def _compile_python_routed(
         from pcc.frontends.python.codegen.layer1 import L1CodeGen as _L1CodeGen
     except ImportError as e:
         raise PyPipelineError(
-            f"Python frontend module not available: {e}. "
-            "The Python pipeline is currently Phase 1 MVP and some "
-            "components may still be under construction."
+            f"Python frontend module not available: {e}."
         ) from e
 
     if not os.path.isfile(src_path):

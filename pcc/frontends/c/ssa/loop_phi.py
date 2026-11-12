@@ -1,4 +1,4 @@
-"""Phase 5 SSA-backed loop-header phi analysis.
+"""SSA-backed loop-header phi analysis.
 
 Classifies phi nodes at loop headers into:
   - dead: result not used anywhere,

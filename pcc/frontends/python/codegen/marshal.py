@@ -1,6 +1,6 @@
 """Marshalling helpers between native scalars and PyObject*.
 
-Phase 2 of the Python frontend splits any expression into an L1 "native"
+The Python frontend splits any expression into an L1 "native"
 and an L2 "boxed PyObject*" form. Whenever a native-typed value has to
 interoperate with a container element, a runtime-lib call, or a mixed-
 arity print, we *marshal* it into ``PyObject*`` via :func:`marshal_to_object`.

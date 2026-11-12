@@ -9,7 +9,7 @@ The AST nodes are ``frozen=True`` dataclasses, so this pass never
 mutates in place; instead it produces fresh nodes via
 :func:`dataclasses.replace`.
 
-Phase 1 scope (see ``docs/plans/python-frontend-plan.md`` section
+Original scope (``docs/plans/python-frontend-plan.md``, section
 "Phase 1"):
 
 * Every ``FuncDef`` argument with an ``annotation`` gets that type;

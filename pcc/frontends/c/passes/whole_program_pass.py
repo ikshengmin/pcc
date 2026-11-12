@@ -1,4 +1,4 @@
-"""Phase 6 whole-program analysis pass (analysis-only).
+"""Whole-program analysis pass (analysis-only).
 
 Intended to be run before per-TU compilation when multiple ASTs are
 available. Records cross-TU facts in PassContext for downstream consumers
