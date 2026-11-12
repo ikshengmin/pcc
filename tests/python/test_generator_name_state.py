@@ -139,8 +139,13 @@ def test_local_imports_restore_generator_classification_in_native_program(
         PCC_NO_AUTO_PCC1="1",
         PCC_RUNTIME_ARCHIVE=str(pcc_runtime_archive),
     )
+    # The installed launcher records and execs PCC_TEST_COMPILER when selected;
+    # python -m pcc intentionally enters the host dispatcher directly.
+    compiler_module = (
+        "pcc.driver.cli_launcher" if os.environ.get("PCC_TEST_COMPILER") else "pcc"
+    )
     compiled = subprocess.run(
-        [sys.executable, "-m", "pcc", "--backend=self",
+        [sys.executable, "-m", compiler_module, "--backend=self",
          "--ir-scaffold=" + scaffold, str(source), "-o", str(binary)],
         capture_output=True, text=True, timeout=90, env=environment,
     )

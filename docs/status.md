@@ -43,8 +43,9 @@ helpers have static native method exports. The phase/body/render logging owned
 by `generation_lowering.py` shares one worker-timing read per invocation,
 preserving normalized truth values and the distinct nonempty-string debug flag.
 For those three phases, mid-generation timing environment changes apply to the
-next invocation; generator-specific subphase readers are not yet consolidated. The expanded lifecycle and
-configuration file is **12 passed** under the unchanged 90-second/1-GiB guard;
+next invocation; generator-specific subphase readers are not yet consolidated.
+The expanded lifecycle and configuration file is **12 passed** under the
+unchanged 90-second/1-GiB guard;
 the ordinary host/IR scope is **211 passed**. The broader initial selection is
 **mixed: 1 failed, 41 passed**, stopping at
 `test_direct_indexed_worker_validation.py::test_native_object_worker_keeps_assembly_until_validation[True-False-arm64-apple-darwin]`.
@@ -63,6 +64,21 @@ constructor retry still fails 1-GiB admission before execution (archive-symbol
 owner estimate 414,678,160 bytes versus 412,729,344 available); the larger
 standard integration budget is not evidence that this resource defect is fixed.
 
+Native pcc1 qualification now has a separate executed boundary. The new
+`4850b0e76` Stage1 passed compilation and its native compile/run smoke in
+1,241.324 seconds (1,197.141 compile, 44.183 barrier), below the unchanged
+1,800-second limit; peak sampled tree RSS was 6,789,922,816 bytes. The emitted
+compiler links only `libSystem.B.dylib`, not libpython or LLVM. The generator
+fixture now uses the existing installed launcher when `PCC_TEST_COMPILER` is
+selected: its old `python -m pcc` command silently stayed on the host dispatcher
+and produced zero native route witnesses. With the test route repaired, the
+17-case selection has **15 host/lifecycle checks plus two native-pcc1 cases
+passed** at six workers/600 seconds/3 GiB. Both scaffold modes have an actual
+pcc1 exec witness, successful compilation, and exact CPython-result comparisons
+under observed GC0–4; the per-compile 90-second timeout is unchanged. The
+standalone 90-second/1-GiB native multi-module probe still rejects because its
+coordinator leaves no child budget; the integration result does not repair it.
+
 Remaining batch scope: 15 groups of differing defensive defaults, remaining
 self-module owner guards, further large-function/environment-read consolidation,
 and native compiler qualification. `_module_del_target_names` is still lazy,
@@ -71,12 +87,13 @@ do not claim repository-wide refactoring or whole-language qualification.
 The supplied older `1b4731f9c` bootstrap receipt ended after a successful Stage1:
 Stage2 had no runtime archive, so it has no Stage2/3 fixed-point result. Its
 separate native C SSA probe also failed to import `pcc.frontends.c.parse.c_lex`;
-that is not evidence of an executed C pass. The new `4850b0e76` Stage1 attempt
-selects its verified runtime explicitly and is running under the shared lock,
-1800-second stage guard, 16-GiB ceiling and 8-GiB Darwin reserve. Native smoke
-barriers and raw-byte pcc2/pcc3 comparison remain required; no new-source fixed
-point has been established. Whole-Python and full five-GC bootstrap qualification
-are also unrun. Bootstrap wiring is tracked in
+that is not evidence of an executed C pass. New Stage2 is running from the
+verified new pcc1 and the same frozen `4850b0e76` inputs, selecting the matching
+runtime explicitly. Each stage retains the shared lock, 1800-second guard,
+16-GiB ceiling and 8-GiB Darwin reserve, including its native smoke barrier.
+Stage3 and raw-byte pcc2/pcc3 comparison remain unrun; Stage1 is not a fixed
+point. Whole-Python and full five-GC bootstrap qualification are also unrun.
+Bootstrap wiring is tracked in
 [#200](https://github.com/allstoalls/pcc/issues/200).
 
 Focused repro, using a verified archive from the selected source:
@@ -96,6 +113,12 @@ The integrated 35-case selection uses those first five files, substitutes
 `test_compiler_dataclass_defaults_native.py`. It runs with `-m ''`, a fresh
 explicit `PCC_RUNTIME_ARCHIVE`, and the standard 600-second/3-GiB integration
 guard. Its passing result does not replace the failed 90-second/1-GiB check.
+For the separate 17-case native-compiler selection, set `PCC_TEST_COMPILER` to
+the verified pcc1 and `PCC_TEST_COMPILER_STRICT=1`, then select
+`test_generator_name_state.py` and `test_frontend_initial_module_reuse.py` under
+the same standard integration guard. Require two native exec records **and**
+the two generator tests' completed compile/execute assertions; an exec attempt
+alone is not completion evidence.
 
 ## Owned Metal device runtime (local Mac, 2026-11-12)
 
