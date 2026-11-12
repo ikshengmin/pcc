@@ -47,6 +47,7 @@ TEST_INPUTS = (
     "scripts/ci_worker_size_prior_gate.py",
     ".github/workflows/pcc1-package-parity.yml",
     "tests/python/owned_regression_support.py",
+    "scripts/owned_image_linkage.py",
     "tests/python/process_timeout.py",
     "tests/runtime_fixture_provenance.py",
     "tests/python/conftest.py",
@@ -59,6 +60,8 @@ TEST_INPUTS = (
 
 
 def verify_receipts(directory, runtime):
+    from scripts.owned_image_linkage import inspect_owned_image
+
     from tests.python.test_bound_find_protocol import (
         FIND_AND_STR_LEN_NATIVE_MODULES,
         FIND_AND_STR_LEN_NATIVE_OUTPUT,
@@ -104,6 +107,7 @@ def verify_receipts(directory, runtime):
         assert record["runtime_archive"] == runtime["path"]
         assert record["runtime_sha256"] == runtime["hashes"][""]
         assert record["binary_sha256"] == sha(binary)
+        assert record["linkage"] == inspect_owned_image(binary.read_bytes())
         expected = (0, FIND_AND_STR_LEN_NATIVE_OUTPUT, "")
         reference = record["reference"]
         assert tuple(reference[key] for key in ("returncode", "stdout", "stderr")) == expected

@@ -136,7 +136,21 @@ def assert_owned_program(
         (directory / "compiler-wrapper.stdout").write_text(captured.out)
         (directory / "compiler-wrapper.stderr").write_text(captured.err)
     assert binary.is_file(), "Compiler did not emit an executable"
-    receipt["binary_sha256"] = hashlib.sha256(binary.read_bytes()).hexdigest()
+    # compile_python and the native CLI have no libpython selector: their
+    # current pipeline is strict. Establish the output property independently
+    # rather than copying that intended policy into a successful receipt.
+    from scripts.owned_image_linkage import inspect_owned_image
+
+    try:
+        linkage = inspect_owned_image(binary.read_bytes())
+    except Exception as error:
+        receipt["status"] = "LINKAGE_FAILED"
+        receipt["error"] = type(error).__name__ + ": " + str(error)
+        receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+        raise
+    receipt["linkage"] = linkage
+    receipt["libpython"] = linkage["libpython"]
+    receipt["binary_sha256"] = linkage["binary_sha256"]
     for backend in range(5):
         environment = dict(
             os.environ,

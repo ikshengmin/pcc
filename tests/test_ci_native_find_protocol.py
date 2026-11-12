@@ -14,10 +14,13 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import struct
 import sys
 import types
 
 import pytest
+
+from scripts.owned_image_linkage import inspect_owned_image
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -98,21 +101,41 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
                 assert member.read_bytes() == program.encode("utf-8")
                 assert module_hashes[member_name] == sha(member)
             binary = directory / "program.out"
-            binary.write_bytes(b"INERT HOST FIXTURE: NEVER EXECUTED\n" + mode.encode())
-            row = {"returncode": 0, "stdout": expected, "stderr": ""}
-            record = {
-                "status": "PASS", "compiler_fixture_parameter": mode,
-                "compiler_mode": mode, "backend": "self", "libpython": "off",
-                "source_sha256": sha(source), "runtime_archive": str(state["archive"]),
-                "runtime_sha256": sha(state["archive"]), "binary_sha256": sha(binary),
-                "reference": {"command": ["HOST-STUB", str(source)], **row},
-                "executions": [
-                    {"gc_backend": gc, "command": [str(binary)], **row}
-                    for gc in range(5)
-                ],
-            }
+            # Exercise the actual producer, not a handwritten success schema.
+            # Only the compiler/process boundaries are inert; the emitted-image
+            # checker and consumer both inspect the same header fixture bytes.
+            from tests.python import owned_regression_support as producer
+
+            def compile_fixture(source_path, output_path, **options):
+                assert options == {
+                    "backend": "self", "ir_scaffold_mode": "on",
+                    "runtime_archive": str(state["archive"]),
+                }
+                payload = static_elf()
+                if mode == "pcc1" and fault == "host_output":
+                    payload = b"#!/usr/bin/python\n"
+                if mode == "pcc1" and fault == "python_linkage":
+                    payload = macho(("/Library/Frameworks/Python.framework/Python",))
+                Path(output_path).write_bytes(payload)
+
+            if mode == "pcc1" and fault == "routed_producer":
+                compile_fixture.__module__ = "tests.pcc1_route"
+
+            def execute_fixture(directory, label, command, environment):
+                return {"command": list(command), "returncode": 0,
+                        "stdout": expected, "stderr": ""}
+
+            with monkeypatch.context() as process_patch:
+                process_patch.setattr(producer, "_record_execution", execute_fixture)
+                producer.assert_owned_program(
+                    FIND_AND_STR_LEN_NATIVE_SOURCE, expected, directory,
+                    compile_fixture, mode, state["archive"],
+                    types.SimpleNamespace(readouterr=lambda: types.SimpleNamespace(out="", err="")),
+                )
+            record = json.loads((directory / "ownership-regression.json").read_text())
             if mode == "pcc1":
                 if fault == "missing_receipt":
+                    (directory / "ownership-regression.json").unlink()
                     continue
                 if fault == "duplicate_mode":
                     record["compiler_fixture_parameter"] = "pcc0"
@@ -122,6 +145,12 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
                     record["status"] = "RUNNING"
                 elif fault == "wrong_backend":
                     record["backend"] = "llvm"
+                elif fault == "linkage_hash":
+                    record["linkage"]["binary_sha256"] = "0" * 64
+                elif fault == "libpython_missing":
+                    del record["libpython"]
+                elif fault == "linkage_missing":
+                    del record["linkage"]
                 elif fault == "libpython":
                     record["libpython"] = "on"
                 elif fault == "source_hash":
@@ -263,6 +292,8 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
     receipt_faults = (
         "pytest_failure", "pytest_interrupt", "missing_receipt", "extra_receipt",
         "duplicate_mode", "routed_mode", "not_pass", "wrong_backend", "libpython",
+        "routed_producer", "host_output", "python_linkage", "linkage_hash",
+        "linkage_missing", "libpython_missing",
         "source_hash", "source_bytes", "runtime_path", "runtime_hash", "binary_hash",
         "reference_output", "gc_missing", "gc_duplicate", "native_command",
         "native_output", "native_returncode", "module_bytes", "module_hash",
@@ -332,13 +363,18 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
             assert result["qualifies_fixed_point"] is False
             assert result["observed_collector_witness"] is False
         else:
-            with pytest.raises((AssertionError, FileNotFoundError, RuntimeError, KeyboardInterrupt)):
+            with pytest.raises((AssertionError, FileNotFoundError, RuntimeError, KeyboardInterrupt, ValueError, KeyError)):
                 gate.run(out)
         record_path = out / "native-find-protocol.json"
         record = json.loads(record_path.read_text())
         assert record["status"] == ("PASS" if fault == "none" else "FAIL"), fault
         if fault != "none":
             assert record["error"], fault
+        if fault in ("host_output", "python_linkage"):
+            failed = json.loads((out / gate.NAME / "pcc1" / "ownership-regression.json").read_text())
+            assert failed["status"] == "LINKAGE_FAILED"
+            assert failed["executions"] == []
+            assert "libpython" not in failed and "linkage" not in failed
         assert len(invocations) - calls_before == (0 if fault in preflight_faults else 1), fault
         if fault == "none":
             before = record_path.read_bytes()
@@ -366,3 +402,123 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
         assert "continue-on-error" not in body
     assert re.search(r"(?s)  other-platform-native-wheel:.*?timeout-minutes: 360", workflow)
     assert re.search(r"(?s)  pcc1-package-parity:.*?timeout-minutes: 200", workflow)
+
+
+# Header-only fixtures below are never runnable native acceptance evidence.
+
+
+def static_elf(machine=62, program_type=1):
+    ident = b"\x7fELF\x02\x01\x01" + bytes(9)
+    return (struct.pack("<16sHHIQQQIHHHHHH", ident, 2, machine, 1,
+                        0x400078, 64, 0, 0, 64, 56, 1, 0, 0, 0)
+            + struct.pack("<IIQQQQQQ", program_type, 5, 0, 0x400000,
+                          0x400000, 120, 120, 4096))
+
+
+def macho(libraries=(), command=0xC):
+    commands = []
+    for library in libraries:
+        name = library.encode() + b"\0"
+        size = (24 + len(name) + 7) & ~7
+        commands.append(struct.pack("<IIIIII", command, size, 24, 0, 0, 0)
+                        + name + bytes(size - 24 - len(name)))
+    body = b"".join(commands)
+    return struct.pack("<IIIIIIII", 0xFEEDFACF, 0x100000C, 0, 2,
+                       len(commands), len(body), 0, 0) + body
+
+
+@pytest.mark.parametrize("machine", (62, 183))
+def test_static_elf_needs_no_nonempty_library_inventory(machine):
+    assert inspect_owned_image(static_elf(machine))["libraries"] == []
+
+
+@pytest.mark.parametrize("command", (0xC, 0x80000018, 0x8000001F, 0x20, 0x80000023))
+def test_all_macho_dependency_commands_are_checked(command):
+    assert inspect_owned_image(macho(("/usr/lib/libSystem.B.dylib",), command))["libpython"] == "off"
+    for library in ("libpython3.15.dylib", "/Library/Frameworks/Python.framework/Python"):
+        with pytest.raises(ValueError, match="Python runtime"):
+            inspect_owned_image(macho((library,), command))
+
+
+def test_pe_import_inventory_is_checked():
+    for libraries in ((), ("KERNEL32.dll",)):
+        assert inspect_owned_image(_pe_import_table(libraries))["libpython"] == "off"
+    for library in ("python3.dll", "python315.dll", "libpython.dll"):
+        with pytest.raises(ValueError, match="Python runtime"):
+            inspect_owned_image(_pe_import_table((library,)))
+    payload = bytearray(_pe_import_table(("KERNEL32.dll",)))
+    struct.pack_into("<II", payload, 128 + 24 + 112 + 13 * 8, 4096, 32)
+    with pytest.raises(ValueError, match="delay imports"):
+        inspect_owned_image(bytes(payload))
+
+
+@pytest.mark.parametrize("payload", (
+    b"#!/usr/bin/python\n", b"", b"MZ", b"\x7fELF", b"\xcf\xfa\xed\xfe",
+    b"\xca\xfe\xba\xbe" + bytes(32),
+    static_elf(program_type=2), static_elf(program_type=3),
+    macho(("libSystem.B.dylib",))[:-1],
+))
+def test_uninspectable_images_never_become_empty_success(payload):
+    with pytest.raises(Exception):
+        inspect_owned_image(payload)
+
+
+def _pe_import_table(libraries):
+    pe = 128
+    optional = pe + 24
+    section = optional + 240
+    raw = 512
+    rva = 4096
+    names = [name.encode("ascii") + b"\0" for name in libraries]
+    descriptors_size = 20 * (len(names) + 1)
+    payload_size = descriptors_size + sum(map(len, names))
+    data = bytearray(raw + payload_size)
+    data[:2] = b"MZ"
+    struct.pack_into("<I", data, 60, pe)
+    data[pe:pe + 4] = b"PE\0\0"
+    struct.pack_into("<HH", data, pe + 4, 0x8664, 1)
+    struct.pack_into("<H", data, pe + 20, 240)
+    struct.pack_into("<H", data, optional, 0x20B)
+    struct.pack_into("<I", data, optional + 108, 16)
+    struct.pack_into("<II", data, optional + 120,
+                     rva if names else 0, descriptors_size if names else 0)
+    data[section:section + 8] = b".idata\0\0"
+    struct.pack_into("<IIII", data, section + 8, payload_size, rva, payload_size, raw)
+    cursor = descriptors_size
+    for index, name in enumerate(names):
+        struct.pack_into("<IIIII", data, raw + index * 20, 0, 0, 0, rva + cursor, 0)
+        data[raw + cursor:raw + cursor + len(name)] = name
+        cursor += len(name)
+    return bytes(data)
+
+
+
+@pytest.fixture(autouse=True)
+def forbid_linkage_contract_processes(monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("linkage contracts may not execute native tools or processes")
+    monkeypatch.setattr(subprocess, "run", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+
+
+@pytest.mark.parametrize("short_first", (True, False))
+def test_overlapping_pe_section_cannot_hide_python_dependency(short_first):
+    # The full table contains python3.dll at RVA 4096, followed by its null
+    # descriptor. A second mapping covers only the first 20 bytes at that
+    # RVA and points at zeros. A whole-table check followed by a different
+    # first-match RVA reader previously certified this as an empty inventory.
+    payload = bytearray(_pe_import_table(("python3.dll",)))
+    section = 128 + 24 + 240
+    long_section = bytes(payload[section:section + 40])
+    zero_at = len(payload)
+    payload.extend(bytes(20))
+    short_section = bytearray(40)
+    short_section[:8] = b".alias\0\0"
+    struct.pack_into("<IIII", short_section, 8, 20, 4096, 20, zero_at)
+    headers = (bytes(short_section), long_section) if short_first else (long_section, bytes(short_section))
+    payload[section:section + 80] = b"".join(headers)
+    struct.pack_into("<H", payload, 128 + 6, 2)
+    assert payload[zero_at:zero_at + 20] == bytes(20)
+    assert payload[552:563] == b"python3.dll"
+    with pytest.raises(ValueError, match="overlapping PE section RVA mappings"):
+        inspect_owned_image(bytes(payload))
