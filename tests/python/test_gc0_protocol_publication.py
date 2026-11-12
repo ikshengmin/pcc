@@ -154,7 +154,8 @@ def test_nonmoving_resolver_keeps_uninitialized_and_checked_paths(settings):
     assert model.events == [("object-index", _OBJECT), ("forwarding-index", _OBJECT)]
 
 
-@pytest.mark.parametrize("backend", [3, 4])
+# Only GC4 relocates (03cbd1849); GC3 is nonmoving like GC1/GC2.
+@pytest.mark.parametrize("backend", [4])
 @pytest.mark.parametrize("known", [False, True])
 def test_moving_resolution_keeps_the_owning_slot_transfer(backend, known):
     model = ProtocolModel(backend)
@@ -170,12 +171,10 @@ def test_moving_resolution_keeps_the_owning_slot_transfer(backend, known):
         ("object-index", _OBJECT), ("forwarding-index", _OBJECT),
         ("forwarding-index", _RELOCATED), ("object-index", _RELOCATED),
     ]
-    if backend == 3:
-        expected += [("incref", _RELOCATED), ("decref", _OBJECT)]
     assert model.events == expected
 
 
-@pytest.mark.parametrize("backend", [3, 4])
+@pytest.mark.parametrize("backend", [4])
 @pytest.mark.parametrize("known", [False, True])
 def test_moving_borrowed_resolution_rewrites_without_owner_transfer(backend, known):
     model = ProtocolModel(backend)
@@ -194,6 +193,25 @@ def test_moving_borrowed_resolution_rewrites_without_owner_transfer(backend, kno
         ("forwarding-index", _RELOCATED), ("object-index", _RELOCATED),
     ]
     assert model.error == "pending exception"
+
+
+def test_nonmoving_gc3_resolution_returns_the_object_without_lookups():
+    # GC3 keeps every object at its address (03cbd1849): even a stale
+    # forwarding entry is not consulted, and neither slot changes.
+    for resolve, args in (
+        ("pcc_gc_resolve_root_slot_unlocked", (_RESULT_SLOT, 0)),
+        ("pcc_gc_resolve_borrowed_root_slot_unlocked", (_SLOTS, _INDEX * 8)),
+    ):
+        model = ProtocolModel(3)
+        model.store(_RESULT_SLOT, 0, _OBJECT)
+        model.store(_OBJECT, 12, 2048 | 64)
+        model.store(_FORWARDING, 8, _RELOCATED)
+        model.known = True
+        model.forwarded = True
+        model.store("pcc_gc_forwarding_population", 0, 1)
+        before = dict(model.memory)
+        assert model.ns[resolve](*args) == _OBJECT
+        assert model.memory == before and model.events == []
 
 
 @pytest.mark.parametrize("adopt", ["_special_adopt", "_named_adopt"])

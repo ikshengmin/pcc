@@ -355,7 +355,9 @@ def test_batch_layout_exports_and_storage_owners_are_explicit():
     assert exports == {name: name for name in FUNCTIONS}
 
 
-@pytest.mark.parametrize("backend,enabled", [(backend, 0) for backend in range(5)] + [(0, 1), (3, 1)])
+# GC3 runs the count-free nonmoving protocol with GC1/GC2 (03cbd1849): with
+# the mode on only GC0 is unselected.
+@pytest.mark.parametrize("backend,enabled", [(backend, 0) for backend in range(5)] + [(0, 1)])
 def test_unselected_collectors_do_not_allocate_or_take(backend, enabled):
     memory = _BatchMemory()
     memory.set_scalar(BACKEND, backend)
@@ -366,7 +368,7 @@ def test_unselected_collectors_do_not_allocate_or_take(backend, enabled):
     assert memory.scalar(FAILURES) == 0
 
 
-@pytest.mark.parametrize("backend", [1, 2, 4])
+@pytest.mark.parametrize("backend", [1, 2, 3, 4])
 def test_full_batch_publishes_exactly_at_64_without_replacement_allocation(backend):
     memory = _BatchMemory()
     memory.set_scalar(BACKEND, backend)
@@ -1316,13 +1318,16 @@ def test_actual_consumer_object_list_fallback_finishes_a_successful_shade_lost_t
 
 
 @pytest.mark.parametrize("walk", ["drain_all_gray_unlocked", "drain_all_gray_locked_slice"])
-def test_gc3_shades_take_no_token_and_its_drain_finds_them_by_the_walk(walk):
+def test_gc3_shades_take_a_token_and_the_queue_alone_finds_them(walk):
+    # GC3 shades like GC1/GC2 (03cbd1849): each shade publishes a token, so
+    # the queue finds the root even when no object-list walk can.
     memory = _RawCollectorMemory()
     memory.set_scalar(BACKEND, 3)
     root, child = memory.object("root"), memory.object("child")
     memory.object_data[root]["edges"] = [child]
     memory.shade(root)
-    assert memory.gray == 1 and not memory.allocations and memory.local() == 0
+    assert memory.gray == 1 and memory.local_count() == 1
+    memory.set_scalar("pcc_gc_object_head", 0)
     assert memory.mark(walk) == 2
     assert memory.traces == {"root": 1, "child": 1} and memory.gray == 0
 

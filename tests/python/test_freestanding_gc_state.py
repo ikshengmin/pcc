@@ -219,7 +219,13 @@ def test_freestanding_gc_state_has_complete_raw_abi_and_initial_values(
     # GC3's closed young domain: its proof state, the cut in progress and
     # the cuts committed and objects freed (4, f2227175c).
     # The stopped-world epoch a mark's roots were seeded in (1).
-    assert len(expected) == 289
+    # GC3's remembered-owner queue, which no store reached, is gone (5,
+    # c2ea4d51a); GC4 owes a remap until the world resumes (1, 4e2feca72);
+    # object-slab GC pages alternate mark bitmaps by one epoch word (1,
+    # 0872e7cfd).
+    assert len(expected) == 286
+    assert expected["pcc_gc_backend4_remap_owed"] == ("define_global_i32", 0)
+    assert expected["pcc_gc_page_mark_epoch_word"] == ("define_global_i64", 0)
     assert expected["pcc_gc_nonmoving_count_free"] == ("define_global_i32", 0)
     assert expected["pcc_gc_cms_finish_pending"] == ("define_global_i32", 0)
     assert expected["pcc_gc_backend4_no_refcounts"] == ("define_global_i32", 0)
