@@ -36,9 +36,25 @@ the baseline six-worker native probe was rejected by the owned Mach-O archive
 parser's memory admission under the same 1-GiB tree cap. That resource failure
 has not been waived or repaired, and the host/IR checks are not native evidence.
 
+The generation slice, anchored at `d6babfe42`, extracts module reset and
+source-order definition emission from `_generate_impl` (926 → 764 lines).
+The 85 reset statements and the emission loop match their prior ASTs; both
+helpers have static native method exports. Generation's phase/body/render
+logging now shares one worker-timing read per invocation, preserving normalized
+truth values and the distinct nonempty-string debug flag. Mid-generation timing
+environment changes apply to the next invocation. The expanded lifecycle and
+configuration file is **12 passed** under the unchanged 90-second/1-GiB guard;
+the ordinary host/IR scope is **211 passed**. The broader initial selection is
+**mixed: 1 failed, 41 passed**, stopping at
+`test_direct_indexed_worker_validation.py::test_native_object_worker_keeps_assembly_until_validation[True-False-arm64-apple-darwin]`.
+That same assembly/text-oracle mismatch reproduces on the preceding source;
+the reference assertion is unchanged and has not been waived. Native execution
+and bootstrap for this generation slice remain **unrun**.
+
 Remaining batch scope: other inconsistent defensive state reads, other
-module-name guards, cohesive extraction from
-large functions, environment-read consolidation, and a fresh bootstrap chain.
+module-name guards, further large-function and environment-read consolidation,
+and a fresh matched-runtime bootstrap chain. These checkpoints do not claim
+that the repository-wide refactoring or language qualification is complete.
 The supplied older `1b4731f9c` bootstrap receipt ended after a successful Stage1:
 Stage2 had no runtime archive, so it has no Stage2/3 fixed-point result. Its
 separate native C SSA probe also failed to import `pcc.frontends.c.parse.c_lex`;

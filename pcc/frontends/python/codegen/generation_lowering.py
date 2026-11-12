@@ -249,6 +249,187 @@ def _iter_module_block_name_assigns(stmt: Stmt):
 
 
 class GenerationLoweringMixin:
+    def _reset_generation_module(
+        self, module: Module, reuse_initial_ir: bool, retain_text: bool,
+    ) -> None:
+        """Reset per-generation state, preserving pipeline configuration.
+
+        The private first-use route keeps its IR and declarations; a public
+        override replaces them. ClassLowering remains constructor-owned.
+        """
+        saved_skip_program_main = self._skip_program_main
+        saved_freestanding_module = self._freestanding_module
+        saved_runtime_port_module = self._runtime_port_module
+        saved_sibling_module_inits = self._sibling_module_inits
+        saved_native_module_exports = self._native_module_exports
+        saved_target_triple = self.module.triple
+        saved_data_layout = self.module.data_layout
+        debug_input_path = debug_source_path(
+            module, self._module_source_path if module is self.ast_module else "",
+        )
+        setattr(self, "ast_module", module)
+        setattr(self, "_ast_body", module.body)
+        setattr(self, "_try_err_block", None)
+        if not reuse_initial_ir:
+            setattr(self, "module", ir.Module(name=module.name or "pcc_py_module"))
+        # Target-sensitive builders inspect their owning module while
+        # lowering. Replacing it must preserve the selected ABI, not just
+        # restore a target directive after instructions have been emitted.
+        self.module.triple = saved_target_triple
+        self.module.data_layout = saved_data_layout
+        self.module._direct_indexed_retain_text = retain_text
+        # Public overrides replace the IR module, so rebuild its owned
+        # debug/runtime declarations. The fresh worker route retains the
+        # constructor module and its matching declarations instead.
+        if not reuse_initial_ir:
+            self._di_init(debug_input_path)
+            setattr(self, "runtime", declare_runtime(self.module))
+            setattr(self, "_printf", self._declare_printf())
+        setattr(self, "functions", {})
+        setattr(self, "_funcdef_functions", {})
+        setattr(self, "_native_symbol_funcdefs", {})
+        setattr(self, "_function_definition_ordinals", {})
+        setattr(self, "_duplicate_module_function_names", set())
+        setattr(self, "_c_abi_export_symbols", set())
+        setattr(self, "_module_has_c_abi_export", False)
+        setattr(self, "_fn_err_exit_blocks", {})
+        setattr(self, "_fn_err_exit_gc_root_names", {})
+        setattr(self, "_fn_gc_root_slot_registry", {})
+        setattr(self, "_function_root_groups", {})
+        setattr(self, "_fn_err_exit_gc_root_slots", {})
+        setattr(self, "_fn_err_exit_owned_slots", {})
+        setattr(self, "_fn_err_exit_finish_blocks", {})
+        setattr(self, "_fn_gc_root_exit_sites", {})
+        setattr(self, "_shared_return_exits", {})
+        setattr(self, "_post_call_frame_blocks", {})
+        setattr(self, "_source_file_lines_cache", {})
+        setattr(self, "_owned_dynamic_call_values", set())
+        setattr(self, "_last_fresh_direct_native_ctor_value", None)
+        marshal.reset_boxed_i64_constants()
+        setattr(self, "_fmt_int", None)
+        setattr(self, "_fmt_float", None)
+        setattr(self, "_fmt_bool_true", None)
+        setattr(self, "_fmt_bool_false", None)
+        setattr(self, "_str_pool", {})
+        setattr(self, "_str_obj_pool", {})
+        setattr(self, "_static_literal_init_fn", None)
+        setattr(self, "_attr_pool", {})
+        setattr(self, "_cstr_pool", {})
+        setattr(self, "_str_counter", 0)
+        setattr(self, "_cstr_counter", 0)
+        setattr(self, "_native_lambda_func_counter", 0)
+        setattr(self, "_native_lambda_callback_counter", 0)
+        setattr(self, "_lambda_counter", [])
+        setattr(self, "_class_type_export_cache", {})
+        setattr(self, "_class_aliases", {})
+        setattr(self, "_extern_bindings", {})
+        setattr(self, "_unsafe_bindings", {})
+        setattr(self, "_extern_decls", {})
+        setattr(self, "_boxed_int_module_global_names", set())
+        setattr(self, "_native_module_aliases", {})
+        setattr(self, "_native_module_constant_bindings", {})
+        setattr(self, "_native_builtin_module_aliases", {})
+        setattr(self, "_native_builtin_value_aliases", {})
+        setattr(self, "_native_module_attr_globals", {})
+        setattr(self, "_native_re_compile_aliases", {})
+        setattr(self, "_native_re_compile_local_aliases", {})
+        setattr(self, "_native_re_static_flag_aliases", {})
+        setattr(self, "_native_file_values", set())
+        setattr(self, "_native_file_env_flags", {})
+        setattr(self, "_weakref_env_flags", {})
+        setattr(self, "_cross_module_func_defs", {})
+        setattr(self, "_cross_module_identity_decorators", {})
+        setattr(self, "_cross_module_static_entries", {})
+        setattr(self, "_cross_module_semantic_functions", {})
+        setattr(self, "_function_import_alias_undo", [])
+        setattr(self, "_module_block_func_defs", {})
+        setattr(self, "_module_block_funcdef_ids", set())
+        setattr(self, "_unboxed_typed_int_abi_cache", {})
+        setattr(self, "_typed_int_abi_call_arg_safety", [])
+        setattr(self, "_bounded_int_abi_function_names", [])
+        setattr(self, "_funcdef_yield_sentinel_cache", {})
+        setattr(self, "_generator_func_names", set())
+        setattr(self, "_vthread_may_park_func_ids", set())
+        setattr(self, "_vthread_may_park_func_names", set())
+        setattr(self, "_vthread_may_park_method_ids", set())
+        setattr(self, "_vthread_may_park_method_keys", set())
+        setattr(self, "_vthread_rejected_park_boundaries", {})
+        setattr(self, "current_class", None)
+        setattr(self, "current_method_kind", None)
+        setattr(self, "_skip_program_main", saved_skip_program_main)
+        setattr(self, "_freestanding_module", saved_freestanding_module)
+        setattr(self, "_runtime_port_module", saved_runtime_port_module)
+        setattr(self, "_sibling_module_inits", saved_sibling_module_inits)
+        setattr(self, "_native_module_exports", saved_native_module_exports)
+
+    def _emit_module_definitions(self, debug_codegen: bool, worker_timing: bool) -> None:
+        """Emit top-level function/class bodies in their original source order."""
+        stmt_index = 0
+        for stmt in self.ast_module.body:
+            if isinstance(stmt, FuncDef):
+                emit_started = time.monotonic() if worker_timing else 0.0
+                if worker_timing:
+                    sys.stderr.write(
+                        "pcc frontend function start module="
+                        + (self.ast_module.name or "<module>")
+                        + " name="
+                        + stmt.name
+                        + "\n"
+                    )
+                _codegen_log(
+                    self,
+                    debug_codegen,
+                    "emit func begin " + str(stmt_index) + " " + stmt.name,
+                )
+                self._emit_user_function(stmt)
+                if worker_timing:
+                    sys.stderr.write(
+                        "pcc frontend function done module="
+                        + (self.ast_module.name or "<module>")
+                        + " name="
+                        + stmt.name
+                        + " elapsed_ms="
+                        + str(int((time.monotonic() - emit_started) * 1000))
+                        + "\n"
+                    )
+                _codegen_log(
+                    self,
+                    debug_codegen,
+                    "emit func end " + str(stmt_index) + " " + stmt.name,
+                )
+            elif isinstance(stmt, ClassDef):
+                emit_started = time.monotonic() if worker_timing else 0.0
+                if worker_timing:
+                    sys.stderr.write(
+                        "pcc frontend class start module="
+                        + (self.ast_module.name or "<module>")
+                        + " name="
+                        + stmt.name
+                        + "\n"
+                    )
+                _codegen_log(
+                    self,
+                    debug_codegen,
+                    "emit class begin " + str(stmt_index) + " " + stmt.name,
+                )
+                self.class_lowering.emit_methods(stmt)
+                if worker_timing:
+                    sys.stderr.write(
+                        "pcc frontend class done module="
+                        + (self.ast_module.name or "<module>")
+                        + " name="
+                        + stmt.name
+                        + " elapsed_ms="
+                        + str(int((time.monotonic() - emit_started) * 1000))
+                        + "\n"
+                    )
+                _codegen_log(
+                    self,
+                    debug_codegen,
+                    "emit class end " + str(stmt_index) + " " + stmt.name,
+                )
+            stmt_index += 1
+
     def _generate_impl(
         self, module: Optional[Module] = None, reuse_initial_ir: bool = False,
     ) -> str:
@@ -313,112 +494,11 @@ class GenerationLoweringMixin:
         # explicit module. Replace the dict so consumers of the prior
         # generation do not share newly populated proofs.
         setattr(self, "_vthread_binding_cache", {})
-        saved_skip_program_main = self._skip_program_main
-        saved_freestanding_module = self._freestanding_module
-        saved_runtime_port_module = self._runtime_port_module
-        saved_sibling_module_inits = self._sibling_module_inits
-        saved_native_module_exports = self._native_module_exports
         saved_direct_retain_text = getattr(self.module, "_direct_indexed_retain_text", False)
-        saved_target_triple = self.module.triple
-        saved_data_layout = self.module.data_layout
         if module is not None:
-            debug_input_path = debug_source_path(
-                module, self._module_source_path if module is self.ast_module else "",
+            GenerationLoweringMixin._reset_generation_module(
+                self, module, reuse_initial_ir, saved_direct_retain_text,
             )
-            setattr(self, "ast_module", module)
-            setattr(self, "_ast_body", module.body)
-            setattr(self, "_try_err_block", None)
-            if not reuse_initial_ir:
-                setattr(self, "module", ir.Module(name=module.name or "pcc_py_module"))
-            # Target-sensitive builders inspect their owning module while
-            # lowering. Replacing it must preserve the selected ABI, not just
-            # restore a target directive after instructions have been emitted.
-            self.module.triple = saved_target_triple
-            self.module.data_layout = saved_data_layout
-            self.module._direct_indexed_retain_text = saved_direct_retain_text
-            # Public overrides replace the IR module, so rebuild its owned
-            # debug/runtime declarations. The fresh worker route retains the
-            # constructor module and its matching declarations instead.
-            if not reuse_initial_ir:
-                self._di_init(debug_input_path)
-                setattr(self, "runtime", declare_runtime(self.module))
-                setattr(self, "_printf", self._declare_printf())
-            setattr(self, "functions", {})
-            setattr(self, "_funcdef_functions", {})
-            setattr(self, "_native_symbol_funcdefs", {})
-            setattr(self, "_function_definition_ordinals", {})
-            setattr(self, "_duplicate_module_function_names", set())
-            setattr(self, "_c_abi_export_symbols", set())
-            setattr(self, "_module_has_c_abi_export", False)
-            setattr(self, "_fn_err_exit_blocks", {})
-            setattr(self, "_fn_err_exit_gc_root_names", {})
-            setattr(self, "_fn_gc_root_slot_registry", {})
-            setattr(self, "_function_root_groups", {})
-            setattr(self, "_fn_err_exit_gc_root_slots", {})
-            setattr(self, "_fn_err_exit_owned_slots", {})
-            setattr(self, "_fn_err_exit_finish_blocks", {})
-            setattr(self, "_fn_gc_root_exit_sites", {})
-            setattr(self, "_shared_return_exits", {})
-            setattr(self, "_post_call_frame_blocks", {})
-            setattr(self, "_source_file_lines_cache", {})
-            setattr(self, "_owned_dynamic_call_values", set())
-            setattr(self, "_last_fresh_direct_native_ctor_value", None)
-            marshal.reset_boxed_i64_constants()
-            setattr(self, "_fmt_int", None)
-            setattr(self, "_fmt_float", None)
-            setattr(self, "_fmt_bool_true", None)
-            setattr(self, "_fmt_bool_false", None)
-            setattr(self, "_str_pool", {})
-            setattr(self, "_str_obj_pool", {})
-            setattr(self, "_static_literal_init_fn", None)
-            setattr(self, "_attr_pool", {})
-            setattr(self, "_cstr_pool", {})
-            setattr(self, "_str_counter", 0)
-            setattr(self, "_cstr_counter", 0)
-            setattr(self, "_native_lambda_func_counter", 0)
-            setattr(self, "_native_lambda_callback_counter", 0)
-            setattr(self, "_lambda_counter", [])
-            setattr(self, "_class_type_export_cache", {})
-            setattr(self, "_class_aliases", {})
-            setattr(self, "_extern_bindings", {})
-            setattr(self, "_unsafe_bindings", {})
-            setattr(self, "_extern_decls", {})
-            setattr(self, "_boxed_int_module_global_names", set())
-            setattr(self, "_native_module_aliases", {})
-            setattr(self, "_native_module_constant_bindings", {})
-            setattr(self, "_native_builtin_module_aliases", {})
-            setattr(self, "_native_builtin_value_aliases", {})
-            setattr(self, "_native_module_attr_globals", {})
-            setattr(self, "_native_re_compile_aliases", {})
-            setattr(self, "_native_re_compile_local_aliases", {})
-            setattr(self, "_native_re_static_flag_aliases", {})
-            setattr(self, "_native_file_values", set())
-            setattr(self, "_native_file_env_flags", {})
-            setattr(self, "_weakref_env_flags", {})
-            setattr(self, "_cross_module_func_defs", {})
-            setattr(self, "_cross_module_identity_decorators", {})
-            setattr(self, "_cross_module_static_entries", {})
-            setattr(self, "_cross_module_semantic_functions", {})
-            setattr(self, "_function_import_alias_undo", [])
-            setattr(self, "_module_block_func_defs", {})
-            setattr(self, "_module_block_funcdef_ids", set())
-            setattr(self, "_unboxed_typed_int_abi_cache", {})
-            setattr(self, "_typed_int_abi_call_arg_safety", [])
-            setattr(self, "_bounded_int_abi_function_names", [])
-            setattr(self, "_funcdef_yield_sentinel_cache", {})
-            setattr(self, "_generator_func_names", set())
-            setattr(self, "_vthread_may_park_func_ids", set())
-            setattr(self, "_vthread_may_park_func_names", set())
-            setattr(self, "_vthread_may_park_method_ids", set())
-            setattr(self, "_vthread_may_park_method_keys", set())
-            setattr(self, "_vthread_rejected_park_boundaries", {})
-            setattr(self, "current_class", None)
-            setattr(self, "current_method_kind", None)
-            setattr(self, "_skip_program_main", saved_skip_program_main)
-            setattr(self, "_freestanding_module", saved_freestanding_module)
-            setattr(self, "_runtime_port_module", saved_runtime_port_module)
-            setattr(self, "_sibling_module_inits", saved_sibling_module_inits)
-            setattr(self, "_native_module_exports", saved_native_module_exports)
 
         # ``self.class_lowering`` is constructed once in __init__; do
         # NOT reassign here — under pcc-py self-host the default-None
@@ -984,74 +1064,13 @@ class GenerationLoweringMixin:
         self._predeclare_native_builtin_module_attr_stores(tuple(self.ast_module.body))
         _frontend_phase_timing(self, phase_timing, "prepare", phase_started)
 
-        worker_timing = str(
-            os.environ.get("PCC_PY_FRONTEND_WORKER_TIMING", "") or ""
-        ).strip().lower() in ("1", "true", "yes", "on")
-        stmt_index = 0
-        for stmt in self.ast_module.body:
-            if isinstance(stmt, FuncDef):
-                emit_started = time.monotonic() if worker_timing else 0.0
-                if worker_timing:
-                    sys.stderr.write(
-                        "pcc frontend function start module="
-                        + (self.ast_module.name or "<module>")
-                        + " name="
-                        + stmt.name
-                        + "\n"
-                    )
-                _codegen_log(
-                    self,
-                    debug_codegen,
-                    "emit func begin " + str(stmt_index) + " " + stmt.name,
-                )
-                self._emit_user_function(stmt)
-                if worker_timing:
-                    sys.stderr.write(
-                        "pcc frontend function done module="
-                        + (self.ast_module.name or "<module>")
-                        + " name="
-                        + stmt.name
-                        + " elapsed_ms="
-                        + str(int((time.monotonic() - emit_started) * 1000))
-                        + "\n"
-                    )
-                _codegen_log(
-                    self,
-                    debug_codegen,
-                    "emit func end " + str(stmt_index) + " " + stmt.name,
-                )
-            elif isinstance(stmt, ClassDef):
-                emit_started = time.monotonic() if worker_timing else 0.0
-                if worker_timing:
-                    sys.stderr.write(
-                        "pcc frontend class start module="
-                        + (self.ast_module.name or "<module>")
-                        + " name="
-                        + stmt.name
-                        + "\n"
-                    )
-                _codegen_log(
-                    self,
-                    debug_codegen,
-                    "emit class begin " + str(stmt_index) + " " + stmt.name,
-                )
-                self.class_lowering.emit_methods(stmt)
-                if worker_timing:
-                    sys.stderr.write(
-                        "pcc frontend class done module="
-                        + (self.ast_module.name or "<module>")
-                        + " name="
-                        + stmt.name
-                        + " elapsed_ms="
-                        + str(int((time.monotonic() - emit_started) * 1000))
-                        + "\n"
-                    )
-                _codegen_log(
-                    self,
-                    debug_codegen,
-                    "emit class end " + str(stmt_index) + " " + stmt.name,
-                )
-            stmt_index += 1
+        # Phase, body and render diagnostics use one decision per generation.
+        # Environment changes become visible to the next generation, not halfway
+        # through this one's prepare/body boundary.
+        worker_timing = phase_timing
+        GenerationLoweringMixin._emit_module_definitions(
+            self, debug_codegen, worker_timing,
+        )
         phase_started = time.monotonic() if phase_timing else 0.0
         for decl in module_block_decls:
             if isinstance(decl, FuncDef):

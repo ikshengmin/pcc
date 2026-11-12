@@ -1861,6 +1861,31 @@ def _populate_static_native_exports_7(out):
                     ),
                     "box_int_abi": False,
                 },
+                {
+                    "name": "_reset_generation_module",
+                    "kind": "instance",
+                    "return_ty": ("none",),
+                    "param_types": (("dyn",), ("dyn",), ("bool",), ("bool",)),
+                    "call_sig": (
+                        _export_arg("self"),
+                        _export_arg("module", ("dyn",)),
+                        _export_arg("reuse_initial_ir", ("bool",)),
+                        _export_arg("retain_text", ("bool",)),
+                    ),
+                    "box_int_abi": False,
+                },
+                {
+                    "name": "_emit_module_definitions",
+                    "kind": "instance",
+                    "return_ty": ("none",),
+                    "param_types": (("dyn",), ("bool",), ("bool",)),
+                    "call_sig": (
+                        _export_arg("self"),
+                        _export_arg("debug_codegen", ("bool",)),
+                        _export_arg("worker_timing", ("bool",)),
+                    ),
+                    "box_int_abi": False,
+                },
             ),
         ),
     }

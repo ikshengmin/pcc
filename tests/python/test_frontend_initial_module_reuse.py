@@ -160,6 +160,10 @@ def _check_public_generation_and_marshal(monkeypatch):
     for route in ("private", "explicit", "default"):
         codegen = _new_codegen(_typed_module())
         initial_module = codegen.module
+        initial_class_lowering = codegen.class_lowering
+        codegen._native_lambda_func_counter = 71
+        codegen._generator_func_names.add("stale_generator")
+        codegen._native_module_aliases["stale_provider"] = "stale.module"
         marker = ir.Constant(ir.IntType(64), 7)
         marshal.note_boxed_i64_constant(marker, 7)
         if route == "private":
@@ -170,6 +174,10 @@ def _check_public_generation_and_marshal(monkeypatch):
             text = codegen.generate()
         assert (id(marker) in marshal._BOXED_I64_CONSTANTS) is (route == "default")
         assert (codegen.module is initial_module) is (route != "explicit")
+        assert codegen.class_lowering is initial_class_lowering
+        assert codegen._native_lambda_func_counter == (71 if route == "default" else 0)
+        assert ("stale_generator" in codegen._generator_func_names) is (route == "default")
+        assert ("stale_provider" in codegen._native_module_aliases) is (route == "default")
         assert not codegen._initial_ir_available
         _assert_private_rejected_without_reset(codegen)
         # Repeated and overriding public generation retain their reset path.
@@ -285,11 +293,24 @@ def _check_static_native_contract():
             assert selected[0]["param_types"] == types
             if name == "generate":
                 assert selected[0]["call_sig"][1]["has_default"]
-    lowering = exports["pcc.frontends.python.codegen.generation_lowering"]["GenerationLoweringMixin"]["methods"][0]
+    lowerings = exports["pcc.frontends.python.codegen.generation_lowering"]["GenerationLoweringMixin"]["methods"]
+    lowering = lowerings[0]
     assert lowering["name"] == "_generate_impl"
     assert lowering["param_types"] == (("dyn",), ("dyn",), ("bool",))
     assert lowering["call_sig"][-1]["name"] == "reuse_initial_ir"
     assert lowering["call_sig"][-1]["has_default"]
+    for name, arguments, types in (
+        ("_reset_generation_module", ("self", "module", "reuse_initial_ir", "retain_text"),
+         (("dyn",), ("dyn",), ("bool",), ("bool",))),
+        ("_emit_module_definitions", ("self", "debug_codegen", "worker_timing"),
+         (("dyn",), ("bool",), ("bool",))),
+    ):
+        selected = [method for method in lowerings if method["name"] == name]
+        assert len(selected) == 1, name
+        assert tuple(arg["name"] for arg in selected[0]["call_sig"]) == arguments
+        assert selected[0]["param_types"] == types
+        assert selected[0]["return_ty"] == ("none",)
+        assert not any(arg["has_default"] for arg in selected[0]["call_sig"])
 
 
 def test_actual_first_use_route_contract(monkeypatch, capsys):
@@ -319,4 +340,72 @@ def test_actual_first_use_route_contract(monkeypatch, capsys):
         _check_setup_failure_consumes_freshness(monkeypatch, trace_failure=trace_failure)
         gc.collect()
     _check_static_native_contract()
+
+
+@pytest.mark.parametrize("raw,enabled", [
+    (None, False), ("", False), ("0", False), ("False", False),
+    (" 1 ", True), ("YES", True), ("on", True), ("true", True), ("unknown", False),
+])
+def test_generation_timing_flag_is_read_once(monkeypatch, capsys, raw, enabled):
+    for name in _DIAGNOSTIC_ENV:
+        monkeypatch.delenv(name, raising=False)
+    if raw is not None:
+        monkeypatch.setenv("PCC_PY_FRONTEND_WORKER_TIMING", raw)
+    codegen = _new_codegen(_typed_module())
+    reads = []
+    from pcc.frontends.python.codegen import generation_lowering
+
+    original_get = generation_lowering.os.environ.get
+
+    def observed_get(name, default=None):
+        if name == "PCC_PY_FRONTEND_WORKER_TIMING":
+            reads.append(name)
+        return original_get(name, default)
+
+    monkeypatch.setattr(generation_lowering.os.environ, "get", observed_get)
+    capsys.readouterr()
+    codegen.generate(codegen.ast_module)
+    assert len(reads) == 1
+    assert ("pcc frontend function start" in capsys.readouterr().err) is enabled
+
+
+def test_generation_debug_flag_retains_nonempty_string_semantics(monkeypatch, capsys):
+    for name in _DIAGNOSTIC_ENV:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("PCC_DEBUG_CODEGEN_PHASES", "0")
+    monkeypatch.setenv("PCC_PY_FRONTEND_WORKER_TIMING", "0")
+    codegen = _new_codegen(_typed_module())
+    capsys.readouterr()
+    codegen.generate(codegen.ast_module)
+    output = capsys.readouterr().err
+    assert "[pcc.frontends.c.codegen] first_use_fixture:emit func begin 0 answer" in output
+    assert "pcc frontend function" not in output
+
+
+def test_generation_timing_snapshot_is_consistent_and_refreshed(monkeypatch, capsys):
+    from pcc.frontends.python.codegen import generation_lowering
+
+    for name in _DIAGNOSTIC_ENV:
+        monkeypatch.delenv(name, raising=False)
+    original_timing = generation_lowering._frontend_phase_timing
+
+    def change_at_prepare(parent, enabled, phase, started):
+        if phase == "prepare":
+            monkeypatch.setenv("PCC_PY_FRONTEND_WORKER_TIMING", "0" if enabled else "1")
+        original_timing(parent, enabled, phase, started)
+
+    monkeypatch.setattr(generation_lowering, "_frontend_phase_timing", change_at_prepare)
+    first = _new_codegen(_typed_module("timing_first"))
+    capsys.readouterr()
+    first.generate(first.ast_module)
+    assert "pcc frontend function" not in capsys.readouterr().err
+    # The first generation changed the environment to enabled. A new generation
+    # must observe it, then keep one choice even after the prepare hook changes it.
+    second = _new_codegen(_typed_module("timing_second"))
+    capsys.readouterr()
+    second.generate(second.ast_module)
+    output = capsys.readouterr().err
+    assert "pcc frontend function start module=timing_second name=answer" in output
+    assert "pcc frontend function done module=timing_second name=answer" in output
+    assert "pcc llvm text render module=timing_second" in output
 
