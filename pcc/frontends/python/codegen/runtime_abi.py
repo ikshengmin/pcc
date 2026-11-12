@@ -2001,6 +2001,7 @@ FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_tracing_seed_stop_epoch',
         'pcc_gc_user_finalizer_runs',
         'pcc_gc_object_list_revision',
+        'pcc_gc_page_mark_epoch_word',
         'pcc_gc_root_registry_revision',
         'pcc_gc_stack_diff_capacity',
         'pcc_gc_stack_diff_count',
@@ -3263,6 +3264,10 @@ def _cross_object_signatures_part_13():
 
 def _cross_object_signatures_part_14():
     return {
+    "pcc_allocator_object_cell_span": (("c_ptr",), "c_ptr"),
+    "pcc_allocator_object_cell_number": (("c_ptr", "c_ptr"), "c_int64"),
+    "pcc_allocator_record_span_page": (("c_ptr",), "c_ptr"),
+    "pcc_allocator_record_span_mark_words": (("c_ptr",), "c_int64"),
         "pcc_gc_backend3_enable_closed_young_domain": ((), "c_void"),
         "pcc_gc_backend3_revoke_closed_young_domain": ((), "c_void"),
         "py_weakref_clear_tracing_candidates": ((), "c_int64"),

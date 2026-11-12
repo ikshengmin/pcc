@@ -1074,6 +1074,10 @@ SPAN_RECORD_NEXT_OFFSET = 56
 # One object-node record per object cell: the tracing collectors' object node
 # (layout owned by freestanding_gc_object_nodes) followed by its index key.
 OBJECT_NODE_RECORD_BYTES = 96
+# The same mapping, after the records, holds the slab's GC page: a header
+# (generation@0, flags@8, live bytes@16; see freestanding_gc_page_marks)
+# and two mark bitmaps of one bit per cell, used in alternate cycles.
+GC_PAGE_HEADER_BYTES = 64
 
 
 @c_abi_export("pcc_allocator_granule_stride_count")
@@ -2179,7 +2183,12 @@ def pcc_allocator_object_node_record_ensure(ptr) -> c_ptr:
         if records_bits == 0:
             # A fresh anonymous mapping is zero-filled: every record starts
             # out unindexed, unlinked and without leases.
-            mapping: i64 = (count * OBJECT_NODE_RECORD_BYTES + 4095) & -4096
+            mapping: i64 = (
+                count * OBJECT_NODE_RECORD_BYTES
+                + GC_PAGE_HEADER_BYTES
+                + 2 * 8 * ((count + 63) // 64)
+                + 4095
+            ) & -4096
             records = page_alloc(mapping)
             if ptr_is_null(records) == 0:
                 atomic_rmw_i64(
@@ -2215,6 +2224,37 @@ def pcc_allocator_object_node_record_ensure(ptr) -> c_ptr:
         if records_bits == 0:
             return null()
     return int_to_ptr(records_bits + cell * OBJECT_NODE_RECORD_BYTES)
+
+
+@c_abi_export("pcc_allocator_record_span_page")
+def pcc_allocator_record_span_page(span: c_ptr) -> c_ptr:
+    """A listed span's GC page header, just after its records; its two mark
+    bitmaps follow it (pcc_allocator_record_span_mark_words words each)."""
+    records_bits: i64 = atomic_load_i64(span, SPAN_NODE_RECORDS_OFFSET, "acquire")
+    if records_bits == 0:
+        return null()
+    return int_to_ptr(records_bits + load_i64(span, 24) * OBJECT_NODE_RECORD_BYTES)
+
+
+@c_abi_export("pcc_allocator_record_span_mark_words")
+def pcc_allocator_record_span_mark_words(span: c_ptr) -> i64:
+    return (load_i64(span, 24) + 63) // 64
+
+
+@c_abi_export("pcc_allocator_object_cell_span")
+def pcc_allocator_object_cell_span(ptr) -> c_ptr:
+    """The span of an exact object-family cell with a record array, else
+    NULL. Reads only, like pcc_allocator_object_node_record_find."""
+    if ptr_is_null(ptr) != 0:
+        return null()
+    span = _granule_radix_span_probe(
+        logical_shift_right_i64(ptr_diff(ptr, null()), 12)
+    )
+    if _object_cell_number(span, ptr) < 0:
+        return null()
+    if atomic_load_i64(span, SPAN_NODE_RECORDS_OFFSET, "acquire") == 0:
+        return null()
+    return span
 
 
 @c_abi_export("pcc_allocator_record_span_first")

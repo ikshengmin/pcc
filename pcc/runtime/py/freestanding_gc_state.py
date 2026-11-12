@@ -344,6 +344,9 @@ define_global_ptr_null("pcc_gc_backend4_reset_object_cursor")
 define_global_ptr_null("pcc_gc_backend4_reseed_page_count_cursor")
 define_global_ptr_null("pcc_gc_backend4_reseed_relocation_cursor")
 define_global_i64("pcc_gc_object_list_revision", 0)
+# Which mark bitmap of each object-slab GC page the current or next mark
+# sets (freestanding_gc_page_marks): 0 or 1.
+define_global_i64("pcc_gc_page_mark_epoch_word", 0)
 define_global_ptr_null("pcc_gc_backend4_store_buffer_head")
 define_global_ptr_null("pcc_gc_backend4_store_buffer_medium_head")
 define_global_ptr_null("pcc_gc_backend4_zpage_head")
