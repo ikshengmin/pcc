@@ -2002,8 +2002,22 @@ class BinaryOpLoweringMixin:
             )
             need_fix = self.builder.and_(r_nz, sign_diff, name=self._fresh("fmod_fix"))
             corrected = self.builder.fadd(r, rv, name=self._fresh("fmod_corr"))
+            # A zero remainder takes the divisor's sign, not fmod's dividend
+            # sign. Ordered equality leaves a NaN remainder unchanged.
+            r_zero = self.builder.fcmp_ordered(
+                "==", r, zero_f, name=self._fresh("fmod_zero")
+            )
+            signed_zero = self.builder.select(
+                b_neg,
+                ir.Constant(_DOUBLE, -0.0),
+                zero_f,
+                name=self._fresh("fmod_signed_zero"),
+            )
+            zero_adjusted = self.builder.select(
+                r_zero, signed_zero, r, name=self._fresh("fmod_zero_adjusted")
+            )
             return self.builder.select(
-                need_fix, corrected, r, name=self._fresh("fmod_res")
+                need_fix, corrected, zero_adjusted, name=self._fresh("fmod_res")
             )
         if op == "**":
             pow_fn = self._get_pow_function()
