@@ -111,7 +111,7 @@ def test_original_math_bits_input_and_unrelated_runtime_frontier_are_preserved(t
     project.run_owned(report, files, tmp_path)
     row = report['owned']['package_frontend']
     assert (row['status'], row['code'], row['filename'], row['line'], row['column']) == (
-        'UNSUPPORTED', 'go.unsupported.interface-types', 'bits_errors.go', 12, 5)
+        'UNSUPPORTED', 'go.unsupported.interface-types', 'bits.go', 507, 9)
     assert report['project_accepted'] is False
     assert all(report['owned'][name]['status'] == 'UNRUN' for name in (
         'dependency_closure', 'test_entry', 'test_build', 'tests_and_examples'))

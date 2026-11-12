@@ -242,11 +242,11 @@ def test_complete_normal_math_bits_stays_at_real_symbol_ownership_boundary(monke
     monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('runtime-owned math/bits reached IR'))
     with pytest.raises(UnsupportedGo) as caught:
         compile_go_packages(inputs)
-    # Both directives bind owned runtime error values; the first variable
-    # then needs package interface storage and runtime initialization.
+    # Both directives bind owned runtime error values whose storage the runtime
+    # owns; the first value use, panic(overflowError) in Div32, is the gap.
     assert caught.value.code == 'go.unsupported.interface-types'
-    assert 'runtime-owned runtime.overflowError' in caught.value.message
-    assert (caught.value.filename, caught.value.line, caught.value.column) == ('bits_errors.go', 12, 5)
+    assert 'runtime-owned runtime.overflowError values' in caught.value.message
+    assert (caught.value.filename, caught.value.line, caught.value.column) == ('bits.go', 507, 9)
     assert set(inputs) == {'main', 'math/bits'}  # No unsafe/runtime replacement.
     for name, text in originals:
         assert (UPSTREAM / name).read_bytes() == text.encode('utf-8')

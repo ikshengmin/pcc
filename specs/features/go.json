@@ -3177,6 +3177,39 @@
       "evidence": []
     },
     {
+      "id": "go.linkname.runtime-owned-variables",
+      "title": "Package variables bound to runtime-owned error values",
+      "chapter_ids": [
+        "variables",
+        "declarations",
+        "packages",
+        "initialization"
+      ],
+      "scope": "A package variable of the predeclared error type bound by //go:linkname to runtime.divideError or runtime.overflowError is a reference to runtime-owned storage: the package emits no global, no initializer and no symbol use for it. Every value use (including panic and comparison) remains go.unsupported.interface-types until the owned runtime provides the boxed error objects and interface values. The unchanged math/bits package moves from bits_errors.go:12:5 to bits.go:507:9 (panic(overflowError) in Div32). Source revision is sha256 of the sorted compact JSON source list.",
+      "tests": [
+        "tests/go/test_linkname_directives.py::test_unused_runtime_owned_declaration_compiles_without_package_storage",
+        "tests/go/test_linkname_directives.py::test_every_value_use_of_a_runtime_owned_error_is_an_explicit_gap",
+        "tests/go/test_linkname_directives.py::test_bound_variable_never_becomes_an_ordinary_nil_global",
+        "tests/go/test_math_bits_project.py::test_only_source_admission_is_attempted_by_the_owned_stage"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:ad221a3be862ae950000576dd2157c9e84ca359f9226c31bdacec6f4ede3a8e1",
+        "sources": [
+          {
+            "path": "pcc/frontends/go/lowering.py",
+            "sha256": "37383077542a4701379fbe1e92f21143237d83a80d7d5e43e0d99581f9f7d3ef"
+          },
+          {
+            "path": "pcc/frontends/go/sema.py",
+            "sha256": "4a8ad989719c4ab9e7e0996295321a73e23aa45cdba43196b77b319ef332ee4e"
+          }
+        ]
+      }
+    },
+    {
       "id": "go.capability.unsafe-operations",
       "title": "Package unsafe operations",
       "chapter_ids": [

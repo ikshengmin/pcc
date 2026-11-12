@@ -124,6 +124,9 @@ class Lowerer:
     def lower(self):
         for declaration in self.program.variables:
             for symbol in declaration.symbols:
+                if symbol.linkname is not None:
+                    # Runtime-owned (//go:linkname): sema admits no value use.
+                    continue
                 storage = ir.GlobalVariable(self.module, ir_type(symbol.type), symbol.abi_symbol)
                 storage.initializer = self.static_initializer(symbol.type, symbol.initializer)
                 self.globals[symbol] = storage

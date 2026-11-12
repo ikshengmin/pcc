@@ -131,6 +131,7 @@ def test_linknamed_package_error_cannot_become_a_fabricated_nil_global(monkeypat
     assert (failure.value.filename, failure.value.line) == ('original.go', 2)
     with pytest.raises(UnsupportedGo) as bound:
         compile_go(original.replace('package main\n', 'package main\nimport _ "unsafe"\n'), 'original.go')
-    # With the import, the binding never becomes an ordinary nil global.
+    # With the import, the binding never becomes an ordinary nil global: the
+    # runtime owns the storage and the value use is the explicit gap.
     assert bound.value.code == 'go.unsupported.interface-types'
-    assert (bound.value.line, bound.value.column) == (4, 5)
+    assert (bound.value.line, bound.value.column) == (5, 15)

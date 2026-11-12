@@ -814,13 +814,15 @@ class Analyzer:
         symbol.type = self.resolve_type(symbol.type)
         if not symbol.package_variable and interface_type(symbol.type) is not None:
             raise GoDiagnostic(symbol.token, "interface-typed initializer is not a constant")
+        if symbol.package_variable and symbol.linkname is not None:
+            # cmd/compile //go:linkname: the runtime owns this variable's
+            # storage and initializer, so the package declares a reference and
+            # never manufactures an ordinary nil global. Each value use stays an
+            # explicit gap until the owned runtime provides the error object.
+            symbol.resolved = True
+            symbol.resolving = False
+            return
         if symbol.package_variable and interface_type(symbol.type) is not None:
-            # In particular, a linknamed variable must never manufacture an
-            # ordinary nil global in place of a runtime-owned error value.
-            if symbol.linkname is not None:
-                raise UnsupportedGo(symbol.token, 'go.unsupported.interface-types',
-                                    "runtime-owned " + symbol.linkname.symbol
-                                    + " requires package interface storage and runtime initialization")
             raise UnsupportedGo(symbol.token, 'go.unsupported.interface-types',
                                 "package interface storage requires runtime initialization and symbol ownership")
         if symbol.package_variable and isinstance(underlying(symbol.type), PointerType):
@@ -846,6 +848,13 @@ class Analyzer:
                 symbol.constant = expr.constant
         symbol.resolved = True
         symbol.resolving = False
+
+    @staticmethod
+    def require_runtime_owned_value(symbol, token):
+        if getattr(symbol, 'linkname', None) is not None:
+            raise UnsupportedGo(token, 'go.unsupported.interface-types',
+                                "runtime-owned " + symbol.linkname.symbol
+                                + " values require the owned runtime error object and interface values")
 
     def lookup(self, token):
         for scope in reversed(self.scopes):
@@ -1436,6 +1445,7 @@ class Analyzer:
             else:
                 symbol = self.lookup(expr.token)
                 symbol.used = True
+                self.require_runtime_owned_value(symbol, expr.token)
                 expr.type, expr.constant, expr.symbol = symbol.type, symbol.constant, symbol
                 expr.addressable = symbol.constant is None
                 expr.storage_depth, expr.iteration_binding = symbol.depth, symbol.iteration_binding
@@ -1457,6 +1467,7 @@ class Analyzer:
                 if symbol is None:
                     raise GoDiagnostic(expr.token, "undefined imported constant or variable " + expr.value)
                 imported.resolve_constant(symbol)
+                self.require_runtime_owned_value(symbol, expr.token)
                 expr.type, expr.constant, expr.symbol = symbol.type, symbol.constant, symbol
                 expr.addressable = symbol.constant is None
                 return
