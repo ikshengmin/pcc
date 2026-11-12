@@ -70,6 +70,12 @@ markers = [
     "pcc_gate(env=, dep=, probe=, unavailable=): opt-in/hardware gate; deselected at collection when the env var is unset, the dependency is missing, the probe fails, or the tool is unavailable. A selected test whose gate is unmet fails instead of skipping",
 ]
 
+# Only the serial guarded CI runner consumes this opt-in. Markers and ordinary
+# pytest scheduling are unchanged. This group shares an explicit disk cache,
+# not cross-module Python session fixtures; see docs/ci-validation.md.
+[tool.pcc-ci.group_policy.go]
+go-reference = "resource-exclusion-only"
+
 [dependency-groups]
 dev = [
     "black>=26.3.1",

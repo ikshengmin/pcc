@@ -41,7 +41,32 @@ Completed shard receipts and modules still awaiting complete inventory survive
 a later collection failure. Collection alone is never execution PASS.
 
 Only the exact complete canonical-node union feeds the existing global batch
-planner, so xdist groups spanning collection shards still execute together.
+planner, so undeclared xdist groups spanning collection shards still execute
+together, including transitive module/group components above the target size.
+The explicit `[tool.pcc-ci.group_policy.<domain>]` tables in `pyproject.toml`
+may declare a group `resource-exclusion-only`: it needs mutual exclusion, but has no
+cross-module Python session or fixture lifetime requirement. Only those groups
+may span multiple **serial** guarded batches. Modules remain indivisible, the
+original xdist marker stays unchanged, and combining an opted-in group with
+any other xdist marker is rejected because xdist combines their exclusion keys.
+Default groups never acquire this permission implicitly. The policy is saved
+in the campaign receipt and bound by the existing frozen source manifest.
+Invalid domains, modes, empty names, duplicate TOML keys, unreadable policy,
+or declared names absent from that domain's complete raw inventory fail closed.
+
+`go-reference` opts in because its oracle calls use separate test-owned outputs
+and an explicit shared on-disk `PCC_GO_REFERENCE_CACHE`, not cross-module session
+fixtures. Every batch inherits the same cache and tool environment. The runner
+waits for each process-tree guard, validates its terminal evidence and records
+outcomes before admitting the next batch; an anomalous batch stops admission.
+In particular, a guard receipt with nonempty `post_exit_cleanup_pids` stops
+admission even when its status is `COMPLETE` and its root returned zero: sending
+termination to observed descendants does not prove they have finished exiting.
+The unchanged guard's normal receipt omits this field when no cleanup was needed;
+an empty list is also accepted. This remains the existing observed-process-tree
+boundary, not a claim to detect every possible escaped process.
+This is a scheduling contract, not a relaxed time budget or a passing result.
+New cross-module session dependencies require withdrawing the declaration.
 Worker inventories must match the frozen raw metadata for every file in their
 body batch, including other lanes and unmet prerequisites, ignoring only xdist's
 final node-ID decoration. Partition-dependent gate, group or identity drift is

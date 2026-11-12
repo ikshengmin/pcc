@@ -878,7 +878,7 @@ def test_campaign_saves_failed_batch_before_deciding_independent_continuation(tm
     monkeypatch.setattr(tools, "verify_tool_receipt", lambda receipt: {"verified": []})
     monkeypatch.setattr(run, "modules", lambda domain: ["a.py", "b.py"])
     rows = [row("a.py", 0), row("b.py", 0)]
-    monkeypatch.setattr(run, "batches", lambda collected, lane: [[entry] for entry in collected])
+    monkeypatch.setattr(run, "batches", lambda collected, lane, **policy: [[entry] for entry in collected])
     attempts = []
 
     def guarded(directory, command, environment, original):
@@ -1173,3 +1173,165 @@ def test_go_ci_installs_pinned_reference_and_binds_whole_package_before_attestat
     assert 'PCC_GO_MATH_BITS_GOROOT=$goroot' in bind
     assert job.index('actions/setup-go@v6') < job.index('scripts/ci_validation_tools.py') < job.index('scripts/ci_validation_run.py')
     assert 'continue-on-error:' not in job
+
+
+def test_resource_groups_split_only_modules_and_preserve_exact_frozen_rows():
+    rows = [row(path, index, group=("oracle",), lane="reference")
+            for path in ("a.py", "b.py", "c.py") for index in range(6)]
+    rows += [row("d.py", 0, group=("oracle",), selected=False, lane="reference")]
+    assert run.batches(rows, "reference") == [rows[:-1]]
+    batches = run.batches(rows, "reference", resource_groups=("oracle",))
+    assert [len(batch) for batch in batches] == [6, 6, 6]
+    assert [entry for batch in batches for entry in batch] == rows[:-1]
+    assert all(len({entry["file"] for entry in batch}) == 1 for batch in batches)
+    assert all(entry["groups"] == ["oracle"] for batch in batches for entry in batch)
+    assert run.batches(rows, "ordinary", resource_groups=("oracle",)) == []
+
+
+def test_resource_declaration_keeps_default_transitive_components_indivisible():
+    rows = [row("a.py", i, group=("oracle",), lane="reference") for i in range(11)]
+    rows += [row("a.py", 20, group=("first",), lane="reference"),
+             row("b.py", 0, group=("first", "second"), lane="reference"),
+             row("c.py", 0, group=("second",), lane="reference"),
+             row("d.py", 0, group=("oracle",), lane="reference")]
+    batches = run.batches(rows, "reference", resource_groups=("oracle",))
+    assert batches == [rows[:-1], rows[-1:]]
+
+
+@pytest.mark.parametrize("groups", [("oracle", "other"), ("oracle", "oracle"), ("oracle", "second")])
+@pytest.mark.parametrize("selected,lane", [(True, "reference"), (False, "reference"), (True, "ordinary")])
+def test_resource_groups_reject_combined_keys_in_all_raw_rows(groups, selected, lane):
+    rows = [row("a.py", 0, group=("oracle",), lane="reference"),
+            row("b.py", 0, group=groups, selected=selected, lane=lane)]
+    with pytest.raises(ValueError, match="sole xdist group"):
+        run.batches(rows, "reference", resource_groups=("oracle",))
+
+
+@pytest.mark.parametrize("declarations", ["oracle", ("",), (" ",), (None,),
+                                          ("oracle", "oracle"), ("unknown",)])
+def test_resource_group_declarations_fail_closed(declarations):
+    with pytest.raises(ValueError):
+        run.batches([row("a.py", 0, group=("oracle",))], "ordinary", resource_groups=declarations)
+
+
+@pytest.mark.parametrize("policy", [[], {"unknown": {"oracle": "resource-exclusion-only"}},
+                                    {"go": []}, {"go": {}}, {"go": {"": "resource-exclusion-only"}},
+                                    {"go": {"oracle": "parallel"}}])
+def test_invalid_resource_policy_fails_closed(policy):
+    with pytest.raises(ValueError, match="group policy"):
+        run.resource_exclusion_groups({"tool": {"pcc-ci": {"group_policy": policy}}}, "go")
+
+
+def test_resource_policy_is_explicit_and_domain_scoped():
+    config = {"tool": {"pcc-ci": {"group_policy": {"go": {"oracle": "resource-exclusion-only"}}}}}
+    assert run.resource_exclusion_groups({}, "go") == ()
+    assert run.resource_exclusion_groups(config, "go") == ("oracle",)
+    assert run.resource_exclusion_groups(config, "cpp") == ()
+    actual = run.tomllib.loads((ROOT / "pyproject.toml").read_text())
+    assert run.resource_exclusion_groups(actual, "go") == ("go-reference",)
+
+
+@pytest.mark.parametrize("stop", [False, True])
+def test_resource_campaign_admits_batches_serially_with_exact_receipts(tmp_path, monkeypatch, stop):
+    """Orchestration model only; real process-tree exclusion remains a CI gate."""
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "pyproject.toml").write_text(
+        '[tool.pytest.ini_options]\naddopts="-n 6 --dist=loadgroup -m \'not integration\'"\n'
+        '[tool.pcc-ci.group_policy.go]\noracle="resource-exclusion-only"\n')
+    setup = tmp_path / "tools.json"
+    setup.write_text("{}")
+    monkeypatch.setenv("PCC_CI_TOOL_RECEIPT", str(setup))
+    monkeypatch.setenv("GITHUB_SHA", "fixture-source")
+    monkeypatch.setenv("PCC_GO_REFERENCE_CACHE", str(tmp_path / "shared-cache"))
+    monkeypatch.delenv("PCC_RUSTC_INSTALL_RECEIPT", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.setattr(run, "ROOT", root)
+    original = {"sha": "fixture-source", "files": {}}
+    monkeypatch.setattr(run, "identity", lambda: original)
+    monkeypatch.setattr(tools, "verify_tool_receipt", lambda receipt: {"verified": []})
+    monkeypatch.setattr(run, "modules", lambda domain: ["a.py", "b.py"])
+    rows = [row(path, index, group=("oracle",), lane="reference")
+            for path in ("a.py", "b.py") for index in range(6)]
+    boundaries = []
+    real_run_guard = run.run_guard
+    monkeypatch.setattr(run.shutil, "disk_usage", lambda path: SimpleNamespace(free=2 * run.DISK_FLOOR))
+    monkeypatch.setattr(run.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=0))
+
+    def guarded(directory, command, environment, frozen):
+        assert frozen == original
+        assert environment["PCC_GO_REFERENCE_CACHE"] == str(tmp_path / "shared-cache")
+        assert run.TIMEOUT == 90 and run.RSS == run.DISK_FLOOR == 1073741824
+        if directory.name.startswith("collection-"):
+            files = json.loads((directory / "modules.json").read_text())
+            return _collection_reports(directory, files, rows)[2]
+        assert "-n0" not in command and "--collect-only" not in command
+        boundaries.append((directory.name, "start"))
+        expected = json.loads((directory / "selection.json").read_text())
+        events = [{"event": "start", "maxfail": 0}]
+        for node in expected:
+            events += _node_reports(node)
+        events.append({"event": "finish", "exitstatus": 0, "testsfailed": 0})
+        _batch_reports(directory, expected, events)
+        for path in (directory / "inventory").glob("gw*.json"):
+            witness = json.loads(path.read_text())
+            witness["rows"] = [dict(entry, nodeid=entry["nodeid"] + "@oracle")
+                               for entry in rows if entry["canonical_nodeid"] in expected]
+            witness["selected"] = [node + "@oracle" for node in expected]
+            path.write_text(json.dumps(witness))
+        live = directory / "live.jsonl"
+        live.write_text(live.read_text().replace("@group", "@oracle"))
+        boundaries.append((directory.name, "finish"))
+        (directory / "result.json").write_text(json.dumps({
+            "status": "COMPLETE", "timeout_s": run.TIMEOUT, "max_tree_rss_bytes": run.RSS,
+            "peak_tree_rss_bytes": 0, "returncode": 0,
+            "post_exit_cleanup_pids": [12345] if stop else [],
+        }))
+        return real_run_guard(directory, command, environment, frozen)
+
+    monkeypatch.setattr(run, "run_guard", guarded)
+    out = tmp_path / "campaign"
+    assert run.run(SimpleNamespace(domain="go", lane="reference", out=out)) == int(stop)
+    receipt = json.loads((out / "receipt.json").read_text())
+    assert receipt["group_policy"] == {"oracle": "resource-exclusion-only"}
+    assert receipt["workers"] == 6 and receipt["dist"] == "loadgroup"
+    assert json.loads((out / "batch-plan.json").read_text()) == [
+        [entry["canonical_nodeid"] for entry in rows[:6]],
+        [entry["canonical_nodeid"] for entry in rows[6:]]]
+    assert boundaries == [(f"batch-{index:03}", phase)
+                          for index in range(1 if stop else 2) for phase in ("start", "finish")]
+    assert receipt["unattempted"] == ([entry["canonical_nodeid"] for entry in rows[6:]] if stop else [])
+    assert receipt["status"] == ("INFRASTRUCTURE_OR_RESOURCE_FAILURE" if stop else "PASS")
+    assert all(not batch["evidence_errors"] for batch in receipt["batches"])
+
+
+def test_combined_declared_resource_groups_are_not_an_exclusion_key():
+    with pytest.raises(ValueError, match="sole xdist group"):
+        run.batches([row("a.py", 0, group=("first", "second"))], "ordinary",
+                    resource_groups=("first", "second"))
+
+
+def test_duplicate_resource_policy_names_are_rejected_by_toml():
+    with pytest.raises(run.tomllib.TOMLDecodeError):
+        run.tomllib.loads('[tool.pcc-ci.group_policy.go]\n'
+                          'oracle="resource-exclusion-only"\n'
+                          'oracle="resource-exclusion-only"\n')
+
+
+@pytest.mark.parametrize("cleanup", [None, [], [12345]])
+def test_guard_rejects_uncertain_post_exit_descendant_cleanup(tmp_path, monkeypatch, cleanup):
+    """Receipt model only: a successful root exit does not prove descendants exited."""
+    original = {"sha": "fixture"}
+    monkeypatch.setattr(run, "identity", lambda: original)
+    monkeypatch.setattr(run.shutil, "disk_usage", lambda path: SimpleNamespace(free=2 * run.DISK_FLOOR))
+    monkeypatch.setattr(run.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=0))
+    result = {"status": "COMPLETE", "timeout_s": run.TIMEOUT, "max_tree_rss_bytes": run.RSS,
+              "peak_tree_rss_bytes": 0, "returncode": 0}
+    if cleanup is not None:
+        result["post_exit_cleanup_pids"] = cleanup
+    (tmp_path / "result.json").write_text(json.dumps(result))
+    if cleanup:
+        with pytest.raises(ValueError, match="resource/guard anomaly; no later batch admitted"):
+            run.run_guard(tmp_path, ["unused"], {}, original)
+    else:
+        assert run.run_guard(tmp_path, ["unused"], {}, original) == 0

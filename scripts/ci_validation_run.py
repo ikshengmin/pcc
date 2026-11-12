@@ -164,8 +164,38 @@ def merge_collections(parts, files):
     return rows
 
 
-def batches(rows, lane):
-    """Partition runnable nodes exactly; never split a module/xdist group."""
+def resource_exclusion_groups(config, domain):
+    """Read explicit scheduling semantics, never infer them from a group name."""
+    policy = config.get("tool", {}).get("pcc-ci", {}).get("group_policy", {})
+    if (not isinstance(policy, dict) or
+            any(scope not in {"cpp", "rust", "go", "java", "shared", "ci-contracts"}
+                or not isinstance(groups, dict) or not groups
+                or any(not isinstance(name, str) or not name.strip() or
+                       mode != "resource-exclusion-only" for name, mode in groups.items())
+                for scope, groups in policy.items())):
+        raise ValueError("invalid CI xdist group policy")
+    return tuple(sorted(policy.get(domain, {})))
+
+
+def batches(rows, lane, *, resource_groups=()):
+    """Keep modules and default groups atomic; split opted-in resources serially.
+
+    The caller must complete each guarded batch before admitting the next one.
+    Resource-only groups promise no cross-module session/fixture dependency.
+    Their original xdist marker remains the sole exclusion key in each batch.
+    """
+    if (not isinstance(resource_groups, (tuple, list)) or
+            any(not isinstance(group, str) or not group.strip() for group in resource_groups) or
+            len(resource_groups) != len(set(resource_groups))):
+        raise ValueError("invalid resource-exclusion group declarations")
+    resources = set(resource_groups)
+    if resources - {group for row in rows for group in row["groups"]}:
+        raise ValueError("declared resource-exclusion group absent from raw domain inventory")
+    # Check even other lanes and unmet prerequisites in the frozen inventory.
+    # xdist combines multiple names into a different key, breaking exclusion.
+    for row in rows:
+        if resources.intersection(row["groups"]) and len(row["groups"]) != 1:
+            raise ValueError("resource-exclusion group must be the sole xdist group")
     selected = [row for row in rows if row["lane"] == lane and row["selected_by_repository"]]
     files = sorted({row["file"] for row in selected})
     parent = {path: path for path in files}
@@ -178,6 +208,8 @@ def batches(rows, lane):
     owner = {}
     for row in selected:
         for group in row["groups"]:
+            if group in resources:
+                continue
             if group in owner:
                 parent[find(row["file"])] = find(owner[group])
             owner[group] = row["file"]
@@ -251,7 +283,8 @@ def run_guard(directory, command, environment, original):
     wrapper = subprocess.run(guarded_command(directory, command), cwd=ROOT, env=environment, check=False)
     result = json.loads((directory / "result.json").read_text())
     if (result["status"] != "COMPLETE" or result["timeout_s"] != TIMEOUT or
-            result["max_tree_rss_bytes"] != RSS or result["peak_tree_rss_bytes"] > RSS):
+            result["max_tree_rss_bytes"] != RSS or result["peak_tree_rss_bytes"] > RSS or
+            result.get("post_exit_cleanup_pids")):
         raise ValueError("resource/guard anomaly; no later batch admitted")
     if wrapper.returncode != result["returncode"]:
         raise ValueError("guard exit differs from its terminal target receipt")
@@ -415,7 +448,10 @@ def run(args):
                "batches": [], "unrun": [], "unattempted": [],
                "collections": [], "collection_pending_modules": []}
     try:
-        options = shlex.split(tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["pytest"]["ini_options"]["addopts"])
+        config = tomllib.loads((ROOT / "pyproject.toml").read_text())
+        resources = resource_exclusion_groups(config, args.domain)
+        receipt["group_policy"] = {name: "resource-exclusion-only" for name in resources}
+        options = shlex.split(config["tool"]["pytest"]["ini_options"]["addopts"])
         if options != ["-n", "6", "--dist=loadgroup", "-m", "not integration"]:
             raise ValueError("default pytest policy changed")
         original = identity()
@@ -490,7 +526,7 @@ def run(args):
         receipt["lane_count"] = sum(row["lane"] == args.lane for row in rows)
         receipt["unrun"] = [dict(row, status="UNRUN_PREREQUISITE") for row in rows
                             if row["lane"] == args.lane and not row["selected_by_repository"]]
-        plan = batches(rows, args.lane)
+        plan = batches(rows, args.lane, resource_groups=resources)
         receipt["unattempted"] = [row["canonical_nodeid"] for batch in plan for row in batch]
         save(args.out / "batch-plan.json", [[row["canonical_nodeid"] for row in batch] for batch in plan])
         for index, batch in enumerate(plan):
