@@ -172,6 +172,9 @@ def build_closed_world_context(
             ast_mod = _finish_lifted_module(_lift_module(raw_mod, src, mod_name))
         else:
             ast_mod = _finish_lifted_module(_closed_world_shallow_lift_module(raw_mod, src, mod_name))
+        # The finished lifted module no longer needs the parser tree.
+        # Release it before export discovery and the next module's parse.
+        raw_mod = None
         _profile_end(profile, "build_closed_world_context_lift", lift_t, mod_name)
         parsed_modules.append(ast_mod)
         exports = {}
