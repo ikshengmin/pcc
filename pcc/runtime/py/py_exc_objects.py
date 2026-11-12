@@ -1,4 +1,4 @@
-"""Phase 4c.5: pcc-Python port of py_exc_objects.c.
+"""pcc-Python runtime ported from the removed C file py_exc_objects.c.
 
 Exception-object construction, accessor, and deallocation. Handles:
     py_exc_alloc, py_exc_new, py_exc_new_with_class,

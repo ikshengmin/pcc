@@ -1,6 +1,6 @@
 """pcc-Python owners for the no-libpython C-API mapping surface.
 
-Replaces the PyMapping_* block of py_capi_shim.c.  All functions delegate to
+Replaces the PyMapping_* block of the removed py_capi_shim.c.  All functions delegate to
 the migrated C-API siblings (PyObject_GetItem/SetItem/Size, PyUnicode_FromString,
 PyDict_Keys/Values/Check, PyErr_*) or the pcc-Python object ABIs
 (py_obj_getattr).

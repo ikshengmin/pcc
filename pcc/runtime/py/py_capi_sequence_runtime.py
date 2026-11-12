@@ -1,6 +1,6 @@
 """pcc-Python owners for the no-libpython C-API sequence surface.
 
-Replaces the PySequence_* block of py_capi_shim.c.  All functions delegate to
+Replaces the PySequence_* block of the removed py_capi_shim.c.  All functions delegate to
 the existing pcc-Python object ABIs (py_obj_getitem/setitem/len/contains/add)
 or to pcc-Python-owned C-API siblings (PyList_New/Append, PyTuple_New,
 PyNumber_Index, PyErr_*).

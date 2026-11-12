@@ -1,4 +1,4 @@
-"""Phase 4c: pcc-Python port of py_int_convert.c.
+"""pcc-Python runtime ported from the removed C file py_int_convert.c.
 
 Converts tagged or heap ints to int64 for runtime callers that need a
 native scalar and an overflow flag. Tagged-int decoding still uses the
@@ -53,7 +53,7 @@ from pcc.unsafe import (
 
 py_int_value_i64     = extern("py_int_value_i64",     (c_ptr,),                  c_int64)
 # Unbox a C-extension number scalar (numpy int/bool scalar from ndarray element
-# access) via its nb_int/nb_index slot. C-only helper (py_capi_shim.c); no cc
+# access) via its nb_int/nb_index slot. C-only helper (the removed py_capi_shim.c); no cc
 # baseline mirror because cext objects only exist under the no-libpython C-API
 # shim that this port archive links.
 py_cext_number_to_i64 = extern("py_cext_number_to_i64", (c_ptr, c_ptr),          c_int64)

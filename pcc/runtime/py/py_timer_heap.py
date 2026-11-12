@@ -1,8 +1,8 @@
-"""pcc-Python port of py_timer_heap.c (scalable vthread timer structure).
+"""pcc-Python runtime ported from the removed C file py_timer_heap.c (scalable vthread timer structure).
 
-Mirror of the C runtime structure ``pcc/runtime/src/py_timer_heap.c`` and of
-the CPU-only oracle ``pcc/vthread/timer_oracle.py::MinHeapTimerQueue``. All
-three implement the SAME algorithm so they can be diffed against one another:
+Same algorithm as the CPU-only oracle
+``pcc/vthread/timer_oracle.py::MinHeapTimerQueue``, so the two can be diffed
+against one another:
 
   * a binary min-heap keyed on ``(deadline, seq)`` (insert O(log n), pop O(log
     n), peek O(1)); and

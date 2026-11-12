@@ -2,7 +2,7 @@
 
 Replaces the pcc_capi_visit_slot / visit_cext_object_slots /
 visit_cext_object_slots_i64 + the PccCapiObjectSlotVisitCtx + the
-pcc_capi_visit_cext_object_slot_ref sentinel block of py_capi_shim.c.
+pcc_capi_visit_cext_object_slot_ref sentinel block of the removed py_capi_shim.c.
 The freestanding GC drives these to walk C-extension object slots.
 
 PccCapiObjectSlotVisitCtx: visit@0 (fn ptr), ctx@8.

@@ -2,7 +2,7 @@
 
 Replaces the PyObject_CallFunction / CallFunctionObjArgs / CallMethod /
 CallMethodObjArgs / CallMethodNoArgs / CallMethodOneArg block of
-py_capi_shim.c.  The variadic forms consume a va_list via the pcc.unsafe
+the removed py_capi_shim.c.  The variadic forms consume a va_list via the pcc.unsafe
 va_* intrinsics (the same mechanism as PyTuple_Pack).
 
 Owned surface (stable C ABI names):

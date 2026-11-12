@@ -1,4 +1,4 @@
-"""Phase 4c.13: pcc-Python port of py_list.c.
+"""pcc-Python runtime ported from the removed C file py_list.c.
 
 Growable PyObject* array with owned references.
 

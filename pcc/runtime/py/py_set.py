@@ -1,4 +1,4 @@
-"""Phase 4c.8: pcc-Python port of py_set.c.
+"""pcc-Python runtime ported from the removed C file py_set.c.
 
 Open-addressing hash set of PyObject* (unordered, unique).
 

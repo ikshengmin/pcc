@@ -1,4 +1,4 @@
-"""pcc-Python replacement for py_runtime/src/py_int_decimal.c."""
+"""pcc-Python runtime ported from the removed C file py_int_decimal.c."""
 
 __pcc_runtime_port__ = True
 
@@ -128,8 +128,8 @@ def py_bigint_to_cstr(b):
 @c_abi_export("py_bigint_to_base_cstr")
 def py_bigint_to_base_cstr(b, base: int, prefix_ch: int):
     # Full base-{2,8,16} string for a bignum: "[-]0<prefix_ch><digits>"
-    # (lowercase a-f). Mirrors py_bigint_to_base_cstr in py_int_decimal.c:
-    # repeated divmod by the small base, one digit per iteration.
+    # (lowercase a-f): repeated divmod by the small base, one digit per
+    # iteration.
     neg: int = 0
     if load_i32(b, PYINTOBJECT_SIGN_OFFSET) < 0:
         neg = 1

@@ -1,6 +1,6 @@
 """pcc-Python owners for the no-libpython PyModule attribute surface.
 
-Replaces the PyModule_GetDict / PyModule_Add* block of py_capi_shim.c.
+Replaces the PyModule_GetDict / PyModule_Add* block of the removed py_capi_shim.c.
 PyModule_Create2 / PyModule_GetState stay C-side (module-state registry is
 GC-integration infrastructure); PyModuleDef_Init stays C-side (C static
 moduledef marker).

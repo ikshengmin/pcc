@@ -1,8 +1,8 @@
 """No-libpython copy/deepcopy and process-local pickle protocol.
 
-This preserves the intentionally narrow ABI of ``src/py_pickle_copy.c``.
+This keeps the intentionally narrow ABI of the removed ``src/py_pickle_copy.c``.
 The pickle payload is a process-local registry token, not CPython pickle wire
-compatibility.  The C source remains a host-C oracle.
+compatibility.
 """
 
 __pcc_runtime_port__ = True

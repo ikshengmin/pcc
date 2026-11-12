@@ -1,4 +1,4 @@
-"""pcc-Python port of py_obj_dealloc.c.
+"""pcc-Python runtime ported from the removed C file py_obj_dealloc.c.
 
 Type-specific object deallocators. The refcount dispatch in py_obj.py
 still calls these symbols by name; the pcc-Python runtime archive

@@ -1,4 +1,4 @@
-"""pcc-Python port of py_re.c.
+"""pcc-Python runtime ported from the removed C file py_re.c.
 
 This intentionally remains the same bootstrap regex subset as the C helper:
 ``re.match`` / ``re.search`` truthiness for literals, '.', anchors, '*', '+',

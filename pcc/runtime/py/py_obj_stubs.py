@@ -1,4 +1,4 @@
-"""Phase 4c.2: pcc-Python replacement for py_runtime/src/py_obj_stubs.c.
+"""pcc-Python runtime ported from the removed C file py_obj_stubs.c.
 
 Contains:
   py_float_*      : Phase 3 stubs (return NULL / 0.0)
@@ -216,8 +216,8 @@ def py_float_to_f64(o) -> float:
 
 @c_abi_export("py_float_is_integer")
 def py_float_is_integer(o) -> int:
-    # float.is_integer(): finite and no fractional part. Mirrors
-    # py_float_is_integer in py_obj_stubs.c (avoids math.h: |v|>=2^53 is always
+    # float.is_integer(): finite and no fractional part
+    # (avoids math.h: |v|>=2^53 is always
     # integral; otherwise fits int64 so the truncate round-trip is exact).
     v: float = py_float_to_f64(o)
     if v != v:  # nan
@@ -1243,8 +1243,8 @@ def py_bytes_data_ptr(o):
 
 @c_abi_export("py_bytes_hex")
 def py_bytes_hex(o):
-    # bytes.hex(): lowercase two-hex-digits-per-byte string. Mirrors
-    # py_bytes_hex in py_bytes.c. Frontend routes only bytes/bytearray here.
+    # bytes.hex(): lowercase two-hex-digits-per-byte string. The frontend
+    # routes only bytes/bytearray here.
     if ptr_is_null(o) != 0:
         return null()
     n: int = load_i64(o, 16)
@@ -1296,8 +1296,7 @@ def py_bytes_upper(o):
     return out
 
 
-# Mirror of py_bytes_lower / py_bytes_strip in src/py_bytes.c (cc tier). This is
-# the pcc-Python port tier (default no-libpython); both must stay in sync.
+# bytes lower/strip helpers.
 def _is_ascii_space(c: int) -> int:
     if c == 32 or c == 9 or c == 10:
         return 1
@@ -1881,7 +1880,7 @@ def py_bytes_find_range(src, needle, begin: int, end: int) -> int:
 
 @c_abi_export("py_bytes_rfind")
 def py_bytes_rfind(src, needle) -> int:
-    # Mirror of py_bytes_rfind in src/py_bytes.c: highest match index, backward.
+    # Highest match index, scanning backward.
     data = _bytes_data(src)
     if ptr_is_null(data):
         return -1
@@ -1924,7 +1923,7 @@ def py_bytes_rfind(src, needle) -> int:
 
 @c_abi_export("py_bytes_count")
 def py_bytes_count(src, needle) -> int:
-    # Mirror of py_bytes_count in src/py_bytes.c: number of non-overlapping
+    # Number of non-overlapping
     # occurrences of the sub-bytes (or single byte value). Empty sub-bytes
     # counts len+1 positions; a match advances past the whole needle. Returns
     # 0 on a bad receiver / out-of-range byte, matching find/rfind's
@@ -1978,7 +1977,7 @@ def py_bytes_count(src, needle) -> int:
 
 @c_abi_export("py_bytes_split")
 def py_bytes_split(src, sep):
-    # Mirror of py_bytes_split in src/py_bytes.c: same-family pieces between each
+    # Same-family pieces between each
     # occurrence of the non-empty separator. py_list_append increfs, so each
     # owned part is decref'd after appending.
     data = _bytes_data(src)
@@ -2271,7 +2270,7 @@ def py_bytes_split_full(src, sep, maxsplit, from_right: int):
 
 @c_abi_export("py_bytes_partition")
 def py_bytes_partition(src, sep):
-    # Mirror of py_bytes_partition in src/py_bytes.c: (before, sep, after) on the
+    # (before, sep, after) on the
     # first occurrence, else (copy-of-whole, b'', b''). set_item increfs -> decref.
     data = _bytes_data(src)
     if ptr_is_null(data):
@@ -3122,7 +3121,7 @@ def _bytes_join_list(sep, sep_len: int, lst):
 @c_abi_export("py_bytes_join")
 def py_bytes_join(sep, lst):
     # bytes.join / bytearray.join over a list or tuple of bytes-like items.
-    # Mirrors py_bytes_join in py_bytes.c.  Result takes the separator's
+    # The result takes the separator's
     # family.  Items that are not bytes/bytearray raise TypeError.  This is
     # the O(n) bulk-building primitive (chunks + one join) that replaces
     # quadratic bytearray += under pcc1.
@@ -4594,7 +4593,7 @@ def py_obj_repr(o):
     if not ptr_is_null(built):
         return built
     if tag == PY_TYPE_EXC:  # PY_TYPE_EXC
-        # repr(exc) == ClassName(repr(arg)); shared C helper (py_format.c).
+        # repr(exc) == ClassName(repr(arg)); see py_format_runtime.py.
         return py_exc_repr(o)
     if tag == PY_TYPE_COMPLEX:  # PY_TYPE_COMPLEX
         return py_complex_repr(o)

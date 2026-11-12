@@ -1,10 +1,8 @@
-"""Phase 4c.11: pcc-Python port of py_obj.c.
+"""pcc-Python runtime ported from the removed C file py_obj.c.
 
 py_bool_from_bit + py_incref + py_decref dispatch. The dealloc
-implementations are separate ABI symbols, provided by py_obj_dealloc.py
-in the pcc-Python runtime archive and by py_obj_dealloc.c in the C
-runtime archives. The immortal singletons live in py_substrate.py for
-the pcc-Python archive and in py_substrate.c for the C runtime archives.
+implementations are separate ABI symbols, provided by py_obj_dealloc.py.
+The immortal singletons live in py_substrate.py.
 This port only owns the "dispatch layer".
 
 The object-header layout, flags, and public type-tag values are consumed from
@@ -385,7 +383,7 @@ pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 
 
 def _refcount_provenance_probe_enabled() -> int:
-    """Mirror of py_obj.c's pcc_gc_refcount_provenance_probe read.
+    """Read pcc_gc_refcount_provenance_probe.
 
     PCC_GC_REFCOUNT_PROVENANCE_PROBE: 0 trusts the caller and skips the
     managed-pointer probe on the refcount hot path, 1 probes and counts misses
@@ -398,7 +396,7 @@ def _refcount_provenance_probe_enabled() -> int:
 
 
 def _note_unmanaged_refcount_op() -> None:
-    """Mirror of py_obj.c's pcc_note_unmanaged_refcount_op.
+    """Count one refcount operation that missed provenance.
 
     PCC_GC_COUNTER_UNMANAGED_REFCOUNT_OPS (116).  Read the enum comment in
     py_runtime.h for why this is a ratchet and not just telemetry.
@@ -508,8 +506,8 @@ def pcc_gc_alloc(size: int, type_tag: int, flags: int):
             or type_tag == PY_TYPE_CLASSMETHOD
             or type_tag == PY_TYPE_WEAKREF
             # Every remaining tag the colored-relocation accept predicate
-            # admits (GC-P1-BACKEND4-RELOCATABLE-TAGS-LACK-FRESH-ALLOC);
-            # mirrors py_obj.c exactly.  Constructors publish on success.
+            # admits (GC-P1-BACKEND4-RELOCATABLE-TAGS-LACK-FRESH-ALLOC).
+            # Constructors publish on success.
             or type_tag == PY_TYPE_FUNC
             or type_tag == PY_TYPE_ITER
             or type_tag == PY_TYPE_GEN
@@ -536,7 +534,7 @@ def pcc_gc_alloc(size: int, type_tag: int, flags: int):
         else:
             stored_flags = stored_flags & ~65536
     if ptr_is_null(obj) != 0:
-        # Mirror the C tier's calloc (py_obj.c): fresh objects are
+        # Zero-filled like calloc: fresh objects are
         # GC-visible before their constructor fills the body; visitors
         # must see NULL slots, not malloc garbage.  Objects draw from the
         # allocator's OBJECT slab family (ARCH-P0 S1) so their granules are
@@ -1290,7 +1288,7 @@ def pcc_gc_store_root_take(slot, value) -> None:
     # moves into ``slot`` (no retain), the previous slot owner is released.
     # Replaces codegen's ``pin(v); store_root(slot, v); unpin(v); release(v)``
     # on every exact-int assignment (four calls, two of them no-ops for
-    # tagged immediates).  Mirrors pcc_gc_store_root_take in py_obj.c.
+    # tagged immediates).
     if ptr_is_null(slot) != 0:
         return
     backend: int = _gc_backend_fast()
@@ -2872,7 +2870,7 @@ def pcc_gc_set_known_ref_checks(enabled: int) -> None:
 
 
 def _known_ref_checks() -> int:
-    """Mirror of py_obj.c's pcc_known_ref_checks.
+    """Read pcc_known_ref_checks.
 
     PCC_GC_KNOWN_REF_CHECKS=1 sends every compiler-proven refcount through
     the checked path, so an audit (PCC_GC_REFCOUNT_PROVENANCE_PROBE=2/3) also

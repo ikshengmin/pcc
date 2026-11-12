@@ -1,4 +1,4 @@
-"""Phase 4c.3: pcc-Python port of py_exc_tls.c.
+"""pcc-Python runtime ported from the removed C file py_exc_tls.c.
 
 Reimplements the four TLS-facing exception entries:
     py_raise, py_err_occurred, py_current_exception, py_clear_exception

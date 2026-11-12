@@ -1,7 +1,7 @@
 """pcc-Python owners for the no-libpython buffer/memoryview surface.
 
 Replaces the PyObject_CheckBuffer / PyObject_GetBuffer / PyMemoryView_*
-block of py_capi_shim.c.  The buffer-data probe (bytes/bytearray/memoryview
+block of the removed py_capi_shim.c.  The buffer-data probe (bytes/bytearray/memoryview
 layout) is duplicated here; PyBuffer_Release already lives in
 py_capi_misc_runtime.py.
 

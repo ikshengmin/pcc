@@ -1,6 +1,6 @@
 """pcc-Python owners for the no-libpython string->number conversions.
 
-Replaces PyFloat_FromString / PyLong_FromUnicodeObject in py_capi_shim.c,
+Replaces PyFloat_FromString / PyLong_FromUnicodeObject in the removed py_capi_shim.c,
 which used libc strtod / strtoll.  The pcc-Python ports implement the parsers
 directly (no libc dependency): a decimal/exponent float parser using i64
 mantissa accumulation + f64 scaling, and an integer parser for base 0/2/8/10/16.

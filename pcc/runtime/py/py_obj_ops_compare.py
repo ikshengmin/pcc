@@ -1,4 +1,4 @@
-"""Phase 4c.15b: pcc-Python port of py_obj_ops_compare.c.
+"""pcc-Python runtime ported from the removed C file py_obj_ops_compare.c.
 
 Equality / hashing / three-way compare / sorted / contains.
 
@@ -309,8 +309,7 @@ def _bytes_cmp(a, b) -> int:
 # P = 2**61 - 1 so that ``x == y`` implies ``hash(x) == hash(y)`` across int,
 # bool and float (``hash(1) == hash(1.0) == hash(True) == 1``).  Mirrors
 # ``long_hash`` / ``_Py_HashDouble`` in Objects/longobject.c and
-# Python/pyhash.c, and ``pcc_hash_i64`` / ``pcc_hash_double_bits`` in
-# py_obj_ops_compare.c.  The port used to hash a float by its raw IEEE bits,
+# Python/pyhash.c.  The port used to hash a float by its raw IEEE bits,
 # so ``d[1.0]`` missed the entry stored under ``d[1]`` and ``{1: a, 1.0: b}``
 # held two keys.
 

@@ -1,8 +1,7 @@
-"""Phase 4c.16-prep: pcc-Python port of py_str_accessors.c.
+"""pcc-Python runtime ported from the removed C file py_str_accessors.c.
 
 PyStrObject accessors and small string helpers. Most helpers are byte-level;
 py_str_len and py_str_find preserve Python's codepoint-visible semantics.
-The remaining py_str.c body keeps only py_str_new.
 
 PyStrObject layout (from py_internal.h):
     offset  0   PyObjectHeader   (16 bytes)
@@ -1456,8 +1455,7 @@ def py_str_isalnum(s) -> int:
 @c_abi_export("py_str_isupper")
 def py_str_isupper(s) -> int:
     # True iff there is at least one cased (ASCII letter) char and no lowercase
-    # one (CPython ignores non-cased chars). Mirrors py_str_isupper in
-    # py_str_accessors.c.
+    # one (CPython ignores non-cased chars).
     if ptr_is_null(s) != 0:
         return 0
     n: int = load_i64(s, PYSTROBJECT_BYTE_LEN_OFFSET)
@@ -1495,7 +1493,7 @@ def py_str_islower(s) -> int:
 @c_abi_export("py_str_isascii")
 def py_str_isascii(s) -> int:
     # True iff every byte is < 0x80 (empty string is True). Exact CPython
-    # semantics. Mirrors py_str_isascii in py_str_accessors.c.
+    # semantics.
     if ptr_is_null(s) != 0:
         return 0
     n: int = load_i64(s, PYSTROBJECT_BYTE_LEN_OFFSET)
@@ -1513,7 +1511,7 @@ def py_str_isascii(s) -> int:
 def py_str_isidentifier(s) -> int:
     # ASCII scope (mirrors py_str_isalpha's ASCII-only rule): empty -> False;
     # first char [A-Za-z_]; remaining chars [A-Za-z0-9_]. Matches CPython for
-    # ASCII-only input. Mirrors py_str_isidentifier in py_str_accessors.c.
+    # ASCII-only input.
     if ptr_is_null(s) != 0:
         return 0
     n: int = load_i64(s, PYSTROBJECT_BYTE_LEN_OFFSET)
@@ -1547,8 +1545,7 @@ def py_str_isidentifier(s) -> int:
 def py_str_isprintable(s) -> int:
     # ASCII scope: empty -> True; else every byte must be a printable ASCII
     # char in [0x20, 0x7E]. Non-ASCII bytes count as non-printable. Matches
-    # CPython for ASCII-only input. Mirrors py_str_isprintable in
-    # py_str_accessors.c.
+    # CPython for ASCII-only input.
     if ptr_is_null(s) != 0:
         return 0
     n: int = load_i64(s, PYSTROBJECT_BYTE_LEN_OFFSET)
@@ -1582,8 +1579,7 @@ def py_str_isdecimal(s) -> int:
 def py_str_istitle(s) -> int:
     # ASCII scope: True iff there is at least one cased (ASCII letter) char and
     # titlecasing holds: an uppercase char must not follow a cased char, and a
-    # lowercase char must follow a cased char. Mirrors py_str_istitle in
-    # py_str_accessors.c.
+    # lowercase char must follow a cased char.
     if ptr_is_null(s) != 0:
         return 0
     n: int = load_i64(s, PYSTROBJECT_BYTE_LEN_OFFSET)
@@ -1968,7 +1964,7 @@ def py_str_capitalize(s):
 
 @c_abi_export("py_str_swapcase")
 def py_str_swapcase(s):
-    # ASCII swapcase, mirrors py_str_accessors.c::py_str_swapcase.
+    # ASCII swapcase.
     if ptr_is_null(s) != 0:
         return null()
     n: int = load_i64(s, PYSTROBJECT_BYTE_LEN_OFFSET)
@@ -1996,7 +1992,7 @@ def py_str_swapcase(s):
 
 @c_abi_export("py_str_title")
 def py_str_title(s):
-    # ASCII titlecase, mirrors py_str_accessors.c::py_str_title.
+    # ASCII titlecase.
     if ptr_is_null(s) != 0:
         return null()
     n: int = load_i64(s, PYSTROBJECT_BYTE_LEN_OFFSET)
@@ -2035,7 +2031,7 @@ def py_str_title(s):
 
 @c_abi_export("py_str_casefold")
 def py_str_casefold(s):
-    # ASCII casefold == lower (mirrors py_str_accessors.c::py_str_casefold).
+    # ASCII casefold == lower.
     return py_str_lower(s)
 
 
@@ -2671,8 +2667,8 @@ def py_str_zfill(s, width: int):
 @c_abi_export("py_str_expandtabs")
 def py_str_expandtabs(s, tabsize: int):
     # str.expandtabs(tabsize): '\t' -> spaces up to the next tabsize column
-    # boundary; '\n'/'\r' reset the column. Mirrors py_str_expandtabs in
-    # py_str_accessors.c (ASCII/byte-oriented column tracking).
+    # boundary; '\n'/'\r' reset the column (ASCII/byte-oriented column
+    # tracking).
     if ptr_is_null(s) != 0:
         return null()
     s_bytes: int = load_i64(s, PYSTROBJECT_BYTE_LEN_OFFSET)
@@ -2716,7 +2712,7 @@ def py_str_expandtabs(s, tabsize: int):
 def py_str_translate(s, table):
     # str.translate(table): map each byte through table (dict {ord:ord|str|None}).
     # Absent->keep, None->delete, int->that byte, str->its bytes. Two-pass (size
-    # then fill). Mirrors py_str_translate in py_str_accessors.c (byte/ASCII).
+    # then fill), byte/ASCII.
     if ptr_is_null(s) != 0:
         return null()
     byte_len: int = load_i64(s, PYSTROBJECT_BYTE_LEN_OFFSET)
@@ -2779,7 +2775,7 @@ def py_str_translate(s, table):
 @c_abi_export("py_str_maketrans")
 def py_str_maketrans(x, y):
     # str.maketrans(x, y) -> {ord(x[i]): ord(y[i])} for the 2-arg form (equal
-    # length). Mirrors py_str_maketrans in py_str_accessors.c. py_dict_set
+    # length). py_dict_set
     # increfs key+value, so the fresh ints are decref'd after.
     xlen: int = load_i64(x, PYSTROBJECT_BYTE_LEN_OFFSET)
     ylen: int = load_i64(y, PYSTROBJECT_BYTE_LEN_OFFSET)
@@ -2885,8 +2881,8 @@ def py_str_partition(s, sep):
 @c_abi_export("py_str_rpartition")
 def py_str_rpartition(s, sep):
     # (before, sep, after) on the LAST occurrence; ("", "", s) if not found
-    # (rpartition puts the original at the END, unlike partition). Mirrors
-    # py_str_rpartition in py_str_accessors.c. No break: loop while found < 0.
+    # (rpartition puts the original at the END, unlike partition). No break:
+    # loop while found < 0.
     if ptr_is_null(s) != 0:
         return null()
     data = ptr_add(s, PYSTROBJECT_DATA_OFFSET)

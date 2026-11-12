@@ -1,8 +1,7 @@
 """pcc-Python owner for object, numeric, and percent formatting ABIs.
 
-The host-C oracle is ``src/py_format.c``.  This module deliberately builds
-text with pcc-owned buffers and the freestanding stdio numeric formatter; it
-does not replace the C helper with a call back into ``snprintf``.
+This module builds text with pcc-owned buffers and the freestanding stdio
+numeric formatter; it does not call back into ``snprintf``.
 """
 
 __pcc_runtime_port__ = True

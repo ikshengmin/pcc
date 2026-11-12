@@ -1,6 +1,6 @@
 """pcc-Python owners for the no-libpython C-API object basics.
 
-Replaces the simple PyObject_* block of py_capi_shim.c: type, truth, str,
+Replaces the simple PyObject_* block of the removed py_capi_shim.c: type, truth, str,
 repr, bytes, format, hash, size, item access, iteration, rich comparison,
 isinstance, weakref invalidation, GC-track no-ops, file-descriptor coercion,
 and length hinting.  Every function delegates to the existing pcc-Python

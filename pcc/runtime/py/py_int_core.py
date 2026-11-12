@@ -1,9 +1,9 @@
-"""pcc-Python replacement for py_runtime/src/py_int_core.c.
+"""pcc-Python runtime ported from the removed C file py_int_core.c.
 
 This slice owns the int object boundary: tagged-int encode/decode,
 small heap bignum allocation, canonical PyObject conversion, and the
-double conversion used by true division. The heavier arithmetic still
-lives in py_int.c for now.
+double conversion used by true division. The heavier arithmetic lives in
+the other py_int_*.py modules.
 """
 
 __pcc_runtime_port__ = True
@@ -109,8 +109,8 @@ def _bigint_tagged_fit_value(b) -> int:
 @c_abi_export("py_int_bit_length")
 def py_int_bit_length(n) -> int:
     # int.bit_length(): bits to represent abs(value), 0 for 0. Exact for bignums:
-    # (ndigits-1)*32 + bits in the top base-2^32 digit. Mirrors py_int_bit_length
-    # in py_int_core.c. tagged-int path only sees i63-range values (negatable).
+    # (ndigits-1)*32 + bits in the top base-2^32 digit. The tagged-int path
+    # only sees i63-range values (negatable).
     if ptr_is_null(n) != 0:
         return 0
     if is_tagged_int(n) != 0:
@@ -141,8 +141,8 @@ def py_int_bit_count(n) -> int:
     # int.bit_count(): number of set bits in abs(value), 0 for 0. CPython counts
     # the magnitude, so negatives match their absolute value:
     # (-255).bit_count() == 8. Exact for bignums: popcount each base-2^32 limb
-    # (limbs store the magnitude; sign is separate). Mirrors py_int_bit_count in
-    # py_int_core.c. tagged-int path only sees i63-range values (negatable).
+    # (limbs store the magnitude; sign is separate). The tagged-int path only
+    # sees i63-range values (negatable).
     if ptr_is_null(n) != 0:
         return 0
     if is_tagged_int(n) != 0:

@@ -1,4 +1,4 @@
-"""pcc-Python port of py_dunder.c."""
+"""pcc-Python runtime ported from the removed C file py_dunder.c."""
 
 __pcc_runtime_port__ = True
 
@@ -344,7 +344,7 @@ def _raise_not_integer(o):
 
 
 def _int_based_repr(o, base: int, prefix_ch: int):
-    # bin()/hex()/oct() shared body, mirrors py_dunder.c::py_int_based_repr.
+    # bin()/hex()/oct() shared body.
     # Negatives use half = -(v+1) (always fits i64, even min_i64) then a +1
     # carry on the digit string, so min_i64 is handled without overflow.
     overflow = malloc(4)
@@ -361,8 +361,7 @@ def _int_based_repr(o, base: int, prefix_ch: int):
             # payload as bigint limbs.
             return _raise_not_integer(o)
         # Bignum exceeding i64: full base-N conversion (was: wrongly returned
-        # the DECIMAL value -> the C<->port drift; C raised). Mirrors
-        # py_dunder.c py_int_based_repr.
+        # the DECIMAL value; it must raise instead).
         cbuf = py_bigint_to_base_cstr(o, base, prefix_ch)
         if ptr_is_null(cbuf):
             return null()

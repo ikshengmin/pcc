@@ -1,6 +1,6 @@
 """pcc-Python owners for the no-libpython C-API import surface.
 
-Replaces the PyImport_* block of py_capi_shim.c.  Delegates to the migrated
+Replaces the PyImport_* block of the removed py_capi_shim.c.  Delegates to the migrated
 extension/compiled-module loaders (py_extension_loader_runtime /
 py_compiled_module_runtime) and to PyUnicode_AsUTF8.
 

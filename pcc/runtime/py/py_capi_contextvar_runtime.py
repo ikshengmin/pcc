@@ -1,7 +1,7 @@
 """pcc-Python owners for the no-libpython ContextVar surface.
 
 Replaces the pcc_capi_contextvar type + PyContextVar_New/Get/Set + the
-get/set/reset method callbacks block of py_capi_shim.c.  The var object is a
+get/set/reset method callbacks block of the removed py_capi_shim.c.  The var object is a
 48-byte heap struct (header 16 + ob_type 8 + name@24 + def@32 + value@40).
 
 Owned surface (stable C ABI names):

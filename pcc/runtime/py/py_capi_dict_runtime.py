@@ -1,6 +1,6 @@
 """pcc-Python owners for the no-libpython C-API dict surface.
 
-Replaces the PyDict_* block of py_capi_shim.c.  Every function delegates to
+Replaces the PyDict_* block of the removed py_capi_shim.c.  Every function delegates to
 the existing pcc-Python dict ABIs (py_dict_new/get/set/del/...), preserving
 the CPython refcount contracts the shim implemented (borrowed GetItem,
 owned GetItemRef/Pop, KeyError-on-missing, TypeError on non-dict input).

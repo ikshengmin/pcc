@@ -1,4 +1,4 @@
-"""Phase 4c.4: pcc-Python port of py_exc_table.c.
+"""pcc-Python runtime ported from the removed C file py_exc_table.c.
 
 Re-implements py_exc_builtin_class — the lazy-bootstrap accessor for
 builtin exception classes. The STATIC ARRAYS (PY_EXC_BUILTIN_NAMES

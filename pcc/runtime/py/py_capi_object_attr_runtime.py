@@ -1,7 +1,7 @@
 """pcc-Python owners for the no-libpython C-API object attribute surface.
 
 Replaces the PyObject_GetAttr/SetAttr/HasAttr/GetOptionalAttr block of
-py_capi_shim.c.  All delegate to the migrated C-API siblings (PyUnicode_AsUTF8,
+the removed py_capi_shim.c.  All delegate to the migrated C-API siblings (PyUnicode_AsUTF8,
 pcc_capi_builtin_object_getattr, PyErr_*) and the pcc-Python object ABIs
 (py_obj_getattr, py_obj_setattr).
 

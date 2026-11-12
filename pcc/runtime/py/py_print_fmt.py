@@ -1,4 +1,4 @@
-"""pcc-Python port of py_print_fmt.c.
+"""pcc-Python runtime ported from the removed C file py_print_fmt.c.
 
 High-level print formatting for runtime PyObject* values. Native scalar
 float printing is still emitted directly by codegen; this module covers
@@ -81,7 +81,7 @@ py_raise_owned = extern("py_raise_owned", (c_ptr,), c_void)
 # Returns 1 if the unknown-tag object was a CPython PyObject and was
 # rendered via PyObject_Str (libpython mode). Returns 0 in strict
 # no-libpython mode (the hook variable is NULL there) so the caller
-# falls through to ``<object tag=N>``. See py_process.c.
+# falls through to ``<object tag=N>``. Defined in py_format_runtime.py.
 py_format_try_cpy_object_into_fd = extern(
     "py_format_try_cpy_object_into_fd",
     (c_int32, c_ptr, c_int32),

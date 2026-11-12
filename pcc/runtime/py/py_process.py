@@ -1,4 +1,4 @@
-"""pcc-Python replacement for py_runtime/src/py_process.c.
+"""pcc-Python runtime ported from the removed C file py_process.c.
 
 This module is used by the pcc-Python runtime archive and defines the
 program argv globals.

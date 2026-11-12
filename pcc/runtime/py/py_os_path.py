@@ -1,4 +1,4 @@
-"""pcc-Python port of py_os_path.c.
+"""pcc-Python runtime ported from the removed C file py_os_path.c.
 
 Narrow os.path runtime helpers: join, basename, and exists. Non-string
 path objects are coerced through py_obj_str before reading UTF-8 bytes.
@@ -61,8 +61,8 @@ py_file_open      = extern("py_file_open",      (c_ptr, c_ptr),   c_ptr)
 py_file_read_all  = extern("py_file_read_all",  (c_ptr,),         c_ptr)
 py_file_close     = extern("py_file_close",     (c_ptr,),         c_void)
 py_str_byte_len   = extern("py_str_byte_len",   (c_ptr,),         c_int64)
-# Low-level platform-portable stat helpers (defined in C; see
-# src/py_os_substrate.c). Avoids encoding struct stat layout — which
+# Low-level platform-portable stat helpers (defined in py_os_substrate.py).
+# Avoids encoding struct stat layout — which
 # differs between Linux and macOS — in pcc-Python.
 py_path_stat_kind  = extern("py_path_stat_kind",  (c_ptr,),         c_int32)
 py_path_stat_mtime = extern("py_path_stat_mtime", (c_ptr,),         c_double)

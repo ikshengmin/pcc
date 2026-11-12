@@ -1,6 +1,6 @@
 """pcc-Python owners for the no-libpython C-API exception surface.
 
-This module replaces the C py_capi_shim.c block that defined the PyExc_*
+This module replaces the removed C file py_capi_shim.c block that defined the PyExc_*
 singleton data symbols, the exception-tag mapping, every PyErr_* error
 function, and the printf-style message formatter shared with
 PyUnicode_FromFormat.  It is a semantic pcc-Python module (PY_MODULES), not
@@ -119,7 +119,7 @@ pcc_stdio_float_raw_capacity = extern(
 )
 
 # --- PyExc_* singleton data symbols -------------------------------------
-# Mirror of py_capi_shim.c: each PyExc_* is a linker-visible pointer global
+# Mirror of the removed py_capi_shim.c: each PyExc_* is a linker-visible pointer global
 # whose value is the address of a stable sentinel int.  C extensions compare
 # `PyErr_ExceptionMatches(PyExc_ValueError)` / pass PyExc_* into error
 # setters, so the addresses must be stable and distinct per class.  IOError
@@ -616,7 +616,7 @@ def PyErr_NormalizeException(exc, val, tb) -> None:
 
 
 # --- printf-style message formatter -------------------------------------
-# Faithful pcc-Python port of py_capi_shim.c's pcc_capi_format_message
+# Faithful pcc-Python port of the removed py_capi_shim.c's pcc_capi_format_message
 # (C's %-mini-language: %s %R %S %U %d %i %u %x %X %o %p %c %f %e %g and
 # their length/precision variants).  Numeric text is produced without a host
 # snprintf dependency; float text reuses the freestanding stdio emitter.

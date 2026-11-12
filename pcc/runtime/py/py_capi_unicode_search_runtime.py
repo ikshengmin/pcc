@@ -1,7 +1,7 @@
 """pcc-Python owners for the no-libpython PyUnicode search/read surface.
 
 Replaces the PyUnicode_Count / PyUnicode_Find / PyUnicode_FindChar /
-PyUnicode_ReadChar block of py_capi_shim.c.  The UTF-8 decode helper
+PyUnicode_ReadChar block of the removed py_capi_shim.c.  The UTF-8 decode helper
 (_utf8_next_u4) is duplicated here — pcc-Python runtime modules cannot import
 each other's private helpers; each module compiles standalone.
 

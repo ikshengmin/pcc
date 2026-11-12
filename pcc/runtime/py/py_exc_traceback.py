@@ -1,4 +1,4 @@
-"""pcc-Python port of py_exc_traceback.c.
+"""pcc-Python runtime ported from the removed C file py_exc_traceback.c.
 
 Traceback frame growth, fail-closed runtime-contract errors, and cold
 unhandled-exception formatting. Output matches the C runtime's stderr text,
@@ -328,7 +328,7 @@ def py_exc_append_frame_source(
 def py_exc_append_frame_indexed(
     exc, func_name, filename, lines, sources, index: int
 ) -> None:
-    # Mirror of py_exc_append_frame_indexed in py_exc_traceback.c: one shared
+    # One shared
     # landing per function/target reads the raise site's (line, source) pair
     # from the module tables by index.
     py_exc_append_frame_source(
@@ -438,7 +438,7 @@ def py_exc_print_unhandled(exc) -> None:
 
 # ---- traceback.format_exc() / traceback.print_exc() -----------------
 #
-# Mirrors the PccTbBuf helpers in py_exc_traceback.c: a growable heap
+# PccTbBuf helpers: a growable heap
 # buffer {buf ptr @0, len i64 @8, cap i64 @16} that collects the
 # CPython-style traceback text. Frames are emitted in reverse trail
 # order (pcc appends the raise site first; CPython prints the outermost

@@ -1,7 +1,7 @@
 """pcc-Python owners for the no-libpython sequence-iterator surface.
 
 Replaces the pcc_capi_seqiter type + PySeqIter_New / pcc_capi_is_seqiter /
-pcc_capi_seqiter_next block of py_capi_shim.c.  The iterator object is a
+pcc_capi_seqiter_next block of the removed py_capi_shim.c.  The iterator object is a
 40-byte heap struct (header 16 + ob_type 8 + seq@24 + index@32) whose type
 is built here.
 

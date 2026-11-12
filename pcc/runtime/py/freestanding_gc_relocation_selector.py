@@ -35,8 +35,8 @@ pcc_gc_object_is_address_pinned = extern("pcc_gc_object_is_address_pinned", (c_p
 
 
 # GC-P1-BACKEND4-FRESH-ALLOC-FILTER-DISAGREEMENT diagnosability counters.
-# Mirrors py_gc_backend.c (which uses atomics); the selector runs under the
-# graph lock on this arm, so plain load/store increments are ordered.
+# The selector runs under the graph lock on this arm, so plain load/store
+# increments are ordered.
 define_global_i64("pcc_gc_backend4_candidate_fresh_skips_g", 0)
 define_global_i64("pcc_gc_backend4_relocation_add_refusals_g", 0)
 

@@ -2,7 +2,7 @@
 
 Replaces the PyArg_ParseTuple / ParseTupleAndKeywords / UnpackTuple /
 VaParseTupleAndKeywords + pcc_capi_parse_one / format_counts / is_parse_code /
-skip_parse_dest block of py_capi_shim.c.  Variadic forms consume a va_list
+skip_parse_dest block of the removed py_capi_shim.c.  Variadic forms consume a va_list
 via the pcc.unsafe va_* intrinsics; dest pointers are read with va_arg_ptr and
 written with the matching store intrinsic.
 

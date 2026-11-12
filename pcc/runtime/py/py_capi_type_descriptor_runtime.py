@@ -2,7 +2,7 @@
 
 Replaces the pcc_capi_type_object_getattr + the method/getset/member/richcompare
 descriptor constructors + their call entries + caches block of
-py_capi_shim.c.  Type-level attribute lookup returns descriptor objects
+the removed py_capi_shim.c.  Type-level attribute lookup returns descriptor objects
 (py_func_named carriers) so extension documentation installers such as
 numpy.add_docstring work.
 

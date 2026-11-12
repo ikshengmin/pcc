@@ -1,4 +1,4 @@
-"""pcc-Python port of py_process_substrate.c.
+"""pcc-Python runtime ported from the removed C file py_process_substrate.c.
 
 Linux/Windows subprocess helpers pass owned argv/environment vectors directly to
 the platform process ABI. Directory operations use owned platform primitives.

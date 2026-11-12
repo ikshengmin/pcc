@@ -5576,8 +5576,7 @@ def pcc_gc_note_object_freeing(o) -> None:
     # The remap-finish struct is written only by the forwarding backends
     # (3/4): every writer below sits under that backend check, so on 0/1/2 it
     # is all-null at every exit and the six-way retirement fan-out is pure
-    # per-free overhead.  Gate the fan-out, not the struct init, and keep the
-    # C mirror in py_gc_backend.c the same shape.
+    # per-free overhead.  Gate the fan-out, not the struct init.
     moving: int = 0
     if backend == 4:
         moving = 1
@@ -6829,9 +6828,8 @@ def pcc_gc_thread_unregister_buffers() -> None:
     pcc_gc_frame_node_tls_pool_drain()
     pcc_gc_gray_worklist_unregister()
     pcc_gc_alloc_stage_thread_exit()
-    # Called from pcc_threads.c::pcc_thread_trampoline on thread exit. The C
-    # runtime (py_gc_backend.c) flushes+frees a PER-THREAD backend-4 medium
-    # store-buffer state here. The pcc-Python runtime mirror keeps the
+    # Called on thread exit. The removed C runtime flushed and freed a
+    # PER-THREAD backend-4 medium store-buffer state here. This runtime keeps the
     # backend-4 store buffer as GLOBAL state (see _store_buffer_medium_head;
     # there is no per-thread TLS buffer), so there is nothing per-thread to
     # flush or free on thread exit. This mirror MUST exist: pcc_threads.c is

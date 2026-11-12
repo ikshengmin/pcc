@@ -1,6 +1,6 @@
 """pcc-Python owners for the no-libpython C-API set surface.
 
-Replaces the PySet_* / PyAnySet_* block of py_capi_shim.c.  All functions
+Replaces the PySet_* / PyAnySet_* block of the removed py_capi_shim.c.  All functions
 delegate to the existing pcc-Python set ABIs (py_set_new/add/contains/
 remove/len) or to pcc-Python-owned C-API siblings (PyErr_*, py_obj_iter,
 py_obj_next).  PySet_New iterates through py_obj_iter/py_obj_next instead of

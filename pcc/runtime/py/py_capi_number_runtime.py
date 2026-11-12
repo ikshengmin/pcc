@@ -1,6 +1,6 @@
 """pcc-Python owners for the no-libpython C-API number surface.
 
-Replaces the PyNumber_* block of py_capi_shim.c.  All functions delegate to
+Replaces the PyNumber_* block of the removed py_capi_shim.c.  All functions delegate to
 the existing pcc-Python int/float ABIs (py_int_add/sub/mul/...,
 py_float_from_f64/to_f64) or to pcc-Python-owned C-API siblings (PyErr_*,
 PyLong_AsSsize_t, PyTuple_Pack).  The C-extension number slot dispatch

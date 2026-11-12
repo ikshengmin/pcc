@@ -1,7 +1,7 @@
 """pcc-Python owners for the CPython private link-readiness helpers.
 
 Replaces the _PyObject_New / _PyObject_NewVar / _PyObject_GC_New /
-_PyDict_GetItem_KnownHash block of py_capi_shim.c.  These are thin wrappers
+_PyDict_GetItem_KnownHash block of the removed py_capi_shim.c.  These are thin wrappers
 over already-migrated C-API surfaces.
 
 Owned surface (stable C ABI names):

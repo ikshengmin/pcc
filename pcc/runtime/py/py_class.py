@@ -1,4 +1,4 @@
-"""Phase 4c.14: pcc-Python port of py_class.c.
+"""pcc-Python runtime ported from the removed C file py_class.c.
 
 Public ``PyClassObject``, ``PyClassMethod``, ``PyInstanceObject``, descriptor,
 header, flag, and type-tag ABI values come from the generated
@@ -144,8 +144,7 @@ from pcc.unsafe import (
 # Number of classes that ever had ``__del__`` installed (class body or a later
 # ``cls.__del__ = f``).  Never decremented: a stale nonzero count only costs
 # the lookup.  ``py_user_del_dispatch`` skips its per-dealloc MRO walk while
-# this is zero -- the common program, and every pcc1 compile.  Mirrors
-# ``pcc_class_del_defined_count`` in py_substrate.c / py_class.c.
+# this is zero -- the common program, and every pcc1 compile.
 define_global_i32("pcc_class_del_defined_count", 0)
 define_global_i64("pcc_object_new_cache_mutex_bits", 0)
 # object's members (CPython vars(object)): built once, scheduler-rooted.
@@ -460,8 +459,8 @@ def _strs_eq(a, b) -> int:
         return 1
     # One pass, comparing terminators, instead of strlen(a) + strlen(b) + a
     # bounded byte loop.  Those three walked the name up to three times for
-    # every method and every field on every attribute access; the C mirror in
-    # py_class.c always did this in one pass because it calls strcmp.  Exactly
+    # every method and every field on every attribute access; one pass, as
+    # strcmp would do it.  Exactly
     # equivalent: unequal lengths are caught when one side reaches its NUL
     # while the other has not, and equal-length strings are decided at the
     # first differing byte or at the shared terminator.  Bytes 0 and 1 are
@@ -3573,8 +3572,7 @@ def _instance_getattr_default_body(inst, cls, name, slots, pins):
         return null()
     # The method-table slot for a compiled __getattr__ holds a PY_TYPE_FUNC
     # object, not a raw code pointer; invoke it via py_obj_call in that case.
-    # call_ptr2 alone treats the object as a code address and crashes. Mirrors
-    # class_call_binary_method in py_class.c.
+    # call_ptr2 alone treats the object as a code address and crashes.
     if _ptr_can_have_header(getattr_method):
         if load_i32(getattr_method, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_FUNC:
             gargs = _instance_lookup_hold(slots, pins, 6, py_tuple_new(2), 0)

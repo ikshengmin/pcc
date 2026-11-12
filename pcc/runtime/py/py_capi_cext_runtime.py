@@ -1,7 +1,7 @@
 """pcc-Python owners for the C-extension object dispatch surface.
 
 Replaces the pcc_capi_cext_object_* / pcc_capi_cext_* slot-dispatch block of
-py_capi_shim.c.  These drive the C-extension PyTypeObject slots (tp_iter,
+the removed py_capi_shim.c.  These drive the C-extension PyTypeObject slots (tp_iter,
 tp_repr, tp_iternext, tp_getattro, tp_setattro, mp_subscript, sq_item,
 tp_call, nb_bool, tp_richcompare, nb_absolute, binary nb_* slots) on behalf
 of the migrated C-API object/number/attr surfaces.

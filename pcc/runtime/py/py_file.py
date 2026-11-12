@@ -1,4 +1,4 @@
-"""pcc-Python port of py_file.c."""
+"""pcc-Python runtime ported from the removed C file py_file.c."""
 
 __pcc_runtime_port__ = True
 

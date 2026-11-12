@@ -1,8 +1,7 @@
-"""Phase 4c.15a: pcc-Python port of py_obj_ops_dispatch.c.
+"""pcc-Python runtime ported from the removed C file py_obj_ops_dispatch.c.
 
-Type-tag dispatch for the simpler generic ops. The compare/hash half
-stays in py_obj_ops_compare.c — porting FNV-1a + bignum cmp to pcc-
-Python is subtle and deferred.
+Type-tag dispatch for the simpler generic ops. The compare/hash half lives
+in py_obj_ops_compare.py.
 
 Public object layouts and type tags come from generated C-header-derived
 constants.  This module has private operation tables, but it must not carry a
@@ -1719,8 +1718,8 @@ def py_obj_rshift(a, b):
 
 @c_abi_export("py_obj_truediv")
 def py_obj_truediv(a, b):
-    # Python true division (``a / b``) for dynamically-typed operands. Mirrors
-    # py_obj_truediv in py_obj_ops_dispatch.c: numeric operands divide as
+    # Python true division (``a / b``) for dynamically-typed operands:
+    # numeric operands divide as
     # doubles (always producing a float, like CPython); anything else defers to
     # the ``__truediv__`` dunder. A tagged int has no ``__truediv__`` attribute,
     # so routing DynType ``/`` straight to the dunder raised AttributeError.
@@ -2129,7 +2128,7 @@ def py_obj_getitem_i64(o, idx: int):
 
 
 def _subscript_raise_missing(o, key) -> None:
-    # Mirror of py_obj_subscript_raise_missing in py_obj_ops_dispatch.c: turn
+    # Turn
     # the getitem primitives' silent NULL into the CPython exception.
     tag: int = _type_of(o)
     if tag == PY_TYPE_DICT:
@@ -4637,8 +4636,7 @@ def py_obj_getattr_default(o, name):
 # WITHOUT constructing the AttributeError those callers immediately clear.
 # User __getattr__ still runs and its real exceptions still surface (NULL
 # with the error set).  Other tags fall back to the raising py_obj_getattr,
-# whose exception the callers clear exactly as before.  Mirror of the C
-# implementation in src/py_obj_ops_dispatch.c; keep both in sync.
+# whose exception the callers clear exactly as before.
 @c_abi_export("py_obj_getattr_maybe")
 def py_obj_getattr_maybe(o, name):
     if ptr_is_null(o) != 0:

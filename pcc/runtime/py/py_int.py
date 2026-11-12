@@ -1,4 +1,4 @@
-"""pcc-Python replacement for the residual py_runtime/src/py_int.c."""
+"""pcc-Python runtime ported from the removed C file py_int.c."""
 
 __pcc_runtime_port__ = True
 

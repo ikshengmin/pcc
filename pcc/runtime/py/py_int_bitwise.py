@@ -1,4 +1,4 @@
-"""pcc-Python replacement for py_runtime/src/py_int_bitwise.c."""
+"""pcc-Python runtime ported from the removed C file py_int_bitwise.c."""
 
 __pcc_runtime_port__ = True
 

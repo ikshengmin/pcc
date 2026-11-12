@@ -73,7 +73,7 @@ pcc_runtime_tripwire_fail = extern(
     "pcc_py_gc_defer_tripwire", "void", ("ptr", "ptr", "i32")
 )
 def pcc_py_gc_defer_tripwire(msg, file, line: i64) -> None:
-    """Mirror of py_gc_backend.c's deferred slot: a graph-lock owner records
+    """Deferred tripwire slot: a graph-lock owner records
     its first invariant violation here instead of entering the runtime
     log/abort sink while locked; the outermost unlock reports it."""
     if (
@@ -108,12 +108,10 @@ def _finish_deferred_tripwire() -> None:
     "pcc_gc_tripwire_defer_or_fail", "i32", ("ptr", "ptr", "i32")
 )
 def pcc_gc_tripwire_defer_or_fail(msg, file, line: i64) -> i64:
-    """Strict-archive owner of py_gc_backend.c's cross-TU mixed-tripwire
-    seam.  C helper files that have no port (py_cpy_handle.c) are compiled
-    into the production archive while py_gc_backend.o is replaced by this
-    port, so the seam must be resolvable from here too.  Same contract as
-    the C oracle: a graph-lock owner records the first violation and returns
-    1 so the caller bails, an unlocked caller enters the fatal sink."""
+    """Cross-module mixed-tripwire seam of the collector.
+
+    A graph-lock owner records the first violation and returns 1 so the
+    caller bails; an unlocked caller enters the fatal sink."""
     if pcc_threads_enabled() == 0:
         pcc_runtime_tripwire_fail(msg, file, line)
         return 0

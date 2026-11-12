@@ -1,7 +1,6 @@
-"""pcc-Python port of py_io_waitset.c (scalable vthread IO waitset structure).
+"""pcc-Python runtime ported from the removed C file py_io_waitset.c (scalable vthread IO waitset structure).
 
-Mirror of the C runtime structure ``pcc/runtime/src/py_io_waitset.c`` and of
-the CPU-only oracle ``pcc/vthread/io_waitset_oracle.py`` (``PollWaitSet`` +
+Same algorithm as the CPU-only oracle ``pcc/vthread/io_waitset_oracle.py`` (``PollWaitSet`` +
 ``KqueueSimWaitSet``). The dependency-free C twin is embedded by production
 ``pcc_threads.c``: it owns Darwin kqueue or the unique-fd live-poll fallback,
 while stable scheduler nodes retain per-vthread GC roots. See

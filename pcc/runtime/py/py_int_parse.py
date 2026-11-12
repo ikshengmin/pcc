@@ -1,7 +1,7 @@
-"""Phase 4c: pcc-Python port of py_int_parse.c.
+"""pcc-Python runtime ported from the removed C file py_int_parse.c.
 
 String-to-int parsing for int(str) / int(str, base). The arithmetic core
-stays in py_int.c for now; this module only parses an int64 payload and
+lives in the other py_int_*.py modules; this module only parses an int64 payload and
 delegates canonical tagged-vs-heap construction to py_int_from_i64.
 """
 
@@ -277,8 +277,8 @@ def py_int_from_cstr(s: c_ptr, base: int):
 def _repr_append_byte(buf: c_ptr, n: int, c: int, quote: int) -> int:
     # Append the CPython-style repr of source byte ``c`` into ``buf`` at
     # position ``n``, using ``quote`` (a byte value) as the active quote so only
-    # the active quote is backslash-escaped. Mirrors repr_append_byte in
-    # py_int_parse.c. ``buf`` must have room for the worst case (4 bytes).
+    # the active quote is backslash-escaped. ``buf`` must have room for the
+    # worst case (4 bytes).
     if c == 92 or c == quote:  # '\\' or the active quote
         store_i8(buf, n, 92)
         store_i8(buf, n + 1, c)
@@ -320,8 +320,7 @@ def _build_bad_literal_message(s: c_ptr, base: int) -> c_ptr:
 def _build_bad_literal_message_length(s: c_ptr, slen: int, base: int, kind: int) -> c_ptr:
     # Build "invalid literal for int() with base <base>: <repr(s)>" into a
     # freshly malloc'd NUL-terminated buffer; caller frees. ``base`` is the
-    # ORIGINAL base argument (0 renders as "base 0"). Mirrors
-    # build_bad_literal_message in py_int_parse.c. Returns null() on OOM.
+    # ORIGINAL base argument (0 renders as "base 0"). Returns null() on OOM.
     # CPython quote selection: single quote unless the string has a single
     # quote but no double quote.
     quote: int = 39  # '\''
@@ -581,8 +580,8 @@ def _needs_counted_parse(s: c_ptr, base: int) -> int:
 def py_int_from_cstr_or_raise(s: c_ptr, base: int):
     # int(str) builtin: parse like py_int_from_cstr but raise ValueError on
     # invalid input instead of returning NULL (which the frontend would unbox to
-    # 0 -> int('xyz') silently became 0). Mirrors py_int_from_cstr_or_raise in
-    # py_int_parse.c; py_int_from_cstr stays NULL-returning for other callers.
+    # 0 -> int('xyz') silently became 0). py_int_from_cstr stays NULL-returning
+    # for other callers.
     #
     # CPython raises two distinct ValueError messages, reproduced here:
     #   - bad base (not 0 and outside 2..36):
@@ -618,7 +617,7 @@ def py_int_from_cstr_or_raise(s: c_ptr, base: int):
 
 @c_abi_export("py_obj_as_int_object")
 def py_obj_as_int_object(obj, base: int):
-    # Mirror of py_obj_as_int_object in py_int_parse.c.  `int(o[, base])` with an
+    # `int(o[, base])` with an
     # OBJECT result: the frontend's i64-returning `int(<dyn>)` lowering phis four
     # unboxed branches and truncates a bignum to 0, so callers that want the
     # object projection emit ONE call here instead.  Returns a NEW reference.

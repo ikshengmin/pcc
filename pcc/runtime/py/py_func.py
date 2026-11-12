@@ -1,4 +1,4 @@
-"""pcc-Python port of py_func.c.
+"""pcc-Python runtime ported from the removed C file py_func.c.
 
 Function object layout (unchanged):
     offset  0   PyObjectHeader (compiler entry roles use header flag bits)

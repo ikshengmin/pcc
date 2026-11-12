@@ -284,8 +284,7 @@ define_global_i64("pcc_py_gc_store_buffer_index_incomplete", 0)
 def pcc_gc_index_py_hash_ptr(key: c_ptr) -> i64:
     # Fibonacci multiply: consecutive (bump-allocated) addresses previously
     # landed in consecutive slots and linear probing degenerated into giant
-    # primary clusters (find_slot dominated GC3/GC4 profiles). Keep bit-exact
-    # with py_gc_index_hash_ptr in src/py_gc_index_table.c.
+    # primary clusters (find_slot dominated GC3/GC4 profiles).
     # -7046029254386353131 == 0x9E3779B97F4A7C15 as a two's-complement i64.
     value: i64 = logical_shift_right_i64(ptr_diff(key, null()), 3)
     value = wrapping_mul_i64(value, -7046029254386353131)

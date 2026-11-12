@@ -1,7 +1,7 @@
 """pcc-Python owners for the no-libpython C-extension method bridge.
 
 Replaces the pcc_capi_method_* + pcc_capi_prepare_call_args +
-pcc_capi_builtin_object_getattr (list.sort bridge) block of py_capi_shim.c.
+pcc_capi_builtin_object_getattr (list.sort bridge) block of the removed py_capi_shim.c.
 A C-extension PyMethodDef is wrapped as a pcc function object whose entry is
 the method_call_entry trampoline; captures carry (self, method_ptr, flags).
 The trampoline decodes the capture and dispatches to the C slot through the

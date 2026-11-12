@@ -1,7 +1,7 @@
 """Native JSON semantics authored in pcc-Python.
 
-The public ABI mirrors ``src/py_json.c``.  That C file remains a host-C oracle;
-the production pcc-Python archive owns these symbols through this module.
+The production pcc-Python archive owns these symbols through this module
+(ported from the removed ``src/py_json.c``, keeping its public ABI).
 """
 
 __pcc_runtime_port__ = True

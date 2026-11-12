@@ -128,7 +128,7 @@ define_global_i64_array(
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 )
 define_global_i32("pcc_gc_backend_selected", 0)
-# Mirror of py_gc_backend.c's pcc_gc_refcount_provenance_probe: whether the
+# pcc_gc_refcount_provenance_probe: whether the
 # refcount hot path asks pcc_gc_pointer_is_managed before it touches a header.
 # 0 trusts the caller (default on the non-moving collectors 0-2), 1 probes and
 # counts misses in pcc_gc_unmanaged_refcount_ops (default on the relocating
@@ -164,7 +164,7 @@ define_global_i64_array(
     "pcc_gc_hot_config_isolation_after",
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 )
-# Mirror of py_gc_backend.c's pcc_gc_unmanaged_refcount_ops.  i64 because it
+# pcc_gc_unmanaged_refcount_ops.  i64 because it
 # counts every refcount operation that missed provenance, which on a long-lived
 # service is not bounded by anything an i32 covers.
 define_global_i64("pcc_gc_unmanaged_refcount_ops", 0)

@@ -1,4 +1,4 @@
-"""Phase 4c.10: pcc-Python port of py_print_sys.c.
+"""pcc-Python runtime ported from the removed C file py_print_sys.c.
 
 sys.stdout.write / sys.stderr.write helpers with TextIOWrapper.write
 semantics: a non-str argument raises TypeError, every UTF-8 byte is written

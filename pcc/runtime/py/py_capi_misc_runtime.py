@@ -1,6 +1,6 @@
 """pcc-Python owners for small no-libpython C-API misc symbols.
 
-Replaces the scattered trivial blocks of py_capi_shim.c: the exception
+Replaces the scattered trivial blocks of the removed py_capi_shim.c: the exception
 __cause__/__context__/__traceback__ setters, the single-interpreter state
 pointers, the dict-proxy no-op view, and the buffer release helper.
 

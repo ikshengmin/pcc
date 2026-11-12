@@ -1,10 +1,10 @@
-"""Phase 4c.1: pcc-Python replacement for py_runtime/src/py_tuple.c.
+"""pcc-Python runtime ported from the removed C file py_tuple.c.
 
 Each public entry point is decorated with ``@c_abi_export(<name>)`` so
 pcc emits the unmangled C-ABI symbol name directly. This lets the
 .o produced from this module drop-in replace py_tuple.o at link time.
 
-Layout mirrors py_tuple.c exactly:
+Layout:
 
     typedef struct {
         PyObjectHeader h;          // 16 bytes (i64 refcount, i32 tag, i32 flags)
@@ -748,8 +748,8 @@ def py_tuple_get_known(tuple_ptr, i: int):
 @c_abi_export("py_tuple_getitem")
 def py_tuple_getitem(tuple_ptr, i: int):
     # t[i] subscript: like py_tuple_get but raises IndexError on out-of-range so
-    # try/except can catch it. Mirrors py_tuple_getitem in py_tuple.c; py_tuple_get
-    # stays non-raising for other callers. Negative indices normalize.
+    # try/except can catch it. py_tuple_get stays non-raising for other
+    # callers. Negative indices normalize.
     if ptr_is_null(tuple_ptr) != 0:
         return null()
     tuple_len: int = load_i64(tuple_ptr, PYTUPLEOBJECT_LEN_OFFSET)

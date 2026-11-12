@@ -1,4 +1,4 @@
-"""Phase 4c.7: pcc-Python port of py_obj_gc.c.
+"""pcc-Python runtime ported from the removed C file py_obj_gc.c.
 
 This mirrors the C runtime's default CPython-style backend: immediate
 refcounting plus a side-table cycle collector for tracked containers.

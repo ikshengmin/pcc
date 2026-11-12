@@ -1,9 +1,8 @@
 """Readable oracle for the production ``py_complex_pow`` implementation.
 
 The production pcc-Python archive owns the ABI in ``py_obj_stubs.py`` alongside
-the other complex arithmetic helpers.  ``src/py_complex_pow.c`` remains the
-host-C/pcc-C oracle implementation; this ordinary-Python transcription remains
-a directly readable algorithm oracle for both implementations.
+the other complex arithmetic helpers; this ordinary-Python transcription is a
+directly readable algorithm oracle for it.
 
 The pure-Python transcription below exists purely as a readable reference of
 the algorithm (which mirrors CPython ``Objects/complexobject.c::_Py_c_pow`` +
@@ -54,7 +53,7 @@ def _c_powi(x, n):
 
 
 def complex_pow(base, ex):
-    """``base ** ex`` for ``(real, imag)`` pairs; reference for py_complex_pow.c.
+    """``base ** ex`` for ``(real, imag)`` pairs.
 
     Raises ``ZeroDivisionError`` for ``0 ** (negative or complex power)``.
     """

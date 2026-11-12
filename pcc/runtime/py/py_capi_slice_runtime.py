@@ -1,7 +1,7 @@
 """pcc-Python owners for the no-libpython slice surface.
 
 Replaces the pcc_capi_slice type + PySlice_New / PySlice_GetIndicesEx block of
-py_capi_shim.c.  The slice object is a 48-byte heap struct
+the removed py_capi_shim.c.  The slice object is a 48-byte heap struct
 (header 16 + ob_type 8 + start@24 + stop@32 + step@40) whose type is built
 here via define_global_* words; the dealloc/traverse callbacks are exported
 pcc-Python functions.

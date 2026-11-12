@@ -1,6 +1,6 @@
-"""Phase 4c.1 spike: py_tuple.c ported to pcc-compilable Python.
+"""Tuple runtime spike: the removed C file py_tuple.c ported to pcc-compilable Python.
 
-Mirrors pcc/runtime/src/py_tuple.c semantics exactly:
+Same semantics as the removed C tuple runtime:
 
     typedef struct {
         PyObjectHeader h;           // int64 refcount, int32 type_tag, int32 flags (16 bytes)

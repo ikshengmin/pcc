@@ -1,7 +1,7 @@
 """pcc-Python substrate replacement.
 
-This module defines the stable runtime storage symbols that used to live
-in py_substrate.c, plus the small C ABI helper functions retained for
+This module defines the stable runtime storage symbols (formerly in the
+removed py_substrate.c), plus the small C ABI helper functions retained for
 older runtime call sites.  The top-level define_global_* and
 define_thread_local_* calls are compile-time pcc.unsafe intrinsics: they
 create storage symbols in the object file and do not depend on the

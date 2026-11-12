@@ -1,7 +1,7 @@
 """pcc-Python owners for the no-libpython C-API PyCFunction accessors.
 
 Replaces the PyCFunction_GetSelf / GetFlags / GetFunction block of
-py_capi_shim.c.  Reads the pcc PyFuncObject layout (header@0, capi_method@16,
+the removed py_capi_shim.c.  Reads the pcc PyFuncObject layout (header@0, capi_method@16,
 capi_self@24, entry@56, self_obj@80) and the fake-libc PyMethodDef layout
 (ml_name@0, ml_meth@8, ml_flags@16, ml_doc@24) plus the C-extension
 PyCFunctionObject prefix (m_ml@16, m_self@24).

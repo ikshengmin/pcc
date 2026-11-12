@@ -1,6 +1,6 @@
 """pcc-Python owners for the no-libpython PyUnicodeWriter surface.
 
-Replaces the PyUnicodeWriter_* block of py_capi_shim.c.  The writer is a
+Replaces the PyUnicodeWriter_* block of the removed py_capi_shim.c.  The writer is a
 3-slot heap struct (data@0, length@8, capacity@16) grown with PyMem_Realloc.
 The UTF-8 encode/decode helpers (_utf8_write / _utf8_next_u4) are duplicated
 here — pcc-Python runtime modules compile standalone and cannot import each

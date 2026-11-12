@@ -1,4 +1,4 @@
-"""Phase 4c: pcc-Python port of py_int_bigint_convert.c."""
+"""pcc-Python runtime ported from the removed C file py_int_bigint_convert.c."""
 
 __pcc_runtime_port__ = True
 

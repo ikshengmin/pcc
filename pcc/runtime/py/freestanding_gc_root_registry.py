@@ -412,7 +412,7 @@ def pcc_gc_scheduler_root_unregister(slot) -> None:
         pcc_gc_cycle_requested_store_release(1)
 
 
-# PccGcContinuationRootNode, mirrored byte-for-byte in py_gc_backend.c:
+# PccGcContinuationRootNode layout:
 #   [0] frame_map   [8] slots        [16] next   [24] root_count
 #   [32] borrowed   [40] stable_values -> [56]   [48] prev
 # ``prev`` exists so a caller holding the node can unlink in O(1).  Every

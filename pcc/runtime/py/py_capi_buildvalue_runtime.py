@@ -1,7 +1,7 @@
 """pcc-Python owner for the no-libpython Py_BuildValue surface.
 
 Replaces the Py_BuildValue + pcc_capi_build_many/build_one/build_none/
-build_skip block of py_capi_shim.c.  The format engine consumes a va_list via
+build_skip block of the removed py_capi_shim.c.  The format engine consumes a va_list via
 the pcc.unsafe va_* intrinsics.
 
 Supported format codes (mirroring the C shim): ( ) [ ] { } b h i l ll L n

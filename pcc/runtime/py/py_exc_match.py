@@ -1,4 +1,4 @@
-"""Phase 4c.6a: pcc-Python port of py_exc_match.c.
+"""pcc-Python runtime ported from the removed C file py_exc_match.c.
 
 Ports py_exc_matches — the hot MRO-aware class matcher used by every
 try/except handler dispatch. Traceback frame growth and unhandled

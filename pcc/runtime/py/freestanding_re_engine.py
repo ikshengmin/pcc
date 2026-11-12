@@ -1,8 +1,8 @@
 """Freestanding pcc-Python byte-regex core.
 
-This is the production owner of the strict ASCII regex subset mirrored by
-``src/py_re_engine.c``.  It uses only raw fixed-layout buffers and compiler
-intrinsics; the C implementation remains an independent differential oracle.
+This is the production owner of the strict ASCII regex subset (ported from
+the removed ``src/py_re_engine.c``).  It uses only raw fixed-layout buffers
+and compiler intrinsics.
 """
 
 from pcc import i64

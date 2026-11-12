@@ -1,6 +1,6 @@
 """pcc-Python owners for the no-libpython C-API unicode surface.
 
-Replaces the simple PyUnicode_* block of py_capi_shim.c: the thin
+Replaces the simple PyUnicode_* block of the removed py_capi_shim.c: the thin
 construction / accessor / comparison wrappers that delegate to the existing
 pcc-Python str ABIs (py_str_new, py_str_utf8, py_str_byte_len,
 py_str_concat, py_str_contains, py_str_slice, py_str_replace_count,

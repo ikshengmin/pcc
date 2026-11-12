@@ -1,4 +1,4 @@
-"""pcc-Python port of py_iter.c.
+"""pcc-Python runtime ported from the removed C file py_iter.c.
 
 Minimal native iterator wrapper for list / tuple / str / dict keys plus
 dispatch to native generator objects.

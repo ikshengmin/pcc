@@ -203,8 +203,7 @@ def py_os_environ_setitem(key, value):
     # os.environ[key] = value: CPython mapping semantics — both key
     # and value must be str (TypeError otherwise); the store is
     # visible to the process environment (setenv), matching CPython's
-    # putenv-backed __setitem__. Mirrors py_os_environ_setitem in
-    # py_os_env.c; py_os_putenv stays coercing/non-raising.
+    # putenv-backed __setitem__. py_os_putenv stays coercing/non-raising.
     if ptr_is_null(key) != 0:
         py_raise_owned(py_exc_new(3, cstr("str expected")))  # PY_EXC_TYPEERROR
         return null()

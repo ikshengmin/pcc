@@ -1,4 +1,4 @@
-"""pcc-Python port of py_coroutine.c.
+"""pcc-Python runtime ported from the removed C file py_coroutine.c.
 
 Coroutine object layout:
     offset  0   PyObjectHeader

@@ -1,7 +1,7 @@
 """pcc-Python owners for the no-libpython C-API object-call core.
 
 Replaces the PyObject_Call / CallObject / CallNoArgs / CallOneArg block of
-py_capi_shim.c.  All delegate to the existing pcc-Python object-call ABI
+the removed py_capi_shim.c.  All delegate to the existing pcc-Python object-call ABI
 (py_obj_call) or pcc-Python-owned C-API siblings (PyErr_*, py_tuple_new).
 
 Owned surface (stable C ABI names):

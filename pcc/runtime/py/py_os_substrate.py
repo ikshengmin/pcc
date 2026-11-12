@@ -1,4 +1,4 @@
-"""pcc-Python port of py_os_substrate.c.
+"""pcc-Python runtime ported from the removed C file py_os_substrate.c.
 
 The stat helpers delegate ABI-sensitive ``struct stat`` reads to
 pcc.unsafe intrinsics. The runtime source stays portable and does not encode

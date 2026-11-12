@@ -1,6 +1,6 @@
 """pcc-Python owners for the no-libpython C-API capsule surface.
 
-Replaces the PyCapsule_* block of py_capi_shim.c.  A capsule is a pcc
+Replaces the PyCapsule_* block of the removed py_capi_shim.c.  A capsule is a pcc
 instance of a lazily-created ``capsule`` class carrying four attributes:
 __pcc_capsule_pointer__, __pcc_capsule_name__, __pcc_capsule_context__,
 __pcc_capsule_destructor__.  The destructor is a raw function address stored

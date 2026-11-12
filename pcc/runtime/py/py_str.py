@@ -1,4 +1,4 @@
-"""pcc-Python port of py_str.c.
+"""pcc-Python runtime ported from the removed C file py_str.c.
 
 Only py_str_new remains here; the rest of the string runtime lives in
 py_str_accessors.py.

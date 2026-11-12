@@ -1,6 +1,6 @@
 """pcc-Python owners for the no-libpython C-API type-token surface.
 
-This module replaces the C py_capi_shim.c type-bridge block: the 24 builtin
+This module replaces the removed C file py_capi_shim.c type-bridge block: the 24 builtin
 Py*_Type recognition tokens (linker-visible data globals that C extensions
 compare against and read tp_name/tp_flags from), the C-extension dynamic type
 registry, pcc_capi_type / pcc_capi_type_addr / pcc_capi_typecheck, the builtin
@@ -25,7 +25,7 @@ type_tag=0, flags=0}, tp_name, and tp_flags=READY are set; everything else is
 zero, exactly like the C ``PCC_CAPI_TYPEOBJ`` macro.
 
 Registry contract (shared with the retained C helpers that stay in
-py_capi_shim.c for later slices): pcc_capi_cext_types holds the registered
+the removed py_capi_shim.c for later slices): pcc_capi_cext_types holds the registered
 PyTypeObject* pointers, pcc_capi_cext_type_count the next free slot, and
 pcc_capi_cext_type_modules the owning module per dynamic tag.  The C side
 declares these extern and keeps writing through them.
