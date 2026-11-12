@@ -49,7 +49,7 @@ MODULES = (
 EXPECTED_OUTPUT = (
     'mem2reg', 'sroa', 'instsimplify', 'simplifycfg', 'fold-two-entry-phi',
     'instcombine', 'dce', 'inline-default-and-defined',
-    'literal-defaults-and-bool-keywords', 'scalar-helpers-and-strict-bool',
+    'literal-defaults-and-bool-keywords', 'scalar-helpers-and-unconditional-strict',
     'native-keyword-arity-errors', 'live-rebinding-and-one-replacement-call',
     'owned-optimizer-native-ok',
 )

@@ -30,7 +30,7 @@ done:
 
 
 def test_driver_memory_tier_matches_production_dispatch():
-    expected = run_owned_passes(_LOOP, ["mem2reg", "sroa"], False)
+    expected = run_owned_passes(_LOOP, ["mem2reg", "sroa"])
     actual = optimize_ir(_LOOP, "mem2reg,sroa")
     assert actual == expected
     assert "alloca" not in actual

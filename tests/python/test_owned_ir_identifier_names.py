@@ -52,12 +52,12 @@ def test_owned_passes_keep_identifiers_whole_through_phi_insertion_and_inlining(
     # Keep its separate ABI restriction explicit; local/block names still
     # exercise both characters through the owned transformations.
     source = IR.replace("worker-name$", "worker$name")
-    promoted = run_owned_passes(source, ["mem2reg", "sroa"], True)
+    promoted = run_owned_passes(source, ["mem2reg", "sroa"])
     assert "alloca" not in promoted
     assert " phi i32 " in promoted
     verify_parsed_module(parse_self_backend_module(promoted))
     result = run_owned_passes(
-        promoted, ["instsimplify", "instcombine", "simplifycfg", "dce", "inline"], True,
+        promoted, ["instsimplify", "instcombine", "simplifycfg", "dce", "inline"],
     )
     verify_parsed_module(parse_self_backend_module(result))
     assert "call i32 @worker$name" not in result

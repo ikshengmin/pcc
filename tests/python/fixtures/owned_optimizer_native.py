@@ -75,8 +75,11 @@ entry:
 CALL = """declare ptr @py_cpy_import(ptr)
 define ptr @probe() {
 entry:
+  %slot = alloca ptr
   %value = call ptr @py_cpy_import(ptr null)
-  ret ptr %value
+  store ptr %value, ptr %slot
+  %loaded = load ptr, ptr %slot
+  ret ptr %loaded
 }
 """
 events: list[str] = []
@@ -87,32 +90,40 @@ def replacement(text: str) -> tuple[str, bool]:
     return text + "; replacement executed\n", True
 
 
+def required_keyword(text: str, *, enabled: bool) -> str:
+    # The real tier no longer has a required strict keyword. Keep the native
+    # required-keyword call contract separate from its two-argument API.
+    if enabled:
+        return text
+    return ""
+
+
 def main():
-    out = run_owned_passes(SCALAR, ["mem2reg"], False)
+    out = run_owned_passes(SCALAR, ["mem2reg"])
     assert "alloca" not in out and "load i64" not in out and "ret i64 %arg" in out
     print("mem2reg")
-    out = run_owned_passes(STRUCT, ["sroa"], False)
+    out = run_owned_passes(STRUCT, ["sroa"])
     assert "alloca {" not in out and "getelementptr" not in out
     print("sroa")
-    out = run_owned_passes(ADD_ZERO, ["instsimplify"], False)
+    out = run_owned_passes(ADD_ZERO, ["instsimplify"])
     assert "add i64" not in out and "ret i64 %arg" in out
     print("instsimplify")
-    out = run_owned_passes(CONSTANT_BRANCH, ["simplifycfg"], False)
+    out = run_owned_passes(CONSTANT_BRANCH, ["simplifycfg"])
     assert "br i1 true" not in out and "ret i64 22" not in out
     print("simplifycfg")
-    out = run_owned_passes(DIAMOND, ["fold-two-entry-phi"], False)
+    out = run_owned_passes(DIAMOND, ["fold-two-entry-phi"])
     assert "select i1" in out and "phi i64" not in out
     print("fold-two-entry-phi")
-    out = run_owned_passes(MULTIPLY, ["instcombine"], False)
+    out = run_owned_passes(MULTIPLY, ["instcombine"])
     assert "mul i64" not in out and "shl i64 %arg, 3" in out
     print("instcombine")
-    out = run_owned_passes(DEAD, ["dce"], False)
+    out = run_owned_passes(DEAD, ["dce"])
     assert "%unused" not in out and "ret i64 %arg" in out
     print("dce")
-    out = run_owned_passes(INTERNAL, ["inline"], False)
+    out = run_owned_passes(INTERNAL, ["inline"])
     assert "call i64 @leaf" not in out
     external = INTERNAL.replace("define internal", "define")
-    out = run_owned_passes(external, ["inline-defined"], False)
+    out = run_owned_passes(external, ["inline-defined"])
     assert "call i64 @leaf" not in out and "define i64 @leaf" in out
     print("inline-default-and-defined")
 
@@ -136,13 +147,22 @@ def main():
     assert "alloca {" not in out and "getelementptr" not in out
     out = run_compiled_default_tier(SCALAR, ["mem2reg", "sroa"])
     assert "alloca" not in out and "ret i64 %arg" in out
-    out = run_owned_passes(SCALAR, ["mem2reg", "sroa"], False)
+    out = run_owned_passes(SCALAR, ["mem2reg", "sroa"])
     assert "alloca" not in out and "ret i64 %arg" in out
     assert _has_py_cpy_call(CALL)
     assert not _has_py_cpy_call("declare ptr @py_cpy_import(ptr)\n")
-    assert run_owned_passes(CALL, ["mem2reg"], True) == CALL
+    assert run_owned_passes(CALL, ["mem2reg"]) == CALL
     assert run_compiled_default_tier(CALL, ["mem2reg", "sroa"]) == CALL
-    print("scalar-helpers-and-strict-bool")
+    # The same memory shape is promotable without an actual CPython fallback
+    # call. Unchanged strict input must not pass merely because it is a no-op.
+    owned_call = CALL.replace("py_cpy_import", "owned_import")
+    promoted = run_owned_passes(owned_call, ["mem2reg"])
+    assert "alloca" not in promoted and "load ptr" not in promoted
+    assert "call ptr @owned_import(ptr null)" in promoted
+    promoted = run_compiled_default_tier(owned_call, ["mem2reg", "sroa"])
+    assert "alloca" not in promoted and "load ptr" not in promoted
+    assert "call ptr @owned_import(ptr null)" in promoted
+    print("scalar-helpers-and-unconditional-strict")
 
     functions = [inline_module]
     caught = False
@@ -151,22 +171,38 @@ def main():
     except TypeError:
         caught = True
     assert caught
+    required = [required_keyword]
+    assert required[0](SCALAR, enabled=True) == SCALAR
+    assert required[0](SCALAR, enabled=False) == ""
+    caught = False
+    try:
+        required[0](SCALAR)
+    except TypeError:
+        caught = True
+    assert caught
     tiers = [run_compiled_default_tier]
     caught = False
     try:
-        tiers[0](SCALAR, ["mem2reg"])
+        tiers[0](SCALAR)
     except TypeError:
+        caught = True
+    assert caught
+    # An unsupported manifest has valid arity and must raise ValueError.
+    caught = False
+    try:
+        tiers[0](SCALAR, ["mem2reg"])
+    except ValueError:
         caught = True
     assert caught
     print("native-keyword-arity-errors")
 
     original = dispatch.inline_module
     dispatch.inline_module = replacement
-    out = run_owned_passes(INTERNAL, ["inline"], False)
+    out = run_owned_passes(INTERNAL, ["inline"])
     assert out == INTERNAL + "; replacement executed\n"
     assert events == [INTERNAL]
     dispatch.inline_module = original
-    out = run_owned_passes(INTERNAL, ["inline"], False)
+    out = run_owned_passes(INTERNAL, ["inline"])
     assert "call i64 @leaf" not in out and events == [INTERNAL]
     print("live-rebinding-and-one-replacement-call")
     print("owned-optimizer-native-ok")

@@ -375,7 +375,7 @@ def test_actual_owned_inlining_never_recreates_per_site_reporter(mode):
     helper = codegen.runtime[_KEY]
     text = str(codegen.module)
     if mode == "pipeline":
-        result = run_owned_passes(text, ["instsimplify", "simplifycfg", "inline", "inline-defined", "dce"], True)
+        result = run_owned_passes(text, ["instsimplify", "simplifycfg", "inline", "inline-defined", "dce"])
     else:
         result, _ = inline_module(text, include_definitions=mode == "inline-defined",
                                   require_alwaysinline=mode == "always-inline")

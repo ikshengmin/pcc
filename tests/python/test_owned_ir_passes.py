@@ -371,7 +371,7 @@ done:
                          capture_output=True, text=True, timeout=15)
     assert run.returncode == 0, run.stderr
     promoted = output_path.read_text()
-    assert promoted == run_owned_passes(memory_ir, ["mem2reg", "sroa"], False)
+    assert promoted == run_owned_passes(memory_ir, ["mem2reg", "sroa"])
     assert "alloca" not in promoted
     assert " = phi i64 " in promoted
 

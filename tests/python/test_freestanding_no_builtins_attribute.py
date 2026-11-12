@@ -123,7 +123,7 @@ def test_owned_passes_preserve_libc_definitions_without_recursive_libcalls(
 
     ir_text = _emit_path(tmp_path, MEM_STR_SRC, "fs_mem_o2")
     verify_ir_text(ir_text)
-    optimized = run_owned_passes(ir_text, ["mem2reg", "sroa", "instsimplify", "instcombine", "dce", "inline-defined"], True)
+    optimized = run_owned_passes(ir_text, ["mem2reg", "sroa", "instsimplify", "instcombine", "dce", "inline-defined"])
     verify_ir_text(optimized)
 
     defined_names = set(_defined_functions(optimized))

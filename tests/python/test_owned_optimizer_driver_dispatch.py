@@ -41,7 +41,7 @@ done:
 ])
 def test_driver_preserves_order_and_escaping_memory(passes):
     actual = optimize_ir(_BRANCH, passes)
-    assert actual == run_owned_passes(_BRANCH, passes.split(","), False)
+    assert actual == run_owned_passes(_BRANCH, passes.split(","))
     assert "store volatile i64 3, ptr %escaped" in actual
     assert "call void @observe(ptr %escaped)" in actual
     if "mem2reg" in passes:
@@ -69,8 +69,41 @@ sys.meta_path.insert(0, RejectLLVM())
         cwd=tmp_path, env=environment, text=True, capture_output=True, timeout=20,
     )
     assert ran.returncode == 0, ran.stdout + ran.stderr
-    assert output.read_text() == run_owned_passes(_BRANCH, ["mem2reg", "sroa"], False)
+    assert output.read_text() == run_owned_passes(_BRANCH, ["mem2reg", "sroa"])
     assert "mem2reg,sroa changed=True" in ran.stderr
+
+
+def test_native_optimizer_fixture_matches_current_host_contract():
+    # A host smoke catches stale fixture calls before the expensive native
+    # gate. It does not replace compilation or execution of the native fixture.
+    import ast
+
+    root = Path(__file__).resolve().parents[2]
+    # Read the shared expectation without importing the Linux-only native
+    # harness or provisioning a runtime in an ordinary host test.
+    harness = ast.parse((root / "scripts/verify_owned_optimizer_native.py").read_text())
+    expectations = [ast.literal_eval(node.value) for node in harness.body
+                    if isinstance(node, ast.Assign)
+                    and isinstance(node.targets[0], ast.Name)
+                    and node.targets[0].id == "EXPECTED_OUTPUT"]
+    assert len(expectations) == 1
+    source = '''import importlib.abc
+import runpy
+import sys
+class RejectLLVM(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "llvmlite" or fullname.startswith("llvmlite.") or fullname == "pcc.ir.binding":
+            raise AssertionError("external LLVM import: " + fullname)
+sys.meta_path.insert(0, RejectLLVM())
+runpy.run_path("tests/python/fixtures/owned_optimizer_native.py")
+'''
+    ran = subprocess.run(
+        [sys.executable, "-c", source], cwd=root,
+        text=True, capture_output=True, timeout=20,
+    )
+    assert ran.returncode == 0, ran.stdout + ran.stderr
+    assert tuple(ran.stdout.splitlines()) == expectations[0]
+    assert not ran.stderr
 
 
 def test_driver_rejects_unknown_pass():
