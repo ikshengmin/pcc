@@ -1,8 +1,11 @@
+import os
 from pathlib import Path
 import platform
 import struct
 import subprocess
 import sys
+
+import pytest
 
 from pcc.frontends.python import pipeline
 from tests.owned_runtime_c_fixture import (
@@ -15,6 +18,15 @@ STDIO_SOURCE = REPO_ROOT / "pcc" / "runtime" / "py" / "freestanding_stdio.py"
 ALLOCATOR_SOURCE = (
     REPO_ROOT / "pcc" / "runtime" / "py" / "freestanding_allocator.py"
 )
+
+
+@pytest.fixture(autouse=True)
+def _admitted_runtime_archive(monkeypatch, pcc_runtime_archive):
+    """Whole-runtime controls read members of an admitted runtime archive:
+    the one named by PCC_RUNTIME_ARCHIVE, else the session's verified owned
+    runtime, which admitted_runtime checks the same way."""
+    if not os.environ.get("PCC_RUNTIME_ARCHIVE"):
+        monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(pcc_runtime_archive))
 
 
 def _compile_stdio_ir(tmp_path: Path) -> Path:
