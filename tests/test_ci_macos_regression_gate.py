@@ -136,6 +136,144 @@ def _workflow_job(workflow, name):
     return body[:next_job.start()] if next_job else body
 
 
+_MACOS_STAGE1_STEPS = {
+    "build": "Build current pcc1",
+    "find": "Verify bound find with the existing pcc0 and pcc1 runtime",
+    "evidence": "Preserve macOS bootstrap evidence",
+}
+
+
+def _workflow_step(job, name):
+    # Stop at every sibling step, including unnamed uses/run steps. A property
+    # on the next step must never satisfy this step's contract.
+    matches = re.findall(
+        r"(?ms)^      - name: " + re.escape(name) + r"\n.*?(?=^      - |\Z)", job,
+    )
+    assert len(matches) == 1, name
+    return matches[0]
+
+
+def _workflow_step_scalar(step, key):
+    values = re.findall(r"(?m)^        " + re.escape(key) + r": (.+)$", step)
+    assert len(values) == 1, key
+    return values[0]
+
+
+def _workflow_step_env(step):
+    blocks = re.findall(r"(?m)^        env:\n((?:          [^\n]*\n)+)", step)
+    assert len(blocks) == 1
+    return [line.strip() for line in blocks[0].splitlines()
+            if not line.lstrip().startswith("#")]
+
+
+def _assert_macos_stage1_step_contracts(stage1):
+    steps = {key: _workflow_step(stage1, name)
+             for key, name in _MACOS_STAGE1_STEPS.items()}
+    build, find, evidence = (steps[key] for key in ("build", "find", "evidence"))
+    assert _workflow_step_scalar(build, "id") == "mac_stage1"
+    assert not re.search(r"(?m)^        if:", build)
+    assert _workflow_step_env(build) == [
+        'PCC_HOST_INDEXED_PROCESS_SPLIT: "1"',
+        'PCC_MACHO_LINK_PHASE_EVENTS: "1"',
+    ]
+    assert _workflow_step_scalar(build, "run") == (
+        "uv run --frozen --no-sync python scripts/ci_worker_size_prior_gate.py "
+        "--out-dir build/worker-prior-gate --phase stage1")
+    assert "PCC_HOST_INDEXED_PROCESS_SPLIT" not in stage1.replace(build, "", 1)
+
+    # Only the post-Stage1 find qualification declares threading. It reuses
+    # the admitted threaded runtime; it must not change the build/job env.
+    assert _workflow_step_scalar(find, "id") == "bound_find"
+    assert _workflow_step_scalar(find, "if") == (
+        "${{ !cancelled() && steps.mac_stage1.outcome == 'success' }}")
+    assert _workflow_step_scalar(find, "timeout-minutes") == "6"
+    assert _workflow_step_env(find) == [
+        'PCC_TEST_NO_NATIVE_PROVISIONING: "1"',
+        'PCC_NO_AUTO_PCC1: "1"',
+        'PCC_WITH_THREADS: "1"',
+        'PCC_REFCOUNT_KIND: "atomic"',
+        'PCC_PYTEST_AUTO_CLEAN: "0"',
+        'UV_PYTHON_DOWNLOADS: "never"',
+    ]
+    assert _workflow_step_scalar(find, "run") == (
+        "uv run --frozen --no-sync python scripts/ci_native_find_protocol.py "
+        "--out-dir build/worker-prior-gate")
+    assert "PCC_WITH_THREADS" not in stage1.replace(find, "", 1)
+
+    assert _workflow_step_scalar(evidence, "id") == "qualification_evidence"
+    assert _workflow_step_scalar(evidence, "if") == "always()"
+    assert _workflow_step_scalar(evidence, "uses") == "actions/upload-artifact@v6"
+    prior = _workflow_step(stage1, "Verify the new pcc1 on native prior worker shapes")
+    wheel = _workflow_step(stage1, "Build, install, and execute the native wheel")
+    assert _workflow_step_scalar(wheel, "if") == (
+        "${{ !cancelled() && steps.native_prior.outcome == 'success' && "
+        "steps.bound_find.outcome == 'success' && "
+        "steps.qualification_evidence.outcome == 'success' }}")
+    assert (stage1.index(build) < stage1.index(prior) < stage1.index(find)
+            < stage1.index(evidence) < stage1.index(wheel))
+    assert "continue-on-error" not in stage1
+
+
+@pytest.mark.parametrize("step, old, new", [
+    pytest.param("evidence", "        id: qualification_evidence\n", "", id="missing-evidence-id"),
+    pytest.param("evidence", "id: qualification_evidence", "id: wrong", id="wrong-evidence-id"),
+    pytest.param("evidence", "        if: always()\n", "", id="missing-evidence-if"),
+    pytest.param("evidence", "if: always()", "if: success()", id="wrong-evidence-if"),
+    pytest.param("evidence", "        if: always()", "      - uses: wrong/action@v1\n        if: always()",
+                 id="evidence-if-on-next-step"),
+    pytest.param("build", "        id: mac_stage1\n", "", id="missing-build-id"),
+    pytest.param("build", "id: mac_stage1", "id: wrong", id="wrong-build-id"),
+    pytest.param("build", "        env:\n", "", id="missing-build-env"),
+    pytest.param("build", 'PCC_HOST_INDEXED_PROCESS_SPLIT: "1"',
+                 'PCC_HOST_INDEXED_PROCESS_SPLIT: "0"', id="wrong-build-env"),
+    pytest.param("build", '          PCC_MACHO_LINK_PHASE_EVENTS: "1"\n', "",
+                 id="missing-build-env-entry"),
+    pytest.param("build", "        env:\n", "      - name: Wrong owner\n        env:\n",
+                 id="build-env-on-next-step"),
+    pytest.param("build", "--phase stage1", "--phase pcc1", id="wrong-build-phase"),
+    pytest.param("find", "        id: bound_find\n", "", id="missing-find-id"),
+    pytest.param("find", "steps.mac_stage1.outcome == 'success'", "steps.mac_stage1.outcome == 'failure'",
+                 id="wrong-find-admission"),
+    pytest.param("find", "        env:\n", "", id="missing-find-env"),
+    pytest.param("find", 'PCC_WITH_THREADS: "1"', 'PCC_WITH_THREADS: "0"', id="disabled-find-threads"),
+    pytest.param("find", '          PCC_WITH_THREADS: "1"\n', "", id="missing-find-threads"),
+])
+def test_macos_stage1_step_contract_rejects_misbound_properties(step, old, new):
+    workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
+    stage1 = _workflow_job(workflow, "pcc1-package-parity")
+    _assert_macos_stage1_step_contracts(stage1)
+    original = _workflow_step(stage1, _MACOS_STAGE1_STEPS[step])
+    assert original.count(old) == 1
+    changed = stage1.replace(original, original.replace(old, new, 1), 1)
+    with pytest.raises(AssertionError):
+        _assert_macos_stage1_step_contracts(changed)
+
+
+@pytest.mark.parametrize("mutation", [
+    "job-threads", "build-threads", "other-step-threads", "duplicate-evidence", "early-evidence",
+])
+def test_macos_stage1_step_contract_rejects_scope_or_order_changes(mutation):
+    workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
+    stage1 = _workflow_job(workflow, "pcc1-package-parity")
+    _assert_macos_stage1_step_contracts(stage1)
+    build = _workflow_step(stage1, _MACOS_STAGE1_STEPS["build"])
+    evidence = _workflow_step(stage1, _MACOS_STAGE1_STEPS["evidence"])
+    if mutation == "job-threads":
+        changed = stage1.replace('    env:\n', '    env:\n      PCC_WITH_THREADS: "1"\n', 1)
+    elif mutation == "build-threads":
+        changed = stage1.replace(build, build.replace(
+            '        env:\n', '        env:\n          PCC_WITH_THREADS: "1"\n', 1), 1)
+    elif mutation == "other-step-threads":
+        changed = stage1 + '      - name: Other owner\n        env:\n          PCC_WITH_THREADS: "1"\n'
+    elif mutation == "duplicate-evidence":
+        changed = stage1 + evidence
+    else:
+        changed = stage1.replace(evidence, "", 1).replace(build, evidence + build, 1)
+    assert changed != stage1
+    with pytest.raises(AssertionError):
+        _assert_macos_stage1_step_contracts(changed)
+
+
 def test_workflow_keeps_stage1_configuration_and_evidence_separate():
     workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
     smoke = _workflow_job(workflow, "macos-pcc0-regressions")
@@ -153,8 +291,7 @@ def test_workflow_keeps_stage1_configuration_and_evidence_separate():
     assert 'PCC_BOOTSTRAP_MIN_TREE_RSS_BYTES: "2147483648"' in stage1
     assert 'PCC_BOOTSTRAP_HOST_MEMORY_RESERVE_BYTES: "536870912"' in stage1
     assert "PCC_BOOTSTRAP_MAX_TREE_RSS_BYTES:" not in stage1
-    assert "name: Preserve macOS bootstrap evidence\n        if: always()" in stage1
-    assert "PCC_WITH_THREADS" not in stage1
+    _assert_macos_stage1_step_contracts(stage1)
     assert "ci_macos_regression_gate" not in stage1
     assert has_only_validation_plan_dependency(smoke)
     assert "--profile float-doc" not in smoke + stage1
@@ -591,10 +728,7 @@ def test_indexed_split_workflow_is_independent_of_macos_stage1_opt_in():
     assert "env -u LC_ALL" not in job
     assert has_only_validation_plan_dependency(stage1)
     assert stage1.count('PCC_HOST_INDEXED_PROCESS_SPLIT: "1"') == 1
-    assert ('      - name: Build current pcc1\n        env:\n'
-            '          # Opt in only this Stage1 build; the bridge gate runs independently.\n'
-            '          PCC_HOST_INDEXED_PROCESS_SPLIT: "1"\n'
-            '          PCC_MACHO_LINK_PHASE_EVENTS: "1"\n        run: uv run') in stage1
+    _assert_macos_stage1_step_contracts(stage1)
     assert 'PCC_BOOTSTRAP_STAGE_TIMEOUT: "7200"' in stage1
     assert "timeout-minutes: 200" in stage1
     assert "PCC_HOST_INDEXED_PROCESS_SPLIT" not in other
