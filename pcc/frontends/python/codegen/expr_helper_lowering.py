@@ -309,7 +309,7 @@ class ExprHelperLoweringMixin:
         if isinstance(expr, BoolLit):
             return ir.Constant(_I64, 1 if bool(expr.value) else 0)
         value = self._emit_expr(expr)
-        if value in getattr(self, "_cpy_values", ()):
+        if value in self._cpy_values:
             return self.builder.call(
                 self.runtime["py_cpy_to_i64"],
                 [value],

@@ -127,7 +127,7 @@ def _method_pointer_provenance(
     """
     if not isinstance(value.type, ir.PointerType):
         return (value, False, False, False)
-    if value in getattr(host, "_cpy_values", ()):
+    if value in host._cpy_values:
         return (value, False, False, False)
     if host._value_is_never_gc_object(value):
         # Tagged immediates, immortal singletons and static literals: there is
@@ -163,7 +163,7 @@ def _method_managed_receiver_provenance(host, value: ir.Value):
     """Class receivers are managed even in modules that also use raw pointers."""
     if not isinstance(value.type, ir.PointerType):
         return (value, False, False, False)
-    if value in getattr(host, "_cpy_values", ()):
+    if value in host._cpy_values:
         return (value, False, False, False)
     return (value, True, False, False)
 

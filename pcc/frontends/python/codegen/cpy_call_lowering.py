@@ -679,7 +679,7 @@ class CpyCallLoweringMixin:
             tuple(live_owned),
         )
         iter_pcc_owned = False
-        if iter_val in getattr(self, "_cpy_values", ()):
+        if iter_val in self._cpy_values:
             iter_val, iter_pcc_owned = self._bridge_cpy_arglist_operand(
                 iter_val,
                 live_owned,
@@ -930,7 +930,7 @@ class CpyCallLoweringMixin:
             tuple(live_owned),
         )
         iter_pcc_owned = False
-        if iter_val in getattr(self, "_cpy_values", ()):
+        if iter_val in self._cpy_values:
             iter_val, iter_pcc_owned = self._bridge_cpy_arglist_operand(
                 iter_val,
                 live_owned,

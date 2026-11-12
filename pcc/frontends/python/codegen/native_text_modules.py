@@ -232,7 +232,7 @@ class NativeTextModulesLoweringMixin:
         if isinstance(expr, IntLit):
             return int(expr.value)
         if isinstance(expr, Name):
-            known = getattr(self, "_native_re_static_flag_aliases", {}).get(expr.ident)
+            known = self._native_re_static_flag_aliases.get(expr.ident)
             if known is not None:
                 return known
             for stmt in getattr(self.ast_module, "body", ()):
@@ -378,12 +378,12 @@ class NativeTextModulesLoweringMixin:
     ) -> Optional[tuple[str, int]]:
         current_func = getattr(self, "current_func_def", None)
         if current_func is not None:
-            local_aliases = getattr(self, "_native_re_compile_local_aliases", {})
+            local_aliases = self._native_re_compile_local_aliases
             key = (id(current_func), alias)
             if key in local_aliases:
                 value = local_aliases[key]
                 return value if value is not None else None
-        return getattr(self, "_native_re_compile_aliases", {}).get(alias)
+        return self._native_re_compile_aliases.get(alias)
 
     def _native_re_compile_alias_uses_are_safe(
         self,

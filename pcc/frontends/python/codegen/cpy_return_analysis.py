@@ -46,7 +46,7 @@ class CpyReturnAnalysisMixin:
                 return False
             if getattr(self, "_cpy_module_flags", {}).get(expr.ident, False):
                 return True
-            if getattr(self, "_cpy_env_flags", {}).get(expr.ident, False):
+            if self._cpy_env_flags.get(expr.ident, False):
                 return True
             return False
         if isinstance(expr, Attr):

@@ -1348,6 +1348,78 @@ SUPPORTED_CASES: tuple[FeatureCase, ...] = (
         """,
     ),
     FeatureCase(
+        # Code generator state that every function body touches: comprehension
+        # scope restore, static re flags at module scope, finally blocks left
+        # by break/continue, an except binding, a literal dict binding and a
+        # module attribute (test_codegen_constructor_owned_state.py).
+        "constructor_owned_codegen_state",
+        """
+        import math
+        import re
+
+        FLAGS = re.IGNORECASE
+        WORD = re.compile("ab+", FLAGS)
+
+        def matches(text):
+            local = re.compile("c+", FLAGS)
+            return WORD.match(text) is not None, local.match(text[3:]) is not None
+
+        def shadowing():
+            x = 99
+            squares = [x * x for x in range(4)]
+            return x, squares
+
+        def for_finally():
+            out = []
+            for i in range(5):
+                try:
+                    if i == 1:
+                        continue
+                    if i == 3:
+                        break
+                    out.append(i)
+                finally:
+                    out.append(-i)
+            return out
+
+        def while_finally():
+            out = []
+            i = 0
+            while i < 4:
+                i = i + 1
+                try:
+                    if i == 2:
+                        continue
+                    out.append(i)
+                finally:
+                    out.append(10 * i)
+            return out
+
+        def except_binding():
+            try:
+                raise ValueError("bad")
+            except ValueError as exc:
+                message = str(exc)
+            return message
+
+        def literal_dict():
+            table = {"a": 1, "b": 2}
+            return table["a"] + table["b"]
+
+        def main() -> None:
+            print(matches("ABBcc"))
+            print(matches("xyzzz"))
+            print(shadowing())
+            print(for_finally())
+            print(while_finally())
+            print(except_binding())
+            print(literal_dict())
+            print(math.pi > 3)
+        if __name__ == "__main__":
+            main()
+        """,
+    ),
+    FeatureCase(
         "function_annotations_runtime",
         """
         def f(x: int) -> int:

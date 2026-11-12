@@ -315,7 +315,7 @@ class OwnershipLoweringMixin:
         """
         if obj is None or not isinstance(obj.type, ir.PointerType):
             return False
-        if obj in getattr(self, "_cpy_values", ()):
+        if obj in self._cpy_values:
             return False
         if self._value_is_owned_object(obj):
             return True
@@ -1203,7 +1203,7 @@ class OwnershipLoweringMixin:
             return
         if (
             name in getattr(self, "_current_param_names", set())
-            and not getattr(self, "_exact_int_env_flags", {}).get(name, False)
+            and not self._exact_int_env_flags.get(name, False)
             and name not in getattr(self, "_for_target_owned_names", set())
         ):
             return
@@ -1227,8 +1227,6 @@ class OwnershipLoweringMixin:
             self._gc_one_slot_borrowed_frame_map(),
         )
         if name in getattr(self, "_gc_rooted_local_names", set()):
-            if not hasattr(self, "_borrowed_gc_rooted_local_names"):
-                self._borrowed_gc_rooted_local_names = set()
             self._borrowed_gc_rooted_local_names.add(name)
 
     def _ensure_local_gc_frame_root(
@@ -1446,8 +1444,7 @@ class OwnershipLoweringMixin:
         if name not in getattr(self, "_gc_rooted_local_names", set()):
             return
         self._gc_rooted_local_names.discard(name)
-        if hasattr(self, "_borrowed_gc_rooted_local_names"):
-            self._borrowed_gc_rooted_local_names.discard(name)
+        self._borrowed_gc_rooted_local_names.discard(name)
 
     def _ensure_owned_local_flag(
         self,
@@ -1456,8 +1453,6 @@ class OwnershipLoweringMixin:
         *,
         allow_module: bool = False,
     ) -> ir.Value:
-        if not hasattr(self, "_owned_local_flag_allocas"):
-            self._owned_local_flag_allocas = {}
         flag = self._owned_local_flag_slots.get(name)
         flag_alloca = self._owned_local_flag_allocas.get(name)
         if flag is not None and (alloca is None or flag_alloca is alloca):
@@ -1485,7 +1480,7 @@ class OwnershipLoweringMixin:
         flag = self._owned_local_flag_slots.get(name)
         if flag is None or alloca is None:
             return flag
-        flag_alloca = getattr(self, "_owned_local_flag_allocas", {}).get(name)
+        flag_alloca = self._owned_local_flag_allocas.get(name)
         if flag_alloca is alloca:
             return flag
         return None
@@ -1622,8 +1617,7 @@ class OwnershipLoweringMixin:
         self.env.pop(target.ident, None)
         self.env_class_hint.pop(target.ident, None)
         self.env_list_elem_class_hint.pop(target.ident, None)
-        if hasattr(self, "_cpy_env_flags"):
-            self._cpy_env_flags.pop(target.ident, None)
+        self._cpy_env_flags.pop(target.ident, None)
         self._weak_dict_env_flags.pop(target.ident, None)
         return True
 
@@ -1651,7 +1645,7 @@ class OwnershipLoweringMixin:
                 continue
             if (
                 name in getattr(self, "_current_param_names", set())
-                and not getattr(self, "_exact_int_env_flags", {}).get(name, False)
+                and not self._exact_int_env_flags.get(name, False)
                 and name not in getattr(self, "_for_target_owned_names", set())
             ):
                 continue

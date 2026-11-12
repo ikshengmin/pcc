@@ -940,7 +940,7 @@ class ModuleGlobalLoweringMixin:
             if not self._module_global_needs_teardown(gv, declared_ty):
                 continue
             self._emit_current_gc_frame_enter(frame_map, gv)
-        for gv in getattr(self, "_native_module_attr_globals", {}).values():
+        for gv in self._native_module_attr_globals.values():
             self._emit_current_gc_frame_enter(frame_map, gv)
 
     def _emit_class_global_root_enters(self) -> None:

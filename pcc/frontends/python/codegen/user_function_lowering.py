@@ -1229,18 +1229,14 @@ class UserFunctionLoweringMixin:
         saved_ir_builder_flags = self._ir_builder_env_flags
         saved_threading_list_elem_flags = self._threading_list_elem_flags
         saved_weak_dict_flags = self._weak_dict_env_flags
-        saved_cpy_env_flags = dict(getattr(self, "_cpy_env_flags", {}))
-        saved_cpy_values = set(getattr(self, "_cpy_values", set()))
+        saved_cpy_env_flags = dict(self._cpy_env_flags)
+        saved_cpy_values = set(self._cpy_values)
         saved_owned_cpy_values = set(getattr(self, "_owned_cpy_values", set()))
         saved_async_body_depth = getattr(self, "_async_body_depth", 0)
         saved_owned_local_names = self._owned_local_names
         saved_owned_local_has_value = self._owned_local_has_value
         saved_owned_local_flag_slots = self._owned_local_flag_slots
-        saved_owned_local_flag_allocas = getattr(
-            self,
-            "_owned_local_flag_allocas",
-            {},
-        )
+        saved_owned_local_flag_allocas = self._owned_local_flag_allocas
         saved_for_target_owned_names = getattr(
             self,
             "_for_target_owned_names",
@@ -1248,13 +1244,9 @@ class UserFunctionLoweringMixin:
         )
         saved_gc_rooted_local_names = self._gc_rooted_local_names
         saved_gc_rooted_local_order = getattr(self, "_gc_rooted_local_order", [])
-        saved_borrowed_gc_rooted_local_names = getattr(
-            self,
-            "_borrowed_gc_rooted_local_names",
-            set(),
-        )
+        saved_borrowed_gc_rooted_local_names = self._borrowed_gc_rooted_local_names
         saved_pinned_gc_rooted_local_names = self._pinned_gc_rooted_local_names
-        saved_except_binding_names = getattr(self, "_except_binding_names", set())
+        saved_except_binding_names = self._except_binding_names
         saved_active_handler_excs = self._active_handler_excs
         saved_container_temp_root_slot_names = getattr(
             self,
@@ -2743,7 +2735,7 @@ class UserFunctionLoweringMixin:
             raw = self._emit_expr(expr)
         finally:
             self._prefer_native_callable_values = old_prefer_native
-        if raw in getattr(self, "_cpy_values", ()):
+        if raw in self._cpy_values:
             return self._emit_value_as_pcc_object_or_bridge(
                 raw,
                 expr.ty,

@@ -657,7 +657,7 @@ class MethodCallFallbackLoweringMixin:
                 getattr(self, "_strict_no_libpython", False)
                 and isinstance(attr.obj, Name)
                 and attr.obj.ident in getattr(self, "_module_globals", {})
-                and not getattr(self, "_cpy_env_flags", {}).get(
+                and not self._cpy_env_flags.get(
                     attr.obj.ident, False
                 )
                 and isinstance(
@@ -813,7 +813,7 @@ class MethodCallFallbackLoweringMixin:
                     and not self._expr_looks_cpython(attr.obj)):
                 return self._emit_slot_method_call(expr, "method." + attr.name)
             raw_val = self._emit_expr(attr.obj)
-            if raw_val not in getattr(self, "_cpy_values", ()) and (
+            if raw_val not in self._cpy_values and (
                 getattr(self, "_strict_no_libpython", False)
                 or obj_ty.name == "type"
             ):

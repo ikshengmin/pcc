@@ -424,12 +424,12 @@ class CompareMembershipLoweringMixin:
             lhs = self._emit_expr(expr.lhs)
             lhs_owned = (
                 isinstance(lhs.type, ir.PointerType)
-                and lhs not in getattr(self, "_cpy_values", ())
+                and lhs not in self._cpy_values
                 and self._pcc_pointer_source_is_owned(expr.lhs)
             )
             lhs_pinned = (
                 isinstance(lhs.type, ir.PointerType)
-                and lhs not in getattr(self, "_cpy_values", ())
+                and lhs not in self._cpy_values
             )
             lhs_cleanup = ()
             if lhs_pinned:
@@ -443,12 +443,12 @@ class CompareMembershipLoweringMixin:
             )
             rhs_owned = (
                 isinstance(rhs.type, ir.PointerType)
-                and rhs not in getattr(self, "_cpy_values", ())
+                and rhs not in self._cpy_values
                 and self._pcc_pointer_source_is_owned(expr.rhs)
             )
             rhs_pinned = (
                 isinstance(rhs.type, ir.PointerType)
-                and rhs not in getattr(self, "_cpy_values", ())
+                and rhs not in self._cpy_values
             )
             if rhs_pinned:
                 self._gc_pin(rhs)
@@ -646,7 +646,7 @@ class CompareMembershipLoweringMixin:
                         other_expr,
                         receiver_live,
                     )
-                    if other_val in getattr(self, "_cpy_values", ()):
+                    if other_val in self._cpy_values:
                         self._guard_cpy_value_not_null(
                             other_val,
                             receiver_live,
@@ -985,7 +985,7 @@ class CompareMembershipLoweringMixin:
             return False
         if isinstance(value.type, ir.PointerType):
             # A CPython-backed value keeps its ``_to_double`` unbox.
-            return value not in getattr(self, "_cpy_values", ())
+            return value not in self._cpy_values
         # pcc.u64 keeps its uitofp: type inference rejects a raw int meeting
         # a float, so only the signed lane arrives here.
         return (
@@ -1533,7 +1533,7 @@ class CompareMembershipLoweringMixin:
         def identity_temp_needs_release(src: Expr, raw: ir.Value) -> bool:
             if not isinstance(raw.type, ir.PointerType):
                 return False
-            if raw in getattr(self, "_cpy_values", ()):
+            if raw in self._cpy_values:
                 return False
             # An emitter-recorded owner (a dynamic ``functions[0](x)`` call
             # result, say) is owned whatever the AST shape suggests; leaving
@@ -1637,7 +1637,7 @@ class CompareMembershipLoweringMixin:
                 expr.rhs,
                 lhs_live,
             )
-            if rhs_value in getattr(self, "_cpy_values", ()):
+            if rhs_value in self._cpy_values:
                 self._guard_cpy_value_not_null(rhs_value, lhs_live)
             container_cpy, container_owned = (
                 self._marshal_to_cpython_consuming_source(
@@ -1704,7 +1704,7 @@ class CompareMembershipLoweringMixin:
             lhs_raw = valueclass_needle
         else:
             lhs_raw = self._emit_expr(expr.lhs)
-        lhs_is_cpy = lhs_raw in getattr(self, "_cpy_values", ())
+        lhs_is_cpy = lhs_raw in self._cpy_values
         cpy_live = ()
         pcc_live = ()
         if lhs_is_cpy:
@@ -1758,7 +1758,7 @@ class CompareMembershipLoweringMixin:
         rhs_raw = self._emit_expr_with_cpy_operand_cleanup(
             expr.rhs, cpy_live, pinned_pcc=pcc_live,
         )
-        if rhs_raw in getattr(self, "_cpy_values", ()):
+        if rhs_raw in self._cpy_values:
             self._guard_cpy_value_not_null(
                 rhs_raw, cpy_live, pinned_pcc_on_error=pcc_live,
             )
@@ -1879,7 +1879,7 @@ class CompareMembershipLoweringMixin:
         """
         if not isinstance(lhs_expr.ty, (IntType, BoolType)):
             return None
-        if value in getattr(self, "_cpy_values", ()):
+        if value in self._cpy_values:
             return None
         if not isinstance(value.type, ir.IntType) or value.type.width > 64:
             return None
@@ -1991,7 +1991,7 @@ class CompareMembershipLoweringMixin:
             acc = result
             if owned:
                 self._gc_unpin(lhs_obj)
-        if owned and lhs_obj not in getattr(self, "_cpy_values", ()):
+        if owned and lhs_obj not in self._cpy_values:
             self._gc_release(lhs_obj)
         if negate:
             return self.builder.not_(acc, name=self._fresh("tup.not_in"))
@@ -2134,7 +2134,7 @@ class CompareMembershipLoweringMixin:
                     newly_owned=True,
                 )
         value = self._emit_expr(source)
-        source_is_cpy = value in getattr(self, "_cpy_values", ())
+        source_is_cpy = value in self._cpy_values
         boxed = self._emit_value_as_pcc_object_or_bridge(
             value,
             source.ty,
@@ -2157,7 +2157,7 @@ class CompareMembershipLoweringMixin:
         fn = self.current_function
 
         lhs = self._emit_expr(expr.left)
-        lhs_is_cpy = lhs in getattr(self, "_cpy_values", ())
+        lhs_is_cpy = lhs in self._cpy_values
         lhs_owned = False
         lhs_pcc_owned = False
         if lhs_is_cpy:
@@ -2210,7 +2210,7 @@ class CompareMembershipLoweringMixin:
             elif lhs_pcc_owned:
                 self._gc_release(lhs_val)
             rhs = self._emit_expr(expr.right)
-            rhs_is_cpy = rhs in getattr(self, "_cpy_values", ())
+            rhs_is_cpy = rhs in self._cpy_values
             rhs_owned = False
             rhs_pcc_owned = False
             if rhs_is_cpy:
@@ -2285,7 +2285,7 @@ class CompareMembershipLoweringMixin:
 
         self.builder.position_at_end(rhs_bb)
         rhs = self._emit_expr(expr.right)
-        rhs_is_cpy = rhs in getattr(self, "_cpy_values", ())
+        rhs_is_cpy = rhs in self._cpy_values
         rhs_pcc_owned = False
         if rhs_is_cpy:
             self._guard_cpy_value_not_null(rhs)

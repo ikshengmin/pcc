@@ -216,8 +216,7 @@ class DeleteLoweringMixin:
                         self._owned_local_names.discard(target.ident)
                         self._owned_local_has_value.discard(target.ident)
                 self.env.pop(target.ident, None)
-                if hasattr(self, "_cpy_env_flags"):
-                    self._cpy_env_flags.pop(target.ident, None)
+                self._cpy_env_flags.pop(target.ident, None)
                 if hasattr(self, "env_class_hint"):
                     self.env_class_hint.pop(target.ident, None)
                 self._clear_native_module_object_alias(target.ident)
@@ -262,7 +261,7 @@ class DeleteLoweringMixin:
                 if isinstance(target.idx, Slice):
                     obj = self._emit_expr(target.obj)
                     obj_ty = target.obj.ty
-                    if obj not in getattr(self, "_cpy_values", ()):
+                    if obj not in self._cpy_values:
                         raise NotImplementedError(
                             f"Layer 1 slice delete on type "
                             f"{type(obj_ty).__name__} not supported"

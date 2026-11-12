@@ -331,11 +331,7 @@ class CallExpressionLoweringMixin:
         if not resolved:
             return None
 
-        is_virtual = sub.obj.ident in getattr(
-            self,
-            "_virtual_literal_dict_expr_bindings",
-            set(),
-        )
+        is_virtual = sub.obj.ident in self._virtual_literal_dict_expr_bindings
         key_obj = self._emit_as_object(sub.idx)
         merge_bb = self.builder.function.append_basic_block(
             name=self._fresh("method.dict.dispatch.end")
@@ -613,7 +609,7 @@ class CallExpressionLoweringMixin:
                 arg, tuple(cpy_owned), pinned_pcc=tuple(pinned),
                 as_pcc_object=isinstance(arg.ty, IntType),
             )
-            is_cpy = raw in getattr(self, "_cpy_values", ())
+            is_cpy = raw in self._cpy_values
             if is_cpy:
                 if not self._cpy_value_is_owned(raw):
                     self.builder.call(self.runtime["py_cpy_incref"], [raw])
@@ -1060,7 +1056,7 @@ class CallExpressionLoweringMixin:
                 # and let the runtime publish directly into the caller's sink.
                 return self._emit_slot_call_object(expr, "expr.obj.call")
             fn_val = self._emit_expr(func_expr)
-            if fn_val in getattr(self, "_cpy_values", ()):
+            if fn_val in self._cpy_values:
                 if expr.kwargs:
                     return self._finish_cpy_call_kw(
                         fn_val,
@@ -1665,7 +1661,7 @@ class CallExpressionLoweringMixin:
             if isinstance(ty, DynType):
                 v = self._emit_expr(arg)
                 if isinstance(v.type, ir.PointerType):
-                    if v in getattr(self, "_cpy_values", ()):
+                    if v in self._cpy_values:
                         return self._to_double(v, ty)
                     result = self.builder.call(
                         self.runtime["py_float_value_of"],
@@ -2357,7 +2353,7 @@ class CallExpressionLoweringMixin:
             or semantic_cross_module
         ):
             if (not semantic_cross_module
-                    and not getattr(self, "_cpy_env_flags", {}).get(name, False)
+                    and not self._cpy_env_flags.get(name, False)
                     and not getattr(self, "_cpy_module_flags", {}).get(name, False)
                     and not self._name_binds_cpy_returning_callable(name)):
                 return self._emit_slot_call_object(expr, name + ".obj.call")
@@ -2380,8 +2376,8 @@ class CallExpressionLoweringMixin:
                     ),
                 )
             is_cpy_local = (
-                fn_val in getattr(self, "_cpy_values", ())
-                or getattr(self, "_cpy_env_flags", {}).get(name, False)
+                fn_val in self._cpy_values
+                or self._cpy_env_flags.get(name, False)
                 or getattr(self, "_cpy_module_flags", {}).get(name, False)
             )
             if is_cpy_local:
@@ -2522,8 +2518,8 @@ class CallExpressionLoweringMixin:
                     ),
                 )
                 is_cpy_local = (
-                    fn_val in getattr(self, "_cpy_values", ())
-                    or getattr(self, "_cpy_env_flags", {}).get(name, False)
+                    fn_val in self._cpy_values
+                    or self._cpy_env_flags.get(name, False)
                     or getattr(self, "_cpy_module_flags", {}).get(name, False)
                 )
                 if is_cpy_local:

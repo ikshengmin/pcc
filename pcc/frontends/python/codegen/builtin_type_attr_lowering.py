@@ -364,7 +364,7 @@ class BuiltinTypeAttrLoweringMixin:
             # exact NEW-reference ABI before any user attribute override.
             return self._emit_owned_unary_runtime_call(expr, "py_type_builtin")
         obj_val = self._emit_as_object(expr.args[0])
-        if obj_val in getattr(self, "_cpy_values", ()):
+        if obj_val in self._cpy_values:
             self._guard_cpy_value_not_null(obj_val)
             obj_owned = self._cpy_value_is_owned(obj_val)
             cpy_name = self._ptr_to_cstr(
@@ -407,7 +407,7 @@ class BuiltinTypeAttrLoweringMixin:
             return dunder
         obj = self._emit_expr(arg)
         # CPython-backed value: dispatch through py_cpy_len (PyObject_Length).
-        if obj in getattr(self, "_cpy_values", ()):
+        if obj in self._cpy_values:
             self._guard_cpy_value_not_null(obj)
             result = self.builder.call(
                 self.runtime["py_cpy_len"],
@@ -477,7 +477,7 @@ class BuiltinTypeAttrLoweringMixin:
             return self._emit_owned_text_conversion(expr, "py_obj_str")
         if isinstance(arg.ty, StrType):
             v = self._emit_expr(arg)
-            if v in getattr(self, "_cpy_values", ()):
+            if v in self._cpy_values:
                 self._guard_cpy_value_not_null(v)
                 result = self.builder.call(
                     self.runtime["py_cpy_to_pcc_str"],
@@ -495,7 +495,7 @@ class BuiltinTypeAttrLoweringMixin:
             return self._gc_retain(v, name=self._fresh("str.retain"))
         if self._expr_looks_cpython(arg):
             v = self._emit_expr(arg)
-            if v in getattr(self, "_cpy_values", ()):
+            if v in self._cpy_values:
                 self._guard_cpy_value_not_null(v)
                 result = self.builder.call(
                     self.runtime["py_cpy_to_pcc_str"],

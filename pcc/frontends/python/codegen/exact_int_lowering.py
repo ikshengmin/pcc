@@ -584,11 +584,7 @@ class ExactIntLoweringMixin:
             )
         if (
             isinstance(expr, Name)
-            and getattr(
-                self,
-                "_exact_int_env_flags",
-                {},
-            ).get(expr.ident, False)
+            and self._exact_int_env_flags.get(expr.ident, False)
         ):
             value = self._emit_expr(expr)
             if isinstance(value.type, ir.PointerType):
@@ -649,12 +645,12 @@ class ExactIntLoweringMixin:
             lhs = self._emit_exact_int_operand_object(expr.lhs)
             lhs_owned = (
                 isinstance(lhs.type, ir.PointerType)
-                and lhs not in getattr(self, "_cpy_values", ())
+                and lhs not in self._cpy_values
                 and self._pcc_pointer_source_is_owned(expr.lhs)
             )
             lhs_pinned = (
                 isinstance(lhs.type, ir.PointerType)
-                and lhs not in getattr(self, "_cpy_values", ())
+                and lhs not in self._cpy_values
             )
             lhs_cleanup = ()
             lhs_root_slot = None
@@ -807,12 +803,12 @@ class ExactIntLoweringMixin:
                 lhs_cleanup = ((lhs, lhs_owned),)
             rhs_owned = (
                 isinstance(rhs.type, ir.PointerType)
-                and rhs not in getattr(self, "_cpy_values", ())
+                and rhs not in self._cpy_values
                 and self._pcc_pointer_source_is_owned(expr.rhs)
             )
             rhs_pinned = (
                 isinstance(rhs.type, ir.PointerType)
-                and rhs not in getattr(self, "_cpy_values", ())
+                and rhs not in self._cpy_values
             )
             # Both operands are exact-int objects here whether or not the
             # enclosing function boxes every int local, so the tagged fast
@@ -916,12 +912,12 @@ class ExactIntLoweringMixin:
             operand = self._emit_exact_int_operand_object(expr.operand)
             operand_owned = (
                 isinstance(operand.type, ir.PointerType)
-                and operand not in getattr(self, "_cpy_values", ())
+                and operand not in self._cpy_values
                 and self._pcc_pointer_source_is_owned(expr.operand)
             )
             operand_pinned = (
                 isinstance(operand.type, ir.PointerType)
-                and operand not in getattr(self, "_cpy_values", ())
+                and operand not in self._cpy_values
             )
             operand_cleanup = ()
             if operand_pinned:
@@ -980,7 +976,7 @@ class ExactIntLoweringMixin:
         ):
             return True
         if isinstance(expr, Name):
-            if getattr(self, "_exact_int_env_flags", {}).get(
+            if self._exact_int_env_flags.get(
                 expr.ident,
                 False,
             ):
@@ -1158,12 +1154,12 @@ class ExactIntLoweringMixin:
         lhs = self._emit_exact_int_operand_object(expr.lhs)
         lhs_owned = (
             isinstance(lhs.type, ir.PointerType)
-            and lhs not in getattr(self, "_cpy_values", ())
+            and lhs not in self._cpy_values
             and self._pcc_pointer_source_is_owned(expr.lhs)
         )
         lhs_pinned = (
             isinstance(lhs.type, ir.PointerType)
-            and lhs not in getattr(self, "_cpy_values", ())
+            and lhs not in self._cpy_values
         )
         lhs_cleanup = ()
         lhs_root_slot = None
@@ -1303,12 +1299,12 @@ class ExactIntLoweringMixin:
             lhs_cleanup = ((lhs, lhs_owned),)
         rhs_owned = (
             isinstance(rhs.type, ir.PointerType)
-            and rhs not in getattr(self, "_cpy_values", ())
+            and rhs not in self._cpy_values
             and self._pcc_pointer_source_is_owned(expr.rhs)
         )
         rhs_pinned = (
             isinstance(rhs.type, ir.PointerType)
-            and rhs not in getattr(self, "_cpy_values", ())
+            and rhs not in self._cpy_values
         )
         pred = {
             "==": "==",
@@ -1348,7 +1344,7 @@ class ExactIntLoweringMixin:
         if isinstance(expr, (IntLit, BoolLit)):
             return True
         if isinstance(expr, Name):
-            if expr.ident in getattr(self, "_cpy_env_flags", {}):
+            if expr.ident in self._cpy_env_flags:
                 return False
             return expr.ident in self.env or expr.ident in self._module_globals
         if isinstance(expr, Attr) and isinstance(expr.obj, Name):
@@ -1478,7 +1474,7 @@ class ExactIntLoweringMixin:
             if boxed_valueclass is not None:
                 return boxed_valueclass
         value = self._emit_expr(expr)
-        if value in getattr(self, "_cpy_values", ()):
+        if value in self._cpy_values:
             # CPython-bridge result (e.g. ``random.randint(...)`` as a
             # comprehension element) — convert to a pcc object before it
             # is stored into a pcc container, or the raw foreign pointer

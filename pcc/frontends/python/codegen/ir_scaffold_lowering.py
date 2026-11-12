@@ -2103,7 +2103,7 @@ class IrScaffoldLoweringMixin:
         else:
             obj = self._emit_exact_int_operand_object(value_expr)
         owned = (
-            obj not in getattr(self, "_cpy_values", ())
+            obj not in self._cpy_values
             and self._pcc_pointer_source_is_owned(value_expr)
         )
         fn = self._declare_external_function(

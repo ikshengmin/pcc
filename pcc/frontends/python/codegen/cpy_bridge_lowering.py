@@ -408,7 +408,7 @@ class CpyBridgeLoweringMixin:
                 ),
                 True,
             )
-        if v in getattr(self, "_cpy_values", ()):
+        if v in self._cpy_values:
             return v, self._cpy_value_is_owned(v)
         if isinstance(ty, (IntType, BoolType)) and isinstance(
             v.type,
@@ -590,7 +590,7 @@ class CpyBridgeLoweringMixin:
         """
         source_pinned = (
             isinstance(value.type, ir.PointerType)
-            and value not in getattr(self, "_cpy_values", ())
+            and value not in self._cpy_values
             and not isinstance(value_ty, FuncType)
         )
         source_owned = (

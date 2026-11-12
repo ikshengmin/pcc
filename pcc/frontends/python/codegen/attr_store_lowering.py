@@ -66,7 +66,7 @@ class AttrStoreLoweringMixin:
         the class nor any base overrides ``__setattr__``; else ``None``."""
         if not isinstance(target.obj, Name) or not hasattr(self, "class_lowering"):
             return None
-        if getattr(self, "_cpy_env_flags", {}).get(target.obj.ident, False):
+        if self._cpy_env_flags.get(target.obj.ident, False):
             return None
         hint = self._class_hint_for_expr(target.obj)
         if hint is None:
@@ -464,9 +464,9 @@ class AttrStoreLoweringMixin:
             class_object_hint = getattr(self, "env_class_object_hint", {}).get(
                 target.obj.ident
             )
-        if obj in getattr(self, "_cpy_values", ()) or (
+        if obj in self._cpy_values or (
             isinstance(target.obj, Name)
-            and getattr(self, "_cpy_env_flags", {}).get(
+            and self._cpy_env_flags.get(
                 target.obj.ident,
                 False,
             )

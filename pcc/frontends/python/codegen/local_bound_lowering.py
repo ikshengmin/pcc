@@ -47,7 +47,7 @@ def mark_bound_target(host, target, bound=True) -> None:
 
 def is_preplanned_owned_local(host, name, slot) -> bool:
     """Match only storage registered with an owning map before body emission."""
-    return slot is not None and getattr(host, "_owned_local_flag_allocas", {}).get(
+    return slot is not None and host._owned_local_flag_allocas.get(
         ".planned.owner." + name,
     ) is slot
 

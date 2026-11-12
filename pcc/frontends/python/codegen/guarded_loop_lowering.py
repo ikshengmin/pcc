@@ -115,7 +115,7 @@ def emit_guarded_loop_counter(host, expr: Call):
 
 
 def _value_is_owned_after_object_projection(host, expr: Expr, value) -> bool:
-    is_cpy = value in getattr(host, "_cpy_values", ())
+    is_cpy = value in host._cpy_values
     return host._container_store_temp_needs_release(expr, expr.ty, is_cpy)
 
 
@@ -175,7 +175,7 @@ def _input_value(host, expr: Expr, cleanup=()):
         cleanup,
         False,
     )
-    if value in getattr(host, "_cpy_values", ()):
+    if value in host._cpy_values:
         raise L1CodegenError(
             "pcc.i64_buffer cannot cross a CPython object boundary"
         )

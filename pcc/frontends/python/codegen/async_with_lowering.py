@@ -94,7 +94,7 @@ class AsyncWithLoweringMixin:
                     ctx_val = self._emit_expr(ctx_expr)
                 finally:
                     _expr, _root, published = self._slot_call_result_sinks.pop()
-                if ctx_val in getattr(self, "_cpy_values", ()):
+                if ctx_val in self._cpy_values:
                     if published:
                         raise L1CodegenError("context producer mixed native and CPython ownership")
                     self._release_slot_call_roots(tuple(roots))
@@ -105,7 +105,7 @@ class AsyncWithLoweringMixin:
                     raise L1CodegenError("native context producer requires an output-slot handoff")
             else:
                 ctx_val = self._emit_expr(ctx_expr)
-                if ctx_val not in getattr(self, "_cpy_values", ()):
+                if ctx_val not in self._cpy_values:
                     raise L1CodegenError("native context binding requires an authoritative source")
             if native_context:
                 self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
@@ -167,8 +167,6 @@ class AsyncWithLoweringMixin:
                 )
                 slot = self.env[as_expr.ident]
             self.builder.store(enter_val, slot[0])
-            if not hasattr(self, "_cpy_env_flags"):
-                self._cpy_env_flags = {}
             self._cpy_env_flags[as_expr.ident] = True
 
         self._emit_stmts(stmt.body)
@@ -376,7 +374,7 @@ class AsyncWithLoweringMixin:
                         f" (got {type(as_expr).__name__})"
                     )
                 prior = self.env.get(as_expr.ident)
-                if (getattr(self, "_cpy_env_flags", {}).get(as_expr.ident, False)
+                if (self._cpy_env_flags.get(as_expr.ident, False)
                         or prior is not None and isinstance(prior[2], RawPointerType)):
                     raise L1CodegenError("native context target cannot reuse a foreign/raw pointer slot")
                 self._store_unpack_root_target(as_expr, enter_root, as_expr.ty)

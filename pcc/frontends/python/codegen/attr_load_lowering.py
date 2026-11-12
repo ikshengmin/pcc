@@ -336,7 +336,7 @@ class AttrLoadLoweringMixin:
         if not isinstance(actual_ir_ty, ir.LiteralStructType) or str(actual_ir_ty) != str(payload_ir_ty):
             raise L1CodegenError("valueclass name requires its actual aggregate payload slot")
         check_local_bound(self, expr)
-        if getattr(self, "_cpy_env_flags", {}).get(expr.ident, False):
+        if self._cpy_env_flags.get(expr.ident, False):
             raise L1CodegenError("CPython valueclass binding requires an explicit output-slot bridge")
         if module_source:
             if getattr(self, "_cpy_module_flags", {}).get(expr.ident, False):
@@ -378,7 +378,7 @@ class AttrLoadLoweringMixin:
             global_entry = self._module_globals.get(base.ident)
             if entry is not None:
                 payload_slot, actual_ir_ty, payload_ty = entry
-                if getattr(self, "_cpy_env_flags", {}).get(base.ident, False):
+                if self._cpy_env_flags.get(base.ident, False):
                     raise L1CodegenError("CPython valueclass binding requires an explicit output-slot bridge")
                 module_source = global_entry is not None and global_entry[0] is payload_slot
             elif global_entry is not None:
@@ -1760,14 +1760,14 @@ class AttrLoadLoweringMixin:
                     cpy_gv, name=self._fresh(f"cpy.{expr.obj.ident}")
                 )
                 return self._emit_cpy_attr(mod_val, expr.name)
-            if getattr(self, "_cpy_env_flags", {}).get(expr.obj.ident, False):
+            if self._cpy_env_flags.get(expr.obj.ident, False):
                 obj_val = self._emit_expr(expr.obj)
                 return self._emit_cpy_attr(obj_val, expr.name)
         if isinstance(expr.obj, (Attr, Subscript, Call)) and self._expr_looks_cpython(
             expr.obj
         ):
             chain_val = self._emit_expr(expr.obj)
-            if chain_val in getattr(self, "_cpy_values", ()):
+            if chain_val in self._cpy_values:
                 return self._emit_cpy_attr(chain_val, expr.name)
             self._gc_release_if_owned(chain_val, expr.obj)
         if isinstance(expr.obj, BinOp) and self._expr_looks_cpython(expr.obj):
@@ -1781,7 +1781,7 @@ class AttrLoadLoweringMixin:
             # (no CPython modules => never looks cpy => bootstrap unaffected).
             # Mirrors the BinOp-receiver method-call branch.
             chain_val = self._emit_expr(expr.obj)
-            if chain_val in getattr(self, "_cpy_values", ()):
+            if chain_val in self._cpy_values:
                 return self._emit_cpy_attr(chain_val, expr.name)
 
         # Dynamically typed properties on ordinary objects use their live

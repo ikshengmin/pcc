@@ -20,7 +20,7 @@ class CallArgLoweringMixin:
         rooted_pcc_on_error=(),
     ) -> tuple[ir.Value, bool]:
         """Convert a checked CPython operand before pcc-list insertion."""
-        if cpy_live_owned is None or value not in getattr(self, "_cpy_values", ()):
+        if cpy_live_owned is None or value not in self._cpy_values:
             return value, False
         self._guard_cpy_value_not_null(
             value,
@@ -246,7 +246,7 @@ class CallArgLoweringMixin:
                     tuple(cpy_live_owned),
                     rooted_pcc_on_error,
                 )
-            if v in getattr(self, "_cpy_values", ()) and cpy_live_owned is not None:
+            if v in self._cpy_values and cpy_live_owned is not None:
                 v_obj, v_bridged = self._bridge_cpy_arglist_operand(
                     v,
                     cpy_live_owned,

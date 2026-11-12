@@ -1091,7 +1091,7 @@ class StringMethodLoweringMixin:
         # the same implementation inlined here.
         name = attr.name
         recv = self._emit_expr(attr.obj)
-        if recv in getattr(self, "_cpy_values", ()):
+        if recv in self._cpy_values:
             recv = self.builder.call(
                 self.runtime["py_cpy_to_pcc_obj"],
                 [recv],
@@ -1461,7 +1461,7 @@ class StringMethodLoweringMixin:
         if name == "hex" and not expr.args and not expr.kwargs and not self._expr_looks_cpython(attr.obj):
             return self._emit_owned_unary_runtime_call(expr, "py_bytes_hex")
         recv = self._emit_expr(attr.obj)
-        if recv in getattr(self, "_cpy_values", ()):
+        if recv in self._cpy_values:
             recv = self.builder.call(
                 self.runtime["py_cpy_to_pcc_obj"],
                 [recv],
@@ -1640,7 +1640,7 @@ class StringMethodLoweringMixin:
             return self._emit_owned_native_join_call(expr)
         name = attr.name
         recv = self._emit_expr(attr.obj)
-        if recv in getattr(self, "_cpy_values", ()):
+        if recv in self._cpy_values:
             recv = self.builder.call(
                 self.runtime["py_cpy_to_pcc_obj"],
                 [recv],

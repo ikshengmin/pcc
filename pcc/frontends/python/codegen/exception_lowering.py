@@ -497,7 +497,7 @@ class ExceptionLoweringMixin:
 
         try_log("finally stack begin")
         if stmt.finally_body:
-            finally_stack = list(getattr(self, "_finally_stack", ()))
+            finally_stack = list(self._finally_stack)
             # Return/break/continue execute this suite outside the owning
             # try's error handler; failures must not enter it a second time.
             finally_stack.append(("pcc.finally.body", stmt.finally_body, prev_err_block, len(self._return_cleanup_roots)))
@@ -509,7 +509,7 @@ class ExceptionLoweringMixin:
             try_log("body end")
         finally:
             if stmt.finally_body:
-                finally_stack = list(getattr(self, "_finally_stack", ()))
+                finally_stack = list(self._finally_stack)
                 if finally_stack:
                     finally_stack.pop()
                 self._finally_stack = finally_stack
@@ -699,9 +699,7 @@ class ExceptionLoweringMixin:
                     )
                 self.env[h.name] = (binding_slot, _CSTR, DynType(name="dyn"))
                 mark_local_bound(self, h.name)
-                binding_names = getattr(self, "_except_binding_names", None)
-                if binding_names is not None:
-                    binding_names.add(h.name)
+                self._except_binding_names.add(h.name)
             saved_active = self._active_handler_excs
             self._active_handler_excs = list(saved_active) + [
                 (self.current_function, handler_exc, handler_slot)

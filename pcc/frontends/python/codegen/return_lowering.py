@@ -183,7 +183,7 @@ class ReturnLoweringMixin:
         ``rooted`` is the return's own cleanup-root decision."""
         if not self._shared_return_exit_allowed():
             return False
-        if value is not None and value in getattr(self, "_cpy_values", ()):
+        if value is not None and value in self._cpy_values:
             return False
         if rooted and not self._shared_return_slot_is_rooted(self.current_function.function_type.return_type):
             return False
@@ -317,7 +317,7 @@ class ReturnLoweringMixin:
         if isinstance(self.current_func_def.return_ty, RawPointerType):
             # _emit_return validates the explicit raw boundary before this.
             return False
-        if value in getattr(self, "_cpy_values", ()):
+        if value in self._cpy_values:
             return False
         if self._value_is_never_gc_object(value):
             # A tagged immediate, None/True/False or a static literal: its
@@ -375,7 +375,7 @@ class ReturnLoweringMixin:
             return self._gc_retain(value, name=self._fresh("ret.cleanup.owner"))
         if (
             isinstance(value.type, ir.PointerType)
-            and value not in getattr(self, "_cpy_values", ())
+            and value not in self._cpy_values
             and not self._value_is_owned_object(value)
             and isinstance(expr, Name)
             and not self._expr_returns_unsafe_raw_pointer(expr)
@@ -427,7 +427,7 @@ class ReturnLoweringMixin:
             return False
         if isinstance(self.current_func_def.return_ty, RawPointerType):
             return False
-        if value in getattr(self, "_cpy_values", ()):
+        if value in self._cpy_values:
             return False
         if self._expr_returns_unsafe_raw_pointer(stmt.value):
             return False
@@ -750,7 +750,7 @@ class ReturnLoweringMixin:
             exact_owned = self._pcc_pointer_source_is_owned(stmt.value)
             exact_pinned = (
                 isinstance(exact_object.type, ir.PointerType)
-                and exact_object not in getattr(self, "_cpy_values", ())
+                and exact_object not in self._cpy_values
             )
             if exact_pinned:
                 self._gc_pin(exact_object)
@@ -862,7 +862,7 @@ class ReturnLoweringMixin:
                     value,
                     stmt.value.ty,
                 )
-        if value in getattr(self, "_cpy_values", ()):
+        if value in self._cpy_values:
             # A NULL from the libpython bridge must take the error edge while
             # the GC frames are still entered: the cleanup below leaves them,
             # and err.exit leaves them again (the precise stack map rejected
@@ -900,7 +900,7 @@ class ReturnLoweringMixin:
         self._return_log("value cleanup")
         self._emit_owned_local_cleanup(skip_name=skip_name)
         value = self._leave_return_cleanup_root(value, ret_root_slot, ret_root_ptr)
-        if value in getattr(self, "_cpy_values", ()):
+        if value in self._cpy_values:
             if self._cpy_value_is_owned(value):
                 # Transfer the expression's existing new reference to the
                 # caller; no extra retain is needed.

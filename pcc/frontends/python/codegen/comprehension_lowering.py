@@ -322,14 +322,14 @@ class ComprehensionLoweringMixin:
         self._current_param_names = saved_param_names.difference(comp_bound_names)
         self._current_global_names = saved_global_names.difference(comp_bound_names)
         _MISSING = object()
-        cpy_flags = getattr(self, "_cpy_env_flags", None)
-        exact_flags = getattr(self, "_exact_int_env_flags", None)
+        cpy_flags = self._cpy_env_flags
+        exact_flags = self._exact_int_env_flags
         # This loop allocates lexical-bound flags and fixes restoration order.
         # Target membership is a set; never let its hash order enter the IR.
         for nm in sorted(comp_bound_names):
             saved_env_entries[nm] = self.env.get(nm, _MISSING)
             saved_owned_flags[nm] = self._owned_local_flag_slots.get(nm, _MISSING)
-            saved_owned_flag_allocas[nm] = getattr(self, "_owned_local_flag_allocas", {}).get(nm, _MISSING)
+            saved_owned_flag_allocas[nm] = self._owned_local_flag_allocas.get(nm, _MISSING)
             # Lexical boundness belongs to the binding, just like its value
             # slot. A later assignment in the enclosing function can give
             # this name a false .bound flag before the comprehension runs.
@@ -339,14 +339,8 @@ class ComprehensionLoweringMixin:
             if saved_bound_flags[nm] is not _MISSING:
                 bound_flag = self._ensure_owned_local_flag(bound_name)
                 self.builder.store(ir.Constant(_I1, 0), bound_flag)
-            if cpy_flags is not None:
-                saved_cpy_flags[nm] = cpy_flags.get(nm, _MISSING)
-            else:
-                saved_cpy_flags[nm] = _MISSING
-            if exact_flags is not None:
-                saved_exact_flags[nm] = exact_flags.get(nm, _MISSING)
-            else:
-                saved_exact_flags[nm] = _MISSING
+            saved_cpy_flags[nm] = cpy_flags.get(nm, _MISSING)
+            saved_exact_flags[nm] = exact_flags.get(nm, _MISSING)
             # Drop the outer binding up front so each loop path allocates a
             # *fresh* slot for the comprehension target. Otherwise a fast
             # path that reuses an existing same-type slot (e.g. the native
@@ -354,10 +348,8 @@ class ComprehensionLoweringMixin:
             # values into the outer variable's storage and corrupt it at
             # runtime, defeating the compile-time env restore below.
             self.env.pop(nm, None)
-            if cpy_flags is not None:
-                cpy_flags.pop(nm, None)
-            if exact_flags is not None:
-                exact_flags.pop(nm, None)
+            cpy_flags.pop(nm, None)
+            exact_flags.pop(nm, None)
 
         # Allocate result container.
         if kind == "list":
@@ -435,8 +427,8 @@ class ComprehensionLoweringMixin:
             # shadowed an outer variable. This is what makes ``x = 99;
             # [x for x in range(5)]; print(x)`` print ``99`` (Python 3),
             # instead of leaking the last loop value.
-            cpy_flags = getattr(self, "_cpy_env_flags", None)
-            exact_flags = getattr(self, "_exact_int_env_flags", None)
+            cpy_flags = self._cpy_env_flags
+            exact_flags = self._exact_int_env_flags
             for nm, prior in saved_env_entries.items():
                 current = self.env.get(nm)
                 if current is not None and self._is_valueclass_payload_type(current[2]):
@@ -467,13 +459,12 @@ class ComprehensionLoweringMixin:
                     self._owned_local_flag_slots.pop(nm, None)
                 else:
                     self._owned_local_flag_slots[nm] = prior_owned_flag
-                flag_allocas = getattr(self, "_owned_local_flag_allocas", None)
-                if flag_allocas is not None:
-                    prior_flag_alloca = saved_owned_flag_allocas[nm]
-                    if prior_flag_alloca is _MISSING:
-                        flag_allocas.pop(nm, None)
-                    else:
-                        flag_allocas[nm] = prior_flag_alloca
+                flag_allocas = self._owned_local_flag_allocas
+                prior_flag_alloca = saved_owned_flag_allocas[nm]
+                if prior_flag_alloca is _MISSING:
+                    flag_allocas.pop(nm, None)
+                else:
+                    flag_allocas[nm] = prior_flag_alloca
                 for attr in ownership_sets:
                     members = getattr(self, attr, None)
                     if members is not None:
@@ -481,18 +472,16 @@ class ComprehensionLoweringMixin:
                             members.add(nm)
                         else:
                             members.discard(nm)
-                if cpy_flags is not None:
-                    prior_flag = saved_cpy_flags.get(nm, _MISSING)
-                    if prior_flag is _MISSING:
-                        cpy_flags.pop(nm, None)
-                    else:
-                        cpy_flags[nm] = prior_flag
-                if exact_flags is not None:
-                    prior_exact = saved_exact_flags.get(nm, _MISSING)
-                    if prior_exact is _MISSING:
-                        exact_flags.pop(nm, None)
-                    else:
-                        exact_flags[nm] = prior_exact
+                prior_flag = saved_cpy_flags.get(nm, _MISSING)
+                if prior_flag is _MISSING:
+                    cpy_flags.pop(nm, None)
+                else:
+                    cpy_flags[nm] = prior_flag
+                prior_exact = saved_exact_flags.get(nm, _MISSING)
+                if prior_exact is _MISSING:
+                    exact_flags.pop(nm, None)
+                else:
+                    exact_flags[nm] = prior_exact
         if output_slot is not None:
             released = self.builder.call(
                 self.runtime["pcc_gc_foreign_lease_release"], [self._as_gc_ptr(output_slot), output_lease],
@@ -699,7 +688,7 @@ class ComprehensionLoweringMixin:
         """
         inner_val = self._emit_expr(inner_iter)
         source_lifetimes = []
-        if inner_val in getattr(self, "_cpy_values", ()):
+        if inner_val in self._cpy_values:
             iter_obj = self.builder.call(
                 self.runtime["py_cpy_to_pcc_obj"],
                 [inner_val],
@@ -1282,7 +1271,7 @@ class ComprehensionLoweringMixin:
             )
             return
         iter_val = self._emit_expr(iter_e)
-        if iter_val in getattr(self, "_cpy_values", ()):
+        if iter_val in self._cpy_values:
             self._emit_cpy_iter_loop(
                 target,
                 iter_val,

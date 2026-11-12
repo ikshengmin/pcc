@@ -4294,11 +4294,7 @@ class ClassLowering:
         saved_owned_local_names = parent._owned_local_names
         saved_owned_local_has_value = parent._owned_local_has_value
         saved_owned_local_flag_slots = parent._owned_local_flag_slots
-        saved_owned_local_flag_allocas = getattr(
-            parent,
-            "_owned_local_flag_allocas",
-            {},
-        )
+        saved_owned_local_flag_allocas = parent._owned_local_flag_allocas
         saved_for_target_owned_names = getattr(
             parent,
             "_for_target_owned_names",
@@ -4306,11 +4302,7 @@ class ClassLowering:
         )
         saved_gc_rooted_local_names = parent._gc_rooted_local_names
         saved_gc_rooted_local_order = getattr(parent, "_gc_rooted_local_order", [])
-        saved_borrowed_gc_rooted_local_names = getattr(
-            parent,
-            "_borrowed_gc_rooted_local_names",
-            set(),
-        )
+        saved_borrowed_gc_rooted_local_names = parent._borrowed_gc_rooted_local_names
         saved_pinned_gc_rooted_local_names = parent._pinned_gc_rooted_local_names
         saved_active_handler_excs = parent._active_handler_excs
         # Snapshot the user-function name table — a method body may

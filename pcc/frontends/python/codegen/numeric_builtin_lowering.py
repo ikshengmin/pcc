@@ -430,7 +430,7 @@ class NumericBuiltinLoweringMixin:
                     obj,
                     arg_ty,
                 )
-            elif obj in getattr(self, "_cpy_values", ()):
+            elif obj in self._cpy_values:
                 return self.builder.call(
                     self.runtime["py_cpy_to_i64"],
                     [obj],
@@ -665,11 +665,11 @@ class NumericBuiltinLoweringMixin:
 
         param_name = param.name
         old_env = self.env.get(param_name)
-        old_cpy_flag = getattr(self, "_cpy_env_flags", {}).get(param_name)
+        old_cpy_flag = self._cpy_env_flags.get(param_name)
         old_class_hint = self.env_class_hint.get(param_name)
         old_class_obj_hint = self.env_class_object_hint.get(param_name)
         old_elem_hint = self.env_list_elem_class_hint.get(param_name)
-        old_exact_int_flag = getattr(self, "_exact_int_env_flags", {}).get(
+        old_exact_int_flag = self._exact_int_env_flags.get(
             param_name
         )
         self.env[param_name] = (item_slot, _CSTR, DynType(name="dyn"))

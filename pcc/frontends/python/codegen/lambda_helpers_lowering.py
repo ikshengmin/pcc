@@ -429,7 +429,7 @@ class LambdaHelperLoweringMixin:
         }
 
         legacy_adapter = any(
-            getattr(self, "_cpy_env_flags", {}).get(name, False)
+            self._cpy_env_flags.get(name, False)
             or self._is_valueclass_payload_type(self.env[name][2])
             for name in free_var_names
         ) or any(self._expr_looks_cpython(param.default) for _index, param in default_params)
@@ -450,8 +450,8 @@ class LambdaHelperLoweringMixin:
         saved_env = self.env
         saved_env_class_hint = getattr(self, "env_class_hint", {})
         saved_env_class_object_hint = getattr(self, "env_class_object_hint", {})
-        saved_cpy_env_flags = dict(getattr(self, "_cpy_env_flags", {}))
-        saved_cpy_values = set(getattr(self, "_cpy_values", set()))
+        saved_cpy_env_flags = dict(self._cpy_env_flags)
+        saved_cpy_values = set(self._cpy_values)
         saved_owned_cpy_values = set(getattr(self, "_owned_cpy_values", set()))
         saved_current_fn = self.current_function
         saved_current_fd = self.current_func_def
@@ -833,7 +833,7 @@ class LambdaHelperLoweringMixin:
             raw = self._emit_name(
                 Name(span=expr.span, ty=cap_ty, ident=fv),
             )
-            raw_is_cpy = raw in getattr(self, "_cpy_values", ())
+            raw_is_cpy = raw in self._cpy_values
             obj = self._emit_value_as_pcc_object_or_bridge(
                 raw,
                 cap_ty,
@@ -852,7 +852,7 @@ class LambdaHelperLoweringMixin:
             if default_expr is None:
                 continue
             raw = self._emit_expr(default_expr)
-            raw_is_cpy = raw in getattr(self, "_cpy_values", ())
+            raw_is_cpy = raw in self._cpy_values
             obj = self._emit_value_as_pcc_object_or_bridge(
                 raw,
                 default_expr.ty,
@@ -907,7 +907,7 @@ class LambdaHelperLoweringMixin:
             slot, _ir_ty, ty = self.env[name]
             val = self.builder.load(slot, name=self._fresh(f"{name}.outer"))
             if (
-                getattr(self, "_cpy_env_flags", {}).get(name, False)
+                self._cpy_env_flags.get(name, False)
                 and isinstance(val.type, ir.PointerType)
                 and not _native_capture_type(ty)
             ):
@@ -948,7 +948,7 @@ class LambdaHelperLoweringMixin:
             ident=name,
         )
         val = self._emit_name(cap_name)
-        if val in getattr(self, "_cpy_values", ()) and isinstance(
+        if val in self._cpy_values and isinstance(
             val.type, ir.PointerType
         ):
             self.builder.call(self.runtime["py_cpy_incref"], [val])
@@ -1139,8 +1139,8 @@ class LambdaHelperLoweringMixin:
         saved_env = self.env
         saved_env_class_hint = getattr(self, "env_class_hint", {})
         saved_env_class_object_hint = getattr(self, "env_class_object_hint", {})
-        saved_cpy_env_flags = dict(getattr(self, "_cpy_env_flags", {}))
-        saved_cpy_values = set(getattr(self, "_cpy_values", set()))
+        saved_cpy_env_flags = dict(self._cpy_env_flags)
+        saved_cpy_values = set(self._cpy_values)
         saved_owned_cpy_values = set(getattr(self, "_owned_cpy_values", set()))
         saved_current_fn = self.current_function
         saved_current_fd = self.current_func_def

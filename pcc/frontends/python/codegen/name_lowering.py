@@ -993,8 +993,6 @@ class NameLoweringMixin:
                         cpy_imported,
                         name=self._fresh("cpy.__doc__"),
                     )
-                    if not hasattr(self, "_cpy_values"):
-                        self._cpy_values = set()
                     self._cpy_values.add(value)
                     return value
                 if self.ast_module.docstring is None:
@@ -1095,8 +1093,6 @@ class NameLoweringMixin:
                     name=self._fresh(expr.ident),
                 )
                 if self._cpy_module_flags.get(expr.ident, False):
-                    if not hasattr(self, "_cpy_values"):
-                        self._cpy_values = set()
                     self._cpy_values.add(val)
                 return val
             # User class reference at value position — load the class
@@ -1141,8 +1137,6 @@ class NameLoweringMixin:
             cpy_gv = getattr(self, "_cpy_module_env", {}).get(expr.ident)
             if cpy_gv is not None:
                 val = self.builder.load(cpy_gv, name=self._fresh(f"cpy.{expr.ident}"))
-                if not hasattr(self, "_cpy_values"):
-                    self._cpy_values = set()
                 self._cpy_values.add(val)
                 return val
             builtin_module = self._native_builtin_module_for_name(expr.ident)
@@ -1393,7 +1387,7 @@ class NameLoweringMixin:
             load_name = "pcc_gc_load_ptr"
             if expr.ident in getattr(
                 self, "_current_param_names", set()
-            ) or expr.ident in getattr(self, "_borrowed_gc_rooted_local_names", set()):
+            ) or expr.ident in self._borrowed_gc_rooted_local_names:
                 load_name = "pcc_gc_load_borrowed_ptr"
             val = self.builder.call(
                 self.runtime[load_name],
@@ -1411,7 +1405,7 @@ class NameLoweringMixin:
         # Re-tag as a CPython value when the binding was recorded as
         # one. Without this, downstream coercions see a bare DynType
         # and route through the pcc (non-CPython) unbox path.
-        if getattr(self, "_cpy_env_flags", {}).get(expr.ident, False):
+        if self._cpy_env_flags.get(expr.ident, False):
             # J2': inside a generator, cpy loop targets live in their
             # slot as CpyHandle boxes (frame-safe). Unbox here — every
             # downstream consumer keeps receiving the raw cpy pointer.
@@ -1424,7 +1418,5 @@ class NameLoweringMixin:
                     [val],
                     name=self._fresh(expr.ident + ".cpy.unbox"),
                 )
-            if not hasattr(self, "_cpy_values"):
-                self._cpy_values = set()
             self._cpy_values.add(val)
         return val

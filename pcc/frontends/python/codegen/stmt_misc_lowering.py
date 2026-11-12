@@ -50,7 +50,7 @@ class StmtMiscLoweringMixin:
             _expression, _slot, discarded = self._slot_call_result_sinks.pop()
         if discarded:
             return
-        if value in getattr(self, "_cpy_values", ()):
+        if value in self._cpy_values:
             if self._cpy_value_is_owned(value):
                 self._guard_cpy_value_not_null(value)
                 self.builder.call(self.runtime["py_cpy_decref"], [value])

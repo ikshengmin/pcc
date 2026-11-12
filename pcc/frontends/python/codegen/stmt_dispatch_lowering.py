@@ -96,7 +96,7 @@ def _persist_generator_import_bindings(host, stmt, from_import: bool) -> None:
         if (name in context["frame_slots"]
                 or name in host._current_global_names
                 or name not in host._owned_local_names
-                or getattr(host, "_cpy_env_flags", {}).get(name, False)):
+                or host._cpy_env_flags.get(name, False)):
             continue
         entry = host.env.get(name)
         if entry is None:
@@ -157,8 +157,7 @@ class StmtDispatchLoweringMixin:
         """Depth of the finally stack at loop entry. ``break``/``continue`` run
         the finally blocks pushed *above* this base (those entered inside the
         loop) before jumping, without disturbing finallys enclosing the loop."""
-        stack = getattr(self, "_finally_stack", None)
-        return len(stack) if stack else 0
+        return len(self._finally_stack)
 
     def _run_loop_exit_finallys(self, base: int) -> None:
         """Emit the finally blocks entered inside the current loop (top-down to

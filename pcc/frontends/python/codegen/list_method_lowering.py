@@ -253,9 +253,7 @@ class ListMethodLoweringMixin:
             item = _list_method_box(self, expr.args[0])
             item_root = ir.Constant(_CSTR, None)
             item_for_call = item
-            if isinstance(item.type, ir.PointerType) and item not in getattr(
-                self, "_cpy_values", ()
-            ):
+            if isinstance(item.type, ir.PointerType) and item not in self._cpy_values:
                 item_root = self._enter_container_temp_root(item, "dyn.list.item")
                 item_for_call = self.builder.call(
                     self.runtime["pcc_gc_load_ptr"],
@@ -1053,7 +1051,7 @@ class ListMethodLoweringMixin:
             return self._take_slot_call_root(output, source_expr=expr)
 
         recv = self._emit_expr(attr.obj)
-        if recv in getattr(self, "_cpy_values", ()):
+        if recv in self._cpy_values:
             return self._emit_cpy_method_call_src(
                 recv,
                 attr.name,
@@ -1150,7 +1148,7 @@ class ListMethodLoweringMixin:
         if name == "extend" and len(expr.args) == 1 and not self._expr_looks_cpython(attr.obj):
             return self._emit_owned_list_extend(expr)
         recv = self._emit_expr(attr.obj)
-        if recv in getattr(self, "_cpy_values", ()):
+        if recv in self._cpy_values:
             return self._emit_cpy_method_call_src(
                 recv,
                 name,
@@ -1279,7 +1277,7 @@ class ListMethodLoweringMixin:
             if isinstance(attr.obj, Name):
                 if attr.obj.ident in self.env:
                     recv_slot = self.env[attr.obj.ident]
-                cpy_env_flags = getattr(self, "_cpy_env_flags", {})
+                cpy_env_flags = self._cpy_env_flags
                 if attr.obj.ident in cpy_env_flags:
                     recv_is_cpy = bool(cpy_env_flags[attr.obj.ident])
             stable_rooted_recv = (
@@ -1300,7 +1298,7 @@ class ListMethodLoweringMixin:
             )
             if (
                 isinstance(item.type, ir.PointerType)
-                and item not in getattr(self, "_cpy_values", ())
+                and item not in self._cpy_values
                 # The root exists so the post-append RELEASE of an owned item
                 # temporary reloads a pointer the append may have relocated.
                 # A borrowed item (a rooted local, a module global) is never

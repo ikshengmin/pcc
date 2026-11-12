@@ -2453,10 +2453,7 @@ class NativeModuleAliasMixin:
         module_name: str,
         attr_name: str,
     ) -> ir.GlobalVariable:
-        slots = getattr(self, "_native_module_attr_globals", None)
-        if slots is None:
-            self._native_module_attr_globals = {}
-            slots = self._native_module_attr_globals
+        slots = self._native_module_attr_globals
         key = (module_name, attr_name)
         existing = slots.get(key)
         if existing is not None:
@@ -2478,10 +2475,7 @@ class NativeModuleAliasMixin:
         module_name: str,
         attr_name: str,
     ) -> Optional[ir.GlobalVariable]:
-        slots = getattr(self, "_native_module_attr_globals", None)
-        if slots is None:
-            return None
-        return slots.get((module_name, attr_name))
+        return self._native_module_attr_globals.get((module_name, attr_name))
 
     def _emit_native_module_attr_load(
         self,

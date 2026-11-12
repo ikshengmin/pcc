@@ -411,7 +411,7 @@ class NativeOsLoweringMixin:
         )
         self._emit_post_call_err_check(getattr(target, "span", None))
         if release_value and isinstance(v_obj.type, ir.PointerType):
-            if v_obj not in getattr(self, "_cpy_values", ()):
+            if v_obj not in self._cpy_values:
                 self._gc_release(v_obj)
         return True
 
@@ -879,7 +879,7 @@ class NativeOsLoweringMixin:
 
     def _emit_os_path_arg_object(self, expr: Expr) -> ir.Value:
         value = self._emit_expr(expr)
-        if value in getattr(self, "_cpy_values", ()):
+        if value in self._cpy_values:
             return self.builder.call(
                 self.runtime["py_cpy_to_pcc_obj"],
                 [value],

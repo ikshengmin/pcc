@@ -231,7 +231,7 @@ class ControlFlowLoweringMixin:
             self._emit_post_call_err_check(None)
             return self.builder.trunc(truth, _I1, name=self._fresh("cond.rooted.i1"))
         value = self._emit_expr(cond_expr)
-        if value in getattr(self, "_cpy_values", ()):
+        if value in self._cpy_values:
             if not self._cpy_value_is_owned(value):
                 self.builder.call(self.runtime["py_cpy_incref"], [value])
                 self._mark_owned_cpy_value(value)
@@ -281,7 +281,7 @@ class ControlFlowLoweringMixin:
             return None
         if live_import_name_slot(self, expr.ident) is not None:
             return None
-        if getattr(self, "_cpy_env_flags", {}).get(expr.ident, False):
+        if self._cpy_env_flags.get(expr.ident, False):
             return None
         entry = self.env.get(expr.ident)
         if entry is None:
@@ -479,7 +479,7 @@ class ControlFlowLoweringMixin:
                 coerced = selected_val
             else:
                 coerced = selected_val if raw_freestanding_join and isinstance(selected_val.type, ir.IntType) else self._coerce(selected_val, selected.ty, expr.ty, selected)
-            if selected_val in getattr(self, "_cpy_values", ()):
+            if selected_val in self._cpy_values:
                 if self._cpy_value_is_owned(selected_val):
                     return self._mark_owned_cpy_value(coerced)
                 return self._mark_cpy_value(coerced)
@@ -540,8 +540,8 @@ class ControlFlowLoweringMixin:
                     else_val = self.builder.sext(else_val, phi_ty, name=self._fresh("ternary.raw.sext"))
         cpy_result = False
         if isinstance(phi_ty, ir.PointerType):
-            then_is_cpy = then_val in getattr(self, "_cpy_values", ())
-            else_is_cpy = else_val in getattr(self, "_cpy_values", ())
+            then_is_cpy = then_val in self._cpy_values
+            else_is_cpy = else_val in self._cpy_values
             if then_is_cpy or else_is_cpy:
                 cpy_result = True
                 self.builder.position_at_end(then_exit)
@@ -664,7 +664,7 @@ class ControlFlowLoweringMixin:
         then_val = self._emit_expr_as_pcc_object(expr.then_e)
         if (
             isinstance(expr.then_e, Name)
-            and getattr(self, "_exact_int_env_flags", {}).get(
+            and self._exact_int_env_flags.get(
                 expr.then_e.ident,
                 False,
             )
@@ -679,7 +679,7 @@ class ControlFlowLoweringMixin:
         else_val = self._emit_expr_as_pcc_object(expr.else_e)
         if (
             isinstance(expr.else_e, Name)
-            and getattr(self, "_exact_int_env_flags", {}).get(
+            and self._exact_int_env_flags.get(
                 expr.else_e.ident,
                 False,
             )

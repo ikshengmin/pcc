@@ -159,12 +159,10 @@ class L1CodeGenEntrypointMixin:
     ) -> None:
         if not self._codegen_trace_is_enabled():
             return
-        capacity = int(getattr(self, "_codegen_trace_capacity", 0))
+        capacity = int(self._codegen_trace_capacity)
         if capacity <= 0:
             return
-        ring = getattr(self, "_codegen_trace_ring", None)
-        if not isinstance(ring, list):
-            return
+        ring = self._codegen_trace_ring
         trace_next = int(getattr(self, "_codegen_trace_next", 0))
         if trace_next < 0:
             trace_next = 0
@@ -276,12 +274,10 @@ class L1CodeGenEntrypointMixin:
             )
         except Exception:
             pass
-        ring = getattr(self, "_codegen_trace_ring", [])
-        if not isinstance(ring, list):
-            ring = []
+        ring = self._codegen_trace_ring
         if len(ring) == 0:
             return
-        capacity = int(getattr(self, "_codegen_trace_capacity", len(ring)))
+        capacity = int(self._codegen_trace_capacity)
         if capacity <= 0 or len(ring) < capacity:
             ordered = ring
         else:

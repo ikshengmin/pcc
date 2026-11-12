@@ -596,17 +596,17 @@ class ExprDispatchLoweringMixin:
                 else self._emit_expr(expr.lhs)
             )
             lhs_cpy_owned = False
-            if lhs in getattr(self, "_cpy_values", ()):
+            if lhs in self._cpy_values:
                 self._guard_cpy_value_not_null(lhs)
                 lhs_cpy_owned = self._cpy_value_is_owned(lhs)
             lhs_release_owned = (
                 isinstance(lhs.type, ir.PointerType)
-                and lhs not in getattr(self, "_cpy_values", ())
+                and lhs not in self._cpy_values
                 and self._pcc_pointer_source_is_owned(expr.lhs)
             )
             lhs_pin = (
                 isinstance(lhs.type, ir.PointerType)
-                and lhs not in getattr(self, "_cpy_values", ())
+                and lhs not in self._cpy_values
             )
             # A GC-quiet rhs (literal, bound name, slot read) cannot allocate,
             # raise or move anything, so the lhs needs no pin across its
@@ -650,7 +650,7 @@ class ExprDispatchLoweringMixin:
                         if rhs_as_exact_object
                         else self._emit_expr(expr.rhs)
                     )
-            if rhs in getattr(self, "_cpy_values", ()):
+            if rhs in self._cpy_values:
                 self._guard_cpy_value_not_null(
                     rhs,
                     (lhs,) if lhs_cpy_owned else (),
@@ -659,14 +659,14 @@ class ExprDispatchLoweringMixin:
                 )
             rhs_release_owned = (
                 isinstance(rhs.type, ir.PointerType)
-                and rhs not in getattr(self, "_cpy_values", ())
+                and rhs not in self._cpy_values
                 and self._pcc_pointer_source_is_owned(expr.rhs)
             )
             rhs_pin = (
                 isinstance(rhs.type, ir.PointerType)
-                and rhs not in getattr(self, "_cpy_values", ())
+                and rhs not in self._cpy_values
             )
-            if defer_pins and rhs in getattr(self, "_cpy_values", ()):
+            if defer_pins and rhs in self._cpy_values:
                 defer_pins = False
             slow_pins: tuple[ir.Value, ...] = ()
             if defer_pins:
@@ -703,7 +703,7 @@ class ExprDispatchLoweringMixin:
             if (
                 (lhs_release_owned or rhs_release_owned)
                 and isinstance(result.type, ir.PointerType)
-                and result not in getattr(self, "_cpy_values", ())
+                and result not in self._cpy_values
                 and self._pcc_pointer_source_is_owned(expr)
             ):
                 self._gc_pin(result)

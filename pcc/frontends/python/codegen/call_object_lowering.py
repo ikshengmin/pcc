@@ -173,7 +173,7 @@ def direct_call_argument_reads_stable_root(host, expr, target_ty) -> bool:
         return False
     if expr.ident not in getattr(host, "_gc_rooted_local_names", ()):
         return False
-    if getattr(host, "_cpy_env_flags", {}).get(expr.ident, False):
+    if host._cpy_env_flags.get(expr.ident, False):
         return False
     entry = host.env.get(expr.ident)
     if entry is None:
@@ -216,7 +216,7 @@ def direct_call_argument_is_managed(host, expr, value, target_ty) -> bool:
     return (
         not isinstance(target_ty, RawPointerType)
         and isinstance(value.type, ir.PointerType)
-        and value not in getattr(host, "_cpy_values", ())
+        and value not in host._cpy_values
     )
 
 
@@ -764,7 +764,7 @@ class CallObjectLoweringMixin:
         entry = self.env.get(expr.ident)
         if entry is not None:
             slot, ir_ty, declared_ty = entry
-            if getattr(self, "_cpy_env_flags", {}).get(expr.ident, False):
+            if self._cpy_env_flags.get(expr.ident, False):
                 raise CPythonValueRequired(
                     "slot-call CPython name requires an output-slot bridge: " + expr.ident
                 )
@@ -791,7 +791,7 @@ class CallObjectLoweringMixin:
             # its lexical borrowed-name marker remains. Ownership belongs to
             # this physical slot; its matching owned flag outranks that marker.
             borrowed = (
-                expr.ident in getattr(self, "_borrowed_gc_rooted_local_names", ())
+                expr.ident in self._borrowed_gc_rooted_local_names
                 and self._owned_local_flag_for(expr.ident, slot) is None
             )
             return slot, borrowed
@@ -2676,7 +2676,7 @@ class CallObjectLoweringMixin:
                 return boxed_valueclass
 
         raw = self._emit_expr(arg)
-        if raw in getattr(self, "_cpy_values", ()):
+        if raw in self._cpy_values:
             return self._emit_value_as_pcc_object_or_bridge(
                 raw,
                 arg.ty,

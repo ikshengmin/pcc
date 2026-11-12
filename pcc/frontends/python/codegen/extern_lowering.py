@@ -209,7 +209,7 @@ class ExternScaffoldMixin:
                     self._raw_addresses_are_ints()
                     and isinstance(want, ir.IntType)
                     and isinstance(v.type, ir.PointerType)
-                    and v not in getattr(self, "_cpy_values", ())
+                    and v not in self._cpy_values
                     and not self._value_is_never_gc_object(v)
                 ):
                     # Unboxing can allocate an OverflowError. Keep the source
@@ -459,7 +459,7 @@ class ExternScaffoldMixin:
             root = None
             if (isinstance(value.type, ir.PointerType)
                     and not isinstance(expr.ty, RawPointerType)
-                    and value not in getattr(self, "_cpy_values", ())
+                    and value not in self._cpy_values
                     and not self._value_is_never_gc_object(value)):
                 root = self._extern_enter_root(
                     value, self._owned_release_needed(value, expr), "extern.argument.root"

@@ -199,7 +199,7 @@ class ModuleLifecycleLoweringMixin:
                 ],
             )
         for gv in reversed(
-            list(getattr(self, "_native_module_attr_globals", {}).values())
+            list(self._native_module_attr_globals.values())
         ):
             value = self.builder.load(
                 gv,

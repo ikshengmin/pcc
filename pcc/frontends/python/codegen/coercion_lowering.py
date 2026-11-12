@@ -103,7 +103,7 @@ class CoercionLoweringMixin:
             if isinstance(v.type, ir.PointerType):
                 # CPython-backed DynType values use a different unbox
                 # path than pcc-native PyObject*.
-                if v in getattr(self, "_cpy_values", ()):
+                if v in self._cpy_values:
                     return self.builder.call(
                         self.runtime["py_cpy_to_i64"],
                         [v],
@@ -133,7 +133,7 @@ class CoercionLoweringMixin:
                 # PyObject* (e.g. ``float(x)`` lowered via py_cpy_call1
                 # before the scaffold path could fold it). Unbox before
                 # the caller expects a native ``double``.
-                if v in getattr(self, "_cpy_values", ()):
+                if v in self._cpy_values:
                     return self.builder.call(
                         self.runtime["py_cpy_to_f64"],
                         [v],
@@ -182,7 +182,7 @@ class CoercionLoweringMixin:
             return self.builder.uitofp(v, _DOUBLE, name=self._fresh("b2f"))
         if isinstance(ty, DynType):
             if isinstance(v.type, ir.PointerType):
-                if v in getattr(self, "_cpy_values", ()):
+                if v in self._cpy_values:
                     return self.builder.call(
                         self.runtime["py_cpy_to_f64"],
                         [v],
@@ -224,7 +224,7 @@ class CoercionLoweringMixin:
         # can produce a real PyObject* while retaining an IntType/BoolType
         # annotation; native truth helpers would read that foreign pointer as
         # a pcc header.  Guard and dispatch through PyObject_IsTrue first.
-        if v in getattr(self, "_cpy_values", ()):
+        if v in self._cpy_values:
             self._guard_cpy_value_not_null(v)
             i32 = self.builder.call(
                 self.runtime["py_cpy_truthy"],

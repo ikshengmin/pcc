@@ -1725,11 +1725,11 @@ def _bind_spill_root(host, spills, ident, root, hint) -> None:
     host.env[ident] = host.env[owner_name]
     added = []
     rooted = getattr(host, "_gc_rooted_local_names", None)
-    borrowed = getattr(host, "_borrowed_gc_rooted_local_names", None)
+    borrowed = host._borrowed_gc_rooted_local_names
     if rooted is not None and owner_name in rooted:
         rooted.add(ident)
         added.append(rooted)
-    if borrowed is not None and owner_name in borrowed:
+    if owner_name in borrowed:
         borrowed.add(ident)
         added.append(borrowed)
     if hint is not None:
@@ -2766,18 +2766,10 @@ class GeneratorLoweringMixin:
         saved_owned_local_names = self._owned_local_names
         saved_owned_local_has_value = self._owned_local_has_value
         saved_owned_local_flag_slots = self._owned_local_flag_slots
-        saved_owned_local_flag_allocas = getattr(
-            self,
-            "_owned_local_flag_allocas",
-            {},
-        )
+        saved_owned_local_flag_allocas = self._owned_local_flag_allocas
         saved_gc_rooted_local_names = self._gc_rooted_local_names
         saved_gc_rooted_local_order = getattr(self, "_gc_rooted_local_order", [])
-        saved_borrowed_gc_rooted_local_names = getattr(
-            self,
-            "_borrowed_gc_rooted_local_names",
-            set(),
-        )
+        saved_borrowed_gc_rooted_local_names = self._borrowed_gc_rooted_local_names
         saved_pinned_gc_rooted_local_names = self._pinned_gc_rooted_local_names
         saved_class = self.current_class
         saved_method_kind = self.current_method_kind
@@ -3267,7 +3259,7 @@ class GeneratorLoweringMixin:
     ) -> bool:
         if not isinstance(value.type, ir.PointerType):
             return False
-        if value in getattr(self, "_cpy_values", ()):
+        if value in self._cpy_values:
             return False
         if self._expr_returns_unsafe_raw_pointer(expr):
             return False

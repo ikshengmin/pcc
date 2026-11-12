@@ -347,7 +347,7 @@ class MethodCallExpressionLoweringMixin:
         """
         return bool(
             isinstance(obj_val.type, ir.PointerType)
-            and obj_val not in getattr(self, "_cpy_values", ())
+            and obj_val not in self._cpy_values
             and (
                 self._value_is_owned_object(obj_val)
                 or self._pcc_pointer_source_is_owned(obj_expr)
@@ -992,7 +992,7 @@ class MethodCallExpressionLoweringMixin:
                     kwargs=expr.kwargs,
                     operand_order=expr.operand_order,
                 )
-            if getattr(self, "_cpy_env_flags", {}).get(attr.obj.ident, False):
+            if self._cpy_env_flags.get(attr.obj.ident, False):
                 if attr.name in _STR_METHOD_NATIVE:
                     native = self._maybe_emit_str_method_via_dyn(expr)
                     if native is not None:
@@ -1013,7 +1013,7 @@ class MethodCallExpressionLoweringMixin:
             # dispatch. Native lowering below owns receiver evaluation: an
             # eager probe would invoke getters twice and leak its first owner.
             chain_val = self._emit_expr(attr.obj)
-            if chain_val in getattr(self, "_cpy_values", ()):
+            if chain_val in self._cpy_values:
                 return self._emit_cpy_method_call_src(
                     chain_val,
                     attr.name,
@@ -1059,7 +1059,7 @@ class MethodCallExpressionLoweringMixin:
                 and isinstance(cfunc.obj, Name)
                 and (
                     cfunc.obj.ident in getattr(self, "_cpy_module_env", {})
-                    or getattr(self, "_cpy_env_flags", {}).get(cfunc.obj.ident, False)
+                    or self._cpy_env_flags.get(cfunc.obj.ident, False)
                 )
             ):
                 return self._emit_cpy_method_call_src(

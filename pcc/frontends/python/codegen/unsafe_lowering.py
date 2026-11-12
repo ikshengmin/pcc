@@ -631,7 +631,7 @@ class UnsafeIntrinsicMixin:
         if not (
             self._raw_addresses_are_ints()
             and isinstance(value.type, ir.PointerType)
-            and value not in getattr(self, "_cpy_values", ())
+            and value not in self._cpy_values
             and not self._value_is_never_gc_object(value)
         ):
             return self._to_int64(value, expr.ty)

@@ -186,7 +186,7 @@ class UnaryCallLoweringMixin:
                 f"{expr.op!r} on a class instance"
             )
         operand = self._emit_expr(expr.operand)
-        operand_is_cpy = operand in getattr(self, "_cpy_values", ())
+        operand_is_cpy = operand in self._cpy_values
         if operand_is_cpy and expr.op in ("+", "-", "~"):
             # Preserve CPython numeric protocol semantics (including custom
             # dunders and arbitrary-precision ints) without a new runtime ABI:
@@ -238,12 +238,12 @@ class UnaryCallLoweringMixin:
                 )
                 operand_owned = (
                     isinstance(operand.type, ir.PointerType)
-                    and operand not in getattr(self, "_cpy_values", ())
+                    and operand not in self._cpy_values
                     and self._pcc_pointer_source_is_owned(expr.operand)
                 )
                 operand_pinned = (
                     isinstance(operand.type, ir.PointerType)
-                    and operand not in getattr(self, "_cpy_values", ())
+                    and operand not in self._cpy_values
                 )
                 operand_cleanup = ()
                 if operand_pinned:
@@ -282,12 +282,12 @@ class UnaryCallLoweringMixin:
                 minus_one = self._emit_int_literal_object(-1)
                 operand_owned = (
                     isinstance(operand.type, ir.PointerType)
-                    and operand not in getattr(self, "_cpy_values", ())
+                    and operand not in self._cpy_values
                     and self._pcc_pointer_source_is_owned(expr.operand)
                 )
                 operand_pinned = (
                     isinstance(operand.type, ir.PointerType)
-                    and operand not in getattr(self, "_cpy_values", ())
+                    and operand not in self._cpy_values
                 )
                 operand_cleanup = ()
                 if operand_pinned:
@@ -323,10 +323,10 @@ class UnaryCallLoweringMixin:
             "~": "py_obj_invert",
         }[expr.op]
         operand_owned = (
-            operand not in getattr(self, "_cpy_values", ())
+            operand not in self._cpy_values
             and self._pcc_pointer_source_is_owned(expr.operand)
         )
-        operand_pinned = operand not in getattr(self, "_cpy_values", ())
+        operand_pinned = operand not in self._cpy_values
         operand_cleanup = ()
         if operand_pinned:
             self._gc_pin(operand)
@@ -566,7 +566,7 @@ class UnaryCallLoweringMixin:
                     raw = self._emit_exact_int_operand_object(ast_arg)
                 if raw is None:
                     raw = self._emit_expr(ast_arg)
-                if raw in getattr(self, "_cpy_values", ()):
+                if raw in self._cpy_values:
                     self._last_call_arg_owned_temp = True
                     return self._emit_value_as_pcc_object_or_bridge(
                         raw,
@@ -659,7 +659,7 @@ class UnaryCallLoweringMixin:
             if boxed_valueclass is not None:
                 self._last_call_arg_owned_temp = True
                 return boxed_valueclass
-        if v in getattr(self, "_cpy_values", ()) and isinstance(
+        if v in self._cpy_values and isinstance(
             param_ir_ty,
             ir.PointerType,
         ):

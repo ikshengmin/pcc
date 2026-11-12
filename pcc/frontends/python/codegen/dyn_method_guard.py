@@ -48,7 +48,7 @@ class DynMethodGuardMixin:
             return None
 
         recv = self._emit_expr(attr.obj)
-        if recv in getattr(self, "_cpy_values", ()):
+        if recv in self._cpy_values:
             return self._emit_cpy_method_call_src(
                 recv,
                 attr.name,

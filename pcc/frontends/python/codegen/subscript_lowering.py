@@ -29,7 +29,7 @@ class SubscriptLoweringMixin:
         index_value = self._emit_expr(expr.idx)
 
         if isinstance(index_value.type, ir.PointerType):
-            if index_value in getattr(self, "_cpy_values", ()):
+            if index_value in self._cpy_values:
                 index_i64 = self.builder.call(
                     self.runtime["py_cpy_to_i64"],
                     [index_value],
@@ -246,7 +246,7 @@ class SubscriptLoweringMixin:
                 self._try_err_block = previous
                 self._cpy_operand_cleanup_block = saved_cpy
         value = self._emit_expr(expr)
-        if value in getattr(self, "_cpy_values", ()):
+        if value in self._cpy_values:
             self._guard_cpy_value_not_null(value)
             result = self.builder.call(
                 self.runtime["py_cpy_to_i64"],
@@ -407,7 +407,7 @@ class SubscriptLoweringMixin:
                 self._gc_release_if_owned(rhs, release_expr)
 
         if isinstance(idx_expr, Slice):
-            if obj not in getattr(self, "_cpy_values", ()):
+            if obj not in self._cpy_values:
                 lo_obj = self._emit_slice_bound_object(idx_expr.lo)
                 hi_obj = self._emit_slice_bound_object(idx_expr.hi)
                 step_obj = self._emit_slice_bound_object(idx_expr.step)
@@ -451,7 +451,7 @@ class SubscriptLoweringMixin:
                 )
 
             def _as_cpy_obj(obj_v: ir.Value) -> ir.Value:
-                if obj_v in getattr(self, "_cpy_values", ()):
+                if obj_v in self._cpy_values:
                     return obj_v
                 return self.builder.call(
                     self.runtime["py_cpy_from_pcc_obj"],
@@ -505,7 +505,7 @@ class SubscriptLoweringMixin:
             )
             release_rhs()
             return
-        if obj in getattr(self, "_cpy_values", ()):
+        if obj in self._cpy_values:
             cpy_key, key_owned = self._marshal_to_cpython(
                 self._emit_expr(idx_expr),
                 idx_expr.ty,
@@ -647,7 +647,7 @@ class SubscriptLoweringMixin:
         slice_log("emit obj begin")
         obj = self._emit_expr(expr.obj)
         slice_log("emit obj end")
-        if obj in getattr(self, "_cpy_values", ()):
+        if obj in self._cpy_values:
             live_owned = self._begin_cpy_operand_evaluation(obj)
             obj_owned = bool(live_owned)
 
@@ -905,7 +905,7 @@ class SubscriptLoweringMixin:
             return native_os_environ_item
 
         obj = self._emit_expr(expr.obj)
-        if obj in getattr(self, "_cpy_values", ()):
+        if obj in self._cpy_values:
             live_owned = self._begin_cpy_operand_evaluation(obj)
             obj_owned = bool(live_owned)
             literal_key = self._maybe_emit_cpython_subscript_key_literal(expr.idx)

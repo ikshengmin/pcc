@@ -292,7 +292,7 @@ class BinaryOpLoweringMixin:
         global_entry = self._module_globals.get(operand.ident)
         if global_entry is not None and global_entry[0] is slot:
             return False
-        if getattr(self, "_cpy_env_flags", {}).get(operand.ident, False):
+        if self._cpy_env_flags.get(operand.ident, False):
             return False
         registry = getattr(self, "_fn_gc_root_slot_registry", {}).get(self.current_function.name, ())
         return any(item[1] is slot for item in registry)
@@ -559,7 +559,7 @@ class BinaryOpLoweringMixin:
         # raise ``TypeError: unsupported operand``. The other operand is
         # marshalled to CPython (a cpy value stays borrowed; a native int/float
         # is boxed). Inert in no-libpython mode (``_cpy_values`` is empty).
-        _cpy_vals = getattr(self, "_cpy_values", ())
+        _cpy_vals = self._cpy_values
         if _cpy_vals and (lhs in _cpy_vals or rhs in _cpy_vals):
             _cpy_op = {
                 "+": 0, "-": 1, "*": 2, "/": 3, "//": 4, "%": 5, "**": 6,

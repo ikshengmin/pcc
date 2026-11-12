@@ -187,7 +187,7 @@ class AssignmentStoreLoweringMixin:
                 # A borrowed parameter's registration has a different tracing
                 # contract. Rebound parameters normally have a prepared owned
                 # slot already; keep that distinction physical if one remains.
-                if (lhs.ident in getattr(self, "_borrowed_gc_rooted_local_names", ())
+                if (lhs.ident in self._borrowed_gc_rooted_local_names
                         and self._owned_local_flag_for(lhs.ident, alloca) is None):
                     alloca = self._alloca_in_entry(_CSTR, name=lhs.ident + ".unpack.addr", init_null=True)
                     self.env[lhs.ident] = (alloca, _CSTR, declared_ty)
@@ -339,7 +339,7 @@ class AssignmentStoreLoweringMixin:
                     and self._ir_type_matches(ir_ty, _CSTR)
                     and lhs.ident not in getattr(self, "_current_global_names", set())
                     and lhs.ident not in getattr(self, "_current_param_names", set())
-                    and not getattr(self, "_cpy_env_flags", {}).get(lhs.ident, False)
+                    and not self._cpy_env_flags.get(lhs.ident, False)
                 ):
                     self._emit_release_owned_local_if_flagged(lhs.ident, alloca)
             self._store_value_at_name(
@@ -407,9 +407,7 @@ class AssignmentStoreLoweringMixin:
     ) -> None:
         """Store a pre-computed SSA value to a local / module global."""
         self.env_class_hint.pop(target.ident, None)
-        if not hasattr(self, "_cpy_env_flags"):
-            self._cpy_env_flags = {}
-        if value in getattr(self, "_cpy_values", ()):
+        if value in self._cpy_values:
             self._cpy_env_flags[target.ident] = True
         else:
             self._cpy_env_flags.pop(target.ident, None)
@@ -439,7 +437,7 @@ class AssignmentStoreLoweringMixin:
                     )
             else:
                 value = self._coerce(value, value_ty, declared_ty)
-            if value in getattr(self, "_cpy_values", ()):
+            if value in self._cpy_values:
                 self._cpy_module_flags[target.ident] = True
                 is_cpy_value = True
             else:
@@ -510,7 +508,7 @@ class AssignmentStoreLoweringMixin:
                 )
             incoming = value
             incoming_owned = bool(value_is_owned)
-            if incoming in getattr(self, "_cpy_values", ()):
+            if incoming in self._cpy_values:
                 incoming = self._emit_value_as_pcc_object_or_bridge(
                     incoming,
                     value_ty,
@@ -582,7 +580,7 @@ class AssignmentStoreLoweringMixin:
         if (
             is_preplanned_owned_local(self, target.ident, alloca)
             and isinstance(value.type, ir.PointerType)
-            and value not in getattr(self, "_cpy_values", ())
+            and value not in self._cpy_values
             and not isinstance(value_ty, RawPointerType)
             and not getattr(self, "_suppress_implicit_gc_roots", False)
         ):
@@ -648,7 +646,7 @@ class AssignmentStoreLoweringMixin:
         # skips the enclosing try/except and corrupts later dispatch.
         self._emit_post_call_err_check(target.span)
         if release_value and isinstance(v_obj.type, ir.PointerType):
-            if v_obj not in getattr(self, "_cpy_values", ()):
+            if v_obj not in self._cpy_values:
                 self._gc_release(v_obj)
 
     def _store_value_at_attr(
@@ -680,5 +678,5 @@ class AssignmentStoreLoweringMixin:
             target.span,
         )
         if release_value and isinstance(v_obj.type, ir.PointerType):
-            if v_obj not in getattr(self, "_cpy_values", ()):
+            if v_obj not in self._cpy_values:
                 self._gc_release(v_obj)

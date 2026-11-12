@@ -45,7 +45,7 @@ def _scalar(owner, expr, ty, roots, cpy_owned, pointer_updates, slot):
     )
     if (isinstance(value.type, ir.PointerType) and owner._raw_addresses_are_ints()
             and not _is_raw_pointer_annotation(owner, expr.ty)):
-        if value in getattr(owner, "_cpy_values", ()):
+        if value in owner._cpy_values:
             if owner._cpy_value_is_owned(value):
                 cpy_owned.append(value)
         elif not owner._value_is_never_gc_object(value):

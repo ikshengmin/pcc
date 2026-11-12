@@ -254,7 +254,7 @@ class NativeSystemLoweringMixin:
                 self._try_err_block = previous
                 self._cpy_operand_cleanup_block = saved_cpy
         argv = self._emit_expr(expr.args[0])
-        if argv in getattr(self, "_cpy_values", ()):
+        if argv in self._cpy_values:
             return None
         argv_obj = marshal.marshal_to_object(
             self.builder,
@@ -343,7 +343,7 @@ class NativeSystemLoweringMixin:
         if not check_true:
             return False
         argv = self._emit_expr(expr.args[0])
-        if argv in getattr(self, "_cpy_values", ()):
+        if argv in self._cpy_values:
             return False
         argv_obj = marshal.marshal_to_object(
             self.builder,

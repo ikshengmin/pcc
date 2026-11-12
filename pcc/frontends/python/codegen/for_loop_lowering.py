@@ -295,7 +295,7 @@ def _for_prepare_owned_object_target(host, target_ident: str, target_ty: Type):
         alloca, declared_ty = global_entry
         if not isinstance(alloca.value_type, ir.PointerType):
             raise L1CodegenError("module loop binding requires object storage: " + target_ident)
-        if (getattr(host, "_cpy_env_flags", {}).get(target_ident, False)
+        if (host._cpy_env_flags.get(target_ident, False)
                 or getattr(host, "_cpy_module_flags", {}).get(target_ident, False)):
             raise L1CodegenError("cannot join a CPython module loop target with a native object binding")
         host.env[target_ident] = (alloca, _CSTR, target_ty)
@@ -312,7 +312,7 @@ def _for_prepare_owned_object_target(host, target_ident: str, target_ty: Type):
         and isinstance(existing[1], ir.PointerType)
         and target_ident in getattr(host, "_owned_local_names", set())
         and target_ident
-        not in getattr(host, "_borrowed_gc_rooted_local_names", set())
+        not in host._borrowed_gc_rooted_local_names
     ):
         alloca = existing[0]
         host.env[target_ident] = (alloca, _CSTR, target_ty)
@@ -334,7 +334,7 @@ def _for_prepare_owned_object_target(host, target_ident: str, target_ty: Type):
     # A flag, not ``existing = None``: rebinding the name to ``None`` makes
     # pcc1 infer it as NoneType and reject the tuple-unpack below.
     dropped_cpy_binding = False
-    if existing is not None and target_ident in getattr(host, "_cpy_env_flags", {}):
+    if existing is not None and target_ident in host._cpy_env_flags:
         # A raw CPython pointer cannot be preserved into a GC-rooted pcc
         # object slot, and one name carries one compile-time domain flag.
         # When nothing can observe the pre-loop value the loop simply drops
@@ -457,8 +457,7 @@ def _for_store_owned_target(host, target_ident: str, slot, value: ir.Value) -> N
 class ForLoopLoweringMixin:
     def _clear_cpy_for_target_binding(self, target_ident: str) -> None:
         """Native for-target rebinding must overwrite CPython local state."""
-        if hasattr(self, "_cpy_env_flags"):
-            self._cpy_env_flags.pop(target_ident, None)
+        self._cpy_env_flags.pop(target_ident, None)
 
     def _for_target_pre_value_is_dead(self, target_ident: str) -> bool:
         """True when no read can observe what ``target_ident`` held before a
@@ -530,7 +529,7 @@ class ForLoopLoweringMixin:
         if (
             slot_info is not None
             and target_ident in getattr(self, "_owned_local_names", set())
-            and target_ident not in getattr(self, "_cpy_env_flags", {})
+            and target_ident not in self._cpy_env_flags
         ):
             # Indexed, not unpacked: ``env.get`` is Optional, so pcc1 infers
             # the binding as NoneType and rejects a tuple-unpack of it.
@@ -561,8 +560,7 @@ class ForLoopLoweringMixin:
             self.env_class_hint.pop(target_ident, None)
         if hasattr(self, "env_class_object_hint"):
             self.env_class_object_hint.pop(target_ident, None)
-        if hasattr(self, "_exact_int_env_flags"):
-            self._exact_int_env_flags.pop(target_ident, None)
+        self._exact_int_env_flags.pop(target_ident, None)
         self._clear_cpy_for_target_binding(target_ident)
 
     def _cpy_for_scan_node(self, node, events: list) -> bool:
@@ -724,7 +722,7 @@ class ForLoopLoweringMixin:
                     )
         pre_target = self.env.get(target_name)
         if pre_target is not None:
-            pre_is_cpy = target_name in getattr(self, "_cpy_env_flags", {})
+            pre_is_cpy = target_name in self._cpy_env_flags
             if (
                 not isinstance(pre_target[1], ir.PointerType)
                 or (gen_ctx is None and not pre_is_cpy)
@@ -849,8 +847,6 @@ class ForLoopLoweringMixin:
         else:
             self.builder.store(item, slot[0])
         # Mark target as CPython-backed.
-        if not hasattr(self, "_cpy_env_flags"):
-            self._cpy_env_flags = {}
         self._cpy_env_flags[target_ident] = True
 
         body_stmts = stmt.body
@@ -2553,7 +2549,7 @@ class ForLoopLoweringMixin:
                 return self._emit_rooted_valueclass_indexed_loop(stmt.iter, stmt.target, statement=stmt)
             # CPython iterable? Use PyObject_GetIter + PyIter_Next.
             iter_val = self._emit_expr(stmt.iter)
-            if iter_val in getattr(self, "_cpy_values", ()):
+            if iter_val in self._cpy_values:
                 return self._emit_for_cpython_iter(stmt, iter_val)
             if len(self._generator_ctx_stack) > 0 and isinstance(
                 stmt.iter.ty,
@@ -2900,8 +2896,6 @@ class ForLoopLoweringMixin:
                 name=f"{target_name}.addr",
             )
             self.env[target_name] = (alloca, nxt.type, DynType(name="dyn"))
-            if not hasattr(self, "_cpy_env_flags"):
-                self._cpy_env_flags = {}
             self._cpy_env_flags[target_name] = True
         else:
             alloca, _, _ = existing

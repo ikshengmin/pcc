@@ -627,11 +627,7 @@ class AssignmentStatementLoweringMixin:
         )
         self.env[target.ident] = (alloca, _CSTR, target_ty)
         self.builder.store(ir.Constant(_CSTR, None), alloca)
-        virtual = getattr(self, "_virtual_literal_dict_expr_bindings", None)
-        if virtual is None:
-            self._virtual_literal_dict_expr_bindings = set()
-            virtual = self._virtual_literal_dict_expr_bindings
-        virtual.add(target.ident)
+        self._virtual_literal_dict_expr_bindings.add(target.ident)
         self._cpy_env_flags.pop(target.ident, None)
         self._weak_dict_env_flags.pop(target.ident, None)
         self._weakref_env_flags.pop(target.ident, None)
@@ -914,7 +910,7 @@ class AssignmentStatementLoweringMixin:
                             )
                 elif target.obj.ident in self._literal_dict_expr_bindings:
                     self._literal_dict_expr_bindings = {}
-                getattr(self, "_virtual_literal_dict_expr_bindings", set()).discard(
+                self._virtual_literal_dict_expr_bindings.discard(
                     target.obj.ident
                 )
             self._emit_subscript_store(target, stmt.value)
@@ -945,7 +941,7 @@ class AssignmentStatementLoweringMixin:
         elif isinstance(stmt.value, Name):
             literal_dict_expr = self._literal_dict_expr_bindings.get(stmt.value.ident)
         self._literal_dict_expr_bindings.pop(target.ident, None)
-        getattr(self, "_virtual_literal_dict_expr_bindings", set()).discard(
+        self._virtual_literal_dict_expr_bindings.discard(
             target.ident
         )
         if literal_dict_expr is not None:
@@ -1022,8 +1018,7 @@ class AssignmentStatementLoweringMixin:
             self.env.pop(target.ident, None)
             self.env_class_hint.pop(target.ident, None)
             self.env_class_object_hint.pop(target.ident, None)
-            if hasattr(self, "_cpy_env_flags"):
-                self._cpy_env_flags.pop(target.ident, None)
+            self._cpy_env_flags.pop(target.ident, None)
             self._weak_dict_env_flags.pop(target.ident, None)
             self._weakref_env_flags.pop(target.ident, None)
             return
@@ -1039,8 +1034,7 @@ class AssignmentStatementLoweringMixin:
             self.env.pop(target.ident, None)
             self.env_class_hint.pop(target.ident, None)
             self.env_class_object_hint.pop(target.ident, None)
-            if hasattr(self, "_cpy_env_flags"):
-                self._cpy_env_flags.pop(target.ident, None)
+            self._cpy_env_flags.pop(target.ident, None)
             self._weak_dict_env_flags.pop(target.ident, None)
             self._weakref_env_flags.pop(target.ident, None)
             module_global_alias = target.ident in self._module_globals and (
@@ -1060,10 +1054,7 @@ class AssignmentStatementLoweringMixin:
 
         if getattr(self, "current_func_def", None) is None:
             static_re_flags = self._native_re_static_flags_value(stmt.value)
-            re_flag_aliases = getattr(self, "_native_re_static_flag_aliases", None)
-            if re_flag_aliases is None:
-                self._native_re_static_flag_aliases = {}
-                re_flag_aliases = self._native_re_static_flag_aliases
+            re_flag_aliases = self._native_re_static_flag_aliases
             if static_re_flags is None:
                 re_flag_aliases.pop(target.ident, None)
             else:
@@ -1095,35 +1086,22 @@ class AssignmentStatementLoweringMixin:
                 re_scope_body,
             ):
                 if current_func is None:
-                    re_aliases = getattr(self, "_native_re_compile_aliases", None)
-                    if re_aliases is None:
-                        self._native_re_compile_aliases = {}
-                        re_aliases = self._native_re_compile_aliases
-                    re_aliases[target.ident] = re_compile_alias
+                    self._native_re_compile_aliases[target.ident] = re_compile_alias
                 else:
-                    re_aliases = getattr(
-                        self,
-                        "_native_re_compile_local_aliases",
-                        None,
-                    )
-                    if re_aliases is None:
-                        self._native_re_compile_local_aliases = {}
-                        re_aliases = self._native_re_compile_local_aliases
-                    re_aliases[(id(current_func), target.ident)] = re_compile_alias
+                    self._native_re_compile_local_aliases[
+                        (id(current_func), target.ident)
+                    ] = re_compile_alias
                 self.env.pop(target.ident, None)
                 self.env_class_hint.pop(target.ident, None)
                 self.env_class_object_hint.pop(target.ident, None)
-                if hasattr(self, "_cpy_env_flags"):
-                    self._cpy_env_flags.pop(target.ident, None)
+                self._cpy_env_flags.pop(target.ident, None)
                 self._weak_dict_env_flags.pop(target.ident, None)
                 self._weakref_env_flags.pop(target.ident, None)
                 return
         if current_func is None:
-            getattr(self, "_native_re_compile_aliases", {}).pop(target.ident, None)
+            self._native_re_compile_aliases.pop(target.ident, None)
         else:
-            re_aliases = getattr(self, "_native_re_compile_local_aliases", None)
-            if re_aliases is not None:
-                re_aliases[(id(current_func), target.ident)] = None
+            self._native_re_compile_local_aliases[(id(current_func), target.ident)] = None
 
         if not hasattr(self, "_ir_builder_env_flags"):
             self._ir_builder_env_flags = {}
@@ -1232,7 +1210,7 @@ class AssignmentStatementLoweringMixin:
         forced_exact_int_target = (
             isinstance(target_ty, IntType) and target_ty.name == "int"
         ) and bool(
-            getattr(self, "_exact_int_env_flags", {}).get(target.ident, False)
+            self._exact_int_env_flags.get(target.ident, False)
             or target.ident
             in getattr(self, "_planned_exact_int_local_names", set())
         )
@@ -1303,14 +1281,10 @@ class AssignmentStatementLoweringMixin:
         # Track "this local holds a CPython PyObject*" so subsequent
         # loads of the variable keep the tag, letting _to_int64 /
         # print / compare dispatch via the libpython helpers.
-        if not hasattr(self, "_cpy_env_flags"):
-            self._cpy_env_flags = {}
-        if value in getattr(self, "_cpy_values", ()):
+        if value in self._cpy_values:
             self._cpy_env_flags[target.ident] = True
         else:
             self._cpy_env_flags.pop(target.ident, None)
-        if not hasattr(self, "_exact_int_env_flags"):
-            self._exact_int_env_flags = {}
 
         # If this is a module-level global (seeded in the first pass),
         # write into the module variable and skip the local alloca
@@ -1343,7 +1317,7 @@ class AssignmentStatementLoweringMixin:
                     )
             else:
                 value = self._coerce(value, stmt.value.ty, declared_ty, stmt.value)
-            if value in getattr(self, "_cpy_values", ()):
+            if value in self._cpy_values:
                 self._cpy_module_flags[target.ident] = True
                 is_cpy_value = True
             else:
@@ -1540,7 +1514,7 @@ class AssignmentStatementLoweringMixin:
             and isinstance(stmt.value, Name)
             and exact_int_name_source_is_borrowed
             and isinstance(value.type, ir.PointerType)
-            and value not in getattr(self, "_cpy_values", ())
+            and value not in self._cpy_values
         )
         operand_root_name_copy = False
         if isinstance(stmt.value, Name):
@@ -1553,13 +1527,13 @@ class AssignmentStatementLoweringMixin:
             isinstance(stmt.value, Name)
             and (
                 stmt.value.ident in getattr(self, "_owned_local_names", set())
-                or stmt.value.ident in getattr(self, "_except_binding_names", set())
+                or stmt.value.ident in self._except_binding_names
                 or exact_int_name_copy
                 or operand_root_name_copy
             )
             and isinstance(value.type, ir.PointerType)
             and self._ir_type_matches(ir_ty, _CSTR)
-            and value not in getattr(self, "_cpy_values", ())
+            and value not in self._cpy_values
         ):
             # `except ... as e` stores a retained handler exception but does
             # not register `e` as a normal owned local because handler cleanup
@@ -1595,7 +1569,7 @@ class AssignmentStatementLoweringMixin:
             and is_preplanned_owned_local(self, target.ident, alloca)
             and isinstance(value.type, ir.PointerType)
             and self._ir_type_matches(ir_ty, _CSTR)
-            and value not in getattr(self, "_cpy_values", ())
+            and value not in self._cpy_values
             and not self._expr_returns_unsafe_raw_pointer(stmt.value)
             and not getattr(self, "_suppress_implicit_gc_roots", False)
         ):
@@ -1632,7 +1606,7 @@ class AssignmentStatementLoweringMixin:
                 or (
                     bool(self.loop_stack)
                     and not getattr(self, "_suppress_implicit_gc_roots", False)
-                    and value not in getattr(self, "_cpy_values", ())
+                    and value not in self._cpy_values
                     and self._is_object(stmt.value.ty)
                     and not self._expr_returns_unsafe_raw_pointer(stmt.value)
                 )
@@ -1649,11 +1623,9 @@ class AssignmentStatementLoweringMixin:
             # assignment. store_root_take releases the previous slot value
             # unconditionally; that would consume the caller's reference.
             # Such locals need the normal ownership-flag-guarded replacement.
-            and target.ident not in getattr(
-                self, "_borrowed_gc_rooted_local_names", set()
-            )
+            and target.ident not in self._borrowed_gc_rooted_local_names
             and isinstance(value.type, ir.PointerType)
-            and value not in getattr(self, "_cpy_values", ())
+            and value not in self._cpy_values
             and self._ir_type_matches(ir_ty, _CSTR)
         )
         # exact_root_store transfers the fresh value's reference into the slot
@@ -1670,7 +1642,7 @@ class AssignmentStatementLoweringMixin:
                 not rhs_returns_owned_object
                 and isinstance(value.type, ir.PointerType)
                 and self._ir_type_matches(ir_ty, _CSTR)
-                and value not in getattr(self, "_cpy_values", ())
+                and value not in self._cpy_values
             ):
                 incoming = value
             owned_alias_kept = self._emit_release_owned_local_if_flagged(
@@ -1684,7 +1656,7 @@ class AssignmentStatementLoweringMixin:
             and not exact_root_store
             and isinstance(value.type, ir.PointerType)
             and self._ir_type_matches(ir_ty, _CSTR)
-            and value not in getattr(self, "_cpy_values", ())
+            and value not in self._cpy_values
         ):
             value = self.builder.call(
                 self.runtime["pcc_gc_resolve_owned_ptr"],
@@ -1699,7 +1671,7 @@ class AssignmentStatementLoweringMixin:
                 or target.ident in getattr(self, "_gc_rooted_local_names", set())
             )
             and isinstance(value.type, ir.PointerType)
-            and value not in getattr(self, "_cpy_values", ())
+            and value not in self._cpy_values
         ):
             self.builder.call(
                 self.runtime["pcc_gc_note_write_barrier"],
@@ -1769,7 +1741,7 @@ class AssignmentStatementLoweringMixin:
             self._owned_local_has_value.discard(target.ident)
             if (
                 isinstance(stmt.value, Name)
-                and stmt.value.ident in getattr(self, "_except_binding_names", set())
+                and stmt.value.ident in self._except_binding_names
                 and isinstance(ir_ty, ir.PointerType)
                 and self._ir_type_matches(ir_ty, _CSTR)
                 and target.ident not in getattr(self, "_current_param_names", set())
@@ -1786,7 +1758,7 @@ class AssignmentStatementLoweringMixin:
                 not getattr(self, "_suppress_implicit_gc_roots", False)
                 and isinstance(value.type, ir.PointerType)
                 and self._ir_type_matches(ir_ty, _CSTR)
-                and value not in getattr(self, "_cpy_values", ())
+                and value not in self._cpy_values
                 and self._is_object(stmt.value.ty)
                 and not self._expr_returns_unsafe_raw_pointer(stmt.value)
             ):
@@ -1820,11 +1792,11 @@ class AssignmentStatementLoweringMixin:
         value = self._emit_expr(elem)
         if not isinstance(value.type, ir.PointerType):
             return value, None
-        if value in getattr(self, "_cpy_values", ()):
+        if value in self._cpy_values:
             return value, None
         if isinstance(elem, Name) and (
             elem.ident in getattr(self, "_owned_local_names", set())
-            or elem.ident in getattr(self, "_except_binding_names", set())
+            or elem.ident in self._except_binding_names
         ):
             return (
                 self._gc_retain(
@@ -2280,7 +2252,7 @@ class AssignmentStatementLoweringMixin:
                 return
             if (
                 isinstance(stmt.target.ty, IntType)
-                and getattr(self, "_exact_int_env_flags", {}).get(
+                and self._exact_int_env_flags.get(
                     stmt.target.ident,
                     False,
                 )
@@ -2365,8 +2337,6 @@ class AssignmentStatementLoweringMixin:
             if self._expr_looks_cpython(stmt.target) and isinstance(
                 cur.type, ir.PointerType
             ):
-                if not hasattr(self, "_cpy_values"):
-                    self._cpy_values = set()
                 self._cpy_values.add(cur)
             rhs = self._emit_expr(stmt.value)
             # CPython augmented assignment tries type(a).__iop__ FIRST;
@@ -2399,7 +2369,7 @@ class AssignmentStatementLoweringMixin:
                 _inplace_code is not None
                 and isinstance(declared_ty, (DynType, ClassType, FuncType, ListType, DictType, SetType))
                 and isinstance(cur.type, ir.PointerType)
-                and cur not in getattr(self, "_cpy_values", ())
+                and cur not in self._cpy_values
             ):
                 rhs_obj = marshal.marshal_to_object(
                     self.builder,
@@ -2432,7 +2402,7 @@ class AssignmentStatementLoweringMixin:
                 declared_ty,
                 value_is_owned=(
                     isinstance(result.type, ir.PointerType)
-                    and result not in getattr(self, "_cpy_values", ())
+                    and result not in self._cpy_values
                 ),
             )
             return
