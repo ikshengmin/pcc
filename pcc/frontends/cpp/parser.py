@@ -2819,6 +2819,9 @@ class CppParser:
         if symbol.kind == "template-value":
             return Expression(Pattern("template-value", token.coord, symbol.template_parameter),
                               symbol.dtype, symbol=symbol)
+        if symbol.kind == "template-enumerator":
+            # A member enumerator of the current instantiation is dependent.
+            return Expression(Pattern("member-enumerator", token.coord, symbol), symbol.dtype, symbol=symbol)
         if symbol.kind == "enumerator":
             result = self._enum_constant_expression(symbol.dtype, symbol.enum_value, token.coord)
             result.decltype_entity = symbol.dtype
@@ -2889,6 +2892,10 @@ class CppParser:
         if self.template_function is not None or self.instantiating_template:
             raise CppDiagnostic("cpp.unsupported.enum-templates",
                                 "enum expressions in templates require dependent lookup", coord)
+        return self._enum_constant_projection(dtype, value, coord)
+
+    def _enum_constant_projection(self, dtype, value, coord):
+        """Project a checked enumerator value; template contexts resolve it first."""
         if is_enum_type(dtype) and not unqualified(dtype).complete:
             raise CppDiagnostic("cpp.incomplete-enum", "enum value initialization requires a complete type", coord)
         scalar = unqualified(dtype).underlying if is_enum_type(dtype) else unqualified(dtype)
@@ -2902,6 +2909,10 @@ class CppParser:
     def _substitute_pattern_type(self, dtype, bindings, coord):
         context = getattr(self, 'class_template_instance', None)
         if context is None:
+            specialization = getattr(self, 'template_specialization', None)
+            if specialization is not None:
+                from pcc.frontends.cpp.class_templates import substitute_member
+                return substitute_member(dtype, bindings, specialization, coord, self)
             return substitute(dtype, bindings)
         from pcc.frontends.cpp.class_templates import substitute_member
         return substitute_member(dtype, bindings, context.symbol.class_owner, coord, self)
@@ -2935,6 +2946,9 @@ class CppParser:
             typename = c_ast.Typename(None, [], self._scalar_type(None, argument.dtype, coord), coord)
             return Expression(c_ast.Cast(typename, node, coord), argument.dtype,
                               constant_fact=known(argument.dtype, argument.value, coord))
+        if kind == "member-enumerator":
+            from pcc.frontends.cpp.class_template_enums import enumerator_expression
+            return enumerator_expression(self, pattern.value, coord)
         if kind in ("name", "member-this"):
             symbol = pattern.value
             return environment[id(symbol)]

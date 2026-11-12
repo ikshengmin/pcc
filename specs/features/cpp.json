@@ -322,6 +322,21 @@
       "url": "https://timsong-cpp.github.io/cppwp/n4659/temp.dep"
     },
     {
+      "id": "dcl.enum",
+      "title": "dcl.enum",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/dcl.enum"
+    },
+    {
+      "id": "temp.inst",
+      "title": "temp.inst",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/temp.inst"
+    },
+    {
+      "id": "basic.lookup.qual",
+      "title": "basic.lookup.qual",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/basic.lookup.qual"
+    },
+    {
       "id": "dcl.fct.def.default",
       "title": "dcl.fct.def.default",
       "url": "https://timsong-cpp.github.io/cppwp/n4659/dcl.fct.def.default"
@@ -916,7 +931,7 @@
       "scope": "Authored, execution-unrun obligations for non-template first-declaration defaulted D1s, independent deletion/triviality/user-provided identity, recursive implicit-member deletion and access checks, and lazy emitted bodies through the existing exact member-cleanup proof and external-ODR worklist. Class completion classifies deletion before deferred default arguments and DMIs, including the unchanged deleted-D1 unevaluated default-argument counterexample. Unused declarations and valid unevaluated calls request no member body. Ordinary, placement, reverse-order, return, loop, nested-member, body-local and cross-TU original programs have authored owned-native/reference rows; no observed pass is claimed. The exact formerly rejected defaulted declaration is preserved unchanged as a positive original. Implicit nontrivial D1 synthesis, template/later defaulting, explicit exception specifications, class-array lifetimes, unknown destructor effects, unavailable evaluated-use bodies, bases/virtual dispatch, internal-linkage ownership and unwinding remain explicit boundaries. Native pcc1 frontend and unchanged TinyXML2 project acceptance remain unqualified. No local tests, imports, compilers or collection were run; CI must establish these outcomes.",
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:7fc68e1af96cf9035f83ed11460cbb4311019d2c331c99b6b47cfb954bc17fb9",
+        "source_revision": "sha256:769fab815555cf9f146851b6450d2d9654e22702569ab8fdd9d85cf23c9a5442",
         "sources": [
           {"path": "pcc/frontends/cpp/allocation.py", "sha256": "22a05dde5d55288b826cc78bd4845f0ed63aedc436b65d3e3579392c01139d5c"},
           {"path": "pcc/frontends/cpp/classes.py", "sha256": "2b86df2b1bcff2267e44fd38fee3ab43d9b8c7a1ad217a0cd7a60bda958d01f1"},
@@ -924,7 +939,7 @@
           {"path": "pcc/frontends/cpp/destructors.py", "sha256": "83b6cf347db627d44d1ad0b5cdfb854bca61fa7f75f666c1459c0b548986d92e"},
           {"path": "pcc/frontends/cpp/lifetimes.py", "sha256": "a5db3b348e44b98f43032e25ff89d2d12dcb118871f387a54735f8444e41d46c"},
           {"path": "pcc/frontends/cpp/member_initialization.py", "sha256": "f9eb701a90b9fd9aa82e3f92e03644c38c57e21528aa84d367df9dd7798ff0bb"},
-          {"path": "pcc/frontends/cpp/parser.py", "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"}
+          {"path": "pcc/frontends/cpp/parser.py", "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"}
         ]
       },
       "tests": [
@@ -948,7 +963,7 @@
           "kind": "full-feature",
           "scope": "Complete bounded first-declaration defaulted-D1 corpus, including all parametrized unit, owned-native, reference and rejection obligations",
           "status": "unrun",
-          "source_revision": "sha256:7fc68e1af96cf9035f83ed11460cbb4311019d2c331c99b6b47cfb954bc17fb9",
+          "source_revision": "sha256:769fab815555cf9f146851b6450d2d9654e22702569ab8fdd9d85cf23c9a5442",
           "mode": "pcc0",
           "platform": "linux-x86_64",
           "backend": "self",
@@ -1136,7 +1151,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:6f6ee77235cd9d43d64818a91f183f674e87fae60cf548cf1aa2e5386e35b90d",
+        "source_revision": "sha256:7fd52b006786a52001ad63434d106a7b22f3f1d968b03fe1d6a3840c12e1c7d8",
         "sources": [
           {
             "path": "pcc/frontends/cpp/classes.py",
@@ -1168,7 +1183,7 @@
           },
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+            "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
           },
           {
             "path": "pcc/frontends/cpp/references.py",
@@ -1279,15 +1294,15 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:1a51df2157b4812170d99b79148002c55809b4ad54125dd828a863d346ed10c6",
+        "source_revision": "sha256:3ef53ab0b47a10afda703b83a6a34ac4bf9e424ba82700a843d8a53619c73b93",
         "sources": [
           {
             "path": "pcc/frontends/cpp/class_template_members.py",
-            "sha256": "e11fe6197a07e5cd81385d95682e2d197a8c84ce65781beaea4c81bb27489129"
+            "sha256": "de997095dd2d63c91bfad21df0103b765fa1bed2befb06e9e1532bf566560fad"
           },
           {
             "path": "pcc/frontends/cpp/class_templates.py",
-            "sha256": "9f32ca19b7e448264604b4675f6cc7f6de438e4a0ff0bb06a25605215c9ed84e"
+            "sha256": "e81e1d753a48cc3a69950e15bbec66f24ed82ea9bd1b5c6a45f4a3820c1f6463"
           },
           {
             "path": "pcc/frontends/cpp/inheritance.py",
@@ -1324,19 +1339,71 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:f5d720375f37881073e5da0e0552f03da0bcd55226db097f55266bb2204e8fe2",
+        "source_revision": "sha256:c66d97a57512571abe5fe9331443a0baddff680deaf7c5dd3b12ace81426a1d5",
         "sources": [
           {
             "path": "pcc/frontends/cpp/class_template_members.py",
-            "sha256": "e11fe6197a07e5cd81385d95682e2d197a8c84ce65781beaea4c81bb27489129"
+            "sha256": "de997095dd2d63c91bfad21df0103b765fa1bed2befb06e9e1532bf566560fad"
           },
           {
             "path": "pcc/frontends/cpp/class_templates.py",
-            "sha256": "9f32ca19b7e448264604b4675f6cc7f6de438e4a0ff0bb06a25605215c9ed84e"
+            "sha256": "e81e1d753a48cc3a69950e15bbec66f24ed82ea9bd1b5c6a45f4a3820c1f6463"
           },
           {
             "path": "pcc/frontends/cpp/virtual_functions.py",
             "sha256": "b426d008cec6ab05dd67f95bfe169839845d1fba9bbcba81dfa60b764b1088b9"
+          }
+        ]
+      }
+    },
+    {
+      "id": "cpp.class-template-enums",
+      "title": "Unnamed unscoped member enums of class templates",
+      "chapter_ids": [
+        "dcl.enum",
+        "class.mem",
+        "temp.dep",
+        "temp.inst",
+        "basic.lookup.qual"
+      ],
+      "scope": "An unnamed unscoped member enum of a class template keeps each enumerator initializer as a definition-point Pattern; an enumerator of the current instantiation is value-dependent when its initializer is. Each specialization builds its own enum with the ordinary owner (values, implicit successors, fixed or selected underlying type and range checks) before its members, so member bodies, array bounds, member access and S<N>::K name that specialization's enumerators, with member access control. Named and scoped member enums of class templates and enum object declarators remain explicit gaps. Source revision is sha256 of the sorted compact JSON source list.",
+      "tests": [
+        "tests/cpp/test_cpp_class_template_enums.py::test_class_template_enum_originals_lower_to_ir",
+        "tests/cpp/test_cpp_class_template_enums.py::test_each_specialization_folds_its_own_enumerator_value",
+        "tests/cpp/test_cpp_class_template_enums.py::test_invalid_class_template_enum_originals_are_ordinary_errors",
+        "tests/cpp/test_cpp_class_template_enums.py::test_unmodeled_class_template_enums_keep_an_explicit_capability_code",
+        "tests/cpp/test_cpp_class_template_enums.py::test_class_template_enum_originals_execute_against_explicit_cpp17_reference",
+        "tests/cpp/test_cpp_class_template_enums.py::test_explicit_reference_rejects_invalid_and_accepts_gap_originals"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:16776f615db51f4e947b2eb154d62beea743b66a94bbcb60e478892e73871f6f",
+        "sources": [
+          {
+            "path": "pcc/frontends/cpp/class_template_enums.py",
+            "sha256": "727a6deb0c1c49fed57a96dc1be26cfe607576439d0d0a368a482ed7a24864fe"
+          },
+          {
+            "path": "pcc/frontends/cpp/class_template_members.py",
+            "sha256": "de997095dd2d63c91bfad21df0103b765fa1bed2befb06e9e1532bf566560fad"
+          },
+          {
+            "path": "pcc/frontends/cpp/class_templates.py",
+            "sha256": "e81e1d753a48cc3a69950e15bbec66f24ed82ea9bd1b5c6a45f4a3820c1f6463"
+          },
+          {
+            "path": "pcc/frontends/cpp/parser.py",
+            "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
+          },
+          {
+            "path": "pcc/frontends/cpp/template_id_members.py",
+            "sha256": "0fce16b19b0478ad4d3d15ff9611ee3d1ac870d6491f763e22204600b459927b"
+          },
+          {
+            "path": "pcc/frontends/cpp/templates.py",
+            "sha256": "d57257c546bbd36273906afaf8185127c8e1e23996ada7f4268dbc5cfae799f5"
           }
         ]
       }
@@ -3583,7 +3650,7 @@
         "feature_id": "cpp.allocation",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -3655,7 +3722,7 @@
         "feature_id": "cpp.array-templates",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -3663,7 +3730,7 @@
         "feature_id": "cpp.arrays-or-lambdas",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -3703,7 +3770,7 @@
         "feature_id": "cpp.c-linkage-internal",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -3711,7 +3778,7 @@
         "feature_id": "cpp.c-linkage-signature",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -3719,7 +3786,7 @@
         "feature_id": "cpp.c-style-cast",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -3743,7 +3810,7 @@
         "feature_id": "cpp.class-array-initialization",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -3767,7 +3834,7 @@
         "feature_id": "cpp.class-assignment",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -3783,7 +3850,7 @@
         "feature_id": "cpp.class-conversions",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -3799,7 +3866,7 @@
         "feature_id": "cpp.class-linkage",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -3807,7 +3874,7 @@
         "feature_id": "cpp.class-operators",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -3831,7 +3898,7 @@
         "feature_id": "cpp.class-values",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -3847,7 +3914,7 @@
         "feature_id": "cpp.condition-declaration",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -3935,7 +4002,7 @@
         "feature_id": "cpp.dependent-lookup",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -3999,7 +4066,7 @@
         "feature_id": "cpp.enum-casts",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4031,7 +4098,7 @@
         "feature_id": "cpp.enum-linkage",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4039,7 +4106,7 @@
         "feature_id": "cpp.enum-list-initialization",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4047,7 +4114,7 @@
         "feature_id": "cpp.enum-local-scope",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4111,7 +4178,7 @@
         "feature_id": "cpp.exceptions",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4119,7 +4186,7 @@
         "feature_id": "cpp.extended-float",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4127,7 +4194,7 @@
         "feature_id": "cpp.for-declaration-list",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4135,7 +4202,7 @@
         "feature_id": "cpp.function-declarators",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4151,7 +4218,7 @@
         "feature_id": "cpp.function-pointers",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4159,7 +4226,7 @@
         "feature_id": "cpp.function-storage",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4175,7 +4242,7 @@
         "feature_id": "cpp.inline-declarations",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4183,7 +4250,7 @@
         "feature_id": "cpp.inline-member-functions",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4191,7 +4258,7 @@
         "feature_id": "cpp.internal-object-declaration",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4199,7 +4266,7 @@
         "feature_id": "cpp.language-linkage",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4223,7 +4290,7 @@
         "feature_id": "cpp.member-qualifiers",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4239,7 +4306,7 @@
         "feature_id": "cpp.members",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4255,7 +4322,7 @@
         "feature_id": "cpp.multilevel-pointers",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4279,7 +4346,7 @@
         "feature_id": "cpp.namespace-object-templates",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4287,7 +4354,7 @@
         "feature_id": "cpp.namespace-templates",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4295,7 +4362,7 @@
         "feature_id": "cpp.namespaces",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4327,7 +4394,7 @@
         "feature_id": "cpp.nullptr-glvalue-evaluation",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4335,7 +4402,7 @@
         "feature_id": "cpp.overload",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4391,7 +4458,7 @@
         "feature_id": "cpp.pointer-operators",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4399,7 +4466,7 @@
         "feature_id": "cpp.pointer-templates",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4407,7 +4474,7 @@
         "feature_id": "cpp.pointers",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4415,7 +4482,7 @@
         "feature_id": "cpp.preprocessor",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4431,7 +4498,7 @@
         "feature_id": "cpp.qualified-names",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4439,7 +4506,7 @@
         "feature_id": "cpp.range-for",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4447,7 +4514,7 @@
         "feature_id": "cpp.references",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4463,7 +4530,7 @@
         "feature_id": "cpp.sizeof.unevaluated",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4471,7 +4538,7 @@
         "feature_id": "cpp.sizeof.unevaluated",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4487,7 +4554,7 @@
         "feature_id": "cpp.static-cast",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4503,7 +4570,7 @@
         "feature_id": "cpp.member-storage",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4519,7 +4586,7 @@
         "feature_id": "cpp.string-array-initialization",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4567,7 +4634,7 @@
         "feature_id": "cpp.syntax",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4599,7 +4666,7 @@
         "feature_id": "cpp.templates",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4623,7 +4690,7 @@
         "feature_id": "cpp.unknown-bound-array-pointers",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4655,7 +4722,7 @@
         "feature_id": "cpp.variable-templates",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4663,7 +4730,7 @@
         "feature_id": "cpp.variadic-argument",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4671,7 +4738,7 @@
         "feature_id": "cpp.variadic-functions",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       },
       {
@@ -4695,7 +4762,7 @@
         "feature_id": "cpp.volatile",
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "9cb62a46d229ed724e98a24df8d65eeb4a5ad7a0279739af9fba25ff64f018b4"
+          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
         }
       }
     ],

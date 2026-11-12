@@ -134,7 +134,8 @@ class Pattern:
 
 
 def dependent(dtype):
-    if dtype is None or isinstance(dtype, TypeParameter) or getattr(dtype, 'cpp_class_pattern', False):
+    if (dtype is None or isinstance(dtype, TypeParameter) or getattr(dtype, 'cpp_class_pattern', False)
+            or getattr(dtype, 'cpp_dependent_type', False)):
         return True
     if isinstance(dtype, ConstType):
         return dependent(dtype.base)

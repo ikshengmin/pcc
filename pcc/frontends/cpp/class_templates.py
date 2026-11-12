@@ -56,6 +56,7 @@ class ClassTemplatePattern:
         self.member_scope = None
         self.member_symbols = []
         self.methods = []
+        self.enums = []
         self.constructors = Symbol(name, 'function', coord)
         self.method_definition = None
         self.base = None
@@ -140,7 +141,11 @@ def parse_declaration(parser, parameters, parent):
                 continue
             if parser._accept(';'):
                 continue
-            if token.value in ('using', 'typedef', 'enum', 'class', 'struct', 'union',
+            if token.value == 'enum':
+                from pcc.frontends.cpp.class_template_enums import parse_enum_pattern
+                parse_enum_pattern(parser, pattern, access)
+                continue
+            if token.value in ('using', 'typedef', 'class', 'struct', 'union',
                                'friend', 'template', 'explicit',
                                'constexpr'):
                 unsupported(token.coord, 'class template members currently require scalar/pointer data declarations')
@@ -295,6 +300,8 @@ def specialize(parser, symbol, coord):
 def substitute_member(dtype, arguments, instance, coord, parser=None):
     if isinstance(dtype, TypeParameter):
         return arguments[dtype.index]
+    if getattr(dtype, 'cpp_enum_pattern', False):
+        return instance.definition.template_enums[dtype]
     if isinstance(dtype, InjectedClassPattern):
         return instance
     if isinstance(dtype, ConstType):
@@ -334,11 +341,17 @@ def complete_layout(parser, dtype, pattern, arguments, coord):
     if pattern.members is None:
         raise CppDiagnostic('cpp.incomplete-class', 'class template definition is unavailable', coord)
     dtype.layout_state = 'in-progress'
+    previous_specialization = getattr(parser, 'template_specialization', None)
     try:
         definition = ClassDefinition(dtype, pattern.scope, pattern.class_key)
         # The nondependent base specifier is shared by every specialization.
         definition.base = pattern.base
         definition.layout_types = parser.types
+        # Member-enumerator Patterns (in enumerators and array bounds) name
+        # this specialization's enumerators.
+        parser.template_specialization = dtype
+        from pcc.frontends.cpp.class_template_enums import instantiate_enums
+        instantiate_enums(parser, pattern, definition, arguments)
         for name, member_type, at, access, mutable in pattern.members:
             member_type = substitute_member(member_type, arguments, dtype, at, parser)
             plain = unqualified(member_type)
@@ -378,6 +391,8 @@ def complete_layout(parser, dtype, pattern, arguments, coord):
             dtype.definition.complete = False
         dtype.layout_failure, dtype.layout_state = error, 'failed'
         raise
+    finally:
+        parser.template_specialization = previous_specialization
 
 
 def emit_instance(parser, entry):

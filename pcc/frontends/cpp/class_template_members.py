@@ -419,6 +419,8 @@ def instantiate_body(parser, context):
     fields = ('return_type', 'member_function', 'this_symbol', 'current_function', 'scope',
               'instantiating_template', 'lifetimes')
     saved = {field: getattr(parser, field) for field in fields}
+    saved['template_specialization'] = getattr(parser, 'template_specialization', None)
+    parser.template_specialization = context.symbol.class_owner
     previous = getattr(parser, 'class_template_instance', None)
     environment = {}
     for original, concrete in zip(record.parameter_symbols, context.parameter_symbols):

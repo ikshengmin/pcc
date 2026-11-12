@@ -606,6 +606,20 @@
         ]
       }
     },
+    "tests/cpp/test_cpp_class_template_enums.py": {
+      "test_class_template_enum_originals_execute_against_explicit_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct C++17 reference compiler subprocess"
+        ]
+      },
+      "test_explicit_reference_rejects_invalid_and_accepts_gap_originals": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct C++17 reference compiler -fsyntax-only subprocess"
+        ]
+      }
+    },
     "tests/cpp/test_cpp_class_template_virtuals.py": {
       "test_virtual_class_template_originals_execute_against_explicit_cpp17_reference": {
         "activity": "external-reference",
