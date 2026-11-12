@@ -13,6 +13,8 @@ record. This owner decides, before code generation, what each one means:
 * every other attribute, or an honored one in a position this owner does not
   model, is a CodegenError gap, never a silently erased semantic.
 """
+import weakref
+
 from pcc.frontends.c.ast import c_ast
 from pcc.frontends.c.codegen.c_declaration_state import CodegenError
 
@@ -175,8 +177,20 @@ def function_definition_attributes(ast):
     return allowed
 
 
+_CHECKED_UNITS = weakref.WeakSet()
+
+
 def check_translation_unit(ast):
-    """Reject every attribute whose meaning is not modeled; return nothing."""
+    """Reject every attribute whose meaning is not modeled; return nothing.
+
+    The evaluator checks right after parsing and codegen checks again for
+    direct callers; an AST already checked is not walked twice.
+    """
+    try:
+        if ast in _CHECKED_UNITS:
+            return
+    except TypeError:
+        pass
     propagate_typedef_alignment(ast)
     definition_declarations = function_definition_attributes(ast)
     pending = [ast]
@@ -196,3 +210,7 @@ def check_translation_unit(ast):
         elif isinstance(node, c_ast.PtrDecl):
             _check(getattr(node, "attributes", ()), "a pointer declarator", frozenset())
         pending.extend(child for _name, child in node.children())
+    try:
+        _CHECKED_UNITS.add(ast)
+    except TypeError:
+        pass

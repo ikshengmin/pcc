@@ -339,7 +339,16 @@ class ASTTransformer:
     def visit(self, node):
         if node is None:
             return None
-        visitor = self._resolve_visitor(type(node))
+        # Bind each node class's visitor once per transformer: resolving and
+        # binding it for every node was a large share of pass time.
+        cls = type(node)
+        try:
+            visitors = self._bound_visitors
+        except AttributeError:
+            visitors = self._bound_visitors = {}
+        visitor = visitors.get(cls)
+        if visitor is None:
+            visitor = visitors[cls] = self._resolve_visitor(cls)
         return visitor(node)
 
     def _resolve_visitor(self, cls):
@@ -393,7 +402,7 @@ class ASTTransformer:
         """Visit and potentially replace all children of a node."""
         if node is None:
             return
-        handler = _get_children_handler(node)
+        handler = _CHILDREN_HANDLERS.get(type(node))
         if handler is not None:
             handler(self, node)
 
@@ -622,3 +631,7 @@ def has_type_sensitive_introspection(funcdef) -> bool:
         return False
 
     return _walk(body)
+
+
+# Fill the child-handler table at import; _visit_children reads it directly.
+_get_children_handler(None)
