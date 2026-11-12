@@ -12,9 +12,13 @@ specialization (layout, construction, destruction and conversions use
 inheritance.py). Virtual members and overriders are declared per
 specialization, which then owns its table (virtual_functions.py); a
 nondependent signature's override rules are checked at the definition.
+Member classes ([temp.mem.class]) holding data members only are
+NestedClassPatterns: each specialization builds its own nested class (Itanium
+nested name under that specialization) before laying out its own members.
 Naming base members inside member bodies, dependent and template-id bases,
-class-element array lifetimes and specializations remain explicit capability
-boundaries, never unparsed, supposedly validated bodies.
+class-element array lifetimes, member functions of member classes and
+specializations remain explicit capability boundaries, never unparsed,
+supposedly validated bodies.
 """
 
 from pcc.frontends.c.ast import c_ast
@@ -60,6 +64,142 @@ class ClassTemplatePattern:
         self.constructors = Symbol(name, 'function', coord)
         self.method_definition = None
         self.base = None
+        self.nested_classes = []
+
+
+class NestedClassPattern:
+    """A member class of a class template: one class per specialization.
+
+    N4659 [temp.mem.class], [temp.dep.type]/1: a member class of the current
+    instantiation is a dependent type. Its data member types are Patterns over
+    the enclosing parameters, member enums and earlier member classes.
+    """
+    cpp_dependent_type = True
+    cpp_nested_class_pattern = True
+
+    def __init__(self, owner, name, class_key, coord, access):
+        self.owner, self.name, self.class_key = owner, name, class_key
+        self.coord, self.access = coord, access
+        self.members = None
+        self.member_scope = Scope(owner.member_scope, kind='class', name=name)
+        self.member_scope.class_type = self
+
+    def __str__(self):
+        return self.owner.name + '::' + self.name
+
+
+def parse_nested_class_pattern(parser, owner, access):
+    """`struct|union|class name { data members };` inside a class template."""
+    keyword = parser.cursor.take()
+    name = parser._identifier()
+    if any(parameter.name == name.value for parameter in owner.parameters):
+        raise CppDiagnostic('cpp.template-parameter-shadowing',
+                            'a member class cannot have a template parameter name', name.coord)
+    if name.value == owner.name:
+        raise CppDiagnostic('cpp.class-name-member', 'a member class cannot have its enclosing class name', name.coord)
+    if name.value in owner.member_scope.names:
+        raise CppDiagnostic('cpp.redeclaration', "'" + name.value + "' is already declared in this class", name.coord)
+    if parser._peek().value == ':':
+        if keyword.value == 'union':
+            raise CppDiagnostic('cpp.invalid-union-base', 'a union cannot have base classes', parser._peek().coord)
+        unsupported(parser._peek().coord, 'bases of member classes of class templates are not implemented')
+    if parser._peek().value != '{':
+        unsupported(name.coord, 'member class declarations of class templates require a definition here')
+    nested = NestedClassPattern(owner, name.value, keyword.value, name.coord, access)
+    # Declared before its body: members may point to the class itself.
+    symbol = owner.member_scope.declare(Symbol(name.value, 'type', name.coord, dtype=nested))
+    symbol.class_owner, symbol.access = owner.injected, access
+    parser._expect('{')
+    previous = parser.scope
+    parser.scope = nested.member_scope
+    members = []
+    member_access = 'private' if keyword.value == 'class' else 'public'
+    try:
+        while not parser._accept('}'):
+            token = parser._peek()
+            if token.value in ('public', 'protected', 'private'):
+                member_access = parser.cursor.take().value
+                parser._expect(':')
+                continue
+            if parser._accept(';'):
+                continue
+            if token.value in ('using', 'typedef', 'class', 'struct', 'union', 'enum', 'friend', 'template',
+                               'explicit', 'constexpr', 'static', 'virtual', 'mutable', '~', 'operator') or (
+                    token.value == name.value and parser.cursor.tokens[parser.cursor.position + 1].value == '('):
+                unsupported(token.coord, 'member classes of class templates currently hold data members only')
+            base = parser._type(check_lowering=False)
+            while True:
+                from pcc.frontends.cpp.operators import declaration_name
+                declaration = DeclaratorParser(parser.cursor, lambda: declaration_name(parser),
+                                               parse_array_bound=lambda: parse_array_bound(parser, owner),
+                                               parse_functions=False).parse()
+                member = declaration.name.identifier
+                if declaration.name.global_scope or len(declaration.name.parts) != 1 or member.kind != 'ID':
+                    unsupported(declaration.coord, 'member classes of class templates currently hold data members only')
+                if parser._peek().value in ('(', '=', '{', ':'):
+                    unsupported(parser._peek().coord, 'member classes of class templates currently hold data members only')
+                dtype = base
+                for chunk in reversed(declaration.chunks):
+                    if chunk.kind == 'array':
+                        dtype = pattern_array_type(parser, dtype, chunk.bound, chunk.coord, nested_element=True)
+                        continue
+                    if chunk.kind != 'pointer' or 'volatile' in chunk.qualifiers:
+                        unsupported(chunk.coord, 'member class reference/function/volatile members are not implemented')
+                    dtype = PointerType(dtype)
+                    if 'const' in chunk.qualifiers:
+                        dtype = qualify_const(dtype)
+                if unqualified(dtype) is nested:
+                    raise CppDiagnostic('cpp.incomplete-class', 'a class cannot contain itself by value', member.coord)
+                if member.value == name.value:
+                    raise CppDiagnostic('cpp.class-name-member', 'a member cannot have its class name', member.coord)
+                if array_type(dtype) and dtype.bound is None:
+                    raise CppDiagnostic('cpp.invalid-array-bound', 'an array data member requires a bound', member.coord)
+                if unqualified(dtype) == 'void':
+                    raise CppDiagnostic('cpp.invalid-object-type', 'a data member cannot have type void', member.coord)
+                member_symbol = nested.member_scope.declare(Symbol(member.value, 'member', member.coord, dtype=dtype))
+                member_symbol.class_owner, member_symbol.access = nested, member_access
+                members.append((member.value, dtype, member.coord, member_access))
+                if not parser._accept(','):
+                    break
+            parser._expect(';')
+        parser._expect(';')
+    finally:
+        parser.scope = previous
+    nested.members = tuple(members)
+    owner.nested_classes.append(nested)
+
+
+def trivial_pattern_element(element):
+    """A member class pattern or class whose array elements need no lifetime actions."""
+    if getattr(unqualified(element), 'cpp_nested_class_pattern', False):
+        return True  # Checked again on the substituted class.
+    from pcc.frontends.cpp.classes import is_class_type, trivial_special_members
+    return is_class_type(element) and trivial_special_members(element)
+
+
+def instantiate_nested_classes(parser, pattern, definition, instance, arguments):
+    """Build this specialization's member classes before its own members."""
+    definition.template_nested = {}
+    for nested in pattern.nested_classes:
+        dtype = ClassType(nested.name, pattern.qualified_name + (nested.name,), nested.coord,
+                          internal_linkage=instance.internal_linkage, declaration_scope=definition.scope)
+        dtype.is_union = nested.class_key == 'union'
+        # Itanium 5.1.2: a nested-name under this specialization.
+        dtype.enclosing_class = instance
+        dtype.c_tag = instance.c_tag + '_' + str(len(nested.name)) + nested.name
+        symbol = definition.scope.declare(Symbol(nested.name, 'type', nested.coord, dtype=dtype))
+        symbol.class_owner, symbol.access = instance, nested.access
+        definition.template_nested[nested] = dtype
+    for nested in pattern.nested_classes:
+        dtype = definition.template_nested[nested]
+        member_definition = ClassDefinition(dtype, definition.scope, nested.class_key)
+        member_definition.layout_types = parser.types
+        for name, member_type, at, access in nested.members:
+            member_type = substitute_member(member_type, arguments, instance, at, parser)
+            member_definition.set_access(access)
+            member_definition.add_member(Symbol(name, 'member', at, dtype=member_type))
+        member_definition.finish()
+        parser.class_template_declarations.append(member_definition.c_declaration(parser._scalar_type))
 
 
 def parameter_key(parameters):
@@ -77,15 +217,24 @@ def parse_array_bound(parser, pattern):
         parser.template_function = previous
 
 
-def pattern_array_type(parser, element, expression, coord):
+def pattern_array_type(parser, element, expression, coord, nested_element=False):
     from pcc.frontends.cpp.arrays import check_array_element, make_array_type
-    check_array_element(element, coord)
+    if getattr(unqualified(element), 'cpp_nested_class_pattern', False):
+        # The element's layout exists only per specialization.
+        if expression is None:
+            raise CppDiagnostic('cpp.invalid-array-bound', 'an array data member requires a bound', coord)
+        if not dependent(expression.dtype) and not parser.types.integral_operand(expression.dtype):
+            raise CppDiagnostic('cpp.invalid-array-bound',
+                                'array bound requires an integral converted constant expression', coord)
+        return ArrayType(element, ArrayBoundPattern(expression))
+    allow_class = nested_element and trivial_pattern_element(element)
+    check_array_element(element, coord, allow_class)
     if expression is not None and value_dependent(expression):
         if not dependent(expression.dtype) and not parser.types.integral_operand(expression.dtype):
             raise CppDiagnostic('cpp.invalid-array-bound',
                                 'array bound requires an integral converted constant expression', coord)
         return ArrayType(element, ArrayBoundPattern(expression))
-    return make_array_type(element, expression, parser.types, coord)
+    return make_array_type(element, expression, parser.types, coord, allow_class)
 
 
 def parse_declaration(parser, parameters, parent):
@@ -144,6 +293,11 @@ def parse_declaration(parser, parameters, parent):
             if token.value == 'enum':
                 from pcc.frontends.cpp.class_template_enums import parse_enum_pattern
                 parse_enum_pattern(parser, pattern, access)
+                continue
+            if (token.value in ('class', 'struct', 'union')
+                    and parser.cursor.tokens[parser.cursor.position + 1].kind == 'ID'
+                    and parser.cursor.tokens[parser.cursor.position + 2].value in ('{', ':')):
+                parse_nested_class_pattern(parser, pattern, access)
                 continue
             if token.value in ('using', 'typedef', 'class', 'struct', 'union',
                                'friend', 'template', 'explicit',
@@ -302,6 +456,8 @@ def substitute_member(dtype, arguments, instance, coord, parser=None):
         return arguments[dtype.index]
     if getattr(dtype, 'cpp_enum_pattern', False):
         return instance.definition.template_enums[dtype]
+    if getattr(dtype, 'cpp_nested_class_pattern', False):
+        return instance.definition.template_nested[dtype]
     if isinstance(dtype, InjectedClassPattern):
         return instance
     if isinstance(dtype, ConstType):
@@ -317,7 +473,10 @@ def substitute_member(dtype, arguments, instance, coord, parser=None):
     if isinstance(dtype, ArrayType):
         from pcc.frontends.cpp.arrays import check_array_element, make_array_type
         element = substitute_member(dtype.element, arguments, instance, coord, parser)
-        check_array_element(element, coord)
+        # Elements of a member class need no lifetime actions when every
+        # special member is trivial (classes.trivial_special_members).
+        allow_class = trivial_pattern_element(element)
+        check_array_element(element, coord, allow_class)
         if isinstance(dtype.bound, ArrayBoundPattern):
             if parser is None:
                 raise CppDiagnostic('cpp.unsupported.array-templates',
@@ -326,7 +485,7 @@ def substitute_member(dtype, arguments, instance, coord, parser=None):
             # never tokens or use-site lookup. The ordinary bound owner checks
             # positivity, target size_t representation and constant proof.
             expression = parser._instantiate_expression(dtype.bound.expression, arguments, {})
-            return make_array_type(element, expression, parser.types, dtype.bound.coord)
+            return make_array_type(element, expression, parser.types, dtype.bound.coord, allow_class)
         return ArrayType(element, dtype.bound)
     return dtype
 
@@ -352,6 +511,7 @@ def complete_layout(parser, dtype, pattern, arguments, coord):
         parser.template_specialization = dtype
         from pcc.frontends.cpp.class_template_enums import instantiate_enums
         instantiate_enums(parser, pattern, definition, arguments)
+        instantiate_nested_classes(parser, pattern, definition, dtype, arguments)
         for name, member_type, at, access, mutable in pattern.members:
             member_type = substitute_member(member_type, arguments, dtype, at, parser)
             plain = unqualified(member_type)
@@ -362,7 +522,10 @@ def complete_layout(parser, dtype, pattern, arguments, coord):
             if not (isinstance(plain, PointerType) or isinstance(plain, ClassType) or array_type(plain) or is_enum_type(plain)
                     or isinstance(plain, str) and (plain == 'nullptr' or parser.types.arithmetic_operand(plain))):
                 raise CppDiagnostic('cpp.invalid-object-type', 'class template member does not have an object type', at)
-            if isinstance(plain, ClassType) and plain is not dtype:
+            if isinstance(plain, ClassType) and plain is not dtype and not (
+                    getattr(plain, 'enclosing_class', None) is dtype and trivial_pattern_element(plain)):
+                # A member class of this specialization whose special members
+                # are all trivial needs no construction or destruction.
                 unsupported(at, 'by-value class template subobjects are not implemented')
             definition.set_access(access)
             definition.add_member(Symbol(name, 'member', at, dtype=member_type), mutable)

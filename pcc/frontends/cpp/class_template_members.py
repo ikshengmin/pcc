@@ -495,6 +495,23 @@ def pattern_member_access(parser, expression, operator, token):
         dtype = dtype.pointee
     owner = unqualified(dtype)
     current = parser.class_template_method.owner
+    if getattr(owner, 'cpp_nested_class_pattern', False) and owner.owner is current:
+        # [temp.dep.type]/6: a member class of the current instantiation is
+        # looked up at the definition; each specialization's own member
+        # class supplies the field when the body is instantiated.
+        symbol = owner.member_scope.names.get(token.value)
+        if symbol is None or symbol.kind != 'member':
+            raise CppDiagnostic('cpp.no-member', "member class '" + owner.name + "' has no data member "
+                                + token.value, token.coord)
+        if symbol.access != 'public':
+            unsupported(token.coord, 'non-public members of member classes are not implemented in member Patterns')
+        if operator == '.' and not expression.lvalue:
+            unsupported(token.coord, 'class template temporary member access requires materialization')
+        result_type = symbol.dtype
+        if isinstance(dtype, ConstType):
+            result_type = qualify_const(result_type)
+        return Expression(Pattern('member-field', token.coord, (symbol, operator, token), [expression]),
+                          result_type, True, symbol, decltype_entity=symbol.dtype)
     if owner is not current.injected:
         unsupported(token.coord, 'dependent/foreign-class member lookup is not implemented in member Patterns')
     symbol = current.member_scope.names.get(token.value)

@@ -245,6 +245,13 @@ def _mangle_class(dtype, substitutions):
             if ordinal is not None else str(len(parts[-1])) + parts[-1])
     namespaces = parts[:-1]
     enclosing_class = getattr(dtype, "enclosing_class", None)
+    if enclosing_class is not None and getattr(enclosing_class, "template_origin", None) is not None:
+        # Itanium 5.1.2: a member of a class template specialization is a
+        # nested-name whose prefix is that specialization (itself a
+        # substitution candidate), not the template's source name.
+        outer = _mangle_type(enclosing_class, substitutions)
+        prefix = outer[1:-1] if outer.startswith("N") else outer
+        return "N" + prefix + name + "E"
     # For a member enum the last prefix is a nominal class type, not a
     # namespace with the same spelling. It shares the substitution entry
     # subsequently used by that enclosing class as a parameter/pointee type.

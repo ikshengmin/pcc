@@ -23,11 +23,12 @@ class MemberArguments:
 def requires_destruction(dtype):
     """No emitted member D1 is needed only if the complete tree is trivial."""
     if array_type(dtype):
-        # Scalar/pointer arrays have no element D1. Retain the conservative
-        # boundary for class-element arrays even if one reaches this query.
+        # [class.dtor]/12: an array needs destruction exactly when its
+        # elements do. Only class elements whose special members are all
+        # trivial are declarable (arrays.require_trivial_member_array).
         while array_type(dtype):
             dtype = dtype.element
-        return is_class_type(dtype)
+        return requires_destruction(dtype)
     if not is_class_type(dtype):
         return False
     definition = unqualified(dtype).definition

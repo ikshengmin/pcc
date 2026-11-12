@@ -76,11 +76,14 @@ def const_array_elements(dtype):
     return isinstance(dtype, ConstType)
 
 
-def require_trivial_member_array(dtype, coord):
+def require_trivial_member_array(dtype, coord, allow_trivial_class=False):
     """Admit complete scalar/pointer elements, never a class-element lifetime.
 
     Declaration, construction and destruction share this predicate. Completeness
     and the existing typed bound owner remain prerequisites to C projection.
+    A member declaration may hold elements of a class whose special members
+    are all trivial (no element lifetime actions); element-wise value and
+    list initialization still require scalar elements.
     """
     if dtype.bound is None:
         raise CppDiagnostic('cpp.invalid-array-bound', 'an array data member requires a bound', coord)
@@ -89,6 +92,9 @@ def require_trivial_member_array(dtype, coord):
     while array_type(leaf):
         leaf = leaf.element
     if is_class_type(leaf):
+        from pcc.frontends.cpp.classes import trivial_special_members
+        if allow_trivial_class and trivial_special_members(leaf):
+            return leaf
         raise CppDiagnostic('cpp.unsupported.class-array-members',
                             'class array members require element special-member and lifetime semantics', coord)
     from pcc.frontends.cpp.types import is_enum_type

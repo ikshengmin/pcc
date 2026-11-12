@@ -124,12 +124,14 @@ def c_class_type(name, dtype, coord):
     return c_ast.TypeDecl(name, qualifiers, c_record(dtype, None, coord), coord)
 
 
-def trivial_union_member_type(dtype):
-    """Whether a union may hold this member without user special members.
+def trivial_special_members(dtype):
+    """Whether every special member of this object type is implicit and trivial.
 
-    Scalars, pointers, enums, arrays of them and classes whose special
-    members are all implicit and trivial ([class.union]/2 with trivial
-    members: the union's own special members stay trivial).
+    Scalars, pointers, enums, arrays of them and classes without declared
+    constructors/destructor, virtual functions, bases or default member
+    initializers whose members are themselves trivial. A union may hold such
+    a member with its own special members staying trivial ([class.union]/2),
+    and an array of such a class needs no element lifetime actions.
     """
     plain = unqualified(dtype)
     while array_type(plain):
@@ -142,7 +144,7 @@ def trivial_union_member_type(dtype):
     return (not definition.constructors.overloads and definition.destructor is None
             and not definition.polymorphic and definition.base is None
             and all(getattr(member, "default_initializer_tokens", None) is None
-                    and trivial_union_member_type(member.dtype) for member in definition.members))
+                    and trivial_special_members(member.dtype) for member in definition.members))
 
 
 class ClassDefinition:
@@ -198,7 +200,7 @@ class ClassDefinition:
             raise CppDiagnostic("cpp.unsupported.function-pointers", "callback members require function-value semantics", symbol.coord)
         if array_type(dtype):
             from pcc.frontends.cpp.arrays import require_trivial_member_array
-            require_trivial_member_array(dtype, symbol.coord)
+            require_trivial_member_array(dtype, symbol.coord, allow_trivial_class=True)
         if dtype == "void":
             raise CppDiagnostic(
                 "cpp.invalid-object-type", "a data member cannot have type void", symbol.coord
@@ -206,7 +208,7 @@ class ClassDefinition:
         require_complete(dtype, symbol.coord)
         from pcc.frontends.cpp.virtual_functions import require_concrete
         require_concrete(dtype, symbol.coord)
-        if self.dtype.is_union and not trivial_union_member_type(symbol.dtype):
+        if self.dtype.is_union and not trivial_special_members(symbol.dtype):
             raise CppDiagnostic("cpp.unsupported.unions",
                                 "union members with non-trivial special members are not implemented",
                                 symbol.coord)

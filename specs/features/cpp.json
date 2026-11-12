@@ -345,6 +345,16 @@
       "id": "class.union",
       "title": "class.union",
       "url": "https://timsong-cpp.github.io/cppwp/n4659/class.union"
+    },
+    {
+      "id": "temp.mem.class",
+      "title": "temp.mem.class",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/temp.mem.class"
+    },
+    {
+      "id": "class.nest",
+      "title": "class.nest",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/class.nest"
     }
   ],
   "features": [
@@ -1202,11 +1212,11 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:1c119658f28ac11f6daaf3b917e96ab0cb11bc4db0fcb5a494486486250d10fe",
+        "source_revision": "sha256:6d0e995be3ad5c40f018578e774d4af9fcd92fe6a4a3a8234d96a89c20666e55",
         "sources": [
           {
             "path": "pcc/frontends/cpp/classes.py",
-            "sha256": "ecae67d4aefe84e05d263df30247141eaab33f359866659460cb9c557bc79fcd"
+            "sha256": "6197e1ce686c9d637b25c663829cddb490c1155bde378eaca5f4a17e0e4c38c2"
           },
           {
             "path": "pcc/frontends/cpp/constructors.py",
@@ -1230,7 +1240,7 @@
           },
           {
             "path": "pcc/frontends/cpp/member_initialization.py",
-            "sha256": "f9eb701a90b9fd9aa82e3f92e03644c38c57e21528aa84d367df9dd7798ff0bb"
+            "sha256": "373c2ffee9c77d68463c57075e4afd6b5255e0121bf35843982e911553cac9de"
           },
           {
             "path": "pcc/frontends/cpp/parser.py",
@@ -1250,7 +1260,7 @@
           },
           {
             "path": "pcc/frontends/cpp/types.py",
-            "sha256": "f90a8bfbfd30c5e7f559e4528e2e2d19e7eb9b50e2442a48525a413700e0f2da"
+            "sha256": "0e21a11578815a492d06efb277004cf662da18bdb35f43244d0b78ff78f8061b"
           }
         ]
       }
@@ -1280,7 +1290,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:79461641412ecc46e2807ef12b9dc449e30a98d88252210d9f2848c1f782f99f",
+        "source_revision": "sha256:65da6427e524679b34d007c242accd286d55150908ed1c8fe64f3be82b147b22",
         "sources": [
           {
             "path": "pcc/frontends/cpp/allocation.py",
@@ -1288,7 +1298,7 @@
           },
           {
             "path": "pcc/frontends/cpp/classes.py",
-            "sha256": "ecae67d4aefe84e05d263df30247141eaab33f359866659460cb9c557bc79fcd"
+            "sha256": "6197e1ce686c9d637b25c663829cddb490c1155bde378eaca5f4a17e0e4c38c2"
           },
           {
             "path": "pcc/frontends/cpp/constructors.py",
@@ -1345,15 +1355,15 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:3ef53ab0b47a10afda703b83a6a34ac4bf9e424ba82700a843d8a53619c73b93",
+        "source_revision": "sha256:540612044ba865cf383077f37015742429f467bc5d5f9e7151ca7802b864794b",
         "sources": [
           {
             "path": "pcc/frontends/cpp/class_template_members.py",
-            "sha256": "de997095dd2d63c91bfad21df0103b765fa1bed2befb06e9e1532bf566560fad"
+            "sha256": "ff8e9262cd039252f2df5baf6a3706daddfffc06536eac836f68b4e06732b839"
           },
           {
             "path": "pcc/frontends/cpp/class_templates.py",
-            "sha256": "e81e1d753a48cc3a69950e15bbec66f24ed82ea9bd1b5c6a45f4a3820c1f6463"
+            "sha256": "9fcf107a43d7c627343d1b03094b7a3f3259372f4f84346755df73a1936a9ccd"
           },
           {
             "path": "pcc/frontends/cpp/inheritance.py",
@@ -1390,15 +1400,15 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:c66d97a57512571abe5fe9331443a0baddff680deaf7c5dd3b12ace81426a1d5",
+        "source_revision": "sha256:e2ffc58c65bf97a03ae5f7c7e934c64259c1c7aa034d4688960ca15db04d919d",
         "sources": [
           {
             "path": "pcc/frontends/cpp/class_template_members.py",
-            "sha256": "de997095dd2d63c91bfad21df0103b765fa1bed2befb06e9e1532bf566560fad"
+            "sha256": "ff8e9262cd039252f2df5baf6a3706daddfffc06536eac836f68b4e06732b839"
           },
           {
             "path": "pcc/frontends/cpp/class_templates.py",
-            "sha256": "e81e1d753a48cc3a69950e15bbec66f24ed82ea9bd1b5c6a45f4a3820c1f6463"
+            "sha256": "9fcf107a43d7c627343d1b03094b7a3f3259372f4f84346755df73a1936a9ccd"
           },
           {
             "path": "pcc/frontends/cpp/virtual_functions.py",
@@ -1430,7 +1440,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:16776f615db51f4e947b2eb154d62beea743b66a94bbcb60e478892e73871f6f",
+        "source_revision": "sha256:74211ad823b009249068cd3f65a213ce8ff887caa7697324e3fcbe977305438d",
         "sources": [
           {
             "path": "pcc/frontends/cpp/class_template_enums.py",
@@ -1438,11 +1448,11 @@
           },
           {
             "path": "pcc/frontends/cpp/class_template_members.py",
-            "sha256": "de997095dd2d63c91bfad21df0103b765fa1bed2befb06e9e1532bf566560fad"
+            "sha256": "ff8e9262cd039252f2df5baf6a3706daddfffc06536eac836f68b4e06732b839"
           },
           {
             "path": "pcc/frontends/cpp/class_templates.py",
-            "sha256": "e81e1d753a48cc3a69950e15bbec66f24ed82ea9bd1b5c6a45f4a3820c1f6463"
+            "sha256": "9fcf107a43d7c627343d1b03094b7a3f3259372f4f84346755df73a1936a9ccd"
           },
           {
             "path": "pcc/frontends/cpp/parser.py",
@@ -3704,11 +3714,11 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:7816c2f04cadf6324dc9a21528ff0cac3f5ba2f4aa0f7bb41bd496c7c3f1d097",
+        "source_revision": "sha256:56acef668d9a56c9ac5d630ac0d37298c3ef4e4cbd9392b0434fbae18d0e0a84",
         "sources": [
           {
             "path": "pcc/frontends/cpp/classes.py",
-            "sha256": "ecae67d4aefe84e05d263df30247141eaab33f359866659460cb9c557bc79fcd"
+            "sha256": "6197e1ce686c9d637b25c663829cddb490c1155bde378eaca5f4a17e0e4c38c2"
           },
           {
             "path": "pcc/frontends/cpp/initializers.py",
@@ -3736,6 +3746,57 @@
         "cpp.unsupported.unions"
       ],
       "evidence": []
+    },
+    {
+      "id": "cpp.class-template-member-classes",
+      "title": "Data-only member classes and unions of class templates",
+      "chapter_ids": [
+        "temp.mem.class",
+        "class.nest",
+        "temp.dep",
+        "class.union",
+        "class.dtor"
+      ],
+      "scope": "A struct, class or union defined inside a class template with data members only is a dependent member class of the current instantiation. Each specialization builds its own class before its own members, with a C tag unique to the specialization and an Itanium nested-name under the specialization (substitution candidates included); member types substitute the enclosing parameters, member enumerators and earlier member classes, including dependent array bounds. Member bodies may access public data members of a member class through objects, pointers and array elements. Arrays of, and by-value members of, a member class whose special members are all trivial need no construction or destruction; an array needs destruction exactly when its element does. Member functions, bases, nested declarations and default member initializers inside member classes, non-public member access from member bodies, and naming Outer<args>::Member outside the template remain explicit gaps. Source revision is sha256 of the sorted compact JSON source list.",
+      "tests": [
+        "tests/cpp/test_cpp_class_template_nested_classes.py::test_each_specialization_owns_its_member_classes",
+        "tests/cpp/test_cpp_class_template_nested_classes.py::test_invalid_or_unimplemented_member_classes_are_explicit",
+        "tests/cpp/test_cpp_class_template_nested_classes.py::test_member_class_programs_compile_to_stable_artifacts",
+        "tests/cpp/test_cpp_class_template_nested_classes.py::test_member_class_symbols_use_itanium_nested_names_under_the_specialization",
+        "tests/cpp/test_cpp_class_template_nested_class_execution.py::test_member_class_programs_execute_against_real_cpp17_reference"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:45f77513d96c876cf6ec6f67afa194b63cd0afc4846b5f1bdd080fbca5f17010",
+        "sources": [
+          {
+            "path": "pcc/frontends/cpp/arrays.py",
+            "sha256": "db513d83902b39b12d01c72fe7e6655abfe08cd7821af2de42a61d6811df1a3f"
+          },
+          {
+            "path": "pcc/frontends/cpp/class_template_members.py",
+            "sha256": "ff8e9262cd039252f2df5baf6a3706daddfffc06536eac836f68b4e06732b839"
+          },
+          {
+            "path": "pcc/frontends/cpp/class_templates.py",
+            "sha256": "9fcf107a43d7c627343d1b03094b7a3f3259372f4f84346755df73a1936a9ccd"
+          },
+          {
+            "path": "pcc/frontends/cpp/classes.py",
+            "sha256": "6197e1ce686c9d637b25c663829cddb490c1155bde378eaca5f4a17e0e4c38c2"
+          },
+          {
+            "path": "pcc/frontends/cpp/member_initialization.py",
+            "sha256": "373c2ffee9c77d68463c57075e4afd6b5255e0121bf35843982e911553cac9de"
+          },
+          {
+            "path": "pcc/frontends/cpp/types.py",
+            "sha256": "0e21a11578815a492d06efb277004cf662da18bdb35f43244d0b78ff78f8061b"
+          }
+        ]
+      }
     }
   ],
   "diagnostics": {
