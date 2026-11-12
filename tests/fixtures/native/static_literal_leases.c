@@ -12,6 +12,12 @@ static PyObjectHeader literals[4] = {
     {1, PY_TYPE_INT, 1}, {1, PY_TYPE_FLOAT, 1}
 };
 
+/* The heap literal's owning root. A slot in this thread's stack would name
+   its object to the count-free collectors' conservative scan, which pins it
+   and makes every lease the no-op token; a static slot keeps GC4's counted
+   lease observable. */
+static PyObject *heap;
+
 int main(int argc, char **argv) {
     if (argc != 2) return 1;
     int backend = atoi(argv[1]);
@@ -40,10 +46,11 @@ int main(int argc, char **argv) {
             if (pcc_gc_foreign_lease_release(&slot, token) != 0) return 20;
             pcc_gc_scheduler_root_unregister_handle(handle);
         }
-        /* An allocator-backed immortal scalar: a moving collector counts
-           its lease and refuses a reset while it lives. GC0-2 never move it,
-           so its lease is the no-op token and a reset proceeds. */
-        PyObject *heap = py_str_new("heap literal boundary", 21);
+        /* An allocator-backed immortal scalar: the moving collector (GC4)
+           counts its lease and refuses a reset while it lives. GC0-3 never
+           move it (GC3 is non-moving since 03cbd1849), so its lease is the
+           no-op token and a reset proceeds. */
+        heap = py_str_new("heap literal boundary", 21);
         if (!heap) return 21;
         if (pcc_gc_set_backend((backend + 1) % 5) != -1 || pcc_gc_backend() != backend) return 12;
         ((PyObjectHeader *)heap)->flags |= 1;
@@ -52,7 +59,7 @@ int main(int argc, char **argv) {
         void *handle = pcc_gc_scheduler_root_register_handle(&heap);
         if (!handle) return 24;
         int64_t token = pcc_gc_foreign_lease_acquire(&heap);
-        if (backend <= 2) {
+        if (backend <= 3) {
             if (token != 0) return 25;
             if (pcc_gc_set_backend(backend) != 0) return 26;
         } else {
