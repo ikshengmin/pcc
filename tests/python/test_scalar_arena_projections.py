@@ -8,6 +8,7 @@ are never imported or called by this file.
 import ast
 import copy
 from dataclasses import dataclass, FrozenInstanceError
+from functools import lru_cache
 import hashlib
 import json
 from pathlib import Path
@@ -32,8 +33,17 @@ _SNAPSHOTS = (
 )
 
 
+@lru_cache(maxsize=16)
+def _source_tree(source):
+    # Worker-local templates are read-only. Copy selected nodes before mutation
+    # or compilation, rather than copying an entire production module.
+    return ast.parse(source)
+
+
 def _tree(path):
-    return ast.parse((ROOT / path).read_text())
+    # Key by exact text, not path/stat metadata: edits must never reuse stale
+    # source, even when file size and timestamps are unchanged.
+    return _source_tree((ROOT / path).read_text())
 
 
 def _function(path, name, *, original=False):
