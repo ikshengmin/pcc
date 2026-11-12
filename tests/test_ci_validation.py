@@ -1335,3 +1335,78 @@ def test_guard_rejects_uncertain_post_exit_descendant_cleanup(tmp_path, monkeypa
             run.run_guard(tmp_path, ["unused"], {}, original)
     else:
         assert run.run_guard(tmp_path, ["unused"], {}, original) == 0
+
+
+@pytest.mark.parametrize("interrupt_at", ["collection-001", "batch-001"])
+def test_campaign_keyboard_interrupt_persists_terminal_status_and_propagates(
+        tmp_path, monkeypatch, interrupt_at):
+    """Orchestration model only, not OS signal or child-cleanup qualification."""
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "pyproject.toml").write_text(
+        "[tool.pytest.ini_options]\naddopts=\"-n 6 --dist=loadgroup -m 'not integration'\"\n")
+    setup = tmp_path / "tools.json"
+    setup.write_text("{}")
+    monkeypatch.setenv("PCC_CI_TOOL_RECEIPT", str(setup))
+    monkeypatch.setenv("GITHUB_SHA", "fixture-source")
+    monkeypatch.delenv("PCC_RUSTC_INSTALL_RECEIPT", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.setattr(run, "ROOT", root)
+    monkeypatch.setattr(run, "identity", lambda: {"sha": "fixture-source", "files": {}})
+    closure_checks = []
+
+    def verify_tools(receipt):
+        closure_checks.append(receipt)
+        return {"verified": []}
+
+    monkeypatch.setattr(tools, "verify_tool_receipt", verify_tools)
+    files = [f"module_{index:02}.py" for index in range(11)]
+    rows = [row(path, index, lane="reference") for path in files for index in range(6)]
+    monkeypatch.setattr(run, "modules", lambda domain: files)
+    interruption = KeyboardInterrupt("fixture interruption")
+    admitted = []
+
+    def guarded(directory, command, environment, frozen):
+        admitted.append(directory.name)
+        if directory.name == interrupt_at:
+            raise interruption
+        if directory.name.startswith("collection-"):
+            shard = json.loads((directory / "modules.json").read_text())
+            return _collection_reports(directory, shard, [r for r in rows if r["file"] in shard])[2]
+        return 0
+
+    # Model a previously completed batch; evidence validation has separate tests.
+    def summarized(directory, expected, frozen_rows):
+        return {"outcomes": [{"nodeid": node, "status": "PASS", "terminal_node": True}
+                             for node in expected],
+                "pytest_exitstatus": 0, "pytest_testsfailed": 0,
+                "session_events": [], "evidence_errors": [], "unattributed_reports": []}
+
+    monkeypatch.setattr(run, "run_guard", guarded)
+    monkeypatch.setattr(run, "summarize_batch", summarized)
+    out = tmp_path / "campaign"
+    with pytest.raises(KeyboardInterrupt) as caught:
+        run.run(SimpleNamespace(domain="go", lane="reference", out=out))
+    assert caught.value is interruption
+    receipt = json.loads((out / "receipt.json").read_text())
+    assert receipt["status"] == "INTERRUPTED"
+    assert receipt["error"] == "KeyboardInterrupt: fixture interruption"
+    assert closure_checks == [{}, {}]
+    assert json.loads((out / "tools-after.json").read_text()) == {"verified": []}
+    assert admitted[-1] == interrupt_at
+    if interrupt_at.startswith("collection-"):
+        assert admitted == ["collection-000", "collection-001"]
+        assert receipt["collections"][0]["status"] == "COLLECTED_NOT_EXECUTED"
+        assert receipt["collections"][1]["status"] == "COLLECTION_INCOMPLETE"
+        assert receipt["collection_pending_modules"] == files[10:]
+        assert receipt["batches"] == []
+    else:
+        assert admitted == ["collection-000", "collection-001", "batch-000", "batch-001"]
+        assert len(receipt["batches"]) == 1
+        assert receipt["batches"][0]["directory"] == "batch-000"
+        assert receipt["batches"][0]["outcomes"] == [
+            {"nodeid": entry["canonical_nodeid"], "status": "PASS", "terminal_node": True}
+            for entry in rows[:6]]
+        assert receipt["unattempted"] == [entry["canonical_nodeid"] for entry in rows[6:]]
+        assert not (out / "batch-001" / "outcomes.json").exists()
+        assert not (out / "batch-002").exists()

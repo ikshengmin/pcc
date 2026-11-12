@@ -556,6 +556,11 @@ def run(args):
             # independent frozen batches. Resource/session anomalies stop here.
         save(args.out / "source-after.json", identity())
         receipt["status"] = campaign_status(receipt)
+    except KeyboardInterrupt as error:
+        # Preserve interruption semantics while the existing finally persists
+        # a non-running receipt and checks any admitted input/tool closure.
+        receipt.update(status="INTERRUPTED", error=type(error).__name__ + ": " + str(error))
+        raise
     except Exception as error:
         receipt.update(status="INFRASTRUCTURE_OR_RESOURCE_FAILURE", error=type(error).__name__ + ": " + str(error))
     finally:
