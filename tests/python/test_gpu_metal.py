@@ -87,7 +87,11 @@ def test_find_metal_compiler_returns_path_or_none():
     assert metal is None or metal.endswith("metal")
 
 
+@pytest.mark.pcc_gate(probe="metal")
 def test_compile_minimal_metal_kernel_when_toolchain_available(tmp_path):
+    # Offline external-toolchain reference, not the owned route. The "metal"
+    # gate deselects it where `xcrun --find metal` fails, for example when
+    # xcode-select names the Command Line Tools, which carry no Metal compiler.
     out = tmp_path / "pcc_empty.air"
 
     try:
