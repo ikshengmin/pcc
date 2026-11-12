@@ -166,21 +166,24 @@ def _callback_lifetime_program(failing_argument=False):
     return program
 
 
-# A status-failure edge first calls the module's private reporter, which
-# raises the selecting exception only when none is pending. Its body may only
-# make these calls: no root, lease, frame or saved exception owner is touched.
+# A status-failure edge reports only if TLS is empty. Its NEW exception is
+# borrowed by py_raise, which establishes an independent TLS owner; the
+# reporter must then retire its NEW owner before borrowing TLS for traceback.
 _STATUS_REPORTER_CALLS = frozenset((
-    "py_err_occurred",
-    "py_exc_new",
-    "py_raise",
-    "py_current_exception",
-    "py_exc_append_frame_source",
+    "py_err_occurred", "py_exc_new", "py_raise", "pcc_gc_release",
+    "py_current_exception", "py_exc_append_frame_source",
 ))
 
 
 def _status_reporters(module):
-    """Names of the verified slot-status reporters defined in ``module``."""
+    """Verify every reporter path, ownership handoff and traceback operand."""
     from pcc.backend.self_backend_kernel import get_indexed_function_kernel
+
+    def args(ins):
+        return [value for _, value in ins.data[4]]
+
+    def called(ins, name):
+        return ins.kind == "call" and not ins.data[3] and ins.data[2] == name
 
     reporters = set()
     for fn in module.functions:
@@ -190,6 +193,51 @@ def _status_reporters(module):
         calls = [ins for block in blocks for ins in block.instructions if ins.kind == "call"]
         assert calls and all(not ins.data[3] and ins.data[2] in _STATUS_REPORTER_CALLS
                              for ins in calls), "unmodeled slot-status reporter body"
+        assert not fn.is_global and fn.ret_type.is_void
+        assert len(fn.args) == 6 and not fn.is_vararg
+        assert all(arg.type.is_ptr for arg in fn.args[:4])
+        assert all(arg.type.is_int and arg.type.width == width
+                   for arg, width in zip(fn.args[4:], (32, 1)))
+        message, function_name, filename, source_line, line, has_frame = [arg.name for arg in fn.args]
+        reports = [block for block in blocks if any(called(ins, "py_exc_new")
+                                                   for ins in block.instructions)]
+        frames = [block for block in blocks if any(called(ins, "py_exc_append_frame_source")
+                                                  for ins in block.instructions)]
+        exits = [block for block in blocks if block.terminator.kind == "ret_void"]
+        assert len(reports) == len(frames) == len(exits) == 1
+        entry, report, frame, done = blocks[0], reports[0], frames[0], exits[0]
+        assert len(blocks) == len({entry.name, report.name, frame.name, done.name}) == 4
+        assert all(not block.phis for block in blocks)
+        assert not done.instructions, "pending TLS must return without touching an owner"
+        assert len(entry.instructions) == 2
+        pending, check = entry.instructions
+        assert called(pending, "py_err_occurred") and not args(pending)
+        assert check.kind == "icmp" and check.data[0] == "ne"
+        assert check.data[3:] == (pending.data[0], "0")
+        assert entry.terminator.kind == "br_cond" and entry.terminator.data == (
+            check.data[1], done.name, report.name,
+        ), "status reporter must leave a pending exception unchanged"
+        assert len(report.instructions) == 4 and all(
+            called(ins, name) for ins, name in zip(report.instructions, (
+                "py_exc_new", "py_raise", "pcc_gc_release", "py_current_exception",
+            ))
+        ), "status reporter must raise, release its NEW owner once, then borrow TLS"
+        created, raised, released, current = report.instructions
+        assert args(created) == ["7", message]
+        assert args(raised) == [created.data[0]], "status reporter must raise its NEW exception"
+        assert args(released) == [created.data[0]], (
+            "status reporter must release its NEW exception owner"
+        )
+        assert not args(current)
+        assert report.terminator.kind == "br_cond" and report.terminator.data == (
+            has_frame, frame.name, done.name,
+        ), "status reporter traceback must follow its has-frame parameter"
+        assert len(frame.instructions) == 1
+        appended = frame.instructions[0]
+        assert called(appended, "py_exc_append_frame_source") and args(appended) == [
+            current.data[0], function_name, filename, source_line, line,
+        ], "status reporter frame must use the borrowed TLS exception and source arguments"
+        assert frame.terminator.kind == "br" and frame.terminator.data == (done.name,)
         reporters.add(fn.name)
     return reporters
 
@@ -205,7 +253,8 @@ def _assert_callback_exception_owner_path(
     slot = addresses.slot
 
     def called(ins, name):
-        return ins.kind == "call" and ins.data[2] == name
+        return (ins.kind == "call" and not ins.data[3]
+                and RootSlotContract.called(ins, name))
 
     def args(ins):
         return [value for _, value in ins.data[4]]
@@ -226,11 +275,11 @@ def _assert_callback_exception_owner_path(
         visited.add(block.name)
         for ins in block.instructions:
             if ins.kind == "call":
-                assert ins.data[2] in (
+                assert any(called(ins, name) for name in (
                     "pcc_gc_frame_enter_lifo", "pcc_gc_frame_leave_lifo",
                     "py_tls_exc_swap_slot", "py_clear_exception", "py_err_occurred",
                     "pcc_gc_foreign_lease_release", "pcc_gc_store_root",
-                ) or (ins.data[2] in reporters and not ins.data[3]), (
+                )) or (ins.data[2] in reporters and not ins.data[3]), (
                     "unmodeled runtime call on protected cleanup path"
                 )
             if ins.kind == "call" and ins.data[2] in reporters:
@@ -275,7 +324,9 @@ def _assert_callback_exception_owner_path(
             elif called(ins, "pcc_gc_frame_leave_lifo") and slot(args(ins)[0]) in swap_slots:
                 owner = slot(args(ins)[0])
                 assert registered and registered[-1] == owner
-                assert saved.get(owner) is None and tls is incoming
+                assert saved.get(owner) is None and tls is incoming, (
+                    "exception owner must be restored before retirement"
+                )
                 registered.pop()
                 trace.append((block.name, "retire-empty-exception-slot", owner))
             elif called(ins, "pcc_gc_foreign_lease_release") or called(ins, "pcc_gc_store_root"):
@@ -319,13 +370,18 @@ def _assert_callback_exception_owner_path(
     raise AssertionError("cleanup loops before transferring the selecting exception")
 
 
-def _assert_callback_slot_contract(text, mutate_cleanup=None):
-    from pcc.backend.self_backend_kernel import get_indexed_function_kernel
+def _parse_callback_module(text):
     from pcc.backend.self_backend_parse import parse_self_backend_module
     from pcc.backend.self_backend_verify import verify_parsed_module
 
     module = parse_self_backend_module(text)
     verify_parsed_module(module)
+    return module
+
+
+def _prepare_callback_slot_contract(module, mutate_cleanup=None):
+    from pcc.backend.self_backend_kernel import get_indexed_function_kernel
+
     function = next(fn for fn in module.functions
                     if fn.name == "user_slot_operand_handler__gen_resume")
     blocks = get_indexed_function_kernel(function).materialize_legacy_blocks(function)
@@ -337,7 +393,8 @@ def _assert_callback_slot_contract(text, mutate_cleanup=None):
     loads = {ins.data[0]: ins.data[3] for _, _, ins in rows if ins.kind == "load"}
 
     def called(ins, name):
-        return ins.kind == "call" and ins.data[2] == name
+        return (ins.kind == "call" and not ins.data[3]
+                and RootSlotContract.called(ins, name))
 
     def args(ins):
         return [value for _, value in ins.data[4]]
@@ -375,35 +432,106 @@ def _assert_callback_slot_contract(text, mutate_cleanup=None):
     for root in roots:
         addresses.require_owning(root)
 
-    # The list holding the first argument and the callable must both be saved
-    # at the argument's suspension, then restored from the same heap cells
-    # before dispatch. Stack-only roots or mismatched frame indices fail here.
-    tuples = [ins for _, _, ins in rows if called(ins, "py_tuple_from_list")]
-    args_tuple = next(ins for ins in tuples if any(
-        following.kind == "store" and following.data[1] == ins.data[0]
-        and slot(following.data[3]) == args_slot for _, _, following in rows))
-    list_slot = slot(loads[args(args_tuple)[0]])
-    dispatch = by_name["gen.dispatch"]
-    # A resume moves each saved owner out of the frame (take); the copying
-    # read is the older spelling of the same restore.
-    restore_calls = {ins.data[0]: args(ins)[1] for ins in dispatch.instructions
-                     if called(ins, "py_gen_frame_take") or called(ins, "py_gen_frame_get")}
-    restored = {slot(ins.data[3]): restore_calls[ins.data[1]]
-                for ins in dispatch.instructions
-                if ins.kind == "store" and ins.data[1] in restore_calls}
+    # Fixed-arity resumable calls evaluate into independent owning cells,
+    # then allocate and fill the tuple. Follow the actual tuple publication
+    # and setter operands, not the former list-to-tuple spelling.
+    tuples = [(owner, position, ins) for owner, position, ins in rows
+              if called(ins, "py_tuple_new") and any(
+                  following.kind == "store" and following.data[1] == ins.data[0]
+                  and slot(following.data[3]) == args_slot
+                  for following in owner.instructions[position + 1:position + 2])]
+    assert len(tuples) == 1, "callback arguments need one published tuple"
+    tuple_block, _, args_tuple = tuples[0]
+    assert args(args_tuple) == ["2"]
+    setters = [(owner, ins) for owner, _, ins in rows
+               if called(ins, "py_tuple_set_item") and args(ins)[0] in loads
+               and slot(loads[args(ins)[0]]) == args_slot]
+    assert [args(ins)[1] for _, ins in setters] == ["0", "1"]
+    item_slots = tuple(slot(loads[args(ins)[2]]) for _, ins in setters)
+    assert len(set(roots + item_slots)) == 5, "callback inputs need distinct owning cells"
+    for root in item_slots:
+        addresses.require_owning(root)
+
+    # Each constructor and the suspending leaf is evaluated exactly once.
+    constructors = [ins for _, _, ins in rows if called(ins, "py_obj_call_slots")]
+    assert [slot(args(ins)[3]) for ins in constructors] == [callable_slot, item_slots[0]]
+    for constructor, class_name in zip(constructors, ("Combine", "Token")):
+        captures = [ins for _, _, ins in rows if called(ins, "pcc_gc_root_copy_lease")
+                    and slot(args(ins)[0]) == slot(args(constructor)[0])]
+        assert len(captures) == 1
+        assert args(captures[0])[1] == "@.class.slot_operand." + class_name
+    assert len([ins for _, _, ins in rows if called(ins, "user_slot_operand_leaf")]) == 1
+    built = straight_path(tuple_block, success=True)
+    assert invoke in built and all(ins in built for _, ins in setters)
+    before_invoke = built[:built.index(invoke)]
+    assert [root for root in clears(before_invoke) if root in roots + item_slots] == list(
+        reversed(item_slots)
+    ), "argument temporaries must retire once after tuple insertion, before invocation"
+    assert all(before_invoke.index(ins) < next(
+        index for index, following in enumerate(before_invoke)
+        if called(following, "pcc_gc_store_root") and args(following)[1] == "null"
+        and slot(args(following)[0]) in item_slots
+    ) for _, ins in setters)
+
+    # Prove every dispatch path restores the same physical cells, including
+    # both the grouped take and its scalar fallback, before selecting a PC.
+    pending = [("gen.dispatch", {}, frozenset())]
+    restored_paths = []
+    while pending:
+        name, restored, seen = pending.pop()
+        assert name not in seen, "operand restore must reach resume dispatch"
+        seen = seen | {name}
+        candidate = by_name[name]
+        restored = dict(restored)
+        group = None
+        for position, ins in enumerate(candidate.instructions):
+            if called(ins, "py_gen_frame_take") or called(ins, "py_gen_frame_get"):
+                publication = candidate.instructions[position + 1]
+                assert publication.kind == "store" and publication.data[1] == ins.data[0]
+                root = slot(publication.data[3])
+                assert root not in restored, "operand restored twice before dispatch"
+                restored[root] = args(ins)[1]
+            elif called(ins, "py_gen_frame_take_group"):
+                assert group is None
+                base, offset = slot(args(ins)[3])
+                first, count = int(args(ins)[1]), int(args(ins)[2])
+                assert count > 0
+                group = (ins.data[0], {
+                    (base, offset + index * addresses.POINTER_BYTES): str(first + index)
+                    for index in range(count)
+                })
+                for root in group[1]:
+                    addresses.require_owning(root)
+        term = candidate.terminator
+        if term.kind == "switch":
+            assert group is None
+            restored_paths.append(restored)
+        elif term.kind == "br":
+            assert group is None
+            pending.append((term.data[0], restored, seen))
+        else:
+            assert term.kind == "br_cond" and group is not None
+            checks = [ins for ins in candidate.instructions if ins.kind == "icmp"
+                      and ins.data[1] == term.data[0]]
+            assert len(checks) == 1 and checks[0].data[0] == "ne"
+            assert checks[0].data[3:] == (group[0], "0")
+            assert not set(restored) & set(group[1])
+            pending.append((term.data[1], restored | group[1], seen))
+            pending.append((term.data[2], restored, seen))
+    assert restored_paths
+    assert all(restored == restored_paths[0] for restored in restored_paths)
+    restored = restored_paths[0]
+    assert set(roots + item_slots) <= set(restored)
     saved_groups = []
     for candidate in blocks:
         saves = {slot(loads[args(ins)[2]]): args(ins)[1]
                  for ins in candidate.instructions
                  if called(ins, "py_gen_frame_set") and args(ins)[2] in loads}
-        if callable_slot in saves and list_slot in saves and result_slot not in saves:
+        if callable_slot in saves and item_slots[0] in saves and result_slot not in saves:
             saved_groups.append(saves)
-    assert saved_groups, "no callable/list owner save across argument suspension"
-    for root in (callable_slot, args_slot, list_slot, result_slot):
-        assert root in restored
-    assert any(all(saved[root] == restored[root] for root in (callable_slot, list_slot))
+    assert saved_groups, "no callable/first-argument owner save across argument suspension"
+    assert any(all(saved[root] == restored[root] for root in (callable_slot, *item_slots, args_slot))
                for saved in saved_groups)
-    assert dispatch.terminator.kind == "switch"
 
     # Independent counted leases protect both raw ABI operands. The exact
     # result is published above before any release/error check can safepoint.
@@ -449,7 +577,7 @@ def _assert_callback_slot_contract(text, mutate_cleanup=None):
 
     # Result-publication/lease failures unwind every owner in reverse order,
     # while the saved exception brackets disposal. Argument errors must unwind
-    # the partial tuple/list before the earlier temporary callable as well.
+    # the captured argument cells and tuple before the temporary callable.
     # Identify the handler from its TLS capture and dispatch operations, not
     # from whichever destination the cleanup happened to branch to. This
     # fixture has either one ValueError handler or the generator error exit.
@@ -467,21 +595,50 @@ def _assert_callback_slot_contract(text, mutate_cleanup=None):
                      if item.is_constant and item.type.describe() == "i32"
                      and item.initializer == "1"}
     cleanup_start = block.terminator.data[1]
-    partial = [candidate for candidate in blocks if clears(candidate.instructions) == [list_slot, args_slot]]
-    assert partial
+    partial = []
+    for count in (1, 2):
+        expected = tuple(reversed(item_slots[:count])) + (args_slot,)
+        candidates = [candidate for candidate in blocks
+                      if clears(candidate.instructions) == list(expected)]
+        assert candidates, "missing partial argument cleanup"
+        partial.extend((candidate.name, expected + (callable_slot,)) for candidate in candidates)
     if mutate_cleanup is not None:
+        from dataclasses import replace
+        from pcc.backend.self_backend_ir import ParsedBlock, ParsedInstr
+        from pcc.backend.self_backend_verify import verify_parsed_function
+
         blocks = mutate_cleanup(blocks, cleanup_start, roots)
-    reporters = _status_reporters(module)
-    traces = [_assert_callback_exception_owner_path(
-        blocks, cleanup_start, tuple(reversed(roots)), (args_slot, callable_slot), expected_target, one_slot_maps,
-        reporters,
-    )]
-    for candidate in partial:
-        traces.append(_assert_callback_exception_owner_path(
-            blocks, candidate.name, (list_slot, args_slot, callable_slot), (), expected_target, one_slot_maps,
-            reporters,
+        # A malformed mutation cannot stand in for an ownership rejection.
+        verified_blocks = [ParsedBlock(
+            name=candidate.name, phis=candidate.phis,
+            instructions=[ParsedInstr(ins.kind, ins.data) for ins in candidate.instructions],
+            terminator=ParsedInstr(candidate.terminator.kind, candidate.terminator.data),
+        ) for candidate in blocks]
+        verify_parsed_function(replace(
+            function, blocks=verified_blocks, indexed_kernel=None, indexed_seed=None,
         ))
-    return traces
+    reporters = _status_reporters(module)
+    def check_cleanup_paths():
+        traces = [_assert_callback_exception_owner_path(
+            blocks, cleanup_start, tuple(reversed(roots)), (args_slot, callable_slot), expected_target, one_slot_maps,
+            reporters,
+        )]
+        for start, expected in partial:
+            traces.append(_assert_callback_exception_owner_path(
+                blocks, start, expected, (), expected_target, one_slot_maps,
+                reporters,
+            ))
+        # ABI normalization identifies the protocol, but cannot establish
+        # that each physical registration retires through the same family.
+        # Check every CFG exit after preserving the specific TLS diagnostics.
+        RootSlotContract(blocks, module.globals_).assert_frame_exits(exact_abi=True)
+        return traces
+
+    return check_cleanup_paths
+
+
+def _assert_callback_slot_contract(text):
+    return _prepare_callback_slot_contract(_parse_callback_module(text))()
 
 
 def test_vthread_callback_roots_callable_during_dynamic_argument_build(tmp_path) -> None:
@@ -516,16 +673,23 @@ def test_callback_exception_owner_contract_rejects_wrong_cleanup(mutation, diagn
     applied = []
 
     def replace_instruction(instruction, data):
+        if instruction.kind == "call":
+            assert len(data) == len(instruction.data)
+            assert data[:4] == instruction.data[:4]
+            assert data[5:] == instruction.data[5:], "call mutation must preserve ABI metadata"
+            assert len(data[4]) == len(instruction.data[4])
         return SimpleNamespace(kind=instruction.kind, data=data)
 
     def mutate(blocks, start, roots):
-        copied = [SimpleNamespace(name=block.name, instructions=list(block.instructions),
-                                  terminator=block.terminator) for block in blocks]
+        copied = [SimpleNamespace(name=block.name, phis=block.phis,
+                                  instructions=list(block.instructions), terminator=block.terminator)
+                  for block in blocks]
         by_name = {block.name: block for block in copied}
         slot = RootSlotContract(copied).slot
 
         def called(ins, name):
-            return ins.kind == "call" and ins.data[2] == name
+            return (ins.kind == "call" and not ins.data[3]
+                    and RootSlotContract.called(ins, name))
 
         path, current = [], by_name[start]
         while current.name not in {block.name for block in path}:
@@ -545,7 +709,7 @@ def test_callback_exception_owner_contract_rejects_wrong_cleanup(mutation, diagn
             restored = instructions.pop(swaps[1])
             # Reuse the already-defined capture address, keeping valid SSA
             # inputs while moving only the erroneous restoration operation.
-            restored = replace_instruction(restored, data=restored.data[:4] + (instructions[swaps[0]].data[4],))
+            restored = replace_instruction(restored, data=restored.data[:4] + (instructions[swaps[0]].data[4],) + restored.data[5:])
             instructions.insert(drops[0], restored)
         elif mutation == "drop-after-restore":
             dropped = instructions.pop(drops[0])
@@ -556,7 +720,7 @@ def test_callback_exception_owner_contract_rejects_wrong_cleanup(mutation, diagn
             restored = instructions[swaps[1]]
             wrong = next(ins.data[4] for previous in path[:-1] for ins in previous.instructions
                          if called(ins, "py_tls_exc_swap_slot"))
-            instructions[swaps[1]] = replace_instruction(restored, data=restored.data[:4] + (wrong,))
+            instructions[swaps[1]] = replace_instruction(restored, data=restored.data[:4] + (wrong,) + restored.data[5:])
         elif mutation == "missing-disposal-clear":
             clear = next(i for i, ins in enumerate(instructions) if called(ins, "py_clear_exception"))
             instructions.pop(clear)
@@ -564,7 +728,7 @@ def test_callback_exception_owner_contract_rejects_wrong_cleanup(mutation, diagn
             enter = next(i for i, ins in enumerate(instructions) if called(ins, "pcc_gc_frame_enter_lifo"))
             instruction = instructions[enter]
             bad_args = ((instruction.data[4][0][0], "null"),) + instruction.data[4][1:]
-            instructions[enter] = replace_instruction(instruction, instruction.data[:4] + (bad_args,))
+            instructions[enter] = replace_instruction(instruction, instruction.data[:4] + (bad_args,) + instruction.data[5:])
         elif mutation == "overwrite-saved-owner":
             capture_address = instructions[swaps[0]].data[4][0][1]
             template = next(ins for ins in by_name["entry"].instructions
@@ -586,9 +750,90 @@ def test_callback_exception_owner_contract_rejects_wrong_cleanup(mutation, diagn
         return copied
 
     text = _emit(_callback_lifetime_program())
-    with pytest.raises(AssertionError, match=diagnostic):
-        _assert_callback_slot_contract(text, mutate_cleanup=mutate)
+    _assert_callback_slot_contract(text)
+    # Mutation construction, metadata checks and SSA verification must succeed
+    # outside raises. Only the intended ownership violation may satisfy it.
+    check_mutated_cleanup = _prepare_callback_slot_contract(
+        _parse_callback_module(text), mutate_cleanup=mutate,
+    )
+    with pytest.raises(AssertionError, match=diagnostic or "exception owner must be restored before retirement"):
+        check_mutated_cleanup()
     assert applied == [mutation], "the negative case must reach the ownership validator"
+
+
+@pytest.mark.parametrize("operation, family", (
+    ("enter", "locality"),
+    ("leave", "locality"),
+    ("enter", "mapping"),
+    ("leave", "mapping"),
+))
+def test_callback_exception_owner_contract_rejects_mismatched_frame_abi(operation, family):
+    import re
+    from pcc.backend.self_backend_kernel import get_indexed_function_kernel
+    from tests.python.test_slot_call_operand_roots import _emit
+
+    text = _emit(_callback_lifetime_program())
+    module = _parse_callback_module(text)
+    _prepare_callback_slot_contract(module)()
+    function = next(fn for fn in module.functions
+                    if fn.name == "user_slot_operand_handler__gen_resume")
+    blocks = get_indexed_function_kernel(function).materialize_legacy_blocks(function)
+    roots = RootSlotContract(blocks, module.globals_)
+    swap_slots = {roots.slot(roots.args(ins)[0]) for _, _, ins in roots.rows
+                  if roots.called(ins, "py_tls_exc_swap_slot") and not ins.data[3]}
+    candidates = [(block, position, ins) for block, position, ins in roots.rows
+                  if roots.called(ins, "pcc_gc_frame_" + operation + "_lifo")
+                  and not ins.data[3]
+                  and roots.slot(roots.args(ins)[1 if operation == "enter" else 0]) in swap_slots]
+    assert candidates, "negative control needs a real exception-owner registration"
+    block, position, original = candidates[0]
+    protocol, local, mapped = roots.frame_abi(original)
+    changed_local = not local if family == "locality" else local
+    changed_mapped = not mapped if family == "mapping" else mapped
+    callee = protocol + ("_local" if changed_local else "") + ("_mapped" if changed_mapped else "")
+    signature = "ptr, ptr" if operation == "enter" else "ptr"
+    assert re.search(r"^declare(?: external)? void @" + re.escape(callee)
+                     + r"\(" + signature + r"\)$", text, re.M), (
+        "negative control must use an already declared frame ABI"
+    )
+    # Locate the exact instruction inside its real function and block. Only
+    # its callee token changes; preserve the full emitted call and SSA text.
+    function_match = re.search(
+        r"^define[^\n]*@" + re.escape(function.name)
+        + r"\([^\n]*\) \{\n(?P<body>.*?)^}", text, re.M | re.S,
+    )
+    assert function_match is not None
+    block_match = re.search(
+        r"^" + re.escape(block.name) + r":\n(?P<body>.*?)(?=^[^\s;][^\n]*:\n|\Z)",
+        function_match["body"], re.M | re.S,
+    )
+    assert block_match is not None
+    values = roots.args(original)
+    assert all(value.startswith("@") or re.fullmatch(r"[A-Za-z_.$][A-Za-z0-9_.$]*", value)
+               for value in values)
+    arguments = ", ".join("ptr " + (value if value.startswith("@") else "%" + value)
+                          for value in values)
+    instruction = "  call void (" + signature + ") @" + original.data[2] + "(" + arguments + ")\n"
+    assert block_match["body"].count(instruction) == 1
+    start = (function_match.start("body") + block_match.start("body")
+             + block_match["body"].index(instruction))
+    changed_instruction = instruction.replace("@" + original.data[2] + "(", "@" + callee + "(", 1)
+    mutated = text[:start] + changed_instruction + text[start + len(instruction):]
+    assert mutated != text
+    # Normal reparsing avoids reusing destructive verifier/kernel projections.
+    # Mutation, metadata, SSA and setup failures cannot satisfy raises.
+    mutated_module = _parse_callback_module(mutated)
+    mutated_function = next(fn for fn in mutated_module.functions if fn.name == function.name)
+    mutated_blocks = get_indexed_function_kernel(mutated_function).materialize_legacy_blocks(mutated_function)
+    changed = next(item for item in mutated_blocks if item.name == block.name).instructions[position]
+    assert changed.kind == original.kind and changed.data[2] == callee
+    assert changed.data[:2] == original.data[:2] and changed.data[3:] == original.data[3:], (
+        "callee-only mutation must preserve every argument and ABI metadata field"
+    )
+    assert roots.frame_abi(changed) == (protocol, changed_local, changed_mapped)
+    check_mutated_cleanup = _prepare_callback_slot_contract(mutated_module)
+    with pytest.raises(AssertionError, match="frame leave ABI does not match registration"):
+        check_mutated_cleanup()
 
 
 def test_callback_exception_owner_contract_rejects_unmodeled_status_reporter():
@@ -602,8 +847,60 @@ def test_callback_exception_owner_contract_rejects_unmodeled_status_reporter():
     # Clearing TLS would discard a pending selecting exception.
     mutated = text[:entry] + "  call void () @py_clear_exception()\n" + text[entry:]
     _assert_callback_slot_contract(text)
+    parsed_mutation = _parse_callback_module(mutated)
     with pytest.raises(AssertionError, match="unmodeled slot-status reporter body"):
-        _assert_callback_slot_contract(mutated)
+        _prepare_callback_slot_contract(parsed_mutation)()
+
+
+@pytest.mark.parametrize("mutation, diagnostic", (
+    ("wrong-release-object", "release its NEW exception owner"),
+    ("missing-release", "release its NEW owner once"),
+    ("release-before-raise", "release its NEW owner once"),
+    ("double-release", "release its NEW owner once"),
+    ("overwrite-pending-exception", "leave a pending exception unchanged"),
+    ("wrong-frame-owner", "frame must use the borrowed TLS exception"),
+))
+def test_callback_status_reporter_rejects_wrong_owner_protocol(mutation, diagnostic):
+    import re
+    from tests.python.test_slot_call_operand_roots import _emit
+
+    text = _emit(_callback_lifetime_program())
+    _assert_callback_slot_contract(text)
+    bodies = list(re.finditer(
+        r"^define internal void @pcc_slot_call_status_report[^\n]*\{\n.*?^}",
+        text, re.M | re.S,
+    ))
+    assert len(bodies) == 1
+    match = bodies[0]
+    lines = match[0].splitlines(keepends=True)
+    release = next(index for index, line in enumerate(lines) if "@pcc_gc_release(" in line)
+    raised = next(index for index, line in enumerate(lines) if "@py_raise(" in line)
+    owner = re.search(r"@pcc_gc_release\(ptr ([^)]+)\)", lines[release])[1]
+    if mutation == "wrong-release-object":
+        message = re.search(r"\(ptr ([^,]+),", lines[0])[1]
+        lines[release] = lines[release].replace("ptr " + owner, "ptr " + message)
+    elif mutation == "missing-release":
+        lines.pop(release)
+    elif mutation == "release-before-raise":
+        lines.insert(raised, lines.pop(release))
+    elif mutation == "double-release":
+        lines.insert(release, lines[release])
+    elif mutation == "overwrite-pending-exception":
+        branch = next(index for index, line in enumerate(lines) if "br i1" in line)
+        assert "label %done, label %report" in lines[branch]
+        lines[branch] = lines[branch].replace("label %done, label %report",
+                                            "label %report, label %report")
+    else:
+        frame = next(index for index, line in enumerate(lines) if "@py_exc_append_frame_source(" in line)
+        lines[frame] = re.sub(r"(@py_exc_append_frame_source\(ptr )[^,]+",
+                             lambda found: found[1] + owner, lines[frame])
+    mutated = text[:match.start()] + "".join(lines) + text[match.end():]
+    assert mutated != text, "reporter negative control must change the real IR"
+    # Invalid IR must fail outside raises; only the reporter ownership oracle
+    # is allowed to satisfy the expected diagnostic.
+    parsed_mutation = _parse_callback_module(mutated)
+    with pytest.raises(AssertionError, match=diagnostic):
+        _prepare_callback_slot_contract(parsed_mutation)()
 
 
 def test_callback_exception_owner_contract_rejects_zero_frame_map():
@@ -613,8 +910,10 @@ def test_callback_exception_owner_contract_rejects_zero_frame_map():
     declaration = "@.pcc.gc.frame.map.1 = internal constant i32 1"
     assert declaration in text
     mutated = text.replace(declaration, "@.pcc.gc.frame.map.1 = internal constant i32 0")
+    _assert_callback_slot_contract(text)
+    parsed_mutation = _parse_callback_module(mutated)
     with pytest.raises(AssertionError, match="real one-slot owning frame map"):
-        _assert_callback_slot_contract(mutated)
+        _prepare_callback_slot_contract(parsed_mutation)()
 
 
 @pytest.mark.integration
