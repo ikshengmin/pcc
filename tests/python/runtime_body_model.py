@@ -117,6 +117,35 @@ def _module_constants(path: str) -> dict[str, ast.stmt]:
     return constants
 
 
+ABI_CONSTANTS_MODULE = "pcc.runtime.py.py_abi_constants"
+
+
+@lru_cache(maxsize=None)
+def _abi_constant_imports(path: str) -> dict[str, str]:
+    """Local name -> generated name of what ``path`` imports from the
+    generated object-ABI constants."""
+    tree = ast.parse(Path(path).read_text(encoding="utf-8"))
+    return {
+        alias.asname or alias.name: alias.name
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == ABI_CONSTANTS_MODULE
+        for alias in node.names
+    }
+
+
+def _bind_abi_constants(path, names, namespace) -> None:
+    """Bind the generated ABI constants ``names`` that the model left
+    unbound: the bodies read the same layout the runtime compiles with."""
+    if not names:
+        return
+    import importlib
+
+    constants = importlib.import_module(ABI_CONSTANTS_MODULE)
+    imported = _abi_constant_imports(str(path))
+    for name in sorted(names):
+        namespace.setdefault(name, getattr(constants, imported[name]))
+
+
 def with_local_helpers(path, names) -> set[str]:
     """``names`` plus every same-module function they use, transitively:
     called, or passed by name (a visitor callback)."""
@@ -204,8 +233,9 @@ def load_functions(path, names, namespace, *, local_helpers=True):
     callees are added unless the model already bound that name. A function
     exported under another symbol is also bound by that symbol, as callers
     in other objects name it. Literal module constants the bodies read are
-    bound per ``_bind_constants``. ``EXTERN_DEFAULTS`` fill only names the
-    model left unbound.
+    bound per ``_bind_constants``; generated ABI constants they import take
+    their generated value unless the model bound the name.
+    ``EXTERN_DEFAULTS`` fill only names the model left unbound.
     """
     functions = _module_functions(str(path))
     names = set(functions) if names is None else set(names)
@@ -218,6 +248,17 @@ def load_functions(path, names, namespace, *, local_helpers=True):
         if isinstance(node, ast.Name) and node.id in constants
     }
     renames = _bind_constants(path, used, namespace)
+    abi_imports = _abi_constant_imports(str(path))
+    _bind_abi_constants(
+        path,
+        {
+            node.id
+            for name in selected
+            for node in ast.walk(functions[name])
+            if isinstance(node, ast.Name) and node.id in abi_imports
+        },
+        namespace,
+    )
     nodes = []
     for name in sorted(selected):
         if name not in names and name in namespace:

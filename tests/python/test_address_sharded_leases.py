@@ -4,6 +4,7 @@ import ast
 import pytest
 
 from pcc.runtime.py import py_abi_constants as abi
+from runtime_body_model import atomic_i64_ops
 from test_foreign_address_leases import Model, RUNTIME, _mode_setter
 from test_runtime_entry_handoff import HandoffModel
 
@@ -71,8 +72,11 @@ def test_distinct_objects_and_collisions_keep_independent_tokens(collide):
 
 
 def test_root_copy_move_and_release_keep_public_token_and_address_shard():
+    # Threaded GC0 under the refcount provenance probe (the Model default):
+    # pcc_gc_fix_backend sets pcc_gc_refcount_atomic only without the probe,
+    # so a root copy takes the checked lease transaction.
     value = HandoffModel(0)
-    value.store("pcc_gc_refcount_atomic", 0, 1)
+    assert value.load("pcc_gc_refcount_provenance_probe") == 1
     source = value.object(node=False, flags=262144, tag=abi.PY_TYPE_INT)
     copied, moved = value.empty(90000), value.empty(90008)
     assert value.acquire(source) == 2
@@ -84,6 +88,28 @@ def test_root_copy_move_and_release_keep_public_token_and_address_shard():
     assert counts(value) == before and value.references[1000] == 2
     assert value.release(moved, token) == 0 and value.active() == 1
     assert value.release(source, 2) == 0 and value.active() == 0
+
+
+def test_threaded_gc0_root_copy_without_probe_takes_one_reference_and_no_lease():
+    # Without the probe threaded GC0 counts atomically (232b80210): the
+    # source owner keeps the object alive, no collector below GC4 leases an
+    # address, so the copy is one atomic reference and a plain store, under
+    # no graph lock, with the no-op token.
+    value = HandoffModel(0)
+    value.store("pcc_gc_refcount_provenance_probe", 0, 0)
+    value.store("pcc_gc_refcount_atomic", 0, 1)
+    value.ns.update(atomic_rmw_i64=atomic_i64_ops(value.load, value.store)["atomic_rmw_i64"])
+    source = value.object(node=False, flags=262144, tag=abi.PY_TYPE_INT)
+    destination = value.empty(90000)
+    before = counts(value)
+    assert value.copy(destination, source) == 0
+    assert value.load(destination) == 1000
+    assert value.load(1000, abi.PYOBJECTHEADER_REFCOUNT_OFFSET) == 1
+    assert counts(value) == before and value.active() == 0
+    assert not [event for event in value.events if event[0] == "lock"]
+    # A destination that already owns a value is refused unchanged.
+    assert value.copy(destination, source) == -4
+    assert value.load(1000, abi.PYOBJECTHEADER_REFCOUNT_OFFSET) == 1
 
 
 @pytest.mark.parametrize("occupied", range(COUNT))
