@@ -87,20 +87,20 @@ def _copy_cases():
     return values["CASES"]
 
 
-def _helper_guards(node, guards=()):
+def _helper_guards(node, guards=(), names=HELPERS):
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-        if node.func.id in HELPERS:
+        if node.func.id in names:
             yield node.func.id, guards
     if isinstance(node, ast.If):
         test = ast.dump(node.test, include_attributes=False)
-        yield from _helper_guards(node.test, guards)
+        yield from _helper_guards(node.test, guards, names)
         for child in node.body:
-            yield from _helper_guards(child, guards + ((test, True),))
+            yield from _helper_guards(child, guards + ((test, True),), names)
         for child in node.orelse:
-            yield from _helper_guards(child, guards + ((test, False),))
+            yield from _helper_guards(child, guards + ((test, False),), names)
     else:
         for child in ast.iter_child_nodes(node):
-            yield from _helper_guards(child, guards)
+            yield from _helper_guards(child, guards, names)
 
 
 class CopyFixtureSourceContract(unittest.TestCase):
@@ -130,9 +130,116 @@ class CopyFixtureSourceContract(unittest.TestCase):
         self.assertIn("#include <stdlib.h>", fixture)
         self.assertIn("#include <stdio.h>", fixture)
 
+    def test_non_slab_mark_uses_real_module_and_preserves_storage(self):
+        fixture = FIXTURE.read_text()
+        native = NATIVE_TEST.read_text()
+        native_tree = ast.parse(native)
+        declarations = {
+            node.targets[0].id: node.value
+            for node in ast.parse(COPY.read_text()).body
+            if isinstance(node, ast.Assign) and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        }
+        self.assertEqual(ast.dump(declarations["pcc_gc_page_mark_set"], include_attributes=False),
+                         _shape('extern("pcc_gc_page_mark_set", (c_ptr,), c_int64)'))
+        imports = next(ast.literal_eval(node.value) for node in ast.parse(CONTRACT.read_text()).body
+                       if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+                       and node.targets[0].id == "RAW_FUNCTION_IMPORTS")
+        self.assertIn("pcc_gc_page_mark_set", imports)
+        emit = next(ast.literal_eval(node.value) for node in native_tree.body
+                    if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+                    and node.targets[0].id == "EMIT_MODULE")
+        emit_tree = ast.parse(emit)
+        compile_loop = next(node for node in emit_tree.body if isinstance(node, ast.For))
+        self.assertEqual(ast.dump(compile_loop.iter, include_attributes=False),
+                         _shape("((copy_source, 'copy'), (index_source, 'index'), (page_source, 'page-marks'))"))
+        self.assertIn("copy_source.with_name('freestanding_gc_page_marks.py')", emit)
+        self.assertIn('str(build / "page-marks.o")', native)
+        self.assertIn('"-Wl,--wrap=pcc_gc_page_mark_set"', native)
+        self.assertNotRegex(fixture, r"(?m)^int64_t pcc_gc_page_mark_set\(")
+        provider = _c_body(fixture, "void *pcc_allocator_object_cell_span(void *obj)")
+        # Comments do not change the exact finite-provider executable body.
+        provider = re.sub(r"/\*.*?\*/", "", provider).strip()
+        self.assertEqual(provider,
+                         'if (object_id(obj) == 0) '
+                         'unexpected_page_provider("pcc_allocator_object_cell_span"); '
+                         "if (observing_mark) mark_span_calls++; "
+                         "else page_lookup_span_calls++; "
+                         "return slab_epoch >= 0 && (obj == &target || obj == &objects[0]) ? &mark_span : NULL;")
+        self.assertIn("if (page_lookup_span_calls != (from_index_missing || null_page)) stub_errors++;",
+                      fixture)
+        wrapper = _c_body(fixture, "int64_t __wrap_pcc_gc_page_mark_set(void *obj)")
+        for check in (
+            "installed_forwarding != &target", "pcc_gc_mark_active != 0",
+            "observing_mark = 1; int64_t result = __real_pcc_gc_page_mark_set(obj); observing_mark = 0;",
+            "page_lookup_span_calls != lookups_before",
+            "if (result == -1) mark_non_slab_results++;", "result != -1",
+            "if (slab_epoch >= 0) check_slab_mark(&before_mark_page, result);",
+            "memcmp(&before_mark_page, &mark_page, sizeof mark_page)",
+            "mark_span_calls != spans_before + 1", "pcc_gc_page_mark_epoch_word != epoch",
+            "memcmp(before_objects, objects, sizeof objects)",
+            "memcmp(&before_target, &target, sizeof target)",
+            "memcmp(before_pages, pages, sizeof pages)", "return result;",
+        ):
+            self.assertIn(check, wrapper)
+        providers = {
+            "pcc_allocator_record_span_first": ("void *", "void", ""),
+            "pcc_allocator_record_span_next": ("void *", "void *span", "(void)span; "),
+        }
+        for name, (result, args, ignored) in providers.items():
+            space = "" if result.endswith("*") else " "
+            self.assertEqual(_c_body(fixture, f"{result}{space}{name}({args})"),
+                             ignored + f'unexpected_page_provider("{name}");')
+        cases = _copy_cases()
+        for case, expected in cases.items():
+            with self.subTest(case=case):
+                committed = expected["result"]
+                self.assertEqual(expected["mark_calls"], committed)
+                self.assertEqual(expected["mark_non_slab_results"], committed)
+                self.assertEqual(expected["mark_span_calls"], committed)
+
+    def test_slab_cases_use_finite_providers_and_check_both_epochs(self):
+        fixture = FIXTURE.read_text()
+        native = ast.parse(NATIVE_TEST.read_text())
+        probe = next(node for node in native.body if isinstance(node, ast.FunctionDef)
+                     and node.name == "test_current_native_copy_marks_finite_slab_provider")
+        self.assertEqual(ast.literal_eval(probe.decorator_list[0].args[1]),
+                         [("slab-epoch0", 0), ("slab-epoch1", 1)])
+        number = _c_body(fixture, "int64_t pcc_allocator_object_cell_number(void *span, void *obj)")
+        self.assertIn("slab_epoch < 0 || span != &mark_span || (obj != &objects[0] && obj != &target)", number)
+        self.assertIn('unexpected_page_provider("pcc_allocator_object_cell_number");', number)
+        self.assertIn("return obj == &objects[0] ? 63 : 64;", number)
+        for result, name, returned in (
+            ("void *", "pcc_allocator_record_span_page", "&mark_page"),
+            ("int64_t ", "pcc_allocator_record_span_mark_words", "2"),
+        ):
+            self.assertEqual(_c_body(fixture, f"{result}{name}(void *span)"),
+                             'if (slab_epoch < 0 || span != &mark_span) '
+                             + f'unexpected_page_provider("{name}"); return {returned};')
+        check = _c_body(fixture, "static void check_slab_mark(const Page *before, int64_t result)")
+        self.assertIn("int target_word = 8 + slab_epoch * 2 + 1;", check)
+        self.assertIn("result != 1 || before->words[target_word] != 2 || mark_page.words[target_word] != 3", check)
+        self.assertIn("i != target_word && mark_page.words[i] != before->words[i]", check)
+
+    def test_page_mark_call_is_only_on_inactive_commit(self):
+        transaction = next(node for node in ast.parse(COPY.read_text()).body
+                           if isinstance(node, ast.FunctionDef)
+                           and node.name == "pcc_gc_backend4_relocate_copy_preallocated_unlocked")
+        active = _shape('load_i32(global_addr("pcc_gc_mark_active"), 0) != 0')
+        self.assertEqual(list(_helper_guards(transaction, names={"pcc_gc_page_mark_set"})),
+                         [("pcc_gc_page_mark_set", ((active, False),))])
+        calls = {node.func.id: node for node in ast.walk(transaction)
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                 and node.func.id in {"pcc_gc_page_mark_set", "pcc_gc_install_forwarding_preallocated_unlocked"}}
+        self.assertLess(calls["pcc_gc_install_forwarding_preallocated_unlocked"].lineno,
+                        calls["pcc_gc_page_mark_set"].lineno)
+
     def test_all_original_copy_cases_keep_marking_and_header_colors_inactive(self):
         fixture = FIXTURE.read_text()
-        self.assertEqual(fixture.count("pcc_gc_mark_active"), 1)
+        # One zero initialization and the wrapper's explicit inactive check.
+        self.assertEqual(fixture.count("pcc_gc_mark_active"), 2)
+        self.assertEqual(re.findall(r"\bpcc_gc_mark_active\s*=(?!=)[^;]*;", fixture),
+                         ["pcc_gc_mark_active = 0;"])
         self.assertIn("pcc_gc_mark_active = 0;", fixture)
         self.assertLess(fixture.index("pcc_gc_mark_active = 0;"),
                         fixture.index("void *result = pcc_gc_backend4_relocate_copy_preallocated_unlocked("))

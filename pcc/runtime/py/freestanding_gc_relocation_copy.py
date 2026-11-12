@@ -125,6 +125,7 @@ py_decref = extern("py_decref", (c_ptr,), c_void)
 pcc_gc_gray_count_increment_acq_rel = extern("pcc_gc_gray_count_increment_acq_rel", (), c_void)
 pcc_gc_gray_count_decrement_acq_rel = extern("pcc_gc_gray_count_decrement_acq_rel", (), c_void)
 pcc_gc_set_mark_color = extern("pcc_gc_set_mark_color", (c_ptr, c_int64), c_void)
+pcc_gc_page_mark_set = extern("pcc_gc_page_mark_set", (c_ptr,), c_int64)
 
 @c_abi_export("pcc_gc_relocation_copy_evacuation_page_unlist")
 def _evacuation_page_unlist(page):
@@ -255,6 +256,14 @@ def pcc_gc_backend4_relocate_copy_preallocated_unlocked(
         if (load_i32(to_obj, 12) & 16) == 0:
             pcc_gc_gray_count_increment_acq_rel()
         pcc_gc_set_mark_color(to_obj, 16)
+    else:
+        # Registration clears a fresh slab cell's current-epoch mark when
+        # no mark is active. Copying the source header cannot restore that
+        # authoritative page bit: the committed replacement is live even
+        # when a pending sweep consumes the finished mark without re-marking.
+        # Mark only after forwarding succeeds. Preserve the source's page bit,
+        # the other bitmap, page generation and the non-slab header fallback.
+        pcc_gc_page_mark_set(to_obj)
     # Forwarding is the commit point.  Before it succeeds the source still
     # owns its original sweep verdict so every rollback path remains honest.
     # Pins may change without this graph lock, including on a live source

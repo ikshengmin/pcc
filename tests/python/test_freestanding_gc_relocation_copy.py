@@ -34,6 +34,7 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_gray_count_increment_acq_rel",
     "pcc_gc_gray_count_decrement_acq_rel",
     "pcc_gc_set_mark_color",
+    "pcc_gc_page_mark_set",
     "pcc_gc_object_is_address_pinned",
     "free",
     "memmove",

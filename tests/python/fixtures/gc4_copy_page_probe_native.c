@@ -1,7 +1,10 @@
 /* Execute the current emitted copy transaction against isolated raw-ABI stubs.
  * This is not a managed-runtime/allocator/GC integration test. In particular,
  * zpage_find is a counted index-map stub; detach only unlinks this fixture's
- * owner node. PCC emits both the actual transaction and membership index.
+ * owner node. PCC emits the actual transaction, membership index and page
+ * marks. Original cases keep static storage outside slabs. Two explicit
+ * cases use finite allocator providers for one GC page, not the production
+ * allocator, selection, concurrency or a complete native GC integration.
  * No membership provider is stubbed: every list entry calls the real note API.
  */
 #include <stdint.h>
@@ -22,7 +25,10 @@ typedef struct { uint64_t words[16]; } Page;
 typedef struct { uint64_t words[2]; } Entry;
 static Object objects[CAP], target;
 static ZNode znodes[CAP], stale_global_node;
-static Page pages[CAP];
+static Page pages[CAP], mark_page;
+static uint64_t mark_span;
+static int slab_epoch = -1, slab_target_before = -2;
+static int64_t slab_mark_result = -2;
 static Entry relocation[CAP], selected_pages[CAP];
 static void *index_map[CAP], *global_zhead;
 static uint64_t finish_plan[3], saved_finish[3], payload_token, forwarding_token;
@@ -34,6 +40,8 @@ static int reenter, cursor_other, page_flag_clear;
 static int find_calls, detach_calls, payload_calls, install_calls, forwarding_calls;
 static int free_calls, finish_calls, unexpected_calls, stub_errors;
 static int calloc_calls, fail_calloc;
+static int mark_calls, mark_non_slab_results, mark_span_calls;
+static int observing_mark, page_lookup_span_calls;
 static int64_t member_before;
 static void *allocations[32];
 static size_t allocation_sizes[32], live_bytes, peak_bytes;
@@ -110,6 +118,88 @@ void pcc_gc_gray_count_decrement_acq_rel(void) {
 void pcc_gc_set_mark_color(void *obj, int64_t color) {
     (void)obj; (void)color;
     unexpected_mark_helper("pcc_gc_set_mark_color");
+}
+
+/* The real page-marks object owns the mark API. Original cases have no
+ * slab. Explicit slab-epoch cases provide one finite page with source cell
+ * 63 and target cell 64; only the compiled production code writes its mark.
+ * Whole-heap iteration is outside this finite allocator-provider model. */
+static _Noreturn void unexpected_page_provider(const char *symbol) {
+    fprintf(stderr, "finite copy fixture unexpectedly called %s\n", symbol);
+    abort();
+}
+void *pcc_allocator_object_cell_span(void *obj) {
+    /* Known static objects have no slab unless this case explicitly models
+     * source/target cells. Unknown pointers must never become a benign miss. */
+    if (object_id(obj) == 0)
+        unexpected_page_provider("pcc_allocator_object_cell_span");
+    if (observing_mark) mark_span_calls++;
+    else page_lookup_span_calls++;
+    return slab_epoch >= 0 && (obj == &target || obj == &objects[0]) ? &mark_span : NULL;
+}
+int64_t pcc_allocator_object_cell_number(void *span, void *obj) {
+    if (slab_epoch < 0 || span != &mark_span || (obj != &objects[0] && obj != &target))
+        unexpected_page_provider("pcc_allocator_object_cell_number");
+    return obj == &objects[0] ? 63 : 64;
+}
+void *pcc_allocator_record_span_page(void *span) {
+    if (slab_epoch < 0 || span != &mark_span)
+        unexpected_page_provider("pcc_allocator_record_span_page");
+    return &mark_page;
+}
+int64_t pcc_allocator_record_span_mark_words(void *span) {
+    if (slab_epoch < 0 || span != &mark_span)
+        unexpected_page_provider("pcc_allocator_record_span_mark_words");
+    return 2;
+}
+void *pcc_allocator_record_span_first(void) {
+    unexpected_page_provider("pcc_allocator_record_span_first");
+}
+void *pcc_allocator_record_span_next(void *span) {
+    (void)span;
+    unexpected_page_provider("pcc_allocator_record_span_next");
+}
+
+static void check_slab_mark(const Page *before, int64_t result) {
+    int target_word = 8 + slab_epoch * 2 + 1;
+    slab_target_before = (int)(before->words[target_word] & 1);
+    slab_mark_result = result;
+    if (result != 1 || before->words[target_word] != 2 || mark_page.words[target_word] != 3)
+        stub_errors++;
+    /* Every other word includes the source bit, adjacent bits, the other
+     * epoch and the entire page header. This checks, rather than writes. */
+    for (int i = 0; i < 16; i++)
+        if (i != target_word && mark_page.words[i] != before->words[i]) stub_errors++;
+}
+
+extern int64_t __real_pcc_gc_page_mark_set(void *obj);
+int64_t __wrap_pcc_gc_page_mark_set(void *obj) {
+    Object before_objects[CAP], before_target;
+    Page before_pages[CAP], before_mark_page;
+    uint64_t epoch = pcc_gc_page_mark_epoch_word;
+    int spans_before = mark_span_calls;
+    int lookups_before = page_lookup_span_calls;
+    memcpy(before_objects, objects, sizeof objects);
+    memcpy(&before_target, &target, sizeof target);
+    memcpy(before_pages, pages, sizeof pages);
+    memcpy(&before_mark_page, &mark_page, sizeof mark_page);
+    if (obj != &target || installed_forwarding != &target || pcc_gc_mark_active != 0)
+        stub_errors++;
+    mark_calls++;
+    observing_mark = 1;
+    int64_t result = __real_pcc_gc_page_mark_set(obj);
+    observing_mark = 0;
+    if (result == -1) mark_non_slab_results++;
+    if (slab_epoch >= 0) check_slab_mark(&before_mark_page, result);
+    else if (result != -1 || memcmp(&before_mark_page, &mark_page, sizeof mark_page))
+        stub_errors++;
+    if (mark_span_calls != spans_before + 1 ||
+        page_lookup_span_calls != lookups_before ||
+        pcc_gc_page_mark_epoch_word != epoch ||
+        memcmp(before_objects, objects, sizeof objects) ||
+        memcmp(&before_target, &target, sizeof target) ||
+        memcmp(before_pages, pages, sizeof pages)) stub_errors++;
+    return result;
 }
 
 /* Retain nominal threaded fixture inputs; the locked transaction no longer
@@ -261,7 +351,9 @@ static void initialize_backlinks(void) {
 }
 
 static int configure(const char *mode) {
-    if (!strcmp(mode, "singleton-head") || !strcmp(mode, "reentry")) {
+    if (!strcmp(mode, "slab-epoch0") || !strcmp(mode, "slab-epoch1")) {
+        slab_epoch = !strcmp(mode, "slab-epoch1");
+    } else if (!strcmp(mode, "singleton-head") || !strcmp(mode, "reentry")) {
         reenter = !strcmp(mode, "reentry");
     } else if (!strcmp(mode, "singleton-middle") || !strcmp(mode, "cursor-other")) {
         rel_ids[0] = 2; rel_ids[1] = 1;
@@ -554,6 +646,15 @@ int main(int argc, char **argv) {
     w64(&target, 0, 99); w32(&target, 8, 2); w32(&target, 12, 64 | 65536);
     for (int k = 16; k < SIZE; k += 8) w64(&target, k, 9000 + k);
     pcc_gc_mark_active = 0;
+    pcc_gc_page_mark_epoch_word = slab_epoch < 0 ? 1 : (uint64_t)slab_epoch;
+    if (slab_epoch >= 0) {
+        mark_page.words[0] = 1;
+        mark_page.words[2] = 128;
+        mark_page.words[8 + slab_epoch * 2] = UINT64_C(0x8000000000000020);
+        mark_page.words[9 + slab_epoch * 2] = 2;
+        mark_page.words[8 + (1 - slab_epoch) * 2] = UINT64_C(0x1111111111111111);
+        mark_page.words[9 + (1 - slab_epoch) * 2] = UINT64_C(0x2222222222222222);
+    }
     pcc_gc_backend_selected = !strcmp(mode, "wrong-backend") ? 3 : 4;
     pcc_gc_backend4_evacuated_bytes_count = 11;
     pcc_gc_backend4_reseed_relocation_revision = 37;
@@ -611,6 +712,9 @@ int main(int argc, char **argv) {
             &objects[0], SIZE, &target, &payload_token, &forwarding_token, finish_plan) != NULL;
         second_clear = finish_plan[0] == 0 && finish_plan[1] == 0 && finish_plan[2] == 0;
     }
+    /* Only these two original cases fall back from znode to page_of(source).
+     * Keep lookup observations separate from the unchanged mark-call oracle. */
+    if (page_lookup_span_calls != (from_index_missing || null_page)) stub_errors++;
     printf("{\"result\":%d,\"second\":%d,\"second_clear\":%d,", result == &target, second, second_clear);
     print_chain("rel_nodes", (void *)(uintptr_t)pcc_gc_relocation_set_head, relocation, relocation_count, 0);
     print_chain("rel_owners", (void *)(uintptr_t)pcc_gc_relocation_set_head, relocation, relocation_count, 1);
@@ -636,6 +740,18 @@ int main(int argc, char **argv) {
     printf("\"source_page_head\":%d,\"find_calls\":%d,\"detach_calls\":%d,\"payload_calls\":%d,\"install_calls\":%d,\"forwarding_calls\":%d,",
         znode_id(ptr(&pages[0], 112)), find_calls, detach_calls, payload_calls, install_calls, forwarding_calls);
     printf("\"other_flags\":%u,", u32(&objects[1], 12));
+    if (slab_epoch >= 0) {
+        printf("\"slab\":{\"epoch\":%llu,\"target_before\":%d,\"mark_result\":%lld,",
+            (unsigned long long)pcc_gc_page_mark_epoch_word, slab_target_before,
+            (long long)slab_mark_result);
+        printf("\"words\":[%llu,%llu,%llu,%llu],\"header\":[%llu,%llu,%llu]},",
+            (unsigned long long)mark_page.words[8], (unsigned long long)mark_page.words[9],
+            (unsigned long long)mark_page.words[10], (unsigned long long)mark_page.words[11],
+            (unsigned long long)mark_page.words[0], (unsigned long long)mark_page.words[1],
+            (unsigned long long)mark_page.words[2]);
+    }
+    printf("\"mark_calls\":%d,\"mark_non_slab_results\":%d,\"mark_span_calls\":%d,",
+        mark_calls, mark_non_slab_results, mark_span_calls);
     printf("\"member_before\":%lld,\"member_after\":%lld,\"member_other\":%lld,",
         (long long)member_before, (long long)pcc_gc_relocation_member_count(&objects[0]),
         (long long)pcc_gc_relocation_member_count(&objects[1]));

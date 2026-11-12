@@ -1,9 +1,12 @@
-"""Run current emitted copy/index modules against counted raw-ABI stubs.
+"""Run current emitted copy/index/page-mark modules against counted raw-ABI stubs.
 
-This is a bounded two-module regression, not a managed-runtime GC gate.
+This is a bounded three-module regression, not a managed-runtime GC gate.
 No runtime archive, pcc1, PE image, historical compiler, or cached object is used.
 The C fixture supplies dependency behavior; PCC emits the actual transaction
-and exact membership table.
+and exact membership table. The real page-mark module must report these
+static fixture objects as non-slab and leave storage unchanged. Two separately
+named cases exercise real bitmap writes through finite allocator providers.
+They do not establish production allocator, selection or concurrent-GC behavior.
 """
 from __future__ import annotations
 
@@ -36,6 +39,13 @@ pytestmark = [
     ),
 ]
 
+PAGE_MARK_FUNCTION_IMPORTS = {
+    "pcc_allocator_object_cell_span", "pcc_allocator_object_cell_number",
+    "pcc_allocator_record_span_page", "pcc_allocator_record_span_mark_words",
+    "pcc_allocator_record_span_first", "pcc_allocator_record_span_next",
+}
+PAGE_MARK_GLOBAL_IMPORTS = {"pcc_gc_page_mark_epoch_word"}
+
 EMIT_MODULE = r"""
 from pathlib import Path
 import hashlib, json, sys
@@ -47,7 +57,8 @@ import resource
 resource.setrlimit(resource.RLIMIT_AS, (768 * 1024 * 1024, 768 * 1024 * 1024))
 copy_source, index_source, build = map(Path, sys.argv[1:])
 triple = 'x86_64-unknown-linux-gnu'
-for source, name in ((copy_source, 'copy'), (index_source, 'index')):
+page_source = copy_source.with_name('freestanding_gc_page_marks.py')
+for source, name in ((copy_source, 'copy'), (index_source, 'index'), (page_source, 'page-marks')):
     output = build / (name + '.o')
     ir = output.with_suffix('.ll')
     _compile_runtime_module(source.stem, str(source), str(ir), triple)
@@ -82,6 +93,7 @@ SUCCESS = {
     "member_before": 1, "member_after": 0, "member_other": 1,
     "member_keys": 2, "member_cap": 256, "member_incomplete": 0, "calloc_calls": 0,
     "free_calls": 0, "finish_calls": 0, "unexpected_calls": 0, "stub_errors": 0,
+    "mark_calls": 1, "mark_non_slab_results": 1, "mark_span_calls": 1,
 }
 PAGE_KEPT = {
     "page_nodes": [1, 2, 3], "pages": [1, 2, 3], "finish": [1, 0, 1],
@@ -97,6 +109,7 @@ UNCHANGED = {
     "forwarded": 0, "source_page_head": 1, "find_calls": 0,
     "detach_calls": 0, "payload_calls": 0, "install_calls": 0,
     "member_after": 1, "member_keys": 3,
+    "mark_calls": 0, "mark_non_slab_results": 0, "mark_span_calls": 0,
 }
 
 CASES = {
@@ -269,7 +282,7 @@ def emitted_copy(tmp_path_factory):
     env.pop("LC_ALL", None)
     env["PYTHONPATH"] = str(REPO_ROOT)
     env["PCC_TEST_NO_NATIVE_PROVISIONING"] = "1"
-    # One total 30-second two-module build budget, including C-stub linking.
+    # One total 30-second build budget for all three modules and C-stub linking.
     deadline = time.monotonic() + 30
     compile_result = subprocess.run(
         [sys.executable, "-c", EMIT_MODULE, str(contract.STRICT_SOURCE), str(index_source), str(build)],
@@ -278,18 +291,21 @@ def emitted_copy(tmp_path_factory):
     (build / "compile.log").write_text(compile_result.stdout + compile_result.stderr)
     assert compile_result.returncode == 0, compile_result.stdout + compile_result.stderr
     (build / "harness_globals.h").write_text(
-        "\n".join("uint64_t " + name + ";" for name in sorted(contract.RAW_GLOBAL_IMPORTS))
+        "\n".join("uint64_t " + name + ";" for name in sorted(
+            contract.RAW_GLOBAL_IMPORTS | PAGE_MARK_GLOBAL_IMPORTS))
         + "\n"
     )
     executable = build / "copy-harness"
     remaining = deadline - time.monotonic()
-    assert remaining > 0, "two-module fixture exhausted its 30-second build budget"
+    assert remaining > 0, "three-module fixture exhausted its 30-second build budget"
     link = subprocess.run(
         ["cc", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-I", str(build),
          str(FIXTURES / "gc4_copy_page_probe_native.c"),
          str(FIXTURES / "gc_index_native_dependencies.c"), str(obj), str(index_obj),
+         str(build / "page-marks.o"),
          str(build / "primary-index-provider.o"),
-         "-Wl,--wrap=calloc", "-Wl,--wrap=free", "-o", str(executable)],
+         "-Wl,--wrap=calloc", "-Wl,--wrap=free", "-Wl,--wrap=pcc_gc_page_mark_set",
+         "-o", str(executable)],
         cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=remaining,
     )
     (build / "link.log").write_text(link.stdout + link.stderr)
@@ -297,8 +313,7 @@ def emitted_copy(tmp_path_factory):
     return build, obj, index_obj, executable
 
 
-@pytest.mark.parametrize("case", CASES)
-def test_current_native_copy_preserves_page_probe_semantics(emitted_copy, case):
+def _copy_result(emitted_copy, case):
     build, _obj, _index_obj, executable = emitted_copy
     result = subprocess.run(
         [str(executable), case], capture_output=True, text=True, timeout=5,
@@ -307,7 +322,27 @@ def test_current_native_copy_preserves_page_probe_semantics(emitted_copy, case):
     observed = json.loads(result.stdout)
     with (build / "results.jsonl").open("a") as stream:
         stream.write(json.dumps({"case": case, "observed": observed}) + "\n")
-    assert observed == CASES[case]
+    return observed
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_current_native_copy_preserves_page_probe_semantics(emitted_copy, case):
+    assert _copy_result(emitted_copy, case) == CASES[case]
+
+
+@pytest.mark.parametrize("case,epoch", [("slab-epoch0", 0), ("slab-epoch1", 1)])
+def test_current_native_copy_marks_finite_slab_provider(emitted_copy, case, epoch):
+    # Source cell 63 and target cell 64 cross a bitmap-word boundary. The
+    # target is initially white, its neighbor is set, and the other epoch
+    # has distinct words. Only the real emitted page-mark body may write.
+    words = [0x1111111111111111, 0x2222222222222222] * 2
+    words[epoch * 2:epoch * 2 + 2] = [0x8000000000000020, 3]
+    assert _copy_result(emitted_copy, case) == {
+        **SUCCESS,
+        "mark_non_slab_results": 0,
+        "slab": {"epoch": epoch, "target_before": 0, "mark_result": 1,
+                 "words": words, "header": [1, 0, 128]},
+    }
 
 
 @pytest.mark.parametrize("case", MEMBERSHIP_CASES)
@@ -392,6 +427,20 @@ def test_current_owned_copy_has_exact_strict_closure(emitted_copy):
         "pcc_gc_relocation_member_forget", "pcc_gc_relocation_member_clear",
     } <= expected_index_symbols
     assert index_defined == expected_index_symbols
+
+    page_undefined, page_defined = _owned_elf_symbol_names(_build / "page-marks.o")
+    assert page_undefined == PAGE_MARK_FUNCTION_IMPORTS | PAGE_MARK_GLOBAL_IMPORTS
+    page_source = contract.STRICT_SOURCE.with_name("freestanding_gc_page_marks.py")
+    page_tree = ast.parse(page_source.read_text())
+    expected_page_symbols = {
+        node.args[0].value
+        for node in ast.walk(page_tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        and node.func.id == "c_abi_export" and node.args
+        and isinstance(node.args[0], ast.Constant)
+    }
+    assert "pcc_gc_page_mark_set" in expected_page_symbols
+    assert page_defined == expected_page_symbols
 
 
 def _symbol_fixture():
