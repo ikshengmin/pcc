@@ -193,10 +193,19 @@ class Scope:
             if direct is None and scope.kind == "class":
                 # [class.member.lookup]: names of a base are members of the
                 # derived class scope unless hidden there.
-                definition = getattr(getattr(scope, "class_type", None), "definition", None)
+                class_type = getattr(scope, "class_type", None)
+                definition = getattr(class_type, "definition", None)
                 if getattr(definition, "base", None) is not None:
                     from pcc.frontends.cpp.inheritance import find_member
                     direct = find_member(definition.base.dtype, name)[0]
+                pattern_base = getattr(class_type, "base", None) if getattr(class_type, "cpp_class_pattern", False) else None
+                if pattern_base is not None:
+                    from pcc.frontends.cpp.inheritance import find_member
+                    if find_member(pattern_base.dtype, name)[0] is not None:
+                        # [temp.dep]/3 finds it in the nondependent base; the
+                        # typed member Patterns have no base-subobject access yet.
+                        raise CppDiagnostic("cpp.unsupported.class-templates",
+                                            "base members named in class template members are not implemented", coord)
             if self._accepted(direct, kinds):
                 found.append(direct)
             if found:

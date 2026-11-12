@@ -102,9 +102,15 @@ def parse_base_clause(parser, definition_keyword, dtype):
         if parser._peek().value == "virtual":
             unsupported("virtual base classes are not implemented", parser._peek().coord)
     name = parser._name()
-    if name.template_arguments if hasattr(name, "template_arguments") else False:
+    if (name.template_arguments if hasattr(name, "template_arguments") else False) or parser._peek().value == "<":
         unsupported("class template-id bases are not implemented", name.coord)
     symbol = parser.scope.resolve_name(name)
+    from pcc.frontends.cpp.templates import TypeParameter
+    from pcc.frontends.cpp.class_templates import InjectedClassPattern
+    if symbol is not None and (symbol.kind == "class-template"
+                               or isinstance(unqualified(symbol.dtype), (TypeParameter, InjectedClassPattern))):
+        raise CppDiagnostic("cpp.unsupported.class-templates",
+                            "dependent base classes require dependent name lookup", name.coord)
     from pcc.frontends.cpp.classes import ClassType, require_complete
     base = None if symbol is None else unqualified(symbol.dtype)
     if symbol is None or symbol.kind != "type" or not isinstance(base, ClassType):

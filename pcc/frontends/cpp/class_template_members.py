@@ -402,6 +402,11 @@ def pattern_member_access(parser, expression, operator, token):
     if owner is not current.injected:
         unsupported(token.coord, 'dependent/foreign-class member lookup is not implemented in member Patterns')
     symbol = current.member_scope.names.get(token.value)
+    if symbol is None and getattr(current, 'base', None) is not None:
+        from pcc.frontends.cpp.inheritance import find_member
+        if find_member(current.base.dtype, token.value)[0] is not None:
+            raise CppDiagnostic('cpp.unsupported.class-templates',
+                                'base members named in class template members are not implemented', token.coord)
     if symbol is None:
         raise CppDiagnostic('cpp.no-member', 'class template has no member ' + token.value, token.coord)
     parser.scope.check_member_access(symbol, token.coord)

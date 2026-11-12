@@ -7,8 +7,11 @@ records. No token replacement, alternate layout engine, or instance cache.
 Ordinary member bodies are typed once at definition time and instantiated on
 ODR-use. Complete-object D1s share the ordinary lifetime owner. Typed array
 bounds retain definition-point Patterns and substitute before layout.
-Class-element array lifetimes, bases and specializations remain explicit
-capability boundaries, never unparsed,
+A single nondependent non-polymorphic base is bound at the definition and
+shared by every specialization (layout, construction, destruction and
+conversions use inheritance.py); naming its members inside member bodies,
+dependent, template-id and polymorphic bases, class-element array lifetimes
+and specializations remain explicit capability boundaries, never unparsed,
 supposedly validated bodies.
 """
 
@@ -53,6 +56,7 @@ class ClassTemplatePattern:
         self.methods = []
         self.constructors = Symbol(name, 'function', coord)
         self.method_definition = None
+        self.base = None
 
 
 def parameter_key(parameters):
@@ -106,8 +110,15 @@ def parse_declaration(parser, parameters, parent):
         return
     if pattern.members is not None:
         raise CppDiagnostic('cpp.class-redefinition', 'class template is already defined', name.coord)
+    base = None
     if parser._peek().value == ':':
-        unsupported(parser._peek().coord, 'class template base layout is not implemented')
+        # [temp.dep]/3: a nondependent base is bound at the definition.
+        from pcc.frontends.cpp.inheritance import parse_base_clause
+        base = parse_base_clause(parser, keyword.value, pattern.injected)
+        if base.dtype.definition.polymorphic:
+            unsupported(base.coord, 'polymorphic bases of class templates require virtual class template members')
+    pattern.base = base
+    pattern.injected.base = base
     parser._expect('{')
     parameter_scope = parser.scope
     scope = Scope(parameter_scope, kind='class', name=name.value)
@@ -117,6 +128,7 @@ def parse_declaration(parser, parameters, parent):
     pattern.member_scope = scope
     from pcc.frontends.cpp.class_template_members import PatternDefinition
     pattern.method_definition = PatternDefinition(pattern)
+    pattern.method_definition.base = base
     members = []
     access = 'private' if keyword.value == 'class' else 'public'
     try:
@@ -313,6 +325,9 @@ def complete_layout(parser, dtype, pattern, arguments, coord):
     dtype.layout_state = 'in-progress'
     try:
         definition = ClassDefinition(dtype, pattern.scope, pattern.class_key)
+        # The nondependent base specifier is shared by every specialization.
+        definition.base = pattern.base
+        definition.layout_types = parser.types
         for name, member_type, at, access, mutable in pattern.members:
             member_type = substitute_member(member_type, arguments, dtype, at, parser)
             plain = unqualified(member_type)

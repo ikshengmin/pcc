@@ -317,6 +317,11 @@
       "url": "https://timsong-cpp.github.io/cppwp/n4659/class.cdtor"
     },
     {
+      "id": "temp.dep",
+      "title": "temp.dep",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/temp.dep"
+    },
+    {
       "id": "dcl.fct.def.default",
       "title": "dcl.fct.def.default",
       "url": "https://timsong-cpp.github.io/cppwp/n4659/dcl.fct.def.default"
@@ -1131,7 +1136,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:16046af15eb522e361b7b9ce744bbbc763858334333cfd00475876d90656b070",
+        "source_revision": "sha256:6f6ee77235cd9d43d64818a91f183f674e87fae60cf548cf1aa2e5386e35b90d",
         "sources": [
           {
             "path": "pcc/frontends/cpp/classes.py",
@@ -1151,7 +1156,7 @@
           },
           {
             "path": "pcc/frontends/cpp/inheritance.py",
-            "sha256": "ea3b09dd5eab130f15173cbc7a4fcc5aa9702ff5fd94d67e8102c653cae7d32b"
+            "sha256": "cebe51920aa70404e35e5cf83b79c8a925e06fee05a1d2f081a00b2733dd646f"
           },
           {
             "path": "pcc/frontends/cpp/lifetimes.py",
@@ -1171,7 +1176,7 @@
           },
           {
             "path": "pcc/frontends/cpp/sema.py",
-            "sha256": "4626945d93f65df1af6e1bc9efb64b40401f216502b0311f23fe5c83b94492fc"
+            "sha256": "bf6acaf3467ce2b9c6a2b90d8a2a33a92ffb09d9e25214b819a82ac172fd39fd"
           },
           {
             "path": "pcc/frontends/cpp/size_queries.py",
@@ -1209,7 +1214,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:2096afe47836382be6f30d88e2565aea98e14c4dc0281f08965a986c249ed392",
+        "source_revision": "sha256:fa94a007c6ceabad30e29dc1921aaf6f55b88a130c4b0ac17016fc2c5de38c76",
         "sources": [
           {
             "path": "pcc/frontends/cpp/allocation.py",
@@ -1233,7 +1238,7 @@
           },
           {
             "path": "pcc/frontends/cpp/inheritance.py",
-            "sha256": "ea3b09dd5eab130f15173cbc7a4fcc5aa9702ff5fd94d67e8102c653cae7d32b"
+            "sha256": "cebe51920aa70404e35e5cf83b79c8a925e06fee05a1d2f081a00b2733dd646f"
           },
           {
             "path": "pcc/frontends/cpp/members.py",
@@ -1246,6 +1251,51 @@
           {
             "path": "pcc/frontends/cpp/virtual_functions.py",
             "sha256": "22f5a89caedc95b6197aad4f184c54d786b6c03bb3a52fb558aebcfa96cddd9a"
+          }
+        ]
+      }
+    },
+    {
+      "id": "cpp.class-template-bases",
+      "title": "A nondependent single base of a class template",
+      "chapter_ids": [
+        "temp.dep",
+        "class.derived",
+        "class.base.init",
+        "class.dtor",
+        "conv.ptr",
+        "class.access.base"
+      ],
+      "scope": "A class template may name one complete nondependent non-polymorphic class as its non-virtual base ([temp.dep]/3 binds it at the definition). Every specialization shares it: the base is the leading C field or an empty base with no storage, implicit and declared constructors construct it first and destructors destroy it last, and member access, access checks and derived-to-base conversions use inheritance.py. Naming base members inside member bodies (unqualified or through this), mem-initializers naming the base, dependent, template-id and polymorphic bases, and base construction that needs a destruction proof remain explicit gaps. Source revision is sha256 of the sorted compact JSON source list.",
+      "tests": [
+        "tests/cpp/test_cpp_class_template_bases.py::test_class_template_base_originals_lower_to_ir",
+        "tests/cpp/test_cpp_class_template_bases.py::test_specialization_record_leads_with_the_shared_base",
+        "tests/cpp/test_cpp_class_template_bases.py::test_invalid_class_template_base_originals_are_ordinary_errors",
+        "tests/cpp/test_cpp_class_template_bases.py::test_unmodeled_class_template_bases_keep_an_explicit_capability_code",
+        "tests/cpp/test_cpp_class_template_bases.py::test_class_template_base_originals_execute_against_explicit_cpp17_reference",
+        "tests/cpp/test_cpp_class_template_bases.py::test_explicit_reference_rejects_invalid_and_accepts_gap_originals"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:9bbcb9c5ed91051ebcd9e546ad7ab7b50296f5b0a4c9812f2834df4b698fdf3e",
+        "sources": [
+          {
+            "path": "pcc/frontends/cpp/class_template_members.py",
+            "sha256": "2001ec4fc22e6d76e48b958086165620eff4b34a1bde235033c016f383d032ea"
+          },
+          {
+            "path": "pcc/frontends/cpp/class_templates.py",
+            "sha256": "55f307c95109adcfd2caa4c8bdfc22c63f080fa1fbae30fab843e40d3e9d24b7"
+          },
+          {
+            "path": "pcc/frontends/cpp/inheritance.py",
+            "sha256": "cebe51920aa70404e35e5cf83b79c8a925e06fee05a1d2f081a00b2733dd646f"
+          },
+          {
+            "path": "pcc/frontends/cpp/sema.py",
+            "sha256": "bf6acaf3467ce2b9c6a2b90d8a2a33a92ffb09d9e25214b819a82ac172fd39fd"
           }
         ]
       }
@@ -3580,7 +3630,7 @@
         "feature_id": "cpp.associated-lookup",
         "source": {
           "path": "pcc/frontends/cpp/sema.py",
-          "sha256": "4626945d93f65df1af6e1bc9efb64b40401f216502b0311f23fe5c83b94492fc"
+          "sha256": "bf6acaf3467ce2b9c6a2b90d8a2a33a92ffb09d9e25214b819a82ac172fd39fd"
         }
       },
       {
@@ -3604,7 +3654,7 @@
         "feature_id": "cpp.block-storage",
         "source": {
           "path": "pcc/frontends/cpp/sema.py",
-          "sha256": "4626945d93f65df1af6e1bc9efb64b40401f216502b0311f23fe5c83b94492fc"
+          "sha256": "bf6acaf3467ce2b9c6a2b90d8a2a33a92ffb09d9e25214b819a82ac172fd39fd"
         }
       },
       {
@@ -4500,7 +4550,7 @@
         "feature_id": "cpp.template-ordering",
         "source": {
           "path": "pcc/frontends/cpp/sema.py",
-          "sha256": "4626945d93f65df1af6e1bc9efb64b40401f216502b0311f23fe5c83b94492fc"
+          "sha256": "bf6acaf3467ce2b9c6a2b90d8a2a33a92ffb09d9e25214b819a82ac172fd39fd"
         }
       },
       {
@@ -4596,7 +4646,7 @@
         "feature_id": "cpp.base-classes",
         "source": {
           "path": "pcc/frontends/cpp/inheritance.py",
-          "sha256": "ea3b09dd5eab130f15173cbc7a4fcc5aa9702ff5fd94d67e8102c653cae7d32b"
+          "sha256": "cebe51920aa70404e35e5cf83b79c8a925e06fee05a1d2f081a00b2733dd646f"
         }
       },
       {
