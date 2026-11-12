@@ -385,6 +385,11 @@
       "id": "replacement.functions",
       "title": "replacement.functions",
       "url": "https://timsong-cpp.github.io/cppwp/n4659/replacement.functions"
+    },
+    {
+      "id": "expr.static.cast",
+      "title": "expr.static.cast",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/expr.static.cast"
     }
   ],
   "features": [
@@ -1242,7 +1247,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:0ac8c0bfe88bb036b70c80e63311bad1db42824ecbf69b75d45de151fb780e45",
+        "source_revision": "sha256:4b10fe45884ec89fd6b27aeeb13d9f114dd579996c25dd172bd62cf3abe29c60",
         "sources": [
           {
             "path": "pcc/frontends/cpp/classes.py",
@@ -1274,7 +1279,7 @@
           },
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "ca6c808bb045d7fba8d2c2e3f3de0d174decd1ef68ae8efbba1a371fa29f4e77"
+            "sha256": "00856eb01cf62dab8aaecc35f26e8f249111e2c7b99fa838bc7b5a9ded684497"
           },
           {
             "path": "pcc/frontends/cpp/references.py",
@@ -1470,7 +1475,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:b40a540109fe2f45a0ed8f2a0c0e1df88e401f7c7bf5093c3f46a5eb9d8f3bed",
+        "source_revision": "sha256:5c82ce9f0e016416bb3c5e225f14a0af2456bd3050f910d6fb44de41afaa0df5",
         "sources": [
           {
             "path": "pcc/frontends/cpp/class_template_enums.py",
@@ -1486,7 +1491,7 @@
           },
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "ca6c808bb045d7fba8d2c2e3f3de0d174decd1ef68ae8efbba1a371fa29f4e77"
+            "sha256": "00856eb01cf62dab8aaecc35f26e8f249111e2c7b99fa838bc7b5a9ded684497"
           },
           {
             "path": "pcc/frontends/cpp/template_id_members.py",
@@ -3852,7 +3857,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:d97d6b2f29624a45f157b43aaaa13622449bb8a04280d6c7e1d4b12579f86d29",
+        "source_revision": "sha256:3b32e91082e1d35873ff7ae008ecce8c11014e45e44436a5b68547ba5367c717",
         "sources": [
           {
             "path": "pcc/frontends/cpp/class_template_members.py",
@@ -3876,7 +3881,7 @@
           },
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "ca6c808bb045d7fba8d2c2e3f3de0d174decd1ef68ae8efbba1a371fa29f4e77"
+            "sha256": "00856eb01cf62dab8aaecc35f26e8f249111e2c7b99fa838bc7b5a9ded684497"
           },
           {
             "path": "pcc/frontends/cpp/sema.py",
@@ -3908,7 +3913,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:1c5ec4a6c79c1356e83684e3933c4e0f65b3ae5300a7217bcfb5497582847948",
+        "source_revision": "sha256:87449cad8fc875b3a41a63e2a8cc9c01bdcd726396dc75eff5040b489d003e1c",
         "sources": [
           {
             "path": "pcc/frontends/c/evaluator/c_evaluator.py",
@@ -3928,7 +3933,37 @@
           },
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "ca6c808bb045d7fba8d2c2e3f3de0d174decd1ef68ae8efbba1a371fa29f4e77"
+            "sha256": "00856eb01cf62dab8aaecc35f26e8f249111e2c7b99fa838bc7b5a9ded684497"
+          }
+        ]
+      }
+    },
+    {
+      "id": "cpp.class-template-static-casts",
+      "title": "static_cast in class template member bodies",
+      "chapter_ids": [
+        "expr.static.cast",
+        "temp.dep.expr"
+      ],
+      "scope": "Inside a class template member body, static_cast keeps a typed static-cast Pattern (target type and operand); instantiation applies the ordinary static_cast rules to the substituted types, including arithmetic conversions and the cv void* to object pointer conversion (TinyXML2 MemPoolT::Free). Invalid substituted casts (removing const from the pointee) are ordinary errors at instantiation. Casts in function templates and the other static_cast kinds keep their existing explicit gaps. Source revision is sha256 of the sorted compact JSON source list.",
+      "tests": [
+        "tests/cpp/test_cpp_class_template_static_casts.py::test_template_static_cast_programs_compile_to_stable_artifacts",
+        "tests/cpp/test_cpp_class_template_static_casts.py::test_template_static_cast_programs_execute_against_real_cpp17_reference",
+        "tests/cpp/test_cpp_class_template_static_casts.py::test_invalid_substituted_static_cast_fails_at_instantiation"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:30a014ed695fe14ba0b7825a8ee9e913cb935a5f44f65befccf8f88987ebe6bc",
+        "sources": [
+          {
+            "path": "pcc/frontends/cpp/parser.py",
+            "sha256": "00856eb01cf62dab8aaecc35f26e8f249111e2c7b99fa838bc7b5a9ded684497"
+          },
+          {
+            "path": "pcc/frontends/cpp/static_casts.py",
+            "sha256": "f1995f333b92716666b21be57b0e955329f4dca469535bb704a655d746a3fcca"
           }
         ]
       }

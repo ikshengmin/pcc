@@ -24,7 +24,8 @@ from pcc.frontends.cpp.types import (
 def convert_void_pointer(parser, dtype, expression, coord):
     from pcc.frontends.cpp.parser import Expression
 
-    if parser.parsing_template or parser.template_function is not None or parser.instantiating_template:
+    if parser.parsing_template or parser.template_function is not None or (
+            parser.instantiating_template and getattr(parser, 'class_template_instance', None) is None):
         raise CppDiagnostic('cpp.unsupported.static-cast',
                             'pointer static_cast in template patterns/replay is not implemented', coord)
     target, source = unqualified(dtype), unqualified(expression.dtype)
@@ -76,4 +77,11 @@ def parse(parser, token):
     parser._expect('(')
     expression = parser._expression()
     parser._expect(')')
+    if getattr(parser, 'class_template_method', None) is not None:
+        # [temp.dep.expr]/3, [expr.static.cast]: a member Pattern keeps the
+        # typed target and operand; instantiation applies the ordinary rules
+        # to the substituted types (static-cast Pattern in _instantiate_expression).
+        from pcc.frontends.cpp.parser import Expression
+        from pcc.frontends.cpp.templates import Pattern
+        return Expression(Pattern('static-cast', token.coord, dtype, [expression]), dtype)
     return parser._explicit_arithmetic_cast(dtype, expression, token.coord, 'static_cast')

@@ -2995,6 +2995,10 @@ class CppParser:
         if kind == 'new-object':
             from pcc.frontends.cpp.allocation import instantiate_new
             return instantiate_new(self, pattern, bindings, environment)
+        if kind == 'static-cast':
+            target = self._substitute_pattern_type(pattern.value, bindings, coord)
+            operand = self._instantiate_expression(pattern.children[0], bindings, environment)
+            return self._explicit_arithmetic_cast(target, operand, coord, 'static_cast')
         arguments = [self._instantiate_expression(child, bindings, environment)
                      for child in pattern.children]
         if kind == 'conditional':
