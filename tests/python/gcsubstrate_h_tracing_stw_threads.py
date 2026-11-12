@@ -327,7 +327,16 @@ def test_tracing_finish_claim_real_pthread_windows_and_single_finisher(
                 (void)arg;
                 __atomic_add_fetch(&finisher_ready, 1, __ATOMIC_ACQ_REL);
                 spin_until(&finisher_first_go, 1);
-                (void)pcc_gc_step(1);
+                /* Bounded incremental steps until this thread's claim
+                 * commits; the claiming step blocks at main's no-park. */
+                int64_t base = pcc_gc_tracing_finish_commits;
+                for (
+                    int i = 0;
+                    i < 4096 && pcc_gc_tracing_finish_commits == base;
+                    i++
+                ) {
+                    (void)pcc_gc_step(1);
+                }
                 return 0;
             }
 
@@ -366,19 +375,21 @@ def test_tracing_finish_claim_real_pthread_windows_and_single_finisher(
                 if (pcc_gc_set_backend(
                         PCC_GC_KIND_INCREMENTAL_TRICOLOR
                     ) != 0) return 4;
+                /* Count-free collectors scan stacks conservatively: the
+                 * detached child and root cycle live only in the statics
+                 * late_child/late_root, never in main's frame, so the
+                 * window's whiteness comes from the heap graph alone. */
                 PyObject *owner = py_list_new(1);
-                PyObject *child = py_list_new(1);
-                PyObject *root_cycle = py_list_new(1);
-                if (owner == 0 || child == 0 || root_cycle == 0) return 5;
-                py_list_append(child, child);
-                py_list_append(root_cycle, root_cycle);
-                py_list_append(owner, child);
-                py_list_append(owner, root_cycle);
-                py_decref(child); /* retain owner edge + internal self-edge */
-                py_decref(root_cycle);
+                late_child = py_list_new(1);
+                late_root = py_list_new(1);
+                if (owner == 0 || late_child == 0 || late_root == 0) return 5;
+                py_list_append(late_child, late_child);
+                py_list_append(late_root, late_root);
+                py_list_append(owner, late_child);
+                py_list_append(owner, late_root);
+                py_decref(late_child); /* retain owner edge + internal self-edge */
+                py_decref(late_root);
                 late_owner = owner;
-                late_child = child;
-                late_root = root_cycle;
                 void *owner_root = pcc_gc_scheduler_root_register_handle(
                     &late_owner
                 );
@@ -390,9 +401,9 @@ def test_tracing_finish_claim_real_pthread_windows_and_single_finisher(
                 }
                 if (
                     (py_header(owner)->flags & PY_FLAG_GC_FRESH_ALLOC) != 0
-                    || (py_header(child)->flags & PY_FLAG_GC_FRESH_ALLOC) != 0
+                    || (py_header(late_child)->flags & PY_FLAG_GC_FRESH_ALLOC) != 0
                     || (
-                        py_header(root_cycle)->flags
+                        py_header(late_root)->flags
                         & PY_FLAG_GC_FRESH_ALLOC
                     ) != 0
                 ) return 43;
@@ -456,14 +467,14 @@ def test_tracing_finish_claim_real_pthread_windows_and_single_finisher(
                     pcc_gc_tracing_finish_claim_epoch != 0
                     || pcc_gc_tracing_finish_claim_backend != -1
                 ) return 10;
-                int32_t child_after_cut = py_header(child)->flags;
+                int32_t child_after_cut = py_header(late_child)->flags;
                 if (
                     (child_after_cut & PY_FLAG_GC_BLACK) == 0
                     || (child_after_cut & PY_FLAG_GC_GRAY) != 0
                     || (child_after_cut & PY_FLAG_GC_WHITE) != 0
                     || (child_after_cut & PY_FLAG_GC_SWEEP_CANDIDATE) != 0
                 ) return 11;
-                int32_t root_after_cut = py_header(root_cycle)->flags;
+                int32_t root_after_cut = py_header(late_root)->flags;
                 if (
                     (root_after_cut & PY_FLAG_GC_BLACK) == 0
                     || (root_after_cut & PY_FLAG_GC_GRAY) != 0
@@ -482,23 +493,23 @@ def test_tracing_finish_claim_real_pthread_windows_and_single_finisher(
                 }
                 if (pcc_gc_tracing_cycle_epoch != epoch_after_late + 1) return 13;
                 if (pcc_gc_tracing_finish_commits != commits0 + 2) return 14;
-                if ((py_header(child)->flags & PY_FLAG_GC_SWEEP_CANDIDATE) != 0) {
+                if ((py_header(late_child)->flags & PY_FLAG_GC_SWEEP_CANDIDATE) != 0) {
                     return 15;
                 }
                 if (
-                    (py_header(root_cycle)->flags & PY_FLAG_GC_SWEEP_CANDIDATE)
+                    (py_header(late_root)->flags & PY_FLAG_GC_SWEEP_CANDIDATE)
                     != 0
                 ) return 49;
                 __atomic_store_n(&late_release, 1, __ATOMIC_RELEASE);
                 if (!join_ok(late_thread)) return 47;
                 pcc_gc_scheduler_root_unregister_handle(owner_root);
                 late_owner = 0;
-                late_child = 0;
-                late_root = 0;
                 py_list_clear(owner);
                     py_decref(owner);
-                    py_list_clear(child);
-                    py_list_clear(root_cycle);
+                    py_list_clear(late_child);
+                    py_list_clear(late_root);
+                late_child = 0;
+                late_root = 0;
                     pcc_gc_scheduler_root_unregister_handle(late_stage_root);
                     py_decref(late_stage);
 
@@ -526,7 +537,17 @@ def test_tracing_finish_claim_real_pthread_windows_and_single_finisher(
                 spin_until(&reset_ready, 1);
                 commits0 = pcc_gc_tracing_finish_commits;
                 epoch0 = pcc_gc_tracing_cycle_epoch;
-                (void)pcc_gc_step(1);
+                /* An incremental step does bounded work: step until one
+                 * claims the final cut, whose stop request admits the reset. */
+                for (
+                    int i = 0;
+                    i < 4096 && __atomic_load_n(
+                        &reset_done, __ATOMIC_ACQUIRE
+                    ) != 1;
+                    i++
+                ) {
+                    (void)pcc_gc_step(1);
+                }
                 if (__atomic_load_n(&reset_done, __ATOMIC_ACQUIRE) != 1) return 18;
                 if (reset_result != 0) return 19;
                 if (
@@ -624,8 +645,14 @@ def test_tracing_finish_claim_real_pthread_windows_and_single_finisher(
                 commits0 = pcc_gc_tracing_finish_commits;
                 if (pcc_stop_the_world() != 0) return 36;
                 if (pcc_thread_owns_stopped_world() != 1) return 37;
-                (void)pcc_gc_step(1);
-                if (pcc_thread_owns_stopped_world() != 1) return 38;
+                for (
+                    int i = 0;
+                    i < 4096 && pcc_gc_tracing_finish_commits == commits0;
+                    i++
+                ) {
+                    (void)pcc_gc_step(1);
+                    if (pcc_thread_owns_stopped_world() != 1) return 38;
+                }
                 if (pcc_gc_tracing_finish_commits != commits0 + 1) return 39;
                 if (pcc_resume_world() != 0) return 40;
                 if (pcc_resume_world() != -1) return 41;
@@ -662,9 +689,16 @@ def test_tracing_gc_finalizer_handles_thread_objects_and_refcount_side_table():
         RUNTIME_DIR / "py" / "freestanding_gc_tracing_sweep_collector.py"
     ).read_text(encoding="utf-8")
     assert "pcc_refcount_forget(obj)" in sweep_collector
-    # The thread tag moved from the magic literal 27 to a named ABI constant.
-    assert 'tag == abi_constant("object.type.thread")' in sweep_collector
-    assert "py_dealloc_thread_thread(obj)" in sweep_collector
+    # The sweep hands every dead object to the one typed deallocator
+    # (8429b6671), which routes the named thread tag to the thread port.
+    forget = sweep_collector.index("pcc_refcount_forget(obj)")
+    assert sweep_collector.index("pcc_gc_dealloc_typed(obj, tag)", forget) > forget
+    dealloc = (RUNTIME_DIR / "py" / "py_obj_dealloc.py").read_text(encoding="utf-8")
+    dispatch = dealloc.split('@c_abi_export("pcc_gc_dealloc_typed")', 1)[1]
+    assert "if tag == PY_TYPE_THREAD:\n        py_dealloc_thread_thread(o)" in dispatch
+    constants_line = dealloc.split("from pcc.runtime.py.py_abi_constants import", 1)[1]
+    imported = {name.strip() for name in constants_line.split("\n", 1)[0].split(",")}
+    assert "PY_TYPE_THREAD" in imported
 
     thread_port = (REPO_ROOT / "pcc" / "runtime" / "py" / "py_threading.py").read_text(
         encoding="utf-8"
