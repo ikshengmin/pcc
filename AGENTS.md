@@ -238,10 +238,21 @@ ledger live under `PCC_PERF_HOME`, outside the repository.
   silently exclude failures to obtain a pass.
   Long runs need durable live node/failure logs and a process-group watchdog;
   stop/clean up only your own children after timeout. Never report dots as green.
+  `-q` dots are not a node log: a run that may exceed a few minutes prints one
+  line per finished node (`-v`) to its log, so a timeout or kill still leaves
+  every finished result. Compare runs by node id (strip xdist's `@group`).
+- Before any suite that builds the runtime archive, compile each edited runtime
+  module alone (`pcc --python-library --emit-llvm`); one broken module fails
+  every archive-dependent test. Compare against HEAD in a snapshot run as
+  `UV_NO_SYNC=1 PYTHONPATH=<snapshot>`, so `uv` never re-points the shared
+  `.venv` editable install at the snapshot.
 - First run the smallest regression, then the original integration scenario and
-  sensitive subsystem checks. Execute the changed shape, not a nearby one: a
-  change to a value, constant, layout, encoding or diagnostic is verified only
-  by compiling and running a program that exercises it and reading the result.
+  sensitive subsystem checks. Widen a comparison only after the narrower one is
+  clean and explained; never start with a whole test directory, and exclude
+  nodes already known to fail on HEAD. Execute the changed shape, not a nearby
+  one: a change to a value, constant, layout, encoding or diagnostic is
+  verified only by compiling and running a program that exercises it and
+  reading the result.
   A successful compile, archive build or link proves none of these. For pcc1
   that means native emitted execution (include a function, compile with `-o`,
   then run).
