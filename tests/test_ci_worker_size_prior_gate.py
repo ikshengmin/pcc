@@ -58,7 +58,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS[:72] == (106, 3, 291, 0, 6, 29, 25, 7, 25, 49, 19, 21, 433, 17, 4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 117, 11, 153, 177, 9, 12, 26, 54, 30, 9, 76, 39, 35, 23)
+    assert gate.HOST_COUNTS[:72] == (106, 3, 291, 0, 6, 29, 25, 7, 25, 49, 19, 21, 433, 17, 4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 39, 35, 23)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
@@ -125,11 +125,11 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text().count(
         '      - "tests/python/test_runtime_abi_chunking.py"') == 2
     assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 84
-    assert sum(gate.HOST_COUNTS) == 3689 and sum(gate.HOST_COUNTS[:72]) == 3380
-    assert sum(gate.HOST_COUNTS[:70]) == 3322
-    assert sum(gate.HOST_COUNTS[:65]) == 3114
-    assert sum(gate.HOST_COUNTS[:63]) == 3076
-    assert sum(gate.HOST_COUNTS[:62]) == 3067
+    assert sum(gate.HOST_COUNTS) == 3744 and sum(gate.HOST_COUNTS[:72]) == 3435
+    assert sum(gate.HOST_COUNTS[:70]) == 3377
+    assert sum(gate.HOST_COUNTS[:65]) == 3169
+    assert sum(gate.HOST_COUNTS[:63]) == 3131
+    assert sum(gate.HOST_COUNTS[:62]) == 3122
     assert sum(gate.HOST_COUNTS[:61]) == 2890
     assert sum(gate.HOST_COUNTS[:60]) == 2737
     assert sum(gate.HOST_COUNTS[:59]) == 2726
@@ -477,7 +477,7 @@ def test_default_command_retains_project_xdist(tmp_path):
                 assert ast.unparse(values) in ("tuple(SIGNATURES)", "tuple(SIGNATURES.items())")
                 cases *= len(signatures[0])
         consumed_cases += cases
-    assert consumed_cases == gate.HOST_COUNTS[61] == 177
+    assert consumed_cases == gate.HOST_COUNTS[61] == 232
     assert gate.STACKMAP_BUDGET_INPUTS == (
         'tests/python/test_compact_stackmap_processing_budget.py',
         'tests/python/test_stackmap_host_budget.py',
@@ -1757,7 +1757,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (106, 3, 291, 0, 6, 29, 25, 7, 25, 49, 19, 21, 433, 17, 4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 117, 11, 153, 177, 9, 12, 26, 54, 30, 9, 76, 39, 35, 23) + (36, 29, 4, 29, 11, 23, 10, 65, 7, 92, 1, 2) and not integration
+            assert nodes == gate.HOST_FILES and counts == (106, 3, 291, 0, 6, 29, 25, 7, 25, 49, 19, 21, 433, 17, 4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 39, 35, 23) + (36, 29, 4, 29, 11, 23, 10, 65, 7, 92, 1, 2) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:

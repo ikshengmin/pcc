@@ -15,6 +15,8 @@ from pcc.frontends.python.unsafe_intrinsic_policy import (
 # Explicit raw-parser shapes. Unknown nodes fail closed instead of looking like
 # leaves. The contract test checks these fields against the parser dataclasses;
 # adding syntax requires reviewing its binding and reflection behavior here.
+# Traverse type_params, but leave _TypeParam and _TypeAlias unaccepted: their
+# annotation scopes and lazy expressions have not been proven provider-free.
 _RAW_FIELDS = {
     "_Pass": (),
     "_Return": ("value",),
@@ -27,7 +29,9 @@ _RAW_FIELDS = {
     "_BinOp": ("op", "lhs", "rhs"),
     "_Call": ("func", "args"),
     "_If": ("cond", "body", "else_body"),
-    "_FuncDef": ("name", "params", "body", "decorators", "returns", "is_async"),
+    "_FuncDef": (
+        "name", "params", "body", "decorators", "returns", "is_async", "type_params",
+    ),
     "_Await": ("value",),
     "_Assign": ("target", "value", "annotation", "has_value"),
     "_AugAssign": ("target", "op", "value"),
@@ -37,7 +41,7 @@ _RAW_FIELDS = {
     "_Continue": (),
     "_Import": ("names",),
     "_ImportFrom": ("module", "names", "level"),
-    "_ClassDef": ("name", "bases", "body", "decorators"),
+    "_ClassDef": ("name", "bases", "body", "decorators", "type_params"),
     "_Raise": ("exc", "cause"),
     "_Try": ("body", "handlers", "else_body", "finally_body"),
     "_Attr": ("obj", "name"),
@@ -77,7 +81,7 @@ _REFLECTIVE_NAMES = frozenset({
 _REFLECTIVE_ATTRIBUTE_PREFIXES = ("__", "gi_", "cr_", "ag_", "tb_", "f_", "co_")
 
 _HEADER_FIELDS = frozenset({
-    "annotation", "returns", "params", "decorators", "bases",
+    "annotation", "returns", "params", "decorators", "bases", "type_params",
 })
 
 

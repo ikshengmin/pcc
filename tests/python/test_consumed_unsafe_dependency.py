@@ -260,6 +260,126 @@ def test_unknown_raw_nodes_and_parser_field_drift_fail_closed():
     assert not proof._only_consumed_unsafe_imports(module)
 
 
+def _assert_single_entry_provider_presence(tmp_path, owned_sources, source, retained):
+    """Exercise both production closure routes with the real owned provider."""
+    entry = tmp_path / "entry.py"
+    entry.write_text(source)
+    for paths, names in (
+        closure._collect_relative_module_closure(str(entry)),
+        closure._prepare_multi_source_compile_closure(
+            [str(entry)], ["entry"], recursive_stdlib=False,
+            ir_scaffold_mode="on",
+        ),
+    ):
+        assert ("pcc.unsafe" in names) is retained
+        assert (owned_sources["pcc.unsafe"] in paths) is retained
+        if not retained:
+            assert paths == [str(entry)]
+            assert names == ["entry"]
+
+
+@pytest.mark.parametrize("definition", [
+    "def f[{parameters}]():\n    return backend()\n",
+    "async def f[{parameters}]():\n    return backend()\n",
+    "class C[{parameters}]:\n    def f(self):\n        return backend()\n",
+])
+@pytest.mark.parametrize("parameters", [
+    "T",                         # even an unused annotation scope is unreviewed
+    "backend",                   # a type-parameter binding can shadow the alias
+    "*backend",
+    "**backend",
+    "T: backend",                # a lazy bound can read the provider value
+    "T: backend()",              # header calls are not compiler-consumed uses
+    "T: (int, backend)",
+    "T = backend",               # defaults are lazy annotation-scope inputs too
+    "T = backend()",
+    "T: int = (lambda: backend)",
+    "*Ts = *tuple[backend, ...]",
+    "**P = [backend]",
+])
+def test_type_parameter_scopes_keep_provider(
+    tmp_path, owned_sources, definition, parameters,
+):
+    from pcc.frontends.python import py_parse
+
+    source = IMPORT + definition.format(parameters=parameters) + CALL
+    module = py_parse.parse(source)
+    declaration = module.body[1]
+    # Rejection must reach a real raw parameter, not hide a parser error or
+    # rely on lifting (which already rejects generic annotation scopes).
+    assert isinstance(declaration, (py_parse._FuncDef, py_parse._ClassDef))
+    assert len(declaration.type_params) == 1
+    assert isinstance(declaration.type_params[0], py_parse._TypeParam)
+    assert "_TypeParam" not in proof._RAW_FIELDS
+    assert not proof._only_consumed_unsafe_imports(module)
+    assert not proof.source_has_only_consumed_unsafe_imports(source)
+    _assert_single_entry_provider_presence(tmp_path, owned_sources, source, True)
+
+
+@pytest.mark.parametrize("tail", [
+    "def outer():\n    def f[T]():\n        return backend\n" + CALL,
+    "class C:\n    def f[T]():\n        return backend()\n" + CALL,
+    "def outer():\n    class C[T: backend()]:\n        pass\n" + CALL,
+    "@decorate\ndef f[T]():\n    pass\n" + CALL,
+    "@decorate\nclass C[T]:\n    pass\n" + CALL,
+    "type Alias = int\n" + CALL,
+    "type Alias = backend\n" + CALL,
+    "type Alias = backend()\n" + CALL,
+    "type Alias = (lambda: backend)\n" + CALL,
+    "type Alias[backend] = int\n" + CALL,
+    "type Alias[T: backend = backend()] = T\n" + CALL,
+    "def outer():\n    type Alias = backend\n" + CALL,
+    "print(f'{backend()}')\n",  # another real, unaccepted raw syntax family
+])
+def test_nested_annotation_scopes_and_unreviewed_syntax_keep_provider(
+    tmp_path, owned_sources, tail,
+):
+    from pcc.frontends.python import py_parse
+
+    source = IMPORT + tail
+    module = py_parse.parse(source)
+    assert "_TypeAlias" not in proof._RAW_FIELDS
+    assert not proof._only_consumed_unsafe_imports(module)
+    assert not proof.source_has_only_consumed_unsafe_imports(source)
+    _assert_single_entry_provider_presence(tmp_path, owned_sources, source, True)
+
+
+@pytest.mark.parametrize("definition", [
+    "def f():\n    return backend()\n",
+    "async def f():\n    return backend()\n",
+    "class C:\n    def f(self):\n        return backend()\n",
+    "class C:\n    pass\n" + CALL,
+])
+def test_definitions_without_type_parameters_still_omit_provider(
+    tmp_path, owned_sources, definition,
+):
+    from pcc.frontends.python import py_parse
+
+    source = IMPORT + definition
+    module = py_parse.parse(source)
+    declaration = module.body[1]
+    assert declaration.type_params == []
+    assert proof._only_consumed_unsafe_imports(module)
+    assert proof.source_has_only_consumed_unsafe_imports(source)
+    _assert_single_entry_provider_presence(tmp_path, owned_sources, source, False)
+    # The raw dataclasses also default this optional field to None. Keep that
+    # existing empty representation eligible, using the same parsed body.
+    declaration.type_params = None
+    assert proof._only_consumed_unsafe_imports(module)
+
+
+@pytest.mark.parametrize("definition", [
+    "def f():\n    return backend()\n",
+    "class C:\n    pass\n" + CALL,
+])
+def test_unknown_nodes_in_type_parameter_fields_fail_closed(definition):
+    from pcc.frontends.python import py_parse
+
+    module = py_parse.parse(IMPORT + definition)
+    module.body[1].type_params.append(SimpleNamespace(new_syntax=True))
+    assert not proof._only_consumed_unsafe_imports(module)
+
+
 @pytest.mark.parametrize("route", ["single", "multi_admission"])
 @pytest.mark.parametrize("provider_kind", ["copy", "same_name", "symlink"])
 def test_only_canonical_owned_provider_can_be_omitted(
