@@ -243,7 +243,7 @@ def test_exact_supplied_project_lookup_and_constructor_access(name, sources, mes
     assert sources == original_sources
 
 
-def test_complete_primes_original_retains_throw_before_generic_type_boundary():
+def test_complete_primes_original_retains_throw_and_generic_result_type():
     _, files = load_inputs()
     sources = original_sources(files, PRODUCTION)
     before = dict(sources)
@@ -261,32 +261,33 @@ def test_complete_primes_original_retains_throw_before_generic_type_boundary():
             return node
 
     parser = OriginalParser(sources[first], first, class_model=True)
-    with pytest.raises(UnsupportedJava, match='generic reference declarations') as caught:
-        parser.parse()
-    assert caught.value.code == 'java.unsupported.generic-declarations'
-    assert ':108:23:' in str(caught.value)
+    program = parser.parse()
+    factors, = [method for method in program.methods if method.token.text == 'primeFactors']
+    assert str(factors.result) == 'List<Integer>'
+    assert (factors.result.tokens[0].line, factors.result.tokens[0].column) == (108, 19)
     loop, = parsed_loops
     variable, expression, _ = loop.children
     assert (loop.token.line, variable.token.line, variable.token.column) == (53, 53, 24)
     assert variable.kind == 'enhanced_var' and variable.value == 'int' and variable.is_final
     assert variable.token.text == 'p' and expression.value == 'SmallPrimes.PRIMES'
-    statement, = parsed_throws
+    # Both original throws parse: nextPrime (line 70) and primeFactors (110).
+    statement, later = parsed_throws
+    assert (later.token.line, later.token.column) == (110, 13)
     creation, = statement.children
     assert (statement.token.line, statement.token.column) == (70, 13)
     assert creation.kind == 'class_new' and creation.value.tokens[0].text == 'IllegalArgumentException'
     call, = creation.children
     assert call.kind == 'call' and call.value == 'String.format'
     assert [child.value for child in call.children] == ['NUMBER_TOO_SMALL', 'n', '0']
-    # Production folds the original String constant variable, parses the
-    # enhanced for (native array domain) and this throw statement with its
-    # class creation (sema gaps); the List<Integer> result type of
-    # primeFactors is the next syntax prerequisite. Parser reach is not execution.
+    # The class model parses the whole original, including List<Integer>.
+    # The native domain still has no reference results: the List<Integer>
+    # result type of primeFactors is its next prerequisite. Parser reach is
+    # not execution.
     with pytest.raises(UnsupportedJava) as native:
         compile_source(sources[first], filename=first)
     assert native.value.code == 'java.unsupported.declared-result-type'
     assert ':108:19:' in str(native.value)
     assert sources == before
-    # Complete original parsing still fails before project Sema or lowering.
     # No token removal, source slice, fake library, or project acceptance.
 
 

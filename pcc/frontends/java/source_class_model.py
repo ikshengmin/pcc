@@ -462,13 +462,15 @@ class ClassModelProject(SourceProject):
             token.error("qualified reference declarations require complete implicit-type/member-type metadata; use a resolved single-type import",
                         code="java.unsupported.implicit-type-metadata")
         target = self.visible_simple_type(caller, token.text)
-        if isinstance(target, BootstrapStringType):
-            return self.require_string_context(caller, token)
-        if target is None:
-            if token.text == "String":
-                return self.require_string_context(caller, token)
+        if target is None and token.text != "String":
             token.error("source reference declaration requires supplied class source for " + str(dtype),
                         code="java.unsupported.source-dependency")
+        if dtype.arguments:
+            # JLS 4.5: String and every supplied class here are non-generic;
+            # generic class declarations are gated before this model.
+            token.error("type " + token.text + " does not take type arguments")
+        if target is None or isinstance(target, BootstrapStringType):
+            return self.require_string_context(caller, token)
         self.require_class_access(caller, target, token)
         return ClassType(target.name)
 

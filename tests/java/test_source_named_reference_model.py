@@ -202,14 +202,25 @@ def test_even_unused_reference_signatures_require_a_supplied_source_dependency()
     ("class ArrayExample{ArrayExample value(){return (ArrayExample)null;}}", "object-expressions"),
     ("class ArrayExample{p.Other value;}", "implicit-type-metadata"),
     ("class ArrayExample{void method(){p.Other value=null;}}", "implicit-type-metadata"),
-    ("class ArrayExample{ArrayExample<String> value;}", "generic-declarations"),
-    ("class ArrayExample{void method(){ArrayExample<String> value;}}", "generic-declarations"),
+    ("class ArrayExample{ArrayExample<String[]> value;}", "generic-declarations"),
     ("package java.lang;class String{}", "string-literals"),
 ])
 def test_missing_managed_and_wider_reference_contracts_remain_explicit(text, code):
     with pytest.raises(UnsupportedJava) as caught:
         analyze_class_sources({"Original.java": text})
     assert caught.value.code == "java.unsupported." + code
+
+
+@pytest.mark.parametrize("text", [
+    "class ArrayExample{ArrayExample<String> value;}",
+    "class ArrayExample{void method(){ArrayExample<String> value=null;}}",
+])
+def test_type_arguments_of_a_nongeneric_supplied_class_are_ordinary_errors(text):
+    # JLS 4.5: only a generic class takes type arguments; every supplied
+    # class here is non-generic (generic class declarations are gated).
+    with pytest.raises(JavaError, match="does not take type arguments") as caught:
+        analyze_class_sources({"Original.java": text})
+    assert not isinstance(caught.value, UnsupportedJava)
 
 
 def test_original_primes_string_field_is_retained_without_fabricating_bootstrap_string():
@@ -226,11 +237,10 @@ def test_original_primes_string_field_is_retained_without_fabricating_bootstrap_
             return dtype
 
     before = dict(sources)
-    # Complete, unchanged original reaches a later grammar boundary. This
+    # The complete, unchanged original parses in the class model. This
     # observation is not class-model or whole-project acceptance.
-    with pytest.raises(JavaError):
-        ObserveTypeNames(sources[first], first, class_model=True).parse()
-    assert str(seen[0]) == "String"
+    ObserveTypeNames(sources[first], first, class_model=True).parse()
+    assert str(seen[0]) == "String" and "List<Integer>" in [str(dtype) for dtype in seen]
     token = seen[0].tokens[0]
     assert (token.filename, token.line, token.column) == (first, 31, 18)
     assert sources == before

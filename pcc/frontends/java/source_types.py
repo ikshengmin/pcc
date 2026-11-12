@@ -20,11 +20,31 @@ ARRAY_COMPONENTS = INTEGRAL | {"boolean"}
 
 @dataclass(frozen=True)
 class NamedType:
-    """Unresolved original type-name tokens, not a managed reference ABI."""
+    """Unresolved original type-name tokens, not a managed reference ABI.
+
+    ``arguments`` holds parsed JLS 4.5.1 type arguments of a parameterized
+    type: reference types or Wildcard bounds. No erasure, capture or
+    parameterized-type identity is computed from them.
+    """
     tokens: tuple
+    arguments: tuple = ()
 
     def __str__(self):
-        return ".".join(token.text for token in self.tokens)
+        name = ".".join(token.text for token in self.tokens)
+        if not self.arguments:
+            return name
+        return name + "<" + ",".join(str(argument) for argument in self.arguments) + ">"
+
+
+@dataclass(frozen=True)
+class Wildcard:
+    """JLS 4.5.1 `?`, `? extends T` or `? super T`, retained unresolved."""
+    token: object
+    kind: str | None = None
+    bound: object = None
+
+    def __str__(self):
+        return "?" if self.kind is None else "? " + self.kind + " " + str(self.bound)
 
 
 @dataclass(frozen=True)

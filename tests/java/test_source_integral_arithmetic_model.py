@@ -621,18 +621,18 @@ def test_complete_primes_original_keeps_modulo_site_and_existing_project_boundar
                 parsed.append(node)
             return node
 
-    with pytest.raises(UnsupportedJava) as parser_error:
-        OriginalParser(sources[first], first, class_model=True).parse()
-    assert parser_error.value.code == "java.unsupported.generic-declarations"
-    assert first + ":108:23:" in str(parser_error.value)
+    # The class model parses the complete Primes original, including the
+    # List<Integer> result type of primeFactors.
+    OriginalParser(sources[first], first, class_model=True).parse()
     assert [(node.token.line, node.value) for node in parsed] == [(54, "%"), (83, "%")]
     node, = [node for node in parsed if node.token.line == 54]
     assert [child.value for child in node.children] == ["n", "p"]
     assert node.arithmetic_plan is None  # Parsing never proves typed runtime plans.
     with pytest.raises(UnsupportedJava) as class_error:
         analyze_class_sources(sources)
-    assert class_error.value.code == "java.unsupported.generic-declarations"
-    assert first + ":108:23:" in str(class_error.value)
+    # SmallPrimes.PRIMES, a static array field, needs class initialization.
+    assert class_error.value.code == "java.unsupported.array-storage"
+    assert PRODUCTION[1] + ":39:18:" in str(class_error.value)
     with pytest.raises(UnsupportedJava) as native_error:
         compile_sources(sources, **ENTRY)
     # The String constant variable folds; the enhanced for and the nextPrime

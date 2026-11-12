@@ -15,7 +15,7 @@ import re
 
 from .diagnostics import JavaError, UnsupportedJava
 from .floating_semantics import FLOAT_LITERAL
-from .source_types import ARRAY_COMPONENTS, ArrayType, DECLARED, NamedType, descriptor
+from .source_types import ARRAY_COMPONENTS, ArrayType, DECLARED, NamedType, Wildcard, descriptor
 
 
 KEYWORDS = frozenset((
@@ -366,12 +366,67 @@ class SourceParser:
                 names.append(self.identifier())
             if names[-1].text in LABEL_CONTEXTUAL_NAMES:
                 names[-1].error(names[-1].text + " is not a declared reference type")
-            if self.peek().text == "<":
-                self.peek().error("generic reference declarations require the next source type domain",
+            arguments = self.type_arguments() if self.peek().text == "<" else ()
+            if self.peek().text == ".":
+                self.peek().error("member types of parameterized types require the next source type domain",
                                   code="java.unsupported.generic-declarations")
-            return NamedType(tuple(names))
+            return NamedType(tuple(names), arguments)
         self.type_boundary(token, "source method results require boolean, integral primitives or void",
                            code="java.unsupported.declared-result-type")
+
+    def close_type_arguments(self):
+        """`>` ends a type-argument list; split `>>`/`>>>` as JLS 3.2 requires."""
+        token = self.peek()
+        if token.text == ">":
+            return self.take()
+        if token.text in {">>", ">>>"}:
+            from dataclasses import replace
+            self.tokens[self.position] = replace(token, text=token.text[1:], column=token.column + 1)
+            return replace(token, text=">")
+        token.error(f"expected '>', got {token.text!r}")
+
+    def type_argument(self):
+        """JLS 4.5.1 TypeArgument: a reference type or a wildcard, retained unresolved."""
+        token = self.peek()
+        if self.accept("?"):
+            bound_token = self.peek()
+            if bound_token.text in {"extends", "super"}:
+                self.take()
+                return Wildcard(token, bound_token.text, self.reference_type_argument())
+            return Wildcard(token)
+        return self.reference_type_argument()
+
+    def reference_type_argument(self):
+        token = self.peek()
+        if token.text in DECLARED or token.text == "void":
+            self.take()
+            if self.peek().text != "[":
+                token.error("a type argument must be a reference type")
+            token.error("primitive array type arguments require the next array semantic domain",
+                        code="java.unsupported.generic-declarations")
+        if token.text in KEYWORDS or not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", token.text):
+            token.error(f"expected a type argument, got {token.text!r}")
+        if self.peek().text == "@":
+            token.error("type annotations require the annotation domain", code="java.unsupported.generic-declarations")
+        self.take()
+        dtype = self.declaration_type(token)
+        if self.peek().text == "[":
+            self.peek().error("reference array type arguments require the next array semantic domain",
+                              code="java.unsupported.generic-declarations")
+        return dtype
+
+    def type_arguments(self):
+        start = self.expect("<")
+        if self.peek().text == ">":
+            start.error("the diamond form is not a declaration type")
+        arguments = [self.type_argument()]
+        while self.accept(","):
+            arguments.append(self.type_argument())
+        if len(arguments) > 16:
+            start.error("type argument count exceeds implementation limit (16)",
+                        code="java.unsupported.generic-declarations")
+        self.close_type_arguments()
+        return tuple(arguments)
 
     def named_local_start(self):
         """Recognize declaration prefixes without reclassifying value calls."""
