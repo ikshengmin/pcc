@@ -5,8 +5,8 @@ the declared object or member: file-scope and static objects carry an explicit
 IR alignment that both self backends now emit; a member makes its record
 layout-backed so offsets, size and _Alignof follow it; unions round their size.
 A zero alignment has no effect; a non-power-of-two, a weaker-than-natural
-alignment and an alignment on a bit-field are errors. An over-aligned automatic
-object needs frame realignment, an explicit gap.
+alignment and an alignment on a bit-field are errors. An over-aligned automatic object gets an
+aligned address inside an oversized byte slot (no frame realignment).
 """
 import pytest
 
@@ -82,7 +82,18 @@ def test_invalid_alignment_specifiers_are_errors(name):
         CEvaluator().evaluate(INVALID[name])
 
 
-def test_over_aligned_automatic_object_is_an_explicit_gap():
-    from pcc.frontends.c.codegen.c_declaration_state import CodegenError
-    with pytest.raises(CodegenError, match="frame realignment"):
-        CEvaluator().evaluate("int main(void) { _Alignas(64) char b[4]; b[0] = 1; return b[0]; }")
+def test_over_aligned_automatic_objects_get_an_aligned_address():
+    # An oversized byte slot yields the aligned address; recursion gives each
+    # activation its own aligned object.
+    source = r'''
+        #include <stdint.h>
+        static int depth(int n) {
+            _Alignas(64) char b[4];
+            struct { char c; } __attribute__((aligned(32))) s;
+            b[0] = (char)n; s.c = 1;
+            int misaligned = (int)(((uintptr_t)b) % 64) + (int)(((uintptr_t)&s) % 32);
+            return misaligned + (n ? depth(n - 1) : 0) + b[0] - n + s.c;
+        }
+        int main(void) { return depth(5) + 36; }
+    '''
+    assert CEvaluator().evaluate(source) == 42

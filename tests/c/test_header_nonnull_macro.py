@@ -5,6 +5,7 @@ external system linker.  They are not native-pcc1 or full-nginx evidence.
 """
 
 import platform
+import re
 import sys
 
 import pytest
@@ -52,7 +53,9 @@ def test_header_defines_its_function_like_nonnull_macro(system_cpp, tmp_path):
     parsed = make_c_parser().parse(processed)
     names = [getattr(node, "name", None) for node in parsed.ext]
     assert "add_to" in names
-    assert "__nonnull" not in processed
+    # The macro is expanded; the owned path keeps the resulting GNU
+    # attribute (__nonnull__), which is not the unexpanded macro name.
+    assert re.search(r"\b__nonnull\b", processed) is None
 
 
 @pytest.mark.pcc_gate(probe=lambda: sys.platform.startswith("linux")

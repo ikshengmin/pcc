@@ -1862,7 +1862,23 @@ class CCodeGenerator(
             entry_builder.position_before(insert_before)
         else:
             entry_builder.position_at_end(entry_block)
-        ret = entry_builder.alloca(ir_type, size=None, name=name)
+        pending = getattr(self, "_pending_local_alignment", None)
+        alignment = max((pending.get(name) if pending else None) or 0, self._ir_type_align(ir_type))
+        if alignment > self._backend_frame_alignment(ir_type):
+            # C17 6.7.5 / GNU aligned beyond what a frame slot provides: carve
+            # an aligned address out of an oversized byte slot, so the object
+            # needs no frame realignment.
+            raw = entry_builder.alloca(ir.ArrayType(int8_t, self._ir_type_size(ir_type) + alignment - 1),
+                                       size=None, name=f"{name}.raw")
+            address = entry_builder.ptrtoint(raw, int64_t, name=f"{name}.rawaddr")
+            address = entry_builder.add(address, ir.Constant(int64_t, alignment - 1), name=f"{name}.bump")
+            address = entry_builder.and_(address, ir.Constant(int64_t, -alignment), name=f"{name}.aligned")
+            ret = entry_builder.inttoptr(address, ir_type.as_pointer(), name=name)
+            if pending:
+                pending.pop(name, None)
+            self._aligned_local_slots = getattr(self, "_aligned_local_slots", set()) | {id(ret)}
+        else:
+            ret = entry_builder.alloca(ir_type, size=None, name=name)
         if (
             self.builder is not None
             and current_block is entry_block
@@ -1901,6 +1917,9 @@ class CCodeGenerator(
         return fn(self, node)
 
     def codegen_FileAST(self, node):
+        # Every GNU attribute is honored, inert or an explicit gap before IR.
+        from pcc.frontends.c.codegen.c_gnu_attributes import check_translation_unit
+        check_translation_unit(node)
         # Collect names of functions that have definitions (FuncDef)
         funcdef_names = set()
         for ext in node.ext:
@@ -3406,6 +3425,10 @@ class CCodeGenerator(
             if alignment < 0 or alignment & (alignment - 1):
                 raise SemanticError(f"alignment {alignment} is not a positive power of two")
             values.append(alignment)
+        from pcc.frontends.c.codegen.c_gnu_attributes import gnu_alignment
+        gnu = gnu_alignment(getattr(decl, "attributes", ()), self._eval_const_expr)
+        if gnu is not None:
+            values.append(gnu)
         return max(values) if values else None
 
     @staticmethod
@@ -3426,6 +3449,10 @@ class CCodeGenerator(
     def _member_needs_explicit_layout(self, decl):
         """A member whose alignment the natural IR record cannot express."""
         if getattr(decl, "align", ()):
+            return True
+        from pcc.frontends.c.codegen.c_gnu_attributes import attributes_named
+        attributes = getattr(decl, "attributes", ())
+        if attributes_named(attributes, "aligned") or attributes_named(attributes, "packed"):
             return True
         if decl.bitsize is not None:
             return False
@@ -3650,6 +3677,8 @@ class CCodeGenerator(
         return segments
 
     def _build_layout_backed_struct(self, node):
+        from pcc.frontends.c.codegen.c_gnu_attributes import attributes_named, gnu_alignment
+        record_packed = bool(attributes_named(getattr(node, "attributes", ()), "packed"))
         current_bit = 0
         max_align = 1
         member_names = []
@@ -3698,12 +3727,15 @@ class CCodeGenerator(
 
             semantic_ir_type = self._resolve_struct_member_ir_type(decl)
             member_align = self._ir_type_align(semantic_ir_type)
+            if record_packed or attributes_named(getattr(decl, "attributes", ()), "packed"):
+                # GCC packed: no padding before the member; aligned may raise it.
+                member_align = 1
             requested = self._declared_alignment(decl)
             if requested is not None:
-                if requested < member_align:
+                if getattr(decl, "align", ()) and requested < member_align:
                     raise SemanticError(f"alignment {requested} of member '{decl.name}' is less strict "
                                         f"than its type's {member_align}")
-                member_align = requested
+                member_align = max(member_align, requested)
             align_bits = member_align * 8
             current_bit = self._align_up(current_bit, align_bits)
             max_align = max(max_align, member_align)
@@ -3721,6 +3753,15 @@ class CCodeGenerator(
             member_types.append(semantic_ir_type)
             current_bit += self._ir_type_size(semantic_ir_type) * 8
 
+        if record_packed:
+            max_align = 1
+            for decl in node.decls:
+                requested = self._declared_alignment(decl)
+                if requested is not None:
+                    max_align = max(max_align, requested)
+        record_alignment = gnu_alignment(getattr(node, "attributes", ()), self._eval_const_expr)
+        if record_alignment is not None:
+            max_align = max(max_align, record_alignment)
         size_bits = self._align_up(current_bit, max_align * 8)
         size_bytes = max(1, size_bits // 8)
         type_name = None
@@ -7211,8 +7252,10 @@ class CCodeGenerator(
             self.define(tag_key, (opaque, None))
             return opaque
 
-        if any(decl.bitsize is not None for decl in node.decls) or any(
-                self._member_needs_explicit_layout(decl) for decl in node.decls):
+        from pcc.frontends.c.codegen.c_gnu_attributes import attributes_named
+        if (any(decl.bitsize is not None for decl in node.decls)
+                or attributes_named(node.attributes, "packed") or attributes_named(node.attributes, "aligned")
+                or any(self._member_needs_explicit_layout(decl) for decl in node.decls)):
             return self._build_layout_backed_struct(node)
 
         member_types = []
@@ -7301,6 +7344,13 @@ class CCodeGenerator(
             if al > max_align:
                 max_align = al
 
+        from pcc.frontends.c.codegen.c_gnu_attributes import attributes_named, gnu_alignment
+        union_packed = bool(attributes_named(getattr(node, "attributes", ()), "packed"))
+        if union_packed:
+            max_align = max([1] + [self._declared_alignment(decl) or 1 for decl in node.decls])
+        record_alignment = gnu_alignment(getattr(node, "attributes", ()), self._eval_const_expr)
+        if record_alignment is not None:
+            max_align = max(max_align, record_alignment)
         # Use a struct {align_type, [padding x i8]} to preserve alignment
         # Pick an alignment element: i64 for 8, i32 for 4, i16 for 2, i8 for 1
         align_map = {8: int64_t, 4: int32_t, 2: int16_t, 1: int8_t}
@@ -7326,7 +7376,7 @@ class CCodeGenerator(
         )
         union_type.is_union = True
         union_type.bitfield_member_indices = frozenset(bitfield_member_indices)
-        if max_align > 8:
+        if max_align > 8 or union_packed:
             # The IR body cannot carry this alignment; record the C layout.
             union_type.custom_align = max_align
             union_type.custom_size = self._align_up(max_size, max_align)

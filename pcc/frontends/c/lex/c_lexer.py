@@ -161,6 +161,8 @@ class CLexer(object):
     keyword_map['__builtin_va_arg'] = 'BUILTIN_VA_ARG'
     keyword_map['__thread'] = '_THREAD_LOCAL'
     keyword_map.pop('int128', None)
+    keyword_map['__attribute__'] = '__ATTRIBUTE__'
+    keyword_map['__attribute'] = '__ATTRIBUTE__'
 
     ##
     ## All the tokens recognized by the lexer
@@ -174,6 +176,9 @@ class CLexer(object):
         # types with typedef)
         'TYPEID',
         'TYPEOF',
+
+        # GNU attribute specifier keyword (__attribute__ / __attribute)
+        '__ATTRIBUTE__',
 
         # constants
         'INT_CONST_DEC', 'INT_CONST_OCT', 'INT_CONST_HEX', 'INT_CONST_BIN',

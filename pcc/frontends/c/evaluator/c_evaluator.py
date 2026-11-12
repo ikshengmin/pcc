@@ -911,6 +911,14 @@ _C_EXTENSION_COMPAT_DEFINES = (
 )
 
 
+# The owned parser reads GNU attributes and c_gnu_attributes decides each
+# one's meaning; erasing them would silently drop packed/aligned/mode.
+_OWNED_C_EXTENSION_COMPAT_DEFINES = tuple(
+    define for define in _C_EXTENSION_COMPAT_DEFINES
+    if not define.startswith(("-D__attribute__(", "-D__attribute("))
+)
+
+
 def _preprocess_translation_unit_source(
     source, base_dir, use_system_cpp, include_dirs=None, cpp_args=None, target_triple=None
 ):
@@ -931,7 +939,7 @@ def _preprocess_translation_unit_source(
             codestr,
             base_dir=base_dir,
             include_dirs=include_dirs,
-            cpp_args=list(_C_EXTENSION_COMPAT_DEFINES) + list(cpp_args or []),
+            cpp_args=list(_OWNED_C_EXTENSION_COMPAT_DEFINES) + list(cpp_args or []),
             target_triple=target_triple,
         )
     return _normalize_preprocessed_source(codestr, target_triple)
@@ -959,6 +967,9 @@ def _compile_preprocessed_translation_unit_artifact(
     else:
         from pcc.frontends.c.parse import make_c_parser
         ast = make_c_parser().parse(codestr)
+        # Decide every GNU attribute before AST passes may drop unused nodes.
+        from pcc.frontends.c.codegen.c_gnu_attributes import check_translation_unit
+        check_translation_unit(ast)
 
     # --- Pass Framework Integration ---
     if pass_pipeline is None:

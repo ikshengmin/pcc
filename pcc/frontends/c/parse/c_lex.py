@@ -67,6 +67,7 @@ KEYWORD_MAP: dict[str, str] = {
     "__signed__": "SIGNED", "__thread": "_THREAD_LOCAL",
     "__typeof": "TYPEOF", "__typeof__": "TYPEOF",
     "__volatile": "VOLATILE", "__volatile__": "VOLATILE",
+    "__attribute__": "__ATTRIBUTE__", "__attribute": "__ATTRIBUTE__",
 }
 
 

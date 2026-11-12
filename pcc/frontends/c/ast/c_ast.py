@@ -320,10 +320,13 @@ class Continue(Node):
 
 class Decl(Node):
     __slots__ = ('name', 'quals', 'storage', 'funcspec', 'type', 'init', 'bitsize', 'coord', '__weakref__',
-                 'definition_linkage', 'align')
+                 'definition_linkage', 'align', 'attributes')
     def __init__(self, name, quals, storage, funcspec, type, init, bitsize, coord=None, definition_linkage='external',
-                 align=()):
+                 align=(), attributes=()):
         self.name = name
+        # GNU __attribute__ items (GnuAttribute) of the declaration specifiers
+        # and declarator.
+        self.attributes = tuple(attributes)
         # C17 6.7.5 alignment specifiers (Alignas nodes) of this declaration.
         self.align = tuple(align)
         self.quals = quals
@@ -344,6 +347,32 @@ class Decl(Node):
         return tuple(nodelist)
 
     attr_names = ('name', 'quals', 'storage', 'funcspec', )
+
+class AttributedKeyword(str):
+    """A struct/union keyword spelling that carries GNU attributes (parser-internal)."""
+    attributes = ()
+
+
+class GnuAttribute(Node):
+    """One GNU attribute of an __attribute__((...)) specifier: name and arguments."""
+    __slots__ = ('name', 'args', 'coord', '__weakref__')
+    def __init__(self, name, args, coord=None):
+        self.name = name
+        self.args = list(args)
+        self.coord = coord
+
+    def children(self):
+        return tuple(("args[%d]" % i, child) for i, child in enumerate(self.args or []))
+
+    @property
+    def base_name(self):
+        """The name without the optional double-underscore spelling."""
+        name = self.name
+        if name.startswith("__") and name.endswith("__") and len(name) > 4:
+            return name[2:-2]
+        return name
+
+    attr_names = ('name', )
 
 class DeclList(Node):
     __slots__ = ('decls', 'coord', '__weakref__')
@@ -409,8 +438,9 @@ class EmptyStatement(Node):
     attr_names = ()
 
 class Enum(Node):
-    __slots__ = ('name', 'values', 'coord', '__weakref__')
-    def __init__(self, name, values, coord=None):
+    __slots__ = ('name', 'values', 'coord', '__weakref__', 'attributes')
+    def __init__(self, name, values, coord=None, attributes=()):
+        self.attributes = tuple(attributes)
         self.name = name
         self.values = values
         self.coord = coord
@@ -728,8 +758,10 @@ class ParamList(Node):
     attr_names = ()
 
 class PtrDecl(Node):
-    __slots__ = ('quals', 'type', 'coord', '__weakref__')
-    def __init__(self, quals, type, coord=None):
+    __slots__ = ('quals', 'type', 'coord', '__weakref__', 'attributes')
+    def __init__(self, quals, type, coord=None, attributes=()):
+        # GNU attributes written after this declarator's `*`.
+        self.attributes = tuple(attributes)
         self.quals = quals
         self.type = type
         self.coord = coord
@@ -755,8 +787,9 @@ class Return(Node):
     attr_names = ()
 
 class Struct(Node):
-    __slots__ = ('name', 'decls', 'coord', '__weakref__')
-    def __init__(self, name, decls, coord=None):
+    __slots__ = ('name', 'decls', 'coord', '__weakref__', 'attributes')
+    def __init__(self, name, decls, coord=None, attributes=()):
+        self.attributes = tuple(attributes)
         self.name = name
         self.decls = decls
         self.coord = coord
@@ -846,8 +879,9 @@ class TypeDecl(Node):
     attr_names = ('declname', 'quals', )
 
 class Typedef(Node):
-    __slots__ = ('name', 'quals', 'storage', 'type', 'coord', '__weakref__')
-    def __init__(self, name, quals, storage, type, coord=None):
+    __slots__ = ('name', 'quals', 'storage', 'type', 'coord', '__weakref__', 'attributes')
+    def __init__(self, name, quals, storage, type, coord=None, attributes=()):
+        self.attributes = tuple(attributes)
         self.name = name
         self.quals = quals
         self.storage = storage
@@ -891,8 +925,9 @@ class UnaryOp(Node):
     attr_names = ('op', )
 
 class Union(Node):
-    __slots__ = ('name', 'decls', 'coord', '__weakref__')
-    def __init__(self, name, decls, coord=None):
+    __slots__ = ('name', 'decls', 'coord', '__weakref__', 'attributes')
+    def __init__(self, name, decls, coord=None, attributes=()):
+        self.attributes = tuple(attributes)
         self.name = name
         self.decls = decls
         self.coord = coord

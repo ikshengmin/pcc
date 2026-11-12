@@ -12,7 +12,18 @@ class CDeclarationLoweringMixin:
     def codegen_Decl(self, node):
         """Lower a declaration, then apply C17 6.7.5 object alignment to its storage."""
         requested = self._declared_alignment(node)
-        result = self._codegen_Decl_impl(node)
+        is_local = (not self.in_global and node.name is not None
+                    and not (node.storage and any(word in node.storage for word in ("static", "extern", "typedef"))))
+        if requested is not None and is_local:
+            pending = getattr(self, "_pending_local_alignment", None)
+            if pending is None:
+                pending = self._pending_local_alignment = {}
+            pending[node.name] = requested
+        try:
+            result = self._codegen_Decl_impl(node)
+        finally:
+            if requested is not None and is_local:
+                self._pending_local_alignment.pop(node.name, None)
         if node.name is None or isinstance(node.type, c_ast.FuncDecl) or (node.storage and "typedef" in node.storage):
             return result
         binding = self.env.get(node.name)
@@ -29,7 +40,8 @@ class CDeclarationLoweringMixin:
             if strictest > 1 and (requested is not None or getattr(ir_type, "custom_align", None) is not None
                                   or self._ir_type_align(ir_type) > 8):
                 storage.align = max(storage.align or 0, strictest)
-        elif strictest > self._backend_frame_alignment(ir_type):
+        elif (strictest > self._backend_frame_alignment(ir_type)
+              and id(storage) not in getattr(self, "_aligned_local_slots", ())):
             raise CodegenError(f"over-aligned automatic object '{node.name}' ({strictest} bytes) requires "
                                "frame realignment, which is not implemented")
         return result

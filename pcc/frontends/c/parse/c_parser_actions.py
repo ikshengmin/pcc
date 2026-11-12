@@ -155,6 +155,37 @@ class CParserActions(PLYParser):
         spec[kind].insert(0, newspec)
         return spec
 
+    _GNU_INTEGER_MODES = {'QI': 'char', 'byte': 'char', 'HI': 'short', 'SI': 'int', 'DI': 'long long', 'TI': '__int128', 'word': 'long', 'pointer': 'long'}
+
+    def _spec_attributes(self, spec):
+        return [attribute for group in spec.get('attributes', ()) for attribute in group]
+
+    def _apply_mode_attribute(self, decl_type, attributes):
+        """GCC mode(QI/HI/SI/DI/TI/byte/word/pointer) on an integer declarator.
+
+            Rewrites the declared integer type names, keeping signedness; an
+            attribute this cannot apply to is retained for the attribute checker.
+            """
+        remaining = []
+        for attribute in attributes:
+            if attribute.base_name != 'mode' or len(attribute.args) != 1 or (not isinstance(attribute.args[0], c_ast.ID)):
+                remaining.append(attribute)
+                continue
+            mode = attribute.args[0].name
+            mode = mode[2:-2] if mode.startswith('__') and mode.endswith('__') and (len(mode) > 4) else mode
+            target = self._GNU_INTEGER_MODES.get(mode)
+            if target is None or not isinstance(decl_type, c_ast.TypeDecl) or (not isinstance(decl_type.type, c_ast.IdentifierType)):
+                remaining.append(attribute)
+                continue
+            names = decl_type.type.names
+            integer_words = {'char', 'short', 'int', 'long', 'signed', 'unsigned', '__int128'}
+            if not names or any((name not in integer_words for name in names)):
+                remaining.append(attribute)
+                continue
+            sign = 'unsigned' if 'unsigned' in names else 'signed'
+            decl_type.type.names = [sign] + target.split()
+        return remaining
+
     def _build_declarations(self, spec, decls, typedef_namespace=False):
         """ Builds a list of declarations all sharing the given specifiers.
                 If typedef_namespace is true, each declared name is added
@@ -185,14 +216,17 @@ class CParserActions(PLYParser):
         for decl in decls:
             if decl['decl'] is None:
                 raise RuntimeError('internal error: declarator missing in declaration')
+            attributes = self._spec_attributes(spec) + list(decl.get('attributes', ()))
             if is_typedef:
-                declaration = c_ast.Typedef(name=None, quals=spec['qual'], storage=spec['storage'], type=decl['decl'], coord=decl['decl'].coord)
+                declaration = c_ast.Typedef(name=None, quals=spec['qual'], storage=spec['storage'], type=decl['decl'], coord=decl['decl'].coord, attributes=attributes)
             else:
-                declaration = c_ast.Decl(name=None, quals=spec['qual'], storage=spec['storage'], funcspec=spec['function'], type=decl['decl'], init=decl.get('init'), bitsize=decl.get('bitsize'), coord=decl['decl'].coord, align=spec.get('alignment', ()))
+                declaration = c_ast.Decl(name=None, quals=spec['qual'], storage=spec['storage'], funcspec=spec['function'], type=decl['decl'], init=decl.get('init'), bitsize=decl.get('bitsize'), coord=decl['decl'].coord, align=spec.get('alignment', ()), attributes=attributes)
             if isinstance(declaration.type, (c_ast.Struct, c_ast.Union, c_ast.IdentifierType)):
                 fixed_decl = declaration
             else:
                 fixed_decl = self._fix_decl_name_type(declaration, spec['type'])
+            if fixed_decl.attributes and (not isinstance(fixed_decl.type, (c_ast.Struct, c_ast.Union))):
+                fixed_decl.attributes = tuple(self._apply_mode_attribute(fixed_decl.type, fixed_decl.attributes))
             if typedef_namespace:
                 if is_typedef:
                     self._add_typedef_name(fixed_decl.name, fixed_decl.coord)
@@ -217,6 +251,13 @@ class CParserActions(PLYParser):
             return c_ast.Struct
         else:
             return c_ast.Union
+
+    def _move_type_attributes(self, type_node, spec):
+        """GCC: attributes after a struct/union/enum definition apply to that type."""
+        if spec and spec.get('attributes') and isinstance(type_node, (c_ast.Struct, c_ast.Union, c_ast.Enum)) and (getattr(type_node, 'decls' if not isinstance(type_node, c_ast.Enum) else 'values', None) is not None):
+            type_node.attributes = tuple(type_node.attributes) + tuple(self._spec_attributes(spec))
+            spec['attributes'] = []
+        return spec
 
     precedence = (('left', 'LOR'), ('left', 'LAND'), ('left', 'OR'), ('left', 'XOR'), ('left', 'AND'), ('left', 'EQ', 'NE'), ('left', 'GT', 'GE', 'LT', 'LE'), ('left', 'RSHIFT', 'LSHIFT'), ('left', 'PLUS', 'MINUS'), ('left', 'TIMES', 'DIVIDE', 'MOD'))
 
@@ -299,6 +340,9 @@ class CParserActions(PLYParser):
         """ decl_body : declaration_specifiers init_declarator_list_opt
             """
         spec = p[1]
+        if p[2] is None and (not spec['type']) and (not spec['storage']) and (not spec['qual']) and (not spec['function']) and spec.get('attributes'):
+            p[0] = []
+            return
         if p[2] is None:
             ty = spec['type']
             s_u_or_e = (c_ast.Struct, c_ast.Union, c_ast.Enum)
@@ -338,7 +382,12 @@ class CParserActions(PLYParser):
     def p_declaration_specifiers_2(self, p):
         """ declaration_specifiers  : type_specifier declaration_specifiers_opt
             """
-        p[0] = self._add_declaration_specifier(p[2], p[1], 'type')
+        p[0] = self._add_declaration_specifier(self._move_type_attributes(p[1], p[2]), p[1], 'type')
+
+    def p_declaration_specifiers_attribute(self, p):
+        """ declaration_specifiers  : attribute_specifier declaration_specifiers_opt
+            """
+        p[0] = self._add_declaration_specifier(p[2], p[1], 'attributes')
 
     def p_declaration_specifiers_3(self, p):
         """ declaration_specifiers  : storage_class_specifier declaration_specifiers_opt
@@ -354,6 +403,41 @@ class CParserActions(PLYParser):
         """ declaration_specifiers  : alignment_specifier declaration_specifiers_opt
             """
         p[0] = self._add_declaration_specifier(p[2], p[1], 'alignment')
+
+    def p_attribute_specifier(self, p):
+        """ attribute_specifier : __ATTRIBUTE__ LPAREN LPAREN attribute_list RPAREN RPAREN
+            """
+        p[0] = [attribute for attribute in p[4] if attribute is not None]
+
+    def p_attribute_specifier_list(self, p):
+        """ attribute_specifier_list    : attribute_specifier
+                                            | attribute_specifier_list attribute_specifier
+            """
+        p[0] = p[1] if len(p) == 2 else p[1] + p[2]
+
+    def p_attribute_list(self, p):
+        """ attribute_list  : attribute_opt
+                                | attribute_list COMMA attribute_opt
+            """
+        p[0] = [p[1]] if len(p) == 2 else p[1] + [p[3]]
+
+    def p_attribute_1(self, p):
+        """ attribute   : attribute_name
+                            | attribute_name LPAREN RPAREN
+            """
+        p[0] = c_ast.GnuAttribute(p[1], [], self._coord(p.lineno(1)))
+
+    def p_attribute_2(self, p):
+        """ attribute   : attribute_name LPAREN argument_expression_list RPAREN
+            """
+        p[0] = c_ast.GnuAttribute(p[1], p[3].exprs, self._coord(p.lineno(1)))
+
+    def p_attribute_name(self, p):
+        """ attribute_name  : ID
+                                | TYPEID
+                                | CONST
+            """
+        p[0] = p[1]
 
     def p_alignment_specifier(self, p):
         """ alignment_specifier : _ALIGNAS LPAREN type_name RPAREN
@@ -430,6 +514,12 @@ class CParserActions(PLYParser):
             """
         p[0] = dict(decl=p[1], init=p[3] if len(p) > 2 else None)
 
+    def p_init_declarator_attributes(self, p):
+        """ init_declarator : declarator attribute_specifier_list
+                                | declarator attribute_specifier_list EQUALS initializer
+            """
+        p[0] = dict(decl=p[1], init=p[4] if len(p) > 3 else None, attributes=p[2])
+
     def p_specifier_qualifier_list_1(self, p):
         """ specifier_qualifier_list    : type_qualifier specifier_qualifier_list_opt
             """
@@ -438,7 +528,12 @@ class CParserActions(PLYParser):
     def p_specifier_qualifier_list_2(self, p):
         """ specifier_qualifier_list    : type_specifier specifier_qualifier_list_opt
             """
-        p[0] = self._add_declaration_specifier(p[2], p[1], 'type')
+        p[0] = self._add_declaration_specifier(self._move_type_attributes(p[1], p[2]), p[1], 'type')
+
+    def p_specifier_qualifier_list_attribute(self, p):
+        """ specifier_qualifier_list    : attribute_specifier specifier_qualifier_list_opt
+            """
+        p[0] = self._add_declaration_specifier(p[2], p[1], 'attributes')
 
     def p_specifier_qualifier_list_alignment(self, p):
         """ specifier_qualifier_list    : alignment_specifier specifier_qualifier_list_opt
@@ -450,14 +545,14 @@ class CParserActions(PLYParser):
                                             | struct_or_union TYPEID
             """
         klass = self._select_struct_union_class(p[1])
-        p[0] = klass(name=p[2], decls=None, coord=self._coord(p.lineno(2)))
+        p[0] = klass(name=p[2], decls=None, coord=self._coord(p.lineno(2)), attributes=getattr(p[1], 'attributes', ()))
 
     def p_struct_or_union_specifier_2(self, p):
         """ struct_or_union_specifier : struct_or_union brace_open brace_close
                                           | struct_or_union brace_open struct_declaration_list brace_close
             """
         klass = self._select_struct_union_class(p[1])
-        p[0] = klass(name=None, decls=[] if len(p) == 4 else p[3], coord=self._coord(p.lineno(2)))
+        p[0] = klass(name=None, decls=[] if len(p) == 4 else p[3], coord=self._coord(p.lineno(2)), attributes=getattr(p[1], 'attributes', ()))
 
     def p_struct_or_union_specifier_3(self, p):
         """ struct_or_union_specifier   : struct_or_union ID brace_open brace_close
@@ -466,13 +561,20 @@ class CParserActions(PLYParser):
                                             | struct_or_union TYPEID brace_open struct_declaration_list brace_close
             """
         klass = self._select_struct_union_class(p[1])
-        p[0] = klass(name=p[2], decls=[] if len(p) == 5 else p[4], coord=self._coord(p.lineno(2)))
+        p[0] = klass(name=p[2], decls=[] if len(p) == 5 else p[4], coord=self._coord(p.lineno(2)), attributes=getattr(p[1], 'attributes', ()))
 
     def p_struct_or_union(self, p):
         """ struct_or_union : STRUCT
                                 | UNION
             """
         p[0] = p[1]
+
+    def p_struct_or_union_attribute(self, p):
+        """ struct_or_union : struct_or_union attribute_specifier
+            """
+        keyword = c_ast.AttributedKeyword(str(p[1]))
+        keyword.attributes = tuple(getattr(p[1], 'attributes', ())) + tuple(p[2])
+        p[0] = keyword
 
     def p_struct_declaration_list(self, p):
         """ struct_declaration_list     : struct_declaration
@@ -515,6 +617,15 @@ class CParserActions(PLYParser):
             """
         p[0] = {'decl': p[1], 'bitsize': None}
 
+    def p_struct_declarator_attributes(self, p):
+        """ struct_declarator   : declarator attribute_specifier_list
+                                    | declarator COLON constant_expression attribute_specifier_list
+            """
+        if len(p) == 3:
+            p[0] = {'decl': p[1], 'bitsize': None, 'attributes': p[2]}
+        else:
+            p[0] = {'decl': p[1], 'bitsize': p[3], 'attributes': p[4]}
+
     def p_struct_declarator_2(self, p):
         """ struct_declarator   : declarator COLON constant_expression
                                     | COLON constant_expression
@@ -540,6 +651,21 @@ class CParserActions(PLYParser):
                                 | ENUM TYPEID brace_open enumerator_list brace_close
             """
         p[0] = c_ast.Enum(p[2], p[4], self._coord(p.lineno(1)))
+
+    def p_enum_specifier_attributes(self, p):
+        """ enum_specifier  : ENUM attribute_specifier_list ID
+                                | ENUM attribute_specifier_list TYPEID
+                                | ENUM attribute_specifier_list brace_open enumerator_list brace_close
+                                | ENUM attribute_specifier_list ID brace_open enumerator_list brace_close
+                                | ENUM attribute_specifier_list TYPEID brace_open enumerator_list brace_close
+            """
+        if len(p) == 4:
+            name, values = (p[3], None)
+        elif len(p) == 6:
+            name, values = (None, p[4])
+        else:
+            name, values = (p[3], p[5])
+        p[0] = c_ast.Enum(name, values, self._coord(p.lineno(1)), attributes=p[2])
 
     def p_enumerator_list(self, p):
         """ enumerator_list : enumerator
@@ -595,6 +721,18 @@ class CParserActions(PLYParser):
             """
         p[0] = p[2]
 
+    def _attach_declarator_attributes(self, declarator, attributes, lineno):
+        """GCC `( attributes declarator )`: keep them on the enclosed pointer level."""
+        if isinstance(declarator, c_ast.PtrDecl):
+            declarator.attributes = tuple(declarator.attributes) + tuple(attributes)
+            return declarator
+        self._parse_error('GNU attributes before a non-pointer parenthesized declarator are not implemented', self._coord(lineno))
+
+    def p_direct_declarator_attributes(self, p):
+        """ direct_declarator   : LPAREN attribute_specifier_list declarator RPAREN
+            """
+        p[0] = self._attach_declarator_attributes(p[3], p[2], p.lineno(1))
+
     def p_direct_declarator_3(self, p):
         """ direct_declarator   : direct_declarator LBRACKET type_qualifier_list_opt assignment_expression_opt RBRACKET
             """
@@ -647,6 +785,20 @@ class CParserActions(PLYParser):
         else:
             p[0] = nested_type
 
+    def p_pointer_attributes(self, p):
+        """ pointer : TIMES type_qualifier_list_opt attribute_specifier_list type_qualifier_list_opt
+                        | TIMES type_qualifier_list_opt attribute_specifier_list type_qualifier_list_opt pointer
+            """
+        nested_type = c_ast.PtrDecl(quals=(p[2] or []) + (p[4] or []), type=None, coord=self._coord(p.lineno(1)), attributes=p[3])
+        if len(p) > 5:
+            tail_type = p[5]
+            while tail_type.type is not None:
+                tail_type = tail_type.type
+            tail_type.type = nested_type
+            p[0] = p[5]
+        else:
+            p[0] = nested_type
+
     def p_type_qualifier_list(self, p):
         """ type_qualifier_list : type_qualifier
                                     | type_qualifier_list type_qualifier
@@ -678,6 +830,14 @@ class CParserActions(PLYParser):
         if not spec['type']:
             spec['type'] = [c_ast.IdentifierType(['int'], coord=self._coord(p.lineno(1)))]
         p[0] = self._build_declarations(spec=spec, decls=[dict(decl=p[2])])[0]
+
+    def p_parameter_declaration_attributes(self, p):
+        """ parameter_declaration   : declaration_specifiers declarator attribute_specifier_list
+            """
+        spec = p[1]
+        if not spec['type']:
+            spec['type'] = [c_ast.IdentifierType(['int'], coord=self._coord(p.lineno(1)))]
+        p[0] = self._build_declarations(spec=spec, decls=[dict(decl=p[2], attributes=p[3])])[0]
 
     def p_parameter_declaration_2(self, p):
         """ parameter_declaration   : declaration_specifiers abstract_declarator_opt
@@ -805,6 +965,10 @@ class CParserActions(PLYParser):
     def p_direct_abstract_declarator_1(self, p):
         """ direct_abstract_declarator  : LPAREN abstract_declarator RPAREN """
         p[0] = p[2]
+
+    def p_direct_abstract_declarator_attributes(self, p):
+        """ direct_abstract_declarator  : LPAREN attribute_specifier_list abstract_declarator RPAREN """
+        p[0] = self._attach_declarator_attributes(p[3], p[2], p.lineno(1))
 
     def p_direct_abstract_declarator_2(self, p):
         """ direct_abstract_declarator  : direct_abstract_declarator LBRACKET type_qualifier_list_opt assignment_expression_opt RBRACKET
