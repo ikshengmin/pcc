@@ -162,6 +162,39 @@ def test_public_copy_weakref_registration_survives_install_rejection(
         assert relocation not in state.freed
 
 
+def _assert_weakref_commit_body_calls(commit):
+    # Export decorators, defaults and annotations are definition metadata,
+    # not operations performed by the commit body under the graph lock.
+    body_calls = [node for statement in commit.body for node in ast.walk(statement)
+                  if isinstance(node, ast.Call)]
+    assert all(isinstance(node.func, ast.Name) for node in body_calls)
+    calls = {node.func.id for node in body_calls}
+    assert calls == {"abi_constant", "load_ptr", "store_ptr", "ptr_is_null",
+                     "global_store_ptr", "null"}
+
+
+@pytest.mark.parametrize("forbidden_call", [
+    "malloc(48)", "callback()", "c_abi_export('commit')", "callbacks.run()",
+])
+def test_weakref_commit_body_audit_excludes_metadata_but_rejects_calls(forbidden_call):
+    # Parse only: none of these metadata or body operations is executed.
+    commit = ast.parse('''
+@c_abi_export("commit")
+def commit(value: parameter_metadata() = default_metadata()) -> return_metadata():
+    if abi_constant("object.type.weakref"):
+        prev = load_ptr(value, 32)
+        if ptr_is_null(prev):
+            global_store_ptr("py_weakref_head", value)
+        store_ptr(value, 40, null())
+''').body[0]
+    _assert_weakref_commit_body_calls(commit)
+    # Nested executable calls must still be audited, including a name that
+    # is permitted only as metadata and calls through an attribute.
+    commit.body.extend(ast.parse("if value:\n    " + forbidden_call).body)
+    with pytest.raises(AssertionError):
+        _assert_weakref_commit_body_calls(commit)
+
+
 def test_weakref_commit_has_exact_abi_and_no_failing_or_callback_operations():
     from pcc.frontends.python.codegen.runtime_abi import (
         FREESTANDING_GC_CROSS_OBJECT_SIGNATURES,
@@ -173,10 +206,7 @@ def test_weakref_commit_has_exact_abi_and_no_failing_or_callback_operations():
     tree = ast.parse(PAYLOAD.read_text(encoding="utf-8"))
     commit = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
                   and node.name == "pcc_gc_relocation_payload_commit_weakref")
-    calls = {node.func.id for node in ast.walk(commit) if isinstance(node, ast.Call)
-             and isinstance(node.func, ast.Name)}
-    assert calls == {"abi_constant", "load_ptr", "store_ptr", "ptr_is_null",
-                     "global_store_ptr", "null"}
+    _assert_weakref_commit_body_calls(commit)
     finish = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
                   and node.name == "_relocate_copy_payload_finish")
     assert "py_weakref_head" not in ast.get_source_segment(PAYLOAD.read_text(), finish)
