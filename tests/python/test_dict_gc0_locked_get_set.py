@@ -1,4 +1,4 @@
-"""Threaded GC0 dict get/set run as one graph transaction each.
+"""Threaded GC0 dict get/set run as one transaction each.
 
 On the threaded runtime the unlocked GC0 probe is unsafe (another carrier
 may rehash the table), so get and set went through the general rooted
@@ -10,6 +10,11 @@ graph transaction; a replaced value is released after the unlock, where its
 finalizer may run. Anything the transaction cannot finish takes the rooted
 operation from the start. A dict built from static pairs is private until it
 is returned, so it keeps the unlocked insert.
+
+In container mode (GC0 and the count-free tracers, without the probe) the
+lookup holds only the dict's own container lock, so carriers reading dicts
+do not queue on the graph lock; a set holds the graph lock and, inside it,
+that container lock, which excludes both kinds of reader.
 """
 
 from __future__ import annotations
@@ -37,11 +42,14 @@ class Heap:
         self.refs = {}
         self.calls = []
         self.depth = 0
+        self.table = 0
         self.flags = {
             "pcc_gc_refcount_atomic": 1,
             "pcc_diagnostics_runtime_log_fast_state": 0,
             "pcc_gc_backend_selected": 0,
             "pcc_gc_foreign_lease_active": 0,
+            "pcc_gc_list_container_mode": 1,
+            "pcc_gc_nonmoving_count_free": 0,
         }
         self.rejected = set()
         self.keys = {}
@@ -82,7 +90,7 @@ class Heap:
         return d
 
     def probe(self, d, key, kind, hash_value, insert_slot):
-        assert self.depth == 1, "probe outside the graph transaction"
+        assert self.locked(), "probe outside the dict's transaction"
         self.store(insert_slot, 0, -1)
         if self.needs_eq:
             return -3
@@ -92,7 +100,7 @@ class Heap:
         return -1
 
     def try_init(self, destination, source):
-        assert self.depth == 1, "retain outside the graph transaction"
+        assert self.locked(), "retain outside the dict's transaction"
         value = self.load(source)
         if value in self.rejected:
             return 0
@@ -102,7 +110,7 @@ class Heap:
         return 1
 
     def decref(self, obj):
-        assert self.depth == 0, "release inside the graph transaction"
+        assert self.depth == 0 and self.table == 0, "release inside the transaction"
         self.calls.append(("decref", obj))
         self.refs[obj] -= 1
 
@@ -112,9 +120,26 @@ class Heap:
         self.calls.append(("lock",))
 
     def unlock(self):
-        assert self.depth == 1
+        assert self.depth == 1 and self.table == 0
         self.depth = 0
         self.calls.append(("unlock",))
+
+    def locked(self):
+        """Inside a transaction on the dict: its container lock in container
+        mode, the graph lock otherwise."""
+        if self.flags["pcc_gc_list_container_mode"]:
+            return self.table == 1
+        return self.depth == 1
+
+    def table_lock(self, d):
+        assert self.table == 0, "a container lock holder takes no second one"
+        self.table = 1
+        self.calls.append(("table_lock", d))
+
+    def table_unlock(self, d):
+        assert self.table == 1
+        self.table = 0
+        self.calls.append(("table_unlock", d))
 
 
 def _functions(heap, names):
@@ -131,6 +156,8 @@ def _functions(heap, names):
         "stack_alloc": heap.alloc,
         "pcc_py_gc_minor_graph_lock": heap.lock,
         "pcc_py_gc_minor_graph_unlock": heap.unlock,
+        "pcc_container_lock": heap.table_lock,
+        "pcc_container_unlock": heap.table_unlock,
         "pcc_gc_try_init_ptr_locked": heap.try_init,
         "py_decref": heap.decref,
         "_dict_fast0_hash": lambda key, kind: 77,
@@ -147,8 +174,19 @@ def _functions(heap, names):
     return namespace
 
 
-SET_NAMES = ["_dict_gc0_admitted_locked", "_dict_set_gc0_locked"]
-GET_NAMES = ["_dict_gc0_admitted_locked", "_dict_get_gc0_locked"]
+LOCK_NAMES = ["_dict_table_lock", "_dict_table_unlock", "_dict_read_lock", "_dict_read_unlock"]
+SET_NAMES = ["_dict_gc0_admitted_locked", "_dict_set_gc0_locked"] + LOCK_NAMES
+GET_NAMES = ["_dict_gc0_admitted_locked", "_dict_get_gc0_locked"] + LOCK_NAMES
+
+
+def _set_calls(d):
+    """A set: the graph lock, and inside it the dict's container lock."""
+    return [("lock",), ("table_lock", d), ("table_unlock", d), ("unlock",)]
+
+
+def _get_calls(d):
+    """A lookup: the dict's container lock alone."""
+    return [("table_lock", d), ("table_unlock", d)]
 
 
 def _entry(heap, d, index):
@@ -164,7 +202,7 @@ def test_replacement_retains_inside_and_releases_after_the_transaction():
     assert ns["_dict_set_gc0_locked"](d, key, new, 2) == 1
     assert _entry(heap, d, 0) == (key, new)
     assert heap.refs[new] == 2 and heap.refs[old] == 0
-    assert heap.calls == [("lock",), ("unlock",), ("decref", old)]
+    assert heap.calls == _set_calls(d) + [("decref", old)]
 
 
 def test_storing_the_same_value_changes_nothing():
@@ -174,7 +212,7 @@ def test_storing_the_same_value_changes_nothing():
     ns = _functions(heap, SET_NAMES)
     assert ns["_dict_set_gc0_locked"](d, key, value, 2) == 1
     assert heap.refs[value] == 1
-    assert heap.calls == [("lock",), ("unlock",)]
+    assert heap.calls == _set_calls(d)
 
 
 def test_insert_publishes_retained_key_and_value_then_grows_outside():
@@ -191,7 +229,7 @@ def test_insert_publishes_retained_key_and_value_then_grows_outside():
     assert heap.load(indices, 5 * 8) == 1
     entries = heap.load(d, abi.PYDICTOBJECT_ENTRIES_OFFSET)
     assert heap.load(entries, abi.DICTENTRY_SIZE + abi.DICTENTRY_HASH_OFFSET) == 77
-    assert heap.calls == [("lock",), ("unlock",), ("grow", d)]
+    assert heap.calls == _set_calls(d) + [("grow", d)]
 
 
 def test_full_table_takes_the_rooted_operation_unchanged():
@@ -215,7 +253,7 @@ def test_refused_value_retain_releases_the_key_after_the_transaction():
     assert _entry(heap, d, 1) == (0, 0)
     assert heap.refs[key] == 1 and heap.refs[value] == 1
     assert heap.load(d, abi.PYDICTOBJECT_ENTRIES_USED_OFFSET) == 1
-    assert heap.calls == [("lock",), ("unlock",), ("decref", key)]
+    assert heap.calls == _set_calls(d) + [("decref", key)]
 
 
 @pytest.mark.parametrize("flag,value", [
@@ -235,7 +273,7 @@ def test_unadmitted_transactions_change_nothing(flag, value):
     assert ns["_dict_get_gc0_locked"](d, key, 2, out) == -1
     assert _entry(heap, d, 0) == (key, old)
     assert heap.refs[old] == 1 and heap.refs[new] == 1
-    assert heap.calls == [("lock",), ("unlock",), ("lock",), ("unlock",)]
+    assert heap.calls == _set_calls(d) + _get_calls(d)
 
 
 def test_equality_callbacks_take_the_rooted_operation():
@@ -261,6 +299,40 @@ def test_get_retains_a_found_value_inside_the_transaction():
     heap.rejected.add(value)
     assert ns["_dict_get_gc0_locked"](d, key, 2, heap.alloc(8)) == -1
     assert heap.refs[value] == 2
+    # Three lookups, none of them under the graph lock.
+    assert heap.calls == _get_calls(d) * 3
+
+
+@pytest.mark.parametrize("backend", (1, 2, 3, 4))
+def test_the_count_free_tracers_share_both_transactions(backend):
+    # Their retain is reachability: the same lookup and set are admitted
+    # with the collector fixed, whatever the refcount mode says.
+    heap = Heap()
+    heap.flags.update({"pcc_gc_nonmoving_count_free": 1, "pcc_gc_refcount_atomic": 0,
+                       "pcc_gc_backend_selected": backend})
+    key, old, new = heap.obj(), heap.obj(), heap.obj()
+    d = heap.dict([(key, old)])
+    ns = _functions(heap, SET_NAMES + ["_dict_get_gc0_locked"])
+    out = heap.alloc(8)
+    assert ns["_dict_get_gc0_locked"](d, key, 2, out) == 1
+    assert ns["_dict_set_gc0_locked"](d, key, new, 2) == 1
+    assert heap.load(out) == old and _entry(heap, d, 0) == (key, new)
+    assert heap.calls == _get_calls(d) + _set_calls(d) + [("decref", old)]
+
+
+def test_without_container_mode_every_transaction_is_a_graph_transaction():
+    # The provenance probe (and a collector not yet fixed) keeps the graph
+    # lock as the dict's only lock, for readers and writers alike.
+    heap = Heap()
+    heap.flags["pcc_gc_list_container_mode"] = 0
+    key, old, new = heap.obj(), heap.obj(), heap.obj()
+    d = heap.dict([(key, old)])
+    ns = _functions(heap, SET_NAMES + ["_dict_get_gc0_locked"])
+    out = heap.alloc(8)
+    assert ns["_dict_get_gc0_locked"](d, key, 2, out) == 1
+    assert ns["_dict_set_gc0_locked"](d, key, new, 2) == 1
+    assert heap.load(out) == old and _entry(heap, d, 0) == (key, new)
+    assert heap.calls == [("lock",), ("unlock",), ("lock",), ("unlock",), ("decref", old)]
 
 
 PROGRAM = r'''

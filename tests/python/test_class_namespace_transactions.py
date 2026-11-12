@@ -29,8 +29,11 @@ def _load_helpers(path, names, environment):
 class NamespaceCommitModel:
     """Execute production commit kernels with observable deferred disposal."""
 
-    def __init__(self, operation, invalid_namespace=False, stale=False, failed_plan=False):
+    def __init__(self, operation, invalid_namespace=False, stale=False, failed_plan=False,
+                 container_mode=1):
         self.operation = operation
+        self.container_mode = container_mode
+        self.table_locked = False
         self.invalid_namespace = invalid_namespace
         self.stale = stale
         self.failed_plan = failed_plan
@@ -63,11 +66,14 @@ class NamespaceCommitModel:
         ), self.env)
         _load_helpers(ROOT / 'pcc/runtime/py/py_dict.py', (
             '_dict_insert_rooted_slot', '_dict_replace_value_rooted_slot',
-            '_dict_del_rooted_slot',
+            '_dict_del_rooted_slot', '_dict_table_lock', '_dict_table_unlock',
         ), self.env)
         self.initialize()
 
     def load(self, base, offset=0):
+        if base == 'pcc_gc_list_container_mode':
+            return self.container_mode
+        assert not isinstance(base, str), base
         return self.memory.get(base + offset, 0)
 
     def store(self, base, offset, value):
@@ -117,14 +123,24 @@ class NamespaceCommitModel:
             self.locked = True
             self.events.append('lock')
         def unlock():
-            assert self.locked
+            assert self.locked and not self.table_locked
             self.events.append('unlock')
             self.locked = False
+        def table_lock(dictionary):
+            # The dict's own lock, inside the graph lock, around every table
+            # write (container mode); its readers hold only this lock.
+            assert self.locked and not self.table_locked and dictionary == self.dict
+            self.table_locked = True
+            self.events.append('table_lock')
+        def table_unlock(dictionary):
+            assert self.table_locked and dictionary == self.dict
+            self.table_locked = False
+            self.events.append('table_unlock')
         def init(plan, owner, backend):
             assert not self.locked
             self.plans[plan] = []
         def commit(plan, owner, slot, value):
-            assert self.locked
+            assert self.locked and self.table_locked == bool(self.container_mode)
             self.events.append('commit')
             if self.failed_plan:
                 return 0
@@ -161,7 +177,8 @@ class NamespaceCommitModel:
             int_to_ptr=lambda value: value, load_ptr=self.load, store_ptr=self.store,
             load_i8=self.load, load_i32=self.load, load_i64=self.load,
             store_i64=self.store, stack_alloc=self.alloc, cstr=cstr,
-            global_addr=lambda name: 14000, atomic_rmw_i32=atomic,
+            global_addr=lambda name: name, atomic_rmw_i32=atomic,
+            pcc_container_lock=table_lock, pcc_container_unlock=table_unlock,
             _dict_read_reload_root=lambda slot,handle: self.load(slot),
             pcc_gc_backend=lambda: 4, pcc_py_gc_minor_graph_lock=lock,
             pcc_py_gc_minor_graph_unlock=unlock, pcc_gc_store_ptr_plan_init=init,
@@ -267,3 +284,20 @@ def test_non_string_namespace_key_invalidates_epoch_without_reading_c_name():
     assert model.epoch == 1 and not model.locked
     assert model.load(model.methods, model.env['PYCLASSMETHOD_FUNC_OFFSET']) == model.raw
     assert model.load(model.cls, model.env['PYCLASSOBJECT_DEL_METHOD_OFFSET']) == model.raw
+
+
+@pytest.mark.parametrize('container_mode', (0, 1))
+@pytest.mark.parametrize('operation', ('insert', 'replace', 'delete'))
+def test_a_table_write_holds_the_dict_lock_inside_the_graph_lock(operation, container_mode):
+    model = NamespaceCommitModel(operation, container_mode=container_mode)
+    assert model.run() == 1
+    assert not model.locked and not model.table_locked
+    events = model.events
+    if container_mode:
+        # Its readers hold only the dict's lock: the commit, the notification
+        # and every table write happen while both are held.
+        assert events.index('lock') < events.index('table_lock') < events.index('commit')
+        assert events.index('notify') < events.index('table_unlock') < events.index('unlock')
+    else:
+        assert 'table_lock' not in events
+    assert events.index('unlock') < events.index('finish')

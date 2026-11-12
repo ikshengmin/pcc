@@ -9,6 +9,11 @@ held by the runtime keeps a private partial result alive. One mode-lease
 reservation keeps a backend switch out; each entry is retained inside one
 graph transaction by pcc_gc_try_init_ptr_locked, the GC0 list append's own
 retain. A retain miss releases everything and the general path starts over.
+
+In container mode (GC0 and the count-free tracers, without the probe) each
+of those transactions holds only the receiver's container lock: every
+writer of a dict's tables holds it as well, inside the graph lock, so a
+materialization excludes writers without queueing on the graph lock.
 """
 
 from __future__ import annotations
@@ -46,6 +51,8 @@ class Heap:
             "pcc_gc_refcount_atomic": 1,
             "pcc_diagnostics_runtime_log_fast_state": 0,
             "pcc_gc_backend_selected": 0,
+            "pcc_gc_nonmoving_count_free": 0,
+            "pcc_gc_list_container_mode": 1,
         }
         self.rejected = set()
         self.fail_alloc = None
@@ -123,7 +130,7 @@ class Heap:
                     self.decref(child)
 
     def try_init(self, destination, source):
-        assert self.depth == 1, "retain outside the graph transaction"
+        assert self.depth == 1, "retain outside the receiver's transaction"
         value = self.load(source)
         if value in self.rejected:
             return 0
@@ -139,14 +146,26 @@ class Heap:
             self.after_reserve()
         return self.reserve_result
 
-    def lock(self):
+    def enter(self, kind):
         assert self.depth == 0
         self.depth = 1
-        self.calls.append(("lock",))
+        self.calls.append(kind)
         if self.on_lock:
-            self.on_lock(sum(call == ("lock",) for call in self.calls))
+            self.on_lock(sum(call in (("lock",), ("table_lock",)) for call in self.calls))
+
+    def lock(self):
+        assert not self.flags["pcc_gc_list_container_mode"], (
+            "a reader took the graph lock in container mode")
+        self.enter(("lock",))
 
     def unlock(self):
+        assert self.depth == 1
+        self.depth = 0
+
+    def table_lock(self, receiver):
+        self.enter(("table_lock",))
+
+    def table_unlock(self, receiver):
         assert self.depth == 1
         self.depth = 0
 
@@ -180,6 +199,8 @@ def _materializer(heap):
         "pcc_gc_mode_lease_release_shard": lambda shard: heap.calls.append(("release", shard)) or 0,
         "pcc_py_gc_minor_graph_lock": heap.lock,
         "pcc_py_gc_minor_graph_unlock": heap.unlock,
+        "pcc_container_lock": heap.table_lock,
+        "pcc_container_unlock": heap.table_unlock,
         "py_list_new": heap.list_new,
         "py_tuple_new": heap.tuple_new,
         "pcc_gc_try_init_ptr_locked": heap.try_init,
@@ -193,12 +214,15 @@ def _materializer(heap):
         "py_exc_new": lambda code, message: (code, message),
         "pcc_platform_abort": abort,
     })
+    names = ("_dict_gc0_materialize", "_dict_read_lock", "_dict_read_unlock")
     nodes = [node for node in tree.body
-             if isinstance(node, ast.FunctionDef) and node.name == "_dict_gc0_materialize"]
-    assert len(nodes) == 1
+             if isinstance(node, ast.FunctionDef) and node.name in names]
+    assert len(nodes) == len(names)
     code = compile(ast.Module(nodes, type_ignores=[]), str(DICT_SOURCE), "exec")
-    function = next(types.FunctionType(const, namespace) for const in code.co_consts
-                    if isinstance(const, types.CodeType) and const.co_name == "_dict_gc0_materialize")
+    for const in code.co_consts:
+        if isinstance(const, types.CodeType):
+            namespace[const.co_name] = types.FunctionType(const, namespace)
+    function = namespace["_dict_gc0_materialize"]
 
     def run(receiver, kind):
         output = heap.alloc(8, "slot")
@@ -233,8 +257,9 @@ def test_gc0_items_are_one_reservation_and_one_transaction_per_entry():
     pairs = heap.children(out)
     assert [heap.children(pair) for pair in pairs] == [list(pair) for pair in zip(keys, values)]
     assert [call for call in heap.calls if call[0] in ("reserve", "release")] == [("reserve", 5), ("release", 5)]
-    # One snapshot of the entry count plus one transaction per used entry.
-    assert heap.calls.count(("lock",)) == 1 + 4
+    # One snapshot of the entry count plus one transaction per used entry,
+    # each under the receiver's own lock.
+    assert heap.calls.count(("table_lock",)) == 1 + 4 and ("lock",) not in heap.calls
     # Only the pair holding a container is tracked; every pair is published.
     assert [call[1] for call in heap.calls if call[0] == "track"] == [pairs[1]]
     assert [call[1] for call in heap.calls if call[0] == "publish"] == pairs
@@ -419,3 +444,26 @@ def test_materialized_views_match_cpython_on_five_collectors(tmp_path, threaded_
         ran = subprocess.run([str(executable)], capture_output=True, text=True, timeout=120,
                              env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)))
         assert (ran.returncode, ran.stdout, ran.stderr) == (0, expected.stdout, ""), backend
+
+
+@pytest.mark.parametrize("kind", sorted(KINDS))
+def test_without_container_mode_each_transaction_is_a_graph_transaction(kind):
+    heap = Heap()
+    heap.flags["pcc_gc_list_container_mode"] = 0
+    run = _materializer(heap)
+    receiver, _, _ = _sample(heap)
+    status, _ = run(receiver, kind)
+    assert status == 1
+    assert heap.calls.count(("lock",)) == 1 + 4 and ("table_lock",) not in heap.calls
+
+
+@pytest.mark.parametrize("backend", (1, 2, 3, 4))
+def test_the_count_free_tracers_share_the_transaction(backend):
+    heap = Heap()
+    heap.flags.update({"pcc_gc_nonmoving_count_free": 1, "pcc_gc_refcount_atomic": 0,
+                       "pcc_gc_backend_selected": backend})
+    run = _materializer(heap)
+    receiver, keys, _ = _sample(heap)
+    status, out = run(receiver, "keys")
+    assert status == 1 and heap.children(out) == list(keys)
+    assert ("lock",) not in heap.calls

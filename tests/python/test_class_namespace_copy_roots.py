@@ -56,7 +56,9 @@ class NamespaceMemory(DictMemory):
         for file, prefixes, names in (
             ('py_protocol_runtime.py', (), {'py_dict_storage_slots'}),
             ('freestanding_class_namespace.py', (), {'_class_namespace_source_locked', '_class_namespace_copy_locked', 'pcc_class_namespace_acquire_slots', 'pcc_class_namespace_install_slots'}),
-            ('py_dict.py', ('_dict_materialize_',), {'py_dict_items', 'py_dict_get_default_slots'}),
+            ('py_dict.py', ('_dict_materialize_',), {'py_dict_items', 'py_dict_get_default_slots',
+                                                     '_dict_table_lock', '_dict_table_unlock',
+                                                     '_dict_read_lock', '_dict_read_unlock'}),
             ('py_class.py', ('_class_apply_',), {'_special_open', '_special_copy', '_special_adopt',
                 '_special_drop', '_special_close', '_special_error', '_special_publish',
                 'py_class_apply_namespace_dict', '_class_new_from_objects_body', 'py_class_new_from_objects',
