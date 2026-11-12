@@ -5,9 +5,10 @@ N4659 [temp.dep]/3 (a nondependent base is bound at the definition),
 [class.access.base]; Itanium C++ ABI 2.4 (base at offset 0, empty-base
 optimization). Every specialization shares the base: layout, implicit and
 declared construction, destruction and conversions reuse inheritance.py.
-Naming base members inside member bodies, mem-initializers naming the base,
-dependent, template-id and polymorphic bases, and base construction that
-needs a destruction proof stay explicit capability boundaries.
+A base that needs destruction is constructed under the closed-construction
+proof. Naming base members inside member bodies, mem-initializers naming the
+base, and dependent and template-id bases stay explicit capability
+boundaries; polymorphic bases are covered by test_cpp_class_template_virtuals.py.
 """
 import os
 import shutil
@@ -37,6 +38,10 @@ PROGRAMS = {
     "empty-base":
         "struct E{int k()const{return 2;}};template<int N> struct D:E{int y;};"
         "int main(){D<1> d;d.y=40;return d.y+d.k()+sizeof(D<1>)-4;}",
+    # The base is destroyed after the specialization's destructor body.
+    "base-with-destructor":
+        "struct B{int*p;B(){} ~B(){*p=*p+40;}};template<int N> struct D:B{int*q;D(){} ~D(){*q=N;}};"
+        "int main(){int r=0;{D<2> d;d.p=&r;d.q=&r;}return r;}",
 }
 INVALID = {
     "private-base-member-outside": ("struct B{int x;};template<int N> class D:B{};int f(){D<1> d;return d.x;}",
@@ -55,13 +60,8 @@ GAPS = {
     "dependent-base": ("template<class T> struct D:T{};", "cpp.unsupported.class-templates"),
     "template-id-base": ("template<int N> struct A{int x;};template<int N> struct D:A<N>{};",
                          "cpp.unsupported.base-classes"),
-    "polymorphic-base": ("struct B{B(){} virtual int f(){return 1;}};template<int N> struct D:B{};",
-                         "cpp.unsupported.class-templates"),
     "base-mem-initializer": ("struct B{int x;B(int v){x=v;}};template<int N> struct D:B{D():B(N){}};",
                              "cpp.unsupported.class-templates"),
-    "base-with-destructor":
-        ("struct B{B(){} ~B(){}};template<int N> struct D:B{D(){} ~D(){}};int main(){{D<1> d;}return 0;}",
-         "cpp.unsupported.destructor-subobjects"),
 }
 
 

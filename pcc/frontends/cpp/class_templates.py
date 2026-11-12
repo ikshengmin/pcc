@@ -7,12 +7,14 @@ records. No token replacement, alternate layout engine, or instance cache.
 Ordinary member bodies are typed once at definition time and instantiated on
 ODR-use. Complete-object D1s share the ordinary lifetime owner. Typed array
 bounds retain definition-point Patterns and substitute before layout.
-A single nondependent non-polymorphic base is bound at the definition and
-shared by every specialization (layout, construction, destruction and
-conversions use inheritance.py); naming its members inside member bodies,
-dependent, template-id and polymorphic bases, class-element array lifetimes
-and specializations remain explicit capability boundaries, never unparsed,
-supposedly validated bodies.
+A single nondependent base is bound at the definition and shared by every
+specialization (layout, construction, destruction and conversions use
+inheritance.py). Virtual members and overriders are declared per
+specialization, which then owns its table (virtual_functions.py); a
+nondependent signature's override rules are checked at the definition.
+Naming base members inside member bodies, dependent and template-id bases,
+class-element array lifetimes and specializations remain explicit capability
+boundaries, never unparsed, supposedly validated bodies.
 """
 
 from pcc.frontends.c.ast import c_ast
@@ -115,8 +117,6 @@ def parse_declaration(parser, parameters, parent):
         # [temp.dep]/3: a nondependent base is bound at the definition.
         from pcc.frontends.cpp.inheritance import parse_base_clause
         base = parse_base_clause(parser, keyword.value, pattern.injected)
-        if base.dtype.definition.polymorphic:
-            unsupported(base.coord, 'polymorphic bases of class templates require virtual class template members')
     pattern.base = base
     pattern.injected.base = base
     parser._expect('{')
@@ -141,16 +141,25 @@ def parse_declaration(parser, parameters, parent):
             if parser._accept(';'):
                 continue
             if token.value in ('using', 'typedef', 'enum', 'class', 'struct', 'union',
-                               'friend', 'virtual', 'template', 'explicit',
+                               'friend', 'template', 'explicit',
                                'constexpr'):
                 unsupported(token.coord, 'class template members currently require scalar/pointer data declarations')
             from pcc.frontends.cpp.class_template_members import parse_signature
             pattern.method_definition.access = access
+            virtual = None
+            if token.value == 'virtual':
+                from pcc.frontends.cpp.virtual_functions import take_virtual
+                virtual = take_virtual(parser, None)
+                token = parser._peek()
+                if token.value == 'virtual':
+                    take_virtual(parser, virtual)
             if token.value == '~':
                 from pcc.frontends.cpp.class_template_members import parse_destructor_signature
-                parse_destructor_signature(parser, pattern)
+                parse_destructor_signature(parser, pattern, virtual=virtual)
                 continue
             if token.value == name.value and parser.cursor.tokens[parser.cursor.position + 1].value == '(':
+                if virtual is not None:
+                    raise CppDiagnostic('cpp.invalid-virtual', 'a constructor cannot be virtual', virtual.coord)
                 parse_signature(parser, pattern, parser._identifier(), 'void', constructor=True)
                 continue
             static = parser._accept('static') is not None
@@ -194,9 +203,11 @@ def parse_declaration(parser, parameters, parent):
                         raise CppDiagnostic('cpp.invalid-mutable', 'mutable applies only to data members', member.coord)
                     if prior_data:
                         unsupported(member.coord, 'mixed data/function declarator lists are not implemented')
-                    parse_signature(parser, pattern, member, dtype, static=static)
+                    parse_signature(parser, pattern, member, dtype, static=static, virtual=virtual)
                     method = True
                     break
+                if virtual is not None:
+                    raise CppDiagnostic('cpp.invalid-virtual', 'virtual applies only to member functions', virtual.coord)
                 if static or parser._peek().value in ('=', '{', ':'):
                     unsupported(parser._peek().coord, 'class template static data, member initializers and bit-fields are not implemented')
                 if member.value == name.value:
@@ -349,8 +360,19 @@ def complete_layout(parser, dtype, pattern, arguments, coord):
         if any(array_type(member.dtype) for member in definition.members):
             from pcc.frontends.cpp.size_queries import sizeof_type
             sizeof_type(dtype, parser.types, coord)
+        tables = []
+        if definition.polymorphic:
+            # After every member declaration of this specialization: its own
+            # table holds each final overrider, so each is ODR-used.
+            from pcc.frontends.cpp.virtual_functions import complete_class
+            tables = complete_class(parser, definition)
+            from pcc.frontends.cpp.class_template_members import request_body
+            for entry in definition.virtual_entries:
+                if not entry.deleting and not entry.overrider.method_pure:
+                    request_body(parser, entry.overrider, coord)
         dtype.layout_state = 'complete'
         parser.class_template_declarations.insert(before, definition.c_declaration(parser._scalar_type))
+        parser.class_template_declarations.extend(tables)
     except BaseException as error:
         if dtype.definition is not None:
             dtype.definition.complete = False

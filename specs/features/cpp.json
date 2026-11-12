@@ -1214,7 +1214,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:fa94a007c6ceabad30e29dc1921aaf6f55b88a130c4b0ac17016fc2c5de38c76",
+        "source_revision": "sha256:a8f041cb0ee934c62fc57e298a0b3dffab0600e8521eab5524981864fb8a38b0",
         "sources": [
           {
             "path": "pcc/frontends/cpp/allocation.py",
@@ -1250,7 +1250,7 @@
           },
           {
             "path": "pcc/frontends/cpp/virtual_functions.py",
-            "sha256": "22f5a89caedc95b6197aad4f184c54d786b6c03bb3a52fb558aebcfa96cddd9a"
+            "sha256": "b426d008cec6ab05dd67f95bfe169839845d1fba9bbcba81dfa60b764b1088b9"
           }
         ]
       }
@@ -1266,7 +1266,7 @@
         "conv.ptr",
         "class.access.base"
       ],
-      "scope": "A class template may name one complete nondependent non-polymorphic class as its non-virtual base ([temp.dep]/3 binds it at the definition). Every specialization shares it: the base is the leading C field or an empty base with no storage, implicit and declared constructors construct it first and destructors destroy it last, and member access, access checks and derived-to-base conversions use inheritance.py. Naming base members inside member bodies (unqualified or through this), mem-initializers naming the base, dependent, template-id and polymorphic bases, and base construction that needs a destruction proof remain explicit gaps. Source revision is sha256 of the sorted compact JSON source list.",
+      "scope": "A class template may name one complete nondependent class as its non-virtual base ([temp.dep]/3 binds it at the definition). Every specialization shares it: the base is the leading C field or an empty base with no storage, implicit and declared constructors construct it first and destructors destroy it last, and member access, access checks and derived-to-base conversions use inheritance.py. Naming base members inside member bodies (unqualified or through this), mem-initializers naming the base, and dependent and template-id bases remain explicit gaps; a base that needs destruction is constructed under the closed-construction proof and polymorphic bases are covered by cpp.class-template-virtuals. Source revision is sha256 of the sorted compact JSON source list.",
       "tests": [
         "tests/cpp/test_cpp_class_template_bases.py::test_class_template_base_originals_lower_to_ir",
         "tests/cpp/test_cpp_class_template_bases.py::test_specialization_record_leads_with_the_shared_base",
@@ -1279,15 +1279,15 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:9bbcb9c5ed91051ebcd9e546ad7ab7b50296f5b0a4c9812f2834df4b698fdf3e",
+        "source_revision": "sha256:1a51df2157b4812170d99b79148002c55809b4ad54125dd828a863d346ed10c6",
         "sources": [
           {
             "path": "pcc/frontends/cpp/class_template_members.py",
-            "sha256": "2001ec4fc22e6d76e48b958086165620eff4b34a1bde235033c016f383d032ea"
+            "sha256": "e11fe6197a07e5cd81385d95682e2d197a8c84ce65781beaea4c81bb27489129"
           },
           {
             "path": "pcc/frontends/cpp/class_templates.py",
-            "sha256": "55f307c95109adcfd2caa4c8bdfc22c63f080fa1fbae30fab843e40d3e9d24b7"
+            "sha256": "9f32ca19b7e448264604b4675f6cc7f6de438e4a0ff0bb06a25605215c9ed84e"
           },
           {
             "path": "pcc/frontends/cpp/inheritance.py",
@@ -1296,6 +1296,47 @@
           {
             "path": "pcc/frontends/cpp/sema.py",
             "sha256": "bf6acaf3467ce2b9c6a2b90d8a2a33a92ffb09d9e25214b819a82ac172fd39fd"
+          }
+        ]
+      }
+    },
+    {
+      "id": "cpp.class-template-virtuals",
+      "title": "Virtual members and polymorphic bases of class templates",
+      "chapter_ids": [
+        "temp.dep",
+        "class.virtual",
+        "class.abstract",
+        "class.cdtor",
+        "class.base.init",
+        "class.dtor"
+      ],
+      "scope": "Class template members may be declared virtual, override or final (including destructors and pure members) and may implicitly override a virtual member of a nondependent polymorphic base. A nondependent signature's override rules (target, final, return type, static) are checked at the definition, a dependent one by each specialization. Each specialization declares its overriders, owns its own table of final overriders (all of which are ODR-used) and stores it in its constructors and destructors; unqualified calls dispatch through it. Specialization constructors construct a base that needs destruction under the closed-construction proof. Defaulted and implicit virtual destructors, virtual operators and base members named inside member bodies remain explicit gaps. Source revision is sha256 of the sorted compact JSON source list.",
+      "tests": [
+        "tests/cpp/test_cpp_class_template_virtuals.py::test_virtual_class_template_originals_lower_to_ir",
+        "tests/cpp/test_cpp_class_template_virtuals.py::test_each_specialization_owns_a_table_of_its_final_overriders",
+        "tests/cpp/test_cpp_class_template_virtuals.py::test_invalid_virtual_class_template_originals_are_ordinary_errors",
+        "tests/cpp/test_cpp_class_template_virtuals.py::test_unmodeled_virtual_class_template_shapes_keep_an_explicit_capability_code",
+        "tests/cpp/test_cpp_class_template_virtuals.py::test_virtual_class_template_originals_execute_against_explicit_cpp17_reference",
+        "tests/cpp/test_cpp_class_template_virtuals.py::test_explicit_reference_rejects_invalid_and_accepts_gap_originals"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:f5d720375f37881073e5da0e0552f03da0bcd55226db097f55266bb2204e8fe2",
+        "sources": [
+          {
+            "path": "pcc/frontends/cpp/class_template_members.py",
+            "sha256": "e11fe6197a07e5cd81385d95682e2d197a8c84ce65781beaea4c81bb27489129"
+          },
+          {
+            "path": "pcc/frontends/cpp/class_templates.py",
+            "sha256": "9f32ca19b7e448264604b4675f6cc7f6de438e4a0ff0bb06a25605215c9ed84e"
+          },
+          {
+            "path": "pcc/frontends/cpp/virtual_functions.py",
+            "sha256": "b426d008cec6ab05dd67f95bfe169839845d1fba9bbcba81dfa60b764b1088b9"
           }
         ]
       }
@@ -4638,7 +4679,7 @@
         "feature_id": "cpp.virtual-functions",
         "source": {
           "path": "pcc/frontends/cpp/virtual_functions.py",
-          "sha256": "22f5a89caedc95b6197aad4f184c54d786b6c03bb3a52fb558aebcfa96cddd9a"
+          "sha256": "b426d008cec6ab05dd67f95bfe169839845d1fba9bbcba81dfa60b764b1088b9"
         }
       },
       {

@@ -150,7 +150,16 @@ def overridden_member(definition, symbol):
     name decide, through every base of the single-base chain.
     """
     from pcc.frontends.cpp.inheritance import base_chain
-    for base in base_chain(definition.dtype):
+    return overridden_in(base_chain(definition.dtype), symbol)
+
+
+def static_override(coord):
+    raise CppDiagnostic("cpp.invalid-virtual",
+                        "a static member function cannot override a virtual function", coord)
+
+
+def overridden_in(bases, symbol):
+    for base in bases:
         group = base.definition.scope.names.get(symbol.name)
         if group is None or group.kind != "function":
             continue
@@ -201,8 +210,7 @@ def declare_virtual(definition, symbol, virtual_token, specifiers, pure, coord):
     """Apply the declaration rules once the member's identity is known."""
     overridden = overridden_member(definition, symbol)
     if overridden is not None and getattr(symbol, "method_static", False):
-        raise CppDiagnostic("cpp.invalid-virtual",
-                            "a static member function cannot override a virtual function", coord)
+        static_override(coord)
     if "override" in specifiers and overridden is None:
         raise CppDiagnostic("cpp.invalid-override",
                             "'" + symbol.name + "' is marked override but does not override a base member",

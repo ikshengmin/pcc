@@ -39,19 +39,22 @@ def self_reference(dtype, owner):
     return isinstance(dtype, ReferenceType) and unqualified(dtype.referent) is owner
 
 
-def parse_destructor_signature(parser, owner):
+def parse_destructor_signature(parser, owner, virtual=None):
     """Retain a primary D1 declaration and typed body, without a concrete name."""
-    from pcc.frontends.cpp.destructors import declare_destructor, parse_parameters
+    from pcc.frontends.cpp.destructors import declare_destructor, parse_parameters, parse_virt_specifiers
     from pcc.frontends.cpp.inline_constructors import collect_body
     parser._expect('~')
     name = parser._identifier()
     definition = owner.method_definition
     parameter_scope = parse_parameters(parser, definition, name, check_lowering=False)
+    specifiers = parse_virt_specifiers(parser)
     if parser._peek().value not in (';', '{'):
         unsupported(name.coord, 'defaulted/deleted/ref-qualified template destructors require special-member rules')
     symbol = declare_destructor(definition, name, encode_name=False)
     symbol.class_template_pattern = owner
     symbol.definition_linkage = 'external_odr'
+    symbol.template_virtual = (virtual, specifiers, False)
+    check_pattern_destructor(owner, symbol, name.coord)
     if parser._accept(';'):
         tokens = None
     else:
@@ -64,7 +67,65 @@ def parse_destructor_signature(parser, owner):
     return record
 
 
-def parse_signature(parser, owner, name, result_type, static=False, constructor=False):
+def pattern_bases(owner):
+    from pcc.frontends.cpp.inheritance import base_chain
+    base = getattr(owner, 'base', None)
+    return [] if base is None else [base.dtype, *base_chain(base.dtype)]
+
+
+def check_pattern_virtual(owner, symbol, coord):
+    """Diagnose a nondependent signature's override rules at the definition."""
+    from pcc.frontends.cpp.virtual_functions import _check_final, _check_return, overridden_in, static_override
+    virtual, specifiers, pure = symbol.template_virtual
+    if virtual is None and not specifiers and not pure:
+        overridden = overridden_in(pattern_bases(owner), symbol) if not dependent_signature(symbol) else None
+        if overridden is not None:
+            # [class.virtual]/2: an implicit overrider obeys the same rules.
+            if getattr(symbol, 'method_static', False):
+                static_override(coord)
+            _check_final(overridden, coord)
+            _check_return(owner.method_definition, symbol, overridden, coord)
+        return
+    if getattr(symbol, 'method_static', False):
+        raise CppDiagnostic('cpp.invalid-virtual', 'a static member function cannot be virtual', coord)
+    if virtual is None and pure:
+        raise CppDiagnostic('cpp.invalid-pure-specifier', 'a pure-specifier requires a virtual function', coord)
+    if symbol.variadic or symbol.name.startswith('operator'):
+        from pcc.frontends.cpp.virtual_functions import _unsupported
+        _unsupported(coord, 'variadic or operator virtual functions require further table entries')
+    if dependent_signature(symbol):
+        return  # Checked by each specialization's declaration.
+    overridden = overridden_in(pattern_bases(owner), symbol)
+    if 'override' in specifiers and overridden is None:
+        raise CppDiagnostic('cpp.invalid-override',
+                            "'" + symbol.name + "' is marked override but does not override a base member", coord)
+    if virtual is None and overridden is None:
+        raise CppDiagnostic('cpp.invalid-virt-specifier', 'final requires a virtual function', coord)
+    if overridden is not None:
+        _check_final(overridden, coord)
+        _check_return(owner.method_definition, symbol, overridden, coord)
+
+
+def check_pattern_destructor(owner, symbol, coord):
+    from pcc.frontends.cpp.virtual_functions import _check_final
+    virtual, specifiers, _ = symbol.template_virtual
+    bases = pattern_bases(owner)
+    overridden = next((base.definition.destructor for base in bases[:1]
+                       if getattr(base.definition.destructor, 'method_virtual', False)), None)
+    if 'override' in specifiers and overridden is None:
+        raise CppDiagnostic('cpp.invalid-override',
+                            "'" + symbol.name + "' is marked override but does not override a base member", coord)
+    if virtual is None and overridden is None and specifiers:
+        raise CppDiagnostic('cpp.invalid-virt-specifier', 'final requires a virtual function', coord)
+    if overridden is not None:
+        _check_final(overridden, coord)
+
+
+def dependent_signature(symbol):
+    return any(dependent(dtype) for dtype in (symbol.dtype, *symbol.parameters))
+
+
+def parse_signature(parser, owner, name, result_type, static=False, constructor=False, virtual=None):
     """Register an ordinary member of a primary class template, not a member template."""
     from pcc.frontends.cpp.inline_constructors import collect_body, collect_definition
     from pcc.frontends.cpp.members import declare_member_function
@@ -94,6 +155,10 @@ def parse_signature(parser, owner, name, result_type, static=False, constructor=
     const = parser._accept('const') is not None
     if constructor and const:
         raise CppDiagnostic('cpp.constructor-cv', 'constructors cannot have cv-qualifiers', name.coord)
+    from pcc.frontends.cpp.virtual_functions import parse_member_specifiers
+    specifiers, pure = parse_member_specifiers(parser)
+    if constructor and (specifiers or pure):
+        raise CppDiagnostic('cpp.invalid-virtual', 'a constructor cannot be virtual or overriding', name.coord)
     if parser._peek().value in ('volatile', '&', '&&', 'noexcept', 'throw', 'try', '=', '->'):
         unsupported(parser._peek().coord, 'member ref/exception/default/delete/trailing contracts are not implemented')
     from pcc.frontends.cpp.operators import validate_assignment, validate_subscript
@@ -133,6 +198,8 @@ def parse_signature(parser, owner, name, result_type, static=False, constructor=
         owner.constructors.overloads.append(symbol)
     else:
         symbol = declare_member_function(owner.method_definition, symbol, const=const, static=static, encode_name=False)
+        symbol.template_virtual = (virtual, specifiers, pure)
+        check_pattern_virtual(owner, symbol, name.coord)
     for parameter in parameter_symbols:
         if parameter is not None:
             parameter.c_name = parser._local_projection_name(parameter.name)
@@ -270,6 +337,16 @@ def declare_instances(parser, owner, definition, arguments):
             declaration.type = c_ast.FuncDecl(c_ast.ParamList(parameters, origin.coord), declaration.type, origin.coord)
             if symbol.internal_linkage:
                 declaration.storage = ['static']
+        virtual, specifiers, pure = getattr(origin, 'template_virtual', (None, (), False))
+        if getattr(origin, 'destructor', False):
+            # A virtual base destructor makes this specialization's virtual.
+            from pcc.frontends.cpp.virtual_functions import declare_destructor as declare_virtual_destructor
+            declare_virtual_destructor(definition, symbol, declaration, virtual, specifiers, False, origin.coord)
+        elif not getattr(origin, 'constructor', False):
+            from pcc.frontends.cpp.virtual_functions import declare_virtual
+            declare_virtual(definition, symbol, virtual, specifiers, pure, origin.coord)
+            if getattr(symbol, 'method_virtual', False):
+                symbol.virtual_prototype = declaration
         symbol.class_template_instance = MethodInstance(record, symbol, declaration, this, symbols, arguments)
         parser.function_projection_names.add(symbol.c_name)
         parser.class_template_declarations.append(declaration)
@@ -356,6 +433,7 @@ def instantiate_body(parser, context):
     # Replay is a separate function, never part of a requesting function's
     # lifetime stack. Local class/reference/array Patterns remain rejected.
     parser.lifetimes = AutomaticLifetimes()
+    construction_calls = selected_destructors = None
     try:
         stores = []
         if getattr(symbol, 'constructor', False):
@@ -364,7 +442,17 @@ def instantiate_body(parser, context):
                 None if expression is None else parser._instantiate_expression(expression, context.arguments, environment)
                 for member, expression in record.initializers.items()
             }
-            stores = lower_member_initializers(parser, symbol.class_owner.definition, context.this, initializers)
+            # The same closed-construction owner as bind_constructor_body:
+            # subobjects needing destruction require a finite proven body.
+            from pcc.frontends.cpp.destructors import member_destructors
+            definition = symbol.class_owner.definition
+            selected_destructors = member_destructors(definition, parser.scope)
+            if selected_destructors and definition.destructor is None:
+                raise CppDiagnostic('cpp.unsupported.destructor-subobjects',
+                                    'member construction requires a declared enclosing destructor', symbol.coord)
+            construction_calls = {}
+            stores = lower_member_initializers(parser, definition, context.this, initializers,
+                                               construction_calls=construction_calls)
         if getattr(symbol, 'destructor', False):
             from pcc.frontends.cpp.destructors import complete_body
             body = complete_body(
@@ -383,6 +471,12 @@ def instantiate_body(parser, context):
     declaration.definition_linkage = 'external_odr'
     symbol.defined = True
     if getattr(symbol, 'constructor', False):
+        from pcc.frontends.cpp.constructors import closed_construction_body
+        closed = closed_construction_body(body, construction_calls)
+        if selected_destructors and not closed:
+            raise CppDiagnostic('cpp.unsupported.destructor-subobjects',
+                                'unknown construction effects require partial member exception cleanup', symbol.coord)
+        symbol.closed_construction_body = closed
         symbol.closed_normal_body = call_free_body(body)
     return c_ast.FuncDef(declaration, None, body, symbol.coord)
 
