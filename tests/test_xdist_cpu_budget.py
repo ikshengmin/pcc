@@ -52,9 +52,21 @@ def _package_event_paths(source, event):
     lines = _mapping_block(trigger, "paths", 4)
     prefix = "      - "
     assert all(line.startswith(prefix) for line in lines)
-    # The workflow uses quoted literal strings. Exact entries are important:
-    # GitHub's path filters match a whole path from the repository root.
-    return tuple(json.loads(line[len(prefix) :]) for line in lines)
+    # Decode only the quoted literal; a YAML comment may follow whitespace.
+    # A '#' inside the string is part of the path, not a comment delimiter.
+    decoder = json.JSONDecoder()
+    patterns = []
+    for line in lines:
+        literal = line[len(prefix) :].lstrip(" \t")
+        value, end = decoder.raw_decode(literal)
+        assert isinstance(value, str), line
+        tail = literal[end:]
+        remainder = tail.lstrip(" \t")
+        assert not remainder or (
+            len(remainder) < len(tail) and remainder.startswith("#")
+        ), line
+        patterns.append(value)
+    return tuple(patterns)
 
 
 @pytest.mark.parametrize("event", ["push", "pull_request"])
@@ -94,6 +106,43 @@ def test_package_paths_do_not_accept_other_scopes_or_similar_names(path, lookali
     assert path not in push_patterns
     assert _package_event_paths(source, "pull_request") == (path,)
 
+
+
+@pytest.mark.parametrize(
+    "path", ["tests/conftest.py", "tests/hash#name.py", 'tests/escaped"#name.py']
+)
+@pytest.mark.parametrize("suffix", ["", "  # path comment", "\t# path comment"])
+def test_package_path_literal_preserves_quoted_hash_and_trailing_comment(path, suffix):
+    source = textwrap.dedent(f"""
+        on:
+          push:
+            paths:
+              - {json.dumps(path)}{suffix}
+    """)
+    assert _package_event_paths(source, "push") == (path,)
+
+
+@pytest.mark.parametrize(
+    "literal,error",
+    [
+        ('"tests/conftest.py" trailing', AssertionError),
+        ('"tests/conftest.py" "another.py"', AssertionError),
+        ('"tests/conftest.py"#missing-separator', AssertionError),
+        ('["tests/conftest.py"]', AssertionError),
+        ("123", AssertionError),
+        ('"unterminated', json.JSONDecodeError),
+        ('"bad\\q.py" # comment', json.JSONDecodeError),
+    ],
+)
+def test_package_path_literal_rejects_nonstring_and_trailing_data(literal, error):
+    source = textwrap.dedent(f"""
+        on:
+          push:
+            paths:
+              - {literal}
+    """)
+    with pytest.raises(error):
+        _package_event_paths(source, "push")
 
 def _implementation(function, **overrides):
     return SimpleNamespace(
