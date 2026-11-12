@@ -31,36 +31,52 @@ guard. Two stale dynamic-call assertions also failed on the preceding source;
 they now require the emitted load-method/call-loaded-method pair, retaining the
 checks against accidental IR-receiver admission and CPython calls. Ordinary
 live imports do not enter the static constructor shortcut; the new tests keep
-that boundary separate. Native constructor execution on this slice is **unrun**:
-the baseline six-worker native probe was rejected by the owned Mach-O archive
-parser's memory admission under the same 1-GiB tree cap. That resource failure
-has not been waived or repaired, and the host/IR checks are not native evidence.
+that boundary separate. Before integration, the baseline six-worker native probe
+was rejected by owned Mach-O archive memory admission under the 1-GiB tree cap;
+this checkpoint did not establish native execution. Integrated-source execution
+is reported below, separately from that still-unrepaired resource failure.
 
 The generation slice, anchored at `d6babfe42`, extracts module reset and
 source-order definition emission from `_generate_impl` (926 → 764 lines).
 The 85 reset statements and the emission loop match their prior ASTs; both
-helpers have static native method exports. Generation's phase/body/render
-logging now shares one worker-timing read per invocation, preserving normalized
-truth values and the distinct nonempty-string debug flag. Mid-generation timing
-environment changes apply to the next invocation. The expanded lifecycle and
+helpers have static native method exports. The phase/body/render logging owned
+by `generation_lowering.py` shares one worker-timing read per invocation,
+preserving normalized truth values and the distinct nonempty-string debug flag.
+For those three phases, mid-generation timing environment changes apply to the
+next invocation; generator-specific subphase readers are not yet consolidated. The expanded lifecycle and
 configuration file is **12 passed** under the unchanged 90-second/1-GiB guard;
 the ordinary host/IR scope is **211 passed**. The broader initial selection is
 **mixed: 1 failed, 41 passed**, stopping at
 `test_direct_indexed_worker_validation.py::test_native_object_worker_keeps_assembly_until_validation[True-False-arm64-apple-darwin]`.
 That same assembly/text-oracle mismatch reproduces on the preceding source;
-the reference assertion is unchanged and has not been waived. Native execution
-and bootstrap for this generation slice remain **unrun**.
+the reference assertion is unchanged and has not been waived.
 
-Remaining batch scope: other inconsistent defensive state reads, other
-module-name guards, further large-function and environment-read consolidation,
-and a fresh matched-runtime bootstrap chain. These checkpoints do not claim
-that the repository-wide refactoring or language qualification is complete.
+Integrated source `4850b0e76` includes upstream `242ab992b`, which makes
+AArch64 GC short-call labels follow emission order rather than call-payload IDs.
+The reference file now has **10 passed** at the original 90-second/1-GiB limit,
+and the original combined host/reference scope has **221 passed**. A newly
+built, provenance-verified runtime supports **35 passed** in the eight-file
+native integration scope at six workers/600 seconds/3 GiB. New live-binding
+constructor and generator-import cases execute and observe GC0–4 against
+CPython results. These remain **host-pcc0/self** results. The focused native
+constructor retry still fails 1-GiB admission before execution (archive-symbol
+owner estimate 414,678,160 bytes versus 412,729,344 available); the larger
+standard integration budget is not evidence that this resource defect is fixed.
+
+Remaining batch scope: 15 groups of differing defensive defaults, remaining
+self-module owner guards, further large-function/environment-read consolidation,
+and native compiler qualification. `_module_del_target_names` is still lazy,
+not constructor-owned, so its guards cannot simply be removed. These checkpoints
+do not claim repository-wide refactoring or whole-language qualification.
 The supplied older `1b4731f9c` bootstrap receipt ended after a successful Stage1:
 Stage2 had no runtime archive, so it has no Stage2/3 fixed-point result. Its
 separate native C SSA probe also failed to import `pcc.frontends.c.parse.c_lex`;
-that is not evidence of an executed C pass. The new chain will select a matching
-verified runtime explicitly; it has **not yet run**. Whole-Python and full
-five-GC bootstrap qualification are also unrun. Bootstrap wiring is tracked in
+that is not evidence of an executed C pass. The new `4850b0e76` Stage1 attempt
+selects its verified runtime explicitly and is running under the shared lock,
+1800-second stage guard, 16-GiB ceiling and 8-GiB Darwin reserve. Native smoke
+barriers and raw-byte pcc2/pcc3 comparison remain required; no new-source fixed
+point has been established. Whole-Python and full five-GC bootstrap qualification
+are also unrun. Bootstrap wiring is tracked in
 [#200](https://github.com/allstoalls/pcc/issues/200).
 
 Focused repro, using a verified archive from the selected source:
@@ -74,6 +90,12 @@ The bounded affected-file selection also includes `test_generator_protocol.py`,
 `test_generator_import_binding_lifetime.py`, `test_dynamic_generator_bound_methods.py`,
 `test_virtual_thread_frontend.py` and `test_vthread_direct_return.py` under
 `tests/python/`; it retains six workers and the shared-lock process-tree guard.
+The integrated 35-case selection uses those first five files, substitutes
+`test_vthread_direct_generator.py` for `test_vthread_direct_return.py`, and adds
+`test_native_ast_constructor_defaults.py` and
+`test_compiler_dataclass_defaults_native.py`. It runs with `-m ''`, a fresh
+explicit `PCC_RUNTIME_ARCHIVE`, and the standard 600-second/3-GiB integration
+guard. Its passing result does not replace the failed 90-second/1-GiB check.
 
 ## Owned Metal device runtime (local Mac, 2026-11-12)
 
