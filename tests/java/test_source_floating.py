@@ -266,7 +266,8 @@ def test_shared_model_float_fields_do_not_claim_native_heap_support():
 def test_floating_arrays_keep_their_separate_model_and_native_boundary():
     text = original("float[] values;return 42;")
     for invoke, code in [(lambda: analyze_class_sources({"Floating.java": text}), "java.unsupported.array-model-shape"),
-                         (lambda: compile_source(text), "java.unsupported.array-storage")]:
+                         # Native locals share the array component domain check.
+                         (lambda: compile_source(text), "java.unsupported.array-model-shape")]:
         with pytest.raises(UnsupportedJava) as caught:
             invoke()
         assert caught.value.code == code

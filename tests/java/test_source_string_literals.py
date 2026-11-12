@@ -165,10 +165,10 @@ def test_original_primes_lexing_preserves_the_next_parser_boundary(monkeypatch):
     forbid_bytecode_or_external_owner(monkeypatch)
     with pytest.raises(UnsupportedJava) as caught:
         compile_sources(sources, **ENTRY)
-    # The literal's constant variable folds without storage; the next
-    # boundary is the enhanced for over a managed array.
-    assert caught.value.code == "java.unsupported.array-storage"
-    assert str(caught.value).startswith(first + ":53:26:")
+    # The literal's constant variable folds without storage and the enhanced
+    # for parses in the native array domain; the next boundary is the throw.
+    assert caught.value.code == "java.unsupported.runtime-statements"
+    assert str(caught.value).startswith(first + ":70:13:")
     assert {name: sha256(data) for name, data in files.items()} == before
     # The independent original-project test still requires every actual stage
     # to PASS. Reaching a later capability boundary is not project acceptance.

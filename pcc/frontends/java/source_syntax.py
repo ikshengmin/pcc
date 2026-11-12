@@ -335,10 +335,12 @@ class SourceParser:
             location.error(message, code=code)
         location.error(message)
 
-    def array_suffix(self, dtype):
+    def array_suffix(self, dtype, *, local=False):
         while self.peek().text == "[":
             token = self.take()
-            if not self.class_model:
+            if not self.class_model and not local:
+                # Native locals have a non-throwing managed-array domain;
+                # fields, parameters and results do not.
                 token.error("array fields require shared Java storage and class initialization",
                             code="java.unsupported.array-storage")
             self.expect("]")
@@ -789,11 +791,11 @@ class SourceParser:
         node separate: Sema declares each binding immediately before checking
         its own initializer, then exposes it to subsequent declarators.
         """
-        common_type = self.array_suffix(self.declaration_type(type_token))
+        common_type = self.array_suffix(self.declaration_type(type_token), local=True)
         declarations = []
         while True:
             name = self.identifier()
-            dtype = self.array_suffix(common_type)
+            dtype = self.array_suffix(common_type, local=True)
             if dtype not in DECLARED and not isinstance(dtype, (ArrayType, NamedType)):
                 self.type_boundary(type_token, "source locals require boolean or integral primitives",
                                    code="java.unsupported.declared-local-type")
@@ -802,9 +804,6 @@ class SourceParser:
                 # a blank final local: each iteration initializes it (14.14.2).
                 # Retain the original expression separately from this binding;
                 # its scope starts only in the body, never in that expression.
-                if not self.class_model:
-                    self.peek().error("enhanced for requires shared managed-array or Iterable lowering",
-                                      code="java.unsupported.array-storage")
                 return Node("enhanced_var", name, dtype, is_final=is_final)
             if self.accept("="):
                 initializer = (self.array_initializer(dtype) if isinstance(dtype, ArrayType) and self.peek().text == "{"
@@ -943,6 +942,10 @@ class SourceParser:
                     node = Node("receiver_field", member, member.text)
         elif (self.class_model or self.inferred_initializer_depth) and token.text == "null":
             node = Node("null", token)
+        elif not self.class_model and token.text == "new" and self.peek().text in ARRAY_COMPONENTS:
+            # The native array domain admits only top-level local initializers.
+            token.error("array creation expressions require shared NullPointerException/NegativeArraySizeException "
+                        "support and managed root ownership", code="java.unsupported.array-storage")
         elif self.class_model and token.text == "new" and self.peek().text in ARRAY_COMPONENTS:
             component = self.take()
             self.expect("[")
@@ -1030,11 +1033,7 @@ class SourceParser:
             if token.text in {"class", "interface", "enum", "record"}:
                 token.error("unsupported Java expression or statement", code="java.unsupported.local-types")
             token.error("unsupported Java expression or statement")
-        if not self.class_model and (self.peek().text == "[" or
-                                     (self.peek().text == "." and self.peek(1).text == "length")):
-            self.peek().error("array access and length require shared managed-array lowering",
-                              code="java.unsupported.array-storage")
-        while self.class_model and self.peek().text in {"[", "."}:
+        while self.peek().text in {"[", "."}:
             postfix = self.take()
             if postfix.text == "[":
                 index = self.expression()

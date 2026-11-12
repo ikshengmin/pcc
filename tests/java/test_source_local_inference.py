@@ -167,7 +167,8 @@ INVALID = [
 NATIVE_GAPS = [
     ("enhanced-for", original("for(var value:new int[]{42}){}return 42;"), "java.unsupported.local-inference-domain"),
     ("final-enhanced-for", original("for(final var value:new int[]{42}){}return 42;"), "java.unsupported.local-inference-domain"),
-    ("new-array", original("var value=new int[]{42};return 42;"), "java.unsupported.object-expressions"),
+    # Native array creation is the array-storage gap (source_native_arrays).
+    ("new-array", original("var value=new int[]{42};return 42;"), "java.unsupported.array-storage"),
     ("new-object", original("var value=new Inferred();return 42;"), "java.unsupported.object-expressions"),
     ("string", original('var value="answer";return 42;'), "java.unsupported.string-literals"),
     ("null-comparison", original("var value=null==null;return value?42:0;"), "java.unsupported.object-expressions"),

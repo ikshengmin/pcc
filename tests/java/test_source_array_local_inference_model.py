@@ -144,7 +144,8 @@ def test_array_var_model_does_not_grant_native_compilation(api, monkeypatch):
             compile_source(MODEL_ARRAY_ORIGINAL)
         else:
             compile_sources({"Inferred.java": MODEL_ARRAY_ORIGINAL}, entry_class="Inferred")
-    assert caught.value.code == "java.unsupported.object-expressions"
+    # Native array creation is the array-storage gap (source_native_arrays).
+    assert caught.value.code == "java.unsupported.array-storage"
 
 
 @pytest.mark.parametrize("component", ("float", "double"))

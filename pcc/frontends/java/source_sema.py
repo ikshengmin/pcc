@@ -12,13 +12,14 @@ from .integer_semantics import evaluate_division, wrap_integer
 from .floating_semantics import converted_constant, floating_binary, floating_literal
 from .diagnostics import UnsupportedJava
 from .source_local_inference import LocalInferenceAnalyzer
+from .source_native_arrays import NativeArrayAnalyzer, array_binding
 from .source_blank_final import check_blank_final_locals
 from .source_static_constructors import check_static_constructor_declarations
 
 
 from .source_string_model import MAX_STRING_UNITS, StringSourceConstant
 from .source_types import (
-    FLOATING, INTEGRAL, NUMERIC, NamedType, conditional_type, promoted, select_method, widening,
+    FLOATING, INTEGRAL, NUMERIC, ArrayType, NamedType, conditional_type, promoted, select_method, widening,
 )
 
 
@@ -70,7 +71,7 @@ def integer_literal(node, allow_min=False):
     node.token.error("invalid " + dtype + " literal")
 
 
-class SourceAnalyzer(LocalInferenceAnalyzer):
+class SourceAnalyzer(NativeArrayAnalyzer, LocalInferenceAnalyzer):
     def __init__(self, program, project=None):
         self.program = program
         self.project = project
@@ -204,6 +205,7 @@ class SourceAnalyzer(LocalInferenceAnalyzer):
             self.method = method
             self.scopes, self.controls = [{}], []
             self.constant_locals = {}
+            self.reset_native_arrays(method)
             assigned = set()
             for parameter, dtype, is_final in zip(method.parameters, method.parameter_types, method.parameter_final):
                 assigned.add(self.declare(parameter, dtype, is_final))
@@ -341,6 +343,9 @@ class SourceAnalyzer(LocalInferenceAnalyzer):
             target_nodes.append(target)
         if target.kind not in {"name", "receiver_field", "array_access", "array_length"}:
             target.token.error("assignment or increment requires a variable")
+        if self.native_array_domain and target.kind == "array_access":
+            self.native_array_store(node, assigned)
+            return
         binding = (next((scope[target.value] for scope in reversed(self.scopes)
                          if target.value in scope), None) if target.kind == "name" else None)
         self.require_completed_local(binding, target.token)
@@ -353,6 +358,9 @@ class SourceAnalyzer(LocalInferenceAnalyzer):
                 target.token.error("array length is final and cannot be assigned")
             node.token.error("field and array expression writes require the next variable-access domain",
                              code="java.unsupported.assignment-expression-target")
+        node.symbol = binding
+        if self.native_array_domain:
+            self.reject_array_reassignment(node)
         if binding.dtype not in NUMERIC | {"boolean"}:
             node.token.error("reference expression writes require the next variable-access domain",
                              code="java.unsupported.assignment-expression-target")
@@ -394,6 +402,8 @@ class SourceAnalyzer(LocalInferenceAnalyzer):
         assigned.add(node.symbol)
 
     def type_expression(self, node, assigned):
+        if self.native_array_domain and self.native_array_expression(node, assigned):
+            return
         kind, op = node.kind, node.value
         if kind == "null":
             # Native syntax retains null only inside an inferred initializer.
@@ -423,6 +433,8 @@ class SourceAnalyzer(LocalInferenceAnalyzer):
                 for scope in reversed(self.scopes):
                     if op in scope:
                         node.symbol = scope[op]
+                        if self.native_array_domain and array_binding(node.symbol):
+                            self.array_reference_read(node, node.symbol)
                         if node.symbol not in assigned:
                             node.token.error("local variable is not definitely assigned: " + node.symbol.name)
                         node.dtype = node.symbol.dtype
@@ -577,6 +589,10 @@ class SourceAnalyzer(LocalInferenceAnalyzer):
                 assigned = self.statement(child, assigned)
             if kind == "block":
                 self.scopes.pop()
+        elif self.native_array_domain and kind == "var" and isinstance(node.value, ArrayType):
+            assigned = self.native_array_local(node, assigned)
+        elif self.native_array_domain and kind == "enhanced_for":
+            assigned = self.native_enhanced_for(node, assigned)
         elif kind == "var":
             if node.inference_token is not None:
                 self.infer_local(node, assigned)
@@ -593,6 +609,8 @@ class SourceAnalyzer(LocalInferenceAnalyzer):
                     self.constant_locals[node.symbol] = converted_constant(child.constant, child.dtype, node.symbol.dtype)
         elif kind == "assign":
             node.symbol = self.lookup(node.token)
+            if self.native_array_domain:
+                self.reject_array_reassignment(node)
             self.check_assignment(node, assigned, node.children)
         elif kind == "expression":
             self.expression(node.children[0], assigned)

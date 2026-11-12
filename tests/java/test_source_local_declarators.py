@@ -137,17 +137,22 @@ def test_declarators_retain_distinct_bindings_and_enclosing_scope():
     assert [binding.slot for binding in method.locals] == [0, 1]
 
 
-@pytest.mark.parametrize("body,types", [
-    ("int a[]={42},b=7;return a[0]+b;", [ArrayType("int"), "int"]),
-    ("int[] a={42},b=a;return b[0];", [ArrayType("int"), ArrayType("int")]),
-    ("int a=42,b[]={a};return b[0];", ["int", ArrayType("int")]),
+@pytest.mark.parametrize("body,types,native", [
+    ("int a[]={42},b=7;return a[0]+b;", [ArrayType("int"), "int"], True),
+    ("int[] a={42},b=a;return b[0];", [ArrayType("int"), ArrayType("int")], False),
+    ("int a=42,b[]={a};return b[0];", ["int", ArrayType("int")], True),
 ])
-def test_array_brackets_belong_to_their_declarator_model_only(body, types, monkeypatch):
+def test_array_brackets_belong_to_their_declarator_model_only(body, types, native, monkeypatch):
+    """Per-declarator brackets in both models; an alias stays a native gap."""
     from pcc.frontends.java.source_lowering import SourceLowerer
     text = original(body)
-    monkeypatch.setattr(SourceLowerer, "lower", lambda *a: pytest.fail("managed array reached native IR"))
     method = analyze_class_sources({"Declared.java": text}).programs[0].methods[0]
     assert [binding.dtype for binding in method.locals] == types
+    if native:
+        native_method = compile_source(text)
+        assert native_method.managed_runtime
+        return
+    monkeypatch.setattr(SourceLowerer, "lower", lambda *a: pytest.fail("managed array reached native IR"))
     with pytest.raises(UnsupportedJava) as caught:
         compile_source(text)
     assert caught.value.code == "java.unsupported.array-storage"

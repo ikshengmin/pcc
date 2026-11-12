@@ -8,7 +8,8 @@ from pcc.ir.compat import ir
 from .artifact import JavaCompilation, method_symbol
 from .diagnostics import UnsupportedJava
 from .integer_semantics import emit_binary, emit_narrow, emit_nonzero_division
-from .source_types import FLOATING
+from .source_native_arrays import NativeArrayLowering
+from .source_types import FLOATING, ArrayType
 from .source_static_constructors import check_static_constructor_declarations
 
 
@@ -25,6 +26,7 @@ class SourceLowerer:
         self.functions = {}
         self.i32 = ir.IntType(32)
         self.control_blocks = {}
+        self.arrays = NativeArrayLowering(self)
 
     @staticmethod
     def scalar_type(dtype):
@@ -107,20 +109,30 @@ class SourceLowerer:
             self.function = self.functions[method.owner, method.token.text, method.descriptor]
             self.result_type = method.result
             self.control_blocks = {}
+            self.method = method
             self.builder = ir.IRBuilder(self.function.append_basic_block("entry"))
-            self.slots = {binding: self.builder.alloca(self.scalar_type(binding.dtype), name="local_" + str(binding.slot))
+            # Array locals own a stable root handle cell, null until allocated.
+            self.slots = {binding: (self.arrays.handle_slot(self.builder) if isinstance(binding.dtype, ArrayType)
+                                    else self.builder.alloca(self.scalar_type(binding.dtype),
+                                                             name="local_" + str(binding.slot)))
                           for binding in method.locals}
+            self.array_slots = [self.slots[binding] for binding in method.locals
+                                if isinstance(binding.dtype, ArrayType)]
             for argument, binding in zip(self.function.args, method.locals):
                 self.builder.store(self.from_abi(argument, binding.dtype), self.slots[binding])
             self.statement(method.body)
             if not self.builder.block.is_terminated:
                 if method.result == "void":
+                    self.arrays.drop_all(self.array_slots)
                     self.builder.ret_void()
                 else:
                     raise AssertionError("source sema admitted a missing return")
         return JavaCompilation(self.module, self.program.name, entry,
                                tuple((method.token.text, method.descriptor) for method in self.program.methods),
-                               tuple(self.functions))
+                               tuple(self.functions), managed_runtime=self.arrays.used)
+
+    def array_index(self, node):
+        return ir.Constant(ir.IntType(64), node.constant)
 
     def expression(self, node):
         if node.constant is not None:
@@ -128,7 +140,20 @@ class SourceLowerer:
             return ir.Constant(self.scalar_type(node.dtype), value)
         kind = node.kind
         if kind == "mutation":
+            target = node.children[0]
+            while target.kind == "group":
+                target = target.children[0]
+            if target.kind == "array_place":
+                # JLS 15.26.1: the constant in-range place cannot fail; the
+                # stored value is the converted right-hand side.
+                value = self.coerce(self.expression(node.children[1]), target.dtype)
+                self.arrays.store(self.slots[target.symbol], target.dtype, self.array_index(target.children[1]), value)
+                return value
             return self.assignment(node, node.children[1:])
+        if kind == "array_length":
+            return ir.Constant(self.i32, self.method.array_lengths[node.symbol])
+        if kind == "array_access":
+            return self.arrays.load(self.slots[node.symbol], node.dtype, self.array_index(node.children[1]))
         if kind == "name":
             return self.builder.load(self.slots[node.symbol])
         if kind == "call":
@@ -249,6 +274,12 @@ class SourceLowerer:
             return
         if kind == "empty":
             return
+        if kind == "var" and isinstance(node.value, ArrayType):
+            self.arrays.allocate(node, self.slots[node.symbol], node.children[0].children)
+            return
+        if kind == "enhanced_for":
+            self.enhanced_for(node)
+            return
         if kind == "var":
             if node.children:
                 self.builder.store(self.coerce(self.expression(node.children[0]), node.symbol.dtype), self.slots[node.symbol])
@@ -260,8 +291,11 @@ class SourceLowerer:
             self.expression(node.children[0])
             return
         if kind == "return":
-            if node.children:
-                self.builder.ret(self.to_abi(self.expression(node.children[0]), self.result_type))
+            # Evaluate the result before retiring frame array roots.
+            value = self.to_abi(self.expression(node.children[0]), self.result_type) if node.children else None
+            self.arrays.drop_all(self.array_slots)
+            if value is not None:
+                self.builder.ret(value)
             else:
                 self.builder.ret_void()
             return
@@ -361,3 +395,38 @@ class SourceLowerer:
                 self.builder.unreachable()
             return
         raise AssertionError("unlowered source statement " + kind)
+
+    def enhanced_for(self, node):
+        """JLS 14.14.2 over a non-null top-level array local of constant length."""
+        variable, _, body = node.children
+        length = self.method.array_lengths[node.symbol]
+        component = node.symbol.dtype.component
+        i64 = ir.IntType(64)
+        # Frame storage belongs in the entry block, so a nested loop does not
+        # grow the stack per outer iteration.
+        entry = ir.IRBuilder(self.function.entry_basic_block)
+        entry.position_at_start(self.function.entry_basic_block)
+        index = entry.alloca(i64, name="java_array_index")
+        self.builder.store(ir.Constant(i64, 0), index)
+        check = self.function.append_basic_block("array_for_check")
+        body_block = self.function.append_basic_block("array_for_body")
+        update = self.function.append_basic_block("array_for_update")
+        done = self.function.append_basic_block("array_for_done")
+        self.builder.branch(check)
+        self.builder.position_at_end(check)
+        current = self.builder.load(index)
+        self.builder.cbranch(self.builder.icmp_signed("<", current, ir.Constant(i64, length)), body_block, done)
+        self.builder.position_at_end(body_block)
+        element = self.arrays.load(self.slots[node.symbol], component, self.builder.load(index))
+        self.builder.store(self.coerce(element, variable.symbol.dtype), self.slots[variable.symbol])
+        self.control_blocks[id(node)] = (update, done)
+        self.statement(body)
+        del self.control_blocks[id(node)]
+        if not self.builder.block.is_terminated:
+            self.builder.branch(update)
+        self.builder.position_at_end(update)
+        self.builder.store(self.builder.add(self.builder.load(index), ir.Constant(i64, 1)), index)
+        self.builder.branch(check)
+        self.builder.position_at_end(done)
+        if not node.completes:
+            self.builder.unreachable()

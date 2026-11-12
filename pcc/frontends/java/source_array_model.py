@@ -62,6 +62,8 @@ class ArrayIterationPlan:
 
 class ArrayModelAnalyzer:
     """Mixin used only by ClassAnalyzer, never the native scalar analyzer."""
+    # This model, not source_native_arrays, owns array semantics here.
+    native_array_domain = False
 
     def admits_inferred_local_type(self, dtype):
         return isinstance(dtype, ArrayType) or super().admits_inferred_local_type(dtype)

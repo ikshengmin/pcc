@@ -22,6 +22,8 @@ class JavaCompilation:
     # Source projects retain class-qualified identities; compatibility callers
     # keep their existing four-argument construction and single-class field.
     emitted_class_methods: tuple[tuple[str, str, str], ...] = ()
+    # Calls the opt-in shared managed GC0 envelope (source_native_arrays).
+    managed_runtime: bool = False
 
     @property
     def entry_symbol(self) -> str:
@@ -47,6 +49,11 @@ class JavaCompilation:
 
         if self.entry[1] != "()I":
             raise UnsupportedJava("executable entry must have descriptor ()I", code="java.unsupported.entry-descriptor")
+        if self.managed_runtime:
+            # The startup stub has no GC0 runtime, carrier or root registry.
+            raise UnsupportedJava("managed Java arrays need the owned runtime archive and shared managed object; "
+                                  "the runtime-free Java executable cannot link them",
+                                  code="java.unsupported.array-storage")
         target = self.module.triple
         if is_x86_64_linux_triple(target):
             start = (".intel_syntax noprefix\n.text\n.globl _start\n_start:\n"

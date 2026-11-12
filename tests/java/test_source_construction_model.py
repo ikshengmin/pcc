@@ -278,12 +278,12 @@ def test_complete_primes_original_retains_throw_before_generic_type_boundary():
     assert call.kind == 'call' and call.value == 'String.format'
     assert [child.value for child in call.children] == ['NUMBER_TOO_SMALL', 'n', '0']
     # Production folds the original String constant variable without storage
-    # and then rejects the managed-array loop before either downstream syntax
-    # prerequisite. Do not turn parser reach into execution.
+    # and parses the enhanced for (native array domain); this throw statement
+    # is the next syntax prerequisite. Do not turn parser reach into execution.
     with pytest.raises(UnsupportedJava) as native:
         compile_source(sources[first], filename=first)
-    assert native.value.code == 'java.unsupported.array-storage'
-    assert ':53:26:' in str(native.value)
+    assert native.value.code == 'java.unsupported.runtime-statements'
+    assert ':70:13:' in str(native.value)
     assert sources == before
     # Complete original parsing still fails before project Sema or lowering.
     # No token removal, source slice, fake library, or project acceptance.

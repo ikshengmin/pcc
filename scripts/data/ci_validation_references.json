@@ -1636,6 +1636,14 @@
         ]
       }
     },
+    "tests/java/test_source_native_arrays.py": {
+      "test_native_array_originals_against_selected_jdk": {
+        "activity": "external-reference",
+        "reason": [
+          "Selected JDK compiler/runtime through recorded raw subprocesses; PCC native execution of managed arrays is UNRUN"
+        ]
+      }
+    },
     "tests/java/test_source_labels.py": {
       "test_exact_labeled_originals_jdk_raw_and_rejections": {
         "activity": "external-reference",

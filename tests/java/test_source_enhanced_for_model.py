@@ -314,18 +314,35 @@ def test_invalid_enhanced_for_originals_are_language_errors_not_capability_gaps(
     assert type(caught.value) is JavaError and caught.value.code is None
 
 
+# Iteration over a top-level initialized local is the non-throwing native
+# array domain (tests/java/test_source_native_arrays.py); it lowers onto the
+# shared GC0 managed envelope instead of remaining a model-only plan.
+NATIVE_ITERATION = {"variable-write-does-not-store-array", "later-components-read-after-body-writes",
+                    "current-component-copied-before-body", "parenthesized-array-expression"}
+# Native syntax keeps null as an unsupported reference expression.
+NATIVE_CODES = {"capture-survives-null-rebind": "java.unsupported.object-expressions"}
+
+
 @pytest.mark.parametrize("name,text", PROGRAMS, ids=[row[0] for row in PROGRAMS])
 def test_checked_array_iteration_never_grants_native_compilation(name, text, monkeypatch):
+    """Outside the non-throwing native array domain, never native compilation."""
     from pcc.frontends.java.source_lowering import SourceLowerer
 
     forbid_bytecode_or_external_owner(monkeypatch)
+    if name in NATIVE_ITERATION:
+        for invoke in (lambda: compile_source(text, filename="ArrayExample.java"),
+                       lambda: compile_sources({"ArrayExample.java": text}, entry_class="ArrayExample")):
+            compilation = invoke()
+            assert compilation.managed_runtime
+            assert "@pcc_rt_managed_alloc" in str(compilation.module)
+        return
     monkeypatch.setattr(SourceLowerer, "__init__",
                         lambda *args: pytest.fail("managed iteration reached scalar IR"))
     for invoke in (lambda: compile_source(text, filename="ArrayExample.java"),
                    lambda: compile_sources({"ArrayExample.java": text}, entry_class="ArrayExample")):
         with pytest.raises(UnsupportedJava) as caught:
             invoke()
-        assert caught.value.code == "java.unsupported.array-storage"
+        assert caught.value.code == NATIVE_CODES.get(name, "java.unsupported.array-storage")
 
 
 @pytest.mark.parametrize("name,text", BOUNDARIES, ids=[row[0] for row in BOUNDARIES])
