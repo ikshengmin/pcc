@@ -340,6 +340,11 @@
       "id": "dcl.fct.def.default",
       "title": "dcl.fct.def.default",
       "url": "https://timsong-cpp.github.io/cppwp/n4659/dcl.fct.def.default"
+    },
+    {
+      "id": "class.union",
+      "title": "class.union",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/class.union"
     }
   ],
   "features": [
@@ -738,7 +743,9 @@
       ],
       "scope": "Class-element array members still require element special-member and lifetime semantics. Scalar/pointer array members have separate authored, execution-unrun obligations; this boundary is not a claim of complete array support.",
       "status": "explicitly_unimplemented",
-      "tests": ["tests/cpp/test_cpp_scalar_array_members.py"],
+      "tests": [
+        "tests/cpp/test_cpp_scalar_array_members.py"
+      ],
       "diagnostics": [
         "cpp.unsupported.class-array-members"
       ],
@@ -899,7 +906,12 @@
     {
       "id": "cpp.templates.dependent-array-new-patterns",
       "title": "Dependent member array-new Patterns, awaiting validation",
-      "chapter_ids": ["expr", "dcl.init", "special", "temp"],
+      "chapter_ids": [
+        "expr",
+        "dcl.init",
+        "special",
+        "temp"
+      ],
       "scope": "Authored, execution-unrun obligations for one-dimensional uninitialized array-new Patterns in class-template member bodies when allocated type or bound is dependent. Allocated type identity, integral first-bound expressions, definition-point local bindings and global lookup syntax are retained without token replay. First bounds may be runtime values or zero; known constant negative lengths are rejected independently of fixed-array bound rules. Concrete void/reference/incomplete/const-scalar restrictions and class-element lifetime gates are checked before any allocation lowering. Every odr-used new[] still fails before IR at the owned allocation/lookup/size/failure/initialization/deallocation boundary; no default allocator or successful allocation value is fabricated. Native positive observers execute only unrelated supported members or separate entry units, not allocation. Both formerly rejected unused-body original inputs are preserved unchanged. Function-template, scalar, nondependent, initialized, multidimensional, converted nonintegral and unevaluated new forms retain explicit gaps. Native pcc1 frontend, allocation runtime and unchanged TinyXML2 acceptance remain unqualified. No local tests, imports, compilers or collection were run.",
       "status": "missing",
       "tests": [
@@ -913,7 +925,12 @@
     {
       "id": "cpp.templates.member-local-pointers",
       "title": "Class-template body-local pointer/cv declarations, awaiting execution",
-      "chapter_ids": ["dcl.decl", "dcl.init", "stmt", "temp"],
+      "chapter_ids": [
+        "dcl.decl",
+        "dcl.init",
+        "stmt",
+        "temp"
+      ],
       "scope": "Authored, execution-unrun obligations for body-local object pointers and cv scalar/pointer declarations in class-template members, including definition-point symbol identity, dependent local const initialization checks, ordinary typed Pattern substitution/storage, pointer and pointee qualifiers, local shadowing, injected-class pointer identity, once-only subscript addresses, static members, full-width scalar storage, lazy unused bodies and cross-TU external-ODR identity. Function-template pointer/cv typing, volatile access, local class/array/reference lifetime, callbacks and allocation remain explicit boundaries. Exact TinyXML2 header local-declaration excerpts are preserved but do not establish unchanged PushArr, EnsureCapacity or project acceptance. No local tests, PCC imports, compiler runs or collection were performed; CI must establish every authored outcome. Native pcc1 frontend and complete C++17 remain unqualified.",
       "status": "missing",
       "tests": [
@@ -927,19 +944,46 @@
     {
       "id": "cpp.destructors.first-defaulted",
       "title": "First-declaration defaulted destructors, awaiting execution",
-      "chapter_ids": ["class.dtor", "dcl.fct.def.default", "class.base.init", "class", "expr.pseudo"],
+      "chapter_ids": [
+        "class.dtor",
+        "dcl.fct.def.default",
+        "class.base.init",
+        "class",
+        "expr.pseudo"
+      ],
       "scope": "Authored, execution-unrun obligations for non-template first-declaration defaulted D1s, independent deletion/triviality/user-provided identity, recursive implicit-member deletion and access checks, and lazy emitted bodies through the existing exact member-cleanup proof and external-ODR worklist. Class completion classifies deletion before deferred default arguments and DMIs, including the unchanged deleted-D1 unevaluated default-argument counterexample. Unused declarations and valid unevaluated calls request no member body. Ordinary, placement, reverse-order, return, loop, nested-member, body-local and cross-TU original programs have authored owned-native/reference rows; no observed pass is claimed. The exact formerly rejected defaulted declaration is preserved unchanged as a positive original. Implicit nontrivial D1 synthesis, template/later defaulting, explicit exception specifications, class-array lifetimes, unknown destructor effects, unavailable evaluated-use bodies, bases/virtual dispatch, internal-linkage ownership and unwinding remain explicit boundaries. Native pcc1 frontend and unchanged TinyXML2 project acceptance remain unqualified. No local tests, imports, compilers or collection were run; CI must establish these outcomes.",
       "implementation": {
         "status": "supported",
         "source_revision": "sha256:769fab815555cf9f146851b6450d2d9654e22702569ab8fdd9d85cf23c9a5442",
         "sources": [
-          {"path": "pcc/frontends/cpp/allocation.py", "sha256": "22a05dde5d55288b826cc78bd4845f0ed63aedc436b65d3e3579392c01139d5c"},
-          {"path": "pcc/frontends/cpp/classes.py", "sha256": "2b86df2b1bcff2267e44fd38fee3ab43d9b8c7a1ad217a0cd7a60bda958d01f1"},
-          {"path": "pcc/frontends/cpp/default_destructors.py", "sha256": "1de386e0c17e0626c27eaad20e06ef99b3da863711c48c2ab646fa365caea1a3"},
-          {"path": "pcc/frontends/cpp/destructors.py", "sha256": "83b6cf347db627d44d1ad0b5cdfb854bca61fa7f75f666c1459c0b548986d92e"},
-          {"path": "pcc/frontends/cpp/lifetimes.py", "sha256": "a5db3b348e44b98f43032e25ff89d2d12dcb118871f387a54735f8444e41d46c"},
-          {"path": "pcc/frontends/cpp/member_initialization.py", "sha256": "f9eb701a90b9fd9aa82e3f92e03644c38c57e21528aa84d367df9dd7798ff0bb"},
-          {"path": "pcc/frontends/cpp/parser.py", "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"}
+          {
+            "path": "pcc/frontends/cpp/allocation.py",
+            "sha256": "22a05dde5d55288b826cc78bd4845f0ed63aedc436b65d3e3579392c01139d5c"
+          },
+          {
+            "path": "pcc/frontends/cpp/classes.py",
+            "sha256": "2b86df2b1bcff2267e44fd38fee3ab43d9b8c7a1ad217a0cd7a60bda958d01f1"
+          },
+          {
+            "path": "pcc/frontends/cpp/default_destructors.py",
+            "sha256": "1de386e0c17e0626c27eaad20e06ef99b3da863711c48c2ab646fa365caea1a3"
+          },
+          {
+            "path": "pcc/frontends/cpp/destructors.py",
+            "sha256": "83b6cf347db627d44d1ad0b5cdfb854bca61fa7f75f666c1459c0b548986d92e"
+          },
+          {
+            "path": "pcc/frontends/cpp/lifetimes.py",
+            "sha256": "a5db3b348e44b98f43032e25ff89d2d12dcb118871f387a54735f8444e41d46c"
+          },
+          {
+            "path": "pcc/frontends/cpp/member_initialization.py",
+            "sha256": "f9eb701a90b9fd9aa82e3f92e03644c38c57e21528aa84d367df9dd7798ff0bb"
+          },
+          {
+            "path": "pcc/frontends/cpp/parser.py",
+            "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
+          }
         ]
       },
       "tests": [
@@ -993,7 +1037,14 @@
     {
       "id": "cpp.classes.trivial-array-members",
       "title": "Scalar/pointer array member semantics, awaiting execution",
-      "chapter_ids": ["class", "class.base.init", "dcl.init", "expr", "special", "temp"],
+      "chapter_ids": [
+        "class",
+        "class.base.init",
+        "dcl.init",
+        "expr",
+        "special",
+        "temp"
+      ],
       "scope": "Authored, execution-unrun source/owned-native/reference obligations for complete scalar/pointer array data members, natural target record layout and sticky size-overflow failures, nested explicit aggregate initialization and omitted/empty zero initialization, const-element deletion/mutability, defaulted-C1 zero prefixes, omitted constructor no-store plans, bounded explicit-empty constructor zero loops, trivial destruction, class-template array decay/subscripts, placement and explicit D1 reuse. No uninitialized scalar is read in the native corpus. Exact formerly rejected originals and TinyXML2 constructor/field excerpts are retained unchanged. Class-element arrays, array DMIs, braced constructor-array initialization, brace elision, function-template arrays, copy/move synthesis, heap allocation runtime, native pcc1 frontend and unchanged TinyXML2 project acceptance remain unqualified boundaries. No local tests, PCC imports, compilers or collection were run; CI must establish the authored outcomes.",
       "status": "missing",
       "tests": [
@@ -1151,11 +1202,11 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:7fd52b006786a52001ad63434d106a7b22f3f1d968b03fe1d6a3840c12e1c7d8",
+        "source_revision": "sha256:1c119658f28ac11f6daaf3b917e96ab0cb11bc4db0fcb5a494486486250d10fe",
         "sources": [
           {
             "path": "pcc/frontends/cpp/classes.py",
-            "sha256": "2b86df2b1bcff2267e44fd38fee3ab43d9b8c7a1ad217a0cd7a60bda958d01f1"
+            "sha256": "ecae67d4aefe84e05d263df30247141eaab33f359866659460cb9c557bc79fcd"
           },
           {
             "path": "pcc/frontends/cpp/constructors.py",
@@ -1195,7 +1246,7 @@
           },
           {
             "path": "pcc/frontends/cpp/size_queries.py",
-            "sha256": "295f642b5288e3c1d34534648fb06b628d1690320dec75239744dbd81c55c0f0"
+            "sha256": "a5f78c00f0212ce48462d0058bd3fb6eb6787f414850c97eae176af13cc5063f"
           },
           {
             "path": "pcc/frontends/cpp/types.py",
@@ -1229,7 +1280,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:a8f041cb0ee934c62fc57e298a0b3dffab0600e8521eab5524981864fb8a38b0",
+        "source_revision": "sha256:79461641412ecc46e2807ef12b9dc449e30a98d88252210d9f2848c1f782f99f",
         "sources": [
           {
             "path": "pcc/frontends/cpp/allocation.py",
@@ -1237,7 +1288,7 @@
           },
           {
             "path": "pcc/frontends/cpp/classes.py",
-            "sha256": "2b86df2b1bcff2267e44fd38fee3ab43d9b8c7a1ad217a0cd7a60bda958d01f1"
+            "sha256": "ecae67d4aefe84e05d263df30247141eaab33f359866659460cb9c557bc79fcd"
           },
           {
             "path": "pcc/frontends/cpp/constructors.py",
@@ -1261,7 +1312,7 @@
           },
           {
             "path": "pcc/frontends/cpp/size_queries.py",
-            "sha256": "295f642b5288e3c1d34534648fb06b628d1690320dec75239744dbd81c55c0f0"
+            "sha256": "a5f78c00f0212ce48462d0058bd3fb6eb6787f414850c97eae176af13cc5063f"
           },
           {
             "path": "pcc/frontends/cpp/virtual_functions.py",
@@ -3632,6 +3683,59 @@
         "cpp.unsupported.variadic-functions"
       ],
       "evidence": []
+    },
+    {
+      "id": "cpp.unions",
+      "title": "Unions with trivial members",
+      "chapter_ids": [
+        "class.union",
+        "dcl.init",
+        "class.mem"
+      ],
+      "scope": "A union is a class whose non-static data members share offset 0, projected to the shared C union record; size and alignment are the largest member's (rounded). Only members whose special members are all trivial are admitted (scalars, pointers, enums, arrays of them, trivial classes and unions), so the union's implicit special members are trivial. A braced list initializes the first member; value-initialization zeroes it. Both require the first member to cover the union, because zeroed padding must be real. A base clause, a virtual function and a class-key that disagrees with an earlier declaration are ordinary errors. Union member functions, constructors, destructors, friends, static members, default member initializers, non-trivial members, anonymous unions and list-initialization of a union whose first member is smaller than the union remain explicit gaps. Source revision is sha256 of the sorted compact JSON source list.",
+      "tests": [
+        "tests/cpp/test_cpp_unions.py::test_union_is_a_class_with_a_c_union_record_and_overlapping_layout",
+        "tests/cpp/test_cpp_unions.py::test_original_union_declaration_from_class_semantics_is_positive",
+        "tests/cpp/test_cpp_unions.py::test_invalid_or_unimplemented_union_routes_are_explicit",
+        "tests/cpp/test_cpp_unions.py::test_union_programs_compile_to_stable_artifacts",
+        "tests/cpp/test_cpp_union_execution.py::test_union_programs_execute_against_real_cpp17_reference"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:7816c2f04cadf6324dc9a21528ff0cac3f5ba2f4aa0f7bb41bd496c7c3f1d097",
+        "sources": [
+          {
+            "path": "pcc/frontends/cpp/classes.py",
+            "sha256": "ecae67d4aefe84e05d263df30247141eaab33f359866659460cb9c557bc79fcd"
+          },
+          {
+            "path": "pcc/frontends/cpp/initializers.py",
+            "sha256": "ba951b6bf4389521f378776d1124caae7fb7fa258e9ee7e63b60033882223f5d"
+          },
+          {
+            "path": "pcc/frontends/cpp/size_queries.py",
+            "sha256": "a5f78c00f0212ce48462d0058bd3fb6eb6787f414850c97eae176af13cc5063f"
+          }
+        ]
+      }
+    },
+    {
+      "id": "cpp.unions-remaining",
+      "title": "Unions \u2014 remaining capability boundary",
+      "chapter_ids": [
+        "class.union"
+      ],
+      "scope": "Only inputs routed to cpp.unsupported.unions in the pinned frontend (non-trivial union members and list-initialization of a union whose first member is smaller than the union); the trivial-member subset is cpp.unions.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/cpp/test_cpp_unions.py"
+      ],
+      "diagnostics": [
+        "cpp.unsupported.unions"
+      ],
+      "evidence": []
     }
   ],
   "diagnostics": {
@@ -3747,6 +3851,14 @@
         "source": {
           "path": "pcc/frontends/cpp/declarators.py",
           "sha256": "2c5c0540ab4a9082f1e22151630e91106c5d130e41439b694f2656b978abc05f"
+        }
+      },
+      {
+        "code": "cpp.unsupported.base-classes",
+        "feature_id": "cpp.base-classes",
+        "source": {
+          "path": "pcc/frontends/cpp/inheritance.py",
+          "sha256": "cebe51920aa70404e35e5cf83b79c8a925e06fee05a1d2f081a00b2733dd646f"
         }
       },
       {
@@ -4686,6 +4798,14 @@
         }
       },
       {
+        "code": "cpp.unsupported.unions",
+        "feature_id": "cpp.unions-remaining",
+        "source": {
+          "path": "pcc/frontends/cpp/classes.py",
+          "sha256": "ecae67d4aefe84e05d263df30247141eaab33f359866659460cb9c557bc79fcd"
+        }
+      },
+      {
         "code": "cpp.unsupported.unknown-bound-array-pointers",
         "feature_id": "cpp.unknown-bound-array-pointers",
         "source": {
@@ -4747,14 +4867,6 @@
         "source": {
           "path": "pcc/frontends/cpp/virtual_functions.py",
           "sha256": "b426d008cec6ab05dd67f95bfe169839845d1fba9bbcba81dfa60b764b1088b9"
-        }
-      },
-      {
-        "code": "cpp.unsupported.base-classes",
-        "feature_id": "cpp.base-classes",
-        "source": {
-          "path": "pcc/frontends/cpp/inheritance.py",
-          "sha256": "cebe51920aa70404e35e5cf83b79c8a925e06fee05a1d2f081a00b2733dd646f"
         }
       },
       {

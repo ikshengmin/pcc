@@ -181,6 +181,24 @@ def _lower_scalar(dtype, initializer, types, convert, coord):
     return convert(initializer, dtype, coord)
 
 
+def require_union_list_storage(dtype, types, coord):
+    """A union list stores only its first member; the other bytes must be zero.
+
+    Zero-initialization also zeroes a union's padding ([dcl.init]/6.3), but the
+    C initializer stores only the first member. Admit unions whose first
+    member covers the whole object.
+    """
+    from pcc.frontends.cpp.size_queries import object_layout
+    definition = unqualified(dtype).definition
+    if not definition.members:
+        return
+    first = object_layout(definition.members[0].dtype, types, coord).size
+    if first != object_layout(dtype, types, coord).size:
+        raise CppDiagnostic("cpp.unsupported.unions",
+                            "list-initialization of a union whose first member is smaller than the union "
+                            "is not implemented", coord)
+
+
 def lower_aggregate_initializer(dtype, initializer, types, convert, *, scope):
     """Return ordered C InitList storage only after C++ list Sema succeeds.
 
@@ -218,8 +236,13 @@ def lower_aggregate_initializer(dtype, initializer, types, convert, *, scope):
             initializer.coord,
         )
     check_aggregate_destructor_access(definition, scope)
+    members = definition.members
+    if unqualified(dtype).is_union:
+        # [dcl.init.aggr]/16: a union's list initializes its first member.
+        require_union_list_storage(dtype, types, initializer.coord)
+        members = members[:1]
     values = []
-    for index, member in enumerate(definition.members):
+    for index, member in enumerate(members):
         if index >= len(initializer.clauses):
             values.append(empty_list_initialize(member.dtype, initializer.coord, scope=scope)
                           if is_class_type(member.dtype)
@@ -248,7 +271,7 @@ def lower_aggregate_initializer(dtype, initializer, types, convert, *, scope):
     # Do not check this before examining class members: a valid brace-elided
     # list may have more clauses than direct members, and must remain a missing
     # capability diagnostic rather than an incorrect ill-formed diagnosis.
-    if len(initializer.clauses) > len(definition.members):
+    if len(initializer.clauses) > len(members):
         raise CppDiagnostic(
             "cpp.too-many-initializers", "too many aggregate initializer clauses", initializer.coord
         )

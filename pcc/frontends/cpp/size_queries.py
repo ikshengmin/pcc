@@ -30,6 +30,11 @@ def object_layout(dtype, types, coord):
         # ClassDefinition.c_declaration, which also adds the one-byte
         # empty-class field matched by the minimum size.
         fields = [object_layout(member.dtype, types, member.coord) for member in plain.definition.members]
+        if plain.is_union:
+            # [class.union]/2: every member starts at offset 0.
+            alignment = max([1] + [field.alignment for field in fields])
+            size = max([1] + [field.size for field in fields])
+            return CAbiScalarLayout(-(-size // alignment) * alignment, alignment)
         from pcc.frontends.cpp.inheritance import base_specifier, is_empty_class
         specifier = base_specifier(plain.definition)
         if specifier is not None and not is_empty_class(specifier.dtype):

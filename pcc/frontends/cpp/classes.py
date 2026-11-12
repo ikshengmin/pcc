@@ -9,8 +9,10 @@ proofs when destruction is nontrivial.
 destructors.py and lifetimes.py own bounded normal exits and explicitly
 declared member destruction. inheritance.py owns single non-virtual bases and
 virtual_functions.py the table pointer, overriding and dispatch. Multiple and
-virtual bases, unions, implicit non-trivial special members and exception
-unwinding remain gaps.
+virtual bases, union member functions and non-trivial union members, implicit
+non-trivial special members and exception unwinding remain gaps. A union is a
+class whose data members share offset 0 ([class.union]); only trivial members
+are admitted, so its implicit special members are trivial.
 
 The parser and this module share ``Scope``/``Symbol``. There is no second
 ordinary-name lookup implementation. Physical layout is performed by the
@@ -54,6 +56,8 @@ class ClassType:
             str(len(part)) + part for part in self.qualified_name
         )
         self.definition = None
+        # Fixed by the first declaration's class-key ([dcl.type.elab]/3).
+        self.is_union = False
 
     @property
     def complete(self):
@@ -105,19 +109,46 @@ def require_complete(dtype, coord):
         )
 
 
+def c_record(dtype, declarations, coord):
+    """The C record of a class: a union's members share offset 0."""
+    record = c_ast.Union if getattr(dtype, "is_union", False) else c_ast.Struct
+    return record(dtype.c_tag, declarations, coord)
+
+
 def c_class_type(name, dtype, coord):
     """Project a class type reference, retaining top-level const qualifiers."""
     qualifiers = ["const"] if isinstance(dtype, ConstType) else []
     dtype = unqualified(dtype)
     if not isinstance(dtype, ClassType):
         raise TypeError("c_class_type requires a C++ class type")
-    return c_ast.TypeDecl(name, qualifiers, c_ast.Struct(dtype.c_tag, None, coord), coord)
+    return c_ast.TypeDecl(name, qualifiers, c_record(dtype, None, coord), coord)
+
+
+def trivial_union_member_type(dtype):
+    """Whether a union may hold this member without user special members.
+
+    Scalars, pointers, enums, arrays of them and classes whose special
+    members are all implicit and trivial ([class.union]/2 with trivial
+    members: the union's own special members stay trivial).
+    """
+    plain = unqualified(dtype)
+    while array_type(plain):
+        plain = unqualified(plain.element)
+    if not isinstance(plain, ClassType):
+        return True
+    definition = plain.definition
+    if definition is None:
+        return False
+    return (not definition.constructors.overloads and definition.destructor is None
+            and not definition.polymorphic and definition.base is None
+            and all(getattr(member, "default_initializer_tokens", None) is None
+                    and trivial_union_member_type(member.dtype) for member in definition.members))
 
 
 class ClassDefinition:
     def __init__(self, dtype, parent, class_key="struct"):
-        if class_key not in ("class", "struct"):
-            raise ValueError("only non-union class definitions are implemented")
+        if class_key not in ("class", "struct", "union"):
+            raise ValueError("invalid class-key")
         if dtype.definition is not None:
             raise CppDiagnostic(
                 "cpp.class-redefinition", "redefinition of class '" + dtype.name + "'",
@@ -175,6 +206,10 @@ class ClassDefinition:
         require_complete(dtype, symbol.coord)
         from pcc.frontends.cpp.virtual_functions import require_concrete
         require_concrete(dtype, symbol.coord)
+        if self.dtype.is_union and not trivial_union_member_type(symbol.dtype):
+            raise CppDiagnostic("cpp.unsupported.unions",
+                                "union members with non-trivial special members are not implemented",
+                                symbol.coord)
         from pcc.frontends.cpp.arrays import const_array_elements
         if mutable and const_array_elements(symbol.dtype):
             raise CppDiagnostic(
@@ -303,7 +338,7 @@ class ClassDefinition:
                 None, None, self.dtype.coord,
             ))
         return c_ast.Decl(
-            None, [], [], [], c_ast.Struct(self.dtype.c_tag, declarations, self.dtype.coord),
+            None, [], [], [], c_record(self.dtype, declarations, self.dtype.coord),
             None, None, self.dtype.coord,
         )
 
@@ -321,8 +356,8 @@ def parse_class(parser):
     """
     parser.last_class_definition = None
     keyword = parser.cursor.take()
-    if keyword.value not in ("class", "struct"):
-        _unsupported(keyword, "union object/lifetime semantics are not implemented")
+    if keyword.value not in ("class", "struct", "union"):
+        _unsupported(keyword, "unknown class-key")
     if parser.parsing_template:
         _unsupported(keyword, "class template semantics are not implemented")
     if parser.scope.kind != "namespace":
@@ -338,21 +373,28 @@ def parse_class(parser):
             internal_linkage=parser.scope.namespace().internal_linkage,
             declaration_scope=parser.scope,
         )
+        dtype.is_union = keyword.value == "union"
         previous = parser.scope.declare(Symbol(name.value, "type", name.coord, dtype=dtype))
         previous.class_declaration = True
     elif not getattr(previous, "class_declaration", False):
         raise CppDiagnostic(
             "cpp.redeclaration", "'" + name.value + "' is not a class declaration", name.coord
         )
+    elif previous.dtype.is_union != (keyword.value == "union"):
+        # [dcl.type.elab]/3: union must agree with the declaration's class-key.
+        raise CppDiagnostic("cpp.class-key-mismatch",
+                            "'" + name.value + "' was declared with a different class-key", name.coord)
     elif previous.owner is not parser.scope:
         _unsupported(name, "redeclaration of an imported class outside its declaring namespace is not implemented")
     dtype = previous.dtype
     dtype.declaration_symbol = previous
     if parser._accept(";"):
         return c_ast.Decl(
-            None, [], [], [], c_ast.Struct(dtype.c_tag, None, name.coord), None, None, name.coord
+            None, [], [], [], c_record(dtype, None, name.coord), None, None, name.coord
         )
     base = None
+    if dtype.is_union and parser._peek().value == ":":
+        raise CppDiagnostic("cpp.invalid-union-base", "a union cannot have base classes", parser._peek().coord)
     if parser._peek().value == ":":
         from pcc.frontends.cpp.inheritance import parse_base_clause
         base = parse_base_clause(parser, keyword.value, dtype)
@@ -376,6 +418,11 @@ def parse_class(parser):
                 parser._expect(":")
                 definition.set_access(token.value)
                 continue
+            if dtype.is_union and token.value == "virtual":
+                raise CppDiagnostic("cpp.invalid-union-member", "a union cannot have virtual functions", token.coord)
+            if dtype.is_union and (token.value in ("~", "friend", "explicit", "static", "extern", "inline", "operator")
+                                   or token.value == dtype.name and parser.cursor.tokens[parser.cursor.position + 1].value == "("):
+                _unsupported(token, "union member functions, friends and static members are not implemented")
             if token.value == "friend":
                 from pcc.frontends.cpp.friend_classes import parse_friend_class
                 parse_friend_class(parser, definition)
@@ -483,6 +530,8 @@ def parse_class(parser):
                             else 'cpp.invalid-subscript-operator')
                     raise CppDiagnostic(code, member.value + ' must declare a function', member.coord)
                 if parser._peek().value == "(":
+                    if dtype.is_union:
+                        _unsupported(member, "union member functions, friends and static members are not implemented")
                     if prior_data:
                         _unsupported(member, "mixed data/function declarator lists are not implemented")
                     if mutable:
@@ -494,6 +543,8 @@ def parse_class(parser):
                 if parser._peek().value in ("{", ":"):
                     _unsupported(parser._peek(), "braced default member initializers and bit-fields are not implemented")
                 symbol = definition.add_member(Symbol(member.value, "member", member.coord, dtype=member_type), mutable)
+                if dtype.is_union and parser._peek().value == "=":
+                    _unsupported(parser._peek(), "union default member initializers are not implemented")
                 if parser._accept("="):
                     from pcc.frontends.cpp.default_member_initializers import collect, unsupported
                     if is_class_type(member_type) or array_type(member_type):
@@ -769,8 +820,15 @@ def _empty_list_initialize(dtype, coord):
         # until N4659 [dcl.init]/8.2 and its later DR handling are qualified.
         raise CppDiagnostic("cpp.unsupported.const-class-initialization",
                             "const non-aggregate value-initialization constraints are not qualified", coord)
+    members = definition.members
+    if owner.is_union:
+        # Value-initialization zeroes the first member and the padding; the C
+        # initializer stores only the first member, which must cover the union.
+        from pcc.frontends.cpp.initializers import require_union_list_storage
+        require_union_list_storage(owner, definition.layout_types, coord)
+        members = members[:1]
     values = []
-    for member in definition.members:
+    for member in members:
         if is_class_type(member.dtype):
             # Under a nonaggregate this InitList is only zero-storage
             # projection, not a new caller-context aggregate initialization.
