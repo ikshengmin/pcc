@@ -277,9 +277,12 @@ def complete_body(parser, definition, symbol, scope, this, coord, bind_body):
     finally:
         parser.lifetimes.leave()
         parser.lifetimes.cleanup_destructors = previous_calls
-    if selected and not closed:
-        raise CppDiagnostic("cpp.unsupported.destructor-subobjects",
-                            "unknown destruction effects require member exception cleanup", coord)
+    # Every destructor admitted here has the implicit non-throwing exception
+    # specification ([except.spec]/8: explicit specifications are rejected
+    # above and no member or base destructor may throw), so an exception
+    # leaving the body calls std::terminate ([except.terminate]) and needs no
+    # member cleanup path. The unproven body stays recorded as not closed for
+    # owners that use the proof.
     symbol.closed_destruction_body = closed
     from pcc.frontends.cpp.constructors import call_free_body
     symbol.closed_normal_body = call_free_body(body)

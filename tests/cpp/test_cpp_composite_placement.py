@@ -118,9 +118,11 @@ DEFERRED = (
     ('unknown-outer-d1-with-trivial-member',
      'void effect();struct M{};struct O{M member;~O(){effect();}};void f(O*p){p->~O();}',
      'cpp.unsupported.placement-constructor-effects'),
+    # The member D1 body is accepted ([except.spec]/8); the explicit call
+    # still needs a closed-destruction proof for its own effects.
     ('unknown-member-d1',
      'void effect();struct M{~M(){effect();}};struct O{M member;~O(){}};void f(O*p){p->~O();}',
-     'cpp.unsupported.destructor-subobjects'),
+     'cpp.unsupported.placement-constructor-effects'),
     ('implicit-outer-d1-not-a-noop',
      'struct M{~M(){}};struct O{M member;};void f(O*p){p->~O();}',
      'cpp.unsupported.destructor-subobjects'),

@@ -175,21 +175,66 @@ DEFERRED = (
     ('implicit-default-parentheses-declare-function', NONAGGREGATE_PRIVATE_DECLARATIONS + 'void f(){O o();}', 'cpp.unsupported.class-initialization'),
     ('implicit-outer-d1', 'struct M{~M(){}};struct O{M member;};void f(){O o;}', 'cpp.unsupported.destructor-subobjects'),
     ('implicit-intermediate-d1', 'struct M{~M(){}};struct Middle{M member;};struct O{Middle member;~O(){}};', 'cpp.unsupported.destructor-subobjects'),
-    ('member-d1-definition-not-available', 'struct M{~M();};struct O{M member;~O(){}};M::~M(){}', 'cpp.unsupported.destructor-subobjects'),
-    ('unknown-member-d1-call', 'void effect();struct M{~M(){effect();}};struct O{M member;~O(){}};', 'cpp.unsupported.destructor-subobjects'),
-    ('unknown-outer-d1-call', 'void effect();struct M{~M(){}};struct O{M member;~O(){effect();}};', 'cpp.unsupported.destructor-subobjects'),
-    ('user-call-to-same-closed-d1-is-not-synthetic-cleanup', 'struct M{~M(){}};'
-     'struct O{M member;M*other;~O(){other->~M();}};', 'cpp.unsupported.destructor-subobjects'),
-    ('unknown-body-local-d1-call', 'void effect();struct Local{~Local(){effect();}};struct M{~M(){}};'
-     'struct O{M member;~O(){Local local;}};', 'cpp.unsupported.destructor-subobjects'),
-    ('body-local-constructor-call', 'struct Local{Local(){}};struct M{~M(){}};struct O{M member;~O(){Local local;}};', 'cpp.unsupported.destructor-subobjects'),
     ('aggregate-initializer-call-after-member', 'int effect();struct M{~M(){}};struct O{M member;int n;~O(){}};'
      'void f(){O o{{},effect()};}', 'cpp.unsupported.destructor-subobjects'),
     ('aggregate-initializer-default-argument-call', 'int effect();int use(int n=effect());'
      'struct M{~M(){}};struct O{M member;int n;~O(){}};void f(){O o{{},use()};}', 'cpp.unsupported.destructor-subobjects'),
-    ('original-strpair-reset-effect', STRPAIR_BOUNDARY, 'cpp.unsupported.destructor-subobjects'),
     ('member-array', 'struct M{~M(){}};struct O{M members[2];~O(){}};', 'cpp.unsupported.class-array-lifetime'),
 )
+
+
+# [except.spec]/8: these destructors have the implicit non-throwing exception
+# specification (explicit ones are rejected), so an exception leaving a body
+# would call std::terminate ([except.terminate]) and no member cleanup path is
+# needed after an unknown call. Moved verbatim from DEFERRED here and from the
+# aggregate, defaulted and template destructor boundary lists.
+NONTHROWING_DESTRUCTOR_BODIES = (
+    ('member-d1-definition-not-available', 'struct M{~M();};struct O{M member;~O(){}};M::~M(){}'),
+    ('unknown-member-d1-call', 'void effect();struct M{~M(){effect();}};struct O{M member;~O(){}};'),
+    ('unknown-outer-d1-call', 'void effect();struct M{~M(){}};struct O{M member;~O(){effect();}};'),
+    ('user-call-to-same-closed-d1-is-not-synthetic-cleanup', 'struct M{~M(){}};'
+     'struct O{M member;M*other;~O(){other->~M();}};'),
+    ('unknown-body-local-d1-call', 'void effect();struct Local{~Local(){effect();}};struct M{~M(){}};'
+     'struct O{M member;~O(){Local local;}};'),
+    ('body-local-constructor-call', 'struct Local{Local(){}};struct M{~M(){}};struct O{M member;~O(){Local local;}};'),
+    ('original-strpair-reset-effect', STRPAIR_BOUNDARY),
+    # From test_cpp_aggregate_destructor_access (unknown-d1-effects).
+    ('aggregate-unknown-d1-effects', 'void effect();struct M{~M(){effect();}};struct O{M member;~O(){}};'),
+    # From test_cpp_defaulted_destructors (member-body-unavailable-at-use, UNUSED_MISSING inlined).
+    ('defaulted-member-body-unavailable-at-use',
+     'struct M{~M();};struct S{M member;~S()=default;};void f(){S s;}M::~M(){}'),
+    # From test_cpp_defaulted_destructors (member-unknown-effects-at-use).
+    ('defaulted-member-unknown-effects-at-use', 'void effect();struct M{~M(){effect();}};'
+     'struct S{M member;~S()=default;};void f(){S s;}'),
+    # From test_cpp_template_destructors (nested-template-d1-without-proof).
+    ('nested-template-d1-without-proof', 'template<class T>struct Box{~Box(){}};'
+     'struct Outer{Box<int>member;~Outer(){}};'),
+)
+
+
+@pytest.mark.parametrize('name,source', NONTHROWING_DESTRUCTOR_BODIES,
+                         ids=[row[0] for row in NONTHROWING_DESTRUCTOR_BODIES])
+def test_nonthrowing_destructor_bodies_with_calls_destroy_members(name, source):
+    CppParser().parse(source)
+
+
+ORDER_AFTER_UNKNOWN_CALL = ('void effect(int*p){*p=*p*10+1;}'
+                            'struct M{int*log;~M(){*log=*log*10+2;}};struct O{M member;int*log;~O(){effect(log);}};'
+                            'int cpp_test_entry(){int log=0;{O o{{&log},&log};}return log+30;}')
+
+
+@pytest.mark.integration
+def test_member_destruction_after_an_unknown_body_call_executes_like_cpp17(tmp_path, monkeypatch):
+    from tests.cpp.sizeof_execution import execute_row_pair
+    execute_row_pair(tmp_path, monkeypatch, (('order.cpp', ORDER_AFTER_UNKNOWN_CALL),))
+
+
+def test_member_destruction_follows_an_unknown_body_call(owned_only):
+    source = ORDER_AFTER_UNKNOWN_CALL
+    text = '\n'.join(compile_host_cpp((('order.cpp', source),)).ir)
+    body = text[text.index('@_ZN1OD1Ev('):]
+    body = body[:body.index('\n}')]
+    assert body.index('@_Z6effectPi') < body.index('@_ZN1MD1Ev')
 
 
 @pytest.mark.parametrize('name,units', PROGRAMS, ids=[row[0] for row in PROGRAMS])

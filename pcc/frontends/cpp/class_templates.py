@@ -27,7 +27,7 @@ from pcc.frontends.cpp.declarators import DeclaratorParser
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.sema import Scope, Symbol
 from pcc.frontends.cpp.templates import (
-    ArrayBoundPattern, TypeParameter, convert_integral_argument, dependent,
+    ArrayBoundPattern, IntegralArgument, TypeParameter, convert_integral_argument, dependent,
     substitute, type_key, value_dependent,
 )
 from pcc.frontends.cpp.types import (
@@ -127,7 +127,7 @@ def parse_nested_class_pattern(parser, owner, access):
                                'explicit', 'constexpr', 'static', 'virtual', 'mutable', '~', 'operator') or (
                     token.value == name.value and parser.cursor.tokens[parser.cursor.position + 1].value == '('):
                 unsupported(token.coord, 'member classes of class templates currently hold data members only')
-            base = parser._type(check_lowering=False)
+            base = member_declaration_type(parser)
             while True:
                 from pcc.frontends.cpp.operators import declaration_name
                 declaration = DeclaratorParser(parser.cursor, lambda: declaration_name(parser),
@@ -167,6 +167,31 @@ def parse_nested_class_pattern(parser, owner, access):
         parser.scope = previous
     nested.members = tuple(members)
     owner.nested_classes.append(nested)
+
+
+def member_declaration_type(parser):
+    """A member declaration's type, where a template-id may be dependent."""
+    previous = getattr(parser, 'class_template_member_declaration', False)
+    parser.class_template_member_declaration = True
+    try:
+        return parser._type(check_lowering=False)
+    finally:
+        parser.class_template_member_declaration = previous
+
+
+def contains_template_id_pattern(dtype):
+    while True:
+        dtype = unqualified(dtype)
+        if getattr(dtype, 'cpp_template_id_pattern', False):
+            return True
+        if isinstance(dtype, PointerType):
+            dtype = dtype.pointee
+        elif isinstance(dtype, ArrayType):
+            dtype = dtype.element
+        elif isinstance(dtype, ReferenceType):
+            dtype = dtype.referent
+        else:
+            return False
 
 
 def trivial_pattern_element(element):
@@ -323,7 +348,7 @@ def parse_declaration(parser, parameters, parent):
                 continue
             static = parser._accept('static') is not None
             mutable = parser._accept('mutable') is not None
-            base = parser._type(check_lowering=False)
+            base = member_declaration_type(parser)
             method = False
             prior_data = False
             while True:
@@ -358,6 +383,8 @@ def parse_declaration(parser, parameters, parent):
                     if 'const' in chunk.qualifiers:
                         dtype = qualify_const(dtype)
                 if parser._peek().value == '(':
+                    if contains_template_id_pattern(dtype):
+                        unsupported(member.coord, 'dependent template-ids in member function signatures are not implemented')
                     if mutable:
                         raise CppDiagnostic('cpp.invalid-mutable', 'mutable applies only to data members', member.coord)
                     if prior_data:
@@ -404,7 +431,25 @@ def parse_declaration(parser, parameters, parent):
     bind_patterns(parser, pattern)
 
 
-def bind_arguments(parser, pattern):
+class TemplateIdPattern:
+    """A class template-id with dependent type arguments, in a member declaration.
+
+    N4659 [temp.dep.type]/9: the simple-template-id is a dependent type. Each
+    enclosing specialization substitutes the arguments and names the ordinary
+    shared specialization (instance identity stays with InstanceRegistry).
+    """
+    cpp_dependent_type = True
+    cpp_template_id_pattern = True
+
+    def __init__(self, symbol, arguments, coord):
+        self.symbol, self.arguments, self.coord = symbol, arguments, coord
+        self.name = symbol.dtype.name
+
+    def __str__(self):
+        return self.name + '<...>'
+
+
+def bind_arguments(parser, pattern, allow_dependent=False):
     explicit = parser._explicit_template_arguments(allow_class_types=True)
     if len(explicit) != len(pattern.parameters):
         raise CppDiagnostic('cpp.template-argument-count', 'class template argument count differs from its parameter list', pattern.coord)
@@ -414,12 +459,15 @@ def bind_arguments(parser, pattern):
             if argument.kind != 'type':
                 raise CppDiagnostic('cpp.template-argument-kind', 'class template parameter requires a type argument', argument.coord)
             dtype = argument.value
-            if isinstance(unqualified(dtype), (TypeParameter, InjectedClassPattern)):
+            if isinstance(unqualified(dtype), (TypeParameter, InjectedClassPattern)) or (
+                    dependent(dtype) and not allow_dependent):
                 unsupported(argument.coord, 'dependent class template-ids are not implemented')
             bindings.append(dtype)
         else:
             if argument.kind != 'value':
                 raise CppDiagnostic('cpp.template-argument-kind', 'class template parameter requires a value argument', argument.coord)
+            if value_dependent(argument.value) or dependent(parameter.dtype) and any(map(dependent, bindings)):
+                unsupported(argument.coord, 'value-dependent class template arguments are not implemented')
             dtype = substitute(parameter.dtype, bindings)
             bindings.append(convert_integral_argument(argument.value, dtype, parser.types, argument.coord))
     return tuple(bindings)
@@ -427,11 +475,20 @@ def bind_arguments(parser, pattern):
 
 def specialize(parser, symbol, coord):
     pattern = symbol.dtype
-    if parser.parsing_template:
+    member_declaration = getattr(parser, 'class_template_member_declaration', False)
+    if parser.parsing_template and not member_declaration:
         unsupported(coord, 'dependent/nested template-id member type patterns are not implemented')
     if parser._peek().value != '<':
         unsupported(coord, 'class template argument deduction is not implemented')
-    arguments = bind_arguments(parser, pattern)
+    arguments = bind_arguments(parser, pattern, allow_dependent=member_declaration)
+    if any(dependent(argument) for argument in arguments if not isinstance(argument, IntegralArgument)):
+        return TemplateIdPattern(symbol, arguments, coord)
+    return specialization(parser, symbol, arguments, coord)
+
+
+def specialization(parser, symbol, arguments, coord):
+    """The shared specialization of `symbol` for bound, nondependent arguments."""
+    pattern = symbol.dtype
     key = (symbol, arguments)
     entry = parser.instance_registry.get(key)
     if entry is not None:
@@ -458,6 +515,13 @@ def substitute_member(dtype, arguments, instance, coord, parser=None):
         return instance.definition.template_enums[dtype]
     if getattr(dtype, 'cpp_nested_class_pattern', False):
         return instance.definition.template_nested[dtype]
+    if getattr(dtype, 'cpp_template_id_pattern', False):
+        if parser is None:
+            unsupported(coord, 'dependent template-ids require a typed instantiation context')
+        arguments_now = tuple(argument if isinstance(argument, IntegralArgument)
+                              else substitute_member(argument, arguments, instance, coord, parser)
+                              for argument in dtype.arguments)
+        return specialization(parser, dtype.symbol, arguments_now, coord)
     if isinstance(dtype, InjectedClassPattern):
         return instance
     if isinstance(dtype, ConstType):
@@ -513,6 +577,7 @@ def complete_layout(parser, dtype, pattern, arguments, coord):
         instantiate_enums(parser, pattern, definition, arguments)
         instantiate_nested_classes(parser, pattern, definition, dtype, arguments)
         for name, member_type, at, access, mutable in pattern.members:
+            template_id_member = contains_template_id_pattern(member_type)
             member_type = substitute_member(member_type, arguments, dtype, at, parser)
             plain = unqualified(member_type)
             if isinstance(plain, ReferenceType) or contains_function(member_type):
@@ -522,7 +587,7 @@ def complete_layout(parser, dtype, pattern, arguments, coord):
             if not (isinstance(plain, PointerType) or isinstance(plain, ClassType) or array_type(plain) or is_enum_type(plain)
                     or isinstance(plain, str) and (plain == 'nullptr' or parser.types.arithmetic_operand(plain))):
                 raise CppDiagnostic('cpp.invalid-object-type', 'class template member does not have an object type', at)
-            if isinstance(plain, ClassType) and plain is not dtype and not (
+            if isinstance(plain, ClassType) and plain is not dtype and not template_id_member and not (
                     getattr(plain, 'enclosing_class', None) is dtype and trivial_pattern_element(plain)):
                 # A member class of this specialization whose special members
                 # are all trivial needs no construction or destruction.

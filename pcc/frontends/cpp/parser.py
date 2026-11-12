@@ -329,7 +329,39 @@ class CppParser:
             self.scope = parent
 
     def _name(self):
-        return parse_qualified_name(self.cursor, self._identifier, reject_template_ids=False)
+        return parse_qualified_name(self.cursor, self._identifier, reject_template_ids=False,
+                                    current_instantiation=self._current_instantiation_arguments)
+
+    def _current_instantiation_arguments(self, name):
+        """Consume `<P1, ..., Pn>` after the template's own name in its member body.
+
+        N4659 [temp.dep.type]/1: the class template's name followed by its
+        primary template argument list, each argument naming the corresponding
+        template parameter, names the current instantiation. Only a following
+        `::` is consumed this way; other template-ids keep their owners.
+        """
+        method = getattr(self, 'class_template_method', None)
+        owner = getattr(method, 'owner', None)
+        if owner is None or name.value != owner.name or not owner.parameters:
+            return False
+        tokens, index = self.cursor.tokens, self.cursor.position + 1
+        for position, parameter in enumerate(owner.parameters):
+            if position and (index >= len(tokens) or tokens[index].value != ','):
+                return False
+            index += 1 if position else 0
+            if index >= len(tokens) or tokens[index].kind != 'ID' or tokens[index].value != parameter.name:
+                return False
+            index += 1
+        if index >= len(tokens) or tokens[index].value != '>':
+            return False
+        from pcc.frontends.cpp.declarators import _scope_separator
+        saved = self.cursor.position
+        self.cursor.position = index + 1
+        with self.cursor.tentative():
+            followed_by_scope = _scope_separator(self.cursor) is not None
+        if not followed_by_scope:
+            self.cursor.position = saved
+        return followed_by_scope
 
     def _type_symbol(self):
         with self.cursor.tentative():
@@ -573,6 +605,7 @@ class CppParser:
             raise CppDiagnostic("cpp.unsupported.unknown-bound-array-pointers", "pointer to an unknown-bound array requires separate completeness rules", token.coord)
         if (self.parsing_template and not getattr(self, 'class_template_signature', False)
                 and getattr(self, 'class_template_method', None) is None
+                and not getattr(self, 'class_template_member_declaration', False)
                 and not allow_template_type_id):
             raise CppDiagnostic("cpp.unsupported.pointer-templates", "pointer template types are not implemented", token.coord)
         if "volatile" in qualifiers:
@@ -2975,6 +3008,26 @@ class CppParser:
             from pcc.frontends.cpp.allocation import lower_delete
             global_only, array = pattern.value
             return lower_delete(self, arguments[0], global_only, array, coord)
+        if kind == 'dependent-member-call':
+            from pcc.frontends.cpp.classes import ClassType, require_complete
+            from pcc.frontends.cpp.members import call_member, call_static_member, is_static_group
+            token, operator = pattern.value
+            receiver, arguments = arguments[0], arguments[1:]
+            owner = unqualified(receiver.dtype)
+            if operator == '->':
+                owner = unqualified(owner.pointee) if isinstance(owner, PointerType) else None
+            if not isinstance(owner, ClassType):
+                raise CppDiagnostic('cpp.invalid-member-access', 'member call requires a class object', coord)
+            require_complete(owner, coord)
+            group = owner.definition.scope.names.get(token.value)
+            if group is None or group.kind != 'function':
+                raise CppDiagnostic('cpp.no-member', "class '" + owner.name + "' has no member function '"
+                                    + token.value + "'", coord)
+            if is_static_group(group):
+                return call_static_member(self, group, arguments, coord, receiver.node)
+            if operator == '.':
+                receiver = self._unary_expression('&', receiver, coord)
+            return call_member(self, group, receiver, arguments, coord, True)
         if kind == 'member-call':
             from pcc.frontends.cpp.members import call_member, call_static_member
             group, static, has_receiver, address_available = pattern.value

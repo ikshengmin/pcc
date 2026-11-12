@@ -478,6 +478,10 @@ def instantiate_body(parser, context):
         if selected_destructors and not closed:
             raise CppDiagnostic('cpp.unsupported.destructor-subobjects',
                                 'unknown construction effects require partial member exception cleanup', symbol.coord)
+        required = getattr(symbol, 'closed_construction_required', None)
+        if required is not None and not closed:
+            raise CppDiagnostic('cpp.unsupported.destructor-subobjects',
+                                'member-owning constructor call requires a bound closed-construction proof', required)
         symbol.closed_construction_body = closed
         symbol.closed_normal_body = call_free_body(body)
     return c_ast.FuncDef(declaration, None, body, symbol.coord)
@@ -512,6 +516,17 @@ def pattern_member_access(parser, expression, operator, token):
             result_type = qualify_const(result_type)
         return Expression(Pattern('member-field', token.coord, (symbol, operator, token), [expression]),
                           result_type, True, symbol, decltype_entity=symbol.dtype)
+    if getattr(owner, 'cpp_template_id_pattern', False):
+        # [temp.dep.expr]/5: a member of an object of dependent class type is
+        # looked up when the body is instantiated, in the concrete class.
+        if operator == '.' and not expression.lvalue:
+            unsupported(token.coord, 'class template temporary member access requires materialization')
+        if parser._accept('('):
+            arguments = parser._call_arguments()
+            return Expression(Pattern('dependent-member-call', token.coord, (token, operator),
+                                      [expression] + list(arguments)), None)
+        return Expression(Pattern('member-field', token.coord, (None, operator, token), [expression]),
+                          None, True)
     if owner is not current.injected:
         unsupported(token.coord, 'dependent/foreign-class member lookup is not implemented in member Patterns')
     symbol = current.member_scope.names.get(token.value)

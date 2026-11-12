@@ -232,8 +232,8 @@ BOUNDARIES = (
      'int f(){DynArray<int>b{nullptr,nullptr};return 0;}', 'cpp.unsupported.allocation'),
     ('explicit-d1-without-proof', 'template<class T>struct Box{~Box(){}};'
      'void f(Box<int>*p){p->~Box();}', 'cpp.unsupported.dependent-destruction'),
-    ('nested-template-d1-without-proof', 'template<class T>struct Box{~Box(){}};'
-     'struct Outer{Box<int>member;~Outer(){}};', 'cpp.unsupported.destructor-subobjects'),
+    # nested-template-d1-without-proof moved verbatim to test_cpp_member_destruction's
+    # NONTHROWING_DESTRUCTOR_BODIES ([except.spec]/8).
     ('class-local', 'struct L{int n;};template<class T>struct Box{~Box(){L local;}};',
      'cpp.unsupported.class-templates'),
     ('dependent-class-local', 'struct L{int n;};template<class T>struct Box{~Box(){T local;}};'

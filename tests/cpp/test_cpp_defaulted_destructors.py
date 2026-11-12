@@ -133,9 +133,8 @@ DEFERRED = (
     ('defaulted-template', 'template<class T>struct S{~S()=default;};', 'cpp.unsupported.member-templates'),
     ('explicit-exception-specification', 'struct S{~S()noexcept=default;};', 'cpp.unsupported.exceptions'),
     ('internal-linkage-defaulting', 'namespace{struct S{~S()=default;};}', 'cpp.unsupported.class-linkage'),
-    ('member-body-unavailable-at-use', UNUSED_MISSING + 'void f(){S s;}M::~M(){}', 'cpp.unsupported.destructor-subobjects'),
-    ('member-unknown-effects-at-use', 'void effect();struct M{~M(){effect();}};'
-     'struct S{M member;~S()=default;};void f(){S s;}', 'cpp.unsupported.destructor-subobjects'),
+    # member-body-unavailable-at-use and member-unknown-effects-at-use moved verbatim to test_cpp_member_destruction's
+    # NONTHROWING_DESTRUCTOR_BODIES ([except.spec]/8).
     ('implicit-nontrivial-member-use', 'struct L{~L(){}};struct M{L leaf;};'
      'struct S{M member;~S()=default;};void f(S*p){p->~S();}', 'cpp.unsupported.destructor-subobjects'),
     ('class-array-lifetime', 'struct M{~M()=default;};struct S{M members[2];~S()=default;};', 'cpp.unsupported.class-array-lifetime'),

@@ -522,7 +522,15 @@ def closed_construction_body(body, construction_calls):
         node = pending.pop()
         if isinstance(node, c_ast.FuncCall):
             selected = construction_calls.get(node)
-            if selected is None or not getattr(selected, "closed_construction_body", False):
+            if (selected is not None and not hasattr(selected, "closed_construction_body")
+                    and getattr(selected, "class_template_instance", None) is not None
+                    and not getattr(selected, "defined", False)):
+                # A pending class template C1 (instantiated after this caller)
+                # takes the obligation; its own instantiation proves the chain
+                # or fails the compilation.
+                selected.closed_construction_required = node.coord
+            if selected is None or not (getattr(selected, "closed_construction_body", False)
+                                        or getattr(selected, "closed_construction_required", None) is not None):
                 return False
         pending.extend(child for _name, child in node.children())
     return True
@@ -559,8 +567,14 @@ def constructor_call(parser, dtype, arguments, address, coord, require_closed=Fa
     from pcc.frontends.cpp.member_initialization import requires_destruction
     member_cleanup = any(requires_destruction(member.dtype) for member in dtype.definition.members)
     if member_cleanup and not getattr(selected, "closed_construction_body", False):
-        raise CppDiagnostic("cpp.unsupported.destructor-subobjects",
-                            "member-owning constructor call requires a bound closed-construction proof", coord)
+        if (getattr(selected, "class_template_instance", None) is not None
+                and not getattr(selected, "defined", False)):
+            # A class template C1 body is instantiated after this call is
+            # requested; its instantiation proves (or rejects) the same chain.
+            selected.closed_construction_required = coord
+        else:
+            raise CppDiagnostic("cpp.unsupported.destructor-subobjects",
+                                "member-owning constructor call requires a bound closed-construction proof", coord)
     if require_closed and not getattr(selected, 'closed_construction_body', False):
         raise CppDiagnostic('cpp.unsupported.placement-constructor-effects',
                             'unknown constructor effects need exception/cleanup integration', coord)

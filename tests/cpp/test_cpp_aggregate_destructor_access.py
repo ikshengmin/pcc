@@ -98,7 +98,8 @@ DEFERRED = (
     ('class-array-lifetime', 'struct M{~M(){}};void f(){M values[2];}', 'cpp.unsupported.class-array-lifetime'),
     ('class-array-member', 'struct M{~M(){}};struct O{M values[2];~O(){}};', 'cpp.unsupported.class-array-lifetime'),
     ('implicit-enclosing-d1', 'struct M{~M(){}};struct O{M member;};void f(){O o{};}', 'cpp.unsupported.destructor-subobjects'),
-    ('unknown-d1-effects', 'void effect();struct M{~M(){effect();}};struct O{M member;~O(){}};', 'cpp.unsupported.destructor-subobjects'),
+    # unknown-d1-effects moved verbatim to test_cpp_member_destruction's
+    # NONTHROWING_DESTRUCTOR_BODIES ([except.spec]/8).
 )
 
 

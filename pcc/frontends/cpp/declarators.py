@@ -70,17 +70,24 @@ class QualifiedName:
         self.coord = coord if coord is not None else tokens[0].coord
 
 
-def parse_qualified_name(cursor, parse_identifier, reject_template_ids=True):
+def parse_qualified_name(cursor, parse_identifier, reject_template_ids=True,
+                         current_instantiation=None):
     """Read an identifier path, leaving all lookup and dependent typing to Sema.
 
     ``parse_identifier`` consumes one ordinary identifier on the same cursor
     and enforces the frontend's keyword/extension spelling policy.
-    Template-ids and member-pointer operators are explicit remaining gaps.
+    ``current_instantiation(token)`` may consume a template argument list
+    after a path component that names the current instantiation
+    ([temp.dep.type]/1); the component then stands for the injected class.
+    Other template-ids and member-pointer operators are explicit remaining gaps.
     """
     start = cursor.peek()
     global_scope = _scope_separator(cursor) is not None
     tokens = [parse_identifier()]
     while True:
+        if (current_instantiation is not None and cursor.peek().value == "<"
+                and current_instantiation(tokens[-1])):
+            continue
         if reject_template_ids and cursor.peek().value == "<":
             _unsupported("template-id-declarators", cursor.peek())
         if _scope_separator(cursor) is None:

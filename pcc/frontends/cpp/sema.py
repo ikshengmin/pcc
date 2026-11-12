@@ -256,6 +256,13 @@ class Scope:
                 if symbol is not None and symbol.kind == "type" and is_enum_type(symbol.dtype):
                     scope = unqualified(symbol.dtype).scope
                     continue
+                if (symbol is not None and symbol.kind == "type"
+                        and getattr(unqualified(symbol.dtype), "cpp_class_pattern", False)):
+                    # [temp.dep.type]/1, [class.qual]: the injected-class-name of a
+                    # class template names the current instantiation, whose
+                    # members are known at the definition.
+                    scope = unqualified(symbol.dtype).owner.member_scope
+                    continue
                 if symbol is None or symbol.namespace_scope is None:
                     raise CppDiagnostic("cpp.not-a-namespace", "'" + part + "' does not name a namespace", name.coord)
                 scope = symbol.namespace_scope
