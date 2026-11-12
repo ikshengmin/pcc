@@ -55,6 +55,8 @@ pcc_thread_snapshot_stopped_world_owner = extern(
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+pcc_gc_object_walk_first = extern("pcc_gc_object_walk_first", (), c_ptr)
+pcc_gc_object_walk_next = extern("pcc_gc_object_walk_next", (c_ptr,), c_ptr)
 
 _INTERVAL_START: i64 = 0
 _INTERVAL_END: i64 = 8
@@ -610,16 +612,16 @@ def _pin_snapshot_owners(words, count: i64, mark: i64) -> i64:
         # Clear the old cut before any source can pin a later node in its
         # forwarding chain. Inactive source pins are cycle-local as well.
         # Without edges, GC3/GC4 can refresh each owner independently.
-        reset = global_load_ptr("pcc_gc_object_head")
+        reset = pcc_gc_object_walk_first()
         while ptr_is_null(reset) == 0:
             if _node_has_live_extent(reset) != 0:
                 store_i64(reset, 56, load_i64(reset, 56) & ~1)
-            reset = load_ptr(reset, 16)
+            reset = pcc_gc_object_walk_next(reset)
     # GC3's address-pin query must not see the previous cut, including at
     # mark/remark. With no edges, pinning one owner cannot pin a later node.
     refresh_inline: i64 = 1 if (chain_pin_cut == 0
                                and (mark == 0 or gc3_count_free != 0)) else 0
-    node = global_load_ptr("pcc_gc_object_head")
+    node = pcc_gc_object_walk_first()
     while ptr_is_null(node) == 0:
         if _node_has_live_extent(node) != 0:
             # A stopped-world relocation step needs CURRENT raw addresses,
@@ -665,7 +667,7 @@ def _pin_snapshot_owners(words, count: i64, mark: i64) -> i64:
             if ptr_is_null(listed) == 0 and is_tagged_int(listed) == 0:
                 if pcc_gc_object_node_is_address_pinned(node, listed) != 0:
                     pcc_gc_mark_root_gray_if_known(listed)
-        node = load_ptr(node, 16)
+        node = pcc_gc_object_walk_next(node)
     if ptr_is_null(pages) == 0:
         free(pages)
     return listed_in_walk

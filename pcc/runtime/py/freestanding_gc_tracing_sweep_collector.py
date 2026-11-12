@@ -95,6 +95,8 @@ pcc_thread_world_stop_epoch_held = extern(
     "pcc_thread_world_stop_epoch_held", (), c_int64
 )
 pcc_platform_monotonic_us = extern("pcc_platform_monotonic_us", (), c_int64)
+pcc_gc_object_walk_first = extern("pcc_gc_object_walk_first", (), c_ptr)
+pcc_gc_object_walk_next = extern("pcc_gc_object_walk_next", (c_ptr,), c_ptr)
 
 
 @c_abi_export("pcc_gc_record_sweep_phase")
@@ -156,11 +158,11 @@ def pcc_gc_tracing_has_sweep_candidate() -> i64:
     # walk after graph-lock acquisition; lock wait has a different owner.
     started: i64 = pcc_platform_monotonic_us()
     visited: i64 = 0
-    node = global_load_ptr("pcc_gc_object_head")
+    node = pcc_gc_object_walk_first()
     while ptr_is_null(node) == 0:
         visited = visited + 1
         if pcc_gc_object_node_is_active(node) == 0:
-            node = load_ptr(node, 16)
+            node = pcc_gc_object_walk_next(node)
             continue
         obj = load_ptr(node, 0)
         flags: i64 = load_i32(obj, 12)
@@ -168,7 +170,7 @@ def pcc_gc_tracing_has_sweep_candidate() -> i64:
             _record_sweep_phase(0, started, pcc_platform_monotonic_us(), visited, 1)
             pcc_py_gc_minor_graph_unlock()
             return 1
-        node = load_ptr(node, 16)
+        node = pcc_gc_object_walk_next(node)
     # A finish that committed during the walk may have flagged nodes behind it.
     if load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0) == commits:
         store_i64(global_addr("pcc_gc_tracing_no_candidate_commit"), 0, commits)
@@ -239,10 +241,10 @@ def pcc_gc_tracing_recheck_reachability_after_finalizers() -> None:
         # object outside it, then leave that object temporarily unreachable.
         # It will survive this sweep, so its referents and class layout must
         # survive too. Ordinary RC used to hide this physical-lifetime edge.
-        node = global_load_ptr("pcc_gc_object_head")
+        node = pcc_gc_object_walk_first()
         while ptr_is_null(node) == 0:
             visited = visited + 1
-            nxt = load_ptr(node, 16)
+            nxt = pcc_gc_object_walk_next(node)
             if pcc_gc_object_node_is_active(node) != 0:
                 obj = load_ptr(node, 0)
                 if (load_i32(obj, 12) & 1024) == 0:
@@ -250,10 +252,10 @@ def pcc_gc_tracing_recheck_reachability_after_finalizers() -> None:
             node = nxt
     pcc_gc_drain_all_gray_unlocked()
     backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    node = global_load_ptr("pcc_gc_object_head")
+    node = pcc_gc_object_walk_first()
     while ptr_is_null(node) == 0:
         visited = visited + 1
-        nxt = load_ptr(node, 16)
+        nxt = pcc_gc_object_walk_next(node)
         if pcc_gc_object_node_is_active(node) != 0:
             obj = load_ptr(node, 0)
             flags: i64 = load_i32(obj, 12)
@@ -448,10 +450,10 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
     # because their lifecycle is owned by the C-API bridge.
     started: i64 = pcc_platform_monotonic_us()
     visited: i64 = 0
-    node = global_load_ptr("pcc_gc_object_head")
+    node = pcc_gc_object_walk_first()
     while ptr_is_null(node) == 0:
         visited = visited + 1
-        nxt = load_ptr(node, 16)
+        nxt = pcc_gc_object_walk_next(node)
         if pcc_gc_object_node_is_active(node) != 0:
             obj = load_ptr(node, 0)
             flags: i64 = load_i32(obj, 12)
@@ -491,10 +493,10 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
     visited = 0
     cleared: i64 = 0
     cleared_nonclasses: i64 = 0
-    node = global_load_ptr("pcc_gc_object_head")
+    node = pcc_gc_object_walk_first()
     while ptr_is_null(node) == 0 and cleared < budget:
         visited = visited + 1
-        nxt = load_ptr(node, 16)
+        nxt = pcc_gc_object_walk_next(node)
         if pcc_gc_object_node_is_active(node) == 0:
             node = nxt
             continue
@@ -545,10 +547,10 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
                 defer_concurrent = 0
     deferred: i64 = 0
     classes_kept: i64 = 0
-    node = global_load_ptr("pcc_gc_object_head")
+    node = pcc_gc_object_walk_first()
     while ptr_is_null(node) == 0:
         visited = visited + 1
-        nxt = load_ptr(node, 16)
+        nxt = pcc_gc_object_walk_next(node)
         if pcc_gc_object_node_is_active(node) == 0:
             node = nxt
             continue
@@ -601,7 +603,7 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
         # Keep layout metadata until EVERY pending ordinary object has been
         # destroyed, and every candidate class has detached its owning edges.
         # This also covers bounded slices and inheritance/metaclass cycles.
-        node = global_load_ptr("pcc_gc_object_head")
+        node = pcc_gc_object_walk_first()
         while ptr_is_null(node) == 0:
             visited = visited + 1
             if pcc_gc_object_node_is_active(node) != 0:
@@ -613,11 +615,11 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
                     if _class_needs_clear(obj) != 0:
                         _record_sweep_phase(3, started, pcc_platform_monotonic_us(), visited, reclaimed)
                         return reclaimed
-            node = load_ptr(node, 16)
-        node = global_load_ptr("pcc_gc_object_head")
+            node = pcc_gc_object_walk_next(node)
+        node = pcc_gc_object_walk_first()
         while ptr_is_null(node) == 0 and reclaimed < budget:
             visited = visited + 1
-            nxt = load_ptr(node, 16)
+            nxt = pcc_gc_object_walk_next(node)
             if pcc_gc_object_node_is_active(node) != 0:
                 obj = load_ptr(node, 0)
                 if (

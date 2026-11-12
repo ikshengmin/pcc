@@ -3,6 +3,9 @@
 from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
+    atomic_cas_i64,
+    atomic_load_i64,
+    atomic_rmw_i64,
     free,
     global_addr,
     global_load_ptr,
@@ -14,6 +17,8 @@ from pcc.unsafe import (
     malloc,
     null,
     ptr_eq,
+    ptr_add,
+    ptr_diff,
     ptr_is_null,
     store_i32,
     store_i64,
@@ -29,20 +34,35 @@ pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 # Internal object-node tail: i64 foreign-address lease count at byte 80.
 # This is not a PyObjectHeader field. Live promotion state never resets it.
 # freeing@32: 0 active, 1 retired, negative = scalar-sweep batch token owner.
-# Word 24 is NULL (it once named a GC3 minor-arena block, which nothing
-# allocates any more).
 # Pending scalar nodes are detached/indexed; next@16, prev@40 and young-next@64
 # belong to their retirement chain. Their first-death live debit already ran.
 #
 # An object-family cell's node is its record in the slab's record array
-# (pcc_allocator_object_node_record_find), with the index key just past the node
+# (pcc_allocator_object_node_record_ensure), with the index key just past the node
 # (freestanding_gc_index_table). A record is never pooled or freed: release
 # returns it to its cell, which registers the next object allocated there.
-# Every other object's node comes from the pool below or from malloc.
+# Records are not on the object list: word 24 of a record names its span
+# (NODE_RECORD_SPAN), and walks reach records through the allocator's
+# record spans. Every other object's node comes from the pool below or from
+# malloc, has word 24 NULL and is on the object list.
+NODE_RECORD_SPAN = 24
+# The allocator's OBJECT_NODE_RECORD_BYTES.
+OBJECT_NODE_RECORD_BYTES = 96
+# The record's index key (freestanding_gc_index_table RECORD_INDEX_KEY).
+RECORD_INDEX_KEY = 88
 
 pcc_gc_object_index_find = extern("pcc_gc_object_index_find", (c_ptr,), c_ptr)
-pcc_allocator_object_node_record_find = extern(
-    "pcc_allocator_object_node_record_find", (c_ptr,), c_ptr
+pcc_allocator_record_span_first = extern(
+    "pcc_allocator_record_span_first", (), c_ptr
+)
+pcc_allocator_record_span_next = extern(
+    "pcc_allocator_record_span_next", (c_ptr,), c_ptr
+)
+pcc_allocator_record_span_records = extern(
+    "pcc_allocator_record_span_records", (c_ptr,), c_ptr
+)
+pcc_allocator_record_span_cells = extern(
+    "pcc_allocator_record_span_cells", (c_ptr,), c_int64
 )
 pcc_thread_owns_stopped_world = extern("pcc_thread_owns_stopped_world", (), c_int64)
 pcc_gc_granule_is_object_start = extern("pcc_gc_granule_is_object_start", (c_ptr,), c_int64)
@@ -51,6 +71,49 @@ pcc_gc_granule_is_object_start = extern("pcc_gc_granule_is_object_start", (c_ptr
 @c_abi_export("pcc_gc_object_list_head")
 def pcc_gc_object_list_head() -> c_ptr:
     return global_load_ptr("pcc_gc_object_head")
+
+
+@c_abi_export("pcc_gc_object_walk_records_from")
+def _object_walk_records_from(span: c_ptr, cell: i64) -> c_ptr:
+    """The first registered record at or after ``cell`` of ``span``, then of
+    the record spans after it, or NULL."""
+    found = null()
+    while ptr_is_null(found) != 0 and ptr_is_null(span) == 0:
+        records = pcc_allocator_record_span_records(span)
+        count: i64 = pcc_allocator_record_span_cells(span)
+        while ptr_is_null(found) != 0 and cell < count:
+            record = ptr_add(records, cell * OBJECT_NODE_RECORD_BYTES)
+            if atomic_load_i64(record, RECORD_INDEX_KEY, "acquire") != 0:
+                found = record
+            cell = cell + 1
+        if ptr_is_null(found) != 0:
+            span = pcc_allocator_record_span_next(span)
+            cell = 0
+    return found
+
+
+@c_abi_export("pcc_gc_object_walk_first")
+def pcc_gc_object_walk_first() -> c_ptr:
+    """The first node of a walk over every registered object: the object
+    list, then each registered cell record. Records are never freed, so a
+    walk may continue from a record whose object died meanwhile."""
+    head = pcc_gc_object_list_head()
+    if ptr_is_null(head) == 0:
+        return head
+    return _object_walk_records_from(pcc_allocator_record_span_first(), 0)
+
+
+@c_abi_export("pcc_gc_object_walk_next")
+def pcc_gc_object_walk_next(node: c_ptr) -> c_ptr:
+    """The node after ``node`` in its walk; see pcc_gc_object_walk_first."""
+    span = load_ptr(node, NODE_RECORD_SPAN)
+    if ptr_is_null(span) != 0:
+        nxt = load_ptr(node, 16)
+        if ptr_is_null(nxt) == 0:
+            return nxt
+        return _object_walk_records_from(pcc_allocator_record_span_first(), 0)
+    cell: i64 = ptr_diff(node, pcc_allocator_record_span_records(span)) // OBJECT_NODE_RECORD_BYTES
+    return _object_walk_records_from(span, cell + 1)
 
 
 @c_abi_export("pcc_gc_object_list_non_slab_enumerate")
@@ -89,12 +152,20 @@ def pcc_gc_object_list_non_slab_enumerate(out: c_ptr, capacity: i64, required_fl
 @c_abi_export("pcc_gc_object_set_list_head")
 def pcc_gc_object_set_list_head(head: c_ptr) -> None:
     global_store_ptr("pcc_gc_object_head", head)
-    revision: i64 = load_i64(global_addr("pcc_gc_object_list_revision"), 0)
-    if revision == 9223372036854775807:
-        revision = 1
-    else:
-        revision = revision + 1
-    store_i64(global_addr("pcc_gc_object_list_revision"), 0, revision)
+    pcc_gc_object_list_revision_bump()
+
+
+@c_abi_export("pcc_gc_object_list_revision_bump")
+def pcc_gc_object_list_revision_bump() -> None:
+    """Note that the set of walked objects changed: a node was linked or
+    unlinked, or a cell record registered or retired. Resumable walks and
+    remap contexts compare this revision to detect a freed (and possibly
+    reused) object, so records bump it exactly as list nodes do. A record
+    registers without the graph lock, so the bump is atomic; readers only
+    compare it for equality."""
+    atomic_rmw_i64(
+        "add", global_addr("pcc_gc_object_list_revision"), 0, 1, "relaxed"
+    )
 
 
 @c_abi_export("pcc_gc_trace_cursor_load")
@@ -230,26 +301,15 @@ def _promotion_unlink(node: c_ptr) -> None:
     _clear_promotion_state(node)
 
 
-# The record's index key (freestanding_gc_index_table RECORD_INDEX_KEY).
-RECORD_INDEX_KEY = 88
-
-
 @c_abi_export("pcc_gc_object_node_is_record")
 def pcc_gc_object_node_is_record(node: c_ptr) -> i64:
-    """1 when ``node`` is its object's cell record.
-
-    An object cell registers only through its record, so a pooled or malloc'd
-    node always belongs to an object outside the cells, and that object has
-    no record to compare equal.
-    """
+    """1 when ``node`` is a cell record: registration names its span in
+    word NODE_RECORD_SPAN, which every other node keeps NULL."""
     if ptr_is_null(node) != 0:
         return 0
-    obj = load_ptr(node, 0)
-    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+    if ptr_is_null(load_ptr(node, NODE_RECORD_SPAN)) != 0:
         return 0
-    if ptr_eq(pcc_allocator_object_node_record_find(obj), node) != 0:
-        return 1
-    return 0
+    return 1
 
 
 @c_abi_export("pcc_gc_object_node_take_record")
@@ -437,6 +497,13 @@ def pcc_gc_backend3_young_unlink(node: c_ptr) -> None:
 
 @c_abi_export("pcc_gc_object_node_unlink")
 def pcc_gc_object_node_unlink(node: c_ptr) -> None:
+    if ptr_is_null(load_ptr(node, NODE_RECORD_SPAN)) == 0:
+        # A cell record is not on the object list, and a walk standing on it
+        # continues from its cell.
+        _promotion_unlink(node)
+        pcc_gc_backend3_young_unlink(node)
+        pcc_gc_object_list_revision_bump()
+        return
     prev = pcc_gc_object_node_prev(node)
     nxt = pcc_gc_object_node_next(node)
     if ptr_eq(pcc_gc_trace_cursor_load(), node) != 0:
@@ -451,14 +518,7 @@ def pcc_gc_object_node_unlink(node: c_ptr) -> None:
         pcc_gc_object_set_list_head(nxt)
     else:
         pcc_gc_object_node_set_next(prev, nxt)
-        revision: i64 = load_i64(
-            global_addr("pcc_gc_object_list_revision"), 0
-        )
-        if revision == 9223372036854775807:
-            revision = 1
-        else:
-            revision = revision + 1
-        store_i64(global_addr("pcc_gc_object_list_revision"), 0, revision)
+        pcc_gc_object_list_revision_bump()
     if ptr_is_null(nxt) == 0:
         pcc_gc_object_node_set_prev(nxt, prev)
 
@@ -475,10 +535,18 @@ def pcc_gc_object_known_size(obj: c_ptr) -> i64:
 
 @c_abi_export("pcc_gc_live_bytes_subtract")
 def pcc_gc_live_bytes_subtract(size: i64) -> None:
+    # Registration of an object cell adds without the graph lock
+    # (pcc_gc_register_object_cell), so every update is atomic. The count
+    # never goes below zero.
     if size <= 0:
         return
-    live: i64 = load_i64(global_addr("pcc_gc_live_bytes"), 0)
-    if size >= live:
-        store_i64(global_addr("pcc_gc_live_bytes"), 0, 0)
-    else:
-        store_i64(global_addr("pcc_gc_live_bytes"), 0, live - size)
+    slot = global_addr("pcc_gc_live_bytes")
+    live: i64 = atomic_load_i64(slot, 0, "relaxed")
+    while True:
+        updated: i64 = 0
+        if size < live:
+            updated = live - size
+        observed: i64 = atomic_cas_i64(slot, 0, live, updated, "relaxed", "relaxed")
+        if observed == live:
+            return
+        live = observed

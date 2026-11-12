@@ -133,7 +133,6 @@ pcc_gc_object_index_find = extern("pcc_gc_object_index_find", (c_ptr,), c_ptr)
 pcc_gc_object_index_remove = extern(
     "pcc_gc_object_index_remove", (c_ptr,), c_ptr
 )
-pcc_gc_object_list_head = extern("pcc_gc_object_list_head", (), c_ptr)
 pcc_gc_object_node_freeing = extern(
     "pcc_gc_object_node_freeing", (c_ptr,), c_int64
 )
@@ -155,6 +154,8 @@ pcc_gc_object_node_unlink = extern(
 pcc_gc_visit_registered_root_slots = extern(
     "pcc_gc_visit_registered_root_slots", (c_int64, c_int64), c_int64
 )
+pcc_gc_object_walk_first = extern("pcc_gc_object_walk_first", (), c_ptr)
+pcc_gc_object_walk_next = extern("pcc_gc_object_walk_next", (c_ptr,), c_ptr)
 
 
 @c_abi_export("pcc_gc_backend4_park_page")
@@ -403,12 +404,12 @@ def _retire_forwarded_source_into_finish(from_obj, finish) -> None:
         pcc_gc_managed_pointer_index_remove(from_obj)
     dead = pcc_gc_object_index_find(from_obj)
     if ptr_is_null(dead) != 0:
-        scan = pcc_gc_object_list_head()
+        scan = pcc_gc_object_walk_first()
         while ptr_is_null(scan) == 0:
             if ptr_eq(load_ptr(scan, 0), from_obj) != 0:
                 dead = scan
                 break
-            scan = load_ptr(scan, 16)
+            scan = pcc_gc_object_walk_next(scan)
     if ptr_is_null(dead) != 0:
         return
     size: i64 = pcc_gc_object_node_size(dead)
@@ -636,7 +637,7 @@ def pcc_gc_backend4_remap_and_retire_stopped_world() -> i64:
                 global_addr("pcc_gc_backend4_reseed_relocation_revision"), 0
             ),
         )
-        cursor = pcc_gc_object_list_head()
+        cursor = pcc_gc_object_walk_first()
         valid = 1
     pcc_py_gc_minor_graph_unlock()
 
@@ -674,7 +675,7 @@ def pcc_gc_backend4_remap_and_retire_stopped_world() -> i64:
             valid = 0
         while valid != 0 and ptr_is_null(cursor) == 0:
             node = cursor
-            cursor = load_ptr(node, 16)
+            cursor = pcc_gc_object_walk_next(node)
             if load_i64(node, 32) != 0:
                 continue
             obj = load_ptr(node, 0)
@@ -827,9 +828,9 @@ def pcc_gc_backend4_remap_and_retire_unlocked(finish) -> None:
     if ptr_is_null(pcc_gc_forwarding_list_head()) != 0:
         store_i32(global_addr("pcc_gc_backend4_remap_owed"), 0, 0)
         return
-    node = pcc_gc_object_list_head()
+    node = pcc_gc_object_walk_first()
     while ptr_is_null(node) == 0:
-        nxt = load_ptr(node, 16)
+        nxt = pcc_gc_object_walk_next(node)
         if load_i64(node, 32) == 0:
             obj = load_ptr(node, 0)
             if pcc_capi_is_cext_type_tag(load_i32(obj, 8)) == 0:

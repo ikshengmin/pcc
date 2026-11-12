@@ -114,6 +114,8 @@ pcc_gc_gray_count_decrement_acq_rel = extern(
 )
 py_incref = extern("py_incref", (c_ptr,), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
+pcc_gc_object_walk_first = extern("pcc_gc_object_walk_first", (), c_ptr)
+pcc_gc_object_walk_next = extern("pcc_gc_object_walk_next", (c_ptr,), c_ptr)
 
 
 @c_abi_export("pcc_gc_tracing_gray_extension_root")
@@ -274,7 +276,7 @@ def _pcc_gc_complete_mark_cycle_seed(
         )
         global_store_ptr(
             "pcc_gc_trace_cursor",
-            global_load_ptr("pcc_gc_object_head"),
+            pcc_gc_object_walk_first(),
         )
         if pcc_gc_gray_count_load_acquire() == 0:
             global_store_ptr("pcc_gc_trace_cursor", null())
@@ -960,7 +962,7 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
         # covered by the existing stopped-world completion protocol below.
         node = null()
     elif ptr_is_null(node) != 0 and queue_only == 0:
-        node = global_load_ptr("pcc_gc_object_head")
+        node = pcc_gc_object_walk_first()
     scanned: i64 = 0
     pcc_gc_trace_stack_begin()
     while (local_processed < remaining_budget
@@ -998,7 +1000,7 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
             # Recheck at exhaustion and retain the original bounded walk.
             queue_only = 0
             if ptr_is_null(node) != 0:
-                node = global_load_ptr("pcc_gc_object_head")
+                node = pcc_gc_object_walk_first()
             atomic_store_i32(
                 global_addr("pcc_gc_gray_worklist_flush_requested"),
                 0, 0, "release",
@@ -1015,7 +1017,7 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
                 continue
             obj = queued
         else:
-            nxt = load_ptr(node, 16)
+            nxt = pcc_gc_object_walk_next(node)
             if load_i64(node, 32) != 0:
                 node = nxt
                 continue
@@ -1094,7 +1096,7 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
             and ptr_is_null(global_load_ptr("pcc_gc_trace_cursor")) != 0):
         if pcc_gc_gray_count_load_acquire() != 0:
             if queue_only == 0:
-                global_store_ptr("pcc_gc_trace_cursor", global_load_ptr("pcc_gc_object_head"))
+                global_store_ptr("pcc_gc_trace_cursor", pcc_gc_object_walk_first())
         elif (
             load_i64(
                 global_addr("pcc_gc_tracing_finish_claim_epoch"), 0

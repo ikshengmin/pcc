@@ -107,6 +107,8 @@ pcc_gc_gray_worklist_flush = extern("pcc_gc_gray_worklist_flush", (), c_void)
 pcc_gc_gray_worklist_clear_stopped = extern(
     "pcc_gc_gray_worklist_clear_stopped", (), c_void
 )
+pcc_gc_object_walk_first = extern("pcc_gc_object_walk_first", (), c_ptr)
+pcc_gc_object_walk_next = extern("pcc_gc_object_walk_next", (c_ptr,), c_ptr)
 
 
 @c_abi_export("pcc_gc_trace_mark_gray_if_known")
@@ -348,7 +350,7 @@ def pcc_gc_drain_all_gray_unlocked() -> i64:
     # can find one.
     while pcc_gc_gray_count_load_acquire() != 0:
         local_processed: i64 = 0
-        node = global_load_ptr("pcc_gc_object_head")
+        node = pcc_gc_object_walk_first()
         while pcc_gc_gray_count_load_acquire() != 0:
             queued = pcc_gc_gray_worklist_take_locked()
             if ptr_is_null(queued) == 0:
@@ -361,7 +363,7 @@ def pcc_gc_drain_all_gray_unlocked() -> i64:
             else:
                 if ptr_is_null(node) != 0:
                     break
-                nxt = load_ptr(node, 16)
+                nxt = pcc_gc_object_walk_next(node)
                 if load_i64(node, 32) != 0:
                     node = nxt
                     continue
@@ -391,7 +393,7 @@ def pcc_gc_drain_all_gray_locked_slice() -> i64:
     pcc_gc_trace_stack_begin()
     while pcc_gc_gray_count_load_acquire() != 0:
         local_processed: i64 = 0
-        node = global_load_ptr("pcc_gc_object_head")
+        node = pcc_gc_object_walk_first()
         while pcc_gc_gray_count_load_acquire() != 0:
             queued = pcc_gc_gray_worklist_take_locked()
             if ptr_is_null(queued) == 0:
@@ -404,7 +406,7 @@ def pcc_gc_drain_all_gray_locked_slice() -> i64:
             else:
                 if ptr_is_null(node) != 0:
                     break
-                nxt = load_ptr(node, 16)
+                nxt = pcc_gc_object_walk_next(node)
                 if pcc_gc_object_node_is_active(node) == 0:
                     node = nxt
                     continue
@@ -539,9 +541,9 @@ def pcc_gc_finish_tracing_cycle(
         pcc_platform_abort()
         return 0
     marked_bytes: i64 = 0
-    node = global_load_ptr("pcc_gc_object_head")
+    node = pcc_gc_object_walk_first()
     while ptr_is_null(node) == 0:
-        nxt = load_ptr(node, 16)
+        nxt = pcc_gc_object_walk_next(node)
         if load_i64(node, 32) != 0:
             node = nxt
             continue

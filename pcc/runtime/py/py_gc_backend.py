@@ -240,7 +240,6 @@ _set_backend3_young_head = extern(
     "pcc_gc_backend3_young_set_head", (c_ptr,), c_void
 )
 _object_node_size = extern("pcc_gc_object_node_size", (c_ptr,), c_int64)
-_object_node_next = extern("pcc_gc_object_node_next", (c_ptr,), c_ptr)
 _set_object_node_next = extern(
     "pcc_gc_object_node_set_next", (c_ptr, c_ptr), c_void
 )
@@ -290,6 +289,17 @@ pcc_gc_object_index_record_find = extern(
 )
 pcc_allocator_object_node_record_ensure = extern(
     "pcc_allocator_object_node_record_ensure", (c_ptr,), c_ptr
+)
+pcc_gc_granule_span = extern("pcc_gc_granule_span", (c_ptr,), c_ptr)
+pcc_gc_object_walk_first = extern("pcc_gc_object_walk_first", (), c_ptr)
+pcc_gc_object_walk_next = extern("pcc_gc_object_walk_next", (c_ptr,), c_ptr)
+pcc_gc_object_index_record_publish = extern(
+    "pcc_gc_object_index_record_publish", (c_ptr, c_ptr), c_void
+)
+pcc_thread_no_park_enter = extern("pcc_thread_no_park_enter", (), c_void)
+pcc_thread_no_park_exit = extern("pcc_thread_no_park_exit", (), c_void)
+pcc_gc_object_list_revision_bump = extern(
+    "pcc_gc_object_list_revision_bump", (), c_void
 )
 pcc_allocator_granule_object_slot = extern(
     "pcc_allocator_granule_object_slot", (c_ptr,), c_ptr
@@ -841,9 +851,9 @@ def _frame_roots_disabled_fast() -> int:
 def _clear_object_list() -> None:
     _object_graph_lock()
     global_store_ptr("pcc_gc_backend4_reset_object_cursor", null())
-    node = _object_head()
+    node = pcc_gc_object_walk_first()
     while ptr_is_null(node) == 0:
-        nxt = _object_node_next(node)
+        nxt = pcc_gc_object_walk_next(node)
         if load_i64(node, 80) != 0:
             abort_extern()
             _object_graph_unlock()
@@ -2622,9 +2632,9 @@ def _mark_gray_if_known(o) -> None:
 
 
 def _gray_exists() -> int:
-    node = _object_head()
+    node = pcc_gc_object_walk_first()
     while ptr_is_null(node) == 0:
-        nxt = load_ptr(node, 16)
+        nxt = pcc_gc_object_walk_next(node)
         if load_i64(node, 32) != 0:
             node = nxt
             continue
@@ -2831,7 +2841,7 @@ def pcc_gc_set_backend(backend: int) -> int:
         # origin is inserted.  The selected-backend store occurs under the
         # same lock, so no tracked allocation can slip into the list after
         # this migration.
-        migration_node = _object_head()
+        migration_node = pcc_gc_object_walk_first()
         while ptr_is_null(migration_node) == 0:
             migration_obj = load_ptr(migration_node, 0)
             if pcc_gc_granule_is_object_start(migration_obj) != 1:
@@ -2839,7 +2849,7 @@ def pcc_gc_set_backend(backend: int) -> int:
                     _object_graph_unlock()
                     _release_cms_worker_pause_unless_kept(keeps_collector)
                     return -1
-            migration_node = _object_node_next(migration_node)
+            migration_node = pcc_gc_object_walk_next(migration_node)
     # Reserve central indexed/tail admission, then freeze every mode-only
     # shard. A racing acquire either prevents a zero-to--1 CAS or observes its
     # shard frozen. No backend state changes until all reservations are owned.
@@ -2909,7 +2919,7 @@ def pcc_gc_set_backend(backend: int) -> int:
             load_i64(global_addr("pcc_gc_object_list_revision"), 0),
         )
         _clear_object_list()
-        store_i64(global_addr("pcc_gc_live_bytes"), 0, 0)
+        atomic_store_i64(global_addr("pcc_gc_live_bytes"), 0, 0, "relaxed")
         store_i64(global_addr("pcc_gc_tracing_marked_bytes"), 0, 0)
     if _backend_uses_forwarding() == 0:
         _forwarding_clear_all()
@@ -3193,7 +3203,7 @@ def pcc_gc_backend4_large_object_reconsiderations() -> int:
 
 def _backend4_generation_count(flag: int) -> int:
     _object_graph_lock()
-    node = _object_head()
+    node = pcc_gc_object_walk_first()
     count: int = 0
     while ptr_is_null(node) == 0:
         if _object_node_is_active(node) != 0:
@@ -3203,14 +3213,14 @@ def _backend4_generation_count(flag: int) -> int:
                     flags: int = load_i32(obj, 12)
                     if (flags & flag) != 0:
                         count = count + 1
-        node = _object_node_next(node)
+        node = pcc_gc_object_walk_next(node)
     _object_graph_unlock()
     return count
 
 
 def _backend4_generation_bytes(flag: int) -> int:
     _object_graph_lock()
-    node = _object_head()
+    node = pcc_gc_object_walk_first()
     total: int = 0
     while ptr_is_null(node) == 0:
         if _object_node_is_active(node) != 0:
@@ -3220,7 +3230,7 @@ def _backend4_generation_bytes(flag: int) -> int:
                     flags: int = load_i32(obj, 12)
                     if (flags & flag) != 0:
                         total = total + _object_node_size(node)
-        node = _object_node_next(node)
+        node = pcc_gc_object_walk_next(node)
     _object_graph_unlock()
     return total
 
@@ -3267,7 +3277,7 @@ def _backend4_generation_for_flags(flags: int) -> int:
 
 def _backend4_page_class_population(page_class: int, count_bytes: int) -> int:
     _object_graph_lock()
-    node = _object_head()
+    node = pcc_gc_object_walk_first()
     total: int = 0
     while ptr_is_null(node) == 0:
         if _object_node_is_active(node) != 0:
@@ -3280,7 +3290,7 @@ def _backend4_page_class_population(page_class: int, count_bytes: int) -> int:
                             total = total + size
                         else:
                             total = total + 1
-        node = _object_node_next(node)
+        node = pcc_gc_object_walk_next(node)
     _object_graph_unlock()
     return total
 
@@ -5103,20 +5113,31 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
             global_store_ptr("pcc_gc_last_alloc", o)
             pcc_gc_backend3_revoke_closed_young_domain()
             return
-        old_head = _object_head()
+        # A cell record is not linked on the object list: walks reach it
+        # through its span (pcc_gc_object_walk_next), named in word 24
+        # before the index key publishes the record.
+        old_head = null()
+        record_span = null()
+        if ptr_is_null(record) != 0:
+            old_head = _object_head()
+        else:
+            record_span = pcc_gc_granule_span(o)
         store_ptr(node, 0, o)
         store_i64(node, 8, size)
         store_ptr(node, 16, old_head)
-        store_ptr(node, 24, null())
+        store_ptr(node, 24, record_span)
         store_i64(node, 32, 0)
         store_ptr(node, 40, null())
         store_ptr(node, 48, null())
         _set_object_node_gc_refs(node, 0)
         _set_object_node_young_next(node, null())
         _set_object_node_young_prev(node, null())
-        if ptr_is_null(old_head) == 0:
-            _set_object_node_prev(old_head, node)
-        _set_object_head(node)
+        if ptr_is_null(record) != 0:
+            if ptr_is_null(old_head) == 0:
+                _set_object_node_prev(old_head, node)
+            _set_object_head(node)
+        else:
+            pcc_gc_object_list_revision_bump()
         index_result: int = pcc_gc_object_index_insert_preallocated(o, node)
         if index_result >= 0:
             if pcc_gc_granule_is_object_start(o) != 1:
@@ -5129,8 +5150,7 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
         final_generation: int = load_i32(o, 12) & 384
         if final_generation == 128:
             _backend3_young_link_head(node)
-        live: int = load_i64(global_addr("pcc_gc_live_bytes"), 0)
-        store_i64(global_addr("pcc_gc_live_bytes"), 0, live + size)
+        atomic_rmw_i64("add", global_addr("pcc_gc_live_bytes"), 0, size, "relaxed")
         if backend == 4:
             store_ptr(zpage_node_owner, 0, prepared_zpage_node)
             store_ptr(zpage_owner, 0, prepared_zpage)
@@ -5171,6 +5191,68 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
             free(prepared_zpage)
         global_store_ptr("pcc_gc_last_alloc", o)
         return
+
+
+@c_abi_export("pcc_gc_register_object_cell")
+def pcc_gc_register_object_cell(o, size: int) -> int:
+    """Register a fresh object cell for the count-free GC1-GC3 without the
+    graph lock; 0 leaves ``o`` to the locked registration (staged or direct).
+    GC3 allocates old (no young bit), so it registers exactly as GC1/GC2 do;
+    GC4 links young objects on the young list and stays locked.
+
+    The cell's record is its node and its index entry (one key word), and
+    walks reach it through its span, so registering it touches no shared
+    list or table: the fields are written, then the key is release-stored.
+    A no-park lease keeps the colour decision and that publication on one
+    side of any stopped world: a mark begins with the world stopped, so it
+    either finds the object published (a root keeps it) or the object reads
+    the active mark and starts black. Counters it shares with locked writers
+    (live bytes, the walk revision) are updated atomically.
+    """
+    backend: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+    if backend != 1 and backend != 2 and backend != 3:
+        return 0
+    if ptr_is_null(o) != 0 or is_tagged_int(o) != 0:
+        return 0
+    if (load_i32(o, 12) & 384) != 0:
+        # A generation bit asks for the locked young-list registration.
+        return 0
+    record = pcc_allocator_object_node_record_ensure(o)
+    if ptr_is_null(record) != 0:
+        return 0
+    span = pcc_gc_granule_span(o)
+    if ptr_is_null(span) != 0:
+        return 0
+    if size < 16:
+        size = 16
+    pcc_thread_no_park_enter()
+    if ptr_is_null(pcc_gc_object_index_record_find(record, o)) == 0:
+        # Registered already: a cell's record is its only node.
+        pcc_thread_no_park_exit()
+        return 1
+    flags: int = load_i32(o, 12)
+    color: int = 8
+    if atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") != 0:
+        color = 32
+    store_i32(o, 12, (flags & ~56) | color | 16384)
+    store_i32(global_addr("pcc_gc_cycle_requested"), 0, 1)
+    node = pcc_gc_object_node_take_record(record)
+    store_ptr(node, 0, o)
+    store_i64(node, 8, size)
+    store_ptr(node, 16, null())
+    store_ptr(node, 24, span)
+    store_i64(node, 32, 0)
+    store_ptr(node, 40, null())
+    store_ptr(node, 48, null())
+    _set_object_node_gc_refs(node, 0)
+    _set_object_node_young_next(node, null())
+    _set_object_node_young_prev(node, null())
+    pcc_gc_object_list_revision_bump()
+    pcc_gc_object_index_record_publish(record, o)
+    atomic_rmw_i64("add", global_addr("pcc_gc_live_bytes"), 0, size, "relaxed")
+    global_store_ptr("pcc_gc_last_alloc", o)
+    pcc_thread_no_park_exit()
+    return 1
 
 
 @c_abi_export("pcc_gc_note_object_allocated")
@@ -5459,7 +5541,7 @@ def pcc_gc_reset_relocation_set() -> None:
         _object_graph_lock()
 
     _object_graph_lock()
-    global_store_ptr("pcc_gc_backend4_reset_object_cursor", _object_head())
+    global_store_ptr("pcc_gc_backend4_reset_object_cursor", pcc_gc_object_walk_first())
     while 1:
         examined = 0
         while (
@@ -5473,7 +5555,7 @@ def pcc_gc_reset_relocation_set() -> None:
             )
             global_store_ptr(
                 "pcc_gc_backend4_reset_object_cursor",
-                _object_node_next(obj_node),
+                pcc_gc_object_walk_next(obj_node),
             )
             obj = load_ptr(obj_node, 0)
             if ptr_is_null(obj) == 0:
@@ -5588,7 +5670,7 @@ def _backend_uses_forwarding() -> int:
 
 def _backend4_clear_large_deferred_flags() -> None:
     _object_graph_lock()
-    node = _object_head()
+    node = pcc_gc_object_walk_first()
     while ptr_is_null(node) == 0:
         if _object_node_is_active(node) != 0:
             obj = load_ptr(node, 0)
@@ -5610,7 +5692,7 @@ def _backend4_clear_large_deferred_flags() -> None:
                             reconsidered + 1,
                         )
                         store_i32(obj, 12, flags & ~32768)
-        node = _object_node_next(node)
+        node = pcc_gc_object_walk_next(node)
     _object_graph_unlock()
 
 

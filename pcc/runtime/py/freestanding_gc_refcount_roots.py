@@ -22,6 +22,8 @@ pcc_gc_mark_root_gray_if_known = extern(
 pcc_gc_subtract_referent_refs = extern(
     "pcc_gc_subtract_referent_refs", (c_ptr,), c_void
 )
+pcc_gc_object_walk_first = extern("pcc_gc_object_walk_first", (), c_ptr)
+pcc_gc_object_walk_next = extern("pcc_gc_object_walk_next", (c_ptr,), c_ptr)
 
 
 @c_abi_export("pcc_gc_object_node_is_active")
@@ -38,24 +40,24 @@ def pcc_gc_object_node_is_active(node) -> i64:
 
 @c_abi_export("pcc_gc_gray_refcount_external_roots")
 def pcc_gc_gray_refcount_external_roots() -> None:
-    node = global_load_ptr("pcc_gc_object_head")
+    node = pcc_gc_object_walk_first()
     while ptr_is_null(node) == 0:
-        nxt = load_ptr(node, 16)
+        nxt = pcc_gc_object_walk_next(node)
         if pcc_gc_object_node_is_active(node) != 0:
             obj = load_ptr(node, 0)
             store_i64(node, 56, load_i64(obj, 0))
         node = nxt
 
-    node = global_load_ptr("pcc_gc_object_head")
+    node = pcc_gc_object_walk_first()
     while ptr_is_null(node) == 0:
-        nxt = load_ptr(node, 16)
+        nxt = pcc_gc_object_walk_next(node)
         if pcc_gc_object_node_is_active(node) != 0:
             pcc_gc_subtract_referent_refs(load_ptr(node, 0))
         node = nxt
 
-    node = global_load_ptr("pcc_gc_object_head")
+    node = pcc_gc_object_walk_first()
     while ptr_is_null(node) == 0:
-        nxt = load_ptr(node, 16)
+        nxt = pcc_gc_object_walk_next(node)
         if pcc_gc_object_node_is_active(node) != 0 and load_i64(node, 56) > 0:
             pcc_gc_mark_root_gray_if_known(load_ptr(node, 0))
         node = nxt

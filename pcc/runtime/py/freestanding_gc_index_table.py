@@ -110,6 +110,13 @@ def _object_index_record_find(record: c_ptr, obj: c_ptr) -> c_ptr:
     return null()
 
 
+@c_abi_export("pcc_gc_object_index_record_publish")
+def _object_index_record_publish(record: c_ptr, obj: c_ptr) -> None:
+    """Index ``obj`` in its own cell record ``record``, whose node fields
+    are written: one release store. The caller owns the fresh cell."""
+    atomic_store_i64(record, RECORD_INDEX_KEY, ptr_diff(obj, null()), "release")
+
+
 @c_abi_export("pcc_gc_object_index_record_insert")
 def _object_index_record_insert(obj: c_ptr, node: c_ptr) -> i64:
     """Index ``obj`` in its cell's record: 1 inserted, 0 already present,

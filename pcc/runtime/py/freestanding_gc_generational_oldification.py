@@ -4,6 +4,7 @@ from pcc.runtime.py.py_abi_constants import PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY
 
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
+    atomic_rmw_i64,
     free,
     global_addr,
     is_tagged_int,
@@ -211,8 +212,7 @@ def pcc_gc_generational_oldify_copy(from_obj: c_ptr) -> c_ptr:
         pcc_gc_object_node_release(node)
         free(to_obj)
         return null()
-    live: i64 = load_i64(global_addr("pcc_gc_live_bytes"), 0)
-    store_i64(global_addr("pcc_gc_live_bytes"), 0, live + size)
+    atomic_rmw_i64("add", global_addr("pcc_gc_live_bytes"), 0, size, "relaxed")
 
     moved_cpy_ref: i64 = 0
     if tag == PY_TYPE_CPY_HANDLE:

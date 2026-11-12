@@ -1060,12 +1060,17 @@ define_global_i64("pcc_allocator_granule_radix_node_count", 0)
 # metadata: object spans are never retired, so neither is their side array.
 define_global_ptr_null("pcc_allocator_side_arena")
 define_global_i64("pcc_allocator_side_arena_used", 0)
+# Newest object span with an object-node record array; see
+# pcc_allocator_record_span_first.
+define_global_ptr_null("pcc_allocator_record_span_head")
 
 # A span descriptor: kind@0, stride@8, slab base@16, cell count@24, free-cell
 # count@32 (raw slabs), side-word array@40 and object-node record array@48
-# (object slabs, both allocated on first use).
-SPAN_BYTES = 56
+# (object slabs, both allocated on first use), and @56 the next object span
+# that has a record array (pcc_allocator_record_span_first).
+SPAN_BYTES = 64
 SPAN_NODE_RECORDS_OFFSET = 48
+SPAN_RECORD_NEXT_OFFSET = 56
 # One object-node record per object cell: the tracing collectors' object node
 # (layout owned by freestanding_gc_object_nodes) followed by its index key.
 OBJECT_NODE_RECORD_BYTES = 96
@@ -1138,6 +1143,7 @@ def _span_new(kind: i64, stride: i64, base) -> c_ptr:
     # Object slabs: per-cell object-node records, allocated on first use (see
     # pcc_allocator_object_node_record_ensure).
     store_ptr(span, SPAN_NODE_RECORDS_OFFSET, null())
+    store_ptr(span, SPAN_RECORD_NEXT_OFFSET, null())
     return span
 
 
@@ -2191,10 +2197,52 @@ def pcc_allocator_object_node_record_ensure(ptr) -> c_ptr:
                 atomic_store_i64(
                     span, SPAN_NODE_RECORDS_OFFSET, records_bits, "release"
                 )
+                # Spans with records form one list, newest first; it only
+                # grows (object spans are never retired). A walker that
+                # acquires the head sees each listed span's records.
+                store_ptr(
+                    span,
+                    SPAN_RECORD_NEXT_OFFSET,
+                    global_load_ptr("pcc_allocator_record_span_head"),
+                )
+                atomic_store_i64(
+                    global_addr("pcc_allocator_record_span_head"),
+                    0,
+                    ptr_diff(span, null()),
+                    "release",
+                )
         pcc_allocator_lock_release()
         if records_bits == 0:
             return null()
     return int_to_ptr(records_bits + cell * OBJECT_NODE_RECORD_BYTES)
+
+
+@c_abi_export("pcc_allocator_record_span_first")
+def pcc_allocator_record_span_first() -> c_ptr:
+    """The newest object span with a record array, or NULL. Spans with
+    records form a list that only grows; a span added after a walk began
+    holds only cells registered after it, which the walk may skip."""
+    return int_to_ptr(
+        atomic_load_i64(global_addr("pcc_allocator_record_span_head"), 0, "acquire")
+    )
+
+
+@c_abi_export("pcc_allocator_record_span_next")
+def pcc_allocator_record_span_next(span: c_ptr) -> c_ptr:
+    """The listed span after ``span`` (published before it), or NULL."""
+    return load_ptr(span, SPAN_RECORD_NEXT_OFFSET)
+
+
+@c_abi_export("pcc_allocator_record_span_records")
+def pcc_allocator_record_span_records(span: c_ptr) -> c_ptr:
+    """A listed span's record array: one OBJECT_NODE_RECORD_BYTES record per
+    cell, in cell order."""
+    return int_to_ptr(atomic_load_i64(span, SPAN_NODE_RECORDS_OFFSET, "acquire"))
+
+
+@c_abi_export("pcc_allocator_record_span_cells")
+def pcc_allocator_record_span_cells(span: c_ptr) -> i64:
+    return load_i64(span, 24)
 
 
 @c_abi_export("pcc_gc_granule_object_publish")

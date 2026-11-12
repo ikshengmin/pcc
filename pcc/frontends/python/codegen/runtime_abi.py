@@ -2508,6 +2508,10 @@ def _cross_object_signatures_part_3():
 
 def _cross_object_signatures_part_4():
     return {
+    "pcc_gc_object_walk_first": ((), "c_ptr"),
+    "pcc_gc_object_walk_next": (("c_ptr",), "c_ptr"),
+    "pcc_gc_object_list_revision_bump": ((), "c_void"),
+    "pcc_gc_object_index_record_publish": (("c_ptr", "c_ptr"), "c_void"),
     "pcc_gc_object_node_freeing": (("c_ptr",), "c_int64"),
     "pcc_gc_object_node_set_freeing": (("c_ptr", "c_int64"), "c_void"),
     "pcc_gc_object_node_prev": (("c_ptr",), "c_ptr"),
@@ -2632,6 +2636,10 @@ def _cross_object_signatures_part_5():
 
 def _cross_object_signatures_part_6():
     return {
+    "pcc_allocator_record_span_first": ((), "c_ptr"),
+    "pcc_allocator_record_span_next": (("c_ptr",), "c_ptr"),
+    "pcc_allocator_record_span_records": (("c_ptr",), "c_ptr"),
+    "pcc_allocator_record_span_cells": (("c_ptr",), "c_int64"),
     "pcc_gc_trace_referents_for_promotion": (("c_ptr",), "c_void"),
     "pcc_gc_backend3_promotion_worklist_unlink": (("c_ptr",), "c_void"),
     "pcc_gc_relocation_member_count": (("c_ptr",), "c_int64"),
@@ -3266,6 +3274,7 @@ def _cross_object_signatures_part_14():
         "pcc_gc_concurrent_sweep_finish_stopped": ((), "c_int64"),
         "pcc_gc_stack_slot_root_is_conservative": (("c_ptr",), "c_int64"),
         "pcc_gc_note_object_allocated_sized": (("c_ptr", "c_int64"), "c_void"),
+        "pcc_gc_register_object_cell": (("c_ptr", "c_int64"), "c_int64"),
         "pcc_gc_alloc_stage_enable": (("c_int64",), "c_void"),
         "pcc_gc_alloc_stage_note": (("c_ptr", "c_int64"), "c_int64"),
         "pcc_gc_alloc_stage_pending": ((), "c_int64"),
