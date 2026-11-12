@@ -150,28 +150,6 @@ def _ptr_is_set(o) -> bool:
     return load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_SET
 
 
-def _set_read_prepare_root(slot, value, backend: int):
-    store_ptr(slot, 0, value)
-    return null()
-
-
-def _set_read_root_failed(value, backend: int, handle) -> int:
-    return 0
-
-
-def _set_read_reload_root(slot, handle):
-    value = load_ptr(slot, 0)
-    if ptr_is_null(handle) == 0:
-        value = pcc_gc_load_ptr(null(), slot)
-        store_ptr(slot, 0, value)
-    return value
-
-
-def _set_read_finish_root(handle) -> None:
-    if ptr_is_null(handle) == 0:
-        pcc_gc_scheduler_root_unregister_handle(handle)
-
-
 def _alloc_entries(capacity: int):
     # SetEntry is 16 bytes: i64 hash + ptr key.
     total = capacity * 16
@@ -257,11 +235,11 @@ def _set_remove_rooted_slot(
     expected_slot,
     expected_hash: int,
 ) -> int:
-    s = _set_read_reload_root(set_slot, set_handle)
+    s = load_ptr(set_slot, 0)
     plan = stack_alloc(128)
     pcc_gc_store_ptr_plan_init(plan, s, pcc_gc_backend())
     pcc_py_gc_minor_graph_lock()
-    s = _set_read_reload_root(set_slot, set_handle)
+    s = load_ptr(set_slot, 0)
     committed: int = 0
     if _ptr_is_set(s):
         if (
@@ -313,13 +291,13 @@ def _set_add_rooted_slot(
     slot: int,
     hash_val: int,
 ) -> int:
-    s = _set_read_reload_root(set_slot, set_handle)
-    item = _set_read_reload_root(item_slot, item_handle)
+    s = load_ptr(set_slot, 0)
+    item = load_ptr(item_slot, 0)
     plan = stack_alloc(128)
     pcc_gc_store_ptr_plan_init(plan, s, pcc_gc_backend())
     pcc_py_gc_minor_graph_lock()
-    s = _set_read_reload_root(set_slot, set_handle)
-    item = _set_read_reload_root(item_slot, item_handle)
+    s = load_ptr(set_slot, 0)
+    item = load_ptr(item_slot, 0)
     committed: int = 0
     if _ptr_is_set(s):
         if (
@@ -350,31 +328,23 @@ def _set_add_rooted_slot(
     pcc_py_gc_minor_graph_unlock()
     pcc_gc_store_ptr_plan_finish(plan)
     if committed != 0:
-        s = _set_read_reload_root(set_slot, set_handle)
+        s = load_ptr(set_slot, 0)
         _maybe_grow(s)
     return committed
 
 
 def _set_lookup_rooted(s, item, mode: int, hash_val: int, hash_known: int) -> int:
-    backend: int = pcc_gc_backend()
     set_slot = stack_alloc(8)
     item_slot = stack_alloc(8)
     candidate_slot = stack_alloc(8)
-    set_handle = _set_read_prepare_root(set_slot, s, backend)
-    if _set_read_root_failed(s, backend, set_handle) != 0:
-        return 0
-    item_handle = _set_read_prepare_root(item_slot, item, backend)
-    if _set_read_root_failed(item, backend, item_handle) != 0:
-        _set_read_finish_root(set_handle)
-        return 0
-    item = _set_read_reload_root(item_slot, item_handle)
+    store_ptr(set_slot, 0, s)
+    store_ptr(item_slot, 0, item)
+    item = load_ptr(item_slot, 0)
     if hash_known == 0:
         hash_val = py_obj_hash(item)
-    s = _set_read_reload_root(set_slot, set_handle)
-    item = _set_read_reload_root(item_slot, item_handle)
+    s = load_ptr(set_slot, 0)
+    item = load_ptr(item_slot, 0)
     if py_err_occurred() != 0:
-        _set_read_finish_root(item_handle)
-        _set_read_finish_root(set_handle)
         return 0
 
     attempts: int = 0
@@ -382,8 +352,8 @@ def _set_lookup_rooted(s, item, mode: int, hash_val: int, hash_known: int) -> in
     found: int = 0
     while attempts < 16 and done == 0:
         attempts = attempts + 1
-        s = _set_read_reload_root(set_slot, set_handle)
-        item = _set_read_reload_root(item_slot, item_handle)
+        s = load_ptr(set_slot, 0)
+        item = load_ptr(item_slot, 0)
         if not _ptr_is_set(s):
             done = 1
             continue
@@ -409,9 +379,9 @@ def _set_lookup_rooted(s, item, mode: int, hash_val: int, hash_known: int) -> in
                         target = first_tombstone
                     found = _set_add_rooted_slot(
                         set_slot,
-                        set_handle,
+                        null(),
                         item_slot,
-                        item_handle,
+                        null(),
                         entries,
                         capacity,
                         target,
@@ -429,7 +399,7 @@ def _set_lookup_rooted(s, item, mode: int, hash_val: int, hash_known: int) -> in
                         if mode == 1:
                             found = _set_remove_rooted_slot(
                                 set_slot,
-                                set_handle,
+                                null(),
                                 entries,
                                 capacity,
                                 j,
@@ -442,52 +412,39 @@ def _set_lookup_rooted(s, item, mode: int, hash_val: int, hash_known: int) -> in
                         and is_tagged_int(item) != 0
                     ):
                         py_incref(entry_key)
-                        candidate_handle = _set_read_prepare_root(
-                            candidate_slot, entry_key, backend
-                        )
-                        if _set_read_root_failed(
-                            entry_key, backend, candidate_handle
-                        ) != 0:
-                            py_decref(entry_key)
+                        store_ptr(candidate_slot, 0, entry_key)
+                        before_s = s
+                        equal: int = py_obj_eq(entry_key, item)
+                        s = load_ptr(set_slot, 0)
+                        item = load_ptr(item_slot, 0)
+                        candidate = load_ptr(candidate_slot, 0)
+                        stable: int = 0
+                        if ptr_eq(s, before_s) != 0 and _ptr_is_set(s):
+                            if (
+                                load_i64(s, 24) == capacity
+                                and ptr_eq(load_ptr(s, 40), entries) != 0
+                            ):
+                                current = _entry_key(s, entries, slot_off)
+                                if ptr_eq(current, candidate) != 0:
+                                    stable = 1
+                        py_decref(candidate)
+                        if py_err_occurred() != 0:
+                            return 0
+                        if stable == 0:
+                            restart = 1
+                        elif equal != 0:
+                            found = 1
+                            if mode == 1:
+                                found = _set_remove_rooted_slot(
+                                    set_slot,
+                                    null(),
+                                    entries,
+                                    capacity,
+                                    j,
+                                    null(),
+                                    0,
+                                )
                             done = 1
-                        else:
-                            before_s = s
-                            equal: int = py_obj_eq(entry_key, item)
-                            s = _set_read_reload_root(set_slot, set_handle)
-                            item = _set_read_reload_root(item_slot, item_handle)
-                            candidate = _set_read_reload_root(
-                                candidate_slot, candidate_handle
-                            )
-                            _set_read_finish_root(candidate_handle)
-                            stable: int = 0
-                            if ptr_eq(s, before_s) != 0 and _ptr_is_set(s):
-                                if (
-                                    load_i64(s, 24) == capacity
-                                    and ptr_eq(load_ptr(s, 40), entries) != 0
-                                ):
-                                    current = _entry_key(s, entries, slot_off)
-                                    if ptr_eq(current, candidate) != 0:
-                                        stable = 1
-                            py_decref(candidate)
-                            if py_err_occurred() != 0:
-                                _set_read_finish_root(item_handle)
-                                _set_read_finish_root(set_handle)
-                                return 0
-                            if stable == 0:
-                                restart = 1
-                            elif equal != 0:
-                                found = 1
-                                if mode == 1:
-                                    found = _set_remove_rooted_slot(
-                                        set_slot,
-                                        set_handle,
-                                        entries,
-                                        capacity,
-                                        j,
-                                        null(),
-                                        0,
-                                    )
-                                done = 1
             if done == 0 and restart == 0:
                 perturb = _perturb_shift5(perturb)
                 j = (j * 5 + perturb + 1) & mask
@@ -496,17 +453,15 @@ def _set_lookup_rooted(s, item, mode: int, hash_val: int, hash_known: int) -> in
             if first_tombstone >= 0:
                 found = _set_add_rooted_slot(
                     set_slot,
-                    set_handle,
+                    null(),
                     item_slot,
-                    item_handle,
+                    null(),
                     entries,
                     capacity,
                     first_tombstone,
                     hash_val,
                 )
             done = 1
-    _set_read_finish_root(item_handle)
-    _set_read_finish_root(set_handle)
     return found
 
 
@@ -532,7 +487,6 @@ def _rehash(s, new_capacity: int) -> int:
     initial_backend: int = pcc_gc_backend()
     owner_slot = stack_alloc(8)
     store_ptr(owner_slot, 0, s)
-    owner_handle = null()
 
     attempt: int = 0
     while attempt < 8:
@@ -541,9 +495,6 @@ def _rehash(s, new_capacity: int) -> int:
         if pcc_gc_backend() != initial_backend:
             pcc_py_gc_minor_graph_unlock()
             break
-        if ptr_is_null(owner_handle) == 0:
-            s = pcc_gc_load_ptr(null(), owner_slot)
-            store_ptr(owner_slot, 0, s)
         old_entries = load_ptr(s, 40)
         old_capacity: int = load_i64(s, 24)
         old_size: int = load_i64(s, 16)
@@ -572,9 +523,6 @@ def _rehash(s, new_capacity: int) -> int:
             free(slot_pairs)
             free(new_entries)
             break
-        if ptr_is_null(owner_handle) == 0:
-            s = pcc_gc_load_ptr(null(), owner_slot)
-            store_ptr(owner_slot, 0, s)
         if (
             ptr_eq(load_ptr(s, 40), old_entries) == 0
             or load_i64(s, 24) != old_capacity
@@ -654,12 +602,8 @@ def _rehash(s, new_capacity: int) -> int:
         pcc_py_gc_minor_graph_unlock()
         free(old_entries)
         free(slot_pairs)
-        if ptr_is_null(owner_handle) == 0:
-            pcc_gc_scheduler_root_unregister_handle(owner_handle)
         return 0
 
-    if ptr_is_null(owner_handle) == 0:
-        pcc_gc_scheduler_root_unregister_handle(owner_handle)
     return -1
 
 
@@ -713,84 +657,57 @@ def py_set_update(dst, src) -> None:
         return
     if ptr_is_null(src) != 0:
         return
-    backend: int = pcc_gc_backend()
     dst_slot = stack_alloc(8)
     src_slot = stack_alloc(8)
     snapshot_slot = stack_alloc(8)
     key_slot = stack_alloc(8)
-    dst_handle = _set_read_prepare_root(dst_slot, dst, backend)
-    if _set_read_root_failed(dst, backend, dst_handle) != 0:
-        return
-    src_handle = _set_read_prepare_root(src_slot, src, backend)
-    if _set_read_root_failed(src, backend, src_handle) != 0:
-        _set_read_finish_root(dst_handle)
-        return
-    src = _set_read_reload_root(src_slot, src_handle)
+    store_ptr(dst_slot, 0, dst)
+    store_ptr(src_slot, 0, src)
+    src = load_ptr(src_slot, 0)
     if not _ptr_is_set(src):
-        _set_update_iterable(_set_read_reload_root(dst_slot, dst_handle), src)
-        _set_read_finish_root(src_handle)
-        _set_read_finish_root(dst_handle)
+        _set_update_iterable(load_ptr(dst_slot, 0), src)
         return
 
     source_size: int = load_i64(src, 16)
     snapshot = py_list_new(source_size if source_size > 0 else 4)
     if ptr_is_null(snapshot) != 0:
-        _set_read_finish_root(src_handle)
-        _set_read_finish_root(dst_handle)
         return
-    snapshot_handle = _set_read_prepare_root(
-        snapshot_slot, snapshot, backend
-    )
-    if _set_read_root_failed(snapshot, backend, snapshot_handle) != 0:
-        py_decref(snapshot)
-        _set_read_finish_root(src_handle)
-        _set_read_finish_root(dst_handle)
-        return
+    store_ptr(snapshot_slot, 0, snapshot)
 
-    src = _set_read_reload_root(src_slot, src_handle)
+    src = load_ptr(src_slot, 0)
     source_capacity: int = load_i64(src, 24)
     dummy = global_load_ptr("py_set_dummy")
     i: int = 0
     while i < source_capacity:
-        src = _set_read_reload_root(src_slot, src_handle)
+        src = load_ptr(src_slot, 0)
         entries = load_ptr(src, 40)
         key = _entry_key(src, entries, i * 16)
         if ptr_is_null(key) == 0 and ptr_eq(key, dummy) == 0:
-            snapshot = _set_read_reload_root(
-                snapshot_slot, snapshot_handle
-            )
+            snapshot = load_ptr(snapshot_slot, 0)
             py_list_append(snapshot, key)
             if py_err_occurred() != 0:
                 i = source_capacity
         i = i + 1
 
-    snapshot = _set_read_reload_root(snapshot_slot, snapshot_handle)
+    snapshot = load_ptr(snapshot_slot, 0)
     snapshot_len: int = py_list_len(snapshot)
     i = 0
     while i < snapshot_len and py_err_occurred() == 0:
-        snapshot = _set_read_reload_root(snapshot_slot, snapshot_handle)
+        snapshot = load_ptr(snapshot_slot, 0)
         key = py_list_get(snapshot, i)
         if ptr_is_null(key) != 0:
             i = snapshot_len
         else:
-            key_handle = _set_read_prepare_root(key_slot, key, backend)
-            if _set_read_root_failed(key, backend, key_handle) != 0:
-                py_decref(key)
-                i = snapshot_len
-            else:
-                dst = _set_read_reload_root(dst_slot, dst_handle)
-                key = _set_read_reload_root(key_slot, key_handle)
-                py_set_add(dst, key)
-                key = _set_read_reload_root(key_slot, key_handle)
-                _set_read_finish_root(key_handle)
-                py_decref(key)
+            store_ptr(key_slot, 0, key)
+            dst = load_ptr(dst_slot, 0)
+            key = load_ptr(key_slot, 0)
+            py_set_add(dst, key)
+            key = load_ptr(key_slot, 0)
+            py_decref(key)
         i = i + 1
 
-    snapshot = _set_read_reload_root(snapshot_slot, snapshot_handle)
-    _set_read_finish_root(snapshot_handle)
+    snapshot = load_ptr(snapshot_slot, 0)
     py_decref(snapshot)
-    _set_read_finish_root(src_handle)
-    _set_read_finish_root(dst_handle)
 
 
 @c_abi_export("py_set_union")
@@ -864,24 +781,17 @@ def py_set_symmetric_difference_update(dst, other) -> None:
     py_decref(result)
 
 
-def _set_predicate_hold(slots, handles, index: int, value, backend: int) -> int:
-    slot = ptr_add(slots, index * 8)
-    handle = _set_read_prepare_root(slot, value, backend)
-    store_ptr(handles, index * 8, handle)
-    if _set_read_root_failed(value, backend, handle) != 0:
-        py_raise_owned(py_exc_new(19, cstr("cannot root set predicate value")))
-        return 0
+def _set_predicate_hold(slots, index: int, value) -> int:
+    store_ptr(slots, index * 8, value)
     return 1
 
 
-def _set_predicate_load(slots, handles, index: int):
-    return _set_read_reload_root(ptr_add(slots, index * 8), load_ptr(handles, index * 8))
+def _set_predicate_load(slots, index: int):
+    return load_ptr(slots, index * 8)
 
 
-def _set_predicate_drop(slots, handles, index: int) -> None:
-    value = _set_predicate_load(slots, handles, index)
-    _set_read_finish_root(load_ptr(handles, index * 8))
-    store_ptr(handles, index * 8, null())
+def _set_predicate_drop(slots, index: int) -> None:
+    value = _set_predicate_load(slots, index)
     store_ptr(slots, index * 8, null())
     if index >= 2:
         py_decref(value)
@@ -890,22 +800,19 @@ def _set_predicate_drop(slots, handles, index: int) -> None:
 def _set_update_iterable(dst, src) -> None:
     # Borrowed destination/input, owned iterator/current item.
     slots = stack_alloc(32)
-    handles = stack_alloc(32)
     memset(slots, 0, 32)
-    memset(handles, 0, 32)
-    backend: int = pcc_gc_backend()
-    ok: int = _set_predicate_hold(slots, handles, 0, dst, backend)
+    ok: int = _set_predicate_hold(slots, 0, dst)
     if ok != 0:
-        ok = _set_predicate_hold(slots, handles, 1, src, backend)
+        ok = _set_predicate_hold(slots, 1, src)
     if ok != 0:
-        iterator = py_obj_iter(_set_predicate_load(slots, handles, 1))
-        ok = _set_predicate_hold(slots, handles, 2, iterator, backend)
+        iterator = py_obj_iter(_set_predicate_load(slots, 1))
+        ok = _set_predicate_hold(slots, 2, iterator)
         if ptr_is_null(iterator) != 0:
             if py_err_occurred() == 0:
                 py_raise_owned(py_exc_new(3, cstr("object is not iterable")))
             ok = 0
     while ok != 0:
-        item = py_obj_next(_set_predicate_load(slots, handles, 2))
+        item = py_obj_next(_set_predicate_load(slots, 2))
         if ptr_is_null(item) != 0:
             if py_err_occurred() != 0:
                 if py_exc_matches(py_current_exception(), py_exc_builtin_class(8)) != 0:
@@ -913,16 +820,16 @@ def _set_update_iterable(dst, src) -> None:
             else:
                 py_raise_owned(py_exc_new(7, cstr("set update iterator returned NULL without an exception")))
             break
-        ok = _set_predicate_hold(slots, handles, 3, item, backend)
+        ok = _set_predicate_hold(slots, 3, item)
         if ok != 0:
-            py_set_add(_set_predicate_load(slots, handles, 0),
-                       _set_predicate_load(slots, handles, 3))
+            py_set_add(_set_predicate_load(slots, 0),
+                       _set_predicate_load(slots, 3))
             if py_err_occurred() != 0:
                 ok = 0
-        _set_predicate_drop(slots, handles, 3)
+        _set_predicate_drop(slots, 3)
     index: int = 3
     while index >= 0:
-        _set_predicate_drop(slots, handles, index)
+        _set_predicate_drop(slots, index)
         index = index - 1
 
 
@@ -1026,61 +933,58 @@ def py_set_from_iterable(src):
 def _set_predicate_iterable(a, b, superset: int) -> int:
     # Borrowed receiver/input, owned iterator/matched-set/current item.
     slots = stack_alloc(40)
-    handles = stack_alloc(40)
     memset(slots, 0, 40)
-    memset(handles, 0, 40)
-    backend: int = pcc_gc_backend()
-    ok: int = _set_predicate_hold(slots, handles, 0, a, backend)
+    ok: int = _set_predicate_hold(slots, 0, a)
     if ok != 0:
-        ok = _set_predicate_hold(slots, handles, 1, b, backend)
+        ok = _set_predicate_hold(slots, 1, b)
     if ok != 0:
-        iterator = py_obj_iter(_set_predicate_load(slots, handles, 1))
-        ok = _set_predicate_hold(slots, handles, 2, iterator, backend)
+        iterator = py_obj_iter(_set_predicate_load(slots, 1))
+        ok = _set_predicate_hold(slots, 2, iterator)
         if ptr_is_null(iterator) != 0:
             ok = 0
     if ok != 0 and superset == 0:
         matched = py_set_new()
-        ok = _set_predicate_hold(slots, handles, 3, matched, backend)
+        ok = _set_predicate_hold(slots, 3, matched)
         if ptr_is_null(matched) != 0:
             py_raise_owned(py_exc_new(19, cstr("cannot allocate set predicate state")))
             ok = 0
     result: int = 0
     while ok != 0:
-        item = py_obj_next(_set_predicate_load(slots, handles, 2))
+        item = py_obj_next(_set_predicate_load(slots, 2))
         if ptr_is_null(item) != 0:
             if py_err_occurred() != 0:
                 if py_exc_matches(py_current_exception(), py_exc_builtin_class(8)) != 0:
                     py_clear_exception()
                     if superset != 0:
                         result = 1
-                    elif load_i64(_set_predicate_load(slots, handles, 3), 16) == load_i64(_set_predicate_load(slots, handles, 0), 16):
+                    elif load_i64(_set_predicate_load(slots, 3), 16) == load_i64(_set_predicate_load(slots, 0), 16):
                         result = 1
             else:
                 py_raise_owned(py_exc_new(7, cstr("set predicate iterator returned NULL without an exception")))
             break
-        ok = _set_predicate_hold(slots, handles, 4, item, backend)
+        ok = _set_predicate_hold(slots, 4, item)
         if ok != 0:
-            hash_val: int = py_obj_hash(_set_predicate_load(slots, handles, 4))
+            hash_val: int = py_obj_hash(_set_predicate_load(slots, 4))
             found: int = 0
             if py_err_occurred() == 0:
-                found = py_set_contains_hash(_set_predicate_load(slots, handles, 0),
-                                              _set_predicate_load(slots, handles, 4), hash_val)
+                found = py_set_contains_hash(_set_predicate_load(slots, 0),
+                                              _set_predicate_load(slots, 4), hash_val)
             if py_err_occurred() != 0:
                 ok = 0
             elif superset != 0 and found == 0:
                 break
             elif superset == 0 and found != 0:
-                py_set_add_hash(_set_predicate_load(slots, handles, 3),
-                                _set_predicate_load(slots, handles, 4), hash_val)
+                py_set_add_hash(_set_predicate_load(slots, 3),
+                                _set_predicate_load(slots, 4), hash_val)
                 if py_err_occurred() != 0:
                     ok = 0
-                elif load_i64(_set_predicate_load(slots, handles, 3), 16) == load_i64(_set_predicate_load(slots, handles, 0), 16):
+                elif load_i64(_set_predicate_load(slots, 3), 16) == load_i64(_set_predicate_load(slots, 0), 16):
                     result = 1
                     break
-        _set_predicate_drop(slots, handles, 4)
+        _set_predicate_drop(slots, 4)
     index: int = 4
     while index >= 0:
-        _set_predicate_drop(slots, handles, index)
+        _set_predicate_drop(slots, index)
         index = index - 1
     return result
 

@@ -732,44 +732,16 @@ def py_tuple_len(tuple_ptr) -> int:
     return load_i64(tuple_ptr, PYTUPLEOBJECT_LEN_OFFSET)
 
 
-def _tuple_method_prepare_root(slot, value, backend: int):
-    store_ptr(slot, 0, value)
-    return null()
-
-
-def _tuple_method_root_failed(value, backend: int, handle) -> int:
-    return 0
-
-
-def _tuple_method_reload_root(slot, handle):
-    value = load_ptr(slot, 0)
-    if ptr_is_null(handle) == 0:
-        value = pcc_gc_load_ptr(null(), slot)
-        store_ptr(slot, 0, value)
-    return value
-
-
-def _tuple_method_finish_root(handle) -> None:
-    if ptr_is_null(handle) == 0:
-        pcc_gc_scheduler_root_unregister_handle(handle)
-
-
 def _tuple_method_scan(tuple_ptr, item, start, stop, want_first: int) -> int:
     if ptr_is_null(tuple_ptr) != 0:
         return -1 if want_first != 0 else 0
-    backend: int = pcc_gc_backend()
     tuple_slot = stack_alloc(8)
     query_slot = stack_alloc(8)
     element_slot = stack_alloc(8)
-    tuple_handle = _tuple_method_prepare_root(tuple_slot, tuple_ptr, backend)
-    if _tuple_method_root_failed(tuple_ptr, backend, tuple_handle) != 0:
-        return -1 if want_first != 0 else 0
-    query_handle = _tuple_method_prepare_root(query_slot, item, backend)
-    if _tuple_method_root_failed(item, backend, query_handle) != 0:
-        _tuple_method_finish_root(tuple_handle)
-        return -1 if want_first != 0 else 0
+    store_ptr(tuple_slot, 0, tuple_ptr)
+    store_ptr(query_slot, 0, item)
 
-    tuple_ptr = _tuple_method_reload_root(tuple_slot, tuple_handle)
+    tuple_ptr = load_ptr(tuple_slot, 0)
     length: int = py_tuple_len(tuple_ptr)
     lo: int = 0
     hi: int = length
@@ -799,35 +771,23 @@ def _tuple_method_scan(tuple_ptr, item, start, stop, want_first: int) -> int:
     count: int = 0
     i: int = lo
     while i < hi:
-        tuple_ptr = _tuple_method_reload_root(tuple_slot, tuple_handle)
-        item = _tuple_method_reload_root(query_slot, query_handle)
+        tuple_ptr = load_ptr(tuple_slot, 0)
+        item = load_ptr(query_slot, 0)
         element = py_tuple_get(tuple_ptr, i)
         store_ptr(element_slot, 0, element)
-        element_handle = _tuple_method_prepare_root(
-            element_slot, element, backend
-        )
-        if _tuple_method_root_failed(element, backend, element_handle) != 0:
-            py_decref(element)
-            break
+        store_ptr(element_slot, 0, element)
         equal: int = py_obj_eq(element, item)
-        tuple_ptr = _tuple_method_reload_root(tuple_slot, tuple_handle)
-        item = _tuple_method_reload_root(query_slot, query_handle)
-        element = _tuple_method_reload_root(element_slot, element_handle)
-        _tuple_method_finish_root(element_handle)
+        tuple_ptr = load_ptr(tuple_slot, 0)
+        item = load_ptr(query_slot, 0)
+        element = load_ptr(element_slot, 0)
         py_decref(element)
         if py_err_occurred() != 0:
-            _tuple_method_finish_root(query_handle)
-            _tuple_method_finish_root(tuple_handle)
             return -1 if want_first != 0 else 0
         if equal != 0:
             if want_first != 0:
-                _tuple_method_finish_root(query_handle)
-                _tuple_method_finish_root(tuple_handle)
                 return i
             count = count + 1
         i = i + 1
-    _tuple_method_finish_root(query_handle)
-    _tuple_method_finish_root(tuple_handle)
     if want_first != 0:
         return -1
     return count

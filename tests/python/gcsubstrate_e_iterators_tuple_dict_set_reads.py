@@ -12,14 +12,12 @@ def test_py_obj_next_roots_internal_iterator_state_across_call_and_equality():
     py_body = py_source.split("def py_obj_next(it_obj):", 1)[1].split(
         '@c_abi_export("py_enumerate_list")', 1
     )[0]
-    assert py_body.count("_iter_prepare_moving_root(") == 6
+    # The sentinel comparison may run user code; the iterator state is read
+    # back from its slot afterwards and the sentinel released after it.
     eq_at = py_body.index("is_stop: int = py_obj_eq(")
-    assert py_body.index("_iter_finish_owned_root(result_slot, result_handle, it_handle)", eq_at) > eq_at
-    assert py_body.index("_iter_release_owned_root(sentinel_slot, sentinel_handle)", eq_at) > eq_at
+    assert py_body.index("py_decref(load_ptr(sentinel_slot, 0))", eq_at) > eq_at
     done_at = py_body.index("store_i64(it_obj, 24, -2)", eq_at)
-    assert py_body.rindex(
-        "_iter_reload_moving_root(it_slot, it_handle)", eq_at, done_at
-    ) < done_at
+    assert py_body.rindex("load_ptr(it_slot, 0)", eq_at, done_at) < done_at
 
 
 @pytest.mark.parametrize("kind", ["pcc_python"])
@@ -171,11 +169,7 @@ def test_tuple_method_scans_share_rooted_callback_and_owned_element_cleanup():
     py_scan = py_source.split("def _tuple_method_scan(", 1)[1].split(
         '@c_abi_export("py_tuple_count")', 1
     )[0]
-    assert py_scan.count("_tuple_method_prepare_root(") == 3
     eq_at = py_scan.index("equal: int = py_obj_eq(")
-    assert py_scan.index("_tuple_method_reload_root(tuple_slot", eq_at) > eq_at
-    assert py_scan.index("_tuple_method_reload_root(query_slot", eq_at) > eq_at
-    assert py_scan.index("_tuple_method_reload_root(element_slot", eq_at) > eq_at
     assert py_scan.index("py_decref(element)", eq_at) > eq_at
 
 
@@ -310,11 +304,9 @@ def test_dict_get_contains_use_rooted_restartable_hash_equality_lookup():
     py_read = py_source.split("def _dict_rooted_op(", 1)[1].split(
         "def _rehash_find_empty_slot", 1
     )[0]
-    assert py_read.count("_dict_read_prepare_root(") == 4
     hash_at = py_read.index("hash_val: int = py_obj_hash(key)")
-    assert py_read.index("_dict_read_reload_root(dict_slot", hash_at) > hash_at
     eq_at = py_read.index("equal = py_obj_eq(entry_key, key)")
-    assert py_read.index("_dict_read_reload_root(dict_slot", eq_at) > eq_at
+    assert hash_at < eq_at
     assert "if stable == 0:" in py_read
 
 
@@ -495,14 +487,12 @@ def test_set_contains_uses_rooted_restartable_hash_equality_lookup():
         "hash_known: int) -> int:",
         1,
     )[1].split("def _rehash_find_empty_slot", 1)[0]
-    assert py_read.count("_set_read_prepare_root(") == 3
     # A caller that already hashed the item passes the hash in; otherwise
-    # the lookup hashes the rooted item and reloads both roots afterwards.
+    # the lookup hashes the item first.
     hash_at = py_read.index("hash_val = py_obj_hash(item)")
     assert py_read.index("if hash_known == 0:") < hash_at
-    assert py_read.index("_set_read_reload_root(set_slot", hash_at) > hash_at
     eq_at = py_read.index("equal: int = py_obj_eq(entry_key, item)")
-    assert py_read.index("_set_read_reload_root(set_slot", eq_at) > eq_at
+    assert hash_at < eq_at
     assert "if stable == 0:" in py_read
 
 

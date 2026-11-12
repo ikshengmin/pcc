@@ -11,7 +11,7 @@ import subprocess
 import pytest
 
 from pcc.runtime.py import py_abi_constants as abi
-from test_exception_constructor_roots import _Object, _Slots
+from test_exception_constructor_roots import _Object
 from test_runtime_getter_roots import _GetterMemory
 
 
@@ -319,30 +319,4 @@ def test_enumerate_owner_teardown_and_errors_keep_live_addresses(backend, gate, 
         assert memory.read(memory.read(pair, 16), 16) == 17
         assert memory.error is None
     assert memory.resolve(memory.iterator).references == 1
-    memory.assert_balanced()
-
-
-@pytest.mark.parametrize("backend", range(5))
-@pytest.mark.parametrize("prior_pin", (False, True))
-def test_owned_release_unroots_before_reentrant_finalizer(backend, prior_pin):
-    memory = _IteratorMemory(backend=backend, gate=1, prior_pin=prior_pin)
-    slot = _Slots(8)
-    handle = memory.namespace["_iter_prepare_moving_root"](slot, memory.item, backend)
-    finalized = []
-
-    def finalize(value):
-        assert value is memory.item and value.alive
-        assert not memory.handles and memory.depth == memory.pins == 0
-        assert bool(value.flags & abi.PY_FLAG_GC_PINNED) == prior_pin
-        # The unchanged decref/finalizer tail owns the reference here, and may
-        # resurrect it; handoff must not hold a lease or erase its earlier pin.
-        value.references -= 1
-        assert value.references == 0
-        value.references += 1
-        finalized.append(value)
-
-    memory.namespace["py_decref"] = finalize
-    memory.namespace["_iter_release_owned_root"](slot, handle)
-    assert finalized == [memory.item]
-    assert memory.item.references == 1
     memory.assert_balanced()

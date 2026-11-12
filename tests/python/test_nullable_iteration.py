@@ -34,12 +34,8 @@ def test_native_sequence_exhaustion_allocates_only_for_explicit_next(tag):
     iterator, sequence = 1000, 2000
     memory = {(iterator, 24): 2, (iterator, 16): sequence}
     pending = [None]
-    allocations, finished = [], []
-    def prepare(slot, value, backend):
-        memory[slot, 0] = value
-        return None
+    allocations = []
     def new_exception(kind, message):
-        assert finished
         allocations.append(kind)
         return ('exception', kind)
     ns = {name: value for name, value in vars(abi).items() if name.startswith('PY_TYPE_')}
@@ -49,14 +45,12 @@ def test_native_sequence_exhaustion_allocates_only_for_explicit_next(tag):
         load_i32=lambda base, offset: abi.PY_TYPE_ITER,
         load_i64=lambda base, offset: memory[base, offset],
         ptr_add=lambda base, offset: (base, offset),
+        store_ptr=lambda base, offset, value: memory.__setitem__((base, offset), value),
+        load_ptr=lambda base, offset: memory[base, offset],
         pcc_gc_load_ptr=lambda owner, slot: memory[slot],
         _type_of=lambda value: abi.PY_TYPE_ITER if value == iterator else tag,
         pcc_capi_is_cext_type_tag=lambda value: 0,
         pcc_gc_backend=lambda: 0, stack_alloc=lambda size: 3000,
-        _iter_prepare_moving_root=prepare,
-        _iter_moving_root_failed=lambda *args: 0,
-        _iter_reload_moving_root=lambda slot, handle: memory[slot, 0],
-        _iter_finish_moving_root=lambda handle: finished.append(True),
         py_list_len=lambda value: 2, py_tuple_len=lambda value: 2,
         py_str_byte_len=lambda value: 2, py_bytes_len=lambda value: 2,
         py_exc_new=new_exception, py_raise_owned=lambda value: pending.__setitem__(0, value),

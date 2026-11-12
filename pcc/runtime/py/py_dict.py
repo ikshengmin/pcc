@@ -101,9 +101,6 @@ pcc_gc_try_init_ptr_locked = extern("pcc_gc_try_init_ptr_locked", (c_ptr, c_ptr)
 pcc_gc_publish_initialized = extern(
     "pcc_gc_publish_initialized", (c_ptr,), c_void
 )
-pcc_gc_scheduler_root_unregister_handle = extern(
-    "pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void
-)
 pcc_py_gc_minor_graph_lock = extern(
     "pcc_py_gc_minor_graph_lock", (), c_void
 )
@@ -185,28 +182,6 @@ def _ptr_is_dict(o) -> bool:
     if not _ptr_can_have_header(o):
         return False
     return load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_DICT
-
-
-def _dict_read_prepare_root(slot, value, backend: int):
-    store_ptr(slot, 0, value)
-    return null()
-
-
-def _dict_read_root_failed(value, backend: int, handle) -> int:
-    return 0
-
-
-def _dict_read_reload_root(slot, handle):
-    value = load_ptr(slot, 0)
-    if ptr_is_null(handle) == 0:
-        value = pcc_gc_load_ptr(null(), slot)
-        store_ptr(slot, 0, value)
-    return value
-
-
-def _dict_read_finish_root(handle) -> None:
-    if ptr_is_null(handle) == 0:
-        pcc_gc_scheduler_root_unregister_handle(handle)
 
 
 def _alloc_tables(d, capacity: int) -> int:
@@ -423,16 +398,16 @@ def _dict_insert_rooted_slot(
     # commits exactly one slot, so key and value need one plan each; both are
     # initialized before the lock and finished after it, keeping every
     # incref/decref finalizer outside the locked transaction.
-    d = _dict_read_reload_root(dict_slot, dict_handle)
+    d = load_ptr(dict_slot, 0)
     key_plan = stack_alloc(128)
     value_plan = stack_alloc(128)
     backend: int = pcc_gc_backend()
     pcc_gc_store_ptr_plan_init(key_plan, d, backend)
     pcc_gc_store_ptr_plan_init(value_plan, d, backend)
     pcc_py_gc_minor_graph_lock()
-    d = _dict_read_reload_root(dict_slot, dict_handle)
-    key = _dict_read_reload_root(key_slot, key_handle)
-    value = _dict_read_reload_root(value_slot, value_handle)
+    d = load_ptr(dict_slot, 0)
+    key = load_ptr(key_slot, 0)
+    value = load_ptr(value_slot, 0)
     _dict_table_lock(d)
     committed: int = 0
     namespace_valid: int = 1
@@ -486,7 +461,7 @@ def _dict_insert_rooted_slot(
     pcc_gc_store_ptr_plan_finish(key_plan)
     pcc_gc_store_ptr_plan_finish(value_plan)
     if committed > 0:
-        d = _dict_read_reload_root(dict_slot, dict_handle)
+        d = load_ptr(dict_slot, 0)
         if _ptr_is_dict(d):
             _maybe_grow(d)
     return committed
@@ -507,12 +482,12 @@ def _dict_replace_value_rooted_slot(
 ) -> int:
     # `d[k] = v` keeps the original stored key object, so this never writes the
     # key slot.  The displaced value is released in plan finish, after unlock.
-    d = _dict_read_reload_root(dict_slot, dict_handle)
+    d = load_ptr(dict_slot, 0)
     plan = stack_alloc(128)
     pcc_gc_store_ptr_plan_init(plan, d, pcc_gc_backend())
     pcc_py_gc_minor_graph_lock()
-    d = _dict_read_reload_root(dict_slot, dict_handle)
-    value = _dict_read_reload_root(value_slot, value_handle)
+    d = load_ptr(dict_slot, 0)
+    value = load_ptr(value_slot, 0)
     _dict_table_lock(d)
     committed: int = 0
     namespace_valid: int = 1
@@ -563,14 +538,14 @@ def _dict_del_rooted_slot(
     # both releases run in plan finish after unlock.  The legacy path decref'd
     # key and value first, so a finalizer re-entering the dict could observe a
     # freed key behind a still-live index.
-    d = _dict_read_reload_root(dict_slot, dict_handle)
+    d = load_ptr(dict_slot, 0)
     key_plan = stack_alloc(128)
     value_plan = stack_alloc(128)
     backend: int = pcc_gc_backend()
     pcc_gc_store_ptr_plan_init(key_plan, d, backend)
     pcc_gc_store_ptr_plan_init(value_plan, d, backend)
     pcc_py_gc_minor_graph_lock()
-    d = _dict_read_reload_root(dict_slot, dict_handle)
+    d = load_ptr(dict_slot, 0)
     _dict_table_lock(d)
     committed: int = 0
     namespace_valid: int = 1
@@ -623,31 +598,18 @@ def _dict_rooted_op(d, key, value, mode: int, status_slot, namespace_commit_cont
     # report through status_slot when it is non-null.
     if ptr_is_null(status_slot) == 0:
         store_i64(status_slot, 0, 0)
-    backend: int = pcc_gc_backend()
     dict_slot = stack_alloc(8)
     key_slot = stack_alloc(8)
     value_slot = stack_alloc(8)
     candidate_slot = stack_alloc(8)
-    dict_handle = _dict_read_prepare_root(dict_slot, d, backend)
-    if _dict_read_root_failed(d, backend, dict_handle) != 0:
-        return null()
-    key_handle = _dict_read_prepare_root(key_slot, key, backend)
-    if _dict_read_root_failed(key, backend, key_handle) != 0:
-        _dict_read_finish_root(dict_handle)
-        return null()
-    value_handle = _dict_read_prepare_root(value_slot, value, backend)
-    if _dict_read_root_failed(value, backend, value_handle) != 0:
-        _dict_read_finish_root(key_handle)
-        _dict_read_finish_root(dict_handle)
-        return null()
-    key = _dict_read_reload_root(key_slot, key_handle)
+    store_ptr(dict_slot, 0, d)
+    store_ptr(key_slot, 0, key)
+    store_ptr(value_slot, 0, value)
+    key = load_ptr(key_slot, 0)
     hash_val: int = py_obj_hash(key)
-    d = _dict_read_reload_root(dict_slot, dict_handle)
-    key = _dict_read_reload_root(key_slot, key_handle)
+    d = load_ptr(dict_slot, 0)
+    key = load_ptr(key_slot, 0)
     if py_err_occurred() != 0:
-        _dict_read_finish_root(value_handle)
-        _dict_read_finish_root(key_handle)
-        _dict_read_finish_root(dict_handle)
         return null()
 
     result = null()
@@ -655,8 +617,8 @@ def _dict_rooted_op(d, key, value, mode: int, status_slot, namespace_commit_cont
     attempts: int = 0
     while done == 0 and attempts < 16:
         attempts = attempts + 1
-        d = _dict_read_reload_root(dict_slot, dict_handle)
-        key = _dict_read_reload_root(key_slot, key_handle)
+        d = load_ptr(dict_slot, 0)
+        key = load_ptr(key_slot, 0)
         if not _ptr_is_dict(d):
             done = 1
             continue
@@ -712,59 +674,45 @@ def _dict_rooted_op(d, key, value, mode: int, status_slot, namespace_commit_cont
                     else:
                         callback = 1
                         py_incref(entry_key)
-                        candidate_handle = _dict_read_prepare_root(
-                            candidate_slot, entry_key, backend
-                        )
-                        if _dict_read_root_failed(
-                            entry_key, backend, candidate_handle
-                        ) != 0:
-                            py_decref(entry_key)
-                            done = 1
-                        else:
-                            before_d = d
-                            equal = py_obj_eq(entry_key, key)
-                            d = _dict_read_reload_root(dict_slot, dict_handle)
-                            key = _dict_read_reload_root(key_slot, key_handle)
-                            candidate = _dict_read_reload_root(
-                                candidate_slot, candidate_handle
-                            )
-                            _dict_read_finish_root(candidate_handle)
-                            stable: int = 0
-                            if ptr_eq(d, before_d) != 0 and _ptr_is_dict(d):
-                                if (
-                                    load_i64(d, PYDICTOBJECT_CAPACITY_OFFSET)
-                                        == capacity
-                                    and ptr_eq(
-                                        load_ptr(d, PYDICTOBJECT_INDICES_OFFSET),
-                                        indices,
-                                    ) != 0
-                                    and ptr_eq(
-                                        load_ptr(d, PYDICTOBJECT_ENTRIES_OFFSET),
-                                        entries,
-                                    ) != 0
-                                    and load_i64(indices, j * 8) == ix
-                                ):
-                                    current = _entry_key(d, entries, entry_off)
-                                    if ptr_eq(current, candidate) != 0:
-                                        stable = 1
-                            py_decref(candidate)
-                            if py_err_occurred() != 0:
-                                # A raising __eq__ leaves py_obj_eq returning
-                                # 0.  Treating that as "not equal" would keep
-                                # probing and, in set mode, insert -- mutating
-                                # the dict even though the statement raises.
-                                _dict_read_finish_root(value_handle)
-                                _dict_read_finish_root(key_handle)
-                                _dict_read_finish_root(dict_handle)
-                                return null()
-                            if stable == 0:
-                                restart = 1
+                        store_ptr(candidate_slot, 0, entry_key)
+                        before_d = d
+                        equal = py_obj_eq(entry_key, key)
+                        d = load_ptr(dict_slot, 0)
+                        key = load_ptr(key_slot, 0)
+                        candidate = load_ptr(candidate_slot, 0)
+                        stable: int = 0
+                        if ptr_eq(d, before_d) != 0 and _ptr_is_dict(d):
+                            if (
+                                load_i64(d, PYDICTOBJECT_CAPACITY_OFFSET)
+                                    == capacity
+                                and ptr_eq(
+                                    load_ptr(d, PYDICTOBJECT_INDICES_OFFSET),
+                                    indices,
+                                ) != 0
+                                and ptr_eq(
+                                    load_ptr(d, PYDICTOBJECT_ENTRIES_OFFSET),
+                                    entries,
+                                ) != 0
+                                and load_i64(indices, j * 8) == ix
+                            ):
+                                current = _entry_key(d, entries, entry_off)
+                                if ptr_eq(current, candidate) != 0:
+                                    stable = 1
+                        py_decref(candidate)
+                        if py_err_occurred() != 0:
+                            # A raising __eq__ leaves py_obj_eq returning
+                            # 0.  Treating that as "not equal" would keep
+                            # probing and, in set mode, insert -- mutating
+                            # the dict even though the statement raises.
+                            return null()
+                        if stable == 0:
+                            restart = 1
                     if callback == 0 or restart == 0:
                         if equal != 0 and restart == 0 and done == 0:
                             if mode == 1:
                                 removed: int = _dict_del_rooted_slot(
                                     dict_slot,
-                                    dict_handle,
+                                    null(),
                                     indices,
                                     entries,
                                     capacity,
@@ -787,9 +735,9 @@ def _dict_rooted_op(d, key, value, mode: int, status_slot, namespace_commit_cont
                             elif mode == 2:
                                 replaced: int = _dict_replace_value_rooted_slot(
                                     dict_slot,
-                                    dict_handle,
+                                    null(),
                                     value_slot,
-                                    value_handle,
+                                    null(),
                                     indices,
                                     entries,
                                     capacity,
@@ -827,11 +775,11 @@ def _dict_rooted_op(d, key, value, mode: int, status_slot, namespace_commit_cont
             if target >= 0:
                 inserted: int = _dict_insert_rooted_slot(
                     dict_slot,
-                    dict_handle,
+                    null(),
                     key_slot,
-                    key_handle,
+                    null(),
                     value_slot,
-                    value_handle,
+                    null(),
                     indices,
                     entries,
                     capacity,
@@ -849,9 +797,6 @@ def _dict_rooted_op(d, key, value, mode: int, status_slot, namespace_commit_cont
                     restart = 1
                 elif ptr_is_null(status_slot) == 0:
                     store_i64(status_slot, 0, 1)
-    _dict_read_finish_root(value_handle)
-    _dict_read_finish_root(key_handle)
-    _dict_read_finish_root(dict_handle)
     return result
 
 
@@ -875,7 +820,6 @@ def _rehash(d, new_capacity: int) -> int:
     initial_backend: int = pcc_gc_backend()
     owner_slot = stack_alloc(8)
     store_ptr(owner_slot, 0, d)
-    owner_handle = null()
 
     attempt: int = 0
     while attempt < 8:
@@ -884,9 +828,6 @@ def _rehash(d, new_capacity: int) -> int:
         if pcc_gc_backend() != initial_backend:
             pcc_py_gc_minor_graph_unlock()
             break
-        if ptr_is_null(owner_handle) == 0:
-            d = pcc_gc_load_ptr(null(), owner_slot)
-            store_ptr(owner_slot, 0, d)
         old_entries = load_ptr(d, PYDICTOBJECT_ENTRIES_OFFSET)
         old_indices = load_ptr(d, PYDICTOBJECT_INDICES_OFFSET)
         old_capacity: int = load_i64(d, PYDICTOBJECT_CAPACITY_OFFSET)
@@ -933,9 +874,6 @@ def _rehash(d, new_capacity: int) -> int:
             free(new_entries)
             free(new_indices)
             break
-        if ptr_is_null(owner_handle) == 0:
-            d = pcc_gc_load_ptr(null(), owner_slot)
-            store_ptr(owner_slot, 0, d)
         if (
             ptr_eq(load_ptr(d, PYDICTOBJECT_ENTRIES_OFFSET), old_entries) == 0
             or ptr_eq(load_ptr(d, PYDICTOBJECT_INDICES_OFFSET), old_indices) == 0
@@ -1046,12 +984,8 @@ def _rehash(d, new_capacity: int) -> int:
         free(old_indices)
         free(old_entries)
         free(slot_pairs)
-        if ptr_is_null(owner_handle) == 0:
-            pcc_gc_scheduler_root_unregister_handle(owner_handle)
         return 0
 
-    if ptr_is_null(owner_handle) == 0:
-        pcc_gc_scheduler_root_unregister_handle(owner_handle)
     return -1
 
 
@@ -1330,37 +1264,30 @@ def _static_agg_element(desc, cursor, owned_slot):
 
 
 def _static_agg_dict(desc, cursor, count: int):
-    backend: int = pcc_gc_backend()
     dict_slot = stack_alloc(8)
     owned_slot = stack_alloc(8)
     d = py_dict_new()
     if ptr_is_null(d) != 0:
         return null()
-    dict_handle = _dict_read_prepare_root(dict_slot, d, backend)
-    if _dict_read_root_failed(d, backend, dict_handle) != 0:
-        py_decref(d)
-        return null()
+    store_ptr(dict_slot, 0, d)
     index: int = 0
     while index < count:
         key = _static_agg_element(desc, cursor, owned_slot)
         value = _static_agg_element(desc, cursor, owned_slot)
         value_owned: int = load_i64(owned_slot, 0)
         if ptr_is_null(value) != 0:
-            _dict_read_finish_root(dict_handle)
             return null()
         # The nested build above may have allocated and moved the container.
-        d = _dict_read_reload_root(dict_slot, dict_handle)
+        d = load_ptr(dict_slot, 0)
         py_dict_set(d, key, value)
         if value_owned != 0:
             py_decref(value)
         index = index + 1
-    d = _dict_read_reload_root(dict_slot, dict_handle)
-    _dict_read_finish_root(dict_handle)
+    d = load_ptr(dict_slot, 0)
     return d
 
 
 def _static_agg_sequence(desc, cursor, count: int, is_tuple: int):
-    backend: int = pcc_gc_backend()
     seq_slot = stack_alloc(8)
     owned_slot = stack_alloc(8)
     if is_tuple != 0:
@@ -1369,18 +1296,14 @@ def _static_agg_sequence(desc, cursor, count: int, is_tuple: int):
         seq = py_list_new(count)
     if ptr_is_null(seq) != 0:
         return null()
-    seq_handle = _dict_read_prepare_root(seq_slot, seq, backend)
-    if _dict_read_root_failed(seq, backend, seq_handle) != 0:
-        py_decref(seq)
-        return null()
+    store_ptr(seq_slot, 0, seq)
     index: int = 0
     while index < count:
         value = _static_agg_element(desc, cursor, owned_slot)
         value_owned: int = load_i64(owned_slot, 0)
         if ptr_is_null(value) != 0:
-            _dict_read_finish_root(seq_handle)
             return null()
-        seq = _dict_read_reload_root(seq_slot, seq_handle)
+        seq = load_ptr(seq_slot, 0)
         if is_tuple != 0:
             py_tuple_set_item(seq, index, value)
         else:
@@ -1388,8 +1311,7 @@ def _static_agg_sequence(desc, cursor, count: int, is_tuple: int):
         if value_owned != 0:
             py_decref(value)
         index = index + 1
-    seq = _dict_read_reload_root(seq_slot, seq_handle)
-    _dict_read_finish_root(seq_handle)
+    seq = load_ptr(seq_slot, 0)
     return seq
 
 
@@ -1692,19 +1614,11 @@ def py_dict_update(dst, src) -> None:
     # Legacy raw entry, retaining its existing borrowed-root admission. Slot
     # callers never use this adapter; raw callers must keep their operands
     # stable through admission. Both routes share the update implementation.
-    backend: int = pcc_gc_backend()
     dst_slot = stack_alloc(C_POINTER_SIZE)
     src_slot = stack_alloc(C_POINTER_SIZE)
-    dst_handle = _dict_read_prepare_root(dst_slot, dst, backend)
-    if _dict_read_root_failed(dst, backend, dst_handle) != 0:
-        return
-    src_handle = _dict_read_prepare_root(src_slot, src, backend)
-    if _dict_read_root_failed(src, backend, src_handle) != 0:
-        _dict_read_finish_root(dst_handle)
-        return
+    store_ptr(dst_slot, 0, dst)
+    store_ptr(src_slot, 0, src)
     _dict_slot_update_bound(dst_slot, src_slot, 1)
-    _dict_read_finish_root(src_handle)
-    _dict_read_finish_root(dst_handle)
 
 
 # Authoritative slot entries. Raw APIs below remain compatibility boundaries;

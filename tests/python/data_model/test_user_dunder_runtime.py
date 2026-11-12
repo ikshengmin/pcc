@@ -135,13 +135,13 @@ def test_iterator_runtime_guards_silent_null_before_state_cleanup():
         for message in messages[-3:]:
             assert message in source
 
-    # The callable iterator reloads its moving roots for the call and
-    # retires the argument root only after the NULL-result guard.
+    # The callable iterator calls with its held callable and releases the
+    # argument tuple only after the NULL-result guard.
     for source, call, guard, cleanup in ((
             iter_py,
-            "result = py_obj_call(\n            _iter_reload_moving_root(callable_slot, callable_handle),",
+            "result = py_obj_call(\n            load_ptr(callable_slot, 0),",
             "callable iterator returned NULL without setting an exception",
-            "_iter_release_owned_root(args_slot, args_handle)",
+            "py_decref(load_ptr(args_slot, 0))",
         ),):
         call_pos = source.index(call)
         guard_pos = source.index(guard, call_pos)
@@ -160,7 +160,7 @@ def test_iterator_runtime_guards_silent_null_before_state_cleanup():
             iter_py,
             "index_obj = py_int_from_i64(index)",
             "enumerate could not allocate an index object",
-            "_iter_release_owned_root(item_slot, item_handle)",
+            "py_decref(load_ptr(item_slot, 0))",
         ),):
         allocation_pos = source.index(allocation)
         guard_pos = source.index(guard, allocation_pos)

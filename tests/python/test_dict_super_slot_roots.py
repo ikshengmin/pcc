@@ -82,7 +82,7 @@ class DictMemory(Memory):
             "pcc_platform_abort": lambda: (_ for _ in ()).throw(AssertionError("lease invariant")),
         })
         for filename, prefix, additional in (
-            ("py_dict.py", "_dict_slot_", {"_ptr_is_dict", "_ptr_can_have_header", "_dict_insert_rooted_slot", "_dict_read_reload_root", "_dict_table_lock", "_dict_table_unlock", "_dict_read_lock", "_dict_read_unlock", "_perturb_shift5", "_dict_raise_sequence_element", "_dict_decimal_append", "_dict_text_append", "py_dict_set_slots", "py_dict_setdefault_slots", "py_dict_update_slots"}),
+            ("py_dict.py", "_dict_slot_", {"_ptr_is_dict", "_ptr_can_have_header", "_dict_insert_rooted_slot", "_dict_table_lock", "_dict_table_unlock", "_dict_read_lock", "_dict_read_unlock", "_perturb_shift5", "_dict_raise_sequence_element", "_dict_decimal_append", "_dict_text_append", "py_dict_set_slots", "py_dict_setdefault_slots", "py_dict_update_slots"}),
             ("py_protocol_runtime.py", "_builtin_init_", {"_type_of", "_is_user_instance", "_dict_items_key", "_cstr_equal", "py_dict_subclass_init_slots", "py_exception_subclass_init_slots", "py_builtin_super_validate_slots"}),
         ):
             path = ROOT / filename

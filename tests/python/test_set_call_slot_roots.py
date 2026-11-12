@@ -28,7 +28,7 @@ def _compile_set_call_model(source, filename):
     """
     tree = ast.parse(source)
     names = {"_ptr_is_set", "_perturb_shift5", "_rehash_find_empty_slot",
-             "_entry_key", "_set_read_reload_root", "_set_remove_rooted_slot",
+             "_entry_key", "_set_remove_rooted_slot",
              "_set_add_rooted_slot"}
     body = [node for node in tree.body if isinstance(node, ast.FunctionDef)
             and (node.name.startswith("_set_call_") or node.name in names

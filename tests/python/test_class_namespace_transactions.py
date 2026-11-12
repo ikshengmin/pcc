@@ -179,7 +179,6 @@ class NamespaceCommitModel:
             store_i64=self.store, stack_alloc=self.alloc, cstr=cstr,
             global_addr=lambda name: name, atomic_rmw_i32=atomic,
             pcc_container_lock=table_lock, pcc_container_unlock=table_unlock,
-            _dict_read_reload_root=lambda slot,handle: self.load(slot),
             pcc_gc_backend=lambda: 4, pcc_py_gc_minor_graph_lock=lock,
             pcc_py_gc_minor_graph_unlock=unlock, pcc_gc_store_ptr_plan_init=init,
             pcc_gc_store_ptr_plan_commit_locked=commit, pcc_gc_store_ptr_plan_finish=finish,
