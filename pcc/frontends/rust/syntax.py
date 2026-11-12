@@ -205,10 +205,33 @@ class AssociatedType:
 
 
 @dataclass(frozen=True)
+class ClosureSignature:
+    moves: bool
+    parameters: tuple[tuple[object, object], ...]
+    result: object = None
+
+
+# Standard closure traits accepting parenthesized argument sugar.
+CALLABLE_TRAITS = frozenset({'Fn', 'FnMut', 'FnOnce'})
+
+
+@dataclass(frozen=True)
+class CallableSignature:
+    """Parenthesized Fn-family sugar: `Fn(A, B) -> R` (reference/trait-bound.html).
+
+    Inputs and the output keep their unnormalized source types; an omitted
+    output is the unit type.
+    """
+    inputs: tuple[object, ...]
+    output: object = "()"
+
+
+@dataclass(frozen=True)
 class TypeBound:
     token: Token
     path: str
     relaxed: bool = False
+    callable: CallableSignature | None = None
 
 
 @dataclass(frozen=True)
@@ -597,16 +620,60 @@ class Parser:
             path = self.name().text
             while self.accept('::'):
                 path += '::' + self.name().text
+            callable = None
             if self.token.text == '(':
-                raise self.token.error('parenthesized Fn-family trait bounds require closure traits, which are not implemented')
+                if path.rsplit('::', 1)[-1] not in CALLABLE_TRAITS:
+                    raise self.token.error('parenthesized arguments are only Fn, FnMut and FnOnce trait sugar')
+                if relaxed:
+                    raise bound_token.error('only Sized bounds can be relaxed')
+                callable = self.callable_signature()
             if self.token.text == '<':
                 raise self.token.error('generic trait bounds and associated projections are not implemented')
-            bounds.append(TypeBound(bound_token, path, relaxed))
+            bounds.append(TypeBound(bound_token, path, relaxed, callable))
             if len(bounds) > 16:
                 raise bound_token.error('type parameter bounds exceed implementation limit (16)')
             if not self.accept('+'):
                 break
         return tuple(bounds)
+
+    def closure_expression(self, token):
+        """`move`? `|params|` (`-> T` block | expression), reference/expressions/closure-expr.html.
+
+        The body extends as far as an ordinary expression. Parameter patterns
+        are single (unparenthesized `|` cannot start an or-pattern here).
+        """
+        moves = token.text == "move"
+        opener = self.take() if moves else token
+        parameters = []
+        if opener.text == "|":
+            while not self.accept("|"):
+                pattern = self.pattern(alternatives=False)
+                annotation = self.type() if self.accept(":") else None
+                parameters.append((pattern, annotation))
+                if len(parameters) > 16:
+                    raise pattern.token.error("closure parameter count exceeds implementation limit (16)")
+                if self.token.text != "|":
+                    self.expect(",")
+        result = None
+        if self.accept("->"):
+            result = self.type()
+            if self.token.text != "{":
+                raise self.token.error("a closure with an explicit return type requires a block body")
+            body = self.block()
+        else:
+            body = self.expression()
+        return Expr("closure", opener, ClosureSignature(moves, tuple(parameters), result), [body])
+
+    def callable_signature(self):
+        self.expect('(')
+        inputs = []
+        while not self.accept(')'):
+            inputs.append(self.type())
+            if len(inputs) > 16:
+                raise self.token.error('Fn-family parameter count exceeds implementation limit (16)')
+            if self.token.text != ')':
+                self.expect(',')
+        return CallableSignature(tuple(inputs), self.type() if self.accept('->') else '()')
 
     def associated_type(self, *, declaration, documentation=()):
         self.expect('type')
@@ -1425,6 +1492,8 @@ class Parser:
             self.expect("::")
             method = self.name()
             expr = Expr("trait_path", token, (owner, trait.text, method.text))
+        elif text in {"|", "||"} or (text == "move" and self.token.text in {"|", "||"}):
+            expr = self.closure_expression(token)
         elif (token.kind == "name" and text != "_") or text in {"self", "Self", "super", "crate"}:
             owner, variant = self.expression_path(token)
             if variant is not None:
@@ -1612,6 +1681,16 @@ class Parser:
                     if self.accept(")"):
                         break
                     self.expect(",")
+        elif token.kind == "name" and self.token.text == "(":
+            # An unqualified tuple-struct/variant pattern such as `Some(e)`.
+            # Resolution of the single value-namespace segment is semantic.
+            result = Pattern("payload", token, (None, token.text))
+            self.take()
+            while not self.accept(")"):
+                result.children.append(self.pattern())
+                if self.accept(")"):
+                    break
+                self.expect(",")
         elif token.kind == "name" or token.text == "mut":
             name = self.name() if token.text == "mut" else token
             if name.text == "_":

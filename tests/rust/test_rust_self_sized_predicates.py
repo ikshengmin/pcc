@@ -38,9 +38,10 @@ GAPS = (
      'where Self predicates naming local traits'),
     ('inherent-method-self-predicate', 'pub struct R{pub v:u64}impl R{pub fn value(&self)->u64 where Self:Sized{self.v}}',
      'where Self predicates on implementation methods'),
-    # The next unchanged project predicate, `F: FnMut(&Self::Item) -> bool`.
+    # The unchanged project predicate `F: FnMut(&Self::Item) -> bool` parses;
+    # its closure-trait obligation remains explicit.
     ('fn-trait-bound-sugar', 'pub fn f<F>(f:F)->u64 where F:FnMut(u64)->bool{0}',
-     'parenthesized Fn-family trait bounds require closure traits'),
+     'standard Fn-family closure-trait obligations require closure traits'),
 )
 
 

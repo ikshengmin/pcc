@@ -72,13 +72,19 @@ class StandardMarkers:
         if local or first in {'crate', 'self', 'super'}:
             raise bound.token.error('local/user trait bounds are not implemented; a local name is not a standard marker')
         parts = bound.path.split('::')
+        # Closure traits live in core::ops (std::ops), markers in core::marker.
+        module = 'ops' if bound.callable is not None else 'marker'
         if len(parts) == 1 and self.policy.standard_prelude_path is not None:
             name = parts[0]
         elif (len(parts) == 3 and parts[0] in self.policy.implicit_extern_prelude
-              and parts[1] == 'marker'):
+              and parts[1] == module):
             name = parts[2]
         else:
             raise bound.token.error('standard marker path is unavailable; external trait loading is not implemented')
+        if bound.callable is not None:
+            # Fn/FnMut/FnOnce sugar names a standard closure trait. Calls, closure
+            # types, function items and capture modes all need that model.
+            raise bound.token.error('standard Fn-family closure-trait obligations require closure traits, which are not implemented')
         if name not in {'Copy', 'Sized'}:
             raise bound.token.error('only canonical standard Copy and Sized bounds are implemented; arbitrary traits/Clone methods are not')
         return COPY if name == 'Copy' else SIZED

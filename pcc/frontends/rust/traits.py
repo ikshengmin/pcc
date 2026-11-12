@@ -243,6 +243,10 @@ class StaticTraits:
                 if bound.path not in self.traits or bound.path in scope:
                     markers.append(bound)
                     continue
+                if bound.callable is not None:
+                    # rustc E0658: parenthesized arguments are Fn-family sugar
+                    # only; a local trait named Fn is not a closure trait.
+                    raise bound.token.error('parenthesized arguments are only Fn, FnMut and FnOnce trait sugar; a local trait does not accept them')
                 if bound.relaxed:
                     raise bound.token.error('local/user trait bounds cannot be relaxed; only canonical ?Sized is supported')
                 if self.associated.has_types(bound.path):

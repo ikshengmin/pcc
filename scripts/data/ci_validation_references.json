@@ -2700,6 +2700,20 @@
         ]
       }
     },
+    "tests/rust/test_rust_closure_syntax.py": {
+      "test_actual_rustc_accepts_closure_family_originals_with_explicit_owned_gap": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "reason": [
+          "Calls tests.rust.certification_support.certify_source on unchanged Fn-family bound, closure and prelude-pattern originals; the owned compilation of each certified source keeps an explicit closure-trait, closure or core Option/Result gap."
+        ]
+      },
+      "test_actual_rustc_rejects_invalid_closure_family_originals": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.rust.test_rust_supertraits.test_genuine_rustc_rejects_the_same_invalid_obligations on unchanged invalid parenthesized-bound and unqualified-pattern originals; requires actual source-attributed rustc rejection (E0658, E0531)."
+        ]
+      }
+    },
     "tests/rust/test_rust_self_sized_predicates.py": {
       "test_actual_same_input_check_precedes_owned_object": {
         "activity": "mandatory-same-input-certification-and-owned-contract",

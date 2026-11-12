@@ -913,6 +913,11 @@ class Checker:
             # early return converts errors through From. No core model exists.
             raise expr.token.error("the ? operator requires owned core Try/Result/Option and From lowering, "
                                    "which is not implemented")
+        elif kind == "closure":
+            # A closure has a unique anonymous type implementing Fn/FnMut/FnOnce
+            # from its captures and body; none of that model exists yet.
+            raise expr.token.error("closure expressions require closure types, captures and Fn-family "
+                                   "closure traits, which are not implemented")
         else:
             raise expr.token.error(f"unsupported semantic node {kind}")
         expr.ty = ty

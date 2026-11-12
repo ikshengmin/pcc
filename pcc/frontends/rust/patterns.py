@@ -53,6 +53,10 @@ def contains_binding(pattern):
     return pattern.kind == "binding" or any(contains_binding(child) for child in pattern.children)
 
 
+# Standard prelude tuple variants (std::prelude::v1).
+PRELUDE_VARIANTS = {"Some": "Option", "Ok": "Result", "Err": "Result"}
+
+
 def check_pattern(checker, pattern, ty, *, allow_inferred=False):
     pattern.ty = ty
     if pattern.kind == "wildcard":
@@ -85,6 +89,14 @@ def check_pattern(checker, pattern, ty, *, allow_inferred=False):
         unify(ty, checker.expression(pattern.value), pattern.token)
     elif pattern.kind in {"variant", "payload"}:
         name, variant = pattern.value
+        if name is None:
+            if variant in PRELUDE_VARIANTS:
+                raise pattern.token.error(
+                    f"prelude {PRELUDE_VARIANTS[variant]} variant patterns require the core "
+                    "Option/Result model, which is not implemented")
+            raise pattern.token.error(
+                "unqualified tuple-struct/variant patterns require value-namespace pattern "
+                "resolution, which is not implemented; qualify the enum variant")
         if isinstance(name, TypeApplication) or name in checker.generics.definitions or name == "Self" or checker.module_resolution is not None:
             name = checker.generics.path_type(
                 name, pattern.token, expected=ty, allow_inferred=allow_inferred)

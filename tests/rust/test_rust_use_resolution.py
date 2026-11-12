@@ -20,7 +20,8 @@ from pcc.frontends.rust import RustError, compile_rust
 from pcc.frontends.rust.crate_context import parse_crate_sources
 from pcc.frontends.rust.generics import PRIMITIVES
 from pcc.frontends.rust.module_resolution import ModuleNamespaces, analyze_crate_syntax
-from pcc.frontends.rust.syntax import Parser
+from pcc.frontends.rust.syntax import CallableSignature, Parser
+from pcc.frontends.rust.types import SharedReference
 from tests.rust.certification_support import actual_check_prerequisite, certify_source
 
 
@@ -44,7 +45,12 @@ def compile_source(text, **options):
     return compile_rust(text, experimental_rustc_checked=True, **options)
 
 
-def assert_associated_items_before_fn_bound(parser, monkeypatch, declarations, location):
+def parse_retaining_associated_types(parser, monkeypatch, gap=None):
+    """Parse with the real parser, retaining every associated type it returns.
+
+    ``gap`` is ``(line, column, message, token)`` for the next unsupported
+    parser boundary; without it the whole source must parse.
+    """
     associated_types = []
     parse_associated_type = parser.associated_type
 
@@ -54,15 +60,16 @@ def assert_associated_items_before_fn_bound(parser, monkeypatch, declarations, l
         return item
 
     monkeypatch.setattr(parser, 'associated_type', retain_associated_type)
-    line, column = location
-    with pytest.raises(RustError, match=(
-            rf'^{line}:{column}: parenthesized Fn-family trait bounds require closure traits, '
-            r'which are not implemented$')):
+    if gap is None:
         parser.parse()
-    assert [(item.token.text, item.token.line, item.token.column, item.value,
+    else:
+        line, column, message, token = gap
+        with pytest.raises(RustError, match=rf'^{line}:{column}: {message}$'):
+            parser.parse()
+        assert (parser.token.text, parser.token.line, parser.token.column) == (token, line, column)
+    return [(item.token.text, item.token.line, item.token.column, item.value,
              [(bound.path, bound.relaxed) for bound in item.bounds])
-            for item in associated_types] == declarations
-    assert (parser.token.text, parser.token.line, parser.token.column) == ('(', line, column)
+            for item in associated_types]
 
 
 def test_use_syntax_retains_tokens_docs_and_original_codepoint_span():
@@ -93,12 +100,18 @@ def test_use_parser_advances_associated_types_but_keeps_fn_bounds_explicit(monke
     ]
     assert ['::'.join(token.text for token in item.path) for item in parser.uses] == [
         'owner::value']
-    parser = Parser(prefix +
-        '\nfn all<F>(&mut self,f:F) where F:FnMut(&Self::Item)->bool;}')
-    assert_associated_items_before_fn_bound(parser, monkeypatch, [
+    text = prefix + '\nfn all<F>(&mut self,f:F) where F:FnMut(&Self::Item)->bool;}'
+    parser = Parser(text)
+    assert parse_retaining_associated_types(parser, monkeypatch) == [
         ('Item', 3, 17, None, [('Sized', True)]),
         ('Error', 3, 34, None, []),
-    ], (4, 39))
+    ]
+    # The parser retains the Fn-family signature; its closure-trait meaning
+    # remains an explicit semantic gap (tests/rust/test_rust_closure_syntax.py).
+    predicate, = parser.traits[0].methods[0].where_predicates
+    bound, = predicate.bounds
+    assert (predicate.parameter.text, bound.path, bound.token.line, bound.token.column) == ('F', 'FnMut', 4, 34)
+    assert bound.callable == CallableSignature((SharedReference('Self::Item', False, None),), 'bool')
 
 
 def test_single_use_binds_both_modeled_namespaces_to_the_canonical_owner():
@@ -346,12 +359,14 @@ def test_original_project_keeps_both_use_items_before_the_next_parser_gap(tmp_pa
     checked = check_rust_source(original.decode(), toolchain=toolchain(),
         evidence_directory=tmp_path / 'actual-check', edition=2015)
     parser = Parser(original.decode(), edition=2015, rustc_check=checked)
-    # Keep the whole authenticated source. Observe the real parser's former
-    # boundary without accepting a rewritten prefix or a discarded declaration.
-    assert_associated_items_before_fn_bound(parser, monkeypatch, [
+    # Keep the whole authenticated source. Observe the real parser's next
+    # boundary without accepting a rewritten prefix or a discarded declaration:
+    # every earlier Fn-family bound, `Some(e)` pattern and closure is parsed.
+    assert parse_retaining_associated_types(parser, monkeypatch, (
+        208, 19, 'range iterators are not implemented', '..')) == [
         ('Item', 28, 10, None, [('Sized', True)]),
         ('Error', 31, 10, None, []),
-    ], (67, 17))
+    ]
     assert ['::'.join(token.text for token in item.path) for item in parser.uses] == [
         'core::cmp', 'core::marker::PhantomData']
     assert [original.decode()[slice(*item.source_span)] for item in parser.uses] == [
