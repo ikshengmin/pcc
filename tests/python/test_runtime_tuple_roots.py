@@ -9,9 +9,10 @@ import pytest
 from pcc.runtime.py import py_abi_constants as abi
 from test_exception_constructor_roots import _Object, _Slots
 from test_runtime_getter_roots import _GetterMemory
+from tests.python.runtime_collector_contract_model import ConfiguredConsumer
 
 
-class _TupleMemory(_GetterMemory):
+class _TupleMemory(ConfiguredConsumer, _GetterMemory):
     def __init__(self, backend=4, phase="unregister", after_unlink=False,
                  prior_pin=False, fail="", fail_register=0, count=2):
         super().__init__(backend=backend, phase=phase, prior_pin=prior_pin,
@@ -54,6 +55,7 @@ class _TupleMemory(_GetterMemory):
             return original_get(lst, index)
 
         self.namespace["py_list_get"] = get
+        self.configure_consumer()
 
     def zero(self, slot, _byte, size):
         for offset in range(0, size, 8):
@@ -154,6 +156,36 @@ class _TupleMemory(_GetterMemory):
 @pytest.mark.parametrize("after_unlink", (False, True))
 def test_tuple_from_list_reloads_owners_at_each_moving_gate(backend, phase, after_unlink):
     memory = _TupleMemory(backend, phase, after_unlink)
+    if backend in (3, 4):
+        # Neither collector relocates at ordinary parks. Old phase names
+        # remain compatibility inputs, not invented parking boundaries.
+        # GC4 relocation still requires separate stopped-world coverage.
+        expected_cells = {
+            "pcc_gc_backend_selected": backend,
+            "pcc_gc_config_initialized": 1,
+            "pcc_gc_backend_frozen": 1,
+            "pcc_gc_backend4_no_refcounts": 1,
+            "pcc_gc_nonmoving_count_free": 1,
+            "pcc_gc_read_barrier_enabled": 0,
+            "pcc_gc_refcount_provenance_probe": 2,
+        }
+
+        def consumer_cells():
+            return {name: memory.globals[name].fields[0] for name in expected_cells}
+
+        assert consumer_cells() == expected_cells
+        item, source, items, caller_slot = memory.item, memory.lst, memory.items, memory.caller_slot
+        aliases = (item, source)
+        prior_pins = tuple(value.flags & abi.PY_FLAG_GC_PINNED for value in aliases)
+        assert caller_slot.fields[0] is source
+        callbacks, original_gc = [], memory.gc
+        observations_start = len(memory.thread_gate.observations)
+
+        def observe_callback(name):
+            callbacks.append((name, memory.depth, memory.no_park_depth))
+            original_gc(name)
+
+        memory.gc = observe_callback
     result = memory.convert()
     assert result is memory.resolve(memory.out) and result.alive
     assert result.references == 1
@@ -162,7 +194,34 @@ def test_tuple_from_list_reloads_owners_at_each_moving_gate(backend, phase, afte
     assert memory.read(result, abi.PYTUPLEOBJECT_ITEMS_OFFSET + 8) is memory.item
     assert memory.item.references == 4
     assert memory.error is None
-    assert memory.moves > 0
+    if backend in (3, 4):
+        assert consumer_cells() == expected_cells
+        assert result is memory.out and memory.item is item and memory.lst is source
+        assert memory.items is items and source.fields[abi.PYLISTOBJECT_ITEMS_OFFSET] is items
+        assert items.fields[0] is item and items.fields[8] is item
+        assert memory.caller_slot is caller_slot and caller_slot.fields[0] is source
+        assert all(value.alive for value in aliases)
+        assert tuple(value.flags & abi.PY_FLAG_GC_PINNED for value in aliases) == prior_pins
+        assert not result.flags & abi.PY_FLAG_GC_PINNED
+        assert memory.forward == {} and memory.moves == 0
+        assert memory.registrations == 0
+        assert (memory.phase, memory.after_unlink) == (phase, after_unlink)
+        # Allocation/store/publication/decref callbacks remain observations;
+        # this model never promotes them to application or relocation gates.
+        assert memory.ordinary_parks == [
+            name for name, depth, no_park in callbacks
+            if depth == no_park == 0
+            and name in ("graph_lock", "graph_unlock", "retain_finish", "no_park_exit")
+        ]
+        assert "graph_unlock" in memory.ordinary_parks
+        assert not {"register_before", "register_after", "unregister"} & {
+            name for name, _, _ in callbacks
+        }
+        assert memory.thread_gate.observations[observations_start:] == [
+            (0, 0)
+        ] * len(memory.ordinary_parks)
+        assert memory.no_park_depth == 0
+        assert not memory.native_frames and not memory.native_ranges
     memory.assert_balanced()
 
 

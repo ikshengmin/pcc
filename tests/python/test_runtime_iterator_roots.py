@@ -13,9 +13,10 @@ import pytest
 from pcc.runtime.py import py_abi_constants as abi
 from test_exception_constructor_roots import _Object
 from test_runtime_getter_roots import _GetterMemory
+from tests.python.runtime_collector_contract_model import ConfiguredConsumer
 
 
-class _IteratorMemory(_GetterMemory):
+class _IteratorMemory(ConfiguredConsumer, _GetterMemory):
     def __init__(self, backend=4, gate=0, after_unlink=False, prior_pin=False,
                  callable_iterator=False, stop=False, call_error=False, eq_error=False,
                  fail_register=0):
@@ -45,6 +46,7 @@ class _IteratorMemory(_GetterMemory):
             "py_err_occurred": lambda: int(self.error is not None),
         })
         self.load("pcc/runtime/py/py_iter.py")
+        self.configure_consumer()
 
     def unregister(self, handle):
         self.unregister_calls += 1
@@ -99,10 +101,63 @@ class _IteratorMemory(_GetterMemory):
 @pytest.mark.parametrize("after_unlink", (False, True))
 def test_sequence_next_reloads_length_owner_and_teardown_result(backend, gate, after_unlink):
     memory = _IteratorMemory(backend=backend, gate=gate, after_unlink=after_unlink)
+    if backend in (3, 4):
+        # GC3 promotes in place; GC4 cannot relocate at ordinary parks.
+        # Retain old gate inputs without inventing unregister callbacks.
+        # GC4 relocation still requires separate stopped-world coverage.
+        expected_cells = {
+            "pcc_gc_backend_selected": backend,
+            "pcc_gc_config_initialized": 1,
+            "pcc_gc_backend_frozen": 1,
+            "pcc_gc_backend4_no_refcounts": 1,
+            "pcc_gc_nonmoving_count_free": 1,
+            "pcc_gc_read_barrier_enabled": 0,
+            "pcc_gc_refcount_provenance_probe": 2,
+        }
+
+        def consumer_cells():
+            return {name: memory.globals[name].fields[0] for name in expected_cells}
+
+        assert consumer_cells() == expected_cells
+        item, source, iterator, items = memory.item, memory.lst, memory.iterator, memory.items
+        aliases = (item, source, iterator)
+        prior_pins = tuple(value.flags & abi.PY_FLAG_GC_PINNED for value in aliases)
+        callbacks, original_gc = [], memory.gc
+        observations_start = len(memory.thread_gate.observations)
+
+        def observe_callback(name):
+            callbacks.append((name, memory.depth, memory.no_park_depth))
+            original_gc(name)
+
+        memory.gc = observe_callback
     result = memory.next()
     assert result is memory.item and result.alive and result.references == 2
     assert memory.resolve(memory.iterator).fields[24] == 1
-    assert memory.moves > 0
+    if backend in (3, 4):
+        assert consumer_cells() == expected_cells
+        assert result is item and memory.item is item
+        assert memory.lst is source and memory.iterator is iterator
+        assert iterator.fields[16] is source and iterator.fields[24] == 1
+        assert memory.items is items and source.fields[abi.PYLISTOBJECT_ITEMS_OFFSET] is items
+        assert items.fields[0] is item and all(value.alive for value in aliases)
+        assert tuple(value.flags & abi.PY_FLAG_GC_PINNED for value in aliases) == prior_pins
+        assert memory.forward == {} and memory.moves == 0
+        assert memory.registrations == memory.unregister_calls == 0
+        assert (memory.gate, memory.after_unlink) == (gate, after_unlink)
+        # Provider callbacks are not all parks. Only unlocked, park-enabled
+        # runtime boundaries reach the real ordinary/application-gate check.
+        assert memory.ordinary_parks == [
+            name for name, depth, no_park in callbacks
+            if depth == no_park == 0
+            and name in ("graph_lock", "graph_unlock", "retain_finish", "no_park_exit")
+        ]
+        assert "graph_unlock" in memory.ordinary_parks
+        assert "unregister" not in {name for name, _, _ in callbacks}
+        assert memory.thread_gate.observations[observations_start:] == [
+            (0, 0)
+        ] * len(memory.ordinary_parks)
+        assert memory.no_park_depth == 0
+        assert not memory.native_frames and not memory.native_ranges
     assert memory.error is None
     memory.assert_balanced()
 
