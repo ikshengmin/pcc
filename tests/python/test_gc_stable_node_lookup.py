@@ -173,7 +173,8 @@ def test_stable_known_preserves_header_guards(state):
         assert not any(base == obj and offset == 12 for base, offset, _ in model.reads)
 
 
-@pytest.mark.parametrize('backend', (3, 4))
+# Only GC4 relocates and takes the relocation read (03cbd1849).
+@pytest.mark.parametrize('backend', (4,))
 def test_public_read_keeps_its_own_node_across_other_object_release(backend):
     model = Nodes()
     model.store('pcc_gc_backend_selected', 0, backend)

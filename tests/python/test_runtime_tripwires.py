@@ -317,20 +317,40 @@ def test_strict_port_routes_locked_fatal_logs_through_deferred_slot():
     unlock = substrate.split("def pcc_py_gc_minor_graph_unlock()", 1)[1].split(
         "@c_abi_export", 1
     )[0]
-    # Exactly two finish sites: the threads-off exit and the outermost
-    # threaded release, with the report strictly after the physical store.
-    assert unlock.count("_finish_deferred_tripwire()") == 2
-    release = unlock.index('"release",')
-    assert unlock.index("_finish_deferred_tripwire()", release) > release
-    shallow = unlock.split("if depth <= 0:", 1)[1].split("return", 1)[0]
-    assert "_finish_deferred_tripwire" not in shallow
+    # The kernel's pcc_thread_graph_lock_release owns depth and the physical
+    # release; it answers 1 only after the outermost release stored (or
+    # handed off) the word with a tripwire deferred. One finish site: on
+    # that answer, before this caller leaves no-park.
+    assert unlock.count("_finish_deferred_tripwire()") == 1
+    reported = unlock.split(
+        'if pcc_thread_graph_lock_release(global_addr("g_pcc_py_gc_minor_graph_lock")) != 0:', 1
+    )[1]
+    assert reported.index("_finish_deferred_tripwire()") < reported.index(
+        "pcc_thread_no_park_exit()"
+    )
+    kernel = (RUNTIME_DIR / "py" / "freestanding_thread_kernel_pthread.py").read_text(
+        encoding="utf-8"
+    )
+    release_fn = kernel.split("def pcc_thread_graph_lock_release(lock_word) -> int:", 1)[1].split(
+        "@c_abi_export", 1
+    )[0]
+    nested = release_fn.index("if (state & 281474959933440) != 0:")
+    physical = release_fn.index('atomic_store_i32(lock_word, 0, 0, "release")')
+    handoff = release_fn.index("_graph_wait_release(lock_word)")
+    deferred = release_fn.index("return 1")
+    # A nested level returns before any release; the report follows both
+    # the physical store and the hand-off to a waiter.
+    assert nested < handoff < deferred and nested < physical < deferred
 
     for name, calls in (
         # Forwarding retirement also refuses a source that still holds a
-        # foreign-address lease, through the same deferred slot.
-        ("freestanding_gc_forwarding_retirement.py", 4),
+        # foreign-address lease, through the same deferred slot, and a
+        # stopped world that cannot settle its relocation (4e2feca72).
+        ("freestanding_gc_forwarding_retirement.py", 5),
         ("freestanding_gc_relocation_payload.py", 1),
-        ("py_gc_backend.py", 1),
+        # The GC4 source side-table commit, and GC3's forwarded-source finish
+        # refusing a running world or a pinned source (8429b6671).
+        ("py_gc_backend.py", 3),
     ):
         body = (RUNTIME_DIR / "py" / name).read_text(encoding="utf-8")
         assert 'extern(\n    "pcc_runtime_tripwire_fail"' not in body, name

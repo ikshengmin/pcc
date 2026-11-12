@@ -212,7 +212,9 @@ def test_admission_needs_count_free_gc1_gc2_automatic_collection_and_running_wor
     heap = _Heap(backend)
     heap.set("pcc_gc_concurrent_sweep_allowed", allowed)
     heap.set("pcc_gc_cms_worker_started", worker)
-    expected = int(count_free == 1 and backend in (1, 2) and allowed == 1 and worker == 1)
+    # GC3 sweeps on the collector thread like GC1/GC2 (03cbd1849); only GC4,
+    # which relocates, sweeps in its stopped world.
+    expected = int(count_free == 1 and backend in (1, 2, 3) and allowed == 1 and worker == 1)
     assert heap.ns["_concurrent_sweep_admitted"](count_free) == expected
 
 

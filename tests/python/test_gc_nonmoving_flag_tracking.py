@@ -60,7 +60,9 @@ def test_backend_freeze_selects_only_gc0_or_count_free_nonmoving_tracking(
     model.injected = True
     model.words[NO_RC] = no_refcounts
     model.words["pcc_gc_refcount_provenance_probe"] = probe
-    expected = int(backend == 0 or (backend in (1, 2) and no_refcounts != 0))
+    # Every tracing collector runs the count-free nonmoving protocol when
+    # counts are off (GC3 since 03cbd1849, GC4 since 4e2feca72).
+    expected = int(backend == 0 or (backend in (1, 2, 3, 4) and no_refcounts != 0))
 
     def enable():
         assert model.depth == 1 and model.words["pcc_gc_backend_frozen"] == 0
@@ -76,7 +78,7 @@ def test_backend_freeze_selects_only_gc0_or_count_free_nonmoving_tracking(
     model.ns["pcc_gc_alloc_stage_enable"] = stage
     model.ns["pcc_gc_fix_backend"]()
     assert model.events.count("tracking-flag-mode") == expected
-    count_free_nonmoving = int(backend in (1, 2) and no_refcounts != 0)
+    count_free_nonmoving = int(backend in (1, 2, 3, 4) and no_refcounts != 0)
     assert model.words.get("pcc_gc_nonmoving_count_free", 0) == count_free_nonmoving
     # Only the count-free nonmoving tracers stage their registrations.
     assert model.events.count(("alloc-stage", 1)) == count_free_nonmoving
