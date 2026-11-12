@@ -31,6 +31,25 @@ _CPP_TOKEN_RE = re.compile(
 )
 
 
+_EXPANDING_BUILTINS = frozenset(("_Pragma", "__LINE__", "__FILE__"))
+_RELEX_DECISIONS = {}
+
+
+def _relexes_apart(previous, spelling):
+    """Whether two adjacent tokens need a space to stay two tokens (memoized)."""
+    key = (previous, spelling)
+    decision = _RELEX_DECISIONS.get(key)
+    if decision is None:
+        decision = (
+            _CPP_TOKEN_RE.findall(previous + spelling) != [previous, spelling]
+            or (previous == "/" and spelling in ("/", "*"))
+            or (previous == "." and spelling == ".")
+        )
+        if len(_RELEX_DECISIONS) < 1 << 16:
+            _RELEX_DECISIONS[key] = decision
+    return decision
+
+
 class _SourceLine:
     __slots__ = ("text", "physical_line")
 
@@ -39,59 +58,55 @@ class _SourceLine:
         self.physical_line = physical_line
 
 
+_LITERAL_OR_COMMENT_RE = re.compile(
+    r'"(?:[^"\\]|\\[\s\S]?)*"?'
+    r"|'(?:[^'\\]|\\[\s\S]?)*'?"
+    r"|/\*[\s\S]*?\*/"
+    r"|//[^\n]*"
+    r"|/\*",
+)
+
+
+def _blank_comment(match):
+    text = match.group()
+    if text[0] in "\"'":
+        return text
+    if text.startswith("//"):
+        return " "
+    if text == "/*":
+        raise RuntimeError("owned preprocessor: unterminated comment")
+    return " " + "\n" * text.count("\n")
+
+
 def _source_line_records(source):
-    """Translation-phase splicing and comments, preserving literal contents."""
+    """Translation-phase splicing and comments, preserving literal contents.
+
+    Splicing removes each original backslash-newline once (a pair it forms is
+    kept); a literal runs to its closing quote even across lines; a block
+    comment becomes one space plus its newlines and a line comment one space,
+    so every spliced line keeps the physical line it starts on.
+    """
     source = source.replace("\r\n", "\n").replace("\r", "\n")
-    spliced = []
-    physical_lines = [1]
-    physical_line = 1
-    index = 0
-    while index < len(source):
-        if source.startswith("\\\r\n", index) or source.startswith("\\\n", index):
-            index += 3 if source.startswith("\\\r\n", index) else 2
-            physical_line += 1
-            continue
-        char = source[index]
-        spliced.append(char)
-        if char == "\n":
-            physical_line += 1
-            physical_lines.append(physical_line)
-        index += 1
-    source = "".join(spliced)
-    pieces = []
-    i = 0
-    while i < len(source):
-        ch = source[i]
-        if ch in ('"', "'"):
-            start = i
-            i += 1
-            while i < len(source):
-                if source[i] == "\\":
-                    i += 2
-                elif source[i] == ch:
-                    i += 1
-                    break
-                else:
-                    i += 1
-            pieces.append(source[start:i])
-        elif source.startswith("/*", i):
-            end = source.find("*/", i + 2)
-            if end < 0:
-                raise RuntimeError("owned preprocessor: unterminated comment")
-            pieces.append(" " + "\n" * source[i:end + 2].count("\n"))
-            i = end + 2
-        elif source.startswith("//", i):
-            end = source.find("\n", i + 2)
-            i = len(source) if end < 0 else end
-            pieces.append(" ")
-        else:
-            pieces.append(ch)
-            i += 1
-    lines = "".join(pieces).split("\n")
+    if "\\\n" in source:
+        parts = source.split("\\\n")
+        physical_lines = [1]
+        physical_line = 1
+        for index, part in enumerate(parts):
+            newlines = part.count("\n")
+            if newlines:
+                physical_lines.extend(range(physical_line + 1, physical_line + newlines + 1))
+                physical_line += newlines
+            if index + 1 < len(parts):
+                physical_line += 1
+        source = "".join(parts)
+    else:
+        physical_lines = None
+    lines = _LITERAL_OR_COMMENT_RE.sub(_blank_comment, source).split("\n")
     if lines[-1] == "":
         lines.pop()
-    return [_SourceLine(text, physical_lines[index])
-            for index, text in enumerate(lines)]
+    if physical_lines is None:
+        return [_SourceLine(text, index) for index, text in enumerate(lines, 1)]
+    return [_SourceLine(text, physical_lines[index]) for index, text in enumerate(lines)]
 
 
 def _source_lines(source):
@@ -934,16 +949,19 @@ class Preprocessor:
                     if i + 1 >= len(lines) or lines[i + 1].text.lstrip().startswith("#"):
                         raise
                 else:
-                    tokens = _CPP_TOKEN_RE.findall(processed)
-                    tail = self.macros.get(tokens[-1]) if tokens else None
+                    # Tokens cover every non-space character, so a line whose
+                    # last one is not a word character cannot end in a name.
+                    last = processed.rstrip()[-1:]
+                    tail = None
+                    if last and (last.isalnum() or last == "_" or not last.isascii()):
+                        tokens = _CPP_TOKEN_RE.findall(processed)
+                        tail = self.macros.get(tokens[-1]) if tokens else None
+                    if tail is None or not tail.is_function:
+                        break
                     following = i + 1
                     while following < len(lines) and not lines[following].text.strip():
                         following += 1
-                    if not (
-                        tail is not None and tail.is_function
-                        and following < len(lines)
-                        and lines[following].text.lstrip().startswith("(")
-                    ):
+                    if not (following < len(lines) and lines[following].text.lstrip().startswith("(")):
                         break
                     self._rollback_pragma_expansion()
                 i += 1
@@ -1305,6 +1323,14 @@ class Preprocessor:
         cached = self._expand_cache.get(line)
         if cached is not None:
             return cached
+        # Only a macro name, _Pragma, __LINE__ or __FILE__ can expand. The
+        # identifier scan finds every identifier token (and some spellings
+        # inside literals), so a line naming none of them rescans unchanged.
+        names = IDENTIFIER_RE.findall(line)
+        if self.macros.keys().isdisjoint(names) and _EXPANDING_BUILTINS.isdisjoint(names):
+            result = self._serialize_macro_fragments((line,))
+            self._expand_cache[line] = result
+            return result
         pragma_generation = self._pragma_generation
         tokens = self._expand_tokens(self._macro_tokens(line))
         trailing = line[len(line.rstrip()):]
@@ -1444,11 +1470,7 @@ class Preprocessor:
                 if leading:
                     pieces.append(leading)
                     separated = True
-                if previous and not separated and (
-                    _CPP_TOKEN_RE.findall(previous + spelling) != [previous, spelling]
-                    or (previous == "/" and spelling in ("/", "*"))
-                    or (previous == "." and spelling == ".")
-                ):
+                if previous and not separated and _relexes_apart(previous, spelling):
                     pieces.append(" ")
                 pieces.append(spelling)
                 previous = spelling
