@@ -70,7 +70,7 @@ class Setter:
             "pcc_gc_refresh_read_barrier": lambda: None,
         }
         names = {"pcc_gc_set_backend", "pcc_gc_fix_backend", "_release_cms_worker_pause",
-                 "_release_cms_worker_pause_unless_kept"}
+                 "_release_cms_worker_pause_unless_kept", "_nonmoving_count_free_backend"}
         tree = ast.parse(SOURCE.read_text(), filename=str(SOURCE))
         functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)
                      and node.name in names]
