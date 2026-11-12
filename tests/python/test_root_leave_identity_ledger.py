@@ -16,6 +16,8 @@ import weakref
 
 import pytest
 
+from tests.python.codegen_body_model import CodegenBodyModel
+
 
 ROOT = Path(__file__).resolve().parents[2]
 CODEGEN = ROOT / "pcc/frontends/python/codegen"
@@ -517,6 +519,139 @@ def test_shared_exit_preserves_value_and_cleanup_calls(rooted):
                 assert events.index(choices[1]) < events.index(("ret", "called"))
 
 
+_ROOT_STATE_FIELDS = (
+    "_fn_gc_root_slot_registry", "_fn_gc_root_exit_sites", "_shared_return_exits",
+)
+
+
+class _GenerationBoundary(Exception):
+    """The recording sink stops before real module lowering begins."""
+
+
+def generation_reset_model(mutation=None):
+    # Use the shared production-body loader. IR/declaration/debug effects are
+    # external sinks; the caller and reset bodies themselves are never mocked.
+    model = CodegenBodyModel(
+        {"generation": CODEGEN / "generation_lowering.py"},
+        {"generation": ("GenerationLoweringMixin",)},
+        {
+            "os": SimpleNamespace(environ={}),
+            "ir": SimpleNamespace(Module=lambda name: SimpleNamespace(name=name, globals={})),
+            "debug_source_path": lambda module, fallback: fallback,
+            "closed_young_module_denial": lambda module: "",
+            "declare_runtime": lambda module: {"pcc_gc_load_ptr": "load_ptr", "pcc_gc_store_root": "store_root"},
+            "marshal": SimpleNamespace(reset_boxed_i64_constants=lambda: None),
+        },
+        constant_factories=("frozenset",),
+    )
+    owner, = [node for node in model.trees["generation"].body
+              if isinstance(node, ast.ClassDef) and node.name == "GenerationLoweringMixin"]
+    # Class-qualified calls below use unbound methods with explicit self.
+    # Fail closed if the owner acquires descriptors or inheritance semantics.
+    assert not owner.bases and not owner.keywords and not owner.decorator_list
+    assert all(isinstance(node, ast.FunctionDef) and not node.decorator_list for node in owner.body)
+    if mutation is not None:
+        _mutate_generation_reset(model, mutation)
+    methods = model.load_methods(model.methods)
+    model.namespaces["generation"]["GenerationLoweringMixin"] = SimpleNamespace(**methods)
+    return methods["_generate_impl"]
+
+
+def _mutate_generation_reset(model, mutation):
+    """Negative controls change source bodies, then use the ordinary loader."""
+    reset = model.methods["_reset_generation_module"][1]
+    generate = model.methods["_generate_impl"][1]
+    if mutation in _ROOT_STATE_FIELDS or mutation == "clear_in_place":
+        selected = []
+        for index, node in enumerate(reset.body):
+            if (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+                    and isinstance(node.value.func, ast.Name) and node.value.func.id == "setattr"
+                    and len(node.value.args) == 3 and isinstance(node.value.args[1], ast.Constant)
+                    and node.value.args[1].value in _ROOT_STATE_FIELDS):
+                if mutation == "clear_in_place" or node.value.args[1].value == mutation:
+                    selected.append(index)
+        assert len(selected) == (3 if mutation == "clear_in_place" else 1)
+        for index in reversed(selected):
+            if mutation == "clear_in_place":
+                field = reset.body[index].value.args[1].value
+                reset.body[index] = ast.parse("self." + field + ".clear()").body[0]
+            else:
+                del reset.body[index]
+        return
+    groups = [node for node in generate.body if isinstance(node, ast.If)
+              and any(isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute)
+                      and child.func.attr == "_reset_generation_module" for child in ast.walk(node))]
+    group, = groups
+    calls = [node for node in group.body if isinstance(node, ast.Expr)
+             and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute)
+             and node.value.func.attr == "_reset_generation_module"]
+    call, = calls
+    if mutation == "missing_call":
+        group.body[group.body.index(call)] = ast.Pass()
+    elif mutation == "after_lowering":
+        boundary, = [node for node in generate.body if isinstance(node, ast.Expr)
+                     and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute)
+                     and node.value.func.attr == "prepare_class_init_outlines"]
+        generate.body.remove(group)
+        generate.body.insert(generate.body.index(boundary) + 1, group)
+    else:
+        assert mutation == "unconditional_reset"
+        group.test = ast.Constant(value=True)
+        call.value.args[1] = ast.parse("self.ast_module if module is None else module", mode="eval").body
+
+
+def assert_generation_reset_contract(host, generate):
+    module = SimpleNamespace(name="first", body=())
+    host.ast_module = module
+    host.module.triple, host.module.data_layout = "recording-target", "recording-layout"
+    host._skip_program_main = host._freestanding_module = host._runtime_port_module = False
+    host._sibling_module_inits = ()
+    host._native_module_exports = {}
+    host._module_source_path = ""
+    host._closed_young_closure = host._closed_young_domain_input = None
+    host._di_init = lambda source: None
+    host._declare_printf = lambda: "printf"
+
+    def boundary():
+        # This is the first lowering call after the actual caller/reset path.
+        # A missing, conditional, late or wrong-owner reset must fail here.
+        for name, old in previous.items():
+            current = getattr(host, name)
+            if explicit_module:
+                assert type(current) is dict and current == {}, "reset did not empty " + name
+                assert all(current is not prior for prior in previous.values()), "reset did not replace " + name
+            else:
+                assert current is old and current, "default generation reset " + name
+        assert len({id(getattr(host, name)) for name in _ROOT_STATE_FIELDS}) == 3, "reset aliased owners"
+        raise _GenerationBoundary
+
+    host.class_lowering = SimpleNamespace(prepare_class_init_outlines=boundary)
+    # The default path intentionally retains state. Explicit generation must
+    # replace it on every invocation, for both the same AST and an override.
+    for index, module in enumerate((module, module, SimpleNamespace(name="next", body=()))):
+        previous = {name: getattr(host, name) for name in _ROOT_STATE_FIELDS}
+        assert all(previous.values()), "the fixture must start with all three owners populated"
+        previous_exit = load_method("shared")(host, False)
+        explicit_module = False
+        with pytest.raises(_GenerationBoundary):
+            generate(host)
+        explicit_module = True
+        with pytest.raises(_GenerationBoundary):
+            generate(host, module)
+        # Reuse the same IR function first, then another with the same name.
+        # Both must leave only this generation's roots, with no stale patching.
+        if index:
+            host.current_function = Host([]).current_function
+        host.patches.clear()
+        new_slot = Slot("new module " + str(index))
+        host.register("a", new_slot)
+        assert host.patches == []
+        host.events.clear()
+        new_exit = load_method("shared")(host, False)
+        assert new_exit is not previous_exit
+        assert [event for event in host.events if event[0] == "leave"] == [("leave", new_slot.label)]
+
+
 def test_shared_exit_cache_and_invocation_local_owned_ledger():
     slot = Slot("slot")
     host = registered_host([("a", slot), ("b", slot)])
@@ -543,33 +678,21 @@ def test_shared_exit_cache_and_invocation_local_owned_ledger():
     new_exit = load_method("shared")(host, False)
     assert new_exit is not first
     assert host._shared_return_exits["f"][0] is fresh
-    # Execute only the actual three reset statements, not module generation.
-    # They must occur together in one block of _generate_impl.
-    tree = ast.parse((CODEGEN / "generation_lowering.py").read_text())
-    generate = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "_generate_impl")
-    fields = {"_fn_gc_root_slot_registry", "_fn_gc_root_exit_sites", "_shared_return_exits"}
-    reset_groups = []
-    for parent in ast.walk(generate):
-        for _field, value in ast.iter_fields(parent):
-            if not isinstance(value, list):
-                continue
-            resets = [node for node in value if isinstance(node, ast.Expr)
-                      and isinstance(node.value, ast.Call)
-                      and isinstance(node.value.func, ast.Name) and node.value.func.id == "setattr"
-                      and len(node.value.args) == 3 and isinstance(node.value.args[1], ast.Constant)
-                      and node.value.args[1].value in fields]
-            if resets:
-                reset_groups.append(resets)
-    assert len(reset_groups) == 1
-    resets = reset_groups[0]
-    assert {node.value.args[1].value for node in resets} == fields
-    assert all(ast.unparse(node.value.args[0]) == "self" and ast.unparse(node.value.args[2]) == "{}" for node in resets)
-    exec(compile(ast.Module(body=resets, type_ignores=[]), str(CODEGEN / "generation_lowering.py"), "exec"), {"self": host})
-    new_slot = Slot("new module")
-    host.register("a", new_slot)
-    host.events.clear()
+    assert_generation_reset_contract(host, generation_reset_model())
+
+
+@pytest.mark.parametrize("mutation", [
+    "_fn_gc_root_slot_registry", "_fn_gc_root_exit_sites", "_shared_return_exits",
+    "clear_in_place", "missing_call", "after_lowering", "unconditional_reset",
+])
+def test_generation_reset_contract_rejects_source_regressions(mutation):
+    host = registered_host([("old", Slot("old module"))])
     load_method("shared")(host, False)
-    assert [event for event in host.events if event[0] == "leave"] == [("leave", "new module")]
+    generate = generation_reset_model(mutation)
+    message = ("default generation reset" if mutation == "unconditional_reset" else
+               "reset did not replace" if mutation == "clear_in_place" else "reset did not empty")
+    with pytest.raises(AssertionError, match=message):
+        assert_generation_reset_contract(host, generate)
 
 
 @pytest.mark.parametrize("kind", ["owned", "shared"])

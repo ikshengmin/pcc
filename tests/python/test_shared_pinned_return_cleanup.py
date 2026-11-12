@@ -752,6 +752,18 @@ class Second:
     with pytest.raises(AssertionError, match="recording sink must take precedence"):
         left.sink()
 
+    frozen = tmp_path / "frozen.py"
+    frozen.write_text("NAMES = {'root', 'exit'}\nVALUE = frozenset(NAMES)\n"
+                      "class Frozen:\n    def entry(self, extra=frozenset({'cache'})):\n"
+                      "        return VALUE, extra\n")
+    frozen_model = CodegenBodyModel(
+        {"fixture": frozen}, {"fixture": ("Frozen",)}, {},
+        constant_factories=("frozenset",),
+    )
+    frozen_host = SimpleNamespace()
+    frozen_model.bind(frozen_host, ("entry",))
+    assert frozen_host.entry() == (frozenset({"root", "exit"}), frozenset({"cache"}))
+
 
 @pytest.mark.parametrize("case", ["constant", "state", "import", "duplicate", "decorator"])
 def test_codegen_loader_rejects_unsupported_or_ambiguous_dependencies(tmp_path, case):
@@ -776,6 +788,38 @@ def test_codegen_loader_rejects_unsupported_or_ambiguous_dependencies(tmp_path, 
     if case in ("constant", "decorator"):
         with pytest.raises(ValueError, match="codegen model"):
             model.bind(host, ("entry",))
+        if case == "constant":
+            def forbidden_factory(*args, **kwargs):
+                raise AssertionError("a rejected constant factory executed")
+
+            for declaration, factories, namespace in (
+                ("VALUE = frozenset({'root'})", (), {}),
+                ("VALUE = frozenset(dynamic())", ("frozenset",), {}),
+                ("VALUE = frozenset(items={'root'})", ("frozenset",), {}),
+                ("def frozenset(items): return items\nVALUE = frozenset({'root'})",
+                 ("frozenset",), {}),
+                ("from builtins import frozenset\nVALUE = frozenset({'root'})",
+                 ("frozenset",), {}),
+                ("if condition: frozenset = replacement\nVALUE = frozenset({'root'})",
+                 ("frozenset",), {}),
+                ("VALUE = frozenset({'root'})", ("frozenset",), {"frozenset": forbidden_factory}),
+                ("VALUE = arbitrary({'root'})", ("arbitrary",), {"arbitrary": forbidden_factory}),
+            ):
+                source.write_text(declaration + "\nclass First:\n    def entry(self): return VALUE\n")
+                rejected = CodegenBodyModel(
+                    {"fixture": source}, {"fixture": ("First",)}, namespace,
+                    constant_factories=factories,
+                )
+                with pytest.raises(ValueError, match="unsupported codegen model constant"):
+                    rejected.bind(SimpleNamespace(), ("entry",))
+            source.write_text("VALUE = frozenset({'root'})\nclass First:\n    def entry(self): return VALUE\n")
+            rejected = CodegenBodyModel(
+                {"fixture": source}, {"fixture": ("First",)}, {},
+                constant_factories=("frozenset",),
+            )
+            rejected.namespaces["fixture"]["__builtins__"]["frozenset"] = forbidden_factory
+            with pytest.raises(ValueError, match="unsupported codegen model constant"):
+                rejected.bind(SimpleNamespace(), ("entry",))
     else:
         model.bind(host, ("entry",))
         if case == "state":

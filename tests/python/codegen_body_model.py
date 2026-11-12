@@ -110,6 +110,18 @@ class CodegenBodyModel:
                 module, definition.value, seen | {value.id},
             )
         if isinstance(value, ast.Call) and not value.keywords:
+            if isinstance(value.func, ast.Name) and value.func.id == "frozenset":
+                # Only this explicitly allowed builtin may be called by name.
+                # Source or recording-namespace shadowing must fail closed.
+                namespace = self.namespaces[module]
+                return (
+                    "frozenset" in self.constant_factories
+                    and "frozenset" not in self.definitions[module]
+                    and "frozenset" not in self.ambiguous_globals[module]
+                    and namespace.get("frozenset", builtins.frozenset) is builtins.frozenset
+                    and namespace["__builtins__"].get("frozenset") is builtins.frozenset
+                    and all(self._safe_constant(module, arg, seen) for arg in value.args)
+                )
             if isinstance(value.func, ast.Attribute):
                 owner = value.func.value
                 if isinstance(owner, ast.Name):

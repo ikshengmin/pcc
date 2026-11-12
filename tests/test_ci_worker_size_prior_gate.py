@@ -115,7 +115,7 @@ def test_default_command_retains_project_xdist(tmp_path):
         'tests/test_ci_native_find_protocol.py',
         'tests/python/test_str_len_protocol.py',
     )
-    assert gate.HOST_COUNTS[72:] == (36, 29, 4, 41, 11, 23, 10, 65, 7, 92, 1, 2)
+    assert gate.HOST_COUNTS[72:] == (36, 36, 4, 41, 11, 23, 10, 65, 7, 92, 1, 2)
     assert "tests/python/test_precise_stackmap_abi.py" not in gate.HOST_FILES
     assert gate.GC_MARK_COLOR_ATOMIC_TEST == "tests/python/test_gc_mark_color_atomic.py"
     assert (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text().count(
@@ -126,7 +126,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text().count(
         '      - "tests/python/test_runtime_abi_chunking.py"') == 2
     assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 84
-    assert sum(gate.HOST_COUNTS) == 3756 and sum(gate.HOST_COUNTS[:72]) == 3435
+    assert sum(gate.HOST_COUNTS) == 3763 and sum(gate.HOST_COUNTS[:72]) == 3435
     assert sum(gate.HOST_COUNTS[:70]) == 3377
     assert sum(gate.HOST_COUNTS[:65]) == 3169
     assert sum(gate.HOST_COUNTS[:63]) == 3131
@@ -171,6 +171,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     for filename, expected_count in ((gate.MANAGED_SCRATCH_TEST, 34), (gate.MANAGED_MEMORY_TEST, 1),
                                      (gate.GC_RELOCATION_PAGE_CURSOR_MODEL_TEST, 117),
                                      (gate.IR_BUILDER_CALL9_TEST, 9),
+                                     (gate.HOST_FILES[73], 36),
                                      (gate.HOST_FILES[75], 41)):
         count = 0
         for node in ast.parse((ROOT / filename).read_text()).body:
@@ -1784,7 +1785,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (106, 3, 291, 0, 6, 29, 25, 7, 25, 49, 19, 21, 433, 17, 4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 39, 35, 23) + (36, 29, 4, 41, 11, 23, 10, 65, 7, 92, 1, 2) and not integration
+            assert nodes == gate.HOST_FILES and counts == (106, 3, 291, 0, 6, 29, 25, 7, 25, 49, 19, 21, 433, 17, 4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 39, 35, 23) + (36, 36, 4, 41, 11, 23, 10, 65, 7, 92, 1, 2) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
