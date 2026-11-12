@@ -6,6 +6,8 @@ import subprocess
 import stat
 from pathlib import Path
 
+import pytest
+
 
 def test_bootstrap_subprocess_wrapper_enforces_configured_timeout(monkeypatch):
     import pcc.driver.cli_bootstrap as cli
@@ -227,7 +229,15 @@ def test_bootstrap_cli_formats_hard_error_as_json(monkeypatch, tmp_path, capsys)
     assert diag["phase"] == "python-frontend"
     assert "boom" in diag["message"]
     assert "fallback_explain" in "\n".join(diag["notes"])
+    assert diag["notes"] == [
+        "exception_type=Exception; backend=self; ir_scaffold=on; "
+        "fallback_explain=unknown: no fallback routing decision was recorded"
+    ]
+    assert diag["metadata"] == {"backend": "self", "ir_scaffold": "on"}
+    assert diag["severity"] == "error"
+    assert data["has_errors"] is True
     assert profile.exists()
+    assert json.loads(profile.read_text(encoding="utf-8"))["metadata"]["backend"] == "self"
 
 
 def test_bootstrap_cli_pytest_mode_uses_pcc1_native_runner(monkeypatch, tmp_path):
@@ -264,9 +274,16 @@ def test_bootstrap_cli_pytest_mode_uses_pcc1_native_runner(monkeypatch, tmp_path
         ["mkdir", "-p", str(tmp_path / ("pcc1-pytest-" + str(os.getpid())))],
         True,
     )
-    assert calls[1][0][0] == "/tmp/pcc1"
-    assert calls[1][0][-2:] == ["--ir-scaffold=on"]
-    assert calls[2][0][0].endswith(".out")
+    scratch = tmp_path / ("pcc1-pytest-" + str(os.getpid()))
+    runners = list(scratch.glob("runner_*.py"))
+    assert len(runners) == 1
+    runner = runners[0]
+    executable = runner.with_suffix(".out")
+    assert calls[1:] == [
+        (["/tmp/pcc1", str(runner), "-o", str(executable), "--ir-scaffold=on"], True),
+        ([str(executable)], True),
+    ]
+    assert "run_tests([test_sample])" in runner.read_text(encoding="utf-8")
     assert not any("uv" in arg for cmd, _ in calls for arg in cmd)
 
 
@@ -467,3 +484,118 @@ def test_bootstrap_cli_routes_array_core_to_split_native_module(monkeypatch):
     ]) == 17
 
     assert calls == [["--literal", "[1]"], ["--shape", "2,3"]]
+
+
+@pytest.mark.parametrize("diagnostic_format", ["json", "text"])
+@pytest.mark.parametrize("explain_fallback", [False, True])
+def test_bootstrap_compile_error_fallback_explanation_is_opt_in(
+    monkeypatch, diagnostic_format, explain_fallback,
+):
+    import pcc.driver.cli_bootstrap as cli
+
+    monkeypatch.delenv("PCC_DEBUG_CODEGEN_PHASES", raising=False)
+    monkeypatch.delenv("PCC_DEBUG_BOOTSTRAP_TRACE", raising=False)
+
+    class ErrorWithoutRepr(RuntimeError):
+        def __repr__(self):
+            raise AssertionError("formatting must not inspect exception repr")
+
+    class UnrelatedMetadata:
+        def __repr__(self):
+            raise AssertionError("formatting must not inspect unrelated metadata")
+
+    message = 'original "failure"\nnext line'
+    formatted = cli._format_compile_error(
+        ErrorWithoutRepr(message),
+        options=cli.ObservabilityOptions(
+            diagnostic_format=diagnostic_format,
+            explain_fallback=explain_fallback,
+            phase="python-frontend",
+        ),
+        metadata={
+            "backend": "self",
+            "ir_scaffold": "auto",
+            "unrelated": UnrelatedMetadata(),
+        },
+    )
+    note = "exception_type=Exception; backend=self; ir_scaffold=auto"
+    if explain_fallback:
+        note += (
+            "; fallback_explain=unknown: "
+            "no fallback routing decision was recorded"
+        )
+    if diagnostic_format == "json":
+        payload = json.loads(formatted)
+        diagnostic = payload["diagnostics"][0]
+        assert payload["has_errors"] is True
+        assert diagnostic["code"] == "PCC-PY-COMPILE-001"
+        assert diagnostic["severity"] == "error"
+        assert diagnostic["phase"] == "python-frontend"
+        assert diagnostic["message"] == message
+        assert diagnostic["notes"] == [note]
+        assert diagnostic["metadata"] == {"backend": "self", "ir_scaffold": "auto"}
+    else:
+        assert formatted == (
+            "error: PCC-PY-COMPILE-001: [python-frontend] "
+            + message + "\n  note: " + note
+        )
+
+
+@pytest.mark.parametrize("metadata", [None, {}])
+def test_bootstrap_compile_error_without_route_data_remains_unknown(
+    monkeypatch, metadata,
+):
+    import pcc.driver.cli_bootstrap as cli
+
+    monkeypatch.delenv("PCC_DEBUG_CODEGEN_PHASES", raising=False)
+    monkeypatch.delenv("PCC_DEBUG_BOOTSTRAP_TRACE", raising=False)
+    error = RuntimeError("")
+    error.pcc_message = "original stored failure"
+    formatted = cli._format_compile_error(
+        error,
+        options=cli.ObservabilityOptions(
+            diagnostic_format="json", explain_fallback=True,
+        ),
+        metadata=metadata,
+    )
+    diagnostic = json.loads(formatted)["diagnostics"][0]
+    assert diagnostic["message"] == "original stored failure"
+    assert diagnostic["notes"] == [
+        "exception_type=Exception; fallback_explain=unknown: "
+        "no fallback routing decision was recorded"
+    ]
+    assert diagnostic["metadata"] == {}
+
+
+def test_bootstrap_cli_pytest_mode_does_not_run_failed_compile(
+    monkeypatch, tmp_path, capsys,
+):
+    import pcc.driver.cli_bootstrap as cli
+
+    src = tmp_path / "test_sample.py"
+    src.write_text("def test_sample():\n    assert True\n", encoding="utf-8")
+    calls = []
+
+    def fake_run(cmd, *, check, timeout=None):
+        calls.append((cmd, check, timeout))
+        if cmd[:2] == ["mkdir", "-p"]:
+            Path(cmd[2]).mkdir(parents=True, exist_ok=True)
+            return subprocess.CompletedProcess(cmd, 0)
+        raise subprocess.CalledProcessError(1, cmd)
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(cli.sys, "executable", "/tmp/pcc1")
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setenv("PCC_BOOTSTRAP_SUBPROCESS_TIMEOUT_SECONDS", "7")
+
+    assert cli.bootstrap_cli_main(["--pytest", str(src)]) == 1
+    scratch = tmp_path / ("pcc1-pytest-" + str(os.getpid()))
+    runners = list(scratch.glob("runner_*.py"))
+    assert len(runners) == 1
+    runner = runners[0]
+    assert calls == [
+        (["mkdir", "-p", str(scratch)], True, 7),
+        (["/tmp/pcc1", str(runner), "-o", str(runner.with_suffix(".out")),
+          "--ir-scaffold=on"], True, 7),
+    ]
+    assert "0 pcc1 pytest file(s) passed, 1 failed" in capsys.readouterr().out

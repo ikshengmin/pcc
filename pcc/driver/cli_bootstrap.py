@@ -9866,6 +9866,13 @@ def _format_compile_error(exc, *, options, metadata):
             + "; ir_scaffold="
             + str(mode_scaffold)
         )
+    if options.explain_fallback:
+        # Selected modes above are known inputs, not evidence that a fallback
+        # did or did not occur. This path has no recorded routing decision.
+        note += (
+            "; fallback_explain=unknown: "
+            "no fallback routing decision was recorded"
+        )
     span_json = ""
     location = ""
     if diagnostic_span is not None:
