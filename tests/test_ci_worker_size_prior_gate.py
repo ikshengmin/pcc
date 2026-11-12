@@ -2099,7 +2099,20 @@ def test_aarch64_regalloc_gates_keep_tree_and_execution_bounds(tmp_path, monkeyp
     source = ast.parse((ROOT / gate.REGALLOC_TEST).read_text())
     function = next(node for node in source.body if isinstance(node, ast.FunctionDef)
                     and node.name == "test_aarch64_call_result_executes_through_indexed_emission")
-    runs = [node for node in ast.walk(function) if isinstance(node, ast.Call)
+    # The native test delegates to the same emission helper as the host test.
+    # Bind the execution-enabled call before checking the helper's subprocess:
+    # merely finding a bounded run elsewhere would allow a no-op native gate.
+    assert len(function.body) == 1 and isinstance(function.body[0], ast.Expr)
+    call = function.body[0].value
+    assert isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+    assert call.func.id == "_assert_aarch64_call_result_indexed_emission"
+    assert [ast.unparse(arg) for arg in call.args] == ["tmp_path", "monkeypatch", "mode"]
+    assert len(call.keywords) == 1 and call.keywords[0].arg == "execute_native"
+    assert isinstance(call.keywords[0].value, ast.Constant)
+    assert call.keywords[0].value.value is True
+    helper = next(node for node in source.body if isinstance(node, ast.FunctionDef)
+                  and node.name == call.func.id)
+    runs = [node for node in ast.walk(helper) if isinstance(node, ast.Call)
             and ast.unparse(node.func) == "subprocess.run"]
     assert len(runs) == 1
     assert any(keyword.arg == "timeout" and isinstance(keyword.value, ast.Constant)
