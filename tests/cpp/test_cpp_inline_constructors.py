@@ -124,7 +124,7 @@ def test_tinyxml_strpair_original_constructor_body_binds_later_fields():
     # Local statics in an inline (in-class) body keep their explicit gate.
     ('struct S{S(){static int n=0;} };', 'cpp.unsupported.static-initialization-analysis'),
     ('struct S{S(){thread_local int n=0;} };', 'cpp.unsupported.syntax'),
-    ('struct S{S():p("same-address"){} const char*p;};', 'cpp.unsupported.syntax'),
+    # The string-literal original moved verbatim to test_cpp_string_literals' MOVED_ORIGINALS.
     ('struct S{S():n{1}{} int n;};', 'cpp.unsupported.constructor-list-initialization'),
     ('struct S{S():S(1){} S(int);};', 'cpp.unsupported.delegating-constructors'),
     ('struct S{using Self=S;S():Self(1){} S(int);};', 'cpp.unsupported.delegating-constructors'),

@@ -2504,8 +2504,12 @@ class CppParser:
                 isinstance(t, ReferenceType) for candidate in group.overloads for t in candidate.parameters):
             raise CppDiagnostic("cpp.unsupported.references", "reference calls in template replay require value-category deduction", coord)
         if any(contains_array(arg.dtype) for arg in arguments):
-            if (self.template_function is not None or self.instantiating_template
-                    or any(candidate.template_parameters for candidate in group.overloads)):
+            # A class template member calling a non-template function decays
+            # array arguments ([conv.array]); no deduction is involved.
+            member_context = (getattr(self, 'class_template_method', None) is not None
+                              or getattr(self, 'class_template_instance', None) is not None)
+            if (any(candidate.template_parameters for candidate in group.overloads)
+                    or (self.template_function is not None or self.instantiating_template) and not member_context):
                 raise CppDiagnostic("cpp.unsupported.array-templates", "array-related template deduction is not implemented", coord)
         arguments = [self._decay_array(argument) for argument in arguments]
         enum_arguments = []
@@ -2717,6 +2721,11 @@ class CppParser:
         if token.kind in ("CHAR_CONST", "WCHAR_CONST"):
             from pcc.frontends.cpp.character_literals import character_expression
             return character_expression(self, token)
+        if token.kind in ("STRING_LITERAL", "WSTRING_LITERAL"):
+            from pcc.frontends.cpp.string_literals import string_expression, unsupported
+            if token.kind != "STRING_LITERAL":
+                unsupported(token.coord, "prefixed and raw string literals require encoding semantics")
+            return string_expression(self, token)
         if token.kind.startswith("INT_CONST_"):
             if (token.kind == "INT_CONST_DEC" and len(token.value) > 1
                     and token.value.startswith("0")):
@@ -2969,6 +2978,10 @@ class CppParser:
         if kind == "literal":
             literal_kind, value, dtype, integer_value = pattern.value
             return self._literal(literal_kind, value, dtype, coord, integer_value)
+        if kind == "string-literal":
+            from pcc.frontends.cpp.string_literals import literal_expression
+            spelling, length = pattern.value
+            return literal_expression(spelling, length, coord)
         if kind in ("template-value", "constant-name"):
             argument = (bindings[pattern.value.index] if kind == "template-value" else pattern.value[1])
             # Project a checked typed value; bool/character/small integers need

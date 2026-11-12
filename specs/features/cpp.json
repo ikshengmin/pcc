@@ -390,6 +390,16 @@
       "id": "expr.static.cast",
       "title": "expr.static.cast",
       "url": "https://timsong-cpp.github.io/cppwp/n4659/expr.static.cast"
+    },
+    {
+      "id": "lex.string",
+      "title": "lex.string",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/lex.string"
+    },
+    {
+      "id": "conv.array",
+      "title": "conv.array",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/conv.array"
     }
   ],
   "features": [
@@ -1247,7 +1257,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:4b10fe45884ec89fd6b27aeeb13d9f114dd579996c25dd172bd62cf3abe29c60",
+        "source_revision": "sha256:58cd651f381feaea0b387f9671a871b56e75fd6ede146e66a8ea535dc1fb0d5e",
         "sources": [
           {
             "path": "pcc/frontends/cpp/classes.py",
@@ -1279,7 +1289,7 @@
           },
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "00856eb01cf62dab8aaecc35f26e8f249111e2c7b99fa838bc7b5a9ded684497"
+            "sha256": "955de51fb2d2f485e9ca4d05ec36526ac5a2fedb6fef91a9b564048d1131c172"
           },
           {
             "path": "pcc/frontends/cpp/references.py",
@@ -1475,7 +1485,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:5c82ce9f0e016416bb3c5e225f14a0af2456bd3050f910d6fb44de41afaa0df5",
+        "source_revision": "sha256:28e1c410bc1a3acb8a9b74c37142176170ac503e9f5e80dff1dc35f108d72bea",
         "sources": [
           {
             "path": "pcc/frontends/cpp/class_template_enums.py",
@@ -1491,7 +1501,7 @@
           },
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "00856eb01cf62dab8aaecc35f26e8f249111e2c7b99fa838bc7b5a9ded684497"
+            "sha256": "955de51fb2d2f485e9ca4d05ec36526ac5a2fedb6fef91a9b564048d1131c172"
           },
           {
             "path": "pcc/frontends/cpp/template_id_members.py",
@@ -3857,7 +3867,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:3b32e91082e1d35873ff7ae008ecce8c11014e45e44436a5b68547ba5367c717",
+        "source_revision": "sha256:d5e621abce9414862b2426775e82f2da6c0794e0ef38d475cd30713fdbbdaed0",
         "sources": [
           {
             "path": "pcc/frontends/cpp/class_template_members.py",
@@ -3881,7 +3891,7 @@
           },
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "00856eb01cf62dab8aaecc35f26e8f249111e2c7b99fa838bc7b5a9ded684497"
+            "sha256": "955de51fb2d2f485e9ca4d05ec36526ac5a2fedb6fef91a9b564048d1131c172"
           },
           {
             "path": "pcc/frontends/cpp/sema.py",
@@ -3913,7 +3923,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:87449cad8fc875b3a41a63e2a8cc9c01bdcd726396dc75eff5040b489d003e1c",
+        "source_revision": "sha256:2594e621d3a14076b9240fc6458195b6efffa38d91ad2383c199098214480ed0",
         "sources": [
           {
             "path": "pcc/frontends/c/evaluator/c_evaluator.py",
@@ -3933,7 +3943,7 @@
           },
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "00856eb01cf62dab8aaecc35f26e8f249111e2c7b99fa838bc7b5a9ded684497"
+            "sha256": "955de51fb2d2f485e9ca4d05ec36526ac5a2fedb6fef91a9b564048d1131c172"
           }
         ]
       }
@@ -3955,11 +3965,11 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:30a014ed695fe14ba0b7825a8ee9e913cb935a5f44f65befccf8f88987ebe6bc",
+        "source_revision": "sha256:f9755e85e00078d8178d3b0d4e44973814483436df5fe8695a74f49326db0ceb",
         "sources": [
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "00856eb01cf62dab8aaecc35f26e8f249111e2c7b99fa838bc7b5a9ded684497"
+            "sha256": "955de51fb2d2f485e9ca4d05ec36526ac5a2fedb6fef91a9b564048d1131c172"
           },
           {
             "path": "pcc/frontends/cpp/static_casts.py",
@@ -3967,6 +3977,54 @@
           }
         ]
       }
+    },
+    {
+      "id": "cpp.ordinary-string-literals",
+      "title": "Ordinary string literals as const char[N] lvalues",
+      "chapter_ids": [
+        "lex.string",
+        "conv.array"
+      ],
+      "scope": "An ordinary string literal (and a sequence of adjacent ones) is an lvalue of type const char[N] whose bytes are decoded in phase 6 before concatenation: simple, octal and hexadecimal escapes (each must fit an unsigned char), universal-character-names and non-basic source characters encoded as UTF-8. The decoded bytes are re-spelled with three-digit octal escapes for the shared C owner. Literals in class template member bodies are typed Patterns; a member may pass one to a non-template function, whose array argument decays without deduction. Prefixed (L, u, U, u8) and raw literals and conditionally-supported escapes remain explicit gaps. Source revision is sha256 of the sorted compact JSON source list.",
+      "tests": [
+        "tests/cpp/test_cpp_string_literals.py::test_string_literal_programs_compile_to_stable_artifacts",
+        "tests/cpp/test_cpp_string_literals.py::test_string_literal_programs_execute_against_real_cpp17_reference",
+        "tests/cpp/test_cpp_string_literals.py::test_moved_string_literal_originals_are_positive",
+        "tests/cpp/test_cpp_string_literals.py::test_literal_bytes_are_spelled_exactly",
+        "tests/cpp/test_cpp_string_literals.py::test_unmodeled_or_invalid_string_literals_are_explicit"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:7735df78a21138f06107a64757b26482cc45f3b9483c3391bc01dcd12cb44746",
+        "sources": [
+          {
+            "path": "pcc/frontends/cpp/parser.py",
+            "sha256": "955de51fb2d2f485e9ca4d05ec36526ac5a2fedb6fef91a9b564048d1131c172"
+          },
+          {
+            "path": "pcc/frontends/cpp/string_literals.py",
+            "sha256": "72f132e08fc56443964818b051d9bb855625326634d6402e0ec86c5901ad6c4d"
+          }
+        ]
+      }
+    },
+    {
+      "id": "cpp.string-literals-remaining",
+      "title": "String literals \u2014 remaining capability boundary",
+      "chapter_ids": [
+        "lex.string"
+      ],
+      "scope": "Only inputs routed to cpp.unsupported.string-literals in the pinned frontend (prefixed and raw literals, conditionally-supported escapes); ordinary literals are cpp.ordinary-string-literals.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/cpp/test_cpp_string_literals.py"
+      ],
+      "diagnostics": [
+        "cpp.unsupported.string-literals"
+      ],
+      "evidence": []
     }
   ],
   "diagnostics": {
@@ -4930,6 +4988,14 @@
         "source": {
           "path": "pcc/frontends/cpp/parser.py",
           "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
+        }
+      },
+      {
+        "code": "cpp.unsupported.string-literals",
+        "feature_id": "cpp.string-literals-remaining",
+        "source": {
+          "path": "pcc/frontends/cpp/string_literals.py",
+          "sha256": "72f132e08fc56443964818b051d9bb855625326634d6402e0ec86c5901ad6c4d"
         }
       },
       {

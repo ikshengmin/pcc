@@ -125,7 +125,7 @@ def test_inline_method_original_artifacts_are_byte_stable(owned_only,name,units)
     ('struct S{static int f()const{return 1;}};','cpp.static-member-cv'),
     ('struct S{int f(){static int n=0;return n;}};','cpp.unsupported.static-initialization-analysis'),
     ('struct S{int f(){thread_local int n=0;return n;}};','cpp.unsupported.syntax'),
-    ('struct S{const char*f(){return "identity";}};','cpp.unsupported.syntax'),
+    # The string-literal original moved verbatim to test_cpp_string_literals' MOVED_ORIGINALS.
     ('struct S{int f()noexcept{return 42;}};','cpp.unsupported.exceptions'),
     # Exact original is preserved in test_cpp_variadic_members.PROGRAMS.
 ))
