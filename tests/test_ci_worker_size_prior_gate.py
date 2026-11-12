@@ -1385,12 +1385,12 @@ def workflow_native_platforms(body, *, legacy):
 
 
 def assert_workflow_marker_permissions(text):
-    # Global scope is contents-read only. The planner and two same-run artifact
+    # Global scope is contents-read only. The planner and three same-run artifact
     # consumers alone add Actions read; no original producer gains permissions.
     global_block = re.search(r"(?m)^permissions:\n((?:  [^\n]*\n)+)", text)
     assert global_block is not None and global_block.group(1) == "  contents: read\n"
-    assert len(re.findall(r"(?m)^\s*permissions:[^\n]*", text)) == 4
-    for name in ("validation-plan", "shared-source-validation", "pytest-markers"):
+    assert len(re.findall(r"(?m)^\s*permissions:[^\n]*", text)) == 5
+    for name in ("validation-plan", "shared-source-validation", "source-platform-coverage", "pytest-markers"):
         body = workflow_job(text, name)
         permission_block = re.search(r"(?m)^    permissions:\n((?:      [^\n]*\n)+)", body)
         assert permission_block is not None
@@ -1403,6 +1403,8 @@ def assert_workflow_job_budgets(text):
         "validation-plan": 5,
         "source-validation": 15,
         "shared-source-validation": 15,
+        "source-platform-validation": 15,
+        "source-platform-coverage": 15,
         "numpy-source-frontier": 5,
         "orjson-source-frontier": 5,
         "ci-plan": 5,

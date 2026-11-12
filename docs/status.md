@@ -7,6 +7,19 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
 
+## Source-platform CI coverage (execution pending)
+
+The source validation workflow now declares exact node/platform owners, adding
+a real macOS arm64 owner for the unchanged Darwin errno SDK reference test.
+The final coverage job joins complete raw phase/subtest evidence from every
+required owner at the same repository, SHA, run and attempt. Missing owners,
+prerequisites, tool/source drift or incomplete phases remain failures. The
+existing six workers, 90-second/1-GiB guards and all original gates remain.
+This batch was source-reviewed against `cbba307938673315092555d44927afbf04ff14a4`;
+local execution is UNRUN under CI-only instructions. Remote CI must qualify the
+new revision. This does not qualify Stage2 time/RSS <= Stage1, native fixed point,
+or shared-runtime Mac/QPS acceptance. See [CI validation](ci-validation.md).
+
 ## C frontend: GNU extensions and frontend speed (local Mac, 2026-11-13)
 
 Commits `04ffd12e` (asm), `2ccee683` and `3bfde933` (attributes), `1dc8792d`,

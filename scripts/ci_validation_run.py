@@ -17,6 +17,11 @@ import subprocess
 import sys
 import tomllib
 
+try:
+    from . import ci_validation_owners as owners
+except ImportError:
+    import ci_validation_owners as owners
+
 ROOT = Path(__file__).resolve().parents[1]
 LANES = ("ordinary", "integration", "reference")
 TIMEOUT = 90
@@ -248,7 +253,7 @@ def guarded_command(directory, command):
 
 
 def pytest_command(directory, files, *, collect=False):
-    command = [sys.executable, "-m", "pytest", "-vv", "--tb=short", "-m", "",
+    command = [sys.executable, "-m", "pytest", "-x", "--maxfail=0", "-vv", "--tb=short", "-m", "",
                "-p", "scripts.ci_validation_inventory", "-p", "scripts.pytest_live_report",
                "--pcc-live-report", str(directory / "live.jsonl"), "--pcc-live-subtests",
                "--basetemp", str(directory / "tmp"), "--junitxml", str(directory / "junit.xml")]
@@ -272,7 +277,11 @@ def identity():
                 omitted.append(name)
             else:
                 hashes[name] = hashlib.sha256(path.read_bytes()).hexdigest()
-    return {"sha": sha, "files": hashes, "sparse_omissions": omitted}
+    result = {"sha": sha, "files": hashes, "sparse_omissions": omitted}
+    if (ROOT / owners.MANIFEST).exists():
+        manifest, digest = owners.read_manifest(ROOT)
+        result.update(ownership_manifest=manifest, ownership_manifest_sha256=digest)
+    return result
 
 
 def run_guard(directory, command, environment, original):
@@ -430,6 +439,8 @@ def campaign_status(receipt):
     if (receipt["unrun"] or receipt.get("unattempted") or receipt.get("collection_pending_modules") or
             any(status != "PASS" for status in statuses)):
         return "INCOMPLETE_UNRUN"
+    if receipt.get("coverage", {}).get("transfers"):
+        return "PLATFORM_COVERAGE_PENDING"
     return "NOT_APPLICABLE" if not receipt["lane_count"] else "PASS"
 
 
@@ -442,12 +453,21 @@ def run(args):
     tool_receipt_sha = None
     consumed_rust_receipt = None
     native_inputs = None
+    manifest = manifest_digest = required_tools = None
+    platform = getattr(args, "platform", None)
     receipt = {"status": "RUNNING", "domain": args.domain, "lane": args.lane,
                "claim": "host-PCC bounded source tests; not native pcc1 or whole-project qualification",
                "workers": 6, "dist": "loadgroup", "timeout_s": TIMEOUT, "rss_bytes": RSS,
                "batches": [], "unrun": [], "unattempted": [],
                "collections": [], "collection_pending_modules": []}
     try:
+        if platform is not None:
+            context, host = owners.host_context(platform)
+            manifest, manifest_digest = owners.read_manifest(ROOT)
+            receipt["coverage"] = {"schema": 1, "context": context, "host": host,
+                                   "manifest_sha256": manifest_digest,
+                                   "scope": "domain" if platform == manifest["default_platform"] else "owned-modules"}
+            save(args.out / "ownership-manifest.json", manifest)
         config = tomllib.loads((ROOT / "pyproject.toml").read_text())
         resources = resource_exclusion_groups(config, args.domain)
         receipt["group_policy"] = {name: "resource-exclusion-only" for name in resources}
@@ -457,6 +477,9 @@ def run(args):
         original = identity()
         if original["sha"] != os.environ.get("GITHUB_SHA"):
             raise ValueError("source SHA differs from workflow revision")
+        if manifest is not None and (original.get("ownership_manifest") != manifest or
+                original.get("ownership_manifest_sha256") != manifest_digest):
+            raise ValueError("source identity does not bind frozen ownership manifest")
         save(args.out / "source-before.json", original)
         native_updates = {}
         native_bundle = getattr(args, "stage1_bundle", None)
@@ -487,7 +510,8 @@ def run(args):
             save(args.out / "consumed-rust-receipt-before.json", consumed_rust_receipt)
         save(args.out / "tools-setup-receipt.json", tool_receipt)
         save(args.out / "tools-before.json", verify_tool_receipt(tool_receipt))
-        files = modules(args.domain)
+        files = (owners.owner_modules(manifest, args.domain, args.lane, platform)
+                 if manifest is not None and platform != manifest["default_platform"] else modules(args.domain))
         save(args.out / "modules.json", files)
         env = dict(os.environ, PCC_NO_AUTO_PCC1="1", PCC_TEST_NO_NATIVE_PROVISIONING="1",
                    PYTEST_ADDOPTS="", PYTHONDONTWRITEBYTECODE="1", PCC_PYTEST_AUTO_CLEAN="0",
@@ -524,9 +548,26 @@ def run(args):
         env.pop("PCC_VALIDATION_COLLECTION", None)
         receipt["raw_union_count"] = len(rows)
         receipt["lane_count"] = sum(row["lane"] == args.lane for row in rows)
+        planner_rows = rows
+        local_ids = {row["canonical_nodeid"] for row in rows if row["lane"] == args.lane}
+        if manifest is not None:
+            partition = owners.partition(rows, manifest, args.domain, args.lane, platform,
+                                         complete=platform == manifest["default_platform"])
+            receipt["coverage"].update(partition)
+            receipt["transfers"] = [dict(row, status="TRANSFER_PENDING") for row in partition["transfers"]]
+            local_ids = set(partition["local_nodeids"])
+            receipt["lane_count"] = len(local_ids)
+            # Only the planner copy changes selection. Raw collection and worker
+            # witnesses retain the repository's actual gate decisions unchanged.
+            planner_rows = [dict(row, selected_by_repository=(row["selected_by_repository"] and
+                            row["canonical_nodeid"] in local_ids)) for row in rows]
+            required_tools = owners.required_tool_bindings(partition["obligations"], platform, tool_receipt)
+            save(args.out / "required-tools-before.json", required_tools)
+            if platform != manifest["default_platform"]:
+                resources = tuple(group for group in resources if any(group in row["groups"] for row in rows))
         receipt["unrun"] = [dict(row, status="UNRUN_PREREQUISITE") for row in rows
-                            if row["lane"] == args.lane and not row["selected_by_repository"]]
-        plan = batches(rows, args.lane, resource_groups=resources)
+                            if row["canonical_nodeid"] in local_ids and not row["selected_by_repository"]]
+        plan = batches(planner_rows, args.lane, resource_groups=resources)
         receipt["unattempted"] = [row["canonical_nodeid"] for batch in plan for row in batch]
         save(args.out / "batch-plan.json", [[row["canonical_nodeid"] for row in batch] for batch in plan])
         for index, batch in enumerate(plan):
@@ -554,7 +595,10 @@ def run(args):
                 raise ValueError(reason + "; no later batch admitted")
             # Ordinary assertion/fixture failures stay FAIL, but do not suppress
             # independent frozen batches. Resource/session anomalies stop here.
-        save(args.out / "source-after.json", identity())
+        final_source = identity()
+        save(args.out / "source-after.json", final_source)
+        if final_source != original:
+            raise ValueError("source identity changed after campaign")
         receipt["status"] = campaign_status(receipt)
     except KeyboardInterrupt as error:
         # Preserve interruption semantics while the existing finally persists
@@ -564,6 +608,18 @@ def run(args):
     except Exception as error:
         receipt.update(status="INFRASTRUCTURE_OR_RESOURCE_FAILURE", error=type(error).__name__ + ": " + str(error))
     finally:
+        if manifest is not None:
+            try:
+                if owners.read_manifest(ROOT) != (manifest, manifest_digest):
+                    raise ValueError("ownership manifest changed during campaign")
+                if required_tools is not None:
+                    actual = owners.required_tool_bindings(receipt["coverage"]["obligations"], platform, tool_receipt)
+                    save(args.out / "required-tools-after.json", actual)
+                    if actual != required_tools:
+                        raise ValueError("required PATH tool bindings changed during campaign")
+            except Exception as error:
+                receipt.update(status="INFRASTRUCTURE_OR_RESOURCE_FAILURE",
+                               ownership_closure_error=type(error).__name__ + ": " + str(error))
         if native_inputs is not None:
             try:
                 save(args.out / "native-inputs-after.json",
@@ -591,7 +647,7 @@ def run(args):
                 stream.write(f"## {args.domain} / {args.lane}: {receipt['status']}\n\n"
                              f"Raw union: {receipt.get('raw_union_count', 'UNRUN')}; lane: {receipt.get('lane_count', 'UNRUN')}; "
                              f"prerequisite UNRUN: {len(receipt['unrun'])}.\n")
-    return 0 if receipt["status"] in {"PASS", "NOT_APPLICABLE"} else 1
+    return 0 if receipt["status"] in {"PASS", "NOT_APPLICABLE", "PLATFORM_COVERAGE_PENDING"} else 1
 
 
 def main():
@@ -599,6 +655,8 @@ def main():
     parser.add_argument("--domain", required=True, choices=("cpp", "rust", "java", "go", "shared", "ci-contracts"))
     parser.add_argument("--lane", required=True, choices=LANES)
     parser.add_argument("--out", required=True, type=Path)
+    parser.add_argument("--platform", choices=tuple(owners.PLATFORMS),
+                        help="Explicit source coverage producer; final reconciliation is required")
     parser.add_argument("--stage1-bundle", type=Path,
                         help="Same-run Linux x86-64 Stage1 bundle required by native-dependent source lanes")
     return run(parser.parse_args())

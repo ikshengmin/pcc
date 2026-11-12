@@ -111,3 +111,52 @@ The bounded source checkout excludes only `projects/nginx-1.28.3/`, preventing
 an unrelated root-conftest configuration warmup. All other original projects and
 frontend fixtures remain present. Sparse omissions are named in the source
 manifest, not mistaken for deleted source. Original legacy checkouts are intact.
+
+## Exact source-platform coverage
+
+`scripts/data/ci_validation_owners.json` assigns exact canonical source nodes to
+host platforms independently of the reference classification. Linux x86_64 is
+the default. Explicit platform lists require every listed owner, never an
+alternative fallback. The first override assigns the unchanged Darwin errno SDK
+reference node to macOS arm64 (`macos-15`). Its real PATH `clang` invocation and
+bytes are attested alongside the existing C++ `g++` oracle. This is external
+reference evidence, not owned native execution or evidence from a user's Mac.
+Unknown prerequisite skips do not create owners or waive tests.
+
+The planner retains every original domain/lane campaign and native Stage1
+producer, adding only the required nondefault platform campaigns. A C++ change
+therefore includes its complete three Linux lanes plus the exact macOS reference
+obligation; a Go-only change does not invent a macOS campaign. Both the plan and
+receipts bind the tracked ownership-manifest digest and exact repository, source
+SHA, workflow run and attempt. Source producers attest their actual host and
+preserve the existing frozen source/tool checks, six workers, guarded batches,
+90-second/1-GiB limits and 15-minute job envelopes. The macOS SDK reference needs
+no native wheel or runtime build. Its inventory retains complete original module
+metadata before selecting only the explicitly owned nodes.
+
+Nonlocal obligations remain `TRANSFER_PENDING`. A locally complete campaign
+with such transfers is `PLATFORM_COVERAGE_PENDING`, not aggregate PASS. The
+required `source-platform-coverage` job runs after all planned source producers,
+including when planning or producers fail, skip or cancel. It downloads the exact plan and
+unmerged compact `coverage-*` producer artifacts, reconstructs complete phase/subtest outcomes and
+joins every required node/platform obligation. Missing downloads still reach the
+reconciler and produce failing aggregate evidence. Only download steps may
+continue after errors; reconciliation itself may not. Absent, stale, duplicate,
+wrong-host, skipped or failed evidence remains incomplete or failing. A passing
+wheel/bootstrap cannot satisfy missing source execution. The aggregate receipt
+is retained on failure as well as success. These are CI execution contracts;
+source review alone does not establish that the campaigns passed.
+
+Full `source-*` artifacts retain original logs and raw diagnostics. The compact
+coverage artifacts contain only campaign JSON, collection and batch selection,
+process-tree result JSON, live node reports, outcomes and worker inventories.
+They omit test binaries and reference caches, so the final join does not need to
+download those potentially large outputs. Compact files retain their original
+relative paths; evidence is not rewritten to manufacture aggregate success.
+Required tool version streams also retain their original bytes in base64 inside
+the tool receipt; reconciliation verifies the raw hashes and displayed text.
+Node completeness is attested by successful complete-module collection and six
+matching execution inventories, not inferred independently from Python syntax.
+Native input admission remains the source producer's before/after validation of
+the actual Stage1 bundle, runtime provenance and same-run lease. The aggregate
+checks those frozen admission receipts without reopening another runner's files.

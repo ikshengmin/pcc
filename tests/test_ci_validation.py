@@ -359,7 +359,7 @@ def test_shared_scope_refreshes_new_elf_macho_odr_modules_without_old_counts():
 
 def test_guard_keeps_six_workers_90_seconds_1gib_without_injected_fail_fast(tmp_path):
     command = run.pytest_command(tmp_path, ["tests/example.py"])
-    assert "-x" not in command and not any(arg.startswith("--maxfail") for arg in command)
+    assert "-x" in command and "--maxfail=0" in command
     assert "-n0" not in command and "-n" not in command
     assert "--pcc-live-subtests" in command
     collection = run.pytest_command(tmp_path, ["tests/example.py"], collect=True)
@@ -1006,7 +1006,7 @@ def test_live_report_records_actual_interrupt_internalerror_worker_and_stop_evid
 
 def test_rust_ci_installs_real_pinned_host_and_cross_std_before_attestation():
     workflow = WORKFLOW.read_text()
-    job = workflow.split('\n  source-validation:\n', 1)[1].split('\n  ci-plan:\n', 1)[0]
+    job = workflow.split('\n  source-validation:\n', 1)[1].split('\n  shared-source-validation:\n', 1)[0]
     assert 'rustup toolchain install 1.91.1 --profile minimal' in job
     assert '--target x86_64-unknown-linux-gnu --target aarch64-apple-darwin' in job
     assert job.index('rustup toolchain install') < job.index('scripts/ci_validation_tools.py') < job.index('scripts/ci_validation_run.py')
@@ -1061,6 +1061,11 @@ def test_tool_version_observation_retains_both_streams_and_actual_exit(tmp_path,
     assert result["command"] == ["/tools/" + name, *arguments]
     assert result["status"] == "COMPLETE" and result["exit_code"] == 0
     assert result["stdout"] == stdout.decode() and result["stderr"] == stderr.decode()
+    import base64
+    import hashlib
+    for stream, data in (("stdout", stdout), ("stderr", stderr)):
+        assert base64.b64decode(result[stream + "_base64"], validate=True) == data
+        assert result[stream + "_sha256"] == hashlib.sha256(data).hexdigest()
     assert (tmp_path / "version/version.stdout.bin").read_bytes() == stdout
     assert (tmp_path / "version/version.stderr.bin").read_bytes() == stderr
     assert calls[0][1] == {"capture_output": True, "timeout": 15, "check": False}

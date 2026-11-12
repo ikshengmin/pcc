@@ -14,6 +14,11 @@ import subprocess
 import urllib.parse
 import urllib.request
 
+try:
+    from .ci_validation_owners import additional_campaigns, read_manifest
+except ImportError:
+    from ci_validation_owners import additional_campaigns, read_manifest
+
 ROOT = Path(__file__).resolve().parents[1]
 LANGUAGES = ("cpp", "rust", "java", "go")
 LANES = ("ordinary", "integration", "reference")
@@ -52,7 +57,7 @@ def dispatch_full_chain(inputs):
     return requested
 
 
-def select(changes, *, scope="auto", before=None, after=None, full_chain=False):
+def select(changes, *, scope="auto", before=None, after=None, full_chain=False, ownership_manifest=None):
     if scope not in SCOPES:
         raise ValueError("unknown validation scope")
     if type(full_chain) is not bool:
@@ -105,6 +110,8 @@ def select(changes, *, scope="auto", before=None, after=None, full_chain=False):
         domains.update((*LANGUAGES, "shared", "ci-contracts"))
     # Explicit manual selection may add obligations, never subtract changes.
     matrix = [{"domain": domain, "lane": lane} for domain in sorted(domains) for lane in LANES]
+    manifest, manifest_digest = read_manifest(ROOT) if ownership_manifest is None else ownership_manifest
+    platform_campaigns = additional_campaigns(sorted(domains), manifest)
     independent = [row for row in matrix if not requires_native_inputs(**row)]
     native = [row for row in matrix if requires_native_inputs(**row)]
     # A frontend project may require Stage1 without owning legacy qualification.
@@ -114,6 +121,8 @@ def select(changes, *, scope="auto", before=None, after=None, full_chain=False):
             "full_chain": full_chain, "changes": reasons, "domains": sorted(domains), "legacy": legacy,
             "cpp_platform": "cpp" in domains, "source": bool(matrix), "matrix": {"include": matrix},
             "source_independent": bool(independent), "matrix_independent": {"include": independent},
+            "source_platform": bool(platform_campaigns), "matrix_platform": {"include": platform_campaigns},
+            "ownership_manifest_sha256": manifest_digest,
             "source_native": bool(native), "matrix_native": {"include": native},
             "native_stage1": bool(producers), "matrix_native_stage1": {"include": producers}}
 
@@ -219,6 +228,9 @@ def main():
         plan["base_error"] = str(error)
     else:
         plan = select(changes, scope=scope, before=before, after=after, full_chain=full_chain)
+    plan["context"] = {"repository": os.environ["GITHUB_REPOSITORY"], "sha": after,
+                       "run_id": os.environ["GITHUB_RUN_ID"],
+                       "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"]}
     plan["event_before_not_coverage_base"] = event.get("before")
     plan["qualified_baseline"] = baseline
     if baseline_error:
@@ -228,7 +240,7 @@ def main():
     with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
         for key in ("legacy", "source", "cpp_platform", "matrix",
                     "source_independent", "matrix_independent", "source_native", "matrix_native",
-                    "native_stage1", "matrix_native_stage1"):
+                    "native_stage1", "matrix_native_stage1", "source_platform", "matrix_platform"):
             output.write(key + "=" + json.dumps(plan[key], separators=(",", ":")) + "\n")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:

@@ -251,6 +251,7 @@ def test_unified_workflow_covers_both_groups_on_four_native_platforms(tmp_path, 
     assert job_ids == expected_jobs | {
         'ci-plan', 'pytest-markers', 'validation-plan', 'source-validation',
         'shared-source-validation', 'numpy-source-frontier', 'orjson-source-frontier', 'cpp17',
+        'source-platform-validation', 'source-platform-coverage',
     }
     predicate = "    if: ${{ needs.validation-plan.outputs.legacy == 'true' && (!inputs.full_chain || inputs.pytest_selection == 'not integration') }}"
     for name in expected_jobs:

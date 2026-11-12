@@ -197,7 +197,7 @@ def test_workflow_consumes_same_run_attempt_bundle_only_in_native_job():
     root = Path(__file__).resolve().parents[1]
     workflow = (root / '.github/workflows/pcc1-package-parity.yml').read_text()
     independent = workflow.split('\n  source-validation:\n', 1)[1].split('\n  shared-source-validation:\n', 1)[0]
-    consumer = workflow.split('\n  shared-source-validation:\n', 1)[1].split('\n  numpy-source-frontier:\n', 1)[0]
+    consumer = re.split(r'\n  [a-zA-Z0-9_-]+:\n', workflow.split('\n  shared-source-validation:\n', 1)[1], maxsplit=1)[0]
     assert 'needs: validation-plan' in independent
     assert 'other-platform-native-wheel' not in independent
     assert 'actions/download-artifact' not in independent and '--stage1-bundle' not in independent
@@ -217,7 +217,7 @@ def test_workflow_consumes_same_run_attempt_bundle_only_in_native_job():
         assert 'timeout-minutes: 15' in job and 'continue-on-error' not in job
         assert job.count('scripts/ci_validation_run.py') == 1
         assert 'name: Source / ${{ matrix.domain }} / ${{ matrix.lane }}' in job
-        assert 'name: source-${{ matrix.domain }}-${{ matrix.lane }}-${{ github.sha }}-${{ github.run_attempt }}' in job
+        assert 'name: source-${{ matrix.domain }}-${{ matrix.lane }}-linux-x86_64-${{ github.sha }}-${{ github.run_attempt }}' in job
         assert '${{ runner.temp }}/source-validation' in job
         assert '${{ runner.temp }}/reference-tools' in job
     assert 'matrix: ${{ steps.select.outputs.matrix }}' in workflow

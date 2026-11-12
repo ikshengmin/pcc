@@ -7,6 +7,7 @@ options and target. Absent target libcore/libstd is explicitly UNRUN.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -40,6 +41,8 @@ def version_observation(name, invocation, directory):
     (directory / "version.stdout.bin").write_bytes(stdout)
     (directory / "version.stderr.bin").write_bytes(stderr)
     observation.update(stdout=stdout.decode("utf-8", "replace"), stderr=stderr.decode("utf-8", "replace"),
+                       stdout_base64=base64.b64encode(stdout).decode("ascii"),
+                       stderr_base64=base64.b64encode(stderr).decode("ascii"),
                        stdout_sha256=hashlib.sha256(stdout).hexdigest(), stderr_sha256=hashlib.sha256(stderr).hexdigest())
     return observation
 
@@ -93,7 +96,13 @@ def verify_tool_receipt(receipt):
                 verified.append({"tool": name, **verify_rust_installation(row)})
             continue
         if "invocation" not in row:
+            if row.get("path_lookup") and shutil.which(name) is not None:
+                raise ValueError("absent audited PATH tool appeared: " + name)
             continue  # Explicit absent prerequisite, never an admitted tool.
+        # Some original SDK tests invoke clang directly through PATH, not
+        # PCC_CPP_ORACLE. Bind the exact lookup as well as the executable bytes.
+        if row.get("path_lookup") and shutil.which(name) != row["invocation"]:
+            raise ValueError("audited tool PATH invocation changed: " + name)
         path = Path(row["invocation"])
         if str(path.resolve(strict=True)) != row["resolved"] or digest(path) != row["sha256"]:
             raise ValueError("audited tool identity changed: " + name)
@@ -149,7 +158,7 @@ def main():
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=False)
     receipt, environment = {}, {}
-    tools = {"cpp": ("g++",), "java": ("java", "javac"), "go": ("go",),
+    tools = {"cpp": ("g++", "clang"), "java": ("java", "javac"), "go": ("go",),
              "rust": ("rustc", "cc"), "shared": ("cc", "as", "ld", "clang", "rustc"),
              "ci-contracts": ()}[args.domain]
     for name in tools:
@@ -162,14 +171,16 @@ def main():
             receipt[name] = {"status": "UNRUN_PREREQUISITE", "reason": str(error)}
             continue
         if not invocation:
-            receipt[name] = {"status": "UNRUN_PREREQUISITE", "reason": "tool absent from runner PATH"}
+            receipt[name] = {"status": "UNRUN_PREREQUISITE", "reason": "tool absent from runner PATH",
+                             "path_lookup": name == "clang"}
             continue
         path = Path(invocation)
         observation = version_observation(name, str(path), args.out / name)
         available = observation["status"] == "COMPLETE" and observation["exit_code"] == 0
         receipt[name] = {"status": "AVAILABLE" if available else "UNRUN_PREREQUISITE",
                          "invocation": str(path), "resolved": str(path.resolve()),
-                         "sha256": digest(path), "version_observation": observation}
+                         "sha256": digest(path), "version_observation": observation,
+                         "path_lookup": name == "clang"}
     if "g++" in receipt and receipt["g++"]["status"] == "AVAILABLE":
         environment["PCC_CPP_ORACLE"] = receipt["g++"]["invocation"]
     if "go" in receipt and receipt["go"]["status"] == "AVAILABLE":

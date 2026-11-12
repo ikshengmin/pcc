@@ -608,6 +608,8 @@ jobs:
     outputs:
       legacy: ${{ steps.select.outputs.legacy }}
       source: ${{ steps.select.outputs.source }}
+      source_platform: ${{ steps.select.outputs.source_platform }}
+      matrix_platform: ${{ steps.select.outputs.matrix_platform }}
       cpp_platform: ${{ steps.select.outputs.cpp_platform }}
       matrix: ${{ steps.select.outputs.matrix }}
       source_independent: ${{ steps.select.outputs.source_independent }}
@@ -700,17 +702,35 @@ jobs:
       - name: Bind actual available reference tools and Rust target sysroot
         run: uv run --frozen --no-sync python scripts/ci_validation_tools.py --domain "${{ matrix.domain }}" --out "$RUNNER_TEMP/reference-tools"
       - name: Complete ordinary, integration or external-reference partition
-        run: uv run --frozen --no-sync python scripts/ci_validation_run.py --domain "${{ matrix.domain }}" --lane "${{ matrix.lane }}" --out "$RUNNER_TEMP/source-validation"
+        run: uv run --frozen --no-sync python scripts/ci_validation_run.py --platform linux-x86_64 --domain "${{ matrix.domain }}" --lane "${{ matrix.lane }}" --out "$RUNNER_TEMP/source-validation"
       - name: Retain raw inventory, prerequisite UNRUN, failures and resource receipts
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: source-${{ matrix.domain }}-${{ matrix.lane }}-${{ github.sha }}-${{ github.run_attempt }}
+          name: source-${{ matrix.domain }}-${{ matrix.lane }}-linux-x86_64-${{ github.sha }}-${{ github.run_attempt }}
           retention-days: 7
           if-no-files-found: warn
           path: |
             ${{ runner.temp }}/source-validation
             ${{ runner.temp }}/reference-tools
+      - name: Retain compact source coverage evidence without test binaries
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: coverage-${{ matrix.domain }}-${{ matrix.lane }}-linux-x86_64-${{ github.sha }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/source-validation/*.json
+            ${{ runner.temp }}/source-validation/collection-*/modules.json
+            ${{ runner.temp }}/source-validation/collection-*/result.json
+            ${{ runner.temp }}/source-validation/collection-*/live.jsonl
+            ${{ runner.temp }}/source-validation/collection-*/inventory/*.json
+            ${{ runner.temp }}/source-validation/batch-*/selection.json
+            ${{ runner.temp }}/source-validation/batch-*/result.json
+            ${{ runner.temp }}/source-validation/batch-*/live.jsonl
+            ${{ runner.temp }}/source-validation/batch-*/outcomes.json
+            ${{ runner.temp }}/source-validation/batch-*/inventory/*.json
 
   shared-source-validation:
     name: Source / ${{ matrix.domain }} / ${{ matrix.lane }}
@@ -764,17 +784,145 @@ jobs:
           name: stage1-native-linux-x86_64-${{ github.sha }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/source-native-input
       - name: Complete ordinary, integration or external-reference partition
-        run: uv run --frozen --no-sync python scripts/ci_validation_run.py --domain "${{ matrix.domain }}" --lane "${{ matrix.lane }}" --stage1-bundle "$RUNNER_TEMP/source-native-input" --out "$RUNNER_TEMP/source-validation"
+        run: uv run --frozen --no-sync python scripts/ci_validation_run.py --platform linux-x86_64 --domain "${{ matrix.domain }}" --lane "${{ matrix.lane }}" --stage1-bundle "$RUNNER_TEMP/source-native-input" --out "$RUNNER_TEMP/source-validation"
       - name: Retain raw inventory, prerequisite UNRUN, failures and resource receipts
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: source-${{ matrix.domain }}-${{ matrix.lane }}-${{ github.sha }}-${{ github.run_attempt }}
+          name: source-${{ matrix.domain }}-${{ matrix.lane }}-linux-x86_64-${{ github.sha }}-${{ github.run_attempt }}
           retention-days: 7
           if-no-files-found: warn
           path: |
             ${{ runner.temp }}/source-validation
             ${{ runner.temp }}/reference-tools
+      - name: Retain compact source coverage evidence without test binaries
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: coverage-${{ matrix.domain }}-${{ matrix.lane }}-linux-x86_64-${{ github.sha }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/source-validation/*.json
+            ${{ runner.temp }}/source-validation/collection-*/modules.json
+            ${{ runner.temp }}/source-validation/collection-*/result.json
+            ${{ runner.temp }}/source-validation/collection-*/live.jsonl
+            ${{ runner.temp }}/source-validation/collection-*/inventory/*.json
+            ${{ runner.temp }}/source-validation/batch-*/selection.json
+            ${{ runner.temp }}/source-validation/batch-*/result.json
+            ${{ runner.temp }}/source-validation/batch-*/live.jsonl
+            ${{ runner.temp }}/source-validation/batch-*/outcomes.json
+            ${{ runner.temp }}/source-validation/batch-*/inventory/*.json
+
+  source-platform-validation:
+    name: Source / ${{ matrix.domain }} / ${{ matrix.lane }} / ${{ matrix.platform }}
+    needs: validation-plan
+    if: ${{ needs.validation-plan.outputs.source_platform == 'true' }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.validation-plan.outputs.matrix_platform) }}
+    env:
+      PCC_NO_AUTO_PCC1: "1"
+      PCC_TEST_NO_NATIVE_PROVISIONING: "1"
+      PCC_PYTEST_AUTO_CLEAN: "0"
+      PYTEST_ADDOPTS: ""
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/projects/nginx-1.28.3/
+      - uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+      - uses: astral-sh/setup-uv@v7
+      - name: Install frozen host test dependencies only
+        run: uv sync --frozen --dev --no-install-project
+      - name: Bind actual PATH clang and available reference tools
+        run: uv run --frozen --no-sync python scripts/ci_validation_tools.py --domain "${{ matrix.domain }}" --out "$RUNNER_TEMP/reference-tools"
+      - name: Execute exact source-platform ownership partition
+        run: uv run --frozen --no-sync python scripts/ci_validation_run.py --platform "${{ matrix.platform }}" --domain "${{ matrix.domain }}" --lane "${{ matrix.lane }}" --out "$RUNNER_TEMP/source-validation"
+      - name: Retain original node outcomes and platform evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: source-${{ matrix.domain }}-${{ matrix.lane }}-${{ matrix.platform }}-${{ github.sha }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/source-validation
+            ${{ runner.temp }}/reference-tools
+      - name: Retain compact source coverage evidence without test binaries
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: coverage-${{ matrix.domain }}-${{ matrix.lane }}-${{ matrix.platform }}-${{ github.sha }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/source-validation/*.json
+            ${{ runner.temp }}/source-validation/collection-*/modules.json
+            ${{ runner.temp }}/source-validation/collection-*/result.json
+            ${{ runner.temp }}/source-validation/collection-*/live.jsonl
+            ${{ runner.temp }}/source-validation/collection-*/inventory/*.json
+            ${{ runner.temp }}/source-validation/batch-*/selection.json
+            ${{ runner.temp }}/source-validation/batch-*/result.json
+            ${{ runner.temp }}/source-validation/batch-*/live.jsonl
+            ${{ runner.temp }}/source-validation/batch-*/outcomes.json
+            ${{ runner.temp }}/source-validation/batch-*/inventory/*.json
+
+  source-platform-coverage:
+    name: Reconcile every planned source-platform obligation
+    needs: [validation-plan, source-validation, shared-source-validation, source-platform-validation]
+    # Missing, failed, skipped or cancelled producers must not skip this gate.
+    if: ${{ always() && (needs.validation-plan.result != 'success' || needs.validation-plan.outputs.source == 'true') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/projects/nginx-1.28.3/
+      - uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+      - name: Download authoritative exact-source plan
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          name: validation-plan-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/source-coverage-plan
+      - name: Download every source producer without merging directories
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          pattern: coverage-*-${{ github.sha }}-${{ github.run_attempt }}
+          merge-multiple: false
+          path: ${{ runner.temp }}/source-coverage-artifacts
+      - name: Fail closed on unresolved source-platform coverage
+        if: always()
+        run: python scripts/ci_validation_coverage.py --plan "$RUNNER_TEMP/source-coverage-plan/validation-plan.json" --artifacts "$RUNNER_TEMP/source-coverage-artifacts" --out "$RUNNER_TEMP/source-coverage.json"
+      - name: Retain aggregate obligations and unresolved evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: aggregate-source-platform-coverage-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/source-coverage.json
+          if-no-files-found: error
+          retention-days: 7
 
   numpy-source-frontier:
     name: NumPy C/C++ host-PCC source frontier (not native pcc1)
