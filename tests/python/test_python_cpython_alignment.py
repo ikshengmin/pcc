@@ -1393,6 +1393,78 @@ SUPPORTED_CASES: tuple[FeatureCase, ...] = (
         """,
     ),
     FeatureCase(
+        # Language reference 8.2/8.3: a local the loop rebinds with another
+        # type is read at the loop top after the back edge or a continue, and
+        # after the loop when it ran zero times or left by break
+        # (test_loop_backedge_type_join.py).
+        "loop_backedge_widens_rebinding",
+        """
+        def while_backedge(n):
+            ref = 0
+            out = []
+            i = 0
+            while i < n:
+                out.append(int(ref) * 10)
+                ref = "5"
+                i += 1
+            return out
+
+        def for_backedge(items):
+            ref = 0
+            out = []
+            for s in items:
+                if isinstance(ref, int):
+                    out.append(ref + 1)
+                else:
+                    out.append(int(ref) + 1)
+                ref = s
+            return out
+
+        def zero_iterations(items: list[str]):
+            x = 0
+            for s in items:
+                x = s
+            if isinstance(x, int):
+                return x + 1
+            return x
+
+        def break_exit(d):
+            x = 0
+            n = 0
+            while n < 3:
+                x = "s"
+                if d:
+                    break
+                x = 1
+                n += 1
+            if isinstance(x, str):
+                return x + "!"
+            return x * 2
+
+        def continue_edge(n):
+            x = 0
+            out = []
+            i = 0
+            while i < n:
+                i += 1
+                out.append(x if isinstance(x, str) else x + 100)
+                x = "c"
+                if i % 2:
+                    continue
+                x = i
+            return out
+
+        def main() -> None:
+            print(while_backedge(2))
+            print(for_backedge(["7", "8"]))
+            print(zero_iterations([]), zero_iterations(["a", "b"]))
+            print(break_exit(True), break_exit(False))
+            print(continue_edge(4))
+        if __name__ == "__main__":
+            main()
+        """,
+    ),
+    FeatureCase(
         # Code generator state that every function body touches: comprehension
         # scope restore, static re flags at module scope, finally blocks left
         # by break/continue, an except binding, a literal dict binding and a

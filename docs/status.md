@@ -194,22 +194,45 @@ modules, 62 keep byte-identical IR; `format_lowering`, `dce` and
 pre-`if` binding. `test_if_join_nested_rebinding.py` and the alignment case
 `if_join_widens_nested_rebinding` cover it.
 
-Open inference gap, pre-existing and unchanged by these commits: `while` and
-`for` bodies are inferred once with the pre-loop bindings, without a join over
-the loop back edge. A local bound to `int` before the loop and rebound to `str`
-at the end of the body is still typed `int` at the top of the next iteration:
-`ref = 0; while i < 2: out.append(int(ref) * 10); ref = "5"; i += 1` lowers
-`int(ref) * 10` to `py_int_mul(ref, 10)` and the native program ends with
-`Unhandled non-exception object (null)` under both the 93ed2fe9c and the
-53a4eb9f1-inference compiler (CPython prints `[0, 50]`). The same-type loop
-and the unrolled straight-line form both match CPython.
+`53a4eb9f1` regression sweep (host pcc0): 193 inference-related test files
+and the CPython alignment suite, in chunks, every failure re-run on the
+93ed2fe9c snapshot. No failure was caused by the change; the failures seen
+also fail on 93ed2fe9c (mostly GC-root and result-slot IR-shape assertions:
+`test_class_method_publication_roots.py`,
+`test_format_compatibility_result_roots.py`,
+`test_imported_constructor_binding.py`, `test_ir_scaffold_integer_abi.py`,
+`test_isinstance_ir_type_identity.py` and others). In `test_fallback_baseline.py`
+35 of 39 pass and the three per-module ratchets fail on 93ed2fe9c too.
+
+Loop back-edge join, pre-existing gap fixed after 53a4eb9f1: `while` and
+`for` bodies were inferred once with the pre-loop bindings. A local bound to
+`int` before the loop and to `str` in it stayed `int` at the top of the next
+iteration and after a loop that ran zero times or left by `break`
+(language reference 8.2, 8.3). `ref = 0; while i < 2: out.append(int(ref) * 10);
+ref = "5"; i += 1` lowered `int(ref) * 10` to `py_int_mul(ref, 10)`. Natively,
+under both the 93ed2fe9c and the 53a4eb9f1 compiler, three of the five
+shapes in the alignment case `loop_backedge_widens_rebinding` ended with
+`Unhandled non-exception object (null)` and two printed wrong results
+(`0 b` for `1 b`, `ss 2` for `s! 2`). Inference now joins the pre-loop type
+with the types at the end of the body and at each `break`/`continue`, by the
+`if` join's slot rule, and re-infers the header and body while a local
+widens; stores of a widened local move to its object slot. All five shapes
+match CPython. `test_loop_backedge_type_join.py` (10 tests) and the
+alignment case cover it; the focused sweep of 20 loop/inference files and
+the whole alignment suite found no failure caused by the change. Of the 65
+standalone compiler modules, 58 keep byte-identical IR and 7 change
+(`py_cpy` calls 29,446 before and after): each widened local is an `int`
+accumulator incremented by a value inference types `dyn` (`match.end()`,
+`sum(...)`, unpacked method results), which the loop top had read as `int`.
+Their arithmetic now takes the generic path; the runtime cost is unmeasured.
 
 Bootstrap: `a6a5c15bf` Stage1 passed in 2,125 s (CPU 8,478 s) and Stage2
 failed on blocker 1. `93ed2fe9c` and the first `b0c7526c3` Stage1 hit the
 unchanged 2,400 s cap at load averages of 120–230 and about 40. The second
 `b0c7526c3` Stage1 passed in 2,215 s (CPU 9,303 s); its Stage2 stopped once
 on the worker tree-RSS state guard (stale snapshot under load, 382 s) and
-then on blocker 2 (815 s). `53a4eb9f1` has not been bootstrapped yet.
+then on blocker 2 (815 s). Neither `53a4eb9f1` nor the loop-join fix has
+been bootstrapped yet.
 
 Pre-existing failures seen on an unmodified 93ed2fe9c snapshot while sweeping
 the affected files (not repaired): `test_fallback_baseline.py` is red for 136
@@ -239,7 +262,7 @@ are a consequence of standalone port compilation and need a performance A/B
 before any sharing.
 
 ```bash
-uv run pytest -x tests/python/test_codegen_constructor_owned_state.py tests/python/test_shared_helper_owners.py tests/python/test_float_bits_copies_contract.py tests/python/test_cli_shared_helpers_contract.py tests/python/test_loop_else_break_tagging.py tests/python/test_selfhost_method_contextmanager.py tests/python/test_pipeline_missing_frontend_module.py tests/python/test_if_join_nested_rebinding.py
+uv run pytest -x tests/python/test_codegen_constructor_owned_state.py tests/python/test_shared_helper_owners.py tests/python/test_float_bits_copies_contract.py tests/python/test_cli_shared_helpers_contract.py tests/python/test_loop_else_break_tagging.py tests/python/test_selfhost_method_contextmanager.py tests/python/test_pipeline_missing_frontend_module.py tests/python/test_if_join_nested_rebinding.py tests/python/test_loop_backedge_type_join.py
 ```
 
 ## Owned Metal device runtime (local Mac, 2026-11-12)

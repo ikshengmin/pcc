@@ -953,6 +953,7 @@ class _InferCtx:
     unsafe_intrinsic_aliases: set[str]
     pcc_guarded_i64_dot_aliases: set[str]
     pcc_guarded_loop_counter_aliases: set[str]
+    loop_exit_frames: list
     class_types: dict[str, ClassType]
     module_attr_types: dict[str, Type]
     annotation_module_bindings: dict[str, str]
@@ -1057,6 +1058,10 @@ class _InferCtx:
         self.unsafe_intrinsic_aliases: set[str] = set()
         self.pcc_guarded_i64_dot_aliases: set[str] = set()
         self.pcc_guarded_loop_counter_aliases: set[str] = set()
+        # One frame per loop being inferred, innermost last: the locals the
+        # loop body assigns, and the types they have at each ``break`` and
+        # ``continue`` of that loop (see ``_infer_loop_to_fixed_point``).
+        self.loop_exit_frames: list = []
         # Locals of the function currently being inferred that receive a
         # 1-arg ``d.setdefault(k)`` call somewhere in its body. CPython
         # inserts ``None`` for a missing key, so an *inferred* scalar-valued
@@ -3186,6 +3191,92 @@ def _typeconf_widen_if_join(
     return (new_body, new_else)
 
 
+def _typeconf_collect_target_names(target, names: list) -> None:
+    """Add the plain names an assignment or ``for`` target binds."""
+    if isinstance(target, Name):
+        ident = _name_ident(target)
+        if ident is not None and ident not in names:
+            names.append(ident)
+    elif isinstance(target, TupleExpr):
+        for element in target.elems:
+            _typeconf_collect_target_names(element, names)
+
+
+def _typeconf_collect_loop_bindings(body: tuple, names: list, annotated: dict) -> None:
+    """Record every simple local a loop body binds, at any depth of its scope.
+
+    Nested ``if``/loop/``try``/``with`` blocks run in the loop's scope, so a
+    binding there can reach the loop's back edge or exit. A nested ``def``
+    binds its own name here but its body is another scope.
+    """
+    for s in body:
+        if isinstance(s, Assign):
+            has_ann = _annotation_or_none(s) is not None
+            for tgt in s.targets:
+                _typeconf_collect_target_names(tgt, names)
+                if has_ann and isinstance(tgt, Name):
+                    ident = _name_ident(tgt)
+                    if ident is not None:
+                        annotated[ident] = True
+        elif isinstance(s, AugAssign):
+            _typeconf_collect_target_names(s.target, names)
+        elif isinstance(s, FuncDef):
+            if s.name not in names:
+                names.append(s.name)
+        elif isinstance(s, If) or isinstance(s, While):
+            _typeconf_collect_loop_bindings(s.body, names, annotated)
+            _typeconf_collect_loop_bindings(s.else_body, names, annotated)
+        elif isinstance(s, For):
+            _typeconf_collect_target_names(s.target, names)
+            _typeconf_collect_loop_bindings(s.body, names, annotated)
+            _typeconf_collect_loop_bindings(s.else_body, names, annotated)
+        elif isinstance(s, With):
+            _typeconf_collect_loop_bindings(s.body, names, annotated)
+        elif isinstance(s, Try):
+            _typeconf_collect_loop_bindings(s.body, names, annotated)
+            for handler in s.handlers:
+                _typeconf_collect_loop_bindings(handler.body, names, annotated)
+            _typeconf_collect_loop_bindings(s.else_body, names, annotated)
+            _typeconf_collect_loop_bindings(s.finally_body, names, annotated)
+
+
+# Results of joining the types a loop local can carry around the loop.
+_LOOP_JOIN_NONE = 0
+_LOOP_JOIN_READ_DYN = 1
+_LOOP_JOIN_OBJECT_SLOT = 2
+
+
+def _typeconf_loop_join_kind(candidates: list) -> int:
+    """Join every type a loop local can hold at the loop top or exit.
+
+    ``_LOOP_JOIN_OBJECT_SLOT`` when two of them need different storage (the
+    ``if`` join's slot rule), ``_LOOP_JOIN_READ_DYN`` when a container type
+    meets an unknown one in the shared object slot (reads must not assume the
+    container layout), else ``_LOOP_JOIN_NONE``.
+    """
+    kind = _LOOP_JOIN_NONE
+    i = 0
+    while i < len(candidates):
+        j = i + 1
+        while j < len(candidates):
+            if _typeconf_join_type(candidates[i], candidates[j]) is not None:
+                return _LOOP_JOIN_OBJECT_SLOT
+            if _typeconf_container_joined_with_unknown(candidates[i], candidates[j]):
+                kind = _LOOP_JOIN_READ_DYN
+            j += 1
+        i += 1
+    return kind
+
+
+def _record_loop_exit(ctx: "_InferCtx", scope: _Scope) -> None:
+    """Snapshot the innermost loop's locals at a ``break`` or ``continue``."""
+    frame = ctx.loop_exit_frames[-1]
+    snapshot: dict = {}
+    for name in frame[0]:
+        snapshot[name] = scope.lookup(name)
+    frame[1].append(snapshot)
+
+
 # ---------------------------------------------------------------------------
 # Statement inference
 # ---------------------------------------------------------------------------
@@ -3288,6 +3379,154 @@ def _scope_merge_arm_changes(
     scope.class_objects.update(merged)
 
 
+def _infer_while_pass(ctx: _InferCtx, scope: _Scope, stmt: While) -> tuple:
+    """Infer a ``while`` condition and body once, from the current bindings."""
+    cond = _infer_expr(ctx, scope, stmt.cond)
+    body = tuple(_infer_stmt(ctx, scope, s) for s in stmt.body)
+    return (cond, body)
+
+
+def _infer_for_pass(ctx: _InferCtx, scope: _Scope, stmt: For, elem_ty: Type) -> tuple:
+    """Bind a ``for`` target and infer the body once, from the current bindings."""
+    target = _infer_expr(ctx, scope, stmt.target)
+    if isinstance(stmt.target, Name):
+        target_ident = _name_ident(stmt.target)
+        if target_ident is not None:
+            pre_loop_ty = scope.lookup(target_ident)
+            target_ty = elem_ty
+            if pre_loop_ty is not None and not type_eq(pre_loop_ty, elem_ty):
+                # A Python for-target is unchanged when the iterable is
+                # empty and rebound on every non-empty iteration.  Those
+                # two control-flow edges therefore need one representation
+                # join.  Dyn is the honest boxed projection when the
+                # incoming value and element type differ; lowering must
+                # migrate the pre-loop value into that slot rather than
+                # replacing it with NULL or storing a pointer into the old
+                # scalar alloca.
+                target_ty = TYPE_DYN
+            scope.update(target_ident, target_ty)
+        else:
+            target_ty = elem_ty
+        target = _with_ty(stmt.target, target_ty)
+    elif isinstance(stmt.target, TupleExpr):
+        # Tuple-unpack targets were never bound into the scope at all, so
+        # each element name resolved through the enclosing chain.  Mostly
+        # that fell through to dyn and accidentally worked -- but a method
+        # whose OWN name matches an element found the recursion seed
+        # (`param_scope.define(fn.name, ft)` in `_infer_funcdef`) and
+        # inferred 'callable', rejecting legal Python:
+        #     def value_id(self, name):
+        #         for existing, value_id in self.rows: return value_id
+        # Bind every element like the single-name branch above: per-slot
+        # types when the element type is a tuple of matching arity, dyn
+        # otherwise, with the same pre-loop representation join.
+        target = _bind_for_tuple_target(ctx, scope, stmt.target, elem_ty)
+    body = tuple(_infer_stmt(ctx, scope, s) for s in stmt.body)
+    return (target, body)
+
+
+def _infer_loop_to_fixed_point(
+    ctx: _InferCtx,
+    scope: _Scope,
+    stmt: Stmt,
+    elem_ty: Optional[Type],
+) -> tuple:
+    """Infer a loop's header and body with the types its back edge brings.
+
+    Language reference 8.2/8.3: the body runs again from the top after it
+    completes or reaches ``continue``, the loop may run zero times, and
+    ``break`` leaves from the middle. So the type a local has at the loop top
+    and after the loop joins its pre-loop type with its type at the end of the
+    body and at every ``break``/``continue``. One pass from the pre-loop
+    bindings sees only the first of those; a local bound to ``int`` before the
+    loop and to ``str`` in it was read as ``int`` on the next iteration.
+
+    A local whose candidates need different storage gets one object slot: it
+    is ``dyn`` at the loop top and after the loop, and the caller retargets its
+    stores in the loop. A container type meeting an unknown one is read as
+    ``dyn`` without moving storage, as at an ``if`` join. The header and body
+    are inferred again from the widened bindings until nothing new widens;
+    without a conflict the single pass stands.
+
+    Returns ``(header, body, widen, read_dyn)``: the inferred condition (or
+    ``for`` target), the inferred body, the locals given an object slot and
+    every local read as ``dyn`` at the loop top.
+    """
+    names: list = []
+    annotated: dict = {}
+    _typeconf_collect_loop_bindings(stmt.body, names, annotated)
+    if isinstance(stmt, For):
+        _typeconf_collect_target_names(stmt.target, names)
+    pre_bindings = dict(scope.bindings)
+    pre_class_objects = set(scope.class_objects)
+    pre_types: dict = {}
+    for name in names:
+        pre_types[name] = scope.lookup(name)
+    widen: dict = {}
+    read_dyn: dict = {}
+    while True:
+        frame = (names, [])
+        ctx.loop_exit_frames.append(frame)
+        try:
+            if isinstance(stmt, While):
+                header, body = _infer_while_pass(ctx, scope, stmt)
+            else:
+                header, body = _infer_for_pass(ctx, scope, stmt, elem_ty)
+        finally:
+            ctx.loop_exit_frames.pop()
+        grew = False
+        for name in names:
+            if annotated.get(name) or widen.get(name):
+                continue
+            candidates: list = []
+            pre_ty = pre_types[name]
+            if pre_ty is not None:
+                candidates.append(pre_ty)
+            end_ty = scope.lookup(name)
+            if end_ty is not None:
+                candidates.append(end_ty)
+            for snapshot in frame[1]:
+                exit_ty = snapshot.get(name)
+                if exit_ty is not None:
+                    candidates.append(exit_ty)
+            kind = _typeconf_loop_join_kind(candidates)
+            if kind == _LOOP_JOIN_OBJECT_SLOT:
+                widen[name] = True
+                read_dyn[name] = True
+                grew = True
+            elif kind == _LOOP_JOIN_READ_DYN and not read_dyn.get(name):
+                read_dyn[name] = True
+                grew = True
+        if not grew:
+            break
+        _scope_restore(scope, pre_bindings, pre_class_objects)
+        for name in read_dyn:
+            scope.update(name, TYPE_DYN)
+    for name in read_dyn:
+        scope.update(name, TYPE_DYN)
+    return (header, body, widen, read_dyn)
+
+
+def _finish_loop_join(
+    scope: _Scope,
+    widen: dict,
+    read_dyn: dict,
+    body: tuple,
+    else_body: tuple,
+) -> tuple:
+    """Retarget a loop's widened stores and leave its joined locals ``dyn``.
+
+    The ``else`` clause runs on the normal exit, which joins with every
+    ``break``; a joined local stays ``dyn`` after the loop whatever it binds.
+    """
+    if widen:
+        body = _typeconf_retarget_arm(body, widen)
+        else_body = _typeconf_retarget_arm(else_body, widen)
+    for name in read_dyn:
+        scope.update(name, TYPE_DYN)
+    return (body, else_body)
+
+
 def _infer_stmt(ctx: _InferCtx, scope: _Scope, stmt: Stmt) -> Stmt:
     if isinstance(stmt, FuncDef):
         return _infer_funcdef(ctx, scope, stmt)
@@ -3362,9 +3601,9 @@ def _infer_stmt(ctx: _InferCtx, scope: _Scope, stmt: Stmt) -> Stmt:
         return replace(stmt, cond=cond, body=body, else_body=else_body)
 
     if isinstance(stmt, While):
-        cond = _infer_expr(ctx, scope, stmt.cond)
-        body = tuple(_infer_stmt(ctx, scope, s) for s in stmt.body)
+        cond, body, widen, read_dyn = _infer_loop_to_fixed_point(ctx, scope, stmt, None)
         else_body = tuple(_infer_stmt(ctx, scope, s) for s in stmt.else_body)
+        body, else_body = _finish_loop_join(scope, widen, read_dyn, body, else_body)
         return replace(stmt, cond=cond, body=body, else_body=else_body)
 
     if isinstance(stmt, For):
@@ -3394,41 +3633,11 @@ def _infer_stmt(ctx: _InferCtx, scope: _Scope, stmt: Stmt) -> Stmt:
             # semantic fact here so an ordinary pre-bound int target keeps
             # the native-i64 loop lane.
             elem_ty = TYPE_INT
-        target = _infer_expr(ctx, scope, stmt.target)
-        if isinstance(stmt.target, Name):
-            target_ident = _name_ident(stmt.target)
-            if target_ident is not None:
-                pre_loop_ty = scope.lookup(target_ident)
-                target_ty = elem_ty
-                if pre_loop_ty is not None and not type_eq(pre_loop_ty, elem_ty):
-                    # A Python for-target is unchanged when the iterable is
-                    # empty and rebound on every non-empty iteration.  Those
-                    # two control-flow edges therefore need one representation
-                    # join.  Dyn is the honest boxed projection when the
-                    # incoming value and element type differ; lowering must
-                    # migrate the pre-loop value into that slot rather than
-                    # replacing it with NULL or storing a pointer into the old
-                    # scalar alloca.
-                    target_ty = TYPE_DYN
-                scope.update(target_ident, target_ty)
-            else:
-                target_ty = elem_ty
-            target = _with_ty(stmt.target, target_ty)
-        elif isinstance(stmt.target, TupleExpr):
-            # Tuple-unpack targets were never bound into the scope at all, so
-            # each element name resolved through the enclosing chain.  Mostly
-            # that fell through to dyn and accidentally worked -- but a method
-            # whose OWN name matches an element found the recursion seed
-            # (`param_scope.define(fn.name, ft)` in `_infer_funcdef`) and
-            # inferred 'callable', rejecting legal Python:
-            #     def value_id(self, name):
-            #         for existing, value_id in self.rows: return value_id
-            # Bind every element like the single-name branch above: per-slot
-            # types when the element type is a tuple of matching arity, dyn
-            # otherwise, with the same pre-loop representation join.
-            target = _bind_for_tuple_target(ctx, scope, stmt.target, elem_ty)
-        body = tuple(_infer_stmt(ctx, scope, s) for s in stmt.body)
+        target, body, widen, read_dyn = _infer_loop_to_fixed_point(
+            ctx, scope, stmt, elem_ty,
+        )
         else_body = tuple(_infer_stmt(ctx, scope, s) for s in stmt.else_body)
+        body, else_body = _finish_loop_join(scope, widen, read_dyn, body, else_body)
         return replace(
             stmt,
             target=target,
@@ -3720,7 +3929,12 @@ def _infer_stmt(ctx: _InferCtx, scope: _Scope, stmt: Stmt) -> Stmt:
                 scope.update(local_name, ft)
                 ctx.func_types[local_name] = ft
         return stmt
-    if isinstance(stmt, (Import, Global, Nonlocal, Pass, Break, Continue)):
+    if isinstance(stmt, (Break, Continue)):
+        # The innermost loop joins the types at this exit or back edge.
+        if ctx.loop_exit_frames:
+            _record_loop_exit(ctx, scope)
+        return stmt
+    if isinstance(stmt, (Import, Global, Nonlocal, Pass)):
         return stmt
 
     # Anything unhandled: return unchanged rather than crash.
