@@ -1348,6 +1348,51 @@ SUPPORTED_CASES: tuple[FeatureCase, ...] = (
         """,
     ),
     FeatureCase(
+        # A local rebound with another type in one arm and converted in a
+        # nested elif (format_lowering's field-reference shape), and an else
+        # arm reading the value from before the if (test_if_join_nested_rebinding.py).
+        "if_join_widens_nested_rebinding",
+        """
+        def classify(parts, nargs, names):
+            fields = []
+            auto_index = 0
+            for part in parts:
+                if not isinstance(part, tuple):
+                    fields.append(part)
+                    continue
+                spec, kind, ref, conv = part
+                if kind == "auto":
+                    ref = auto_index
+                    auto_index += 1
+                elif kind == "index":
+                    ref = int(ref)
+                if kind == "name":
+                    if ref not in names:
+                        return None
+                elif ref < 0 or ref >= nargs:
+                    return None
+                fields.append((spec, kind, ref, conv))
+            return fields
+
+        def else_reads_before(pair, flag):
+            label, value = pair
+            if flag:
+                value = 0
+            else:
+                print("else sees", value)
+            return value
+
+        def main() -> None:
+            parts = ["lit", ("", "auto", "", None), (">3", "index", "1", "r"), ("", "name", "x", None)]
+            print(classify(parts, 2, {"x": 1}))
+            print(classify(parts, 1, {"x": 1}))
+            print(else_reads_before(("a", "text"), False))
+            print(else_reads_before(("a", "text"), True))
+        if __name__ == "__main__":
+            main()
+        """,
+    ),
+    FeatureCase(
         # Code generator state that every function body touches: comprehension
         # scope restore, static re flags at module scope, finally blocks left
         # by break/continue, an except binding, a literal dict binding and a

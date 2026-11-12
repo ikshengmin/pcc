@@ -3034,31 +3034,80 @@ def _typeconf_retarget_arm(body: tuple, widen: dict) -> tuple:
     changed = False
     new_body: list = []
     for s in body:
-        if isinstance(s, Assign):
-            new_targets: list = []
-            tgt_changed = False
-            for tgt in s.targets:
-                if isinstance(tgt, Name):
-                    ident = _name_ident(tgt)
-                    if (
-                        ident is not None
-                        and widen.get(ident)
-                        and not isinstance(tgt.ty, DynType)
-                    ):
-                        new_targets.append(_with_ty(tgt, TYPE_DYN))
-                        tgt_changed = True
-                        continue
-                new_targets.append(tgt)
-            if tgt_changed:
-                new_body.append(replace(s, targets=tuple(new_targets)))
-                changed = True
-            else:
-                new_body.append(s)
-        else:
-            new_body.append(s)
+        new_s = _typeconf_retarget_stmt(s, widen)
+        if new_s is not s:
+            changed = True
+        new_body.append(new_s)
     if not changed:
         return body
     return tuple(new_body)
+
+
+def _typeconf_retarget_stmt(s, widen: dict):
+    """Retarget one statement, descending into blocks that share its scope.
+
+    The widened local has one object slot for the whole function, so every
+    assignment to it inside the arm must store there, including those nested
+    in ``if``/``elif``, loops, ``try`` and ``with`` blocks. A nested ``def``
+    or ``class`` body is a different scope and is left alone.
+    """
+    if isinstance(s, Assign):
+        new_targets: list = []
+        tgt_changed = False
+        for tgt in s.targets:
+            if isinstance(tgt, Name):
+                ident = _name_ident(tgt)
+                if (
+                    ident is not None
+                    and widen.get(ident)
+                    and not isinstance(tgt.ty, DynType)
+                ):
+                    new_targets.append(_with_ty(tgt, TYPE_DYN))
+                    tgt_changed = True
+                    continue
+            new_targets.append(tgt)
+        if tgt_changed:
+            return replace(s, targets=tuple(new_targets))
+        return s
+    if isinstance(s, If) or isinstance(s, While) or isinstance(s, For):
+        body = _typeconf_retarget_arm(s.body, widen)
+        else_body = _typeconf_retarget_arm(s.else_body, widen)
+        if body is s.body and else_body is s.else_body:
+            return s
+        return replace(s, body=body, else_body=else_body)
+    if isinstance(s, With):
+        body = _typeconf_retarget_arm(s.body, widen)
+        if body is s.body:
+            return s
+        return replace(s, body=body)
+    if isinstance(s, Try):
+        body = _typeconf_retarget_arm(s.body, widen)
+        else_body = _typeconf_retarget_arm(s.else_body, widen)
+        finally_body = _typeconf_retarget_arm(s.finally_body, widen)
+        handlers: list = []
+        handlers_changed = False
+        for handler in s.handlers:
+            handler_body = _typeconf_retarget_arm(handler.body, widen)
+            if handler_body is not handler.body:
+                handlers_changed = True
+                handlers.append(replace(handler, body=handler_body))
+            else:
+                handlers.append(handler)
+        if (
+            body is s.body
+            and else_body is s.else_body
+            and finally_body is s.finally_body
+            and not handlers_changed
+        ):
+            return s
+        return replace(
+            s,
+            body=body,
+            handlers=tuple(handlers),
+            else_body=else_body,
+            finally_body=finally_body,
+        )
+    return s
 
 
 def _typeconf_widen_if_join(
@@ -3196,6 +3245,49 @@ def _bind_for_tuple_target(
     return replace(target, elems=tuple(new_elems), ty=resolved)
 
 
+def _scope_restore(scope: _Scope, bindings: dict, class_objects: set) -> None:
+    """Put a scope's own bindings back to an earlier snapshot."""
+    scope.bindings.clear()
+    scope.bindings.update(bindings)
+    scope.class_objects.clear()
+    scope.class_objects.update(class_objects)
+
+
+def _scope_merge_arm_changes(
+    scope: _Scope,
+    pre_bindings: dict,
+    pre_class_objects: set,
+    then_bindings: dict,
+    then_class_objects: set,
+) -> None:
+    """Apply the then arm's binding changes under the else arm's.
+
+    ``scope`` holds the pre-``if`` bindings plus the else arm's changes. The
+    result is what inferring both arms one after the other in one scope gave:
+    every name the then arm changed takes its then-arm binding unless the
+    else arm changed the same name, in which case the else arm's stays.
+    """
+    for name in then_bindings:
+        then_ty = then_bindings[name]
+        if name in pre_bindings and pre_bindings[name] is then_ty:
+            continue
+        else_changed = (
+            name not in pre_bindings and name in scope.bindings
+        ) or (
+            name in pre_bindings and scope.bindings.get(name) is not pre_bindings[name]
+        )
+        if not else_changed:
+            scope.bindings[name] = then_ty
+    else_added = scope.class_objects - pre_class_objects
+    else_removed = pre_class_objects - scope.class_objects
+    merged = (pre_class_objects - (pre_class_objects - then_class_objects)) | (
+        then_class_objects - pre_class_objects
+    )
+    merged = (merged - else_removed) | else_added
+    scope.class_objects.clear()
+    scope.class_objects.update(merged)
+
+
 def _infer_stmt(ctx: _InferCtx, scope: _Scope, stmt: Stmt) -> Stmt:
     if isinstance(stmt, FuncDef):
         return _infer_funcdef(ctx, scope, stmt)
@@ -3246,8 +3338,21 @@ def _infer_stmt(ctx: _InferCtx, scope: _Scope, stmt: Stmt) -> Stmt:
             pre_names.append(name)
         for name in pre_names:
             pre_types[name] = scope.lookup(name)
+        # The else arm starts from the bindings before the ``if``, not from
+        # what the then arm left behind; otherwise a read in the else arm
+        # takes the then arm's type (``int(r)`` after ``r = 0`` in the then
+        # arm folded to a no-op on the original str). The bindings after the
+        # ``if`` are unchanged: the then arm's changes, then the else arm's.
+        pre_bindings = dict(scope.bindings)
+        pre_class_objects = set(scope.class_objects)
         body = tuple(_infer_stmt(ctx, body_scope, s) for s in stmt.body)
+        then_bindings = dict(scope.bindings)
+        then_class_objects = set(scope.class_objects)
+        _scope_restore(scope, pre_bindings, pre_class_objects)
         else_body = tuple(_infer_stmt(ctx, scope, s) for s in stmt.else_body)
+        _scope_merge_arm_changes(
+            scope, pre_bindings, pre_class_objects, then_bindings, then_class_objects,
+        )
         # Forced-object widening (SEC-P1-TYPECONF): if the two arms leave a
         # shared local in incompatible storage slots, rebind it to a boxed
         # object slot so the control-flow join reads a real value, not a
