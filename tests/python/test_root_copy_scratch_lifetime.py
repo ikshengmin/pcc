@@ -34,6 +34,9 @@ class ScratchLifetimeModel(HandoffModel):
             pcc_thread_no_park_enter=self.no_park_enter,
             pcc_thread_no_park_exit=self.no_park_exit,
             pcc_gc_note_store=self.note_store,
+            # The root publisher counts its store inline.
+            pcc_gc_metric_shard=lambda: 256,
+            atomic_rmw_i64=self.count_store,
         )
         # Explicit names always load the production body, even if the base
         # model already loaded it transitively. No copied AST/body executor.
@@ -103,6 +106,11 @@ class ScratchLifetimeModel(HandoffModel):
 
     def note_store(self):
         assert self.no_park_depth == 2
+        self.events.append(("note_store", self.no_park_depth))
+
+    def count_store(self, op, base, offset, value, order):
+        assert (op, base, offset, value, order) == (
+            "add", "pcc_gc_metric_shards", 256 + 16, 1, "relaxed")
         self.events.append(("note_store", self.no_park_depth))
 
     def invoke(self, entry, destination, source):
@@ -355,11 +363,11 @@ def test_nonmoving_local_no_park_branch_has_no_fallback_scratch(backend, entry, 
     assert model.events[0] == ("no_park_enter", 1)
     assert model.events[-1] == ("no_park_exit", 0)
     if expected == 0:
-        # The real publisher enters/exits its nested no-park scope. Marking
-        # is inactive here; this is not a concurrent marking/barrier model.
-        assert ("no_park_enter", 2) in model.events
-        assert ("note_store", 2) in model.events
-        assert ("no_park_exit", 1) in model.events
+        # Marking is inactive here (this is not a concurrent marking/barrier
+        # model): the real publisher owes no shade, so it opens no nested
+        # no-park scope and counts its store inside the copy's own scope.
+        assert ("no_park_enter", 2) not in model.events
+        assert ("note_store", 1) in model.events
     assert model.load(source) == value
     assert model.load(destination) == (value if expected == 0 else (9 if case == "nonempty" else 0))
     assert model.count() == model.active() == 0

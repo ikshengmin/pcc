@@ -204,6 +204,7 @@ pcc_gc_note_relocation_read = extern(
     c_ptr,
 )
 pcc_gc_note_store = extern("pcc_gc_note_store", (), c_void)
+pcc_gc_metric_shard = extern("pcc_gc_metric_shard", (), c_int64)
 pcc_gc_object_index_seen_stable = extern(
     "pcc_gc_object_index_seen_stable", (c_ptr,), c_int64
 )
@@ -1051,31 +1052,38 @@ def pcc_gc_store_ptr_plan_finish(plan) -> None:
 
 
 def _store_root_nonmoving_tracing(slot, value, backend: int) -> None:
-    # Initial seeding and the final root verdict stop the world. Keep the
-    # store and its insertion barrier in one no-park scope, so neither can
-    # be observed as a completed publication without the other.
-    pcc_thread_no_park_enter()
-    pcc_gc_note_store()
+    # Initial seeding and the final root verdict stop the world, so a store
+    # and its insertion barrier must never be split by a stop. Only
+    # intrinsics run between the store and the phase read below: a stop is
+    # admitted only at a poll, and the mark phase changes only in a stopped
+    # world, so the read answers for this store. Outside a cycle the store
+    # owes nothing; during one, the shade runs in a no-park scope that opens
+    # before anything could poll (pcc_thread_no_park_enter polls nowhere).
     store_ptr(slot, 0, value)
     if (
         ptr_is_null(value) == 0
         and is_tagged_int(value) == 0
         and atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") != 0
-        and pcc_gc_object_index_seen_stable(value) != 0
     ):
-        flags: i64 = i64(atomic_load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET, "acquire"))
-        if (flags & 524288) == 0:
-            if backend == 2:
-                if (flags & 16) == 0:
-                    # GC2's barrier telemetry, as its locked root barrier
-                    # counts each store that shades.
-                    atomic_rmw_i32(
-                        "add", global_addr("pcc_gc_cms_wb_flushes"), 0, 1, "relaxed"
-                    )
-                pcc_gc_shade_gray_atomic(value, 1)
-            elif (flags & 8) != 0:
-                pcc_gc_shade_gray_atomic(value, 0)
-    pcc_thread_no_park_exit()
+        pcc_thread_no_park_enter()
+        if pcc_gc_object_index_seen_stable(value) != 0:
+            flags: i64 = i64(atomic_load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET, "acquire"))
+            if (flags & 524288) == 0:
+                if backend == 2:
+                    if (flags & 16) == 0:
+                        # GC2's barrier telemetry, as its locked root barrier
+                        # counts each store that shades.
+                        atomic_rmw_i32(
+                            "add", global_addr("pcc_gc_cms_wb_flushes"), 0, 1, "relaxed"
+                        )
+                    pcc_gc_shade_gray_atomic(value, 1)
+                elif (flags & 8) != 0:
+                    pcc_gc_shade_gray_atomic(value, 0)
+        pcc_thread_no_park_exit()
+    # pcc_gc_note_store's count, without its call and entry poll.
+    atomic_rmw_i64(
+        "add", global_addr("pcc_gc_metric_shards"), pcc_gc_metric_shard() + 16, 1, "relaxed"
+    )
 
 
 def _store_root_count_free_unforwarded(slot, value) -> int:

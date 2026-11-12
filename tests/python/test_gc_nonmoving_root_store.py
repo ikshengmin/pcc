@@ -39,6 +39,7 @@ class RootStore:
             "pcc_gc_forwarding_population": 0,
         }
         self.depth = self.gray = self.notes = self.lookups = 0
+        self.store_depths = []
         self.events = []
         self.reads = []
         self.gray_worklist_notes = []
@@ -58,6 +59,9 @@ class RootStore:
             "pcc_thread_no_park_enter": self.enter,
             "pcc_thread_no_park_exit": self.exit,
             "pcc_gc_note_store": self.note,
+            # The root store counts itself inline (no entry poll).
+            "pcc_gc_metric_shard": lambda: 256,
+            "atomic_rmw_i64": self.metric_add,
             "pcc_gc_object_index_seen_stable": self.member,
             "pcc_gc_gray_count_increment_acq_rel": self.increment,
             "pcc_gc_gray_count_decrement_acq_rel": self.decrement,
@@ -81,9 +85,14 @@ class RootStore:
         return self.words[base, offset]
 
     def write(self, base, offset, value):
-        assert self.depth == 1
+        self.store_depths.append(self.depth)
         self.words[base, offset] = value
         self.events.append("store")
+
+    def metric_add(self, op, base, offset, value, order):
+        assert (op, base, offset, value, order) == (
+            "add", "pcc_gc_metric_shards", 256 + 16, 1, "relaxed")
+        self.notes += 1
 
     def cas(self, base, offset, expected, desired, success, failure):
         assert self.depth == 1
@@ -141,11 +150,16 @@ def test_root_publication_has_no_graph_or_refcount_protocol(backend, entry, valu
     shaded = int(active and value_kind == "object")
     assert model.words[model.slot, 0] == value
     assert model.notes == 1 and model.depth == 0 and model.gray == shaded
-    assert model.stopped_roots == [(value, shaded)]
-    assert model.events[0] == "enter" and model.events[-1] == "exit"
-    if shaded:
-        assert model.events.index("store") < model.events.index("shade")
-    if not active or value_kind in ("null", "tagged"):
+    if active and value_kind in ("object", "foreign"):
+        # A cycle is active: the shade runs in a no-park scope after the
+        # store, and a pending stop is admitted only at its exit.
+        expected = ["store", "enter"] + ["shade"] * shaded + ["exit"]
+        assert model.events == expected
+        assert model.stopped_roots == [(value, shaded)]
+    else:
+        # Outside a cycle, or for an immediate, the store owes nothing:
+        # no no-park scope, no index probe, no stop admitted here.
+        assert model.events == ["store"] and model.stopped_roots == []
         assert model.lookups == 0
     assert model.globals["pcc_gc_mark_active"] == active
 
@@ -202,10 +216,11 @@ def test_unforwarded_moving_root_publication_is_lock_free(backend, entry, value_
     shaded = int(active and value_kind == "object")
     assert model.words[model.slot, 0] == value
     assert model.notes == 1 and model.depth == 0 and model.gray == shaded
-    assert model.stopped_roots == [(value, shaded)]
-    if shaded:
-        assert model.events.index("store") < model.events.index("shade")
-    if not active or value_kind in ("null", "tagged"):
+    if active and value_kind in ("object", "foreign"):
+        assert model.events == ["store", "enter"] + ["shade"] * shaded + ["exit"]
+        assert model.stopped_roots == [(value, shaded)]
+    else:
+        assert model.events == ["store"] and model.stopped_roots == []
         assert model.lookups == 0
 
 
@@ -227,7 +242,7 @@ def test_a_forwarding_population_does_not_change_root_publication(backend, entry
     model = RootStore(backend)
     model.globals["pcc_gc_forwarding_population"] = forwarding
     model.ns[entry](model.slot, model.obj)
-    assert model.events == ["enter", "store", "shade", "exit"]
+    assert model.events == ["store", "enter", "shade", "exit"]
     assert model.words[model.slot, 0] == model.obj and model.notes == 1
     assert model.stopped_roots == [(model.obj, 1)]
     assert ("pcc_gc_forwarding_population", 0) not in model.reads
@@ -294,8 +309,9 @@ def test_immediate_roots_publish_in_one_no_park_interval_without_the_graph_lock(
     # count is read for it.
     assert ("pcc_gc_mark_active", 0) not in model.reads
     assert ("pcc_gc_forwarding_population", 0) not in model.reads
-    assert model.events == ["enter", "store", "exit"]
-    assert not model.graph_events and model.stopped_roots == [(value, 7)]
+    # It owes no barrier, so it opens no no-park scope either.
+    assert model.events == ["store"]
+    assert not model.graph_events and model.stopped_roots == []
 
 
 @pytest.mark.parametrize("backend", (1, 2, 3, 4))
@@ -318,7 +334,8 @@ def test_non_immediate_roots_publish_under_a_forwarding_population(
     assert model.gray == 7 + (active and member)
     assert ((value, 12) in model.reads) == bool(active and member)
     assert ("pcc_gc_forwarding_population", 0) not in model.reads
-    assert model.stopped_roots == [(value, 7 + (active and member))]
+    # Only an active cycle opens the shade's no-park scope.
+    assert model.stopped_roots == ([(value, 7 + member)] if active else [])
 
 
 @pytest.mark.parametrize("backend", (1, 2, 3, 4))
@@ -417,9 +434,9 @@ class ImmediatePlanRootStore(ImmediateRootStore):
         assert (operation, base, offset, value, order) == (
             "add", "pcc_gc_metric_shards", 272, 1, "relaxed",
         )
-        # Counted inside the store's no-park interval, with or without the
-        # graph lock of the diagnostic plan.
-        assert self.depth == 1
+        # The count is telemetry, not part of the publication protocol: the
+        # direct store counts outside any no-park scope, the diagnostic plan
+        # inside its graph lock.
         old = self.metrics.get((base, offset), 0)
         self.metrics[base, offset] = old + value
         self.notes += 1
@@ -448,7 +465,9 @@ def test_immediate_direct_and_actual_plan_match_publication_and_store_metrics(
         assert model.metrics == {("pcc_gc_metric_shards", 272): 1}
         assert not model.gray_worklist_notes and not model.lookups
         assert (0xBAD0, 12) not in model.reads
-        assert model.stopped_roots == [(value, 7)]
+        # The direct immediate store opens no no-park scope; the plan's
+        # graph lock admits a pending stop at its unlock.
+        assert model.stopped_roots == ([] if model is direct else [(value, 7)])
     # Only the checked or logged store goes through the plan and its lock.
     assert not direct.plan_events and not direct.logs and not direct.graph_events
     assert planned.plan_events == ["plan"]
@@ -472,9 +491,10 @@ def test_immediate_direct_and_actual_plan_match_publication_and_store_metrics(
 def test_immediate_store_and_the_stopped_root_healer_never_interleave(
     backend, entry, value, writer_first,
 ):
-    # A forwarded root is healed only by a stopped world. A store is one
-    # no-park interval, so the stop sees the slot before the store or after
-    # it; the graph lock plays no part.
+    # A forwarded root is healed only by a stopped world. An immediate store
+    # calls nothing between its write and its return, so no stop can fall
+    # inside it: the stop sees the slot before the store or after it; the
+    # graph lock plays no part.
     model = ImmediateRootStore(backend)
     model.globals.update({
         "pcc_gc_forwarding_population": 1,
@@ -518,7 +538,7 @@ def test_immediate_store_and_the_stopped_root_healer_never_interleave(
     assert model.words[model.slot, 0] == value and model.notes == 1
     assert model.depth == model.graph_depth == 0
     assert not model.graph_events
-    assert model.events == ["enter", "store", "exit"]
+    assert model.events == ["store"]
 
 
 @pytest.mark.parametrize("backend", (1, 2, 3, 4))
@@ -526,15 +546,15 @@ def test_immediate_store_and_the_stopped_root_healer_never_interleave(
 @pytest.mark.parametrize("value", (0, 35))
 @pytest.mark.parametrize("outer", ("none", "lease", "graph"))
 @pytest.mark.parametrize("pending_stop,pending_flush", ((0, 0), (1, 0), (0, 1), (1, 1)))
-@pytest.mark.parametrize("tripwire", (False, True))
 def test_immediate_store_keeps_real_no_park_and_stop_boundaries(
-    backend, entry, value, outer, pending_stop, pending_flush, tripwire,
+    backend, entry, value, outer, pending_stop, pending_flush,
 ):
-    # The kernel's own no-park and graph-lock bodies. The store takes one
-    # no-park lease and leaves the graph lock as it found it; a pending stop
-    # or flush is admitted once, when the outermost lease is released.
+    # The kernel's own no-park and graph-lock bodies. An immediate store
+    # takes no lease, polls nowhere and leaves the graph lock as it found
+    # it; a pending stop or flush is admitted once, when the caller's
+    # outermost lease is released (or at the caller's next poll).
     model = RootStore(backend)
-    registered, graph_level, tripwire_bit = 562949953421312, 16777216, 2251799813685248
+    registered, graph_level = 562949953421312, 16777216
     outer_lease = 2 if outer == "lease" else int(outer == "graph")
     initial = registered + outer_lease + (graph_level if outer == "graph" else 0)
     held = int(outer == "graph")
@@ -545,7 +565,7 @@ def test_immediate_store_keeps_real_no_park_and_stop_boundaries(
         "pcc_thread_stop_requested": pending_stop,
         "pcc_gc_gray_worklist_flush_requested": pending_flush,
     })
-    polled, finished = [], []
+    polled = []
     model.gray = 7
 
     def state():
@@ -556,36 +576,23 @@ def test_immediate_store_keeps_real_no_park_and_stop_boundaries(
             model.globals[base] = stored
         else:
             assert base == model.slot
-            # Inside this store's lease, one deeper than the caller's.
-            assert (state() & 16777215) == outer_lease + 1
+            # At the caller's own lease depth: the store opens none.
+            assert (state() & 16777215) == outer_lease
             assert model.globals["g_pcc_py_gc_minor_graph_lock"] == held
             model.words[base, offset] = stored
-
-    def note():
-        assert (state() & 16777215) == outer_lease + 1
-        model.notes += 1
-        # Only a graph-lock owner defers a tripwire (pcc_py_gc_defer_tripwire);
-        # its outermost unlock reports it.
-        if tripwire and held:
-            model.globals["pcc_tls_thread_state_py"] |= tripwire_bit
 
     def safepoint():
         assert (state() & 16777215) == 0
         assert model.globals["g_pcc_py_gc_minor_graph_lock"] == 0
         polled.append((model.words[model.slot, 0], model.gray))
 
-    def finish_tripwire():
-        assert model.globals["g_pcc_py_gc_minor_graph_lock"] == 0
-        assert state() & 16777215
-        finished.append(model.words[model.slot, 0])
-
     model.ns.update(
         store_i64=kernel_write, store_ptr=kernel_write,
         atomic_store_i32=lambda base, offset, stored, order: kernel_write(base, offset, stored),
         atomic_cas_i32=lambda *args: pytest.fail("a root store took the graph lock"),
         _GRAPH_QUEUED_BIT=4503599627370496,
-        pcc_gc_note_store=note, pcc_thread_safepoint=safepoint,
-        _finish_deferred_tripwire=finish_tripwire,
+        pcc_thread_safepoint=safepoint,
+        _finish_deferred_tripwire=lambda: pytest.fail("no tripwire was deferred"),
         pcc_platform_abort=lambda: pytest.fail("graph/no-park imbalance"),
         pcc_current_thread_id=lambda: pytest.fail("registered thread re-registered"),
     )
@@ -598,7 +605,7 @@ def test_immediate_store_keeps_real_no_park_and_stop_boundaries(
     })
     model.ns[entry](model.slot, value)
     assert model.words[model.slot, 0] == value and model.notes == 1
-    assert (state() & ~tripwire_bit) == initial
+    assert state() == initial
     assert model.globals["g_pcc_py_gc_minor_graph_lock"] == held
     assert model.gray == 7 and not model.gray_worklist_notes
     if outer != "none":
@@ -608,8 +615,8 @@ def test_immediate_store_keeps_real_no_park_and_stop_boundaries(
         else:
             for _ in range(outer_lease):
                 model.ns["pcc_thread_no_park_exit"]()
-    assert polled == ([(value, 7)] if pending_stop or pending_flush else [])
-    assert finished == ([value] if tripwire and held else [])
+    admitted = (pending_stop or pending_flush) and outer != "none"
+    assert polled == ([(value, 7)] if admitted else [])
     assert state() == registered
     assert model.globals["g_pcc_py_gc_minor_graph_lock"] == 0
 
@@ -628,3 +635,27 @@ def test_immediate_cleanup_never_reads_old_root_or_adds_gray(backend, entry):
     assert not model.graph_events
     assert not model.lookups and not model.gray_worklist_notes
     assert not any(base == model.slot for base, _ in model.reads)
+
+
+def test_root_store_and_phase_read_cannot_be_split_by_a_stop():
+    """No call runs between the slot store and the mark-phase read.
+
+    A stop is admitted only at a poll, and every runtime-port function
+    begins with one; the mark phase changes only in a stopped world. With
+    only intrinsics between the store and the read, the read answers for
+    the store itself, so an inactive cycle needs no no-park scope.
+    """
+    tree = ast.parse((RUNTIME / "py_obj.py").read_text())
+    fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+              and n.name == "_store_root_nonmoving_tracing")
+    first, decision = fn.body[0], fn.body[1]
+    assert ast.unparse(first) == "store_ptr(slot, 0, value)"
+    assert isinstance(decision, ast.If)
+    intrinsics = {"ptr_is_null", "is_tagged_int", "atomic_load_i32", "global_addr"}
+    calls = {n.func.id for n in ast.walk(decision.test) if isinstance(n, ast.Call)}
+    assert calls == intrinsics
+    assert "pcc_gc_mark_active" in ast.unparse(decision.test)
+    # The shade's no-park scope opens before anything that could poll.
+    assert ast.unparse(decision.body[0]) == "pcc_thread_no_park_enter()"
+    assert ast.unparse(decision.body[-1]) == "pcc_thread_no_park_exit()"
+    assert "pcc_gc_note_store" not in ast.unparse(fn)
