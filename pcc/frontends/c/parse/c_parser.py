@@ -454,17 +454,91 @@ class CParser(PLYParser):
             mode = mode[2:-2] if mode.startswith("__") and mode.endswith("__") and len(mode) > 4 else mode
             target = self._GNU_INTEGER_MODES.get(mode)
             if (target is None or not isinstance(decl_type, c_ast.TypeDecl)
-                    or not isinstance(decl_type.type, c_ast.IdentifierType)):
+                    or not isinstance(decl_type.type, (c_ast.IdentifierType, c_ast.Enum))):
                 remaining.append(attribute)
                 continue
-            names = decl_type.type.names
-            integer_words = {"char", "short", "int", "long", "signed", "unsigned", "__int128"}
-            if not names or any(name not in integer_words for name in names):
+            # An enum defined in this declaration keeps its enumerators: a gap.
+            defines_enum = isinstance(decl_type.type, c_ast.Enum) and decl_type.type.values is not None
+            sign = None if defines_enum else self._integer_signedness(decl_type.type)
+            if sign is None:
                 remaining.append(attribute)
                 continue
-            sign = "unsigned" if "unsigned" in names else "signed"
-            decl_type.type.names = [sign] + target.split()
+            decl_type.type = c_ast.IdentifierType([sign] + target.split(), decl_type.type.coord)
         return remaining
+
+    def _signedness_tables(self):
+        """Per-parse signedness of typedef names and enum tags, for mode()."""
+        tables = self.__dict__.get("_mode_signedness")
+        if tables is None:
+            tables = self.__dict__["_mode_signedness"] = ({}, {})
+        return tables
+
+    def _integer_signedness(self, type_node):
+        """'signed'/'unsigned' for an integer, integer typedef or enum type; else None.
+
+        An enum is unsigned unless an enumerator is negative (GCC's
+        underlying-type rule); an enumerator this cannot fold gives None.
+        """
+        typedefs, enums = self._signedness_tables()
+        if isinstance(type_node, c_ast.IdentifierType):
+            names = type_node.names
+            integer_words = {"char", "short", "int", "long", "signed", "unsigned", "__int128"}
+            if names and all(name in integer_words for name in names):
+                return "unsigned" if "unsigned" in names else "signed"
+            if len(names) == 1:
+                return typedefs.get(names[0])
+            return None
+        if isinstance(type_node, c_ast.Enum):
+            if type_node.values is None:
+                return enums.get(type_node.name)
+            return self._note_enum(type_node)
+        return None
+
+    def _note_enum(self, enum):
+        """Record a defined enum's signedness; return it (None if not foldable)."""
+        known, value, negative = {}, -1, False
+        for enumerator in enum.values.enumerators:
+            if enumerator.value is None:
+                value += 1
+            else:
+                value = self._fold_enum_value(enumerator.value, known)
+                if value is None:
+                    sign = None
+                    break
+            known[enumerator.name] = value
+            negative = negative or value < 0
+        else:
+            sign = "signed" if negative else "unsigned"
+        if enum.name:
+            self._signedness_tables()[1][enum.name] = sign
+        return sign
+
+    def _fold_enum_value(self, node, known):
+        if isinstance(node, c_ast.Constant) and node.type in ("int", "unsigned int", "long int",
+                                                              "unsigned long int", "long long int",
+                                                              "unsigned long long int"):
+            text = node.value.rstrip("uUlL")
+            try:
+                if len(text) > 1 and text[0] == "0" and text[1] not in "xXbB":
+                    return int(text, 8)
+                return int(text, 0)
+            except ValueError:
+                return None
+        if isinstance(node, c_ast.ID):
+            return known.get(node.name)
+        if isinstance(node, c_ast.UnaryOp) and node.op in ("-", "+", "~"):
+            operand = self._fold_enum_value(node.expr, known)
+            if operand is None:
+                return None
+            return -operand if node.op == "-" else ~operand if node.op == "~" else operand
+        if isinstance(node, c_ast.BinaryOp) and node.op in ("+", "-", "*", "<<", ">>", "|", "&", "^"):
+            left = self._fold_enum_value(node.left, known)
+            right = self._fold_enum_value(node.right, known)
+            if left is None or right is None or (node.op in ("<<", ">>") and not 0 <= right < 64):
+                return None
+            return {"+": left + right, "-": left - right, "*": left * right, "<<": left << right,
+                    ">>": left >> right, "|": left | right, "&": left & right, "^": left ^ right}[node.op]
+        return None
 
     def _build_declarations(self, spec, decls, typedef_namespace=False):
         """ Builds a list of declarations all sharing the given specifiers.
@@ -548,6 +622,8 @@ class CParser(PLYParser):
                 fixed_decl = self._fix_decl_name_type(declaration, spec['type'])
             if fixed_decl.attributes and not isinstance(fixed_decl.type, (c_ast.Struct, c_ast.Union)):
                 fixed_decl.attributes = tuple(self._apply_mode_attribute(fixed_decl.type, fixed_decl.attributes))
+            if is_typedef and fixed_decl.name and isinstance(fixed_decl.type, c_ast.TypeDecl):
+                self._signedness_tables()[0][fixed_decl.name] = self._integer_signedness(fixed_decl.type.type)
 
             # Add the type name defined by typedef to a
             # symbol table (for usage in the lexer)
@@ -1257,6 +1333,7 @@ class CParser(PLYParser):
                             | ENUM TYPEID brace_open enumerator_list brace_close
         """
         p[0] = c_ast.Enum(p[2], p[4], self._coord(p.lineno(1)))
+        self._note_enum(p[0])
 
     def p_enum_specifier_attributes(self, p):
         """ enum_specifier  : ENUM attribute_specifier_list ID
@@ -1272,6 +1349,8 @@ class CParser(PLYParser):
         else:
             name, values = p[3], p[5]
         p[0] = c_ast.Enum(name, values, self._coord(p.lineno(1)), attributes=p[2])
+        if name and values is not None:
+            self._note_enum(p[0])
 
     def p_enumerator_list(self, p):
         """ enumerator_list : enumerator

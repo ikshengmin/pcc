@@ -20,7 +20,11 @@ def definition_linkage_from_ir(linkage: str) -> str:
         return "external"
     if linkage == "internal":
         return "internal"
-    if linkage == "weak_odr":
+    if linkage in ("weak_odr", "weak"):
+        # Both lower to one weak symbol definition (Mach-O N_WEAK_DEF, ELF
+        # STB_WEAK); a strong definition elsewhere wins at link time. The
+        # IR inliner refuses to inline either, so a C weak body never
+        # replaces a call another definition may win.
         return "external_odr"
     raise BackendUnavailable("unsupported function definition linkage: " + linkage)
 

@@ -1143,9 +1143,12 @@ def _invoke_compile_preprocessed_translation_unit_artifact(
 
 
 def _raise_if_duplicate_external_definitions(compiled_units):
+    """Reject two strong definitions of one symbol; a weak function definition yields to any other."""
     seen = {}
     for unit_name, _, _, external_defs in compiled_units:
         for kind, symbol_name, display_name in external_defs:
+            if kind == "weak function":
+                continue
             previous = seen.get(symbol_name)
             if previous is None:
                 seen[symbol_name] = (unit_name, kind, display_name)

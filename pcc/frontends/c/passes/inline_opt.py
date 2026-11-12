@@ -104,7 +104,9 @@ class _InlineAnalyzer(ASTTransformer):
         # ── 45. Eta Reduction ───────────────────────────────────────────
 
         # f(x, y) { return g(x, y); } → f is a wrapper for g
-        eta_target = self._detect_eta(funcdef)
+        # A weak wrapper may be replaced at link time, so its calls stay its own.
+        weak = any(attribute.base_name == "weak" for attribute in getattr(funcdef.decl, "attributes", ()) or ())
+        eta_target = None if weak else self._detect_eta(funcdef)
         if eta_target and self._has_safe_eta_signature(funcdef, eta_target):
             self._eta_targets[func_name] = eta_target
             self.ctx.record(

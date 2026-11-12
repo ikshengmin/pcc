@@ -23,6 +23,10 @@ class StructFieldLayout:
     bit_offset: int = 0
     bit_width: int = 0
     is_unsigned: bool = False
+    # A packed bit-field's exact byte window: storage_span bytes (when not a
+    # power of two, accessed byte by byte) at alignment storage_align.
+    storage_span: int = 0
+    storage_align: int = 0
 
 
 @dataclass
@@ -42,6 +46,21 @@ class BitFieldRef:
     bit_width: int
     semantic_ir_type: object
     is_unsigned: bool
+    storage_span: int = 0
+    storage_align: int = 0
+
+    @classmethod
+    def for_layout(cls, container_ptr, layout):
+        return cls(
+            container_ptr=container_ptr,
+            storage_ir_type=layout.storage_ir_type,
+            bit_offset=layout.bit_offset,
+            bit_width=layout.bit_width,
+            semantic_ir_type=layout.semantic_ir_type,
+            is_unsigned=layout.is_unsigned,
+            storage_span=layout.storage_span,
+            storage_align=layout.storage_align,
+        )
 
 
 def is_floating_ir_type(ir_type) -> bool:

@@ -6,8 +6,9 @@ record. This owner decides, before code generation, what each one means:
 * inert: attributes that only steer diagnostics, optimization or symbol
   visibility in a way this compiler does not depend on (noinline, unused,
   format, noreturn, visibility, ...). Ignoring them preserves C semantics.
-* honored: ``aligned`` on objects, members and records, ``packed`` on records
-  and members, and integer ``mode`` (rewritten by the parser).
+* honored: ``aligned`` on objects, members, records and typedefs, ``packed``
+  on records, members and bit-fields, integer ``mode`` (rewritten by the
+  parser) and ``weak`` on file-scope function definitions.
 * every other attribute, or an honored one in a position this owner does not
   model, is a CodegenError gap, never a silently erased semantic.
 """
@@ -69,8 +70,106 @@ def _check(attributes, where, honored):
         _gap(attribute, where)
 
 
+class TypedefAlignment(c_ast.GnuAttribute):
+    """An ``aligned`` attribute a declaration inherits from its typedef name."""
+    __slots__ = ('typedef',)
+
+    def __init__(self, attribute, typedef):
+        super().__init__(attribute.name, attribute.args, attribute.coord)
+        self.typedef = typedef
+
+
+def _typedef_name(type_node):
+    """The single typedef name a TypeDecl spells, or None."""
+    if isinstance(type_node, c_ast.TypeDecl) and isinstance(type_node.type, c_ast.IdentifierType):
+        names = type_node.type.names
+        if len(names) == 1:
+            return names[0]
+    return None
+
+
+def propagate_typedef_alignment(ast):
+    """Give each object or member declared with an aligned typedef name that alignment.
+
+    GCC "Common Type Attributes": ``aligned`` on a typedef applies to every
+    object of that typedef. Objects and members spelled with the name inherit
+    it (codegen honors it and rejects a lowering); every other use of the
+    name (casts, sizeof/_Alignof, pointers, arrays, parameters) is a gap.
+    """
+    aligned = {}
+    contexts = {c_ast.Typename: "type name", c_ast.PtrDecl: "pointer declarator",
+                c_ast.ArrayDecl: "array declarator", c_ast.FuncDecl: "function declarator"}
+    pending = [(ast, "declaration")]
+    while pending:
+        node, context = pending.pop()
+        if node is None:
+            continue
+        if isinstance(node, c_ast.Typedef):
+            name = _typedef_name(node.type)
+            inherited = list(aligned.get(name, ())) if name else []
+            own = list(attributes_named(node.attributes, "aligned"))
+            if own or inherited:
+                aligned[node.name] = inherited + own
+            if not inherited:
+                pending.append((node.type, "typedef"))
+            continue
+        if isinstance(node, c_ast.Decl) and context != "parameter":
+            name = _typedef_name(node.type)
+            if name in aligned and node.bitsize is None:
+                if not any(isinstance(attribute, TypedefAlignment) for attribute in node.attributes or ()):
+                    node.attributes = tuple(node.attributes or ()) + tuple(
+                        TypedefAlignment(attribute, name) for attribute in aligned[name])
+                pending.append((node.init, "expression"))
+                continue
+        if isinstance(node, c_ast.IdentifierType):
+            for name in node.names:
+                if name in aligned:
+                    _gap(aligned[name][0], f"a typedef ('{name}') used in a {context}")
+            continue
+        if isinstance(node, c_ast.ParamList):
+            pending.extend((param, "parameter") for param in reversed(node.params or ()))
+            continue
+        child_context = contexts.get(type(node), context)
+        pending.extend((child, child_context) for _name, child in reversed(node.children()))
+    return ast
+
+
+def weak_function_definitions(ast):
+    """Attach a file-scope function's ``weak`` to its definition; return the declarations allowed it.
+
+    GCC "Common Function Attributes": a weak definition is emitted as a weak
+    symbol that a strong definition elsewhere overrides. Declaring weak a
+    function this unit does not define (an undefined weak reference) and
+    weak objects are gaps; a weak static function is an error.
+    """
+    weak, definitions, declarations = {}, {}, {}
+    for ext in getattr(ast, "ext", None) or ():
+        decl = ext.decl if isinstance(ext, c_ast.FuncDef) else ext if isinstance(ext, c_ast.Decl) else None
+        if decl is None or not isinstance(decl.type, c_ast.FuncDecl):
+            continue
+        declarations.setdefault(decl.name, []).append(decl)
+        attributes = attributes_named(decl.attributes, "weak")
+        if attributes:
+            weak.setdefault(decl.name, attributes[0])
+        if isinstance(ext, c_ast.FuncDef):
+            definitions[decl.name] = ext
+    allowed = set()
+    for name, attribute in weak.items():
+        definition = definitions.get(name)
+        if definition is None:
+            _gap(attribute, f"the undefined function '{name}' (a weak reference)")
+        if any("static" in decl.storage for decl in declarations[name]):
+            raise CodegenError(f"weak declaration of '{name}' must be public")
+        if not attributes_named(definition.decl.attributes, "weak"):
+            definition.decl.attributes = tuple(definition.decl.attributes or ()) + (attribute,)
+        allowed.update(id(decl) for decl in declarations[name])
+    return allowed
+
+
 def check_translation_unit(ast):
     """Reject every attribute whose meaning is not modeled; return nothing."""
+    propagate_typedef_alignment(ast)
+    weak_declarations = weak_function_definitions(ast)
     pending = [ast]
     while pending:
         node = pending.pop()
@@ -78,15 +177,12 @@ def check_translation_unit(ast):
             continue
         if isinstance(node, (c_ast.Struct, c_ast.Union)):
             _check(node.attributes, "a struct or union", HONORED)
-            if attributes_named(node.attributes, "packed") and node.decls and any(
-                    decl.bitsize is not None for decl in node.decls):
-                _gap(attributes_named(node.attributes, "packed")[0], "a record with bit-fields")
         elif isinstance(node, c_ast.Enum):
             _check(node.attributes, "an enum", frozenset())
         elif isinstance(node, c_ast.Typedef):
-            _check(node.attributes, "a typedef", frozenset())
+            _check(node.attributes, "a typedef", frozenset({"aligned"}))
         elif isinstance(node, c_ast.Decl):
-            _check(node.attributes, "a declaration", HONORED)
+            _check(node.attributes, "a declaration", HONORED | {"weak"} if id(node) in weak_declarations else HONORED)
         elif isinstance(node, c_ast.PtrDecl):
             _check(getattr(node, "attributes", ()), "a pointer declarator", frozenset())
         pending.extend(child for _name, child in node.children())

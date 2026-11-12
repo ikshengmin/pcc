@@ -896,7 +896,9 @@ class CCodeGenerator(
         defs = []
         for name, state in self._file_scope_function_states.items():
             if state.linkage == "external" and state.defined:
-                defs.append(("function", state.symbol_name, name))
+                function = self.module.globals.get(state.symbol_name)
+                weak = isinstance(function, ir.Function) and function.linkage == "weak"
+                defs.append(("weak function" if weak else "function", state.symbol_name, name))
         for name, state in self._file_scope_object_states.items():
             if (
                 state.linkage == "external"
@@ -3480,9 +3482,19 @@ class CCodeGenerator(
                 raise SemanticError(f"alignment {alignment} is not a positive power of two")
             values.append(alignment)
         if gnu:
-            from pcc.frontends.c.codegen.c_gnu_attributes import gnu_alignment
-            gnu_value = gnu_alignment(getattr(decl, "attributes", ()), self._eval_const_expr)
+            from pcc.frontends.c.codegen.c_gnu_attributes import TypedefAlignment, gnu_alignment
+            attributes = getattr(decl, "attributes", ()) or ()
+            gnu_value = gnu_alignment(attributes, self._eval_const_expr)
             if gnu_value is not None:
+                inherited = [attribute for attribute in attributes if isinstance(attribute, TypedefAlignment)]
+                if inherited:
+                    natural = self._ir_type_align(self._resolve_ast_type(decl.type))
+                    for attribute in inherited:
+                        value = gnu_alignment([attribute], self._eval_const_expr)
+                        if value < natural:
+                            raise CodegenError(
+                                f"GNU attribute 'aligned({value})' on typedef '{attribute.typedef}' "
+                                "lowers its type's alignment, which is not implemented")
                 values.append(gnu_value)
         return max(values) if values else None
 
@@ -3665,7 +3677,59 @@ class CCodeGenerator(
         storage_type.has_custom_layout = True
         return storage_type
 
+    def _packed_bitfield_layout(self, decl, current_bit):
+        """GCC packed bit-field: placed at the next bit, read through its exact byte window.
+
+        The window starts at the field's first byte and covers span bytes; a
+        span of 3, 5, 6 or 7 bytes is accessed byte by byte, so no access
+        reaches past the field's bytes. Returns None for a zero-width field.
+        """
+        declared = self._bitfield_storage_ir_type(decl)
+        bit_width = self._eval_const_expr(decl.bitsize)
+        if bit_width == 0:
+            return None
+        start = current_bit // 8
+        bit_offset = current_bit - start * 8
+        span = (bit_offset + bit_width + 7) // 8
+        if span > 8:
+            raise CodegenError(f"packed bit-field '{decl.name}' spanning {span} bytes is not implemented")
+        window = 1 << (span - 1).bit_length()
+        return StructFieldLayout(
+            name=decl.name,
+            byte_offset=start,
+            semantic_ir_type=declared,
+            decl_type=decl.type,
+            is_bitfield=True,
+            storage_byte_offset=start,
+            storage_ir_type=ir.IntType(window * 8),
+            bit_offset=bit_offset,
+            bit_width=bit_width,
+            is_unsigned=self._bitfield_decl_is_unsigned(decl.type, bit_width),
+            storage_span=span if span != window else 0,
+            storage_align=1,
+        )
+
     def _custom_layout_storage_segments(self, field_layouts_by_index, size_bytes):
+        segments = self._unchecked_storage_segments(field_layouts_by_index, size_bytes)
+        if segments is None:
+            return None
+        # The segments become an IR struct body whose elements sit at their
+        # natural offsets; a body that would move a member (packed records)
+        # or outgrow the record is replaced by raw bytes.
+        cursor = 0
+        body_align = 1
+        for segment in segments:
+            align = max(1, self._ir_type_align(segment.ir_type))
+            body_align = max(body_align, align)
+            cursor = self._align_up(cursor, align)
+            if cursor != segment.byte_offset:
+                return None
+            cursor += self._ir_type_size(segment.ir_type)
+        if self._align_up(cursor, body_align) > size_bytes:
+            return None
+        return segments
+
+    def _unchecked_storage_segments(self, field_layouts_by_index, size_bytes):
         segments = []
         cursor = 0
         storage_segment_by_offset = {}
@@ -3734,6 +3798,7 @@ class CCodeGenerator(
     def _build_layout_backed_struct(self, node):
         from pcc.frontends.c.codegen.c_gnu_attributes import attributes_named, gnu_alignment
         record_packed = bool(attributes_named(getattr(node, "attributes", ()), "packed"))
+        any_packed_bitfield = False
         current_bit = 0
         max_align = 1
         member_names = []
@@ -3745,6 +3810,24 @@ class CCodeGenerator(
         for decl in node.decls:
             if decl.bitsize is not None and getattr(decl, "align", ()):
                 raise SemanticError("an alignment specifier cannot apply to a bit-field")
+            if decl.bitsize is not None and (
+                    record_packed or attributes_named(getattr(decl, "attributes", ()), "packed")):
+                any_packed_bitfield = True
+                layout = self._packed_bitfield_layout(decl, current_bit)
+                if layout is None:
+                    # A zero-width bit-field still aligns the next member to
+                    # its type; it does not raise the packed record's alignment.
+                    storage_ir_type = self._bitfield_storage_ir_type(decl)
+                    current_bit = self._align_up(current_bit, self._ir_type_align(storage_ir_type) * 8)
+                    continue
+                if decl.name is not None:
+                    field_layouts[decl.name] = layout
+                field_layouts_by_index.append(layout)
+                member_names.append(decl.name)
+                member_decl_types.append(decl.type)
+                member_types.append(layout.semantic_ir_type)
+                current_bit += layout.bit_width
+                continue
             if decl.bitsize is not None:
                 storage_ir_type = self._bitfield_storage_ir_type(decl)
                 storage_bits = storage_ir_type.width
@@ -3826,7 +3909,7 @@ class CCodeGenerator(
             if tag_key in self.env:
                 existing_type = self.env[tag_key][0]
             type_name = self._aggregate_type_name("struct", node.name)
-        storage_segments = self._custom_layout_storage_segments(
+        storage_segments = None if any_packed_bitfield else self._custom_layout_storage_segments(
             field_layouts_by_index, size_bytes
         )
         struct_type = self._raw_layout_struct_type(
@@ -3878,8 +3961,40 @@ class CCodeGenerator(
             return 0
         return (1 << bit_width) - 1
 
+    def _bitfield_window_bytes(self, ref):
+        byte_ptr = self.builder.bitcast(ref.container_ptr, voidptr_t, "bitfieldptr.bytes")
+        return [
+            self.builder.gep(byte_ptr, [ir.Constant(int64_t, index)], name="bitfieldptr.byte")
+            if index else byte_ptr
+            for index in range(ref.storage_span)
+        ]
+
+    def _load_bitfield_window(self, ref, container_ptr, align):
+        if not ref.storage_span:
+            return self.builder.load(container_ptr, align=align)
+        # Little-endian assembly of a 3/5/6/7-byte window; the bytes above it are zero.
+        value = None
+        for index, byte_ptr in enumerate(self._bitfield_window_bytes(ref)):
+            byte = self.builder.zext(self.builder.load(byte_ptr, align=1), ref.storage_ir_type, "bitfield.byte")
+            if index:
+                byte = self.builder.shl(byte, ir.Constant(ref.storage_ir_type, 8 * index), "bitfield.byteshift")
+                value = self.builder.or_(value, byte, "bitfield.bytes")
+            else:
+                value = byte
+        return value
+
+    def _store_bitfield_window(self, ref, value, container_ptr, align):
+        if not ref.storage_span:
+            self.builder.store(value, container_ptr, align=align)
+            return
+        for index, byte_ptr in enumerate(self._bitfield_window_bytes(ref)):
+            part = value
+            if index:
+                part = self.builder.lshr(value, ir.Constant(ref.storage_ir_type, 8 * index), "bitfield.byteshift")
+            self.builder.store(self.builder.trunc(part, int8_t, "bitfield.byte"), byte_ptr, align=1)
+
     def _load_bitfield(self, ref):
-        align = max(1, self._ir_type_align(ref.storage_ir_type))
+        align = ref.storage_align or max(1, self._ir_type_align(ref.storage_ir_type))
         container_ptr = ref.container_ptr
         storage_ptr_ty = ref.storage_ir_type.as_pointer()
         pointee = getattr(container_ptr.type, "pointee", None)
@@ -3887,7 +4002,7 @@ class CCodeGenerator(
             container_ptr = self.builder.bitcast(
                 container_ptr, storage_ptr_ty, "bitfieldptr.base"
             )
-        raw = self.builder.load(container_ptr, align=align)
+        raw = self._load_bitfield_window(ref, container_ptr, align)
         if ref.bit_offset:
             raw = self.builder.lshr(
                 raw, ir.Constant(ref.storage_ir_type, ref.bit_offset), "bitshift"
@@ -3921,7 +4036,7 @@ class CCodeGenerator(
     def _store_bitfield(self, value, ref):
         if value is None:
             return
-        align = max(1, self._ir_type_align(ref.storage_ir_type))
+        align = ref.storage_align or max(1, self._ir_type_align(ref.storage_ir_type))
         container_ptr = ref.container_ptr
         storage_ptr_ty = ref.storage_ir_type.as_pointer()
         pointee = getattr(container_ptr.type, "pointee", None)
@@ -3929,7 +4044,7 @@ class CCodeGenerator(
             container_ptr = self.builder.bitcast(
                 container_ptr, storage_ptr_ty, "bitfieldptr.base"
             )
-        storage_value = self.builder.load(container_ptr, align=align)
+        storage_value = self._load_bitfield_window(ref, container_ptr, align)
         if value.type != ref.semantic_ir_type:
             value = self._implicit_convert(value, ref.semantic_ir_type)
         value = self._convert_int_value(
@@ -3967,7 +4082,7 @@ class CCodeGenerator(
                 "bitstore.clear",
             )
             value = self.builder.or_(storage_value, value, "bitstore.merge")
-        self.builder.store(value, container_ptr, align=align)
+        self._store_bitfield_window(ref, value, container_ptr, align)
 
     def _refine_member_ir_type(self, aggregate_type, member_key, field_type):
         """Prefer semantic member types over storage types when available."""
@@ -7201,6 +7316,15 @@ class CCodeGenerator(
                 if needs_internal_linkage:
                     raise SemanticError("external_odr conflicts with internal function linkage")
                 self.function.linkage = "weak_odr"
+            from pcc.frontends.c.codegen.c_gnu_attributes import attributes_named
+            if attributes_named(node.decl.attributes, "weak"):
+                from pcc.backend.definition_linkage import supports_external_odr_function_definitions
+                if needs_internal_linkage or definition_linkage != "external":
+                    raise SemanticError(f"weak declaration of '{funcname}' must be public")
+                if not supports_external_odr_function_definitions(str(self.module.triple)):
+                    raise CodegenError("weak function definitions are not implemented for target "
+                                       + str(self.module.triple))
+                self.function.linkage = "weak"
             if self._func_decl_returns_unsigned(node.decl.type):
                 self._mark_unsigned_return(self.function)
             # Add stack protector attribute for security hardening
@@ -7492,13 +7616,9 @@ class CCodeGenerator(
                     ir.PointerType(layout.storage_ir_type),
                     name="bitfieldptr",
                 )
-                ref = BitFieldRef(
-                    container_ptr=container_ptr,
-                    storage_ir_type=layout.storage_ir_type,
-                    bit_offset=layout.bit_offset,
-                    bit_width=layout.bit_width,
-                    semantic_ir_type=layout.semantic_ir_type,
-                    is_unsigned=layout.is_unsigned,
+                ref = BitFieldRef.for_layout(
+                    container_ptr,
+                    layout,
                 )
                 val = self._load_bitfield(ref)
                 if layout.decl_type is not None:
@@ -7659,13 +7779,9 @@ class CCodeGenerator(
                     ir.PointerType(layout.storage_ir_type),
                     name="bitfieldptr",
                 )
-                ref = BitFieldRef(
-                    container_ptr=container_ptr,
-                    storage_ir_type=layout.storage_ir_type,
-                    bit_offset=layout.bit_offset,
-                    bit_width=layout.bit_width,
-                    semantic_ir_type=layout.semantic_ir_type,
-                    is_unsigned=layout.is_unsigned,
+                ref = BitFieldRef.for_layout(
+                    container_ptr,
+                    layout,
                 )
                 val = self._load_bitfield(ref)
                 if layout.decl_type is not None:

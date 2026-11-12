@@ -231,6 +231,11 @@ class FuncAttrPass(IRPass):
             func_info = func_infos.get(func_name)
             if func_info is None:
                 continue
+            # A weak/linkonce body may be replaced at link time; callers must
+            # not trust attributes proven only from this body.
+            linkage_words = set(match.group("prefix").split("@", 1)[0].split())
+            if linkage_words & {"weak", "linkonce", "extern_weak"}:
+                continue
 
             attrs_to_add = []
             if func_info.is_leaf and not func_info.has_setjmp:

@@ -997,7 +997,7 @@ class CInitializerLoweringMixin:
                             field_value = int(self._eval_const_expr(scalar_node))
                         except Exception:
                             continue
-                        storage_size = self._ir_type_size(layout.storage_ir_type)
+                        storage_size = layout.storage_span or self._ir_type_size(layout.storage_ir_type)
                         start = layout.storage_byte_offset
                         current = self._raw_bytes_to_unsigned_int(
                             raw[start : start + storage_size]
@@ -1354,18 +1354,14 @@ class CInitializerLoweringMixin:
                             field_val,
                             layout.semantic_ir_type,
                         )
-                    ref = BitFieldRef(
-                        container_ptr=self._byte_offset_ptr(
+                    ref = BitFieldRef.for_layout(
+                        self._byte_offset_ptr(
                             base_addr,
                             layout.storage_byte_offset,
                             ir.PointerType(layout.storage_ir_type),
                             name="bitfieldptr",
                         ),
-                        storage_ir_type=layout.storage_ir_type,
-                        bit_offset=layout.bit_offset,
-                        bit_width=layout.bit_width,
-                        semantic_ir_type=layout.semantic_ir_type,
-                        is_unsigned=layout.is_unsigned,
+                        layout,
                     )
                     self._store_bitfield(field_val, ref)
                     continue
