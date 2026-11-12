@@ -73,10 +73,10 @@ def __dir__() -> list[str]:
     return sorted(list(globals().keys()) + __all__)
 
 
-# Roadmap real-wire hooks are intentionally installed from the package root so
-# both `python -m pcc` and `from pcc.frontends.python.pipeline import compile_python`
-# see the same observability/pass/cache wiring. Disable with
-# PCC_DISABLE_ROADMAP_DEEPWIRE=1 when bisecting bootstrap regressions.
+# Freeze the diagnostic-wiring policy once, without importing compiler owners.
+# Each owner installs its existing hooks before its import returns, so direct
+# from-imports and CLI entry points see the same observability/pass/cache wiring.
+# Disable with PCC_DISABLE_ROADMAP_DEEPWIRE=1 before the first package import.
 try:
     from pcc.diagnostics.wiring import install as _pcc_diagnostics_wiring_install
 

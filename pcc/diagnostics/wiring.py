@@ -6,8 +6,10 @@ the earlier "catalog only" pattern: every installer below monkey-patches a
 currently-used function in ``cli_core.py``, ``pipeline.py``, ``project.py`` or
 ``ir_pass_pipeline.py``.
 
-The install path is guarded by ``PCC_DISABLE_ROADMAP_DEEPWIRE`` so bootstrap
-bisecting can turn it off without removing the code.
+Package initialization freezes ``PCC_DISABLE_ROADMAP_DEEPWIRE`` once. Each
+compiler owner then passes its live module to its installer after defining its
+entry points; importing a leaf module does not initialize unrelated owners.
+The existing wrappers still read their diagnostic options at invocation time.
 """
 from __future__ import annotations
 
@@ -24,21 +26,16 @@ from pcc.diagnostics.compile_observability import ObservabilityOptions, Observed
 from pcc.diagnostics.profile_events import ProfileRecorder, write_profile_json
 
 _INSTALLED = False
+_ENABLED = False
 _LAST_CLI_OBSERVABILITY: dict[str, Any] = {}
 
 
 def install() -> None:
-    """Install all deep runtime wires. Safe to call multiple times."""
-    global _INSTALLED
+    """Freeze the owner-wiring policy. Safe to call multiple times."""
+    global _INSTALLED, _ENABLED
     if _INSTALLED:
         return
-    if _truthy(os.environ.get("PCC_DISABLE_ROADMAP_DEEPWIRE")):
-        _INSTALLED = True
-        return
-    _install_cli_core()
-    _install_pipeline_profile()
-    _install_ir_pass_explain_and_tailcall()
-    _install_project_cache_explain()
+    _ENABLED = not _truthy(os.environ.get("PCC_DISABLE_ROADMAP_DEEPWIRE"))
     _INSTALLED = True
 
 
@@ -46,10 +43,8 @@ def _truthy(value: object) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _install_cli_core() -> None:
-    try:
-        from pcc.driver import cli_core
-    except Exception:
+def _install_cli_core(cli_core) -> None:
+    if not _ENABLED:
         return
     if getattr(cli_core, "_pcc_deepwire_installed", False):
         return
@@ -185,10 +180,12 @@ def _temporary_env(updates: dict[str, Optional[str]]):
                 os.environ[key] = value
 
 
-def _install_pipeline_profile() -> None:
-    try:
-        from pcc.frontends.python import pipeline
-    except Exception:
+def _install_pipeline_profile(pipeline) -> None:
+    if not _ENABLED:
+        return
+    # A normal reload replaces the entry point but retains module attributes.
+    # Keep the previous one-shot installation behavior instead of rewrapping it.
+    if getattr(pipeline, "_pcc_diagnostics_profile_registered", False):
         return
     original = getattr(pipeline, "compile_python", None)
     if original is None or getattr(original, "_pcc_profiled", False):
@@ -216,6 +213,7 @@ def _install_pipeline_profile() -> None:
 
     compile_python_profiled._pcc_profiled = True
     pipeline.compile_python = compile_python_profiled
+    pipeline._pcc_diagnostics_profile_registered = True
 
 
 def _patch_pipeline_phase_functions(stack: ExitStack, recorder: ProfileRecorder) -> None:
@@ -282,10 +280,11 @@ def _patch_pipeline_phase_functions(stack: ExitStack, recorder: ProfileRecorder)
         patch_attr(subprocess, name, "subprocess")
 
 
-def _install_ir_pass_explain_and_tailcall() -> None:
-    try:
-        from pcc.frontends.python import ir_pass_pipeline
-    except Exception:
+def _install_ir_pass_explain_and_tailcall(ir_pass_pipeline) -> None:
+    if not _ENABLED:
+        return
+    # Match the one-shot policy on ordinary owner reload, as above.
+    if getattr(ir_pass_pipeline, "_pcc_diagnostics_pass_registered", False):
         return
     original = getattr(ir_pass_pipeline, "run_python_ir_pass_pipeline", None)
     if original is None or getattr(original, "_pcc_deepwire_pass", False):
@@ -316,6 +315,7 @@ def _install_ir_pass_explain_and_tailcall() -> None:
 
     run_pipeline_deepwire._pcc_deepwire_pass = True
     ir_pass_pipeline.run_python_ir_pass_pipeline = run_pipeline_deepwire
+    ir_pass_pipeline._pcc_diagnostics_pass_registered = True
 
 
 def _emit_pass_explain(ir_pass_pipeline: object, ir_text: str, pass_names: tuple[str, ...], module_name: str, *, tail_requested: bool = False, tail_result: object | None = None) -> None:
@@ -359,10 +359,8 @@ def _emit_pass_explain(ir_pass_pipeline: object, ir_text: str, pass_names: tuple
         sys.stderr.write(f"[pcc.diagnostics.pass_explain] module={module_name}\n{text}\n")
 
 
-def _install_project_cache_explain() -> None:
-    try:
-        from pcc.driver import project
-    except Exception:
+def _install_project_cache_explain(project) -> None:
+    if not _ENABLED:
         return
     if getattr(project, "_pcc_diagnostics_cache_explain_installed", False):
         return

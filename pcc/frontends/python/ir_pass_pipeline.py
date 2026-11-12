@@ -91,5 +91,17 @@ def main(argv=None):
     return 0
 
 
+# Register only this fully defined owner before from-imports capture its hooks.
+# Optional diagnostics must not make an otherwise valid owner import fail.
+try:
+    from pcc.diagnostics.wiring import (
+        _install_ir_pass_explain_and_tailcall as _pcc_install_diagnostics,
+    )
+
+    _pcc_install_diagnostics(sys.modules[__name__])
+except Exception:
+    pass
+
+
 if __name__ == "__main__":
     raise SystemExit(main())

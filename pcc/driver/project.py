@@ -16,6 +16,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import warnings
 from dataclasses import dataclass
 
@@ -1103,3 +1104,15 @@ def _has_main(source, path=None, include_dirs=None, cpp_args=None, target_triple
         return True
 
     return bool(main_pattern.search(processed))
+
+
+# Register only this fully defined owner before from-imports capture its hooks.
+# Optional diagnostics must not make an otherwise valid owner import fail.
+try:
+    from pcc.diagnostics.wiring import (
+        _install_project_cache_explain as _pcc_install_diagnostics,
+    )
+
+    _pcc_install_diagnostics(sys.modules[__name__])
+except Exception:
+    pass

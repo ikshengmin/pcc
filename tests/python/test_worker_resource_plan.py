@@ -942,8 +942,15 @@ publish_worker_resource("complete")
     for item in tasks:
         item["calibrate_before_peers"] = True
     tasks[2]["depends_on"] = tasks[3]["depends_on"] = 0
-    commands = [shlex.join([sys.executable, "-B", str(child), str(tmp_path), str(index)])
-                for index in range(4)]
+    # Executing a temporary script puts its directory, not the checkout, at
+    # sys.path[0]. CI installs dependencies with --no-install-project, so give
+    # each real worker the tested source explicitly and preserve caller paths.
+    pythonpath = str(Path(__file__).resolve().parents[2])
+    inherited_pythonpath = os.environ.get("PYTHONPATH")
+    if inherited_pythonpath:
+        pythonpath += os.pathsep + inherited_pythonpath
+    commands = [shlex.join(["PYTHONPATH=" + pythonpath, sys.executable, "-B",
+                           str(child), str(tmp_path), str(index)]) for index in range(4)]
     trace = tmp_path / "ready_unknown.tsv"
     observations = []
     reaped = set()

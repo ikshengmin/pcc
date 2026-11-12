@@ -1813,3 +1813,15 @@ def cli_main_sys_argv_exit() -> None:
         from sys import exit as _exit
 
         _exit(code)
+
+
+# Register only this fully defined owner before from-imports capture its hooks.
+# Optional diagnostics must not make an otherwise valid owner import fail.
+try:
+    from pcc.diagnostics.wiring import (
+        _install_cli_core as _pcc_install_diagnostics,
+    )
+
+    _pcc_install_diagnostics(sys.modules[__name__])
+except Exception:
+    pass

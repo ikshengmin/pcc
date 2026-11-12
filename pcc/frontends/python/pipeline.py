@@ -4504,3 +4504,15 @@ def compile_python_multi(
     if verbose:
         _log(verbose, "wrote executable: " + out_path)
     _profile_end(profile, "compile_python_multi_total", total_start)
+
+
+# Register only this fully defined owner before from-imports capture its hooks.
+# Optional diagnostics must not make an otherwise valid owner import fail.
+try:
+    from pcc.diagnostics.wiring import (
+        _install_pipeline_profile as _pcc_install_diagnostics,
+    )
+
+    _pcc_install_diagnostics(sys.modules[__name__])
+except Exception:
+    pass

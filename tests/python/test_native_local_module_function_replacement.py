@@ -191,3 +191,119 @@ def test_local_import_binding_does_not_change_namespace_ownership():
         setattr(host, mode, True)
         assert not live_import_name_binding(host, "pipeline")
         setattr(host, mode, False)
+
+
+INITIALIZING_WIRING = '''import functools
+
+_installed = False
+_enabled = False
+events = []
+
+def install():
+    global _installed, _enabled
+    if _installed:
+        return
+    _enabled = True
+    _installed = True
+
+def install_owner(owner):
+    if not _enabled or getattr(owner, "_registered", False):
+        return
+    original = owner.operation
+    assert not getattr(owner, "finished", False)
+    @functools.wraps(original)
+    def wrapped(*args, **kwargs):
+        events.append("begin")
+        try:
+            return original(*args, **kwargs)
+        finally:
+            events.append("end")
+    wrapped._profiled = True
+    owner.operation = wrapped
+    owner._registered = True
+'''
+
+INITIALIZING_OWNER = '''import sys
+
+def operation(value, *, offset=2):
+    if value < 0:
+        raise ValueError("negative")
+    return value + offset
+
+try:
+    from initializing_pkg.wiring import install_owner
+    install_owner(sys.modules[__name__])
+except Exception:
+    pass
+finished = True
+'''
+
+INITIALIZING_ENTRY = '''from initializing_pkg.provider import operation
+from initializing_pkg import provider, wiring
+
+def main():
+    assert provider.finished
+    assert provider._registered
+    assert operation is provider.operation
+    assert operation._profiled
+    assert operation(5, offset=3) == 8
+    assert wiring.events == ["begin", "end"]
+    wiring.install()
+    wiring.install_owner(provider)
+    assert operation is provider.operation
+    try:
+        operation(-1)
+    except ValueError as error:
+        assert str(error) == "negative"
+    else:
+        raise AssertionError("initialization wrapper swallowed the exception")
+    assert wiring.events == ["begin", "end", "begin", "end"]
+    print("initializing-owner-registration-ok")
+
+main()
+'''
+INITIALIZING_EXPECTED = "initializing-owner-registration-ok\n"
+
+
+def _write_initializing_owner(tmp_path):
+    # Language Reference 5.4 and 7.11: publish the live owner before executing
+    # its initializer and finish replacement before a from-import captures it.
+    package = tmp_path / "initializing_pkg"
+    package.mkdir()
+    (package / "__init__.py").write_text(
+        "from initializing_pkg.wiring import install\ninstall()\n", encoding="utf-8",
+    )
+    (package / "wiring.py").write_text(INITIALIZING_WIRING, encoding="utf-8")
+    (package / "provider.py").write_text(INITIALIZING_OWNER, encoding="utf-8")
+    entry = tmp_path / "initializing_entry.py"
+    entry.write_text(INITIALIZING_ENTRY, encoding="utf-8")
+    return entry
+
+
+def test_owner_registration_during_initialization_cpython_reference(tmp_path):
+    entry = _write_initializing_owner(tmp_path)
+    result = subprocess.run(
+        [sys.executable, "-B", str(entry)], cwd=tmp_path,
+        capture_output=True, text=True, timeout=20,
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (0, INITIALIZING_EXPECTED, "")
+
+
+@pytest.mark.integration
+def test_owner_registration_during_initialization_native(
+    tmp_path, pcc_runtime_archive, python_program_compiler,
+):
+    entry = _write_initializing_owner(tmp_path)
+    output = tmp_path / "initializing-owner"
+    python_program_compiler(
+        str(entry), str(output), backend="self", ir_scaffold_mode="on",
+        runtime_archive=str(pcc_runtime_archive),
+    )
+    for backend in range(5):
+        result = subprocess.run(
+            [str(output)], cwd=tmp_path, capture_output=True, text=True, timeout=20,
+            env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)),
+        )
+        assert (result.returncode, result.stdout, result.stderr) == (
+            0, INITIALIZING_EXPECTED, "",
+        ), backend
