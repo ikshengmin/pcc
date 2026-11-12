@@ -207,6 +207,22 @@ def _gateway_package() -> Path:
     return package
 
 
+def performance_lock():
+    """The lock heavy builds and measurements share: wait for the holder
+    (a bootstrap, another arm or measurement) instead of contending."""
+    sys.path.insert(0, str(REPO_ROOT))
+    from scripts.file_lock import exclusive_file_lock
+
+    (REPO_ROOT / "build").mkdir(exist_ok=True)
+    lock = REPO_ROOT / "build/.pcc-performance.lock"
+    try:
+        with exclusive_file_lock(str(lock), blocking=False):
+            pass
+    except OSError:
+        print(f"waiting for {lock} (another build or measurement holds it)", flush=True)
+    return exclusive_file_lock(str(lock), blocking=True)
+
+
 def build(name: str, timeout: int, max_tree_rss: int) -> int:
     """Build a sealed arm under the shared performance lock and RSS guard."""
     arm = arm_dir(name)
@@ -219,7 +235,6 @@ def build(name: str, timeout: int, max_tree_rss: int) -> int:
         shutil.copytree(_gateway_package(), package,
                         ignore=shutil.ignore_patterns("__pycache__"))
     sys.path.insert(0, str(REPO_ROOT))
-    from scripts.file_lock import exclusive_file_lock
     from scripts import run_process_tree_sample
 
     environment = dict(
@@ -229,16 +244,7 @@ def build(name: str, timeout: int, max_tree_rss: int) -> int:
         PCC_PERF_HOME=str(HOME),
     )
     os.environ.update(environment)
-    (REPO_ROOT / "build").mkdir(exist_ok=True)
-    lock = REPO_ROOT / "build/.pcc-performance.lock"
-    try:
-        with exclusive_file_lock(str(lock), blocking=False):
-            pass
-    except OSError:
-        # Another heavy build or measurement owns the machine (a bootstrap,
-        # another arm): wait for it rather than contend with it.
-        print(f"waiting for {lock} (another build or measurement holds it)", flush=True)
-    with exclusive_file_lock(str(lock), blocking=True):
+    with performance_lock():
         return run_process_tree_sample.main([
             "--result", str(arm / "guard.json"), "--samples", str(arm / "rss.tsv"),
             "--stdout", str(arm / "build.stdout"), "--stderr", str(arm / "build.stderr"),
@@ -1037,12 +1043,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "_build":
         return build_child(args.arm)
     if args.command == "ab":
-        rows = compare(args.a, args.b, args.pairs, args.gc, args.workers, args.rounds)
+        with performance_lock():
+            rows = compare(args.a, args.b, args.pairs, args.gc, args.workers, args.rounds)
         print_comparison(rows)
         append_ledger(rows)
         return 0
     if args.command == "table":
-        print_table(args.name, args.rounds, args.repeats)
+        with performance_lock():
+            print_table(args.name, args.rounds, args.repeats)
         return 0
     if args.command == "asyncio":
         print(f"asyncio {measure_asyncio(args.rounds, args.repeats):.0f} req/s")
