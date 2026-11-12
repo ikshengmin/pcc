@@ -146,7 +146,7 @@ def call_member(parser, group, object_expression, arguments, coord, address_avai
     if virtual_dispatch and getattr(selected, "method_virtual", False):
         # [class.virtual]/16: a qualified name suppresses the virtual call.
         from pcc.frontends.cpp.virtual_functions import callee
-        function = callee(selected, name, coord)
+        function = callee(selected, c_ast.ID(name, coord), coord)
     call = c_ast.FuncCall(function, c_ast.ExprList(converted, coord), coord)
     # [expr.call]: postfix-expression (including object) precedes every
     # argument. Capture once before evaluating arguments; do not rely on C's

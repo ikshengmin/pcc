@@ -35,7 +35,8 @@ def object_layout(dtype, types, coord):
         if specifier is not None and not is_empty_class(specifier.dtype):
             # inheritance.py admits only bases whose leading C field is exact.
             fields.insert(0, object_layout(specifier.dtype, types, coord))
-        if plain.definition.polymorphic:
+        from pcc.frontends.cpp.virtual_functions import owns_vptr
+        if owns_vptr(plain.definition):
             fields.insert(0, pointer_scalar_layout())
         record = natural_record_layout(fields, minimum_size=1)
         return CAbiScalarLayout(record.size, record.alignment)

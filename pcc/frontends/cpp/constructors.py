@@ -271,6 +271,11 @@ def lower_member_initializers(parser, definition, this, initializers, *, constru
         # [class.base.init]/13: the direct base is initialized before members.
         stores.extend(lower_base_initializer(parser, definition, this, initializers.get(base),
                                              construction_calls=construction_calls))
+    if definition.polymorphic:
+        # [class.cdtor]/4: after the base subobject, before any member, the
+        # class's own table (the base constructor stored the base's).
+        from pcc.frontends.cpp.virtual_functions import vptr_store
+        stores.append(vptr_store(definition, this, this.coord))
     for member in definition.members:
         if array_type(member.dtype):
             from pcc.frontends.cpp.arrays import const_array_elements, zero_array_member
@@ -360,10 +365,6 @@ def bind_constructor_body(parser, definition, symbol, parameter_scope, declarati
         stores = lower_member_initializers(parser, definition, this, initializers,
                                           construction_calls=construction_calls)
         body = parser._block(new_scope=False)
-        if definition.polymorphic:
-            # No base subobjects precede it; members see the class's table.
-            from pcc.frontends.cpp.virtual_functions import vptr_store
-            stores.insert(0, vptr_store(definition, this, coord))
         body.block_items = stores + body.block_items
     finally:
         parser.scope = parent
@@ -532,7 +533,9 @@ def constructor_call(parser, dtype, arguments, address, coord, require_closed=Fa
                      initialization_kind="default", object_type=None):
     """Select the existing C1 at an already-evaluated complete-object address."""
     group = dtype.definition.constructors
-    if (len(arguments) == 1 and unqualified(arguments[0].dtype) is dtype
+    from pcc.frontends.cpp.inheritance import is_proper_base
+    if (len(arguments) == 1 and (unqualified(arguments[0].dtype) is dtype
+                                 or is_proper_base(dtype, arguments[0].dtype))
             and not any(is_copy_constructor(candidate, dtype) for candidate in group.overloads)):
         # A same-class argument can select an implicitly declared copy
         # constructor even when no spelled constructor is viable. Do not

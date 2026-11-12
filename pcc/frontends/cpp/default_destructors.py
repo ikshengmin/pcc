@@ -36,13 +36,29 @@ def bind_definition(definition):
     if symbol is None or not getattr(symbol, 'destructor_defaulted', False):
         return
     from pcc.frontends.cpp.member_initialization import requires_destruction
-    symbol.destructor_trivial = not any(requires_destruction(member.dtype) for member in definition.members)
+    base = getattr(definition, 'base', None)
+    symbol.destructor_trivial = not (any(requires_destruction(member.dtype) for member in definition.members)
+                                     or base is not None and requires_destruction(base.dtype))
     symbol.destructor_deleted = _member_deletion(definition)
 
 
 def _member_deletion(definition):
     """Deletion of implicit member D1s can be checked without defining them."""
     deleted = False
+    base = getattr(definition, 'base', None)
+    if base is not None:
+        # [class.dtor]/5: an inaccessible or deleted base destructor deletes it.
+        child = base.dtype.definition.destructor
+        if child is None:
+            deleted = _member_deletion(base.dtype.definition)
+        else:
+            deleted = getattr(child, 'destructor_deleted', False)
+            try:
+                definition.scope.check_named_member_access(child, base.coord)
+            except CppDiagnostic as error:
+                if error.code != 'cpp.member-access':
+                    raise
+                deleted = True
     for member in definition.members:
         if not is_class_type(member.dtype):
             continue

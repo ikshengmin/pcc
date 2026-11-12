@@ -5,8 +5,9 @@ N4659 [class.derived], [class.member.lookup], [class.access.base]/1-5,
 [expr.sizeof], [class.base.init]/2,13 and [class.dtor]/9; Itanium C++ ABI 2.4
 (base at offset 0, empty-base optimization, no tail-padding reuse of a POD
 base). User-provided derived constructors construct the base first and
-destructors destroy it last. Polymorphic, virtual and multiple bases and
-implicit derived special members stay explicit capability boundaries.
+destructors destroy it last. Virtual and multiple bases and implicit derived
+special members stay explicit capability boundaries; polymorphic bases are
+covered by test_cpp_polymorphic_inheritance.py.
 """
 import os
 import shutil
@@ -99,7 +100,6 @@ INVALID = {
 GAPS = {
     "virtual-base": "struct B{};struct D:virtual B{};",
     "multiple-bases": "struct A{};struct B{};struct D:A,B{};",
-    "polymorphic-base": "struct B{B(){} virtual int f(){return 1;}};struct D:B{};",
     "polymorphic-derived": "struct B{int x;};struct D:B{virtual int f(){return 1;}};",
     "value-initialized-constructorless-base": "struct B{int x;};struct D:B{D():B(){}};",
     "base-default-member-initializer": "struct B{int x=40;};struct D:B{D(){}};",

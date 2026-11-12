@@ -262,7 +262,8 @@ def explicit_destructor(parser, expression, operator):
     destructor = owner.definition.destructor
     from pcc.frontends.cpp.member_initialization import requires_destruction
     if (any(array_type(member.dtype) and requires_destruction(member.dtype) for member in owner.definition.members)
-            or (destructor is None and any(is_class_type(member.dtype) for member in owner.definition.members))):
+            or (destructor is None and (any(is_class_type(member.dtype) for member in owner.definition.members)
+                                        or requires_destruction(owner)))):
         raise CppDiagnostic('cpp.unsupported.destructor-subobjects',
                             'explicit array or implicit member destruction requires its lifetime owner', coord)
     if destructor is not None:
@@ -283,7 +284,12 @@ def explicit_destructor(parser, expression, operator):
     saved = parser._fresh_projection_name('__pcc_cpp_destroy_')
     temporary = parser._decl(saved, PointerType(dtype), coord, address)
     pointer = _cast(parser, c_ast.ID(saved, coord), PointerType(owner), coord)
-    effect = (c_ast.FuncCall(c_ast.ID(destructor.c_name, coord), c_ast.ExprList([pointer], coord), coord)
+    function = None if destructor is None else c_ast.ID(destructor.c_name, coord)
+    if getattr(destructor, 'method_virtual', False):
+        # [class.dtor]/14: an unqualified explicit call invokes the final overrider.
+        from pcc.frontends.cpp.virtual_functions import callee
+        function = callee(destructor, c_ast.ID(saved, coord), coord)
+    effect = (c_ast.FuncCall(function, c_ast.ExprList([pointer], coord), coord)
               if destructor is not None else _cast(parser, c_ast.ID(saved, coord), 'void', coord))
     node = c_ast.StmtExpr(c_ast.Compound([temporary, effect], coord), coord)
     return Expression(node, 'void', constant_fact=not_constant('void', 'explicit destruction', coord))

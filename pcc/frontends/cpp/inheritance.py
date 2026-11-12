@@ -1,4 +1,4 @@
-"""Single non-virtual base classes of non-polymorphic classes.
+"""Single non-virtual base classes.
 
 N4659 [class.derived], [class.member.lookup], [class.access.base],
 [conv.ptr]/3, [dcl.init.ref]/5 and [class.protected]; Itanium C++ ABI 2.4
@@ -8,9 +8,10 @@ tail-padding reuse of a non-POD base).
 One direct base per class, so every base subobject is at offset 0 of its
 derived object and a Derived* converts to Base* without adjustment. A base
 whose layout the existing C aggregate projection reproduces exactly is a
-leading C field; an empty base is allocated no storage. Layouts that need
-tail-padding reuse, and bases or derived classes with user-declared special
-members or virtual functions, remain explicit capability boundaries.
+leading C field; an empty base is allocated no storage. A dynamic base is
+the primary base and shares its table pointer (virtual_functions.py).
+Layouts that need tail-padding reuse, or a nonempty non-dynamic base after
+a new table pointer, remain explicit capability boundaries.
 """
 from dataclasses import dataclass
 
@@ -115,9 +116,6 @@ def parse_base_clause(parser, definition_keyword, dtype):
         unsupported("multiple base classes are not implemented", parser._peek().coord)
     if parser._peek().value == "...":
         unsupported("base pack expansions are not implemented", parser._peek().coord)
-    definition = base.definition
-    if definition.polymorphic or any(item.definition.polymorphic for item in base_chain(base)):
-        unsupported("polymorphic base classes and overriding are not implemented", name.coord)
     del colon
     return BaseSpecifier(base, access, name.coord)
 
@@ -128,7 +126,8 @@ def record_fields(dtype, types, coord):
     from pcc.frontends.c.c_abi_layout import pointer_scalar_layout
     definition = unqualified(dtype).definition
     fields = []
-    if definition.polymorphic:
+    from pcc.frontends.cpp.virtual_functions import owns_vptr
+    if owns_vptr(definition):
         layout = pointer_scalar_layout()
         fields.append((layout, layout.size))
     specifier = base_specifier(definition)
@@ -159,10 +158,12 @@ def check_derived_definition(definition):
     if specifier is None:
         return
     coord = specifier.coord
-    if definition.polymorphic:
-        unsupported("virtual functions of derived classes require overriding semantics", coord)
     from pcc.frontends.cpp.classes import is_class_type
     base = specifier.dtype
+    if definition.polymorphic and not base.definition.polymorphic and not is_empty_class(base):
+        # Itanium 2.4: the new table pointer takes offset 0 and moves a
+        # nonempty non-dynamic base after it; conversions would need an offset.
+        unsupported("a nonempty non-polymorphic base of a polymorphic class is not at offset 0", coord)
     if is_empty_class(base):
         # [intro.object]/8: two distinct objects of the same type cannot share
         # an address, which Itanium resolves by moving the empty base.

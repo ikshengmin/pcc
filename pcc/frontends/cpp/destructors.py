@@ -1,7 +1,9 @@
 """Complete-object destructors with owned declaration/access rules.
 
 N4659 [class.dtor]; Itanium ABI D1 complete-object destructor encoding. There
-is no D0 delete, D2 base destruction, virtual dispatch or unwind claim.
+is no D0 delete, D2 base destruction or unwind claim. A destructor is virtual
+if declared so or if its base's destructor is (virtual_functions.py); the
+destructor of a polymorphic class stores its own table pointer on entry.
 In-class bodies use the existing completed-class external-ODR method owner.
 Explicit member D1 calls share the normal-exit cleanup owner; implicit D1
 synthesis, unknown effects and exception cleanup remain explicit boundaries.
@@ -92,7 +94,18 @@ def declaration(parser, symbol):
     return result, this
 
 
-def parse_destructor(parser, definition=None):
+def parse_virt_specifiers(parser):
+    """[class.mem]: an in-class destructor declarator may end with override/final."""
+    specifiers = []
+    while parser._peek().kind == "ID" and parser._peek().value in ("override", "final"):
+        token = parser.cursor.take()
+        if token.value in specifiers:
+            raise CppDiagnostic("cpp.duplicate-virt-specifier", "a virt-specifier may occur only once", token.coord)
+        specifiers.append(token.value)
+    return tuple(specifiers)
+
+
+def parse_destructor(parser, definition=None, *, virtual_token=None):
     parent = parser.scope
     outside = definition is None
     if outside:
@@ -113,6 +126,7 @@ def parse_destructor(parser, definition=None):
         name = parser._identifier()
         owner = definition.dtype
     parameter_scope = parse_parameters(parser, definition, name)
+    specifiers = () if outside else parse_virt_specifiers(parser)
     defaulted = parser._peek().value == "="
     if defaulted:
         if outside:
@@ -141,6 +155,10 @@ def parse_destructor(parser, definition=None):
         symbol = declare_destructor(definition, name)
     parser.function_projection_names.add(symbol.c_name)
     function_declaration, this = declaration(parser, symbol)
+    if not outside:
+        from pcc.frontends.cpp.virtual_functions import declare_destructor as declare_virtual_destructor
+        declare_virtual_destructor(definition, symbol, function_declaration, virtual_token, specifiers,
+                                   defaulted, name.coord)
     if defaulted:
         from pcc.frontends.cpp.default_destructors import defer_definition
         defer_definition(definition, symbol, parameter_scope, function_declaration, this)
@@ -249,6 +267,11 @@ def complete_body(parser, definition, symbol, scope, this, coord, bind_body):
     try:
         parser.lifetimes.register_members(this, selected)
         body = bind_body()
+        if definition.polymorphic:
+            # [class.cdtor]/4: a derived destructor left this subobject's
+            # table pointer at its own table; restore the class's before the body.
+            from pcc.frontends.cpp.virtual_functions import vptr_store
+            body.block_items.insert(0, vptr_store(definition, this, coord))
         body.block_items.extend(parser.lifetimes.current_cleanup(coord))
         closed = _closed_destruction_body(body, parser.lifetimes.cleanup_destructors)
     finally:

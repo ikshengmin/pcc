@@ -7,9 +7,10 @@ constructors use this layout; constructors.py owns explicit construction of
 scalar/pointer subobjects and declared C1 members with bounded closed lifetime
 proofs when destruction is nontrivial.
 destructors.py and lifetimes.py own bounded normal exits and explicitly
-declared member destruction. virtual_functions.py owns the table pointer and
-dispatch of polymorphic classes without bases. Bases, unions, implicit
-non-trivial special members and exception unwinding remain gaps.
+declared member destruction. inheritance.py owns single non-virtual bases and
+virtual_functions.py the table pointer, overriding and dispatch. Multiple and
+virtual bases, unions, implicit non-trivial special members and exception
+unwinding remain gaps.
 
 The parser and this module share ``Scope``/``Symbol``. There is no second
 ordinary-name lookup implementation. Physical layout is performed by the
@@ -206,12 +207,14 @@ class ClassDefinition:
 
     @property
     def polymorphic(self):
-        return bool(self.virtual_functions)
+        # [class.virtual]/1: declared or inherited virtual functions.
+        return bool(self.virtual_functions) or (
+            self.base is not None and self.base.dtype.definition.polymorphic)
 
     @property
     def abstract(self):
-        # Without bases every pure virtual member is its own final overrider.
-        return any(getattr(symbol, "method_pure", False) for symbol in self.virtual_functions)
+        from pcc.frontends.cpp.virtual_functions import abstract
+        return abstract(self)
 
     @property
     def aggregate(self):
@@ -288,7 +291,9 @@ class ClassDefinition:
         if leading is not None:
             # Itanium 2.4: the primary non-virtual base subobject is at offset 0.
             declarations.insert(0, leading)
-        if self.polymorphic:
+        from pcc.frontends.cpp.virtual_functions import owns_vptr
+        if owns_vptr(self):
+            # A dynamic primary base already holds the shared table pointer.
             from pcc.frontends.cpp.virtual_functions import vptr_field
             declarations.insert(0, vptr_field(self))
         if not declarations:
