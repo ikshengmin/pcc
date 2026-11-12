@@ -57,6 +57,11 @@ class _LoadModel:
             "pcc_gc_backend_selected": backend,
             "pcc_gc_forwarding_population": population,
             "pcc_gc_relocation_set_head": 16384 if pending else 0,
+            # The counted relocating protocol (the provenance probe): under
+            # the shared mutator protocol a forwarded address is visible only
+            # while its stop owes the remap.
+            "pcc_gc_nonmoving_count_free": 0,
+            "pcc_gc_backend4_remap_owed": 0,
         }
         self.after_slot_read = None
         self.namespace = {
@@ -210,14 +215,12 @@ def test_load_config_disabled_backend_and_gc3_controls(entry):
         )
         assert model.run(entry) == value
         assert model.counts["configure"] == int(enabled and not initialized)
-        if not enabled or backend < 3:
+        # GC3 moves nothing: like GC0-GC2 its load is a plain load.
+        if not enabled or backend < 4:
             assert model.counts["read_barrier_counter"] == 0
             assert model.counts["needs_resolve"] == 0
-        if backend == 3:
-            assert model.counts["read_barrier_counter"] == int(enabled and population)
-            assert model.counts["gc3_candidate"] == int(enabled and population)
+            assert model.counts["gc3_candidate"] == 0
             assert model.counts["root_membership"] == 0
-            assert model.counts["needs_resolve"] == 0
 
 
 @pytest.mark.parametrize("entry", ENTRY_POINTS)
