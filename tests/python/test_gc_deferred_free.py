@@ -229,7 +229,7 @@ def test_begin_admits_only_normal_count_free_nonmoving_owner(backend, reason):
         rt.no_park = 1
     if reason == "counted":
         rt.write(rt.global_address("pcc_gc_backend4_no_refcounts"), 0, 0)
-    expected = int(backend in (1, 2) and reason == "normal")
+    expected = int(backend in (1, 2, 3) and reason == "normal")
     assert rt.call("begin", int(reason == "prior-stop")) == expected
     if expected:
         assert rt.call("begin", 0) == 0
@@ -491,7 +491,7 @@ def test_real_outer_owner_drains_after_actual_resume_before_poll_callback_return
     rt = CollectionRuntime(backend, held)
     assert rt.ns[entry](0) == 1
     free_event = next(row for row in rt.events if row[0] == "free")
-    if backend in (1, 2) and held == 0:
+    if backend in (1, 2, 3) and held == 0:
         assert free_event[2] == 0
         assert rt.counter(3) == rt.counter(4) == 1
         assert rt.events.index(("resume", 0)) < rt.events.index(free_event)

@@ -538,8 +538,9 @@ def test_gc4_gate_finishes_a_left_remark_and_sweeps_in_one_collection(mark_activ
         assert calls == ["step"] and pending["pcc_gc_cms_finish_pending"] == 0
 
 
+@pytest.mark.parametrize("backend", [1, 2, 3])
 @pytest.mark.parametrize("left,mark_active", [(1, 1), (1, 0), (0, 1)])
-def test_gc3_collection_consumes_a_left_remark(left, mark_active):
+def test_gc1_to_gc3_collection_consumes_a_left_remark(backend, left, mark_active):
     tree = _body("py_obj", ["_gc_maybe_auto_collect"])
     memory = {"pcc_gc_backend4_auto_step_pending": 1, "pcc_gc_cms_finish_pending": left,
               "pcc_gc_mark_active": mark_active}
@@ -558,13 +559,15 @@ def test_gc3_collection_consumes_a_left_remark(left, mark_active):
         "pcc_thread_no_park_depth": lambda: 0,
         "pcc_py_gc_minor_graph_lock_depth": lambda: 0,
         "_gc_automatic_collection_enabled": lambda: 1,
-        "_gc_backend_fast": lambda: 3,
+        "_gc_backend_fast": lambda: backend,
         "_gc_tracing_automatic_collect": lambda mark: calls.append(mark),
     }
-    exec(compile(ast.fix_missing_locations(tree), "gc3-production-gate", "exec"), namespace)
+    exec(compile(ast.fix_missing_locations(tree), "gc1-gc3-production-gate", "exec"), namespace)
     namespace["_gc_maybe_auto_collect"]()
-    # Only a left remark of an active mark takes the finish-only collection.
-    assert calls == ([2] if left and mark_active else [1])
+    # GC3 shares GC1/GC2's collector thread: a left remark of an active mark
+    # is finished by this collection (mark 1); otherwise it sweeps only a
+    # completed mark (0).
+    assert calls == ([1] if left and mark_active else [0])
     assert memory["pcc_gc_cms_finish_pending"] == 0
 
 

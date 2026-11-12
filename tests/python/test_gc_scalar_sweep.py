@@ -152,9 +152,10 @@ def test_native_mode_admission_boundary(backend):
     rt = ScalarRuntime(backend)
     pair = rt.object()
     rt.begin()
-    assert rt.enqueue(pair) == int(backend in (1, 2))
+    # The nonmoving count-free collectors, GC3 among them since it moves nothing.
+    assert rt.enqueue(pair) == int(backend in (1, 2, 3))
     rt.seal()
-    assert rt.drain() == int(backend in (1, 2))
+    assert rt.drain() == int(backend in (1, 2, 3))
 
 
 @pytest.mark.parametrize("tag", (2, 3, 4))
@@ -505,7 +506,8 @@ def test_actual_allocation_fallback_sets_origin_bit_only_on_moving_backends(back
                      memset=lambda *args: None)
     exec(compile(ast.Module(fallback, type_ignores=[]), "actual-allocation-fallback", "exec"), namespace)
     assert namespace["obj"] == 4096
-    assert namespace["stored_flags"] == (262144 if backend in (3, 4) else 0)
+    # Only the relocating collector needs the origin bit.
+    assert namespace["stored_flags"] == (262144 if backend == 4 else 0)
 
 
 @pytest.mark.parametrize("origin_bit", (0, 262144))
