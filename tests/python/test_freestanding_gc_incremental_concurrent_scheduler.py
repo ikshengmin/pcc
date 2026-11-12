@@ -46,6 +46,8 @@ OWNED_SYMBOLS = {
     "pcc_gc_backend4_maybe_auto_step",
 }
 RAW_FUNCTION_IMPORTS = {
+    "pcc_gc_object_walk_first",
+    "pcc_gc_object_walk_next",
     "pcc_gc_gray_worklist_take_locked",
     "pcc_gc_gray_worklist_flush",
     "pcc_gc_reclaim_retired_index_tables",
@@ -147,7 +149,6 @@ RAW_GLOBAL_IMPORTS = {
     "pcc_gc_metric_collection_stw_hist2",
     "pcc_gc_metric_collection_stw_hist3",
     "pcc_gc_metric_step",
-    "pcc_gc_object_head",
     "pcc_gc_pause",
     "pcc_gc_stepmul",
     "pcc_gc_trace_cursor",

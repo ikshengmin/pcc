@@ -57,6 +57,28 @@ EXTERN_DEFAULTS = {
     "pcc_allocator_object_node_record_ensure": lambda ptr: 0,
     "pcc_allocator_granule_object_slot": lambda ptr: 0,
     "pcc_gc_object_node_is_record": lambda node: 0,
+    "pcc_allocator_object_cell_span": lambda ptr: 0,
+    "pcc_allocator_record_span_first": lambda: 0,
+    "pcc_allocator_record_span_next": lambda span: 0,
+    "pcc_gc_granule_span": lambda ptr: 0,
+    "pcc_gc_object_index_record_publish": lambda record, obj: None,
+    # GC1-GC3 register an object cell without the graph lock
+    # (pcc_gc_register_object_cell); a modeled object is no cell and takes
+    # the locked or staged registration these models exercise.
+    "pcc_gc_register_object_cell": lambda obj, size: 0,
+    # An object cell's mark is a bit of its slab's GC page
+    # (freestanding_gc_page_marks); every other object keeps its colour in
+    # its header. Modeled objects are no cells: no page bit (-1), and colour
+    # tests read the header.
+    "pcc_gc_page_mark_set": lambda obj: -1,
+    "pcc_gc_page_mark_test": lambda obj: -1,
+    "pcc_gc_page_mark_assign": lambda obj, marked: None,
+    "pcc_gc_page_marks_begin": lambda: None,
+    "pcc_gc_object_is_white": lambda obj, flags: 1 if (flags & 8) != 0 else 0,
+    "pcc_gc_object_is_black": lambda obj, flags: 1 if (flags & 32) != 0 else 0,
+    # The walk revision bump outside freestanding_gc_object_nodes is reached
+    # only for a cell record, which models have none of.
+    "pcc_gc_object_list_revision_bump": lambda: None,
 }
 
 
@@ -227,6 +249,21 @@ def load_functions(path, names, namespace, *, local_helpers=True):
 def install_extern_defaults(namespace) -> None:
     for name, value in EXTERN_DEFAULTS.items():
         namespace.setdefault(name, value)
+    # A walk over every registered object (pcc_gc_object_walk_first/next)
+    # is the object list followed by the cell records of the record spans.
+    # Model memory has no record spans, so a modeled walk is the list:
+    # the head, then each node's next word (16), read from the model.
+    if "pcc_gc_object_walk_first" not in namespace:
+        def walk_first():
+            head = namespace.get("pcc_gc_object_list_head")
+            if head is not None:
+                return head()
+            return namespace["global_load_ptr"]("pcc_gc_object_head")
+        namespace["pcc_gc_object_walk_first"] = walk_first
+    if "pcc_gc_object_walk_next" not in namespace:
+        namespace["pcc_gc_object_walk_next"] = (
+            lambda node: namespace["load_ptr"](node, 16)
+        )
 
 
 @lru_cache(maxsize=None)

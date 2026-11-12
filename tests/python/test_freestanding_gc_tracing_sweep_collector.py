@@ -39,6 +39,9 @@ OWNED_SYMBOLS = {
     "pcc_gc_tracing_sweep_unreachable",
 }
 RAW_FUNCTION_IMPORTS = {
+    "pcc_gc_object_walk_first",
+    "pcc_gc_object_walk_next",
+    "pcc_gc_object_is_white",
     "pcc_gc_scalar_sweep_try_enqueue",
     'pcc_platform_monotonic_us',
     'pcc_capi_is_cext_type_tag',
@@ -102,7 +105,6 @@ RAW_GLOBAL_IMPORTS = {
     "pcc_gc_metric_sweep_recheck_sum_us",
     "pcc_gc_backend4_no_refcounts",
     "pcc_gc_backend_selected",
-    "pcc_gc_object_head",
     "pcc_gc_tracing_finish_commits",
     "pcc_gc_tracing_finish_stop_epoch",
     "pcc_gc_tracing_no_candidate_commit",

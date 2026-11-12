@@ -26,10 +26,12 @@ OWNED_SYMBOLS = {
 }
 MANAGED_PROVIDER_SYMBOLS = {"pcc_gc_subtract_referent_refs"}
 RAW_FUNCTION_IMPORTS = {
+    "pcc_gc_object_walk_first",
+    "pcc_gc_object_walk_next",
     "pcc_gc_mark_root_gray_if_known",
     "pcc_gc_subtract_referent_refs",
 }
-RAW_GLOBAL_IMPORTS = {"pcc_gc_object_head"}
+RAW_GLOBAL_IMPORTS: set[str] = set()
 
 
 def _exported_symbols(source: str) -> set[str]:

@@ -44,6 +44,9 @@ OWNED_DATA_SYMBOLS = {
 }
 TLS_STORAGE_SYMBOLS = {"pcc_gc_trace_stack_owner"}
 RAW_FUNCTION_IMPORTS = {
+    "pcc_gc_object_walk_first",
+    "pcc_gc_object_walk_next",
+    "pcc_gc_object_is_white",
     "pcc_gc_gray_worklist_take_locked",
     "pcc_gc_gray_worklist_flush",
     "pcc_gc_gray_worklist_clear_stopped",
@@ -83,7 +86,6 @@ RAW_GLOBAL_IMPORTS = {
     "pcc_gc_backend_selected",
     "pcc_gc_explicit_collect_active",
     "pcc_gc_mark_active",
-    "pcc_gc_object_head",
     "pcc_gc_trace_cursor",
     "pcc_gc_trace_cext_pending_backend",
     "pcc_gc_trace_cext_pending_epoch",
@@ -211,7 +213,11 @@ def test_referent_trace_does_not_regray_black_objects():
     ).split('@c_abi_export("pcc_gc_shade_gray_atomic")', 1)[1].split(
         "\n@c_abi_export", 1
     )[0]
-    assert "(allow_black == 0 and (old & 32) != 0)" in shade
+    # Black stays black unless a re-scan is allowed: an object cell is black
+    # by its page bit (pcc_gc_object_is_black), any other object by its
+    # header, which the CAS loop rechecks.
+    assert "allow_black == 0 and pcc_gc_object_is_black(obj, old) != 0" in shade
+    assert "allow_black == 0 and (old & 32) != 0" in shade
     assert shade.index("pcc_gc_gray_count_increment_acq_rel()") < shade.index(
         "atomic_cas_i32("
     )

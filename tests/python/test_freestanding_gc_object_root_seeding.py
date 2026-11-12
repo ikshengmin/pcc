@@ -25,6 +25,9 @@ OWNED_SYMBOLS = {
     "pcc_gc_prepare_object_list_mark",
 }
 RAW_FUNCTION_IMPORTS = {
+    "pcc_gc_object_walk_first",
+    "pcc_gc_object_walk_next",
+    "pcc_gc_page_marks_begin",
     "pcc_gc_gray_worklist_clear_stopped",
     # The walk reads each listed object's own node (GC1/GC2).
     "pcc_gc_object_node_is_address_pinned",
@@ -32,7 +35,7 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_mark_root_gray_if_known",
     "pcc_gc_visit_registered_root_slots",
 }
-RAW_GLOBAL_IMPORTS = {"pcc_gc_object_head", "pcc_gc_backend4_no_refcounts"}
+RAW_GLOBAL_IMPORTS = {"pcc_gc_backend4_no_refcounts"}
 
 
 def _exported_symbols(source: str) -> set[str]:

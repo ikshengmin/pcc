@@ -54,6 +54,8 @@ LOCAL_HELPER_SYMBOLS = {
 }
 DEFINED_SYMBOLS = OWNED_SYMBOLS | LOCAL_HELPER_SYMBOLS
 RAW_FUNCTION_IMPORTS = {
+    "pcc_gc_object_walk_first",
+    "pcc_gc_object_walk_next",
     # Count-free GC3/GC4 retirement: liveness of forwarded sources and
     # targets, conservative pins and the gate-parked admission of a cut.
     "pcc_capi_visit_extension_module_state_roots",
@@ -91,7 +93,6 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_managed_pointer_index_remove",
     "pcc_gc_object_index_find",
     "pcc_gc_object_index_remove",
-    "pcc_gc_object_list_head",
     "pcc_gc_object_node_freeing",
     "pcc_gc_object_node_finish_detached",
     # A forwarded source cell's record goes back to its cell under the lock.

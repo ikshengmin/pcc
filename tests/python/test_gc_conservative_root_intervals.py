@@ -126,6 +126,10 @@ class FrozenWordMemory(IntervalMemory):
             malloc=self.allocate,
             free=self.freed.append,
             global_load_ptr=lambda name: self.head if name == "pcc_gc_object_head" else 0,
+            # The walk over registered objects is this model's object list:
+            # it has no cell records (freestanding_gc_object_nodes).
+            pcc_gc_object_walk_first=lambda: self.head,
+            pcc_gc_object_walk_next=lambda node: self.namespace["load_ptr"](node, 16),
             pcc_thread_world_stop_epoch_held=lambda: 1,
             pcc_thread_snapshot_stopped_world_owner=self.snapshot_owner,
             pcc_thread_visit_conservative_words=self.visit,
@@ -295,6 +299,9 @@ extern void pcc_gc_pin_conservative_thread_roots(void);
 extern long pcc_gc_gray_conservative_and_listed_pinned_roots(void);
 void *pcc_gc_object_head;
 static long nodes[3][11];
+/* The walk over registered objects: these listed nodes, no cell records. */
+void *pcc_gc_object_walk_first(void) { return pcc_gc_object_head; }
+void *pcc_gc_object_walk_next(void *node) { return (void *)((long *)node)[2]; }
 /* Count-free GC1 without forwarding edges, unless a case selects GC4. */
 int pcc_gc_backend_selected = 1;
 int pcc_gc_backend4_no_refcounts = 1;

@@ -94,6 +94,9 @@ class HeaderMemory:
             "i64": int, "PYOBJECTHEADER_FLAGS_OFFSET": 12,
             "atomic_load_i32": self.load, "atomic_cas_i32": self.cas,
             "atomic_rmw_i32": self.rmw,
+            # This header is no object cell: it has no page mark bit
+            # (freestanding_gc_page_marks), so its colour is the header's.
+            "pcc_gc_page_mark_set": lambda obj: -1,
         }
         # An absent helper is allowed only so the same call-site regression
         # can demonstrate the original stale-store failure on the preimage.
@@ -164,6 +167,9 @@ def _scheduler_namespace(memory, operation):
         "global_addr": lambda name: globals_[name],
         "global_load_ptr": lambda name: globals_[name],
         "global_store_ptr": lambda name, value: globals_.__setitem__(name, value),
+        # The walk over registered objects: this one listed node.
+        "pcc_gc_object_walk_first": lambda: globals_["pcc_gc_object_head"],
+        "pcc_gc_object_walk_next": lambda node: node[16],
         "pcc_py_gc_minor_graph_lock": lambda: locks.append("lock"),
         "pcc_py_gc_minor_graph_unlock": lambda: locks.append("unlock"),
         "pcc_thread_owns_stopped_world": lambda: 0,
@@ -272,9 +278,12 @@ def test_actual_helper_emits_one_strong_full_word_cas(tmp_path):
                                 for target in node.targets))
     source = (
         "from pcc import i64\n"
-        "from pcc.extern import c_abi_export\n"
+        "from pcc.extern import c_abi_export, c_int64, c_ptr, extern\n"
         "from pcc.unsafe import atomic_load_i32, atomic_cas_i32\n"
         "__pcc_freestanding__ = True\n" + ast.unparse(flags_offset) + "\n"
+        # Gray and black also set an object cell's page bit, in another
+        # object (freestanding_gc_page_marks); the header is still one CAS.
+        "pcc_gc_page_mark_set = extern('pcc_gc_page_mark_set', (c_ptr,), c_int64)\n"
         + ast.unparse(node) + "\n"
     )
     path = tmp_path / "actual_mark_color.py"

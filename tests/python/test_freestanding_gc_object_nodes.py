@@ -36,6 +36,10 @@ OWNED_SYMBOLS = {
     "pcc_gc_object_node_finish_detached",
     "pcc_gc_object_node_gc_refs",
     "pcc_gc_object_node_is_record",
+    "pcc_gc_object_list_revision_bump",
+    "pcc_gc_object_walk_first",
+    "pcc_gc_object_walk_next",
+    "pcc_gc_object_walk_records_from",
     "pcc_gc_object_node_next",
     "pcc_gc_object_node_plan_requires_prepare",
     "pcc_gc_object_node_prepare",
@@ -68,7 +72,10 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_object_index_find",
     "pcc_thread_owns_stopped_world",
     "pcc_gc_granule_is_object_start",
-    "pcc_allocator_object_node_record_find",
+    "pcc_allocator_record_span_first",
+    "pcc_allocator_record_span_next",
+    "pcc_allocator_record_span_records",
+    "pcc_allocator_record_span_cells",
 }
 RAW_GLOBAL_IMPORTS = {
     "pcc_gc_backend3_promotion_head",
@@ -281,10 +288,18 @@ def test_object_nodes_preserve_pool_list_and_young_invariants() -> None:
         assert "free(" not in _export_body(strict, name)
 
     unlink = _export_body(strict, "pcc_gc_object_node_unlink")
-    assert unlink.index("pcc_gc_trace_cursor_load()") < unlink.index(
+    # A cell record is not on the object list: its branch leaves the young
+    # and promotion lists and returns before any list or cursor update.
+    record_part, list_part = unlink.split("prev = pcc_gc_object_node_prev(node)", 1)
+    assert "if ptr_is_null(load_ptr(node, NODE_RECORD_SPAN)) == 0:" in record_part
+    assert "pcc_gc_backend3_young_unlink(node)" in record_part
+    assert "return" in record_part
+    assert "pcc_gc_trace_cursor" not in record_part
+    assert "pcc_gc_object_set_list_head" not in record_part
+    assert list_part.index("pcc_gc_trace_cursor_load()") < list_part.index(
         "pcc_gc_backend3_young_unlink(node)"
     )
-    assert unlink.index("pcc_gc_backend3_young_unlink(node)") < unlink.index(
+    assert list_part.index("pcc_gc_backend3_young_unlink(node)") < list_part.index(
         "pcc_gc_object_set_list_head(nxt)"
     )
 
@@ -296,9 +311,14 @@ def test_object_nodes_preserve_pool_list_and_young_invariants() -> None:
         known_size.index("pcc_gc_object_node_size(node)")
     )
 
+    # Live bytes never go below zero, and the debit is one CAS because an
+    # object cell registers (adds) without the graph lock.
     live = _export_body(strict, "pcc_gc_live_bytes_subtract")
-    assert "if size >= live:" in live
-    assert 'store_i64(global_addr("pcc_gc_live_bytes"), 0, 0)' in live
+    assert 'slot = global_addr("pcc_gc_live_bytes")' in live
+    assert "updated: i64 = 0" in live and "if size < live:" in live
+    assert "updated = live - size" in live
+    assert "atomic_cas_i64(slot, 0, live, updated" in live
+    assert "store_i64(" not in live
 
 
 def test_production_archive_has_one_object_node_owner(

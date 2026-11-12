@@ -80,6 +80,9 @@ RAW_ONLY_CROSS_OBJECT_SYMBOLS = {
     "pcc_gc_gray_worklist_note",
 }
 RAW_FUNCTION_IMPORTS = RAW_ONLY_CROSS_OBJECT_SYMBOLS | {
+    "pcc_gc_page_mark_set",
+    "pcc_gc_page_mark_test",
+    "pcc_gc_object_is_black",
     "pcc_platform_abort",
     # The Darwin thread-local descriptor bootstrap of the handled-context slot.
     "tlv_bootstrap",
