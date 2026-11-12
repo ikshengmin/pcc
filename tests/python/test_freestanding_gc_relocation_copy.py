@@ -28,6 +28,7 @@ MAKEFILE = RUNTIME_DIR / "Makefile"
 OWNED_SYMBOLS = {
     "pcc_gc_backend4_relocate_copy_preallocated_unlocked",
     "pcc_gc_relocate_copy",
+    "pcc_gc_relocation_copy_evacuation_page_unlist",
 }
 RAW_FUNCTION_IMPORTS = {
     "pcc_gc_gray_count_increment_acq_rel",
@@ -42,6 +43,9 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_backend4_zpage_detach_for_relocation",
     "pcc_gc_backend4_zpage_finish_relocation_detach",
     "pcc_gc_config_ensure",
+    # An allocator cell's page is its object slab's GC page.
+    "pcc_gc_page_of",
+    "pcc_gc_page_set_evacuating",
     "pcc_gc_forwarding_find",
     "pcc_gc_forwarding_install_plan_finish",
     "pcc_gc_forwarding_install_plan_prepare",
@@ -69,6 +73,7 @@ RAW_GLOBAL_IMPORTS = {
     "pcc_gc_backend_selected",
     "pcc_gc_backend4_evacuated_bytes_count",
     "pcc_gc_backend4_evacuation_page_head",
+    "pcc_gc_backend4_relocation_target_alloc",
     "pcc_gc_backend4_reseed_commit_owner",
     "pcc_gc_backend4_reseed_page_count_cursor",
     "pcc_gc_backend4_reseed_page_revision",
@@ -205,15 +210,24 @@ def test_relocation_copy_preserves_transaction_contract() -> None:
     assert 'global_store_ptr("pcc_gc_relocation_set_head", nxt)' in body
     assert "store_ptr(finish_plan, 0, relocation_node)" in body
     assert "pcc_gc_backend4_zpage_find(from_obj)" in body
-    assert (
-        'global_load_ptr("pcc_gc_backend4_evacuation_page_head")'
-        in compact
-    )
+    # The last candidate of a page takes the page off the evacuation list:
+    # a logical zpage, or an allocator cell's object slab (pcc_gc_page_of),
+    # whose evacuating flag clears with it.
+    assert "_evacuation_page_unlist(from_page)" in body
+    assert "store_ptr(finish_plan, 8, page_node)" in body
+    assert "from_slab_page = pcc_gc_page_of(from_obj)" in body
+    assert "_evacuation_page_unlist(from_slab_page)" in body
+    assert "pcc_gc_page_set_evacuating(from_slab_page, 0)" in body
+    assert "store_ptr(finish_plan, 8, slab_node)" in body
+    unlist = strict.split("def _evacuation_page_unlist(page):", 1)[1].split(
+        "@c_abi_export", 1
+    )[0]
+    compact_unlist = "".join(unlist.split())
+    assert 'global_load_ptr("pcc_gc_backend4_evacuation_page_head")' in compact_unlist
     assert (
         'global_store_ptr("pcc_gc_backend4_evacuation_page_head",next_page)'
-        in compact
+        in compact_unlist
     )
-    assert "store_ptr(finish_plan, 8, page_node)" in body
     for managed_helper in (
         "pcc_gc_backend4_evacuation_page_remove",
         "pcc_gc_backend4_relocation_set_contains_page",
@@ -242,6 +256,16 @@ def test_relocation_copy_preserves_transaction_contract() -> None:
     )
     assert public.index("pcc_py_gc_minor_graph_unlock()") < public.index(
         "to_obj = pcc_gc_alloc(size, tag, (flags & ~10240) | 64)"
+    )
+    # The copy target never comes from a slab being evacuated: the switch
+    # brackets exactly the target allocation.
+    target_alloc = public.index("to_obj = pcc_gc_alloc(size, tag, (flags & ~10240) | 64)")
+    assert public.rindex(
+        'store_i32(global_addr("pcc_gc_backend4_relocation_target_alloc"), 0, 1)',
+        0, target_alloc,
+    ) < target_alloc < public.index(
+        'store_i32(global_addr("pcc_gc_backend4_relocation_target_alloc"), 0, 0)',
+        target_alloc,
     )
     allocation = public.index("to_obj = pcc_gc_alloc")
     commit_lock = public.index("pcc_py_gc_minor_graph_lock()", allocation)

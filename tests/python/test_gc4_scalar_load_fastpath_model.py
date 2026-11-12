@@ -247,5 +247,5 @@ def test_scalar_guard_precedes_membership_in_source(entry):
     tree = ast.parse(LOAD_SOURCE.read_text(encoding="utf-8"))
     function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == entry)
     body = ast.get_source_segment(LOAD_SOURCE.read_text(encoding="utf-8"), function)
-    assert body.index("is_tagged_int(v)") < body.index("_gc_backend4_should_check_slot(slot)")
-    assert body.index("_gc_backend4_should_check_slot(slot)") < body.index("pcc_gc_note_load()")
+    assert body.index("is_tagged_int(v)") < body.index("_gc_backend4_should_check_slot(owner, slot)")
+    assert body.index("_gc_backend4_should_check_slot(owner, slot)") < body.index("pcc_gc_note_load()")

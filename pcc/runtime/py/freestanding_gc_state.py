@@ -229,6 +229,9 @@ define_global_i64("pcc_gc_metric_graph_wait_store_max_us", 0)
 # The public byte-count APIs are i64; retain that width in raw state too.
 define_global_i64("pcc_gc_debt_bytes", 0)
 define_global_i32("pcc_gc_backend4_auto_step_pending", 0)
+# Set by pcc_gc_relocate_copy around its allocation: a GC4 copy target
+# comes from pcc_allocator_alloc_object_outside_evacuation.
+define_global_i32("pcc_gc_backend4_relocation_target_alloc", 0)
 # A finished mark waiting for mutator-owned cleanup, distinct from a moving
 # collector's pending generation/relocation work (which must not block marking).
 define_global_i32("pcc_gc_cms_sweep_pending", 0)

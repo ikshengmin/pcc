@@ -48,6 +48,9 @@ pcc_gc_backend4_zpage_payload_span_preflight_locked = extern(
     (c_ptr, c_int64),
     c_int64
 )
+pcc_gc_backend4_zpage_find = extern(
+    "pcc_gc_backend4_zpage_find", (c_ptr,), c_ptr
+)
 pcc_gc_backend4_zpage_publish_relocation_payload_spans_locked = extern(
     "pcc_gc_backend4_zpage_publish_relocation_payload_spans_locked",
     (c_ptr, c_ptr, c_int64, c_int64),
@@ -541,6 +544,10 @@ def pcc_gc_relocation_payload_raw_validate_locked(
             return 0
         total_span_bytes = total_span_bytes + span_bytes
         index = index + 1
+    if ptr_is_null(pcc_gc_backend4_zpage_find(to_obj)) != 0:
+        # An allocator cell's payload is external to its object slab: no
+        # page accounts its spans.
+        return 1
     return pcc_gc_backend4_zpage_payload_span_preflight_locked(
         to_obj, total_span_bytes
     )
@@ -1081,7 +1088,9 @@ def _relocate_raw_publish_locked(to_obj, ctx) -> i64:
             span_count = span_count + 1
             total_span_bytes = total_span_bytes + span_bytes
         index = index + 1
-    if span_count > 0:
+    # Only a logical-zpage owner accounts payload spans on its page; an
+    # allocator cell's spans stay in the plan, which frees them.
+    if span_count > 0 and ptr_is_null(pcc_gc_backend4_zpage_find(to_obj)) == 0:
         if pcc_gc_backend4_zpage_publish_relocation_payload_spans_locked(
             to_obj, span_head, span_count, total_span_bytes
         ) == 0:

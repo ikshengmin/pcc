@@ -185,6 +185,9 @@ pcc_gc_fix_backend = extern("pcc_gc_fix_backend", (), c_void)
 pcc_allocator_alloc_object = extern(
     "pcc_allocator_alloc_object", (c_int64,), c_ptr
 )
+pcc_allocator_alloc_object_outside_evacuation = extern(
+    "pcc_allocator_alloc_object_outside_evacuation", (c_int64,), c_ptr
+)
 pcc_gc_backend4_try_zpage_alloc = extern(
     "pcc_gc_backend4_try_zpage_alloc",
     (c_int64, c_int32),
@@ -431,11 +434,16 @@ def _gc_forwarding_population() -> int:
     return load_i32(global_addr("pcc_gc_forwarding_population"), 0)
 
 
-def _gc_backend4_should_check_slot(slot) -> int:
+def _gc_backend4_should_check_slot(owner, slot) -> int:
     if _gc_forwarding_population() > 0:
         return 1
     if ptr_is_null(global_load_ptr("pcc_gc_relocation_set_head")) != 0:
         return 0
+    # A slot of an ``owner`` object is a heap slot, never a runtime root:
+    # only an ownerless slot asks the root registry, which takes the graph
+    # lock (the lock a container-locked reader must not take).
+    if ptr_is_null(owner) == 0:
+        return 1
     if pcc_gc_slot_is_runtime_root(slot) != 0:
         return 0
     return 1
@@ -536,7 +544,14 @@ def pcc_gc_alloc(size: int, type_tag: int, flags: int):
         # allocator's OBJECT slab family (ARCH-P0 S1) so their granules are
         # registered for exact structural provenance; raw allocations keep
         # using plain malloc and never share these slabs.
-        obj = pcc_allocator_alloc_object(size)
+        if (
+            backend == 4
+            and load_i32(global_addr("pcc_gc_backend4_relocation_target_alloc"), 0) != 0
+        ):
+            # A relocation copy never lands in a slab being evacuated.
+            obj = pcc_allocator_alloc_object_outside_evacuation(size)
+        else:
+            obj = pcc_allocator_alloc_object(size)
         if ptr_is_null(obj) == 0:
             memset(obj, 0, size)
             if backend == 4:
@@ -650,7 +665,7 @@ def pcc_gc_load_ptr(owner, slot):
         # counting a read-barrier check.
         if ptr_is_null(v) != 0 or is_tagged_int(v) != 0:
             return v
-        if _gc_backend4_should_check_slot(slot) == 0:
+        if _gc_backend4_should_check_slot(owner, slot) == 0:
             return v
         pcc_gc_note_load()
         # G-P0-LONGRUN: decide via pointer-value lookups, never a raw
@@ -678,7 +693,7 @@ def pcc_gc_load_borrowed_ptr(owner, slot):
         # counting a read-barrier check.
         if ptr_is_null(v) != 0 or is_tagged_int(v) != 0:
             return v
-        if _gc_backend4_should_check_slot(slot) == 0:
+        if _gc_backend4_should_check_slot(owner, slot) == 0:
             return v
         pcc_gc_note_load()
         # G-P0-LONGRUN: decide via pointer-value lookups, never a raw

@@ -32,6 +32,7 @@ from pcc.unsafe import (
 __pcc_freestanding__ = True
 
 
+
 pcc_gc_object_is_address_pinned = extern("pcc_gc_object_is_address_pinned", (c_ptr,), c_int64)
 
 
@@ -51,6 +52,10 @@ pcc_gc_backend4_zpage_finish_relocation_detach = extern(
     "pcc_gc_backend4_zpage_finish_relocation_detach", (c_ptr,), c_void
 )
 pcc_gc_config_ensure = extern("pcc_gc_config_ensure", (), c_int64)
+pcc_gc_page_of = extern("pcc_gc_page_of", (c_ptr,), c_ptr)
+pcc_gc_page_set_evacuating = extern(
+    "pcc_gc_page_set_evacuating", (c_ptr, c_int64), c_void
+)
 pcc_gc_forwarding_find = extern("pcc_gc_forwarding_find", (c_ptr,), c_ptr)
 pcc_gc_forwarding_install_plan_prepare = extern(
     "pcc_gc_forwarding_install_plan_prepare", (c_ptr, c_ptr), c_ptr
@@ -120,6 +125,42 @@ py_decref = extern("py_decref", (c_ptr,), c_void)
 pcc_gc_gray_count_increment_acq_rel = extern("pcc_gc_gray_count_increment_acq_rel", (), c_void)
 pcc_gc_gray_count_decrement_acq_rel = extern("pcc_gc_gray_count_decrement_acq_rel", (), c_void)
 pcc_gc_set_mark_color = extern("pcc_gc_set_mark_color", (c_ptr, c_int64), c_void)
+
+@c_abi_export("pcc_gc_relocation_copy_evacuation_page_unlist")
+def _evacuation_page_unlist(page):
+    """Unlink ``page``'s node from the evacuation page list and return it
+    (detached), or NULL when the page is not listed. The caller holds the
+    graph lock and frees the node after it."""
+    found = null()
+    prev_page = null()
+    page_node = global_load_ptr("pcc_gc_backend4_evacuation_page_head")
+    while ptr_is_null(page_node) == 0 and ptr_is_null(found) != 0:
+        next_page = load_ptr(page_node, 8)
+        if ptr_eq(load_ptr(page_node, 0), page) != 0:
+            if ptr_eq(
+                global_load_ptr("pcc_gc_backend4_reseed_page_count_cursor"),
+                page_node,
+            ) != 0:
+                global_store_ptr(
+                    "pcc_gc_backend4_reseed_page_count_cursor", next_page
+                )
+            revision: i64 = load_i64(
+                global_addr("pcc_gc_backend4_reseed_page_revision"), 0
+            )
+            store_i64(
+                global_addr("pcc_gc_backend4_reseed_page_revision"), 0, revision + 1
+            )
+            if ptr_is_null(prev_page) != 0:
+                global_store_ptr("pcc_gc_backend4_evacuation_page_head", next_page)
+            else:
+                store_ptr(prev_page, 8, next_page)
+            store_ptr(page_node, 8, null())
+            found = page_node
+        else:
+            prev_page = page_node
+            page_node = next_page
+    return found
+
 
 @c_abi_export("pcc_gc_backend4_relocate_copy_preallocated_unlocked")
 def pcc_gc_backend4_relocate_copy_preallocated_unlocked(
@@ -245,6 +286,10 @@ def pcc_gc_backend4_relocate_copy_preallocated_unlocked(
     from_znode = pcc_gc_backend4_zpage_find(from_obj)
     if ptr_is_null(from_znode) == 0:
         from_page = load_ptr(from_znode, 8)
+    # An allocator cell's page is its object slab (pcc_gc_page_of).
+    from_slab_page = null()
+    if ptr_is_null(from_page) != 0:
+        from_slab_page = pcc_gc_page_of(from_obj)
     evacuated: i64 = load_i32(
         global_addr("pcc_gc_backend4_evacuated_bytes_count"), 0
     )
@@ -334,44 +379,26 @@ def pcc_gc_backend4_relocate_copy_preallocated_unlocked(
                     page_has_candidate = 1
                 scan = load_ptr(scan, 8)
         if page_has_candidate == 0:
-            prev_page = null()
-            page_node = global_load_ptr(
-                "pcc_gc_backend4_evacuation_page_head"
-            )
-            while ptr_is_null(page_node) == 0:
-                next_page = load_ptr(page_node, 8)
-                if ptr_eq(load_ptr(page_node, 0), from_page) != 0:
-                    if ptr_eq(
-                        global_load_ptr(
-                            "pcc_gc_backend4_reseed_page_count_cursor"
-                        ),
-                        page_node,
-                    ) != 0:
-                        global_store_ptr(
-                            "pcc_gc_backend4_reseed_page_count_cursor",
-                            next_page,
-                        )
-                    revision: i64 = load_i64(
-                        global_addr("pcc_gc_backend4_reseed_page_revision"),
-                        0,
-                    )
-                    store_i64(
-                        global_addr("pcc_gc_backend4_reseed_page_revision"),
-                        0,
-                        revision + 1,
-                    )
-                    if ptr_is_null(prev_page) != 0:
-                        global_store_ptr(
-                            "pcc_gc_backend4_evacuation_page_head", next_page
-                        )
-                    else:
-                        store_ptr(prev_page, 8, next_page)
-                    store_i32(from_page, 108, 0)
-                    store_ptr(page_node, 8, null())
-                    store_ptr(finish_plan, 8, page_node)
-                    break
-                prev_page = page_node
-                page_node = next_page
+            page_node = _evacuation_page_unlist(from_page)
+            if ptr_is_null(page_node) == 0:
+                store_i32(from_page, 108, 0)
+                store_ptr(finish_plan, 8, page_node)
+    if ptr_is_null(from_slab_page) == 0:
+        # The slab stays on the evacuation list while the relocation set
+        # holds another of its objects; the last copy clears it.
+        slab_has_candidate: i64 = 0
+        if pcc_gc_relocation_member_count(from_obj) != 0:
+            slab_has_candidate = 1
+        scan = global_load_ptr("pcc_gc_relocation_set_head")
+        while ptr_is_null(scan) == 0 and slab_has_candidate == 0:
+            if ptr_eq(pcc_gc_page_of(load_ptr(scan, 0)), from_slab_page) != 0:
+                slab_has_candidate = 1
+            scan = load_ptr(scan, 8)
+        if slab_has_candidate == 0:
+            slab_node = _evacuation_page_unlist(from_slab_page)
+            if ptr_is_null(slab_node) == 0:
+                pcc_gc_page_set_evacuating(from_slab_page, 0)
+                store_ptr(finish_plan, 8, slab_node)
     store_ptr(
         finish_plan,
         16,
@@ -443,7 +470,9 @@ def pcc_gc_relocate_copy(from_obj, size: i64):
     ) == 0:
         pcc_gc_relocation_payload_plan_finish(payload_plan)
         return null()
+    store_i32(global_addr("pcc_gc_backend4_relocation_target_alloc"), 0, 1)
     to_obj = pcc_gc_alloc(size, tag, (flags & ~10240) | 64)
+    store_i32(global_addr("pcc_gc_backend4_relocation_target_alloc"), 0, 0)
     if ptr_is_null(to_obj) != 0:
         pcc_gc_relocation_payload_plan_finish(payload_plan)
         return null()

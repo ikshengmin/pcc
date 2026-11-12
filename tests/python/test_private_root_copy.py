@@ -68,7 +68,7 @@ def test_private_borrowed_copy_heals_forwarding_without_source_reference_transfe
     model.ns.update(
         _gc_forwarding_population=lambda: 1,
         _gc_relocation_candidate=lambda value: int(value == 1000),
-        _gc_backend4_should_check_slot=lambda slot: 1,
+        _gc_backend4_should_check_slot=lambda owner, slot: 1,
         pcc_gc_backend4_slot_needs_resolve=lambda value: int(value == 1000),
         pcc_gc_note_load=lambda: None,
         pcc_gc_note_relocation_read=lambda value: 2000 if value == 1000 else value,

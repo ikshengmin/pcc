@@ -1781,6 +1781,7 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         # refcount-prepare mirrors, read by pcc_gc_telemetry.
         'pcc_allocator_double_free_reported',
         'pcc_allocator_double_free_audit',
+        'pcc_gc_backend4_relocation_target_alloc',
         'pcc_gc_refcount_provenance_probe',
         'pcc_gc_refcount_provenance_probe_reported',
         # py_incref/py_decref's in-place update gate (backend 0, no probe,
@@ -3299,6 +3300,16 @@ def _cross_object_signatures_part_14():
     }
 
 
+def _cross_object_signatures_part_15():
+    return {
+    # GC4 evacuates object slabs (freestanding_gc_relocation_selector).
+    "pcc_gc_page_of": (("c_ptr",), "c_ptr"),
+    "pcc_gc_page_evacuating": (("c_ptr",), "c_int64"),
+    "pcc_gc_page_set_evacuating": (("c_ptr", "c_int64"), "c_void"),
+    "pcc_allocator_alloc_object_outside_evacuation": (("c_int64",), "c_ptr"),
+    }
+
+
 FREESTANDING_GC_CROSS_OBJECT_SIGNATURES: dict[
     str, tuple[tuple[str, ...], str]
 ] = _cross_object_signatures_part_0()
@@ -3318,6 +3329,7 @@ FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_12(
 
 FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_13())
 FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_14())
+FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_15())
 def is_freestanding_gc_cross_object_runtime_import(
     symbol: str, parameters_source: str, return_source: str
 ) -> bool:

@@ -78,6 +78,30 @@ pcc_thread_world_stop_epoch_held = extern(
 pcc_gc_object_is_white = extern("pcc_gc_object_is_white", (c_ptr, c_int64), c_int64)
 
 
+pcc_allocator_record_span_first = extern(
+    "pcc_allocator_record_span_first", (), c_ptr
+)
+pcc_allocator_record_span_next = extern(
+    "pcc_allocator_record_span_next", (c_ptr,), c_ptr
+)
+pcc_allocator_record_span_records = extern(
+    "pcc_allocator_record_span_records", (c_ptr,), c_ptr
+)
+pcc_allocator_record_span_cells = extern(
+    "pcc_allocator_record_span_cells", (c_ptr,), c_int64
+)
+pcc_allocator_record_span_page = extern(
+    "pcc_allocator_record_span_page", (c_ptr,), c_ptr
+)
+pcc_gc_page_evacuating = extern("pcc_gc_page_evacuating", (c_ptr,), c_int64)
+pcc_gc_alloc_stage_drain_locked = extern(
+    "pcc_gc_alloc_stage_drain_locked", (), c_int64
+)
+pcc_gc_page_set_evacuating = extern(
+    "pcc_gc_page_set_evacuating", (c_ptr, c_int64), c_void
+)
+
+
 @c_abi_export("pcc_gc_relocation_selector_zpage_head")
 def _zpage_head():
     return global_load_ptr("pcc_gc_backend4_zpage_head")
@@ -190,19 +214,15 @@ def _backend4_note_page_candidate(size: i64, page) -> None:
         )
 
 
-@c_abi_export("pcc_gc_relocation_selector_candidate_score")
-def _backend4_zpage_candidate_score(node, allow_large_pages: i64) -> i64:
-    if ptr_is_null(node) != 0:
-        return -1
-    obj = load_ptr(node, 0)
-    page = load_ptr(node, 8)
-    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0 or ptr_is_null(page) != 0:
-        return -1
-    if load_i64(page, 88) > 0:
-        return -1
+@c_abi_export("pcc_gc_relocation_selector_object_relocatable")
+def _object_relocatable(obj) -> i64:
+    """1 when ``obj`` itself may move: not deallocating, pinned, fresh or a
+    forwarding party, its type copyable, and no thread, virtual thread or
+    channel state that names it from outside the heap. Page policy and the
+    object's size are the caller's."""
     flags: i64 = load_i32(obj, 12)
     if (flags & (2048 | 8192 | 524288)) != 0 or pcc_gc_object_is_address_pinned(obj) != 0:
-        return -1
+        return 0
     if (flags & 16384) != 0:
         # FRESH_ALLOC: the add refuses half-initialized objects
         # unconditionally, so a fresh owner must be skipped here, counted,
@@ -216,52 +236,52 @@ def _backend4_zpage_candidate_score(node, allow_large_pages: i64) -> i64:
             0,
             skips + 1,
         )
-        return -1
+        return 0
     tag: i64 = load_i32(obj, 8)
     if pcc_gc_backend4_relocate_copy_supported_tag(tag) == 0:
-        return -1
+        return 0
     if (
         tag == abi_constant("object.type.thread")
         and ptr_is_null(load_ptr(obj, 16)) == 0
     ):
-        return -1
+        return 0
     if tag == abi_constant("object.type.virtual_thread"):
         if load_i64(
             obj, abi_constant("object.virtual_thread.queued_offset")
         ) != 0:
-            return -1
+            return 0
         if ptr_is_null(load_ptr(
             obj, abi_constant("object.virtual_thread.timer_entry_offset")
         )) == 0:
-            return -1
+            return 0
         if ptr_is_null(load_ptr(
             obj, abi_constant("object.virtual_thread.io_entry_offset")
         )) == 0:
-            return -1
+            return 0
         if ptr_is_null(load_ptr(
             obj, abi_constant("object.virtual_thread.join_waiters_offset")
         )) == 0:
-            return -1
+            return 0
         if ptr_is_null(load_ptr(
             obj, abi_constant("object.virtual_thread.join_wait_tail_offset")
         )) == 0:
-            return -1
+            return 0
         if ptr_is_null(load_ptr(
             obj, abi_constant("object.virtual_thread.join_entry_offset")
         )) == 0:
-            return -1
+            return 0
         if ptr_is_null(load_ptr(
             obj, abi_constant("object.virtual_thread.channel_arm_a_offset")
         )) == 0:
-            return -1
+            return 0
         if ptr_is_null(load_ptr(
             obj, abi_constant("object.virtual_thread.channel_arm_b_offset")
         )) == 0:
-            return -1
+            return 0
         if load_i64(
             obj, abi_constant("object.virtual_thread.wait_kind_offset")
         ) != 0:
-            return -1
+            return 0
     if tag == abi_constant("object.type.vthread_channel"):
         kind: i64 = load_i64(
             obj, abi_constant("object.vthread_channel.core.kind_offset")
@@ -271,28 +291,44 @@ def _backend4_zpage_candidate_score(node, allow_large_pages: i64) -> i64:
                 obj,
                 abi_constant("object.vthread_channel.core.send_head_offset"),
             )) == 0:
-                return -1
+                return 0
             if ptr_is_null(load_ptr(
                 obj,
                 abi_constant("object.vthread_channel.core.send_tail_offset"),
             )) == 0:
-                return -1
+                return 0
             if ptr_is_null(load_ptr(
                 obj,
                 abi_constant("object.vthread_channel.core.recv_head_offset"),
             )) == 0:
-                return -1
+                return 0
             if ptr_is_null(load_ptr(
                 obj,
                 abi_constant("object.vthread_channel.core.recv_tail_offset"),
             )) == 0:
-                return -1
+                return 0
             if load_i64(
                 obj, abi_constant("object.vthread_channel.core.flags_offset")
             ) != 0:
-                return -1
+                return 0
         elif kind != 1 and kind != 2:
-            return -1
+            return 0
+    return 1
+
+
+@c_abi_export("pcc_gc_relocation_selector_candidate_score")
+def _backend4_zpage_candidate_score(node, allow_large_pages: i64) -> i64:
+    if ptr_is_null(node) != 0:
+        return -1
+    obj = load_ptr(node, 0)
+    page = load_ptr(node, 8)
+    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0 or ptr_is_null(page) != 0:
+        return -1
+    if load_i64(page, 88) > 0:
+        return -1
+    if _object_relocatable(obj) == 0:
+        return -1
+    flags: i64 = load_i32(obj, 12)
     size: i64 = load_i64(node, 32)
     large_page_accepted: i64 = 0
     if _backend4_evacuation_policy_accept(size) == 0 and allow_large_pages != 0:
@@ -957,6 +993,304 @@ def _select_page_objects_batch(
     return selected
 
 
+# GC4 evacuates object slabs, the allocator's pages (ZGC pages): a slab
+# whose live cells are at most this percentage of its cells is a candidate
+# (ZGC's default fragmentation limit relocates a page with 25% garbage).
+SLAB_EVACUATION_LIVE_PERCENT = 75
+# Slabs one selection evacuates at most, sparsest first.
+SLAB_EVACUATION_PAGES = 16
+# The allocator's OBJECT_NODE_RECORD_BYTES and the record's index key
+# (freestanding_gc_object_nodes): a record with a key is registered;
+# freeing@32 is 0 while its object lives; its size is at 8.
+SLAB_RECORD_BYTES = 96
+SLAB_RECORD_INDEX_KEY = 88
+# Ranked slab: span, live cells.
+_SLAB_RANK_SPAN = 0
+_SLAB_RANK_LIVE = 8
+_SLAB_RANK_BYTES = 16
+
+
+@c_abi_export("pcc_gc_relocation_selector_graph_leaf_tag")
+def _graph_leaf_tag(tag: i64) -> i64:
+    """1 for the graph leaves pcc_gc_alloc never put on a logical zpage
+    (py_obj._gc_graph_leaf_tag): GC4 does not relocate them, and runtime
+    readers of their slots (str.join, os.path) rely on it."""
+    if tag == abi_constant("object.type.none") or tag == abi_constant("object.type.bool"):
+        return 1
+    if tag == abi_constant("object.type.int") or tag == abi_constant("object.type.float"):
+        return 1
+    if tag == abi_constant("object.type.str") or tag == abi_constant("object.type.complex"):
+        return 1
+    if tag == abi_constant("object.type.bytes") or tag == abi_constant("object.type.bytearray"):
+        return 1
+    if tag == abi_constant("object.type.cpy_handle"):
+        return 1
+    if (
+        tag == abi_constant("object.type.ellipsis")
+        or tag == abi_constant("object.type.notimplemented")
+    ):
+        return 1
+    return 0
+
+
+@c_abi_export("pcc_gc_relocation_selector_slab_live_cells")
+def _slab_live_cells(span) -> i64:
+    """Cells of ``span`` whose registered object lives."""
+    records = pcc_allocator_record_span_records(span)
+    cells: i64 = pcc_allocator_record_span_cells(span)
+    live: i64 = 0
+    cell: i64 = 0
+    while cell < cells:
+        record = ptr_add(records, cell * SLAB_RECORD_BYTES)
+        if (
+            load_i64(record, SLAB_RECORD_INDEX_KEY) != 0
+            and load_i64(record, 32) == 0
+        ):
+            live = live + 1
+        cell = cell + 1
+    return live
+
+
+@c_abi_export("pcc_gc_relocation_selector_slab_rank_locked")
+def _slab_rank_locked(ranked, page_budget: i64, live_percent: i64) -> i64:
+    """Fill ``ranked`` with up to ``page_budget`` candidate slabs, sparsest
+    first; return how many. A candidate has a GC page that is not being
+    evacuated and some, but at most ``live_percent`` percent, live cells.
+    The caller holds the graph lock."""
+    count: i64 = 0
+    span = pcc_allocator_record_span_first()
+    while ptr_is_null(span) == 0:
+        page = pcc_allocator_record_span_page(span)
+        if ptr_is_null(page) == 0 and pcc_gc_page_evacuating(page) == 0:
+            live: i64 = _slab_live_cells(span)
+            cells: i64 = pcc_allocator_record_span_cells(span)
+            if live > 0 and live * 100 <= cells * live_percent:
+                # Insertion into the sorted prefix; a full table keeps the
+                # sparsest page_budget slabs.
+                position: i64 = count
+                if count == page_budget:
+                    position = count - 1
+                    if load_i64(
+                        ranked, position * _SLAB_RANK_BYTES + _SLAB_RANK_LIVE
+                    ) <= live:
+                        position = -1
+                else:
+                    count = count + 1
+                if position >= 0:
+                    while (
+                        position > 0
+                        and load_i64(
+                            ranked,
+                            (position - 1) * _SLAB_RANK_BYTES + _SLAB_RANK_LIVE,
+                        ) > live
+                    ):
+                        store_ptr(
+                            ranked,
+                            position * _SLAB_RANK_BYTES + _SLAB_RANK_SPAN,
+                            load_ptr(
+                                ranked,
+                                (position - 1) * _SLAB_RANK_BYTES + _SLAB_RANK_SPAN,
+                            ),
+                        )
+                        store_i64(
+                            ranked,
+                            position * _SLAB_RANK_BYTES + _SLAB_RANK_LIVE,
+                            load_i64(
+                                ranked,
+                                (position - 1) * _SLAB_RANK_BYTES + _SLAB_RANK_LIVE,
+                            ),
+                        )
+                        position = position - 1
+                    store_ptr(ranked, position * _SLAB_RANK_BYTES + _SLAB_RANK_SPAN, span)
+                    store_i64(ranked, position * _SLAB_RANK_BYTES + _SLAB_RANK_LIVE, live)
+        span = pcc_allocator_record_span_next(span)
+    return count
+
+
+@c_abi_export("pcc_gc_relocation_selector_slab_add_candidate")
+def _slab_add_candidate(obj, page, size: i64, plan) -> i64:
+    """Add ``obj`` of the slab ``page`` to the relocation set; the slab joins
+    the evacuation page list with its first candidate. As
+    _backend4_add_candidate_node, whose page is a logical zpage."""
+    if load_i64(global_addr("pcc_gc_backend4_relocation_reset_owner"), 0) != 0:
+        return 0
+    if load_i64(global_addr("pcc_gc_backend4_reseed_commit_owner"), 0) != 0:
+        return 0
+    relocation_node = load_ptr(plan, 0)
+    if ptr_is_null(relocation_node) != 0:
+        return 0
+    flags: i64 = load_i32(obj, 12)
+    if (flags & (2048 | 8192 | 16384 | 524288)) != 0 or pcc_gc_object_is_address_pinned(obj) != 0:
+        refusals: i64 = load_i64(
+            global_addr("pcc_gc_backend4_relocation_add_refusals_g"), 0
+        )
+        store_i64(
+            global_addr("pcc_gc_backend4_relocation_add_refusals_g"),
+            0,
+            refusals + 1,
+        )
+        return 0
+    if ptr_is_null(pcc_gc_forwarding_find(obj)) == 0:
+        return 0
+    if pcc_gc_forwarding_target_exists(obj) != 0:
+        return 0
+    list_page: i64 = 0
+    if pcc_gc_page_evacuating(page) == 0:
+        list_page = 1
+        if ptr_is_null(load_ptr(plan, 8)) != 0:
+            return 0
+    store_ptr(plan, 0, load_ptr(relocation_node, 8))
+    store_ptr(relocation_node, 0, obj)
+    store_ptr(relocation_node, 8, global_load_ptr("pcc_gc_relocation_set_head"))
+    atomic_store_i32(global_addr("pcc_gc_read_barrier_enabled"), 0, 1, "release")
+    global_store_ptr("pcc_gc_relocation_set_head", relocation_node)
+    pcc_gc_relocation_member_note(obj)
+    relocation_revision: i64 = load_i64(
+        global_addr("pcc_gc_backend4_reseed_relocation_revision"), 0
+    )
+    store_i64(
+        global_addr("pcc_gc_backend4_reseed_relocation_revision"),
+        0,
+        relocation_revision + 1,
+    )
+    atomic_rmw_i32("or", obj, 12, 2048, "acq_rel")
+    candidates: i64 = load_i32(
+        global_addr("pcc_gc_backend4_evacuation_candidates"), 0
+    )
+    store_i32(
+        global_addr("pcc_gc_backend4_evacuation_candidates"), 0, candidates + 1
+    )
+    if list_page != 0:
+        page_node = load_ptr(plan, 8)
+        store_ptr(plan, 8, load_ptr(page_node, 8))
+        store_ptr(page_node, 0, page)
+        store_ptr(
+            page_node, 8, global_load_ptr("pcc_gc_backend4_evacuation_page_head")
+        )
+        global_store_ptr("pcc_gc_backend4_evacuation_page_head", page_node)
+        pcc_gc_page_set_evacuating(page, 1)
+        revision: i64 = load_i64(
+            global_addr("pcc_gc_backend4_reseed_page_revision"), 0
+        )
+        store_i64(
+            global_addr("pcc_gc_backend4_reseed_page_revision"), 0, revision + 1
+        )
+    _backend4_note_page_candidate(size, null())
+    return 1
+
+
+@c_abi_export("pcc_gc_relocation_selector_slab_select_span_locked")
+def _slab_select_span_locked(span, budget: i64, reached_only: i64, plan) -> i64:
+    """Add up to ``budget`` live, relocatable objects of one slab."""
+    page = pcc_allocator_record_span_page(span)
+    if ptr_is_null(page) != 0:
+        return 0
+    records = pcc_allocator_record_span_records(span)
+    cells: i64 = pcc_allocator_record_span_cells(span)
+    added: i64 = 0
+    cell: i64 = 0
+    while cell < cells and added < budget:
+        record = ptr_add(records, cell * SLAB_RECORD_BYTES)
+        if (
+            load_i64(record, SLAB_RECORD_INDEX_KEY) != 0
+            and load_i64(record, 32) == 0
+        ):
+            obj = load_ptr(record, 0)
+            if (
+                ptr_is_null(obj) == 0
+                and _graph_leaf_tag(load_i32(obj, 8)) == 0
+                and _object_relocatable(obj) != 0
+                and _backend4_evacuation_policy_accept(load_i64(record, 8)) != 0
+            ):
+                # Only what the last mark reached moves, as ZGC relocates
+                # (pcc_gc_backend4_select_relocation_pages).
+                if (
+                    reached_only == 0
+                    or pcc_gc_object_is_white(obj, load_i32(obj, 12)) == 0
+                ):
+                    added = added + _slab_add_candidate(
+                        obj, page, load_i64(record, 8), plan
+                    )
+        cell = cell + 1
+    return added
+
+
+@c_abi_export("pcc_gc_relocation_selector_slab_select")
+def _slab_select(
+    object_budget: i64, page_budget: i64, reached_only: i64, live_percent: i64
+) -> i64:
+    """Select the live objects of the sparsest object slabs for relocation:
+    up to ``page_budget`` slabs with at most ``live_percent`` percent live
+    cells and ``object_budget`` objects. Rank under the graph lock, allocate
+    the plan's nodes outside it, then add under it; a slab that changed
+    meanwhile adds what it still holds."""
+    if object_budget <= 0 or page_budget <= 0:
+        return 0
+    if page_budget > SLAB_EVACUATION_PAGES:
+        page_budget = SLAB_EVACUATION_PAGES
+    ranked = stack_alloc(SLAB_EVACUATION_PAGES * _SLAB_RANK_BYTES)
+    pcc_py_gc_minor_graph_lock()
+    # Staged allocations register first: their records count in the ranking.
+    pcc_gc_alloc_stage_drain_locked()
+    chosen: i64 = _slab_rank_locked(ranked, page_budget, live_percent)
+    pcc_py_gc_minor_graph_unlock()
+    if chosen <= 0:
+        return 0
+    wanted: i64 = 0
+    index: i64 = 0
+    while index < chosen:
+        wanted = wanted + load_i64(ranked, index * _SLAB_RANK_BYTES + _SLAB_RANK_LIVE)
+        index = index + 1
+    if wanted > object_budget:
+        wanted = object_budget
+    plan = stack_alloc(16)
+    store_ptr(plan, 0, null())
+    store_ptr(plan, 8, null())
+    allocated: i64 = 0
+    done: i64 = 0
+    while done == 0 and allocated < wanted:
+        relocation_node = malloc(16)
+        if ptr_is_null(relocation_node) != 0:
+            done = 1
+        else:
+            store_ptr(relocation_node, 8, load_ptr(plan, 0))
+            store_ptr(plan, 0, relocation_node)
+            allocated = allocated + 1
+    index = 0
+    done = 0
+    while done == 0 and index < chosen:
+        page_node = malloc(16)
+        if ptr_is_null(page_node) != 0:
+            done = 1
+        else:
+            store_ptr(page_node, 8, load_ptr(plan, 8))
+            store_ptr(plan, 8, page_node)
+            index = index + 1
+    added: i64 = 0
+    pcc_py_gc_minor_graph_lock()
+    index = 0
+    while index < chosen and added < allocated:
+        added = added + _slab_select_span_locked(
+            load_ptr(ranked, index * _SLAB_RANK_BYTES + _SLAB_RANK_SPAN),
+            allocated - added,
+            reached_only,
+            plan,
+        )
+        index = index + 1
+    pcc_py_gc_minor_graph_unlock()
+    unused = load_ptr(plan, 0)
+    while ptr_is_null(unused) == 0:
+        nxt = load_ptr(unused, 8)
+        free(unused)
+        unused = nxt
+    unused = load_ptr(plan, 8)
+    while ptr_is_null(unused) == 0:
+        nxt = load_ptr(unused, 8)
+        free(unused)
+        unused = nxt
+    return added
+
+
 @c_abi_export("pcc_gc_select_relocation_set")
 def pcc_gc_select_relocation_set(budget: i64) -> i64:
     backend: i64 = pcc_gc_config_ensure()
@@ -965,6 +1299,11 @@ def pcc_gc_select_relocation_set(budget: i64) -> i64:
     owner_thread_id: i64 = pcc_current_thread_id()
     if owner_thread_id <= 0:
         return 0
+    if ptr_is_null(_zpage_head()) != 0:
+        # GC4 objects are allocator cells: their pages are object slabs. An
+        # explicit selection takes every slab with live objects, sparsest
+        # first, as the logical zpages admitted every page with room.
+        return _slab_select(budget, SLAB_EVACUATION_PAGES, 0, 100)
     selected: i64 = 0
     while selected < budget:
         batch_budget: i64 = budget - selected
@@ -1500,6 +1839,11 @@ def pcc_gc_backend4_select_relocation_pages(page_budget: i64) -> i64:
     owner_thread_id: i64 = pcc_current_thread_id()
     if owner_thread_id <= 0:
         return 0
+    if ptr_is_null(_zpage_head()) != 0:
+        # Every live object of the chosen slabs that the last mark reached.
+        return _slab_select(
+            1073741824, page_budget, 1, SLAB_EVACUATION_LIVE_PERCENT
+        )
     selected: i64 = 0
     pages: i64 = 0
     rank_state = stack_alloc(72)

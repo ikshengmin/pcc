@@ -30,6 +30,7 @@ pcc_gc_config_ensure = extern("pcc_gc_config_ensure", (), c_int64)
 pcc_gc_object_known_size = extern(
     "pcc_gc_object_known_size", (c_ptr,), c_int64
 )
+pcc_gc_page_of = extern("pcc_gc_page_of", (c_ptr,), c_ptr)
 pcc_gc_relocate_copy = extern(
     "pcc_gc_relocate_copy", (c_ptr, c_int64), c_ptr
 )
@@ -143,11 +144,14 @@ def _relocate_selected_page(page) -> i64:
             nxt = load_ptr(node, 8)
             obj = load_ptr(node, 0)
             examined = examined + 1
+            # The object's page: its logical zpage, else its object slab.
+            obj_page = null()
             znode = pcc_gc_backend4_zpage_find(obj)
-            if (
-                ptr_is_null(znode) == 0
-                and ptr_eq(load_ptr(znode, 8), page) != 0
-            ):
+            if ptr_is_null(znode) == 0:
+                obj_page = load_ptr(znode, 8)
+            else:
+                obj_page = pcc_gc_page_of(obj)
+            if ptr_eq(obj_page, page) != 0:
                 store_ptr(sources, captured * 8, obj)
                 captured = captured + 1
             node = nxt

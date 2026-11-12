@@ -1081,6 +1081,10 @@ OBJECT_NODE_RECORD_BYTES = 96
 # (generation@0, flags@8, live bytes@16; see freestanding_gc_page_marks)
 # and two mark bitmaps of one bit per cell, used in alternate cycles.
 GC_PAGE_HEADER_BYTES = 64
+# The GC page's flags word and its evacuating bit (PAGE_FLAGS,
+# PAGE_FLAG_EVACUATING of freestanding_gc_page_marks).
+GC_PAGE_FLAGS = 8
+GC_PAGE_FLAG_EVACUATING = 1
 
 
 @c_abi_export("pcc_allocator_granule_stride_count")
@@ -2867,6 +2871,52 @@ def pcc_allocator_alloc_object(size: i64) -> c_ptr:
         pcc_allocator_account_allocate(size, usable, 0)
         return user
     return pcc_allocator_allocate_raw(size, 16)
+
+
+@c_abi_export("pcc_allocator_cell_in_evacuating_slab")
+def _cell_in_evacuating_slab(cell) -> i64:
+    """1 when ``cell`` lies in an object slab whose GC page is evacuating."""
+    span = pcc_allocator_object_cell_span(cell)
+    if ptr_is_null(span) != 0:
+        return 0
+    page = pcc_allocator_record_span_page(span)
+    if ptr_is_null(page) != 0:
+        return 0
+    return atomic_load_i64(page, GC_PAGE_FLAGS, "acquire") & GC_PAGE_FLAG_EVACUATING
+
+
+@c_abi_export("pcc_allocator_alloc_object_outside_evacuation")
+def pcc_allocator_alloc_object_outside_evacuation(size: i64) -> c_ptr:
+    """pcc_allocator_alloc_object for a relocation copy: never a free cell of
+    a slab being evacuated (ZGC copies into to-space pages, never into the
+    relocation set). It takes from the central object lists, passing over
+    such cells, and carves a fresh slab when none other is free; the cells
+    passed over return to their list. Thread magazines are not consulted."""
+    if size < 0:
+        return null()
+    usable: i64 = pcc_allocator_size_class(size)
+    if usable == 0:
+        return pcc_allocator_allocate_raw(size, 16)
+    pcc_allocator_lock_acquire()
+    skipped = null()
+    user = pcc_allocator_take_small_object(usable)
+    while ptr_is_null(user) == 0 and _cell_in_evacuating_slab(user) != 0:
+        store_ptr(user, 0, skipped)
+        skipped = user
+        user = pcc_allocator_take_small_object(usable)
+    if ptr_is_null(user):
+        user = pcc_allocator_refill_small_object(usable)
+    while ptr_is_null(skipped) == 0:
+        cell = skipped
+        skipped = load_ptr(cell, 0)
+        pcc_allocator_put_small_object(cell, usable)
+    pcc_allocator_lock_release()
+    if ptr_is_null(user):
+        return null()
+    atomic_store_i64(user, GRANULE_STATE_OFFSET, GC_STATE_RESERVED, "release")
+    store_i64(user, GRANULE_REQUESTED_SIZE_OFFSET, size)
+    pcc_allocator_account_allocate(size, usable, 0)
+    return user
 
 
 @c_abi_export("malloc")

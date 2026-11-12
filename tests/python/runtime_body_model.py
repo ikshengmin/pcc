@@ -76,6 +76,11 @@ EXTERN_DEFAULTS = {
     "pcc_gc_page_marks_begin": lambda: None,
     "pcc_gc_object_is_white": lambda obj, flags: 1 if (flags & 8) != 0 else 0,
     "pcc_gc_object_is_black": lambda obj, flags: 1 if (flags & 32) != 0 else 0,
+    # GC4 evacuates object slabs (freestanding_gc_relocation_selector);
+    # modeled objects are no cells and have no slab page.
+    "pcc_gc_page_of": lambda obj: 0,
+    "pcc_gc_page_evacuating": lambda page: 0,
+    "pcc_gc_page_set_evacuating": lambda page, evacuating: None,
 }
 
 

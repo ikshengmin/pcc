@@ -222,12 +222,14 @@ def test_freestanding_gc_state_has_complete_raw_abi_and_initial_values(
     # GC3's remembered-owner queue, which no store reached, is gone (5,
     # c2ea4d51a); GC4 owes a remap until the world resumes (1, 4e2feca72);
     # object-slab GC pages alternate mark bitmaps by one epoch word (1,
-    # 0872e7cfd).
-    assert len(expected) == 286
+    # 0872e7cfd). A GC4 relocation copy allocates outside the slabs being
+    # evacuated while one word says so (1).
+    assert len(expected) == 287
     assert expected["pcc_gc_backend4_remap_owed"] == ("define_global_i32", 0)
     assert expected["pcc_gc_page_mark_epoch_word"] == ("define_global_i64", 0)
     assert expected["pcc_gc_nonmoving_count_free"] == ("define_global_i32", 0)
     assert expected["pcc_gc_cms_finish_pending"] == ("define_global_i32", 0)
+    assert expected["pcc_gc_backend4_relocation_target_alloc"] == ("define_global_i32", 0)
     assert expected["pcc_gc_backend4_no_refcounts"] == ("define_global_i32", 0)
     assert expected["pcc_gc_frame_registry_inactive"] == ("define_global_i32", 0)
     assert expected["pcc_gc_stackmap_walk_state"] == ("define_global_i32", 0)

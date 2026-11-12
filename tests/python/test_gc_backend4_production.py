@@ -1097,9 +1097,23 @@ def test_backend4_deallocating_objects_are_quarantined_from_add_score_and_copy_s
     )[1].split(
         '@c_abi_export("pcc_gc_relocation_selector_add_candidate_node")', 1
     )[0]
-    guard = _quarantine_guard(strict_score, "obj", {"2048", "8192", "524288"}, "return -1")
+    # The score asks the object predicate it shares with the slab
+    # selection before any size, page or deferral work.
+    guard = strict_score.index("if _object_relocatable(obj) == 0:\n        return -1")
     assert guard < strict_score.index("size: i64 = load_i64(node, 32)")
     assert guard < strict_score.index('atomic_rmw_i32("or", obj, 12, 32768, "acq_rel")')
+    strict_object = strict_selector.split("def _object_relocatable(obj) -> i64:", 1)[1].split(
+        "\n@c_abi_export", 1
+    )[0]
+    _quarantine_guard(strict_object, "obj", {"2048", "8192", "524288"}, "return 0")
+    # The slab add refuses the same objects before touching the plan.
+    strict_slab_add = strict_selector.split("def _slab_add_candidate(", 1)[1].split(
+        "\n@c_abi_export", 1
+    )[0]
+    guard = _quarantine_guard(
+        strict_slab_add, "obj", {"2048", "8192", "16384", "524288"}, "refusals: i64"
+    )
+    assert guard < strict_slab_add.index("store_ptr(plan, 0, load_ptr(relocation_node, 8))")
 
     strict_copy_source = STRICT_RELOCATION_COPY.read_text(encoding="utf-8")
     strict_copy = strict_copy_source.split(

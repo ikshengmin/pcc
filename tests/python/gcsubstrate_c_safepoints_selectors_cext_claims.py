@@ -445,10 +445,15 @@ def test_colored_relocation_selector_polls_after_graph_unlock_in_c_and_strict():
         '@c_abi_export("pcc_gc_relocation_selector_add_candidate_node")', 1
     )[0]
     # Forwarded, relocation-target and dying objects are never candidates,
-    # nor is an address-pinned one (the pin table, not the header bit).
+    # nor is an address-pinned one (the pin table, not the header bit): the
+    # object predicate the zpage score and the slab selection share.
+    assert "if _object_relocatable(obj) == 0:" in strict_score
+    strict_object = strict_src.split("def _object_relocatable(obj) -> i64:", 1)[1].split(
+        "\n@c_abi_export", 1
+    )[0]
     assert (
         "(flags & (2048 | 8192 | 524288)) != 0 or pcc_gc_object_is_address_pinned(obj) != 0"
-        in strict_score
+        in strict_object
     )
     assert 'global_load_ptr("pcc_gc_relocation_set_head")' not in strict_score
     assert 'global_load_ptr("pcc_gc_backend4_remembered_slots_head")' not in (
@@ -487,7 +492,7 @@ def test_colored_relocation_selector_polls_after_graph_unlock_in_c_and_strict():
 
     strict_page_batch = strict_src.split(
         "def _select_page_objects_batch(", 1
-    )[1].split('@c_abi_export("pcc_gc_select_relocation_set")', 1)[0]
+    )[1].split("\n@c_abi_export", 1)[0]
     assert "and examined < 16" in strict_page_batch
     assert strict_page_batch.count("examined = examined + 1") == 2
     strict_page_cursor_loop = strict_page_batch.split(
@@ -499,6 +504,27 @@ def test_colored_relocation_selector_polls_after_graph_unlock_in_c_and_strict():
     )
     for forbidden in ("pcc_thread_safepoint(", "malloc(", "free("):
         assert forbidden not in strict_page_batch
+
+    # Slab selection (GC4 pages are object slabs) keeps the same split: the
+    # helpers that run under the graph lock neither allocate, free nor poll;
+    # the entry allocates its plan between its two locked intervals.
+    for locked_helper in (
+        "def _slab_live_cells(",
+        "def _slab_rank_locked(",
+        "def _slab_add_candidate(",
+        "def _slab_select_span_locked(",
+    ):
+        helper = strict_src.split(locked_helper, 1)[1].split("\n@c_abi_export", 1)[0]
+        for forbidden in ("pcc_thread_safepoint(", "malloc(", "free("):
+            assert forbidden not in helper, (locked_helper, forbidden)
+    slab_select = strict_src.split("def _slab_select(", 1)[1].split("\n@c_abi_export", 1)[0]
+    rank_unlock = slab_select.index("pcc_py_gc_minor_graph_unlock()")
+    add_lock = slab_select.index("pcc_py_gc_minor_graph_lock()", rank_unlock)
+    assert rank_unlock < slab_select.index("malloc(16)") < add_lock
+    assert slab_select.index("_slab_select_span_locked(") > add_lock
+    assert slab_select.index("free(unused)") > slab_select.index(
+        "pcc_py_gc_minor_graph_unlock()", add_lock
+    )
 
     strict_objects = strict_src.split(
         "def pcc_gc_select_relocation_set(", 1

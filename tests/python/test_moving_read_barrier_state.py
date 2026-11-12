@@ -314,6 +314,7 @@ def test_all_authoritative_population_and_selected_head_writers_are_enumerated()
         ('freestanding_gc_forwarding_retirement.py','pcc_gc_backend4_remap_and_retire_unlocked',POP),
         ('py_gc_backend.py','_set_relocation_set_head',SELECTED),
         ('freestanding_gc_relocation_selector.py','_backend4_add_candidate_node',SELECTED),
+        ('freestanding_gc_relocation_selector.py','_slab_add_candidate',SELECTED),
         ('freestanding_gc_relocation_copy.py','pcc_gc_backend4_relocate_copy_preallocated_unlocked',SELECTED),
     }
     actual=set()

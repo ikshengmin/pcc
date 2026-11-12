@@ -65,7 +65,7 @@ def test_root_reads_preserve_null_immediates_and_relocation(
         "is_tagged_int": lambda pointer: pointer == 1,
         "_gc_backend_fast": lambda: backend,
         "_gc_forwarding_population": lambda: forwarding,
-        "_gc_backend4_should_check_slot": lambda source: 1,
+        "_gc_backend4_should_check_slot": lambda owner, source: 1,
         "_gc_relocation_candidate": lambda pointer: pointer == 42,
         "pcc_gc_backend4_slot_needs_resolve": lambda pointer: pointer == 42,
         "pcc_gc_note_load": lambda: events.append(("note",)),
