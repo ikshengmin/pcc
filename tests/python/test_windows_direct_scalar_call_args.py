@@ -421,6 +421,84 @@ def test_precise_root_return_oracle_requires_a_fresh_preserved_value(reload, ret
     ) is expected
 
 
+def _precise_root_return_retires_before_epilogue(instructions, root_slot, after_slot, epilogue):
+    leave_call = "  call pcc_gc_frame_leave"
+    if instructions.count(leave_call) != 1:
+        return False
+    leave = instructions.index(leave_call)
+    if not _precise_root_return_survives_frame_leave(
+        instructions[:leave + 2], root_slot, after_slot,
+    ):
+        return False
+    home = instructions[leave + 1].removeprefix("  mov rax, ")
+    # Retire precisely the pointer home just copied to RAX. A dword MOV
+    # clears the entire register without changing flags; a spilled home
+    # needs a qword store. Neither is part of the ABI restore sequence.
+    aliases = {"rbx": "ebx", "rsi": "esi", "rdi": "edi", "r12": "r12d",
+               "r13": "r13d", "r14": "r14d", "r15": "r15d"}
+    retirement = f"  mov {after_slot if home == after_slot else aliases[home]}, 0"
+    return instructions[leave + 2:] == [retirement] + epilogue
+
+
+@pytest.mark.parametrize("home,retired", (
+    ("rbx", "ebx"), ("rsi", "esi"), ("rdi", "edi"),
+    ("r12", "r12d"), ("r13", "r13d"), ("r14", "r14d"), ("r15", "r15d"),
+    ("QWORD PTR [rbp - 40]", "QWORD PTR [rbp - 40]"),
+))
+def test_precise_root_retirement_oracle_accepts_only_the_returned_home(home, retired):
+    # Oracle fragments only: register allocation/save insertion and native
+    # execution remain covered by their separate backend/platform tests.
+    root, after = "QWORD PTR [rbp - 16]", "QWORD PTR [rbp - 40]"
+    reload = ([f"  mov r10, {root}", f"  mov {home}, r10"] if home == after
+              else [f"  mov {home}, {root}"])
+    epilogue = win64.epilogue(_frame())
+    instructions = reload + [
+        "  lea rcx, [rbp - 16]", "  call pcc_gc_frame_leave",
+        f"  mov rax, {home}", f"  mov {retired}, 0",
+    ] + epilogue
+    assert _precise_root_return_retires_before_epilogue(instructions, root, after, epilogue)
+
+
+@pytest.mark.parametrize("old,new", (
+    pytest.param(("  mov rbx, {root}",), ("  mov rbx, {borrow}",), id="stale-borrow"),
+    pytest.param(("  mov rbx, {root}",), ("  mov rbx, QWORD PTR [rbp - 8]",), id="wrong-root"),
+    pytest.param(("  lea rcx, [rbp - 16]",), ("  lea rcx, [rbp - 24]",), id="wrong-frame"),
+    pytest.param(("  call pcc_gc_frame_leave",),
+                 ("  mov ebx, 0", "  call pcc_gc_frame_leave"), id="clear-before-leave"),
+    pytest.param(("  mov rax, rbx",),
+                 ("  mov ebx, 0", "  mov rax, rbx"), id="clear-before-return-copy"),
+    pytest.param(("  mov rax, rbx",), ("  mov rax, rsi",), id="wrong-return-home"),
+    pytest.param(("  mov rax, rbx",), ("  mov eax, ebx",), id="truncated-return"),
+    pytest.param(("  mov ebx, 0",), (), id="missing-retirement"),
+    pytest.param(("  mov ebx, 0",), ("  mov esi, 0",), id="wrong-retired-register"),
+    pytest.param(("  mov ebx, 0",), ("  mov ebx, 0", "  mov eax, 0"), id="clobbered-return"),
+    pytest.param(("  mov ebx, 0",), ("  mov bx, 0",), id="partial-retirement"),
+    pytest.param(("  mov ebx, 0",), ("  mov ebx, 1",), id="nonzero-retirement"),
+    pytest.param(("  mov ebx, 0",), ("  xor ebx, ebx",), id="clobbered-flags"),
+    pytest.param(("  mov ebx, 0",), ("  mov ebx, 0", "  mov ebx, 0"), id="duplicate-retirement"),
+    pytest.param(("  mov ebx, 0",), ("  mov ebx, 0", "  nop"), id="arbitrary-prefix"),
+    pytest.param(("  mov rbx, QWORD PTR [rsp + 128]", "  mov rsi, QWORD PTR [rsp + 136]"),
+                 ("  mov rsi, QWORD PTR [rsp + 136]", "  mov rbx, QWORD PTR [rsp + 128]"),
+                 id="reordered-epilogue"),
+    pytest.param(("  pop rbp",), (), id="incomplete-epilogue"),
+))
+def test_precise_root_retirement_oracle_rejects_broken_lifetimes_and_tails(old, new):
+    slots = dict(root="QWORD PTR [rbp - 16]", borrow="QWORD PTR [rbp - 24]",
+                 after="QWORD PTR [rbp - 40]")
+    epilogue = win64.epilogue(_frame())
+    instructions = [
+        "  mov rbx, " + slots["root"], "  lea rcx, [rbp - 16]",
+        "  call pcc_gc_frame_leave", "  mov rax, rbx", "  mov ebx, 0",
+    ] + epilogue
+    old = [line.format(**slots) for line in old]
+    index = instructions.index(old[0])
+    assert instructions[index:index + len(old)] == old
+    instructions[index:index + len(old)] = [line.format(**slots) for line in new]
+    assert not _precise_root_return_retires_before_epilogue(
+        instructions, slots["root"], slots["after"], epilogue,
+    )
+
+
 def test_precise_root_remains_local_across_a_direct_scalar_call(monkeypatch):
     from pcc.backend import target_objects
     from pcc.backend.coff_x86_64 import parse_object
@@ -486,8 +564,18 @@ entry:
     assert _precise_root_return_survives_frame_leave(
         post_call[:leave + 2], root_slot, after_slot,
     ), post_call
-    assert post_call[leave + 2:] == win64.epilogue(function)
+    assert _precise_root_return_retires_before_epilogue(
+        post_call, root_slot, after_slot, win64.epilogue(function),
+    ), post_call
     assert any(section.name == ".xdata" and section.data for section in obj.sections)
+    # This fixture saves RBP, allocates 176 bytes, and saves RBX/RSI/RDI and
+    # XMM10/XMM11 at rsp+32/40/48 and rsp+64/80. The 40-byte prologue owns
+    # 13 unwind slots; pointer retirement must not change those operations.
+    assert win64.frame_size(function) == 176 and win64.outgoing_size(function) == 32
+    assert [section.data for section in obj.sections if section.name == ".xdata"] == [
+        bytes.fromhex("01 28 0d 00 28 b8 05 00 21 a8 04 00 1a 74 06 00 "
+                      "15 64 05 00 10 34 04 00 0b 01 16 00 01 50 00 00"),
+    ]
 
 
 # Independent ABI oracle. Incoming homes are writable by the callee at
