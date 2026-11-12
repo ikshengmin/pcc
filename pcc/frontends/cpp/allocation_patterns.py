@@ -1,9 +1,11 @@
-"""Typed dependent array-new syntax; never an allocation/runtime substitute.
+"""Typed dependent array-new syntax in class template members.
 
 N4659 [expr.new]/1,5-7,18,20-21. Definition-point expressions and type
 identities survive until member ODR-use. The first bound is not a fixed-array
-constant bound: runtime integral counts and zero are permitted. Heap lookup,
-limits, cookies, failure, element construction and cleanup remain unowned.
+constant bound: runtime integral counts and zero are permitted. Instantiation
+re-checks the substituted element and count, then lowers through the owned
+global allocation functions (heap_allocation.py). Cookies, element
+construction and cleanup for class elements remain unowned.
 """
 
 from pcc.frontends.c.c_abi_layout import c_size_type_name
@@ -60,12 +62,13 @@ def check_count(parser, count, coord):
     # owner below. Zero must not inherit make_array_type's positive-bound rule.
 
 
-def parse_array_new(parser, global_only, coord):
+def parse_array_new(parser, global_only, coord, element=None):
     from pcc.frontends.cpp.parser import Expression
     if parser.unevaluated_depth:
         raise CppDiagnostic('cpp.unsupported.array-new',
                             'unevaluated dependent array-new requires allocation type/lookup checking', coord)
-    element = parser._abstract_pointer_type(parser._type(check_lowering=False))
+    if element is None:
+        element = parser._abstract_pointer_type(parser._type(check_lowering=False))
     if not parser._accept('['):
         raise CppDiagnostic('cpp.unsupported.allocation-templates',
                             'dependent non-array allocation is not implemented', coord)
@@ -77,9 +80,6 @@ def parse_array_new(parser, global_only, coord):
     if parser._peek().value in ('[', '(', '{'):
         raise CppDiagnostic('cpp.unsupported.array-new',
                             'multidimensional or initialized dependent array-new is not implemented', coord)
-    if not dependent(element) and not value_dependent(count):
-        raise CppDiagnostic('cpp.unsupported.allocation-templates',
-                            'nondependent template allocation requires the owned heap semantics', coord)
     check_element(element, coord)
     check_count(parser, count, coord)
     result = PointerType(element)
@@ -93,9 +93,5 @@ def instantiate_array_new(parser, pattern, bindings, environment):
     check_element(element, pattern.coord)
     count = parser._instantiate_expression(pattern.children[0], bindings, environment)
     check_count(parser, count, pattern.coord)
-    # Keep the explicit global-lookup flag in the Pattern. There is no default
-    # allocation function, malloc bridge, fake successful value or C AST new.
-    operation = '::new[]' if global_only else 'new[]'
-    raise CppDiagnostic('cpp.unsupported.allocation',
-                        operation + ' requires owned allocation lookup, size/failure, initialization and deallocation semantics',
-                        pattern.coord)
+    from pcc.frontends.cpp.heap_allocation import lower_new
+    return lower_new(parser, element, count, 'default', [], global_only, pattern.coord)

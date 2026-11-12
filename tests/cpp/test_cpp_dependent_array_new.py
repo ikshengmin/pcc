@@ -1,9 +1,11 @@
-"""Dependent member array-new Patterns, not owned heap execution, UNRUN.
+"""Dependent member array-new Patterns, lowered at instantiation.
 
 N4659 [expr.new]/1,5-7,18,20-21; [temp.res], [temp.inst], [expr.const].
-Unused bodies are typed and retained; native positive observers execute only
-unrelated supported members. Every actual new[] use remains fail-before-IR.
-Original allocation examples are preserved, never replaced by a fake allocator.
+Unused bodies are typed and retained. An actual use re-checks the substituted
+element and count and then calls the global operator new[] (heap_allocation.py,
+executed in test_cpp_heap_allocation*). Invalid substitutions and class
+element lifetimes still fail before IR. Original allocation examples are
+preserved, never replaced by a fake allocator.
 """
 
 from pathlib import Path
@@ -28,6 +30,10 @@ OBSERVER = ('using size_t=unsigned long;template<class T>struct Buffer{'
 RETAINED_ORIGINALS = (
     ('retained-local-pointer-allocation-original', 'using size_t=unsigned long;template<class T>struct S{T*f(size_t cap){const size_t newAllocated=cap*2;T*newMem=new T[newAllocated];return newMem;}};'),
     ('retained-destructor-allocation-original', 'template<class T>struct Box{T*p;~Box(){p=new T[2];}};'),
+    # Formerly SYNTAX_GAPS rows: non-array and nondependent new in a class
+    # template member are typed Patterns now (moved verbatim).
+    ('scalar-dependent-new', 'template<class T>struct S{T*f(){return new T;}};'),
+    ('nondependent-template-new', 'template<class T>struct S{int*f(int n){return new int[n];}};'),
 )
 
 
@@ -84,13 +90,33 @@ def test_retained_unused_allocation_originals_are_typed_without_emitting_bodies(
     assert not parser.instance_registry.entries
 
 
-USED_GAPS = (
-    ('runtime-count', 'template<class T>struct S{T*f(int n){return new T[n];}};int run(){S<int>s;s.f(2);return 0;}', 'cpp.unsupported.allocation'),
-    ('zero-count-still-needs-allocation', 'template<class T>struct S{T*f(){return new T[0];}};int run(){S<int>s;s.f();return 0;}', 'cpp.unsupported.allocation'),
-    ('pointer-element-allocation', 'template<class T>struct S{T**f(int n){return new T*[n];}};int run(){S<int>s;s.f(2);return 0;}', 'cpp.unsupported.allocation'),
-    ('class-element-lifetime', 'struct E{E();~E();};template<class T>struct S{T*f(){return new T[2];}};int run(){S<E>s;s.f();return 0;}', 'cpp.unsupported.class-array-lifetime'),
-    ('destructor-allocation-use', 'template<class T>struct Box{T*p;~Box(){p=new T[2];}};int run(){Box<int>b{nullptr};return 0;}', 'cpp.unsupported.allocation'),
+# Formerly USED_GAPS rows (moved verbatim): each actual use now calls the
+# global operator new[] from the instantiated member.
+USED_ALLOCATIONS = (
+    ('runtime-count', 'template<class T>struct S{T*f(int n){return new T[n];}};int run(){S<int>s;s.f(2);return 0;}'),
+    ('zero-count-still-needs-allocation', 'template<class T>struct S{T*f(){return new T[0];}};int run(){S<int>s;s.f();return 0;}'),
+    ('pointer-element-allocation', 'template<class T>struct S{T**f(int n){return new T*[n];}};int run(){S<int>s;s.f(2);return 0;}'),
+    ('destructor-allocation-use', 'template<class T>struct Box{T*p;~Box(){p=new T[2];}};int run(){Box<int>b{nullptr};return 0;}'),
 )
+USED_GAPS = (
+    ('class-element-lifetime', 'struct E{E();~E();};template<class T>struct S{T*f(){return new T[2];}};int run(){S<E>s;s.f();return 0;}', 'cpp.unsupported.class-array-lifetime'),
+)
+
+
+@pytest.mark.parametrize('name,source', USED_ALLOCATIONS, ids=[row[0] for row in USED_ALLOCATIONS])
+def test_used_array_new_calls_the_global_array_allocation_function(name, source):
+    tree = CppParser(TARGET).parse(source, name + '.cpp')
+    calls = [node for node in _walk(tree) if isinstance(node, c_ast.FuncCall)
+             and isinstance(node.name, c_ast.ID) and node.name.name == '_Znam']
+    assert calls and any(isinstance(node, c_ast.FuncDef) for node in tree.ext)
+
+
+def _walk(node):
+    pending = [node]
+    while pending:
+        current = pending.pop()
+        yield current
+        pending.extend(child for _name, child in current.children())
 INVALID = (
     ('negative-known-count', 'template<class T>struct S{T*f(){return new T[-1];}};int run(){S<int>s;s.f();return 0;}', 'cpp.invalid-new-array-bound'),
     ('negative-substituted-count', 'template<int N>struct S{int*f(){return new int[N];}};int run(){S<-1>s;s.f();return 0;}', 'cpp.invalid-new-array-bound'),
@@ -104,9 +130,7 @@ SYNTAX_GAPS = (
     ('initialized-array-new', 'template<class T>struct S{T*f(int n){return new T[n]();}};', 'cpp.unsupported.array-new'),
     ('multidimensional-array-new', 'template<class T>struct S{void f(int n){new T[n][2];}};', 'cpp.unsupported.array-new'),
     ('unevaluated-array-new', 'template<class T>struct S{int f(){return sizeof(new T[2]);}};', 'cpp.unsupported.array-new'),
-    ('scalar-dependent-new', 'template<class T>struct S{T*f(){return new T;}};', 'cpp.unsupported.allocation-templates'),
     ('function-template-new', 'template<class T>int f(){new T[2];return 0;}', 'cpp.unsupported.allocation-templates'),
-    ('nondependent-template-new', 'template<class T>struct S{int*f(int n){return new int[n];}};', 'cpp.unsupported.allocation-templates'),
 )
 
 
@@ -126,7 +150,7 @@ def test_used_array_new_failure_is_sticky_in_the_shared_instance_registry():
     parser = CppParser(TARGET)
     with pytest.raises(CppDiagnostic) as first:
         parser.parse(USED_GAPS[0][1])
-    assert first.value.code == 'cpp.unsupported.allocation'
+    assert first.value.code == 'cpp.unsupported.class-array-lifetime'
     failed = [entry for entry in parser.instance_registry.entries.values() if entry.state is InstanceState.FAILED]
     assert len(failed) == 1 and failed[0].failure is first.value
     with pytest.raises(CppDiagnostic) as repeated:

@@ -42,24 +42,35 @@ def test_global_delete_retains_typed_original_operand_and_flags(operation, flags
 
 
 @pytest.mark.parametrize('operation,_flags', OPERATIONS)
-def test_global_delete_real_use_still_requires_owned_deallocation(operation, _flags, monkeypatch):
-    from pcc.frontends.c.codegen.c_codegen import CCodeGenerator
-    def forbidden(*args, **kwargs):
-        raise AssertionError('unowned global deallocation reached IR')
-    monkeypatch.setattr(CCodeGenerator, 'generate_code', forbidden)
+def test_global_delete_real_use_calls_the_global_deallocation_function(operation, _flags):
     source = ('template<class T>struct Box{T*p;~Box(){\n' + operation + ';\n}};'
               'int cpp_test_entry(){Box<int>b{nullptr};return 0;}')
-    with pytest.raises(CppDiagnostic) as error:
-        compile_host_cpp((('global-delete.cpp', source),))
-    assert error.value.code == 'cpp.unsupported.allocation'
-    assert error.value.coord.file == 'global-delete.cpp' and error.value.coord.line == 2
-    assert 'requires owned deallocation' in str(error.value)
+    tree = CppParser().parse(source, 'global-delete.cpp')
+    expected = '_ZdaPv' if _flags[1] else '_ZdlPvm'
+    pending, names = [tree], set()
+    while pending:
+        node = pending.pop()
+        if isinstance(node, c_ast.FuncCall) and isinstance(node.name, c_ast.ID):
+            names.add(node.name.name)
+        pending.extend(child for _name, child in node.children())
+    assert expected in names
+
+
+def test_global_new_statement_reaches_the_allocation_owner():
+    # Formerly a boundary row; `::new int;` now allocates (and leaks) one int.
+    tree = CppParser().parse('void f(){\n::new int;\n}', 'routing.cpp')
+    pending, names = [tree], set()
+    while pending:
+        node = pending.pop()
+        if isinstance(node, c_ast.FuncCall) and isinstance(node.name, c_ast.ID):
+            names.add(node.name.name)
+        pending.extend(child for _name, child in node.children())
+    assert '_Znwm' in names
 
 
 @pytest.mark.parametrize('operation,code', (
     ('::delete 1', 'cpp.invalid-delete-operand'),
     ('::delete [] 1', 'cpp.invalid-delete-operand'),
-    ('::new int', 'cpp.unsupported.allocation'),
 ))
 def test_global_allocation_statements_reach_their_semantic_owner(operation, code):
     with pytest.raises(CppDiagnostic) as error:

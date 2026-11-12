@@ -370,6 +370,21 @@
       "id": "except.spec",
       "title": "except.spec",
       "url": "https://timsong-cpp.github.io/cppwp/n4659/except.spec"
+    },
+    {
+      "id": "expr.delete",
+      "title": "expr.delete",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/expr.delete"
+    },
+    {
+      "id": "basic.stc.dynamic",
+      "title": "basic.stc.dynamic",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/basic.stc.dynamic"
+    },
+    {
+      "id": "replacement.functions",
+      "title": "replacement.functions",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/replacement.functions"
     }
   ],
   "features": [
@@ -1227,7 +1242,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:d474a871cb45e67fe1ffb3f305525786c988fe8d234a13d337364685b6cf8400",
+        "source_revision": "sha256:0ac8c0bfe88bb036b70c80e63311bad1db42824ecbf69b75d45de151fb780e45",
         "sources": [
           {
             "path": "pcc/frontends/cpp/classes.py",
@@ -1259,7 +1274,7 @@
           },
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "8a1485958d0da3780736870ebc242668fd5f0436d0f6732e7dfd0b6a40ca8fc5"
+            "sha256": "ca6c808bb045d7fba8d2c2e3f3de0d174decd1ef68ae8efbba1a371fa29f4e77"
           },
           {
             "path": "pcc/frontends/cpp/references.py",
@@ -1305,11 +1320,11 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:f01bd75a74d73be4a1f0afe779c53a8d0b659bdb1e7bb95450f036691e5a2083",
+        "source_revision": "sha256:8adb141d9b401587eb302273368850933dbc8d4cdedc2a95b13b3edf05f0a4c8",
         "sources": [
           {
             "path": "pcc/frontends/cpp/allocation.py",
-            "sha256": "22a05dde5d55288b826cc78bd4845f0ed63aedc436b65d3e3579392c01139d5c"
+            "sha256": "3c4754b9de150da60f28b20014106b1dffd5a48dbd414b5845d86748205f6f18"
           },
           {
             "path": "pcc/frontends/cpp/classes.py",
@@ -1455,7 +1470,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:f187679108d1c1b64c43d7bf2ef3c2d7e5ebfb9e4b9bcc797c1d55a55391665a",
+        "source_revision": "sha256:b40a540109fe2f45a0ed8f2a0c0e1df88e401f7c7bf5093c3f46a5eb9d8f3bed",
         "sources": [
           {
             "path": "pcc/frontends/cpp/class_template_enums.py",
@@ -1471,7 +1486,7 @@
           },
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "8a1485958d0da3780736870ebc242668fd5f0436d0f6732e7dfd0b6a40ca8fc5"
+            "sha256": "ca6c808bb045d7fba8d2c2e3f3de0d174decd1ef68ae8efbba1a371fa29f4e77"
           },
           {
             "path": "pcc/frontends/cpp/template_id_members.py",
@@ -3837,7 +3852,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:04a89ff6bd6ddc7b823adb7b6765ed878d1097dd7d7bc1a42c41c8ed11ecd0de",
+        "source_revision": "sha256:d97d6b2f29624a45f157b43aaaa13622449bb8a04280d6c7e1d4b12579f86d29",
         "sources": [
           {
             "path": "pcc/frontends/cpp/class_template_members.py",
@@ -3861,11 +3876,59 @@
           },
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "8a1485958d0da3780736870ebc242668fd5f0436d0f6732e7dfd0b6a40ca8fc5"
+            "sha256": "ca6c808bb045d7fba8d2c2e3f3de0d174decd1ef68ae8efbba1a371fa29f4e77"
           },
           {
             "path": "pcc/frontends/cpp/sema.py",
             "sha256": "53a9a38e78d6ac8c42d99900536f50f2c5af1c3f19be0f614354e1a595a2b58d"
+          }
+        ]
+      }
+    },
+    {
+      "id": "cpp.heap-allocation",
+      "title": "Allocating new/delete over the global replaceable allocation functions",
+      "chapter_ids": [
+        "expr.new",
+        "expr.delete",
+        "basic.stc.dynamic",
+        "replacement.functions"
+      ],
+      "scope": "new T, new T() and new T(args) call operator new(sizeof(T)) (_Znwm) and then initialize: a declared constructor through the shared C1 owner, a class whose special members are all trivial by nothing or by value-initialization, a scalar by nothing, zero or the converted argument. new E[n] for trivially destructible E (no cookie) calls operator new[](n*sizeof(E)), passing SIZE_MAX when the size overflows or n is negative so allocation fails. delete p destroys a non-null complete object through its D1 and calls the sized operator delete (_ZdlPvm, [expr.delete]/10); delete[] p calls the unsized operator delete[] (_ZdaPv). Class template members keep typed new-object/new-array/delete Patterns that lower at instantiation after re-checking the substituted types and counts. Every translation unit implicitly declares the usual functions; programs may replace the usual unaligned forms, and C++ executables link owned weak defaults over malloc/free/abort whose array and sized forms forward as the defaults do (default-allocator execution is unrun: it needs the owned runtime). Allocation failure terminates (no exception support). Class-specific allocation functions, aligned and nothrow forms, braced and initialized-array new-initializers, multidimensional array-new, class elements with lifetimes and deleting a polymorphic object remain explicit gaps. Source revision is sha256 of the sorted compact JSON source list.",
+      "tests": [
+        "tests/cpp/test_cpp_heap_allocation.py::test_heap_allocation_programs_compile_to_stable_artifacts",
+        "tests/cpp/test_cpp_heap_allocation.py::test_new_and_delete_call_the_selected_usual_functions",
+        "tests/cpp/test_cpp_heap_allocation.py::test_moved_allocation_originals_reach_the_allocation_functions",
+        "tests/cpp/test_cpp_heap_allocation.py::test_unmodeled_or_invalid_allocation_is_explicit",
+        "tests/cpp/test_cpp_heap_allocation.py::test_cpp_executables_link_weak_default_allocation_functions",
+        "tests/cpp/test_cpp_heap_allocation_execution.py::test_heap_allocation_programs_execute_against_real_cpp17_reference",
+        "tests/cpp/test_cpp_dependent_array_new.py::test_used_array_new_calls_the_global_array_allocation_function"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:1c5ec4a6c79c1356e83684e3933c4e0f65b3ae5300a7217bcfb5497582847948",
+        "sources": [
+          {
+            "path": "pcc/frontends/c/evaluator/c_evaluator.py",
+            "sha256": "424f55a1d1a9434500ef19efd3ac50380aa0ff0b57fb8715af452d1b4ef9e054"
+          },
+          {
+            "path": "pcc/frontends/cpp/allocation.py",
+            "sha256": "3c4754b9de150da60f28b20014106b1dffd5a48dbd414b5845d86748205f6f18"
+          },
+          {
+            "path": "pcc/frontends/cpp/allocation_patterns.py",
+            "sha256": "9edca0c2eb5bc7b295b38047be8489ace71b548d768a45d3215fab744f0b2a09"
+          },
+          {
+            "path": "pcc/frontends/cpp/heap_allocation.py",
+            "sha256": "9f5dde5690c6f728d040e6e200f19d63ffafc0c6da542cbdbecfa2006c29d10f"
+          },
+          {
+            "path": "pcc/frontends/cpp/parser.py",
+            "sha256": "ca6c808bb045d7fba8d2c2e3f3de0d174decd1ef68ae8efbba1a371fa29f4e77"
           }
         ]
       }

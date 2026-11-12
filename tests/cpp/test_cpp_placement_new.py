@@ -182,7 +182,7 @@ def test_user_provided_default_placement_does_not_invent_zero_initialization():
 
 
 @pytest.mark.parametrize('body,code', (
-    ('struct S{int n;S();};S::S(){}int f(){S*p=new S;return 0;}', 'cpp.unsupported.allocation'),
+    # The allocating `new S` original moved verbatim to test_cpp_heap_allocation's MOVED_ORIGINALS.
     ('struct S{int n;S();};S::S(){}int f(){long long raw[4];new(raw)S[2];return 0;}', 'cpp.unsupported.array-new'),
     ('struct S{int n;S();};S::S(){}int f(){long long raw[4];new(raw)S{};return 0;}', 'cpp.unsupported.placement-list-initialization'),
     ('struct S{int n;};int f(){long long raw[4];new(raw)S();return 0;}', 'cpp.unsupported.placement-implicit-construction'),

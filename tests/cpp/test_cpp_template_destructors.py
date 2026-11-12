@@ -228,8 +228,7 @@ BOUNDARIES = (
      'cpp.template-definition'),
     ('used-dependent-invalid', 'template<class T>struct Box{T n;~Box(){n=n%2;}};'
      'int f(){Box<double>b{0.0};return 0;}', 'cpp.invalid-operands'),
-    ('used-dependent-delete', DYNARRAY_SCAFFOLD +
-     'int f(){DynArray<int>b{nullptr,nullptr};return 0;}', 'cpp.unsupported.allocation'),
+    # used-dependent-delete moved verbatim to test_cpp_heap_allocation's MOVED_ORIGINALS.
     ('explicit-d1-without-proof', 'template<class T>struct Box{~Box(){}};'
      'void f(Box<int>*p){p->~Box();}', 'cpp.unsupported.dependent-destruction'),
     # nested-template-d1-without-proof moved verbatim to test_cpp_member_destruction's
@@ -271,16 +270,14 @@ def test_private_d1_access_fails_before_requesting_its_definition():
                    for entry in parser.instance_registry.entries.values())
 
 
-def test_used_dependent_delete_fails_at_the_preserved_expression_not_as_empty_d1():
+def test_used_dependent_delete_lowers_the_preserved_expression_in_the_instantiated_d1():
     parser = CppParser()
-    with pytest.raises(CppDiagnostic) as error:
-        parser.parse('template<class T>struct Box{T*p;~Box(){\n'
-                     'delete [] p;\n}};int f(){Box<int>b{nullptr};return 0;}', 'delete.cpp')
-    assert error.value.code == 'cpp.unsupported.allocation'
-    assert error.value.coord.file == 'delete.cpp' and error.value.coord.line == 2
+    parser.parse('template<class T>struct Box{T*p;~Box(){\n'
+                 'delete [] p;\n}};int f(){Box<int>b{nullptr};return 0;}', 'delete.cpp')
     entry, = (entry for entry in parser.instance_registry.entries.values()
               if isinstance(entry.context, MethodInstance))
-    assert not entry.value.defined
+    assert entry.value.defined
+    # The body's unknown deallocation call is not a closed-destruction proof.
     assert not getattr(entry.value, 'closed_destruction_body', False)
 
 

@@ -2992,6 +2992,9 @@ class CppParser:
         if kind == 'new-array':
             from pcc.frontends.cpp.allocation_patterns import instantiate_array_new
             return instantiate_array_new(self, pattern, bindings, environment)
+        if kind == 'new-object':
+            from pcc.frontends.cpp.allocation import instantiate_new
+            return instantiate_new(self, pattern, bindings, environment)
         arguments = [self._instantiate_expression(child, bindings, environment)
                      for child in pattern.children]
         if kind == 'conditional':

@@ -56,9 +56,15 @@ def validate_declaration(parser, name, result, parameters, nonthrowing,
     if reserved and defining:
         raise CppDiagnostic('cpp.reserved-placement-definition',
                             'a program cannot replace a reserved standard placement function', name.coord)
-    if defining:
+    usual = {('operator new', (size,)), ('operator new[]', (size,)),
+             ('operator delete', (PointerType('void'),)), ('operator delete', (PointerType('void'), size)),
+             ('operator delete[]', (PointerType('void'),)), ('operator delete[]', (PointerType('void'), size))}
+    if defining and (variadic or (name.value, tuple(unqualified(p) for p in parameters)) not in usual):
+        # [replacement.functions]: the usual unaligned forms are replaceable and
+        # called by new/delete-expressions (heap_allocation.py). Aligned and
+        # nothrow replacements need their own selection rules.
         raise CppDiagnostic('cpp.unsupported.allocation-function-definitions',
-                            'allocation replacement definitions require heap/failure/deallocation semantics', name.coord)
+                            'only the usual unaligned allocation functions can be replaced here', name.coord)
 
 
 def global_new_ahead(parser):
@@ -89,11 +95,10 @@ def _delete_operand(expression, coord):
 
 
 def lower_delete(parser, expression, global_only, array, coord):
-    """A real instantiated use must retain the owned heap/deallocation boundary."""
+    """Deallocation through the global usual functions (heap_allocation.py)."""
     _delete_operand(expression, coord)
-    operation = 'delete[]' if array else 'delete'
-    raise CppDiagnostic('cpp.unsupported.allocation',
-                        operation + ' requires owned deallocation, object lifetime and failure semantics', coord)
+    from pcc.frontends.cpp.heap_allocation import lower_delete as lower_heap_delete
+    return lower_heap_delete(parser, expression, global_only, array, coord)
 
 
 def parse_delete(parser):
@@ -109,9 +114,76 @@ def parse_delete(parser):
     parser._require_value(operand, allow_class=True)
     operand = parser._decay_array(operand)
     _delete_operand(operand, token.coord)
-    if parser.template_function is not None and dependent(operand.dtype):
+    if getattr(parser, 'class_template_method', None) is not None or (
+            parser.template_function is not None and dependent(operand.dtype)):
         return Expression(Pattern('delete', token.coord, (global_only, array), [operand]), 'void')
+    if parser.template_function is not None or parser.parsing_template or parser.instantiating_template:
+        if not getattr(parser, 'class_template_instance', None):
+            raise CppDiagnostic('cpp.unsupported.allocation-templates', 'dependent deallocation is not implemented',
+                                token.coord)
     return lower_delete(parser, operand, global_only, array, token.coord)
+
+
+def parse_allocating_new(parser, global_only, coord):
+    """`new type-id [count] new-initializer(opt)` without a placement list."""
+    from pcc.frontends.cpp.parser import Expression
+    from pcc.frontends.cpp.templates import Pattern, dependent, value_dependent
+    in_class_template = getattr(parser, 'class_template_method', None) is not None
+    if (parser.template_function is not None or parser.parsing_template) and not in_class_template:
+        raise CppDiagnostic('cpp.unsupported.allocation-templates', 'dependent allocation is not implemented', coord)
+    if parser._peek().value == '(':
+        raise CppDiagnostic('cpp.unsupported.new-type-id', 'parenthesized allocation type-ids are not implemented', coord)
+    if parser.unevaluated_depth and not in_class_template:
+        raise CppDiagnostic('cpp.unsupported.allocation', 'unevaluated new-expressions are not implemented', coord)
+    dtype = parser._abstract_pointer_type(parser._type(check_lowering=False))
+    if in_class_template and parser._peek().value == '[':
+        from pcc.frontends.cpp.allocation_patterns import parse_array_new
+        return parse_array_new(parser, global_only, coord, element=dtype)
+    count = None
+    if parser._accept('['):
+        if parser._peek().value == ']':
+            raise CppDiagnostic('cpp.unsupported.array-new', 'array-new bound inference is not implemented', coord)
+        count = parser._expression()
+        parser._require_value(count)
+        parser._expect(']')
+        if parser._peek().value == '[':
+            raise CppDiagnostic('cpp.unsupported.array-new', 'multidimensional array-new is not implemented', coord)
+    kind, arguments = 'default', []
+    if parser._peek().value == '{':
+        raise CppDiagnostic('cpp.unsupported.allocation', 'braced new-initializers are not implemented', coord)
+    if parser._accept('('):
+        if parser._accept(')'):
+            kind = 'value'
+        else:
+            kind = 'direct'
+            while True:
+                expression = parser._expression()
+                parser._require_value(expression)
+                arguments.append(parser._decay_array(expression))
+                if parser._accept(')'):
+                    break
+                parser._expect(',')
+    if in_class_template:
+        if parser.unevaluated_depth:
+            raise CppDiagnostic('cpp.unsupported.allocation', 'unevaluated new-expressions are not implemented', coord)
+        # Member Patterns are instantiated with the specialization's types.
+        result = PointerType(dtype)
+        children = ([count] if count is not None else []) + arguments
+        return Expression(Pattern('new-object', coord, (global_only, dtype, count is not None, kind), children),
+                          result, constant_fact=not_constant(result, 'C++17 new-expression', coord))
+    if dependent(dtype) or (count is not None and value_dependent(count)):
+        raise CppDiagnostic('cpp.unsupported.allocation-templates', 'dependent allocation is not implemented', coord)
+    from pcc.frontends.cpp.heap_allocation import lower_new
+    return lower_new(parser, dtype, count, kind, arguments, global_only, coord)
+
+
+def instantiate_new(parser, pattern, bindings, environment):
+    global_only, dtype, has_count, kind = pattern.value
+    dtype = parser._substitute_pattern_type(dtype, bindings, pattern.coord)
+    children = [parser._instantiate_expression(child, bindings, environment) for child in pattern.children]
+    count = children.pop(0) if has_count else None
+    from pcc.frontends.cpp.heap_allocation import lower_new
+    return lower_new(parser, dtype, count, kind, children, global_only, pattern.coord)
 
 
 def _cast(parser, node, dtype, coord):
@@ -124,13 +196,11 @@ def parse_new(parser):
     global_only = _scope_separator(parser.cursor) is not None
     token = parser._expect('new')
     coord = token.coord
+    if parser._peek().value != '(':
+        return parse_allocating_new(parser, global_only, coord)
     if parser.template_function is not None or parser.parsing_template or parser.instantiating_template:
-        if getattr(parser, 'class_template_method', None) is not None and parser._peek().value != '(':
-            from pcc.frontends.cpp.allocation_patterns import parse_array_new
-            return parse_array_new(parser, global_only, coord)
         raise CppDiagnostic('cpp.unsupported.allocation-templates', 'dependent allocation is not implemented', coord)
-    if not parser._accept('('):
-        raise CppDiagnostic('cpp.unsupported.allocation', 'allocating new requires the owned allocation/failure runtime', coord)
+    parser._expect('(')
     if parser._is_type(parser._peek()):
         raise CppDiagnostic('cpp.unsupported.new-type-id', 'parenthesized allocation type-ids are not implemented', coord)
     placement = []

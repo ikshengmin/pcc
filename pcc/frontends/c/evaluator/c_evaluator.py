@@ -1169,6 +1169,23 @@ def _invoke_compile_preprocessed_translation_unit_artifact(
     )
 
 
+_CXX_ALLOCATION_SUPPORT = """
+void *malloc(unsigned long);
+void free(void *);
+void abort(void);
+__attribute__((weak)) void *_Znwm(unsigned long size) {
+    void *p = malloc(size ? size : 1);
+    if (!p) abort();
+    return p;
+}
+__attribute__((weak)) void *_Znam(unsigned long size) { return _Znwm(size); }
+__attribute__((weak)) void _ZdlPv(void *p) { free(p); }
+__attribute__((weak)) void _ZdlPvm(void *p, unsigned long size) { (void)size; _ZdlPv(p); }
+__attribute__((weak)) void _ZdaPv(void *p) { _ZdlPv(p); }
+__attribute__((weak)) void _ZdaPvm(void *p, unsigned long size) { (void)size; _ZdaPv(p); }
+"""
+
+
 def _raise_if_duplicate_external_definitions(compiled_units):
     """Reject two strong definitions of one symbol; a weak function definition yields to any other."""
     seen = {}
@@ -1512,6 +1529,21 @@ class CEvaluator(object):
         # archive view or interpret absent member configuration as defaults.
         return _ensure_runtime(False, target_triple=self.target_triple)
 
+    def _cxx_allocation_support_units(self, compiled_units):
+        """Owned default global allocation functions for a C++ program.
+
+        N4659 [new.delete.single]/[new.delete.array] and [replacement.functions]:
+        the defaults are weak, so a program's own replacement wins at link.
+        Allocation failure terminates (no exception support); the array and
+        sized forms forward to the single unsized ones as the defaults do.
+        """
+        from pcc.frontends.cpp.driver import is_cpp_path
+        if not any(is_cpp_path(unit[0]) for unit in compiled_units):
+            return []
+        artifact = _compile_preprocessed_translation_unit_artifact(
+            "__pcc_cxx_allocation.c", _CXX_ALLOCATION_SUPPORT, target_triple=self.target_triple)
+        return [_artifact_to_compiled_unit(artifact)]
+
     def emit_executable(self, compiled_units, output: str, *, optimize=True,
                         link_args=None, freestanding_libc=False):
         """Publish a C executable with the explicitly selected backend owner."""
@@ -1550,6 +1582,7 @@ class CEvaluator(object):
                    for candidate in (map_path, map_path + ".pcc-link.tmp")
                    for path in protected):
                 raise BackendUnavailable("link map output aliases an input or executable")
+        compiled_units = list(compiled_units) + self._cxx_allocation_support_units(compiled_units)
         prepared = self._prepare_self_backend_units(compiled_units, optimize=optimize) if self._normalize_opt_level(optimize) > 0 else compiled_units
         target_id = self._self_link_target_identity(prepared)
         if target_id in ("self-aarch64-linux-v0", "self-x86_64-linux-v0", "self-x86_64-windows-v0"):
