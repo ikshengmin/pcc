@@ -128,7 +128,9 @@ def lex(source: str) -> list[Token]:
             advance(end)
             continue
         op = next((op for op in _OPERATORS if source.startswith(op, i)), None)
-        if op is None and char in "{}()[];,:.+-*/%!=<>&|^#?":
+        # `$` is a Rust token (reference/tokens.html#punctuation) used only by
+        # macros by example; the parser reports macro syntax as a gap.
+        if op is None and char in "{}()[];,:.+-*/%!=<>&|^#?$":
             op = char
         if op is None:
             raise Token(char, "", ln, column).error(f"unsupported Rust token {char!r}")
@@ -1156,6 +1158,9 @@ class Parser:
                 continue
             if repr_c:
                 raise self.token.error("repr(C) applies only to a struct")
+            if self.token.kind == "name" and self.tokens[self.pos + 1].text == "!":
+                raise self.token.error("macro_rules! definitions and item macro invocations require "
+                                       "macro-by-example expansion, which is not implemented")
             unsafe = self.accept("unsafe")
             abi = "Rust"
             if self.accept("extern"):
@@ -1506,6 +1511,8 @@ class Parser:
             expr = Expr("trait_path", token, (owner, trait.text, method.text))
         elif text in {"|", "||"} or (text == "move" and self.token.text in {"|", "||"}):
             expr = self.closure_expression(token)
+        elif token.kind == "name" and self.token.text == "!":
+            raise token.error("macro invocations require macro-by-example expansion, which is not implemented")
         elif (token.kind == "name" and text != "_") or text in {"self", "Self", "super", "crate"}:
             owner, variant = self.expression_path(token)
             if variant is not None:

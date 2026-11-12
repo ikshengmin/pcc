@@ -215,6 +215,7 @@ def test_same_size_original_byte_changes_fail_closed(tmp_path, name):
 @pytest.mark.parametrize("message,status", (
     ("unsupported semantic crate attribute", "UNSUPPORTED"),
     ("experimental Rust frontend has no borrow checker", "UNSUPPORTED"),
+    ("4:4: cfg_attr requires an actual source/options-bound CheckedRustSource configuration", "UNSUPPORTED"),
     ("expected fn, found use", "FAIL"),
     ("owned preprocessor: header not found: math.h", "FAIL"),
     ("unexpected internal exception", "FAIL"),

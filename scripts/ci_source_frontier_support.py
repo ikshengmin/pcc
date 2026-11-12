@@ -123,6 +123,7 @@ def diagnostic_status(error):
     return "UNSUPPORTED" if any(marker in diagnostic for marker in (
         "not implemented", "unsupported", "has no borrow checker",
         "requires an owned", "requires an actual checkedrustsource",
+        "requires an actual source/options-bound checkedrustsource",
     )) else "FAIL"
 
 
