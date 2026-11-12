@@ -4714,42 +4714,10 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
             zpage_required: int = 0
             need_zpage_node: int = 0
             need_zpage_page: int = 0
-            if backend == 4:
-                zpage_required = pcc_gc_zpage_owner_index_plan_capacity(1)
-                need_zpage_node = (
-                    _backend4_zpage_node_plan_requires_prepare()
-                )
-                # Recompute after every preparation unlock/retry. The final
-                # attempt carries this selection through the locked commit.
-                current_page = null()
-                current_page_offset: int = -1
-                if (load_i32(o, 12) & 65536) != 0:
-                    current_page = _backend4_zpage_find_page_for_addr(
-                        o, size
-                    )
-                    if ptr_is_null(current_page) == 0:
-                        current_page_offset = ptr_diff(
-                            o, load_ptr(current_page, 72)
-                        )
-                if ptr_is_null(current_page) != 0:
-                    current_page = _backend4_zpage_find_reusable_page(
-                        o, size
-                    )
-                if (
-                    ptr_is_null(current_page) != 0
-                    and ptr_is_null(prepared_zpage) != 0
-                ):
-                    prepared_zpage = _backend4_zpage_pop_free_page(size)
-                    if ptr_is_null(prepared_zpage) == 0:
-                        prepared_zpage_from_free = 1
-                    else:
-                        prepared_zpage_from_free = 0
-                    prepared_zpage_ready = 0
-                if (
-                    ptr_is_null(current_page) != 0
-                    and prepared_zpage_ready == 0
-                ):
-                    need_zpage_page = 1
+            # GC4 objects are allocator cells (every tracing collector runs
+            # the count-free protocol), so no logical zpage, zpage node or
+            # zpage owner entry is planned for them: GC4's pages are the
+            # object slabs (freestanding_gc_page_marks).
             if required < 0 or zpage_required < 0:
                 if (
                     ptr_is_null(prepared_zpage) == 0
@@ -5157,23 +5125,6 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
         if final_generation == 128:
             _backend3_young_link_head(node)
         atomic_rmw_i64("add", global_addr("pcc_gc_live_bytes"), 0, size, "relaxed")
-        if backend == 4:
-            store_ptr(zpage_node_owner, 0, prepared_zpage_node)
-            store_ptr(zpage_owner, 0, prepared_zpage)
-            zpage_node = _backend4_zpage_track_alloc_selected(
-                o,
-                size,
-                zpage_node_owner,
-                zpage_owner,
-                prepared_zpage_from_free,
-                current_page,
-                current_page_offset,
-            )
-            prepared_zpage_node = load_ptr(zpage_node_owner, 0)
-            prepared_zpage = load_ptr(zpage_owner, 0)
-            if ptr_is_null(prepared_zpage) != 0:
-                prepared_zpage_from_free = 0
-            _set_object_node_zpage(node, zpage_node)
         if (
             ptr_is_null(prepared_zpage) == 0
             and prepared_zpage_from_free != 0

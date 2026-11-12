@@ -231,7 +231,13 @@ def pcc_gc_step(budget: i64) -> i64:
                 # keep draining at every step.
                 marks_finished: i64 = load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0)
                 selection_due: i64 = 0
-                if marks_finished != load_i64(global_addr("pcc_gc_backend4_selection_commit"), 0):
+                # Selection scores logical zpages; GC4 objects are allocator
+                # cells and register none (their slab evacuation is still to
+                # come), so a step selects only while zpages exist.
+                if (
+                    marks_finished != load_i64(global_addr("pcc_gc_backend4_selection_commit"), 0)
+                    and ptr_is_null(global_load_ptr("pcc_gc_backend4_zpage_head")) == 0
+                ):
                     selection_due = 1
                 if processed < budget and may_relocate != 0:
                     # Refresh before selection/copy, which may run before a
