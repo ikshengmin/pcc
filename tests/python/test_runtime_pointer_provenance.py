@@ -158,22 +158,30 @@ def _harness_source() -> str:
             failed |= expect("str", pcc_gc_pointer_is_managed(text), 1);
             failed |= expect("bigint", pcc_gc_pointer_is_managed(big), 1);
 
-            uintptr_t old_list = (uintptr_t)list;
-            uintptr_t old_text = (uintptr_t)text;
-            uintptr_t old_big = (uintptr_t)big;
+            /* GC1-GC4 count nothing and root every word of a stopped
+             * stack conservatively: an address this frame keeps names a
+             * live object. Keep the old addresses masked and clear the
+             * locals, so releasing the last owner leaves them unreachable. */
+            const uintptr_t mask = (uintptr_t)0x5a5a5a5a5a5a5a5aULL;
+            volatile uintptr_t old_list = (uintptr_t)list ^ mask;
+            volatile uintptr_t old_text = (uintptr_t)text ^ mask;
+            volatile uintptr_t old_big = (uintptr_t)big ^ mask;
             py_decref(list);
             py_decref(text);
             py_decref(big);
+            *(PyObject *volatile *)&list = NULL;
+            *(PyObject *volatile *)&text = NULL;
+            *(PyObject *volatile *)&big = NULL;
             /* GC4 intentionally keeps old forwarding shells managed until
              * its two-epoch remap quarantine has healed every slot.  Drive
              * that public lifecycle to quiescence before testing stale
-             * provenance; the other backends make these collects no-ops or
-             * ordinary bounded collections. */
+             * provenance; GC0 makes these collects no-ops, the tracing
+             * collectors free the unreachable objects. */
             (void)pcc_gc_collect(0);
             (void)pcc_gc_collect(0);
-            failed |= expect_stale("stale-list", (PyObject *)old_list);
-            failed |= expect_stale("stale-str", (PyObject *)old_text);
-            failed |= expect_stale("stale-bigint", (PyObject *)old_big);
+            failed |= expect_stale("stale-list", (PyObject *)(old_list ^ mask));
+            failed |= expect_stale("stale-str", (PyObject *)(old_text ^ mask));
+            failed |= expect_stale("stale-bigint", (PyObject *)(old_big ^ mask));
 
             munmap(guard, 4096);
             if (failed != 0) return 92;
