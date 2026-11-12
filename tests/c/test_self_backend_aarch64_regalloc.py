@@ -173,10 +173,9 @@ entry:
     assert _register_index(func, "second") is None
 
 
-# AArch64 Darwin execution
-@pytest.mark.pcc_gate(probe=lambda: not (sys.platform != "darwin" or platform.machine() != "arm64"))
-@pytest.mark.parametrize("mode", ("default", "function", "local"))
-def test_aarch64_call_result_executes_through_indexed_emission(tmp_path, monkeypatch, mode):
+def _assert_aarch64_call_result_indexed_emission(
+    tmp_path, monkeypatch, mode, *, execute_native,
+):
     import platform
     import subprocess
     import sys
@@ -187,9 +186,10 @@ def test_aarch64_call_result_executes_through_indexed_emission(tmp_path, monkeyp
     from pcc.backend.macho_exec import link_executable
     from pcc.backend.arm64_asm_driver import assemble_file
 
-    from pcc.backend import self_backend_aarch64_darwin_prologue as prologue
     from tests.aarch64_regalloc_scan_reference import (
-        old_scan_allocator, select_mode,
+        AllocatorEmissionCapture,
+        old_scan_allocator,
+        select_mode,
     )
 
     from tests.scalar_arena_projection_ci_reference import disable_scalar_projections
@@ -238,9 +238,10 @@ entry:
   ret i32 %status
 }
 '''
-    # Force the callee's scratch register to disagree with its return value;
-    # two self-emitted functions could accidentally leave the result in x1.
-    helper_sections, helper_undefined = assemble_file('''
+    if execute_native:
+        # Force the callee's scratch register to disagree with its return value;
+        # two self-emitted functions could accidentally leave the result in x1.
+        helper_sections, helper_undefined = assemble_file('''
 .section __TEXT,__text,regular,pure_instructions
 .globl _opaque
 _opaque:
@@ -248,9 +249,10 @@ _opaque:
   movz x0, #33
   ret
 ''')
-    helper = NativeObject.from_sections(helper_sections, undefined=helper_undefined)
+        helper = NativeObject.from_sections(helper_sections, undefined=helper_undefined)
     for optimize in (False, True):
         outputs = []
+        captures = []
         graph_counts = [dict(pops=0, edges=0, hits=0) for _ in range(2)]
         reference = old_scan_allocator(facts_counts=graph_counts[0])
         # Execute the exact current helper with its real production globals;
@@ -259,23 +261,29 @@ _opaque:
         counted_facts.__globals__.update(vars(aarch64_regalloc))
         for index, allocator in enumerate((reference, allocate_aarch64_block_registers)):
             with monkeypatch.context() as patch:
-                patch.setattr(prologue, "allocate_aarch64_block_registers", allocator)
+                capture = AllocatorEmissionCapture(patch, allocator)
                 if index == 0:
                     disable_scalar_projections(patch, allocator)
                 if index == 1:
                     patch.setattr(aarch64_regalloc, "_function_level_facts", counted_facts)
                 module = parse_self_backend_module(source)
                 transport = emit_aarch64_darwin_indexed_transport(module, optimize=optimize)
+            capture.assert_complete({"two_calls", "shared_homes", "main"})
+            captures.append(capture)
             sections, undefined = transport.assemble_sections()
             outputs.append((sections, undefined))
-            executable = tmp_path / ("call-results-" + str(optimize) + "-" + str(index))
-            executable.write_bytes(link_executable([NativeObject.from_sections(sections, undefined=undefined), helper]))
-            executable.chmod(0o755)
+            if execute_native:
+                executable = tmp_path / ("call-results-" + str(optimize) + "-" + str(index))
+                executable.write_bytes(link_executable([NativeObject.from_sections(sections, undefined=undefined), helper]))
+                executable.chmod(0o755)
             if transport.encoded_line_records is not None:
                 transport.encoded_line_records.close()
-            result = subprocess.run([str(executable)], capture_output=True, timeout=10)
-            assert result.returncode == 0, result.stderr
+            if execute_native:
+                result = subprocess.run([str(executable)], capture_output=True, timeout=10)
+                assert result.returncode == 0, result.stderr
         assert outputs[0] == outputs[1]
+        assert captures[0].allocation_states == captures[1].allocation_states
+        assert captures[0].physical_frame_states == captures[1].physical_frame_states
         graph_counts[1] = {key: summary_counts[key] for key in ("pops", "edges", "hits")}
         if mode != "local":
             assert summary_counts["summary_nodes"] > 0
@@ -286,6 +294,26 @@ _opaque:
         else:
             assert summary_counts["summary_nodes"] == 0
             assert graph_counts == [dict(pops=0, edges=0, hits=0)] * 2
+
+
+@pytest.mark.parametrize("mode", ("default", "function", "local"))
+def test_aarch64_call_result_indexed_emission_selects_both_allocators(
+    tmp_path, monkeypatch, mode,
+):
+    # Exercise the exact native input and both optimization settings on every
+    # host. Emission, frame/byte equality and graph counts are not execution.
+    _assert_aarch64_call_result_indexed_emission(
+        tmp_path, monkeypatch, mode, execute_native=False,
+    )
+
+
+# AArch64 Darwin execution
+@pytest.mark.pcc_gate(probe=lambda: not (sys.platform != "darwin" or platform.machine() != "arm64"))
+@pytest.mark.parametrize("mode", ("default", "function", "local"))
+def test_aarch64_call_result_executes_through_indexed_emission(tmp_path, monkeypatch, mode):
+    _assert_aarch64_call_result_indexed_emission(
+        tmp_path, monkeypatch, mode, execute_native=True,
+    )
 
 
 def test_aarch64_linear_scan_spills_farthest_interval_under_pressure():
@@ -738,8 +766,11 @@ def test_aarch64_regalloc_reuses_function_facts_without_changing_state(
 @pytest.mark.parametrize("mode", ("default", "function", "local"))
 def test_aarch64_regalloc_scan_reuse_preserves_syscall_failure(monkeypatch, mode):
     from pcc.backend import BackendUnavailable
-    from pcc.backend import self_backend_aarch64_darwin_prologue as prologue
-    from tests.aarch64_regalloc_scan_reference import old_scan_allocator, select_mode
+    from tests.aarch64_regalloc_scan_reference import (
+        AllocatorEmissionCapture,
+        old_scan_allocator,
+        select_mode,
+    )
     from tests.python.test_unsafe_syscall6 import _build_syscall6_module
 
     select_mode(monkeypatch, mode)
@@ -749,10 +780,11 @@ def test_aarch64_regalloc_scan_reuse_preserves_syscall_failure(monkeypatch, mode
     failures = []
     for index, allocator in enumerate((old_scan_allocator(), allocate_aarch64_block_registers)):
         with monkeypatch.context() as patch:
-            patch.setattr(prologue, "allocate_aarch64_block_registers", allocator)
+            capture = AllocatorEmissionCapture(patch, allocator)
             if index == 0:
                 disable_scalar_projections(patch, allocator)
             with pytest.raises(BackendUnavailable, match="syscall6") as failure:
                 emit_self_asm(source)
+        capture.assert_complete({"main"})
         failures.append((type(failure.value), str(failure.value)))
     assert failures[0] == failures[1]
