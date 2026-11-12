@@ -8,7 +8,8 @@ record. This owner decides, before code generation, what each one means:
   format, noreturn, visibility, ...). Ignoring them preserves C semantics.
 * honored: ``aligned`` on objects, members, records and typedefs, ``packed``
   on records, members and bit-fields, integer ``mode`` (rewritten by the
-  parser) and ``weak`` on file-scope function definitions.
+  parser), and ``weak``, ``constructor`` and ``destructor`` on file-scope
+  function definitions.
 * every other attribute, or an honored one in a position this owner does not
   model, is a CodegenError gap, never a silently erased semantic.
 """
@@ -134,42 +135,50 @@ def propagate_typedef_alignment(ast):
     return ast
 
 
-def weak_function_definitions(ast):
-    """Attach a file-scope function's ``weak`` to its definition; return the declarations allowed it.
+DEFINITION_ATTRIBUTES = ("weak", "constructor", "destructor")
+
+
+def function_definition_attributes(ast):
+    """Attach a file-scope function's weak/constructor/destructor to its definition.
 
     GCC "Common Function Attributes": a weak definition is emitted as a weak
-    symbol that a strong definition elsewhere overrides. Declaring weak a
-    function this unit does not define (an undefined weak reference) and
-    weak objects are gaps; a weak static function is an error.
+    symbol that a strong definition elsewhere overrides; a constructor runs
+    before main and a destructor after it. Each must name a function this
+    unit defines (an undefined weak reference and a constructor defined
+    elsewhere are gaps); a weak static function is an error. Returns the ids
+    of the declarations allowed these attributes.
     """
-    weak, definitions, declarations = {}, {}, {}
+    found, definitions, declarations = {}, {}, {}
     for ext in getattr(ast, "ext", None) or ():
         decl = ext.decl if isinstance(ext, c_ast.FuncDef) else ext if isinstance(ext, c_ast.Decl) else None
         if decl is None or not isinstance(decl.type, c_ast.FuncDecl):
             continue
         declarations.setdefault(decl.name, []).append(decl)
-        attributes = attributes_named(decl.attributes, "weak")
-        if attributes:
-            weak.setdefault(decl.name, attributes[0])
+        for name in DEFINITION_ATTRIBUTES:
+            for attribute in attributes_named(decl.attributes, name):
+                found.setdefault(decl.name, {}).setdefault(name, attribute)
         if isinstance(ext, c_ast.FuncDef):
             definitions[decl.name] = ext
     allowed = set()
-    for name, attribute in weak.items():
-        definition = definitions.get(name)
-        if definition is None:
-            _gap(attribute, f"the undefined function '{name}' (a weak reference)")
-        if any("static" in decl.storage for decl in declarations[name]):
-            raise CodegenError(f"weak declaration of '{name}' must be public")
-        if not attributes_named(definition.decl.attributes, "weak"):
-            definition.decl.attributes = tuple(definition.decl.attributes or ()) + (attribute,)
-        allowed.update(id(decl) for decl in declarations[name])
+    for function, attributes in found.items():
+        definition = definitions.get(function)
+        for name, attribute in attributes.items():
+            if definition is None:
+                where = (f"the undefined function '{function}' (a weak reference)" if name == "weak"
+                         else f"'{function}', which this translation unit does not define")
+                _gap(attribute, where)
+            if name == "weak" and any("static" in decl.storage for decl in declarations[function]):
+                raise CodegenError(f"weak declaration of '{function}' must be public")
+            if not attributes_named(definition.decl.attributes, name):
+                definition.decl.attributes = tuple(definition.decl.attributes or ()) + (attribute,)
+        allowed.update(id(decl) for decl in declarations[function])
     return allowed
 
 
 def check_translation_unit(ast):
     """Reject every attribute whose meaning is not modeled; return nothing."""
     propagate_typedef_alignment(ast)
-    weak_declarations = weak_function_definitions(ast)
+    definition_declarations = function_definition_attributes(ast)
     pending = [ast]
     while pending:
         node = pending.pop()
@@ -182,7 +191,8 @@ def check_translation_unit(ast):
         elif isinstance(node, c_ast.Typedef):
             _check(node.attributes, "a typedef", frozenset({"aligned"}))
         elif isinstance(node, c_ast.Decl):
-            _check(node.attributes, "a declaration", HONORED | {"weak"} if id(node) in weak_declarations else HONORED)
+            _check(node.attributes, "a declaration",
+                   HONORED | set(DEFINITION_ATTRIBUTES) if id(node) in definition_declarations else HONORED)
         elif isinstance(node, c_ast.PtrDecl):
             _check(getattr(node, "attributes", ()), "a pointer declarator", frozenset())
         pending.extend(child for _name, child in node.children())

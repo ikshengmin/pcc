@@ -109,13 +109,14 @@ For ownership boundaries and what each route proves, see
 The owned path parses GNU `__attribute__` and `asm` and decides each one; it
 no longer defines them away. Honored: `aligned` (objects, members, records,
 typedefs used to declare objects or members), `packed` (records, members,
-bit-fields), integer `mode` (including on typedef and enum types), `weak` on
-file-scope function definitions, and `asm` statements with an empty template
-(their tied operands are assigned, every operand is evaluated once).
-Attributes without semantic effect here (`noinline`, `unused`, `format`, ...)
-are ignored. Everything else, such as `vector_size`, `alias`, `cleanup`,
-`constructor`, `section`, weak objects, asm labels and real instruction
-templates, fails with an explicit "not implemented" diagnostic. The list
+bit-fields), integer `mode` (including on typedef and enum types), `weak`,
+`constructor` and `destructor` (with priorities) on file-scope function
+definitions, and `asm` statements with an empty template (their tied operands
+are assigned, every operand is evaluated once). Attributes without semantic
+effect here (`noinline`, `unused`, `format`, ...) are ignored. Everything
+else, such as `vector_size`, `alias`, `cleanup`, `section`, weak objects, asm
+labels and real instruction templates, fails with an explicit "not
+implemented" diagnostic. The list
 lives in `pcc/frontends/c/codegen/c_gnu_attributes.py`; the executed checks
-are `tests/c/test_c_gnu_attributes.py`, `tests/c/test_c_gnu_asm.py` and
-`tests/c/test_c_weak_functions.py`.
+are `tests/c/test_c_gnu_attributes.py`, `tests/c/test_c_gnu_asm.py`,
+`tests/c/test_c_weak_functions.py` and `tests/c/test_c_constructor_attributes.py`.

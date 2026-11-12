@@ -13,6 +13,16 @@ def _is_static_decl(decl) -> bool:
     return "static" in storage
 
 
+# GNU attributes that keep a function without a C reference: the runtime
+# calls constructors/destructors, and ``used`` must be emitted regardless.
+_ROOT_ATTRIBUTES = frozenset(("constructor", "destructor", "used"))
+
+
+def _is_attribute_root(decl) -> bool:
+    return any(attribute.base_name in _ROOT_ATTRIBUTES
+               for attribute in getattr(decl, "attributes", ()) or ())
+
+
 class GlobalDCEPass(ASTPass):
     """Remove unreachable static functions from the translation unit."""
 
@@ -34,7 +44,7 @@ class GlobalDCEPass(ASTPass):
                 if not name:
                     continue
                 funcdefs[name] = ext
-                if _is_static_decl(ext.decl):
+                if _is_static_decl(ext.decl) and not _is_attribute_root(ext.decl):
                     static_func_names.add(name)
                 else:
                     root_names.add(name)

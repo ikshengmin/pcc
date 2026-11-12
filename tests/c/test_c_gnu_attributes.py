@@ -169,7 +169,6 @@ PROGRAMS = {
 GAPS = {
     "vector-size": "typedef int v4 __attribute__((vector_size(16))); int main(void) { v4 x; (void)x; return 0; }",
     "cleanup": "void f(int *p) {} int main(void) { int x __attribute__((cleanup(f))) = 1; return x; }",
-    "constructor": "__attribute__((constructor)) static void init(void) {} int main(void) { return 0; }",
     "section": "int x __attribute__((section(\".data.x\"))) = 1; int main(void) { return x; }",
     "weak": "int w __attribute__((weak)) = 1; int main(void) { return w; }",
     "aligned-typedef-in-sizeof": "typedef int aint __attribute__((aligned(16))); int main(void) { return sizeof(aint); }",

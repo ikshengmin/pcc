@@ -2003,6 +2003,58 @@ class CCodeGenerator(
         for i, ext in enumerate(node.ext):
             if i not in pass1:
                 self.codegen(ext)
+        self._emit_gnu_initializers()
+
+    def _record_gnu_initializer(self, decl, function):
+        """Note a constructor/destructor definition with its GCC priority."""
+        from pcc.frontends.c.codegen.c_gnu_attributes import attributes_named
+        for kind in ("constructor", "destructor"):
+            for attribute in attributes_named(decl.attributes, kind)[:1]:
+                priority = 65535
+                if attribute.args:
+                    if len(attribute.args) != 1:
+                        raise CodegenError(f"GNU {kind} takes at most one priority")
+                    priority = self._eval_const_expr(attribute.args[0])
+                    if not 0 <= priority <= 65535:
+                        raise CodegenError(f"GNU {kind} priority {priority} is outside 0..65535")
+                entries = self.__dict__.setdefault("_gnu_initializers", {"constructor": [], "destructor": []})
+                entries[kind].append((priority, len(entries[kind]), function))
+
+    def _emit_gnu_initializers(self):
+        """Lower GNU constructors to llvm.global_ctors; register destructors with atexit.
+
+        A smaller constructor priority runs earlier. Destructors are registered
+        by an internal priority-0 constructor in ascending priority, so atexit
+        runs them after main's handlers, the smaller priority last.
+        """
+        entries = self.__dict__.get("_gnu_initializers")
+        if not entries or not (entries["constructor"] or entries["destructor"]):
+            return
+        constructors = sorted(entries["constructor"], key=lambda entry: entry[:2])
+        if entries["destructor"]:
+            import zlib
+            atexit = self.module.globals.get("atexit")
+            if not isinstance(atexit, ir.Function):
+                atexit = ir.Function(self.module, ir.FunctionType(int32_t, [voidptr_t]), name="atexit")
+            unit = (self.translation_unit_name or "unit").encode("utf-8")
+            register = ir.Function(self.module, ir.FunctionType(ir.VoidType(), []),
+                                   name=f"__pcc_gnu_destructors.{zlib.crc32(unit):08x}")
+            register.linkage = "internal"
+            builder = ir.IRBuilder(register.append_basic_block("entry"))
+            parameter = atexit.function_type.args[0] if atexit.function_type.args else voidptr_t
+            for _priority, _ordinal, function in sorted(entries["destructor"], key=lambda entry: entry[:2]):
+                handler = function if function.type == parameter else builder.bitcast(function, parameter)
+                builder.call(atexit, [handler])
+            builder.ret_void()
+            constructors.insert(0, (0, -1, register))
+        record = ir.LiteralStructType([int32_t, voidptr_t, voidptr_t])
+        table_type = ir.ArrayType(record, len(constructors))
+        table = ir.GlobalVariable(self.module, table_type, name="llvm.global_ctors")
+        table.linkage = "appending"
+        table.initializer = ir.Constant(table_type, [
+            ir.Constant(record, [ir.Constant(int32_t, priority), function, ir.Constant(voidptr_t, None)])
+            for priority, _ordinal, function in constructors
+        ])
 
     _escape_map = {
         "n": "\n",
@@ -7325,6 +7377,7 @@ class CCodeGenerator(
                     raise CodegenError("weak function definitions are not implemented for target "
                                        + str(self.module.triple))
                 self.function.linkage = "weak"
+            self._record_gnu_initializer(node.decl, self.function)
             if self._func_decl_returns_unsigned(node.decl.type):
                 self._mark_unsigned_return(self.function)
             # Add stack protector attribute for security hardening
