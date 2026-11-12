@@ -493,6 +493,9 @@ class ClassModelProject(SourceProject):
             method.result = self.resolve_named_type(program, method.result)
             method.parameter_types = tuple(self.resolve_named_type(program, dtype)
                                            for dtype in method.parameter_types)
+        for method in program.methods:
+            if method.override is not None:
+                check_object_override(method)
 
     def analyze(self):
         super().analyze()
@@ -552,3 +555,47 @@ def analyze_class_sources(sources):
         return ClassModelProject(programs).analyze()
     except RecursionError as error:
         raise UnsupportedJava("class source model exceeds the bounded parser/analysis nesting limit", code="java.unsupported.nesting-limit") from error
+
+
+# JLS 4.3.2: the overridable methods of Object, the only supertype of a class
+# without extends/implements (both are gated before this model). Each is
+# (parameter count, required result, public). clone's result may be any
+# reference type (JLS 8.4.8.3 return-type-substitutable, covariant).
+OBJECT_METHODS = {
+    "toString": (0, "String", True),
+    "hashCode": (0, "int", True),
+    "finalize": (0, "void", False),
+    "clone": (0, "reference", False),
+}
+
+
+def check_object_override(method):
+    """JLS 9.6.4.4: an @Override method must override a method of Object here.
+
+    The check is compile-time only; the annotation has no runtime effect.
+    equals(Object) needs the Object parameter type, which is not modeled.
+    """
+    name = method.token.text
+    if name == "equals" and len(method.parameter_types) == 1:
+        method.override.error("@Override equals(Object) requires the owned java.lang.Object type",
+                              code="java.unsupported.annotations")
+    expected = OBJECT_METHODS.get(name)
+    if expected is None or expected[0] != len(method.parameter_types):
+        method.override.annotation_error("method does not override or implement a method from a supertype")
+    _, result, public = expected
+    actual = method.result
+    if result == "String":
+        valid = isinstance(actual, BootstrapStringType)
+    elif result == "reference":
+        valid = isinstance(actual, (ArrayType, ClassType, BootstrapStringType))
+    else:
+        valid = actual == result
+    if not valid:
+        method.token.error(name + "() in " + str(method.owner).replace("/", ".")
+                           + " cannot override " + name + "() in java.lang.Object; incompatible return type")
+    if public and "public" not in method.modifiers:
+        method.token.error(name + "() cannot override " + name
+                           + "() in java.lang.Object; attempting to assign weaker access privileges")
+    if not public and "private" in method.modifiers:
+        method.token.error(name + "() cannot override " + name
+                           + "() in java.lang.Object; attempting to assign weaker access privileges")

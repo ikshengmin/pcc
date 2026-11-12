@@ -33,5 +33,10 @@ network download, JAR/class-file production fallback or workflow change exists.
   PCC output or qualify PCC.
 
 First observed blocker (local Mac, PCC master at the native-array round): both
-the native compiler and the class model stop at `GenericGF.java:162:3`, the
-`@Override` annotation on `toString` (`java.unsupported.annotations`).
+the native compiler and the class model stopped at `GenericGF.java:162:3`, the
+`@Override` annotation on `toString` (`java.unsupported.annotations`). With
+marker `@Override` parsed and checked against Object's methods, the native
+compiler stops at `GenericGF.java:33:23` (a static field of class type,
+`java.unsupported.declared-result-type`) and the class model at
+`GenericGF.java:42:17` (final instance fields,
+`java.unsupported.final-instance-fields`).

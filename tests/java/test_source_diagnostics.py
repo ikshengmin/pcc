@@ -32,7 +32,7 @@ def original(body):
 # Exact inputs are retained; diagnostic prose follows the implemented boundary.
 CAPABILITIES = [
     (original('return "text";'), "string-literals", "shared managed String allocation"),
-    ("@Deprecated class Diagnostic{}", "annotations", "unsupported Java source token"),
+    ("@Deprecated class Diagnostic{}", "annotations", "annotation Deprecated requires the annotation domain"),
     (original("int π=1;return π;"), "unicode-tokens", "unsupported Java source token"),
     ("abstract class Diagnostic{}", "abstract-classes", "unsupported top-level class modifiers"),
     ("class Diagnostic extends Object{}", "class-supertypes-generics", "inheritance, generics"),

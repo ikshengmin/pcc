@@ -48,7 +48,15 @@ class Token:
     column: int
     string_units: tuple[int, ...] | None = None
 
+    def annotation_error(self, message):
+        """An ordinary error located at an annotation's @ (not a capability gap)."""
+        raise JavaError(f"{self.filename}:{self.line}:{self.column}: {message}")
+
     def error(self, message, *, code=None):
+        if self.text == "@" and code is None:
+            # Only member-modifier marker annotations are parsed; an
+            # annotation anywhere else reaches its domain boundary here.
+            message, code = "annotations in this position require the annotation domain", "java.unsupported.annotations"
         diagnostic = f"{self.filename}:{self.line}:{self.column}: {message}"
         if code is not None:
             raise UnsupportedJava(diagnostic, code=code)
@@ -91,6 +99,8 @@ class SourceMethod:
     implicit: bool = False
     constructor_target: object = None
     initialization_steps: tuple = ()
+    # The @Override marker token (JLS 9.6.4.4), checked once types resolve.
+    override: Token | None = None
 
     @property
     def descriptor(self):
@@ -281,7 +291,12 @@ def tokenize(source, filename):
                         token_at("'", pos).error("invalid Java character literal")
                     token = token_at(source[pos], pos)
                     if source[pos] == "@":
-                        token.error("unsupported Java source token", code="java.unsupported.annotations")
+                        if re.match(r"@\s*interface\b", source[pos:pos + 64]):
+                            token.error("annotation interface declarations require the annotation domain",
+                                        code="java.unsupported.annotations")
+                        tokens.append(token)
+                        pos += 1
+                        continue
                     if not source[pos].isascii():
                         token.error("unsupported Java source token", code="java.unsupported.unicode-tokens")
                     token.error("unsupported Java source token")
@@ -475,9 +490,30 @@ class SourceParser:
         self.expect("}")
         return Node("array_initializer", token, dtype, values)
 
+    def annotation(self):
+        """JLS 9.7.2 marker annotation; only java.lang.Override has a domain."""
+        at = self.expect("@")
+        names = [self.identifier()]
+        while self.accept("."):
+            names.append(self.identifier())
+        spelled = ".".join(token.text for token in names)
+        if self.peek().text == "(":
+            self.peek().error("annotation element values require the annotation domain",
+                              code="java.unsupported.annotations")
+        if spelled not in {"Override", "java.lang.Override"}:
+            at.error("annotation " + spelled + " requires the annotation domain", code="java.unsupported.annotations")
+        return at
+
     def modifiers(self):
         result = set()
-        while self.peek().text in MODIFIERS:
+        self.last_override = None
+        while self.peek().text in MODIFIERS or self.peek().text == "@":
+            if self.peek().text == "@":
+                at = self.annotation()
+                if self.last_override is not None:
+                    at.annotation_error("Override is not a repeatable annotation interface")
+                self.last_override = at
+                continue
             token = self.take()
             if token.text in result:
                 token.error("duplicate modifier")
@@ -485,6 +521,11 @@ class SourceParser:
         if len(result & {"public", "private", "protected"}) > 1:
             self.peek().error("mutually exclusive access modifiers")
         return result
+
+    def require_no_override(self, kind):
+        if getattr(self, "last_override", None) is not None:
+            self.last_override.annotation_error("annotation interface Override is not applicable to " + kind
+                                                + " declaration")
 
     def parse(self):
         """The class of a unit with at most one top-level type, else None."""
@@ -529,7 +570,9 @@ class SourceParser:
         # Each type of the unit shares its package and imports.
         classes = []
         while self.peek().text != "<eof>":
-            classes.append(self.class_declaration(self.modifiers(), "/".join(package),
+            mods = self.modifiers()
+            self.require_no_override("a class")
+            classes.append(self.class_declaration(mods, "/".join(package),
                                                   tuple(imports), tuple(static_imports)))
         return tuple(classes)
 
@@ -565,7 +608,9 @@ class SourceParser:
             if self.accept(";"):
                 continue
             mods = self.modifiers()
+            override = self.last_override
             if self.peek().text in {"class", "interface", "enum", "record"}:
+                self.require_no_override("a class")
                 if self.peek().text != "class" or self.class_model or "static" not in mods:
                     self.peek().error("only native static member classes have an owned source domain",
                                       code="java.unsupported.member-types")
@@ -576,6 +621,7 @@ class SourceParser:
                 self.peek().error("source method results require boolean, integral primitives or void",
                                   code="java.unsupported.static-initialization")
             if self.class_model and self.peek().text == "{":
+                self.require_no_override("an initializer")
                 if mods == {"static"}:
                     self.peek().error("static initializer execution requires shared Java class initialization", code="java.unsupported.static-initialization")
                 if mods:
@@ -587,6 +633,7 @@ class SourceParser:
                 initialization_steps.append(initializer)
                 continue
             if self.peek().text == name and self.peek(1).text == "(":
+                self.require_no_override("a constructor")
                 constructor = self.take()
                 if mods - {"public", "private", "protected"}:
                     constructor.error("invalid constructor modifier")
@@ -620,6 +667,7 @@ class SourceParser:
                 result_type = self.array_suffix(self.declaration_type(result))
             method_name = self.identifier()
             if self.peek().text != "(":
+                self.require_no_override("a field")
                 common_type = result_type
                 if result.text == "void":
                     result.error("a field cannot have void type")
@@ -662,9 +710,12 @@ class SourceParser:
             if result.text not in DECLARED | {"void"} and not isinstance(result_type, (ArrayType, NamedType)):
                 self.type_boundary(result, "source method results require boolean, integral primitives or void",
                                    code="java.unsupported.declared-result-type")
+            if override is not None and "static" in mods:
+                # JLS 8.4.8: a static method hides; it never overrides.
+                override.annotation_error("method does not override or implement a method from a supertype")
             methods.append(SourceMethod(method_name, result_type, parameters, self.block(),
                                         owner=owner, modifiers=frozenset(mods), parameter_types=parameter_types,
-                                        parameter_final=parameter_final))
+                                        parameter_final=parameter_final, override=override))
         program.methods, program.fields, program.constructors = tuple(methods), tuple(fields), tuple(constructors)
         program.instance_initializers, program.initialization_steps = tuple(initializers), tuple(initialization_steps)
         program.member_classes = tuple(members)
