@@ -11,6 +11,7 @@ from collections import Counter
 from pathlib import Path
 
 import pytest
+from tests.python.runtime_body_model import load_functions as _load_production_functions
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -26,18 +27,9 @@ RESET_OWNER = "pcc_gc_backend4_relocation_reset_owner"
 
 
 def _load_functions(path, namespace, names):
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    functions = [
-        node for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name in names
-    ]
-    assert {node.name for node in functions} == names
-    for node in functions:
-        node.decorator_list = []
-    exec(
-        compile(ast.Module(body=functions, type_ignores=[]), str(path), "exec"),
-        namespace,
-    )
+    # Production bodies, their literal constants, and the documented
+    # cross-object defaults (runtime_body_model) a model left unbound.
+    _load_production_functions(path, set(names), namespace)
 
 
 class _MembershipMemory:

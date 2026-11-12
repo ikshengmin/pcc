@@ -322,7 +322,9 @@ def test_every_post_pause_refusal_releases_and_restarts_if_needed(reason):
         rt.ns["_tracing_cycle_epoch_advance_unlocked"] = lambda: 0
     elif reason == "migration":
         target = 0
-        rt.ns["_object_head"] = lambda: 29
+        # One registered object to migrate (the walk over registered objects).
+        rt.ns["pcc_gc_object_walk_first"] = lambda: 29
+        rt.ns["pcc_gc_object_walk_next"] = lambda node: 0
         rt.ns["pcc_gc_managed_pointer_index_insert"] = lambda obj: -1
     original = rt.memory[BACKEND]
     assert rt.set_backend(target) == -1

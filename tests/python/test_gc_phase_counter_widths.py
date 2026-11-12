@@ -145,6 +145,8 @@ class _Memory:
         # Pointer heads used by the extracted dispatcher are separate from the
         # exact-width integer cells. Unknown pointer names must fail closed.
         self.pointers = {
+            # GC4 objects are allocator cells: no logical zpage is registered.
+            "pcc_gc_backend4_zpage_head": None,
             "pcc_gc_backend4_parked_head": None,
             "pcc_gc_backend4_retained_page_head": None,
         }
@@ -454,6 +456,8 @@ def test_host_source_gc4_relocation_requires_other_mutators_at_application_gates
     selection_commit = marks_finished - int(selection_due)
     memory.set("pcc_gc_tracing_finish_commits", marks_finished)
     memory.set("pcc_gc_backend4_selection_commit", selection_commit)
+    # Selection scores logical zpages; a due selection needs one to exist.
+    memory.pointers["pcc_gc_backend4_zpage_head"] = 0x2000
     calls = []
 
     def work(name, result=0):

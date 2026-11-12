@@ -8,6 +8,7 @@ import ast
 from pathlib import Path
 
 import pytest
+from tests.python.runtime_body_model import install_extern_defaults
 
 
 SOURCE = Path(__file__).resolve().parents[2] / 'pcc/runtime/py/freestanding_gc_barrier_dispatcher.py'
@@ -44,6 +45,9 @@ class BarrierState:
                      'pcc_thread_no_park_enter': self.no_park_enter,
                      'pcc_thread_no_park_exit': self.no_park_exit}
         exec(compile(ast.Module(body=nodes, type_ignores=[]), str(SOURCE), 'exec'), namespace)
+        # Cross-object entries this model leaves unbound (colour predicates of
+        # non-cell objects read the header).
+        install_extern_defaults(namespace)
         self.barrier = namespace['pcc_gc_note_slot_write_barrier']
 
     def load(self, address, offset):

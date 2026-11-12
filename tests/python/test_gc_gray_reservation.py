@@ -3,6 +3,7 @@ import ast
 from pathlib import Path
 
 import pytest
+from tests.python.runtime_body_model import install_extern_defaults
 
 
 SOURCE = Path(__file__).resolve().parents[2] / "pcc/runtime/py/freestanding_gc_root_operations.py"
@@ -29,6 +30,9 @@ class Shader:
         for node in functions:
             node.decorator_list = []
         exec(compile(ast.Module(functions, type_ignores=[]), str(SOURCE), 'exec'), self.ns)
+        # Cross-object entries this model leaves unbound: modeled objects are
+        # no object cells, so they have no page mark bit.
+        install_extern_defaults(self.ns)
 
     def load(self, base, offset=0, *order):
         return self.words.get((base, offset), 0)

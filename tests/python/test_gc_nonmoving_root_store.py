@@ -8,6 +8,7 @@ import ast
 from pathlib import Path
 
 import pytest
+from tests.python.runtime_body_model import load_functions as _load_production_functions
 
 
 RUNTIME = Path(__file__).resolve().parents[2] / "pcc/runtime/py"
@@ -15,13 +16,9 @@ WHITE, GRAY, BLACK, DYING = 8, 16, 32, 524288
 
 
 def load_functions(namespace, filename, names):
-    path = RUNTIME / filename
-    nodes = [node for node in ast.parse(path.read_text()).body
-             if isinstance(node, ast.FunctionDef) and node.name in names]
-    assert {node.name for node in nodes} == set(names)
-    for node in nodes:
-        node.decorator_list = []
-    exec(compile(ast.Module(nodes, type_ignores=[]), str(path), "exec"), namespace)
+    # Production bodies, their literal constants, and the documented
+    # cross-object defaults (runtime_body_model) a model left unbound.
+    _load_production_functions(RUNTIME / filename, set(names), namespace)
 
 
 class RootStore:

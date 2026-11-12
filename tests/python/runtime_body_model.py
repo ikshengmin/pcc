@@ -76,9 +76,6 @@ EXTERN_DEFAULTS = {
     "pcc_gc_page_marks_begin": lambda: None,
     "pcc_gc_object_is_white": lambda obj, flags: 1 if (flags & 8) != 0 else 0,
     "pcc_gc_object_is_black": lambda obj, flags: 1 if (flags & 32) != 0 else 0,
-    # The walk revision bump outside freestanding_gc_object_nodes is reached
-    # only for a cell record, which models have none of.
-    "pcc_gc_object_list_revision_bump": lambda: None,
 }
 
 
@@ -244,6 +241,28 @@ def load_functions(path, names, namespace, *, local_helpers=True):
             namespace.setdefault(exported, namespace[name])
     install_extern_defaults(namespace)
     return namespace
+
+
+def atomic_i64_ops(load, store) -> dict:
+    """i64 read-modify-write and compare-and-swap over a model's own plain
+    ``load(base, offset)`` and ``store(base, offset, value)``: a model runs
+    one thread, so each is one indivisible step there."""
+
+    def rmw(operation, base, offset, value, *order):
+        old = load(base, offset)
+        store(base, offset, {
+            "add": old + value, "sub": old - value, "or": old | value,
+            "and": old & value, "xchg": value,
+        }[operation])
+        return old
+
+    def cas(base, offset, expected, desired, *order):
+        old = load(base, offset)
+        if old == expected:
+            store(base, offset, desired)
+        return old
+
+    return {"atomic_rmw_i64": rmw, "atomic_cas_i64": cas}
 
 
 def install_extern_defaults(namespace) -> None:

@@ -47,6 +47,7 @@ class Index:
             'load_ptr': self.load, 'load_i64': self.load, 'load_i32': self.load,
             'store_ptr': self.store, 'store_i64': self.store,
             'atomic_load_i64': self.load, 'atomic_store_i64': self.store,
+            'atomic_rmw_i64': self.rmw, 'atomic_cas_i64': self.cas,
             'atomic_fence': self.fences.append,
             'calloc': self.calloc, 'free': lambda value: None,
             'pcc_platform_abort': lambda: (_ for _ in ()).throw(RuntimeError('abort')),
@@ -93,6 +94,19 @@ class Index:
             assert 0 <= offset < self.blocks[base], ('out-of-bounds', base, offset, self.blocks[base])
         key = base if isinstance(base, str) and offset == 0 else base + offset
         return self.words.get(key, 0)
+
+    def rmw(self, operation, base, offset, value, *order):
+        old = self.load(base, offset)
+        new = {"add": old + value, "sub": old - value, "or": old | value,
+               "and": old & value, "xchg": value}[operation]
+        self.store(base, offset, new)
+        return old
+
+    def cas(self, base, offset, expected, desired, *order):
+        old = self.load(base, offset)
+        if old == expected:
+            self.store(base, offset, desired)
+        return old
 
     def store(self, base, offset, value, *order):
         key = base if isinstance(base, str) and offset == 0 else base + offset

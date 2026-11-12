@@ -14,6 +14,7 @@ from collections import Counter
 from pathlib import Path
 
 import pytest
+from tests.python.runtime_body_model import load_functions as _load_production_functions
 
 
 RUNTIME = Path(__file__).resolve().parents[2] / "pcc/runtime/py"
@@ -29,14 +30,9 @@ COLOR_FUNCTIONS = {"pcc_gc_set_mark_color", "pcc_gc_shade_gray_atomic"}
 
 
 def _load_bodies(filename, names, namespace):
-    source = RUNTIME / filename
-    tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
-    bodies = [node for node in tree.body
-              if isinstance(node, ast.FunctionDef) and node.name in names]
-    assert {node.name for node in bodies} == names
-    for node in bodies:
-        node.decorator_list = []  # Export registration is not a function body.
-    exec(compile(ast.Module(body=bodies, type_ignores=[]), str(source), "exec"), namespace)
+    # Production bodies, their literal constants, and the documented
+    # cross-object defaults (runtime_body_model) a model left unbound.
+    _load_production_functions(RUNTIME / filename, set(names), namespace)
 
 
 class _MarkBoundary:

@@ -15,6 +15,8 @@ from pathlib import Path
 import pytest
 
 from pcc.frontends.python.codegen.freestanding_abi_constants import ABI_CONSTANTS
+from tests.python.runtime_body_model import atomic_i64_ops
+from tests.python.runtime_body_model import load_functions as _load_production_functions
 
 
 RUNTIME = Path(__file__).resolve().parents[2] / "pcc/runtime/py"
@@ -22,15 +24,9 @@ WHITE, GRAY, BLACK, OLD, DYING = 8, 16, 32, 256, 524288
 
 
 def _functions(namespace, filename, names):
-    source = RUNTIME / filename
-    tree = ast.parse(source.read_text(encoding="utf-8"))
-    selected = []
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name in names:
-            node.decorator_list = []
-            selected.append(node)
-    assert {node.name for node in selected} == set(names)
-    exec(compile(ast.Module(body=selected, type_ignores=[]), str(source), "exec"), namespace)
+    # Production bodies, their literal constants, and the documented
+    # cross-object defaults (runtime_body_model) a model left unbound.
+    _load_production_functions(RUNTIME / filename, set(names), namespace)
 
 
 @pytest.mark.parametrize('backend, count_free, expected', [
@@ -79,6 +75,8 @@ class RetirementState:
             "load_i32": self.load, "load_i64": self.load, "load_ptr": self.load,
             "store_i32": self.store, "store_i64": self.store, "store_ptr": self.store,
             "atomic_load_i32": lambda a, o, order: self.load(a, o),
+            "atomic_load_i64": lambda a, o, order: self.load(a, o),
+            **atomic_i64_ops(self.load, self.store),
             "atomic_store_i32": lambda a, o, v, order: self.store(a, o, v),
             "atomic_cas_i32": self.cas, "atomic_rmw_i32": self.rmw,
             "stack_alloc": self.allocate, "free": noop, "cstr": lambda s: s,

@@ -172,8 +172,10 @@ class Registration(Index):
         assert self.load('pcc_gc_live_bytes') == 40
         assert self.load('pcc_gc_last_alloc') == self.object
         if self.backend == 4:
-            assert self.load(node, 48) == self.znode
-            assert self.zpage_commits == 1
+            # GC4 objects are allocator cells: no logical zpage node and no
+            # zpage owner entry (GC4's pages are the object slabs).
+            assert self.load(node, 48) == 0
+            assert self.zpage_commits == 0 and self.selections == []
 
 
 @pytest.mark.parametrize('backend', (1, 2, 3, 4))
@@ -234,19 +236,17 @@ def test_non_slab_provenance_is_retired_only_after_exact_index_publication():
     assert model.removed_provenance == [model.object]
 
 
-@pytest.mark.parametrize('failure', ('node', 'table', 'commit', 'zpage_commit'))
+@pytest.mark.parametrize('failure', ('node', 'table', 'commit'))
 def test_preparation_and_commit_failures_do_not_publish_partial_object(failure):
-    model = Registration(4 if failure == 'zpage_commit' else 1, pooled_node=False)
+    model = Registration(1, pooled_node=False)
     if failure in ('table', 'commit'):
         model.fill_index()
     if failure == 'node':
         model.fail_malloc = 88
     elif failure == 'table':
         model.fail_malloc = 16384 * 16
-    elif failure == 'commit':
-        model.short_commit = True
     else:
-        model.fail_zpage_commit = True
+        model.short_commit = True
     model.register()
     assert not model.locked and model.pending == 0
     assert model.call('pcc_gc_object_index_find', model.object) == 0
@@ -256,13 +256,14 @@ def test_preparation_and_commit_failures_do_not_publish_partial_object(failure):
     assert model.generation() & 1 == 0
 
 
-@pytest.mark.parametrize('backend,acquires', ((1, 1), (2, 1), (3, 2)))
+@pytest.mark.parametrize('backend,acquires', ((1, 1), (2, 1), (3, 1)))
 def test_empty_node_pool_registers_nonmoving_objects_in_one_graph_acquisition(
     backend, acquires
 ):
-    # The pool keeps at most 8192 nodes and is empty between sweeps. GC1/GC2
-    # prepare the node before the first acquisition (unlocked pool-head
-    # hint); the moving collectors keep the planned unlock/prepare/relock.
+    # The pool keeps at most 8192 nodes and is empty between sweeps. The
+    # nonmoving GC1-GC3 (GC3 since 03cbd1849) prepare the node before the
+    # first acquisition (unlocked pool-head hint); GC4 keeps the planned
+    # unlock/prepare/relock.
     model = Registration(backend, pooled_node=False)
     model.register()
     model.assert_published()
@@ -465,47 +466,15 @@ int main(int argc, char **argv) {
         ), (backend, result)
 
 
-@pytest.mark.parametrize('address_hit', (False, True))
-def test_gc4_registration_carries_exact_page_selection_and_offset(address_hit):
+def test_gc4_registration_selects_no_zpage():
+    # Every tracing collector runs the count-free protocol, so a GC4 object
+    # is an allocator cell: registration plans and commits no logical zpage
+    # (no page lookup, zpage node or owner entry) and publishes the object.
     model = Registration(4)
-    model.store(model.object, 12, 65536 | 256)
-    model.store(model.page, 72, model.object - 24)
-    lookups = []
-    def address(obj, size):
-        assert model.locked
-        lookups.append((model.acquires, 'address'))
-        return model.page if address_hit else 0
-    def reusable(obj, size):
-        assert model.locked
-        lookups.append((model.acquires, 'reusable'))
-        return model.page
-    model.ns['_backend4_zpage_find_page_for_addr'] = address
-    model.ns['_backend4_zpage_find_reusable_page'] = reusable
+    for hook in ('_backend4_zpage_find_page_for_addr',
+                 '_backend4_zpage_find_reusable_page',
+                 '_backend4_zpage_track_alloc_selected'):
+        model.ns[hook] = lambda *args, hook=hook: pytest.fail(hook + ' called')
     model.register()
     model.assert_published()
-    # The initially empty owner index prepares storage outside the lock.
-    # Each attempt selects once; only the second attempt commits tracking.
-    assert model.acquires == 2
-    expected = ['address'] if address_hit else ['address', 'reusable']
-    assert lookups == [(attempt, name) for attempt in (1, 2) for name in expected]
-    assert model.selections == [(model.page, 24 if address_hit else -1)]
-    assert model.load(model.object, 12) & (65536 | 256) == 65536 | 256
-
-
-def test_gc4_registration_reselects_page_and_resets_offset_after_unlock():
-    model = Registration(4, pooled_node=False)
-    model.store(model.object, 12, 65536)
-    old_page = model.page
-    model.store(old_page, 72, model.object - 24)
-    new_page = model.calloc(1, 96)
-    lookups = []
-    def address(obj, size):
-        assert model.locked
-        lookups.append(model.acquires)
-        return old_page if model.acquires == 1 else 0
-    model.ns['_backend4_zpage_find_page_for_addr'] = address
-    model.on_relock = lambda: setattr(model, 'page', new_page)
-    model.register()
-    model.assert_published()
-    assert model.acquires == 2 and lookups == [1, 2]
-    assert model.selections == [(new_page, -1)]
+    assert model.acquires == 1

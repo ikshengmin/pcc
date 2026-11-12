@@ -1323,6 +1323,10 @@ def _object_index_find_once(obj: c_ptr) -> c_ptr:
 
 @c_abi_export("pcc_gc_object_index_find")
 def pcc_gc_object_index_find(obj: c_ptr) -> c_ptr:
+    # NULL and tagged integers are never registered: answer without reading
+    # any table, record or the staging word.
+    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+        return null()
     node = _object_index_find_once(obj)
     if ptr_is_null(node) == 0:
         return node

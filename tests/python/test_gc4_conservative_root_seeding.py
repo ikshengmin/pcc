@@ -3,6 +3,7 @@ import ast
 from pathlib import Path
 
 import pytest
+from tests.python.runtime_body_model import install_extern_defaults
 
 RUNTIME = Path(__file__).resolve().parents[2] / "pcc/runtime/py"
 
@@ -115,6 +116,8 @@ def body(module, name, namespace):
     function.decorator_list = []
     namespace["i64"] = int
     exec(compile(ast.Module(body=[function], type_ignores=[]), str(RUNTIME / module), "exec"), namespace)
+    # Cross-object entries the model leaves unbound (no object cells here).
+    install_extern_defaults(namespace)
     return namespace[name]
 
 

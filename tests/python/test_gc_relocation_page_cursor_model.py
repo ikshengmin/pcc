@@ -8,6 +8,7 @@ import ast
 from pathlib import Path
 
 import pytest
+from tests.python.runtime_body_model import load_functions as _load_production_functions
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -16,19 +17,10 @@ LIFECYCLE = ROOT / "pcc/runtime/py/freestanding_gc_zpage_lifecycle.py"
 
 
 def _load_functions(path, namespace, names=None):
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    functions = [
-        node for node in tree.body
-        if isinstance(node, ast.FunctionDef)
-        and (names is None or node.name in names)
-    ]
-    if names is not None:
-        assert {node.name for node in functions} == names
-    for node in functions:
-        node.decorator_list = []
-    exec(
-        compile(ast.Module(body=functions, type_ignores=[]), str(path), "exec"),
-        namespace,
+    # Production bodies, their literal constants, and the documented
+    # cross-object defaults (runtime_body_model) a model left unbound.
+    _load_production_functions(
+        path, None if names is None else set(names), namespace
     )
 
 

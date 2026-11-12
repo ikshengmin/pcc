@@ -14,6 +14,8 @@ import os
 from pathlib import Path
 
 import pytest
+from tests.python.runtime_body_model import atomic_i64_ops
+from tests.python.runtime_body_model import load_functions as _load_production_functions
 
 
 REPO = Path(os.environ.get("PCC_SCAN_BUDGET_REPO", Path(__file__).resolve().parents[2])).resolve()
@@ -23,14 +25,9 @@ MODES = [(1, 0), (2, 0), (3, 0), (4, 0), (4, 1)]
 
 
 def load_functions(namespace, filename, names):
-    source = RUNTIME / filename
-    selected = []
-    for node in ast.parse(source.read_text(encoding="utf-8")).body:
-        if isinstance(node, ast.FunctionDef) and node.name in names:
-            node.decorator_list = []
-            selected.append(node)
-    assert {node.name for node in selected} == set(names)
-    exec(compile(ast.Module(body=selected, type_ignores=[]), str(source), "exec"), namespace)
+    # Production bodies, their literal constants, and the documented
+    # cross-object defaults (runtime_body_model) a model left unbound.
+    _load_production_functions(RUNTIME / filename, set(names), namespace)
 
 
 class TraceState:
@@ -64,6 +61,7 @@ class TraceState:
             "global_store_ptr": lambda name, value: self.store(name, 0, value),
             "load_i32": self.load, "load_i64": self.load, "load_ptr": self.load,
             "store_i32": self.store, "store_i64": self.store, "store_ptr": self.store,
+            **atomic_i64_ops(self.load, self.store),
             "atomic_load_i32": lambda a, o, order: self.load(a, o),
             "atomic_store_i32": lambda a, o, v, order: self.store(a, o, v),
             "atomic_cas_i32": self.cas, "stack_alloc": self.allocate,
