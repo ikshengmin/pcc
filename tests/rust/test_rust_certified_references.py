@@ -34,7 +34,8 @@ PROGRAMS = ('certified_mut_scalar', 'certified_mut_record', 'certified_mut_metho
             'certified_nonlexical_reborrow', 'certified_generic_mut', 'certified_inferred_mut',
             'certified_assignment_order', 'certified_compound_assignment_order',
             'certified_field_assignment_order', 'certified_local_slot_rebinding',
-            'certified_disjoint_mutable_fields', 'certified_generic_mut_receiver')
+            'certified_disjoint_mutable_fields', 'certified_generic_mut_receiver',
+            'certified_impl_lifetimes')
 
 
 def digest(data):

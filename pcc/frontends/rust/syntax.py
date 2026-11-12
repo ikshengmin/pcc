@@ -174,6 +174,8 @@ class Implementation:
     parameter_bounds: tuple[tuple[Token, tuple[TypeBound, ...]], ...] = ()
     where_predicates: tuple[WherePredicate, ...] = ()
     associated_types: tuple[AssociatedType, ...] = ()
+    # Erased after the matching actual rustc check (items/implementations.html#generic-implementations).
+    lifetime_parameters: tuple[Token, ...] = ()
 
     @property
     def effective_parameter_bounds(self):
@@ -588,7 +590,7 @@ class Parser:
             lifetime_parameter = self.token.kind == "lifetime"
             if lifetime_parameter:
                 if not allow_lifetimes:
-                    raise self.token.error("lifetime parameters on data/impl declarations are not implemented")
+                    raise self.token.error("lifetime parameters on data declarations are not implemented")
                 self.last_lifetime_parameters.append(self.take())
             else:
                 parameters.append(self.name())
@@ -1091,8 +1093,9 @@ class Parser:
                 if public or repr_c or enum_repr or no_mangle:
                     raise self.token.error("visibility and attributes on impl blocks are not implemented")
                 token = self.tokens[self.pos - 1]
-                parameters = self.generic_parameters(allow_bounds=True)
+                parameters = self.generic_parameters(allow_lifetimes=True, allow_bounds=True)
                 parameter_bounds = tuple(self.last_parameter_bounds)
+                lifetime_parameters = tuple(self.last_lifetime_parameters)
                 owner = self.type()
                 trait_name = None
                 if self.accept("for"):
@@ -1108,7 +1111,8 @@ class Parser:
                 self.expect("{")
                 docs.extend(self.documentation(inner=True))
                 implementation = Implementation(token, owner, parameters, trait_name, tuple(docs),
-                                                parameter_bounds, where_predicates)
+                                                parameter_bounds, where_predicates,
+                                                lifetime_parameters=lifetime_parameters)
                 self.implementations.append(implementation)
                 associated_types = []
                 while not self.accept("}"):

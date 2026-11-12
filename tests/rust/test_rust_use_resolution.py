@@ -49,7 +49,9 @@ def parse_retaining_associated_types(parser, monkeypatch, gap=None):
     """Parse with the real parser, retaining every associated type it returns.
 
     ``gap`` is ``(line, column, message, token)`` for the next unsupported
-    parser boundary; without it the whole source must parse.
+    parser boundary; without it the whole source must parse. ``token`` is the
+    current token's text at that location, or ``(text, line, column)`` when
+    the boundary is reported at an earlier token of the same item.
     """
     associated_types = []
     parse_associated_type = parser.associated_type
@@ -66,7 +68,8 @@ def parse_retaining_associated_types(parser, monkeypatch, gap=None):
         line, column, message, token = gap
         with pytest.raises(RustError, match=rf'^{line}:{column}: {message}$'):
             parser.parse()
-        assert (parser.token.text, parser.token.line, parser.token.column) == (token, line, column)
+        expected = token if isinstance(token, tuple) else (token, line, column)
+        assert (parser.token.text, parser.token.line, parser.token.column) == expected
     return [(item.token.text, item.token.line, item.token.column, item.value,
              [(bound.path, bound.relaxed) for bound in item.bounds])
             for item in associated_types]
@@ -361,10 +364,10 @@ def test_original_project_keeps_both_use_items_before_the_next_parser_gap(tmp_pa
     parser = Parser(original.decode(), edition=2015, rustc_check=checked)
     # Keep the whole authenticated source. Observe the real parser's next
     # boundary without accepting a rewritten prefix or a discarded declaration:
-    # every earlier Fn-family bound, `Some(e)` pattern, closure and integer
-    # range loop is parsed.
+    # every earlier Fn-family bound, `Some(e)` pattern, closure, integer
+    # range loop and the impl lifetime parameter is parsed.
     assert parse_retaining_associated_types(parser, monkeypatch, (
-        306, 6, 'lifetime parameters on data/impl declarations are not implemented', "'a")) == [
+        306, 1, 'generic traits and blanket/generic trait impls are not implemented', ('&', 306, 51))) == [
         ('Item', 28, 10, None, [('Sized', True)]),
         ('Error', 31, 10, None, []),
     ]

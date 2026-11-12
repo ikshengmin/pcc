@@ -172,6 +172,12 @@ class Checker:
         self.function_generics = GenericFunctions(self)
         from .methods import InherentMethods
         self.methods = InherentMethods(self, implementations)
+        for implementation in implementations:
+            # Lifetimes are erased; only the matching actual rustc check
+            # establishes that the impl's region constraints hold.
+            if implementation.lifetime_parameters and not externally_checked:
+                raise implementation.lifetime_parameters[0].error(
+                    "explicit impl lifetimes require a matching external rustc check record")
         from .traits import StaticTraits
         self.traits = StaticTraits(self, traits, implementations)
         from .standard_markers import StandardMarkers
