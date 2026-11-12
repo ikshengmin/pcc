@@ -6,7 +6,9 @@ object-family allocator cell now uses its record in the slab's record array
 (``pcc_allocator_object_node_record_find``) as its node, and the record's index-key
 word as its index entry; only objects outside the object slabs still take a
 pooled node and the hash. This drives the production allocator, registration,
-lookups and the freeing note of the runtime archive under all five collectors.
+lookups, the object walk (records are reached through their slab spans, not
+the object list), the page mark bits and the freeing note of the runtime
+archive under all five collectors.
 """
 
 from __future__ import annotations
@@ -36,11 +38,16 @@ HARNESS = r'''
     extern int64_t pcc_gc_object_index_seen_stable(void *obj);
     extern int64_t pcc_gc_object_node_is_record(void *node);
     extern void *pcc_gc_object_list_head(void);
+    extern void *pcc_gc_object_walk_first(void);
+    extern void *pcc_gc_object_walk_next(void *node);
+    extern void *pcc_allocator_object_cell_span(void *ptr);
+    extern int64_t pcc_gc_page_mark_test(void *obj);
+    extern int64_t pcc_gc_object_is_white(void *obj, int64_t flags);
     extern int64_t pcc_gc_alloc_stage_drain_stopped(void);
     extern int64_t pcc_py_gc_object_count;
     extern int64_t pcc_gc_live_bytes;
 
-    enum { NODE_OBJECT = 0, NODE_SIZE = 8, RECORD_INDEX_KEY = 88 };
+    enum { NODE_OBJECT = 0, NODE_SIZE = 8, NODE_RECORD_SPAN = 24, RECORD_INDEX_KEY = 88 };
 
     typedef union {
         uint64_t align[4];
@@ -51,6 +58,15 @@ HARNESS = r'''
 
     static void *field(void *record, int offset) {
         return *(void **)((char *)record + offset);
+    }
+
+    /* 1 when a walk over every registered object visits node. */
+    static int walked(void *node) {
+        for (void *at = pcc_gc_object_walk_first(); at != NULL;
+             at = pcc_gc_object_walk_next(at)) {
+            if (at == node) return 1;
+        }
+        return 0;
     }
 
     static int64_t known(void *obj) {
@@ -88,7 +104,14 @@ HARNESS = r'''
         if (*(int64_t *)((char *)record + NODE_SIZE) != 64) return 6;
         if (field(record, RECORD_INDEX_KEY) != obj) return 7;
         if (pcc_gc_object_node_is_record(record) != 1) return 8;
-        if (pcc_gc_object_list_head() != record) return 9;
+        /* A record is not on the object list: walks reach it by its span. */
+        if (pcc_gc_object_list_head() == record) return 9;
+        if (field(record, NODE_RECORD_SPAN) != pcc_allocator_object_cell_span(obj)
+            || field(record, NODE_RECORD_SPAN) == NULL) return 39;
+        if (!walked(record)) return 40;
+        /* Registered outside a mark: white in the page bitmap. */
+        if (pcc_gc_page_mark_test(obj) != 0) return 41;
+        if (pcc_gc_object_is_white(obj, *(int32_t *)((char *)obj + 12)) != 1) return 42;
         if (known(obj) != 2) return 11;
         if (pcc_gc_object_index_find_stable(obj) != record) return 12;
         if (pcc_py_gc_object_count != hashed) return 13;
@@ -96,7 +119,7 @@ HARNESS = r'''
 
         /* A second registration of the same object changes nothing. */
         pcc_gc_note_object_allocated_sized(obj, 64);
-        if (pcc_gc_object_list_head() != record) return 15;
+        if (pcc_gc_object_list_head() == record || !walked(record)) return 15;
         if (pcc_gc_object_index_find(obj) != record) return 16;
         if (pcc_gc_live_bytes != live + 64) return 17;
 
@@ -117,14 +140,14 @@ HARNESS = r'''
         pcc_gc_note_object_freeing(obj);
         if (field(record, RECORD_INDEX_KEY) != NULL) return 24;
         if (pcc_gc_object_index_find(obj) != NULL || known(obj) != 0) return 25;
-        if (pcc_gc_object_list_head() == record) return 26;
+        if (pcc_gc_object_list_head() == record || walked(record)) return 26;
         if (pcc_gc_live_bytes != live) return 27;
 
         /* The cell's next object registers through the same record. */
         header(obj, PY_TYPE_TUPLE);
         pcc_gc_note_object_allocated_sized(obj, 48);
         if (pcc_gc_object_index_find(obj) != record) return 28;
-        if (pcc_gc_object_list_head() != record) return 29;
+        if (pcc_gc_object_list_head() == record || !walked(record)) return 29;
         if (*(int64_t *)((char *)record + NODE_SIZE) != 48) return 30;
         pcc_gc_note_object_freeing(obj);
         if (pcc_gc_object_index_find(obj) != NULL) return 31;
@@ -138,6 +161,9 @@ HARNESS = r'''
         void *node = pcc_gc_object_index_find(outside);
         if (node == NULL || pcc_gc_object_node_is_record(node) != 0) return 33;
         if (field(node, NODE_OBJECT) != outside) return 34;
+        /* A pooled node is on the object list and has no span. */
+        if (field(node, NODE_RECORD_SPAN) != NULL || !walked(node)) return 43;
+        if (pcc_gc_page_mark_test(outside) != -1) return 44;
         if (pcc_allocator_object_node_record_ensure(outside) != NULL) return 35;
         if (pcc_py_gc_object_count != hashed + 1) return 36;
         pcc_gc_note_object_freeing(outside);

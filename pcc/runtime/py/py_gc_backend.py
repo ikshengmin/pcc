@@ -4972,42 +4972,6 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                 global_store_ptr("pcc_gc_last_alloc", o)
                 pcc_gc_backend3_revoke_closed_young_domain()
                 return
-            if backend == 4:
-                store_ptr(zpage_slots_owner, 0, prepared_zpage_slots)
-                zpage_commit_result: int = (
-                    pcc_gc_zpage_owner_index_plan_commit(
-                        zpage_slots_owner, prepared_zpage_cap, 1
-                    )
-                )
-                prepared_zpage_slots = load_ptr(zpage_slots_owner, 0)
-                if zpage_commit_result < 0:
-                    if (
-                        ptr_is_null(prepared_zpage) == 0
-                        and prepared_zpage_from_free != 0
-                    ):
-                        store_ptr(
-                            prepared_zpage,
-                            56,
-                            global_load_ptr(
-                                "pcc_gc_backend4_free_page_head"
-                            ),
-                        )
-                        global_store_ptr(
-                            "pcc_gc_backend4_free_page_head",
-                            prepared_zpage,
-                        )
-                        prepared_zpage = null()
-                    _object_graph_unlock()
-                    free(prepared_node)
-                    free(prepared_slots)
-                    free(prepared_zpage_node)
-                    free(prepared_zpage_slots)
-                    if ptr_is_null(prepared_zpage) == 0:
-                        free(load_ptr(prepared_zpage, 72))
-                        free(prepared_zpage)
-                    global_store_ptr("pcc_gc_last_alloc", o)
-                    pcc_gc_backend3_revoke_closed_young_domain()
-                    return
 
         if backend == 1 or backend == 2 or backend == 3:
             flags: int = load_i32(o, 12)
