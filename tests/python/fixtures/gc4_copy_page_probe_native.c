@@ -119,6 +119,9 @@ void *pcc_allocator_object_side_slot(void *p, int64_t create) {
     (void)p; (void)create; return NULL;
 }
 void *pcc_allocator_granule_object_slot(void *p) { (void)p; return NULL; }
+void *pcc_allocator_object_node_record_find(void *p) {
+    (void)p; return NULL;
+}
 int64_t pcc_gc_object_is_address_pinned(void *p) {
     if (p != &objects[0]) stub_errors++;
     return pinned;

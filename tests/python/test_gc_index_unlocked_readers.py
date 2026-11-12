@@ -95,6 +95,11 @@ void *pcc_allocator_granule_object_slot(void *ptr) {
     return NULL;
 }
 
+void *pcc_allocator_object_node_record_find(void *ptr) {
+    (void)ptr;
+    return NULL;
+}
+
 /* This standalone object also exports the primary tracked-index wrappers.
    Supply their real partitioned storage ABI, though the concurrent reader
    workload below targets the independently published object/managed tables. */

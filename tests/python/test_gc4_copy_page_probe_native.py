@@ -374,6 +374,7 @@ def test_current_owned_copy_has_exact_strict_closure(emitted_copy):
     index_undefined, index_defined = _owned_elf_symbol_names(index_obj)
     assert index_undefined == {
         "calloc", "free", "pcc_allocator_object_side_slot", "pcc_allocator_granule_object_slot",
+        "pcc_allocator_object_node_record_find",
         "pcc_gc_tracked_primary_index_cells",
         "pcc_platform_abort", "pcc_gc_alloc_stage_enabled", "pcc_gc_alloc_stage_miss_drain",
     }

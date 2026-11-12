@@ -111,6 +111,8 @@ class RetirementState:
             "pcc_gc_relocation_finish_source_payloads": noop,
             "pcc_gc_identity_finish_detached": noop,
             "pcc_gc_object_node_finish_detached": noop,
+            # Model nodes are pooled nodes, never an object cell's record.
+            "pcc_gc_object_node_is_record": zero,
             "py_decref": self.decref, "py_incref": lambda obj: self.store(obj, 0, self.load(obj, 0) + 1),
             "pcc_gc_forwarding_find": lambda obj: self.forwardings.get(obj, 0),
             "pcc_gc_object_is_address_pinned": zero,

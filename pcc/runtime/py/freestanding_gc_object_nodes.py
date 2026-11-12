@@ -31,8 +31,17 @@ pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 # freeing@32: 0 active, 1 retired, negative = scalar-sweep batch token owner.
 # Pending scalar nodes are detached/indexed; next@16, prev@40 and young-next@64
 # belong to their retirement chain. Their first-death live debit already ran.
+#
+# An object-family cell's node is its record in the slab's record array
+# (pcc_allocator_object_node_record_find), with the index key just past the node
+# (freestanding_gc_index_table). A record is never pooled or freed: release
+# returns it to its cell, which registers the next object allocated there.
+# Every other object's node comes from the pool below or from malloc.
 
 pcc_gc_object_index_find = extern("pcc_gc_object_index_find", (c_ptr,), c_ptr)
+pcc_allocator_object_node_record_find = extern(
+    "pcc_allocator_object_node_record_find", (c_ptr,), c_ptr
+)
 pcc_thread_owns_stopped_world = extern("pcc_thread_owns_stopped_world", (), c_int64)
 pcc_gc_granule_is_object_start = extern("pcc_gc_granule_is_object_start", (c_ptr,), c_int64)
 
@@ -224,6 +233,63 @@ def _promotion_unlink(node: c_ptr) -> None:
     _clear_promotion_state(node)
 
 
+# The record's index key (freestanding_gc_index_table RECORD_INDEX_KEY).
+RECORD_INDEX_KEY = 88
+
+
+@c_abi_export("pcc_gc_object_node_is_record")
+def pcc_gc_object_node_is_record(node: c_ptr) -> i64:
+    """1 when ``node`` is its object's cell record.
+
+    An object cell registers only through its record, so a pooled or malloc'd
+    node always belongs to an object outside the cells, and that object has
+    no record to compare equal.
+    """
+    if ptr_is_null(node) != 0:
+        return 0
+    obj = load_ptr(node, 0)
+    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+        return 0
+    if ptr_eq(pcc_allocator_object_node_record_find(obj), node) != 0:
+        return 1
+    return 0
+
+
+@c_abi_export("pcc_gc_object_node_take_record")
+def pcc_gc_object_node_take_record(record: c_ptr) -> c_ptr:
+    """Claim a cell's record as the node of the object now in that cell.
+
+    The caller holds the graph lock and has checked the record is not indexed
+    for this object already. The cell's previous object released the record
+    before its cell could be allocated again: unindexed and without leases.
+    """
+    if (
+        load_i64(record, RECORD_INDEX_KEY) != 0
+        or load_i64(record, 80) != 0
+    ):
+        pcc_platform_abort()
+        return null()
+    _clear_promotion_state(record)
+    return record
+
+
+@c_abi_export("pcc_gc_object_node_return_record")
+def pcc_gc_object_node_return_record(record: c_ptr) -> None:
+    """Return a detached cell record to its cell; nothing is freed.
+
+    The caller holds the graph lock, has removed the record's index key and
+    unlinked it. A record still keyed, leased or not a record at all aborts.
+    """
+    if (
+        pcc_gc_object_node_is_record(record) == 0
+        or load_i64(record, RECORD_INDEX_KEY) != 0
+        or load_i64(record, 80) != 0
+    ):
+        pcc_platform_abort()
+        return
+    _clear_promotion_state(record)
+
+
 @c_abi_export("pcc_gc_object_node_alloc")
 def pcc_gc_object_node_alloc() -> c_ptr:
     head = global_load_ptr("pcc_gc_object_node_free_head")
@@ -291,6 +357,8 @@ def pcc_gc_object_node_release(node: c_ptr) -> None:
         pcc_platform_abort()
         return
     _clear_promotion_state(node)
+    if pcc_gc_object_node_is_record(node) != 0:
+        return
     count: i64 = load_i32(global_addr("pcc_gc_object_node_free_count"), 0)
     if count >= 8192:
         free(node)
@@ -306,10 +374,14 @@ def pcc_gc_object_node_release_to_pool(node: c_ptr) -> i64:
 
     Return zero to transfer the full pool's overflow node to the caller's raw
     release chunk. The caller must not inspect a successfully pooled node again.
+    A cell's record returns to its cell instead and is never overflow.
     """
     if ptr_is_null(node) != 0 or load_i64(node, 80) != 0:
         pcc_platform_abort()
         return 0
+    if pcc_gc_object_node_is_record(node) != 0:
+        _clear_promotion_state(node)
+        return 1
     count: i64 = load_i32(global_addr("pcc_gc_object_node_free_count"), 0)
     if count >= 8192:
         return 0
@@ -329,7 +401,9 @@ def pcc_gc_object_node_finish_detached(nodes: c_ptr) -> None:
             pcc_platform_abort()
             return
         store_ptr(node, 16, null())
-        free(node)
+        # Records are released before their chain is built; never free one.
+        if pcc_gc_object_node_is_record(node) == 0:
+            free(node)
 
 
 @c_abi_export("pcc_gc_backend3_young_link_head")

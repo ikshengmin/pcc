@@ -215,6 +215,11 @@ void *pcc_allocator_granule_object_slot(void *ptr) {
     /* Model an exact cell whose side-array allocation failed. */
     return ptr == TEST_OOM_OBJECT_CELL ? ptr : NULL;
 }
+void *pcc_allocator_object_node_record_find(void *ptr) {
+    /* No object slabs: every object-index key uses the hash table. */
+    (void)ptr;
+    return NULL;
+}
 #endif
 
 static uint64_t hash_ptr(const void *ptr) {
@@ -766,13 +771,14 @@ def test_freestanding_gc_index_table_ir_is_raw_and_exports_complete_abi(tmp_path
         for line in undefined.stdout.splitlines()
         if line.strip()
     }
-    # Side-word provenance remains allocator-owned; fallback storage is
-    # selected by the tracking kernel's same address shard. Other imports
-    # are raw memory operations.
+    # Side-word and object-node-record provenance remain allocator-owned;
+    # fallback storage is selected by the tracking kernel's same address
+    # shard. Other imports are raw memory operations.
     assert undefined_names == {
         "calloc",
         "free",
         "pcc_allocator_granule_object_slot",
+        "pcc_allocator_object_node_record_find",
         "pcc_allocator_object_side_slot",
         "pcc_gc_alloc_stage_enabled",
         "pcc_gc_alloc_stage_miss_drain",

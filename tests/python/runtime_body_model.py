@@ -48,6 +48,15 @@ EXTERN_DEFAULTS = {
     "pcc_gc_alloc_stage_miss_drain": lambda: 0,
     "pcc_gc_alloc_stage_drain_stopped": lambda: 0,
     "pcc_gc_alloc_stage_thread_exit": lambda: None,
+    # An exact object-family allocator cell keeps its object node in its
+    # slab's record (pcc_allocator_object_node_record_*), indexed by one key
+    # word. Model memory has no object slabs: every modeled object lies
+    # outside them and keeps a pooled node in the object hash, the protocol
+    # these models exercise. test_gc_object_node_records runs the records.
+    "pcc_allocator_object_node_record_find": lambda ptr: 0,
+    "pcc_allocator_object_node_record_ensure": lambda ptr: 0,
+    "pcc_allocator_granule_object_slot": lambda ptr: 0,
+    "pcc_gc_object_node_is_record": lambda node: 0,
 }
 
 

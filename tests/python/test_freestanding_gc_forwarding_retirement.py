@@ -94,6 +94,9 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_object_list_head",
     "pcc_gc_object_node_freeing",
     "pcc_gc_object_node_finish_detached",
+    # A forwarded source cell's record goes back to its cell under the lock.
+    "pcc_gc_object_node_is_record",
+    "pcc_gc_object_node_return_record",
     "pcc_gc_object_node_size",
     "pcc_gc_object_node_unlink",
     "pcc_gc_relocation_finish_source_payloads",
@@ -484,6 +487,18 @@ def test_forwarding_retirement_defers_normal_remap_metadata_node_free_after_unlo
     assert "store_ptr(finish, 16, identity)" in strict_metadata
     assert "store_ptr(dead, 16, load_ptr(finish, 24))" in strict_metadata
     assert "store_ptr(finish, 24, dead)" in strict_metadata
+    # A cell record frees nothing and must not wait on the finish chain: its
+    # cell can be registered again as soon as the lock is dropped.
+    record_return = strict_metadata.index(
+        "pcc_gc_object_node_return_record(dead)"
+    )
+    assert (
+        strict_metadata.index("pcc_gc_object_node_unlink(dead)")
+        < strict_metadata.index("if pcc_gc_object_node_is_record(dead) != 0:")
+        < record_return
+        < strict_metadata.index("store_ptr(dead, 16, load_ptr(finish, 24))")
+    )
+    assert "return" in strict_metadata[record_return:].split("store_ptr(dead", 1)[0]
 
     strict_finish = strict.split(
         "def pcc_gc_backend4_finish_remap_retirement(finish)", 1

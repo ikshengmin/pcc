@@ -140,6 +140,12 @@ pcc_gc_object_node_freeing = extern(
 pcc_gc_object_node_finish_detached = extern(
     "pcc_gc_object_node_finish_detached", (c_ptr,), c_void
 )
+pcc_gc_object_node_is_record = extern(
+    "pcc_gc_object_node_is_record", (c_ptr,), c_int64
+)
+pcc_gc_object_node_return_record = extern(
+    "pcc_gc_object_node_return_record", (c_ptr,), c_void
+)
 pcc_gc_object_node_size = extern(
     "pcc_gc_object_node_size", (c_ptr,), c_int64
 )
@@ -417,6 +423,12 @@ def _retire_forwarded_source_into_finish(from_obj, finish) -> None:
             pcc_gc_live_bytes_subtract(size)
     pcc_gc_object_index_remove(from_obj)
     pcc_gc_object_node_unlink(dead)
+    if pcc_gc_object_node_is_record(dead) != 0:
+        # A cell's record frees nothing, so it is returned here: once the
+        # source cell is released after unlock it may be registered again,
+        # and a record still waiting on the finish chain would be overwritten.
+        pcc_gc_object_node_return_record(dead)
+        return
     store_ptr(dead, 16, load_ptr(finish, 24))
     store_ptr(finish, 24, dead)
 

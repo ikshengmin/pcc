@@ -35,6 +35,7 @@ OWNED_SYMBOLS = {
     "pcc_gc_object_node_freeing",
     "pcc_gc_object_node_finish_detached",
     "pcc_gc_object_node_gc_refs",
+    "pcc_gc_object_node_is_record",
     "pcc_gc_object_node_minor_block",
     "pcc_gc_object_node_next",
     "pcc_gc_object_node_plan_requires_prepare",
@@ -42,6 +43,7 @@ OWNED_SYMBOLS = {
     "pcc_gc_object_node_prev",
     "pcc_gc_object_node_release",
     "pcc_gc_object_node_release_to_pool",
+    "pcc_gc_object_node_return_record",
     "pcc_gc_object_node_set_freeing",
     "pcc_gc_object_node_set_gc_refs",
     "pcc_gc_object_node_set_next",
@@ -51,6 +53,7 @@ OWNED_SYMBOLS = {
     "pcc_gc_object_node_set_zpage",
     "pcc_gc_object_node_size",
     "pcc_gc_object_node_take_prepared",
+    "pcc_gc_object_node_take_record",
     "pcc_gc_object_node_unlink",
     "pcc_gc_object_node_young_next",
     "pcc_gc_object_node_young_prev",
@@ -66,6 +69,7 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_object_index_find",
     "pcc_thread_owns_stopped_world",
     "pcc_gc_granule_is_object_start",
+    "pcc_allocator_object_node_record_find",
 }
 RAW_GLOBAL_IMPORTS = {
     "pcc_gc_backend3_promotion_head",
@@ -268,6 +272,15 @@ def test_object_nodes_preserve_pool_list_and_young_invariants() -> None:
     release = _export_body(strict, "pcc_gc_object_node_release")
     assert "if count >= 8192:" in release
     assert release.index("if count >= 8192:") < release.index("free(node)")
+    # A cell's record stays with its cell: no release path frees one.
+    assert release.index("pcc_gc_object_node_is_record(node) != 0") < (
+        release.index("free(node)")
+    )
+    for name in (
+        "pcc_gc_object_node_return_record",
+        "pcc_gc_object_node_take_record",
+    ):
+        assert "free(" not in _export_body(strict, name)
 
     unlink = _export_body(strict, "pcc_gc_object_node_unlink")
     assert unlink.index("pcc_gc_trace_cursor_load()") < unlink.index(

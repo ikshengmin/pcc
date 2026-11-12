@@ -22,6 +22,15 @@ lives in exactly one of the two places. Primary find/insert/remove callers
 must hold the address's tracking shard or all tracking locks, or establish
 quiescence; a returned node may not outlive that protection without a
 separate lifetime guarantee. These functions do not acquire another lock.
+
+The tracing collectors' object index is split the same way. An exact
+object-family cell's object node is that cell's record in its slab's record
+array (``pcc_allocator_object_node_record_find``), and the record's index-key word
+holds the cell's address while the node is indexed, NULL otherwise: finding,
+inserting and removing it is one word, and no node is allocated for it. Only
+other keys use the object hash table. Writers hold the graph lock; the key
+word is release-stored after the node's fields, so an unlocked reader that
+acquires the key sees the node it indexes, and a NULL key is an exact miss.
 """
 
 from pcc import i64
@@ -62,6 +71,9 @@ pcc_allocator_object_side_slot = extern(
 pcc_allocator_granule_object_slot = extern(
     "pcc_allocator_granule_object_slot", (c_ptr,), c_ptr
 )
+pcc_allocator_object_node_record_find = extern(
+    "pcc_allocator_object_node_record_find", (c_ptr,), c_ptr
+)
 pcc_gc_tracked_primary_index_cells = extern(
     "pcc_gc_tracked_primary_index_cells", (c_ptr,), c_ptr
 )
@@ -84,6 +96,40 @@ define_global_i64("pcc_py_gc_object_used", 0)
 define_global_i64("pcc_gc_object_index_generation", 0)
 
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+
+# The index-key word of an object-node record, just past the node itself
+# (allocator OBJECT_NODE_RECORD_BYTES; node layout in freestanding_gc_object_nodes).
+RECORD_INDEX_KEY = 88
+
+
+@c_abi_export("pcc_gc_object_index_record_find")
+def _object_index_record_find(record: c_ptr, obj: c_ptr) -> c_ptr:
+    """``record`` when its key word holds ``obj``, else NULL (an exact miss)."""
+    if atomic_load_i64(record, RECORD_INDEX_KEY, "acquire") == ptr_diff(obj, null()):
+        return record
+    return null()
+
+
+@c_abi_export("pcc_gc_object_index_record_insert")
+def _object_index_record_insert(obj: c_ptr, node: c_ptr) -> i64:
+    """Index ``obj`` in its cell's record: 1 inserted, 0 already present,
+    -1 refused, and -2 when ``obj`` is not an object cell (the hash table
+    owns it). Only the cell's own record can be its node, and an object cell
+    whose record array could not be mapped is refused like a full table: it
+    must never land in the hash table, where lookups through a later record
+    array would not see it."""
+    record = pcc_allocator_object_node_record_find(obj)
+    if ptr_is_null(record) != 0:
+        if ptr_is_null(pcc_allocator_granule_object_slot(obj)) == 0:
+            return -1
+        return -2
+    key: i64 = ptr_diff(obj, null())
+    if atomic_load_i64(record, RECORD_INDEX_KEY, "relaxed") == key:
+        return 0
+    if ptr_eq(node, record) == 0:
+        return -1
+    atomic_store_i64(record, RECORD_INDEX_KEY, key, "release")
+    return 1
 
 
 @c_abi_export("pcc_gc_object_index_write_begin")
@@ -134,6 +180,12 @@ def pcc_gc_object_index_seen_stable(obj: c_ptr) -> i64:
     remain allocated under the existing no-park/STW retirement contract.
     """
     if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+        return 0
+    record = pcc_allocator_object_node_record_find(obj)
+    if ptr_is_null(record) == 0:
+        # One key word: a hit and a miss are both exact.
+        if ptr_is_null(_object_index_record_find(record, obj)) == 0:
+            return 1
         return 0
     if pcc_gc_object_index_seen(obj) != 0:
         return 1
@@ -479,6 +531,9 @@ def pcc_gc_object_index_find_unpublished(obj: c_ptr) -> c_ptr:
     """
     if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
         return null()
+    record = pcc_allocator_object_node_record_find(obj)
+    if ptr_is_null(record) == 0:
+        return _object_index_record_find(record, obj)
     sequence = global_addr("pcc_gc_object_index_generation")
     key_bits: i64 = ptr_diff(obj, null())
     while True:
@@ -1068,6 +1123,13 @@ def pcc_gc_object_index_seen(obj) -> i64:
 
     0 = unknown; see pcc_gc_index_py_seen.
     """
+    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+        return 0
+    record = pcc_allocator_object_node_record_find(obj)
+    if ptr_is_null(record) == 0:
+        if ptr_is_null(_object_index_record_find(record, obj)) == 0:
+            return 1
+        return 0
     return pcc_gc_index_py_seen(
         global_addr("pcc_py_gc_object_published"), obj, 16
     )
@@ -1240,11 +1302,21 @@ def py_gc_index_remove(obj: c_ptr) -> c_ptr:
     )
 
 
-@c_abi_export("pcc_gc_object_index_find")
-def pcc_gc_object_index_find(obj: c_ptr) -> c_ptr:
-    node = pcc_gc_index_py_find_published(
+@c_abi_export("pcc_gc_object_index_find_once")
+def _object_index_find_once(obj: c_ptr) -> c_ptr:
+    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+        return null()
+    record = pcc_allocator_object_node_record_find(obj)
+    if ptr_is_null(record) == 0:
+        return _object_index_record_find(record, obj)
+    return pcc_gc_index_py_find_published(
         global_addr("pcc_py_gc_object_published"), obj
     )
+
+
+@c_abi_export("pcc_gc_object_index_find")
+def pcc_gc_object_index_find(obj: c_ptr) -> c_ptr:
+    node = _object_index_find_once(obj)
     if ptr_is_null(node) == 0:
         return node
     # A count-free GC1/GC2 allocation may still be staged in its thread's
@@ -1256,13 +1328,15 @@ def pcc_gc_object_index_find(obj: c_ptr) -> c_ptr:
         return node
     if pcc_gc_alloc_stage_miss_drain() == 0:
         return node
-    return pcc_gc_index_py_find_published(
-        global_addr("pcc_py_gc_object_published"), obj
-    )
+    return _object_index_find_once(obj)
 
 
 @c_abi_export("pcc_gc_object_index_insert")
 def pcc_gc_object_index_insert(obj: c_ptr, node: c_ptr) -> i64:
+    if ptr_is_null(obj) == 0 and is_tagged_int(obj) == 0:
+        recorded: i64 = _object_index_record_insert(obj, node)
+        if recorded != -2:
+            return recorded
     return pcc_gc_index_py_insert(
         global_addr("pcc_py_gc_object_slots"),
         global_addr("pcc_py_gc_object_cap"),
@@ -1362,6 +1436,11 @@ def pcc_gc_object_index_plan_commit(
 
 @c_abi_export("pcc_gc_object_index_insert_preallocated")
 def pcc_gc_object_index_insert_preallocated(obj: c_ptr, node: c_ptr) -> i64:
+    if ptr_is_null(obj) == 0 and is_tagged_int(obj) == 0 and ptr_is_null(node) == 0:
+        # A record key needs no capacity and no write generation.
+        recorded: i64 = _object_index_record_insert(obj, node)
+        if recorded != -2:
+            return recorded
     write_generation: i64 = 0
     write_generation = _object_index_write_begin()
     if write_generation < 0:
@@ -1406,6 +1485,13 @@ def pcc_gc_object_index_insert_preallocated(obj: c_ptr, node: c_ptr) -> i64:
 
 @c_abi_export("pcc_gc_object_index_remove")
 def pcc_gc_object_index_remove(obj: c_ptr) -> c_ptr:
+    if ptr_is_null(obj) == 0 and is_tagged_int(obj) == 0:
+        record = pcc_allocator_object_node_record_find(obj)
+        if ptr_is_null(record) == 0:
+            if ptr_is_null(_object_index_record_find(record, obj)) != 0:
+                return null()
+            atomic_store_i64(record, RECORD_INDEX_KEY, 0, "release")
+            return record
     return pcc_gc_index_py_remove(
         global_addr("pcc_py_gc_object_slots"),
         global_addr("pcc_py_gc_object_cap"),

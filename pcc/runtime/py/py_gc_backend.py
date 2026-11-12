@@ -282,6 +282,21 @@ _object_node_plan_requires_prepare = extern(
 _object_node_take_prepared = extern(
     "pcc_gc_object_node_take_prepared", (c_ptr,), c_ptr
 )
+pcc_gc_object_node_take_record = extern(
+    "pcc_gc_object_node_take_record", (c_ptr,), c_ptr
+)
+pcc_gc_object_node_is_record = extern(
+    "pcc_gc_object_node_is_record", (c_ptr,), c_int64
+)
+pcc_gc_object_index_record_find = extern(
+    "pcc_gc_object_index_record_find", (c_ptr, c_ptr), c_ptr
+)
+pcc_allocator_object_node_record_ensure = extern(
+    "pcc_allocator_object_node_record_ensure", (c_ptr,), c_ptr
+)
+pcc_allocator_granule_object_slot = extern(
+    "pcc_allocator_granule_object_slot", (c_ptr,), c_ptr
+)
 _object_node_release = extern("pcc_gc_object_node_release", (c_ptr,), c_void)
 _unlink_object_node = extern("pcc_gc_object_node_unlink", (c_ptr,), c_void)
 _backend3_young_link_head = extern(
@@ -934,7 +949,11 @@ def _clear_object_list() -> None:
             abort_extern()
             _object_graph_unlock()
             return
-        free(node)
+        if pcc_gc_object_node_is_record(node) != 0:
+            # A record stays with its cell; only its index key goes.
+            pcc_gc_object_index_remove(load_ptr(node, 0))
+        else:
+            free(node)
         node = nxt
     _set_object_head(null())
     _set_trace_cursor(null())
@@ -4792,7 +4811,17 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
     # The nonmoving GC1-GC3 take the hint: measured, GC4 lost a little (it
     # prepares zpage resources in that round trip as well).
     node_prepare_failed: int = 0
-    if backend == 1 or backend == 2 or backend == 3:
+    # An object cell's node is its record (pcc_allocator_object_node_record_*):
+    # no node to prepare and no hash capacity to plan. The slab's record array
+    # is mapped here, before the graph transaction; a cell whose array cannot
+    # be mapped is not registered, as when no node can be prepared.
+    record = pcc_allocator_object_node_record_ensure(o)
+    if ptr_is_null(record) != 0 and ptr_is_null(pcc_allocator_granule_object_slot(o)) == 0:
+        _set_pending_minor_block(null())
+        global_store_ptr("pcc_gc_last_alloc", o)
+        pcc_gc_backend3_revoke_closed_young_domain()
+        return
+    if (backend == 1 or backend == 2 or backend == 3) and ptr_is_null(record) != 0:
         if _object_node_plan_requires_prepare() != 0:
             prepared_node = _object_node_prepare()
             if ptr_is_null(prepared_node) != 0:
@@ -4809,8 +4838,11 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
         ):
             graph_leaf = 1
         if graph_leaf == 0:
-            required: int = pcc_gc_object_index_plan_capacity(1)
-            need_node: int = _object_node_plan_requires_prepare()
+            required: int = 0
+            need_node: int = 0
+            if ptr_is_null(record) != 0:
+                required = pcc_gc_object_index_plan_capacity(1)
+                need_node = _object_node_plan_requires_prepare()
             zpage_required: int = 0
             need_zpage_node: int = 0
             need_zpage_page: int = 0
@@ -5068,13 +5100,16 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
             # the existing commit path, including exhaustion after its no-op
             # generation and before insertion. An unused prepared buffer
             # remains ours and is freed after unlock, as on a no-op commit.
+            # A record key plans no hash capacity and opens no index write
+            # generation (pcc_gc_object_index_insert_preallocated).
             index_generation: int = 0
             if required == 0:
                 index_generation = atomic_load_i64(
                     global_addr("pcc_gc_object_index_generation"), 0, "relaxed"
                 )
             commit_result: int = 0
-            if (required > 0 or index_generation < 0
+            if ptr_is_null(record) != 0 and (
+                    required > 0 or index_generation < 0
                     or (index_generation & 1) != 0
                     or index_generation > 9223372036854775802):
                 store_ptr(slots_owner, 0, prepared_slots)
@@ -5190,7 +5225,13 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
             return
 
         store_ptr(node_owner, 0, prepared_node)
-        node = _object_node_take_prepared(node_owner)
+        node = null()
+        if ptr_is_null(record) != 0:
+            node = _object_node_take_prepared(node_owner)
+        elif ptr_is_null(pcc_gc_object_index_record_find(record, o)) != 0:
+            node = pcc_gc_object_node_take_record(record)
+        # else: o is registered already. Its record is its only node, so it
+        # is not linked a second time and nothing is registered.
         prepared_node = load_ptr(node_owner, 0)
         if ptr_is_null(node) != 0:
             if (

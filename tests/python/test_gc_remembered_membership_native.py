@@ -111,6 +111,9 @@ void *pcc_allocator_object_side_slot(void *ptr, int64_t create) {
     (void)ptr; (void)create; return NULL;
 }
 void *pcc_allocator_granule_object_slot(void *ptr) { (void)ptr; return NULL; }
+void *pcc_allocator_object_node_record_find(void *ptr) {
+    (void)ptr; return NULL;
+}
 
 int main(void) {
     CHECK(pcc_gc_remembered_member_maybe(&keys[0]) == 0);

@@ -1061,6 +1061,15 @@ define_global_i64("pcc_allocator_granule_radix_node_count", 0)
 define_global_ptr_null("pcc_allocator_side_arena")
 define_global_i64("pcc_allocator_side_arena_used", 0)
 
+# A span descriptor: kind@0, stride@8, slab base@16, cell count@24, free-cell
+# count@32 (raw slabs), side-word array@40 and object-node record array@48
+# (object slabs, both allocated on first use).
+SPAN_BYTES = 56
+SPAN_NODE_RECORDS_OFFSET = 48
+# One object-node record per object cell: the tracing collectors' object node
+# (layout owned by freestanding_gc_object_nodes) followed by its index key.
+OBJECT_NODE_RECORD_BYTES = 96
+
 
 @c_abi_export("pcc_allocator_granule_stride_count")
 def _granule_stride_count(stride: i64) -> i64:
@@ -1093,7 +1102,7 @@ def _granule_stride_count(stride: i64) -> i64:
 def _span_new(kind: i64, stride: i64, base) -> c_ptr:
     arena = global_load_ptr("pcc_allocator_span_arena")
     used: i64 = load_i64(global_addr("pcc_allocator_span_arena_used"), 0)
-    if ptr_is_null(arena) != 0 or used + 48 > 65536:
+    if ptr_is_null(arena) != 0 or used + SPAN_BYTES > 65536:
         arena = page_alloc(65536)
         if ptr_is_null(arena):
             return null()
@@ -1113,7 +1122,7 @@ def _span_new(kind: i64, stride: i64, base) -> c_ptr:
         global_store_ptr("pcc_allocator_span_arena", arena)
         used = 0
     span = ptr_add(arena, used)
-    store_i64(global_addr("pcc_allocator_span_arena_used"), 0, used + 48)
+    store_i64(global_addr("pcc_allocator_span_arena_used"), 0, used + SPAN_BYTES)
     store_i64(span, 0, kind)
     store_i64(span, 8, stride)
     store_ptr(span, 16, base)
@@ -1126,6 +1135,9 @@ def _span_new(kind: i64, stride: i64, base) -> c_ptr:
     # Object slabs: per-cell side words, allocated on first use (see
     # pcc_allocator_object_side_slot).
     store_ptr(span, 40, null())
+    # Object slabs: per-cell object-node records, allocated on first use (see
+    # pcc_allocator_object_node_record_ensure).
+    store_ptr(span, SPAN_NODE_RECORDS_OFFSET, null())
     return span
 
 
@@ -1339,27 +1351,13 @@ def _granule_radix_leaf_slot_locked(key: i64) -> c_ptr:
     return ptr_add(int_to_ptr(leaf_bits), (key & 4095) * 8)
 
 
-@c_abi_export("pcc_allocator_granule_radix_span_key")
-def _granule_radix_span_key(key: i64) -> c_ptr:
-    if key <= 0 or logical_shift_right_i64(key, 48) != 0:
-        return null()
-    # The object-start probe's direct-mapped span cache, consulted here too so
-    # free(), publish and retire stop walking four radix levels per object.
-    # Any reader may cache an object (kind 1) span -- those are never retired
-    # and a key is never rebound.  Raw (kind 2) spans are cached only by
-    # allocator-lock holders (``_granule_span_locked``) and retirement clears
-    # them before the address can be reused, so a hit is exactly what the
-    # radix leaf would answer.  A hit is accepted only when the cached slab's
-    # sixteen granules cover this page.
-    cache = global_addr("pcc_allocator_granule_span_cache")
-    cache_slot: i64 = (logical_shift_right_i64(key, 4) & 255) * 8
-    cached_bits: i64 = load_i64(cache, cache_slot)
-    if cached_bits != 0:
-        cached_page: i64 = key - logical_shift_right_i64(
-            ptr_diff(load_ptr(int_to_ptr(cached_bits), 16), null()), 12
-        )
-        if cached_page >= 0 and cached_page < 16:
-            return int_to_ptr(cached_bits)
+@c_abi_export("pcc_allocator_granule_radix_walk")
+def _granule_radix_walk(key: i64) -> c_ptr:
+    """The span the radix leaf maps ``key`` (an address >> 12) to, or NULL.
+
+    Reads only: acquire loads of published radix levels.  The caller has
+    checked that ``key`` is in range.
+    """
     root_bits: i64 = atomic_load_i64(
         global_addr("pcc_allocator_granule_radix_root"), 0, "acquire"
     )
@@ -1385,13 +1383,57 @@ def _granule_radix_span_key(key: i64) -> c_ptr:
     )
     if leaf_bits == 0:
         return null()
-    span_bits: i64 = atomic_load_i64(
-        int_to_ptr(leaf_bits), (key & 4095) * 8, "acquire"
+    return int_to_ptr(
+        atomic_load_i64(int_to_ptr(leaf_bits), (key & 4095) * 8, "acquire")
     )
-    if span_bits != 0 and load_i64(int_to_ptr(span_bits), 0) == 1:
+
+
+@c_abi_export("pcc_allocator_granule_radix_span_probe")
+def _granule_radix_span_probe(key: i64) -> c_ptr:
+    """``_granule_radix_span_key`` without filling the span cache: a lookup
+    that reads only, for callers that must not write (the object index's
+    lock-free find)."""
+    if key <= 0 or logical_shift_right_i64(key, 48) != 0:
+        return null()
+    cached_bits: i64 = load_i64(
+        global_addr("pcc_allocator_granule_span_cache"),
+        (logical_shift_right_i64(key, 4) & 255) * 8,
+    )
+    if cached_bits != 0:
+        cached_page: i64 = key - logical_shift_right_i64(
+            ptr_diff(load_ptr(int_to_ptr(cached_bits), 16), null()), 12
+        )
+        if cached_page >= 0 and cached_page < 16:
+            return int_to_ptr(cached_bits)
+    return _granule_radix_walk(key)
+
+
+@c_abi_export("pcc_allocator_granule_radix_span_key")
+def _granule_radix_span_key(key: i64) -> c_ptr:
+    if key <= 0 or logical_shift_right_i64(key, 48) != 0:
+        return null()
+    # The object-start probe's direct-mapped span cache, consulted here too so
+    # free(), publish and retire stop walking four radix levels per object.
+    # Any reader may cache an object (kind 1) span -- those are never retired
+    # and a key is never rebound.  Raw (kind 2) spans are cached only by
+    # allocator-lock holders (``_granule_span_locked``) and retirement clears
+    # them before the address can be reused, so a hit is exactly what the
+    # radix leaf would answer.  A hit is accepted only when the cached slab's
+    # sixteen granules cover this page.
+    cache = global_addr("pcc_allocator_granule_span_cache")
+    cache_slot: i64 = (logical_shift_right_i64(key, 4) & 255) * 8
+    cached_bits: i64 = load_i64(cache, cache_slot)
+    if cached_bits != 0:
+        cached_page: i64 = key - logical_shift_right_i64(
+            ptr_diff(load_ptr(int_to_ptr(cached_bits), 16), null()), 12
+        )
+        if cached_page >= 0 and cached_page < 16:
+            return int_to_ptr(cached_bits)
+    span = _granule_radix_walk(key)
+    if ptr_is_null(span) == 0 and load_i64(span, 0) == 1:
         if load_i32(global_addr("pcc_allocator_granule_span_cache_fill"), 0) != 0:
-            store_i64(cache, cache_slot, span_bits)
-    return int_to_ptr(span_bits)
+            store_i64(cache, cache_slot, ptr_diff(span, null()))
+    return span
 
 
 @c_abi_export("pcc_gc_granule_span")
@@ -2058,6 +2100,101 @@ def pcc_allocator_object_side_slot(ptr, create: i64) -> c_ptr:
         if side_bits == 0:
             return null()
     return ptr_add(int_to_ptr(side_bits), cell * 8)
+
+
+@c_abi_export("pcc_allocator_object_cell_number")
+def _object_cell_number(span: c_ptr, ptr) -> i64:
+    """``ptr``'s cell number in object span ``span``, or -1 unless ``ptr`` is
+    exactly a cell's start (``_granule_object_slot``'s validation: an
+    interior or foreign pointer must never alias another cell). Reads only."""
+    if ptr_is_null(span) != 0 or load_i64(span, 0) != 1:
+        return -1
+    stride: i64 = load_i64(span, 8)
+    count: i64 = load_i64(span, 24)
+    if count <= 0 or stride <= 0:
+        return -1
+    base = load_ptr(span, 16)
+    if ptr_is_null(base) != 0 or (ptr_diff(base, null()) & 4095) != 0:
+        return -1
+    slab_offset: i64 = ptr_diff(ptr, base)
+    if slab_offset < 48 or slab_offset >= 65536:
+        return -1
+    carve_offset: i64 = slab_offset - 48
+    cell: i64 = carve_offset // stride
+    if cell * stride != carve_offset or cell >= count:
+        return -1
+    return cell
+
+
+@c_abi_export("pcc_allocator_object_node_record_find")
+def pcc_allocator_object_node_record_find(ptr) -> c_ptr:
+    """Address of an object-family cell's object-node record, or NULL.
+
+    Each object slab can carry one OBJECT_NODE_RECORD_BYTES record per cell;
+    the tracing collectors keep a cell's object node there, so registering
+    and retiring a slab object needs no node allocation and no hash index.
+    NULL means ``ptr`` is not an exact object-family cell or its slab has no
+    record array yet. Reads only, without locks: the object index's
+    lock-free find runs it. The array is immortal like the span itself, so a
+    record address never dangles; its contents belong to the GC.
+    """
+    if ptr_is_null(ptr) != 0:
+        return null()
+    span = _granule_radix_span_probe(
+        logical_shift_right_i64(ptr_diff(ptr, null()), 12)
+    )
+    cell: i64 = _object_cell_number(span, ptr)
+    if cell < 0:
+        return null()
+    records_bits: i64 = atomic_load_i64(span, SPAN_NODE_RECORDS_OFFSET, "acquire")
+    if records_bits == 0:
+        return null()
+    return int_to_ptr(records_bits + cell * OBJECT_NODE_RECORD_BYTES)
+
+
+@c_abi_export("pcc_allocator_object_node_record_ensure")
+def pcc_allocator_object_node_record_ensure(ptr) -> c_ptr:
+    """``pcc_allocator_object_node_record_find``, first mapping the slab's
+    record array when it has none. NULL when ``ptr`` is not an exact
+    object-family cell or the array cannot be mapped."""
+    if ptr_is_null(ptr) != 0:
+        return null()
+    span = _granule_radix_span_key(
+        logical_shift_right_i64(ptr_diff(ptr, null()), 12)
+    )
+    cell: i64 = _object_cell_number(span, ptr)
+    if cell < 0:
+        return null()
+    records_bits: i64 = atomic_load_i64(span, SPAN_NODE_RECORDS_OFFSET, "acquire")
+    if records_bits == 0:
+        count: i64 = load_i64(span, 24)
+        pcc_allocator_lock_acquire()
+        records_bits = load_i64(span, SPAN_NODE_RECORDS_OFFSET)
+        if records_bits == 0:
+            # A fresh anonymous mapping is zero-filled: every record starts
+            # out unindexed, unlinked and without leases.
+            mapping: i64 = (count * OBJECT_NODE_RECORD_BYTES + 4095) & -4096
+            records = page_alloc(mapping)
+            if ptr_is_null(records) == 0:
+                atomic_rmw_i64(
+                    "add", global_addr("pcc_allocator_mapped"), 0, mapping,
+                    "relaxed",
+                )
+                atomic_rmw_i64(
+                    "add",
+                    global_addr("pcc_allocator_metadata_mapped"),
+                    0,
+                    mapping,
+                    "relaxed",
+                )
+                records_bits = ptr_diff(records, null())
+                atomic_store_i64(
+                    span, SPAN_NODE_RECORDS_OFFSET, records_bits, "release"
+                )
+        pcc_allocator_lock_release()
+        if records_bits == 0:
+            return null()
+    return int_to_ptr(records_bits + cell * OBJECT_NODE_RECORD_BYTES)
 
 
 @c_abi_export("pcc_gc_granule_object_publish")

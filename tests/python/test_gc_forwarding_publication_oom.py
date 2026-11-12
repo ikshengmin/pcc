@@ -284,6 +284,9 @@ void *pcc_allocator_object_side_slot(void *key, int64_t create) {
     (void)key; (void)create; return NULL;
 }
 void *pcc_allocator_granule_object_slot(void *key) { (void)key; return NULL; }
+void *pcc_allocator_object_node_record_find(void *key) {
+    (void)key; return NULL;
+}
 static int64_t primary[32][4];
 void *pcc_gc_tracked_primary_index_cells(void *key) {
     uintptr_t bits = (uintptr_t)key;

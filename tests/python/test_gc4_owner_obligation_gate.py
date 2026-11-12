@@ -20,6 +20,13 @@ def test_known_lookup_closure_is_read_only():
             "pcc_gc_object_index_find", "pcc_gc_index_py_find_published",
             "pcc_gc_object_index_find_unpublished",
             "pcc_gc_index_py_find_slot", "pcc_gc_index_py_hash_ptr",
+            "_object_index_find_once", "_object_index_record_find",
+        ),
+        # An object cell's node is its slab record: finding it walks the
+        # allocator's span radix without filling the span cache.
+        RUNTIME / "freestanding_allocator.py": (
+            "pcc_allocator_object_node_record_find", "_object_cell_number",
+            "_granule_radix_span_probe", "_granule_radix_walk",
         ),
     }
     allowed = {"ptr_is_null", "is_tagged_int", "null", "load_i32", "load_i64",
