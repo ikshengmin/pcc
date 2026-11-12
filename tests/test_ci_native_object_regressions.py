@@ -303,19 +303,24 @@ def test_gate_selects_exact_two_root_pcc0_node_and_program_source():
     assert len(gate.NODES) == len(set(gate.NODES)) == 5
 
 
-@pytest.mark.parametrize("machine", (62, 183))
-@pytest.mark.parametrize("program_header", (1, 2, 3))
-def test_elf_admission_checks_program_headers_without_external_tools(tmp_path, machine, program_header):
-    from pcc.backend.elf_x86_64 import ElfError
-
+def _elf_image_fixture(machine=62, program_header=1):
+    """Header-only parser fixture; never native execution evidence."""
     payload = bytearray(128)
     ident = b"\x7fELF\x02\x01\x01" + bytes(9)
     struct.pack_into("<16sHHIQQQIHHHHHH", payload, 0,
                      ident, 2, machine, 1, 0x400000, 64, 0, 0, 64, 56, 1, 0, 0, 0)
     struct.pack_into("<IIQQQQQQ", payload, 64,
                      program_header, 5, 0, 0x400000, 0x400000, 128, 128, 4096)
+    return bytes(payload)
+
+
+@pytest.mark.parametrize("machine", (62, 183))
+@pytest.mark.parametrize("program_header", (1, 2, 3))
+def test_elf_admission_checks_program_headers_without_external_tools(tmp_path, machine, program_header):
+    from pcc.backend.elf_x86_64 import ElfError
+
     binary = tmp_path / "program.out"
-    binary.write_bytes(payload)
+    binary.write_bytes(_elf_image_fixture(machine, program_header))
     if program_header == 1:
         assert gate.verify_native_image(binary) == {"format": "static-elf", "libraries": []}
     else:
@@ -355,7 +360,8 @@ def test_shared_helper_runs_absolute_native_paths_with_no_host_fallback(tmp_path
     def compile_program(source, binary, **options):
         assert options == {"backend": "self",
                            "ir_scaffold_mode": "on", "runtime_archive": str(archive)}
-        Path(binary).write_bytes(b"host-only executable placeholder")
+        # Keep the real linkage parser active; only compile/run are simulated.
+        Path(binary).write_bytes(_elf_image_fixture())
 
     monkeypatch.setattr(support, "run_process_group_timeout", execute)
     capfd = SimpleNamespace(readouterr=lambda: SimpleNamespace(out="", err=""))
@@ -377,6 +383,11 @@ def test_shared_helper_runs_absolute_native_paths_with_no_host_fallback(tmp_path
     record = json.loads((tmp_path / "ownership-regression.json").read_text())
     assert record["status"] == ("PASS" if fail_gc is None else "NATIVE_EXECUTION_FAILED")
     assert len(record["executions"]) == (5 if fail_gc is None else 3)
+    linkage = record["linkage"]
+    assert linkage["schema"] == "pcc.owned-image-linkage.v1"
+    assert linkage["format"] == "static-elf64" and linkage["libraries"] == []
+    assert linkage["libpython"] == record["libpython"] == "off"
+    assert linkage["binary_sha256"] == record["binary_sha256"] == gate.sha(tmp_path / "program.out")
 
 
 def test_super_regression_uses_explicit_owned_helper_without_pcc1(tmp_path, monkeypatch):
