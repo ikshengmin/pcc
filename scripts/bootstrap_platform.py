@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from scripts.platform_process_watchdog import run
+from scripts import ci_failed_stage_identity
 
 
 def _digest(path):
@@ -311,7 +312,19 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400, stage1_timeou
     # after this attempt fails before it can publish its own result.
     for name in ("receipt.json", "failure.json", "progress.json"):
         (out_dir / name).unlink(missing_ok=True)
+    failure_identity_available = True
+    try:
+        (out_dir / ci_failed_stage_identity.FILENAME).unlink(missing_ok=True)
+    except Exception:
+        # Optional cleanup cannot change the primary result. Do not retry,
+        # rename, chmod or overwrite a refused sidecar; disable this invocation.
+        failure_identity_available = False
     source = source_identity(allow_dirty)
+    failure_context = (ci_failed_stage_identity.capture(ROOT, source, target)
+                       if failure_identity_available else None)
+    failure_phase = None
+    failure_command = None
+    runtime_identity = None
     configuration = build_configuration(target)
     environment = _stage_environment(gc_backend, jobs, rss_limit)
     suffix = ".exe" if os.name == "nt" else ""
@@ -449,15 +462,21 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400, stage1_timeou
                 # Re-raising after its report lets the process handler add the
                 # file and line to the canary log; success is unaffected.
                 smoke_env["PCC_DEBUG_WORKER_RERAISE"] = "1"
+                failure_phase = "canary_compile"
+                failure_command = compiler + [str(canary), "-o", str(executable), "--backend", "self"]
                 canary_compile = guarded(
-                    compiler + [str(canary), "-o", str(executable), "--backend", "self"],
+                    failure_command,
                     cwd=ROOT, env=smoke_env, log_path=out_dir / f"canary{stage}-compile.log",
                     timeout=timeout, rss_limit=rss_limit, native=True)
+                failure_phase = None
                 if not executable.is_file() or executable.stat().st_size == 0:
                     raise RuntimeError("canary compile exited successfully without producing an executable")
                 log = out_dir / f"canary{stage}-run.log"
-                canary_run = guarded([str(executable)], cwd=out_dir, env=smoke_env, log_path=log,
+                failure_phase = "canary_run"
+                failure_command = [str(executable)]
+                canary_run = guarded(failure_command, cwd=out_dir, env=smoke_env, log_path=log,
                                  timeout=60, rss_limit=rss_limit, native=True)
+                failure_phase = None
                 expected = f"{gc_backend}\n{2 ** 80 + 42}\n"
                 if log.read_text(encoding="utf-8").replace("\r\n", "\n") != expected:
                     raise RuntimeError("native GC/function/object/integer/exception canary failed")
@@ -500,7 +519,22 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400, stage1_timeou
         except BaseException as exc:
             (out_dir / "failure.json").write_text(json.dumps({"source": source, "stages": records,
                                                               "incomplete_stage": incomplete_stage,
-                                                              "error": str(exc)}, indent=2), encoding="utf-8")
+                                                              "error": str(exc),
+                                                              ci_failed_stage_identity.ASSOCIATION_FIELD: (
+                                                                  failure_context[ci_failed_stage_identity.ASSOCIATION_FIELD]
+                                                                  if failure_context is not None else None),
+                                                              }, indent=2), encoding="utf-8")
+            try:
+                if failure_context is not None:
+                    ci_failed_stage_identity.record(
+                        failure_context, root=ROOT, out_dir=out_dir, source=source,
+                        current_source=lambda: source_identity(allow_dirty), target=target, gc=str(gc_backend),
+                        incomplete=incomplete_stage, runtime_identity=runtime_identity,
+                        phase=failure_phase, command=failure_command, error=exc,
+                    )
+            except BaseException:
+                # Optional diagnostics can never replace the original failure.
+                pass
             raise
 
 

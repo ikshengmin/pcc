@@ -111,29 +111,76 @@ def test_stage1_deadline_survives_run_chain_lock_recursion(tmp_path, monkeypatch
 
 def test_same_integration_run_peers_wait_and_reuse_the_common_build(tmp_path, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
+    from contextlib import contextmanager
 
     events = _fake_platform(tmp_path, monkeypatch)
+    modeled_run = platform.run
+    # The model is installed first. Keep real subprocess execution forbidden
+    # while locally allowing this test's modeled shared preparation only.
+    external_calls = []
+
+    def forbidden_execution(*args, **kwargs):
+        external_calls.append((args, kwargs))
+        raise AssertionError("shared-queue model must not execute a real child")
+
+    for name in ("Popen", "run", "check_output"):
+        monkeypatch.setattr(platform.subprocess, name, forbidden_execution)
+    monkeypatch.delenv("PCC_TEST_NO_NATIVE_PROVISIONING", raising=False)
     started = threading.Event()
+    second_queued = threading.Event()
     release = threading.Event()
     original = platform.run_chain
+    original_admission = platform._same_run_admission
+    admissions = []
+    admission_lock = threading.Lock()
+
+    @contextmanager
+    def admission(*args, **kwargs):
+        with admission_lock:
+            admissions.append((args, kwargs))
+            if len(admissions) == 2:
+                second_queued.set()
+        with original_admission(*args, **kwargs):
+            yield
 
     def run_chain(*args, **kwargs):
+        assert platform.run is modeled_run
         if kwargs.get("shared") is not None and args[0] == "0":
             started.set()
             assert release.wait(3)
         return original(*args, **kwargs)
 
+    monkeypatch.setattr(platform, "_same_run_admission", admission)
     monkeypatch.setattr(platform, "run_chain", run_chain)
     with ThreadPoolExecutor(max_workers=2) as pool:
         first = pool.submit(platform.run_from_shared, "0", tmp_path / "gc0", run_id="same-session")
-        assert started.wait(3)
-        second = pool.submit(platform.run_from_shared, "1", tmp_path / "gc1", run_id="same-session")
         try:
+            assert started.wait(3)
+            second = pool.submit(platform.run_from_shared, "1", tmp_path / "gc1", run_id="same-session")
+            assert second_queued.wait(3)
             assert not second.done()
         finally:
             release.set()
         assert first.result()["qualified"] and second.result()["qualified"]
+    assert len(admissions) == 2 and platform.run is modeled_run
     assert sum("pcc.frontends.python.owned_runtime_build" in event[0] for event in events) == 1
+    assert sum("--ir-scaffold=on" in event[0] and "-m" in event[0] for event in events) == 1
+    assert external_calls == []
+
+
+def test_same_run_guard_still_rejects_unadmitted_inputs_with_a_mocked_runner(tmp_path, monkeypatch):
+    events = _fake_platform(tmp_path, monkeypatch)
+    monkeypatch.setenv("PCC_TEST_NO_NATIVE_PROVISIONING", "1")
+
+    def forbidden_execution(*args, **kwargs):
+        raise AssertionError("no-provision guard must reject before real execution")
+
+    monkeypatch.setattr(platform.subprocess, "Popen", forbidden_execution)
+    with pytest.raises(RuntimeError, match="automatic rebuild is disabled"):
+        platform.run_from_shared("0", tmp_path / "gc0", run_id="same-session")
+    assert events == []
+    assert not (tmp_path / "shared" / "receipt.json").exists()
+    assert not (tmp_path / "gc0" / "receipt.json").exists()
 
 
 def test_peer_queue_preserves_external_build_contention_rejection(tmp_path, monkeypatch):
