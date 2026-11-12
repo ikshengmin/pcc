@@ -327,7 +327,7 @@ class _GetterMemory:
 
 
 @pytest.mark.parametrize("name", ("py_list_get", "py_list_getitem", "py_list_get_for_frame"))
-@pytest.mark.parametrize("backend", (3, 4))
+@pytest.mark.parametrize("backend", (4,))
 @pytest.mark.parametrize("phase", ("graph_unlock", "retain_finish", "no_park_exit", "read_barrier"))
 def test_list_getter_returns_current_owned_element_after_actual_cleanup_park(name, backend, phase):
     memory = _GetterMemory(backend=backend, phase=phase)
@@ -340,7 +340,7 @@ def test_list_getter_returns_current_owned_element_after_actual_cleanup_park(nam
 
 
 @pytest.mark.parametrize("name", ("py_list_get", "py_list_getitem", "py_list_get_for_frame"))
-@pytest.mark.parametrize("backend", (3, 4))
+@pytest.mark.parametrize("backend", (4,))
 @pytest.mark.parametrize("phase", ("graph_unlock", "retain_finish", "no_park_exit", "read_barrier"))
 def test_count_free_list_getter_leaves_stack_slots_to_the_conservative_scan(name, backend, phase):
     memory = _GetterMemory(backend=backend, phase=phase, count_free=True)
@@ -353,7 +353,7 @@ def test_count_free_list_getter_leaves_stack_slots_to_the_conservative_scan(name
     assert memory.depth == 0
 
 
-@pytest.mark.parametrize("backend", (0, 1, 2))
+@pytest.mark.parametrize("backend", (0, 1, 2, 3))
 @pytest.mark.parametrize("name", ("py_list_get", "py_list_getitem", "py_list_get_for_frame"))
 def test_list_getter_nonmoving_paths_keep_reference_contract(name, backend):
     memory = _GetterMemory(backend=backend)
@@ -375,7 +375,7 @@ def test_list_getter_restores_existing_pin(name):
 
 
 @pytest.mark.parametrize("name", ("py_list_get", "py_list_getitem", "py_list_get_for_frame"))
-@pytest.mark.parametrize("backend", (3, 4))
+@pytest.mark.parametrize("backend", (4,))
 @pytest.mark.parametrize("value", (None, 85))
 def test_list_getter_null_and_tagged_elements_need_no_pin(name, backend, value):
     memory = _GetterMemory(backend=backend)
@@ -425,7 +425,7 @@ class _FieldMemory(_GetterMemory):
             self.record = self.resolve(self.record)
 
 
-@pytest.mark.parametrize("backend", (3, 4))
+@pytest.mark.parametrize("backend", (4,))
 @pytest.mark.parametrize("name", ("py_instance_get_field", "py_valuebox_get_field"))
 def test_instance_field_getter_uses_healed_receiver_before_deriving_field_slot(backend, name):
     memory = _FieldMemory(backend=backend, stale_receiver=True)
@@ -436,7 +436,7 @@ def test_instance_field_getter_uses_healed_receiver_before_deriving_field_slot(b
     assert not memory.handles and memory.depth == 0 and memory.pins == 0
 
 
-@pytest.mark.parametrize("backend", (3, 4))
+@pytest.mark.parametrize("backend", (4,))
 @pytest.mark.parametrize("name", ("py_instance_get_field", "py_valuebox_get_field"))
 def test_count_free_instance_field_getter_reads_in_one_transaction(backend, name):
     memory = _FieldMemory(backend=backend, count_free=True)
@@ -452,7 +452,7 @@ def test_count_free_instance_field_getter_reads_in_one_transaction(backend, name
     assert not memory.handles and memory.depth == 0
 
 
-@pytest.mark.parametrize("backend", (0, 1, 2))
+@pytest.mark.parametrize("backend", (0, 1, 2, 3))
 def test_instance_field_getter_keeps_nonmoving_fast_path(backend):
     memory = _FieldMemory(backend=backend)
     result = memory.namespace["py_instance_get_field"](memory.record, 0)
@@ -570,7 +570,7 @@ class _MissingFieldMemory(_FieldMemory):
         value.flags |= bits
 
 
-@pytest.mark.parametrize('backend', [3, 4])
+@pytest.mark.parametrize('backend', [4])
 @pytest.mark.parametrize('phase', ['graph_lock', 'graph_unlock', 'lookup', 'unregister'])
 @pytest.mark.parametrize('cache', [False, True])
 def test_missing_field_fallback_roots_receiver_class_and_result(backend, phase, cache):
@@ -691,7 +691,7 @@ def _install_missing_field_dynamic_dict(memory, *, found=False, fail=''):
     return dynamic
 
 
-@pytest.mark.parametrize('backend', [3, 4])
+@pytest.mark.parametrize('backend', [4])
 @pytest.mark.parametrize('cache', [False, True])
 @pytest.mark.parametrize('phase', ['dict_key', 'dict_get', 'decref'])
 @pytest.mark.parametrize('found', [False, True])
