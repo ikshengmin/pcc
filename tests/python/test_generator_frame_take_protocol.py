@@ -1,123 +1,12 @@
-"""Frame take's real count-free plans and controlled NULL-clear obligations.
+"""Frame take's controlled NULL-clear obligations.
 
-The model executes production plan bodies but does not prove native parking.
 The native cases control mark colors under an outer graph lock: they compare
 fused/split state, not autonomous collection, throughput or SATB correctness.
 """
 
-import ast
-from functools import cache
-
 import pytest
 
-from tests.python.test_generator_moving_frame_take import RUNTIME, _native
-
-
-@cache
-def _plan_code():
-    names = {
-        "pcc_gc_store_root_plan_init", "pcc_gc_store_ptr_plan_init",
-        "_pcc_gc_store_plan_commit_locked", "pcc_gc_store_ptr_plan_commit_locked",
-        "_pcc_gc_store_plan_finish", "pcc_gc_store_ptr_plan_finish",
-        "_py_refcount_prepared_reset", "_py_incref_prepare", "_py_incref_finish",
-        "pcc_gc_retain_plan_prepare_locked", "pcc_gc_retain_plan_finish",
-    }
-    path = RUNTIME / "py/py_obj.py"
-    nodes = [node for node in ast.parse(path.read_text()).body
-             if isinstance(node, ast.FunctionDef) and node.name in names]
-    assert {node.name for node in nodes} == names
-    for node in nodes:
-        node.decorator_list = []
-    return compile(ast.Module(body=nodes, type_ignores=[]), str(path), "exec")
-
-
-@pytest.mark.parametrize("backend", (3, 4))
-@pytest.mark.parametrize("marking", (False, True))
-@pytest.mark.parametrize("prior_pin", (False, True))
-@pytest.mark.parametrize("phase", (
-    "graph_lock", "graph_unlock", "retain_finish", "store_finish",
-))
-def test_take_real_count_free_plans_keep_result_root_through_finishes(
-    backend, marking, prior_pin, phase,
-):
-    from tests.python.test_runtime_getter_roots import _GetterMemory
-
-    memory = _GetterMemory(backend=backend, phase=phase, prior_pin=prior_pin)
-    ns = memory.namespace
-    for name, value in (("pcc_log_init_state", 2),
-                        ("pcc_gc_backend4_no_refcounts", 1),
-                        ("pcc_gc_mark_active", int(marking))):
-        memory.global_cell(name).fields[0] = value
-    events, plans = [], []
-
-    def forbidden(*args):
-        raise AssertionError("NULL count-free clear entered an RC/barrier callback")
-
-    def zero(plan, value, size):
-        assert value == 0
-        for offset in range(0, size, 4):
-            memory.write(plan, offset, 0)
-
-    ns.update(
-        i64=int, store_i32=memory.write, memset=zero,
-        atomic_load_i32=lambda slot, offset, order: memory.read(slot, offset),
-        pcc_gc_note_store=lambda: events.append("store-note"),
-        _gc_forwarding_population=lambda: int(memory.moves > 0),
-        _gc_relocation_candidate=lambda value: value is not None,
-        pcc_gc_note_relocation_read=forbidden,
-        pcc_gc_note_slot_write_barrier=forbidden,
-        pcc_gc_backend4_note_heap_store_locked=forbidden,
-        _py_decref_prepare=forbidden, _py_decref_finish=forbidden,
-        pcc_diagnostics_runtime_log_event_code=forbidden,
-    )
-    exec(_plan_code(), ns)
-    ns["pcc_list_body_py_list_take_for_gen_frame"] = ns["_native_body_py_list_take_for_gen_frame"]
-    commit = ns["pcc_gc_store_ptr_plan_commit_locked"]
-    retain_finish = ns["pcc_gc_retain_plan_finish"]
-    store_finish = ns["pcc_gc_store_ptr_plan_finish"]
-
-    def assert_rooted():
-        assert any(memory.read(*memory.pointer(slot)) is memory.item
-                   for slot in memory.handles.values())
-        assert memory.item.alive and memory.item.references == 1
-
-    def checked_commit(plan, owner, slot, value):
-        assert memory.depth > 0 and owner is memory.lst and value is None
-        assert_rooted()
-        plans.append(plan)
-        events.append("commit")
-        assert commit(plan, owner, slot, value) == 1
-        assert memory.items.fields[0] is None and plan.fields[124] == 3
-        return 1
-
-    def checked_retain_finish(plan):
-        assert memory.depth == 0
-        assert_rooted()
-        memory.gc("retain_finish")
-        retain_finish(plan)
-        assert plan.fields[0] is None
-        events.append("retain-finish")
-
-    def checked_store_finish(plan):
-        assert memory.depth == 0
-        assert_rooted()
-        memory.gc("store_finish")
-        store_finish(plan)
-        assert plan.fields[124] == 7
-        events.append("store-finish")
-
-    ns.update(pcc_gc_store_ptr_plan_commit_locked=checked_commit,
-              pcc_gc_retain_plan_finish=checked_retain_finish,
-              pcc_gc_store_ptr_plan_finish=checked_store_finish)
-    result = ns["py_list_take_for_gen_frame"](memory.lst, 0)
-    assert result is memory.item and result.alive and result.references == 1
-    assert events == ["commit", "store-note", "retain-finish", "store-finish"]
-    assert len(plans) == 1 and plans[0].fields[0] is None
-    assert all(plans[0].fields[offset] == 0 for offset in range(8, 112, 4))
-    assert memory.moves > 0 and memory.items.fields[0] is None
-    assert bool(result.flags & ns["PY_FLAG_GC_PINNED"]) == prior_pin
-    assert not memory.handles and not memory.native_frames and not memory.native_ranges
-    assert memory.depth == 0 and memory.no_park_depth == 0
+from tests.python.test_generator_moving_frame_take import _native
 
 
 NULL_CLEAR = r'''

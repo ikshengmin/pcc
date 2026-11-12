@@ -152,18 +152,6 @@ def test_tagged_iterator_result_needs_no_pin(backend):
     memory.assert_balanced()
 
 
-@pytest.mark.parametrize("backend", (3, 4))
-@pytest.mark.parametrize("failed_root", (1, 2, 3, 4, 5))
-def test_callable_registration_failure_releases_only_owned_references(backend, failed_root):
-    memory = _IteratorMemory(backend=backend, callable_iterator=True,
-                             fail_register=failed_root)
-    assert memory.next() is None
-    assert memory.item.references == 1
-    assert memory.resolve(memory.callable).references == 1
-    assert memory.resolve(memory.sentinel).references == 1
-    memory.assert_balanced()
-
-
 _NATIVE_SOURCE = '''class Record:
     def __init__(self, value):
         self.value = value

@@ -35,7 +35,6 @@ from pcc.unsafe import (
     load_ptr,
     malloc,
     null,
-    ptr_add,
     ptr_eq,
     ptr_is_null,
     ptr_to_int,
@@ -87,7 +86,6 @@ strlen = extern("strlen", (c_ptr,), c_int64)
 pcc_diagnostics_runtime_log_event_code = extern("pcc_diagnostics_runtime_log_event_code", (c_int32, c_int32, c_int64, c_int64, c_ptr), c_void)
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
 pcc_gc_object_id = extern("pcc_gc_object_id", (c_ptr,), c_int64)
-pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
 pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 py_tls_exc_set = extern("py_tls_exc_set", (c_ptr,), c_void)
@@ -146,9 +144,6 @@ def _type_of(obj) -> int:
 
 
 def _load_instance_cls(o):
-    backend: int = pcc_gc_backend()
-    if (backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0):
-        return pcc_gc_load_ptr(o, ptr_add(o, PYINSTANCEOBJECT_CLS_OFFSET))
     return load_ptr(o, PYINSTANCEOBJECT_CLS_OFFSET)
 
 

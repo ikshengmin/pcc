@@ -115,9 +115,6 @@ pcc_gc_free_object_memory = extern(
 )
 pcc_gc_load_ptr  = extern("pcc_gc_load_ptr",  (c_ptr, c_ptr),           c_ptr)
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
-pcc_gc_scheduler_root_register_handle = extern(
-    "pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr
-)
 pcc_gc_scheduler_root_unregister_handle = extern(
     "pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void
 )
@@ -156,24 +153,11 @@ def _type_of(obj) -> int:
 
 def _iter_prepare_moving_root(slot, value, backend: int):
     store_ptr(slot, 0, value)
-    if (
-        (backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0)
-        and ptr_is_null(value) == 0
-        and is_tagged_int(value) == 0
-    ):
-        handle = pcc_gc_scheduler_root_register_handle(slot)
-        if ptr_is_null(handle) == 0:
-            store_ptr(slot, 0, pcc_gc_load_ptr(null(), slot))
-        return handle
     return null()
 
 
 def _iter_moving_root_failed(value, backend: int, handle) -> int:
-    if (backend != 4 or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0):
-        return 0
-    if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
-        return 0
-    return ptr_is_null(handle)
+    return 0
 
 
 def _iter_reload_moving_root(slot, handle):
@@ -884,7 +868,6 @@ def py_enumerate_list(iterable, start: int):
     it = py_obj_iter(iterable)
     if ptr_is_null(it) != 0:
         return null()
-    moving_backend: int = pcc_gc_backend()
     it_slot = stack_alloc(8)
     item_slot = stack_alloc(8)
     index_slot = stack_alloc(8)
@@ -892,12 +875,6 @@ def py_enumerate_list(iterable, start: int):
     store_ptr(item_slot, 0, null())
     store_ptr(index_slot, 0, null())
     it_handle = null()
-    if (moving_backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0):
-        it_handle = pcc_gc_scheduler_root_register_handle(it_slot)
-        if ptr_is_null(it_handle) != 0:
-            py_decref(it)
-            return null()
-        it = pcc_gc_load_ptr(null(), it_slot)
     out = py_list_new(4)
     if ptr_is_null(out) != 0:
         _require_result(
@@ -932,14 +909,6 @@ def py_enumerate_list(iterable, start: int):
         else:
             store_ptr(item_slot, 0, item)
             item_handle = null()
-            if (moving_backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0):
-                item_handle = pcc_gc_scheduler_root_register_handle(item_slot)
-                if ptr_is_null(item_handle) != 0:
-                    py_decref(item)
-                    _iter_release_owned_root(it_slot, it_handle)
-                    pcc_gc_unpin(out)
-                    py_decref(out)
-                    return null()
             pair = py_tuple_new(2)
             if ptr_is_null(pair) != 0:
                 _require_result(
@@ -969,17 +938,6 @@ def py_enumerate_list(iterable, start: int):
                 return null()
             store_ptr(index_slot, 0, index_obj)
             index_handle = null()
-            if (moving_backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0):
-                index_handle = pcc_gc_scheduler_root_register_handle(index_slot)
-                if ptr_is_null(index_handle) != 0:
-                    py_decref(index_obj)
-                    _iter_release_owned_root(item_slot, item_handle)
-                    pcc_gc_unpin(pair)
-                    py_decref(pair)
-                    _iter_release_owned_root(it_slot, it_handle)
-                    pcc_gc_unpin(out)
-                    py_decref(out)
-                    return null()
             index_obj = _iter_reload_moving_root(index_slot, index_handle)
             py_tuple_set_item(pair, 0, index_obj)
             _iter_release_owned_root(index_slot, index_handle)

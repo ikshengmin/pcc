@@ -227,9 +227,6 @@ pcc_gc_scheduler_root_register_handle = extern(
 pcc_gc_scheduler_root_unregister_handle = extern(
     "pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void
 )
-pcc_gc_stack_slot_root_is_conservative = extern(
-    "pcc_gc_stack_slot_root_is_conservative", (c_ptr,), c_int64
-)
 pcc_gc_retain_plan_prepare_locked = extern(
     "pcc_gc_retain_plan_prepare_locked", (c_ptr, c_ptr), c_ptr
 )
@@ -2784,14 +2781,11 @@ def py_instance_new(cls) -> c_ptr:
 
 @c_abi_export("py_instance_get_field")
 def py_instance_get_field(inst, idx: int):
-    # Every static `self.field` read lands here.  With the read barrier off
-    # and a non-forwarding collector, pcc_gc_load_ptr is a plain load and
-    # pcc_gc_note_relocation_read the identity, so this path makes the same
-    # checks -- provenance probe included -- without calling them.
-    if (
-        load_i32(global_addr("pcc_gc_read_barrier_enabled"), 0) == 0
-        and (load_i32(global_addr("pcc_gc_backend_selected"), 0) != 4 or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0)
-    ):
+    # Every static `self.field` read lands here.  With the read barrier off,
+    # pcc_gc_load_ptr is a plain load and pcc_gc_note_relocation_read the
+    # identity, so this path makes the same checks -- provenance probe
+    # included -- without calling them.
+    if load_i32(global_addr("pcc_gc_read_barrier_enabled"), 0) == 0:
         if ptr_is_null(inst) != 0 or is_tagged_int(inst) != 0:
             return null()
         if pcc_gc_pointer_is_managed(inst) == 0:
@@ -2842,19 +2836,6 @@ def _instance_prepare_moving_root(slot, handle_slot) -> int:
     value = load_ptr(slot, 0)
     if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
         return 0
-    backend: int = pcc_gc_backend()
-    if (backend != 4 or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0):
-        return 0
-    handle = pcc_gc_scheduler_root_register_handle(slot)
-    if ptr_is_null(handle) != 0:
-        return -1
-    store_ptr(handle_slot, 0, handle)
-    value = pcc_gc_load_ptr(null(), slot)
-    store_ptr(slot, 0, value)
-    if ptr_is_null(value) != 0:
-        pcc_gc_scheduler_root_unregister_handle(handle)
-        store_ptr(handle_slot, 0, null())
-        return -1
     return 0
 
 
@@ -2928,16 +2909,6 @@ def _instance_field_load(inst, offset: int, out) -> int:
         _class_require_result(null(), cstr("instance field lookup"), cstr("instance field lookup root registration failed"))
         return -1
     result_handle = null()
-    backend: int = pcc_gc_backend()
-    if (backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0) and pcc_gc_stack_slot_root_is_conservative(out) == 0:
-        # Register the empty result root before the transaction stores into
-        # it. A count-free collector's conservative stack scan already roots
-        # a stack ``out`` and keeps its object in place.
-        result_handle = pcc_gc_scheduler_root_register_handle(out)
-        if ptr_is_null(result_handle) != 0:
-            _instance_finish_moving_root(receiver_handle_slot)
-            _class_require_result(null(), cstr("instance field lookup"), cstr("instance field lookup root registration failed"))
-            return -1
     retain_plan = stack_alloc(56)
     pcc_py_gc_minor_graph_lock()
     receiver = _instance_reload_moving_root(receiver_slot, receiver_handle_slot)

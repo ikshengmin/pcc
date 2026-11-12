@@ -43,27 +43,6 @@ def test_take_has_its_own_no_poll_entry_and_does_not_enlarge_getters():
     assert text.count("stack_alloc(128)") == 1
 
 
-def test_take_rechecks_admission_after_lock_and_keeps_rooted_finish():
-    _, body = _function("py_list.py", "_native_body_py_list_take_for_gen_frame")
-    locked = body.index("pcc_py_gc_minor_graph_lock()")
-    for gate in ("pcc_gc_backend_selected", "pcc_gc_backend4_no_refcounts",
-                 "pcc_log_init_state", "pcc_diagnostics_runtime_log_fast_state",
-                 "pcc_gc_refcount_provenance_probe"):
-        assert body.index(gate) > locked
-    assert body.index("pcc_gc_native_root_bind_range(result_slot, 1)") < locked
-    publish = body.index("store_ptr(result_slot, 0, value)")
-    commit = body.index("pcc_gc_store_ptr_plan_commit_locked")
-    unlock = body.index("pcc_py_gc_minor_graph_unlock()")
-    assert locked < publish < commit < unlock
-    assert unlock < body.index("pcc_gc_retain_plan_finish") < body.index("pcc_gc_store_ptr_plan_finish")
-    assert "tag == PY_TYPE_CPY_HANDLE or tag >= PY_TYPE_CEXT_TAG_BASE" in body
-    assert "return _list_get_finish(result_slot, result_handle, list_handle_slot)" in body
-    _, dispatch = _function("py_gen.py", "py_gen_frame_take")
-    branch = dispatch.split("if _frame_list_raw() == 0:", 1)[1]
-    assert "index >= 0" in branch and "pcc_log_init_state" in branch
-    assert "value = py_list_get(frame, index)\n        py_list_set(frame, index, null())" in branch
-
-
 SHAPES = r'''
 #include "py_internal.h"
 #include <stdio.h>
@@ -230,46 +209,6 @@ def _run(executable, backend, **extra):
     return run_process_group_timeout(
         [str(executable)], timeout=20, env=env,
     )
-
-
-@pytest.mark.parametrize("phase", ("graph_lock", "graph_unlock", "retain_finish"))
-@pytest.mark.parametrize("backend", (3, 4))
-@pytest.mark.parametrize("prior_pin", (False, True))
-def test_source_take_reloads_movable_roots_at_each_park_boundary(phase, backend, prior_pin):
-    # Supplement the native witnesses with deterministic relocation at each
-    # park boundary. This executes the production functions, but is a model.
-    from tests.python.test_runtime_getter_roots import _GetterMemory
-
-    memory = _GetterMemory(backend=backend, phase=phase, prior_pin=prior_pin)
-    ns = memory.namespace
-    memory.global_cell("pcc_log_init_state").fields[0] = 2
-    memory.global_cell("pcc_gc_backend4_no_refcounts").fields[0] = 1
-    ns["atomic_load_i32"] = lambda slot, offset, order: memory.read(slot, offset)
-    ns["pcc_list_body_py_list_take_for_gen_frame"] = ns["_native_body_py_list_take_for_gen_frame"]
-    commits = []
-
-    def commit(plan, owner, slot, value):
-        assert memory.depth > 0 and value is None
-        old = memory.read(*memory.pointer(slot))
-        assert old is memory.item
-        assert any(memory.read(*memory.pointer(root)) is old
-                   for root in memory.handles.values())
-        # Logical ownership model: result retain precedes clearing the cell.
-        assert old.references == 2
-        old.references -= 1
-        memory.write(*memory.pointer(slot), None)
-        commits.append(owner)
-        return 1
-
-    ns["pcc_gc_store_ptr_plan_init"] = lambda plan, owner, backend: None
-    ns["pcc_gc_store_ptr_plan_commit_locked"] = commit
-    ns["pcc_gc_store_ptr_plan_finish"] = lambda plan: None
-    result = ns["py_list_take_for_gen_frame"](memory.lst, 0)
-    assert result is memory.item and result.alive and result.references == 1
-    assert memory.items.fields[0] is None and len(commits) == 1
-    assert memory.moves > 0
-    assert bool(result.flags & ns["PY_FLAG_GC_PINNED"]) == prior_pin
-    assert not memory.handles and not memory.native_frames and not memory.native_ranges
 
 
 @pytest.mark.integration

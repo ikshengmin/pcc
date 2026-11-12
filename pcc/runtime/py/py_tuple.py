@@ -433,19 +433,6 @@ def py_tuple_from_list(lst):
     # borrowed argument until all empty result/error slots are registered.
     source_pin: int = _tuple_conversion_pin_value(lst)
     count: int = 0
-    backend: int = pcc_gc_backend()
-    if (backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0):
-        while count < 4:
-            handle = pcc_gc_scheduler_root_register_handle(ptr_add(slots, count * 8))
-            if ptr_is_null(handle):
-                while count > 0:
-                    count = count - 1
-                    pcc_gc_scheduler_root_unregister_handle(load_ptr(handles, count * 8))
-                _tuple_conversion_restore_slot(slots, source_pin)
-                py_raise_owned(py_exc_new(19, cstr("tuple: out of memory")))
-                return null()
-            store_ptr(handles, count * 8, handle)
-            count = count + 1
     _tuple_conversion_restore_slot(slots, source_pin)
     success: int = _tuple_conversion_fill(slots)
     result_slot = ptr_add(slots, 8)
@@ -681,34 +668,7 @@ def py_tuple_set_item(tuple_ptr, i: int, item) -> None:
     # backend read above answers without a call once configuration ran.
     if backend < 0:
         backend = pcc_gc_backend()
-    if (backend != 4 or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0):
-        return
-    # Nothing waits on a published tuple (publication only clears the
-    # pending bit, PY_FLAG_GC_FRESH_ALLOC = 16384).  While pending, probe the last slot before the prefix
-    # scan: a sequential fill stores it last and a reverse fill first, so
-    # both stay O(1) per store.  Scanning every slot on every store made each
-    # n-item tuple O(n^2) load barriers under GC4 -- the bulk of a GC4 pcc1
-    # compile.
-    if (load_i32(tuple_ptr, PYOBJECTHEADER_FLAGS_OFFSET) & 16384) == 0:
-        return
-    if ptr_is_null(pcc_gc_load_ptr(
-        tuple_ptr,
-        ptr_add(tuple_ptr, PYTUPLEOBJECT_ITEMS_OFFSET + (tuple_len - 1) * 8),
-    )) != 0:
-        return
-    complete: int = 1
-    slot_index: int = 0
-    while slot_index < tuple_len:
-        if ptr_is_null(pcc_gc_load_ptr(
-            tuple_ptr,
-            ptr_add(tuple_ptr, PYTUPLEOBJECT_ITEMS_OFFSET + slot_index * 8),
-        )) != 0:
-            complete = 0
-            slot_index = tuple_len
-        else:
-            slot_index = slot_index + 1
-    if complete != 0:
-        pcc_gc_publish_initialized(tuple_ptr)
+    return
 
 
 @c_abi_export("py_tuple_get")
@@ -774,24 +734,11 @@ def py_tuple_len(tuple_ptr) -> int:
 
 def _tuple_method_prepare_root(slot, value, backend: int):
     store_ptr(slot, 0, value)
-    if (
-        (backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0)
-        and ptr_is_null(value) == 0
-        and is_tagged_int(value) == 0
-    ):
-        handle = pcc_gc_scheduler_root_register_handle(slot)
-        if ptr_is_null(handle) == 0:
-            store_ptr(slot, 0, pcc_gc_load_ptr(null(), slot))
-        return handle
     return null()
 
 
 def _tuple_method_root_failed(value, backend: int, handle) -> int:
-    if (backend != 4 or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0):
-        return 0
-    if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
-        return 0
-    return ptr_is_null(handle)
+    return 0
 
 
 def _tuple_method_reload_root(slot, handle):

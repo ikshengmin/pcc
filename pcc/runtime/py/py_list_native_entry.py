@@ -10,14 +10,10 @@ __pcc_runtime_port__ = True
 
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
-    atomic_load_i32,
     global_addr,
-    is_tagged_int,
     load_i32,
-    load_ptr,
     memset,
     null,
-    ptr_is_null,
     stack_alloc,
     store_ptr,
 )
@@ -312,87 +308,24 @@ def py_list_take_for_gen_frame(lst: c_ptr, i: int) -> c_ptr:
     return result
 
 
-pcc_list_body_py_gen_frame_take_group = extern(
-    "pcc_list_body_py_gen_frame_take_group", (c_ptr, c_int64, c_int64, c_ptr), c_int64
-)
-
-
 @c_abi_export("py_gen_frame_take_group")
 def py_gen_frame_take_group(lst: c_ptr, start: int, count: int, outputs: c_ptr) -> int:
-    """Try a bounded move directly into already registered, empty caller roots.
+    """Decline the bounded group move: return 0 without consuming a cell.
 
-    Return 0 without consuming a cell when the original scalar path is needed.
-    The caller must reload its authoritative frame root before that fallback.
-    No managed pointer is returned or removed from its caller-owned output root.
+    The caller reloads its frame root and takes the cells one by one. Only
+    the retired relocating protocol took a group here.
     """
-    # This module has no implicit polls. Reject other collectors/policies
-    # before allocating/registering a native frame, without dereferencing lst
-    # or invoking a configuration getter that could park with a raw input.
-    if (count < 2 or count > 16 or start < 0 or ptr_is_null(outputs) != 0
-            or load_i32(global_addr("pcc_gc_config_initialized"), 0) == 0
-            or (load_i32(global_addr("pcc_gc_backend_selected"), 0) != 4 or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0)
-            or load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0
-            or atomic_load_i32(global_addr("pcc_log_init_state"), 0, "acquire") != 2
-            or load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0
-            or load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) != 0):
-        return 0
-    native_frame_bytes: int = 40
-    native_range_capacity: int = 8
-    native_ranges_bytes: int = 128
-    pcc_thread_no_park_enter()
-    frame = stack_alloc(40)
-    memset(frame, 0, native_frame_bytes)
-    ranges = stack_alloc(128)
-    inputs = stack_alloc(8)
-    store_ptr(inputs, 0, lst)
-    pcc_gc_native_frame_enter(frame, ranges, native_range_capacity)
-    pcc_gc_native_root_bind_range(inputs, -1)
-    pcc_thread_no_park_exit()
-    taken: int = pcc_list_body_py_gen_frame_take_group(inputs, start, count, outputs)
-    pcc_gc_native_frame_leave(frame)
-    return taken
-
-
-pcc_list_body_py_gen_frame_clear_group = extern(
-    "pcc_list_body_py_gen_frame_clear_group", (c_ptr, c_int64, c_int64), c_int64
-)
+    return 0
 
 
 @c_abi_export("py_gen_frame_clear_group")
 def py_gen_frame_clear_group(lst: c_ptr, start: int, count: int) -> int:
-    """Try clearing 2..16 NULL/tagged-int/actual-None cells; 0 changes none.
+    """Decline the bounded group clear: return 0 and change no cell.
 
-    Heap owners decline, including containers with indirect callbacks. The
-    caller keeps its frame owner alive. A declined group must reload that
-    owner and use the original serial setters, including their error order.
-    Managed generator terminal lowering may try this bounded primitive.
+    The caller reloads its frame owner and uses the serial setters, in their
+    error order. Only the retired relocating protocol cleared a group here.
     """
-    # No implicit poll in this module. Publish the borrowed input before the
-    # body's first parking edge, exactly as for the existing take group.
-    if (count < 2 or count > 16 or start < 0
-            or load_i32(global_addr("pcc_gc_config_initialized"), 0) == 0
-            or atomic_load_i32(global_addr("pcc_gc_backend_frozen"), 0, "acquire") == 0
-            or (load_i32(global_addr("pcc_gc_backend_selected"), 0) != 4 or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0)
-            or load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0
-            or atomic_load_i32(global_addr("pcc_log_init_state"), 0, "acquire") != 2
-            or load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0
-            or load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) != 0):
-        return 0
-    native_frame_bytes: int = 40
-    native_range_capacity: int = 8
-    native_ranges_bytes: int = 128
-    pcc_thread_no_park_enter()
-    frame = stack_alloc(40)
-    memset(frame, 0, native_frame_bytes)
-    ranges = stack_alloc(128)
-    inputs = stack_alloc(8)
-    store_ptr(inputs, 0, lst)
-    pcc_gc_native_frame_enter(frame, ranges, native_range_capacity)
-    pcc_gc_native_root_bind_range(inputs, -1)
-    pcc_thread_no_park_exit()
-    cleared: int = pcc_list_body_py_gen_frame_clear_group(inputs, start, count)
-    pcc_gc_native_frame_leave(frame)
-    return cleared
+    return 0
 
 
 pcc_list_body_py_list_getitem = extern(
@@ -1157,40 +1090,14 @@ def py_list_reverse(lst: c_ptr) -> None:
     return
 
 
-pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
-pcc_gc_native_root_unbind = extern("pcc_gc_native_root_unbind", (c_ptr,), c_void)
-
-
 @c_abi_export("pcc_list_native_prepare_root")
 def pcc_list_native_prepare_root(slot: c_ptr, handle_slot: c_ptr, owned: int) -> int:
-    """Publish a captured temporary before the first read-barrier poll.
+    """Bind no handle for a captured temporary: clear the handle slot.
 
-    Managed allocation fixed the backend before this slot obtained a value.
-    Config reads and the local bind are nonpolling; no wrapper can introduce
-    an earlier implicit entry poll. Counted nonmoving modes keep their old
-    no-registration path; so do the count-free nonmoving GC1/2, whose
-    stopped-world seed and remark scan thread stacks conservatively. Only the
-    relocating GC3/4 bind a temporary they may move.
+    GC0 keeps its owners' counts. The count-free collectors rescan every
+    thread's registers and stack conservatively at each stopped-world seed
+    and remark, which finds a temporary held in this frame, and none of them
+    moves it.
     """
     store_ptr(handle_slot, 0, null())
-    value = load_ptr(slot, 0)
-    if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
-        return 0
-    backend: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if (backend != 4 or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0):
-        # GC0 and the counted modes keep their owners' counts. The nonmoving
-        # count-free GC1/GC2 rescan every thread's registers and stack
-        # conservatively at each stopped-world seed and remark, which finds a
-        # temporary held in this frame; neither moves it.
-        return 0
-    handle = pcc_gc_native_root_bind_range(slot, 1 if owned != 0 else -1)
-    if ptr_is_null(handle) != 0:
-        return -1
-    store_ptr(handle_slot, 0, handle)
-    value = pcc_gc_load_ptr(null(), slot)
-    store_ptr(slot, 0, value)
-    if ptr_is_null(value) != 0:
-        pcc_gc_native_root_unbind(handle)
-        store_ptr(handle_slot, 0, null())
-        return -1
     return 0

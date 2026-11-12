@@ -44,7 +44,6 @@ from pcc.unsafe import (
     cstr,
     define_global_ptr_null,
     define_global_i32,
-    global_addr,
     stack_alloc,
     free,
     global_load_ptr,
@@ -111,7 +110,6 @@ py_list_get = extern("py_list_get", (c_ptr, c_int64), c_ptr)
 py_dict_new = extern("py_dict_new", (), c_ptr)
 py_dict_set = extern("py_dict_set", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
-pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
 pcc_gc_pointer_register = extern("pcc_gc_pointer_register", (c_ptr,), c_int64)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
@@ -1985,11 +1983,6 @@ def py_str_concat(a, b):
         return null()
     if ptr_is_null(b) != 0:
         return null()
-    backend: int = pcc_gc_backend()
-    moving_inputs: bool = (backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0)
-    if moving_inputs:
-        a = pcc_gc_note_relocation_read(a)
-        b = pcc_gc_note_relocation_read(b)
     tag_a: int = _type_of(a)
     tag_b: int = _type_of(b)
     if tag_a != PY_TYPE_STR:
@@ -2013,29 +2006,14 @@ def py_str_concat(a, b):
     cp_len: int = -1
     if cp_a >= 0 and cp_b >= 0:
         cp_len = cp_a + cp_b
-    tmp = null()
-    if moving_inputs and total > 0:
-        tmp = malloc(total)
-        if ptr_is_null(tmp) != 0:
-            return null()
-        if la > 0:
-            memmove(tmp, ptr_add(a, PYSTROBJECT_DATA_OFFSET), la)
-        if lb > 0:
-            memmove(ptr_add(tmp, la), ptr_add(b, PYSTROBJECT_DATA_OFFSET), lb)
     out = _str_alloc(total)
     if ptr_is_null(out) != 0:
-        if ptr_is_null(tmp) == 0:
-            free(tmp)
         return null()
     out_data = ptr_add(out, PYSTROBJECT_DATA_OFFSET)
-    if moving_inputs and total > 0:
-        memmove(out_data, tmp, total)
-        free(tmp)
-    else:
-        if la > 0:
-            memmove(out_data, ptr_add(a, PYSTROBJECT_DATA_OFFSET), la)
-        if lb > 0:
-            memmove(ptr_add(out_data, la), ptr_add(b, PYSTROBJECT_DATA_OFFSET), lb)
+    if la > 0:
+        memmove(out_data, ptr_add(a, PYSTROBJECT_DATA_OFFSET), la)
+    if lb > 0:
+        memmove(ptr_add(out_data, la), ptr_add(b, PYSTROBJECT_DATA_OFFSET), lb)
     if cp_len >= 0:
         store_i64(out, PYSTROBJECT_CP_LEN_OFFSET, cp_len)
     return out

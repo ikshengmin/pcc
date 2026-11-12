@@ -144,8 +144,6 @@ def test_backend4_container_constructors_use_fresh_then_publish_contract():
     for py_name in ("py_list.py", "py_dict.py", "py_set.py"):
         source = (RUNTIME_DIR / "py" / py_name).read_text(encoding="utf-8")
         assert "pcc_gc_publish_initialized(" in source
-    py_tuple = (RUNTIME_DIR / "py" / "py_tuple.py").read_text(encoding="utf-8")
-    assert "if complete != 0:\n        pcc_gc_publish_initialized(tuple_ptr)" in py_tuple
 
 
 # ---------------------------------------------------------------------------
@@ -232,11 +230,6 @@ def test_backend4_container_and_wrapper_tags_are_admitted_and_publish():
         "py/py_class.py",
         "py/py_weakref.py",
         "py/py_obj_stubs.py",
-    )
-    py_tuple = (RUNTIME_DIR / "py" / "py_tuple.py").read_text(encoding="utf-8")
-    assert (
-        "if complete != 0:\n        pcc_gc_publish_initialized(tuple_ptr)"
-        in py_tuple
     )
 
 
@@ -586,28 +579,6 @@ def test_backend4_py_obj_sorted_releases_all_constant_cost_pins(
     )
 
 
-def test_py_obj_min_max_roots_every_callback_retained_managed_local():
-
-    py_source = (
-        RUNTIME_DIR / "py" / "py_obj_ops_compare.py"
-    ).read_text(encoding="utf-8")
-    py_body = py_source.split("def py_obj_min_max(iterable, want_max: int):", 1)[
-        1
-    ].split('# ---- sorted', 1)[0]
-    assert py_body.count("pcc_gc_scheduler_root_register_handle(") == 3
-    assert py_body.index("it = pcc_gc_load_ptr(null(), it_slot)") < (
-        py_body.index("element = py_obj_next(it)")
-    )
-    compare_at = py_body.index("replace = py_obj_lt")
-    assert py_body.index(
-        "best = pcc_gc_load_ptr(null(), best_slot)", compare_at
-    ) > compare_at
-    assert py_body.index(
-        "element = pcc_gc_load_ptr(null(), element_slot)", compare_at
-    ) > compare_at
-    assert "pcc_gc_pin(" not in py_body
-
-
 @pytest.mark.parametrize("kind", ["pcc_python"])
 def test_backend4_py_obj_min_max_balances_iterator_best_and_element_roots(
     tmp_path: Path,
@@ -676,10 +647,12 @@ def test_py_enumerate_list_roots_callback_retained_values_and_pins_private_outpu
     py_body = py_source.split("def py_enumerate_list(iterable, start: int):", 1)[
         1
     ]
-    assert py_body.count("pcc_gc_scheduler_root_register_handle(") == 3
+    # No collector moves a value a running thread names: the count-free
+    # collectors scan each stack conservatively, so no root handle is bound.
+    assert "pcc_gc_scheduler_root_register_handle(" not in py_body
     assert py_body.index("pcc_gc_pin(out)") < py_body.index("py_obj_next(it)")
     assert py_body.index("pcc_gc_pin(pair)") < py_body.index("py_int_from_i64")
-    assert py_body.count("pcc_gc_unpin(out)") == 7
+    assert py_body.count("pcc_gc_unpin(out)") == 5
 
 
 @pytest.mark.parametrize("kind", ["pcc_python"])

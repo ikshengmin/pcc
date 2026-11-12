@@ -207,18 +207,6 @@ def test_tuple_conversion_releases_partial_output_and_preserves_error(backend, f
     memory.assert_balanced()
 
 
-@pytest.mark.parametrize("backend", (3, 4))
-@pytest.mark.parametrize("failed_root", (1, 2, 3, 4))
-@pytest.mark.parametrize("prior_pin", (False, True))
-def test_tuple_conversion_registration_failure_balances_borrow_and_pins(backend, failed_root, prior_pin):
-    memory = _TupleMemory(backend=backend, fail_register=failed_root, prior_pin=prior_pin)
-    assert memory.convert() is None
-    assert memory.out is None and memory.item.references == 2
-    assert memory.error is not None and memory.error.references == 1
-    assert bool(memory.lst.flags & abi.PY_FLAG_GC_PINNED) == prior_pin
-    memory.assert_balanced()
-
-
 @pytest.mark.parametrize("backend", range(5))
 @pytest.mark.parametrize("prior_pin", (False, True))
 @pytest.mark.parametrize("resurrect", (False, True))

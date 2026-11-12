@@ -152,24 +152,11 @@ def _ptr_is_set(o) -> bool:
 
 def _set_read_prepare_root(slot, value, backend: int):
     store_ptr(slot, 0, value)
-    if (
-        (backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0)
-        and ptr_is_null(value) == 0
-        and is_tagged_int(value) == 0
-    ):
-        handle = pcc_gc_scheduler_root_register_handle(slot)
-        if ptr_is_null(handle) == 0:
-            store_ptr(slot, 0, pcc_gc_load_ptr(null(), slot))
-        return handle
     return null()
 
 
 def _set_read_root_failed(value, backend: int, handle) -> int:
-    if (backend != 4 or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0):
-        return 0
-    if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
-        return 0
-    return ptr_is_null(handle)
+    return 0
 
 
 def _set_read_reload_root(slot, handle):
@@ -546,10 +533,6 @@ def _rehash(s, new_capacity: int) -> int:
     owner_slot = stack_alloc(8)
     store_ptr(owner_slot, 0, s)
     owner_handle = null()
-    if (initial_backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0):
-        owner_handle = pcc_gc_scheduler_root_register_handle(owner_slot)
-        if ptr_is_null(owner_handle) != 0:
-            return -1
 
     attempt: int = 0
     while attempt < 8:

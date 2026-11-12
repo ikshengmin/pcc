@@ -27,11 +27,9 @@ def test_list_prepare_has_no_polling_shim_or_implicit_role():
     calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "_prepare_moving_root"]
     assert calls and all(len(n.args) == 3 for n in calls)
     entry = functions(parsed("py_list_native_entry.py"))["pcc_list_native_prepare_root"]
-    order = sorted((n.lineno, n.func.id) for n in ast.walk(entry) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name))
-    bind = next(line for line, name in order if name == "pcc_gc_native_root_bind_range")
-    barrier = next(line for line, name in order if name == "pcc_gc_load_ptr")
-    assert bind < barrier
-    assert not ({"malloc", "pcc_gc_backend", "pcc_thread_safepoint"} & set(named_calls(entry)))
+    # No collector moves a temporary a running thread names, so the entry
+    # binds nothing; it only clears the caller's handle slot.
+    assert set(named_calls(entry)) - {"c_abi_export"} == {"store_ptr", "null"}
 
 
 def test_public_native_entries_use_local_literal_layouts_and_keep_gc0_bypass():

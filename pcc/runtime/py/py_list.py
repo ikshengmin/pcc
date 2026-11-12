@@ -28,11 +28,8 @@ from pcc.runtime.py.py_abi_constants import PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG
 from pcc.runtime.py.py_abi_constants import (
     C_POINTER_SIZE,
     PY_FLAG_GC_DEALLOCATING,
-    PY_TYPE_CEXT_TAG_BASE,
-    PY_TYPE_CPY_HANDLE,
 )
 from pcc.unsafe import (
-    atomic_load_i32,
     atomic_load_i64,
     cstr,
     define_global_i32,
@@ -389,10 +386,6 @@ def _grow_if_needed(l, want: int):
     owner_slot = stack_alloc(8)
     store_ptr(owner_slot, 0, l)
     owner_handle = null()
-    if (initial_backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0):
-        owner_handle = pcc_gc_native_root_bind_range(owner_slot, -1)
-        if ptr_is_null(owner_handle) != 0:
-            return null()
 
     # A retry means another mutator changed the list meanwhile, so the loop
     # makes progress; giving up after a fixed count reported a contended
@@ -1074,19 +1067,6 @@ def _list_get_owned_rooted(lst, i: int, raising: int):
     result_slot = stack_alloc(8)
     store_ptr(result_slot, 0, null())
     result_handle = null()
-    backend: int = pcc_gc_backend()
-    if (backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0) and pcc_gc_stack_slot_root_is_conservative(result_slot) == 0:
-        # The relocating collectors bind an empty owning slot before reading
-        # the NEW element, so it cannot move before the caller roots it.
-        # Binding cannot park; the first object store happens under the
-        # graph lease. The count-free collectors need no binding or pin:
-        # every stopped-world seed and remark scans each thread's stack
-        # conservatively, which finds the returned value wherever it is held
-        # and keeps it in place (pcc_gc_stack_slot_root_is_conservative).
-        result_handle = pcc_gc_native_root_bind_range(result_slot, 1)
-        if ptr_is_null(result_handle) != 0:
-            _finish_moving_root(list_handle_slot)
-            return null()
     retain_plan = stack_alloc(56)
     locked = load_ptr(list_slot, 0)
     _list_lock(locked)
@@ -1173,39 +1153,6 @@ def _native_body_py_list_take_for_gen_frame(_native_inputs, i: int):
     # either plan or touching a cell. Backend/policy commits use this lock;
     # logging's completed init state excludes its temporary disabled state.
     pcc_py_gc_minor_graph_lock()
-    backend: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if ((backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0) and i >= 0
-            and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
-            and atomic_load_i32(global_addr("pcc_log_init_state"), 0, "acquire") == 2
-            and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
-            and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0):
-        lst = pcc_gc_load_ptr(null(), _native_inputs)
-        pcc_gc_store_ptr_plan_init(store_plan, lst, backend)
-        planned = 1
-        # Admission is silent: malformed inputs must reach the original
-        # get/set checks once each, without an extra debug diagnostic here.
-        if _ptr_is_list(lst):
-            length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
-            capacity: int = load_i64(lst, PYLISTOBJECT_CAPACITY_OFFSET)
-            items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
-            if (i < length and capacity >= length and capacity <= 134217728
-                    and ptr_is_null(items) == 0
-                    and (load_i32(lst, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_DEALLOCATING) == 0):
-                slot = ptr_add(items, i * C_POINTER_SIZE)
-                value = pcc_gc_load_ptr(lst, slot)
-                ordinary: int = 1
-                if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-                    if pcc_gc_pointer_is_managed(value) == 0:
-                        ordinary = 0
-                    else:
-                        tag: int = load_i32(value, PYOBJECTHEADER_TYPE_TAG_OFFSET)
-                        if tag == PY_TYPE_CPY_HANDLE or tag >= PY_TYPE_CEXT_TAG_BASE:
-                            ordinary = 0
-                if ordinary != 0:
-                    value = pcc_gc_retain_plan_prepare_locked(retain_plan, value)
-                    store_ptr(result_slot, 0, value)
-                    pcc_gc_store_ptr_plan_commit_locked(store_plan, lst, slot, null())
-                    taken = 1
     pcc_py_gc_minor_graph_unlock()
     if taken != 0:
         pcc_gc_retain_plan_finish(retain_plan)
@@ -1219,151 +1166,6 @@ def _native_body_py_list_take_for_gen_frame(_native_inputs, i: int):
         store_ptr(result_slot, 0, value)
         py_list_set(pcc_gc_load_ptr(null(), _native_inputs), i, null())
     return _list_get_finish(result_slot, result_handle, list_handle_slot)
-
-
-@c_abi_export("pcc_list_body_py_gen_frame_take_group")
-def _native_body_py_gen_frame_take_group(_native_inputs, start: int, count: int, outputs) -> int:
-    """One graph transaction for 2..16 frame cells and caller-owned roots.
-
-    The positive caller map covers every empty output before the wrapper's
-    first parking edge. Graph ownership, not root membership or no-park
-    alone, serializes aliases that resize this ordinary list and forwarding
-    installers. No private-frame exclusivity or address lease is inferred.
-    """
-    if count < 2 or count > 16 or start < 0 or ptr_is_null(outputs) != 0:
-        return 0
-    # Match the existing 16-cell operand-root layout, not a tuning parameter.
-    # Each cell keeps its own unchanged RetainPlan/StorePlan lifecycle.
-    retain_plans = stack_alloc(896)  # 16 * 56
-    store_plans = stack_alloc(2048)  # 16 * 128
-    taken: int = 0
-    pcc_py_gc_minor_graph_lock()
-    backend: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if ((backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0)
-            and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
-            and atomic_load_i32(global_addr("pcc_log_init_state"), 0, "acquire") == 2
-            and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
-            and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0):
-        lst = pcc_gc_load_ptr(null(), _native_inputs)
-        if _ptr_is_list(lst):
-            length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
-            capacity: int = load_i64(lst, PYLISTOBJECT_CAPACITY_OFFSET)
-            items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
-            if (length >= count and start <= length - count
-                    and capacity >= length and capacity <= 134217728
-                    and ptr_is_null(items) == 0
-                    and (load_i32(lst, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_DEALLOCATING) == 0):
-                # Admission may heal forwarding slots and count read barriers,
-                # but completes before any retain, output write,
-                # plan initialization or frame clear. One foreign/nonempty
-                # cell rejects the whole group, preserving scalar ordering.
-                valid: int = 1
-                offset: int = 0
-                while offset < count:
-                    if ptr_is_null(load_ptr(outputs, offset * C_POINTER_SIZE)) == 0:
-                        valid = 0
-                    value = pcc_gc_load_ptr(lst, ptr_add(items, (start + offset) * C_POINTER_SIZE))
-                    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-                        if pcc_gc_pointer_is_managed(value) == 0:
-                            valid = 0
-                        else:
-                            tag: int = load_i32(value, PYOBJECTHEADER_TYPE_TAG_OFFSET)
-                            if tag == PY_TYPE_CPY_HANDLE or tag >= PY_TYPE_CEXT_TAG_BASE:
-                                valid = 0
-                    offset = offset + 1
-                if valid != 0:
-                    offset = 0
-                    while offset < count:
-                        retain_plan = ptr_add(retain_plans, offset * 56)
-                        store_plan = ptr_add(store_plans, offset * 128)
-                        slot = ptr_add(items, (start + offset) * C_POINTER_SIZE)
-                        pcc_gc_store_ptr_plan_init(store_plan, lst, backend)
-                        value = pcc_gc_load_ptr(lst, slot)
-                        value = pcc_gc_retain_plan_prepare_locked(retain_plan, value)
-                        store_ptr(outputs, offset * C_POINTER_SIZE, value)
-                        pcc_gc_store_ptr_plan_commit_locked(store_plan, lst, slot, null())
-                        offset = offset + 1
-                    taken = 1
-    pcc_py_gc_minor_graph_unlock()
-    if taken != 0:
-        offset = 0
-        while offset < count:
-            # These calls and the loop latch can poll even when a count-free
-            # finish is a no-op. All results stay in the caller's owning map;
-            # never collect N raw return values or tear down their roots here.
-            pcc_gc_retain_plan_finish(ptr_add(retain_plans, offset * 56))
-            pcc_gc_store_ptr_plan_finish(ptr_add(store_plans, offset * 128))
-            offset = offset + 1
-    return taken
-
-
-@c_abi_export("pcc_list_body_py_gen_frame_clear_group")
-def _native_body_py_gen_frame_clear_group(_native_inputs, start: int, count: int) -> int:
-    """Bound one terminal-clear transaction by the existing 16-cell policy.
-
-    The graph lock stabilizes the canonical list, payload and count-free
-    policy. A registered borrowed input spans acquisition and every finish.
-    No raw owner/payload address is used after unlock. NoRC alone is not an
-    address lease: neither the graph lock nor the native root is elided.
-    """
-    if count < 2 or count > 16 or start < 0:
-        return 0
-    store_plan = stack_alloc(128)  # Existing StorePlan ABI.
-    memset(store_plan, 0, 128)
-    cleared: int = 0
-    pcc_py_gc_minor_graph_lock()
-    backend: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if ((backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0)
-            and atomic_load_i32(global_addr("pcc_gc_backend_frozen"), 0, "acquire") != 0
-            and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
-            and atomic_load_i32(global_addr("pcc_log_init_state"), 0, "acquire") == 2
-            and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
-            and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0):
-        lst = pcc_gc_load_ptr(null(), _native_inputs)
-        if _ptr_is_list(lst):
-            length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
-            capacity: int = load_i64(lst, PYLISTOBJECT_CAPACITY_OFFSET)
-            items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
-            if (length >= count and start <= length - count
-                    and capacity >= length and capacity <= 134217728
-                    and ptr_is_null(items) == 0
-                    and (load_i32(lst, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_DEALLOCATING) == 0):
-                # Removing a heap owner can change the set seen by finalizers
-                # or weakrefs at the unlock's pending-stop boundary. NoRC is
-                # not a lifetime proof. Admit only values with no collectable
-                # referents, and validate EVERY old cell before any write.
-                # An arbitrary immortal flag is deliberately insufficient.
-                none = global_load_ptr("py_None")
-                valid: int = 1
-                offset: int = 0
-                while offset < count:
-                    old = load_ptr(items, (start + offset) * C_POINTER_SIZE)
-                    if (ptr_is_null(old) == 0 and is_tagged_int(old) == 0
-                            and ptr_eq(old, none) == 0):
-                        valid = 0
-                        break
-                    offset = offset + 1
-                if valid != 0:
-                    offset = 0
-                    while offset < count:
-                        # Admission excludes collectable old values and RC
-                        # work. Each commit saves only the same immortal None;
-                        # canonical init may reset this private count-free plan.
-                        pcc_gc_store_ptr_plan_init(store_plan, lst, backend)
-                        pcc_gc_store_ptr_plan_commit_locked(
-                            store_plan, lst, ptr_add(items, (start + offset) * C_POINTER_SIZE), none
-                        )
-                        offset = offset + 1
-                    cleared = 1
-    pcc_py_gc_minor_graph_unlock()
-    if cleared != 0:
-        offset = 0
-        while offset < count:
-            # Keep all N calls outside the lock: even an already-finished
-            # plan crosses wrapper/shared entry polls and this loop's latch.
-            pcc_gc_store_ptr_plan_finish(store_plan)
-            offset = offset + 1
-    return cleared
 
 
 @c_abi_export("pcc_list_body_py_list_get_i64")
@@ -2409,11 +2211,6 @@ def _native_body_py_list_slice(_native_inputs):
         py_decref(load_ptr(out_slot, 0))
         _finish_moving_root(source_handle_slot)
         return null()
-    # Only the relocating collector binds this temporary; the nonmoving
-    # count-free GC1-GC3 find it by their conservative stack scans.
-    if (load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0):
-        store_ptr(value_handle_slot, 0, pcc_gc_native_root_bind_range(value_slot, -1))
-
     if step_v > 0:
         i: int = lo_v
         while i < hi_v:

@@ -1,7 +1,5 @@
-"""Rooted frame batches: source/IR, production-plan model, and native controls.
+"""Rooted frame batches: source/IR and native controls.
 
-The model controls relocation at potential stop boundaries; it is not a
-collector simulator or proof of a real pending-stop/native handshake.
 Native admitted return=1 and reference semantics are separate evidence from
 emitted call presence. No timing, stack-size or throughput assertion is made.
 """
@@ -12,37 +10,12 @@ import sys
 import pytest
 
 from pcc.ir.compat import ir
-from tests.python.test_generator_frame_take_protocol import _plan_code
-from tests.python.test_generator_moving_frame_take import _function, _native, _run
+from tests.python.test_generator_moving_frame_take import _native, _run
 from tests.python.test_generator_operand_root_groups import (
     Host, I64, PTR, _parsed_function, body_text, call_count,
     source_generator_group_ir,
 )
-from tests.python.test_runtime_getter_roots import _GetterMemory, _Object, _Slots, abi
 from tests.python.root_slot_contract import RootSlotContract
-
-
-def test_group_entry_rejects_other_policies_before_any_native_frame_or_poll():
-    _, wrapper = _function("py_list_native_entry.py", "py_gen_frame_take_group")
-    setup = wrapper.index("pcc_thread_no_park_enter()")
-    for gate in ("pcc_gc_config_initialized", "pcc_gc_backend_selected",
-                 "pcc_gc_backend4_no_refcounts", "pcc_log_init_state",
-                 "pcc_diagnostics_runtime_log_fast_state", "pcc_gc_refcount_provenance_probe"):
-        assert wrapper.index(gate) < setup
-    assert "pcc_gc_backend()" not in wrapper
-    assert setup < wrapper.index("store_ptr(inputs, 0, lst)")
-    assert wrapper.index("pcc_gc_native_root_bind_range(inputs, -1)") < wrapper.index("pcc_thread_no_park_exit()")
-    assert wrapper.index("pcc_thread_no_park_exit()") < wrapper.index("taken: int = pcc_list_body_")
-    assert wrapper.index("pcc_gc_native_frame_leave(frame)") < wrapper.rindex("return taken")
-    _, body = _function("py_list.py", "_native_body_py_gen_frame_take_group")
-    lock, unlock = body.index("pcc_py_gc_minor_graph_lock()"), body.index("pcc_py_gc_minor_graph_unlock()")
-    assert lock < body.index("pcc_gc_backend_selected")
-    assert body.index("while offset < count:") < body.index("if valid != 0:")
-    assert body.index("if valid != 0:") < body.index("pcc_gc_store_ptr_plan_init")
-    assert body.index("store_ptr(outputs,") < body.index("pcc_gc_store_ptr_plan_commit_locked") < unlock
-    assert unlock < body.index("pcc_gc_retain_plan_finish") < body.index("pcc_gc_store_ptr_plan_finish")
-    assert "return " not in body[lock:unlock]
-    assert "pcc_gc_pin(" not in body and "pcc_gc_native_root_unbind" not in body
 
 
 def assert_group_restore_contract(blocks, globals_, start="gen.dispatch", target="gen.select", frame_offset=8,
@@ -198,182 +171,6 @@ def test_frontend_emitter_probe_covers_registered_consumer_and_all_exits(source_
     _, module, blocks = source_generator_group_ir
     batches = assert_group_restore_contract(blocks, module.globals_)
     assert len(batches) >= 2 and any(len(run) == 16 for run in batches.values())
-
-
-class BatchMemory(_GetterMemory):
-    def __init__(self, count=16, backend=4, phase="none", prior_pin=False):
-        super().__init__(backend=backend, phase=phase, prior_pin=prior_pin)
-        self.count, self.events = count, []
-        self.values = [self.item] + [self.make(abi.PY_TYPE_LIST) for _ in range(count - 1)]
-        self.items = _Slots(count * 8)
-        self.items.fields.update({index * 8: value for index, value in enumerate(self.values)})
-        self.payloads.append(self.items)
-        self.lst.fields.update({abi.PYLISTOBJECT_LENGTH_OFFSET: count,
-                                abi.PYLISTOBJECT_CAPACITY_OFFSET: count,
-                                abi.PYLISTOBJECT_ITEMS_OFFSET: self.items})
-        self.outputs, self.owner = _Slots(count * 8), _Slots(8)
-        self.owner.fields[0] = self.lst
-        for cell in range(count):
-            self.register(self.add(self.outputs, cell * 8))
-        self.register(self.owner)
-        self.caller_handles = set(self.handles)
-        self.global_cell("pcc_log_init_state").fields[0] = 2
-        self.global_cell("pcc_gc_backend4_no_refcounts").fields[0] = 1
-        def forbidden(*args):
-            raise AssertionError("count-free NULL clear entered a callback/barrier")
-        def zero(plan, value, size):
-            for offset in range(0, size, 4):
-                self.write(plan, offset, value)
-        ns = self.namespace
-        ns.update(i64=int, store_i32=self.write, memset=zero,
-                  atomic_load_i32=lambda slot, offset, order: self.read(slot, offset),
-                  pcc_gc_note_store=lambda: self.events.append("store-note"),
-                  _gc_forwarding_population=lambda: int(bool(self.forward)),
-                  _gc_relocation_candidate=lambda value: value is not None,
-                  pcc_gc_note_relocation_read=forbidden,
-                  pcc_gc_note_slot_write_barrier=forbidden,
-                  pcc_gc_backend4_note_heap_store_locked=forbidden,
-                  _py_decref_prepare=forbidden, _py_decref_finish=forbidden,
-                  pcc_diagnostics_runtime_log_event_code=forbidden)
-        exec(_plan_code(), ns)
-        commit, retain_finish, store_finish = (ns[name] for name in (
-            "pcc_gc_store_ptr_plan_commit_locked", "pcc_gc_retain_plan_finish", "pcc_gc_store_ptr_plan_finish"))
-        def checked_commit(plan, owner, slot, value):
-            assert self.depth > 0 and owner is self.lst and value is None
-            old = self.read(*self.pointer(slot))
-            assert any(self.read(*self.pointer(root)) is old for root in self.handles.values())
-            self.events.append("commit")
-            return commit(plan, owner, slot, value)
-        def checked_finish(plan, kind, function):
-            assert self.depth == 0 and set(self.handles) >= self.caller_handles
-            self.gc(kind)
-            for offset, original in enumerate(self.values):
-                current = self.outputs.fields[offset * 8]
-                assert current is self.resolve(original)
-                if isinstance(current, _Object):
-                    assert current.alive and current.references == 1
-            function(plan)
-            self.events.append(kind)
-        body = ns["_native_body_py_gen_frame_take_group"]
-        def body_entry(*args):
-            self.gc("body_entry")  # Models its compiler-inserted entry poll.
-            return body(*args)
-        ns.update(pcc_list_body_py_gen_frame_take_group=body_entry,
-                  pcc_gc_store_ptr_plan_commit_locked=checked_commit,
-                  pcc_gc_retain_plan_finish=lambda p: checked_finish(p, "retain_finish", retain_finish),
-                  pcc_gc_store_ptr_plan_finish=lambda p: checked_finish(p, "store_finish", store_finish))
-
-    def root_read(self, owner, slot):
-        # The real barrier resolves a forwarding chain, including a stale
-        # source copied into the borrowed input immediately before entry.
-        self.gc("read_barrier")
-        value = self.resolve(self.read(*self.pointer(slot)))
-        self.write(*self.pointer(slot), value)
-        return value
-
-    def run(self, start=0, count=None, frame=None):
-        return self.namespace["py_gen_frame_take_group"](
-            self.lst if frame is None else frame, start,
-            self.count if count is None else count, self.outputs)
-
-    def assert_clean(self):
-        assert set(self.handles) == self.caller_handles
-        assert not self.native_frames and not self.native_ranges
-        assert self.depth == self.no_park_depth == self.pins == 0
-
-
-@pytest.mark.parametrize("backend", (3, 4))
-@pytest.mark.parametrize("count", (2, 15, 16))
-@pytest.mark.parametrize("phase", ("no_park_exit", "body_entry", "graph_lock", "graph_unlock", "retain_finish", "store_finish"))
-@pytest.mark.parametrize("prior_pin", (False, True))
-def test_real_plans_keep_every_caller_root_through_move_stop_and_finishes(backend, count, phase, prior_pin):
-    memory = BatchMemory(count, backend, phase, prior_pin)
-    memory.global_cell("pcc_gc_mark_active").fields[0] = 1
-    assert memory.run() == 1
-    assert memory.events.count("commit") == memory.events.count("store-note") == count
-    assert memory.events[-count * 2:] == ["retain_finish", "store_finish"] * count
-    assert all(memory.items.fields[index * 8] is None for index in range(count))
-    assert bool(memory.outputs.fields[0].flags & abi.PY_FLAG_GC_PINNED) == prior_pin
-    assert memory.moves > 0
-    memory.assert_clean()
-
-
-def test_forwarding_chain_before_entry_is_healed_before_owner_or_value_dereference():
-    memory = BatchMemory(2, phase="before_entry")
-    old_frame, old_value = memory.lst, memory.item
-    memory.gc("before_entry")
-    middle = memory.resolve(old_value)
-    memory.gc("before_entry")
-    assert old_value in memory.forward and middle in memory.forward
-    memory.phase = "none"
-    # Retain a real old field address as input to the value barrier too.
-    memory.items.fields[0] = old_value
-    assert memory.run(frame=old_frame) == 1
-    assert memory.outputs.fields[0] is memory.resolve(old_value)
-    memory.assert_clean()
-
-
-@pytest.mark.parametrize("reject", ("foreign", "cext", "unmanaged", "nonempty", "range", "capacity", "deallocating", "inline"))
-def test_last_cell_or_shape_rejection_consumes_nothing_and_finishes_native_frame(reject):
-    memory = BatchMemory(16, phase="body_entry")
-    if reject in ("foreign", "cext"):
-        memory.values[-1].tag = abi.PY_TYPE_CPY_HANDLE if reject == "foreign" else abi.PY_TYPE_CEXT_TAG_BASE
-    elif reject == "unmanaged":
-        memory.items.fields[15 * 8] = object()
-    elif reject == "nonempty":
-        memory.outputs.fields[15 * 8] = memory.item
-    elif reject == "capacity":
-        memory.lst.fields[abi.PYLISTOBJECT_CAPACITY_OFFSET] = 15
-    elif reject == "deallocating":
-        memory.lst.flags |= abi.PY_FLAG_GC_DEALLOCATING
-    elif reject == "inline":
-        memory.lst.tag = abi.PY_TYPE_GEN
-    before = dict(memory.items.fields)
-    assert memory.run(start=1 if reject == "range" else 0) == 0
-    assert not memory.events
-    assert all(memory.items.fields[offset] is memory.resolve(value) for offset, value in before.items())
-    assert all(value is None for offset, value in memory.outputs.fields.items() if offset != 15 * 8 or reject != "nonempty")
-    assert memory.moves > 0  # Failed body entry really crossed a moving poll.
-    memory.assert_clean()
-
-
-@pytest.mark.parametrize("backend", range(5))
-@pytest.mark.parametrize("gate", ("backend", "config", "no_rc", "log_init", "logging", "provenance", "one", "zero", "over", "negative"))
-def test_cheap_fallback_does_not_enter_frame_or_touch_roots(backend, gate):
-    memory = BatchMemory(16, backend)
-    gates = {"config": ("pcc_gc_config_initialized", 0), "no_rc": ("pcc_gc_backend4_no_refcounts", 0),
-             "log_init": ("pcc_log_init_state", 1), "logging": ("pcc_diagnostics_runtime_log_fast_state", 1),
-             "provenance": ("pcc_gc_refcount_provenance_probe", 1)}
-    if gate == "backend" and backend in (3, 4):
-        return
-    if gate in gates:
-        name, value = gates[gate]
-        memory.global_cell(name).fields[0] = value
-    count = {"one": 1, "zero": 0, "over": 17}.get(gate, 16)
-    assert memory.run(start=-1 if gate == "negative" else 0, count=count) == 0
-    assert not memory.events and not memory.moves
-    assert all(value is None for value in memory.outputs.fields.values())
-    assert list(memory.items.fields.values()) == memory.values
-    memory.assert_clean()
-
-
-def test_alias_growth_is_observed_after_acquisition_and_serialized_through_clear():
-    memory = BatchMemory(16)
-    old_items = memory.items
-    def lock_after_growth():
-        assert memory.depth == 0
-        grown = _Slots(32 * 8)
-        grown.fields.update(memory.items.fields)
-        memory.items = grown
-        memory.payloads.append(grown)
-        memory.lst.fields[abi.PYLISTOBJECT_ITEMS_OFFSET] = grown
-        memory.lst.fields[abi.PYLISTOBJECT_CAPACITY_OFFSET] = 32
-        memory.lock()
-    memory.namespace["pcc_py_gc_minor_graph_lock"] = lock_after_growth
-    assert memory.run() == 1
-    assert all(memory.items.fields[index * 8] is None for index in range(16))
-    assert list(old_items.fields.values()) == memory.values
-    memory.assert_clean()
 
 
 NATIVE_SHAPES = r'''
@@ -618,21 +415,6 @@ def test_no_log_generator_group_finalization_and_cleanup_matches_reference(tmp_p
                 0, reference.stdout, ""), (case, backend)
 
 
-@pytest.mark.parametrize("empty", (False, True))
-def test_accepted_null_tagged_and_managed_outputs_keep_exact_plan_lifecycles(empty):
-    memory = BatchMemory(16, phase="store_finish")
-    if empty:
-        memory.values = [None] * 16
-    else:
-        memory.values[0], memory.values[1] = None, 85
-    memory.items.fields.update({index * 8: value for index, value in enumerate(memory.values)})
-    assert memory.run() == 1
-    assert memory.events.count("commit") == memory.events.count("store-note") == 16
-    assert memory.events[-32:] == ["retain_finish", "store_finish"] * 16
-    assert all(memory.items.fields[index * 8] is None for index in range(16))
-    memory.assert_clean()
-
-
 @pytest.mark.parametrize("first_entry", ("0", "1"))
 def test_real_generator_state_read_stays_before_restore_chain(monkeypatch, first_entry):
     from tests.python.test_slot_call_operand_roots import _emit
@@ -682,16 +464,3 @@ def test_real_generator_state_read_stays_before_restore_chain(monkeypatch, first
     assert states[0][0] in dominators["gen.select"]
     select = next(block for block in blocks if block.name == "gen.select")
     assert select.terminator.data[1] == states[0][1].data[0]
-
-
-def test_admission_is_rechecked_after_a_parking_graph_acquisition():
-    memory = BatchMemory(2, phase="graph_lock")
-    def lock_then_reject():
-        memory.lock()
-        memory.global_cell("pcc_gc_refcount_provenance_probe").fields[0] = 1
-    memory.namespace["pcc_py_gc_minor_graph_lock"] = lock_then_reject
-    assert memory.run() == 0 and not memory.events
-    assert memory.moves > 0
-    assert all(value is None for value in memory.outputs.fields.values())
-    assert all(memory.items.fields[i * 8] is memory.resolve(value) for i, value in enumerate(memory.values))
-    memory.assert_clean()

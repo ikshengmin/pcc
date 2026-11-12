@@ -398,43 +398,6 @@ def pcc_gc_count_free_barrier_shade(value) -> None:
     pcc_thread_no_park_exit()
 
 
-@c_abi_export("pcc_gc_backend4_note_heap_store_locked")
-def pcc_gc_backend4_note_heap_store_locked(owner, slot, value) -> None:
-    """GC4 heap-only insertion barrier; caller holds the graph lock.
-
-    Known-object membership is checked before reading either header. This
-    entry is not for roots or the GC1/GC2 container-lock transaction.
-    """
-    if pcc_gc_object_is_known_no_lock(owner) == 0:
-        return
-    owner_flags: i64 = load_i32(owner, 12)
-    mark_active: i64 = load_i32(global_addr("pcc_gc_mark_active"), 0)
-    # The graph lock keeps the owner's generation/color and the mark phase
-    # stable. A non-old owner owes no generation recording; unless it is
-    # black during marking it owes no major insertion work either. Avoid
-    # probing the value in this common case, including unknown sentinels.
-    if (owner_flags & 256) == 0 and (
-        mark_active == 0 or (owner_flags & 32) == 0
-    ):
-        return
-    if pcc_gc_object_is_known_no_lock(value) == 0:
-        return
-    value_flags: i64 = load_i32(value, 12)
-    if (
-        mark_active != 0
-        and (owner_flags & 32) != 0
-        and (value_flags & 8) != 0
-    ):
-        pcc_gc_shade_gray_atomic(value, 0)
-    if (owner_flags & 256) != 0 and (value_flags & 128) != 0:
-        if pcc_gc_backend4_store_buffer_enqueue(owner, slot, value) != 0:
-            store_i32(
-                global_addr("pcc_gc_backend4_genzgc_store_barriers"),
-                0,
-                load_i32(global_addr("pcc_gc_backend4_genzgc_store_barriers"), 0) + 1,
-            )
-
-
 @c_abi_export("pcc_gc_note_slot_write_barrier")
 def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
     if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:

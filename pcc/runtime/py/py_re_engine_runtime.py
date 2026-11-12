@@ -16,7 +16,6 @@ from pcc.unsafe import (
     cstr,
     define_global_ptr_null,
     function_addr,
-    global_addr,
     global_load_ptr,
     global_store_ptr,
     is_tagged_int,
@@ -71,7 +70,6 @@ py_index_i64_checked = extern("py_index_i64_checked", (c_ptr,), c_int64)
 py_err_occurred = extern("py_err_occurred", (), c_int64)
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
-pcc_gc_scheduler_root_register_handle = extern("pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr)
 pcc_gc_scheduler_root_unregister_handle = extern("pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void)
 py_raise = extern("py_raise", (c_ptr,), c_void)
 # py_raise increfs; a caller that created the exception must release it.
@@ -528,12 +526,6 @@ def _str_has_backslash(value) -> int:
 def _sub_hold(slots, handles, index: int, value, backend: int) -> int:
     slot = ptr_add(slots, index * 8)
     store_ptr(slot, 0, value)
-    if (backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0) and ptr_is_null(value) == 0:
-        handle = pcc_gc_scheduler_root_register_handle(slot)
-        store_ptr(handles, index * 8, handle)
-        if ptr_is_null(handle) != 0:
-            py_raise_owned(py_exc_new(19, cstr("re.sub: cannot root temporary")))
-            return 0
     return 1
 
 

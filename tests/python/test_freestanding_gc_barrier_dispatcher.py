@@ -35,7 +35,6 @@ PUBLIC_SYMBOLS = {
 }
 OWNED_SYMBOLS = PUBLIC_SYMBOLS | {
     # Heap StorePlans already hold the graph lock on GC4.
-    "pcc_gc_backend4_note_heap_store_locked",
     # GC1/GC2's lock-free container stores shade through the barrier's
     # own count-free predicate (generator frames, container init).
     "pcc_gc_count_free_store_shade",
@@ -238,7 +237,7 @@ def test_barrier_dispatcher_preserves_backend_order_and_lock_contract() -> None:
         "pcc_gc_backend4_step_generation_aging"
     )
     explicit_gc4 = step.split(
-        'elif backend == 4:', 1
+        "\n    if backend == 4:\n", 1
     )[1].split("else:", 1)[0]
     assert explicit_gc4.index(
         "pcc_gc_backend3_drain_promotion_worklist("
@@ -254,7 +253,7 @@ def test_barrier_dispatcher_preserves_backend_order_and_lock_contract() -> None:
 
     assert "_ptr_can_have_header(owner)" in barrier
     assert "_ptr_can_have_header(value)" in barrier
-    generational = barrier.split("if backend != 3 and backend != 4:", 1)[1]
+    generational = barrier.split("if backend != 4:\n", 1)[1]
     assert generational.index("value_flags & 128") < generational.index(
         "pcc_py_gc_minor_graph_lock_for(1)"
     )
@@ -407,34 +406,6 @@ def test_barrier_dispatcher_records_old_to_young_edges(
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout == expected
-
-
-def test_gc4_locked_heap_helper_has_explicit_runtime_port_abi() -> None:
-    from pcc.frontends.python.pipeline_freestanding import (
-        source_declares_freestanding_module,
-        source_declares_runtime_port_module,
-    )
-
-    source = (RUNTIME_DIR / "py/py_obj.py").read_text()
-    # This caller is a runtime port, not a strict freestanding module.
-    # Its explicit extern owns the ABI; the strict import allowlist applies
-    # only to freestanding callers, not to the defining dispatcher export.
-    assert source_declares_runtime_port_module(source)
-    assert not source_declares_freestanding_module(source)
-    # Runtime-port extern syntax is ordinary Python (including trailing
-    # commas), not the stricter freestanding allowlist source grammar.
-    bindings = [node.value for node in ast.parse(source).body
-                if isinstance(node, ast.Assign)
-                and any(isinstance(target, ast.Name)
-                        and target.id == "pcc_gc_backend4_note_heap_store_locked"
-                        for target in node.targets)]
-    assert len(bindings) == 1
-    call = bindings[0]
-    assert isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
-    assert call.func.id == "extern" and len(call.args) == 3
-    assert call.args[0].value == "pcc_gc_backend4_note_heap_store_locked"
-    assert tuple(item.id for item in call.args[1].elts) == ("c_ptr", "c_ptr", "c_ptr")
-    assert call.args[2].id == "c_void"
 
 
 class _AutoStepModel:

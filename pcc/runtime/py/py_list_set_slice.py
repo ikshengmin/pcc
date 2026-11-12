@@ -13,7 +13,6 @@ from pcc.extern import c_abi_export, c_int32, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     cstr,
     free,
-    global_addr,
     global_load_ptr,
     is_tagged_int,
     load_i32,
@@ -60,9 +59,6 @@ pcc_gc_backend4_zpage_register_owner_payload_span = extern(
     c_int64,
 )
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
-pcc_gc_scheduler_root_register_handle = extern(
-    "pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr
-)
 pcc_gc_scheduler_root_unregister_handle = extern(
     "pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void
 )
@@ -169,19 +165,6 @@ def _prepare_moving_root(slot, handle_slot) -> int:
     value = load_ptr(slot, 0)
     if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
         return 0
-    backend: int = pcc_gc_backend()
-    if (backend != 4 or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0):
-        return 0
-    handle = pcc_gc_scheduler_root_register_handle(slot)
-    if ptr_is_null(handle) != 0:
-        return -1
-    store_ptr(handle_slot, 0, handle)
-    value = pcc_gc_load_ptr(null(), slot)
-    store_ptr(slot, 0, value)
-    if ptr_is_null(value) != 0:
-        pcc_gc_scheduler_root_unregister_handle(handle)
-        store_ptr(handle_slot, 0, null())
-        return -1
     return 0
 
 

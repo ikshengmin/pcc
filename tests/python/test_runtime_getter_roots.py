@@ -329,19 +329,6 @@ class _GetterMemory:
 @pytest.mark.parametrize("name", ("py_list_get", "py_list_getitem", "py_list_get_for_frame"))
 @pytest.mark.parametrize("backend", (4,))
 @pytest.mark.parametrize("phase", ("graph_unlock", "retain_finish", "no_park_exit", "read_barrier"))
-def test_list_getter_returns_current_owned_element_after_actual_cleanup_park(name, backend, phase):
-    memory = _GetterMemory(backend=backend, phase=phase)
-    result = memory.namespace[name](memory.lst, 0)
-    assert result is memory.item and result.alive
-    assert result.references == 2
-    assert memory.moves > 0
-    assert not memory.native_frames and not memory.native_ranges
-    assert not memory.handles and memory.depth == 0 and memory.pins == 0
-
-
-@pytest.mark.parametrize("name", ("py_list_get", "py_list_getitem", "py_list_get_for_frame"))
-@pytest.mark.parametrize("backend", (4,))
-@pytest.mark.parametrize("phase", ("graph_unlock", "retain_finish", "no_park_exit", "read_barrier"))
 def test_count_free_list_getter_leaves_stack_slots_to_the_conservative_scan(name, backend, phase):
     memory = _GetterMemory(backend=backend, phase=phase, count_free=True)
     result = memory.namespace[name](memory.lst, 0)
@@ -570,21 +557,6 @@ class _MissingFieldMemory(_FieldMemory):
         value.flags |= bits
 
 
-@pytest.mark.parametrize('backend', [4])
-@pytest.mark.parametrize('phase', ['graph_lock', 'graph_unlock', 'lookup', 'unregister'])
-@pytest.mark.parametrize('cache', [False, True])
-def test_missing_field_fallback_roots_receiver_class_and_result(backend, phase, cache):
-    memory = _MissingFieldMemory(backend=backend, phase=phase, cache=cache)
-    result = memory.namespace['py_instance_get_field'](memory.record, 0)
-    assert result is memory.item and result.alive and result.references == 2
-    assert memory.moves > 0
-    assert not memory.handles and memory.depth == 0 and memory.error is None
-    assert memory.pins == 0
-    assert memory.resolve(memory.record).flags & abi.PY_FLAG_GC_PINNED == 0
-    assert memory.resolve(memory.klass).flags & abi.PY_FLAG_GC_PINNED == 0
-    assert result.flags & abi.PY_FLAG_GC_PINNED == 0
-
-
 @pytest.mark.parametrize('result_kind', ['default', 'receiver', 'class'])
 @pytest.mark.parametrize('prior_pin', [False, True])
 def test_missing_field_fallback_restores_existing_and_aliased_pins(result_kind, prior_pin):
@@ -607,12 +579,7 @@ def test_missing_field_fallback_preserves_error_and_field_cache(result_kind, cac
     assert not memory.handles and memory.depth == 0
 
 
-# With other carriers running, the field read itself roots the receiver and
-# its result on a moving collector before the missing-field lookup's roots.
-_FIELD_READ_ROOTS = 2
-
-
-@pytest.mark.parametrize('failed_root', range(1, 4 + _FIELD_READ_ROOTS))
+@pytest.mark.parametrize('failed_root', range(1, 4))
 def test_missing_field_root_failure_balances_registration_and_pin_state(failed_root):
     memory = _MissingFieldMemory(fail_register=failed_root)
     assert memory.namespace['py_instance_get_field'](memory.record, 0) is None
@@ -817,7 +784,7 @@ def test_missing_field_getattr_keeps_method_key_and_arguments_current(phase, raw
     assert memory.error is None
 
 
-@pytest.mark.parametrize('failed_root', range(7 + _FIELD_READ_ROOTS, 15 + _FIELD_READ_ROOTS))
+@pytest.mark.parametrize('failed_root', range(7, 15))
 def test_missing_field_temporary_root_failure_balances_all_leases(failed_root):
     # The field read, the indexed wrapper and the semantic default wrapper
     # register their roots first (two, three and three).

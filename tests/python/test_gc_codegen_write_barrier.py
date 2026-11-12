@@ -209,9 +209,6 @@ def test_hash_rehash_move_stores_route_through_slot_write_barrier():
         "def _rehash(d, new_capacity: int) -> int:", 1
     )[1].split("def _maybe_grow", 1)[0]
     assert dict_py_rehash.index(
-        "pcc_gc_scheduler_root_register_handle(owner_slot)"
-    ) < dict_py_rehash.index("new_indices = malloc(")
-    assert dict_py_rehash.index(
         "pcc_gc_backend4_retarget_mutator_payload_locked("
     ) < dict_py_rehash.index(
         "pcc_gc_note_slot_write_barrier("
@@ -234,9 +231,6 @@ def test_hash_rehash_move_stores_route_through_slot_write_barrier():
     set_py_rehash = set_py.split(
         "def _rehash(s, new_capacity: int) -> int:", 1
     )[1].split("def _maybe_grow", 1)[0]
-    assert set_py_rehash.index(
-        "pcc_gc_scheduler_root_register_handle(owner_slot)"
-    ) < set_py_rehash.index("new_entries = _alloc_entries(")
     assert set_py_rehash.index(
         "pcc_gc_backend4_retarget_mutator_payload_locked("
     ) < set_py_rehash.index(
