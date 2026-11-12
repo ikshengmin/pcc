@@ -10,6 +10,7 @@ import logging
 import time
 from abc import ABC, abstractmethod
 
+from pcc.frontends.c.ast import c_ast
 from pcc.frontends.c.passes.context import PassContext
 
 _logger = logging.getLogger("pcc.frontends.c.passes")
@@ -39,6 +40,25 @@ class ASTPass(Pass):
     def run(self, ast, ctx: PassContext):
         """Analyze or transform the AST. Return None for analysis-only."""
         ...
+
+
+class FunctionAnalysisPass(ASTPass):
+    """An analysis pass that visits each function definition once.
+
+    Subclasses implement ``_analyze_function(funcdef, ctx)`` and record
+    their facts in ``ctx``; the AST is not modified.
+    """
+
+    def run(self, ast, ctx: PassContext):
+        if not isinstance(ast, c_ast.FileAST):
+            return None
+        for ext in ast.ext or []:
+            if isinstance(ext, c_ast.FuncDef):
+                self._analyze_function(ext, ctx)
+        return None
+
+    def _analyze_function(self, funcdef, ctx: PassContext):
+        raise NotImplementedError
 
 
 class IRPass(Pass):

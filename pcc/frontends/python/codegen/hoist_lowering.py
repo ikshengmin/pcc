@@ -65,6 +65,7 @@ from pcc.frontends.python.codegen.hoist_boxing import (
     scope_declared_names,
     stable_capture_parameters,
 )
+from pcc.frontends.python.codegen.hoist_free_names import _hoist_cache_key4
 from pcc.frontends.python.codegen.hoist_free_names import compute_free_names as analyze_free_names
 from pcc.frontends.python.codegen.hoist_predicates import body_has_yield, body_needs_nested_rewrite, hoist_stmt_kind
 from pcc.frontends.python.codegen.decorator_lowering import (
@@ -602,17 +603,6 @@ def _hoist_cache_key(prefix: str, fd, names=(), extra: str = "") -> str:
     key = prefix + ":" + str(id(fd)) + ":" + extra
     for name in names:
         key = key + "|" + str(name)
-    return key
-
-
-def _hoist_cache_key4(prefix: str, fd, names_a, names_b, names_c) -> str:
-    key = prefix + ":" + str(id(fd))
-    for name in names_a:
-        key = key + "|a:" + str(name)
-    for name in names_b:
-        key = key + "|b:" + str(name)
-    for name in names_c:
-        key = key + "|c:" + str(name)
     return key
 
 

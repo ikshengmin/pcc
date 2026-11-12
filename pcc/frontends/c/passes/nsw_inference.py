@@ -17,22 +17,12 @@ Inspired by Graal's Range Analysis + Canonicalization passes.
 from __future__ import annotations
 
 from pcc.frontends.c.ast import c_ast
-from pcc.frontends.c.passes.base import ASTPass
+from pcc.frontends.c.passes.base import FunctionAnalysisPass
 from pcc.frontends.c.passes.context import OverflowFlag, PassContext
 
 
-class NSWInferencePass(ASTPass):
+class NSWInferencePass(FunctionAnalysisPass):
     name = "nsw-inference"
-
-    def run(self, ast, ctx: PassContext):
-        if not isinstance(ast, c_ast.FileAST):
-            return None
-
-        for ext in ast.ext or []:
-            if isinstance(ext, c_ast.FuncDef):
-                self._analyze_function(ext, ctx)
-
-        return None
 
     def _analyze_function(self, funcdef: c_ast.FuncDef, ctx: PassContext):
         func_name = funcdef.decl.name

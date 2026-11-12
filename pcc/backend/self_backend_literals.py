@@ -103,6 +103,17 @@ __all__ = [
 ]
 
 
+def emit_byte_data(data: bytes) -> list[str]:
+    """``.byte`` lines, sixteen bytes each, for raw data in either assembler dialect."""
+    if not data:
+        return []
+    lines: list[str] = []
+    for start in range(0, len(data), 16):
+        chunk = ", ".join(str(byte) for byte in data[start : start + 16])
+        lines.append(f"  .byte {chunk}")
+    return lines
+
+
 def wide_int_quad_lines(init: str, size: int) -> list[str]:
     """Little-endian ``.quad`` words of an integer constant wider than 64 bits.
 

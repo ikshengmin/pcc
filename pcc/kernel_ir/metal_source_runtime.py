@@ -24,7 +24,8 @@ from pcc.kernel_ir.metal_buffer import (
     MetalNativeBufferRuntimeArtifacts,
 )
 from pcc.kernel_ir.metal_finalize import MetalFinalizeResult
-from pcc.kernel_ir.metal_launch import MetalLaunchPlan
+from pcc.kernel_ir.metal_launch import MetalLaunchPlan, _c_identifier
+from pcc.kernel_ir.metal_package import _sha256_file
 from pcc.kernel_ir.metal_runtime_abi import build_metal_source_runtime_call_plan
 from pcc.kernel_ir.metal_tensor import MetalMatrixTransferSet
 from pcc.kernel_ir.metal_verify import MetalCpuOracleComparisonResult
@@ -169,29 +170,6 @@ _SCALAR_C_TYPES = {
     "f32": "float",
     "f64": "double",
 }
-
-
-def _c_identifier(name: str) -> str:
-    chars: list[str] = []
-    for ch in name:
-        if ch.isalnum() or ch == "_":
-            chars.append(ch)
-        else:
-            chars.append("_")
-    ident = "".join(chars) or "pcc_metal_kernel"
-    if ident[0].isdigit():
-        ident = "_" + ident
-    return ident
-
-
-def _sha256_file(path: Path) -> tuple[str, int]:
-    h = hashlib.sha256()
-    size = 0
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-            size += len(chunk)
-            h.update(chunk)
-    return h.hexdigest(), size
 
 
 def _runtime_source_package_artifact_paths(

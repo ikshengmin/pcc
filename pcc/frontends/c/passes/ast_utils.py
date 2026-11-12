@@ -514,6 +514,18 @@ def normalize_type_name(type_name: str) -> str:
     return " ".join(tokens)
 
 
+def is_scalar_type_name(type_name: str) -> bool:
+    """True for a named scalar type: not a pointer, array, function or aggregate."""
+    normalized = normalize_type_name(type_name)
+    if not normalized:
+        return False
+    if any(ch in normalized for ch in "*[]()"):
+        return False
+    if normalized.startswith(("struct ", "union ", "enum ")):
+        return False
+    return True
+
+
 def decl_type_name(node) -> str:
     """Normalized identifier type of a declaration; "" for pointers, arrays and structs."""
     if isinstance(node, c_ast.FuncDecl):

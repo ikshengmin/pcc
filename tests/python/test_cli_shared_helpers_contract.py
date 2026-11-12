@@ -72,6 +72,30 @@ def test_bytes_hash_matches_across_both_copies(data):
     assert cli_core._fnv1a_update_bytes_u64(FNV_OFFSET, data) == expected
 
 
+import pcc.driver.cli_bootstrap_array_core as array_core
+
+# The other helpers the CLI modules each carry. cli_bootstrap and its
+# array-core companion compile as self-contained units for the same reason as
+# the hash helpers above; each pair below must stay the same code.
+OTHER_COPIES = (
+    ("_json_int_list", cli_bootstrap, array_core),
+    ("_native_find_from", cli_bootstrap, array_core),
+    ("_should_consume_emit_llvm_value", cli_bootstrap, cli_core),
+    ("_write_text", array_core, cli_core),
+)
+
+
+@pytest.mark.parametrize(
+    "name,first,second", OTHER_COPIES, ids=[entry[0] for entry in OTHER_COPIES]
+)
+def test_other_cli_helper_copies_are_source_identical(name, first, second):
+    ours = ast.dump(ast.parse(inspect.getsource(getattr(first, name))))
+    theirs = ast.dump(ast.parse(inspect.getsource(getattr(second, name))))
+    assert ours == theirs, (
+        f"{name} drifted between {first.__name__} and {second.__name__}"
+    )
+
+
 def test_source_walk_matches_across_both_copies():
     for root in ("pcc/backend", "pcc/frontends/python/codegen", "pcc/driver/cli_core.py"):
         target = str(_repo_root() / root)

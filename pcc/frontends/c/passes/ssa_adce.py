@@ -9,8 +9,8 @@ from pcc.frontends.c.ssa import SSAADCEAnalyzer
 from pcc.frontends.c.passes.ast_utils import (
     ASTTransformer,
     collect_function_types,
+    is_scalar_type_name,
     is_side_effect_free,
-    normalize_type_name,
 )
 from pcc.frontends.c.passes.base import ASTPass
 from pcc.frontends.c.passes.context import PassContext
@@ -225,18 +225,7 @@ class _SSAADCETransformer(ASTTransformer):
     def _is_local_scalar_name(self, name: str | None) -> bool:
         if not name:
             return False
-        return self._is_scalar_type_name(self._current_types.get(name, ""))
-
-    @classmethod
-    def _is_scalar_type_name(cls, type_name: str) -> bool:
-        normalized = normalize_type_name(type_name)
-        if not normalized:
-            return False
-        if any(ch in normalized for ch in "*[]()"):
-            return False
-        if normalized.startswith(("struct ", "union ", "enum ")):
-            return False
-        return True
+        return is_scalar_type_name(self._current_types.get(name, ""))
 
 
 class SSAADCEPass(ASTPass):

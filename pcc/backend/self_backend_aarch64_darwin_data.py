@@ -9,7 +9,11 @@ from . import BackendUnavailable
 from .self_backend_aarch64_darwin_regs import align_pow2
 from .self_backend_aarch64_darwin_symbols import asm_symbol
 from .self_backend_ir import GlobalDef, TypeDesc, _align_to
-from .self_backend_literals import fp_bitcast_initializer_bits, wide_int_quad_lines
+from .self_backend_literals import (
+    emit_byte_data,
+    fp_bitcast_initializer_bits,
+    wide_int_quad_lines,
+)
 from .self_backend_float_bits import bits_to_float64, float32_to_bits
 from .self_backend_module_symbols import PreparedModuleSymbols
 from .self_backend_parse import (
@@ -198,16 +202,6 @@ def _emit_thread_local_global(global_: GlobalDef, module_symbols: PreparedModule
         lines.append(".globl " + symbol)
     lines.extend([symbol + ":", "  .quad __tlv_bootstrap", "  .quad 0",
                   "  .quad " + initial, ""])
-    return lines
-
-
-def emit_byte_data(data: bytes) -> list[str]:
-    if not data:
-        return []
-    lines: list[str] = []
-    for start in range(0, len(data), 16):
-        chunk = ", ".join(str(byte) for byte in data[start : start + 16])
-        lines.append(f"  .byte {chunk}")
     return lines
 
 

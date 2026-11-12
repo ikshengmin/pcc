@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from pcc.frontends.c.ast import c_ast
 from pcc.frontends.c.passes.ast_utils import ASTTransformer, collect_ids, get_safe_int_value, has_type_sensitive_introspection, has_unstructured_control_flow, is_side_effect_free, make_int_constant
-from pcc.frontends.c.passes.base import ASTPass
+from pcc.frontends.c.passes.base import ASTPass, FunctionAnalysisPass
 from pcc.frontends.c.passes.context import PassContext
 
 
@@ -665,7 +665,7 @@ class GVNPass(ASTPass):
         return None
 
 
-class SROAPass(ASTPass):
+class SROAPass(FunctionAnalysisPass):
     """Pass 36: Scalar Replacement of Aggregates.
 
     Identifies struct variables where only individual fields are accessed
@@ -673,15 +673,6 @@ class SROAPass(ASTPass):
     in PassContext. Codegen can then generate separate allocas per field.
     """
     name = "sroa"
-
-    def run(self, ast, ctx: PassContext):
-        if not isinstance(ast, c_ast.FileAST):
-            return None
-
-        for ext in ast.ext or []:
-            if isinstance(ext, c_ast.FuncDef):
-                self._analyze_function(ext, ctx)
-        return None
 
     def _analyze_function(self, funcdef, ctx: PassContext):
         func_name = funcdef.decl.name
