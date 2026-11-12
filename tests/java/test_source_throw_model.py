@@ -511,7 +511,10 @@ def test_native_parser_and_public_entries_reject_throw_before_ir(text, monkeypat
     ):
         with pytest.raises(UnsupportedJava) as caught:
             invoke()
-        assert caught.value.code == "java.unsupported.runtime-statements"
+        # The native parser admits throw statements (sema keeps them a
+        # runtime-statements gap); each original's operand is null, which
+        # native syntax still rejects as an object expression first.
+        assert caught.value.code == "java.unsupported.object-expressions"
         assert "ArrayExample.java:" in str(caught.value)
 
 

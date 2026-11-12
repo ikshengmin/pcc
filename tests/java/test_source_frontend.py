@@ -123,7 +123,7 @@ def test_source_semantic_errors_are_rejected_before_ir(body, helpers, message, m
     ("class C {static int value;}", "fields"),
     ("class C {int run(){return 1;}}", "static source methods"),
     ("class C {static synchronized int run(){return 1;}}", "static source methods"),
-    (source("return new Object();"), "unsupported Java"),
+    (source("return new Object();"), "class instance creation requires the shared managed object model"),
     (source("int π=1;return π;"), "unsupported Java source token"),
 ])
 def test_source_runtime_and_lexical_boundaries_fail_explicitly(original, message):

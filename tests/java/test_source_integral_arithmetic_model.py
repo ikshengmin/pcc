@@ -635,10 +635,10 @@ def test_complete_primes_original_keeps_modulo_site_and_existing_project_boundar
     assert first + ":108:23:" in str(class_error.value)
     with pytest.raises(UnsupportedJava) as native_error:
         compile_sources(sources, **ENTRY)
-    # The String constant variable folds and the enhanced for parses in the
-    # native array domain; the nextPrime throw statement is next.
-    assert native_error.value.code == "java.unsupported.runtime-statements"
-    assert first + ":70:13:" in str(native_error.value)
+    # The String constant variable folds; the enhanced for and the nextPrime
+    # throw parse; the List<Integer> result type of primeFactors is next.
+    assert native_error.value.code == "java.unsupported.declared-result-type"
+    assert first + ":108:19:" in str(native_error.value)
     assert sources == before
     assert all(sources[name].encode("utf-8") == files[name] for name in sources)
 

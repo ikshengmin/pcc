@@ -424,7 +424,8 @@ BOUNDARIES = [
     ("nested-blank-static-final", "static class Inner{static final int VALUE;}", "static-initialization"),
     ("nested-nonconstant-initializer", "static class Inner{static final int VALUE=f();static int f(){return 42;}}", "static-initialization"),
     ("unused-object-allocation", "static class Inner{static int unused(){new Inner();return 42;}}", "object-expressions"),
-    ("unused-anonymous-class", "static class Inner{static int unused(){new Inner(){};return 42;}}", "object-expressions"),
+    # Native class creation parses; an anonymous body needs the nested-class domain.
+    ("unused-anonymous-class", "static class Inner{static int unused(){new Inner(){};return 42;}}", "member-types"),
     ("unused-local-class", "static class Inner{static int unused(){class Local{}return 42;}}", "local-types"),
     ("unused-string", 'static class Inner{static int unused(){return "text";}}', "string-literals"),
     ("nested-array-state", "static class Inner{static final int[] VALUES={42};}", "array-storage"),
@@ -518,13 +519,15 @@ def test_complete_pinned_regularized_gamma_preserves_its_first_native_and_model_
     assert lock["complete_build_closure"] is False
     assert lock["project_accepted"] is False
     forbid_lowering(monkeypatch)
-    with pytest.raises(UnsupportedJava) as native:
+    with pytest.raises(JavaError) as native:
         compile_source(source, filename="RegularizedGamma.java", entry="value", descriptor="(DD)D")
-    assert native.value.code == "java.unsupported.object-expressions"
-    assert str(native.value).startswith("RegularizedGamma.java:77:44:")
+    # The supplied unit omits BoostGamma, so the first native boundary is that
+    # missing dependency, an ordinary error; new Policy (77:44) follows it.
+    assert type(native.value) is JavaError and native.value.code is None
+    assert str(native.value).startswith("RegularizedGamma.java:60:20: unresolved source class qualifier BoostGamma")
     assert lock["native_expected_boundary"]["code"] == native.value.code
-    assert lock["native_expected_boundary"]["line"] == 77
-    assert lock["native_expected_boundary"]["column"] == 44
+    assert lock["native_expected_boundary"]["line"] == 60
+    assert lock["native_expected_boundary"]["column"] == 20
     assert "BoostGamma" in lock["unresolved_dependencies"]
     with pytest.raises(UnsupportedJava) as model:
         analyze_class_sources({"RegularizedGamma.java": source})

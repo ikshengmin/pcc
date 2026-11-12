@@ -8,10 +8,10 @@
   "execution": "UNRUN",
   "project_accepted": false,
   "native_expected_boundary": {
-    "code": "java.unsupported.object-expressions",
-    "line": 77,
-    "column": 44,
-    "reason": "Private empty utility constructor declarations are retained; new Policy still requires managed object construction. Authored source prediction, execution UNRUN."
+    "code": null,
+    "line": 60,
+    "column": 20,
+    "reason": "The native parser now admits class instance creation and throw, so native sema first reaches the unresolved BoostGamma qualifier (unresolved_dependencies): an ordinary missing-source error, before new Policy at 77:44 (java.unsupported.object-expressions). Execution UNRUN."
   },
   "model_expected_boundary": {
     "code": "java.unsupported.member-types",

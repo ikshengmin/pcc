@@ -710,7 +710,8 @@ class SourceParser:
             update = Node("empty", token) if self.peek().text == ")" else self.for_expressions()
             self.expect(")")
             return Node("for", token, children=[initial, condition, update, self.statement()])
-        if self.class_model and self.accept("throw"):
+        if self.accept("throw"):
+            # Native sema keeps throw an explicit exception-support gap.
             expression = self.expression()
             self.expect(";")
             return Node("throw", token, children=[expression])
@@ -754,7 +755,7 @@ class SourceParser:
                 current = "arrow"
                 if self.peek().text == "{":
                     statements = [self.block()]
-                elif self.class_model and self.peek().text == "throw":
+                elif self.peek().text == "throw":
                     statements = [self.statement()]
                 else:
                     statements = [self.simple()]
@@ -882,7 +883,7 @@ class SourceParser:
                 operation.error("array assignment requires an array component variable")
             children = [expression] + ([] if operation.text in {"++", "--"} else [self.expression()])
             return Node("array_assign", operation, operation.text, children)
-        if expression.kind not in {"call", "mutation"} and not (self.class_model and expression.kind in {"receiver_call", "class_new"}):
+        if expression.kind not in {"call", "mutation", "class_new"} and not (self.class_model and expression.kind == "receiver_call"):
             expression.token.error("only assignment, increment or method invocation is an expression statement")
         return Node("expression", token, children=[expression])
 
@@ -962,7 +963,7 @@ class SourceParser:
                     self.peek().error("multidimensional arrays require the next array semantic domain",
                                       code="java.unsupported.array-model-shape")
                 node = Node("array_new", token, dtype, [dimension])
-        elif (self.class_model and token.text == "new" and
+        elif (token.text == "new" and
               re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", self.peek().text) and
               self.peek().text not in KEYWORDS):
             name = self.identifier()
@@ -1022,9 +1023,9 @@ class SourceParser:
                 token.error("unsupported Java expression or statement", code="java.unsupported.object-expressions")
             if token.text == "switch":
                 token.error("unsupported Java expression or statement", code="java.unsupported.switch-expressions")
-            if self.class_model and token.text == "throw":
+            if token.text == "throw":
                 token.error("throw is a statement, not an expression")
-            if token.text in {"throw", "try", "synchronized"}:
+            if token.text in {"try", "synchronized"}:
                 token.error("unsupported Java expression or statement", code="java.unsupported.runtime-statements")
             if token.text == "assert":
                 token.error("unsupported Java expression or statement", code="java.unsupported.assert-statements")

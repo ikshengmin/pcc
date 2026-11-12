@@ -57,10 +57,11 @@ CAPABILITIES = [
     ("class Diagnostic{static final int value=Diagnostic.value;}", "cyclic-initialization", "cyclic field initialization"),
     (original("return 1/0;"), "arithmetic-exception", "ArithmeticException"),
     (original("return true?true:1;"), "reference-conditional", "reference/boxing conditional"),
-    (original("return new Object();"), "object-expressions", "unsupported Java expression"),
+    (original("return new Object();"), "object-expressions", "class instance creation requires the shared managed object model"),
     (original("return null;"), "object-expressions", "unsupported Java expression"),
     (original("return switch(1){default->42;};"), "switch-expressions", "unsupported Java expression"),
-    (original("throw null;"), "runtime-statements", "unsupported Java expression"),
+    # A natively parsed operand, so the throw statement itself is the gap.
+    (original("throw new RuntimeException();"), "runtime-statements", "throw statements require shared Java exception support"),
     (original("assert true;return 42;"), "assert-statements", "unsupported Java expression"),
     (original("class Local{}return 42;"), "local-types", "unsupported Java expression"),
     (original("return missing.Package.f();"), "implicit-type-metadata", "complete implicit-type metadata"),

@@ -405,6 +405,11 @@ class SourceAnalyzer(NativeArrayAnalyzer, LocalInferenceAnalyzer):
         if self.native_array_domain and self.native_array_expression(node, assigned):
             return
         kind, op = node.kind, node.value
+        if kind == "class_new":
+            # JLS 15.9: allocation, constructor invocation and publication need
+            # the shared managed object model (the class model types them).
+            node.token.error("class instance creation requires the shared managed object model",
+                             code="java.unsupported.object-expressions")
         if kind == "null":
             # Native syntax retains null only inside an inferred initializer.
             # It can diagnose null-type inference, never create native storage.
@@ -607,6 +612,11 @@ class SourceAnalyzer(NativeArrayAnalyzer, LocalInferenceAnalyzer):
                 if node.is_final and node.children[0].constant is not None:
                     child = node.children[0]
                     self.constant_locals[node.symbol] = converted_constant(child.constant, child.dtype, node.symbol.dtype)
+        elif kind == "throw":
+            # JLS 14.18: abrupt completion by an exception object needs shared
+            # Java exception, unwinding and object support; none is lowered.
+            node.token.error("throw statements require shared Java exception support",
+                             code="java.unsupported.runtime-statements")
         elif kind == "assign":
             node.symbol = self.lookup(node.token)
             if self.native_array_domain:
