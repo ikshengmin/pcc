@@ -492,23 +492,34 @@ def _assert_preload_without_spawn(monkeypatch, tmp_path, root_count, no_work_dir
     assert actual == expected
 
 
-def test_departing_coordinator_and_empty_safe_lane_do_not_reserve_workers(monkeypatch):
+@pytest.mark.parametrize("tree_budget", [None, "1073741824"], ids=["unbudgeted", "budgeted"])
+def test_departing_coordinator_and_empty_safe_lane_do_not_reserve_workers(monkeypatch, tree_budget):
     from pcc.frontends.python import pipeline_frontend_parallel as parallel
+    # Pure planning model: choose its input, not the enclosing guard's budget.
+    if tree_budget is None:
+        monkeypatch.delenv(pipeline_frontend_workers.WORKER_TREE_BUDGET_ENV, raising=False)
+    else:
+        monkeypatch.setenv(pipeline_frontend_workers.WORKER_TREE_BUDGET_ENV, tree_budget)
     def forbidden(_jobs):
         raise AssertionError("no child co-resides with this owner")
     monkeypatch.setattr(parallel, "_compiled_native_auto_jobs", forbidden)
-    assert parallel._codegen_safe_worker_jobs(10, True, 3, "/new/plan") == 2
+    assert parallel._codegen_safe_worker_jobs(10, True, 3, "/new/plan") == (10 if tree_budget else 2)
     assert parallel._codegen_safe_worker_jobs(2, True, 0, "") == 2
     assert parallel._codegen_safe_worker_jobs(2, True, 0, "/new/plan") == 2
     assert parallel._codegen_safe_worker_jobs(10, False, 3, "") == 10
 
 
-def test_direct_safe_workers_still_reserve_from_their_actual_owner(monkeypatch):
+@pytest.mark.parametrize("tree_budget", [None, "1073741824"], ids=["unbudgeted", "budgeted"])
+def test_direct_safe_workers_still_reserve_from_their_actual_owner(monkeypatch, tree_budget):
     from pcc.frontends.python import pipeline_frontend_parallel as parallel
+    if tree_budget is None:
+        monkeypatch.delenv(pipeline_frontend_workers.WORKER_TREE_BUDGET_ENV, raising=False)
+    else:
+        monkeypatch.setenv(pipeline_frontend_workers.WORKER_TREE_BUDGET_ENV, tree_budget)
     called = []
     monkeypatch.setattr(parallel, "_compiled_native_auto_jobs", lambda jobs: called.append(jobs) or 1)
-    assert parallel._codegen_safe_worker_jobs(2, True, 3, "") == 1
-    assert called == [2]
+    assert parallel._codegen_safe_worker_jobs(2, True, 3, "") == (2 if tree_budget else 1)
+    assert called == ([] if tree_budget else [2])
 
 
 def test_deferred_execution_samples_driver_after_input_preparation(monkeypatch):

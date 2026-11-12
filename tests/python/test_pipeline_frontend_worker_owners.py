@@ -117,46 +117,66 @@ def test_action_dependencies_keep_from_import_submodules_and_ir_provider():
         ),
     )
     assert method_dependencies == (
-        "pcc.ir.ir",
         "pcc.frontends.python.codegen.errors",
         "pcc.frontends.python.codegen.freestanding_abi_constants",
         "pcc.frontends.python.codegen.marshal",
         "pcc.frontends.python.py_ast",
+        "pcc.ir.ir",
     )
+    assert method_dependencies == tuple(sorted(method_dependencies))
 
 
+@pytest.mark.parametrize(
+    "tree_budget", [None, "0", str(1024**3), str(5 * 1024**3), str(8 * 1024**3)],
+    ids=["unset", "zero", "one-gib", "five-gib", "eight-gib"],
+)
 def test_summary_worker_parallelism_uses_host_width_and_native_memory_guard(
-    monkeypatch,
+    monkeypatch, tree_budget,
 ):
+    # This pure planning unit owns its budget input. The outer process-tree
+    # guard remains active and no real worker is launched with these values.
+    if tree_budget is None:
+        monkeypatch.delenv("PCC_WORKER_TREE_BUDGET_BYTES", raising=False)
+    else:
+        monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", tree_budget)
+    budgeted = tree_budget not in (None, "0")
     monkeypatch.delenv("PCC_PY_FRONTEND_SUMMARY_JOBS", raising=False)
-    monkeypatch.delenv("PCC_WORKER_TREE_BUDGET_BYTES", raising=False)
     monkeypatch.delenv("PCC_PY_FRONTEND_JOBS", raising=False)
     monkeypatch.setattr(parallel, "_parallel_cpu_budget", lambda: 12)
-    assert parallel._summary_worker_parallelism(10, ["python", "-m", "pcc"]) == 10
-    assert parallel._summary_worker_parallelism(10, ["pcc1"]) == 2
-    assert parallel._summary_worker_parallelism(1, ["python", "-m", "pcc"]) == 1
+    original_native_jobs = parallel._compiled_native_summary_jobs
+    native_requests = []
 
-    gib = 1024**3
-    # Automatic native summaries request the CPU width; their 512 MiB class
-    # above the 3 GiB coordinator reserve admits ten in 8 GiB.
-    monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(8 * gib))
-    assert parallel._summary_worker_parallelism(10, ["pcc1"]) == 10
-    assert parallel._summary_worker_parallelism(3, ["pcc1"]) == 10
-    monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(5 * gib))
-    assert parallel._summary_worker_parallelism(3, ["pcc1"]) == 4
-    # An explicit frontend width keeps the requested light width.
+    def native_summary_jobs(requested):
+        assert not budgeted, "budgeted admission must retain its owner's width"
+        native_requests.append(requested)
+        return original_native_jobs(requested)
+
+    monkeypatch.setattr(parallel, "_compiled_native_summary_jobs", native_summary_jobs)
+    for width in (0, 1, 3, 10):
+        assert parallel._summary_worker_parallelism(width, ["python", "-m", "pcc"]) == max(1, width)
+        expected = max(1, width) if budgeted else (1 if width <= 1 else 2)
+        assert parallel._summary_worker_parallelism(width, ["pcc1"]) == expected
+    # Without a tree budget, automatic native summaries request host CPU
+    # width and retain the existing native risk cap. With a positive budget,
+    # admission already chose max_parallel and this helper cannot widen it.
+    assert native_requests == ([] if budgeted else [1, 1, 12, 12])
+
     monkeypatch.setenv("PCC_PY_FRONTEND_JOBS", "7")
-    monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(16 * gib))
-    assert parallel._summary_worker_parallelism(7, ["pcc1"]) == 7
+    assert parallel._summary_worker_parallelism(7, ["pcc1"]) == (7 if budgeted else 2)
+    if not budgeted:
+        assert native_requests[-1] == 7
     monkeypatch.delenv("PCC_PY_FRONTEND_JOBS", raising=False)
 
-    monkeypatch.setenv("PCC_PY_FRONTEND_SUMMARY_JOBS", "7")
-    assert parallel._summary_worker_parallelism(10, ["pcc1"]) == 7
-    monkeypatch.setenv("PCC_PY_FRONTEND_SUMMARY_JOBS", "99")
-    assert parallel._summary_worker_parallelism(10, ["pcc1"]) == 10
+    for override, requested in (("7", 7), ("99", 10)):
+        monkeypatch.setenv("PCC_PY_FRONTEND_SUMMARY_JOBS", override)
+        assert parallel._summary_worker_parallelism(10, ["python", "-m", "pcc"]) == requested
+        assert parallel._summary_worker_parallelism(10, ["pcc1"]) == (requested if budgeted else 2)
+        # A valid override is still limited by the current owner's width.
+        assert parallel._summary_worker_parallelism(3, ["pcc1"]) == (3 if budgeted else 2)
     for invalid in ("0", "-3", "auto", "invalid"):
         monkeypatch.setenv("PCC_PY_FRONTEND_SUMMARY_JOBS", invalid)
-        assert parallel._summary_worker_parallelism(10, ["pcc1"]) == 1
+        for prefix in (["python", "-m", "pcc"], ["pcc1"]):
+            assert parallel._summary_worker_parallelism(10, prefix) == 1
 
 
 def test_summary_worker_owns_exactly_one_ast_and_publishes_one_wire(tmp_path):
@@ -405,10 +425,19 @@ def test_parallel_worker_failure_is_fail_closed_before_result_parse(tmp_path):
         raise AssertionError("worker failure must fail closed")
 
 
-def test_source_workers_separate_export_and_short_codegen_shards(tmp_path):
+@pytest.mark.parametrize("module_count,expected_exports", [
+    (4, [list(range(4))]),
+    (7, [list(range(7))]),
+    (8, [list(range(8))]),
+    (9, [list(range(8)), [8]]),
+    (17, [list(range(8)), list(range(8, 16)), [16]]),
+])
+def test_source_workers_separate_export_and_short_codegen_shards(
+    tmp_path, module_count, expected_exports,
+):
     src_paths = []
     module_names = []
-    for index in range(4):
+    for index in range(module_count):
         source = tmp_path / ("m" + str(index) + ".py")
         body = "x = " + str(index) + "\n"
         if index == 0:
@@ -424,10 +453,8 @@ def test_source_workers_separate_export_and_short_codegen_shards(tmp_path):
 
     def chunks(_paths, count):
         chunk_counts.append(count)
-        if count == 2:
-            return [[0, 1], [2, 3]]
-        assert count == 4
-        return [[0], [1], [2], [3]]
+        assert count == module_count
+        return [[index] for index in range(module_count)]
 
     def build_exports(_tmp, _srcs, _names, chunks_arg, *_args, **_kwargs):
         export_chunks.extend(chunks_arg)
@@ -487,7 +514,7 @@ def test_source_workers_separate_export_and_short_codegen_shards(tmp_path):
         verbose=False,
         can_spawn_worker=lambda: True,
         worker_command_prefix=lambda: ["python3"],
-        chunk_count_for_workers=lambda *_args: 4,
+        chunk_count_for_workers=lambda *_args: module_count,
         codegen_chunks=chunks,
         ast_wire_enabled=lambda: False,
         build_shared_exports_callback=build_exports,
@@ -505,20 +532,32 @@ def test_source_workers_separate_export_and_short_codegen_shards(tmp_path):
         pipeline_error=RuntimeError,
     )
 
-    assert chunk_counts == [4, 2]
-    assert export_chunks == [[0, 1], [2, 3]]
-    assert [entry[4] for entry in manifests] == [[0], [1], [2], [3]]
+    assert chunk_counts == [module_count]
+    assert worker_policy.SOURCE_WORKER_MODULES_PER_CHUNK == 8
+    assert export_chunks == expected_exports
+    assert all(1 <= len(chunk) <= 8 for chunk in export_chunks)
+    assert [index for chunk in export_chunks for index in chunk] == list(range(module_count))
+    assert [entry[4] for entry in manifests] == [[index] for index in range(module_count)]
     # Host CPython workers are memory-cheap: auto mode keeps the full chunked
     # width with no oversized split.  The split + safe-lane clamp is the
     # compiled pcc1 contract, covered by the native lane test below.
-    assert command_batches == [(4, 2)]
+    assert command_batches == [(module_count, 2)]
     assert [name for name, _ir in result[0]] == module_names
 
 
+@pytest.mark.parametrize("tree_budget", [None, "1073741824"], ids=["unbudgeted", "budgeted"])
 def test_native_auto_frontend_bounds_export_and_codegen_lanes(
     tmp_path,
     monkeypatch,
+    tree_budget,
 ):
+    # All execution callbacks below are models. Keep their planning inputs
+    # explicit without changing the outer watchdog or a real worker pool.
+    if tree_budget is None:
+        monkeypatch.delenv(worker_policy.WORKER_TREE_BUDGET_ENV, raising=False)
+    else:
+        monkeypatch.setenv(worker_policy.WORKER_TREE_BUDGET_ENV, tree_budget)
+    monkeypatch.setattr(parallel, "_parallel_cpu_budget", lambda: 10)
     monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_EMIT", "1")
     monkeypatch.setenv("PCC_DIRECT_INDEXED_NATIVE_OBJECT", "1")
     src_paths = []
@@ -611,17 +650,18 @@ def test_native_auto_frontend_bounds_export_and_codegen_lanes(
 
     assert export_plan == {
         "chunks": [[0], [1], [2], [3]],
-        "oversized": 1,
-        "safe_jobs": 2,
+        "oversized": 0 if tree_budget else 1,
+        "safe_jobs": 10 if tree_budget else 2,
     }
-    assert command_batches == [(1, 1), (3, 2)]
+    assert command_batches == [(1, 1), (3, 10 if tree_budget else 2)]
+    assert [entry[4] for entry in manifests] == [[0], [1], [2], [3]]
     assert "PCC_DIRECT_INDEXED_NATIVE_OBJECT=0" in worker_commands[0]
     assert all(
         "PCC_DIRECT_INDEXED_NATIVE_OBJECT=0" not in command
         for command in worker_commands[1:]
     )
     assert counters["multi_frontend_worker_requested_concurrency"] == 10
-    assert counters["multi_frontend_worker_concurrency"] == 2
+    assert counters["multi_frontend_worker_concurrency"] == (10 if tree_budget else 2)
     assert [name for name, _ir in result[0]] == module_names
 
 
@@ -1146,47 +1186,78 @@ def test_parallel_frontend_preserves_mixed_artifact_module_order(tmp_path):
     ]
 
 
+def _direct_pco_release_positions(source):
+    needles = {
+        "generate": "generated_module = codegen._generate_initial_module()",
+        "conditional_render": 'ir_text = str(generated_module) if render_ir_text else ""',
+        "structured_emit": "emit_aarch64_darwin_indexed_transport(",
+        "structured_mode": "structured_instructions=True",
+        "release_frontend": "parsed_modules[index] = None",
+        "assemble_lines": "sections, undefined = direct_transport.assemble_sections()",
+        "release_transport": "del direct_transport",
+        "assemble": "sections, undefined = assemble_file(direct_asm)",
+        "release_assembly": 'direct_asm = ""',
+        "encode_sections": "encoded = encode_native_object_from_sections(",
+        "release_sections": "del sections",
+        "write_encoded": "stream.write(encoded)",
+    }
+    positions = {}
+    for name in ("generate", "conditional_render", "structured_emit", "structured_mode", "assemble"):
+        positions[name] = source.index(needles[name])
+    # The handoff branch has an earlier frontend release. Select the direct
+    # structured-object branch, then assert its independent lifetime bounds.
+    positions["release_frontend"] = source.index(
+        needles["release_frontend"], positions["structured_mode"],
+    )
+    for name in ("assemble_lines", "release_transport"):
+        positions[name] = source.index(needles[name], positions["structured_mode"])
+    for name in ("release_assembly", "encode_sections"):
+        positions[name] = source.index(needles[name], positions["assemble"])
+    for name in ("release_sections", "write_encoded"):
+        positions[name] = source.index(needles[name], positions["encode_sections"])
+    return needles, positions
+
+
+def _assert_direct_pco_release_order(source):
+    _needles, position = _direct_pco_release_positions(source)
+    assert (
+        position["generate"]
+        < position["conditional_render"]
+        < position["structured_emit"]
+        < position["structured_mode"]
+        < position["release_frontend"]
+    )
+    assert position["release_frontend"] < position["assemble_lines"] < position["release_transport"] < position["assemble"]
+    assert position["assemble"] < position["release_assembly"] < position["encode_sections"]
+    assert position["encode_sections"] < position["release_sections"] < position["write_encoded"]
+
+
 def test_direct_pco_worker_releases_frontend_and_authoring_graphs_in_order():
     source = Path(worker_execution.__file__).read_text(encoding="utf-8")
+    _assert_direct_pco_release_order(source)
 
-    generate = source.index("generated_module = codegen.generate(typed_module)")
-    conditional_render = source.index(
-        'ir_text = str(generated_module) if render_ir_text else ""',
-        generate,
-    )
-    structured_emit = source.index(
-        "emit_aarch64_darwin_indexed_transport(",
-        conditional_render,
-    )
-    structured_mode = source.index(
-        "structured_instructions=True",
-        structured_emit,
-    )
-    release_frontend = source.index("parsed_modules[index] = None")
-    assemble_lines = source.index(
-        "sections, undefined = direct_transport.assemble_sections()",
-        release_frontend,
-    )
-    release_transport = source.index("del direct_transport", assemble_lines)
-    assemble = source.index("sections, undefined = assemble_file(direct_asm)")
-    release_assembly = source.index('direct_asm = ""', assemble)
-    encode_sections = source.index(
-        "encoded = encode_native_object_from_sections(",
-        assemble,
-    )
-    release_sections = source.index("del sections", encode_sections)
-    write_encoded = source.index("stream.write(encoded)", release_sections)
 
-    assert (
-        generate
-        < conditional_render
-        < structured_emit
-        < structured_mode
-        < release_frontend
+@pytest.mark.parametrize("left,right", [
+    ("generate", "conditional_render"),
+    ("structured_mode", "release_frontend"),
+    ("release_frontend", "assemble_lines"),
+    ("release_transport", "assemble"),
+    ("release_assembly", "encode_sections"),
+    ("release_sections", "write_encoded"),
+])
+def test_direct_pco_release_order_rejects_reordered_ownership(left, right):
+    source = Path(worker_execution.__file__).read_text(encoding="utf-8")
+    needles, position = _direct_pco_release_positions(source)
+    first, second = position[left], position[right]
+    # Keep both statements, but reverse the actual lifetime boundary. These
+    # are source-oracle controls, not fake worker execution or result rows.
+    reordered = (
+        source[:first] + needles[right]
+        + source[first + len(needles[left]):second] + needles[left]
+        + source[second + len(needles[right]):]
     )
-    assert release_frontend < assemble_lines < release_transport < assemble
-    assert assemble < release_assembly < encode_sections
-    assert encode_sections < release_sections < write_encoded
+    with pytest.raises((AssertionError, ValueError)):
+        _assert_direct_pco_release_order(reordered)
 
 
 def test_source_worker_lane_failure_stops_safe_work_and_override_is_authoritative(

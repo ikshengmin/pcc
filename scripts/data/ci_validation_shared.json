@@ -149,6 +149,7 @@
       "tests/python/test_direct_indexed_route_default.py",
       "tests/python/test_direct_indexed_syscall.py",
       "tests/python/test_direct_indexed_worker_validation.py",
+      "tests/python/test_frontend_worker_failure_diagnostics.py",
       "tests/python/test_host_indexed_process_split.py",
       "tests/python/test_indexed_handoff_closed_world.py",
       "tests/python/test_indexed_payload_argument_contract.py",

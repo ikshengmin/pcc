@@ -40,7 +40,8 @@ def require_host_indexed_split(env, *, checkpoint_root, action_cache_plan, artif
 
 def run_host_indexed_stage(commands, manifest_paths, result_paths, chunks,
                            module_names, ir_dir, worker_prefix, jobs,
-                           worker_environment, shell_quote_arg):
+                           worker_environment, shell_quote_arg, *,
+                           failure_result_bindings=None):
     """Keep at most ``jobs`` not-yet-consumed modules in dynamic slots.
 
     Each FE acquires a slot until its own dependent BE is reaped, its final
@@ -112,7 +113,12 @@ def run_host_indexed_stage(commands, manifest_paths, result_paths, chunks,
         task["calibrate_before_peers"] = True
         task["depends_on"] = -1
         task["handoff_slot"] = 2 * position
-        all_commands.append(ENV_REQUEST + "=" + shell_quote_arg(request_path) + " " + commands[source_position])
+        frontend_command = ENV_REQUEST + "=" + shell_quote_arg(request_path) + " " + commands[source_position]
+        all_commands.append(frontend_command)
+        if failure_result_bindings is not None:
+            # Only this owner knows the actual prefixed frontend command.
+            # Backend commands have no frontend ERR result of their own.
+            failure_result_bindings.append((frontend_command, result_paths[source_position]))
         all_tasks.append(task)
         backend_command = worker_environment + " " + ENV_REQUEST + "=" + shell_quote_arg(request_path)
         backend_command += " " + " ".join(shell_quote_arg(str(part)) for part in worker_prefix)

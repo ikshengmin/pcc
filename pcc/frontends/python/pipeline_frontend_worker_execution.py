@@ -907,8 +907,11 @@ def run_codegen_worker(
                         direct_needs_libpython = bool(direct_libpython_edge)
                         if direct_needs_libpython:
                             raise _worker_failure(
-                                "direct indexed kernel still calls the CPython bridge: "
+                                "Python pipeline cannot compile the program natively: "
+                                "generated IR still calls py_cpy_* CPython bridge helpers "
+                                "(direct indexed edge: "
                                 + direct_libpython_edge
+                                + ")"
                             )
                         if (
                             (require_zero_direct_fallback or handoff_request)

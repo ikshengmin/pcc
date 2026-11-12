@@ -23,6 +23,7 @@ WORKER_MANIFEST_V3 = "pcc.frontends.python.codegen_worker.v3"
 WORKER_MANIFEST_V4 = "pcc.frontends.python.codegen_worker.v4"
 WORKER_MANIFEST_V5 = "pcc.frontends.python.codegen_worker.v5"
 WORKER_MANIFEST_V6 = "pcc.frontends.python.codegen_worker.v6"
+WORKER_ERROR_MAX_BYTES = 16384
 
 # Export batches retain all lifted ASTs until publication. Keep their size
 # independent of the number of active processes. Codegen is one module per
@@ -857,9 +858,56 @@ def read_worker_manifest(path: str):
 
 
 def write_worker_error(result_path: str, message: str) -> None:
-    safe = str(message).replace("\t", " ").replace("\n", " ")
+    safe = str(message).replace("\t", " ").replace("\n", " ").replace("\r", " ")
     with open(result_path, "w", encoding="utf-8") as stream:
         stream.write("ERR\t" + safe + "\n")
+
+
+def read_worker_error(result_path: str) -> str:
+    """Read only a complete, bounded failure record from an owned result.
+
+    A failed process may leave no result, a partial write, or completed OK
+    rows. None is a diagnostic. Invalid artifacts must not replace the
+    coordinator's original worker-failure exception with a reader error.
+    """
+    try:
+        with open(result_path, "rb") as stream:
+            data = stream.read(WORKER_ERROR_MAX_BYTES + 1)
+        if len(data) > WORKER_ERROR_MAX_BYTES:
+            return ""
+        text = data.decode("utf-8")
+    except (OSError, UnicodeError):
+        return ""
+    if not text.startswith("ERR\t") or not text.endswith("\n"):
+        return ""
+    # Host text writers translate LF to CRLF on Windows. Remove exactly one
+    # complete wire terminator; embedded CR/control characters remain invalid.
+    if text.endswith("\r\n"):
+        message = text[4:-2]
+    else:
+        message = text[4:-1]
+    has_content = False
+    for char in message:
+        codepoint = ord(char)
+        # Match the full wire line/control rejection set explicitly. Native
+        # splitlines only handles CR/LF, so it cannot own this validation.
+        if (
+            codepoint < 32 or codepoint == 127
+            or codepoint == 0x85 or codepoint == 0x2028 or codepoint == 0x2029
+        ):
+            return ""
+        # These are the remaining CPython Unicode whitespace codepoints
+        # after the controls above are rejected. Owned strip is ASCII-only.
+        # Track content without trimming or skipping later invalid characters.
+        if not (
+            codepoint == 0x20 or codepoint == 0xA0 or codepoint == 0x1680
+            or (codepoint >= 0x2000 and codepoint <= 0x200A)
+            or codepoint == 0x202F or codepoint == 0x205F or codepoint == 0x3000
+        ):
+            has_content = True
+    if not has_content:
+        return ""
+    return message
 
 
 def read_worker_ir(ir_path: str, module_name: str) -> str:

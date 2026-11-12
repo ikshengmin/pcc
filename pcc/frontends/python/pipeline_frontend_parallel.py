@@ -10,6 +10,9 @@ import time
 from typing import Optional
 
 from pcc.frontends.python import module_action_dag as _module_action_dag
+from pcc.frontends.python.pipeline_frontend_workers import (
+    read_worker_error as _read_worker_error,
+)
 from pcc.frontends.python.pipeline_frontend_workers import SOURCE_WORKER_AUTO_SAFE_JOBS as _SOURCE_WORKER_AUTO_SAFE_JOBS, WORKER_TREE_BUDGET_ENV as _WORKER_TREE_BUDGET_ENV, compiled_native_auto_jobs as _compiled_native_auto_jobs, compiled_native_export_jobs as _compiled_native_export_jobs, compiled_native_summary_jobs as _compiled_native_summary_jobs, compiled_native_summary_plan as _compiled_native_summary_plan, numeric_jobs_override as _numeric_jobs_override, split_codegen_chunks_by_source_size as _split_codegen_chunks_by_source_size, worker_tree_budget_bytes as _worker_tree_budget_bytes
 from pcc.frontends.python.pipeline_pass_config import parallel_cpu_budget as _parallel_cpu_budget
 
@@ -1529,6 +1532,10 @@ def compile_parallel_uncached(
             profile_counter(profile, "multi_frontend_codegen_deferred", 1)
             return (_DEFERRED_CODEGEN_RESULT,)
 
+        failure_result_bindings = []
+        if not host_indexed_split:
+            for worker_index, command in enumerate(commands):
+                failure_result_bindings.append((command, result_paths[worker_index]))
         try:
             started = profile_begin(profile)
             in_process_codegen = (
@@ -1554,6 +1561,7 @@ def compile_parallel_uncached(
                     commands, manifest_paths, result_paths, scheduled_chunks,
                     module_names, ir_dir, worker_prefix, safe_jobs,
                     worker_env_prefix(), shell_quote_arg,
+                    failure_result_bindings=failure_result_bindings,
                 )
             elif in_process_codegen:
                 old_native_object = os.environ.get(
@@ -1563,14 +1571,16 @@ def compile_parallel_uncached(
                 os.environ["PCC_DIRECT_INDEXED_NATIVE_OBJECT"] = "0"
                 os.environ["PCC_PY_FRONTEND_JOBS"] = "1"
                 try:
-                    for manifest_path in manifest_paths:
+                    for worker_index, manifest_path in enumerate(manifest_paths):
                         result_code = run_worker_manifest_in_process(
                             manifest_path
                         )
                         if int(result_code) != 0:
-                            raise pipeline_error(
-                                "in-process frontend codegen worker failed"
-                            )
+                            message = "in-process frontend codegen worker failed"
+                            detail = _read_worker_error(result_paths[worker_index])
+                            if detail:
+                                message += ": " + detail
+                            raise pipeline_error(message)
                 finally:
                     if old_native_object is None:
                         os.environ.pop("PCC_DIRECT_INDEXED_NATIVE_OBJECT", None)
@@ -1613,7 +1623,22 @@ def compile_parallel_uncached(
                 allocations_owned_by_current_process=False,
             )
         except subprocess.CalledProcessError as exc:
-            raise pipeline_error("parallel frontend codegen worker failed") from exc
+            message = "parallel frontend codegen worker failed"
+            # The pool reports the exact failed command. Bind its diagnostic
+            # to our result path, never to stderr or a successful peer's row.
+            try:
+                failed_command = exc.cmd
+            except Exception:
+                # Error transport is best effort; even an unreadable command
+                # field must leave the original process failure as the cause.
+                failed_command = None
+            for command, result_path in failure_result_bindings:
+                if failed_command == command:
+                    detail = _read_worker_error(result_path)
+                    if detail:
+                        message += ": " + detail
+                    break
+            raise pipeline_error(message) from exc
 
         result_started = 0
         if coordinator_timing is not None:
