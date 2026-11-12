@@ -119,6 +119,10 @@ These are required outcomes, not assertions that migration is complete. See
 - Preserve other work. Re-read targets before narrow edits; no destructive
   restore/reset/revert/stash/clean or discarding branch switches without explicit
   user direction. Do not commit/push unless authorized in the current session.
+- Stay inside the workspace. Never search, list or traverse from `/`, the home
+  directory or other user folders (iCloud Drive, Music, Photos, Desktop...);
+  scope `rg`/`find` to this repository and the session scratch directory. A
+  missing artifact is reported or built, never hunted for across the disk.
 - When the user names a single action, do exactly that action. Additional steps
   the user did not ask for are proposed, never taken silently. Report a user
   decision only in the user's own words; label a recommendation as one.
