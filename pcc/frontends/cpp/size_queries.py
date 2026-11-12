@@ -30,6 +30,11 @@ def object_layout(dtype, types, coord):
         # ClassDefinition.c_declaration, which also adds the one-byte
         # empty-class field matched by the minimum size.
         fields = [object_layout(member.dtype, types, member.coord) for member in plain.definition.members]
+        from pcc.frontends.cpp.inheritance import base_specifier, is_empty_class
+        specifier = base_specifier(plain.definition)
+        if specifier is not None and not is_empty_class(specifier.dtype):
+            # inheritance.py admits only bases whose leading C field is exact.
+            fields.insert(0, object_layout(specifier.dtype, types, coord))
         if plain.definition.polymorphic:
             fields.insert(0, pointer_scalar_layout())
         record = natural_record_layout(fields, minimum_size=1)

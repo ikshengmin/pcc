@@ -180,7 +180,8 @@ INVALID = (
 )
 BOUNDARIES = (
     ('dependent-array-type', 'template<class T>int f(){return sizeof(T[2]);}', 'cpp.unsupported.array-templates'),
-    ('unowned-bases', 'struct B{};struct S:B{};int f(){return sizeof(S);}', 'cpp.unsupported.classes'),
+    # Single non-virtual bases are owned by inheritance.py; a virtual base is not.
+    ('unowned-bases', 'struct B{};struct S:virtual B{};int f(){return sizeof(S);}', 'cpp.unsupported.base-classes'),
 )
 
 

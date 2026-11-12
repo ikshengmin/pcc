@@ -65,9 +65,21 @@ def directly_compatible(source, destination, lvalue):
             and (not isinstance(source, ConstType) or isinstance(referent, ConstType)))
 
 
+def base_compatible(source, destination, lvalue):
+    """[dcl.init.ref]/4-5: cv1 B reference-compatible with a cv2 D lvalue."""
+    from pcc.frontends.cpp.inheritance import is_proper_base
+    from pcc.frontends.cpp.classes import is_class_type
+    referent = destination.referent
+    return (lvalue and is_class_type(source) and is_class_type(referent)
+            and is_proper_base(unqualified(referent), unqualified(source))
+            and (not isinstance(source, ConstType) or isinstance(referent, ConstType)))
+
+
 def conversion_rank(source, destination, lvalue, types, null_pointer=False):
     if directly_compatible(source, destination, lvalue):
         return 0
+    if base_compatible(source, destination, lvalue):
+        return 2  # [over.ics.ref]/1: a derived-to-base Conversion
     if isinstance(destination.referent, ConstType):
         # Keep otherwise-valid temporary bindings in overload resolution. If
         # selected, bind() rejects their missing lifetime implementation; do
@@ -82,6 +94,14 @@ def compare(source, first, second, types, null_pointer=False):
         a, b = first.referent, second.referent
         if unqualified(a) == unqualified(b):
             return int(isinstance(a, ConstType)) - int(isinstance(b, ConstType))
+        from pcc.frontends.cpp.inheritance import is_proper_base
+        from pcc.frontends.cpp.classes import is_class_type
+        if is_class_type(source) and is_class_type(a) and is_class_type(b):
+            # [over.ics.rank]/4.4: the nearer base (or the exact class) is better.
+            if unqualified(a) is unqualified(source) or is_proper_base(unqualified(b), unqualified(a)):
+                return -1
+            if unqualified(b) is unqualified(source) or is_proper_base(unqualified(a), unqualified(b)):
+                return 1
     # A reference and a by-value exact match do not gain a fictitious ordering.
     return types.compare_conversions(source,
         first.referent if first_ref else first,
@@ -96,6 +116,11 @@ def bind(parser, expression, destination, coord, *, allow_class=False):
     if is_class_type(destination.referent) and not allow_class:
         raise CppDiagnostic('cpp.unsupported.class-reference-values',
                             'class-reference declarations do not implement class value/copy calls', coord)
+    if base_compatible(expression.dtype, destination, expression.lvalue):
+        # Direct binding to the base subobject ([dcl.init.ref]/5.1.1).
+        from pcc.frontends.cpp.inheritance import base_subobject, require_accessible_base
+        require_accessible_base(parser.scope, unqualified(expression.dtype), unqualified(destination.referent), coord)
+        expression = base_subobject(parser, expression, unqualified(destination.referent), coord)
     if not directly_compatible(expression.dtype, destination, expression.lvalue):
         if isinstance(destination.referent, ConstType) and parser.types.conversion_rank(
                 expression.dtype, destination.referent, expression.null_pointer) is not None:

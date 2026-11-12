@@ -156,7 +156,7 @@ DEFERRED = (
     ('defaulted-owner-class-subobject', 'struct M{M(){}};struct S{S()=default;M m;};',
      'cpp.unsupported.constructor-subobjects'),
     ('defaulted-owner-reference-subobject', 'struct S{S()=default;int&n;};', 'cpp.unsupported.references'),
-    ('defaulted-base-construction', 'struct B{};struct S:B{S()=default;};', 'cpp.unsupported.classes'),
+    ('defaulted-base-construction', 'struct B{};struct S:B{S()=default;};', 'cpp.unsupported.base-classes'),
     ('explicit-exception-specification', 'struct S{S()noexcept=default;};', 'cpp.unsupported.exceptions'),
     ('aggregate-list-with-dmi-retains-existing-owner-gap', 'struct S{S()=default;int n=42;};void f(){S s{};}',
      'cpp.unsupported.default-member-initializer-path'),

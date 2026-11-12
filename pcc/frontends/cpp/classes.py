@@ -75,7 +75,8 @@ def record_declaration_projection_supported(dtype, types):
         return False
     definition = dtype.definition
     if (not definition.members or definition.constructors.overloads
-            or definition.destructor is not None or definition.polymorphic):
+            or definition.destructor is not None or definition.polymorphic
+            or definition.base is not None):
         return False
     for member in definition.members:
         plain = unqualified(member.dtype)
@@ -141,6 +142,8 @@ class ClassDefinition:
         self.destructor = None
         # Virtual members in declaration order: the table entry order.
         self.virtual_functions = []
+        # The single direct non-virtual base specifier (inheritance.py), if any.
+        self.base = None
         self.complete = False
         # The enclosing declaration provides the injected name for the current
         # non-nested/non-template class boundary. A data member can hide it just
@@ -196,6 +199,8 @@ class ClassDefinition:
                 if member.name == self.dtype.name:
                     raise CppDiagnostic("cpp.class-name-member",
                                         "a class with a constructor cannot have a same-named data member", member.coord)
+        from pcc.frontends.cpp.inheritance import check_derived_definition
+        check_derived_definition(self)
         self.complete = True
         return self
 
@@ -214,7 +219,10 @@ class ClassDefinition:
         # user-declared constructor. A first-declaration, non-explicit defaulted
         # C1 does not prevent aggregate initialization, even if private/deleted.
         # [dcl.init.aggr]/1 also excludes classes with virtual functions.
-        return (not self.polymorphic
+        # [dcl.init.aggr]/1 admits public non-virtual bases in C++17, but their
+        # leading base elements are not modeled; keep derived classes outside
+        # aggregate initialization (an explicit boundary at its use).
+        return (not self.polymorphic and self.base is None
                 and all(not getattr(constructor, "constructor_user_provided", True)
                         and not getattr(constructor, "constructor_explicit", False)
                         for constructor in self.constructors.overloads)
@@ -269,6 +277,11 @@ class ClassDefinition:
             )
             for member in self.members
         ]
+        from pcc.frontends.cpp.inheritance import base_field
+        leading = base_field(self, project_type)
+        if leading is not None:
+            # Itanium 2.4: the primary non-virtual base subobject is at offset 0.
+            declarations.insert(0, leading)
         if self.polymorphic:
             from pcc.frontends.cpp.virtual_functions import vptr_field
             declarations.insert(0, vptr_field(self))
@@ -328,12 +341,16 @@ def parse_class(parser):
         return c_ast.Decl(
             None, [], [], [], c_ast.Struct(dtype.c_tag, None, name.coord), None, None, name.coord
         )
+    base = None
     if parser._peek().value == ":":
-        _unsupported(parser._peek(), "base class layout and lifetime semantics are not implemented")
+        from pcc.frontends.cpp.inheritance import parse_base_clause
+        base = parse_base_clause(parser, keyword.value, dtype)
     if parser._peek().value != "{":
         _unsupported(parser._peek(), "elaborated class declarations are not implemented here")
     parser._expect("{")
     definition = ClassDefinition(dtype, parser.scope, keyword.value)
+    definition.base = base
+    definition.layout_types = parser.types
     parent = parser.scope
     parser.scope = definition.scope
     try:
@@ -531,6 +548,26 @@ def member_access(parser, expression, operator, member):
     definition = owner.definition
     # Qualified member lookup must not find an unrelated enclosing declaration.
     symbol = definition.scope.names.get(member.value)
+    inherited = False
+    if symbol is None and definition.base is not None:
+        # [class.member.lookup]: a single base chain, nearest declaration first.
+        from pcc.frontends.cpp.inheritance import base_pointer, base_subobject, find_member, require_member_access
+        found, declaring = find_member(owner, member.value)
+        if found is not None:
+            if found.kind in ("member", "function") and not getattr(found, "static_member", False):
+                require_member_access(parser.scope, found, owner, owner, member.coord)
+            elif getattr(found, "access", "public") != "public":
+                require_member_access(parser.scope, found, owner, None, member.coord)
+            expression = (base_pointer(expression, declaring, member.coord) if operator == "->"
+                          else base_subobject(parser, expression, declaring, member.coord))
+            dtype = expression.dtype if operator == "." else unqualified(expression.dtype).pointee
+            owner, definition, symbol, inherited = declaring, declaring.definition, found, True
+    cursor = getattr(parser, "cursor", None)
+    if (symbol is None and cursor is not None and cursor.peek().value == ":"
+            and cursor.position + 1 < len(cursor.tokens) and cursor.tokens[cursor.position + 1].value == ":"):
+        # x.B::m names m through a nested-name-specifier ([basic.lookup.classref]).
+        raise CppDiagnostic("cpp.unsupported.base-classes",
+                            "qualified class member access (x.C::m) is not implemented", member.coord)
     if symbol is None:
         if member.value == 'operator=':
             raise CppDiagnostic('cpp.unsupported.class-assignment',
@@ -567,7 +604,8 @@ def member_access(parser, expression, operator, member):
             require_explicit_assignment_candidates(owner, symbol, arguments, member.coord)
         return call_member(parser, symbol, object_expression, arguments, member.coord,
                            address_available=True)
-    parser.scope.check_member_access(symbol, member.coord)
+    if not inherited:
+        parser.scope.check_member_access(symbol, member.coord)
     if symbol.kind == "enumerator":
         if operator == ".":
             if not expression.lvalue:

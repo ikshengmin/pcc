@@ -440,6 +440,9 @@ class ArithmeticTypes:
             if isinstance(source, PointerType):
                 if pointer_qualification_conversion(source, destination):
                     return 0
+                from pcc.frontends.cpp.inheritance import derived_to_base_pointer
+                if derived_to_base_pointer(source, destination):
+                    return 2  # [over.ics.scs] Table 12: pointer conversion
                 if (unqualified(destination.pointee) == "void"
                         and not function_type(source.pointee)
                         and (not const_qualified(source.pointee)
@@ -488,6 +491,21 @@ class ArithmeticTypes:
                 b = pointer_qualification_conversion(second, first)
                 if a != b:
                     return -1 if a else 1
+                # [over.ics.rank]/4.4: D* to B* beats D* to void*, and a nearer
+                # base beats a farther one.
+                from pcc.frontends.cpp.inheritance import derived_to_base_pointer, is_proper_base
+                to_first = derived_to_base_pointer(source, first)
+                to_second = derived_to_base_pointer(source, second)
+                if to_first and unqualified(second.pointee) == "void":
+                    return -1
+                if to_second and unqualified(first.pointee) == "void":
+                    return 1
+                if to_first and to_second:
+                    a, b = unqualified(first.pointee), unqualified(second.pointee)
+                    if is_proper_base(b, a):
+                        return -1
+                    if is_proper_base(a, b):
+                        return 1
         return 0
 
     def common(self, lhs, rhs):

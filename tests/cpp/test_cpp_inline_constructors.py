@@ -132,7 +132,7 @@ def test_tinyxml_strpair_original_constructor_body_binds_later_fields():
     ('struct S{S():n(later()){} int n;};int later();', 'cpp.undeclared'),
     ('struct S{S()try{}catch(...){} };', 'cpp.unsupported.exceptions'),
     ('struct S{S()noexcept{} };', 'cpp.unsupported.exceptions'),
-    ('struct B{};struct S:B{S():B(){} };', 'cpp.unsupported.classes'),
+    ('struct B{};struct S:B{S():B(){} };', 'cpp.unsupported.base-classes'),
     ('struct S{S():missing(1){} int n;};', 'cpp.invalid-member-initializer'),
     ('struct S{S():n(1),n(2){} int n;};', 'cpp.duplicate-member-initializer'),
     ('struct S{S(){} const int n;};', 'cpp.const-initializer'),

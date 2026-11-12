@@ -142,6 +142,15 @@ class Scope:
                   if self._accepted(scope.names.get(name), kinds)]
         if direct:
             return direct
+        if self.kind == "class":
+            # [class.qual]/1 with [class.member.lookup]: C::m also finds
+            # members of C's single base chain.
+            definition = getattr(getattr(self, "class_type", None), "definition", None)
+            if getattr(definition, "base", None) is not None:
+                from pcc.frontends.cpp.inheritance import find_member
+                inherited = find_member(definition.base.dtype, name)[0]
+                if self._accepted(inherited, kinds):
+                    return [inherited]
         found = []
         for scope in scopes:
             for nominated in scope.using_directives:
@@ -181,6 +190,13 @@ class Scope:
                 pending.extend(nominated.using_directives)
             found = list(injected.get(scope, ()))
             direct = scope.names.get(name)
+            if direct is None and scope.kind == "class":
+                # [class.member.lookup]: names of a base are members of the
+                # derived class scope unless hidden there.
+                definition = getattr(getattr(scope, "class_type", None), "definition", None)
+                if getattr(definition, "base", None) is not None:
+                    from pcc.frontends.cpp.inheritance import find_member
+                    direct = find_member(definition.base.dtype, name)[0]
             if self._accepted(direct, kinds):
                 found.append(direct)
             if found:
@@ -211,7 +227,7 @@ class Scope:
                     # [class.qual]/2 keeps an elaborated injected-class-name
                     # a type, not a constructor. Reuse its canonical symbol.
                     symbol = getattr(injected, "declaration_symbol", None)
-            self.check_member_access(symbol, name.coord)
+            self.check_named_member_access(symbol, name.coord)
             if index != len(name.parts) - 1:
                 if symbol is not None and symbol.kind in ("template-type", "class-template"):
                     raise CppDiagnostic("cpp.unsupported.dependent-lookup",
@@ -235,6 +251,20 @@ class Scope:
                     raise CppDiagnostic("cpp.not-a-namespace", "'" + part + "' does not name a namespace", name.coord)
                 scope = symbol.namespace_scope
         return symbol
+
+    def check_named_member_access(self, symbol, coord):
+        """A name without an object expression: its implicit object, if any, is
+        `this` of the lexically enclosing class, which may be derived from the
+        member's class ([class.access.base]/5, [class.protected])."""
+        owner = getattr(symbol, "class_owner", None)
+        if (owner is not None and getattr(symbol, "access", "public") != "public"
+                and getattr(self, "deferred_member_access", None) is None):
+            from pcc.frontends.cpp.inheritance import is_proper_base, lexical_classes, member_accessible
+            for lexical in lexical_classes(self):
+                if is_proper_base(owner, lexical) and member_accessible(
+                        self, owner, symbol.access, lexical, lexical):
+                    return
+        self.check_member_access(symbol, coord)
 
     def check_member_access(self, symbol, coord):
         """Check the selected declaration, not a nominal type's alias history.

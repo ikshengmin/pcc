@@ -592,6 +592,20 @@
         ]
       }
     },
+    "tests/cpp/test_cpp_single_inheritance.py": {
+      "test_inheritance_originals_execute_against_explicit_cpp17_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct C++17 reference compiler subprocess"
+        ]
+      },
+      "test_explicit_reference_rejects_invalid_and_accepts_gap_originals": {
+        "activity": "external-reference",
+        "reason": [
+          "Direct C++17 reference compiler -fsyntax-only subprocess"
+        ]
+      }
+    },
     "tests/cpp/test_cpp_declarators.py": {
       "test_declarator_binding_matches_explicit_cpp17_type_oracle": {
         "activity": "external-reference",

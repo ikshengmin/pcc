@@ -118,8 +118,9 @@ DEFERRED = (
     ('volatile-object-pointer', 'void f(void*p){static_cast<volatile int*>(p);}', 'cpp.unsupported.volatile'),
     ('volatile-void-pointer', 'void f(volatile void*p){static_cast<volatile int*>(p);}', 'cpp.unsupported.volatile'),
     ('dependent-pointer-target', 'template<class T>void f(void*p){static_cast<T*>(p);}', 'cpp.unsupported.pointer-templates'),
-    ('base-upcast', 'struct B{};struct D:B{};B*f(D*p){return static_cast<B*>(p);}', 'cpp.unsupported.classes'),
-    ('base-downcast', 'struct B{};struct D:B{};D*f(B*p){return static_cast<D*>(p);}', 'cpp.unsupported.classes'),
+    # Bases parse now; class-pointer static_cast keeps its own boundary.
+    ('base-upcast', 'struct B{};struct D:B{};B*f(D*p){return static_cast<B*>(p);}', 'cpp.unsupported.static-cast'),
+    ('base-downcast', 'struct B{};struct D:B{};D*f(B*p){return static_cast<D*>(p);}', 'cpp.unsupported.static-cast'),
 )
 
 

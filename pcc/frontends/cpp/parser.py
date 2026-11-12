@@ -810,6 +810,11 @@ class CppParser:
         if (self.types.conversion_rank(expression.dtype, dtype, expression.null_pointer) is None
                 and not nullptr_bool and not enum_explicit):
             raise CppDiagnostic("cpp.invalid-conversion", "unsupported conversion", coord)
+        from pcc.frontends.cpp.inheritance import derived_to_base_pointer, require_accessible_base
+        if derived_to_base_pointer(expression.dtype, dtype):
+            # [conv.ptr]/3: the base must be accessible here; offset 0, a C cast.
+            require_accessible_base(self.scope, unqualified(unqualified(expression.dtype).pointee),
+                                    unqualified(dtype.pointee), coord)
         if expression.dtype == dtype and not force:
             return expression.node
         typename = c_ast.Typename(None, [], self._scalar_type(None, dtype, coord), coord)
@@ -2632,7 +2637,10 @@ class CppParser:
         return arguments
 
     def _implicit_object(self, owner, coord):
-        if self.member_function is None or self.this_symbol is None or self.member_function.class_owner is not owner:
+        from pcc.frontends.cpp.inheritance import is_proper_base
+        current = None if self.member_function is None else self.member_function.class_owner
+        if (self.member_function is None or self.this_symbol is None
+                or current is not owner and not is_proper_base(owner, current)):
             raise CppDiagnostic("cpp.nonstatic-member-without-object", "a non-static member requires an object", coord)
         symbol = self.this_symbol
         if getattr(self, 'class_template_method', None) is not None:
