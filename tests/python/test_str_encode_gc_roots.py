@@ -1,9 +1,14 @@
-"""Counted encoder address leases, direct-entry roots, and failure teardown.
+"""The encoder reads its operands where they are, on every collector.
 
-The fixture-free memory model executes the checked-in guard bodies. Both
-moving collectors honor legacy Boolean pins, but an overlapping callback can
-clear that flag while another operation still borrows the address. Independent
-counted leases must survive that interleave. Native controls remain deferred.
+No collector moves an object while a mutator runs: GC0-GC3 never move one,
+and GC4 relocates only inside a stopped world, leaving in place whatever a
+thread's stack or registers name. The caller keeps the three operands alive
+for the call, so the encoder takes no frame, address lease, pin or graph
+lock: it runs the codec on the operands it was given and returns the new
+bytes object, or NULL with the codec's exception. The model executes the
+checked-in entry bodies; the codec itself has its own source-body tests
+(test_str_encode_binding.py), and the native cases below run the compiled
+runtime on all five collectors.
 """
 from __future__ import annotations
 
@@ -14,228 +19,101 @@ import re
 import pytest
 
 from pcc.runtime.py import py_abi_constants as abi
-from test_exception_constructor_roots import _Object, _Slots
 from test_int_bytes_gc_roots import _BytesMemory
 
 ROOT = Path(__file__).resolve().parents[2]
 PORT = ROOT / "pcc/runtime/py/py_str_accessors.py"
+GUARDS = (
+    "pcc_gc_frame_enter", "pcc_gc_frame_leave", "pcc_gc_foreign_lease_acquire",
+    "pcc_gc_foreign_lease_release", "pcc_gc_pin", "pcc_gc_take_pinned_slot",
+    "pcc_py_gc_minor_graph_lock", "pcc_py_gc_minor_graph_unlock", "pcc_gc_store_root",
+)
 
 
 class _EncoderMemory(_BytesMemory):
-    def __init__(self, phase="acquire", fail_acquire=0, acquire_code=-1,
-                 pending=None, fail_release=False, alias=False, backend=3):
-        super().__init__(phase=phase, pending=pending, fail_release=fail_release)
-        self.backend = backend
-        self.fail_acquire = fail_acquire
-        self.acquire_code = acquire_code
-        self.acquires = 0
-        self.releases = []
-        self.frames = {}
-        self.cached = []
+    def __init__(self, pending=None, codec_error=False):
+        super().__init__(phase="none", pending=pending)
+        self.codec_error = codec_error
+        self.codec_calls = []
+        self.released = []
         self.value.tag = abi.PY_TYPE_STR
-        self.value.movable = True
         self.signed.tag = abi.PY_TYPE_STR
-        if alias:
-            self.order = self.value
-            self.signed = self.value
         namespace = self.namespace
+
+        def guard(name):
+            def called(*args):
+                raise AssertionError(name + " in the encoder")
+            return called
+
+        namespace.update({name: guard(name) for name in GUARDS})
         namespace.update({
             "global_addr": lambda name: name,
-            "memset": self.memset,
-            "pcc_gc_frame_enter": self.frame_enter,
-            "pcc_gc_frame_leave": self.frame_leave,
-            "pcc_gc_foreign_lease_acquire": self.acquire,
-            "pcc_gc_foreign_lease_release": self.release,
-            "pcc_gc_load_ptr": lambda _owner, slot: self.read(slot, 0),
+            "py_err_occurred": lambda: int(self.error is not None),
+            "py_decref": self.released.append,
         })
         tree = ast.parse(PORT.read_text())
         functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)]
         exec(compile(ast.Module(body=functions, type_ignores=[]), str(PORT), "exec"), namespace)
-        # Conversion bytes/error ranges have their own source-body oracle.
-        # These hooks force GC precisely while the real guard holds raw views.
         namespace["_str_encode_names_leased"] = self.encode_names
-        namespace["_str_encode_codec"] = self.encode_legacy
+        namespace["_str_encode_codec"] = self.encode_codec
         self.namespace = namespace
+        if pending is not None:
+            self.error = (59, pending)
 
-    def memset(self, slots, _byte, size):
-        for offset in range(0, size, 8):
-            self.write(slots, offset, None)
-
-    def frame_enter(self, frame_map, slots):
-        count = 3 if "borrowed" in frame_map else 4
-        handles = []
-        for index in range(count):
-            handle = object()
-            self.handles[handle] = self.add(slots, index * 8)
-            handles.append(handle)
-        self.frames[slots] = handles
-        # The registry links the slots before entry can service a stop
-        # (test_frame_enter_publication_no_park.py), so a stop requested
-        # before or during entry runs here, after publication. Incoming raw
-        # SSA copies are deliberately stale afterward; the body must reload.
-        self.gc("frame_before")
-        self.gc("frame_enter")
-
-    def frame_leave(self, slots):
-        # The shared final transfer protocol has separate runtime gates. Here
-        # force relocation while these slots are still authoritative.
-        self.gc("frame_leave")
-        for handle in self.frames.pop(slots):
-            del self.handles[handle]
-
-    def gc(self, phase):
-        if self.depth or phase != self.phase:
-            return
-        for old in list(self.objects):
-            if not old.alive or not old.movable or old.leases:
-                continue
-            # Mirror the shared address-pinned predicate used by GC3
-            # oldification and GC4 relocation. Alias-unpin is injected by the
-            # explicit callback hooks, never by ignoring a live Boolean pin.
-            if old.flags & abi.PY_FLAG_GC_PINNED:
-                continue
-            moved = self.make(old.name, old.tag)
-            moved.references, moved.fields = old.references, old.fields.copy()
-            moved.flags = old.flags
-            moved.leases = old.leases
-            for slot in self.handles.values():
-                if self.read(slot, 0) is old:
-                    self.write(slot, 0, moved)
-            for value in self.objects:
-                if value.alive:
-                    value.fields = {key: moved if item is old else item
-                                    for key, item in value.fields.items()}
-            old.alive, old.references = False, 0
-            self.moves += 1
-
-    def acquire(self, slot):
-        self.acquires += 1
-        self.gc("acquire")
-        if self.acquires == self.fail_acquire:
-            return self.acquire_code
-        value = self.read(slot, 0)
-        if value is None or isinstance(value, int):
-            return 0
-        assert value.alive, "lease acquired from a stale root"
-        value.leases += 1
-        return 1
-
-    def release(self, slot, acquired):
-        if acquired:
-            value = self.read(slot, 0)
-            assert value.alive and value.leases > 0
-            value.leases -= 1
-            self.releases.append(value.name)
-        self.gc("release")
-        return -3 if self.fail_release else 0
-
-    def encode_names(self, value, encoding, errors):
-        for obj in (value, encoding, errors):
-            assert obj.alive and obj.leases > 0, "raw codec input lacks a counted lease"
-            self.cached.append(obj)
-            # Simulate an overlapping/nested operation balancing pin/unpin.
-            obj.flags &= ~abi.PY_FLAG_GC_PINNED
-        self.gc("encode")
-        assert all(obj.alive for obj in self.cached), "cached UTF8 pointer moved"
-        if self.pending:
+    def _codec(self, kind, operands):
+        self.codec_calls.append((kind, operands))
+        if self.codec_error:
             self.error = (59, "unicode")
             return None
-        result = self.make("result", abi.PY_TYPE_BYTES)
-        return result
-
-    def encode_legacy(self, value, _codec, _mode):
-        assert value.alive and value.leases > 0
-        self.cached.append(value)
-        value.flags &= ~abi.PY_FLAG_GC_PINNED
-        self.gc("encode")
-        assert value.alive
         return self.make("result", abi.PY_TYPE_BYTES)
+
+    def encode_names(self, value, encoding, errors):
+        return self._codec("names", (value, encoding, errors))
+
+    def encode_codec(self, value, codec, mode):
+        return self._codec("codec", (value, codec, mode))
 
     def encode_call(self, symbol="py_str_encode_with_encoding"):
         if symbol == "py_str_encode_with_encoding":
             return self.namespace[symbol](self.value, self.order, self.signed)
         return self.namespace[symbol](self.value)
 
-    def assert_closed(self):
-        assert not self.frames and not self.handles
-        assert self.depth == self.pins == 0
-        for value in self.objects:
-            if value.alive:
-                assert value.leases == 0, value.name
-                assert value.references == 1, value.name
 
-
-@pytest.mark.parametrize("phase", ("frame_enter", "lock", "acquire"))
-@pytest.mark.parametrize("backend", (3, 4))
-def test_direct_entry_reloads_before_leasing(phase, backend):
-    memory = _EncoderMemory(phase=phase, backend=backend)
+def test_the_encoder_runs_the_codec_on_its_operands_without_a_guard():
+    memory = _EncoderMemory()
     result = memory.encode_call()
-    assert result is memory.latest["result"] and result.alive
-    assert memory.error is None and memory.moves > 0
-    memory.assert_closed()
+    assert result is memory.latest["result"] and memory.error is None
+    # The very operands it was given, not reloaded or leased copies.
+    assert memory.codec_calls == [("names", (memory.value, memory.order, memory.signed))]
+    assert not memory.released
 
 
-def test_direct_entry_stop_during_frame_entry_follows_publication():
-    # A contended graph lock used to service a stop before the borrowed frame
-    # was linked, while only its unpublished slots held the arguments. Frame
-    # entry now stays unparkable until the link, so that stop runs after
-    # publication and the arguments relocate with their rooted slots.
-    memory = _EncoderMemory(phase="frame_before", backend=3)
-    result = memory.encode_call()
-    assert result is memory.latest["result"] and result.alive
-    memory.assert_closed()
-
-
-@pytest.mark.parametrize("alias", (False, True))
-@pytest.mark.parametrize("backend", (3, 4))
-def test_counted_leases_survive_alias_unpin(alias, backend):
-    memory = _EncoderMemory(phase="encode", alias=alias, backend=backend)
-    result = memory.encode_call()
-    assert result.alive and memory.error is None
-    assert all(value.alive for value in memory.cached)
-    assert memory.acquires == 3 and len(memory.releases) == 3
-    memory.assert_closed()
-
-
-@pytest.mark.parametrize("failure", (1, 2, 3))
-@pytest.mark.parametrize("code", (-1, -2))
-def test_partial_lease_failure_balances_roots(failure, code):
-    memory = _EncoderMemory(fail_acquire=failure, acquire_code=code)
-    assert memory.encode_call() is None
-    assert memory.error[0] == (15 if code == -2 else 7)
-    assert len(memory.releases) == failure - 1
-    memory.assert_closed()
-
-
-def test_pending_error_survives_lease_cleanup():
-    memory = _EncoderMemory(pending="unicode", fail_release=True, phase="release")
-    assert memory.encode_call() is None
-    assert memory.error == (59, "unicode")
-    memory.assert_closed()
-    memory = _EncoderMemory(fail_release=True, phase="close")
-    assert memory.encode_call() is None
-    assert memory.error[0] == 7
-    assert not memory.latest["result"].alive
-    memory.assert_closed()
-
-
-@pytest.mark.parametrize("phase", ("release", "close", "frame_leave"))
-@pytest.mark.parametrize("backend", (3, 4))
-def test_result_survives_owner_teardown(phase, backend):
-    memory = _EncoderMemory(phase=phase, backend=backend)
-    result = memory.encode_call()
-    assert result is memory.latest["result"] and result.alive
-    assert memory.error is None and memory.moves > 0
-    memory.assert_closed()
-
-
-@pytest.mark.parametrize("symbol", ("py_str_utf8_encode", "py_str_latin1_encode", "py_str_ascii_encode"))
-def test_legacy_exports_use_local_lifetime_guard(symbol):
-    memory = _EncoderMemory(phase="encode")
+@pytest.mark.parametrize("symbol,codec,mode", (
+    ("py_str_utf8_encode", 0, 0),
+    ("py_str_ascii_encode", 1, 0),
+    ("py_str_latin1_encode", 2, 0),
+))
+def test_fixed_codec_exports_pass_their_codec_and_strict_mode(symbol, codec, mode):
+    memory = _EncoderMemory()
     result = memory.encode_call(symbol)
-    assert result.alive and memory.error is None
-    assert memory.acquires == 3 and len(memory.releases) == 1
-    memory.assert_closed()
+    assert result is memory.latest["result"] and memory.error is None
+    assert memory.codec_calls == [("codec", (memory.value, codec, mode))]
+
+
+@pytest.mark.parametrize("symbol", ("py_str_encode_with_encoding", "py_str_utf8_encode"))
+def test_a_pending_exception_is_kept_and_nothing_is_encoded(symbol):
+    memory = _EncoderMemory(pending="earlier")
+    assert memory.encode_call(symbol) is None
+    assert memory.error == (59, "earlier") and not memory.codec_calls
+
+
+@pytest.mark.parametrize("symbol", ("py_str_encode_with_encoding", "py_str_latin1_encode"))
+def test_a_codec_error_returns_null_with_its_exception(symbol):
+    memory = _EncoderMemory(codec_error=True)
+    assert memory.encode_call(symbol) is None
+    assert memory.error == (59, "unicode")
+    # The codec produced nothing, so nothing is released but NULL.
+    assert memory.released == [None]
 
 
 def test_encoder_binders_capture_results_before_releasing_leases(tmp_path):

@@ -23,7 +23,7 @@ class MkdirRuntime(FileRuntime):
         self.ns.update(mkdir_at=self.mkdir_at, py_unicode_encode_error=self.encoding_error)
         self.load_selected(ROOT/'pcc/runtime/py/py_str_accessors.py', {
             '_utf8_ord_at_byte', '_encode_width', '_encode_invalid',
-            '_encode_raise_unicode', '_str_encode_codec', '_encode_guard_error',
+            '_encode_raise_unicode', '_str_encode_codec',
             '_str_encode_guarded', 'py_text_encode_ids',
         })
         self.load(ROOT/'pcc/runtime/py/py_os_mkdir.py')

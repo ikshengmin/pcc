@@ -87,18 +87,8 @@ py_raise_owned = extern("py_raise_owned", (c_ptr,), c_void)
 py_exc_new = extern("py_exc_new", (c_int64, c_ptr), c_ptr)
 py_unicode_encode_error = extern("py_unicode_encode_error", (c_ptr, c_ptr, c_int64, c_int64, c_ptr), c_void)
 py_err_occurred = extern("py_err_occurred", (), c_int64)
-pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
-pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
-pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
-pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
-pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
-pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
-pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
-pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_list_lock = extern("pcc_list_lock", (c_ptr,), c_void)
 pcc_list_unlock = extern("pcc_list_unlock", (c_ptr,), c_void)
-define_global_i32("pcc_str_encode_borrowed_frame_map", -3)
-define_global_i32("pcc_str_encode_owned_frame_map", 4)
 py_bytes_new = extern("py_bytes_new", (c_ptr, c_int64), c_ptr)
 py_int_value_i64 = extern("py_int_value_i64", (c_ptr,), c_int64)
 py_list_new = extern("py_list_new", (c_int64,), c_ptr)
@@ -915,88 +905,19 @@ def _str_encode_names_leased(s, encoding, errors):
     return _str_encode_codec(s, codec, _encode_error_id(errors))
 
 
-def _encode_guard_error(kind: int, message: c_ptr) -> None:
-    # Infrastructure cleanup must never replace the original codec exception.
-    if py_err_occurred() == 0:
-        py_raise_owned(py_exc_new(kind, message))
-
-
 @c_abi_export("_pcc_str_encode_guarded")
 def _str_encode_guarded(s, encoding, errors, forced_codec: int):
-    # Stage incoming borrowed pointers before retention, then keep separate
-    # owned slots and local counted leases for every raw codec view. Initial
-    # frame publication still consumes the shared runtime-entry contract:
-    # threaded raw ABI callers must keep incoming addresses leased until it
-    # completes, because frame_enter itself may park before linking slots.
-    borrowed = stack_alloc(24)
-    store_ptr(borrowed, 0, s)
-    store_ptr(borrowed, 8, encoding)
-    store_ptr(borrowed, 16, errors)
-    pcc_gc_frame_enter(global_addr("pcc_str_encode_borrowed_frame_map"), borrowed)
-    owned = stack_alloc(32)
-    memset(owned, 0, 32)
-    pcc_gc_frame_enter(global_addr("pcc_str_encode_owned_frame_map"), owned)
-    index: int = 0
-    while index < 3:
-        pcc_py_gc_minor_graph_lock()
-        value = pcc_gc_load_ptr(null(), ptr_add(borrowed, index * 8))
-        pcc_gc_store_root(ptr_add(owned, index * 8), value)
-        pcc_py_gc_minor_graph_unlock()
-        index = index + 1
-    pcc_gc_frame_leave(borrowed)
-    tokens = stack_alloc(24)
-    store_i64(tokens, 0, -1)
-    store_i64(tokens, 8, -1)
-    store_i64(tokens, 16, -1)
-    index = 0
-    while index < 3 and py_err_occurred() == 0:
-        acquired: int = pcc_gc_foreign_lease_acquire(ptr_add(owned, index * 8))
-        store_i64(tokens, index * 8, acquired)
-        if acquired < 0:
-            if acquired == -2:
-                _encode_guard_error(15, cstr("string encoding address lease overflow"))
-            else:
-                _encode_guard_error(7, cstr("string encoding requires a stable managed owner"))
-            break
-        index = index + 1
-    result_slot = ptr_add(owned, 24)
-    if index == 3:
-        if forced_codec < 0:
-            result = _str_encode_names_leased(
-                pcc_gc_load_ptr(null(), owned),
-                pcc_gc_load_ptr(null(), ptr_add(owned, 8)),
-                pcc_gc_load_ptr(null(), ptr_add(owned, 16)),
-            )
-        else:
-            policy: int = forced_codec // 3
-            result = _str_encode_codec(pcc_gc_load_ptr(null(), owned), forced_codec % 3,
-                                       -1 if policy == 8 else policy)
-        # Transfer the newly produced owner directly into the already traced
-        # result slot before lease release or any source-owner finalizer.
-        store_ptr(result_slot, 0, result)
-    index = 2
-    while index >= 0:
-        acquired = load_i64(tokens, index * 8)
-        if acquired >= 0:
-            status: int = pcc_gc_foreign_lease_release(ptr_add(owned, index * 8), acquired)
-            if status < 0:
-                _encode_guard_error(7, cstr("string encoding address lease cleanup failed"))
-        index = index - 1
-    index = 2
-    while index >= 0:
-        pcc_gc_store_root(ptr_add(owned, index * 8), null())
-        index = index - 1
-    # Use the shared final no-park transfer after all allocating/error/finalizer
-    # work. The result stays in its authoritative slot until frame retirement.
-    prior: int = 0
-    pcc_py_gc_minor_graph_lock()
-    result = pcc_gc_load_ptr(null(), result_slot)
-    if not ptr_is_null(result) and not is_tagged_int(result):
-        prior = load_i32(result, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
-    pcc_gc_pin(result)
-    pcc_py_gc_minor_graph_unlock()
-    pcc_gc_frame_leave(owned)
-    result = pcc_gc_take_pinned_slot(result_slot, prior)
+    # The caller keeps its three operands alive for the call, and no
+    # collector moves an object while a mutator runs: the codec reads them
+    # where they are and returns the new bytes object to its caller. No
+    # frame, lease, pin or graph lock stands between them.
+    if py_err_occurred() != 0:
+        return null()
+    if forced_codec < 0:
+        result = _str_encode_names_leased(s, encoding, errors)
+    else:
+        policy: int = forced_codec // 3
+        result = _str_encode_codec(s, forced_codec % 3, -1 if policy == 8 else policy)
     if py_err_occurred() != 0:
         py_decref(result)
         return null()
