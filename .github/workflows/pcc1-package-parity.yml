@@ -680,6 +680,23 @@ jobs:
           rustup toolchain install 1.91.1 --profile minimal \
             --target x86_64-unknown-linux-gnu --target aarch64-apple-darwin
           echo "PCC_CI_RUST_TOOLCHAIN=1.91.1" >> "$GITHUB_ENV"
+      - name: Install the pinned official Go reference toolchain
+        if: ${{ matrix.domain == 'go' }}
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.3'
+          cache: false
+      - name: Bind the matching whole-package Go reference installation
+        if: ${{ matrix.domain == 'go' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GOTOOLCHAIN=local
+          test "$(go env GOVERSION)" = 'go1.27.3'
+          goroot="$(go env GOROOT)"
+          test -x "$goroot/bin/go"
+          echo "PCC_GO_MATH_BITS_REFERENCE=$goroot/bin/go" >> "$GITHUB_ENV"
+          echo "PCC_GO_MATH_BITS_GOROOT=$goroot" >> "$GITHUB_ENV"
       - name: Bind actual available reference tools and Rust target sysroot
         run: uv run --frozen --no-sync python scripts/ci_validation_tools.py --domain "${{ matrix.domain }}" --out "$RUNNER_TEMP/reference-tools"
       - name: Complete ordinary, integration or external-reference partition

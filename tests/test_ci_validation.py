@@ -1154,3 +1154,22 @@ def test_native_source_lane_without_bundle_stops_before_tools_or_collection(tmp_
     assert receipt["status"] == "INFRASTRUCTURE_OR_RESOURCE_FAILURE"
     assert "requires an explicit same-run Stage1 bundle" in receipt["error"]
     assert receipt["collections"] == receipt["batches"] == []
+
+
+def test_go_ci_installs_pinned_reference_and_binds_whole_package_before_attestation():
+    job = WORKFLOW.read_text().split('\n  source-validation:\n', 1)[1].split(
+        '\n  shared-source-validation:\n', 1)[0]
+    install = job.split('      - name: Install the pinned official Go reference toolchain\n', 1)[1]
+    install, bind = install.split('      - name: Bind the matching whole-package Go reference installation\n', 1)
+    bind = bind.split('      - name: Bind actual available reference tools', 1)[0]
+    for step in (install, bind):
+        assert "if: ${{ matrix.domain == 'go' }}" in step
+    assert 'uses: actions/setup-go@v6' in install
+    assert "go-version: '1.27.3'" in install and 'cache: false' in install
+    assert 'export GOTOOLCHAIN=local' in bind
+    assert 'test "$(go env GOVERSION)" = \'go1.27.3\'' in bind
+    assert 'goroot="$(go env GOROOT)"' in bind and 'test -x "$goroot/bin/go"' in bind
+    assert 'PCC_GO_MATH_BITS_REFERENCE=$goroot/bin/go' in bind
+    assert 'PCC_GO_MATH_BITS_GOROOT=$goroot' in bind
+    assert job.index('actions/setup-go@v6') < job.index('scripts/ci_validation_tools.py') < job.index('scripts/ci_validation_run.py')
+    assert 'continue-on-error:' not in job
