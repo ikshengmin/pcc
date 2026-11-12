@@ -1780,6 +1780,7 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         # (py_runtime.h:117).  Written by pcc_gc_config_ensure and the
         # refcount-prepare mirrors, read by pcc_gc_telemetry.
         'pcc_allocator_double_free_reported',
+        'pcc_allocator_double_free_audit',
         'pcc_gc_refcount_provenance_probe',
         'pcc_gc_refcount_provenance_probe_reported',
         # py_incref/py_decref's in-place update gate (backend 0, no probe,

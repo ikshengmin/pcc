@@ -322,6 +322,17 @@ int main(void) {
     assert run.returncode == 0, run.stdout + run.stderr
 
 
+# The allocator object is closed over the Darwin platform ABI (libSystem):
+# pages (mmap, munmap), the per-thread object magazines (thread-local
+# storage, __tlv_bootstrap), and the double-free audit's report and abort
+# (write; kill, getpid and _exit with errno): the owned platform intrinsics.
+# Nothing of the managed runtime, the collector or a libc allocator.
+DARWIN_PLATFORM_IMPORTS = {
+    "_mmap", "_munmap", "__tlv_bootstrap",
+    "_write", "_kill", "_getpid", "__exit", "___error",
+}
+
+
 def test_freestanding_allocator_compiles_to_closed_platform_abi_object(tmp_path):
     obj = _build_allocator_object(tmp_path)
     symbols = subprocess.run(
@@ -341,7 +352,7 @@ def test_freestanding_allocator_compiles_to_closed_platform_abi_object(tmp_path)
         timeout=30,
     )
     assert undefined.returncode == 0, undefined.stdout + undefined.stderr
-    assert set(undefined.stdout.split()) == {"_mmap", "_munmap"}
+    assert set(undefined.stdout.split()) == DARWIN_PLATFORM_IMPORTS
     for forbidden in ("malloc", "calloc", "realloc", "free"):
         assert forbidden not in undefined.stdout.replace("munmap", "")
 
@@ -363,7 +374,7 @@ def test_freestanding_allocator_self_backend_uses_same_c_abi(tmp_path):
     )
     assert undefined.returncode == 0, undefined.stdout + undefined.stderr
     if supported_darwin:
-        assert set(undefined.stdout.split()) == {"_mmap", "_munmap"}
+        assert set(undefined.stdout.split()) == DARWIN_PLATFORM_IMPORTS
     else:
         assert undefined.stdout.strip() == ""
     _run_allocator_harness(tmp_path, "allocator_self_harness", obj)

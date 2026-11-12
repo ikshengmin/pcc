@@ -8,7 +8,7 @@ pointer.  The only platform boundary is ``pcc.unsafe.page_alloc/page_free``.
 """
 
 from pcc import i64
-from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
+from pcc.extern import c_abi_export, c_ptr
 from pcc.unsafe import (
     logical_shift_right_i64,
     atomic_cas_i64,
@@ -23,10 +23,12 @@ from pcc.unsafe import (
     define_thread_local_ptr_null,
     define_thread_local_i32,
     frame_address,
+    getpid,
     global_addr,
     global_load_ptr,
     global_store_ptr,
     int_to_ptr,
+    kill,
     load_i8,
     load_i32,
     load_i64,
@@ -39,12 +41,14 @@ from pcc.unsafe import (
     ptr_diff,
     ptr_eq,
     ptr_is_null,
+    process_exit,
     ptr_to_int,
     store_i64,
     store_i8,
     store_i32,
     store_ptr,
     wrapping_mul_i64,
+    write,
 )
 
 __pcc_freestanding__ = True
@@ -753,14 +757,13 @@ define_global_i64("pcc_allocator_fully_free_slabs", 0)
 # here names the second free instead.  PCC_GC_COUNTER_ALLOCATOR_DOUBLE_FREES.
 define_global_i64("pcc_allocator_double_frees", 0)
 define_global_i32("pcc_allocator_double_free_reported", 0)
-
-# Reporting a double free needs a write and an abort, both freestanding
-# platform exports; the allocator itself stays free of any managed runtime
-# reference.
-pcc_platform_write = extern(
-    "pcc_platform_write", (c_int64, c_ptr, c_int64), c_int64
-)
-pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+# The allocator's own audit level: 2 reports the first double free on
+# stderr, 3 also aborts. The collector's configuration copies
+# PCC_GC_REFCOUNT_PROVENANCE_PROBE here, so the allocator reads no collector
+# state. It reports and aborts through the owned platform intrinsics (the
+# platform ABI: libSystem on Darwin, raw system calls on Linux) and stays an
+# object closed over that ABI.
+define_global_i32("pcc_allocator_double_free_audit", 0)
 define_global_ptr_null("pcc_allocator_trim_queue")
 define_global_ptr_null("pcc_allocator_free_16")
 define_global_ptr_null("pcc_allocator_free_obj_16")
@@ -2954,13 +2957,13 @@ def pcc_free(ptr) -> None:
                 # mapping path can still fail inside page_free.
                 pcc_allocator_account_allocate(requested, usable, 0)
                 audit: i64 = load_i32(
-                    global_addr("pcc_gc_refcount_provenance_probe"), 0
+                    global_addr("pcc_allocator_double_free_audit"), 0
                 )
                 if audit >= 2:
                     reported = global_addr("pcc_allocator_double_free_reported")
                     if load_i32(reported, 0) == 0:
                         store_i32(reported, 0, 1)
-                        pcc_platform_write(
+                        write(
                             2,
                             cstr(
                                 "pcc runtime: object cell freed twice "
@@ -2970,7 +2973,9 @@ def pcc_free(ptr) -> None:
                         )
                         if audit == 3:
                             pcc_allocator_lock_release()
-                            pcc_platform_abort()
+                            # SIGABRT, so the crash report names the caller.
+                            kill(getpid(), 6)
+                            process_exit(134)
                 pcc_allocator_lock_release()
                 return
             pcc_allocator_put_small_object(ptr, usable)

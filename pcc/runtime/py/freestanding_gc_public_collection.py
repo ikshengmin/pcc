@@ -417,6 +417,8 @@ def pcc_gc_config_ensure() -> i64:
     store_i32(global_addr("pcc_gc_minor_heap_size"), 0, minor_heap_size)
     store_i32(global_addr("pcc_gc_minor_alloc_max"), 0, minor_alloc_max)
     store_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0, refcount_probe)
+    # The allocator audits double frees at the same level, from its own word.
+    store_i32(global_addr("pcc_allocator_double_free_audit"), 0, refcount_probe)
     refcount_fast: i64 = 0
     if backend == 0 and refcount_probe == 0 and pcc_threads_enabled() == 0:
         refcount_fast = 1

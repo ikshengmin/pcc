@@ -78,11 +78,29 @@ def test_free_checks_the_poison_before_linking() -> None:
 def test_the_double_free_is_counted_and_auditable() -> None:
     assert 'define_global_i64("pcc_allocator_double_frees", 0)' in ALLOCATOR
     assert 'define_global_i32("pcc_allocator_double_free_reported", 0)' in ALLOCATOR
-    # The audit gate is the same knob as the refcount provenance probe.
-    assert 'global_addr("pcc_gc_refcount_provenance_probe"), 0' in ALLOCATOR
+    # The audit gate is the same knob as the refcount provenance probe, held
+    # in the allocator's own word: the allocator reads no collector state.
+    assert 'define_global_i32("pcc_allocator_double_free_audit", 0)' in ALLOCATOR
+    assert 'global_addr("pcc_allocator_double_free_audit"), 0' in ALLOCATOR
+    assert "pcc_gc_refcount_provenance_probe" not in ALLOCATOR.replace(
+        "PCC_GC_REFCOUNT_PROVENANCE_PROBE", ""
+    )
+    config = (RUNTIME / "py" / "freestanding_gc_public_collection.py").read_text(
+        encoding="utf-8"
+    )
+    probe = config.index(
+        'store_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0, refcount_probe)'
+    )
+    assert config.index(
+        'store_i32(global_addr("pcc_allocator_double_free_audit"), 0, refcount_probe)'
+    ) > probe
     assert "if audit >= 2:" in ALLOCATOR
     assert "if audit == 3:" in ALLOCATOR
-    assert "pcc_platform_abort()" in ALLOCATOR
+    # Report and abort through the owned platform intrinsics, so the
+    # allocator object stays closed over the platform ABI.
+    assert "kill(getpid(), 6)" in ALLOCATOR
+    assert "process_exit(134)" in ALLOCATOR
+    assert "pcc_platform_" not in ALLOCATOR
     assert DOUBLE_FREE_MESSAGE in ALLOCATOR
 
 
@@ -99,6 +117,10 @@ def test_the_new_globals_are_registered_for_the_freestanding_closure() -> None:
     assert "pcc_allocator_double_frees" in runtime_abi.FREESTANDING_GC_I64_GLOBALS
     assert (
         "pcc_allocator_double_free_reported"
+        in runtime_abi.FREESTANDING_GC_I32_GLOBALS
+    )
+    assert (
+        "pcc_allocator_double_free_audit"
         in runtime_abi.FREESTANDING_GC_I32_GLOBALS
     )
 
@@ -293,7 +315,7 @@ def test_the_double_free_report_length_matches_its_literal() -> None:
     import re
 
     call = re.search(
-        r"pcc_platform_write\(\s*2,\s*cstr\(\s*(.*?)\s*\),\s*(\d+),",
+        r"\bwrite\(\s*2,\s*cstr\(\s*(.*?)\s*\),\s*(\d+),",
         ALLOCATOR,
         re.S,
     )
