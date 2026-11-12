@@ -1,0 +1,72 @@
+// PCC-owned C++17 declarations; N4659 [ctime.syn] (C11 7.27).
+// No time routine is implemented by this header: every function is a C-linkage
+// declaration of the target C library's routine and needs a real definition.
+// clock_t, struct tm and struct timespec follow the target C library's ABI:
+// glibc (x86-64 and AArch64 Linux) and Darwin. struct tm keeps that library's
+// tm_gmtoff/tm_zone members, so its size and member offsets are not narrowed.
+// Any other target fails explicitly rather than borrowing another layout.
+#ifndef _PCC_CXX_CTIME
+#define _PCC_CXX_CTIME
+#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
+using clock_t = long;
+using __pcc_tm_zone_name = const char*;
+#elif defined(__APPLE__)
+using clock_t = unsigned long;
+using __pcc_tm_zone_name = char*;
+#else
+#error owned C++ <ctime> has no C library time ABI for this target
+#endif
+using size_t = __SIZE_TYPE__;
+using time_t = long;
+#ifndef NULL
+#define NULL 0
+#endif
+#define CLOCKS_PER_SEC ((clock_t)1000000)
+#define TIME_UTC 1
+struct timespec {
+    time_t tv_sec;
+    long tv_nsec;
+};
+struct tm {
+    int tm_sec;
+    int tm_min;
+    int tm_hour;
+    int tm_mday;
+    int tm_mon;
+    int tm_year;
+    int tm_wday;
+    int tm_yday;
+    int tm_isdst;
+    long tm_gmtoff;
+    __pcc_tm_zone_name tm_zone;
+};
+extern "C" {
+clock_t clock();
+double difftime(time_t, time_t);
+time_t mktime(tm*);
+time_t time(time_t*);
+int timespec_get(timespec*, int);
+char* asctime(const tm*);
+char* ctime(const time_t*);
+tm* gmtime(const time_t*);
+tm* localtime(const time_t*);
+size_t strftime(char*, size_t, const char*, const tm*);
+}
+namespace std {
+using ::clock_t;
+using ::size_t;
+using ::time_t;
+using ::timespec;
+using ::tm;
+using ::clock;
+using ::difftime;
+using ::mktime;
+using ::time;
+using ::timespec_get;
+using ::asctime;
+using ::ctime;
+using ::gmtime;
+using ::localtime;
+using ::strftime;
+}
+#endif
