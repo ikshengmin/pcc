@@ -5,28 +5,17 @@ the complete runtime's actual root scan, finalizers, weakrefs and reclamation.
 """
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 
 import pytest
 
+from pcc.frontends.python.codegen.freestanding_abi_constants import ABI_CONSTANTS
 from tests.python.runtime_body_model import load_functions
 
 
 SOURCE = Path(__file__).resolve().parents[2] / (
     "pcc/runtime/py/freestanding_gc_tracing_sweep_collector.py"
 )
-ABI_CONSTANTS = {
-    "object.type.class": next(
-        ast.literal_eval(node.value)
-        for node in ast.parse(
-            SOURCE.with_name("py_abi_constants.py").read_text(encoding="utf-8")
-        ).body
-        if isinstance(node, ast.Assign)
-        and any(isinstance(target, ast.Name) and target.id == "PY_TYPE_CLASS"
-                for target in node.targets)
-    )
-}
 WHITE, GRAY, BLACK, FINALIZED, CANDIDATE = 8, 16, 32, 4, 1024
 
 
