@@ -299,20 +299,25 @@ def test_granule_object_raw_preflight_and_exact_set_fallback(
             print(pointer_register(a), exact_contains(a))
             print(retire_obj(a), is_obj(a), pointer_is_managed(a))
             free(b)
-            print(is_obj(b))
+            freed_is_obj = is_obj(b)
 
             # A freed object cell stays in the object-family list.  A raw
             # allocation in the SAME size class cannot steal it, while the
             # next object allocation reuses it deterministically (locked LIFO).
+            # Nothing prints in between: GC1-GC4 free no print temporary
+            # before a collection, so one would take the freed cell first.
             raw_same = malloc(56)
             raw_stole_object = 0
             if ptr_diff(raw_same, b) == 0:
                 raw_stole_object = 1
-            print(raw_stole_object, kind(raw_same), is_obj(raw_same))
+            raw_kind = kind(raw_same)
+            raw_is_obj = is_obj(raw_same)
             reused = alloc_obj(56)
             object_reused = 0
             if ptr_diff(reused, b) == 0:
                 object_reused = 1
+            print(freed_is_obj)
+            print(raw_stole_object, raw_kind, raw_is_obj)
             print(object_reused, kind(reused), is_obj(reused))
 
             # The public registration path must publish the completed header
@@ -1815,6 +1820,16 @@ def _build_threaded_granule_harness(
                 return 0;
             }
 
+            /* The table capacity after ``slab_count`` registrations: 256,
+             * doubled at each grow index already registered. */
+            static int64_t expected_table_capacity(int64_t slab_count) {
+                int64_t capacity = 256;
+                for (int64_t index = 8; index <= 512; index *= 2) {
+                    if (slab_count > index) capacity *= 2;
+                }
+                return capacity;
+            }
+
             static int64_t expected_metadata_total(
                 int64_t table_cap,
                 int64_t slab_count,
@@ -2057,10 +2072,14 @@ def _build_threaded_granule_harness(
                 int64_t initial_capacity = pcc_allocator_granule_table == NULL
                     ? 0
                     : *(int64_t *)pcc_allocator_granule_table;
+                /* The runtime registers its own slabs before main (eleven
+                 * at this writing, so the table already grew once): derive
+                 * the capacity from them instead of assuming none grew it. */
                 if (
-                    initial_capacity != 256
-                    || initial_keys <= 0
+                    initial_keys <= 0
                     || initial_keys % GRANULES != 0
+                    || initial_capacity
+                        != expected_table_capacity(initial_keys / GRANULES)
                 ) {
                     __atomic_add_fetch(&errors, 1, __ATOMIC_ACQ_REL);
                 }
@@ -2218,6 +2237,16 @@ def _build_threaded_granule_harness(
     return exe
 
 
+def _expected_granule_table_capacity(slab_count: int) -> int:
+    """The granule table capacity after ``slab_count`` slab registrations:
+    256, doubled at each grow index (8, 16, ..., 512) already registered."""
+    capacity = 256
+    for grow_index in (8, 16, 32, 64, 128, 256, 512):
+        if slab_count > grow_index:
+            capacity *= 2
+    return capacity
+
+
 def test_granule_single_writer_races_real_pthread_readers_through_grow(
     tmp_path: Path,
     granule_runtime_archives: dict[str, Path],
@@ -2241,10 +2270,16 @@ def test_granule_single_writer_races_real_pthread_readers_through_grow(
         assert tokens[:2] == ["backend", str(backend)]
         values = dict(zip(tokens[2::2], tokens[3::2], strict=True))
         assert values["threads"] == "1"
-        assert values["starting_cap"] == "256"
+        # The runtime's own slabs registered before main set the capacity:
+        # 256, doubled at each grow index they passed.
+        assert int(values["starting_cap"]) == _expected_granule_table_capacity(
+            int(values["starting_slabs"])
+        )
         assert int(values["starting_slabs"]) > 0
         assert int(values["starting_metadata"]) >= 2 * 65536
-        assert values["initial_cap"] == "256"
+        assert int(values["initial_cap"]) == _expected_granule_table_capacity(
+            int(values["initial_slabs"])
+        )
         assert int(values["initial_slabs"]) >= int(values["starting_slabs"])
         assert int(values["bootstrap_capacity"]) >= 0
         assert int(values["bootstrap_metadata"]) >= 0
