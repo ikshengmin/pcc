@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -32,10 +33,15 @@ def test_bootstrap_stage_result_declares_metric_scope_and_pairing_contract(
     options = bootstrap.Options({
         "PCC_BOOTSTRAP_PROFILE_DIR": str(tmp_path),
         "PCC_BOOTSTRAP_OUT_DIR": str(tmp_path / "out"),
+        # This receipt unit has a fake build, so do not auto-size it from
+        # the host. Still exercise the real explicit-budget validation.
+        "PCC_BOOTSTRAP_MAX_TREE_RSS_BYTES": str(1024 * 1024 * 1024),
     })
     options.out_dir.mkdir(parents=True, exist_ok=True)
 
     def fake_guarded(target, opts, stage, environment):
+        assert opts.max_tree_rss_bytes == 1024 * 1024 * 1024
+        assert opts.memory_budget_selection["selection_kind"] == "explicit"
         output = opts.stage_output(stage)
         output.write_bytes(b"stage binary")
         output.chmod(0o755)
@@ -212,6 +218,148 @@ def test_stage_pair_summary_uses_tree_cpu_without_automatic_verdict() -> None:
     assert stage["medians"]["candidate"]["cpu_s"] == pytest.approx(405.0)
     assert stage["paired_median_candidate_over_baseline"]["cpu_s"] < 0.8
     assert stage["paired_candidate_over_baseline"]["wall_s"] == [1.1, 0.875]
+
+
+def _stage2_record(tool, **metrics):
+    result = {
+        "wall_ms": 100_000,
+        "compile_wall_ms": 99_000,
+        "compile_user_ms": 250_000,
+        "compile_sys_ms": 10_000,
+        "metric_scopes": {
+            key: value for key, value in tool.STAGE2_METRIC_SCOPES.items()
+            if key != "peak_tree_rss_bytes"
+        },
+    }
+    result.update(metrics)
+    return {"result": result, "process": {"peak_tree_rss_bytes": 2000}}
+
+
+def test_stage2_missing_cpu_stays_unavailable_in_all_pair_summaries():
+    tool = _load_stage_ab()
+    first = _stage2_record(tool)
+    first["result"].pop("compile_user_ms")
+    first["result"].pop("compile_sys_ms")
+    assert tool._stage_metrics(first, "stage2")["cpu_s"] is None
+    stage1 = {"result": {"metrics": {"wall_s": 80, "cpu_s": 200}},
+              "process": {"peak_tree_rss_bytes": 1000}}
+    pairs = []
+    for index in range(2):
+        pairs.append({
+            "baseline": {"stage1": stage1, "stage2": _stage2_record(tool)},
+            "candidate": {"stage1": stage1,
+                          "stage2": first if index == 0 else _stage2_record(tool)},
+        })
+    result = tool.summarize_pairs(pairs)["stages"]["stage2"]
+    assert result["medians"]["baseline"]["cpu_s"] == 260
+    assert result["medians"]["candidate"]["cpu_s"] is None
+    assert result["candidate_over_baseline"]["cpu_s"] is None
+    assert result["paired_candidate_over_baseline"]["cpu_s"] == [None, 1.0]
+    assert result["paired_median_candidate_over_baseline"]["cpu_s"] is None
+    assert result["medians"]["candidate"]["wall_s"] == 100
+    assert result["candidate_over_baseline"]["peak_tree_rss_bytes"] == 1.0
+
+
+@pytest.mark.parametrize("missing", ("compile_user_ms", "compile_sys_ms"))
+def test_stage2_partial_cpu_pair_is_rejected(missing):
+    tool = _load_stage_ab()
+    record = _stage2_record(tool)
+    record["result"].pop(missing)
+    with pytest.raises(tool.StageABError, match="incomplete.*CPU"):
+        tool._stage_metrics(record, "stage2")
+
+
+@pytest.mark.parametrize(
+    "invalid", (None, -1, True, "100", float("nan"), float("inf"), 10**400)
+)
+@pytest.mark.parametrize("metric", ("wall_ms", "compile_user_ms"))
+def test_stage2_invalid_metric_is_not_a_performance_observation(metric, invalid):
+    tool = _load_stage_ab()
+    record = _stage2_record(tool, **{metric: invalid})
+    with pytest.raises(tool.StageABError, match=metric):
+        tool._stage_metrics(record, "stage2")
+
+
+@pytest.mark.parametrize("stage", ("stage1", "stage2"))
+def test_stage_summary_rejects_unmeasured_process_tree_rss(stage):
+    tool = _load_stage_ab()
+    record = _stage2_record(tool)
+    if stage == "stage1":
+        record["result"] = {"metrics": {"wall_s": 80, "cpu_s": 200}}
+    record["process"].pop("peak_tree_rss_bytes")
+    with pytest.raises(tool.StageABError, match="peak_tree_rss_bytes"):
+        tool._stage_metrics(record, stage)
+
+
+def test_stage2_zero_measured_cpu_is_not_missing_or_a_ratio_denominator():
+    tool = _load_stage_ab()
+    measured = _stage2_record(tool, compile_user_ms=0, compile_sys_ms=0)
+    assert tool._stage_metrics(measured, "stage2")["cpu_s"] == 0.0
+    stage1 = {"result": {"metrics": {"wall_s": 80, "cpu_s": 200}},
+              "process": {"peak_tree_rss_bytes": 1000}}
+    arm = {"stage1": stage1, "stage2": measured}
+    result = tool.summarize_pairs([{"baseline": arm, "candidate": arm}])["stages"]["stage2"]
+    assert result["medians"]["baseline"]["cpu_s"] == 0.0
+    assert result["candidate_over_baseline"]["cpu_s"] is None
+    assert result["paired_candidate_over_baseline"]["cpu_s"] == [None]
+
+
+@pytest.mark.parametrize("scope", (None, {}, {"wall_ms": "coordinator_only"}))
+def test_stage2_scope_is_checked_before_smoke_and_is_not_relabelled(
+    tmp_path, monkeypatch, scope,
+):
+    tool = _load_stage_ab()
+    compiler = tmp_path / "compiler"
+    compiler.write_bytes(b"test compiler identity, never executed")
+    receipt = tmp_path / "receipt.json"
+    receipt.write_text(json.dumps({"environment": {}}))
+    arm_root = tmp_path / "arm"
+    arm_root.mkdir()
+    record = _stage2_record(tool, metric_scopes=scope)
+
+    def sample(_args):
+        profile = arm_root / "stage2" / "profile"
+        profile.mkdir()
+        (profile / "stage2.result.json").write_text(json.dumps(record["result"]))
+        return {"status": "COMPLETE", "returncode": 0}
+
+    def unexpected_smoke(*args, **kwargs):
+        raise AssertionError("invalid measurement reached executable smoke")
+
+    monkeypatch.setattr(tool, "_sampler_args", lambda *args, **kwargs: None)
+    with pytest.raises(tool.StageABError, match="Stage2 metric scope mismatch"):
+        tool._run_stage2(
+            arm="candidate", pair_index=1,
+            stage1_record={"compiler": str(compiler), "source_snapshot": str(tmp_path),
+                           "receipt_path": str(receipt)},
+            arm_root=arm_root,
+            args=SimpleNamespace(self_backend_jobs=2, max_tree_rss_bytes=1024,
+                                 stage2_timeout=60, smoke_timeout=1),
+            ab=SimpleNamespace(_run_process=unexpected_smoke),
+            sampler=SimpleNamespace(run=sample),
+        )
+
+
+@pytest.mark.parametrize("cpu_split", ((0.05, 0.01), None))
+def test_stage2_scope_matches_the_real_bootstrap_result_writer(tmp_path, cpu_split):
+    tool = _load_stage_ab()
+    options = bootstrap.Options({"PCC_BOOTSTRAP_PROFILE_DIR": str(tmp_path)})
+    bootstrap.write_stage_result_json(
+        2, tmp_path / "pcc2", options, compile_elapsed_ms=100,
+        barrier_elapsed_ms=20, stage_elapsed_ms=120, returncode=0,
+        barrier_returncode=0, cpu_split=cpu_split,
+    )
+    result = json.loads((tmp_path / "stage2.result.json").read_text())
+    metrics = tool._stage_metrics(
+        {"result": result, "process": {"peak_tree_rss_bytes": 1000}}, "stage2",
+    )
+    assert metrics["wall_s"] == 0.12
+    assert metrics["compile_wall_s"] == 0.1
+    assert metrics["peak_tree_rss_bytes"] == 1000.0
+    if cpu_split is None:
+        assert metrics["cpu_s"] is None
+    else:
+        assert metrics["cpu_s"] == pytest.approx(0.06)
 
 
 def test_stage2_runner_uses_auto_oversized_lane_and_two_backend_workers() -> None:

@@ -14,6 +14,7 @@ import datetime as dt
 import hashlib
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -125,25 +126,73 @@ def normalize_arm_environment(
     return normalized
 
 
-def _stage_metrics(record: dict[str, Any], stage: str) -> dict[str, float]:
+def _measured_number(values: dict[str, Any], name: str) -> float:
+    value = values.get(name)
+    if type(value) not in (int, float):
+        raise StageABError("invalid or missing measured metric: " + name)
+    try:
+        measured = float(value)
+    except OverflowError as exc:
+        raise StageABError("invalid measured metric: " + name) from exc
+    if not math.isfinite(measured) or measured < 0:
+        raise StageABError("invalid measured metric: " + name)
+    return measured
+
+
+def _stage_metrics(record: dict[str, Any], stage: str) -> dict[str, float | None]:
     if stage == "stage1":
         raw = record["result"]["metrics"]
         return {
-            "wall_s": float(raw["wall_s"]),
-            "cpu_s": float(raw["cpu_s"]),
-            "peak_tree_rss_bytes": float(record["process"]["peak_tree_rss_bytes"]),
+            "wall_s": _measured_number(raw, "wall_s"),
+            "cpu_s": _measured_number(raw, "cpu_s"),
+            "peak_tree_rss_bytes": _measured_number(
+                record["process"], "peak_tree_rss_bytes"
+            ),
         }
     raw = record["result"]
-    return {
-        "wall_s": float(raw["wall_ms"]) / 1000.0,
-        "compile_wall_s": float(raw["compile_wall_ms"]) / 1000.0,
-        "cpu_s": (
-            float(raw.get("compile_user_ms", 0))
-            + float(raw.get("compile_sys_ms", 0))
-        )
-        / 1000.0,
-        "peak_tree_rss_bytes": float(record["process"]["peak_tree_rss_bytes"]),
+    # Validate the producer's scope instead of replacing it with our label.
+    # Tree RSS belongs to the outer sampler, not bootstrap's stage receipt.
+    expected_scopes = {
+        key: value
+        for key, value in STAGE2_METRIC_SCOPES.items()
+        if key != "peak_tree_rss_bytes"
     }
+    if raw.get("metric_scopes") != expected_scopes:
+        raise StageABError("Stage2 metric scope mismatch")
+    has_user = "compile_user_ms" in raw
+    has_system = "compile_sys_ms" in raw
+    if has_user != has_system:
+        raise StageABError("incomplete Stage2 timed CPU metrics")
+    # bootstrap deliberately omits both fields when timed child CPU is
+    # unavailable. Keep that absence; zero is a real measured observation.
+    cpu_s = None
+    if has_user:
+        cpu_s = (
+            _measured_number(raw, "compile_user_ms") / 1000.0
+            + _measured_number(raw, "compile_sys_ms") / 1000.0
+        )
+    return {
+        "wall_s": _measured_number(raw, "wall_ms") / 1000.0,
+        "compile_wall_s": _measured_number(raw, "compile_wall_ms") / 1000.0,
+        "cpu_s": cpu_s,
+        "peak_tree_rss_bytes": _measured_number(
+            record["process"], "peak_tree_rss_bytes"
+        ),
+    }
+
+
+def _complete_median(values: list[float | None]) -> float | None:
+    # Do not silently shrink the requested pair population to its measured
+    # subset when one arm lacks an observation.
+    if any(value is None for value in values):
+        return None
+    return float(statistics.median(values))
+
+
+def _measured_ratio(candidate: float | None, baseline: float | None) -> float | None:
+    if candidate is None or baseline is None or baseline == 0:
+        return None
+    return candidate / baseline
 
 
 def _process_failure_summary(process: dict[str, Any]) -> str:
@@ -307,35 +356,39 @@ def summarize_pairs(pairs: list[dict[str, Any]]) -> dict[str, Any]:
         "stages": {},
     }
     for stage in stages:
-        by_arm: dict[str, list[dict[str, float]]] = {"baseline": [], "candidate": []}
+        by_arm: dict[str, list[dict[str, float | None]]] = {
+            "baseline": [], "candidate": []
+        }
         for pair in pairs:
             for arm in by_arm:
                 by_arm[arm].append(_stage_metrics(pair[arm][stage], stage))
         metric_names = sorted(by_arm["baseline"][0])
-        medians: dict[str, dict[str, float]] = {}
+        medians: dict[str, dict[str, float | None]] = {}
         for arm in by_arm:
             medians[arm] = {
-                metric: float(
-                    statistics.median(row[metric] for row in by_arm[arm])
-                )
+                metric: _complete_median([row[metric] for row in by_arm[arm]])
                 for metric in metric_names
             }
-        paired_ratios: dict[str, list[float]] = {}
+        paired_ratios: dict[str, list[float | None]] = {}
         for metric in metric_names:
             paired_ratios[metric] = [
-                _stage_metrics(pair["candidate"][stage], stage)[metric]
-                / _stage_metrics(pair["baseline"][stage], stage)[metric]
+                _measured_ratio(
+                    _stage_metrics(pair["candidate"][stage], stage)[metric],
+                    _stage_metrics(pair["baseline"][stage], stage)[metric],
+                )
                 for pair in pairs
             ]
         summary["stages"][stage] = {
             "medians": medians,
             "candidate_over_baseline": {
-                metric: medians["candidate"][metric] / medians["baseline"][metric]
+                metric: _measured_ratio(
+                    medians["candidate"][metric], medians["baseline"][metric]
+                )
                 for metric in metric_names
             },
             "paired_candidate_over_baseline": paired_ratios,
             "paired_median_candidate_over_baseline": {
-                metric: float(statistics.median(values))
+                metric: _complete_median(values)
                 for metric, values in paired_ratios.items()
             },
         }
@@ -529,6 +582,7 @@ def _run_stage2(
             arm + " Stage2 did not complete: " + _process_failure_summary(process)
         )
     result = _read_json(profile / "stage2.result.json")
+    _stage_metrics({"result": result, "process": process}, "stage2")
     pcc2 = output / "pcc2"
     if result.get("returncode") != 0 or not pcc2.is_file() or not os.access(pcc2, os.X_OK):
         raise StageABError(arm + " Stage2 produced no executable pcc2")
