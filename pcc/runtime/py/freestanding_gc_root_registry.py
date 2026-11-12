@@ -69,6 +69,36 @@ define_global_i32("pcc_py_gc_scheduler_root_free_count", 0)
 define_global_ptr_null("pcc_py_gc_scheduler_root_stack_handle")
 
 
+# The continuation-root list is changed under this word, as the scheduler
+# list is: a few loads and stores, never across a safepoint, so no holder
+# parks. Once the collector is fixed without the provenance probe (container
+# mode) its writers hold this word alone: every collector walks the list
+# with the world stopped (root seeding and remark, GC0's cycle collection,
+# GC4's relocation and remap) and introspection holds this word. Otherwise
+# writers hold the graph lock around it, for GC3's incremental scan cursor.
+define_global_i32("pcc_py_gc_continuation_root_spin", 0)
+
+
+@c_abi_export("pcc_gc_continuation_root_list_acquire")
+def _continuation_root_spin_acquire() -> None:
+    word = global_addr("pcc_py_gc_continuation_root_spin")
+    while atomic_cas_i32(word, 0, 0, 1, "acq_rel", "acquire") != 0:
+        while atomic_load_i32(word, 0, "relaxed") != 0:
+            word = global_addr("pcc_py_gc_continuation_root_spin")
+
+
+@c_abi_export("pcc_gc_continuation_root_list_release")
+def _continuation_root_spin_release() -> None:
+    atomic_store_i32(global_addr("pcc_py_gc_continuation_root_spin"), 0, 0, "release")
+
+
+@c_abi_export("pcc_gc_continuation_root_writers_need_graph")
+def _continuation_writers_need_graph() -> i64:
+    if load_i32(global_addr("pcc_gc_list_container_mode"), 0) != 0:
+        return 0
+    return 1
+
+
 @c_abi_export("pcc_gc_scheduler_root_list_acquire")
 def _scheduler_root_spin_acquire() -> None:
     """Hold the list word around a change or a walk of the list."""
@@ -130,8 +160,9 @@ def pcc_gc_root_registry_note_mutation_locked() -> None:
     slot = global_addr("pcc_gc_root_registry_revision")
     backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
     if (
-        backend == 1 or backend == 2 or backend == 3
-        or (backend == 4 and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0)
+        load_i32(global_addr("pcc_gc_list_container_mode"), 0) == 0
+        and (backend == 1 or backend == 2 or backend == 3
+             or (backend == 4 and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0))
     ):
         # Every root writer in these modes already holds the graph lock.
         # Preserve their original serial increment instead of introducing an
@@ -143,8 +174,9 @@ def pcc_gc_root_registry_note_mutation_locked() -> None:
             serial_revision = serial_revision + 1
         store_i64(slot, 0, serial_revision)
         return
-    # GC0 and count-free GC4 scheduler handles can overlap graph-protected
-    # frame/continuation writers. Preserve all of their invalidations.
+    # GC0 and count-free GC4 scheduler handles, and in container mode the
+    # continuation writers, change roots without the graph lock while frame
+    # writers hold it. Preserve all of their invalidations.
     revision: i64 = atomic_load_i64(slot, 0, "acquire")
     while True:
         replacement: i64 = 1
@@ -453,15 +485,20 @@ def pcc_gc_register_continuation_root_node(frame_map, slots):
     store_i32(node, 32, pcc_gc_root_map_is_borrowed(frame_map))
     store_ptr(node, 40, ptr_add(node, 56))
     store_ptr(node, 48, null())
-    pcc_py_gc_minor_graph_lock()
+    graph: i64 = _continuation_writers_need_graph()
+    if graph != 0:
+        pcc_py_gc_minor_graph_lock()
+    _continuation_root_spin_acquire()
     head = global_load_ptr("pcc_gc_continuation_root_head")
     store_ptr(node, 16, head)
     if ptr_is_null(head) == 0:
         store_ptr(head, 48, node)
     global_store_ptr("pcc_gc_continuation_root_head", node)
     pcc_gc_root_registry_note_mutation_locked()
+    _continuation_root_spin_release()
     pcc_gc_cycle_requested_store_release(1)
-    pcc_py_gc_minor_graph_unlock()
+    if graph != 0:
+        pcc_py_gc_minor_graph_unlock()
     return node
 
 
@@ -475,7 +512,10 @@ def pcc_gc_register_continuation_root(frame_map, slots) -> None:
 
 @c_abi_export("pcc_gc_continuation_root_unlink_locked")
 def pcc_gc_continuation_root_unlink_locked(node) -> None:
-    """Detach one node from the doubly-linked list.  Caller holds the lock.
+    """Detach one node from the doubly-linked list.
+
+    The caller holds the list word, and the graph lock as well when
+    writers need it (_continuation_writers_need_graph).
 
     Same shape as pcc_gc_scheduler_root_unlink_locked above: scheduler roots
     have been doubly linked with a register-handle entry point all along, and
@@ -513,9 +553,14 @@ def pcc_gc_unregister_continuation_root_node(node) -> None:
     gc_backend_current()
     if ptr_is_null(node) != 0:
         return
-    pcc_py_gc_minor_graph_lock()
+    graph: i64 = _continuation_writers_need_graph()
+    if graph != 0:
+        pcc_py_gc_minor_graph_lock()
+    _continuation_root_spin_acquire()
     pcc_gc_continuation_root_unlink_locked(node)
-    pcc_py_gc_minor_graph_unlock()
+    _continuation_root_spin_release()
+    if graph != 0:
+        pcc_py_gc_minor_graph_unlock()
     free(node)
 
 
@@ -525,7 +570,10 @@ def pcc_gc_unregister_continuation_root(slots) -> None:
     if ptr_is_null(slots) != 0:
         return
     dead = null()
-    pcc_py_gc_minor_graph_lock()
+    graph: i64 = _continuation_writers_need_graph()
+    if graph != 0:
+        pcc_py_gc_minor_graph_lock()
+    _continuation_root_spin_acquire()
     node = global_load_ptr("pcc_gc_continuation_root_head")
     while ptr_is_null(node) == 0:
         next_node = load_ptr(node, 16)
@@ -535,6 +583,8 @@ def pcc_gc_unregister_continuation_root(slots) -> None:
             node = null()
         else:
             node = next_node
-    pcc_py_gc_minor_graph_unlock()
+    _continuation_root_spin_release()
+    if graph != 0:
+        pcc_py_gc_minor_graph_unlock()
     if ptr_is_null(dead) == 0:
         free(dead)

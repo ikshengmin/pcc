@@ -47,6 +47,11 @@ INTERNAL_SYMBOLS = {
     "pcc_gc_scheduler_root_unlink_held",
     "pcc_gc_scheduler_root_node_take",
     "pcc_gc_scheduler_root_node_give",
+    # The continuation-root list word, and whether its writers also need
+    # the graph lock (not in container mode).
+    "pcc_gc_continuation_root_list_acquire",
+    "pcc_gc_continuation_root_list_release",
+    "pcc_gc_continuation_root_writers_need_graph",
 }
 # The list word and the free-node list this module owns.
 OWNED_GLOBALS = {
@@ -54,6 +59,7 @@ OWNED_GLOBALS = {
     "pcc_py_gc_scheduler_root_free_head",
     "pcc_py_gc_scheduler_root_free_count",
     "pcc_py_gc_scheduler_root_stack_handle",
+    "pcc_py_gc_continuation_root_spin",
 }
 RAW_FUNCTION_IMPORTS = {
     "pcc_gc_backend3_revoke_closed_young_domain",
@@ -79,6 +85,7 @@ RAW_GLOBAL_IMPORTS = {
     "pcc_gc_scheduler_root_head",
     "pcc_gc_continuation_root_head",
     "pcc_gc_root_registry_revision",
+    "pcc_gc_list_container_mode",
 }
 
 
@@ -404,3 +411,41 @@ def test_root_registry_survives_pthread_mutation_and_observation(
         )
         assert result.returncode == 0, result.stdout + result.stderr
         assert result.stdout == "final:0,0\n"
+
+
+@pytest.mark.parametrize("name", [
+    "pcc_gc_register_continuation_root_node",
+    "pcc_gc_unregister_continuation_root_node",
+    "pcc_gc_unregister_continuation_root",
+])
+def test_continuation_writers_hold_the_list_word_and_the_graph_lock_only_when_needed(name):
+    strict = REGISTRY_SOURCE.read_text(encoding="utf-8")
+    body = strict.split("def " + name + "(", 1)[1].split("\n\n@", 1)[0]
+    # The graph lock is conditional on the mode and encloses the list word;
+    # the list change happens inside the word.
+    assert "graph: i64 = _continuation_writers_need_graph()" in body
+    assert body.index("if graph != 0:\n        pcc_py_gc_minor_graph_lock()") < (
+        body.index("_continuation_root_spin_acquire()")
+    )
+    assert body.index("_continuation_root_spin_release()") < (
+        body.rindex("pcc_py_gc_minor_graph_unlock()")
+    )
+    change = ("global_store_ptr(\"pcc_gc_continuation_root_head\", node)"
+              if "register" in name and "unregister" not in name
+              else "pcc_gc_continuation_root_unlink_locked(node)")
+    assert body.index("_continuation_root_spin_acquire()") < body.index(change) < (
+        body.index("_continuation_root_spin_release()")
+    )
+    if "unregister" in name:
+        assert body.rindex("pcc_py_gc_minor_graph_unlock()") < body.rindex("free(")
+
+
+def test_continuation_writers_need_the_graph_lock_only_outside_container_mode():
+    strict = REGISTRY_SOURCE.read_text(encoding="utf-8")
+    body = strict.split("def _continuation_writers_need_graph(", 1)[1].split("\n\n@", 1)[0]
+    assert 'load_i32(global_addr("pcc_gc_list_container_mode"), 0) != 0' in body
+    # Root revisions bump atomically in container mode: continuation writers
+    # then change roots without the graph lock that frame writers hold.
+    note = strict.split("def pcc_gc_root_registry_note_mutation_locked(", 1)[1].split("\n\n@", 1)[0]
+    serial = note.split("serial_revision", 1)[0]
+    assert 'load_i32(global_addr("pcc_gc_list_container_mode"), 0) == 0' in serial

@@ -2537,6 +2537,8 @@ def _cross_object_signatures_part_4():
     "pcc_gc_object_node_young_prev": (("c_ptr",), "c_ptr"),
     "pcc_gc_object_node_set_young_prev": (("c_ptr", "c_ptr"), "c_void"),
     "pcc_gc_object_node_clear_promotion_state": (("c_ptr",), "c_void"),
+    "pcc_gc_continuation_root_list_acquire": ((), "c_void"),
+    "pcc_gc_continuation_root_list_release": ((), "c_void"),
     }
 
 

@@ -213,6 +213,7 @@ class RegistryModel(SpanModel):
         self.globals = {}
         self.depth = 0
         self.scheduler_depth = 0
+        self.continuation_depth = 0
         self.native = set(native)
         self.address = 0x10000000
         self.add_chain("pcc_gc_frame_head", frames, 40)
@@ -225,6 +226,8 @@ class RegistryModel(SpanModel):
             pcc_py_gc_minor_graph_unlock=self.unlock,
             pcc_gc_scheduler_root_list_acquire=self.scheduler_lock,
             pcc_gc_scheduler_root_list_release=self.scheduler_unlock,
+            pcc_gc_continuation_root_list_acquire=self.continuation_lock,
+            pcc_gc_continuation_root_list_release=self.continuation_unlock,
             global_load_ptr=self.global_read,
             load_ptr=self.read,
             load_i64=self.read,
@@ -263,7 +266,7 @@ class RegistryModel(SpanModel):
         self.events.append(("lock",))
 
     def unlock(self):
-        assert self.depth == 1 and self.scheduler_depth == 0
+        assert self.depth == 1 and self.scheduler_depth == self.continuation_depth == 0
         self.depth = 0
         self.events.append(("unlock",))
 
@@ -277,10 +280,23 @@ class RegistryModel(SpanModel):
         self.scheduler_depth = 0
         self.events.append(("scheduler_unlock",))
 
+    def continuation_lock(self):
+        # The continuation list's own word, taken inside the graph lock.
+        assert self.depth == 1 and self.scheduler_depth == self.continuation_depth == 0
+        self.continuation_depth = 1
+        self.events.append(("continuation_lock",))
+
+    def continuation_unlock(self):
+        assert self.depth == self.continuation_depth == 1
+        self.continuation_depth = 0
+        self.events.append(("continuation_unlock",))
+
     def global_read(self, name):
         assert self.depth == 1
         if name == "pcc_gc_scheduler_root_head":
             assert self.scheduler_depth == 1
+        if name == "pcc_gc_continuation_root_head":
+            assert self.continuation_depth == 1
         value = self.globals[name]
         self.events.append(("global", name, value))
         return value

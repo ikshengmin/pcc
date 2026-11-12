@@ -32,6 +32,12 @@ pcc_gc_scheduler_root_list_release = extern(
 )
 
 
+pcc_gc_continuation_root_list_acquire = extern(
+    "pcc_gc_continuation_root_list_acquire", (), c_void
+)
+pcc_gc_continuation_root_list_release = extern(
+    "pcc_gc_continuation_root_list_release", (), c_void
+)
 pcc_thread_owns_stopped_world = extern("pcc_thread_owns_stopped_world", (), c_int64)
 pcc_stop_the_world = extern("pcc_stop_the_world", (), c_int64)
 pcc_resume_world = extern("pcc_resume_world", (), c_int64)
@@ -79,11 +85,13 @@ def pcc_gc_frame_root_slot_count() -> i64:
 def pcc_gc_continuation_root_slot_count() -> i64:
     gc_backend_current()
     pcc_py_gc_minor_graph_lock()
+    pcc_gc_continuation_root_list_acquire()
     node = global_load_ptr("pcc_gc_continuation_root_head")
     count: i64 = 0
     while ptr_is_null(node) == 0:
         count = count + load_i64(node, 24)
         node = load_ptr(node, 16)
+    pcc_gc_continuation_root_list_release()
     pcc_py_gc_minor_graph_unlock()
     return count
 
@@ -135,12 +143,15 @@ def pcc_gc_slot_is_runtime_root(slot) -> i64:
             pcc_py_gc_minor_graph_unlock()
             return 1
         node = load_ptr(node, 16)
+    pcc_gc_continuation_root_list_acquire()
     node = global_load_ptr("pcc_gc_continuation_root_head")
     while ptr_is_null(node) == 0:
         if pcc_gc_root_slot_in_span(slot, load_ptr(node, 8), load_i64(node, 24)) != 0:
+            pcc_gc_continuation_root_list_release()
             pcc_py_gc_minor_graph_unlock()
             return 1
         node = load_ptr(node, 16)
+    pcc_gc_continuation_root_list_release()
     found: i64 = 0
     pcc_gc_scheduler_root_list_acquire()
     node = global_load_ptr("pcc_gc_scheduler_root_head")

@@ -33,6 +33,9 @@ RAW_FUNCTION_IMPORTS = {
     # The scheduler-root list word its walks hold.
     "pcc_gc_scheduler_root_list_acquire",
     "pcc_gc_scheduler_root_list_release",
+    # And the continuation-root list word.
+    "pcc_gc_continuation_root_list_acquire",
+    "pcc_gc_continuation_root_list_release",
     "pcc_thread_native_root_contains",
     "pcc_thread_owns_stopped_world",
     "pcc_stop_the_world",
@@ -202,11 +205,16 @@ int main(void) {
 #include <stdint.h>
 #include <stdio.h>
 
+/* Static storage: a count-free collector roots a slot or frame in the
+ * registering thread's own stack through its conservative scan and does not
+ * link it (pcc_gc_stack_slot_root_is_conservative,
+ * pcc_gc_frame_slots_conservative), so a stack slot would not be counted. */
+static PyObject *scheduler_slot = NULL;
+static PyObject *frame_slots[2];
+
 int main(void) {
     int32_t frame_map[] = {2, 0, 8};
     int32_t continuation_map[] = {3, 0, 8, 16};
-    PyObject *scheduler_slot = NULL;
-    PyObject *frame_slots[2] = {NULL, NULL};
     PyObject *continuation_slots[3] = {NULL, NULL, NULL};
     void *handle = pcc_gc_scheduler_root_register_handle(&scheduler_slot);
     if (handle == NULL) return 1;
