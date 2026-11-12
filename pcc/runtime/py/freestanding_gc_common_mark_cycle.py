@@ -109,6 +109,7 @@ pcc_gc_gray_worklist_clear_stopped = extern(
 )
 pcc_gc_object_walk_first = extern("pcc_gc_object_walk_first", (), c_ptr)
 pcc_gc_object_walk_next = extern("pcc_gc_object_walk_next", (c_ptr,), c_ptr)
+pcc_gc_object_is_white = extern("pcc_gc_object_is_white", (c_ptr, c_int64), c_int64)
 
 
 @c_abi_export("pcc_gc_trace_mark_gray_if_known")
@@ -552,7 +553,7 @@ def pcc_gc_finish_tracing_cycle(
             node = nxt
             continue
         flags: i64 = load_i32(obj, 12)
-        if (flags & 8) != 0:
+        if pcc_gc_object_is_white(obj, flags) != 0:
             store_i32(obj, 12, flags | 1024)
         else:
             store_i32(obj, 12, flags & ~1024)

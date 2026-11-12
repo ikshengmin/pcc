@@ -81,6 +81,7 @@ pcc_gc_gray_count_increment_acq_rel = extern(
 pcc_gc_pin_conservative_thread_roots = extern(
     "pcc_gc_pin_conservative_thread_roots", (), c_void
 )
+pcc_gc_object_is_white = extern("pcc_gc_object_is_white", (c_ptr, c_int64), c_int64)
 
 
 @c_abi_export("pcc_gc_dispatch_selected_backend")
@@ -340,7 +341,7 @@ def pcc_gc_count_free_store_shade(value) -> None:
         return
     if load_i32(global_addr("pcc_gc_backend_selected"), 0) == 2:
         pcc_gc_shade_gray_atomic(value, 1)
-    elif (load_i32(value, 12) & 8) != 0:
+    elif pcc_gc_object_is_white(value, load_i32(value, 12)) != 0:
         pcc_gc_shade_gray_atomic(value, 0)
 
 
@@ -370,7 +371,7 @@ def pcc_gc_count_free_barrier_shade(value) -> None:
                         "add", global_addr("pcc_gc_cms_wb_flushes"), 0, 1, "relaxed"
                     )
                 pcc_gc_shade_gray_atomic(value, 1)
-            elif (flags & 8) != 0:
+            elif pcc_gc_object_is_white(value, flags) != 0:
                 pcc_gc_shade_gray_atomic(value, 0)
     pcc_thread_no_park_exit()
 
@@ -411,7 +412,7 @@ def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
                 return
             if backend == 2:
                 pcc_gc_shade_gray_atomic(value, 1)
-            elif (load_i32(value, 12) & 8) != 0:
+            elif pcc_gc_object_is_white(value, load_i32(value, 12)) != 0:
                 pcc_gc_shade_gray_atomic(value, 0)
             return
     if atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") == 0:

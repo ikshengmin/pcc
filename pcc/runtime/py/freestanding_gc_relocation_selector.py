@@ -75,6 +75,7 @@ pcc_threads_enabled = extern("pcc_threads_enabled", (), c_int64)
 pcc_thread_world_stop_epoch_held = extern(
     "pcc_thread_world_stop_epoch_held", (), c_int64
 )
+pcc_gc_object_is_white = extern("pcc_gc_object_is_white", (c_ptr, c_int64), c_int64)
 
 
 @c_abi_export("pcc_gc_relocation_selector_zpage_head")
@@ -905,7 +906,9 @@ def _select_page_objects_batch(
             ) > 0
             and (
                 reached_only == 0
-                or (load_i32(load_ptr(seed, 0), 12) & 8) == 0
+                or pcc_gc_object_is_white(
+                    load_ptr(seed, 0), load_i32(load_ptr(seed, 0), 12)
+                ) == 0
             )
             and _backend4_add_candidate_node(
                 seed, allow_large_pages, plan
@@ -930,7 +933,9 @@ def _select_page_objects_batch(
             _backend4_zpage_candidate_score(node, allow_large_pages) > 0
             and (
                 reached_only == 0
-                or (load_i32(load_ptr(node, 0), 12) & 8) == 0
+                or pcc_gc_object_is_white(
+                    load_ptr(node, 0), load_i32(load_ptr(node, 0), 12)
+                ) == 0
             )
             and _backend4_add_candidate_node(
                 node, allow_large_pages, plan

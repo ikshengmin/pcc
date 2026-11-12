@@ -37,12 +37,15 @@ pcc_gc_visit_registered_root_slots = extern(
     "pcc_gc_visit_registered_root_slots", (c_int64, c_int64), c_int64
 )
 pcc_gc_object_walk_first = extern("pcc_gc_object_walk_first", (), c_ptr)
+pcc_gc_page_marks_begin = extern("pcc_gc_page_marks_begin", (), c_void)
 pcc_gc_object_walk_next = extern("pcc_gc_object_walk_next", (c_ptr,), c_ptr)
 
 
 @c_abi_export("pcc_gc_prepare_object_list_mark")
 def pcc_gc_prepare_object_list_mark(explicit_collect: i64) -> None:
     pcc_gc_gray_worklist_clear_stopped()
+    # Object cells are unmarked in the fresh page bitmap.
+    pcc_gc_page_marks_begin()
     pcc_gc_gray_count_store_release(0)
     # A fresh allocation stays black for one automatic cycle only while
     # refcounts find the external references of objects nothing traced. A

@@ -298,6 +298,9 @@ pcc_gc_object_index_record_publish = extern(
 )
 pcc_thread_no_park_enter = extern("pcc_thread_no_park_enter", (), c_void)
 pcc_thread_no_park_exit = extern("pcc_thread_no_park_exit", (), c_void)
+pcc_gc_page_mark_set = extern("pcc_gc_page_mark_set", (c_ptr,), c_int64)
+pcc_gc_page_mark_assign = extern("pcc_gc_page_mark_assign", (c_ptr, c_int64), c_void)
+pcc_gc_object_is_black = extern("pcc_gc_object_is_black", (c_ptr, c_int64), c_int64)
 pcc_gc_object_list_revision_bump = extern(
     "pcc_gc_object_list_revision_bump", (), c_void
 )
@@ -2625,9 +2628,10 @@ def _mark_gray_if_known(o) -> None:
     if _is_known_object(o) == 0:
         return
     flags: int = load_i32(o, 12)
-    if (flags & 32) == 0:
+    if pcc_gc_object_is_black(o, flags) == 0:
         if (flags & 16) == 0:
             _inc_gray_count()
+        pcc_gc_page_mark_set(o)
         store_i32(o, 12, (flags & ~56) | 16)
 
 
@@ -5042,6 +5046,7 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
             color: int = 8
             if load_i32(global_addr("pcc_gc_mark_active"), 0) != 0:
                 color = 32
+            pcc_gc_page_mark_assign(o, color & 32)
             store_i32(o, 12, (flags & ~56) | color | 16384)
             store_i32(global_addr("pcc_gc_cycle_requested"), 0, 1)
         elif backend == 4:
@@ -5049,6 +5054,7 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
             color: int = 8
             if load_i32(global_addr("pcc_gc_mark_active"), 0) != 0:
                 color = 32
+            pcc_gc_page_mark_assign(o, color & 32)
             new_flags: int = (flags & ~(56 | 2048 | 8192)) | color
             if (flags & 384) == 0:
                 new_flags = new_flags | 128
@@ -5233,7 +5239,10 @@ def pcc_gc_register_object_cell(o, size: int) -> int:
     flags: int = load_i32(o, 12)
     color: int = 8
     if atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") != 0:
+        # Allocated during a mark: born marked (black).
         color = 32
+    # A reused cell's bit may be its previous object's: assign it.
+    pcc_gc_page_mark_assign(o, color & 32)
     store_i32(o, 12, (flags & ~56) | color | 16384)
     store_i32(global_addr("pcc_gc_cycle_requested"), 0, 1)
     node = pcc_gc_object_node_take_record(record)

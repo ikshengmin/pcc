@@ -97,6 +97,7 @@ pcc_thread_world_stop_epoch_held = extern(
 pcc_platform_monotonic_us = extern("pcc_platform_monotonic_us", (), c_int64)
 pcc_gc_object_walk_first = extern("pcc_gc_object_walk_first", (), c_ptr)
 pcc_gc_object_walk_next = extern("pcc_gc_object_walk_next", (c_ptr,), c_ptr)
+pcc_gc_object_is_white = extern("pcc_gc_object_is_white", (c_ptr, c_int64), c_int64)
 
 
 @c_abi_export("pcc_gc_record_sweep_phase")
@@ -264,7 +265,7 @@ def pcc_gc_tracing_recheck_reachability_after_finalizers() -> None:
             # to remap retirement. Test the edge, not the candidate flag: a
             # selected object that has not moved still needs ordinary sweeping.
             if (flags & 1024) != 0 and (
-                (flags & 8) == 0
+                pcc_gc_object_is_white(obj, flags) == 0
                 or (
                     backend == 4
                     and ptr_is_null(pcc_gc_forwarding_index_find(obj)) == 0

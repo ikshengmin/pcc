@@ -4,9 +4,10 @@ An object slab that holds a registered cell has a record array
 (freestanding_allocator.pcc_allocator_object_node_record_ensure). The same
 mapping, after the records, holds the slab's GC page: a header and two mark
 bitmaps of one bit per cell. Marking alternates between the two bitmaps
-(pcc_gc_page_mark_epoch): a mark sets bits in the current one, the finished
-mark's verdict reads it, and the sweep that follows clears the other one for
-the next cycle, so no mark ever starts by clearing the heap.
+(pcc_gc_page_mark_epoch): a mark begins by switching to the other one and
+clearing it (a few words per slab, pcc_gc_page_marks_begin), sets bits in
+it, and its verdict reads it; the bitmap left behind keeps the previous
+finished mark for page selection.
 
 The page header:
 - PAGE_GENERATION: 0 young, 1 old (GC4 ages slabs; GC1-GC3 slabs stay 0).
@@ -69,12 +70,33 @@ def pcc_gc_page_mark_epoch() -> i64:
 
 @c_abi_export("pcc_gc_page_mark_epoch_flip")
 def pcc_gc_page_mark_epoch_flip() -> None:
-    """Start using the other bitmap. Called with the world stopped when a
-    mark begins, after the previous cycle's sweep cleared that bitmap."""
+    """Start using the other bitmap (pcc_gc_page_marks_begin)."""
     epoch: i64 = pcc_gc_page_mark_epoch()
     atomic_store_i64(
         global_addr("pcc_gc_page_mark_epoch_word"), 0, 1 - epoch, "release"
     )
+
+
+pcc_allocator_record_span_first = extern(
+    "pcc_allocator_record_span_first", (), c_ptr
+)
+pcc_allocator_record_span_next = extern(
+    "pcc_allocator_record_span_next", (c_ptr,), c_ptr
+)
+
+
+@c_abi_export("pcc_gc_page_marks_begin")
+def pcc_gc_page_marks_begin() -> None:
+    """Start a mark with the world stopped: switch to the other bitmap and
+    clear it on every page. The bitmap left behind keeps the last finished
+    mark. Clearing here, not after a sweep, keeps an abandoned mark's bits
+    from ever reading as marked; it costs a slab's few words."""
+    pcc_gc_page_mark_epoch_flip()
+    epoch: i64 = pcc_gc_page_mark_epoch()
+    span = pcc_allocator_record_span_first()
+    while ptr_is_null(span) == 0:
+        pcc_gc_page_marks_clear(span, epoch)
+        span = pcc_allocator_record_span_next(span)
 
 
 @c_abi_export("pcc_gc_page_bitmap")
@@ -132,6 +154,52 @@ def pcc_gc_page_mark_set(obj: c_ptr) -> i64:
     if (old & bit) != 0:
         return 0
     return 1
+
+
+@c_abi_export("pcc_gc_page_mark_assign")
+def pcc_gc_page_mark_assign(obj: c_ptr, marked: i64) -> None:
+    """Set or clear a fresh object cell's bit: a cell is reused, so the bit
+    a registration finds may be its previous object's. No-op elsewhere."""
+    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+        return
+    span = pcc_allocator_object_cell_span(obj)
+    if ptr_is_null(span) != 0:
+        return
+    cell: i64 = pcc_allocator_object_cell_number(span, obj)
+    bitmap = pcc_gc_page_bitmap(span, pcc_gc_page_mark_epoch())
+    bit: i64 = 1 << (cell & 63)
+    if marked != 0:
+        atomic_rmw_i64("or", bitmap, (cell // 64) * 8, bit, "acq_rel")
+    else:
+        atomic_rmw_i64("and", bitmap, (cell // 64) * 8, ~bit, "acq_rel")
+
+
+@c_abi_export("pcc_gc_object_is_white")
+def pcc_gc_object_is_white(obj: c_ptr, flags: i64) -> i64:
+    """1 when the current mark has not reached ``obj``: an object cell's
+    page bit is clear, any other object's header ``flags`` hold white."""
+    marked: i64 = pcc_gc_page_mark_test(obj)
+    if marked < 0:
+        if (flags & 8) != 0:
+            return 1
+        return 0
+    if marked == 0:
+        return 1
+    return 0
+
+
+@c_abi_export("pcc_gc_object_is_black")
+def pcc_gc_object_is_black(obj: c_ptr, flags: i64) -> i64:
+    """1 when ``obj`` is marked and scanned: an object cell's page bit is set
+    and its header is not gray; any other object's ``flags`` hold black."""
+    marked: i64 = pcc_gc_page_mark_test(obj)
+    if marked < 0:
+        if (flags & 32) != 0:
+            return 1
+        return 0
+    if marked != 0 and (flags & 16) == 0:
+        return 1
+    return 0
 
 
 @c_abi_export("pcc_gc_page_marks_clear")

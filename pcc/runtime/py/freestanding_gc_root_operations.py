@@ -376,6 +376,9 @@ def pcc_gc_set_mark_color(obj, color: i64) -> None:
     # bits atomically without that lock. Retry against the current word so
     # coloring cannot erase those updates. One CAS also avoids a transient
     # colorless word, which GC1/2 refcount operations treat as uninitialized.
+    if (color & 48) != 0:
+        # Gray and black are marked: an object cell's page bit says so.
+        pcc_gc_page_mark_set(obj)
     old: i64 = atomic_load_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET, "acquire")
     while True:
         desired: i64 = (old & ~56) | color
@@ -400,11 +403,18 @@ def pcc_gc_shade_gray_atomic(obj, allow_black: i64) -> None:
     black unless ``allow_black`` asks for a re-scan.
     """
     old: i64 = atomic_load_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET, "acquire")
-    if (old & (16 | 524288)) != 0 or (allow_black == 0 and (old & 32) != 0):
+    if (old & (16 | 524288)) != 0 or (
+        allow_black == 0 and pcc_gc_object_is_black(obj, old) != 0
+    ):
         return
+    # Graying marks: an object cell's page bit is set with its colour.
+    pcc_gc_page_mark_set(obj)
     pcc_gc_gray_count_increment_acq_rel()
     while True:
-        if (old & (16 | 524288)) != 0 or (allow_black == 0 and (old & 32) != 0):
+        if (old & (16 | 524288)) != 0 or (
+            allow_black == 0 and (old & 32) != 0
+            and pcc_gc_page_mark_test(obj) < 0
+        ):
             pcc_gc_gray_count_decrement_acq_rel()
             return
         desired: i64 = (old & ~56) | 16
@@ -769,6 +779,9 @@ def pcc_gc_foreign_lease_release(slot, acquired: i64) -> i64:
 pcc_gc_count_free_store_shade = extern(
     "pcc_gc_count_free_store_shade", (c_ptr,), c_void
 )
+pcc_gc_page_mark_set = extern("pcc_gc_page_mark_set", (c_ptr,), c_int64)
+pcc_gc_object_is_black = extern("pcc_gc_object_is_black", (c_ptr, c_int64), c_int64)
+pcc_gc_page_mark_test = extern("pcc_gc_page_mark_test", (c_ptr,), c_int64)
 
 
 @c_abi_export("pcc_gc_try_init_ptr_locked")

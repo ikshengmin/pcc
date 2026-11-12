@@ -3264,6 +3264,12 @@ def _cross_object_signatures_part_13():
 
 def _cross_object_signatures_part_14():
     return {
+    "pcc_gc_page_mark_test": (("c_ptr",), "c_int64"),
+    "pcc_gc_page_mark_assign": (("c_ptr", "c_int64"), "c_void"),
+    "pcc_gc_object_is_white": (("c_ptr", "c_int64"), "c_int64"),
+    "pcc_gc_object_is_black": (("c_ptr", "c_int64"), "c_int64"),
+    "pcc_gc_page_mark_set": (("c_ptr",), "c_int64"),
+    "pcc_gc_page_marks_begin": ((), "c_void"),
     "pcc_allocator_object_cell_span": (("c_ptr",), "c_ptr"),
     "pcc_allocator_object_cell_number": (("c_ptr", "c_ptr"), "c_int64"),
     "pcc_allocator_record_span_page": (("c_ptr",), "c_ptr"),

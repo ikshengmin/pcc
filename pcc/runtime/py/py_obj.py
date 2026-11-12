@@ -175,6 +175,7 @@ pcc_gc_note_object_allocated_sized = extern(
 pcc_gc_register_object_cell = extern(
     "pcc_gc_register_object_cell", (c_ptr, c_int64), c_int64
 )
+pcc_gc_object_is_white = extern("pcc_gc_object_is_white", (c_ptr, c_int64), c_int64)
 pcc_gc_pointer_register = extern(
     "pcc_gc_pointer_register",
     (c_ptr,),
@@ -1083,7 +1084,7 @@ def _store_root_nonmoving_tracing(slot, value, backend: int) -> None:
                             "add", global_addr("pcc_gc_cms_wb_flushes"), 0, 1, "relaxed"
                         )
                     pcc_gc_shade_gray_atomic(value, 1)
-                elif (flags & 8) != 0:
+                elif pcc_gc_object_is_white(value, flags) != 0:
                     pcc_gc_shade_gray_atomic(value, 0)
         pcc_thread_no_park_exit()
     # pcc_gc_note_store's count, without its call and entry poll.
@@ -1119,7 +1120,7 @@ def _store_root_count_free_unforwarded(slot, value) -> int:
         and pcc_gc_object_index_seen_stable(value) != 0
     ):
         flags: i64 = i64(atomic_load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET, "acquire"))
-        if (flags & 524288) == 0 and (flags & 8) != 0:
+        if (flags & 524288) == 0 and pcc_gc_object_is_white(value, flags) != 0:
             pcc_gc_shade_gray_atomic(value, 0)
     pcc_thread_no_park_exit()
     return 1
