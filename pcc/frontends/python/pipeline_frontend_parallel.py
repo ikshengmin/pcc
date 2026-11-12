@@ -73,7 +73,10 @@ def _write_deferred_codegen_plan(
         stream.write(os.path.abspath(artifact_root) + "\n")
         stream.write(str(module_count) + "\n")
         stream.write(str(oversized_count) + "\n")
-        stream.write(str(safe_jobs) + "\n")
+        # The v2 wire field is the unbudgeted fallback, not the budgeted CPU
+        # ceiling. The fresh execution driver owns resource/width admission;
+        # keep its legacy fallback valid even if the tree budget is absent.
+        stream.write(str(min(safe_jobs, _SOURCE_WORKER_AUTO_SAFE_JOBS)) + "\n")
         stream.write(str(len(manifests)) + "\n")
         stream.write(_DEFERRED_INDEXED_PROCESS_SPLIT + "\n")
         for manifest_path in manifests:

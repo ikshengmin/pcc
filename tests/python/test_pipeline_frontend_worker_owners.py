@@ -895,10 +895,11 @@ def test_native_codegen_checkpoint_persists_sidecars_and_singleton_manifests(
     assert result == ("PCC_DEFERRED_FRONTEND_CODEGEN",)
     lines = plan.read_text(encoding="utf-8").splitlines()
     assert lines[0] == "pcc.frontend-codegen-plan.v2"
-    # With an explicit tree budget, the plan retains the requested ceiling;
-    # the execution driver owns memory admission when the plan is resumed.
-    assert lines[7:11] == ["2", "1", str(jobs), "2"]
+    # The plan carries a conservative fallback, including when its budget is
+    # absent at resume. Budgeted admission still owns the requested CPU width.
+    assert lines[7:11] == ["2", "1", "2", "2"]
     assert lines[11] == "pidx-pco-v1"
+    assert counters["multi_frontend_codegen_safe_jobs"] == jobs
     assert counters["multi_frontend_export_safe_jobs"] == (10 if auto_source_lanes else 2)
     persisted = [Path(path) for path in lines[12:]]
     assert all(path.is_file() for path in persisted)

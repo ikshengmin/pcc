@@ -8,6 +8,30 @@ import pytest
 from pcc.frontends.python import native_deferred as driver
 
 
+SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
+
+
+def _codegen_manifest(tmp_path, index, count):
+    from pcc.frontends.python.pipeline_frontend_workers import write_worker_manifest
+
+    sources = []
+    names = []
+    for item in range(count):
+        source = tmp_path / ("source" + str(item) + ".py")
+        source.write_text("value = " + str(item) + "\n")
+        (tmp_path / ("module_" + str(item) + ".json")).write_text("{}\n")
+        sources.append(str(source))
+        names.append("module" + str(item))
+    manifest = tmp_path / ("worker" + str(index))
+    result = tmp_path / ("result" + str(index))
+    write_worker_manifest(
+        str(manifest), str(result), str(tmp_path), "", str(tmp_path),
+        sources, names, [index], entry_module=names[0], sibling_inits=[],
+        ir_scaffold_mode="on", verbose=False,
+    )
+    return manifest, result
+
+
 def test_native_entry_rejects_host_python():
     with pytest.raises(RuntimeError, match="host Python is not supported"):
         driver.main()
@@ -32,9 +56,7 @@ def test_cli_dispatch_checks_native_owner_and_forwards_plan(monkeypatch, capsys)
 
 def test_wrapper_rejects_old_compiler_before_starting_compile(tmp_path):
     touched = tmp_path / "started"
-    script = (
-        Path(driver.__file__).parents[2] / "scripts" / "run_pcc_native_deferred.py"
-    )
+    script = SCRIPTS / "run_pcc_native_deferred.py"
     # ``sys.executable`` answers ``--pcc-native-deferred-worker --check`` with
     # exit 2 ("Unknown option"), which is exactly an old compiler that cannot
     # run the continuation.
@@ -69,7 +91,7 @@ def test_bootstrap_rejects_missing_deferred_runtime_before_compilation(tmp_path)
         PCC_BOOTSTRAP_DEFER_SELF_LINK="1",
     )
     environment.pop("LC_ALL", None)
-    script = Path(driver.__file__).parents[2] / "scripts" / "bootstrap.py"
+    script = SCRIPTS / "bootstrap.py"
     result = subprocess.run(
         [
             sys.executable,
@@ -116,6 +138,8 @@ def test_stage_continuation_inherits_effective_stage_environment(tmp_path, monke
                 "PCC_SELF_BACKEND_JOBS": "1",
                 "PCC_RUNTIME_ARCHIVE": str(runtime),
                 "PCC_BOOTSTRAP_EXTERNAL_MEMORY_GUARD": "1",
+                # Supply the required cap to this no-spawn environment model.
+                "PCC_WORKER_TREE_BUDGET_BYTES": str(1024**3),
             }
         )
     )
@@ -143,19 +167,17 @@ def test_stage_continuation_inherits_effective_stage_environment(tmp_path, monke
 
 
 @pytest.mark.parametrize("auto_pco", [False, True])
-def test_native_codegen_orders_results_and_rejects_stale_artifacts(tmp_path, monkeypatch, auto_pco):
+@pytest.mark.parametrize("budgeted", [False, True])
+def test_native_codegen_orders_results_and_rejects_stale_artifacts(
+    tmp_path, monkeypatch, auto_pco, budgeted,
+):
     manifests = []
     for index in (1, 0):
-        manifest = tmp_path / ("worker" + str(index))
-        result = tmp_path / ("result" + str(index))
-        manifest.write_text("\n".join([
-            "pcc.frontends.python.codegen_worker.v4", str(result),
-            str(tmp_path), "", "", "", "", "", "", "", "1", str(index),
-        ]) + "\n")
+        manifest, result = _codegen_manifest(tmp_path, index, 2)
         result.write_text("stale result")
-        stem = tmp_path / ("module_" + str(index) + ".direct")
-        stem.with_suffix(".pco").write_bytes(b"stale pco")
-        stem.with_suffix(".pidx").write_bytes(b"stale sidecar")
+        stem = str(tmp_path / ("module_" + str(index) + ".direct"))
+        Path(stem + ".pco").write_bytes(b"stale pco")
+        Path(stem + ".pidx").write_bytes(b"stale sidecar")
         manifests.append(str(manifest))
     runtime = tmp_path / "runtime.a"
     runtime.write_bytes(b"archive")
@@ -189,43 +211,47 @@ def test_native_codegen_orders_results_and_rejects_stale_artifacts(tmp_path, mon
         for command in commands:
             run_one(command)
 
-    def run_chained(commands, reservations, followups, paths, floor, width, budget):
-        calls.append(("chained", len(commands), width))
-        for command, followup, path in zip(commands, followups, paths):
+    def run_resource(commands, tasks, width, budget, *, trace_path):
+        calls.append(("resource", len(commands), width))
+        assert budget == 6 * 1073741824
+        assert trace_path == manifests[0] + ".chained-admission.tsv"
+        assert len(tasks) == 4
+        assert [task["depends_on"] for task in tasks[2:]] == [0, 1]
+        for command in commands:
             run_one(command)
-            assert Path(path).is_file()
-            run_one(followup)
+
+    def old_pool(*args, **kwargs):
+        pytest.fail("budgeted execution must use the resource-admission pool")
 
     linked = []
     monkeypatch.setattr(driver, "_native_worker", lambda _path: None)
     from pcc.frontends.python import deferred_frontend_schedule
     monkeypatch.setattr(deferred_frontend_schedule, "run_worker_processes", run_commands)
-    monkeypatch.setattr(deferred_frontend_schedule, "run_chained_worker_processes", run_chained)
-    monkeypatch.setattr(
-        deferred_frontend_schedule, "_frontend_floors_and_order",
-        lambda commands, _manifests: ([1] * len(commands), list(range(len(commands)))),
-    )
+    monkeypatch.setattr(deferred_frontend_schedule, "run_resource_worker_processes", run_resource)
+    monkeypatch.setattr(deferred_frontend_schedule, "run_chained_worker_processes", old_pool)
     monkeypatch.setenv("PCC_PY_FRONTEND_JOBS", "auto" if auto_pco else "2")
-    monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(6 * 1073741824))
+    # Model both policies at the process boundary; these pools do not spawn.
+    monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(6 * 1073741824) if budgeted else "0")
     monkeypatch.setattr(deferred_frontend_schedule, "parallel_cpu_budget", lambda: 12)
     # Memory admission reads this process's RSS; ordering is the contract here.
     monkeypatch.setattr(deferred_frontend_schedule, "compiled_native_auto_jobs", lambda jobs: jobs)
     monkeypatch.setattr(driver, "_link", lambda *args: linked.append(args))
     driver._codegen(plan)
-    assert calls == ([("chained", 2, 12)] if auto_pco else [(1, 1), (1, 2), (1, 1), (1, 2)])
+    assert calls == (
+        [("resource", 4, 12 if auto_pco else 2)] if budgeted
+        else [(1, 1), (1, 2), (1, 1), (1, 2)]
+    )
     assert Path(linked[0][1]).read_text().splitlines()[2:] == [
         "PCO\t" + str(tmp_path / "module_0.direct.pco"),
         "PCO\t" + str(tmp_path / "module_1.direct.pco"),
     ]
 
 
-def test_native_codegen_rejects_a_sidecar_other_than_the_scheduled_one(tmp_path, monkeypatch):
-    manifest = tmp_path / "worker0"
-    result = tmp_path / "result0"
-    manifest.write_text("\n".join([
-        "pcc.frontends.python.codegen_worker.v4", str(result),
-        str(tmp_path), "", "", "", "", "", "", "", "1", "0",
-    ]) + "\n")
+@pytest.mark.parametrize("budgeted", [False, True])
+def test_native_codegen_rejects_a_sidecar_other_than_the_scheduled_one(
+    tmp_path, monkeypatch, budgeted,
+):
+    manifest, result = _codegen_manifest(tmp_path, 0, 1)
     runtime = tmp_path / "runtime.a"
     runtime.write_bytes(b"archive")
     plan = [
@@ -249,6 +275,11 @@ def test_native_codegen_rejects_a_sidecar_other_than_the_scheduled_one(tmp_path,
     monkeypatch.setattr(driver, "_native_worker", lambda _path: None)
     from pcc.frontends.python import deferred_frontend_schedule
     monkeypatch.setattr(deferred_frontend_schedule, "run_worker_processes", run_commands)
+    monkeypatch.setattr(
+        deferred_frontend_schedule, "run_resource_worker_processes",
+        lambda commands, tasks, width, budget, *, trace_path: run_commands(commands, width),
+    )
+    monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(1024**3) if budgeted else "0")
     monkeypatch.setenv("PCC_PY_FRONTEND_JOBS", "1")
     monkeypatch.setattr(driver, "_link", lambda *args: None)
     with pytest.raises(ValueError, match="not the scheduled PCO input"):
@@ -357,9 +388,7 @@ def test_pcc1_native_deferred_cli_compiles_and_executes_two_modules(
                PCC_DEFER_FRONTEND_CODEGEN_PLAN=str(codegen),
                PCC_DEFER_FRONTEND_OUTPUT=str(output), PCC_DEFER_SELF_LINK_PLAN=str(link))
     env.pop("LC_ALL", None)
-    script = (
-        Path(driver.__file__).parents[2] / "scripts" / "run_pcc_native_deferred.py"
-    )
+    script = SCRIPTS / "run_pcc_native_deferred.py"
     result = run_process_group_timeout(
         [sys.executable, str(script), str(native_pcc1_compiler), str(codegen), str(link), "--",
          str(native_pcc1_compiler), "--backend", "self", str(source), "-o", str(output)],

@@ -87,12 +87,35 @@ do not claim repository-wide refactoring or whole-language qualification.
 The supplied older `1b4731f9c` bootstrap receipt ended after a successful Stage1:
 Stage2 had no runtime archive, so it has no Stage2/3 fixed-point result. Its
 separate native C SSA probe also failed to import `pcc.frontends.c.parse.c_lex`;
-that is not evidence of an executed C pass. New Stage2 is running from the
-verified new pcc1 and the same frozen `4850b0e76` inputs, selecting the matching
-runtime explicitly. Each stage retains the shared lock, 1800-second guard,
-16-GiB ceiling and 8-GiB Darwin reserve, including its native smoke barrier.
-Stage3 and raw-byte pcc2/pcc3 comparison remain unrun; Stage1 is not a fixed
-point. Whole-Python and full five-GC bootstrap qualification are also unrun.
+that is not evidence of an executed C pass. New Stage2 at frozen `4850b0e76`
+**failed** after 571.737 seconds, peak tree RSS 6,731,513,856 bytes, with
+`native deferred codegen plan count mismatch`. Its 570 module and manifest
+counts agree; the producer serialized a budgeted width of 10 into a legacy
+fallback field whose reader accepts only 1–2. A three-module native-pcc1
+regression reproduces the same rejection in 9.94 seconds. No pcc2 was produced;
+Stage3 and raw-byte comparison were not started. This was neither timeout nor
+memory-limit termination: the shared lock, 1800-second guard, 16-GiB ceiling,
+8-GiB Darwin reserve and matching runtime were retained.
+
+The producer correction, based on `73dfb1ef6`, keeps the existing fallback cap
+while leaving actual budgeted scheduling and decoder rejection checks unchanged. Its new host
+producer/reader checks have **12 passed** at six workers/90 seconds/1 GiB.
+The adjoining deferred-driver tests initially had six pre-existing failures:
+relocated script paths, a missing cap in a no-spawn environment model, and
+obsolete manifests/process-pool mocks. Corrected fixtures use the real manifest
+writer and current resource-pool boundary, retain unbudgeted coverage and
+wrong-sidecar rejection, and seed stale artifacts at their actual scheduled
+names. The combined two-file host selection has **25 passed**, expanded to
+**27 passed** with the full checkpoint producer, at the same limits. The
+checkpoint test now separately checks the capped wire field and unchanged
+budgeted concurrency counter. The five-file ordinary selection, including a
+host-pcc0/self native admission helper, has **373 passed** under the standard
+600-second/3-GiB guard. Its earlier 90-second/1-GiB run still has an unrepaired
+archive-symbol-owner admission failure (220,527,248 bytes versus 214,777,856
+available); the standard-budget pass is not a repair of that gate. The native
+correction still needs a freshly built pcc1; these results do not establish
+native-pcc1 completion or a fixed point. Whole-Python and full five-GC bootstrap
+qualification are also unrun.
 Bootstrap wiring is tracked in
 [#200](https://github.com/allstoalls/pcc/issues/200).
 
