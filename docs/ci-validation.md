@@ -122,6 +122,10 @@ reference node to macOS arm64 (`macos-15`). Its real PATH `clang` invocation and
 bytes are attested alongside the existing C++ `g++` oracle. This is external
 reference evidence, not owned native execution or evidence from a user's Mac.
 Unknown prerequisite skips do not create owners or waive tests.
+The Java tenth-float Darwin ABI integration node also belongs to macOS arm64.
+It uses host-PCC object emission plus real clang caller/control execution, not
+a Stage1 compiler. Its explicit clang override is bound to the audited tool
+before collection; ordinary cross-object tests and all Linux lanes remain.
 
 The planner retains every original domain/lane campaign and native Stage1
 producer, adding only the required nondefault platform campaigns. A C++ change

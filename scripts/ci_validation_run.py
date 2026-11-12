@@ -501,9 +501,17 @@ def run(args):
         # The Rust test helper extracts only rustc's pin. CI separately verifies
         # all declared tool files, including the installed_files library closure.
         try:
-            from .ci_validation_tools import verify_tool_receipt, consumed_rust_receipt_identity
+            from .ci_validation_tools import (
+                bind_java_darwin_clang,
+                consumed_rust_receipt_identity,
+                verify_tool_receipt,
+            )
         except ImportError:
-            from ci_validation_tools import verify_tool_receipt, consumed_rust_receipt_identity
+            from ci_validation_tools import (
+                bind_java_darwin_clang,
+                consumed_rust_receipt_identity,
+                verify_tool_receipt,
+            )
         if os.environ.get("PCC_RUSTC_INSTALL_RECEIPT"):
             consumed_rust_receipt = consumed_rust_receipt_identity(
                 tool_receipt, os.environ["PCC_RUSTC_INSTALL_RECEIPT"])
@@ -518,6 +526,8 @@ def run(args):
                    PCC_VALIDATION_REFERENCES=str(REFERENCES),
                    PCC_VALIDATION_SOURCE_MANIFEST=str(args.out / "source-before.json"))
         env.pop("PCC_VALIDATION_SELECTION", None)
+        if args.domain == "java":
+            bind_java_darwin_clang(env, tool_receipt)
         env.update(native_updates)
         shards = collection_plan(files)
         save(args.out / "collection-plan.json", shards)

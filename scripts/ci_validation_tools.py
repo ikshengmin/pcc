@@ -151,6 +151,18 @@ def selected_rustc_invocation():
     return shutil.which("rustc")
 
 
+def bind_java_darwin_clang(environment, receipt):
+    """Replace inherited Java caller overrides with the audited clang invocation."""
+    name = "PCC_JAVA_DARWIN_CLANG"
+    clang = receipt.get("clang", {})
+    if clang.get("status") == "AVAILABLE":
+        environment[name] = clang["invocation"]
+    elif environment.get(name):
+        raise ValueError("refuse inherited Java Darwin clang without an available audited tool")
+    else:
+        environment.pop(name, None)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--domain", required=True)
@@ -158,7 +170,7 @@ def main():
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=False)
     receipt, environment = {}, {}
-    tools = {"cpp": ("g++", "clang"), "java": ("java", "javac"), "go": ("go",),
+    tools = {"cpp": ("g++", "clang"), "java": ("java", "javac", "clang"), "go": ("go",),
              "rust": ("rustc", "cc"), "shared": ("cc", "as", "ld", "clang", "rustc"),
              "ci-contracts": ()}[args.domain]
     for name in tools:
@@ -181,6 +193,8 @@ def main():
                          "invocation": str(path), "resolved": str(path.resolve()),
                          "sha256": digest(path), "version_observation": observation,
                          "path_lookup": name == "clang"}
+    if args.domain == "java":
+        bind_java_darwin_clang(environment, receipt)
     if "g++" in receipt and receipt["g++"]["status"] == "AVAILABLE":
         environment["PCC_CPP_ORACLE"] = receipt["g++"]["invocation"]
     if "go" in receipt and receipt["go"]["status"] == "AVAILABLE":
