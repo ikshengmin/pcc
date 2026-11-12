@@ -1,9 +1,16 @@
-"""GNU asm compatibility is preprocessing, not inline-assembly execution."""
+"""GNU asm around preprocessing: the owned path keeps it, system cpp erases it.
+
+The owned preprocessor no longer defines asm away; the parser keeps each
+statement as an AsmStatement (see test_c_gnu_asm.py for its semantics). The
+system-cpp compatibility route still erases asm as text. Either way the
+surrounding C must be unchanged.
+"""
 
 import subprocess
 
 import pytest
 
+from pcc.frontends.c.ast import c_ast
 from pcc.frontends.c.evaluator.c_evaluator import _preprocess_translation_unit_source
 from pcc.frontends.c.parse import make_c_parser
 from pcc.frontends.c.parse.ast_normalize import normalize
@@ -59,5 +66,11 @@ def test_asm_compat_preserves_the_surrounding_c_ast(
         target_triple="x86_64-unknown-linux-gnu",
     )
     parser = make_c_parser()
-    assert normalize(parser.parse(processed)) == normalize(parser.parse(_EXPECTED))
+    ast = parser.parse(processed)
+    if not use_system_cpp:
+        body = ast.ext[-1].body.block_items
+        kept = [index for index, item in enumerate(body) if isinstance(item, c_ast.AsmStatement)]
+        assert len(kept) == 1, "owned preprocessing must keep the asm statement"
+        body[kept[0]] = c_ast.EmptyStatement(body[kept[0]].coord)
+    assert normalize(ast) == normalize(parser.parse(_EXPECTED))
     assert bool(calls) is use_system_cpp

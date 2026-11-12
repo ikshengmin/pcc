@@ -60,6 +60,9 @@ def _gap(attribute, where):
 
 def _check(attributes, where, honored):
     for attribute in attributes or ():
+        if attribute.name == "__asm_label__":
+            location = f"{attribute.coord}: " if attribute.coord else ""
+            raise CodegenError(f"{location}asm labels that rename a declaration's symbol are not implemented")
         name = gnu_name(attribute)
         if name in INERT or name in honored:
             continue

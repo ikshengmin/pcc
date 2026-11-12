@@ -353,6 +353,30 @@ class AttributedKeyword(str):
     attributes = ()
 
 
+class AsmStatement(Node):
+    """GNU asm: template, (constraint, expression, name) operands, clobbers, goto labels."""
+    __slots__ = ('template', 'outputs', 'inputs', 'clobbers', 'labels', 'qualifiers', 'file_scope',
+                 'coord', '__weakref__')
+    def __init__(self, template, outputs=(), inputs=(), clobbers=(), labels=(), qualifiers=(),
+                 file_scope=False, coord=None):
+        self.template = template
+        self.outputs = list(outputs)
+        self.inputs = list(inputs)
+        self.clobbers = list(clobbers)
+        self.labels = list(labels)
+        self.qualifiers = list(qualifiers)
+        self.file_scope = file_scope
+        self.coord = coord
+
+    def children(self):
+        nodelist = [("template", self.template)]
+        for kind, operands in (("outputs", self.outputs), ("inputs", self.inputs)):
+            for index, (_constraint, expression, _name) in enumerate(operands):
+                nodelist.append(("%s[%d]" % (kind, index), expression))
+        return tuple(nodelist)
+
+    attr_names = ('qualifiers', )
+
 class GnuAttribute(Node):
     """One GNU attribute of an __attribute__((...)) specifier: name and arguments."""
     __slots__ = ('name', 'args', 'coord', '__weakref__')

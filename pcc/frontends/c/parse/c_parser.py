@@ -163,6 +163,9 @@ class CParser(PLYParser):
                 'type_qualifier_list',
                 'struct_declarator_list',
                 'attribute',
+                'asm_qualifier_list',
+                'asm_operands',
+                'asm_clobbers',
             ]
 
             for rule in rules_with_opt:
@@ -678,6 +681,77 @@ class CParser(PLYParser):
         """
         p[0] = [p[1]]
 
+    def p_external_declaration_asm(self, p):
+        """ external_declaration    : asm_statement
+        """
+        p[1].file_scope = True
+        p[0] = [p[1]]
+
+    def p_asm_statement(self, p):
+        """ asm_statement   : ASM asm_qualifier_list_opt LPAREN unified_string_literal asm_tail RPAREN SEMI
+        """
+        outputs, inputs, clobbers, labels = p[5]
+        p[0] = c_ast.AsmStatement(p[4], outputs, inputs, clobbers, labels, p[2] or [],
+                                  coord=self._coord(p.lineno(1)))
+
+    def p_asm_tail(self, p):
+        """ asm_tail    : empty
+                        | COLON asm_operands_opt
+                        | COLON asm_operands_opt COLON asm_operands_opt
+                        | COLON asm_operands_opt COLON asm_operands_opt COLON asm_clobbers_opt
+                        | COLON asm_operands_opt COLON asm_operands_opt COLON asm_clobbers_opt COLON asm_labels
+        """
+        parts = [p[i] for i in range(2, len(p), 2)] if len(p) > 2 else []
+        parts += [None] * (4 - len(parts))
+        p[0] = tuple(part or [] for part in parts)
+
+    def p_asm_qualifier_list(self, p):
+        """ asm_qualifier_list  : asm_qualifier
+                                | asm_qualifier_list asm_qualifier
+        """
+        p[0] = [p[1]] if len(p) == 2 else p[1] + [p[2]]
+
+    def p_asm_qualifier(self, p):
+        """ asm_qualifier   : VOLATILE
+                            | INLINE
+                            | GOTO
+        """
+        p[0] = p[1]
+
+    def p_asm_operands(self, p):
+        """ asm_operands    : asm_operand
+                            | asm_operands COMMA asm_operand
+        """
+        p[0] = [p[1]] if len(p) == 2 else p[1] + [p[3]]
+
+    def p_asm_operand(self, p):
+        """ asm_operand : unified_string_literal LPAREN expression RPAREN
+                        | LBRACKET ID RBRACKET unified_string_literal LPAREN expression RPAREN
+        """
+        if len(p) == 5:
+            p[0] = (p[1], p[3], None)
+        else:
+            p[0] = (p[4], p[6], p[2])
+
+    def p_asm_clobbers(self, p):
+        """ asm_clobbers    : unified_string_literal
+                            | asm_clobbers COMMA unified_string_literal
+        """
+        p[0] = [p[1]] if len(p) == 2 else p[1] + [p[3]]
+
+    def p_asm_labels(self, p):
+        """ asm_labels  : ID
+                        | asm_labels COMMA ID
+        """
+        p[0] = [p[1]] if len(p) == 2 else p[1] + [p[3]]
+
+    def p_asm_label(self, p):
+        """ asm_label   : ASM LPAREN unified_string_literal RPAREN
+        """
+        # A declarator's asm label renames its linkage symbol; kept as an
+        # attribute-like record so c_gnu_attributes can decide it.
+        p[0] = [c_ast.GnuAttribute("__asm_label__", [p[3]], self._coord(p.lineno(1)))]
+
     def p_pp_directive(self, p):
         """ pp_directive  : PPHASH
         """
@@ -727,6 +801,7 @@ class CParser(PLYParser):
                         | selection_statement
                         | iteration_statement
                         | jump_statement
+                        | asm_statement
         """
         p[0] = p[1]
 
@@ -985,6 +1060,20 @@ class CParser(PLYParser):
                             | declarator attribute_specifier_list EQUALS initializer
         """
         p[0] = dict(decl=p[1], init=(p[4] if len(p) > 3 else None), attributes=p[2])
+
+    def p_init_declarator_asm_label(self, p):
+        """ init_declarator : declarator asm_label
+                            | declarator asm_label EQUALS initializer
+                            | declarator asm_label attribute_specifier_list
+                            | declarator asm_label attribute_specifier_list EQUALS initializer
+        """
+        if len(p) in (3, 5):
+            attributes = p[2]
+            init = p[4] if len(p) == 5 else None
+        else:
+            attributes = p[2] + p[3]
+            init = p[5] if len(p) == 6 else None
+        p[0] = dict(decl=p[1], init=init, attributes=attributes)
 
     def p_specifier_qualifier_list_1(self, p):
         """ specifier_qualifier_list    : type_qualifier specifier_qualifier_list_opt

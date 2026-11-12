@@ -68,6 +68,7 @@ KEYWORD_MAP: dict[str, str] = {
     "__typeof": "TYPEOF", "__typeof__": "TYPEOF",
     "__volatile": "VOLATILE", "__volatile__": "VOLATILE",
     "__attribute__": "__ATTRIBUTE__", "__attribute": "__ATTRIBUTE__",
+    "asm": "ASM", "__asm": "ASM", "__asm__": "ASM",
 }
 
 

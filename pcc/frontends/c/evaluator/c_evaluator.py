@@ -802,13 +802,16 @@ def _expand_simple_gnu_range_designators(codestr):
     return _SIMPLE_RANGE_DESIGNATOR.sub(repl, codestr)
 
 
-def _normalize_preprocessed_source(codestr, target_triple=None):
+def _normalize_preprocessed_source(codestr, target_triple=None, strip_asm=True):
     from pcc.frontends.c.c_builtin_compat import normalize_builtin_type_compat
 
     codestr = normalize_builtin_type_compat(codestr, target_triple)
     codestr = _normalize_simple_typeof_identifiers(codestr)
     codestr = _normalize_typeof_declaration_fallbacks(codestr)
-    codestr = _strip_gnu_asm_statements(codestr)
+    if strip_asm:
+        # Legacy host-cpp path only: the owned parser reads asm statements and
+        # codegen_AsmStatement decides them instead of erasing real templates.
+        codestr = _strip_gnu_asm_statements(codestr)
     codestr = _FIXED_WIDTH_ENUM_BASE.sub("enum", codestr)
     codestr = _CPP11_ATTRIBUTE.sub("", codestr)
     codestr = _expand_simple_gnu_range_designators(codestr)
@@ -911,11 +914,12 @@ _C_EXTENSION_COMPAT_DEFINES = (
 )
 
 
-# The owned parser reads GNU attributes and c_gnu_attributes decides each
-# one's meaning; erasing them would silently drop packed/aligned/mode.
+# The owned parser reads GNU attributes and asm statements; c_gnu_attributes
+# and codegen_AsmStatement decide each one's meaning. Erasing them would
+# silently drop packed/aligned/mode, asm operand assignments and real asm.
 _OWNED_C_EXTENSION_COMPAT_DEFINES = tuple(
     define for define in _C_EXTENSION_COMPAT_DEFINES
-    if not define.startswith(("-D__attribute__(", "-D__attribute("))
+    if not define.startswith(("-D__attribute__(", "-D__attribute(", "-Dasm(", "-D__asm__(", "-D__asm("))
 )
 
 
@@ -942,7 +946,7 @@ def _preprocess_translation_unit_source(
             cpp_args=list(_OWNED_C_EXTENSION_COMPAT_DEFINES) + list(cpp_args or []),
             target_triple=target_triple,
         )
-    return _normalize_preprocessed_source(codestr, target_triple)
+    return _normalize_preprocessed_source(codestr, target_triple, strip_asm=bool(use_system_cpp))
 
 
 def _compile_preprocessed_translation_unit_artifact(
@@ -970,6 +974,9 @@ def _compile_preprocessed_translation_unit_artifact(
         # Decide every GNU attribute before AST passes may drop unused nodes.
         from pcc.frontends.c.codegen.c_gnu_attributes import check_translation_unit
         check_translation_unit(ast)
+        # Empty-template asm becomes the C it means before any AST pass.
+        from pcc.frontends.c.codegen.c_asm import rewrite_empty_templates
+        rewrite_empty_templates(ast)
 
     # --- Pass Framework Integration ---
     if pass_pipeline is None:

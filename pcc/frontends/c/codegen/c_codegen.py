@@ -1916,6 +1916,56 @@ class CCodeGenerator(
             return None, None
         return fn(self, node)
 
+    @staticmethod
+    def _asm_text(literal):
+        """The characters of a (concatenated) asm string literal, escapes undone loosely."""
+        value = literal.value
+        if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+            value = value[1:-1]
+        return value.replace('\\n', '\n').replace('\\t', '\t')
+
+    def codegen_AsmStatement(self, node):
+        """GNU asm with an empty template: only its operand semantics remain.
+
+        An empty template executes no instruction. A "+" operand keeps its
+        value, an "=" operand tied to an input ("0", "[name]") receives that
+        input, an untied "=" operand keeps an unspecified (here: its old)
+        value, and every operand expression is evaluated once. Any real
+        instruction template, asm goto or file-scope asm is an explicit gap.
+        """
+        text = self._asm_text(node.template)
+        if node.file_scope:
+            if text.strip():
+                raise CodegenError(f"{node.coord}: file-scope asm is not implemented")
+            return None, None
+        if node.labels or "goto" in node.qualifiers:
+            raise CodegenError(f"{node.coord}: asm goto is not implemented")
+        if text.strip():
+            raise CodegenError(f"{node.coord}: inline assembly templates are not implemented")
+        names = {name: index for index, (_c, _e, name) in enumerate(node.outputs) if name}
+
+        def constraint(literal):
+            return self._asm_text(literal).lstrip("=+&%")
+
+        tied = {}
+        for constraint_literal, expression, _name in node.inputs:
+            body = constraint(constraint_literal)
+            target = None
+            if body.isdigit():
+                target = int(body)
+            elif body.startswith("[") and body.endswith("]") and body[1:-1] in names:
+                target = names[body[1:-1]]
+            if target is not None and target < len(node.outputs):
+                tied[target] = expression
+            else:
+                self.codegen(expression)
+        for index, (constraint_literal, expression, _name) in enumerate(node.outputs):
+            if index in tied:
+                self.codegen(c_ast.Assignment("=", expression, tied[index], node.coord))
+            else:
+                self._codegen_lvalue_address(expression)
+        return None, None
+
     def codegen_FileAST(self, node):
         # Every GNU attribute is honored, inert or an explicit gap before IR.
         from pcc.frontends.c.codegen.c_gnu_attributes import check_translation_unit

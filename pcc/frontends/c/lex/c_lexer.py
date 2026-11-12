@@ -163,6 +163,9 @@ class CLexer(object):
     keyword_map.pop('int128', None)
     keyword_map['__attribute__'] = '__ATTRIBUTE__'
     keyword_map['__attribute'] = '__ATTRIBUTE__'
+    keyword_map['asm'] = 'ASM'
+    keyword_map['__asm'] = 'ASM'
+    keyword_map['__asm__'] = 'ASM'
 
     ##
     ## All the tokens recognized by the lexer
@@ -179,6 +182,8 @@ class CLexer(object):
 
         # GNU attribute specifier keyword (__attribute__ / __attribute)
         '__ATTRIBUTE__',
+        # GNU asm keyword (asm / __asm / __asm__)
+        'ASM',
 
         # constants
         'INT_CONST_DEC', 'INT_CONST_OCT', 'INT_CONST_HEX', 'INT_CONST_BIN',
