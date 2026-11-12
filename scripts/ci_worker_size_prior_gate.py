@@ -334,7 +334,7 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               'tests/python/test_str_method_slot_models.py',
               'tests/test_ci_native_find_protocol.py',
               'tests/python/test_str_len_protocol.py')
-# Exact default-marker collection: 84 modules, 3744 unique selected nodes.
+# Exact default-marker collection: 84 modules, 3756 unique selected nodes.
 # Keep all paths and explicit counts. Reconcile source hashes and actual node
 # identities before updating this receipt; collection is not execution evidence.
 HOST_COUNTS = (
@@ -343,7 +343,7 @@ HOST_COUNTS = (
     84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1,
     116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6,
     43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 39,
-    35, 23, 36, 29, 4, 29, 11, 23, 10, 65, 7, 92, 1, 2,
+    35, 23, 36, 29, 4, 41, 11, 23, 10, 65, 7, 92, 1, 2,
 )
 PHASES = ("preflight", "stage1", "pcc1")
 
@@ -388,6 +388,7 @@ def source_identity():
                            *CONSUMED_UNSAFE_INPUTS, *HOST_CONTRACT_DATA_INPUTS,
                            "tests/strict_exception_oracle.py", "tests/fixtures/strict_stackmap_catch.ll",
                            "tests/owned_ir_validation.py",
+                           "tests/python/codegen_body_model.py",
                            "tests/fixtures/native/worker_size_priors.py", "conftest.py")}
     value["python"] = {"executable": sys.executable, "sha256": sha(sys.executable),
                        "version": sys.version}

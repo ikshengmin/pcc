@@ -1,6 +1,7 @@
 """Pure command/report controls; actual native/xdist gates run in CI."""
 
 import ast
+from fnmatch import fnmatchcase
 import hashlib
 import importlib.util
 import json
@@ -114,7 +115,7 @@ def test_default_command_retains_project_xdist(tmp_path):
         'tests/test_ci_native_find_protocol.py',
         'tests/python/test_str_len_protocol.py',
     )
-    assert gate.HOST_COUNTS[72:] == (36, 29, 4, 29, 11, 23, 10, 65, 7, 92, 1, 2)
+    assert gate.HOST_COUNTS[72:] == (36, 29, 4, 41, 11, 23, 10, 65, 7, 92, 1, 2)
     assert "tests/python/test_precise_stackmap_abi.py" not in gate.HOST_FILES
     assert gate.GC_MARK_COLOR_ATOMIC_TEST == "tests/python/test_gc_mark_color_atomic.py"
     assert (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text().count(
@@ -125,7 +126,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text().count(
         '      - "tests/python/test_runtime_abi_chunking.py"') == 2
     assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 84
-    assert sum(gate.HOST_COUNTS) == 3744 and sum(gate.HOST_COUNTS[:72]) == 3435
+    assert sum(gate.HOST_COUNTS) == 3756 and sum(gate.HOST_COUNTS[:72]) == 3435
     assert sum(gate.HOST_COUNTS[:70]) == 3377
     assert sum(gate.HOST_COUNTS[:65]) == 3169
     assert sum(gate.HOST_COUNTS[:63]) == 3131
@@ -169,7 +170,8 @@ def test_default_command_retains_project_xdist(tmp_path):
             parameter_case_count(ast.parse(expression, mode="eval").body)
     for filename, expected_count in ((gate.MANAGED_SCRATCH_TEST, 34), (gate.MANAGED_MEMORY_TEST, 1),
                                      (gate.GC_RELOCATION_PAGE_CURSOR_MODEL_TEST, 117),
-                                     (gate.IR_BUILDER_CALL9_TEST, 9)):
+                                     (gate.IR_BUILDER_CALL9_TEST, 9),
+                                     (gate.HOST_FILES[75], 41)):
         count = 0
         for node in ast.parse((ROOT / filename).read_text()).body:
             if isinstance(node, ast.FunctionDef) and node.name.startswith("test_"):
@@ -277,6 +279,31 @@ def test_default_command_retains_project_xdist(tmp_path):
     for path in gate.HOST_CONTRACT_DATA_INPUTS:
         assert input_names.count(path) == 1
         assert gate.sha(ROOT / path) == hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+    model_helper = "tests/python/codegen_body_model.py"
+    assert input_names.count(model_helper) == 1
+    assert gate.sha(ROOT / model_helper) == hashlib.sha256(
+        (ROOT / model_helper).read_bytes(),
+    ).hexdigest()
+    # This shared loader is already covered by the actual broad filters.
+    # Keep both event routes and the planner's full-qualification boundary.
+    event_filters = (
+        push_filters.split("\n  push:", 1)[1],
+        pull_request_filters.split("\npermissions:", 1)[0],
+    )
+    for event in event_filters:
+        patterns = re.findall(r'^      - "([^"]+)"', event, re.MULTILINE)
+        assert "**" in patterns and "tests/**" in patterns
+        assert any(fnmatchcase(model_helper, pattern) for pattern in patterns)
+        assert not any(pattern.startswith("!") and fnmatchcase(model_helper, pattern[1:])
+                       for pattern in patterns)
+    helper_plan = ci_validation_plan.select([("A", model_helper)])
+    assert helper_plan["legacy"] is True
+    assert set(helper_plan["domains"]) == {*ci_validation_plan.LANGUAGES, "shared", "ci-contracts"}
+    assert helper_plan["changes"] == [{
+        "path": model_helper,
+        "reason": "shared, legacy or unclassified: full qualification",
+    }]
+    assert helper_plan["matrix_native_stage1"]["include"] == list(ci_validation_plan.NATIVE_PLATFORMS)
     for path in (*gate.HOST_FILES[72:], *gate.HOST_CONTRACT_DATA_INPUTS):
         assert path in input_names
         assert push_filters.count('      - "' + path + '"') == 1
@@ -1757,7 +1784,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (106, 3, 291, 0, 6, 29, 25, 7, 25, 49, 19, 21, 433, 17, 4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 39, 35, 23) + (36, 29, 4, 29, 11, 23, 10, 65, 7, 92, 1, 2) and not integration
+            assert nodes == gate.HOST_FILES and counts == (106, 3, 291, 0, 6, 29, 25, 7, 25, 49, 19, 21, 433, 17, 4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 39, 35, 23) + (36, 29, 4, 41, 11, 23, 10, 65, 7, 92, 1, 2) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:

@@ -7,14 +7,16 @@ The inline oracle uses the real cleanup's unchanged target=None path.
 
 import __future__
 import ast
-import builtins
 import copy
 import inspect
+from functools import lru_cache
 from pathlib import Path
 from types import MethodType, SimpleNamespace
 import weakref
 
 import pytest
+
+from tests.python.codegen_body_model import CodegenBodyModel
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -39,6 +41,32 @@ class VoidType:
     pass
 
 
+class IntType:
+    def __init__(self, width):
+        self.width = width
+
+    def as_pointer(self):
+        return PointerType()
+
+
+class GlobalVariable:
+    def __init__(self, module, ty, name):
+        self.value_type = ty
+        self.type = PointerType()
+        self.name = name
+        self.global_constant = False
+        module.globals[name] = self
+
+
+class RuntimeCallee(str):
+    """Keep the original oracle's event label and the exact emitted ABI symbol."""
+
+    def __new__(cls, symbol, label):
+        callee = super().__new__(cls, label)
+        callee.symbol = symbol
+        return callee
+
+
 class RawPointerType:
     pass
 
@@ -52,6 +80,7 @@ class Constant:
 class Slot:
     def __init__(self, label):
         self.label = label
+        self.type = PointerType()
 
     def __eq__(self, other):
         raise AssertionError("slot equality is not an identity test")
@@ -128,6 +157,10 @@ class Builder:
                     return
         raise AssertionError("instruction not in this function")
 
+    def bitcast(self, value, ty, name=""):
+        # A recording address cast keeps physical identity; no memory action.
+        return value
+
     def load(self, slot, name=""):
         result = Result()
         self.emit("load", slot, result=result)
@@ -153,68 +186,65 @@ class Builder:
         self.emit("ret", value)
 
 
+@lru_cache(maxsize=None)
+def body_model():
+    prefix = "pcc.frontends.python.codegen."
+    sources = {prefix + name: CODEGEN / (name + ".py") for name in (
+        "ownership_lowering", "return_lowering", "private_frame_scopes",
+        "frame_root_groups", "generator_lowering", "layer1_init",
+    )}
+    model = CodegenBodyModel(
+        sources,
+        {prefix + "ownership_lowering": ("OwnershipLoweringMixin",),
+         prefix + "return_lowering": ("ReturnLoweringMixin",),
+         prefix + "layer1_init": ("Layer1InitMixin",)},
+        {"ir": SimpleNamespace(
+            PointerType=PointerType, VoidType=VoidType, IntType=IntType,
+            GlobalVariable=GlobalVariable, Constant=Constant, IRBuilder=Builder,
+        ), "RawPointerType": RawPointerType, "L1CodegenError": AssertionError},
+        sinks=("_alloca_in_entry", "_as_gc_ptr", "_fresh",
+               "_value_available_at_insertion_point", "_ir_type_matches",
+               "_emit_owned_valueclass_cleanup", "_emit_release_owned_local_if_flagged",
+               "_valueclass_payload_owned_roots", "_instruction_is_terminator",
+               "_mark_walked_frames"),
+        constant_factories=("ir.IntType",),
+    )
+    model.load_methods(METHOD_NAMES)
+    return model
+
+
 def methods():
-    selected = {}
-    for filename in ("ownership_lowering.py", "return_lowering.py"):
-        tree = ast.parse((CODEGEN / filename).read_text())
-        for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef) and node.name in METHOD_NAMES:
-                assert node.name not in selected
-                selected[node.name] = copy.deepcopy(node)
-    assert set(selected) == set(METHOD_NAMES)
-
-    def import_stub(name, globals=None, locals=None, fromlist=(), level=0):
-        assert name == "pcc.frontends.python.codegen.frame_root_groups"
-        return SimpleNamespace(frame_root_group=lambda host, slot: None)
-
-    namespace = {
-        "__builtins__": dict(vars(builtins), __import__=import_stub),
-        "ir": SimpleNamespace(PointerType=PointerType, VoidType=VoidType,
-                              Constant=Constant, IRBuilder=Builder),
-        "_CSTR": PointerType(),
-        "RawPointerType": RawPointerType,
-    }
-    module = ast.Module(body=list(selected.values()), type_ignores=[])
-    # A compiler flag avoids executing a synthetic __future__ import through
-    # the deliberately narrow generator-module import stub.
-    code = compile(ast.fix_missing_locations(module), "<pinned-cleanup-methods>", "exec",
-                   flags=__future__.annotations.compiler_flag, dont_inherit=True)
-    exec(code, namespace)
-    return {name: namespace[name] for name in METHOD_NAMES}
+    return body_model().load_methods(METHOD_NAMES)
 
 
 class Host:
-    def __init__(self, *, inline=False, pointer_return=False):
+    def __init__(self, *, inline=False, pointer_return=False, mapped=False):
         self.current_function = Function(return_type=PointerType() if pointer_return else VoidType())
         self.current_func_def = SimpleNamespace(return_ty=object())
         self.ast_module = SimpleNamespace(name="test.module")
         self.builder = Builder(self.current_function.append_basic_block("entry"))
-        self.runtime = {name: name for name in ("pcc_gc_unpin", "pcc_gc_store_root", "pcc_gc_load_ptr")}
-        self._shared_return_exits = {}
-        self._fn_gc_root_exit_sites = {}
+        self.module = SimpleNamespace(globals={})
+        self.runtime = {name: name for name in (
+            "pcc_gc_unpin", "pcc_gc_store_root", "pcc_gc_load_ptr",
+        )}
+        for operation in ("enter", "leave", "enter_lifo", "leave_lifo"):
+            for suffix in ("", "_local", "_mapped", "_local_mapped"):
+                symbol = "pcc_gc_frame_" + operation + suffix
+                self.runtime[symbol] = RuntimeCallee(symbol, "frame_" + operation)
         self._fn_gc_root_slot_registry = {"f": []}
-        self._return_handoff_sites = []
-        self._gc_rooted_local_names = set()
-        self._gc_rooted_local_order = []
-        self._pinned_gc_rooted_local_names = set()
-        self._owned_local_names = set()
-        self._owned_local_has_value = set()
-        self._current_global_names = set()
-        self._current_param_names = set()
-        self._exact_int_env_flags = {}
-        self._for_target_owned_names = set()
-        self._freestanding_module = False
-        self._python_library = False
+        # These are scenario inputs, not constructor defaults: model a normal
+        # function and choose the target's already-resolved stack-map mode.
         self._runtime_port_module = False
-        self._generator_ctx_stack = []
-        self._async_body_depth = 0
+        self._precise_stack_frames_mapped = mapped
         self._suppress_implicit_gc_roots = False
-        self._cpy_values = ()
         self.env = {}
         self.serial = 0
-        real = methods()
-        for name, method in real.items():
-            setattr(self, name, MethodType(method, self))
+        self.walked_frame_marks = 0
+        model = body_model()
+        model.bind(self, METHOD_NAMES)
+        model.initialize_state(
+            self, "pcc.frontends.python.codegen.layer1_init", "_init_l1_state",
+        )
         if inline:
             cleanup = self._emit_owned_local_cleanup
 
@@ -243,7 +273,13 @@ class Host:
         return prefix + "." + str(self.serial)
 
     def _alloca_in_entry(self, ty, name, init_null=False):
-        return Slot("return-slot" if name.startswith("ret.shared") else name)
+        slot = Slot("return-slot" if name.startswith("ret.shared") else name)
+        # Storage is a recording sink; its provenance is the actual producer.
+        body_model().function(
+            "pcc.frontends.python.codegen.private_frame_scopes",
+            "record_private_root_address",
+        )(self, slot, 1 if isinstance(ty, PointerType) else 0)
+        return slot
 
     def _as_gc_ptr(self, slot, name=""):
         return slot
@@ -263,17 +299,9 @@ class Host:
     def _valueclass_payload_owned_roots(self, payload):
         return ()
 
-    def _emit_gc_frame_leave_for_slot(self, slot):
-        self.builder.call("frame_leave", [slot])
-
-    def _emit_gc_frame_leave_lifo_for_slot(self, slot):
-        self.builder.call("frame_leave_lifo", [slot])
-
-    def _emit_current_gc_frame_enter_lifo(self, frame_map, slot):
-        self.builder.call("frame_enter_lifo", [frame_map, slot])
-
-    def _gc_one_slot_frame_map(self):
-        return "one-slot-map"
+    def _mark_walked_frames(self):
+        # The backend marker is outside this CFG model; observe each request.
+        self.walked_frame_marks += 1
 
     def _instruction_is_terminator(self, instruction):
         return instruction.opname in ("branch", "ret", "ret_void")
@@ -299,6 +327,8 @@ def trace(entry, initial=None):
         return value
 
     def printable(value):
+        if isinstance(value, GlobalVariable):
+            return ("map", value.name)
         return ("slot", value.label) if isinstance(value, Slot) else value
 
     block = entry
@@ -599,3 +629,178 @@ def test_static_method_signatures_match_actual_generator_formatters():
     assert len(assignments) == 1
     host_methods = ast.literal_eval(assignments[0].value)
     assert host_methods.count("_shared_return_pinned_cleanup") == 1
+
+
+def assert_rooted_return_abi(entry, *, mapped):
+    symbols = [event[0].symbol for event in trace(entry)
+               if isinstance(event[0], RuntimeCallee) and "lifo" in event[0].symbol]
+    suffix = "_local_mapped" if mapped else "_local"
+    assert symbols == ["pcc_gc_frame_enter_lifo" + suffix,
+                       "pcc_gc_frame_leave_lifo" + suffix], "rooted LIFO ABI mismatch"
+
+
+@pytest.mark.parametrize("mapped", [False, True])
+@pytest.mark.parametrize("inline", [False, True])
+def test_rooted_return_selects_early_abi_and_pairs_each_actual_enter(inline, mapped):
+    host = Host(inline=inline, pointer_return=True, mapped=mapped)
+    host.register("first")
+    host.register("second")
+    entries = [host.new_return(rooted=True, value="result") for _ in range(3)]
+    for entry in entries:
+        assert_rooted_return_abi(entry, mapped=mapped)
+        events = trace(entry)
+        assert events[-1] == ("return", "result")
+        labels = [event[0] for event in events]
+        assert labels.index("frame_enter_lifo") < labels.index("pcc_gc_unpin")
+        assert labels.index("frame_leave") < labels.index("pcc_gc_load_ptr")
+        assert labels.index("pcc_gc_load_ptr") < labels.index("frame_leave_lifo")
+        assert events[labels.index("frame_leave_lifo") - 1] == (
+            "pcc_gc_store_root", (("slot", "return-slot"), None),
+        )
+    assert static_calls(host, "frame_enter_lifo") == 3
+    assert static_calls(host, "frame_leave_lifo") == 1
+    assert (host.walked_frame_marks > 0) is mapped
+    # The helper was pulled by self-call, not added to the model's root list.
+    assert "_gc_frame_entry" not in METHOD_NAMES
+    assert host._gc_frame_entry.__func__ is methods()["_gc_frame_entry"]
+
+
+@pytest.mark.parametrize("mapped", [False, True])
+def test_abi_oracle_rejects_missing_early_shared_return_selection(mapped):
+    host = Host(pointer_return=True, mapped=mapped)
+    module, original = body_model().methods["_shared_return_exit"]
+    altered = copy.deepcopy(original)
+
+    class RemoveEarlySelection(ast.NodeTransformer):
+        removed = 0
+
+        def visit_Expr(self, node):
+            if (isinstance(node.value, ast.Call)
+                    and isinstance(node.value.func, ast.Attribute)
+                    and node.value.func.attr == "_gc_frame_entry"):
+                self.removed += 1
+                return ast.copy_location(ast.Pass(), node)
+            return self.generic_visit(node)
+
+    mutation = RemoveEarlySelection()
+    altered = mutation.visit(altered)
+    assert mutation.removed == 1
+    namespace = dict(body_model().namespaces[module])
+    tree = ast.fix_missing_locations(ast.Module(body=[altered], type_ignores=[]))
+    exec(compile(tree, "<missing-early-selection-negative-control>", "exec",
+                 flags=__future__.annotations.compiler_flag, dont_inherit=True), namespace)
+    host._shared_return_exit = MethodType(namespace["_shared_return_exit"], host)
+    entry = host.new_return(rooted=True, value="result")
+    assert trace(entry)[-1] == ("return", "result")
+    with pytest.raises(AssertionError, match="rooted LIFO ABI mismatch"):
+        assert_rooted_return_abi(entry, mapped=mapped)
+
+
+def test_codegen_loader_discovers_helpers_constants_and_fresh_source_state(tmp_path):
+    first = tmp_path / "first.py"
+    second = tmp_path / "second.py"
+    first.write_text('''
+raise AssertionError("module initialization must not execute")
+VALUE = 3
+class First:
+    raise AssertionError("class initialization must not execute")
+    def initialize(self):
+        self.pending = []
+        self.seen = set()
+        self.untouched = arbitrary_call()
+    def entry(self):
+        from fixture_second import helper
+        self.pending.append(helper())
+        self.seen.add(VALUE)
+        return self.bridge() + self.sink()
+    def sink(self):
+        raise AssertionError("the recording sink must take precedence")
+''')
+    second.write_text('''
+VALUE = 7
+def helper(value=VALUE):
+    return nested(value)
+def nested(value):
+    return value
+def bridge(host):
+    return VALUE
+class Second:
+    def bridge(self):
+        return self.pending[-1] + bridge(self)
+''')
+    model = CodegenBodyModel(
+        {"fixture_first": first, "fixture_second": second},
+        {"fixture_first": ("First",), "fixture_second": ("Second",)},
+        {}, sinks=("sink",),
+    )
+    left, right = SimpleNamespace(sink=lambda: 1), SimpleNamespace(sink=lambda: 2)
+    for host in (left, right):
+        model.bind(host, ("entry",))
+        model.initialize_state(host, "fixture_first", "initialize")
+    assert left.entry() == 15 and right.entry() == 16
+    assert left.pending == right.pending == [7]
+    assert left.seen == right.seen == {3}
+    assert left.pending is not right.pending and left.seen is not right.seen
+    assert not hasattr(left, "untouched")
+    global_bridge = model.function("fixture_second", "bridge")
+    assert global_bridge(left) == 7
+    assert left.bridge.__func__ is not global_bridge
+    assert left.bridge.__func__.__globals__ is model.namespaces["fixture_second"]
+    assert model.namespaces["fixture_second"]["bridge"] is global_bridge
+    # Explicit roots cannot silently become a recording sink.
+    model.bind(left, ("sink",))
+    with pytest.raises(AssertionError, match="recording sink must take precedence"):
+        left.sink()
+
+
+@pytest.mark.parametrize("case", ["constant", "state", "import", "duplicate", "decorator"])
+def test_codegen_loader_rejects_unsupported_or_ambiguous_dependencies(tmp_path, case):
+    source = tmp_path / "source.py"
+    cases = {
+        "constant": "VALUE = forbidden()\nclass First:\n    def entry(self): return VALUE\n",
+        "state": "class First:\n    def initialize(self): self.pending = forbidden()\n"
+                 "    def entry(self): return self.pending\n",
+        "import": "class First:\n    def entry(self):\n"
+                  "        from pcc.not_a_model_provider import value\n        return value\n",
+        "duplicate": "class First:\n    def entry(self): return 1\n"
+                     "class Second:\n    def entry(self): return 2\n",
+        "decorator": "class First:\n    @forbidden\n    def entry(self): return 1\n",
+    }
+    source.write_text(cases[case])
+    if case == "duplicate":
+        with pytest.raises(AssertionError, match="entry"):
+            CodegenBodyModel({"fixture": source}, {"fixture": ("First", "Second")}, {})
+        return
+    model = CodegenBodyModel({"fixture": source}, {"fixture": ("First",)}, {})
+    host = SimpleNamespace()
+    if case in ("constant", "decorator"):
+        with pytest.raises(ValueError, match="codegen model"):
+            model.bind(host, ("entry",))
+    else:
+        model.bind(host, ("entry",))
+        if case == "state":
+            with pytest.raises(ValueError, match="explicit model state required: pending"):
+                model.initialize_state(host, "fixture", "initialize")
+            for declarations in (
+                "        if flag: self.pending = []\n",
+                "        self.pending = []\n        if flag: self.pending = []\n",
+                "        if False: self.pending = []\n",
+            ):
+                source.write_text(
+                    "class First:\n    def initialize(self):\n" + declarations
+                    + "    def entry(self): return getattr(self, 'pending', 'hidden')\n",
+                )
+                conditional = CodegenBodyModel(
+                    {"fixture": source}, {"fixture": ("First",)}, {},
+                )
+                scenario = SimpleNamespace()
+                conditional.bind(scenario, ("entry",))
+                with pytest.raises(ValueError, match="ambiguous model state: pending"):
+                    conditional.initialize_state(scenario, "fixture", "initialize")
+                assert not hasattr(scenario, "pending")
+                scenario.pending = [42]  # An explicit branch outcome is valid input.
+                conditional.initialize_state(scenario, "fixture", "initialize")
+                assert scenario.entry() == [42]
+        else:
+            with pytest.raises(ImportError, match="no source provider"):
+                host.entry()
