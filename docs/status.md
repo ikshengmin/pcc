@@ -231,8 +231,19 @@ failed on blocker 1. `93ed2fe9c` and the first `b0c7526c3` Stage1 hit the
 unchanged 2,400 s cap at load averages of 120–230 and about 40. The second
 `b0c7526c3` Stage1 passed in 2,215 s (CPU 9,303 s); its Stage2 stopped once
 on the worker tree-RSS state guard (stale snapshot under load, 382 s) and
-then on blocker 2 (815 s). Neither `53a4eb9f1` nor the loop-join fix has
-been bootstrapped yet.
+then on blocker 2 (815 s). `d7b0cf564` (both fixes) Stage1 passed in
+2,395 s (CPU 9,499 s) against the unchanged 2,400 s cap, and its runtime
+archive verified. Stage2, run twice from that Stage1 under 1-minute load
+averages of 23–68 from other workloads, stopped both times after 550–606 s on
+the worker tree-RSS freshness guard (native coordinator: no usable sample for
+more than 2 s, last sample rejected `before_barrier`), before any codegen
+verdict. Stage2/Stage3 and the pcc2 == pcc3 fixed point remain unverified for
+these commits; rerun them on a quieter host:
+
+```bash
+uv run python scripts/bootstrap.py --out-dir OUT --stage 1
+PCC_RUNTIME_ARCHIVE=pcc/runtime/build_owned/arm64-apple-darwin/threads-atomic/libpy_runtime_pcc_py.a uv run python scripts/bootstrap.py --out-dir OUT --from-stage 2 --stage 3 --reuse-stage1
+```
 
 Pre-existing failures seen on an unmodified 93ed2fe9c snapshot while sweeping
 the affected files (not repaired): `test_fallback_baseline.py` is red for 136
