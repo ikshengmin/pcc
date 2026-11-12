@@ -3,12 +3,14 @@
 Uses the C generator's lexical maps and existing scalar/registered type owners.
 Variable array query shapes are not runtime pointer lowering capabilities.
 """
-from contextlib import contextmanager
-from collections import ChainMap
 from copy import copy
 
 from pcc.frontends.c.ast import c_ast
 from pcc.frontends.c.codegen.c_declaration_state import CodegenError
+from pcc.frontends.c.codegen.c_scope_context import (
+    TypedefDefinitionScope,
+    UnevaluatedDeclarationScope,
+)
 from pcc.ir.compat import ir_c as ir
 
 
@@ -29,35 +31,12 @@ class UnevaluatedVLAType(ir.Type):
 
 
 class CUnevaluatedTypeMixin:
-    @contextmanager
     def _unevaluated_declaration_scope(self):
-        counter = self._scope_id_counter
-        builder = self.builder
-        depth = getattr(self, '_unevaluated_binding_depth', 0)
-        try:
-            with self.new_scope():
-                # No initializer, bound, layout or value emission is permitted.
-                self.builder = None
-                self._unevaluated_binding_depth = depth + 1
-                yield
-        finally:
-            self.builder = builder
-            self._unevaluated_binding_depth = depth
-            self._scope_id_counter = counter
+        return UnevaluatedDeclarationScope(self)
 
-    @contextmanager
     def _query_typedef_definition_scope(self, name):
         """Resolve an existing alias in its declaring scope, not a later shadow."""
-        env, aliases = self.env, self._typedef_ast_types
-        key = '__typedef_' + name
-        env_index = next((i for i, scope in enumerate(env.maps) if key in scope), 0)
-        alias_index = next((i for i, scope in enumerate(aliases.maps) if name in scope), 0)
-        try:
-            self.env = ChainMap(*env.maps[env_index:])
-            self._typedef_ast_types = ChainMap(*aliases.maps[alias_index:])
-            yield
-        finally:
-            self.env, self._typedef_ast_types = env, aliases
+        return TypedefDefinitionScope(self, name)
 
     def _freeze_query_declarator(self, node, seen=()):
         """Bind typedef use at its declaration point, retaining nominal nodes."""

@@ -52,9 +52,10 @@ _DECORATOR_WHITELIST = frozenset({
     # helpers; both have stub impls in pcc.stdlib.functools.
     "wraps", "functools.wraps",
     "lru_cache", "functools.lru_cache", "cache", "functools.cache",
-    # @contextmanager becomes a generator decorator — our pcc.stdlib
-    # .contextlib stub implements it in terms of the ``__enter__`` /
-    # ``__exit__`` protocol the existing codegen already handles.
+    # @contextmanager on a module-level generator: ``with f():`` is lowered
+    # statically (generator_context_lowering.py). On a method it is applied
+    # at class definition by calling pcc.stdlib.contextlib.contextmanager,
+    # which raises NotImplementedError; visit_ClassDef flags that shape.
     "contextmanager", "contextlib.contextmanager",
     # @<name>.setter / @<name>.getter / @<name>.deleter are treated
     # specially at the audit level (endswith ".setter" etc).
@@ -168,6 +169,14 @@ class Auditor(ast.NodeVisitor):
                         node, "class-kw",
                         f"class {node.name}({kw.arg}=...)",
                     )
+        for item in node.body:
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for dec in item.decorator_list:
+                    if self._dec_name(dec) in ("contextmanager", "contextlib.contextmanager"):
+                        self._flag(
+                            item, "method-contextmanager",
+                            f"@contextmanager on method {node.name}.{item.name}",
+                        )
         for dec in node.decorator_list:
             name = self._dec_name(dec)
             # Same whitelist as functions — @dataclass is in there.
