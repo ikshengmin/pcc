@@ -1,6 +1,7 @@
 """Pure command/report controls; actual native/xdist gates run in CI."""
 
 import ast
+import copy
 from fnmatch import fnmatchcase
 import hashlib
 import importlib.util
@@ -690,7 +691,7 @@ def test_integration_selects_one_owner_without_changing_workers(tmp_path):
     (["a.py::one"], "6 workers [1 item]"),
     (["a.py::one", "b.py::two"], "6 workers [2 items]"),
 ])
-def test_exact_six_worker_reports_are_required(tmp_path, nodes, summary):
+def test_exact_six_worker_reports_are_required(tmp_path, nodes, summary, monkeypatch):
     put(tmp_path, reports(tmp_path, nodes))
     # Literal xdist output keeps the fixture from repeating a parser spelling bug.
     (tmp_path / "target.stdout").write_text(
@@ -698,6 +699,120 @@ def test_exact_six_worker_reports_are_required(tmp_path, nodes, summary):
     assert gate.verify_pytest(tmp_path, nodes) == nodes
     assert gate.verify_pytest(tmp_path, [node.split("::")[0] for node in nodes],
                               [1] * len(nodes)) == nodes
+
+    from tests import conftest as test_gates
+
+    # Extend this existing execution node, preserving the canonical HOST_COUNTS.
+    declaration = {"platforms": ("linux",), "machines": ("x86_64", "amd64")}
+    source = ast.parse((ROOT / "tests/c/test_self_backend_text_index.py").read_text())
+    native = next(node for node in source.body if isinstance(node, ast.FunctionDef)
+                  and node.name == "test_repeated_suffix_phi_program_executes_with_owned_linker")
+    mark = native.decorator_list[0]
+    assert {kw.arg: ast.literal_eval(kw.value) for kw in mark.keywords} == declaration
+    extra = "a.py::platform_program"
+    universe = nodes + [extra]
+    paths = list(dict.fromkeys(node.split("::")[0] for node in universe))
+    counts = [sum(node.startswith(path + "::") for node in universe) for path in paths]
+
+    def witnessed(target, machine):
+        marker = SimpleNamespace(args=(), kwargs=declaration)
+        item = SimpleNamespace(iter_markers=lambda _name: iter([marker]))
+        with monkeypatch.context() as patch:
+            patch.setattr(test_gates, "_gate_sys", SimpleNamespace(platform=target))
+            patch.setattr(test_gates, "_gate_platform", SimpleNamespace(machine=lambda: machine))
+            blocked = test_gates._pcc_gate_blocked_reason(item) is not None
+        assert blocked == (target != "linux" or machine.lower() not in ("x86_64", "amd64"))
+        selected = nodes + ([] if blocked else [extra + "@owned"])
+        value = reports(tmp_path, selected)
+        value[0].update(collection_witness=True, workers=6, dist="loadgroup",
+                        markexpr="not integration", platform=target, machine=machine.lower(),
+                        keyword="", ignore=[], ignore_glob=[], deselect=[], lf=False,
+                        stepwise=False, stepwise_skip=False, pyargs=False,
+                        noconftest=False, confcutdir="")
+        raw = [{"canonical_nodeid": node, "nodeid": node, "integration": False,
+                "selected": True, "gates": []} for node in nodes]
+        raw.append({"canonical_nodeid": extra, "nodeid": extra if blocked else extra + "@owned",
+                    "integration": False, "selected": not blocked,
+                    "gates": [{"args": [], "kwargs": {key: list(val) for key, val in declaration.items()}}]})
+        # A marker-excluded integration case is outside the ordinary universe,
+        # even when an environmental gate also prevented its selection.
+        raw.append({"canonical_nodeid": "a.py::integration", "nodeid": "a.py::integration",
+                    "integration": True, "selected": False,
+                    "gates": [{"args": [], "kwargs": {"env": "PCC_MISSING_CONTROL"}}]})
+        witness = {"version": 1, "platform": target, "machine": machine.lower(),
+                   "marker": "not integration", "keyword": "", "rows": raw, "selected": selected}
+        value[-1:-1] = [{"event": "collection_witness", "worker": "gw" + str(i),
+                        "witness": copy.deepcopy(witness)} for i in range(6)]
+        return value, selected
+
+    for target, machine in (("linux", "x86_64"), ("linux", "AMD64"),
+                            ("linux", "aarch64"), ("win32", "AMD64"), ("darwin", "arm64")):
+        value, selected = witnessed(target, machine)
+        put(tmp_path, value)
+        assert gate.verify_pytest(tmp_path, paths, counts, collection_witness=True) == selected
+        accounting = json.loads((tmp_path / "collection-accounting.json").read_text())
+        assert accounting["universe_count"] == len(universe)
+        assert accounting["selected_passed_count"] == len(selected)
+        assert [row["nodeid"] for row in accounting["platform_unrun"]] == ([] if extra + "@owned" in selected else [extra])
+        assert all(row["status"] == "UNRUN" for row in accounting["platform_unrun"])
+
+    original, _ = witnessed("linux", "aarch64")
+    for fault in ("missing-witness", "duplicate-worker", "null-witness", "disagreement", "host",
+                  "marker", "keyword", "filter", "wrong-file", "duplicate-node", "missing-node",
+                  "removed-report", "crash", "late-witness", "applicable", "no-gate",
+                  "env", "dep", "unavailable", "probe", "unknown", "args", "mixed-marker",
+                  "integration-selected"):
+        value = copy.deepcopy(original)
+        witnesses = [row for row in value if row["event"] == "collection_witness"]
+        if fault == "missing-witness": value.remove(witnesses[-1])
+        elif fault == "duplicate-worker": witnesses[-1]["worker"] = "gw0"
+        elif fault == "null-witness": witnesses[-1]["witness"] = None
+        elif fault == "disagreement": witnesses[-1]["witness"]["rows"].pop()
+        elif fault == "filter": value[0]["deselect"] = [nodes[0]]
+        elif fault == "removed-report": value.pop(3)
+        elif fault == "crash": value.insert(-1, {"event": "worker_crash"})
+        elif fault == "late-witness": value.append(value.pop(value.index(witnesses[-1])))
+        else:
+            for event in witnesses:
+                witness = event["witness"]
+                row = witness["rows"][len(nodes)]
+                condition = row["gates"][0]
+                if fault == "host": witness["machine"] = "x86_64"
+                elif fault == "marker": witness["marker"] = ""
+                elif fault == "keyword": witness["keyword"] = "selected_only"
+                elif fault == "wrong-file": row["canonical_nodeid"] = row["nodeid"] = "other.py::missing"
+                elif fault == "duplicate-node": witness["rows"].append(copy.deepcopy(row))
+                elif fault == "missing-node": witness["rows"].remove(row)
+                elif fault == "applicable": condition["kwargs"]["machines"] = ["aarch64"]
+                elif fault == "no-gate": row["gates"] = []
+                elif fault == "args": condition["args"] = ["unknown prerequisite"]
+                elif fault == "mixed-marker": row["gates"].append({"args": [], "kwargs": {"env": "MISSING"}})
+                elif fault == "integration-selected": witness["rows"][0]["integration"] = True
+                else: condition["kwargs"][fault] = {"type": "function"} if fault == "probe" else "MISSING"
+        put(tmp_path, value)
+        with pytest.raises(AssertionError):
+            gate.verify_pytest(tmp_path, paths, counts, collection_witness=True)
+
+    # The new path is mandatory only for default-xdist; historical reports
+    # cannot gain a platform waiver by being replayed through the verifier.
+    put(tmp_path, reports(tmp_path, nodes))
+    with pytest.raises((AssertionError, KeyError)):
+        gate.verify_pytest(tmp_path, paths, counts, collection_witness=True)
+    command = gate.pytest_command(tmp_path, paths, collection_witness=True)
+    assert "--pcc-live-collection-witness" in command
+    assert "--pcc-live-collection-witness" not in gate.pytest_command(tmp_path, paths)
+
+    # Exercise the real gate owner for mixed prerequisites and malformed data.
+    monkeypatch.delenv("PCC_MISSING_CONTROL", raising=False)
+    for conditions in ({"env": "PCC_MISSING_CONTROL"},
+                       {**declaration, "env": "PCC_MISSING_CONTROL"},
+                       {"probe": lambda: False}):
+        item = SimpleNamespace(iter_markers=lambda _name: iter([SimpleNamespace(kwargs=conditions)]))
+        assert test_gates._pcc_gate_blocked_reason(item) is not None
+    for allowed in ("linux", (), [None]):
+        item = SimpleNamespace(iter_markers=lambda _name: iter([SimpleNamespace(kwargs={"platforms": allowed})]))
+        with pytest.raises(TypeError, match="nonempty sequence"):
+            test_gates._pcc_gate_blocked_reason(item)
 
 
 @pytest.mark.parametrize("summary", [

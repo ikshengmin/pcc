@@ -1,8 +1,5 @@
 """Generated suffixes must not turn sparse name indexes into dense probe runs."""
 
-import platform
-import sys
-
 import pytest
 
 from pcc.backend import self_backend_kernel as kernel_module
@@ -471,8 +468,7 @@ def test_full_name_keys_preserve_emitted_object_bytes(monkeypatch):
 
 
 @pytest.mark.pcc_gate(
-    probe=lambda: sys.platform == "linux"
-    and platform.machine().lower() in ("x86_64", "amd64")
+    platforms=("linux",), machines=("x86_64", "amd64")
 )
 def test_repeated_suffix_phi_program_executes_with_owned_linker(tmp_path):
     from tests.c.test_self_backend_x86_64_aggregate_stores import _run_owned_program

@@ -9,6 +9,7 @@ means what it says and no longer depends on a process-wide monkeypatch.
 from __future__ import annotations
 
 import importlib.util
+import platform as _gate_platform
 import shutil
 import subprocess
 import sys as _gate_sys
@@ -319,6 +320,17 @@ def _pcc_gate_blocked_reason(item) -> str | None:
         dep = marker.kwargs.get("dep")
         if dep and importlib.util.find_spec(dep) is None:
             return f"dependency {dep!r} not installed"
+        # Declarative host constraints are auditable without interpreting an
+        # opaque probe. Each specified dimension is required (logical AND).
+        for name, actual in (("platforms", _gate_sys.platform),
+                             ("machines", _gate_platform.machine().lower())):
+            if name in marker.kwargs:
+                allowed = marker.kwargs[name]
+                if (not isinstance(allowed, (tuple, list)) or not allowed
+                        or any(not isinstance(value, str) or not value for value in allowed)):
+                    raise TypeError(f"pcc_gate {name} must be a nonempty sequence of strings")
+                if actual not in allowed:
+                    return f"{name} {actual!r} not in {tuple(allowed)!r}"
         probe = marker.kwargs.get("probe")
         if callable(probe):
             available = probe()

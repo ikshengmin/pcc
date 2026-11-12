@@ -9,23 +9,72 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import platform
+import sys
 import time
 
 import pytest
 from _pytest._io.saferepr import saferepr
 from _pytest.subtests import SubtestReport
 
+from scripts.ci_validation_inventory import serial
+
 
 def pytest_addoption(parser):
     parser.addoption("--pcc-live-report", default=None, help="New JSONL report path")
     parser.addoption("--pcc-live-subtests", action="store_true", default=False,
                      help="Separate explicit subtest events for subtest-aware consumers")
+    parser.addoption("--pcc-live-collection-witness", action="store_true", default=False,
+                     help="Record each worker's before/after repository collection inventory")
 
 
 def pytest_configure(config):
     path = config.getoption("--pcc-live-report")
+    if config.getoption("--pcc-live-collection-witness"):
+        if not path:
+            raise pytest.UsageError("collection witnesses require --pcc-live-report")
+        config.pluginmanager.register(CollectionWitness(config), "pcc-live-collection-witness")
     if path and not hasattr(config, "workerinput"):
         config.pluginmanager.register(LiveReport(Path(path), config), "pcc-live-report")
+
+
+class CollectionWitness:
+    """Observe the original hooks, without changing selection or evaluating gates."""
+
+    def __init__(self, config):
+        self.config = config
+        self.value = None
+
+    @pytest.hookimpl(wrapper=True, tryfirst=True)
+    def pytest_collection_modifyitems(self, items):
+        # Same before/after shape as ci_validation_inventory. Retain actual
+        # objects until all selection and xdist group spelling hooks finish.
+        before = [(item, {
+            "canonical_nodeid": item.nodeid,
+            "integration": bool(item.get_closest_marker("integration")),
+            "gates": [{"args": serial(mark.args), "kwargs": serial(mark.kwargs)}
+                      for mark in item.iter_markers("pcc_gate")],
+        }) for item in items]
+        result = yield
+        selected_ids = {id(item) for item in items}
+        rows = [dict(row, nodeid=item.nodeid, selected=id(item) in selected_ids)
+                for item, row in before]
+        self.value = {
+            "version": 1, "platform": sys.platform, "machine": platform.machine().lower(),
+            "marker": self.config.getoption("markexpr"),
+            "keyword": self.config.getoption("keyword"),
+            "rows": rows, "selected": [item.nodeid for item in items],
+        }
+        return result
+
+    @pytest.hookimpl(tryfirst=True)
+    def pytest_sessionfinish(self, session, exitstatus):
+        if hasattr(self.config, "workeroutput"):
+            self.config.workeroutput["pcc_collection_witness"] = self.value
+        else:
+            reporter = self.config.pluginmanager.getplugin("pcc-live-report")
+            if self.value is not None:
+                reporter.write("collection_witness", worker="controller", witness=self.value)
 
 
 class LiveReport:
@@ -35,6 +84,7 @@ class LiveReport:
         self.collections = set()
         self.subtest_counts = {}
         self.separate_subtests = config.getoption("--pcc-live-subtests")
+        self.collection_witness = config.getoption("--pcc-live-collection-witness")
         self.write(
             "start",
             argv=list(config.invocation_params.args),
@@ -47,6 +97,11 @@ class LiveReport:
             collect_only=config.getoption("collectonly"),
             maxfail=config.getoption("maxfail"),
             separate_subtests=self.separate_subtests,
+            collection_witness=self.collection_witness,
+            workers=config.getoption("numprocesses", default=0),
+            dist=config.getoption("dist", default="no"),
+            platform=sys.platform,
+            machine=platform.machine().lower(),
             lf=bool(config.getoption("lf", default=False)),
             stepwise=bool(config.getoption("stepwise", default=False)),
             stepwise_skip=bool(config.getoption("stepwise_skip", default=False)),
@@ -137,6 +192,9 @@ class LiveReport:
     def pytest_testnodedown(self, node, error):
         if error is not None:
             self.write("worker_crash", worker=node.gateway.id, error=str(error))
+        if getattr(self, "collection_witness", False):
+            self.write("collection_witness", worker=node.gateway.id,
+                       witness=getattr(node, "workeroutput", {}).get("pcc_collection_witness"))
 
     def pytest_sessionfinish(self, session, exitstatus):
         self.write(

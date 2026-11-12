@@ -462,28 +462,87 @@ def verify_posix_guard(result, timeout):
             "timeout_s": timeout, "status": result["status"], "returncode": result["returncode"]}
 
 
-def pytest_command(directory, nodes, integration=False):
+def pytest_command(directory, nodes, integration=False, *, collection_witness=False):
     # In particular, never clear addopts or override -n/--dist.
     command = [sys.executable, "-m", "pytest", "-x", "-vv", "--tb=short",
                "-p", "scripts.pytest_live_report", "--pcc-live-report", str(directory / "live.jsonl"),
                "--junitxml", str(directory / "junit.xml"), "--basetemp", str(directory / "tests")]
+    if collection_witness:
+        command.append("--pcc-live-collection-witness")
     return command + (["-m", "integration"] if integration else []) + list(nodes)
 
 
-def verify_pytest(directory, expected, file_counts=None):
+def _verify_collection_witnesses(rows, start, nodes):
+    """Account for platform-inapplicable nodes, never missing prerequisites."""
+    assert start["collection_witness"] is True
+    assert start["workers"] == 6 and start["dist"] == "loadgroup"
+    assert start["markexpr"] == "not integration"
+    assert not any(start[name] for name in (
+        "keyword", "ignore", "ignore_glob", "deselect", "lf", "stepwise",
+        "stepwise_skip", "pyargs", "noconftest", "confcutdir",
+    )), "default inventory cannot be filtered"
+    assert not any(row["event"] in {"worker_crash", "internalerror", "interrupt", "collection"}
+                   for row in rows)
+    events = [row for row in rows if row["event"] == "collection_witness"]
+    assert len(events) == 6 and {row["worker"] for row in events} == {"gw" + str(i) for i in range(6)}
+    assert rows[-1]["event"] == "finish", "all worker witnesses must precede controller finish"
+    witness = events[0]["witness"]
+    assert isinstance(witness, dict) and all(row["witness"] == witness for row in events)
+    assert witness["version"] == 1 and witness["marker"] == "not integration" and not witness["keyword"]
+    assert witness["platform"] == start["platform"] and witness["machine"] == start["machine"]
+    assert witness["selected"] == nodes
+    raw = witness["rows"]
+    assert len({row["canonical_nodeid"] for row in raw}) == len(raw)
+    assert len({row["nodeid"] for row in raw}) == len(raw)
+    assert all(type(row["selected"]) is bool and type(row["integration"]) is bool for row in raw)
+    assert {row["nodeid"] for row in raw if row["selected"]} == set(nodes)
+    universe, unrun = [], []
+    for row in raw:
+        canonical = row["canonical_nodeid"]
+        assert row["nodeid"] == canonical or row["nodeid"].startswith(canonical + "@")
+        if row["integration"]:
+            assert not row["selected"], "integration nodes cannot enter the ordinary inventory"
+            continue
+        universe.append(canonical)
+        if row["selected"]:
+            continue
+        gates = row["gates"]
+        assert gates, (canonical, "unexplained deselection")
+        blocked = False
+        for marker in gates:
+            conditions = marker["kwargs"]
+            # Every marker must be exclusively declarative. A platform false
+            # must not conceal env/dep/unavailable, an opaque callable, extra
+            # positional arguments or an unknown prerequisite in any marker.
+            assert not marker["args"] and conditions and set(conditions) <= {"platforms", "machines"}, canonical
+            for name, allowed in conditions.items():
+                assert isinstance(allowed, list) and allowed
+                assert all(isinstance(value, str) and value for value in allowed)
+                actual = witness["platform" if name == "platforms" else "machine"]
+                blocked |= actual not in allowed
+        assert blocked, (canonical, "applicable platform node disappeared")
+        unrun.append({"nodeid": canonical, "status": "UNRUN", "reason": "platform-inapplicable",
+                      "gates": gates, "platform": witness["platform"], "machine": witness["machine"]})
+    assert len(universe) == len(nodes) + len(unrun)
+    return universe, unrun
+
+
+def verify_pytest(directory, expected, file_counts=None, *, collection_witness=False):
     rows = [json.loads(line) for line in (directory / "live.jsonl").read_text().splitlines()]
     starts = [r for r in rows if r["event"] == "start"]
     assert len(starts) == 1 and not starts[0]["collect_only"] and not starts[0]["override_ini"]
     collections = [r["nodeids"] for r in rows if r["event"] == "collected"]
     assert len(collections) == 1 and len(set(collections[0])) == len(collections[0])
     nodes = collections[0]
+    inventory, unrun = (_verify_collection_witnesses(rows, starts[0], nodes)
+                        if collection_witness else (nodes, []))
     if file_counts is None:
-        assert nodes == list(expected), (nodes, expected)
+        assert inventory == list(expected), (inventory, expected)
     else:
-        assert len(nodes) == sum(file_counts)
-        assert all(sum(node.startswith(path + "::") for node in nodes) == count
+        assert len(expected) == len(file_counts) and len(inventory) == sum(file_counts)
+        assert all(sum(node.startswith(path + "::") for node in inventory) == count
                    for path, count in zip(expected, file_counts))
-        assert all(any(node.startswith(path + "::") for path in expected) for node in nodes)
+        assert all(any(node.startswith(path + "::") for path in expected) for node in inventory)
     reports = [r for r in rows if r["event"] == "report"]
     assert len(reports) == 3 * len(nodes)
     for node in nodes:
@@ -498,11 +557,20 @@ def verify_pytest(directory, expected, file_counts=None):
     assert "scheduling tests via LoadGroupScheduling" in lines
     noun = "item" if len(nodes) == 1 else "items"
     assert "6 workers [" + str(len(nodes)) + " " + noun + "]" in lines
+    if collection_witness:
+        save(directory / "collection-accounting.json", {
+            "universe_count": len(inventory), "selected_passed_count": len(nodes),
+            "platform_unrun": unrun, "worker_witnesses": 6,
+        })
     return nodes
 
 
 def run_pytest(out, name, nodes, env, *, integration=False, counts=None, timeout=300):
     directory = out / name
+    if name == "default-xdist":
+        assert not integration and nodes == HOST_FILES and counts == HOST_COUNTS
+        guarded(pytest_command(directory, nodes, collection_witness=True), directory, timeout, env)
+        return verify_pytest(directory, nodes, counts, collection_witness=True)
     guarded(pytest_command(directory, nodes, integration), directory, timeout, env)
     return verify_pytest(directory, nodes, counts)
 
