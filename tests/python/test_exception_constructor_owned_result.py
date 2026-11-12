@@ -33,11 +33,90 @@ def _body(text):
 
 def _producer_contract(module, symbol, has_argument):
     from pcc.backend.self_backend_kernel import get_indexed_function_kernel
-    from tests.python.root_slot_contract import RootSlotContract
 
     function = next(fn for fn in module.functions if fn.name == "user_exception_owner_make_value")
     blocks = get_indexed_function_kernel(function).materialize_legacy_blocks(function)
-    addresses = RootSlotContract(blocks, module.globals_)
+    # Import at use time: both newer modules reuse this file's _emit.
+    from test_exception_module_live_callee import (
+        _DirectRoots,
+        _must_precede,
+        _position,
+        _reaches,
+        _successors,
+    )
+
+    addresses = _DirectRoots(blocks, module.globals_)
+    direct = [ins for _, _, ins in addresses.rows
+              if addresses.called(ins, "user_exception_owner_consume")]
+    if direct:
+        # The exact positional ABI transfers through a pinned output take,
+        # rather than retaining this object in a dynamic call's list/tuple.
+        # The shared real-IR contract binds the take SSA to consume's first
+        # argument and checks publication, TLS, leases and all frame exits.
+        from test_exception_constructor_temporary_owner import _temporary_owner_contract
+
+        nested = has_argument and any(
+            addresses.called(ins, "py_exc_new") and addresses.args(ins)[0] == "3"
+            for _, _, ins in addresses.rows
+        )
+        _temporary_owner_contract(module, symbol, has_argument, nested)
+        consumer = next(row for row in addresses.rows
+                        if addresses.called(row[2], "user_exception_owner_consume"))
+        argument = addresses.args(consumer[2])[0]
+        pins = [row for row in addresses.rows
+                if addresses.called(row[2], "pcc_gc_pin")
+                and addresses.args(row[2]) == [argument]]
+        assert len(pins) == 1, "direct argument needs its exact pre-call pin"
+        _must_precede(addresses, _position(pins[0]), _position(consumer))
+        for row in addresses.rows:
+            ins = row[2]
+            if (addresses.called(ins, "pcc_gc_unpin")
+                    or addresses.called(ins, "pcc_gc_release")
+                    or addresses.called(ins, "pcc_gc_release_known")):
+                if addresses.args(ins) == [argument]:
+                    assert not (_reaches(addresses, (pins[0][0].name, pins[0][1] + 1), _position(row))
+                                and _reaches(addresses, (row[0].name, row[1] + 1), _position(consumer))), (
+                        "direct argument protection ended before consumer"
+                    )
+        comparisons = [ins for ins in consumer[0].instructions
+                       if ins.kind == "icmp" and ins.data[0] == "eq"
+                       and ins.data[3:] == (consumer[2].data[0], "null")]
+        assert len(comparisons) == 1, "direct result must select its actual NULL error edge"
+        branch = consumer[0].terminator
+        assert branch.kind == "br_cond" and branch.data[0] == comparisons[0].data[1]
+        assert branch.data[1] != branch.data[2]
+        by_name = {block.name: block for block in blocks}
+        pending = [(consumer[0].name, consumer[1] + 1, 0, 0, None)]
+        seen, exits = set(), set()
+        while pending:
+            state = pending.pop()
+            if state in seen:
+                continue
+            seen.add(state)
+            name, offset, unpinned, released, lane = state
+            block = by_name[name]
+            for ins in block.instructions[offset:]:
+                if addresses.called(ins, "pcc_gc_unpin") and addresses.args(ins) == [argument]:
+                    assert unpinned == released == 0, "direct argument unpinned twice or after release"
+                    unpinned = 1
+                if (addresses.called(ins, "pcc_gc_release") or addresses.called(ins, "pcc_gc_release_known")):
+                    if addresses.args(ins) == [argument]:
+                        assert unpinned == 1 and released == 0, "direct argument owner must be released exactly once after unpin"
+                        released = 1
+            successors = _successors(block)
+            if successors:
+                for target in successors:
+                    next_lane = lane
+                    if name == consumer[0].name:
+                        next_lane = "error" if target == branch.data[1] else "normal"
+                    pending.append((target, 0, unpinned, released, next_lane))
+            elif block.terminator.kind in ("ret", "ret_void"):
+                assert unpinned == released == 1, "direct argument owner must be released exactly once on every exit"
+                exits.add(lane)
+        assert exits == {"normal", "error"}, "direct consumer needs checked normal/error exits"
+        # This proves disposal of the transferred input owner. It does not
+        # prove the separate raw returned-result window across that disposal.
+        return
     rows = addresses.rows
     slot, called, args = addresses.slot, addresses.called, addresses.args
     invocations = [(block, index, ins) for block, index, ins in rows

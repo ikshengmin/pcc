@@ -986,18 +986,25 @@ class ExceptionLoweringMixin:
                 return result
             if tag >= 0:
                 sink = self._slot_call_result_sink(exc_expr)
-                if (sink is not None and not exc_expr.kwargs
+                if (not exc_expr.kwargs
                         and len(exc_expr.args) <= 1
                         and not self._has_starred_unpack(exc_expr.args)
                         and self._split_starstar_kwargs_unpack(exc_expr.args) is None):
-                    # Publish this known NEW producer into its caller's root.
-                    # Keep dispatch in the exception builder: routing through
-                    # class-call construction has a different argument ABI.
+                    # Publish the NEW producer before any lease or cleanup.
+                    # A direct-ABI caller has no output sink, but its nested
+                    # argument still needs an owner and a matching release.
+                    # Keep the existing constructor ABI and literal messages.
                     previous = self._current_try_err_block()
                     target = previous if previous is not None else self._ensure_fn_err_exit()
                     saved_cpy = self._cpy_operand_cleanup_block
+                    output = sink
                     roots = []
+                    if output is None:
+                        output = self._new_slot_call_root("exception.value.result")
+                        roots.append(output)
                     try:
+                        self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                        self._cpy_operand_cleanup_block = self._try_err_block
                         if exc_expr.args and not isinstance(exc_expr.args[0], StrLit):
                             argument = self._emit_slot_call_operand(
                                 exc_expr.args[0], "exception.value.argument",
@@ -1006,7 +1013,7 @@ class ExceptionLoweringMixin:
                             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                             self._cpy_operand_cleanup_block = self._try_err_block
                             self._slot_call_runtime_call(
-                                "py_exc_new_with_value", (argument,), result_slot=sink,
+                                "py_exc_new_with_value", (argument,), result_slot=output,
                                 suffix_args=(ir.Constant(_I64, tag),), argument_order=(1, 0),
                                 span=exc_expr.span,
                             )
@@ -1015,42 +1022,115 @@ class ExceptionLoweringMixin:
                             # so there is no managed input crossing this call.
                             message = _message_cstr(exc_expr.args)
                             self._slot_call_runtime_call(
-                                "py_exc_new", (), result_slot=sink,
+                                "py_exc_new", (), result_slot=output,
                                 suffix_args=(ir.Constant(_I64, tag), message), span=exc_expr.span,
                             )
-                        self._release_slot_call_roots(tuple(roots))
-                        return self.builder.load(sink, name=self._fresh("exception.value.current"))
+                        self._release_slot_call_roots(tuple(roots[1:]) if sink is None else tuple(roots))
+                        if sink is None:
+                            return self._take_slot_call_root(output, source_expr=exc_expr)
+                        return self.builder.load(output, name=self._fresh("exception.value.current"))
                     finally:
                         self._try_err_block = previous
                         self._cpy_operand_cleanup_block = saved_cpy
-                if (
-                    len(exc_expr.args) == 1
-                    and not exc_expr.kwargs
-                    and not isinstance(exc_expr.args[0], StrLit)
-                    and not self._is_starred_unpack_expr(exc_expr.args[0])
-                ):
-                    # The argument object itself is args[0]: ``SystemExit(3)``
-                    # exits with 3 and ``ValueError(3).args == (3,)``; it
-                    # used to be stringified into the message.
-                    arg_obj = self._emit_expr_as_pcc_object(exc_expr.args[0])
-                    result = self.builder.call(
-                        self.runtime["py_exc_new_with_value"],
-                        [ir.Constant(_I64, tag), arg_obj],
-                        name=self._fresh(f"exc.{cls_name}"),
-                    )
-                else:
-                    msg_ptr = _message_cstr(exc_expr.args, exc_expr.kwargs)
-                    result = self.builder.call(
-                        self.runtime["py_exc_new"],
-                        [ir.Constant(_I64, tag), msg_ptr],
-                        name=self._fresh(f"exc.{cls_name}"),
-                    )
-                if sink is not None:
-                    self._publish_slot_call_owned(sink, result, label="builtin exception")
-                    self._emit_post_call_err_check(exc_expr.span)
-                    return self.builder.load(sink, name=self._fresh("exception.value.current"))
-                self._note_owned_object_value(result)
-                return result
+                # Keep the legacy fallback's argument selection, including
+                # message/msg keywords, while giving every NEW result and
+                # managed message input the same owning handoff as above.
+                previous = self._current_try_err_block()
+                target = previous if previous is not None else self._ensure_fn_err_exit()
+                saved_cpy = self._cpy_operand_cleanup_block
+                output = sink
+                roots = []
+                if output is None:
+                    output = self._new_slot_call_root("exception.value.result")
+                    roots.append(output)
+                try:
+                    self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                    self._cpy_operand_cleanup_block = self._try_err_block
+                    if (len(exc_expr.args) == 1 and not exc_expr.kwargs
+                            and not isinstance(exc_expr.args[0], StrLit)
+                            and not self._is_starred_unpack_expr(exc_expr.args[0])):
+                        argument = self._emit_slot_call_operand(
+                            exc_expr.args[0], "exception.value.argument",
+                        )
+                        roots.append(argument)
+                        self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                        self._cpy_operand_cleanup_block = self._try_err_block
+                        self._slot_call_runtime_call(
+                            "py_exc_new_with_value", (argument,), result_slot=output,
+                            suffix_args=(ir.Constant(_I64, tag),), argument_order=(1, 0),
+                            span=exc_expr.span,
+                        )
+                    else:
+                        # Preserve first positional / first message-or-msg
+                        # selection. This does not implement new keyword or
+                        # unpacking semantics for the legacy constructor ABI.
+                        message_expr = exc_expr.args[0] if exc_expr.args else None
+                        if message_expr is None:
+                            for key, value in exc_expr.kwargs:
+                                if key == "message" or key == "msg":
+                                    message_expr = value
+                                    break
+                        message_root = None
+                        message_token = None
+                        if message_expr is None:
+                            message_ptr = ir.Constant(_CSTR, None)
+                        elif isinstance(message_expr, StrLit):
+                            message_ptr = self._pooled_cstr_ptr(message_expr.value, ".exc.msg")
+                        else:
+                            message_root = self._emit_slot_call_operand(
+                                message_expr, "exception.message.object",
+                            )
+                            roots.append(message_root)
+                            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                            self._cpy_operand_cleanup_block = self._try_err_block
+                            if not isinstance(message_expr.ty, StrType):
+                                text_root = self._new_slot_call_root("exception.message.text")
+                                roots.append(text_root)
+                                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                                self._cpy_operand_cleanup_block = self._try_err_block
+                                self._slot_call_runtime_call(
+                                    "py_obj_str", (message_root,), result_slot=text_root,
+                                    span=exc_expr.span,
+                                )
+                                message_root = text_root
+                            cleanup = self._slot_call_cleanup_block(tuple(roots), target)
+                            message_token = self.builder.call(
+                                self.runtime["pcc_gc_foreign_lease_acquire"],
+                                [self._as_gc_ptr(message_root)],
+                                name=self._fresh("exception.message.lease"),
+                            )
+                            self._slot_call_check_status(message_token, "exception message lease", exc_expr.span)
+                            self._try_err_block = self._slot_call_cleanup_block(
+                                (), cleanup, ((message_root, message_token),),
+                            )
+                            self._cpy_operand_cleanup_block = self._try_err_block
+                            # The interior pointer remains leased across the
+                            # constructor, result publication and TLS check.
+                            message_ptr = self.builder.call(
+                                self.runtime["py_str_utf8"], [self.builder.load(message_root)],
+                                name=self._fresh("exception.message.utf8"),
+                            )
+                            self._emit_post_call_err_check(exc_expr.span)
+                        self._slot_call_runtime_call(
+                            "py_exc_new", (), result_slot=output,
+                            suffix_args=(ir.Constant(_I64, tag), message_ptr), span=exc_expr.span,
+                        )
+                        if message_root is not None:
+                            released = self.builder.call(
+                                self.runtime["pcc_gc_foreign_lease_release"],
+                                [self._as_gc_ptr(message_root), message_token],
+                                name=self._fresh("exception.message.release"),
+                            )
+                            self._try_err_block = cleanup
+                            self._cpy_operand_cleanup_block = cleanup
+                            self._slot_call_check_status(released, "exception message lease release", exc_expr.span)
+                    self._release_slot_call_roots(tuple(roots[1:]) if sink is None else tuple(roots))
+                    if sink is None:
+                        return self._take_slot_call_root(output, source_expr=exc_expr)
+                    return self.builder.load(output, name=self._fresh("exception.value.current"))
+                finally:
+                    self._try_err_block = previous
+                    self._cpy_operand_cleanup_block = saved_cpy
             info = self.class_lowering.classes.get(cls_name)
             if info is not None and self.class_lowering._class_subclasses_exception(info):
                 # The runtime class call keeps the positional arguments as
