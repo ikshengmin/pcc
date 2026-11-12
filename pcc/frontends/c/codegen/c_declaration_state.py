@@ -39,6 +39,10 @@ class CodegenError(Exception):
     """Raised for a C construct that cannot be lowered faithfully."""
 
 
+class BitFieldAddressError(CodegenError):
+    """A bit-field member has no byte address, offset or sizeof type (C17 6.5.3.4, 7.19)."""
+
+
 class ExternGlobalRef:
     def __init__(self, symbol_name, ir_type, thread_local=False) -> None:
         self.symbol_name = symbol_name

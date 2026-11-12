@@ -249,5 +249,23 @@ class TestBitfields(unittest.TestCase):
         assert ret == 0
 
 
+    def test_conditional_operands_read_bitfield_members(self):
+        # C17 6.5.15: each operand of ?: is an ordinary rvalue; a bit-field
+        # member is read through its storage unit, never addressed (sqlite3.c).
+        ret = CEvaluator().evaluate(
+            r'''
+            struct S { unsigned a:3; int b; signed c:5; };
+            static int pick(struct S *s, int k) { return k ? s->a : s->b; }
+            static int other(struct S s, int k) { return k ? 0 : s.c; }
+            int main(void) {
+                struct S s;
+                s.a = 6; s.b = 30; s.c = -2;
+                return pick(&s, 1) + pick(&s, 0) + other(s, 0) + 8;
+            }
+            '''
+        )
+        assert ret == 42
+
+
 if __name__ == "__main__":
     unittest.main()

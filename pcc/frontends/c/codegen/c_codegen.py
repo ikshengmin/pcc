@@ -24,6 +24,7 @@ from pcc.frontends.c.c_abi_layout import (
 )
 from pcc.frontends.c.c_character_literals import decode_c_character_constant
 from pcc.frontends.c.codegen.c_declaration_state import (
+    BitFieldAddressError,
     CodegenError,
     ExternGlobalRef,
     FileScopeFunctionState,
@@ -2421,7 +2422,12 @@ class CCodeGenerator(
                              or (isinstance(node, c_ast.Cast) and isinstance(node.expr, c_ast.InitList)))
             if ((literal_shape or not self._address_base_contains_statement_expression(node))
                     and self._is_stored_lvalue_shape(node)):
-                known_type = self._infer_sizeof_operand_ir_type(node)
+                try:
+                    known_type = self._infer_sizeof_operand_ir_type(node)
+                except BitFieldAddressError:
+                    # A bit-field member is never an array operand; its value
+                    # is fetched by the ordinary member path below.
+                    known_type = None
                 if isinstance(known_type, ir.ArrayType):
                     address = self._codegen_lvalue_address(node)
                     return address, address, known_type
@@ -3850,7 +3856,7 @@ class CCodeGenerator(
     def _get_aggregate_field_info_by_path(self, aggregate_type, field_path):
         field_index = field_path[0]
         if field_index in getattr(aggregate_type, 'bitfield_member_indices', ()):
-            raise CodegenError("offsetof on bit-field is not supported")
+            raise BitFieldAddressError("offsetof on bit-field is not supported")
 
         if getattr(aggregate_type, "is_union", False):
             field_type = self._aggregate_member_ir_type(aggregate_type, field_index)
@@ -3872,7 +3878,7 @@ class CCodeGenerator(
                 raise CodegenError(f"Field index {field_index} not found in aggregate")
             if len(field_path) == 1:
                 if layout.is_bitfield:
-                    raise CodegenError("offsetof on bit-field is not supported")
+                    raise BitFieldAddressError("offsetof on bit-field is not supported")
                 return layout.byte_offset, layout.semantic_ir_type
             if layout.is_bitfield or not self._is_aggregate_ir_type(
                 layout.semantic_ir_type
