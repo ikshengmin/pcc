@@ -19,7 +19,9 @@ import pytest
 from pcc.frontends.rust import RustError, compile_rust
 from pcc.frontends.rust.crate_context import parse_crate_sources
 from pcc.frontends.rust.generics import PRIMITIVES
-from pcc.frontends.rust.module_resolution import ModuleNamespaces, analyze_crate_syntax
+from pcc.frontends.rust.module_resolution import (
+    ModuleNamespaces, ModuleResolution, analyze_crate_syntax,
+)
 from pcc.frontends.rust.syntax import CallableSignature, Parser
 from pcc.frontends.rust.types import SharedReference
 from tests.rust.certification_support import actual_check_prerequisite, certify_source
@@ -174,7 +176,6 @@ INVALID = (
     # Exact independent-review counterexample. Rust's imported Number type
     # shadows the language-prelude u64; it is not the primitive return type.
     ('primitive-shadow-return', 'mod provider{pub struct Number{pub x:u64}} use provider::Number as u64; fn answer()->u64{42}', 'primitive-shadowing type use', 'E0308'),
-    ('primitive-module-return', 'mod provider{pub fn value()->u64{42}} use provider as u64; fn answer()->u64{42}', 'primitive-shadowing type use', 'E0573'),
     ('record-shadows-Copy', 'mod provider{pub struct Number{pub x:u64}} use provider::Number as Copy; fn id<T:Copy>(value:T)->T{value}', 'local/user trait bounds', 'E0404'),
     ('record-shadows-Sized', 'mod provider{pub struct Number{pub x:u64}} use provider::Number as Sized; fn id<T:Sized>(value:T)->T{value}', 'local/user trait bounds', 'E0404'),
     ('module-shadows-core-marker', 'mod provider{pub mod marker{pub struct Copy{pub x:u64}}} use provider as core; fn id<T:core::marker::Copy>(value:T)->T{value}', 'local/user trait bounds', 'E0404'),
@@ -194,10 +195,20 @@ def test_invalid_imports_are_checked_even_when_unused_and_never_enter_ir(name, t
         compile_source(text)
 
 
-PRIMITIVE_TYPE_IMPORTS = (
-    ('well-typed-record', 'mod provider{pub struct Number{pub x:u64}} use provider::Number as u64; fn answer()->u64{u64{x:42}}'),
+# The exact former E0573 negative is accepted by pinned rustc 1.91.1.
+# Module names fall back to primitives in bare type positions; nominal types do
+# not. See rustc_resolve::late::resolve_qpath_anywhere's primitive fallback:
+# https://doc.rust-lang.org/nightly/nightly-rustc/src/rustc_resolve/late.rs.html
+PRIMITIVE_MODULE_IMPORTS = (
+    ('primitive-module-return', 'mod provider{pub fn value()->u64{42}} use provider as u64; fn answer()->u64{42}'),
     ('module', 'mod provider{pub fn value()->u64{42}} use provider as u64; fn answer(){u64::value();}'),
     ('crate-self-alias', 'extern crate self as original; use original as u64; fn answer(){}'),
+    ('crate-self-member', 'extern crate self as original; use original as u64; fn value()->u64{42} fn answer()->u64{u64::value()}'),
+)
+
+
+PRIMITIVE_TYPE_IMPORTS = (
+    ('well-typed-record', 'mod provider{pub struct Number{pub x:u64}} use provider::Number as u64; fn answer()->u64{u64{x:42}}'),
     ('enum', 'mod provider{pub enum Number{Value}} use provider::Number as u64; fn answer()->u64{u64::Value}'),
     ('both-namespaces', 'mod provider{pub struct Number{pub x:u64} pub fn Number()->u64{42}} use provider::Number as u64; fn answer(){u64();}'),
     ('forward-chain', 'use self::Intermediate as u64; use provider::Number as Intermediate; mod provider{pub struct Number{pub x:u64}} fn answer(){}'),
@@ -404,3 +415,64 @@ def test_actual_rustc_rejects_the_exact_invalid_use_originals(tmp_path, monkeypa
         with pytest.raises(RustExternalCheckError, match=code):
             compile_rust_checked(text, toolchain=toolchain(), evidence_directory=tmp_path / name)
         assert (tmp_path / name / 'original.rs').read_bytes() == text.encode('utf-8')
+
+
+@pytest.mark.parametrize('name,text', PRIMITIVE_MODULE_IMPORTS)
+def test_primitive_module_alias_originals_emit_owned_objects(name, text, monkeypatch):
+    monkeypatch.setattr(subprocess, 'Popen', lambda *args, **kwargs: pytest.fail('owned compile invoked tool'))
+    assert compile_source(text).emit_object().startswith(b'\x7fELF')
+
+
+@pytest.mark.xdist_group(name='rust-native-reference')
+@pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
+@pytest.mark.parametrize('name,text', PRIMITIVE_MODULE_IMPORTS)
+def test_actual_valid_primitive_module_originals_certify_then_emit_owned(name, text, tmp_path, monkeypatch):
+    checked = certify_source(text, tmp_path / 'actual-check')
+    with monkeypatch.context() as denied:
+        denied.setattr(subprocess, 'Popen', lambda *args, **kwargs: pytest.fail('owned compile invoked tool'))
+        result = compile_source(text, rustc_check=checked)
+        assert result.externally_checked and result.emit_object().startswith(b'\x7fELF')
+    assert (tmp_path / 'actual-check/original.rs').read_bytes() == text.encode('utf-8')
+    assert checked.provenance.source_sha256 == hashlib.sha256(text.encode()).hexdigest()
+
+
+@pytest.mark.parametrize('name', sorted(PRIMITIVES - {'()'}))
+def test_primitive_module_members_precede_associated_fallback(name):
+    text = ('mod provider{pub fn member()->u64{42}} use provider as ' + name +
+            '; fn answer(){}')
+    resolver = ModuleResolution(graph(text))
+    token = resolver.crate.root.body.uses[0].token
+    assert resolver.associated_function(name, 'member', resolver.root, token).token.text == 'member'
+    assert resolver.associated_function(name, 'max_value', resolver.root, token) is None
+    # Returning None defers to the existing primitive method owner; it is not a
+    # claim that primitive associated functions have been implemented.
+    absent = ModuleResolution(graph('fn answer(){}'))
+    assert absent.associated_function(name, 'max_value', absent.root, token) is None
+
+
+@pytest.mark.parametrize('text,message', [
+    ('mod provider{fn hidden()->u64{42}} use provider as u64; fn answer()->u64{u64::hidden()}', 'private item'),
+    ('mod provider{} mod u64{} use provider as u64; fn answer(){}', 'duplicate imported type-namespace'),
+])
+def test_primitive_module_fallback_preserves_privacy_and_conflicts(text, message, monkeypatch):
+    from pcc.frontends.rust.lowering import Lowerer
+    monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('invalid module lookup reached IR'))
+    with pytest.raises(RustError, match=message):
+        compile_source(text)
+
+
+@pytest.mark.xdist_group(name='rust-native-reference')
+@pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
+@pytest.mark.parametrize('text,code', [
+    ('mod provider{fn hidden()->u64{42}} use provider as u64; fn answer()->u64{u64::hidden()}', 'E0603'),
+    ('mod provider{} mod u64{} use provider as u64; fn answer(){}', 'E0255'),
+])
+def test_actual_primitive_module_privacy_and_conflicts_reject_originals(text, code, tmp_path, monkeypatch):
+    from pcc.frontends.rust import RustExternalCheckError, compile_rust_checked
+    from pcc.frontends.rust.lowering import Lowerer
+    from tests.rust.test_rust_certified_references import toolchain
+    monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('rustc-invalid module reached IR'))
+    directory = tmp_path / 'actual-check'
+    with pytest.raises(RustExternalCheckError, match=code):
+        compile_rust_checked(text, toolchain=toolchain(), evidence_directory=directory)
+    assert (directory / 'original.rs').read_bytes() == text.encode('utf-8')

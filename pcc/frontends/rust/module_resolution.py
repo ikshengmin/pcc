@@ -100,10 +100,13 @@ class ModuleNamespaces:
                     continue
                 # Generic normalization and associated-path lookup still
                 # recognize these language-prelude names before scoped lookup.
-                # Do not admit a type/module alias that those owners could
+                # Do not admit a nominal type alias that those owners could
                 # silently reinterpret as a primitive. Value-only aliases do
                 # not shadow the type namespace and retain ordinary lookup.
-                if namespace == 'type' and name in PRIMITIVES:
+                # Module aliases retain module lookup in qualified paths, but
+                # bare type positions fall back to the language primitive.
+                if (namespace == 'type' and name in PRIMITIVES
+                        and not isinstance(declaration.syntax, (Module, CrateSelfAlias))):
                     raise item.binding.error('primitive-shadowing type use bindings require scoped primitive lookup, which is not implemented')
                 if (namespace, name) in self.modules[module].items:
                     raise item.binding.error(f'duplicate imported {namespace}-namespace item {name!r}')
@@ -214,7 +217,18 @@ class ModuleResolution(ModuleNamespaces):
     def associated_function(self, owner, name, requester, token):
         if isinstance(owner, TypeApplication):
             return None
-        if owner in {'Self', 'bool', 'i32', 'i64', 'u32', 'u64', 'usize', 'isize', '()'} or owner in self.by_key:
+        if owner in PRIMITIVES:
+            # Rust resolves a real module member before primitive associated
+            # items, but an absent member can fall back to the primitive. Keep
+            # privacy errors and nominal type shadowing out of that fallback.
+            declaration = self.resolve(owner, 'type', requester, token, _optional_final=True)
+            if declaration is not None and isinstance(declaration.syntax, (Module, CrateSelfAlias)):
+                member = self.resolve(owner + '::' + name, 'value', requester, token,
+                                      _optional_final=True)
+                if member is not None:
+                    return member.syntax
+            return None
+        if owner == 'Self' or owner in self.by_key:
             return None
         if owner in {'crate', 'self'} or all(p == 'super' for p in owner.split('::')):
             return self.function(owner + '::' + name, requester, token)
