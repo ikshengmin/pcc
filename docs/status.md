@@ -377,6 +377,23 @@ fence-lifetime qualification. M2 and later local-model milestones remain open.
 
 ## Gateway Web Frameworks Benchmark: native request path
 
+Latest local Mac retry (2026-11-13): gateway `c2ca245` was compiled from the
+current core checkout at `bd81bf994` using ordinary `uv run pcc --backend self`.
+The native build and 103 focused gateway host tests pass, but original C512
+concurrent-ID preflight still fails before any timed rows: no new valid QPS.
+The unchanged aiohttp control passes; native passes only the diagnostic variant
+which establishes all 512 connections before concurrent requests. GC0–4 and
+the tested polling/scheduling variations do not resolve the original failure.
+The requested ten-round limit has been reached; the cause remains open.
+See the sibling `pcc-gateway/benchmarks/web-frameworks.md` for the current
+boundary and reproduction entry. Earlier figures below remain historical.
+
+Profiler repair `8d16e7f60` resolves named Apple sample frames by their actual
+program counters in the captured binary, preserving ambiguous grouped-PC
+weights. Its 29 focused tests pass and the live gateway capture was reprocessed;
+this fixes attribution, not gateway throughput. Full suites/bootstrap remain
+unrun. No speculative scheduler or collector change was published in this retry.
+
 The next queue-pressure probe uses 400 yielding tasks on a persistent carrier.
 At `92d73d8ab`, the last task first enters after 9,113 task steps: overflow
 injection is served only once per 32 local dequeues, and local work is mostly
