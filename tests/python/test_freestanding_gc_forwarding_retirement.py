@@ -42,6 +42,9 @@ OWNED_SYMBOLS = {
     "pcc_gc_backend4_zpage_note_forwarding_removed",
     "pcc_gc_forwarding_remove",
     "pcc_gc_forwarding_remove_target",
+    # GC4 settles relocation before a stopped world resumes (4e2feca72); the
+    # thread kernel calls it from pcc_resume_world.
+    "pcc_gc_relocation_settle_stopped",
 }
 LOCAL_HELPER_SYMBOLS = {
     "pcc_gc_backend4_release_retained_pages_unlocked",
@@ -54,6 +57,10 @@ LOCAL_HELPER_SYMBOLS = {
 }
 DEFINED_SYMBOLS = OWNED_SYMBOLS | LOCAL_HELPER_SYMBOLS
 RAW_FUNCTION_IMPORTS = {
+    # Settling a stopped world's relocation resets the relocation set and
+    # fails closed on a broken settle (4e2feca72).
+    "pcc_gc_reset_relocation_set",
+    "pcc_platform_abort",
     "pcc_gc_object_walk_first",
     "pcc_gc_object_walk_next",
     # Count-free GC3/GC4 retirement: liveness of forwarded sources and
@@ -114,6 +121,9 @@ RAW_FUNCTION_IMPORTS = {
     "py_incref",
 }
 RAW_GLOBAL_IMPORTS = {
+    # Settling owes a remap until the world resumes, and reads the protocol.
+    "pcc_gc_backend4_remap_owed",
+    "pcc_gc_nonmoving_count_free",
     # Count-free retirement waits for an idle mark and requests the next one.
     "pcc_gc_cycle_requested",
     "pcc_gc_backend4_no_refcounts",
@@ -169,6 +179,8 @@ def test_forwarding_retirement_has_one_strict_source_owner() -> None:
         # Called only from freestanding retirement/remap objects.
         "pcc_gc_forwarding_retirement_backend_admitted",
         "pcc_gc_backend3_pin_external_remap_root",
+        # Called by the thread kernel before a stopped world resumes.
+        "pcc_gc_relocation_settle_stopped",
     }
     for symbol in OWNED_SYMBOLS - locally_routed:
         assert f'"{symbol}"' in managed
@@ -178,6 +190,11 @@ def test_forwarding_retirement_has_one_strict_source_owner() -> None:
         + STRICT_DISPATCHER_SOURCE.read_text(encoding="utf-8")
         + strict
     )
+    kernel = (RUNTIME_DIR / "py" / "freestanding_thread_kernel_pthread.py").read_text(
+        encoding="utf-8"
+    )
+    assert '"pcc_gc_relocation_settle_stopped"' in kernel
+    assert "pcc_gc_relocation_settle_stopped()" in kernel
     for symbol in locally_routed:
         assert symbol in routed_sources
 

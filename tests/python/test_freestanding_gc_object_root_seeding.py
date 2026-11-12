@@ -129,6 +129,7 @@ extern void pcc_gc_prepare_object_list_mark(int64_t explicit_collect);
 extern void pcc_gc_gray_current_roots(void);
 extern int64_t pcc_gc_gray_count_load_acquire(void);
 extern int64_t pcc_gc_alloc_stage_drain_stopped(void);
+extern int64_t pcc_gc_object_is_known_no_lock(PyObject *obj);
 
 typedef struct {
     PyObjectHeader h;
@@ -155,11 +156,13 @@ int main(void) {
     ProbeListObject *fresh = new_probe();
     ProbeListObject *registered = new_probe();
     if (pinned == NULL || fresh == NULL || registered == NULL) return 3;
-    /* GC1 stages allocation registrations in the allocating thread's ring;
-     * a stopped world registers them before any object-list walk. This
-     * probe calls the walks directly, so it registers them first, as the
-     * stopped world does. */
-    if (pcc_gc_alloc_stage_drain_stopped() != 3) return 4;
+    /* GC1 registers an object cell at allocation, without the graph lock
+     * (pcc_gc_register_object_cell): nothing waits in the staging ring,
+     * and every probe is already known to the walks below. */
+    if (pcc_gc_alloc_stage_drain_stopped() != 0) return 4;
+    if (pcc_gc_object_is_known_no_lock((PyObject *)pinned) == 0
+        || pcc_gc_object_is_known_no_lock((PyObject *)fresh) == 0
+        || pcc_gc_object_is_known_no_lock((PyObject *)registered) == 0) return 5;
 
     pinned->h.flags = PY_FLAG_GC_TRACKED | PY_FLAG_GC_PINNED;
     fresh->h.flags = PY_FLAG_GC_TRACKED | PY_FLAG_GC_FRESH_ALLOC;
@@ -244,8 +247,11 @@ def test_archive_owns_object_root_seeding_and_executes_semantics(
     # GC1 is count-free: a fresh allocation is white in an automatic cycle
     # as in an explicit one (stopped-world stack roots protect temporaries;
     # only refcounted tracing kept fresh objects black for one cycle).
+    # Count-free collectors keep no frame registry (aa9de99f4): a stack slot
+    # is a root through the stopped-world conservative scan, not through
+    # pcc_gc_frame_enter, so only the explicit pin grays here.
     assert result.stdout == (
         "prepare:1,0,0,1\n"
-        "gray:1,1,2\n"
+        "gray:1,0,1\n"
         "explicit:1,0\n"
     )

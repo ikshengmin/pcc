@@ -342,7 +342,8 @@ def test_incremental_concurrent_scheduler_preserves_bounded_policy_order() -> No
     public_step = dispatch.split('@c_abi_export("pcc_gc_step")', 1)[1].split(
         "\n@c_abi_export", 1
     )[0]
-    assert public_step.index("if backend == 1 or backend == 2:") < (
+    # GC3 shares the mark step (03cbd1849); only GC4 relocates.
+    assert public_step.index("if backend == 1 or backend == 2 or backend == 3:") < (
         public_step.index('global_addr("pcc_gc_metric_step")')
     )
     assert "return pcc_gc_incremental_concurrent_step(budget)" in public_step

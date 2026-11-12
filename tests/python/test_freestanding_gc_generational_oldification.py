@@ -31,7 +31,9 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_gray_count_increment_acq_rel",
     "pcc_gc_gray_count_decrement_acq_rel",
     "pcc_gc_set_mark_color",
-    "pcc_gc_object_is_address_pinned",
+    # The generational pin query bounds its refresh to stopped-world
+    # snapshots (b95151692).
+    "pcc_gc_generational_object_is_address_pinned",
     "free",
     "malloc",
     "memmove",
@@ -66,6 +68,8 @@ RAW_GLOBAL_IMPORTS = {
     "pcc_gc_backend_selected",
     "pcc_gc_backend3_oldify_suspended",
     "pcc_gc_live_bytes",
+    # A count-free copy keeps no refcount on the promoted object (8429b6671).
+    "pcc_gc_backend4_no_refcounts",
 }
 
 

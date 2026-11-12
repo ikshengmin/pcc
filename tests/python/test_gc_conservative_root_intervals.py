@@ -398,7 +398,11 @@ int main(void) {
     if (pcc_gc_gray_conservative_and_listed_pinned_roots() != 1 || marked != 0) return 12;
     /* A GC4 chain cut leaves listed pins to the separate walk. */
     pcc_gc_backend_selected = 4; pcc_gc_forwarding_population = 1;
-    listed_pinned = 12288; marked = 0;
+    /* A GC4 cut reads each live listed object's header for an explicit pin
+       (PY_FLAG_GC_PINNED): give the listed nodes real, unpinned headers. */
+    static long objects[2][2];
+    nodes[0][0] = (long)objects[0]; nodes[1][0] = (long)objects[1];
+    listed_pinned = (long)objects[0]; marked = 0;
     if (pcc_gc_gray_conservative_and_listed_pinned_roots() != 0 || marked != 0) return 13;
     /* Each stopped snapshot is visited once to size and once to fill words. */
     return visits == 22 ? 0 : 7;

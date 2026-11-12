@@ -624,8 +624,20 @@ def test_only_the_count_free_nonmoving_tracers_enable_staging():
         and "pcc_gc_nonmoving_count_free" in ast.unparse(node.body)
     )
     condition = ast.unparse(guard.test)
-    assert "container_backend == 1 or container_backend == 2" in condition
-    assert "pcc_gc_backend4_no_refcounts" in condition
+    # Every tracing collector runs the count-free nonmoving protocol
+    # (03cbd1849, 4e2feca72): the guard is that protocol's predicate, which
+    # admits GC1-GC4 only when counts are off.
+    assert condition == "nonmoving != 0"
+    assign = next(
+        node for node in ast.walk(fix)
+        if isinstance(node, ast.AnnAssign) and ast.unparse(node.target) == "nonmoving"
+    )
+    assert ast.unparse(assign.value) == "_nonmoving_count_free_backend(container_backend)"
+    predicate = ast.unparse(
+        _function(RUNTIME / "py_gc_backend.py", "_nonmoving_count_free_backend")
+    )
+    assert "pcc_gc_backend4_no_refcounts" in predicate
+    assert "backend >= 1 and backend <= 4" in predicate
 
 
 def test_a_leaving_thread_releases_its_ring_with_its_other_gc_buffers():
