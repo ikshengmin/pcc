@@ -3407,7 +3407,11 @@ class CCodeGenerator(
             return value
         return (value + align - 1) & ~(align - 1)
 
-    def _declared_alignment(self, decl):
+    def _c11_alignment(self, decl):
+        """Only the C17 _Alignas part of a declaration's alignment, or None."""
+        return self._declared_alignment(decl, gnu=False)
+
+    def _declared_alignment(self, decl, gnu=True):
         """C17 6.7.5: the strictest alignment specifier of a declaration, or None.
 
         A zero alignment has no effect (6.7.5p6); any other value must be a
@@ -3425,10 +3429,11 @@ class CCodeGenerator(
             if alignment < 0 or alignment & (alignment - 1):
                 raise SemanticError(f"alignment {alignment} is not a positive power of two")
             values.append(alignment)
-        from pcc.frontends.c.codegen.c_gnu_attributes import gnu_alignment
-        gnu = gnu_alignment(getattr(decl, "attributes", ()), self._eval_const_expr)
-        if gnu is not None:
-            values.append(gnu)
+        if gnu:
+            from pcc.frontends.c.codegen.c_gnu_attributes import gnu_alignment
+            gnu_value = gnu_alignment(getattr(decl, "attributes", ()), self._eval_const_expr)
+            if gnu_value is not None:
+                values.append(gnu_value)
         return max(values) if values else None
 
     @staticmethod
@@ -7333,12 +7338,13 @@ class CCodeGenerator(
             al = self._ir_type_align(ir_t)
             requested = self._declared_alignment(decl)
             if requested is not None:
-                if decl.bitsize is not None:
+                if decl.bitsize is not None and getattr(decl, "align", ()):
                     raise SemanticError("an alignment specifier cannot apply to a bit-field")
-                if requested < al:
+                if getattr(decl, "align", ()) and requested < al:
                     raise SemanticError(f"alignment {requested} of member '{decl.name}' is less strict "
                                         f"than its type's {al}")
-                al = requested
+                # GNU aligned never decreases a member's alignment.
+                al = max(al, requested)
             if sz > max_size:
                 max_size = sz
             if al > max_align:

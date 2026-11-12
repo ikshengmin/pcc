@@ -32,9 +32,10 @@ class CDeclarationLoweringMixin:
         if storage is None or ir_type is None or isinstance(ir_type, ir.FunctionType):
             return result
         natural = self._ir_type_align(ir_type)
-        if requested is not None and requested < natural:
+        c11 = self._c11_alignment(node)
+        if c11 is not None and c11 < natural:
             from pcc.frontends.c.codegen.c_codegen import SemanticError
-            raise SemanticError(f"alignment {requested} of '{node.name}' is less strict than its type's {natural}")
+            raise SemanticError(f"alignment {c11} of '{node.name}' is less strict than its type's {natural}")
         strictest = max(natural, requested or 1)
         if isinstance(storage, ir.GlobalVariable):
             if strictest > 1 and (requested is not None or getattr(ir_type, "custom_align", None) is not None

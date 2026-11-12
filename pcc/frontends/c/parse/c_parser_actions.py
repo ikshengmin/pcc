@@ -259,7 +259,7 @@ class CParserActions(PLYParser):
             spec['attributes'] = []
         return spec
 
-    precedence = (('left', 'LOR'), ('left', 'LAND'), ('left', 'OR'), ('left', 'XOR'), ('left', 'AND'), ('left', 'EQ', 'NE'), ('left', 'GT', 'GE', 'LT', 'LE'), ('left', 'RSHIFT', 'LSHIFT'), ('left', 'PLUS', 'MINUS'), ('left', 'TIMES', 'DIVIDE', 'MOD'))
+    precedence = (('nonassoc', '__ATTRIBUTE__'), ('nonassoc', 'ATTRIBUTE_LIST'), ('left', 'LOR'), ('left', 'LAND'), ('left', 'OR'), ('left', 'XOR'), ('left', 'AND'), ('left', 'EQ', 'NE'), ('left', 'GT', 'GE', 'LT', 'LE'), ('left', 'RSHIFT', 'LSHIFT'), ('left', 'PLUS', 'MINUS'), ('left', 'TIMES', 'DIVIDE', 'MOD'))
 
     def p_translation_unit_or_empty(self, p):
         """ translation_unit_or_empty   : translation_unit
@@ -410,8 +410,8 @@ class CParserActions(PLYParser):
         p[0] = [attribute for attribute in p[4] if attribute is not None]
 
     def p_attribute_specifier_list(self, p):
-        """ attribute_specifier_list    : attribute_specifier
-                                            | attribute_specifier_list attribute_specifier
+        """ attribute_specifier_list    : attribute_specifier %prec ATTRIBUTE_LIST
+                                            | attribute_specifier_list attribute_specifier %prec ATTRIBUTE_LIST
             """
         p[0] = p[1] if len(p) == 2 else p[1] + p[2]
 
