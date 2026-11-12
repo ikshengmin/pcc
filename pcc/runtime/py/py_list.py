@@ -648,16 +648,11 @@ def _native_body_py_list_from_static_items(items, count: int):
     if ptr_is_null(l):
         return null()
     list_slot = stack_alloc(8)
-    list_handle_slot = stack_alloc(8)
     store_ptr(list_slot, 0, l)
-    if _prepare_moving_root(list_slot, list_handle_slot, 1) != 0:
-        py_decref(load_ptr(list_slot, 0))
-        return null()
     index: int = 0
     while index < count:
         py_list_append(load_ptr(list_slot, 0), load_ptr(items, index * 8))
         index = index + 1
-    _finish_moving_root(list_handle_slot)
     return load_ptr(list_slot, 0)
 
 
@@ -1060,22 +1055,18 @@ def _list_get_gc0(lst, i: int, raising: int, taken):
 
 def _list_get_owned_rooted(lst, i: int, raising: int):
     list_slot = stack_alloc(8)
-    list_handle_slot = stack_alloc(8)
     store_ptr(list_slot, 0, lst)
-    if _prepare_moving_root(list_slot, list_handle_slot, 0) != 0:
-        return null()
     result_slot = stack_alloc(8)
     store_ptr(result_slot, 0, null())
     result_handle = null()
     retain_plan = stack_alloc(56)
     locked = load_ptr(list_slot, 0)
     _list_lock(locked)
-    lst = _reload_moving_root(list_slot, list_handle_slot)
+    lst = load_ptr(list_slot, 0)
     if not _list_shape_ok(lst, -103):
         _list_unlock(locked)
         if ptr_is_null(result_handle) == 0:
             pcc_gc_native_root_unbind(result_handle)
-        _finish_moving_root(list_handle_slot)
         return null()
     length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
     idx: int = _normalize_index(i, length, 0)
@@ -1083,7 +1074,6 @@ def _list_get_owned_rooted(lst, i: int, raising: int):
         _list_unlock(locked)
         if ptr_is_null(result_handle) == 0:
             pcc_gc_native_root_unbind(result_handle)
-        _finish_moving_root(list_handle_slot)
         if raising != 0:
             py_raise_owned(py_exc_new(5, cstr("list index out of range")))
         return null()
@@ -1096,17 +1086,15 @@ def _list_get_owned_rooted(lst, i: int, raising: int):
     if ptr_is_null(result_handle) != 0:
         # GC0/1/2 cannot relocate, and the count-free GC3/GC4 do not move
         # what this stack slot holds: return the retained owner directly.
-        _finish_moving_root(list_handle_slot)
         return v
-    return _list_get_finish(result_slot, result_handle, list_handle_slot)
+    return _list_get_finish(result_slot, result_handle)
 
 
-def _list_get_finish(result_slot, result_handle, list_handle_slot):
+def _list_get_finish(result_slot, result_handle):
     if pcc_gc_stack_slot_root_is_conservative(result_slot) != 0:
         # The count-free collectors' conservative stack scan roots the result
         # here and keeps it in place: tear the bound range down unpinned.
         pcc_gc_native_root_unbind(result_handle)
-        _finish_moving_root(list_handle_slot)
         taken = load_ptr(result_slot, 0)
         store_ptr(result_slot, 0, null())
         return taken
@@ -1120,7 +1108,6 @@ def _list_get_finish(result_slot, result_handle, list_handle_slot):
         pcc_gc_pin(result)
     pcc_py_gc_minor_graph_unlock()
     pcc_gc_native_root_unbind(result_handle)
-    _finish_moving_root(list_handle_slot)
     # No callback/park/refcount change after removing the last result root;
     # the existing primitive also restores a pin held before this getter.
     return pcc_gc_take_pinned_slot(result_slot, prior_pin)
@@ -1141,10 +1128,6 @@ def _native_body_py_list_take_for_gen_frame(_native_inputs, i: int):
     result_handle = pcc_gc_native_root_bind_range(result_slot, 1)
     if ptr_is_null(result_handle) != 0:
         return null()
-    # _list_get_finish accepts an empty owner-handle slot: the enclosing
-    # native entry, not this body, owns _native_inputs and its lifetime.
-    list_handle_slot = stack_alloc(C_POINTER_SIZE)
-    store_ptr(list_handle_slot, 0, null())
     taken: int = 0
     planned: int = 0
     retain_plan = stack_alloc(56)
@@ -1165,7 +1148,7 @@ def _native_body_py_list_take_for_gen_frame(_native_inputs, i: int):
         value = py_list_get(pcc_gc_load_ptr(null(), _native_inputs), i)
         store_ptr(result_slot, 0, value)
         py_list_set(pcc_gc_load_ptr(null(), _native_inputs), i, null())
-    return _list_get_finish(result_slot, result_handle, list_handle_slot)
+    return _list_get_finish(result_slot, result_handle)
 
 
 @c_abi_export("pcc_list_body_py_list_get_i64")
@@ -1177,24 +1160,19 @@ def _native_body_py_list_get_i64(_native_inputs, i: int) -> int:
     # growth can also retire the items buffer. Keep conversion inside the
     # writer's transaction.
     list_slot = stack_alloc(8)
-    list_handle_slot = stack_alloc(8)
     store_ptr(list_slot, 0, lst)
-    if _prepare_moving_root(list_slot, list_handle_slot, 0) != 0:
-        return 0
     locked = load_ptr(list_slot, 0)
     _list_lock(locked)
-    lst = _reload_moving_root(list_slot, list_handle_slot)
+    lst = load_ptr(list_slot, 0)
     length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
     idx: int = _normalize_index(i, length, 0)
     if idx < 0:
         _list_unlock(locked)
-        _finish_moving_root(list_handle_slot)
         return 0
     items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
     v = pcc_gc_load_ptr(lst, ptr_add(items, idx * 8))
     result: int = _int_to_i64_or_zero(v)
     _list_unlock(locked)
-    _finish_moving_root(list_handle_slot)
     return result
 
 
@@ -1204,23 +1182,18 @@ def _native_body_py_list_get_i64_nonnegative(_native_inputs, i: int) -> int:
     if ptr_is_null(lst) != 0:
         return 0
     list_slot = stack_alloc(8)
-    list_handle_slot = stack_alloc(8)
     store_ptr(list_slot, 0, lst)
-    if _prepare_moving_root(list_slot, list_handle_slot, 0) != 0:
-        return 0
     locked = load_ptr(list_slot, 0)
     _list_lock(locked)
-    lst = _reload_moving_root(list_slot, list_handle_slot)
+    lst = load_ptr(list_slot, 0)
     length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
     if i < 0 or i >= length:
         _list_unlock(locked)
-        _finish_moving_root(list_handle_slot)
         return 0
     items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
     v = pcc_gc_load_ptr(lst, ptr_add(items, i * 8))
     result: int = _int_to_i64_or_zero(v)
     _list_unlock(locked)
-    _finish_moving_root(list_handle_slot)
     return result
 
 
@@ -1231,16 +1204,9 @@ def _list_set_item_transaction(lst, i: int, item) -> int:
     # graph lock. Its writer must use the same transaction so replacement
     # cannot retire that owner between the reader's load and retain.
     list_slot = stack_alloc(8)
-    list_handle_slot = stack_alloc(8)
     item_slot = stack_alloc(8)
-    item_handle_slot = stack_alloc(8)
     store_ptr(list_slot, 0, lst)
     store_ptr(item_slot, 0, item)
-    if _prepare_moving_root(list_slot, list_handle_slot, 0) != 0:
-        return -1
-    if _prepare_moving_root(item_slot, item_handle_slot, 0) != 0:
-        _finish_moving_root(list_handle_slot)
-        return -1
     backend: int = pcc_gc_backend()
     store_plan = stack_alloc(128)
     pcc_gc_store_ptr_plan_init(
@@ -1248,8 +1214,8 @@ def _list_set_item_transaction(lst, i: int, item) -> int:
     )
     locked = load_ptr(list_slot, 0)
     _list_lock(locked)
-    lst = _reload_moving_root(list_slot, list_handle_slot)
-    item = _reload_moving_root(item_slot, item_handle_slot)
+    lst = load_ptr(list_slot, 0)
+    item = load_ptr(item_slot, 0)
     length: int = -1
     if _list_shape_ok(lst, -104):
         length = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
@@ -1257,8 +1223,6 @@ def _list_set_item_transaction(lst, i: int, item) -> int:
     if length < 0 or idx < 0:
         _list_unlock(locked)
         pcc_gc_store_ptr_plan_finish(store_plan)
-        _finish_moving_root(item_handle_slot)
-        _finish_moving_root(list_handle_slot)
         return -1
     items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
     committed: int = pcc_gc_store_ptr_plan_commit_locked(
@@ -1266,8 +1230,6 @@ def _list_set_item_transaction(lst, i: int, item) -> int:
     )
     _list_unlock(locked)
     pcc_gc_store_ptr_plan_finish(store_plan)
-    _finish_moving_root(item_handle_slot)
-    _finish_moving_root(list_handle_slot)
     if committed == 0:
         return -1
     return 0
@@ -1335,56 +1297,42 @@ def _native_body_py_list_len(_native_inputs) -> int:
         # word.
         return load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
     list_slot = stack_alloc(8)
-    list_handle_slot = stack_alloc(8)
     store_ptr(list_slot, 0, lst)
-    if _prepare_moving_root(list_slot, list_handle_slot, 0) != 0:
-        return 0
     pcc_py_gc_minor_graph_lock()
-    lst = _reload_moving_root(list_slot, list_handle_slot)
+    lst = load_ptr(list_slot, 0)
     length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
     pcc_py_gc_minor_graph_unlock()
-    _finish_moving_root(list_handle_slot)
     return length
 
 
 def _append_snapshot_items(
-    out_slot, out_handle_slot, source, source_length: int, repeat_count: int
+    out_slot, source, source_length: int, repeat_count: int
 ) -> int:
     if ptr_is_null(out_slot) != 0:
         return -1
     if ptr_is_null(load_ptr(out_slot, 0)) != 0 or ptr_is_null(source) != 0:
         return -1
     source_slot = stack_alloc(8)
-    source_handle_slot = stack_alloc(8)
     store_ptr(source_slot, 0, source)
-    if _prepare_moving_root(source_slot, source_handle_slot, 0) != 0:
-        _finish_moving_root(out_handle_slot)
-        return -1
     repeat: int = 0
     while repeat < repeat_count:
         i: int = 0
         while i < source_length:
-            source = _reload_moving_root(source_slot, source_handle_slot)
-            out = _reload_moving_root(out_slot, out_handle_slot)
+            source = load_ptr(source_slot, 0)
+            out = load_ptr(out_slot, 0)
             value = py_list_get(source, i)
             if ptr_is_null(value) != 0:
-                _finish_moving_root(source_handle_slot)
-                _finish_moving_root(out_handle_slot)
                 return -1
             py_list_append(out, value)
             py_decref(value)
             if py_err_occurred() != 0:
-                out = _reload_moving_root(out_slot, out_handle_slot)
+                out = load_ptr(out_slot, 0)
                 store_ptr(out_slot, 0, out)
-                _finish_moving_root(source_handle_slot)
-                _finish_moving_root(out_handle_slot)
                 return -1
             i = i + 1
         repeat = repeat + 1
-    out = _reload_moving_root(out_slot, out_handle_slot)
+    out = load_ptr(out_slot, 0)
     store_ptr(out_slot, 0, out)
-    _finish_moving_root(source_handle_slot)
-    _finish_moving_root(out_handle_slot)
     return 0
 
 
@@ -1660,12 +1608,8 @@ def _native_body_py_list_copy(_native_inputs):
         return null()
     out_slot = stack_alloc(8)
     store_ptr(out_slot, 0, out)
-    out_handle_slot = stack_alloc(8)
-    if _prepare_moving_root(out_slot, out_handle_slot, 1) != 0:
-        py_decref(load_ptr(out_slot, 0))
-        return null()
     src = load_ptr(_native_inputs, 0)
-    if _append_snapshot_items(out_slot, out_handle_slot, src, n, 1) != 0:
+    if _append_snapshot_items(out_slot, src, n, 1) != 0:
         py_decref(load_ptr(out_slot, 0))
         return null()
     return load_ptr(out_slot, 0)
@@ -1693,13 +1637,9 @@ def _native_body_py_list_repeat(_native_inputs, count: int):
         return null()
     out_slot = stack_alloc(8)
     store_ptr(out_slot, 0, out)
-    out_handle_slot = stack_alloc(8)
-    if _prepare_moving_root(out_slot, out_handle_slot, 1) != 0:
-        py_decref(load_ptr(out_slot, 0))
-        return null()
     src = load_ptr(_native_inputs, 0)
     if _append_snapshot_items(
-        out_slot, out_handle_slot, src, sl, real_count
+        out_slot, src, sl, real_count
     ) != 0:
         py_decref(load_ptr(out_slot, 0))
         return null()
@@ -1708,9 +1648,7 @@ def _native_body_py_list_repeat(_native_inputs, count: int):
 
 def _list_eq_at_callback(
     list_slot,
-    list_handle_slot,
     query_slot,
-    query_handle_slot,
     candidate_slot,
     index: int,
     keep_equal: int = 0,
@@ -1720,7 +1658,7 @@ def _list_eq_at_callback(
     retain_plan = stack_alloc(56)
     locked = load_ptr(list_slot, 0)
     _list_lock(locked)
-    lst = _reload_moving_root(list_slot, list_handle_slot)
+    lst = load_ptr(list_slot, 0)
     length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
     if index < 0 or index >= length:
         _list_unlock(locked)
@@ -1732,7 +1670,7 @@ def _list_eq_at_callback(
     _list_unlock(locked)
     pcc_gc_retain_plan_finish(retain_plan)
 
-    query = _reload_moving_root(query_slot, query_handle_slot)
+    query = load_ptr(query_slot, 0)
     equal: int = py_obj_eq(load_ptr(candidate_slot, 0), query)
     had_error: int = py_err_occurred()
 
@@ -1750,7 +1688,7 @@ def _list_eq_at_callback(
 
 
 def _list_scan_simple_locked(
-    list_slot, list_handle_slot, query_slot, query_handle_slot,
+    list_slot, query_slot,
     start: int, stop: int, index_slot,
 ) -> int:
     """Compare from ``start`` while no callback can decide, in one transaction.
@@ -1763,11 +1701,11 @@ def _list_scan_simple_locked(
     """
     locked = load_ptr(list_slot, 0)
     _list_lock(locked)
-    lst = _reload_moving_root(list_slot, list_handle_slot)
+    lst = load_ptr(list_slot, 0)
     if not _list_shape_ok(lst, -108):
         _list_unlock(locked)
         return -1
-    query = _reload_moving_root(query_slot, query_handle_slot)
+    query = load_ptr(query_slot, 0)
     query_kind: int = 0
     if is_tagged_int(query) != 0:
         query_kind = 1
@@ -1796,22 +1734,13 @@ def _list_equality_scan(
     lst, item, start: int, stop: int, mode: int
 ) -> int:
     list_slot = stack_alloc(8)
-    list_handle_slot = stack_alloc(8)
     query_slot = stack_alloc(8)
-    query_handle_slot = stack_alloc(8)
     candidate_slot = stack_alloc(8)
     store_ptr(list_slot, 0, lst)
     store_ptr(query_slot, 0, item)
     store_ptr(candidate_slot, 0, null())
-    if _prepare_moving_root(list_slot, list_handle_slot, 0) != 0:
-        return -1 if mode == 1 else 0
-    if _prepare_moving_root(query_slot, query_handle_slot, 0) != 0:
-        _finish_moving_root(list_handle_slot)
-        return -1 if mode == 1 else 0
     candidate_handle = pcc_gc_native_root_bind_range(candidate_slot, 1)
     if ptr_is_null(candidate_handle) != 0:
-        _finish_moving_root(query_handle_slot)
-        _finish_moving_root(list_handle_slot)
         return -1 if mode == 1 else 0
     index_slot = stack_alloc(8)
     index: int = start
@@ -1820,7 +1749,7 @@ def _list_equality_scan(
         # Elements no callback can compare are scanned in one transaction;
         # the first that needs one is retained and compared after unlocking.
         simple: int = _list_scan_simple_locked(
-            list_slot, list_handle_slot, query_slot, query_handle_slot,
+            list_slot, query_slot,
             index, stop, index_slot,
         )
         compared: int = 2
@@ -1831,35 +1760,25 @@ def _list_equality_scan(
             index = load_i64(index_slot, 0)
             compared = _list_eq_at_callback(
                 list_slot,
-                list_handle_slot,
                 query_slot,
-                query_handle_slot,
                 candidate_slot,
                 index,
             )
         if compared < 0:
             pcc_gc_native_root_unbind(candidate_handle)
-            _finish_moving_root(query_handle_slot)
-            _finish_moving_root(list_handle_slot)
             return -1 if mode == 1 else 0
         if compared == 2:
             break
         if compared == 1:
             if mode == 0:
                 pcc_gc_native_root_unbind(candidate_handle)
-                _finish_moving_root(query_handle_slot)
-                _finish_moving_root(list_handle_slot)
                 return 1
             if mode == 1:
                 pcc_gc_native_root_unbind(candidate_handle)
-                _finish_moving_root(query_handle_slot)
-                _finish_moving_root(list_handle_slot)
                 return index
             total = total + 1
         index = index + 1
     pcc_gc_native_root_unbind(candidate_handle)
-    _finish_moving_root(query_handle_slot)
-    _finish_moving_root(list_handle_slot)
     if mode == 1:
         return -1
     return total
@@ -1874,7 +1793,7 @@ def _native_body_py_list_contains(_native_inputs) -> int:
     return _list_equality_scan(lst, item, 0, -1, 0)
 
 
-def _push_to_list(out_slot, value_slot, out_handle_slot, value_handle_slot):
+def _push_to_list(out_slot, value_slot):
     out = load_ptr(out_slot, 0)
     v = load_ptr(value_slot, 0)
     # Helper: append v to out with grow-check; return canonical out or NULL.
@@ -1894,7 +1813,7 @@ def _push_to_list(out_slot, value_slot, out_handle_slot, value_handle_slot):
             fast_grown, PYLISTOBJECT_LENGTH_OFFSET, fast_length + 1
         )
         return fast_grown
-    out = _reload_moving_root(out_slot, out_handle_slot)
+    out = load_ptr(out_slot, 0)
     out_len: int = load_i64(out, PYLISTOBJECT_LENGTH_OFFSET)
     grown = _grow_if_needed(out, out_len + 1)
     if ptr_is_null(grown) != 0:
@@ -1906,8 +1825,8 @@ def _push_to_list(out_slot, value_slot, out_handle_slot, value_handle_slot):
     )
     locked = load_ptr(out_slot, 0)
     _list_lock(locked)
-    out = _reload_moving_root(out_slot, out_handle_slot)
-    v = _reload_moving_root(value_slot, value_handle_slot)
+    out = load_ptr(out_slot, 0)
+    v = load_ptr(value_slot, 0)
     if not _list_shape_ok(out, -109):
         _list_unlock(locked)
         pcc_gc_store_ptr_plan_finish(store_plan)
@@ -2115,21 +2034,16 @@ def _native_body_py_list_slice(_native_inputs):
     if not _list_is_sane(lst, -110):
         return null()
     source_slot = stack_alloc(8)
-    source_handle_slot = stack_alloc(8)
     store_ptr(source_slot, 0, lst)
-    if _prepare_moving_root(source_slot, source_handle_slot, 0) != 0:
-        return null()
-    lst = _reload_moving_root(source_slot, source_handle_slot)
+    lst = load_ptr(source_slot, 0)
     length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
 
     step_v: int = 1
     if _is_none_or_null(step) == 0:
         step_v = py_obj_index_i64(step)
         if py_err_occurred() != 0:
-            _finish_moving_root(source_handle_slot)
             return null()
         if step_v == 0:
-            _finish_moving_root(source_handle_slot)
             py_raise_zero_slice_step()
             return null()
 
@@ -2141,14 +2055,12 @@ def _native_body_py_list_slice(_native_inputs):
         else:
             lo_v = py_obj_index_i64(lo)
             if py_err_occurred() != 0:
-                _finish_moving_root(source_handle_slot)
                 return null()
         if _is_none_or_null(hi) != 0:
             hi_v = length
         else:
             hi_v = py_obj_index_i64(hi)
             if py_err_occurred() != 0:
-                _finish_moving_root(source_handle_slot)
                 return null()
     else:
         if _is_none_or_null(lo) != 0:
@@ -2156,14 +2068,12 @@ def _native_body_py_list_slice(_native_inputs):
         else:
             lo_v = py_obj_index_i64(lo)
             if py_err_occurred() != 0:
-                _finish_moving_root(source_handle_slot)
                 return null()
         if _is_none_or_null(hi) != 0:
             hi_v = -1
         else:
             hi_v = py_obj_index_i64(hi)
             if py_err_occurred() != 0:
-                _finish_moving_root(source_handle_slot)
                 return null()
 
     if step_v > 0:
@@ -2198,33 +2108,22 @@ def _native_body_py_list_slice(_native_inputs):
 
     out = py_list_new(4)
     if ptr_is_null(out):
-        _finish_moving_root(source_handle_slot)
         return null()
     out_slot = stack_alloc(8)
-    out_handle_slot = stack_alloc(8)
     value_slot = stack_alloc(8)
-    value_handle_slot = stack_alloc(8)
     store_ptr(out_slot, 0, out)
     store_ptr(value_slot, 0, null())
-    store_ptr(value_handle_slot, 0, null())
-    if _prepare_moving_root(out_slot, out_handle_slot, 1) != 0:
-        py_decref(load_ptr(out_slot, 0))
-        _finish_moving_root(source_handle_slot)
-        return null()
     if step_v > 0:
         i: int = lo_v
         while i < hi_v:
-            lst = _reload_moving_root(source_slot, source_handle_slot)
+            lst = load_ptr(source_slot, 0)
             items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
             v = pcc_gc_load_ptr(lst, ptr_add(items, i * 8))
             store_ptr(value_slot, 0, v)
-            grown_out = _push_to_list(out_slot, value_slot, out_handle_slot, value_handle_slot)
+            grown_out = _push_to_list(out_slot, value_slot)
             if ptr_is_null(grown_out) != 0:
                 py_decref(load_ptr(out_slot, 0))
                 store_ptr(out_slot, 0, null())
-                _finish_moving_root(value_handle_slot)
-                _finish_moving_root(source_handle_slot)
-                _finish_moving_root(out_handle_slot)
                 return null()
             out = grown_out
             i = i + step_v
@@ -2235,23 +2134,17 @@ def _native_body_py_list_slice(_native_inputs):
                 # break loop
                 hi_v = i  # force exit
             else:
-                lst = _reload_moving_root(source_slot, source_handle_slot)
+                lst = load_ptr(source_slot, 0)
                 items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
                 v = pcc_gc_load_ptr(lst, ptr_add(items, i * 8))
                 store_ptr(value_slot, 0, v)
-                grown_out = _push_to_list(out_slot, value_slot, out_handle_slot, value_handle_slot)
+                grown_out = _push_to_list(out_slot, value_slot)
                 if ptr_is_null(grown_out) != 0:
                     py_decref(load_ptr(out_slot, 0))
                     store_ptr(out_slot, 0, null())
-                    _finish_moving_root(value_handle_slot)
-                    _finish_moving_root(source_handle_slot)
-                    _finish_moving_root(out_handle_slot)
                     return null()
                 out = grown_out
                 i = i + step_v
-    _finish_moving_root(value_handle_slot)
-    _finish_moving_root(source_handle_slot)
-    _finish_moving_root(out_handle_slot)
     return load_ptr(out_slot, 0)
 
 
@@ -2264,33 +2157,15 @@ def _native_body_py_list_del_slice(_native_inputs) -> int:
     if not _list_type_ok(lst, -112):
         return -1
     list_slot = stack_alloc(8)
-    list_handle_slot = stack_alloc(8)
     lo_slot = stack_alloc(8)
-    lo_handle_slot = stack_alloc(8)
     hi_slot = stack_alloc(8)
-    hi_handle_slot = stack_alloc(8)
     step_slot = stack_alloc(8)
-    step_handle_slot = stack_alloc(8)
     store_ptr(list_slot, 0, lst)
     store_ptr(lo_slot, 0, lo)
     store_ptr(hi_slot, 0, hi)
     store_ptr(step_slot, 0, step)
-    if _prepare_moving_root(list_slot, list_handle_slot, 0) != 0:
-        return -1
-    if _prepare_moving_root(lo_slot, lo_handle_slot, 0) != 0:
-        _finish_moving_root(list_handle_slot)
-        return -1
-    if _prepare_moving_root(hi_slot, hi_handle_slot, 0) != 0:
-        _finish_moving_root(lo_handle_slot)
-        _finish_moving_root(list_handle_slot)
-        return -1
-    if _prepare_moving_root(step_slot, step_handle_slot, 0) != 0:
-        _finish_moving_root(hi_handle_slot)
-        _finish_moving_root(lo_handle_slot)
-        _finish_moving_root(list_handle_slot)
-        return -1
 
-    step = _reload_moving_root(step_slot, step_handle_slot)
+    step = load_ptr(step_slot, 0)
     step_none: int = _is_none_or_null(step)
     step_v: int = 1
     if step_none == 0:
@@ -2298,36 +2173,21 @@ def _native_body_py_list_del_slice(_native_inputs) -> int:
         if py_err_occurred() != 0 or step_v == 0:
             if step_v == 0:
                 py_raise_zero_slice_step()
-            _finish_moving_root(step_handle_slot)
-            _finish_moving_root(hi_handle_slot)
-            _finish_moving_root(lo_handle_slot)
-            _finish_moving_root(list_handle_slot)
             return -1
-    lo = _reload_moving_root(lo_slot, lo_handle_slot)
+    lo = load_ptr(lo_slot, 0)
     lo_none: int = _is_none_or_null(lo)
     raw_lo: int = 0
     if lo_none == 0:
         raw_lo = py_obj_index_i64(lo)
         if py_err_occurred() != 0:
-            _finish_moving_root(step_handle_slot)
-            _finish_moving_root(hi_handle_slot)
-            _finish_moving_root(lo_handle_slot)
-            _finish_moving_root(list_handle_slot)
             return -1
-    hi = _reload_moving_root(hi_slot, hi_handle_slot)
+    hi = load_ptr(hi_slot, 0)
     hi_none: int = _is_none_or_null(hi)
     raw_hi: int = 0
     if hi_none == 0:
         raw_hi = py_obj_index_i64(hi)
         if py_err_occurred() != 0:
-            _finish_moving_root(step_handle_slot)
-            _finish_moving_root(hi_handle_slot)
-            _finish_moving_root(lo_handle_slot)
-            _finish_moving_root(list_handle_slot)
             return -1
-    _finish_moving_root(step_handle_slot)
-    _finish_moving_root(hi_handle_slot)
-    _finish_moving_root(lo_handle_slot)
 
     backend: int = pcc_gc_backend()
     lo_out = stack_alloc(8)
@@ -2338,13 +2198,12 @@ def _native_body_py_list_del_slice(_native_inputs) -> int:
         attempt = attempt + 1
         locked = load_ptr(list_slot, 0)
         _list_lock(locked)
-        lst = _reload_moving_root(list_slot, list_handle_slot)
+        lst = load_ptr(list_slot, 0)
         sane: int = 1 if _list_shape_ok(lst, -112) else 0
         length = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
         capacity: int = load_i64(lst, PYLISTOBJECT_CAPACITY_OFFSET)
         _list_unlock(locked)
         if sane == 0:
-            _finish_moving_root(list_handle_slot)
             return -1
         _normalize_delete_slice_scalars(
             lo_none,
@@ -2360,13 +2219,10 @@ def _native_body_py_list_del_slice(_native_inputs) -> int:
         hi_v = load_i64(hi_out, 0)
         count = _slice_count(lo_v, hi_v, step_v)
         if count <= 0:
-            _finish_moving_root(list_handle_slot)
             return 0
         if length <= 0 or count > length:
-            _finish_moving_root(list_handle_slot)
             return -1
         if length > 576460752303423487 or count > 72057594037927935:
-            _finish_moving_root(list_handle_slot)
             return -1
         remove_mask = malloc(length)
         plans = malloc(count * 128)
@@ -2379,7 +2235,6 @@ def _native_body_py_list_del_slice(_native_inputs) -> int:
             free(slot_pairs)
             free(plans)
             free(remove_mask)
-            _finish_moving_root(list_handle_slot)
             return -1
         memset(remove_mask, 0, length)
         memset(plans, 0, count * 128)
@@ -2400,7 +2255,7 @@ def _native_body_py_list_del_slice(_native_inputs) -> int:
 
         locked = load_ptr(list_slot, 0)
         _list_lock(locked)
-        lst = _reload_moving_root(list_slot, list_handle_slot)
+        lst = load_ptr(list_slot, 0)
         if (
             pcc_gc_backend() != backend
             or load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET) != length
@@ -2446,7 +2301,6 @@ def _native_body_py_list_del_slice(_native_inputs) -> int:
             free(slot_pairs)
             free(plans)
             free(remove_mask)
-            _finish_moving_root(list_handle_slot)
             return -1
         plan_i: int = 0
         src = 0
@@ -2490,9 +2344,7 @@ def _native_body_py_list_del_slice(_native_inputs) -> int:
         free(slot_pairs)
         free(plans)
         free(remove_mask)
-        _finish_moving_root(list_handle_slot)
         return 0
-    _finish_moving_root(list_handle_slot)
     return -1
 
 
@@ -2643,7 +2495,7 @@ def _list_extend_source_items(source, tag: int):
     return load_ptr(source, PYLISTOBJECT_ITEMS_OFFSET)
 
 
-def _list_extend_locked(list_slot, list_handle_slot, source_slot, source_handle_slot, tag: int) -> int:
+def _list_extend_locked(list_slot, source_slot, tag: int) -> int:
     """Append a list's or tuple's items, at most 1024 per graph transaction.
 
     Each transaction rereads the target length, its room and the source under
@@ -2663,8 +2515,8 @@ def _list_extend_locked(list_slot, list_handle_slot, source_slot, source_handle_
     limit: int = -1
     finished: int = 0
     while finished == 0:
-        a = _reload_moving_root(list_slot, list_handle_slot)
-        b = _reload_moving_root(source_slot, source_handle_slot)
+        a = load_ptr(list_slot, 0)
+        b = load_ptr(source_slot, 0)
         planned: int = _list_extend_source_length(b, tag) - copied
         if limit >= 0:
             planned = limit - copied
@@ -2699,8 +2551,8 @@ def _list_extend_locked(list_slot, list_handle_slot, source_slot, source_handle_
                 if tag != PY_TYPE_TUPLE:
                     source_locked = load_ptr(source_slot, 0)
                 _list_lock_pair(locked, source_locked)
-                a = _reload_moving_root(list_slot, list_handle_slot)
-                b = _reload_moving_root(source_slot, source_handle_slot)
+                a = load_ptr(list_slot, 0)
+                b = load_ptr(source_slot, 0)
                 sane: int = 1 if _list_shape_ok(a, -113) else 0
                 if sane != 0 and tag != PY_TYPE_TUPLE and not _list_shape_ok(b, -117):
                     sane = 0
@@ -2760,46 +2612,29 @@ def _native_body_py_list_extend(_native_inputs) -> None:
         return
 
     list_slot = stack_alloc(8)
-    list_handle_slot = stack_alloc(8)
     source_slot = stack_alloc(8)
-    source_handle_slot = stack_alloc(8)
     store_ptr(list_slot, 0, a)
     store_ptr(source_slot, 0, b)
-    if _prepare_moving_root(list_slot, list_handle_slot, 0) != 0:
-        py_raise_owned(py_exc_new(19, cstr("list extend: out of memory")))
-        return
-    if _prepare_moving_root(source_slot, source_handle_slot, 0) != 0:
-        _finish_moving_root(list_handle_slot)
-        py_raise_owned(py_exc_new(19, cstr("list extend: out of memory")))
-        return
-    a = _reload_moving_root(list_slot, list_handle_slot)
-    b = _reload_moving_root(source_slot, source_handle_slot)
+    a = load_ptr(list_slot, 0)
+    b = load_ptr(source_slot, 0)
     btag: int = _type_of(b)
     if btag == PY_TYPE_LIST and not _list_type_ok(b, -117):
-        _finish_moving_root(source_handle_slot)
-        _finish_moving_root(list_handle_slot)
         return
     if btag == PY_TYPE_TUPLE:
         tuple_length: int = load_i64(b, PYTUPLEOBJECT_LEN_OFFSET)
         if tuple_length < 0 or tuple_length > 134217728:
             _debug_bad_container(b, -118)
-            _finish_moving_root(source_handle_slot)
-            _finish_moving_root(list_handle_slot)
             return
     if btag == PY_TYPE_LIST or btag == PY_TYPE_TUPLE:
         status: int = _list_extend_locked(
-            list_slot, list_handle_slot, source_slot, source_handle_slot, btag
+            list_slot, source_slot, btag
         )
-        _finish_moving_root(source_handle_slot)
-        _finish_moving_root(list_handle_slot)
         if status == -1:
             py_raise_owned(py_exc_new(19, cstr("list extend: out of memory")))  # PY_EXC_MEMORYERROR
         return
-    a = _reload_moving_root(list_slot, list_handle_slot)
-    b = _reload_moving_root(source_slot, source_handle_slot)
+    a = load_ptr(list_slot, 0)
+    b = load_ptr(source_slot, 0)
     _list_extend_iterable(a, b)
-    _finish_moving_root(source_handle_slot)
-    _finish_moving_root(list_handle_slot)
 
 
 @c_abi_export("pcc_list_body_py_list_insert")
@@ -2809,29 +2644,18 @@ def _native_body_py_list_insert(_native_inputs, i: int) -> None:
     if not _list_type_ok(lst, -119):
         return
     list_slot = stack_alloc(8)
-    list_handle_slot = stack_alloc(8)
     item_slot = stack_alloc(8)
-    item_handle_slot = stack_alloc(8)
     store_ptr(list_slot, 0, lst)
     store_ptr(item_slot, 0, item)
-    if _prepare_moving_root(list_slot, list_handle_slot, 0) != 0:
-        py_raise_owned(py_exc_new(19, cstr("list insert: out of memory")))
-        return
-    if _prepare_moving_root(item_slot, item_handle_slot, 0) != 0:
-        _finish_moving_root(list_handle_slot)
-        py_raise_owned(py_exc_new(19, cstr("list insert: out of memory")))
-        return
     store_plan = stack_alloc(128)
     inserted: int = 0
     while inserted == 0:
         # Growth allocates outside the transaction. Another mutator may
         # insert or delete meanwhile, so the length, the index and the room
         # are read again under the graph lock before the tail shifts.
-        lst = _reload_moving_root(list_slot, list_handle_slot)
+        lst = load_ptr(list_slot, 0)
         grown = _grow_if_needed(lst, load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET) + 1)
         if ptr_is_null(grown) != 0:
-            _finish_moving_root(item_handle_slot)
-            _finish_moving_root(list_handle_slot)
             py_raise_owned(py_exc_new(19, cstr("list insert: out of memory")))  # PY_EXC_MEMORYERROR
             return
         store_ptr(list_slot, 0, grown)
@@ -2840,17 +2664,15 @@ def _native_body_py_list_insert(_native_inputs, i: int) -> None:
         )
         locked = load_ptr(list_slot, 0)
         _list_lock(locked)
-        lst = _reload_moving_root(list_slot, list_handle_slot)
+        lst = load_ptr(list_slot, 0)
         if not _list_shape_ok(lst, -119):
             _list_unlock(locked)
             pcc_gc_store_ptr_plan_finish(store_plan)
-            _finish_moving_root(item_handle_slot)
-            _finish_moving_root(list_handle_slot)
             return
         length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
         if length < load_i64(lst, PYLISTOBJECT_CAPACITY_OFFSET):
             idx: int = _normalize_index(i, length, 1)
-            item = _reload_moving_root(item_slot, item_handle_slot)
+            item = load_ptr(item_slot, 0)
             items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
             if idx < length:
                 # Shift tail [idx, length) right by one.
@@ -2875,8 +2697,6 @@ def _native_body_py_list_insert(_native_inputs, i: int) -> None:
             inserted = 1
         _list_unlock(locked)
     pcc_gc_store_ptr_plan_finish(store_plan)
-    _finish_moving_root(item_handle_slot)
-    _finish_moving_root(list_handle_slot)
 
 
 @c_abi_export("pcc_list_body_py_list_pop")
@@ -2885,29 +2705,23 @@ def _native_body_py_list_pop(_native_inputs, i: int):
     if not _list_type_ok(lst, -120):
         return null()
     list_slot = stack_alloc(8)
-    list_handle_slot = stack_alloc(8)
     store_ptr(list_slot, 0, lst)
-    if _prepare_moving_root(list_slot, list_handle_slot, 0) != 0:
-        return null()
     result_slot = stack_alloc(8)
     store_ptr(result_slot, 0, null())
     result_handle = pcc_gc_native_root_bind_range(result_slot, 1)
     if ptr_is_null(result_handle) != 0:
-        _finish_moving_root(list_handle_slot)
         return null()
     locked = load_ptr(list_slot, 0)
     _list_lock(locked)
-    lst = _reload_moving_root(list_slot, list_handle_slot)
+    lst = load_ptr(list_slot, 0)
     if not _list_shape_ok(lst, -120):
         _list_unlock(locked)
         pcc_gc_native_root_unbind(result_handle)
-        _finish_moving_root(list_handle_slot)
         return null()
     length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
     if length == 0:
         _list_unlock(locked)
         pcc_gc_native_root_unbind(result_handle)
-        _finish_moving_root(list_handle_slot)
         py_raise_owned(py_exc_new(5, cstr("pop from empty list")))  # PY_EXC_INDEXERROR
         return null()
     idx: int = 0
@@ -2918,7 +2732,6 @@ def _native_body_py_list_pop(_native_inputs, i: int):
         if idx < 0:
             _list_unlock(locked)
             pcc_gc_native_root_unbind(result_handle)
-            _finish_moving_root(list_handle_slot)
             py_raise_owned(py_exc_new(5, cstr("pop index out of range")))  # PY_EXC_INDEXERROR
             return null()
     items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
@@ -2930,7 +2743,6 @@ def _native_body_py_list_pop(_native_inputs, i: int):
         memmove(dst, src, (length - idx - 1) * 8)
     store_i64(lst, PYLISTOBJECT_LENGTH_OFFSET, length - 1)
     _list_unlock(locked)
-    _finish_moving_root(list_handle_slot)
     pcc_gc_native_root_unbind(result_handle)
     return load_ptr(result_slot, 0)
 
@@ -2957,7 +2769,7 @@ def _list_simple_eq(item, query, query_kind: int) -> int:
     return -1
 
 
-def _list_remove_simple_locked(list_slot, list_handle_slot, query_slot, query_handle_slot, removed_slot) -> int:
+def _list_remove_simple_locked(list_slot, query_slot, removed_slot) -> int:
     """Delete the first element equal to the query in one transaction.
 
     Returns 1 after the deletion (the list's reference moves into the
@@ -2968,11 +2780,11 @@ def _list_remove_simple_locked(list_slot, list_handle_slot, query_slot, query_ha
     """
     locked = load_ptr(list_slot, 0)
     _list_lock(locked)
-    lst = _reload_moving_root(list_slot, list_handle_slot)
+    lst = load_ptr(list_slot, 0)
     if not _list_shape_ok(lst, -121):
         _list_unlock(locked)
         return -1
-    query = _reload_moving_root(query_slot, query_handle_slot)
+    query = load_ptr(query_slot, 0)
     query_kind: int = 0
     if is_tagged_int(query) != 0:
         query_kind = 1
@@ -3011,36 +2823,23 @@ def _native_body_py_list_remove(_native_inputs) -> None:
     if not _list_type_ok(lst, -121):
         return
     list_slot = stack_alloc(8)
-    list_handle_slot = stack_alloc(8)
     query_slot = stack_alloc(8)
-    query_handle_slot = stack_alloc(8)
     candidate_slot = stack_alloc(8)
     store_ptr(list_slot, 0, lst)
     store_ptr(query_slot, 0, item)
     store_ptr(candidate_slot, 0, null())
-    if _prepare_moving_root(list_slot, list_handle_slot, 0) != 0:
-        return
-    if _prepare_moving_root(query_slot, query_handle_slot, 0) != 0:
-        _finish_moving_root(list_handle_slot)
-        return
     candidate_handle = pcc_gc_native_root_bind_range(candidate_slot, 1)
     if ptr_is_null(candidate_handle) != 0:
-        _finish_moving_root(query_handle_slot)
-        _finish_moving_root(list_handle_slot)
         return
     # Comparisons that run no callback scan and delete in one transaction,
     # so a concurrent shift cannot move the element past the scan.
     simple: int = _list_remove_simple_locked(
-        list_slot, list_handle_slot, query_slot, query_handle_slot, candidate_slot
+        list_slot, query_slot, candidate_slot
     )
     if simple < 0:
         pcc_gc_native_root_unbind(candidate_handle)
-        _finish_moving_root(query_handle_slot)
-        _finish_moving_root(list_handle_slot)
         return
     if simple == 1:
-        _finish_moving_root(query_handle_slot)
-        _finish_moving_root(list_handle_slot)
         pcc_gc_native_root_unbind(candidate_handle)
         removed = load_ptr(candidate_slot, 0)
         if ptr_is_null(removed) == 0:
@@ -3054,17 +2853,13 @@ def _native_body_py_list_remove(_native_inputs) -> None:
     while index >= 0:
         compared: int = _list_eq_at_callback(
             list_slot,
-            list_handle_slot,
             query_slot,
-            query_handle_slot,
             candidate_slot,
             index,
             1,
         )
         if compared < 0:
             pcc_gc_native_root_unbind(candidate_handle)
-            _finish_moving_root(query_handle_slot)
-            _finish_moving_root(list_handle_slot)
             return
         if compared == 2:
             break
@@ -3077,7 +2872,7 @@ def _native_body_py_list_remove(_native_inputs) -> None:
         matched: int = 0
         locked = load_ptr(list_slot, 0)
         _list_lock(locked)
-        lst = _reload_moving_root(list_slot, list_handle_slot)
+        lst = load_ptr(list_slot, 0)
         length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
         candidate = pcc_gc_load_ptr(null(), candidate_slot)
         if index >= 0 and index < length:
@@ -3099,8 +2894,6 @@ def _native_body_py_list_remove(_native_inputs) -> None:
         # the list's former reference through the root teardown below.
         py_decref(candidate)
         if matched != 0:
-            _finish_moving_root(query_handle_slot)
-            _finish_moving_root(list_handle_slot)
             pcc_gc_native_root_unbind(candidate_handle)
             removed = load_ptr(candidate_slot, 0)
             if ptr_is_null(removed) == 0:
@@ -3108,8 +2901,6 @@ def _native_body_py_list_remove(_native_inputs) -> None:
             return
         index = 0
     pcc_gc_native_root_unbind(candidate_handle)
-    _finish_moving_root(query_handle_slot)
-    _finish_moving_root(list_handle_slot)
     # Not found: raise ValueError (private exception-table tag 2; 12 is
     # ArithmeticError) with CPython's message.
     py_raise_owned(py_exc_new(2, cstr("list.remove(x): x not in list")))
@@ -3122,30 +2913,24 @@ def _native_body_py_list_clear(_native_inputs) -> None:
         return
 
     list_slot = stack_alloc(8)
-    list_handle_slot = stack_alloc(8)
     store_ptr(list_slot, 0, lst)
-    if _prepare_moving_root(list_slot, list_handle_slot, 0) != 0:
-        return
     backend: int = pcc_gc_backend()
     attempt: int = 0
     while attempt < 8:
         attempt = attempt + 1
         locked = load_ptr(list_slot, 0)
         _list_lock(locked)
-        lst = _reload_moving_root(list_slot, list_handle_slot)
+        lst = load_ptr(list_slot, 0)
         length: int = -1
         if _list_shape_ok(lst, -122):
             length = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
         _list_unlock(locked)
         if length <= 0:
-            _finish_moving_root(list_handle_slot)
             return
         if length > 72057594037927935:
-            _finish_moving_root(list_handle_slot)
             return
         plans = malloc(length * 128)
         if ptr_is_null(plans) != 0:
-            _finish_moving_root(list_handle_slot)
             return
         memset(plans, 0, length * 128)
         plan_i: int = 0
@@ -3164,9 +2949,8 @@ def _native_body_py_list_clear(_native_inputs) -> None:
                 pcc_gc_store_ptr_plan_finish(ptr_add(plans, plan_i * 128))
                 plan_i = plan_i + 1
             free(plans)
-            _finish_moving_root(list_handle_slot)
             return
-        lst = _reload_moving_root(list_slot, list_handle_slot)
+        lst = load_ptr(list_slot, 0)
         if load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET) != length:
             _list_unlock(locked)
             plan_i = 0
@@ -3197,9 +2981,7 @@ def _native_body_py_list_clear(_native_inputs) -> None:
             pcc_gc_store_ptr_plan_finish(ptr_add(plans, plan_i * 128))
             plan_i = plan_i + 1
         free(plans)
-        _finish_moving_root(list_handle_slot)
         return
-    _finish_moving_root(list_handle_slot)
 
 
 @c_abi_export("py_obj_clear")
@@ -3286,20 +3068,16 @@ def _native_body_py_list_reverse(_native_inputs) -> None:
     if not _list_type_ok(lst, -125):
         return
     list_slot = stack_alloc(8)
-    list_handle_slot = stack_alloc(8)
     store_ptr(list_slot, 0, lst)
-    if _prepare_moving_root(list_slot, list_handle_slot, 0) != 0:
-        return
     # Reversal permutes the owners already in the array: no count changes,
     # and one graph transaction, so a concurrent pop or insert sees the
     # whole reversal or none of it. Loads take the read barrier and every
     # rewritten slot notes the write barrier.
     locked = load_ptr(list_slot, 0)
     _list_lock(locked)
-    lst = _reload_moving_root(list_slot, list_handle_slot)
+    lst = load_ptr(list_slot, 0)
     if not _list_shape_ok(lst, -125):
         _list_unlock(locked)
-        _finish_moving_root(list_handle_slot)
         return
     items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
     i: int = 0
@@ -3316,4 +3094,3 @@ def _native_body_py_list_reverse(_native_inputs) -> None:
         i = i + 1
         j = j - 1
     _list_unlock(locked)
-    _finish_moving_root(list_handle_slot)

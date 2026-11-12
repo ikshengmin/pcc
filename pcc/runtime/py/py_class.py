@@ -2831,29 +2831,6 @@ def py_instance_get_field(inst, idx: int):
     return v
 
 
-def _instance_prepare_moving_root(slot, handle_slot) -> int:
-    store_ptr(handle_slot, 0, null())
-    value = load_ptr(slot, 0)
-    if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
-        return 0
-    return 0
-
-
-def _instance_reload_moving_root(slot, handle_slot):
-    value = load_ptr(slot, 0)
-    if ptr_is_null(load_ptr(handle_slot, 0)) == 0:
-        value = pcc_gc_load_ptr(null(), slot)
-        store_ptr(slot, 0, value)
-    return value
-
-
-def _instance_finish_moving_root(handle_slot) -> None:
-    handle = load_ptr(handle_slot, 0)
-    if ptr_is_null(handle) == 0:
-        pcc_gc_scheduler_root_unregister_handle(handle)
-        store_ptr(handle_slot, 0, null())
-
-
 def _instance_field_load(inst, offset: int, out) -> int:
     """Store the field at ``offset`` into ``out`` as a new reference.
 
@@ -2903,15 +2880,11 @@ def _instance_field_load(inst, offset: int, out) -> int:
             return 0
         pcc_py_gc_minor_graph_unlock()
     receiver_slot = stack_alloc(C_POINTER_SIZE)
-    receiver_handle_slot = stack_alloc(C_POINTER_SIZE)
     store_ptr(receiver_slot, 0, inst)
-    if _instance_prepare_moving_root(receiver_slot, receiver_handle_slot) != 0:
-        _class_require_result(null(), cstr("instance field lookup"), cstr("instance field lookup root registration failed"))
-        return -1
     result_handle = null()
     retain_plan = stack_alloc(56)
     pcc_py_gc_minor_graph_lock()
-    receiver = _instance_reload_moving_root(receiver_slot, receiver_handle_slot)
+    receiver = load_ptr(receiver_slot, 0)
     value = pcc_gc_load_ptr(receiver, ptr_add(receiver, offset))
     value = pcc_gc_retain_plan_prepare_locked(retain_plan, value)
     store_ptr(out, 0, value)
@@ -2920,7 +2893,6 @@ def _instance_field_load(inst, offset: int, out) -> int:
     if ptr_is_null(result_handle) != 0:
         # GC0/1/2 cannot relocate the retained owner, and the count-free
         # GC3/GC4 do not move what a stack ``out`` holds.
-        _instance_finish_moving_root(receiver_handle_slot)
         return 0
     # Only the result root's teardown needs a short pin (py_list_get's finish).
     pcc_py_gc_minor_graph_lock()
@@ -2931,7 +2903,6 @@ def _instance_field_load(inst, offset: int, out) -> int:
         pcc_gc_pin(result)
     pcc_py_gc_minor_graph_unlock()
     pcc_gc_scheduler_root_unregister_handle(result_handle)
-    _instance_finish_moving_root(receiver_handle_slot)
     store_ptr(out, 0, pcc_gc_take_pinned_slot(out, prior_pin))
     return 0
 
@@ -2945,11 +2916,7 @@ def _instance_field_clear(inst, offset: int) -> int:
     across acquiring it, which can park.
     """
     receiver_slot = stack_alloc(C_POINTER_SIZE)
-    receiver_handle_slot = stack_alloc(C_POINTER_SIZE)
     store_ptr(receiver_slot, 0, inst)
-    if _instance_prepare_moving_root(receiver_slot, receiver_handle_slot) != 0:
-        _class_require_result(null(), cstr("instance field delete"), cstr("instance field root registration failed"))
-        return -1
     plan = stack_alloc(128)
     pcc_gc_store_ptr_plan_init(plan, inst, _gc_backend_selected_fast())
     own_lock: int = _fields_lock_themselves()
@@ -2958,7 +2925,7 @@ def _instance_field_clear(inst, offset: int) -> int:
         pcc_container_lock(inst)
     else:
         pcc_py_gc_minor_graph_lock()
-    receiver = _instance_reload_moving_root(receiver_slot, receiver_handle_slot)
+    receiver = load_ptr(receiver_slot, 0)
     slot = ptr_add(receiver, offset)
     bound: int = 0
     if ptr_is_null(pcc_gc_load_ptr(receiver, slot)) == 0:
@@ -2968,7 +2935,6 @@ def _instance_field_clear(inst, offset: int) -> int:
     else:
         pcc_py_gc_minor_graph_unlock()
     pcc_gc_store_ptr_plan_finish(plan)
-    _instance_finish_moving_root(receiver_handle_slot)
     return bound
 
 

@@ -59,9 +59,6 @@ pcc_gc_backend4_zpage_register_owner_payload_span = extern(
     c_int64,
 )
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
-pcc_gc_scheduler_root_unregister_handle = extern(
-    "pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void
-)
 pcc_list_grow_for_mutation = extern(
     "pcc_list_grow_for_mutation", (c_ptr, c_int64), c_ptr
 )
@@ -158,34 +155,6 @@ def _is_none_or_null(o) -> int:
     if ptr_eq(o, global_load_ptr("py_None")):
         return 1
     return 0
-
-
-def _prepare_moving_root(slot, handle_slot) -> int:
-    store_ptr(handle_slot, 0, null())
-    value = load_ptr(slot, 0)
-    if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
-        return 0
-    return 0
-
-
-def _reload_moving_root(slot, handle_slot):
-    value = load_ptr(slot, 0)
-    if ptr_is_null(load_ptr(handle_slot, 0)) == 0:
-        value = pcc_gc_load_ptr(null(), slot)
-        store_ptr(slot, 0, value)
-    return value
-
-
-def _finish_moving_root(handle_slot) -> None:
-    handle = load_ptr(handle_slot, 0)
-    if ptr_is_null(handle) == 0:
-        pcc_gc_scheduler_root_unregister_handle(handle)
-        store_ptr(handle_slot, 0, null())
-
-
-def _finish_slice_roots(list_handle_slot, replacement_handle_slot) -> None:
-    _finish_moving_root(replacement_handle_slot)
-    _finish_moving_root(list_handle_slot)
 
 
 def _seq_len(seq) -> int:
@@ -297,41 +266,27 @@ def _snapshot_set_slice_replacement(replacement):
     if tag != PY_TYPE_TUPLE:
         return null()
     source_slot = stack_alloc(8)
-    source_handle_slot = stack_alloc(8)
     store_ptr(source_slot, 0, replacement)
-    if _prepare_moving_root(source_slot, source_handle_slot) != 0:
-        return null()
     length: int = py_tuple_len(replacement)
     if length < 0:
-        _finish_moving_root(source_handle_slot)
         return null()
     out = py_list_new(length if length > 0 else 4)
     if ptr_is_null(out) != 0:
-        _finish_moving_root(source_handle_slot)
         return null()
     out_slot = stack_alloc(8)
-    out_handle_slot = stack_alloc(8)
     store_ptr(out_slot, 0, out)
-    if _prepare_moving_root(out_slot, out_handle_slot) != 0:
-        _finish_moving_root(source_handle_slot)
-        py_decref(out)
-        return null()
     i: int = 0
     while i < length:
-        replacement = _reload_moving_root(source_slot, source_handle_slot)
-        out = _reload_moving_root(out_slot, out_handle_slot)
+        replacement = load_ptr(source_slot, 0)
+        out = load_ptr(out_slot, 0)
         value = py_tuple_get(replacement, i)
         if ptr_is_null(value) != 0:
-            _finish_moving_root(out_handle_slot)
-            _finish_moving_root(source_handle_slot)
             py_decref(out)
             return null()
         py_list_append(out, value)
         py_decref(value)
         i = i + 1
-    out = _reload_moving_root(out_slot, out_handle_slot)
-    _finish_moving_root(out_handle_slot)
-    _finish_moving_root(source_handle_slot)
+    out = load_ptr(out_slot, 0)
     return out
 
 
@@ -386,39 +341,17 @@ def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
     if ptr_is_null(replacement) != 0:
         return -1
     list_slot = stack_alloc(8)
-    list_handle_slot = stack_alloc(8)
     replacement_slot = stack_alloc(8)
-    replacement_handle_slot = stack_alloc(8)
     lo_slot = stack_alloc(8)
-    lo_handle_slot = stack_alloc(8)
     hi_slot = stack_alloc(8)
-    hi_handle_slot = stack_alloc(8)
     step_slot = stack_alloc(8)
-    step_handle_slot = stack_alloc(8)
     store_ptr(list_slot, 0, lst)
     store_ptr(replacement_slot, 0, replacement)
     store_ptr(lo_slot, 0, lo)
     store_ptr(hi_slot, 0, hi)
     store_ptr(step_slot, 0, step)
-    if _prepare_moving_root(list_slot, list_handle_slot) != 0:
-        return -1
-    if _prepare_moving_root(replacement_slot, replacement_handle_slot) != 0:
-        _finish_moving_root(list_handle_slot)
-        return -1
-    if _prepare_moving_root(lo_slot, lo_handle_slot) != 0:
-        _finish_slice_roots(list_handle_slot, replacement_handle_slot)
-        return -1
-    if _prepare_moving_root(hi_slot, hi_handle_slot) != 0:
-        _finish_moving_root(lo_handle_slot)
-        _finish_slice_roots(list_handle_slot, replacement_handle_slot)
-        return -1
-    if _prepare_moving_root(step_slot, step_handle_slot) != 0:
-        _finish_moving_root(hi_handle_slot)
-        _finish_moving_root(lo_handle_slot)
-        _finish_slice_roots(list_handle_slot, replacement_handle_slot)
-        return -1
 
-    step = _reload_moving_root(step_slot, step_handle_slot)
+    step = load_ptr(step_slot, 0)
     step_none: int = _is_none_or_null(step)
     step_v: int = 1
     if step_none == 0:
@@ -426,52 +359,28 @@ def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
         if py_err_occurred() != 0 or step_v == 0:
             if step_v == 0:
                 py_raise_zero_slice_step()
-            _finish_moving_root(step_handle_slot)
-            _finish_moving_root(hi_handle_slot)
-            _finish_moving_root(lo_handle_slot)
-            _finish_slice_roots(list_handle_slot, replacement_handle_slot)
             return -1
-    lo = _reload_moving_root(lo_slot, lo_handle_slot)
+    lo = load_ptr(lo_slot, 0)
     lo_none: int = _is_none_or_null(lo)
     raw_lo: int = 0
     if lo_none == 0:
         raw_lo = py_obj_index_i64(lo)
         if py_err_occurred() != 0:
-            _finish_moving_root(step_handle_slot)
-            _finish_moving_root(hi_handle_slot)
-            _finish_moving_root(lo_handle_slot)
-            _finish_slice_roots(list_handle_slot, replacement_handle_slot)
             return -1
-    hi = _reload_moving_root(hi_slot, hi_handle_slot)
+    hi = load_ptr(hi_slot, 0)
     hi_none: int = _is_none_or_null(hi)
     raw_hi: int = 0
     if hi_none == 0:
         raw_hi = py_obj_index_i64(hi)
         if py_err_occurred() != 0:
-            _finish_moving_root(step_handle_slot)
-            _finish_moving_root(hi_handle_slot)
-            _finish_moving_root(lo_handle_slot)
-            _finish_slice_roots(list_handle_slot, replacement_handle_slot)
             return -1
-    _finish_moving_root(step_handle_slot)
-    _finish_moving_root(hi_handle_slot)
-    _finish_moving_root(lo_handle_slot)
 
-    replacement = _reload_moving_root(
-        replacement_slot, replacement_handle_slot
-    )
+    replacement = load_ptr(replacement_slot, 0)
     snapshot = _snapshot_set_slice_replacement(replacement)
     if ptr_is_null(snapshot) != 0:
-        _finish_slice_roots(list_handle_slot, replacement_handle_slot)
         return -1
-    _finish_moving_root(replacement_handle_slot)
     snapshot_slot = stack_alloc(8)
-    snapshot_handle_slot = stack_alloc(8)
     store_ptr(snapshot_slot, 0, snapshot)
-    if _prepare_moving_root(snapshot_slot, snapshot_handle_slot) != 0:
-        _finish_moving_root(list_handle_slot)
-        py_decref(snapshot)
-        return -1
     repl_len: int = load_i64(snapshot, 16)
     backend: int = pcc_gc_backend()
     lo_out = stack_alloc(8)
@@ -487,7 +396,7 @@ def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
             hold = 1
         locked = load_ptr(list_slot, 0)
         pcc_list_lock(locked)
-        lst = _reload_moving_root(list_slot, list_handle_slot)
+        lst = load_ptr(list_slot, 0)
         old_len: int = load_i64(lst, 16)
         old_capacity: int = load_i64(lst, 24)
         old_items = load_ptr(lst, 32)
@@ -521,11 +430,7 @@ def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
                 if hold != 0:
                     pcc_list_unlock(locked)
                 _raise_extended_slice_size(repl_len, selected)
-                snapshot = _reload_moving_root(
-                    snapshot_slot, snapshot_handle_slot
-                )
-                _finish_moving_root(snapshot_handle_slot)
-                _finish_moving_root(list_handle_slot)
+                snapshot = load_ptr(snapshot_slot, 0)
                 py_decref(snapshot)
                 return -1
         new_len: int = old_len
@@ -605,8 +510,8 @@ def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
         if hold == 0:
             locked = load_ptr(list_slot, 0)
             pcc_list_lock(locked)
-        lst = _reload_moving_root(list_slot, list_handle_slot)
-        snapshot = _reload_moving_root(snapshot_slot, snapshot_handle_slot)
+        lst = load_ptr(list_slot, 0)
+        snapshot = load_ptr(snapshot_slot, 0)
         if (
             pcc_gc_backend() != backend
             or load_i64(lst, 16) != old_len
@@ -735,14 +640,10 @@ def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
         free(new_plans)
         free(old_plans)
         free(replacement_index)
-        snapshot = _reload_moving_root(snapshot_slot, snapshot_handle_slot)
-        _finish_moving_root(snapshot_handle_slot)
-        _finish_moving_root(list_handle_slot)
+        snapshot = load_ptr(snapshot_slot, 0)
         py_decref(snapshot)
         return 0
-    snapshot = _reload_moving_root(snapshot_slot, snapshot_handle_slot)
-    _finish_moving_root(snapshot_handle_slot)
-    _finish_moving_root(list_handle_slot)
+    snapshot = load_ptr(snapshot_slot, 0)
     py_decref(snapshot)
     if py_err_occurred() == 0:
         py_raise_owned(py_exc_new(19, cstr("list slice assignment: out of memory")))  # PY_EXC_MEMORYERROR

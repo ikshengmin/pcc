@@ -22,9 +22,6 @@ class StoreModel:
             "stack_alloc": self.allocate, "load_i64": self.load,
             "load_ptr": self.load, "store_ptr": self.store,
             "ptr_add": lambda p, n: p + n,
-            "_prepare_moving_root": self.prepare,
-            "_reload_moving_root": lambda slot, handle: self.load(slot, 0),
-            "_finish_moving_root": lambda handle: self.calls.append(("root-finish",)),
             "pcc_gc_store_ptr_plan_init": self.initialize,
             "pcc_py_gc_minor_graph_lock": self.lock,
             "pcc_py_gc_minor_graph_unlock": self.unlock,
@@ -51,11 +48,6 @@ class StoreModel:
 
     def store(self, pointer, offset, value):
         self.memory[pointer + offset] = value
-
-    def prepare(self, slot, handle, owned):
-        assert owned == 0, "list replacement inputs are borrowed"
-        self.store(handle, 0, 0)
-        return 0
 
     def initialize(self, plan, owner, backend):
         assert self.depth == 0 and owner == 1000
@@ -116,7 +108,7 @@ def test_gc0_transaction_does_not_read_a_thread_mode_switch():
     assert model.run() == 0
     assert model.calls == [
         ("init", 0), ("lock",), ("commit", 3008), ("unlock",),
-        ("finish",), ("root-finish",), ("root-finish",),
+        ("finish",),
     ]
     assert model.memory[2000] == 7000
     assert model.memory[3008] == 5000
