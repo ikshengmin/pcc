@@ -9,16 +9,16 @@ import pytest
 from pcc.runtime.py import py_abi_constants as abi
 from tests.owned_c_execution import compile_owned_c_with_runtime
 from tests.python.test_bulk_nonterminal_retirement import Model
+from tests.python.runtime_body_model import load_functions as _load_production_functions
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 def load_body(filename, name, namespace):
-    path = ROOT / "pcc/runtime/py" / filename
-    node = next(n for n in ast.parse(path.read_text()).body
-                if isinstance(n, ast.FunctionDef) and n.name == name)
-    node.decorator_list = []
-    exec(compile(ast.Module([node], type_ignores=[]), str(path), "exec"), namespace)
+    # The production body with its same-module helpers (a list transaction
+    # asks _container_fast_admitted), constants and documented defaults; a
+    # double the model bound first still wins.
+    _load_production_functions(ROOT / "pcc/runtime/py" / filename, {name}, namespace)
 
 
 class InitModel(Model):
@@ -168,6 +168,7 @@ C_PROBE = r'''
 extern void pcc_py_gc_minor_graph_lock(void);
 extern void pcc_py_gc_minor_graph_unlock(void);
 extern int32_t pcc_gc_refcount_atomic;
+extern int32_t pcc_gc_nonmoving_count_free;
 int main(int argc, char **argv) {
     if (argc != 2 || pcc_gc_set_backend(atoi(argv[1]))) return 1;
     PyObject *roots[2] = {NULL, NULL};
@@ -177,7 +178,9 @@ int main(int argc, char **argv) {
     pcc_py_gc_minor_graph_lock();
     int64_t copied = pcc_gc_try_init_ptr_locked(&roots[1], &roots[0]);
     pcc_py_gc_minor_graph_unlock();
-    if (pcc_gc_refcount_atomic) {
+    /* GC0's container transactions also serve the nonmoving count-free
+     * collectors (_container_fast_admitted): both admit the copy. */
+    if (pcc_gc_refcount_atomic || pcc_gc_nonmoving_count_free) {
         if (copied != 1 || roots[1] != roots[0]) return 2;
         pcc_gc_store_root(&roots[0], NULL);
         py_list_append(roots[1], py_int_from_i64(7));
