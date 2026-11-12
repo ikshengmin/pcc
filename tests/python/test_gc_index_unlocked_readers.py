@@ -269,6 +269,7 @@ RECLAIM_PROBE = r"""
 
 extern void *pcc_py_gc_index_retired_tables;
 extern int64_t pcc_py_gc_managed_pointer_cap;
+extern int64_t pcc_live_thread_count_py;
 extern int64_t pcc_gc_managed_pointer_index_seen(void *obj);
 extern int64_t pcc_gc_reclaim_retired_index_tables(void);
 
@@ -300,14 +301,28 @@ static void *worker(void *unused) {
 int main(void) {
     int64_t backend = pcc_gc_backend();
     int64_t cap_before = pcc_py_gc_managed_pointer_cap;
-    /* One registered thread: every table the set outgrows is freed at once. */
+    /* One registered thread: every table the set outgrows is freed at once.
+     * GC1, GC3 and GC4 start their registered collector thread with the
+     * first registration; then a replaced table waits for the holder of a
+     * stopped world like any other multi-threaded process. */
     for (int i = 0; i < ALONE; i++) {
         PyObject *obj = (PyObject *)(fake_objects + i * 16);
         if (pcc_gc_pointer_register(obj) != 1) return 2;
-        if (retired_blocks() != 0) return 3;
+        if (pcc_live_thread_count_py == 1 && retired_blocks() != 0) return 3;
         if (pcc_gc_managed_pointer_index_seen(obj) != 1) return 4;
     }
     if (pcc_py_gc_managed_pointer_cap <= cap_before) return 5;
+    /* GC2 starts its worker lazily, possibly after the last growth: then
+     * nothing was kept. */
+    int64_t collector_kept = retired_blocks();
+    if (collector_kept > 0) {
+        if (pcc_live_thread_count_py <= 1) return 19;
+        if (pcc_gc_reclaim_retired_index_tables() != -1) return 20;
+        if (pcc_stop_the_world() != 0) return 21;
+        if (pcc_gc_reclaim_retired_index_tables() != collector_kept) return 22;
+        if (pcc_resume_world() != 0) return 23;
+    }
+    if (retired_blocks() != 0) return 3;
 
     PccThreadHandle *thread = 0;
     if (pcc_thread_start(&thread, worker, 0) != 0) return 6;
@@ -353,7 +368,8 @@ def test_retired_tables_are_freed_when_no_thread_can_probe_them(
         source, executable, runtime_archive=pcc_runtime_archive,
         cpp_args=("-I" + str(REPO_ROOT / "pcc/runtime/src"),),
     )
-    for backend in (0, 4):
+    # Every collector: alone (GC0, GC2) or beside its collector thread.
+    for backend in range(5):
         run = subprocess.run([str(executable)], capture_output=True, text=True,
                              timeout=120, env={**os.environ, "PCC_GC_BACKEND": str(backend)})
         assert run.returncode == 0, f"GC{backend}: {run.returncode} {run.stderr[-2000:]}"
