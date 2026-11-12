@@ -45,9 +45,6 @@ pcc_gc_precise_stack_diff_if_requested = extern(
 pcc_gc_incremental_concurrent_step = extern(
     "pcc_gc_incremental_concurrent_step", (c_int64,), c_int64
 )
-pcc_gc_generational_step = extern(
-    "pcc_gc_generational_step", (c_int64, c_int64), c_int64
-)
 pcc_gc_backend4_step_remembered_roots = extern(
     "pcc_gc_backend4_step_remembered_roots", (c_int64,), c_int64
 )
@@ -144,11 +141,7 @@ def pcc_gc_step(budget: i64) -> i64:
     backend: i64 = _selected_backend()
     if budget <= 0:
         return 0
-    if (
-        (backend == 4 or (backend == 3
-                         and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0))
-        and load_i32(global_addr("pcc_gc_backend4_remap_active"), 0) != 0
-    ):
+    if backend == 4 and load_i32(global_addr("pcc_gc_backend4_remap_active"), 0) != 0:
         return 0
     if backend == 1 or backend == 2 or backend == 3:
         # GC3 copies and remaps nothing: its step is the shared mark step.
@@ -180,34 +173,8 @@ def pcc_gc_step(budget: i64) -> i64:
     start_us: i64 = pcc_platform_monotonic_us()
     processed: i64 = 0
 
-    if backend == 3:
-        oldify_suspended: i64 = load_i32(global_addr("pcc_gc_backend3_oldify_suspended"), 0)
-        # Oldification copies a young object to a new address. As for GC4
-        # relocation, every other mutator must be parked at an application
-        # gate: one parked inside runtime code may hold raw pointers no root
-        # describes. Otherwise promotion stays in place. Automatic and
-        # explicit GC3 steps run in a world their caller stopped.
-        if (
-            pcc_thread_live_count() > 1
-            and pcc_thread_owns_stopped_world() != 0
-            and pcc_thread_all_stopped_at_gates() == 0
-        ):
-            store_i32(global_addr("pcc_gc_backend3_oldify_suspended"), 0, 1)
-        processed = processed + pcc_gc_generational_step(budget, 1)
-        if (
-            processed < budget
-            and load_i32(global_addr("pcc_gc_explicit_collect_active"), 0) != 0
-            and _tracing_work_pending() != 0
-        ):
-            processed = processed + pcc_gc_tracing_step_cycle(budget - processed)
-        store_i32(global_addr("pcc_gc_backend3_oldify_suspended"), 0, oldify_suspended)
-        if (load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
-                and processed == 0 and _tracing_work_pending() == 0
-                and load_i32(global_addr("pcc_gc_forwarding_population"), 0) > 0):
-            # All-live majors have no sweep candidates. Their real idle cut
-            # must still release healed nursery shells while targets live.
-            processed = processed + pcc_gc_backend4_remap_and_retire_stopped_world()
-    elif backend == 4:
+    # GC1-GC3 returned through the shared mark step above.
+    if backend == 4:
         if load_i32(global_addr("pcc_gc_explicit_collect_active"), 0) != 0:
             # Store-buffer entries own a reference to their recorded value. An
             # explicit collect drains them as background steps do (promoting

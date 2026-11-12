@@ -646,30 +646,20 @@ def pcc_gc_load_ptr(owner, slot):
     else:
         backend = load_i32(global_addr("pcc_gc_backend_selected"), 0)
     if backend == 4:
-        # Null and tagged values cannot relocate. Skip GC4 root membership
-        # and resolution before counting a read-barrier check.
-        if backend == 4 and (ptr_is_null(v) != 0 or is_tagged_int(v) != 0):
+        # Only the relocating collector forwards. Null and tagged values
+        # cannot relocate: skip root membership and resolution before
+        # counting a read-barrier check.
+        if ptr_is_null(v) != 0 or is_tagged_int(v) != 0:
             return v
-        if backend == 3 and _gc_forwarding_population() <= 0:
-            return v
-        if backend == 4 and _gc_backend4_should_check_slot(slot) == 0:
+        if _gc_backend4_should_check_slot(slot) == 0:
             return v
         pcc_gc_note_load()
-        needs_resolve: int = 0
-        if backend == 4:
-            # G-P0-LONGRUN: decide via pointer-value lookups, never a raw
-            # header deref of a possibly-stale/unmapped slot value.
-            if pcc_gc_backend4_slot_needs_resolve(v) != 0:
-                needs_resolve = 1
-        elif _gc_relocation_candidate(v) != 0:
-            needs_resolve = 1
-        if needs_resolve != 0:
+        # G-P0-LONGRUN: decide via pointer-value lookups, never a raw
+        # header deref of a possibly-stale/unmapped slot value.
+        if pcc_gc_backend4_slot_needs_resolve(v) != 0:
             resolved = pcc_gc_note_relocation_read(v)
             if ptr_eq(resolved, v) == 0:
-                if backend == 3 and ptr_is_null(owner) == 0:
-                    _heal_forwarded_field(slot, v, resolved)
-                else:
-                    store_ptr(slot, 0, resolved)
+                store_ptr(slot, 0, resolved)
                 v = resolved
         return v
     return v
@@ -684,30 +674,20 @@ def pcc_gc_load_borrowed_ptr(owner, slot):
         return v
     backend: int = _gc_backend_fast()
     if backend == 4:
-        # Null and tagged values cannot relocate. Skip GC4 root membership
-        # and resolution before counting a read-barrier check.
-        if backend == 4 and (ptr_is_null(v) != 0 or is_tagged_int(v) != 0):
+        # Only the relocating collector forwards. Null and tagged values
+        # cannot relocate: skip root membership and resolution before
+        # counting a read-barrier check.
+        if ptr_is_null(v) != 0 or is_tagged_int(v) != 0:
             return v
-        if backend == 3 and _gc_forwarding_population() <= 0:
-            return v
-        if backend == 4 and _gc_backend4_should_check_slot(slot) == 0:
+        if _gc_backend4_should_check_slot(slot) == 0:
             return v
         pcc_gc_note_load()
-        needs_resolve: int = 0
-        if backend == 4:
-            # G-P0-LONGRUN: decide via pointer-value lookups, never a raw
-            # header deref of a possibly-stale/unmapped slot value.
-            if pcc_gc_backend4_slot_needs_resolve(v) != 0:
-                needs_resolve = 1
-        elif _gc_relocation_candidate(v) != 0:
-            needs_resolve = 1
-        if needs_resolve != 0:
+        # G-P0-LONGRUN: decide via pointer-value lookups, never a raw
+        # header deref of a possibly-stale/unmapped slot value.
+        if pcc_gc_backend4_slot_needs_resolve(v) != 0:
             resolved = pcc_gc_note_relocation_read(v)
             if ptr_eq(resolved, v) == 0:
-                if backend == 3 and ptr_is_null(owner) == 0:
-                    _heal_forwarded_field(slot, v, resolved)
-                else:
-                    store_ptr(slot, 0, resolved)
+                store_ptr(slot, 0, resolved)
                 v = resolved
         return v
     return v
@@ -724,9 +704,6 @@ def pcc_gc_resolve_owned_ptr(value):
         return value
     if _gc_forwarding_population() <= 0:
         return value
-    if backend == 3:
-        if _gc_relocation_candidate(value) == 0:
-            return value
     resolved = pcc_gc_note_relocation_read(value)
     if ptr_eq(resolved, value) == 0:
         return resolved
@@ -1917,62 +1894,11 @@ def pcc_gc_frame_leave_lifo_mapped(slots) -> None:
 
 
 def _gc_tracing_collect_step(budget: int) -> int:
-    # Full-collection owners check sweep_owed before this call. Preserve the
-    # public step dispatcher for every other phase and backend. During a
-    # count-free GC3 mark, promote only required roots/remembered work: bulk
-    # aging can turn otherwise dead white young objects into gray copies.
+    # Full-collection owners check sweep_owed before this call; the public
+    # step dispatcher does every collector's step.
     if budget <= 0:
         return 0
-    if (
-        _gc_backend_fast() != 3
-        or load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0
-        or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
-        or load_i32(global_addr("pcc_gc_explicit_collect_active"), 0) == 0
-        or pcc_thread_owns_stopped_world() == 0
-        or (
-            load_i32(global_addr("pcc_gc_cycle_requested"), 0) == 0
-            and load_i32(global_addr("pcc_gc_mark_active"), 0) == 0
-        )
-    ):
-        return pcc_gc_step(budget)
-    if load_i32(global_addr("pcc_gc_backend4_remap_active"), 0) != 0:
-        return 0
-    store_i64(
-        global_addr("pcc_gc_metric_step"),
-        0,
-        load_i64(global_addr("pcc_gc_metric_step"), 0) + 1,
-    )
-    start_us: int = pcc_runtime_monotonic_us()
-    oldify_suspended: int = load_i32(
-        global_addr("pcc_gc_backend3_oldify_suspended"), 0
-    )
-    if pcc_thread_live_count() > 1 and pcc_thread_all_stopped_at_gates() == 0:
-        store_i32(global_addr("pcc_gc_backend3_oldify_suspended"), 0, 1)
-    processed: int = pcc_gc_generational_step(budget, 0)
-    # Promotion cleanup can run callbacks. Read the current phase rather
-    # than carrying the admission's requested/active value across it.
-    if (
-        processed < budget
-        and load_i32(global_addr("pcc_gc_explicit_collect_active"), 0) != 0
-        and (
-            load_i32(global_addr("pcc_gc_cycle_requested"), 0) != 0
-            or load_i32(global_addr("pcc_gc_mark_active"), 0) != 0
-        )
-    ):
-        processed = processed + pcc_gc_tracing_step_cycle(budget - processed)
-    store_i32(global_addr("pcc_gc_backend3_oldify_suspended"), 0, oldify_suspended)
-    if (
-        load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
-        and processed == 0
-        and pcc_gc_dispatch_tracing_work_pending() == 0
-        and load_i32(global_addr("pcc_gc_forwarding_population"), 0) > 0
-    ):
-        # A zero-progress all-live finish still owns the dispatcher's idle
-        # retirement opportunity. The automatic owner exits at this commit.
-        # Its authoritative candidate query is allowed at this full-heap cut.
-        processed = processed + pcc_gc_backend4_remap_and_retire_stopped_world()
-    pcc_gc_tracing_record_pause(start_us, pcc_runtime_monotonic_us())
-    return processed
+    return pcc_gc_step(budget)
 
 
 def _gc_tracing_automatic_collect(mark: int) -> int:

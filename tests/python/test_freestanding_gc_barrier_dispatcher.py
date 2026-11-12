@@ -64,7 +64,6 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_backend4_remap_and_retire_stopped_world",
     "pcc_gc_backend4_select_relocation_pages",
     "pcc_gc_config_ensure",
-    "pcc_gc_generational_step",
     "pcc_gc_incremental_concurrent_step",
     "pcc_gc_object_is_known_no_lock",
     "pcc_gc_pointer_is_managed",
@@ -95,8 +94,6 @@ RAW_GLOBAL_IMPORTS = {
     "pcc_gc_backend4_parked_head",
     "pcc_gc_backend4_retained_page_head",
     "pcc_gc_backend4_no_refcounts",
-    # GC3 copies young objects only while other mutators are at gates.
-    "pcc_gc_backend3_oldify_suspended",
     "pcc_gc_backend4_genzgc_store_barriers",
     "pcc_gc_backend4_remap_active",
     "pcc_gc_backend4_store_buffer_entries_count",

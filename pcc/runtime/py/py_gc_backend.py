@@ -5336,16 +5336,6 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
                 color = 32
             store_i32(o, 12, (flags & ~56) | color | 16384)
             store_i32(global_addr("pcc_gc_cycle_requested"), 0, 1)
-        elif backend == 3:
-            flags: int = load_i32(o, 12)
-            color: int = 8
-            if load_i32(global_addr("pcc_gc_mark_active"), 0) != 0:
-                color = 32
-            new_flags: int = (flags & ~(56 | 384)) | 128 | color
-            if ptr_is_null(pending_block) == 0:
-                new_flags = new_flags | 4096
-            store_i32(o, 12, new_flags)
-            store_i32(global_addr("pcc_gc_cycle_requested"), 0, 1)
         elif backend == 4:
             flags: int = load_i32(o, 12)
             color: int = 8
