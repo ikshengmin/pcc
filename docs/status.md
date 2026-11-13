@@ -454,34 +454,42 @@ fence-lifetime qualification. M2 and later local-model milestones remain open.
 
 ## Gateway Web Frameworks Benchmark: native request path
 
-Latest local Mac retry (2026-11-13): the third batch stopped after its five
-authorized rounds. Gateway `5527492` was compiled from the current directory
-with `uv run pcc --backend self` at core `bc6743593`, including the recorded
-uncommitted dependency-closure work. Input hashes were unchanged across this
-build. The original RSpec, connection-recycling and C512 concurrent-ID checks
-pass, but the consecutive dynamic GET has 285 connect, 7 read and 115 write
-errors. Only one of 30 planned timed rows is accepted: `GET /` at 1,333.3
-requests/s. **There is no accepted complete current QPS comparison.** An earlier
-artifact in this batch reached 3,767.1 requests/s on that single route but also
-failed the next route; these different worktree inputs are not a controlled
-performance A/B. No timing, concurrency or error criterion was weakened.
+Latest local Mac retry (2026-11-13): the fourth batch stopped after five
+authorized rounds. It first rebuilt the current checkout after synchronizing
+core `298453e29`; the unchanged C512 comparison still failed. The final build
+uses gateway `72fe5ef`, starting from core `cfa9366c2` plus the recorded local
+worktree changes, through ordinary current-directory `uv run pcc --backend
+self`. Backend and Rust source files changed during compilation; this is
+evidence about the recorded binary, not an immutable-commit performance result.
+The original RSpec, connection-recycling and C512 concurrent-ID gates pass.
+Only one of 30 planned timed rows is accepted: `GET /` at 3,767.7 requests/s,
+with zero errors. The consecutive dynamic GET reports 107 connect, 1 read and
+1,029 write errors. **There is no accepted complete current QPS comparison.**
+No concurrency, deadline, connection-limit or error criterion was weakened.
 
-Gateway `5527492` keeps accepted-socket admission and task publication in one
-resumable batch and tests cancellation ownership and close-then-raise cleanup.
-Its server/streaming selection is 109 passed. A separate native diagnostic
-checks 4,577 responses on 512 connections: reaching the 1,000-request limit on
-one connection does not close the others. A debug run on the preceding failed
-artifact observes read errno -54 (ECONNRESET), not EINTR or EBADF. An independent
-listener probe admits 128 queued sockets even with requested backlog 4,096;
-that is a platform constraint, not proof of the gateway failure's cause.
-Connection admission/cleanup overlap remains the observed failure boundary;
-the exact cause is unresolved. This batch adds no new core runtime change.
+External socket tracing on the initial artifact found 376 failed clients that
+were never accepted. Separate captures showed the kernel reporting listener
+readiness while its task remained behind old I/O work, including a position
+258 in the ready queue. Already queued READ events can become disconnects
+before dispatch, so classifying only newly observed HUP events is insufficient.
+Core `0b5030034` alternates both ends of a rooted I/O deque in constant time,
+preserving the ordinary-work budget and old-owner progress. `8823f8154` updates
+the pool model and checks raw node bounds. The focused model/ownership checks
+are **54 passed**. The new native C ABI reference executes the owned scheduler
+on GC0–4 with 64/256/1,024 already-ready owners: the fresh and oldest owner both
+run within two I/O dispatches, and empty cached roots remain accounted for.
+This is an external C driver reference, not native-pcc1 qualification.
 
-The preceding batch's core model/ownership selection was 66 passed. Its C ABI
-reference drivers executed terminal-capture cleanup across GC0–4 and five I/O
-cases in `auto` mode against the verified owned runtime. Those are historical
-reference results, not new native-pcc1 qualification; the earlier cold-build
-1-GiB failures remain recorded. Full suites/bootstrap remain unrun.
+One post-fix diagnostic burst accepts all 512 clients with about 0.14 ms from
+listener readiness to accept. The original zrk protocol still exposed mixed
+batch delays of 35–75 ms before the final gateway change. Gateway `72fe5ef`
+removes connections by a checked position and swap, and makes failed-spawn
+rollback identity-based without releasing an already completed owner twice.
+Its server/streaming selection is **114 passed**. These changes do not establish
+a throughput gain or complete C512 correctness. The final failure remains open.
+An additional hot-layout test selection hit the unchanged 1-GiB guard; its
+failure is retained and its children were confirmed gone. Full suites,
+bootstrap and live TLS qualification remain unrun.
 See the sibling `pcc-gateway/benchmarks/web-frameworks.md` for the current
 boundary and reproduction entry. Earlier figures below remain historical.
 
