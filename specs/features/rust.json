@@ -2472,6 +2472,21 @@
       "status": "missing"
     },
     {
+      "id": "rust.generics.data-outlives-bounds",
+      "title": "Outlives bounds on struct and enum type parameters",
+      "chapter_ids": [
+        "rust.ref.6.14",
+        "rust.ref.10.6"
+      ],
+      "scope": "Qualification missing, not implementation missing: `struct Convert<'a, I, T: 'a>` and `T: 'static + 'a +` parse and are retained per type parameter (an empty `T:` constrains nothing); undeclared lifetimes (E0261) and `'_` (E0637) are parse errors as in rustc. They only constrain regions, so without an actual rustc check they are an explicit boundary, and after one they are erased with no layout or code effect. Trait bounds on struct and enum type parameters, lifetime-parameter bounds (`'a: 'b`), defaults and where clauses on data declarations stay explicit gaps. A program with bounded struct and enum parameters runs on the local Mac from PCC's own compiler, arm64 assembler and Mach-O linker after an actual aarch64-apple-darwin check (local rustc 1.92.0 receipt) and prints the same u64 as a local rustc build; the x86-64 Linux run is unrun. fallible-streaming-iterator's parser frontier moves from lib.rs:373:28 to 427:23, the tuple struct `Empty`. No schema2 evidence row is migrated.",
+      "tests": [
+        "tests/rust/test_rust_data_outlives_bounds.py"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "status": "missing"
+    },
+    {
       "id": "rust.attributes.builtin-derives",
       "title": "Built-in derives: Copy, Clone, PartialEq and declared Eq/PartialOrd/Ord/Hash/Debug/Default",
       "chapter_ids": [

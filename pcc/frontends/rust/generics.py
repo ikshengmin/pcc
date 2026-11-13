@@ -154,6 +154,10 @@ class GenericDeclarations:
             if declaration.lifetime_parameters and not self.checker.externally_checked:
                 raise declaration.lifetime_parameters[0].error(
                     "lifetime parameters on data declarations require a matching external rustc check record")
+            if declaration.outlives_bounds and not self.checker.externally_checked:
+                # Region constraints only: proven by the actual check, then erased.
+                raise declaration.outlives_bounds[0][1][0].error(
+                    "outlives bounds on data declarations require a matching external rustc check record")
             if declaration.item_identity is not None:
                 self.checker.current_module = declaration.item_identity.module
             scope = {}

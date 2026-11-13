@@ -366,6 +366,8 @@ class Record:
     lifetime_parameters: tuple[Token, ...] = ()
     derives: tuple = ()
     helper_attributes: tuple = ()
+    # `T: 'a + 'static`: (type parameter token, lifetime tokens), in order.
+    outlives_bounds: tuple = ()
 
     @property
     def declaration_name(self):
@@ -390,6 +392,8 @@ class Enumeration:
     lifetime_parameters: tuple[Token, ...] = ()
     derives: tuple = ()
     helper_attributes: tuple = ()
+    # `T: 'a + 'static`: (type parameter token, lifetime tokens), in order.
+    outlives_bounds: tuple = ()
 
     @property
     def declaration_name(self):
@@ -697,9 +701,11 @@ class Parser:
         finally:
             self.type_argument_depth -= 1
 
-    def generic_parameters(self, *, allow_lifetimes=False, allow_bounds=False) -> tuple[Token, ...]:
+    def generic_parameters(self, *, allow_lifetimes=False, allow_bounds=False,
+                           allow_outlives=False) -> tuple[Token, ...]:
         self.last_lifetime_parameters = []
         self.last_parameter_bounds = []
+        self.last_outlives_bounds = []
         if not self.accept("<"):
             return ()
         if self.token.text == ">":
@@ -720,6 +726,11 @@ class Parser:
             if self.token.text == ":" and allow_bounds and not lifetime_parameter:
                 self.take()
                 self.last_parameter_bounds.append((parameters[-1], self.type_parameter_bounds({',', '>'})))
+            if self.token.text == ":" and allow_outlives and not lifetime_parameter:
+                self.take()
+                lifetimes = self.outlives_bounds()
+                if lifetimes:  # `T:` with no bounds constrains nothing
+                    self.last_outlives_bounds.append((parameters[-1], lifetimes))
             if self.token.text in {":", "="}:
                 raise self.token.error("generic bounds and default arguments require trait/constraint checking, which is not implemented")
             if self.accept(">"):
@@ -728,6 +739,33 @@ class Parser:
             if self.accept(">"):
                 break
         return tuple(parameters)
+
+    def outlives_bounds(self):
+        """`T: 'a + 'static` on a struct or enum type parameter.
+
+        Rust Reference items/generics.html and trait-bounds.html#lifetime-bounds:
+        the bound only constrains regions. PCC keeps it for the matching actual
+        rustc check, which proves it, and erases it; trait bounds on data
+        declarations need trait solving and stay an explicit gap. An empty
+        list (`T:`) and a trailing `+` are valid.
+        """
+        lifetimes = []
+        while self.token.text not in {',', '>'}:
+            if self.token.kind != 'lifetime':
+                raise self.token.error('trait bounds on struct and enum type parameters require trait solving '
+                                       'and well-formedness checking, which is not implemented')
+            lifetime = self.take()
+            if lifetime.text == "'_":
+                raise lifetime.error("`'_` cannot be used in a bound (rustc E0637)")
+            declared = {item.text for item in self.last_lifetime_parameters}
+            if lifetime.text != "'static" and lifetime.text not in declared:
+                raise lifetime.error(f"use of undeclared lifetime name `{lifetime.text}` (rustc E0261)")
+            lifetimes.append(lifetime)
+            if len(lifetimes) > 16:
+                raise lifetime.error('type parameter bounds exceed implementation limit (16)')
+            if not self.accept('+'):
+                break
+        return tuple(lifetimes)
 
     def type_parameter_bounds(self, terminators):
         bounds = []
@@ -973,8 +1011,9 @@ class Parser:
 
     def record(self, repr_c: bool, documentation=(), public=False, helpers=False) -> None:
         name = self.name()
-        parameters = self.generic_parameters(allow_lifetimes=True)
+        parameters = self.generic_parameters(allow_lifetimes=True, allow_outlives=True)
         lifetime_parameters = tuple(self.last_lifetime_parameters)
+        outlives_bounds = tuple(self.last_outlives_bounds)
         if self.token.text == "where":
             raise self.token.error("generic where constraints and traits are not implemented")
         self.expect("{")
@@ -992,7 +1031,7 @@ class Parser:
             self.expect(",")
         self.records.append(Record(name, fields, repr_c, parameters, documentation, tuple(field_docs), public,
                                    tuple(field_public), lifetime_parameters=lifetime_parameters,
-                                   helper_attributes=tuple(retained)))
+                                   helper_attributes=tuple(retained), outlives_bounds=outlives_bounds))
 
     def module_body(self):
         # Reuse the exact token/source coordinate space. No slicing, rewriting,
@@ -2019,8 +2058,9 @@ class Parser:
 
     def enumeration(self, representation, documentation=(), public=False, helpers=False) -> None:
         name = self.name()
-        parameters = self.generic_parameters(allow_lifetimes=True)
+        parameters = self.generic_parameters(allow_lifetimes=True, allow_outlives=True)
         lifetime_parameters = tuple(self.last_lifetime_parameters)
+        outlives_bounds = tuple(self.last_outlives_bounds)
         if self.token.text == "where":
             raise self.token.error("generic where constraints and traits are not implemented")
         self.expect("{")
@@ -2080,7 +2120,7 @@ class Parser:
                                       type_parameters=parameters, documentation=documentation,
                                       variant_documentation=tuple(variant_docs), payload_documentation=payload_docs,
                                       lifetime_parameters=lifetime_parameters, helper_attributes=tuple(retained),
-                                      named_payloads=named_payloads))
+                                      named_payloads=named_payloads, outlives_bounds=outlives_bounds))
 
     def pattern(self, *, alternatives=True) -> Pattern:
         if alternatives:

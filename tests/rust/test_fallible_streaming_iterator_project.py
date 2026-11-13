@@ -253,8 +253,13 @@ def test_parser_frontier_under_an_actual_darwin_target_check(tmp_path):
                                 target_triple='aarch64-apple-darwin', edition=2015)
     parser = Parser(source, source_path='src/lib.rs', edition=2015, rustc_check=checked)
     # Formerly 367:16, the bound Iterator<Item = Result<&'a T, E>> of
-    # `convert`; now the outlives bound `T: 'a` of `struct Convert`.
-    with pytest.raises(RustError, match=r'^src/lib\.rs: 373:28: generic bounds and default arguments require trait/constraint checking, which is not implemented$'):
+    # `convert`, then 373:28, the outlives bound `T: 'a` of `struct Convert`;
+    # now the tuple struct `pub struct Empty<T, E>(PhantomData<(T, E)>);`.
+    with pytest.raises(RustError, match=r"^src/lib\.rs: 427:23: expected '\{', found '\('$"):
         parser.parse()
-    # Both blanket trait impls before it were parsed and retained.
-    assert [str(item.owner) for item in parser.implementations if item.trait] == ["&'a mut I"]
+    # The trait impls before it, including both for Convert, were retained.
+    assert [str(item.owner) for item in parser.implementations if item.trait] == [
+        "&'a mut I", "Convert<'a, I, T>", "Convert<'a, I, T>"]
+    convert, = parser.records
+    assert [(name.text, [item.text for item in lifetimes]) for name, lifetimes in convert.outlives_bounds] == [
+        ('T', ["'a"])]
