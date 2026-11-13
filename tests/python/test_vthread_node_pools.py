@@ -21,6 +21,7 @@ class Pools:
     def __init__(self, pool_address=104):
         self.pool_address = pool_address
         self.memory = {}
+        self.allocation_sizes = {}
         self.atomic = threading.Lock()
         self.local = threading.local()
         self.next_pointer = 4096
@@ -79,6 +80,8 @@ class Pools:
         return self.memory.get((pointer, offset), 0)
 
     def store(self, pointer, offset, value):
+        if pointer in self.allocation_sizes:
+            assert 0 <= offset <= self.allocation_sizes[pointer] - 8
         self.memory[pointer, offset] = value
 
     def enter(self):
@@ -120,11 +123,12 @@ class Pools:
 
     def allocate(self, size):
         self.outside()
-        assert size in (32, 80)
+        assert size in (32, self.namespace["READY_NODE_SIZE"], 80)
         if self.fail_allocation:
             return 0
         with self.atomic:
             self.next_pointer += 128
+            self.allocation_sizes[self.next_pointer] = size
             return self.next_pointer
 
     def free(self, node):
