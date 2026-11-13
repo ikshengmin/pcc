@@ -243,6 +243,10 @@ class Lowerer:
             return ir.Constant(self.type(expr.ty), expr.value)
         if kind == "bool":
             return ir.Constant(ir.IntType(1), int(expr.value))
+        if kind == "const":
+            # A const item denotes its evaluated value at each use.
+            value = expr.binding.value
+            return ir.Constant(ir.IntType(1) if expr.ty == "bool" else self.type(expr.ty), int(value))
         if kind == "unit":
             return None
         if kind == "name":

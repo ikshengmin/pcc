@@ -49,7 +49,7 @@ predicate is `cfg(test)`, which the test asserts.
 | `crates/uv/src/bin/uv.rs` | `4:14` `extern crate uv_performance_memory_allocator;` (active under default features) needs external crate loading |
 | `crates/uv/src/lib.rs` | `70:75` the lifetime `'a` in a reference type |
 | `crates/uv-version/src/lib.rs` | `5:5` `env!` macro invocation |
-| `crates/uv-lock/src/lock/mod.rs` | `98:1` `const VERSION: u32 = 1;` const item |
+| `crates/uv-lock/src/lock/mod.rs` | `101:3` `#[derive(Debug, thiserror::Error)]` derive attribute |
 
 Both roots formerly stopped in the lexer at `@` (`lib.rs:1515:34`, the
 `run_variant @ (ToolCommand::Uvx(_) | ToolCommand::Run(_))` binding, and
@@ -68,7 +68,9 @@ are now parsed into one checked import per leaf
 are retained with no compile effect, as rustc evaluates none of them
 (`tests/rust/programs/tool_lints.rs`). The three former `cfg` blockers
 (`uv.rs:3:3`, `lib.rs:7:3`, `lock/mod.rs:94:3`) are evaluated by the owned
-configuration (`tests/rust/test_rust_owned_cfg.py`).
+configuration (`tests/rust/test_rust_owned_cfg.py`), and the integer const
+item `const VERSION: u32 = 1;` (formerly `lock/mod.rs:98:1`) is owned
+(`tests/rust/programs/const_items.rs`).
 
 ```sh
 uv run pytest -x -q tests/rust/test_uv_source_frontier.py

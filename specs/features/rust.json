@@ -2409,6 +2409,22 @@
       "status": "missing"
     },
     {
+      "id": "rust.items.free-const-items",
+      "title": "Free integer and bool const items",
+      "chapter_ids": [
+        "rust.ref.6.9",
+        "rust.ref.18"
+      ],
+      "scope": "Qualification missing, not implementation missing: module-scope `const NAME: Type = expr;` items of integer or bool type are value-namespace declarations (visibility, cfg rollback, `use`, `self::`/`crate::`/`super::`/module paths, privacy E0603). Every item is evaluated once at its declaration, used or not, from literals, unary/binary operators, casts and other const items in any order; overflow, out-of-range literals and division by zero are errors (E0080), as are cycles (E0391). Each use denotes the folded value and lowers to an IR constant; const items may give array lengths and indices. Calling a const (E0618), duplicate value names (E0428), assignment (E0070) and bindings that would shadow a const (E0005) are rejected; constant patterns, other const types, const fn, calls/blocks in initializers, `const _`, block-scoped consts and inline const blocks remain explicit gaps. Thirteen rejected sources are rejected with the recorded codes by local rustc 1.92.0 and container rustc 1.91.1; fixture const_items: a local rustc build and the owned pcc0 self-backend Linux x86-64 executable (container) both produce 0xfedcba9876543210, and it cross-emits Darwin. No schema2 evidence row is migrated.",
+      "tests": [
+        "tests/rust/test_rust_const_items.py",
+        "tests/rust/test_rust_const_items.py::test_const_item_fixture_owned_execution@rust-native-reference"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "status": "missing"
+    },
+    {
       "id": "rust.enums.payload-values",
       "title": "Tagged payload enums and by-value bindings",
       "chapter_ids": [

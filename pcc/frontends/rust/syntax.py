@@ -415,6 +415,25 @@ class UseDeclaration:
 
 
 @dataclass
+class ConstItem:
+    """A module-scope `const NAME: Type = expr;` item (Rust Reference
+    items/constant-items). Each use denotes the evaluated value itself; the
+    item has no address or storage."""
+    token: Token
+    ty: object
+    expression: Expr
+    public: object = False
+    documentation: tuple[Documentation, ...] = ()
+    item_identity: object = None
+    value: object = None
+    evaluated: bool = False
+
+    @property
+    def declaration_name(self):
+        return self.item_identity.binding_key if self.item_identity is not None else self.token.text
+
+
+@dataclass
 class ModuleBody:
     functions: list[Function]
     records: list[Record]
@@ -427,6 +446,7 @@ class ModuleBody:
     crate_policy: CratePolicy = field(default_factory=CratePolicy)
     conditional_items: tuple = ()
     uses: list[UseDeclaration] = field(default_factory=list)
+    consts: list[ConstItem] = field(default_factory=list)
 
 
 @dataclass
@@ -462,6 +482,7 @@ class Parser:
         self.crate_policy = CratePolicy(edition)
         self.crate_aliases = []
         self.uses = []
+        self.consts = []
         # Every parsed `pub(...)`, shared with inline child-module parsers.
         self.visibility_restrictions = []
         self.line_offsets = [0]
@@ -861,6 +882,7 @@ class Parser:
         child.records, child.enums, child.implementations, child.traits = [], [], [], []
         child.modules, child.attribute_requirements, child.crate_aliases = [], [], []
         child.uses = []
+        child.consts = []
         child.crate_stability = None
         child.crate_documentation = ()
         child.crate_lint_attributes = ()
@@ -873,7 +895,20 @@ class Parser:
         return ModuleBody(functions, child.records, child.enums, child.implementations,
                           child.traits, child.modules, child.crate_documentation,
                           child.crate_aliases, child.crate_policy, child.conditional_items,
-                          uses=child.uses)
+                          uses=child.uses, consts=child.consts)
+
+    def const_item(self, public, documentation):
+        """`const NAME: Type = Expression;` (Rust Reference items/constant-items)."""
+        if self.token.text == '_':
+            raise self.token.error('unnamed const items (`const _`) are not implemented')
+        name = self.name()
+        self.expect(':')
+        ty = self.type()
+        if not self.accept('='):
+            raise self.token.error('a free const item requires an initializer expression')
+        expression = self.expression()
+        self.expect(';')
+        self.consts.append(ConstItem(name, ty, expression, public, documentation))
 
     def use_declaration(self, token, public, documentation):
         """Retain bounded SimplePaths; resolution owns every actual binding.
@@ -1108,6 +1143,14 @@ class Parser:
                     raise use_token.error('representation/no_mangle attributes do not apply to use declarations')
                 self.use_declaration(use_token, public, tuple(docs))
                 continue
+            if self.token.text == 'const' and self.tokens[self.pos + 1].text != 'fn':
+                const_token = self.take()
+                if repr_c or enum_repr or no_mangle or inline_attributes or language_item is not None:
+                    raise const_token.error('representation/no_mangle/inline/lang attributes do not apply to const items')
+                self.const_item(public, tuple(docs))
+                continue
+            if self.token.text == 'const':
+                raise self.token.error('const fn requires checking function bodies against const-evaluation rules, which is not implemented')
             if self.accept("trait"):
                 if repr_c or enum_repr or no_mangle:
                     raise self.token.error("attributes on traits are not implemented")
@@ -1286,7 +1329,7 @@ class Parser:
     # Every parser collection one module item can extend. A disabled item is
     # parsed like any other, then each collection is cut back to its length
     # before the item, so nothing it declared reaches names, files or IR.
-    _ITEM_COLLECTIONS = ('records', 'enums', 'implementations', 'traits', 'modules', 'uses',
+    _ITEM_COLLECTIONS = ('records', 'enums', 'implementations', 'traits', 'modules', 'uses', 'consts',
                          'crate_aliases', 'attribute_requirements', 'visibility_restrictions')
 
     def item_snapshot(self, functions):
@@ -1444,6 +1487,8 @@ class Parser:
                 raise self.token.error("unterminated block")
             if self.token.text == 'use':
                 raise self.token.error('block-scoped use declarations require lexical item scopes, which are not implemented')
+            if self.token.text == 'const':
+                raise self.token.error('block-scoped const items and inline const blocks require lexical item scopes, which are not implemented')
             if self.accept(";"):
                 continue
             if self.accept("let"):

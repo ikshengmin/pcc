@@ -14,7 +14,7 @@ from .crate_context import (
     CrateId, CrateSyntax, ModuleId, SourceFile, _Loader,
 )
 from .generics import PRIMITIVES
-from .syntax import CrateSelfAlias, Enumeration, Module, ModuleBody, Record, RustError
+from .syntax import ConstItem, CrateSelfAlias, Enumeration, Module, ModuleBody, Record, RustError
 from .types import TypeApplication
 from .visibility import scope_components, within
 
@@ -228,7 +228,7 @@ class ModuleResolution(ModuleNamespaces):
             obligation = crate.compiler_context_obligations[0]
             raise obligation.token.error("unresolved owned compiler context: " + obligation.description)
         super().__init__(crate)
-        self.functions, self.records, self.enums = [], [], []
+        self.functions, self.records, self.enums, self.consts = [], [], [], []
         for module in self.modules.values():
             if module.body.traits or module.body.implementations:
                 item = (module.body.traits or module.body.implementations)[0]
@@ -242,6 +242,8 @@ class ModuleResolution(ModuleNamespaces):
                     self.records.append(item)
                 elif isinstance(item, Enumeration):
                     self.enums.append(item)
+                elif isinstance(item, ConstItem):
+                    self.consts.append(item)
                 else:
                     if item.abi != 'Rust' or item.no_mangle:
                         raise item.token.error('foreign/export ABI in a resolved module crate is not implemented')
@@ -257,7 +259,23 @@ class ModuleResolution(ModuleNamespaces):
 
     def function(self, path, requester, token):
         declaration = self.resolve(path, 'value', requester, token)
+        if isinstance(declaration.syntax, ConstItem):
+            raise token.error(f'expected function, found constant {path!r} (rustc E0618)')
         return declaration.syntax
+
+    def constant(self, path, requester, token):
+        """The const item a value path names, or None for any other value."""
+        declaration = self.resolve(path, 'value', requester, token, _optional_final=True)
+        if declaration is not None and isinstance(declaration.syntax, ConstItem):
+            return declaration.syntax
+        return None
+
+    def module_path(self, path, requester, token):
+        """Whether a path prefix names a module (or the crate) for value lookup."""
+        if path in {'crate', 'self'} or all(part == 'super' for part in path.split('::')):
+            return True
+        declaration = self.resolve(path, 'type', requester, token, _optional_final=True)
+        return declaration is not None and isinstance(declaration.syntax, (Module, CrateSelfAlias))
 
     def associated_function(self, owner, name, requester, token):
         if isinstance(owner, TypeApplication):
@@ -316,7 +334,7 @@ def inline_crate(parser, functions):
     body = ModuleBody(functions, parser.records, parser.enums, parser.implementations,
                       parser.traits, parser.modules, parser.crate_documentation,
                       parser.crate_aliases, parser.crate_policy, parser.conditional_items,
-                      uses=parser.uses)
+                      uses=parser.uses, consts=parser.consts)
     graph = _Loader(files).load_body(file, body, ModuleId(identity, ()), PurePosixPath('.'), None, inline=False)
     return CrateSyntax(graph, edition, files)
 
@@ -331,7 +349,7 @@ def analyze_crate_syntax(crate, *, pointer_bits=64):
     from .semantics import Checker
     resolution = ModuleResolution(crate)
     reject_uncertified_references(resolution.functions, resolution.records, resolution.enums)
-    checker = Checker(resolution.functions, resolution.records, resolution.enums,
+    checker = Checker(resolution.functions, resolution.records, resolution.enums, consts=resolution.consts,
                       pointer_bits=pointer_bits, module_resolution=resolution)
     checker.check()
     from .moves import MoveChecker

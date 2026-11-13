@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .syntax import Enumeration, Expr, Function, Record, RustError, Token
+from .syntax import ConstItem, Enumeration, Expr, Function, Record, RustError, Token
 from .types import (
     INTEGER_TYPES, FixedArrayType, SharedReference, TupleType, TypeApplication, TypeParameter, integer_bits,
 )
@@ -132,7 +132,7 @@ def cast_constant(value: int, ty: str, pointer_bits=None) -> int:
 
 
 class Checker:
-    def __init__(self, functions: list[Function], records: list[Record] = (), enums: list[Enumeration] = (), implementations=(), traits=(), *, externally_checked=False, pointer_bits=None, module_resolution=None, crate_policy=None):
+    def __init__(self, functions: list[Function], records: list[Record] = (), enums: list[Enumeration] = (), implementations=(), traits=(), *, externally_checked=False, pointer_bits=None, module_resolution=None, crate_policy=None, consts=()):
         if pointer_bits is None:
             from .targets import DEFAULT_TARGET, resolve_target
             pointer_bits = resolve_target(DEFAULT_TARGET).pointer_bits
@@ -156,6 +156,17 @@ class Checker:
                 raise enum.token.error("duplicate or reserved enum type")
             self.enums[name] = enum
         self.names: dict[str, Function] = {}
+        # Free const items. A single-module crate looks them up by name; a
+        # module crate resolves them through its module namespaces.
+        self.consts = tuple(consts)
+        self.const_names = {}
+        if module_resolution is None:
+            function_names = {fn.token.text for fn in functions if fn.implementation is None}
+            for const in self.consts:
+                if const.token.text in self.const_names or const.token.text in function_names:
+                    raise const.token.error(f'the name {const.token.text!r} is defined multiple times in the value namespace')
+                self.const_names[const.token.text] = const
+        self.evaluating_consts = []
         self.scopes: list[dict[str, Binding]] = []
         self.serial = 0
         self.loops = []
@@ -193,11 +204,78 @@ class Checker:
             self.module_resolution.type_access(ty, self.current_module, token)
 
     def bind(self, token: Token, ty: object, mutable: bool, *, parameter=False) -> Binding:
+        # An identifier pattern naming a const is a constant pattern in Rust,
+        # never a fresh binding; keep that form an explicit gap.
+        if self.constant_named(token.text, token) is not None:
+            raise token.error(f'{token.text!r} names a constant: constant patterns and bindings that '
+                              'would shadow a constant are not implemented')
         self.source_type_access(ty, token)
         self.serial += 1
         binding = Binding(token.text, ty, mutable, self.serial, parameter)
         self.scopes[-1][token.text] = binding
         return binding
+
+    def constant_named(self, name, token):
+        """The const item a bare value name denotes in the current module."""
+        if self.module_resolution is not None:
+            return self.module_resolution.constant(name, self.current_module, token)
+        return self.const_names.get(name)
+
+    def constant_path(self, owner, name, token):
+        """The const item `owner::name` denotes when `owner` is a module path."""
+        if isinstance(owner, TypeApplication):
+            return None
+        if self.module_resolution is None:
+            return self.const_names.get(name) if owner in {'crate', 'self'} else None
+        if not self.module_resolution.module_path(owner, self.current_module, token):
+            return None
+        const = self.module_resolution.constant(owner + '::' + name, self.current_module, token)
+        if const is None:
+            raise token.error(f'cannot find value {name!r} in module {owner!r}')
+        return const
+
+    def evaluate_const(self, const, token):
+        """Type and evaluate one const initializer, once, at its declaration.
+
+        Rust Reference const_eval.html: integer and bool const items whose
+        initializers use literals, unary/binary operators, casts and other
+        const items. Overflow and out-of-range literals are errors (rustc
+        E0080), as is a cycle between initializers (E0391).
+        """
+        if const.evaluated:
+            return const
+        if const in self.evaluating_consts:
+            raise token.error(f'cycle detected when evaluating constant {const.token.text!r} (rustc E0391)')
+        if len(self.evaluating_consts) >= 64:
+            raise token.error('const item dependency chain exceeds implementation limit (64)')
+        saved = (self.scopes, self.current_module, self.type_scope, self.abstract_function)
+        self.evaluating_consts.append(const)
+        try:
+            self.scopes, self.type_scope, self.abstract_function = [{}], {}, False
+            if const.item_identity is not None:
+                self.current_module = const.item_identity.module
+            ty = self.generics.normalize(const.ty, const.token)
+            if ty not in INTEGERS | {"bool"}:
+                raise const.token.error(f'const items of type {ty} are not implemented; integer and bool const items are')
+            pending, count = [const.expression], 0
+            while pending:
+                node = pending.pop()
+                count += 1
+                if count > 1024:
+                    raise node.token.error('const initializer exceeds implementation limit (1024 nodes)')
+                if node.kind not in {'integer', 'bool', 'group', 'unary', 'binary', 'cast', 'name', 'variant', 'const'}:
+                    raise node.token.error('const initializers support literals, operators, casts and other const '
+                                           'items; calls, blocks and other expressions are not implemented')
+                pending.extend(node.children)
+            unify(ty, self.expression(const.expression), const.expression.token)
+            value = self.validate(const.expression)
+            if value is None:
+                raise const.expression.token.error('const initializer is not a closed constant expression')
+            const.ty, const.value, const.evaluated = ty, value, True
+            return const
+        finally:
+            self.evaluating_consts.pop()
+            self.scopes, self.current_module, self.type_scope, self.abstract_function = saved
 
     def local(self, name: str) -> Binding | None:
         for scope in reversed(self.scopes):
@@ -352,6 +430,9 @@ class Checker:
             self.valid_type(name, record.token)
         self.traits.prepare()
         self.methods.prepare()
+        # rustc evaluates every free const item, used or not.
+        for const in self.consts:
+            self.evaluate_const(const, const.token)
         declarations = tuple(self.functions)
         for fn in declarations:
             if fn.item_identity is not None:
@@ -472,6 +553,12 @@ class Checker:
                 raise expr.token.error("cannot move a non-Copy value out of a shared reference")
         elif kind == "bool":
             ty = "bool"
+        elif kind == "variant" and self.constant_path(expr.value[0], expr.value[1], expr.token) is not None:
+            const = self.evaluate_const(self.constant_path(expr.value[0], expr.value[1], expr.token), expr.token)
+            expr.kind, expr.binding, expr.value = "const", const, None
+            ty = const.ty
+        elif kind == "const":
+            ty = expr.binding.ty
         elif kind == "variant":
             enum_name, variant = expr.value
             if isinstance(enum_name, TypeApplication) or enum_name in self.generics.definitions or enum_name == "Self" or self.module_resolution is not None:
@@ -621,10 +708,16 @@ class Checker:
                 raise expr.token.error("cannot move a non-Copy field out of a shared reference")
         elif kind == "name":
             binding = self.local(str(expr.value))
-            if binding is None:
-                raise expr.token.error(f"unknown local {expr.value!r}; function values are not implemented")
-            expr.binding = binding
-            ty = binding.ty
+            const = self.constant_named(str(expr.value), expr.token) if binding is None else None
+            if const is not None:
+                self.evaluate_const(const, expr.token)
+                expr.kind, expr.binding, expr.value = "const", const, None
+                ty = const.ty
+            else:
+                if binding is None:
+                    raise expr.token.error(f"unknown local {expr.value!r}; function values are not implemented")
+                expr.binding = binding
+                ty = binding.ty
         elif kind == "block":
             self.scopes.append({})
             diverges = False
@@ -721,6 +814,8 @@ class Checker:
                     raise callee.token.error("only unshadowed direct function calls are supported")
                 fn = (self.module_resolution.function(name, self.current_module, callee.token)
                       if self.module_resolution is not None else self.names.get(name))
+                if fn is None and name in self.const_names:
+                    raise callee.token.error(f'expected function, found constant {name!r} (rustc E0618)')
                 if fn is None:
                     raise callee.token.error(f"unknown function {callee.value!r}")
                 explicit_arguments = path.arguments if isinstance(path, TypeApplication) else None
@@ -994,6 +1089,8 @@ class Checker:
             expr.value = index
         if kind == "variant":
             return expr.value
+        if kind == "const":
+            return expr.binding.value
         if kind == "group":
             return values[0]
         if kind == "bool":

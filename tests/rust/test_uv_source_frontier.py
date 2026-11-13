@@ -26,9 +26,10 @@ FRONTIER = (
     # owned; line 70 has the lifetime `'a`.
     ("crates/uv/src/lib.rs", "70:75: unsupported Rust type \"'a\"; references and traits are not implemented"),
     ("crates/uv-version/src/lib.rs", "5:5: macro invocations require macro-by-example expansion"),
-    # Grouped uses, `pub use`, `pub(crate)` and `#[cfg(test)]` (off) are owned;
-    # line 98 is `const VERSION: u32 = 1;`.
-    ("crates/uv-lock/src/lock/mod.rs", "98:1: expected 'fn', found 'const'"),
+    # Grouped uses, `pub use`, `pub(crate)`, `#[cfg(test)]` (off) and
+    # `const VERSION: u32 = 1;` are owned; line 101 is
+    # `#[derive(Debug, thiserror::Error)]`.
+    ("crates/uv-lock/src/lock/mod.rs", "101:3: unsupported Rust attribute; only repr(C) records and no_mangle functions are admitted"),
 )
 
 

@@ -107,11 +107,12 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
     parser = Parser(source, edition=edition, rustc_check=rustc_check, configuration=configuration)
     functions = parser.parse()
     resolution = None
-    records, enums = parser.records, parser.enums
+    records, enums, consts = parser.records, parser.enums, parser.consts
     if parser.modules or parser.crate_aliases or parser.uses:
         from .module_resolution import ModuleResolution, inline_crate
         resolution = ModuleResolution(inline_crate(parser, functions))
         functions, records, enums = resolution.functions, resolution.records, resolution.enums
+        consts = resolution.consts
     from .inline_attributes import collect_inline_hints
     inline_hints = collect_inline_hints(functions, parser.traits)
     if rustc_check is None:
@@ -126,7 +127,7 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
             raise inline_hints[0].attributes[0].token.error(
                 'inline attribute admission requires an actual source/options-bound '
                 'CheckedRustSource; caller attestation is not certification')
-    checker = Checker(functions, records, enums, parser.implementations, parser.traits,
+    checker = Checker(functions, records, enums, parser.implementations, parser.traits, consts=consts,
                       externally_checked=rustc_check is not None, pointer_bits=target.pointer_bits,
                       module_resolution=resolution, crate_policy=parser.crate_policy)
     checker.traits.require_checked_context(rustc_check, source, target.triple, overflow_checks)

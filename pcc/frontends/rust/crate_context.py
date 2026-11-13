@@ -151,7 +151,7 @@ class _Loader:
             body = ModuleBody(functions, parser.records, parser.enums,
                               parser.implementations, parser.traits, parser.modules,
                               parser.crate_documentation, parser.crate_aliases, parser.crate_policy,
-                              parser.conditional_items, uses=parser.uses)
+                              parser.conditional_items, uses=parser.uses, consts=parser.consts)
             return self.load_body(source, body, identity, directory, declaration,
                                   inline=False)
         except RustError as exc:
@@ -177,6 +177,8 @@ class _Loader:
         for function in body.functions:
             if function.implementation is None:
                 register('value', function)
+        for const in body.consts:
+            register('value', const)
         children = []
         for module in body.modules:
             child_id = identity.child(module.token.text)

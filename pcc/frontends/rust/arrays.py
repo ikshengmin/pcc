@@ -18,8 +18,10 @@ def closed_constant(expression, token):
         count += 1
         if count > 128:
             raise token.error('array constant expression exceeds implementation limit (128 nodes)')
-        if node.kind not in {'integer', 'bool', 'group', 'unary', 'binary', 'cast'}:
-            raise token.error('array lengths and indices require closed scalar constant expressions; const items, const generics and dynamic bounds/panic support are not implemented')
+        # Checked after typing: a name that denotes a const item is a `const`
+        # node by now, while a local is still a `name` and stays rejected.
+        if node.kind not in {'integer', 'bool', 'group', 'unary', 'binary', 'cast', 'const'}:
+            raise token.error('array lengths and indices require closed scalar constant expressions; const generics and dynamic bounds/panic support are not implemented')
         pending.extend(node.children)
 
 
@@ -27,8 +29,8 @@ def length_value(checker, length, token):
     if isinstance(length, ArrayLength):
         from .semantics import unify
         expression = deepcopy(length.expression)
-        closed_constant(expression, token)
         unify('usize', checker.expression(expression), token)
+        closed_constant(expression, token)
         length = checker.validate(expression)
     if type(length) is not int or length < 0:
         raise token.error('array length must be a nonnegative usize constant')
