@@ -1150,10 +1150,14 @@ def pcc_gc_store_root(slot, value) -> None:
     # instead of two calls that repeat this gate, each entering a polled
     # frame. (The single-thread non-atomic variant never ran: the runtime is
     # always threaded.) Any other object, and a count that would reach zero,
-    # still goes through those functions.
+    # still goes through those functions. PCC_DEBUG_RUNTIME validates a
+    # value before reading its header; this path reads the tag directly, so
+    # it runs only once the debug cache is known to be off (the first
+    # allocation fills it).
     if (
         load_i32(global_addr("pcc_gc_refcount_atomic"), 0) != 0
         and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
+        and load_i32(global_addr("pcc_debug_runtime_enabled_cache"), 0) == 0
     ):
         fast_old = load_ptr(slot, 0)
         if ptr_eq(fast_old, value) != 0:
@@ -1203,7 +1207,9 @@ def pcc_gc_store_root(slot, value) -> None:
                 py_decref(fast_old)
         return
     backend: int = _gc_backend_fast()
-    if backend == 0:
+    # PCC_DEBUG_RUNTIME validates both values in the store plan, which
+    # publishes nothing it refuses; the direct path below cannot refuse.
+    if backend == 0 and load_i32(global_addr("pcc_debug_runtime_enabled_cache"), 0) == 0:
         if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
             pcc_diagnostics_runtime_log_event_code(2, 3, backend, 0, null())
         old = load_ptr(slot, 0)
@@ -2344,6 +2350,16 @@ def _py_refcount_prepared_reset(prepared, o) -> None:
     store_i64(prepared, 48, 0)
 
 
+def _debug_refuses_unmanaged(o, prepared) -> int:
+    """PCC_DEBUG_RUNTIME: a value without managed provenance is refused
+    before its header is read; finish reports it after the caller's lock."""
+    if _pcc_debug_runtime_enabled() == 0 or _ptr_can_have_header(o):
+        return 0
+    store_i64(prepared, 8, -1)
+    store_i64(prepared, 48, 1)
+    return 1
+
+
 # PY_TYPE_CEXT_TAG_BASE is the first tag handed out by the extension registry.
 # The generated ABI import is statically resolved by the runtime-library
 # pipeline. Tags from PY_TYPE_USER_CLASS_START up to this boundary belong to
@@ -2363,6 +2379,8 @@ def _py_incref_prepare(o, prepared) -> None:
         backend = load_i32(global_addr("pcc_gc_backend_selected"), 0)
     if _refcount_provenance_probe_enabled() != 0 and not _ptr_can_have_header(o):
         _note_unmanaged_refcount_op()
+        return
+    if _debug_refuses_unmanaged(o, prepared) != 0:
         return
     tag: int = load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET)
     if (
@@ -2545,12 +2563,18 @@ def _py_decref_prepare(o, prepared) -> None:
     if _refcount_provenance_probe_enabled() != 0 and not _ptr_can_have_header(o):
         _note_unmanaged_refcount_op()
         return
+    if _debug_refuses_unmanaged(o, prepared) != 0:
+        return
     tag_dbg: int = load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET)
     if (
         tag_dbg < PY_TYPE_NONE
         or (tag_dbg > PY_TYPE_CPY_HANDLE and tag_dbg < PY_TYPE_USER and tag_dbg != PY_TYPE_ELLIPSIS and tag_dbg != PY_TYPE_NOTIMPLEMENTED)
         or (tag_dbg >= (PY_TYPE_CEXT_TAG_BASE) and pcc_capi_is_cext_type_tag(tag_dbg) == 0)
     ):
+        if _pcc_debug_runtime_enabled() != 0:
+            # As the retain side: refuse, and report from finish.
+            store_i64(prepared, 8, tag_dbg)
+            store_i64(prepared, 48, 1)
         return
     flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
     if (backend == 1 or backend == 2 or backend == 3) and flags == 0:

@@ -40,8 +40,74 @@
 #define SIGQUIT 3
 #endif
 
+#ifndef SIGILL
+#define SIGILL 4
+#endif
+
+#if !defined(_WIN32)
+#ifndef SIGTRAP
+#define SIGTRAP 5
+#endif
+#endif
+
+#ifndef SIGABRT
+#if defined(_WIN32)
+#define SIGABRT 22
+#else
+#define SIGABRT 6
+#endif
+#endif
+
+#if !defined(_WIN32)
+#ifndef SIGBUS
+#if defined(__linux__)
+#define SIGBUS 7
+#else
+#define SIGBUS 10
+#endif
+#endif
+#endif
+
 #ifndef SIGFPE
 #define SIGFPE 8
+#endif
+
+#if !defined(_WIN32)
+#ifndef SIGKILL
+#define SIGKILL 9
+#endif
+
+#ifndef SIGUSR1
+#if defined(__linux__)
+#define SIGUSR1 10
+#else
+#define SIGUSR1 30
+#endif
+#endif
+
+#ifndef SIGUSR2
+#if defined(__linux__)
+#define SIGUSR2 12
+#else
+#define SIGUSR2 31
+#endif
+#endif
+
+#ifndef SIGPIPE
+#define SIGPIPE 13
+#endif
+
+#ifndef SIGCHLD
+#if defined(__linux__)
+#define SIGCHLD 17
+#else
+#define SIGCHLD 20
+#endif
+#endif
+#endif
+
+#ifndef SIGSEGV
+#define SIGSEGV 11
 #endif
 
 #ifndef SIGALRM
