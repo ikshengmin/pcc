@@ -264,6 +264,58 @@ def test_uv_locked_generic_graph_is_transactional_and_repeat_is_noop(
     _assert_no_libpython(app)
 
 
+def _numpy_find_links_index(root: Path) -> Path:
+    """A find-links index holding an sdist of the pinned NumPy tree."""
+    import tarfile
+
+    index = root / "index"
+    index.mkdir(parents=True)
+    archive = index / "numpy-2.4.4.tar.gz"
+
+    def keep(info: tarfile.TarInfo) -> tarfile.TarInfo | None:
+        parts = info.name.split("/")
+        return None if len(parts) > 1 and parts[1] in ("build", ".git") else info
+
+    with tarfile.open(archive, "w:gz") as tar:
+        tar.add(NUMPY_ROOT, arcname="numpy-2.4.4", filter=keep)
+    return index
+
+
+def test_uv_registry_numpy_lock_builds_from_the_locked_sdist(
+    tmp_path: Path, pcc_wheel: Path
+):
+    """`uv add numpy`-shaped lock: registry source, sdist only, revision 5."""
+    assert NUMPY_ROOT.is_dir(), f"real NumPy source tree is required: {NUMPY_ROOT}"
+    env = _base_env(tmp_path)
+    index = _numpy_find_links_index(tmp_path / "registry")
+    project = tmp_path / "numpy-registry-project"
+    project.mkdir()
+    (project / "pyproject.toml").write_text(
+        "[project]\n"
+        'name = "numpy-registry-project"\n'
+        'version = "0.0.0"\n'
+        'requires-python = ">=3.11"\n'
+        'dependencies = ["numpy==2.4.4"]\n'
+        "[tool.uv]\n"
+        f'find-links = ["{index}"]\n'
+        "no-index = true\n",
+        encoding="utf-8",
+    )
+    lock_text = _lock_project(project, env).decode("utf-8")
+    assert 'source = { registry = "' in lock_text and "numpy-2.4.4.tar.gz" in lock_text
+    _create_project_environment(project, pcc_wheel, env)
+    first = _sync(project, env, timeout=600)
+    assert first["changed"] is True and first["native_builds"] == 1
+    (row,) = first["packages"]
+    assert row["name"] == "numpy" and row["artifact_kind"] == "source-artifact"
+    environment = json.loads(
+        _uv_run(project, "pcc1", "env", "info", "--json", env=env).stdout
+    )
+    site = Path(str(environment["selected_site_packages"]))
+    assert list(site.glob("numpy/**/*.pcc*-pcc_native-*.so"))
+    assert not list(site.glob("numpy/**/*.cpython-*.so"))
+
+
 def test_uv_locked_numpy_sync_compiles_and_runs_without_libpython(
     tmp_path: Path, pcc_wheel: Path
 ):

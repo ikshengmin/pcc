@@ -28,7 +28,14 @@ from pcc.package.environment import resolve_package_environment
 
 UV_LOCK_ADAPTER_SCHEMA = "pcc.uv-lock-adapter.v1"
 UV_LOCK_SUPPORTED_VERSION = 1
-UV_LOCK_SUPPORTED_REVISIONS = (1, 2, 3)
+# uv lock format version 1 revisions (uv 0.13.7, crates/uv-lock/src/lock/mod.rs):
+# 0 missing field; 1 provides-extras and empty group metadata; 2 upload times;
+# 3 per-package exclude-newer; 4 optional package declaration metadata and
+# recorded empty extras/groups; 5 default groups and group metadata for
+# workspace members and roots. This adapter reads only package identity,
+# source, sdist/wheels and the dependency tables, which no revision changes;
+# groups stay explicit (--group), so recorded default groups are not applied.
+UV_LOCK_SUPPORTED_REVISIONS = (0, 1, 2, 3, 4, 5)
 SYNC_STATE_SCHEMA = "pcc.uv-locked-sync.v1"
 _LOCAL_SOURCE_IGNORED_NAMES = {
     ".git",
@@ -401,9 +408,10 @@ def _artifact_for_package(
         wheels = []
     compatible_wheels = []
     for wheel in wheels:
-        if not isinstance(wheel, dict) or not wheel.get("url"):
+        if not isinstance(wheel, dict) or not (wheel.get("url") or wheel.get("path")):
             continue
-        filename = Path(urllib.parse.urlparse(str(wheel["url"])).path).name
+        location = str(wheel.get("url") or wheel.get("path"))
+        filename = Path(urllib.parse.urlparse(location).path if wheel.get("url") else location).name
         compatible, reason = _artifact_compatibility_reason_from_name(
             filename, abi="pcc-native"
         )
@@ -412,11 +420,15 @@ def _artifact_for_package(
             compatible_wheels.append((rank, filename, wheel, reason))
     if compatible_wheels:
         _, _, selected, reason = max(compatible_wheels)
-        return _locked_remote_artifact(selected, reason)
+        if selected.get("url"):
+            return _locked_remote_artifact(selected, reason)
+        return _locked_local_artifact(selected, reason, lock_dir, package)
 
     sdist = package.get("sdist")
     if isinstance(sdist, dict) and sdist.get("url"):
         return _locked_remote_artifact(sdist, "source-artifact")
+    if isinstance(sdist, dict) and sdist.get("path"):
+        return _locked_local_artifact(sdist, "source-artifact", lock_dir, package)
     if wheels:
         raise UvLockSyncError(
             "PCC-PKG-UVLOCK-INCOMPATIBLE-WHEEL",
@@ -430,6 +442,39 @@ def _artifact_for_package(
         package=package.get("name"),
         version=package.get("version"),
     )
+
+
+def _locked_local_artifact(
+    row: dict[str, object], reason: str, lock_dir: Path, package: dict[str, object]
+) -> dict[str, object]:
+    """A local archive from a find-links or local registry (`path`, no URL).
+
+    uv records no hash for a local file; as for local directories, the
+    artifact identity is its content when projected, and the sync snapshot is
+    checked against it. A recorded hash must still match.
+    """
+    path = (lock_dir / str(row["path"])).resolve()
+    if not path.is_file():
+        raise UvLockSyncError(
+            "PCC-PKG-UVLOCK-MISSING-ARTIFACT",
+            f"locked local artifact is missing: {path}",
+            package=package.get("name"),
+        )
+    digest = _sha256_file(path)
+    hash_text = str(row.get("hash") or "")
+    if hash_text and hash_text != "sha256:" + digest:
+        raise UvLockSyncError(
+            "PCC-PKG-UVLOCK-HASH-MISMATCH",
+            f"locked local artifact hash mismatch: {path}",
+            expected=hash_text,
+            actual_sha256=digest,
+        )
+    return {
+        "kind": reason,
+        "path": str(path),
+        "url": None,
+        "sha256": digest,
+    }
 
 
 def _locked_remote_artifact(row: dict[str, object], reason: str) -> dict[str, object]:
@@ -468,7 +513,7 @@ def project_uv_lock(
             "PCC-PKG-UVLOCK-UNSUPPORTED-SCHEMA", "uv lock is not valid TOML"
         ) from exc
     version = lock.get("version")
-    revision = lock.get("revision", 1)
+    revision = lock.get("revision", 0)
     if (
         version != UV_LOCK_SUPPORTED_VERSION
         or revision not in UV_LOCK_SUPPORTED_REVISIONS
@@ -852,7 +897,17 @@ def sync_uv_lock(
                 snapshot_parent = source_snapshots_root / f"{package_index:04d}"
                 snapshot_parent.mkdir()
                 artifact_path = snapshot_parent / source_path.name
-                _snapshot_local_source(source_path, artifact_path)
+                if source_path.is_file():
+                    # A local archive: the snapshot is the identity checked.
+                    shutil.copy2(source_path, artifact_path)
+                    if _sha256_file(artifact_path) != artifact["sha256"]:
+                        raise UvLockSyncError(
+                            "PCC-PKG-UVLOCK-HASH-MISMATCH",
+                            f"local artifact changed after projection: {source_path}",
+                            expected_sha256=artifact["sha256"],
+                        )
+                else:
+                    _snapshot_local_source(source_path, artifact_path)
             else:
                 artifact_path, downloaded = _materialize_remote_artifact(
                     artifact, cache_root

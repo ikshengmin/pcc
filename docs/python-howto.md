@@ -199,3 +199,30 @@ For benchmark + acceptance of the whole corpus:
 ```bash
 python tests/py_corpus/run_pcc.py --bench
 ```
+
+---
+
+## 11. Install a uv project's locked dependencies (numpy included)
+
+`pcc sync --locked` projects the project's `uv.lock` into a pcc-native
+environment under `.venv/.pcc`; uv itself still resolves and writes the lock.
+It needs the native `pcc1` shipped in the pcc wheel.
+
+```bash
+uv add numpy              # uv writes uv.lock (format 1, revisions 0-5 accepted)
+uv run pcc sync --locked  # downloads each locked artifact and checks its sha256
+```
+
+For every locked package, a pcc-native or pure-Python wheel is preferred;
+otherwise the locked sdist is built from source. All numpy wheels on PyPI
+target the CPython ABI, so `uv add numpy` builds numpy 2.4.4 from its sdist.
+A local registry or `find-links` archive (`sdist = { path = ... }`) is hashed
+when the lock is projected and its snapshot is checked again before the build.
+Dependency groups are installed only when named with `--group`; default
+groups recorded by revision 5 are not applied.
+
+Building numpy from source still goes through Meson. The executed path today
+uses the host Meson/ninja build (`pcc pip`'s `host` build mode); the owned mode
+stops before Meson with `PCC-PKG-OWNED-BUILD-TOOL-REQUIRED`. The numpy C++
+sources, Cython modules and C-extension base classes are open gaps; see
+`docs/status.md` for the current frontier.

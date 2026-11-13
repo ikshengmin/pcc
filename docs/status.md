@@ -20,6 +20,20 @@ local execution is UNRUN under CI-only instructions. Remote CI must qualify the
 new revision. This does not qualify Stage2 time/RSS <= Stage1, native fixed point,
 or shared-runtime Mac/QPS acceptance. See [CI validation](ci-validation.md).
 
+## numpy through uv locks (local Mac, 2026-11-13)
+
+`pcc sync --locked` rejected every lock written by current uv (0.13.7 writes
+revision 5; only 1-3 were accepted). It now accepts revisions 0-5 per uv's own
+definitions (`crates/uv-lock/src/lock/mod.rs`), reading only fields no revision
+changes, and accepts `find-links`/local-registry archives (`path`, hashed at
+projection, snapshot re-checked). A real PyPI lock for `numpy==2.4.4` projects to
+its hashed sdist (all 71 wheels are CPython-ABI). Unit tests executed; the
+registry numpy integration test needs a current-source pcc1 and is unrun. The
+numpy build itself remains the host-Meson route; owned-build blockers: owned
+Meson execution, generated headers (`_numpyconfig.h`), C++ (`va_list` on Darwin,
+no C++ standard library), Cython, extension link/load, C-extension base
+classes (`numpy._core.records`).
+
 ## C frontend: GNU extensions and frontend speed (local Mac, 2026-11-13)
 
 Commits `04ffd12e` (asm), `2ccee683` and `3bfde933` (attributes), `1dc8792d`,
