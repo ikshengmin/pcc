@@ -2246,7 +2246,7 @@ jobs:
           path: ${{ runner.temp }}/pcc-ab-request*.json
 
   pcc-compile-ab:
-    name: Bounded qualified compiler A/B (not Stage2 versus Stage1)
+    name: Bounded qualified compile and full-stage A/B
     needs: [validation-plan, source-validation, shared-source-validation, source-platform-validation, source-platform-coverage, numpy-source-frontier, orjson-source-frontier, ci-plan, macos-pcc0-regressions, macos-pcc0-float-doc-regressions, macos-pcc0-indexed-split, worker-prior-preflight, windows-rss-publication, other-platform-native-wheel, pcc1-package-parity, pytest-markers, cpp17, pcc-ab-qualification]
     if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.performance_ab && needs.pcc-ab-qualification.result == 'success' }}
     runs-on: macos-15
@@ -2295,7 +2295,7 @@ jobs:
         with:
           name: pcc-ab-request-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/pcc-ab-request
-      - name: Qualify both real sources and run the bounded compile slice
+      - name: Qualify both real sources and run bounded compile and full-stage pairs
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -2318,7 +2318,7 @@ jobs:
               'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
               'job_status': os.environ['PCC_AB_JOB_STATUS'],
               'deadline_epoch': os.environ.get('PCC_CI_AB_DEADLINE_EPOCH'),
-              'stage2_le_stage1': 'UNAVAILABLE: no bounded full-stage campaign producer',
+              'stage2_le_stage1': 'UNPROVEN: require guarded matched full-stage completion receipt',
               'claim': 'Job status is not a performance acceptance receipt',
           }, sort_keys=True, indent=2) + '\n')
       - name: Preserve all partial campaign receipts and failure evidence

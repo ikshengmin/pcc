@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """CI-only, qualification-gated compiler A/B under one admitted tree budget.
 
-This is a compile-slice orchestration owner, not a replacement for the original
-correctness, five-GC or fixed-point owners, nor a Stage2 <= Stage1 measurement.
+This orchestrates compile slices and mandatory matched full compiler windows.
+It does not replace the original correctness, five-GC or fixed-point owners.
 It never applies a patch, downloads sources, builds a runtime, or runs a shell.
 Both complete read-only source trees and a qualified runtime are explicit inputs.
 Input expected_output is complete stdout and must end in a newline, matching
 the existing compile harness; it is never whitespace-normalized.
 All preparation, two strict Stage1 builds, explicit candidate mechanism assertions,
-six compile pairs and baseline A/A controls share one absolute job deadline and one sampled process-tree guard.
+six compile pairs, five full Stage1/Stage2 pairs and five full unchanged A/A
+controls share one absolute job deadline and one sampled process-tree guard.
+Full compiler windows exclude preparation, runtime construction and smoke/barrier.
 """
 from __future__ import annotations
 
@@ -44,6 +46,8 @@ SELF_BACKEND_JOBS = 2
 TOOLS = (
     "scripts/run_pcc_ci_ab.py", "scripts/ci_pcc_ab_gate.py",
     "scripts/run_pcc_stage1_build.py", "scripts/run_pcc_compile_ab.py",
+    "scripts/run_pcc_stage_ab.py", "scripts/bootstrap.py",
+    "scripts/run_pcc_native_deferred.py", "scripts/pcc_stage_ab_acceptance.py",
     "scripts/run_process_tree_sample.py", "scripts/file_lock.py",
     "pcc/tools/runtime_archive_provenance.py",
     "scripts/pcc_ci_ab_mechanism.py",
@@ -53,8 +57,11 @@ TOOLS = (
 _MODULES = {}
 _MECHANISM_PROOFS = {}
 _PARENT_LAUNCHES = {}
+_FULL_STAGE_PROOFS = {}
+FULL_STAGE_PAIRS = 5
+FULL_STAGE_CONTROL_PAIRS = 5
+FULL_STAGE_SCOPE = "launch_to_observed_owned_tree_exit_including_compile_wrappers"
 NOT_PROVEN = [
-    "Stage2 <= Stage1 wall time or process-tree memory",
     "new Stage1 -> Stage2 -> Stage3 fixed point",
     "new five-GC production qualification",
 ]
@@ -622,6 +629,135 @@ def _compile_args(frozen, output, arms, ab):
     return ab._parser().parse_args(argv)
 
 
+def _stage_args(roots, frozen, output, stage, guard, *, control=False):
+    # Full-stage work is mandatory, never a user-supplied selector. The stage
+    # producer clips every timeout to the original inherited absolute deadline.
+    argv = ["--baseline-source", str(roots["baseline"]),
+            "--candidate-source", str(roots["baseline" if control else "candidate"]),
+            "--runtime-archive", frozen["runtime_archive"]["path"],
+            "--output-dir", str(output / ("full-stage-control" if control else "full-stage-ab")),
+            "--measure-compile-window", "--stages", "stage1-stage2",
+            "--pairs", str(FULL_STAGE_CONTROL_PAIRS if control else FULL_STAGE_PAIRS),
+            "--first-pair-index", "1", "--stage1-timeout", str(STAGE1_SECONDS),
+            "--stage2-timeout", "540", "--smoke-timeout", "60",
+            "--frontend-jobs", str(BUILD_FRONTEND_JOBS),
+            "--self-backend-jobs", str(SELF_BACKEND_JOBS),
+            "--max-tree-rss-bytes", str(guard.max_tree_rss_bytes), "--gc-backend", "0"]
+    return stage._parser().parse_args(argv)
+
+
+def _stage_artifact(path, value):
+    if (path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1
+            or _json(path) != value):
+        raise CampaignError("full-stage artifact differs from live producer result")
+    path.chmod(0o444)
+    return {"path": str(path), "sha256": _sha(path)}
+
+
+def _run_full_stage(args, output, roots, frozen, ab, token):
+    stage = _load("run_pcc_stage_ab")
+    acceptance = _load("pcc_stage_ab_acceptance")
+    guard = ab._validated_worker_budget(**_guard_kwargs(args, output))
+    guard.verify()
+    # These identities are frozen before launch; caller JSON cannot supply a
+    # stage verdict. The stage owner retains the original live source context.
+    identity = {"run_id": _identity({"token": args.run_token, "output": str(output)}),
+                "parent_source_sha256": frozen["baseline_source"]["sha256"],
+                "input_sha256": _identity(frozen),
+                "runtime_sha256": frozen["runtime_archive"]["sha256"],
+                "tools_sha256": _identity({name: _sha(REPO_ROOT / name) for name in TOOLS}),
+                "producer_sha256": _sha(REPO_ROOT / "scripts/run_pcc_stage_ab.py"),
+                "host_runtime_sha256": ab._canonical_sha256(
+                    ab.host_python_runtime_evidence(Path(sys.executable).resolve(strict=True))),
+                "guard_contract_sha256": guard.receipt["guard_result"]["contract_sha256"]}
+    result = stage.run_guarded(_stage_args(roots, frozen, output, stage, guard),
+                              ab=ab, performance_lock_token=token, **_guard_kwargs(args, output))
+    guard.verify()
+    control = stage.run_guarded(_stage_args(roots, frozen, output, stage, guard, control=True),
+                               ab=ab, performance_lock_token=token, **_guard_kwargs(args, output))
+    summary = _evaluate_full_stage(stage, acceptance, result, control, ab, token, identity)
+    summary_path = output / "full-stage-summary.json"
+    _persist(summary_path, summary)
+    evidence = {"schema": "pcc.ci-full-stage-evidence.v1", "scope": FULL_STAGE_SCOPE,
+                "pair_count": FULL_STAGE_PAIRS, "control_pair_count": FULL_STAGE_CONTROL_PAIRS,
+                "candidate_stage2_le_stage1": summary.get("candidate_stage2_le_stage1"),
+                "control_verdict": summary.get("unchanged_control", {}).get("verdict"),
+                "source_promotion_authorized": False, "automatic_source_acceptance": False,
+                "control_review_status": "REQUIRED",
+                "manifest": _stage_artifact(output / "full-stage-ab/manifest.json", result),
+                "control": _stage_artifact(output / "full-stage-control/manifest.json", control),
+                "summary": _stage_artifact(summary_path, summary)}
+    # Retain failed numeric observations too, before failing closed.
+    _persist(output / "full-stage-evidence.json", evidence)
+    _validate_full_stage_metadata(evidence, output)
+    _FULL_STAGE_PROOFS[id(evidence)] = (evidence, _identity(evidence), result, control, summary, identity)
+    return evidence
+
+
+def _evaluate_full_stage(stage, acceptance, result, control, ab, token, identity):
+    # Authority belongs to the actual producer's live registry, not arithmetic
+    # over a caller's JSON. Revalidate both sides before AND after calculation.
+    stage.verify_guarded_result(result, ab=ab, performance_lock_token=token)
+    stage.verify_guarded_result(control, ab=ab, performance_lock_token=token)
+    if (identity["host_runtime_sha256"] != ab._canonical_sha256(
+            ab.host_python_runtime_evidence(Path(sys.executable).resolve(strict=True)))
+            or identity["tools_sha256"] != _identity({name: _sha(REPO_ROOT / name) for name in TOOLS})):
+        raise CampaignError("full-stage host runtime or producer changed")
+    for manifest in (result, control):
+        for pair in manifest["pairs"]:
+            for arm in ("baseline", "candidate"):
+                for name in ("stage1", "stage2"):
+                    if pair[arm][name].get("host_runtime_sha256") != identity["host_runtime_sha256"]:
+                        raise CampaignError("full-stage host runtime differs from frozen launch")
+    expected = acceptance.calculation_bindings(result["pairs"], control["pairs"], campaign_identity=identity)
+    summary = acceptance.evaluate_stage_campaign(result["pairs"], control["pairs"],
+                                                 expected=expected, observed=expected)
+    stage.verify_guarded_result(result, ab=ab, performance_lock_token=token)
+    stage.verify_guarded_result(control, ab=ab, performance_lock_token=token)
+    return summary
+
+
+def _validate_full_stage_metadata(evidence, output):
+    if (not isinstance(evidence, dict) or evidence.get("schema") != "pcc.ci-full-stage-evidence.v1"
+            or evidence.get("scope") != FULL_STAGE_SCOPE
+            or type(evidence.get("pair_count")) is not int or evidence["pair_count"] < FULL_STAGE_PAIRS
+            or type(evidence.get("control_pair_count")) is not int
+            or evidence["control_pair_count"] < FULL_STAGE_CONTROL_PAIRS
+            or evidence.get("candidate_stage2_le_stage1") is not True
+            or evidence.get("control_verdict") != "OBSERVATION_ONLY"
+            or evidence.get("source_promotion_authorized") is not False
+            or evidence.get("automatic_source_acceptance") is not False
+            or evidence.get("control_review_status") != "REQUIRED"):
+        raise CampaignError("missing, incomplete or unsuccessful matched full-stage evidence")
+    for key, relative in (("manifest", "full-stage-ab/manifest.json"),
+                          ("control", "full-stage-control/manifest.json"),
+                          ("summary", "full-stage-summary.json")):
+        row = evidence.get(key)
+        digest = row.get("sha256") if isinstance(row, dict) else None
+        if (not isinstance(row, dict) or set(row) != {"path", "sha256"}
+                or row["path"] != str(output / relative) or not isinstance(digest, str)
+                or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest)):
+            raise CampaignError("invalid full-stage artifact identity: " + key)
+
+
+def _verify_full_stage(evidence, *, args, output, ab, performance_lock_token):
+    _validate_full_stage_metadata(evidence, output)
+    registered = _FULL_STAGE_PROOFS.get(id(evidence))
+    if registered is None or registered[0] is not evidence or registered[1] != _identity(evidence):
+        raise CampaignError("full-stage evidence lacks the same-process producer proof")
+    _, _, result, control, summary, identity = registered
+    stage = _load("run_pcc_stage_ab")
+    refreshed = _evaluate_full_stage(stage, _load("pcc_stage_ab_acceptance"),
+                                     result, control, ab, performance_lock_token, identity)
+    if refreshed != summary:
+        raise CampaignError("full-stage calculation changed before completion")
+    for key, value in (("manifest", result), ("control", control), ("summary", summary)):
+        path = _file(evidence[key])
+        if _json(path) != value:
+            raise CampaignError("full-stage artifact changed before completion")
+    ab._validated_worker_budget(**_guard_kwargs(args, output)).verify()
+
+
 def _guarded(args, output, ab):
     manifest = _json(output / "manifest.json")
     if manifest.get("run_token") != args.run_token or manifest.get("status") != "IN_PROGRESS":
@@ -687,9 +823,14 @@ def _guarded(args, output, ab):
                         measurement_status=result.get("status"),
                         compile_manifest=str(output / "compile-ab/manifest.json"))
         if result.get("status") == "ACCEPTED":
+            manifest.update(phase="MEASURING_FULL_STAGE")
+            _persist(output / "manifest.json", manifest)
+            full_stage = _run_full_stage(args, output, roots, frozen, ab, token)
+            manifest.update(phase="MEASURED", full_stage=full_stage)
             context, completion, compile_hash = _finish_guarded(
                 args, output, manifest, spec, trees, proof, mechanism_proof,
-                result, ab, prepared_root=prepared_root)
+                result, ab, prepared_root=prepared_root,
+                performance_lock_token=token)
             manifest.update(campaign_context=context, completion=completion,
                             compile_manifest_sha256=compile_hash, candidate_mechanism_sha256=_identity(mechanism_proof))
         _persist(output / "manifest.json", manifest)
@@ -707,14 +848,14 @@ def _child_command(args, output):
 
 
 
-COMPLETION_SCHEMA = "pcc.ci-compile-ab-completion.v1"
+COMPLETION_SCHEMA = "pcc.ci-compile-ab-completion.v2"
 COMPLETION_MAX_BYTES = 64 * 1024
 TERMINAL_MANIFEST_MAX_BYTES = 8 * 1024 * 1024
 TERMINAL_GUARD_MAX_BYTES = 1024 * 1024
 _COMPLETION_RESULT_FIELDS = (
     "schema", "phase", "compile_summary", "measurement_status", "source_identities",
     "arms", "qualification", "compile_manifest", "worker_policy", "measurement_mode",
-    "runtime_build", "enforcement",
+    "runtime_build", "enforcement", "full_stage",
 )
 _GUARD_CONTRACT_KEYS = (
     "schema", "status", "started_at_utc", "command", "cwd", "environment",
@@ -741,7 +882,7 @@ def _guard_contract_digest(guard):
 
 
 def _finish_guarded(args, output, manifest, spec, trees, qualification,
-                    mechanism, result, ab, *, prepared_root):
+                    mechanism, result, ab, *, prepared_root, performance_lock_token):
     """All expensive final verification stays inside the existing watchdog.
 
     The outer process can be uv's venv while this source-owned child uses the
@@ -757,6 +898,8 @@ def _finish_guarded(args, output, manifest, spec, trees, qualification,
     _validate_spec(spec, output, ab, prepared_root=prepared_root)
     _verify_frozen_qualification(qualification)
     _verify_live_import_origins(trees["candidate"])
+    _verify_full_stage(manifest.get("full_stage"), args=args, output=output,
+                       ab=ab, performance_lock_token=performance_lock_token)
     compile_path = output / "compile-ab/manifest.json"
     if (compile_path.is_symlink() or not compile_path.is_file()
             or compile_path.stat().st_nlink != 1 or _json(compile_path) != result):
@@ -780,6 +923,7 @@ def _finish_guarded(args, output, manifest, spec, trees, qualification,
                       "source_sha256": mechanism["source_sha256"],
                       "compiler_receipt_sha256": mechanism["compiler_receipt_sha256"]},
         "compile_manifest_sha256": compile_hash,
+        "full_stage_sha256": _identity(manifest["full_stage"]),
         "verified_at_monotonic": time.monotonic(),
     }
     encoded = json.dumps(completion, sort_keys=True, indent=2, allow_nan=False) + "\n"
@@ -831,7 +975,7 @@ def _verify_completion(manifest, guard, *, output, expected):
         raise CampaignError("completion receipt changed after guarded verification")
     value = json.loads(content)
     fields = {"schema", "status", "launch", "guard_contract_sha256", "campaign_context_sha256",
-              "result_body_sha256", "mechanism", "compile_manifest_sha256", "verified_at_monotonic"}
+              "result_body_sha256", "mechanism", "compile_manifest_sha256", "full_stage_sha256", "verified_at_monotonic"}
     if (not isinstance(value, dict) or set(value) != fields or value.get("schema") != COMPLETION_SCHEMA
             or value.get("status") != "VERIFIED_ACCEPTED" or value.get("launch") != launch
             or value.get("guard_contract_sha256") != _guard_contract_digest(guard)):
@@ -863,7 +1007,11 @@ def _verify_completion(manifest, guard, *, output, expected):
             or manifest.get("compile_manifest") != str(output / "compile-ab/manifest.json")
             or manifest.get("compile_manifest_sha256") != value["compile_manifest_sha256"]):
         raise CampaignError("completion artifact identities changed")
-    # Do not reread mechanism/compile bundles here: their full verification was
+    full_stage = manifest.get("full_stage")
+    _validate_full_stage_metadata(full_stage, output)
+    if value["full_stage_sha256"] != _identity(full_stage):
+        raise CampaignError("full-stage identities changed after guarded verification")
+    # Do not reread mechanism/compile/full-stage bundles here: their full verification was
     # performed under the watchdog, and their immutable hashes remain evidence.
     return value
 
@@ -892,11 +1040,13 @@ def _terminal(manifest, guard, error=None, *, output=None, expected=None):
     else:
         terminal = "FAILED"
     manifest.update(status=terminal, completed_at_epoch=time.time(),
-                    guard=guard, does_not_prove=NOT_PROVEN,
-                    claim_level="compile-slice-only")
+                    guard=guard, does_not_prove=NOT_PROVEN if terminal == "SUCCEEDED" else [
+                        "Stage2 <= Stage1 wall time or process-tree memory", *NOT_PROVEN],
+                    claim_level="matched-full-compiler-windows" if terminal == "SUCCEEDED" else "unaccepted")
     if error is not None:
         manifest["error"] = type(error).__name__ + ": " + str(error)
-    # Never promote A/B acceptance or a sampled total RSS into stage equality.
+    # Only independently validated matched windows support the narrow claim.
+    # Neither source promotion nor whole-build equality follows from it.
     return manifest
 
 
@@ -909,10 +1059,10 @@ def run(args):
     args.run_token = os.urandom(16).hex()
     manifest = {"schema": SCHEMA, "status": "IN_PROGRESS", "phase": "ADMISSION",
                 "run_token": args.run_token, "started_at_epoch": time.time(),
-                "does_not_prove": NOT_PROVEN, "claim_level": "compile-slice-only",
+                "does_not_prove": ["Stage2 <= Stage1 wall time or process-tree memory", *NOT_PROVEN], "claim_level": "unaccepted",
                 "worker_policy": {"stage1": {"frontend": 2, "self_backend": 2, "link": 8},
                                   "measured": {"frontend": 1, "self_backend": 2, "link": 2}},
-                "measurement_mode": "serial-native-frontend optimization slice; not production Stage2 auto",
+                "measurement_mode": "compile slice plus matched full compiler windows with native Stage2 auto",
                 "runtime_build": "not_performed; frozen qualified runtime required",
                 "enforcement": "sampled_campaign_tree; not kernel hard limit or per-arm tree RSS"}
     _persist(output / "manifest.json", manifest)

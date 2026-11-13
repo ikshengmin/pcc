@@ -55,6 +55,18 @@ static int64_t finalized;
 static PyObject *watched_copy;
 static int64_t del_on_copy;
 static int64_t del_other;
+/* Only root_slot is a strong owner. Diagnostic identities stay off the
+ * conservative stack so they neither pin selection nor retain a dead copy. */
+static PyObject *source_holder;
+static PyObject *root_slot;
+static void *root_handle;
+
+/* Match the stopped-world production probes: discard stale construction and
+ * observation words only after those noinline frames have returned. */
+__attribute__((noinline)) static void probe_scrub_stack(void) {
+    volatile unsigned char words[65536];
+    for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+}
 
 extern struct PyClassObject *py_class_new(
     const char *, struct PyClassObject **, int32_t,
@@ -195,12 +207,7 @@ static int fail_relocation_state(
     return result;
 }
 
-int main(void) {
-    const int32_t backend = @BACKEND@;
-    if (pcc_threads_enabled() != @EXPECTED_THREADS@) return 6;
-    if (pcc_refcount_strategy() != @EXPECTED_REFCOUNT_STRATEGY@) return 1;
-    if (pcc_gc_set_backend(backend) != 0) return 2;
-
+__attribute__((noinline)) static int build_probe(void) {
     struct PyClassObject *value_class =
         py_class_new("SweepVerdictValue", 0, 0, 0, 0);
     if (value_class == 0) return 3;
@@ -211,21 +218,33 @@ int main(void) {
     PyObject *source = py_instance_new(value_class);
     if (source == 0) return 4;
 
-    static PyObject *root_slot;
     pcc_gc_store_root(&root_slot, source);
     /* Transfer the constructor reference into the owning root slot. */
     py_decref(source);
-    void *root_handle = pcc_gc_scheduler_root_register_handle(&root_slot);
+    root_handle = pcc_gc_scheduler_root_register_handle(&root_slot);
     if (root_handle == 0) return 5;
 
     /* Poke the verdict exactly as a finished tracing cycle leaves it on
      * an object it judged unreachable (white->candidate cut). */
     py_header_flags_or(py_header(source), PY_FLAG_GC_SWEEP_CANDIDATE);
+    source_holder = source;
+    return 0;
+}
 
+__attribute__((noinline)) static int relocate_probe(int32_t backend) {
+    /* The caller owns the stop. Do not load source_holder into a stack or
+     * register alias until selection has captured and pinned thread roots. */
     pcc_gc_reset_relocation_set();
     if (pcc_gc_select_relocation_set(1) != 1)
         /* Size was not requested on this path; -1 means not evaluated. */
-        return fail_relocation_state(13, "select", source, 0, -1);
+        return fail_relocation_state(13, "select", source_holder, 0, -1);
+    PyObject *source = source_holder;
+    if (pcc_gc_relocation_set_contains(source) != 1)
+        return fail_relocation_state(13, "selected-other-object", source, 0, -1);
+    /* Selection and root capture must not consume the injected verdict:
+     * otherwise checking a clear copy would no longer exercise the mask. */
+    if ((flags_of(source) & PY_FLAG_GC_SWEEP_CANDIDATE) == 0)
+        return fail_state(29, "source-lost-injected-verdict", source, 0);
     int64_t requested_size = instance_payload_size(source);
     PyObject *copy = pcc_gc_relocate_copy(
         source, requested_size
@@ -250,6 +269,16 @@ int main(void) {
         return fail_state(21, "shell-keeps-verdict", source, copy);
     }
 
+    return 0;
+}
+
+__attribute__((noinline)) static int verify_live_copy(void) {
+    /* Resume has remapped the registered owner. The forwarding shell may
+     * already be retired, so later diagnostics must not dereference it. */
+    PyObject *source = 0;
+    PyObject *copy = root_slot;
+    if (copy != watched_copy)
+        return fail_state(28, "owner-not-remapped-to-copy", source, copy);
     /* Exercise explicit collection after relocation. The live copy must
      * survive untouched, including the current pre-finalizer root recheck. */
     (void)pcc_gc_collect(0);
@@ -262,20 +291,47 @@ int main(void) {
     if (pcc_gc_object_is_known_no_lock(copy) != 1)
         return fail_state(24, "live-copy-unknown-after-collect", source, copy);
 
+    return 0;
+}
+
+__attribute__((noinline)) static void release_probe(void) {
     /* Normal reclamation stays exactly-once: release the one owning root and
-     * drive collections to the final dispatch.  Object-index membership is
+     * drive collections to the final dispatch. Object-index membership is
      * not ownership and must never be used as a license to decref again. */
     pcc_gc_scheduler_root_unregister_handle(root_handle);
     pcc_gc_store_root(&root_slot, 0);
     root_slot = 0;
+}
+
+int main(void) {
+    const int32_t backend = @BACKEND@;
+    if (pcc_threads_enabled() != @EXPECTED_THREADS@) return 6;
+    if (pcc_refcount_strategy() != @EXPECTED_REFCOUNT_STRATEGY@) return 1;
+    if (pcc_gc_set_backend(backend) != 0) return 2;
+
+    int result = build_probe();
+    if (result != 0) return result;
+    probe_scrub_stack();
+    if (pcc_stop_the_world() != 0) return 90;
+    result = relocate_probe(backend);
+    source_holder = 0;
+    /* Resume even when an original assertion failed, without hiding it. */
+    int resume_result = pcc_resume_world();
+    if (result != 0) return result;
+    if (resume_result != 0) return 91;
+    result = verify_live_copy();
+    if (result != 0) return result;
+
+    release_probe();
     for (int i = 0; i < 16 && del_on_copy == 0; i++) {
+        probe_scrub_stack();
         (void)pcc_gc_collect(0);
     }
     if (backend == PCC_GC_KIND_COLORED_RELOCATING) {
         if (del_on_copy != 1)
-            return fail_state(25, "exactly-once-violated", source, copy);
-    } else if (pcc_gc_object_is_known_no_lock(copy) != 0) {
-        return fail_state(26, "dead-copy-still-known", source, copy);
+            return fail_state(25, "exactly-once-violated", 0, 0);
+    } else if (pcc_gc_object_is_known_no_lock(watched_copy) != 0) {
+        return fail_state(26, "dead-copy-still-known", 0, 0);
     }
 
     if (del_other != 0)
@@ -378,6 +434,48 @@ def _run_probe(tmp_path: Path, kind: str) -> None:
         f"{run.returncode}: " + run.stdout + run.stderr
     )
     assert run.stdout == "ok backend=4 del_other=0\n", run.stdout + run.stderr
+
+
+def test_probe_relocation_obeys_stopped_world_and_stack_lifetime() -> None:
+    """Keep the native verdict witness on GC4's actual relocation protocol."""
+    main = PROBE_SOURCE.split("int main(void) {", 1)[1]
+    steps = [
+        "int result = build_probe();",
+        "probe_scrub_stack();",
+        "if (pcc_stop_the_world() != 0) return 90;",
+        "result = relocate_probe(backend);",
+        "source_holder = 0;",
+        "int resume_result = pcc_resume_world();",
+        "if (result != 0) return result;",
+        "if (resume_result != 0) return 91;",
+        "result = verify_live_copy();",
+        "release_probe();",
+        "for (int i = 0; i < 16 && del_on_copy == 0; i++) {",
+        "probe_scrub_stack();",
+        "(void)pcc_gc_collect(0);",
+    ]
+    position = 0
+    for step in steps:
+        position = main.index(step, position) + len(step)
+    assert "PyObject *" not in main
+    for name in ("build_probe", "relocate_probe", "verify_live_copy", "release_probe"):
+        assert ("__attribute__((noinline)) static int " + name in PROBE_SOURCE
+                or "__attribute__((noinline)) static void " + name in PROBE_SOURCE)
+    relocation = PROBE_SOURCE.split("static int relocate_probe(", 1)[1].split(
+        "static int verify_live_copy(", 1,
+    )[0]
+    assert relocation.index("pcc_gc_select_relocation_set(1)") < relocation.index(
+        "PyObject *source = source_holder;"
+    ) < relocation.index("pcc_gc_relocation_set_contains(source)") < relocation.index(
+        "pcc_gc_relocate_copy("
+    )
+    assert relocation.index('"source-lost-injected-verdict"') < relocation.index(
+        "pcc_gc_relocate_copy("
+    )
+    assert '"destination-inherits-verdict"' in relocation
+    assert '"shell-keeps-verdict"' in relocation
+    assert '"exactly-once-violated"' in main
+    assert '"finalizer-ran-on-forwarding-shell"' in main
 
 
 def test_source_sweep_verdict_clears_only_after_forwarding_commit() -> None:

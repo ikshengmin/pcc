@@ -146,7 +146,7 @@ def test_limits_are_not_widened_and_partial_evidence_is_retained():
     assert "actions: read" in job and "contents: read" in job and "write" not in re.search(r"    permissions:\n(.*?)    env:", job, re.S).group(1)
     assert "Record the job outcome even when qualification or setup failed\n        if: always()" in job
     assert "Preserve all partial campaign receipts and failure evidence\n        if: always()" in job
-    assert "stage2_le_stage1': 'UNAVAILABLE" in job
+    assert "stage2_le_stage1': 'UNPROVEN" in job
     original = workflow_job("pcc1-package-parity")
     assert "timeout-minutes: 200" in original
     assert 'PCC_BOOTSTRAP_STAGE_TIMEOUT: "7200"' in original
@@ -357,7 +357,7 @@ def test_request_route_prepares_only_inside_guarded_entry_and_declares_stage_gap
     corpus = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "corpus_inputs")
     assert 'row["expected_output"].endswith("\\n")' in ast.get_source_segment(source, corpus)
     assert 'selected["input_manifest"]' in text
-    assert 'stage2_le_stage1="UNAVAILABLE' in text
+    assert 'stage2_le_stage1="UNRUN' in text
     main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main")
     assert 'prepare_campaign(' not in ast.get_source_segment(source, main)
 
@@ -952,7 +952,7 @@ def require_resolved_campaign_dependencies(workflow):
     assert body == expected
     assert job.index("Fix the campaign deadline") < job.index(name)
     assert job.index("run: uv sync --frozen --dev --no-install-project") < job.index(name)
-    assert job.index(name) < job.index("Qualify both real sources and run the bounded compile slice")
+    assert job.index(name) < job.index("Qualify both real sources and run bounded compile and full-stage pairs")
     assert "int(time.time()) + 11700" in job and "timeout-minutes: 200" in job
     assert "uv run --frozen --no-sync python scripts/run_pcc_ci_ab.py" in job
     assert "PYTHONPATH" not in body and "--system" not in body
@@ -1034,3 +1034,25 @@ def test_locked_campaign_dependency_policy_rejects_builds_or_unbound_inputs(muta
         rows["python-cc"]["dev-dependencies"]["dev"].append({"name": "mlx"})
     with pytest.raises(AssertionError):
         require_locked_dev_wheels(lock)
+
+
+def test_full_stage_is_mandatory_inside_existing_campaign_without_new_selector():
+    source = (ROOT / "scripts/run_pcc_ci_ab.py").read_text()
+    tree = ast.parse(source)
+    functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+    guarded = ast.get_source_segment(source, functions["_guarded"])
+    assert guarded.index('ab.run_guarded(') < guarded.index('_run_full_stage(') < guarded.index('_finish_guarded(')
+    assert 'performance_lock_token=token' in guarded
+    stage = ast.get_source_segment(source, functions["_run_full_stage"])
+    assert stage.count('stage.run_guarded(') == 2
+    assert stage.count('**_guard_kwargs(args, output)') >= 3
+    assert 'FULL_STAGE_PAIRS = 5' in source and 'FULL_STAGE_CONTROL_PAIRS = 5' in source
+    finish = ast.get_source_segment(source, functions["_finish_guarded"])
+    assert finish.index('_verify_full_stage(') < finish.index('finish_campaign(')
+    terminal = ast.get_source_segment(source, functions["_verify_completion"])
+    assert '_validate_full_stage_metadata(full_stage, output)' in terminal
+    assert '_verify_full_stage(' not in terminal
+    assert '"full_stage_sha256"' in terminal
+    for path in ('scripts/run_pcc_stage_ab.py', 'scripts/bootstrap.py',
+                 'scripts/run_pcc_native_deferred.py', 'scripts/pcc_stage_ab_acceptance.py'):
+        assert '"' + path + '"' in source

@@ -163,7 +163,7 @@ def test_remaining_uses_original_deadline(tool, monkeypatch):
 def test_terminal_never_promotes_partial_or_failed_guard(tool, guard, child, expected):
     result = tool._terminal(child, guard)
     assert result["status"] == expected
-    assert result["claim_level"] == "compile-slice-only"
+    assert result["claim_level"] == "unaccepted"
     assert "Stage2 <= Stage1 wall time or process-tree memory" in result["does_not_prove"]
 
 
@@ -618,11 +618,13 @@ def _completion_fixture(tool, tmp_path):
                 "campaign_context": context, "candidate_mechanism": mechanism,
                 "candidate_mechanism_sha256": tool._identity(mechanism),
                 "compile_manifest": str(output / "compile-ab/manifest.json"), "compile_manifest_sha256": "3" * 64}
+    manifest["full_stage"] = _full_stage_metadata(tool, output)
     completion = {"schema": tool.COMPLETION_SCHEMA, "status": "VERIFIED_ACCEPTED", "launch": launch,
                   "guard_contract_sha256": tool._guard_contract_digest(guard),
                   "campaign_context_sha256": tool._identity(context), "verified_at_monotonic": 100,
                   "result_body_sha256": tool._identity({key: manifest.get(key) for key in tool._COMPLETION_RESULT_FIELDS}),
                   "compile_manifest_sha256": "3" * 64,
+                  "full_stage_sha256": tool._identity(manifest["full_stage"]),
                   "mechanism": {"proof_sha256": tool._identity(mechanism), "request_sha256": "c" * 64, "result_sha256": "d" * 64,
                                 "tree_sha256": "e" * 64, "source_sha256": "f" * 64, "compiler_receipt_sha256": "1" * 64}}
     path = output / "completion.json"
@@ -762,11 +764,12 @@ def test_guarded_completion_runs_full_checks_before_sealing_metadata(tool, tmp_p
     args = argparse.Namespace(run_token="token", campaign_request="request", job_deadline_epoch=500,
                               campaign_deadline_monotonic=200)
     mechanism = {key: "c" * 64 for key in ("request_sha256", "result_sha256", "sha256", "source_sha256", "compiler_receipt_sha256")}
+    monkeypatch.setattr(tool, "_verify_full_stage", lambda *args, **kwargs: calls.append("full-stage"))
     context_out, receipt, digest = tool._finish_guarded(args, output,
-        {"input_kind": "request", "input_sha256": "b" * 64}, {"target_sha": "d" * 40},
-        {"candidate": {}}, object(), mechanism, result, ab, prepared_root=None)
+        {"input_kind": "request", "input_sha256": "b" * 64, "full_stage": _full_stage_metadata(tool, output)}, {"target_sha": "d" * 40},
+        {"candidate": {}}, object(), mechanism, result, ab, prepared_root=None, performance_lock_token=object())
     assert calls == ["qualification", "source", "origins", "mechanism", "spec",
-                     "qualification", "origins", "provider-final", "guard", "guard"]
+                     "qualification", "origins", "full-stage", "provider-final", "guard", "guard"]
     assert context_out == context
     assert digest == tool._sha(output / "compile-ab/manifest.json")
     assert receipt["size_bytes"] <= tool.COMPLETION_MAX_BYTES
@@ -893,3 +896,241 @@ def test_failed_or_unproven_mechanism_stops_before_timing(tool, tmp_path, monkey
                               run_token="owned", campaign_request=None)
     with pytest.raises(tool.CampaignError):
         tool._guarded(args, output, ab)
+
+
+
+def _full_stage_metadata(tool, output):
+    return {"schema": "pcc.ci-full-stage-evidence.v1", "scope": tool.FULL_STAGE_SCOPE,
+            "pair_count": 5, "control_pair_count": 5, "candidate_stage2_le_stage1": True,
+            "control_verdict": "OBSERVATION_ONLY", "control_review_status": "REQUIRED",
+            "source_promotion_authorized": False, "automatic_source_acceptance": False,
+            **{key: {"path": str(output / name), "sha256": "7" * 64} for key, name in (
+                ("manifest", "full-stage-ab/manifest.json"),
+                ("control", "full-stage-control/manifest.json"),
+                ("summary", "full-stage-summary.json"))}}
+
+
+def test_full_stage_args_require_real_full_pairs_and_same_cap(tool, tmp_path):
+    fake = types.SimpleNamespace(_parser=lambda: types.SimpleNamespace(parse_args=lambda args: args))
+    roots = {"baseline": Path("/baseline"), "candidate": Path("/candidate")}
+    frozen = {"runtime_archive": {"path": "/runtime.a"}}
+    guard = types.SimpleNamespace(max_tree_rss_bytes=3 * 1024 ** 3)
+    for control in (False, True):
+        argv = tool._stage_args(roots, frozen, tmp_path, fake, guard, control=control)
+        assert argv[argv.index("--pairs") + 1] == "5"
+        assert argv[argv.index("--candidate-source") + 1] == ("/baseline" if control else "/candidate")
+        assert argv[argv.index("--max-tree-rss-bytes") + 1] == str(3 * 1024 ** 3)
+        assert argv[argv.index("--stages") + 1] == "stage1-stage2"
+        assert argv[argv.index("--frontend-jobs") + 1] == "2"
+        assert argv[argv.index("--self-backend-jobs") + 1] == "2"
+        assert "--measure-compile-window" in argv
+        assert "--no-performance-lock" not in argv
+
+
+@pytest.mark.parametrize("mutation", ["missing", "control", "summary", "pairs", "controls", "relation", "scope", "stable", "promotion", "review"])
+def test_terminal_requires_full_stage_relation_and_unreviewed_control(tool, tmp_path, mutation):
+    output, manifest, guard, expected, completion = _completion_fixture(tool, tmp_path)
+    evidence = manifest["full_stage"]
+    if mutation == "missing":
+        manifest.pop("full_stage")
+    elif mutation in {"control", "summary"}:
+        evidence.pop(mutation)
+    else:
+        key, value = {"pairs": ("pair_count", 4), "controls": ("control_pair_count", 0),
+                      "relation": ("candidate_stage2_le_stage1", False), "scope": ("scope", "compile-slice"),
+                      "stable": ("control_verdict", "PASS"), "promotion": ("source_promotion_authorized", True),
+                      "review": ("control_review_status", "WAIVED")}[mutation]
+        evidence[key] = value
+    # Even coherently rehashed passive metadata cannot relax the contract.
+    completion["full_stage_sha256"] = tool._identity(manifest.get("full_stage"))
+    completion["result_body_sha256"] = tool._identity({key: manifest.get(key) for key in tool._COMPLETION_RESULT_FIELDS})
+    path = output / "completion.json"
+    path.chmod(0o644)
+    tool._persist(path, completion)
+    path.chmod(0o444)
+    manifest["completion"].update(sha256=tool._sha(path), size_bytes=path.stat().st_size)
+    assert tool._terminal(manifest, guard, output=output, expected=expected)["status"] == "FAILED"
+
+
+@pytest.mark.parametrize("copied", [False, True])
+def test_full_stage_finalizer_rejects_copied_or_mutated_proof(tool, tmp_path, copied):
+    evidence = _full_stage_metadata(tool, tmp_path)
+    tool._FULL_STAGE_PROOFS[id(evidence)] = (evidence, tool._identity(evidence), {}, {}, {}, {})
+    if copied:
+        evidence = json.loads(json.dumps(evidence))
+    else:
+        evidence["manifest"]["sha256"] = "8" * 64
+    with pytest.raises(tool.CampaignError, match="same-process"):
+        tool._verify_full_stage(evidence, args=None, output=tmp_path, ab=None, performance_lock_token=object())
+
+
+def test_full_stage_success_keeps_control_review_and_source_acceptance_separate(tool, tmp_path):
+    output, manifest, guard, expected, completion = _completion_fixture(tool, tmp_path)
+    result = tool._terminal(manifest, guard, output=output, expected=expected)
+    assert result["status"] == "SUCCEEDED"
+    assert result["claim_level"] == "matched-full-compiler-windows"
+    assert result["full_stage"]["control_review_status"] == "REQUIRED"
+    assert result["full_stage"]["control_verdict"] == "OBSERVATION_ONLY"
+    assert result["full_stage"]["automatic_source_acceptance"] is False
+    assert result["full_stage"]["source_promotion_authorized"] is False
+    assert "new Stage1 -> Stage2 -> Stage3 fixed point" in result["does_not_prove"]
+
+
+def test_full_stage_invokes_producer_twice_with_same_guard_lock_and_deadline(tool, tmp_path, monkeypatch):
+    output = tmp_path / "campaign"
+    output.mkdir()
+    token = object()
+    calls = []
+    guard = types.SimpleNamespace(max_tree_rss_bytes=3 * 1024 ** 3,
+        receipt={"guard_result": {"contract_sha256": "1" * 64}}, verify=lambda: calls.append("guard"))
+    ab = types.SimpleNamespace(_validated_worker_budget=lambda **kwargs: guard,
+        _canonical_sha256=tool._identity, host_python_runtime_evidence=lambda path: {})
+    args = argparse.Namespace(run_token="owner", campaign_request="request", job_deadline_epoch=500,
+                              campaign_deadline_monotonic=200)
+    roots = {"baseline": Path("/baseline"), "candidate": Path("/candidate")}
+    frozen = {"baseline_source": {"sha256": "2" * 64},
+              "runtime_archive": {"path": "/runtime.a", "sha256": "3" * 64}}
+    monkeypatch.setattr(tool, "_sha", lambda path: "4" * 64)
+    def run(stage_args, **kwargs):
+        assert kwargs["ab"] is ab and kwargs["performance_lock_token"] is token
+        assert kwargs["guard_result_path"] == output / "guard.json"
+        assert kwargs["campaign_deadline_monotonic"] == 200
+        assert kwargs["expected_guard_command"] == tool._child_command(args, output)
+        assert stage_args.pairs == 5 and stage_args.max_tree_rss_bytes == guard.max_tree_rss_bytes
+        calls.append(stage_args.candidate_source)
+        path = Path(stage_args.output_dir)
+        path.mkdir()
+        result = {"status": "COMPLETE", "arm": stage_args.candidate_source}
+        tool._persist(path / "manifest.json", result)
+        return result
+    def parse(argv):
+        def value(flag): return argv[argv.index(flag) + 1]
+        return argparse.Namespace(pairs=int(value("--pairs")), max_tree_rss_bytes=int(value("--max-tree-rss-bytes")),
+            output_dir=value("--output-dir"), candidate_source=value("--candidate-source"))
+    stage = types.SimpleNamespace(_parser=lambda: types.SimpleNamespace(parse_args=parse), run_guarded=run)
+    summary = {"candidate_stage2_le_stage1": True, "unchanged_control": {"verdict": "OBSERVATION_ONLY"}}
+    def evaluate(stage_arg, acceptance_arg, result, control, ab_arg, token_arg, identity):
+        assert stage_arg is stage and result["arm"] == "/candidate" and control["arm"] == "/baseline"
+        assert ab_arg is ab and token_arg is token
+        calls.append("evaluate")
+        return summary
+    acceptance = types.SimpleNamespace()
+    monkeypatch.setattr(tool, "_evaluate_full_stage", evaluate)
+    monkeypatch.setattr(tool, "_load", lambda name: stage if name == "run_pcc_stage_ab" else acceptance)
+    evidence = tool._run_full_stage(args, output, roots, frozen, ab, token)
+    assert calls == ["guard", "/candidate", "guard", "/baseline", "evaluate"]
+    assert tool._FULL_STAGE_PROOFS[id(evidence)][0] is evidence
+    tool._verify_full_stage(evidence, args=args, output=output, ab=ab, performance_lock_token=token)
+    assert calls[-2:] == ["evaluate", "guard"]
+
+
+@pytest.mark.parametrize("reason", ["deadline exhausted", "source changed", "runtime changed", "producer changed", "sample changed"])
+def test_final_stage_revalidation_failure_prevents_completion(tool, tmp_path, monkeypatch, reason):
+    evidence = _full_stage_metadata(tool, tmp_path)
+    tool._FULL_STAGE_PROOFS[id(evidence)] = (evidence, tool._identity(evidence), {}, {}, {}, {})
+    def reject(*args, **kwargs):
+        raise RuntimeError(reason)
+    monkeypatch.setattr(tool, "_load", lambda name: types.SimpleNamespace())
+    monkeypatch.setattr(tool, "_evaluate_full_stage", reject)
+    with pytest.raises(RuntimeError, match=reason):
+        tool._verify_full_stage(evidence, args=None, output=tmp_path, ab=None, performance_lock_token=object())
+
+
+def test_full_stage_artifact_seal_survives_real_producer_finalizer(tool, tmp_path, monkeypatch):
+    """Real capability finalizer and filesystem checks, synthetic launch only."""
+    stage = _load(ROOT / "scripts/run_pcc_stage_ab.py", "ci_real_stage_finalizer")
+    ab = _load(ROOT / "scripts/run_pcc_compile_ab.py", "ci_real_stage_receipts")
+    token = object()
+    output = tmp_path / "out"
+    output.mkdir()
+    path = output / "manifest.json"
+    sample = output / "samples.tsv"
+    sample.write_text("synthetic sample\n")
+    result = {"status": "COMPLETE", "pairs": []}
+    tool._persist(path, result)
+    path.chmod(0o444)  # producer seals before retaining its receipt
+    context = types.SimpleNamespace(ab=ab, token=token, budget=object(),
+        verify=lambda: None, sources=[], builds=[], result_files=[ab._path_receipt(path), ab._path_receipt(sample)])
+    stage._GUARDED_RESULTS[id(result)] = (result, context, stage._canonical_sha256(result))
+    artifact = tool._stage_artifact(path, result)
+    stage.verify_guarded_result(result, ab=ab, performance_lock_token=token)
+    assert artifact["sha256"] == tool._sha(path)
+    sample.write_text("changed synthetic sample\n")
+    with pytest.raises(RuntimeError):
+        stage.verify_guarded_result(result, ab=ab, performance_lock_token=token)
+
+
+def test_full_stage_calculation_never_bypasses_live_stage_authority(tool, tmp_path, monkeypatch):
+    calls = []
+    result, control = {"pairs": []}, {"pairs": []}
+    ab = types.SimpleNamespace(_canonical_sha256=tool._identity, host_python_runtime_evidence=lambda path: {})
+    monkeypatch.setattr(tool, "_sha", lambda path: "a" * 64)
+    identity = {"host_runtime_sha256": tool._identity({}),
+                "tools_sha256": tool._identity({name: "a" * 64 for name in tool.TOOLS})}
+    token = object()
+    def verify(value, **kwargs):
+        assert kwargs == {"ab": ab, "performance_lock_token": token}
+        calls.append("ab" if value is result else "aa")
+    stage = types.SimpleNamespace(verify_guarded_result=verify)
+    acceptance = types.SimpleNamespace(
+        calculation_bindings=lambda pairs, controls, **kwargs: (calls.append("bindings") or {}),
+        evaluate_stage_campaign=lambda pairs, controls, **kwargs: (calls.append("calculate") or {"value": True}))
+    assert tool._evaluate_full_stage(stage, acceptance, result, control, ab, token, identity) == {"value": True}
+    assert calls == ["ab", "aa", "bindings", "calculate", "ab", "aa"]
+
+
+def test_real_stage_pair_order_survives_ci_artifact_and_finalization(tool, tmp_path, monkeypatch):
+    """Exercise real artifact/registry seam, with launch and arithmetic synthetic."""
+    stage = _load(ROOT / "scripts/run_pcc_stage_ab.py", "ci_pair_order_stage")
+    ab = _load(ROOT / "scripts/run_pcc_compile_ab.py", "ci_pair_order_ab")
+    token = object()
+    output = tmp_path / "campaign"
+    output.mkdir()
+    records = []
+    samples = []
+    for label in ("full-stage-ab", "full-stage-control"):
+        directory = output / label
+        directory.mkdir()
+        path = directory / "manifest.json"
+        sample = directory / "samples.tsv"
+        sample.write_text("synthetic launch sample\n")
+        # Match the producer's JSON-native pair representation; retain the
+        # actual alternating order function rather than a hand-written order.
+        pairs = [{"index": index, "order": list(stage.pair_order(index)),
+                  **{arm: {"stage_status": {"stage1": "COMPLETE", "stage2": "COMPLETE"}}
+                     for arm in stage.pair_order(index)}} for index in range(1, 6)]
+        result = {"schema": "pcc.bootstrap-stage-ab.v1", "status": "COMPLETE", "pairs": pairs}
+        stage._persist(path, result)
+        path.chmod(0o444)
+        assert json.loads(path.read_text()) == result
+        context = types.SimpleNamespace(ab=ab, token=token, budget=object(),
+            verify=lambda: None, sources=[], builds=[],
+            result_files=[ab._path_receipt(path), ab._path_receipt(sample)])
+        stage._GUARDED_RESULTS[id(result)] = (result, context, stage._canonical_sha256(result))
+        stage.verify_guarded_result(result, ab=ab, performance_lock_token=token)
+        records.append(result)
+        samples.append(sample)
+    summary = {"candidate_stage2_le_stage1": True, "unchanged_control": {"verdict": "OBSERVATION_ONLY"}}
+    tool._persist(output / "full-stage-summary.json", summary)
+    evidence = _full_stage_metadata(tool, output)
+    for key, relative, value in (("manifest", "full-stage-ab/manifest.json", records[0]),
+                                 ("control", "full-stage-control/manifest.json", records[1]),
+                                 ("summary", "full-stage-summary.json", summary)):
+        evidence[key] = tool._stage_artifact(output / relative, value)
+    tool._FULL_STAGE_PROOFS[id(evidence)] = (evidence, tool._identity(evidence), *records, summary, {})
+    # Only numerical calculation is stubbed. Production artifact reads, strong
+    # registry checks, immutable receipt checks and final CI comparisons run.
+    def calculate(stage_arg, acceptance, result, control, ab_arg, token_arg, identity):
+        assert stage_arg is stage and ab_arg is ab and token_arg is token
+        for manifest in (result, control):
+            stage.verify_guarded_result(manifest, ab=ab, performance_lock_token=token)
+        return summary
+    monkeypatch.setattr(tool, "_evaluate_full_stage", calculate)
+    monkeypatch.setattr(tool, "_load", lambda name: stage if name == "run_pcc_stage_ab" else object())
+    monkeypatch.setattr(ab, "_validated_worker_budget", lambda **kwargs: types.SimpleNamespace(verify=lambda: None))
+    args = argparse.Namespace(run_token="owner", campaign_request="request", job_deadline_epoch=500,
+                              campaign_deadline_monotonic=200)
+    tool._verify_full_stage(evidence, args=args, output=output, ab=ab, performance_lock_token=token)
+    samples[1].write_text("changed unchanged-control sample\n")
+    with pytest.raises(RuntimeError):
+        tool._verify_full_stage(evidence, args=args, output=output, ab=ab, performance_lock_token=token)
