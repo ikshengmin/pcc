@@ -2487,6 +2487,20 @@
       "status": "missing"
     },
     {
+      "id": "rust.items.tuple-structs",
+      "title": "Tuple struct declarations, constructors and positional fields",
+      "chapter_ids": [
+        "rust.ref.6.14"
+      ],
+      "scope": "Qualification missing, not implementation missing: `struct S<T>(pub T, u64);` parses into a record with fields named by decimal index, so `s.0` is ordinary field access; `S(a, b)`, `S::<T>(a)` and `module::S(a)` call the constructor in the value namespace and are checked and lowered as the equivalent struct expression. Braced structs are not callable (E0423), argument counts must match (E0061) and private fields keep the constructor private. Tuple-struct patterns, where clauses and unit structs stay gaps. A program runs on the local Mac from PCC's own compiler, arm64 assembler and Mach-O linker; no rustc comparison is recorded for it and the Linux run is unrun. fallible-streaming-iterator's parser frontier moves from lib.rs:427:23 to 836:13 under the actual aarch64-apple-darwin check. No schema2 evidence row is migrated.",
+      "tests": [
+        "tests/rust/test_rust_tuple_structs.py"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "status": "missing"
+    },
+    {
       "id": "rust.attributes.builtin-derives",
       "title": "Built-in derives: Copy, Clone, PartialEq and declared Eq/PartialOrd/Ord/Hash/Debug/Default",
       "chapter_ids": [

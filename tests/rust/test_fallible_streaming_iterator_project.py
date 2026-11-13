@@ -254,12 +254,14 @@ def test_parser_frontier_under_an_actual_darwin_target_check(tmp_path):
     parser = Parser(source, source_path='src/lib.rs', edition=2015, rustc_check=checked)
     # Formerly 367:16, the bound Iterator<Item = Result<&'a T, E>> of
     # `convert`, then 373:28, the outlives bound `T: 'a` of `struct Convert`;
-    # now the tuple struct `pub struct Empty<T, E>(PhantomData<(T, E)>);`.
-    with pytest.raises(RustError, match=r"^src/lib\.rs: 427:23: expected '\{', found '\('$"):
+    # then 427:23, the tuple struct `pub struct Empty<T, E>(PhantomData<(T, E)>);`
+    # (tests/rust/test_rust_tuple_structs.py); now line 836.
+    with pytest.raises(RustError, match=r"^src/lib\.rs: 836:13: expected an identifier$"):
         parser.parse()
-    # The trait impls before it, including both for Convert, were retained.
-    assert [str(item.owner) for item in parser.implementations if item.trait] == [
-        "&'a mut I", "Convert<'a, I, T>", "Convert<'a, I, T>"]
-    convert, = parser.records
+    # The trait impls before it, including both for Convert and Empty, were retained.
+    assert [str(item.owner) for item in parser.implementations if item.trait][:5] == [
+        "&'a mut I", "Convert<'a, I, T>", "Convert<'a, I, T>", 'Empty<T, E>', 'Empty<T, E>']
+    convert = parser.records[0]
+    assert [record.token.text for record in parser.records if record.tuple_fields] == ['Empty']
     assert [(name.text, [item.text for item in lifetimes]) for name, lifetimes in convert.outlives_bounds] == [
         ('T', ["'a"])]

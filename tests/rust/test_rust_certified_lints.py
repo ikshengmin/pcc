@@ -218,7 +218,7 @@ def test_unchanged_project_retains_lint_before_the_next_source_boundary(tmp_path
     # Keep the exact current capability boundary after retained use items.
     # This lint-retention observation is not successful whole-crate compilation.
     with pytest.raises(RustError, match=(
-            r"^src/lib\.rs: 427:23: expected '\{', found '\('$")):
+            r"^src/lib\.rs: 836:13: expected an identifier$")):
         parser.parse()
     assert ['::'.join(token.text for token in item.path) for item in parser.uses] == [
         'core::cmp', 'core::marker::PhantomData']
