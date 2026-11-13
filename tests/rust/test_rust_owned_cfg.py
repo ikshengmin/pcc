@@ -219,10 +219,43 @@ def test_every_item_kind_is_parsed_then_kept_or_rolled_back():
             compile_source(line + ' pub fn answer()->u64{1}')
 
 
-def test_disabled_items_still_need_valid_supported_syntax():
-    # rustc strips only parsed items: a disabled item's syntax is still checked.
-    with pytest.raises(RustError, match="expected"):
+def test_disabled_items_still_need_balanced_item_structure():
+    # A disabled item must still end where Rust syntax ends it.
+    with pytest.raises(RustError, match="unclosed delimiter"):
         compile_source('#[cfg(feature="slow")] fn broken( {} pub fn f(){}')
+
+
+@pytest.mark.parametrize('item', [
+    # rustc strips a disabled item before resolving or expanding anything in
+    # it; forms PCC does not implement are skipped by delimiter structure.
+    '#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn t() { assert_eq!(1, 1); }\n}',
+    '#[cfg(feature="slow")] use std::collections::*;',
+    '#[cfg(feature="slow")] const TABLE: &[u8] = &[1, 2, {3}];',
+    '#[cfg(feature="slow")] macro_rules! m { ($x:expr) => { $x }; }',
+    '#[cfg(feature="slow")] struct Tuple(&\'static [u8]);',
+    '#[cfg(feature="slow")] fn g() -> u64 { unimplemented!() }',
+])
+def test_disabled_items_with_unimplemented_forms_are_skipped(item):
+    source = item + '\npub fn after()->u64{7}'
+    configuration = OwnedRustConfiguration('x86_64-unknown-linux-gnu', 2021, FAST)
+    parser = Parser(source, configuration=configuration)
+    functions = parser.parse()
+    assert [f.token.text for f in functions] == ['after']
+    configured, = parser.conditional_items
+    assert not configured.enabled and configured.item == ()
+    assert source[slice(*configured.source_span)] == item
+    assert parser.macro_expansions == [] and not parser.uses and not parser.consts
+    assert 'define' in compile_source(source).ir_text
+
+
+def test_an_enabled_item_keeps_every_explicit_boundary():
+    with pytest.raises(RustError, match='glob use declarations'):
+        compile_source('#[cfg(feature="fast")] use std::collections::*; pub fn f(){}')
+    with pytest.raises(RustError, match='environment variable `X` not defined'):
+        compile_source('#[cfg(feature="fast")] const A: &str = env!("X"); pub fn f(){}', env={})
+    # A disabled item's env! is never evaluated, as rustc never expands it.
+    assert 'define' in compile_source('#[cfg(feature="slow")] const A: &str = env!("X"); pub fn f(){}',
+                                      env={}).ir_text
 
 
 def test_disabled_outlined_module_file_is_never_loaded():

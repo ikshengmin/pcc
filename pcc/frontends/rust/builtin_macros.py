@@ -7,9 +7,10 @@ input: defined variables, plus names that are knowingly unavailable (such as
 `CARGO_PKG_README`, which Cargo derives from package files) so that using
 them is an explicit error instead of a wrong "not defined".
 
-Both macros are evaluated at parse time. The resulting `&'static str` (or
-`Option<&'static str>`) has no runtime representation yet, so the expansion
-is recorded on the parser and the use then stops at that explicit gap.
+Both macros are evaluated at parse time and every expansion is recorded on
+the parser. `env!` yields a string literal expression (`&'static str`);
+`option_env!` yields `Option<&'static str>`, which stops at the explicit gap
+of the missing core Option model.
 """
 from __future__ import annotations
 
@@ -98,7 +99,7 @@ def expand_expression_macro(parser, token):
     expansion = MacroExpansion(token, token.text, arguments, value)
     parser.macro_expansions.append(expansion)
     if token.text == 'env':
-        raise token.error(f'runtime string values are not implemented; env!({name!r}) expanded to a '
-                          "`&'static str` literal with no runtime representation")
+        from .syntax import Expr
+        return Expr('string', token, value)
     raise token.error(f"option_env!({name!r}) yields Option<&'static str>; the core Option model and "
                       'runtime string values are not implemented')

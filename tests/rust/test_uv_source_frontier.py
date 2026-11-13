@@ -26,9 +26,12 @@ FRONTIER = (
     # `@` patterns, tool lint paths and feature cfg (self-update is off) are
     # owned; line 70 has the lifetime `'a`.
     ("crates/uv/src/lib.rs", "70:75: unsupported Rust type \"'a\"; references and traits are not implemented"),
-    # env!("CARGO_PKG_VERSION") expands to "0.13.7" from the pinned manifest;
-    # the resulting `&'static str` has no runtime representation yet.
-    ("crates/uv-version/src/lib.rs", "5:5: runtime string values are not implemented; env!('CARGO_PKG_VERSION')"),
+    # The whole root parses and compiles: env!("CARGO_PKG_VERSION") is the
+    # `&'static str` "0.13.7" and the disabled test module is skipped. What
+    # remains is the gate on every input: PCC has no owned borrow checker,
+    # so compiling needs an actual rustc check or the caller's attestation
+    # (test_uv_version_compiles_and_runs_natively below).
+    ("crates/uv-version/src/lib.rs", "experimental Rust frontend has no borrow checker"),
     # Grouped uses, `pub use`, `pub(crate)`, `#[cfg(test)]` (off) and
     # `const VERSION: u32 = 1;` are owned; line 101 is
     # `#[derive(Debug, thiserror::Error)]`.
@@ -109,3 +112,34 @@ def test_uv_rust_root_stops_at_its_recorded_first_blocker(name, blocker):
         assert blocker in str(error)
     else:
         pytest.fail(name + " passed its recorded blocker; record the next one")
+
+
+@pytest.mark.xdist_group(name="rust-native-reference")
+def test_uv_version_compiles_and_runs_natively(tmp_path, monkeypatch):
+    """The unchanged root, its release cfg and Cargo environment, compiled by
+    PCC (with the value-only attestation) and run natively where possible."""
+    from tests.rust.str_execution import HOST_TARGET, run_owned_str_function
+    name = "crates/uv-version/src/lib.rs"
+    source = (PROJECT / name).read_text(encoding="utf-8")
+    options = dict(edition=2024, cfg=release_cfg(name), env=crate_environment(name), module_name="uv_version")
+    from pcc.frontends.rust import compile_rust
+    for target in ("x86_64-unknown-linux-gnu", "arm64-apple-darwin"):
+        result = compile_rust(source, experimental_rustc_checked=True, target_triple=target, **options)
+        assert set(result.symbols) == {"version"} and result.emit_object()
+        disabled, = result.conditional_items
+        assert not disabled.enabled and disabled.item == ()  # `#[cfg(test)] mod tests`, skipped
+    if HOST_TARGET is None:
+        pytest.skip("owned execution needs an arm64 Darwin or x86-64 Linux host")
+    assert run_owned_str_function(source, "version", tmp_path, monkeypatch, **options) == b"0.13.7"
+
+
+@pytest.mark.xdist_group(name="rust-native-reference")
+@pytest.mark.pcc_gate(unavailable=None if __import__("shutil").which("rustc") else "development-only rustc is not installed")
+def test_rustc_builds_the_same_uv_version_root(tmp_path):
+    from tests.rust.str_execution import run_rustc_str_function
+    name = "crates/uv-version/src/lib.rs"
+    environment = dict(crate_environment(name).variables)
+    cfg = release_cfg(name)
+    assert run_rustc_str_function((PROJECT / name).read_text(encoding="utf-8"), "version", tmp_path,
+                                  edition=2024, environment=environment, cfg=cfg.cfg,
+                                  panic=cfg.panic) == b"0.13.7"

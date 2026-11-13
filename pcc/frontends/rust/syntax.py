@@ -1066,250 +1066,262 @@ class Parser:
             pending_cfg = None
             item_start = self.pos
             cfg_attributes = []
-            repr_c = no_mangle = False
-            module_path = None
-            enum_repr = None
-            language_item = None
-            docs = []
-            inline_attributes = []
-            while True:
-                docs.extend(self.documentation())
-                if not self.accept("#"):
-                    break
-                attribute_start = self.tokens[self.pos - 1]
-                self.expect("[")
-                attribute = self.take()
-                if attribute.text == 'inline':
-                    from .inline_attributes import inline_attribute
-                    inline_attributes.append(inline_attribute(self, attribute, attribute_start))
-                    continue
-                if attribute.text == 'cfg':
-                    from .configuration import item_cfg_attribute, ConfiguredItemAttribute
-                    syntax = item_cfg_attribute(self, attribute, attribute_start)
-                    self.item_cfg_syntax += (syntax,)
-                    context = self.cfg_configuration(attribute, 'cfg')
-                    cfg_attributes.append(ConfiguredItemAttribute(syntax, context, context.predicate(syntax.predicate)))
-                    continue
-                if attribute.text == "lang":
-                    if language_item is not None:
-                        raise attribute.error("multiple lang attributes on one item are not implemented")
-                    language_item = self.language_item_attribute(attribute)
-                elif attribute.text == "path" and module_path is None:
-                    self.expect("=")
-                    literal = self.take()
-                    if literal.kind != "string":
-                        raise literal.error("module path requires a literal string; macro paths are not implemented")
-                    module_path = literal.literal_value
-                elif attribute.text == "repr" and not repr_c and enum_repr is None:
-                    self.expect("(")
-                    representation = self.take()
-                    if representation.text == "C":
-                        repr_c = True
-                    elif representation.text in {"i32", "i64", "u32", "u64"}:
-                        enum_repr = representation.text
-                    else:
-                        raise representation.error("unsupported representation; enum repr supports i32/i64/u32/u64")
-                    self.expect(")")
-                elif attribute.text == "no_mangle" and not no_mangle:
-                    no_mangle = True
-                else:
-                    raise attribute.error("unsupported Rust attribute; only repr(C) records and no_mangle functions are admitted")
-                self.expect("]")
-            if docs and self.token.kind == "eof":
-                raise docs[-1].token.error("outer documentation attribute has no following item")
-            # Taken before the visibility, so a disabled item's `pub(in ..)`
-            # restriction is rolled back with everything else it declared.
-            cfg_snapshot = self.item_snapshot(functions) if cfg_attributes else None
-            public = parse_visibility(self)
-            from .inline_attributes import require_function_target
-            require_function_target(self, inline_attributes)
-            if cfg_attributes and not (self.token.text == 'extern' and self.tokens[self.pos + 1].text == 'crate'):
-                # Any other item is parsed in full (rustc strips only parsed
-                # items), then kept or rolled back when the next item starts.
-                pending_cfg = (tuple(cfg_attributes), item_start, cfg_snapshot)
-            if language_item is not None and self.token.text != "trait":
-                raise language_item.token.error("language item requires a trait target")
-            if self.accept("mod"):
-                if repr_c or enum_repr or no_mangle:
-                    raise self.token.error("representation/no_mangle attributes do not apply to modules")
-                name = self.name()
-                if self.accept(";"):
-                    body = None
-                else:
-                    if module_path is not None:
-                        raise name.error("path attributes on inline modules are not implemented")
-                    self.expect("{")
-                    body = self.module_body()
-                self.modules.append(Module(name, public, tuple(docs), module_path, body))
-                continue
-            if module_path is not None:
-                raise self.token.error("path attribute is implemented only for outlined modules")
-            if self.accept('use'):
-                use_token = self.tokens[self.pos - 1]
-                if repr_c or enum_repr or no_mangle:
-                    raise use_token.error('representation/no_mangle attributes do not apply to use declarations')
-                self.use_declaration(use_token, public, tuple(docs))
-                continue
-            if self.token.text == 'const' and self.tokens[self.pos + 1].text != 'fn':
-                const_token = self.take()
-                if repr_c or enum_repr or no_mangle or inline_attributes or language_item is not None:
-                    raise const_token.error('representation/no_mangle/inline/lang attributes do not apply to const items')
-                self.const_item(public, tuple(docs))
-                continue
-            if self.token.text == 'const':
-                raise self.token.error('const fn requires checking function bodies against const-evaluation rules, which is not implemented')
-            if self.accept("trait"):
-                if repr_c or enum_repr or no_mangle:
-                    raise self.token.error("attributes on traits are not implemented")
-                name = self.name()
-                parameters = self.generic_parameters(allow_lifetimes=True) if language_item is not None else ()
-                if language_item is not None and (parameters or self.last_lifetime_parameters):
-                    raise language_item.token.error("language item trait requires exactly zero generic parameters")
-                supertraits = []
-                if self.accept(":"):
-                    while self.token.text != "{":
-                        bound = self.token
-                        if bound.kind == "lifetime" or bound.text in {"?", "for"}:
-                            raise bound.error("lifetime, relaxed and higher-ranked supertraits are not implemented")
-                        name_path = self.type()
-                        if not isinstance(name_path, str):
-                            raise bound.error("generic supertraits are not implemented")
-                        supertraits.append((bound, name_path))
-                        if len(supertraits) > 128:
-                            raise bound.error("supertrait list exceeds implementation limit (128)")
-                        if not self.accept("+"):
-                            break
-                if self.token.text != "{":
-                    raise self.token.error("generic traits and where constraints are not implemented")
-                self.expect("{")
-                trait = Trait(name, documentation=tuple(docs), public=public,
-                              language_item=language_item, type_parameters=parameters,
-                              supertraits=tuple(supertraits))
-                while not self.accept("}"):
-                    from .inline_attributes import function_attributes
-                    method_docs, method_inline = function_attributes(self)
-                    require_function_target(self, method_inline)
-                    if self.token.text == 'type':
+            item_snapshot = self.item_snapshot(functions)
+            try:
+                repr_c = no_mangle = False
+                module_path = None
+                enum_repr = None
+                language_item = None
+                docs = []
+                inline_attributes = []
+                while True:
+                    docs.extend(self.documentation())
+                    if not self.accept("#"):
+                        break
+                    attribute_start = self.tokens[self.pos - 1]
+                    self.expect("[")
+                    attribute = self.take()
+                    if attribute.text == 'inline':
+                        from .inline_attributes import inline_attribute
+                        inline_attributes.append(inline_attribute(self, attribute, attribute_start))
+                        continue
+                    if attribute.text == 'cfg':
+                        from .configuration import item_cfg_attribute, ConfiguredItemAttribute
+                        syntax = item_cfg_attribute(self, attribute, attribute_start)
+                        self.item_cfg_syntax += (syntax,)
+                        context = self.cfg_configuration(attribute, 'cfg')
+                        cfg_attributes.append(ConfiguredItemAttribute(syntax, context, context.predicate(syntax.predicate)))
+                        continue
+                    if attribute.text == "lang":
                         if language_item is not None:
-                            raise self.token.error('associated types on inspected language-item traits are not implemented')
-                        trait.associated_types.append(self.associated_type(
-                            declaration=True, documentation=method_docs))
-                        continue
-                    if self.token.text != "fn":
-                        raise self.token.error("only safe required or default trait methods and associated types are implemented; associated constants and unsafe methods are not implemented")
-                    trait.methods.append(self.function("Rust", False, False, False,
-                        declaration=True, implementation=Implementation(name, "Self", trait=name.text),
-                        trait_declaration=True, documentation=method_docs, inline_attributes=method_inline))
-                self.traits.append(trait)
-                continue
-            if self.accept("impl"):
-                if public or repr_c or enum_repr or no_mangle:
-                    raise self.token.error("visibility and attributes on impl blocks are not implemented")
-                token = self.tokens[self.pos - 1]
-                parameters = self.generic_parameters(allow_lifetimes=True, allow_bounds=True)
-                parameter_bounds = tuple(self.last_parameter_bounds)
-                lifetime_parameters = tuple(self.last_lifetime_parameters)
-                owner = self.type()
-                trait_name = None
-                if self.accept("for"):
-                    if parameters or not isinstance(owner, str):
-                        raise token.error("generic traits and blanket/generic trait impls are not implemented")
-                    trait_name, owner = owner, self.type()
-                where_predicates = ()
-                if self.token.text == "where":
-                    where_token = self.take()
-                    if trait_name is not None:
-                        raise where_token.error("trait impl constraints require generic/coherence checking, which is not implemented")
-                    where_predicates = self.function_where_clause(parameters, owner_parameters=())
-                self.expect("{")
-                docs.extend(self.documentation(inner=True))
-                implementation = Implementation(token, owner, parameters, trait_name, tuple(docs),
-                                                parameter_bounds, where_predicates,
-                                                lifetime_parameters=lifetime_parameters)
-                self.implementations.append(implementation)
-                associated_types = []
-                while not self.accept("}"):
-                    from .inline_attributes import function_attributes
-                    method_docs, method_inline = function_attributes(self)
-                    visible = parse_visibility(self)
-                    require_function_target(self, method_inline)
-                    unsafe = self.accept("unsafe")
-                    if trait_name is not None and (visible or unsafe):
-                        raise self.token.error("trait impl methods must be safe and have no visibility qualifier in this slice")
-                    if self.token.text == 'type':
-                        if trait_name is None:
-                            raise self.token.error('inherent associated types are not implemented')
-                        associated_types.append(self.associated_type(
-                            declaration=False, documentation=method_docs))
-                        continue
-                    if trait_name is not None and self.token.text != "fn":
-                        raise self.token.error("trait associated constants are not implemented")
-                    functions.append(self.function("Rust", visible, False, unsafe,
-                        implementation=implementation, documentation=method_docs,
-                        inline_attributes=method_inline))
-                if associated_types:
-                    original = implementation
-                    implementation = replace(original, associated_types=tuple(associated_types))
-                    self.implementations[-1] = implementation
-                    for function in functions:
-                        if function.implementation is original:
-                            function.implementation = implementation
-                continue
-            if self.accept("enum"):
-                if repr_c or no_mangle:
-                    raise self.token.error("enum repr(C) and no_mangle are not supported")
-                self.enumeration(enum_repr, tuple(docs), public=public)
-                continue
-            if enum_repr is not None:
-                raise self.token.error("integer repr applies only to an enum")
-            if self.accept("struct"):
-                if no_mangle:
-                    raise self.token.error("no_mangle is supported only on extern C function definitions")
-                self.record(repr_c, tuple(docs), public=public)
-                continue
-            if repr_c:
-                raise self.token.error("repr(C) applies only to a struct")
-            if self.token.kind == "name" and self.tokens[self.pos + 1].text == "!":
-                raise self.token.error("macro_rules! definitions and item macro invocations require "
-                                       "macro-by-example expansion, which is not implemented")
-            unsafe = self.accept("unsafe")
-            abi = "Rust"
-            if self.accept("extern"):
-                extern_token = self.tokens[self.pos - 1]
-                if self.accept("crate"):
-                    if unsafe or no_mangle or repr_c or enum_repr is not None or language_item is not None:
-                        raise self.token.error("attributes/unsafe on crate aliases are not implemented")
-                    item = self.extern_crate_item(extern_token, self.tokens[item_start], public, tuple(docs))
-                    if cfg_attributes:
-                        from .configuration import ConfiguredItem
-                        configured = ConfiguredItem(tuple(cfg_attributes), item,
-                                                    tuple(self.tokens[item_start:self.pos]), item.source_span)
-                        self.conditional_items += (configured,)
-                        if not configured.enabled:
-                            del self.visibility_restrictions[cfg_snapshot[-1]:]
-                            continue
-                    self.register_extern_crate(item)
+                            raise attribute.error("multiple lang attributes on one item are not implemented")
+                        language_item = self.language_item_attribute(attribute)
+                    elif attribute.text == "path" and module_path is None:
+                        self.expect("=")
+                        literal = self.take()
+                        if literal.kind != "string":
+                            raise literal.error("module path requires a literal string; macro paths are not implemented")
+                        module_path = literal.literal_value
+                    elif attribute.text == "repr" and not repr_c and enum_repr is None:
+                        self.expect("(")
+                        representation = self.take()
+                        if representation.text == "C":
+                            repr_c = True
+                        elif representation.text in {"i32", "i64", "u32", "u64"}:
+                            enum_repr = representation.text
+                        else:
+                            raise representation.error("unsupported representation; enum repr supports i32/i64/u32/u64")
+                        self.expect(")")
+                    elif attribute.text == "no_mangle" and not no_mangle:
+                        no_mangle = True
+                    else:
+                        raise attribute.error("unsupported Rust attribute; only repr(C) records and no_mangle functions are admitted")
+                    self.expect("]")
+                if docs and self.token.kind == "eof":
+                    raise docs[-1].token.error("outer documentation attribute has no following item")
+                # Taken before the visibility, so a disabled item's `pub(in ..)`
+                # restriction is rolled back with everything else it declared.
+                cfg_snapshot = self.item_snapshot(functions) if cfg_attributes else None
+                public = parse_visibility(self)
+                from .inline_attributes import require_function_target
+                require_function_target(self, inline_attributes)
+                if cfg_attributes and not (self.token.text == 'extern' and self.tokens[self.pos + 1].text == 'crate'):
+                    # Any other item is parsed in full (rustc strips only parsed
+                    # items), then kept or rolled back when the next item starts.
+                    pending_cfg = (tuple(cfg_attributes), item_start, cfg_snapshot)
+                if language_item is not None and self.token.text != "trait":
+                    raise language_item.token.error("language item requires a trait target")
+                if self.accept("mod"):
+                    if repr_c or enum_repr or no_mangle:
+                        raise self.token.error("representation/no_mangle attributes do not apply to modules")
+                    name = self.name()
+                    if self.accept(";"):
+                        body = None
+                    else:
+                        if module_path is not None:
+                            raise name.error("path attributes on inline modules are not implemented")
+                        self.expect("{")
+                        body = self.module_body()
+                    self.modules.append(Module(name, public, tuple(docs), module_path, body))
                     continue
-                if self.token.kind == "string":
-                    token = self.take()
-                    if token.literal_value == "C-unwind":
-                        raise token.error("C-unwind requires owned cross-language unwinding, which is not implemented")
-                    if token.literal_value != "C":
-                        raise token.error('only the non-unwinding extern "C" ABI is supported')
-                abi = "C"
-                if self.accept("{"):
-                    if no_mangle or public or docs:
-                        raise self.token.error("attributes and visibility on extern blocks are not supported")
+                if module_path is not None:
+                    raise self.token.error("path attribute is implemented only for outlined modules")
+                if self.accept('use'):
+                    use_token = self.tokens[self.pos - 1]
+                    if repr_c or enum_repr or no_mangle:
+                        raise use_token.error('representation/no_mangle attributes do not apply to use declarations')
+                    self.use_declaration(use_token, public, tuple(docs))
+                    continue
+                if self.token.text == 'const' and self.tokens[self.pos + 1].text != 'fn':
+                    const_token = self.take()
+                    if repr_c or enum_repr or no_mangle or inline_attributes or language_item is not None:
+                        raise const_token.error('representation/no_mangle/inline/lang attributes do not apply to const items')
+                    self.const_item(public, tuple(docs))
+                    continue
+                if self.token.text == 'const':
+                    raise self.token.error('const fn requires checking function bodies against const-evaluation rules, which is not implemented')
+                if self.accept("trait"):
+                    if repr_c or enum_repr or no_mangle:
+                        raise self.token.error("attributes on traits are not implemented")
+                    name = self.name()
+                    parameters = self.generic_parameters(allow_lifetimes=True) if language_item is not None else ()
+                    if language_item is not None and (parameters or self.last_lifetime_parameters):
+                        raise language_item.token.error("language item trait requires exactly zero generic parameters")
+                    supertraits = []
+                    if self.accept(":"):
+                        while self.token.text != "{":
+                            bound = self.token
+                            if bound.kind == "lifetime" or bound.text in {"?", "for"}:
+                                raise bound.error("lifetime, relaxed and higher-ranked supertraits are not implemented")
+                            name_path = self.type()
+                            if not isinstance(name_path, str):
+                                raise bound.error("generic supertraits are not implemented")
+                            supertraits.append((bound, name_path))
+                            if len(supertraits) > 128:
+                                raise bound.error("supertrait list exceeds implementation limit (128)")
+                            if not self.accept("+"):
+                                break
+                    if self.token.text != "{":
+                        raise self.token.error("generic traits and where constraints are not implemented")
+                    self.expect("{")
+                    trait = Trait(name, documentation=tuple(docs), public=public,
+                                  language_item=language_item, type_parameters=parameters,
+                                  supertraits=tuple(supertraits))
                     while not self.accept("}"):
                         from .inline_attributes import function_attributes
-                        declaration_docs, declaration_inline = function_attributes(self)
-                        visible = parse_visibility(self)
-                        require_function_target(self, declaration_inline)
-                        functions.append(self.function("C", visible, False, True, declaration=True,
-                            documentation=declaration_docs, inline_attributes=declaration_inline))
+                        method_docs, method_inline = function_attributes(self)
+                        require_function_target(self, method_inline)
+                        if self.token.text == 'type':
+                            if language_item is not None:
+                                raise self.token.error('associated types on inspected language-item traits are not implemented')
+                            trait.associated_types.append(self.associated_type(
+                                declaration=True, documentation=method_docs))
+                            continue
+                        if self.token.text != "fn":
+                            raise self.token.error("only safe required or default trait methods and associated types are implemented; associated constants and unsafe methods are not implemented")
+                        trait.methods.append(self.function("Rust", False, False, False,
+                            declaration=True, implementation=Implementation(name, "Self", trait=name.text),
+                            trait_declaration=True, documentation=method_docs, inline_attributes=method_inline))
+                    self.traits.append(trait)
                     continue
-            functions.append(self.function(abi, public, no_mangle, unsafe, documentation=tuple(docs),
-                                           inline_attributes=tuple(inline_attributes)))
+                if self.accept("impl"):
+                    if public or repr_c or enum_repr or no_mangle:
+                        raise self.token.error("visibility and attributes on impl blocks are not implemented")
+                    token = self.tokens[self.pos - 1]
+                    parameters = self.generic_parameters(allow_lifetimes=True, allow_bounds=True)
+                    parameter_bounds = tuple(self.last_parameter_bounds)
+                    lifetime_parameters = tuple(self.last_lifetime_parameters)
+                    owner = self.type()
+                    trait_name = None
+                    if self.accept("for"):
+                        if parameters or not isinstance(owner, str):
+                            raise token.error("generic traits and blanket/generic trait impls are not implemented")
+                        trait_name, owner = owner, self.type()
+                    where_predicates = ()
+                    if self.token.text == "where":
+                        where_token = self.take()
+                        if trait_name is not None:
+                            raise where_token.error("trait impl constraints require generic/coherence checking, which is not implemented")
+                        where_predicates = self.function_where_clause(parameters, owner_parameters=())
+                    self.expect("{")
+                    docs.extend(self.documentation(inner=True))
+                    implementation = Implementation(token, owner, parameters, trait_name, tuple(docs),
+                                                    parameter_bounds, where_predicates,
+                                                    lifetime_parameters=lifetime_parameters)
+                    self.implementations.append(implementation)
+                    associated_types = []
+                    while not self.accept("}"):
+                        from .inline_attributes import function_attributes
+                        method_docs, method_inline = function_attributes(self)
+                        visible = parse_visibility(self)
+                        require_function_target(self, method_inline)
+                        unsafe = self.accept("unsafe")
+                        if trait_name is not None and (visible or unsafe):
+                            raise self.token.error("trait impl methods must be safe and have no visibility qualifier in this slice")
+                        if self.token.text == 'type':
+                            if trait_name is None:
+                                raise self.token.error('inherent associated types are not implemented')
+                            associated_types.append(self.associated_type(
+                                declaration=False, documentation=method_docs))
+                            continue
+                        if trait_name is not None and self.token.text != "fn":
+                            raise self.token.error("trait associated constants are not implemented")
+                        functions.append(self.function("Rust", visible, False, unsafe,
+                            implementation=implementation, documentation=method_docs,
+                            inline_attributes=method_inline))
+                    if associated_types:
+                        original = implementation
+                        implementation = replace(original, associated_types=tuple(associated_types))
+                        self.implementations[-1] = implementation
+                        for function in functions:
+                            if function.implementation is original:
+                                function.implementation = implementation
+                    continue
+                if self.accept("enum"):
+                    if repr_c or no_mangle:
+                        raise self.token.error("enum repr(C) and no_mangle are not supported")
+                    self.enumeration(enum_repr, tuple(docs), public=public)
+                    continue
+                if enum_repr is not None:
+                    raise self.token.error("integer repr applies only to an enum")
+                if self.accept("struct"):
+                    if no_mangle:
+                        raise self.token.error("no_mangle is supported only on extern C function definitions")
+                    self.record(repr_c, tuple(docs), public=public)
+                    continue
+                if repr_c:
+                    raise self.token.error("repr(C) applies only to a struct")
+                if self.token.kind == "name" and self.tokens[self.pos + 1].text == "!":
+                    raise self.token.error("macro_rules! definitions and item macro invocations require "
+                                           "macro-by-example expansion, which is not implemented")
+                unsafe = self.accept("unsafe")
+                abi = "Rust"
+                if self.accept("extern"):
+                    extern_token = self.tokens[self.pos - 1]
+                    if self.accept("crate"):
+                        if unsafe or no_mangle or repr_c or enum_repr is not None or language_item is not None:
+                            raise self.token.error("attributes/unsafe on crate aliases are not implemented")
+                        item = self.extern_crate_item(extern_token, self.tokens[item_start], public, tuple(docs))
+                        if cfg_attributes:
+                            from .configuration import ConfiguredItem
+                            configured = ConfiguredItem(tuple(cfg_attributes), item,
+                                                        tuple(self.tokens[item_start:self.pos]), item.source_span)
+                            self.conditional_items += (configured,)
+                            if not configured.enabled:
+                                del self.visibility_restrictions[cfg_snapshot[-1]:]
+                                continue
+                        self.register_extern_crate(item)
+                        continue
+                    if self.token.kind == "string":
+                        token = self.take()
+                        if token.literal_value == "C-unwind":
+                            raise token.error("C-unwind requires owned cross-language unwinding, which is not implemented")
+                        if token.literal_value != "C":
+                            raise token.error('only the non-unwinding extern "C" ABI is supported')
+                    abi = "C"
+                    if self.accept("{"):
+                        if no_mangle or public or docs:
+                            raise self.token.error("attributes and visibility on extern blocks are not supported")
+                        while not self.accept("}"):
+                            from .inline_attributes import function_attributes
+                            declaration_docs, declaration_inline = function_attributes(self)
+                            visible = parse_visibility(self)
+                            require_function_target(self, declaration_inline)
+                            functions.append(self.function("C", visible, False, True, declaration=True,
+                                documentation=declaration_docs, inline_attributes=declaration_inline))
+                        continue
+                functions.append(self.function(abi, public, no_mangle, unsafe, documentation=tuple(docs),
+                                               inline_attributes=tuple(inline_attributes)))
+            except RustError as error:
+                # rustc strips a disabled item before resolving or expanding
+                # anything in it; it only has to be valid syntax, which the
+                # required rustc check (or its attestation) guarantees. When
+                # PCC's own parse of such an item reaches an unimplemented
+                # form, skip it by delimiter structure instead.
+                if not any(not attribute.enabled for attribute in cfg_attributes):
+                    raise
+                pending_cfg = None
+                self.skip_disabled_item(item_start, tuple(cfg_attributes), item_snapshot, functions, error)
         self.finish_configured_item(pending_cfg, functions)
         if _inline:
             self.expect("}")
@@ -1337,7 +1349,71 @@ class Parser:
     # parsed like any other, then each collection is cut back to its length
     # before the item, so nothing it declared reaches names, files or IR.
     _ITEM_COLLECTIONS = ('records', 'enums', 'implementations', 'traits', 'modules', 'uses', 'consts',
-                         'crate_aliases', 'attribute_requirements', 'visibility_restrictions')
+                         'crate_aliases', 'attribute_requirements', 'visibility_restrictions',
+                         'macro_expansions')
+
+    # Items whose syntax ends with a braced body (or `;` when bodiless); the
+    # others end only at a top-level `;`, even when they contain braces.
+    _BRACED_ITEMS = frozenset({'fn', 'struct', 'enum', 'union', 'trait', 'impl', 'mod', 'macro_rules'})
+    _SEMICOLON_ITEMS = frozenset({'use', 'const', 'static', 'type'})
+
+    def skip_token_tree(self):
+        opener = self.take()
+        closers = {'(': ')', '[': ']', '{': '}'}
+        stack = [closers[opener.text]]
+        while stack:
+            token = self.take()
+            if token.kind == 'eof':
+                raise opener.error(f'unclosed delimiter {opener.text!r}')
+            if token.kind == 'punct' and token.text in closers:
+                stack.append(closers[token.text])
+            elif token.kind == 'punct' and token.text in {')', ']', '}'}:
+                if token.text != stack.pop():
+                    raise token.error(f'mismatched closing delimiter {token.text!r}')
+
+    def skip_disabled_item(self, start, attributes, snapshot, functions, error):
+        """Skip one cfg-disabled item by token-tree structure and record it."""
+        from .attribute_metadata import offset
+        from .configuration import ConfiguredItem
+        del functions[snapshot[0]:]
+        for name, length in zip(self._ITEM_COLLECTIONS, snapshot[1:]):
+            del getattr(self, name)[length:]
+        self.pos = start
+        while True:
+            if self.token.kind == 'doc_outer':
+                self.take()
+            elif self.token.text == '#' and self.tokens[self.pos + 1].text == '[':
+                self.take()
+                self.skip_token_tree()
+            else:
+                break
+        kind = None
+        while True:
+            token = self.token
+            if token.kind == 'eof':
+                raise error
+            if kind is None and token.text in self._BRACED_ITEMS | self._SEMICOLON_ITEMS | {'extern'}:
+                following = self.tokens[self.pos + 1]
+                if token.text == 'const' and following.text in {'fn', 'unsafe', 'async', 'extern'}:
+                    kind = 'fn'
+                elif token.text == 'extern':
+                    kind = 'use' if following.text == 'crate' else 'fn'
+                else:
+                    kind = token.text
+            if token.text == ';':
+                self.take()
+                break
+            if token.text in {'(', '[', '{'}:
+                braced = token.text == '{' and kind not in self._SEMICOLON_ITEMS
+                self.skip_token_tree()
+                if braced:
+                    break
+                continue
+            self.take()
+        first, last = self.tokens[start], self.tokens[self.pos - 1]
+        end = last.source_end if last.source_end is not None else offset(self, last) + len(last.text)
+        self.conditional_items += (ConfiguredItem(attributes, (), tuple(self.tokens[start:self.pos]),
+                                                  (offset(self, first), end)),)
 
     def item_snapshot(self, functions):
         return (len(functions),) + tuple(len(getattr(self, name)) for name in self._ITEM_COLLECTIONS)
@@ -1552,12 +1628,13 @@ class Parser:
     def expression(self, minimum: int = 1, allow_struct: bool = True, *, complete_block: bool = False) -> Expr:
         token = self.take()
         text = token.text
-        if token.kind == "string":
-            raise token.error("runtime string values are not implemented; strings are admitted only as attribute payloads and ABI names")
         if token.kind in {"doc_inner", "doc_outer"}:
             raise token.error("documentation attributes on statements and nested block expressions are not implemented")
         if token.kind == "integer":
             expr = Expr("integer", token, text)
+        elif token.kind == "string":
+            # A string literal is a `&'static str` value (see types.STATIC_STR).
+            expr = Expr("string", token, token.literal_value)
         elif text in {"true", "false"}:
             expr = Expr("bool", token, text == "true")
         elif text == "[":
@@ -1671,7 +1748,7 @@ class Parser:
             # Built-in expression macros; no macro_rules! can shadow them here,
             # since macro definitions are not admitted.
             from .builtin_macros import expand_expression_macro
-            expand_expression_macro(self, token)
+            expr = expand_expression_macro(self, token)
         elif token.kind == "name" and self.token.text == "!":
             raise token.error("macro invocations require macro-by-example expansion, which is not implemented")
         elif (token.kind == "name" and text != "_") or text in {"self", "Self", "super", "crate"}:

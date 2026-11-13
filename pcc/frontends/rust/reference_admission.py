@@ -8,8 +8,8 @@ pointer lowering through a caller-attestation flag.
 """
 from dataclasses import fields, is_dataclass
 
-from .syntax import Expr, RustError
-from .types import SharedReference
+from .syntax import ConstItem, Expr, RustError
+from .types import SharedReference, is_static_str
 
 
 REFERENCE_CHECK_REQUIRED = (
@@ -31,6 +31,14 @@ def contains_references(*roots):
         if identity in seen:
             continue
         seen.add(identity)
+        if is_static_str(value):
+            continue  # Literal data only; see types.STATIC_STR.
+        if isinstance(value, ConstItem):
+            # A const item's `&str` is `&'static str` (elision in a const).
+            pending.append(value.expression)
+            if not is_static_str(value.ty, elided_is_static=True):
+                pending.append(value.ty)
+            continue
         if isinstance(value, SharedReference):
             return True
         if isinstance(value, Expr) and value.kind in {"borrow", "deref"}:

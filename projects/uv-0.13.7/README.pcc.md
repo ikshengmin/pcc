@@ -48,7 +48,7 @@ predicate is `cfg(test)`, which the test asserts.
 |---|---|
 | `crates/uv/src/bin/uv.rs` | `4:14` `extern crate uv_performance_memory_allocator;` (active under default features) needs external crate loading |
 | `crates/uv/src/lib.rs` | `70:75` the lifetime `'a` in a reference type |
-| `crates/uv-version/src/lib.rs` | `5:5` `env!("CARGO_PKG_VERSION")` expands to `"0.13.7"`; the `&'static str` value has no runtime representation yet |
+| `crates/uv-version/src/lib.rs` | none in the frontend: the whole root compiles, and with the value-only attestation an owned native build prints `0.13.7`; without it, the global gate (no owned borrow checker) remains |
 | `crates/uv-lock/src/lock/mod.rs` | `101:3` `#[derive(Debug, thiserror::Error)]` derive attribute |
 
 Both roots formerly stopped in the lexer at `@` (`lib.rs:1515:34`, the
@@ -72,7 +72,13 @@ configuration (`tests/rust/test_rust_owned_cfg.py`), and the integer const
 item `const VERSION: u32 = 1;` (formerly `lock/mod.rs:98:1`) is owned
 (`tests/rust/programs/const_items.rs`). `env!` is evaluated against the crate
 environment Cargo sets, derived from the pinned manifests
-(`tests/rust/test_rust_builtin_env.py`).
+(`tests/rust/test_rust_builtin_env.py`). With string literals as `&'static str`
+values and disabled items skipped by delimiter structure (its `#[cfg(test)] mod
+tests`), `uv-version` is the first uv root PCC compiles in full: on Apple
+silicon, PCC's own compiler, assembler and Mach-O linker produce a program
+whose `version()` prints `0.13.7`, as rustc's build of the same root does
+(`test_uv_version_compiles_and_runs_natively`, local Mac evidence; the
+x86-64 Linux run of the same test is unrun in this change).
 
 ```sh
 uv run pytest -x -q tests/rust/test_uv_source_frontier.py

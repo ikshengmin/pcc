@@ -11,7 +11,8 @@ from pcc.support.instantiation import InstanceRegistry
 
 from .syntax import Enumeration
 from .types import (
-    INTEGER_TYPES, FixedArrayType, SharedReference, TupleType, TypeApplication, TypeParameter,
+    INTEGER_TYPES, STATIC_STR, FixedArrayType, SharedReference, TupleType, TypeApplication, TypeParameter,
+    is_static_str,
 )
 
 PRIMITIVES = INTEGER_TYPES | {"bool", "()"}
@@ -91,6 +92,8 @@ class GenericDeclarations:
         if isinstance(ty, TupleType):
             return TupleType(tuple(self.normalize(t, token, scope, placeholder_context=placeholder_context)
                                    for t in ty.elements))
+        if is_static_str(ty):
+            return STATIC_STR
         if isinstance(ty, SharedReference):
             return SharedReference(self.normalize(ty.referent, token, scope, placeholder_context=placeholder_context),
                                    ty.mutable, ty.lifetime)
@@ -200,8 +203,8 @@ class GenericDeclarations:
                 if budget < 0 or len(stack) > 32:
                     raise declaration.token.error("recursive/growing generic layout exceeds implementation limit")
                 bounded_type(ty, declaration.token)
-                if isinstance(ty, TypeParameter) or ty in PRIMITIVES:
-                    return
+                if isinstance(ty, TypeParameter) or ty in PRIMITIVES or ty == STATIC_STR:
+                    return  # A `&'static str` field stores literal data only.
                 if isinstance(ty, SharedReference):
                     raise declaration.token.error("aggregate reference storage requires lifetime analysis, which is not implemented")
                 if isinstance(ty, FixedArrayType):

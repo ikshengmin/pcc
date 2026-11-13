@@ -125,7 +125,7 @@ class MoveChecker:
 
     def expression(self, expr: Expr, state: State) -> State | None:
         kind, children = expr.kind, expr.children
-        if kind in {"integer", "bool", "unit", "variant", "const"}:
+        if kind in {"integer", "bool", "unit", "variant", "const", "string"}:
             return state
         if kind == "borrow":
             self.read_place(children[0], state, consume=False)

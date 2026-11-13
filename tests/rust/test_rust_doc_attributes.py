@@ -94,8 +94,6 @@ def test_ordinary_comment_prefixes_do_not_create_documentation():
     ('#[doc=r##"unterminated"#]fn f(){}','unterminated raw'),
     ('#[doc=include_str!("x.md")]fn f(){}','literal string'),
     ('#[doc(unknown)]fn f(){}','unsupported doc option'),
-    ('fn f(){"hello";}','runtime string'),
-    ('fn f(){r#"hello"#;}','runtime string'),
     ('fn f(){ {/// }\n} }','documentation attributes'),
     ('#["doc"="text"]fn f(){}','unsupported Rust attribute'),
     ('#!["no_std"]fn f(){}','unsupported semantic crate attribute'),

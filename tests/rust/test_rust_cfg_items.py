@@ -135,9 +135,6 @@ def test_actual_cfg_never_guesses_target_custom_or_short_circuited_context(
 @pytest.mark.parametrize('source,message', (
     ('#[cfg(all())]extern crate core;' + BODY, 'external crate dependency loading'),
     ('#[cfg(all())]extern crate self as _;' + BODY, 'anonymous crate aliases'),
-    # Every item kind is now gated; a disabled item is still parsed in full,
-    # as rustc strips only parsed items, so its macro body keeps that boundary.
-    ('#[cfg(feature="std")]fn omitted(){unimplemented!();}' + BODY, 'macro invocations require'),
 ))
 def test_actual_conditional_items_keep_active_dependency_and_other_item_boundaries(
         source, message, tmp_path, monkeypatch):
@@ -146,6 +143,18 @@ def test_actual_conditional_items_keep_active_dependency_and_other_item_boundari
     monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('unowned conditional item reached IR'))
     with pytest.raises(RustError, match=message):
         compile_rust(source, rustc_check=checked)
+
+
+@pytest.mark.integration
+@pytest.mark.xdist_group(name='rust-native-reference')
+@pytest.mark.pcc_gate(unavailable=ACTUAL_UNAVAILABLE)
+def test_actual_disabled_item_with_a_macro_body_is_skipped(tmp_path):
+    # Former boundary row: rustc never expands a disabled item's macros.
+    source = '#[cfg(feature="std")]fn omitted(){unimplemented!();}' + BODY
+    checked = certify(source, tmp_path / 'actual-check')
+    result = compile_rust(source, rustc_check=checked)
+    item, = result.conditional_items
+    assert not item.enabled and item.item == () and result.externally_checked
 
 
 @pytest.mark.integration

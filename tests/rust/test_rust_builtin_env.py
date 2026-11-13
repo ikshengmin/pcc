@@ -6,9 +6,10 @@ https://doc.rust-lang.org/cargo/reference/environment-variables.html
 PCC evaluates both macros at parse time against a `CompileEnvironment` the
 caller supplies (never the host process environment). Argument rules and
 messages follow rustc; values follow the environment, and Cargo's crate
-environment is derived from manifests. The expanded `&'static str` has no
-runtime representation yet, so every expansion is recorded on the parser and
-the use then stops at that explicit gap: no owned execution is claimed.
+environment is derived from manifests. Every expansion is recorded on the
+parser. `env!` yields a `&'static str` literal (executed natively in
+test_rust_static_str and for uv-version); `option_env!` stops at the
+explicit gap of the missing core Option model.
 """
 import os
 import shutil
@@ -24,10 +25,13 @@ ENV = CompileEnvironment.of({'PCC_SET': 'value', 'PCC_EMPTY': ''}, {'PCC_HIDDEN'
 
 
 def expand(body, environment=ENV):
+    """The recorded expansions, and the parse error (None when it parses)."""
     parser = Parser('pub fn f(){ let v = ' + body + '; }', environment=environment)
-    with pytest.raises(RustError) as error:
+    try:
         parser.parse()
-    return parser.macro_expansions, str(error.value)
+    except RustError as error:
+        return parser.macro_expansions, str(error)
+    return parser.macro_expansions, None
 
 
 EXPANDED = (
@@ -44,12 +48,15 @@ EXPANDED = (
 
 
 @pytest.mark.parametrize('body,name,arguments,value', EXPANDED, ids=[row[0] for row in EXPANDED])
-def test_expansion_records_the_value_then_stops_at_runtime_strings(body, name, arguments, value):
+def test_expansion_records_the_value_and_env_yields_a_string_literal(body, name, arguments, value):
     expansions, message = expand(body)
     expansion, = expansions
     assert (expansion.name, expansion.arguments, expansion.value) == (name, arguments, value)
     assert (expansion.token.text, expansion.token.column) == (name, 21)
-    assert 'runtime string values are not implemented' in message
+    if name == 'env':
+        assert message is None
+    else:
+        assert 'the core Option model' in message
 
 
 REJECTED = (
@@ -67,7 +74,7 @@ REJECTED = (
 @pytest.mark.parametrize('body,message', REJECTED, ids=[row[0] for row in REJECTED])
 def test_invalid_uses_report_rustc_messages_without_expanding(body, message):
     expansions, actual = expand(body)
-    assert expansions == [] and actual.endswith(message)
+    assert expansions == [] and actual is not None and actual.endswith(message)
 
 
 @pytest.mark.parametrize('body,environment,message', [
@@ -78,7 +85,7 @@ def test_invalid_uses_report_rustc_messages_without_expanding(body, message):
 ])
 def test_unowned_arguments_and_missing_environments_are_explicit(body, environment, message):
     expansions, actual = expand(body, environment)
-    assert expansions == [] and message in actual
+    assert expansions == [] and actual is not None and message in actual
 
 
 def test_compile_rust_takes_a_mapping_or_an_environment_and_never_reads_the_host(monkeypatch):
@@ -87,8 +94,8 @@ def test_compile_rust_takes_a_mapping_or_an_environment_and_never_reads_the_host
         compile_rust('pub fn f(){ let v = env!("PCC_FROM_HOST"); }', experimental_rustc_checked=True)
     with pytest.raises(RustError, match='`PCC_FROM_HOST` not defined at compile time'):
         compile_rust('pub fn f(){ let v = env!("PCC_FROM_HOST"); }', experimental_rustc_checked=True, env={})
-    with pytest.raises(RustError, match='runtime string values'):
-        compile_rust('pub fn f(){ let v = env!("X"); }', experimental_rustc_checked=True, env={'X': 'y'})
+    assert 'define' in compile_rust('pub fn f()->&\'static str{ env!("X") }', experimental_rustc_checked=True,
+                                    env={'X': 'y'}).ir_text
     with pytest.raises(RustError, match='map strings to strings'):
         CompileEnvironment.of({'X': 1})
     with pytest.raises(RustError, match='both defined and unavailable'):

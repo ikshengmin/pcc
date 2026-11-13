@@ -6,7 +6,8 @@ from dataclasses import dataclass
 
 from .syntax import ConstItem, Enumeration, Expr, Function, Record, RustError, Token
 from .types import (
-    INTEGER_TYPES, FixedArrayType, SharedReference, TupleType, TypeApplication, TypeParameter, integer_bits,
+    INTEGER_TYPES, STATIC_STR, FixedArrayType, SharedReference, TupleType, TypeApplication, TypeParameter, integer_bits,
+    is_static_str,
 )
 
 INTEGERS = INTEGER_TYPES
@@ -254,21 +255,24 @@ class Checker:
             self.scopes, self.type_scope, self.abstract_function = [{}], {}, False
             if const.item_identity is not None:
                 self.current_module = const.item_identity.module
-            ty = self.generics.normalize(const.ty, const.token)
-            if ty not in INTEGERS | {"bool"}:
-                raise const.token.error(f'const items of type {ty} are not implemented; integer and bool const items are')
+            # In a const item an elided `&str` lifetime is 'static.
+            ty = STATIC_STR if is_static_str(const.ty, elided_is_static=True) else self.generics.normalize(const.ty, const.token)
+            if ty not in INTEGERS | {"bool", STATIC_STR}:
+                raise const.token.error(f'const items of type {ty} are not implemented; integer, bool and &str const items are')
             pending, count = [const.expression], 0
             while pending:
                 node = pending.pop()
                 count += 1
                 if count > 1024:
                     raise node.token.error('const initializer exceeds implementation limit (1024 nodes)')
-                if node.kind not in {'integer', 'bool', 'group', 'unary', 'binary', 'cast', 'name', 'variant', 'const'}:
+                if node.kind not in {'integer', 'bool', 'string', 'group', 'unary', 'binary', 'cast', 'name', 'variant', 'const'}:
                     raise node.token.error('const initializers support literals, operators, casts and other const '
                                            'items; calls, blocks and other expressions are not implemented')
                 pending.extend(node.children)
             unify(ty, self.expression(const.expression), const.expression.token)
             value = self.validate(const.expression)
+            if ty == STATIC_STR:
+                value = self.static_str_value(const.expression)
             if value is None:
                 raise const.expression.token.error('const initializer is not a closed constant expression')
             const.ty, const.value, const.evaluated = ty, value, True
@@ -276,6 +280,16 @@ class Checker:
         finally:
             self.evaluating_consts.pop()
             self.scopes, self.current_module, self.type_scope, self.abstract_function = saved
+
+    def static_str_value(self, expr):
+        """The literal text a `&'static str` const initializer denotes."""
+        while expr.kind == "group":
+            expr = expr.children[0]
+        if expr.kind == "string":
+            return expr.value
+        if expr.kind == "const":
+            return expr.binding.value
+        return None
 
     def local(self, name: str) -> Binding | None:
         for scope in reversed(self.scopes):
@@ -311,7 +325,7 @@ class Checker:
         if isinstance(ty, TupleType):
             return all(self.copy_type(item) for item in ty.elements)
         # Named Rust structs do NOT become Copy just because their fields are.
-        return ty in INTEGERS | {"bool", "()"}
+        return ty in INTEGERS | {"bool", "()", STATIC_STR}
 
     def valid_type(self, ty: object, token: Token, stack: tuple[str, ...] = (), *, allow_reference=True, require_sized=True) -> None:
         if isinstance(ty, (InferredInteger, InferredType)):
@@ -351,7 +365,7 @@ class Checker:
             for item in ty.elements:
                 self.valid_type(item, token, stack, allow_reference=False)
             return
-        if ty in INTEGERS | {"bool", "()"}:
+        if ty in INTEGERS | {"bool", "()", STATIC_STR}:
             return
         if ty in self.enums:
             if ty in stack:
@@ -559,6 +573,8 @@ class Checker:
             ty = const.ty
         elif kind == "const":
             ty = expr.binding.ty
+        elif kind == "string":
+            ty = STATIC_STR
         elif kind == "variant":
             enum_name, variant = expr.value
             if isinstance(enum_name, TypeApplication) or enum_name in self.generics.definitions or enum_name == "Self" or self.module_resolution is not None:

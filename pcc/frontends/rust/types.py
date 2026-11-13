@@ -23,6 +23,19 @@ class SharedReference:
         return "&" + ((self.lifetime + " ") if self.lifetime else "") + ("mut " if self.mutable else "") + str(self.referent)
 
 
+# `&'static str`: string-literal data. It is a plain Copy value type here:
+# literals are its only source and no borrow of a local can produce one, so
+# it needs no lifetime analysis. `&str` with any other lifetime is still an
+# ordinary reference behind the checked-source boundary.
+STATIC_STR = "&'static str"
+
+
+def is_static_str(ty, *, elided_is_static=False):
+    """Whether a parsed type is `&'static str` (or `&str` where elision means 'static)."""
+    return (isinstance(ty, SharedReference) and ty.referent == "str" and not ty.mutable
+            and (ty.lifetime == "'static" or elided_is_static and ty.lifetime is None))
+
+
 @dataclass(frozen=True)
 class TypeApplication:
     """Nominal application, resolved within one declaration-owning checker."""

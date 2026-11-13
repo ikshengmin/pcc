@@ -9,7 +9,7 @@ from .iteration import OwnedArrayIteration, StandardIterator
 from .semantics import Binding, Checker, NEVER
 from .syntax import Expr, Function
 from .targets import RustTarget
-from .types import FixedArrayType, SharedReference, TupleType, integer_bits
+from .types import STATIC_STR, FixedArrayType, SharedReference, TupleType, integer_bits
 
 
 def ir_type(ty: str, pointer_bits=None):
@@ -56,6 +56,10 @@ class Lowerer:
         self.function = None
 
     def type(self, ty):
+        if ty == STATIC_STR:
+            # (data pointer, byte length): two integer words, as rustc passes
+            # and returns a `&str` scalar pair on these targets.
+            return ir.LiteralStructType([ir.IntType(8).as_pointer(), ir.IntType(self.target.pointer_bits)])
         if isinstance(ty, FixedArrayType):
             element = ir.LiteralStructType([]) if ty.element == "()" else self.type(ty.element)
             return ir.ArrayType(element, ty.length)
@@ -79,6 +83,30 @@ class Lowerer:
                 return ir.LiteralStructType([tag] + [self.type(TupleType(fields)) for fields in enum.payloads.values()])
             return tag
         return ir_type(ty, self.target.pointer_bits)
+
+    def static_str(self, text):
+        """A `&'static str` value: private readonly UTF-8 bytes and a
+        private (pointer, length) descriptor, loaded as one value. The
+        backend relocates pointers in static aggregate initializers, not in
+        inline aggregate constants. An empty string still points at a byte:
+        a `&str` pointer is never null."""
+        data = text.encode('utf-8')
+        cache = self.__dict__.setdefault('static_strings', {})
+        if data not in cache:
+            serial = len(cache)
+            storage = ir.GlobalVariable(self.module, ir.ArrayType(ir.IntType(8), max(1, len(data))),
+                                        f"__pcc_rust_str_{serial}")
+            storage.linkage = "private"
+            storage.global_constant = True
+            storage.initializer = ir.Constant(storage.value_type, bytearray(data or b"\0"))
+            pointer = storage.gep([ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0)])
+            descriptor = ir.GlobalVariable(self.module, self.type(STATIC_STR), f"__pcc_rust_str_value_{serial}")
+            descriptor.linkage = "private"
+            descriptor.global_constant = True
+            descriptor.initializer = ir.Constant(self.type(STATIC_STR), [
+                pointer, ir.Constant(ir.IntType(self.target.pointer_bits), len(data))])
+            cache[data] = descriptor
+        return self.builder.load(cache[data])
 
     def place_pointer(self, expr):
         if expr.kind == "group":
@@ -243,6 +271,8 @@ class Lowerer:
             return ir.Constant(self.type(expr.ty), expr.value)
         if kind == "bool":
             return ir.Constant(ir.IntType(1), int(expr.value))
+        if kind == "string" or kind == "const" and expr.ty == STATIC_STR:
+            return self.static_str(expr.value if kind == "string" else expr.binding.value)
         if kind == "const":
             # A const item denotes its evaluated value at each use.
             value = expr.binding.value
