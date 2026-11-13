@@ -13,6 +13,7 @@ enum { KEEPER = 0, CLASS = 1, CALLBACK = 2, WEAK_FIRST = 3, WEAK_SECOND = 4,
        TEMP_FIRST = 5, TEMP_SECOND = 6, INTERIOR = 7, GC_CALLBACK = 8, ROOT_COUNT = 9 };
 
 extern int32_t pcc_gc_mark_active;
+extern int32_t pcc_gc_backend4_no_refcounts;
 extern int32_t pcc_gc_explicit_collect_active;
 extern int32_t pcc_gc_trace_extension_roots_pending;
 extern int64_t pcc_gc_tracing_finish_claim_epoch;
@@ -151,8 +152,39 @@ static int build_graph(void) {
     return 0;
 }
 
+static int graph_matches(int count) {
+    /* GC1-GC4 are count-free. Header refcounts do not count owning edges;
+     * inspect the actual graph before injecting the synthetic verdict.
+     * The world is still stopped, and every getter's new reference is released.
+     */
+    int index;
+    for (index = 0; index < count; index++) {
+        PyObject *peer = py_instance_get_field(watched[index], 0);
+        int same = peer == watched[mode == 4 ? 1 - index : index];
+        if (peer != 0) py_decref(peer);
+        if (!same) return 0;
+    }
+    if (py_list_len(roots[KEEPER]) != (mode == 1 ? 1 : 0)) return 0;
+    if (mode == 1) {
+        PyObject *interior = py_list_get(roots[KEEPER], 0);
+        if (interior == 0) return 0;
+        int same = 0;
+        if (py_list_len(interior) == 1) {
+            PyObject *target = py_list_get(interior, 0);
+            same = target == watched[0];
+            if (target != 0) py_decref(target);
+        }
+        py_decref(interior);
+        if (!same) return 0;
+    }
+    return 1;
+}
+
 static int inject_candidates(int count) {
     phase = 3;
+    /* Keep this fixture tied to the production count-free ownership policy,
+     * rather than silently accepting a future counted configuration. */
+    if (pcc_gc_backend4_no_refcounts != 1) return 159;
     pcc_py_gc_minor_graph_lock();
     int index;
     for (index = 0; index < count; index++) {
@@ -162,10 +194,21 @@ static int inject_candidates(int count) {
             return 130;
         }
         PyObjectHeader *header = (PyObjectHeader *)obj;
-        if ((header->flags & (PINNED | DEAD)) != 0 || header->refcount != (mode == 1 ? 2 : 1)) {
+        if ((header->flags & (PINNED | DEAD)) != 0) {
+            printf("sweep-verdict:precondition backend=%d mode=%d index=%d flags=0x%x refcount=%lld\n",
+                   pcc_gc_backend(), mode, index, (unsigned)header->flags,
+                   (long long)header->refcount);
             pcc_py_gc_minor_graph_unlock();
             return 131;
         }
+    }
+    pcc_py_gc_minor_graph_unlock();
+    /* Check known-object admission before any field getter. Keep getters
+     * outside the graph lock; the stopped world still protects this graph. */
+    if (!graph_matches(count)) return 158;
+    pcc_py_gc_minor_graph_lock();
+    for (index = 0; index < count; index++) {
+        PyObjectHeader *header = (PyObjectHeader *)watched[index];
         header->flags = (header->flags & ~FRESH) | CANDIDATE;
     }
     /* These synthetic candidates are not a new completed mark. Invalidate
