@@ -1,10 +1,10 @@
 """Per-module Rust namespaces feeding the existing owned semantic checker.
 
 Canonical declaration keys identify storage only after scoped lookup and privacy
-checks. They are never searched as a flattened source namespace. This first
-slice supports private single-path imports from the supplied module closure.
-Reexports, external crates and module-scoped trait/method candidate sets remain
-explicit gaps; no import synthesizes source or supplies library definitions.
+checks. They are never searched as a flattened source namespace. Private and
+`pub use` (re-export) imports resolve within the supplied module closure.
+External crates and module-scoped trait/method candidate sets remain explicit
+gaps; no import synthesizes source or supplies library definitions.
 """
 from hashlib import sha256
 from pathlib import PurePosixPath
@@ -95,7 +95,8 @@ class ModuleNamespaces:
             for namespace in ('type', 'value'):
                 declaration = self.resolve(path, namespace, module, item.token,
                                            _use_root=self.policy.edition == 2015,
-                                           _optional_final=True)
+                                           _optional_final=True,
+                                           _reexport=item.public)
                 if declaration is None:
                     continue
                 # Generic normalization and associated-path lookup still
@@ -118,14 +119,19 @@ class ModuleNamespaces:
         finally:
             self._resolving_uses.remove(key)
 
-    def _lookup(self, module, namespace, name, requester, token):
+    def _binding(self, module, namespace, name, requester, token):
+        """The declaration a name denotes in `module`, and whether that
+        binding (the item itself, or the use binding naming it) is public."""
         declaration = self.modules[module].items.get((namespace, name))
-        if declaration is None and name in self._uses[module]:
-            if (requester.crate != module.crate or
-                    requester.components[:len(module.components)] != module.components):
-                raise token.error(f'private use binding {name!r} is inaccessible from this module')
-            declaration = self._bind_use(module, name).get(namespace)
-        return declaration
+        if declaration is not None:
+            return declaration, declaration.public
+        item = self._uses[module].get(name)
+        if item is None:
+            return None, False
+        if not item.public and (requester.crate != module.crate or
+                requester.components[:len(module.components)] != module.components):
+            raise token.error(f'private use binding {name!r} is inaccessible from this module')
+        return self._bind_use(module, name).get(namespace), item.public
 
     def _start(self, path, requester, token):
         parts = path.split('::')
@@ -145,16 +151,18 @@ class ModuleNamespaces:
             raise token.error('item path must name a declaration')
         return current, parts
 
-    def resolve(self, path, namespace, requester, token, *, _use_root=False, _optional_final=False):
+    def resolve(self, path, namespace, requester, token, *, _use_root=False, _optional_final=False,
+                _reexport=False):
         current, parts = self._start(path, requester, token)
         if _use_root and path.split('::', 1)[0] not in {'crate', 'self', 'super'}:
             current = self.root
         for index, name in enumerate(parts):
             space = namespace if index == len(parts) - 1 else 'type'
-            declaration = self._lookup(current, space, name, requester, token)
+            declaration, public = self._binding(current, space, name, requester, token)
             implicit = index == 0 and space == 'type' and path.split('::', 1)[0] not in {'crate', 'self', 'super'}
             if declaration is None and implicit:
                 declaration = self.extern_prelude.get(name)
+                public = declaration is not None and declaration.public
             if declaration is None:
                 if implicit and name in self.policy.implicit_extern_prelude:
                     raise token.error('implicit library/prelude source dependency is unavailable; external crate loading is not implemented')
@@ -164,6 +172,10 @@ class ModuleNamespaces:
             if not self.visible(declaration, requester):
                 raise token.error(f'private item {name!r} is inaccessible from this module')
             if index == len(parts) - 1:
+                # A re-export cannot widen visibility: the re-exported binding
+                # (an item or another use binding) must itself be `pub`.
+                if _reexport and not public:
+                    raise token.error(f'{name!r} is private, and cannot be re-exported')
                 return declaration
             if isinstance(declaration.syntax, CrateSelfAlias):
                 current = self.root

@@ -395,12 +395,18 @@ class ExternCrateItem:
 
 @dataclass(frozen=True)
 class UseDeclaration:
-    """One private module-scope use path; never a copied target declaration."""
+    """One module-scope use path; never a copied target declaration.
+
+    `public` is a `pub use` re-export: the binding is visible wherever a
+    `pub` item of its module would be (Rust Reference items/use-declarations,
+    "use Visibility").
+    """
     token: Token
     path: tuple[Token, ...]
     alias: Token | None
     documentation: tuple[Documentation, ...]
     source_span: tuple[int, int]
+    public: bool = False
 
     @property
     def binding(self):
@@ -867,10 +873,10 @@ class Parser:
         declarations would. Every leaf keeps the declaration's `use` token,
         documentation and source span; resolution checks each one, used or
         not. Globs, absolute paths, `self` leaves and empty groups remain gaps.
+        A `pub use` re-export keeps `public`; resolution checks that every
+        re-exported binding is itself public (rustc E0364/E0365).
         """
         from .attribute_metadata import offset
-        if public:
-            raise token.error('public use/reexports require visibility-merge resolution, which is not implemented')
         if self.token.text == '::':
             raise self.token.error('absolute use paths are not implemented')
         leaves = []
@@ -878,7 +884,7 @@ class Parser:
         end = self.expect(';')
         span = (offset(self, token), offset(self, end) + 1)
         for path, alias in leaves:
-            self.uses.append(UseDeclaration(token, path, alias, documentation, span))
+            self.uses.append(UseDeclaration(token, path, alias, documentation, span, public))
 
     def use_tree(self, token, prefix, leaves, depth):
         if self.token.text == '*':

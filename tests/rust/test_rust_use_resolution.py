@@ -29,7 +29,8 @@ from tests.rust.certification_support import actual_check_prerequisite, certify_
 
 PROGRAMS = ('use_function_alias', 'use_module_alias', 'use_type_alias',
             'use_forward_alias', 'use_parent_scope', 'use_crate_self_alias',
-            'use_value_primitive_alias', 'use_grouped_tree', 'use_reference_alias')
+            'use_value_primitive_alias', 'use_grouped_tree', 'use_public_reexport',
+            'use_reference_alias')
 PROJECT = 'projects/fallible-streaming-iterator-0.1.9/src/lib.rs'
 PROJECT_SHA256 = '7fb7428997bdd89c3ee0818ecee642f8d93882c9c66171c9c6194b732f337089'
 
@@ -106,6 +107,19 @@ def test_grouped_use_tree_declares_one_simple_use_per_leaf():
     assert {text[slice(*item.source_span)] for item in parser.uses[:3]} == {
         'use self::a::{value, b::{v as read, w,},};'}
     assert text[slice(*last.source_span)] == 'use {a::b::v};'
+
+
+def test_public_use_marks_every_leaf_as_a_reexport():
+    # Former gap row ('reexport', 'pub use a::value;') is now this positive form.
+    text = 'mod a{pub fn value(){} pub fn other(){}} pub use a::{value, other as o}; use a::value as v;'
+    parser = Parser(text)
+    parser.parse()
+    assert [(item.binding.text, item.public) for item in parser.uses] == [
+        ('value', True), ('o', True), ('v', False)]
+    resolver = ModuleNamespaces(graph('mod a{mod inner{pub fn v(){}} pub use self::inner::v;}'))
+    owner = next(module for module in resolver.modules.values() if module.identity.components == ('a',))
+    declaration = resolver.resolve('a::v', 'value', resolver.root, owner.body.uses[0].token)
+    assert declaration.identity.module.components == ('a', 'inner')
 
 
 def test_use_tree_nesting_has_an_explicit_bound():
@@ -211,6 +225,18 @@ INVALID = (
     # Every leaf of a grouped use tree is resolved and checked like a simple use.
     ('group-unresolved', 'mod a{} use a::{missing}; fn answer()->u64{42}', 'unknown use target', 'E0432'),
     ('group-private', 'mod a{fn hidden(){}} use a::{hidden}; fn answer()->u64{42}', 'private item', 'E0603'),
+    # A `pub use` cannot widen the re-exported binding's visibility, even unused.
+    ('reexport-private-item', 'mod a{fn hidden(){} pub use self::hidden as h;} fn answer()->u64{42}',
+     'is private, and cannot be re-exported', 'E0364'),
+    ('reexport-private-import', 'mod a{pub fn v(){}} mod b{use crate::a::v; pub use self::v as w;} fn answer()->u64{42}',
+     'is private, and cannot be re-exported', 'E0364'),
+    ('reexport-private-module', 'mod a{mod inner{} pub use self::inner as i;} fn answer()->u64{42}',
+     'is private, and cannot be re-exported', 'E0365'),
+    ('reexport-crate-private', 'fn top()->u64{1} mod a{pub use crate::top;} fn answer()->u64{42}',
+     'is private, and cannot be re-exported', 'E0364'),
+    # The re-export does not make its private source path nameable.
+    ('reexport-source-path-private', 'mod a{mod inner{pub fn v()->u64{42}} pub use self::inner::v;} pub fn answer()->u64{a::inner::v()}',
+     'private item', 'E0603'),
 )
 
 
@@ -291,7 +317,6 @@ GAPS = (
     ('group-glob', 'mod a{pub fn value(){}} use a::{*};', 'glob use declarations'),
     ('group-self', 'mod a{pub fn value(){}} use a::{self};', 'nonleading self/crate/super'),
     ('empty-group', 'mod a{pub fn value(){}} use a::{};', 'empty use groups'),
-    ('reexport', 'mod a{pub fn value(){}} pub use a::value;', 'public use/reexports'),
     ('anonymous', 'mod a{pub fn value(){}} use a::value as _;', 'anonymous use'),
     ('absolute', 'mod a{pub fn value(){}} use ::a::value;', 'absolute use paths'),
     ('trailing-self', 'mod a{} use a::self as alias;', 'nonleading self/crate/super'),

@@ -42,7 +42,7 @@ shared source-lock loader and records each root's first blocker:
 | `crates/uv/src/bin/uv.rs` | `3:3` `#[cfg(feature = ...)]` needs a checked Cargo configuration |
 | `crates/uv/src/lib.rs` | `1:15` tool lint path in `#![deny(clippy::print_stdout, ...)]` |
 | `crates/uv-version/src/lib.rs` | `5:5` `env!` macro invocation |
-| `crates/uv-lock/src/lock/mod.rs` | `74:5` `pub use crate::lock::deserialize::Error as CanonicalLockError;` re-export |
+| `crates/uv-lock/src/lock/mod.rs` | `87:4` restricted visibility `pub(crate) mod export;` |
 
 Both roots formerly stopped in the lexer at `@` (`lib.rs:1515:34`, the
 `run_variant @ (ToolCommand::Uvx(_) | ToolCommand::Run(_))` binding, and
@@ -51,7 +51,10 @@ subpatterns are now owned (`tests/rust/programs/at_bindings.rs`); macro
 matchers remain a macro-by-example gap. Grouped use trees
 (`use std::collections::{BTreeMap, BTreeSet, VecDeque};`, formerly `3:23`)
 are now parsed into one checked import per leaf
-(`tests/rust/programs/use_grouped_tree.rs`).
+(`tests/rust/programs/use_grouped_tree.rs`), and `pub use` re-exports
+(`pub use crate::lock::deserialize::Error as CanonicalLockError;`, formerly
+`74:5`) resolve with rustc's E0364/E0365 visibility checks
+(`tests/rust/programs/use_public_reexport.rs`).
 
 ```sh
 uv run pytest -x -q tests/rust/test_uv_source_frontier.py

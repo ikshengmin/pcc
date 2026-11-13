@@ -21,8 +21,9 @@ FRONTIER = (
     # lint path in `#![deny(clippy::print_stdout, clippy::print_stderr)]`.
     ("crates/uv/src/lib.rs", "1:15: expected ',', found '::'"),
     ("crates/uv-version/src/lib.rs", "5:5: macro invocations require macro-by-example expansion"),
-    # Grouped use trees now parse (lines 3-72); line 74 is a `pub use` re-export.
-    ("crates/uv-lock/src/lock/mod.rs", "74:5: public use/reexports require visibility-merge resolution"),
+    # Grouped use trees and `pub use` re-exports (lines 3-84) now parse; line
+    # 87 is `pub(crate) mod export;`, restricted visibility.
+    ("crates/uv-lock/src/lock/mod.rs", "87:4: expected 'fn', found '('"),
 )
 
 
