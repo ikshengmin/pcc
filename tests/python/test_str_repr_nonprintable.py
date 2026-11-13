@@ -19,6 +19,18 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 STUBS = ROOT / "pcc/runtime/py/py_obj_stubs.py"
 _TREE = ast.parse(STUBS.read_text())
+# Keep the import-time source snapshot, but only the statements used below.
+# Retain every match in source order so first-match and missing-entry behavior
+# stay with _table() and _lookup(), rather than changing collection failures.
+_TREE.body = [
+    node for node in _TREE.body
+    if (isinstance(node, ast.FunctionDef)
+        and node.name == "_repr_codepoint_printable")
+    or (isinstance(getattr(node, "value", None), ast.Call)
+        and getattr(node.value.func, "id", "") == "define_global_i32_array"
+        and node.value.args
+        and getattr(node.value.args[0], "value", None) == "pcc_unicode_nonprintable_ranges")
+]
 
 
 def _table() -> list[int]:

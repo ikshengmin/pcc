@@ -20,6 +20,8 @@ ROOT = Path(__file__).resolve().parents[2]
 _RUNTIME_TREE = ast.parse((ROOT / "pcc/runtime/py/py_str_accessors.py").read_text())
 _RUNTIME_TREE.body = [node for node in _RUNTIME_TREE.body if isinstance(node, ast.FunctionDef)]
 _RUNTIME_FUNCTIONS = compile(_RUNTIME_TREE, "py_str_accessors.py", "exec")
+# The code object owns everything the model needs; do not retain its input AST.
+del _RUNTIME_TREE
 
 
 class _Memory:

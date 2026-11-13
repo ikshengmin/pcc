@@ -27,6 +27,7 @@ _LOCK_CODE = next(
     const for const in compile(_KERNEL, "freestanding_thread_kernel_pthread.py", "exec").co_consts
     if isinstance(const, types.CodeType) and const.co_name == "pcc_mutex_lock"
 )
+del _KERNEL
 EBUSY = 16
 
 
