@@ -1518,3 +1518,158 @@ def test_runner_writes_complete_manifest_for_four_matched_pairs(tmp_path, monkey
         for pair in manifest["pairs"]
     )
     assert all(pair["candidate"]["run"]["returncode"] == 0 for pair in manifest["pairs"])
+
+
+def _admission_receipt_fixture(tmp_path):
+    tool = _load_tool()
+    compilers = []
+    for arm in ("candidate", "baseline"):
+        compiler = tmp_path / arm
+        compiler.write_bytes(arm.encode())
+        compilers.append(compiler)
+    runtime = tmp_path / "runtime.a"
+    runtime.write_bytes(b"runtime")
+    receipts, _ = _write_build_evidence(
+        tool, tmp_path, compilers, runtime, shared_logical_source_root=False,
+    )
+    return tool, receipts[0], compilers[0], runtime
+
+
+def _load_admission_receipt(tool, path, compiler, runtime):
+    return tool._load_build_receipt(
+        path, arm="candidate", compiler_sha256=tool.sha256_path(compiler),
+        runtime_sha256=tool.sha256_path(runtime),
+        compiler_size_bytes=compiler.stat().st_size,
+    )
+
+
+@pytest.mark.parametrize("shape", ["historical", "caller", "explicit", "external_guard", "automatic"])
+def test_build_receipt_admits_known_budget_extension_without_changing_history(tmp_path, shape):
+    tool, path, compiler, runtime = _admission_receipt_fixture(tmp_path)
+    receipt = json.loads(path.read_text())
+    if shape != "historical":
+        receipt["memory_budget_selection"] = {
+            "selection_kind": shape, "max_tree_rss_bytes": 1024,
+            "observation": {"platform": "fixture", "available_bytes": 2048},
+        }
+        receipt["environment"]["PCC_WORKER_TREE_BUDGET_BYTES"] = "1024"
+        receipt["environment_sha256"] = tool._canonical_sha256(receipt["environment"])
+        path.write_text(json.dumps(receipt))
+    loaded = _load_admission_receipt(tool, path, compiler, runtime)
+    assert loaded["receipt"] == receipt
+    assert ("memory_budget_selection" in loaded["receipt"]) == (shape != "historical")
+
+
+@pytest.mark.parametrize("selection,advertised", [
+    (None, "1024"), ([], "1024"), ({}, "1024"),
+    ({"selection_kind": "caller", "max_tree_rss_bytes": True}, "True"),
+    ({"selection_kind": "caller", "max_tree_rss_bytes": "1024"}, "1024"),
+    ({"selection_kind": "caller", "max_tree_rss_bytes": 1024.0}, "1024"),
+    ({"selection_kind": "caller", "max_tree_rss_bytes": 0}, "0"),
+    ({"selection_kind": "caller", "max_tree_rss_bytes": -1}, "-1"),
+    ({"selection_kind": "unknown", "max_tree_rss_bytes": 1024}, "1024"),
+    ({"max_tree_rss_bytes": 1024}, "1024"),
+    ({"selection_kind": "caller", "max_tree_rss_bytes": 1024}, None),
+    ({"selection_kind": "caller", "max_tree_rss_bytes": 1024}, "2048"),
+])
+def test_build_receipt_rejects_invalid_admission_extension(tmp_path, selection, advertised):
+    tool, path, compiler, runtime = _admission_receipt_fixture(tmp_path)
+    receipt = json.loads(path.read_text())
+    receipt["memory_budget_selection"] = selection
+    if advertised is not None:
+        receipt["environment"]["PCC_WORKER_TREE_BUDGET_BYTES"] = advertised
+    receipt["environment_sha256"] = tool._canonical_sha256(receipt["environment"])
+    path.write_text(json.dumps(receipt))
+    with pytest.raises(tool.CompileABError, match="admission budget"):
+        _load_admission_receipt(tool, path, compiler, runtime)
+
+
+@pytest.mark.parametrize("with_selection", [False, True])
+def test_build_receipt_admission_extension_does_not_allow_unknown_fields(tmp_path, with_selection):
+    tool, path, compiler, runtime = _admission_receipt_fixture(tmp_path)
+    receipt = json.loads(path.read_text())
+    if with_selection:
+        receipt["memory_budget_selection"] = {
+            "selection_kind": "caller", "max_tree_rss_bytes": 1024,
+        }
+        receipt["environment"]["PCC_WORKER_TREE_BUDGET_BYTES"] = "1024"
+        receipt["environment_sha256"] = tool._canonical_sha256(receipt["environment"])
+    receipt["unrecognized_admission_override"] = True
+    path.write_text(json.dumps(receipt))
+    with pytest.raises(tool.CompileABError, match="fields mismatch"):
+        _load_admission_receipt(tool, path, compiler, runtime)
+
+
+@pytest.mark.parametrize("selected_by_guard", [False, True])
+def test_stage1_produced_admission_receipt_passes_strict_loader(tmp_path, monkeypatch, selected_by_guard):
+    """Exercise the actual receipt producer with all process launches replaced."""
+    import subprocess
+
+    tool, fixture_path, _compiler, runtime = _admission_receipt_fixture(tmp_path)
+    fixture = json.loads(fixture_path.read_text())
+    spec = importlib.util.spec_from_file_location(
+        "stage1_admission_producer", ROOT / "scripts/run_pcc_stage1_build.py",
+    )
+    assert spec is not None and spec.loader is not None
+    builder = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(builder)
+    output = tmp_path / "produced-build"
+    cap = 1024
+    args = builder._parser().parse_args([
+        "--arm", "candidate", "--source-root", str(fixture_path.parent / "source-snapshot"),
+        "--runtime-archive", str(runtime), "--output-dir", str(output),
+        "--jobs", "2", "--self-backend-jobs", "2", "--memory-budget-bytes", str(cap),
+    ])
+    args.jobs = 2
+    monkeypatch.setenv("PATH", os.defpath)
+    monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(cap))
+    monkeypatch.delenv("PCC_WORKER_TREE_STATE_PATH", raising=False)
+    monkeypatch.delenv("PCC_WORKER_TREE_RECOVERY", raising=False)
+    if selected_by_guard:
+        # The inherited-cap branch performs no host observation or process launch.
+        args.memory_budget_selection = builder._host_memory_budget_selection(cap)
+    monkeypatch.setattr(tool, "require_claim_platform", lambda: None)
+    monkeypatch.setattr(tool, "_prepare_runtime_bundle", lambda *a, **k: {"archive": str(runtime)})
+    monkeypatch.setattr(tool, "runtime_bundle_evidence", lambda bundle: fixture["runtime_bundle"])
+    monkeypatch.setattr(tool, "_verify_runtime_bundle", lambda bundle: None)
+    monkeypatch.setattr(tool, "external_tool_evidence", lambda python: fixture["external_tools"])
+    monkeypatch.setattr(tool, "host_python_runtime_evidence", lambda python: fixture["host_python_runtime"])
+    linkage = {"checked": True, "links_libpython": False, "links_llvm": False, "stdout": "fixture"}
+    monkeypatch.setattr(tool, "_linkage", lambda *a, **k: linkage)
+    monkeypatch.setattr(builder, "run_function_smoke", lambda *a, **k: None)
+    launches = []
+
+    def fake_process(command, **kwargs):
+        launches.append(command)
+        if len(launches) == 1:
+            assert command[0] == str(tool.TIME_BINARY)
+            (output / "pcc1").write_bytes(b"synthetic compiler")
+            (output / "pcc1").chmod(0o755)
+            (output / "stage1.time").write_bytes((fixture_path.parent / "stage1.time").read_bytes())
+            (output / "stage1.profile.json").write_text("{}\n")
+        else:
+            assert command == [str(output / "pcc1"), "--help"]
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("admission receipt regression must not launch a real process")
+
+    monkeypatch.setattr(tool, "_run_process", fake_process)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(subprocess, "run", forbidden)
+    builder._run_build(args, tool, run_token="admission-fixture")
+    loaded = _load_admission_receipt(tool, output / "build-receipt.json", output / "pcc1", runtime)
+    selection = loaded["receipt"]["memory_budget_selection"]
+    assert selection["max_tree_rss_bytes"] == cap
+    assert selection["selection_kind"] == ("explicit" if selected_by_guard else "caller")
+    assert loaded["receipt"]["environment"]["PCC_WORKER_TREE_BUDGET_BYTES"] == str(cap)
+    assert len(launches) == 2
+    stage_spec = importlib.util.spec_from_file_location(
+        "stage_ab_admission_consumer", ROOT / "scripts/run_pcc_stage_ab.py",
+    )
+    assert stage_spec is not None and stage_spec.loader is not None
+    stage_ab = importlib.util.module_from_spec(stage_spec)
+    stage_spec.loader.exec_module(stage_ab)
+    stage_ab._assert_stage1_admission_budget(
+        loaded["receipt"], expected=cap, arm="candidate",
+    )

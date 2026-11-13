@@ -96,6 +96,9 @@ BUILD_RECEIPT_FIELDS = frozenset(
         "host_python_runtime_sha256",
     }
 )
+# The admission extension was added by the Stage1 producer without changing v3.
+# Preserve historical receipts, but never accept arbitrary extra fields.
+BUILD_RECEIPT_ADMISSION_FIELDS = frozenset({"memory_budget_selection"})
 BUILD_RECEIPT_SCHEMA = "pcc.stage1-build-receipt.v3"
 STAGE_RESULT_FIELDS = frozenset(
     {
@@ -1285,9 +1288,10 @@ def _load_build_receipt(
     expected_gc_backend: int | None = None,
 ) -> dict[str, Any]:
     receipt = _load_json_object(path, arm + " build receipt")
-    if set(receipt) != BUILD_RECEIPT_FIELDS:
+    current_fields = BUILD_RECEIPT_FIELDS | BUILD_RECEIPT_ADMISSION_FIELDS
+    if set(receipt) not in (BUILD_RECEIPT_FIELDS, current_fields):
         missing = sorted(BUILD_RECEIPT_FIELDS - set(receipt))
-        extra = sorted(set(receipt) - BUILD_RECEIPT_FIELDS)
+        extra = sorted(set(receipt) - current_fields)
         raise CompileABError(
             f"{arm} build receipt fields mismatch: missing={missing!r} extra={extra!r}"
         )
@@ -1332,6 +1336,20 @@ def _load_build_receipt(
         for key, value in environment.items()
     ):
         raise CompileABError(f"{arm} build receipt environment is invalid")
+    if "memory_budget_selection" in receipt:
+        selection = receipt["memory_budget_selection"]
+        # Other selection fields are diagnostic observations, not authorization
+        # to widen the compiler's cap. Bind the consumed cap to the environment
+        # whose digest is verified below; historical omission proves no cap.
+        if (not isinstance(selection, dict)
+                or type(selection.get("max_tree_rss_bytes")) is not int
+                or selection["max_tree_rss_bytes"] <= 0
+                or selection.get("selection_kind") not in (
+                    "caller", "explicit", "external_guard", "automatic"
+                )
+                or environment.get("PCC_WORKER_TREE_BUDGET_BYTES")
+                != str(selection["max_tree_rss_bytes"])):
+            raise CompileABError(f"{arm} build receipt admission budget is invalid")
     if not isinstance(cwd_raw, str) or not cwd_raw:
         raise CompileABError(f"{arm} build receipt cwd is invalid")
     if _canonical_sha256(command) != receipt["command_sha256"]:
