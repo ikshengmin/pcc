@@ -103,7 +103,7 @@
       "scope": "PCC-specific native runtime API, not Python language-standard coverage. The new wait entry shares registration, cancellation, deadline and root ownership with the existing eager probe entry. Source implementation is present; full-feature/native-pcc1 acceptance is unrecorded, and no performance gain is claimed by this row.",
       "implementation": {
         "status": "supported",
-        "source_revision": "71fad9093a00824969b47d1c5be4ad0c018848f0",
+        "source_revision": "bed0b165fe2804a0efab9f8d1ccfe244ebd5f9f2",
         "sources": [
           {
             "path": "pcc/virtual_thread.py",
@@ -123,7 +123,7 @@
           },
           {
             "path": "pcc/frontends/python/codegen/runtime_abi.py",
-            "sha256": "45f64cbae517479797d673d7ad4c26ab2fcedaacf9e402eb5b0354cbf01244b3"
+            "sha256": "c22b3d93e895822da8654245cfe6a99525f537baa6e1db6d3005893d3dc708bc"
           },
           {
             "path": "pcc/frontends/python/codegen/vthread_effect_analysis.py",
