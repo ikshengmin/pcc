@@ -1651,3 +1651,56 @@ def test_i64_min_max_oracles_keep_native_only_ownership_in_integration():
         assert classify(module, name, integration, registry) == (
             "reference" if name in reference_calls
             else "integration" if name == native_only else "ordinary")
+
+
+@pytest.mark.parametrize("module,reference,helper,reference_integration,siblings", [
+    (
+        'tests/java/test_source_static_initializers.py',
+        'test_static_initializer_originals_against_selected_jdk_only',
+        'check_originals_reference', True, {
+            'test_a_block_without_fields_is_still_a_step',
+            'test_blocks_and_initializers_are_steps_in_textual_order_and_blank_finals_are_slots',
+            'test_former_empty_static_block_rows_are_checked_steps',
+            'test_invalid_static_initializer_originals_fail_as_java_errors',
+            'test_native_domain_still_rejects_static_initialization',
+            'test_nested_blank_final_assignments_stay_explicit',
+            'test_obligation_names_each_step_and_the_static_reference_root',
+            'test_reference_typed_blank_finals_keep_the_static_reference_boundary',
+            'test_static_initializer_originals_are_checked_in_the_class_model',
+        },
+    ),
+    (
+        'tests/go/test_defer_statements.py',
+        'test_reference_accepts_and_rejects_the_same_sources',
+        'reference_rejection', False, {
+            'test_a_deferred_function_literal_reports_the_function_value_gap_first',
+            'test_defer_keeps_its_call',
+            'test_deferred_calls_are_an_explicit_checker_gap',
+            'test_invalid_defer_statements_are_source_errors',
+            'test_math_bits_external_test_package_now_stops_at_a_type_assertion',
+        },
+    ),
+])
+def test_static_initializer_and_defer_oracles_preserve_owned_sibling_lanes(
+        module, reference, helper, reference_integration, siblings):
+    registry = json.loads(run.REFERENCES.read_text())["functions"]
+    assert set(registry[module]) == {reference}
+    tree = ast.parse((ROOT / module).read_text())
+    functions = {node.name: node for node in tree.body
+                 if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")}
+    assert functions.keys() == siblings | {reference}
+    for name, function in functions.items():
+        calls = {node.func.id for node in ast.walk(function)
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+        marks = {ast.unparse(mark.func if isinstance(mark, ast.Call) else mark)
+                 for mark in function.decorator_list}
+        integration = "pytest.mark.integration" in marks
+        assert integration == (name == reference and reference_integration)
+        if name == reference:
+            assert helper in calls
+            assert registry[module][name]["activity"] == "external-reference"
+            assert not registry[module][name].get("conditional")
+        else:
+            assert helper not in calls
+        assert classify(module, name, integration, registry) == (
+            "reference" if name == reference else "ordinary")

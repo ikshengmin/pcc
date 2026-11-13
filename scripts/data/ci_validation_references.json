@@ -3002,6 +3002,22 @@
           "Runs the identical JSON string corpus in actual CPython and self-backed native code on five collectors. Compares exact UTF-8 hex output and decoded codepoints, including host-generated canonical backspace/form-feed JSON inputs. This mixed comparison does not establish Stage2 or fixed-point execution."
         ]
       }
+    },
+    "tests/java/test_source_static_initializers.py": {
+      "test_static_initializer_originals_against_selected_jdk_only": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls check_originals_reference on unchanged static-initializer originals. The selected development JDK compiles and executes positive sources and rejects invalid sources through ArrayModelReference. This optional oracle does not certify owned compilation or execute the PCC runtime."
+        ]
+      }
+    },
+    "tests/go/test_defer_statements.py": {
+      "test_reference_accepts_and_rejects_the_same_sources": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls reference_rejection on unchanged valid and invalid defer originals, invoking the selected development Go toolchain build command and checking compiler outcomes and diagnostics. This optional oracle does not execute binaries or provide an owned production fallback."
+        ]
+      }
     }
   },
   "method": "AST/source-reviewed direct reference calls and helper edges; no test bodies or imports executed. Function registry is classification only, never a prerequisite waiver or certification token. Unknown functions remain selected in ordinary/integration.",
