@@ -36,6 +36,11 @@ _CSTR = ir.IntType(8).as_pointer()
 _DOUBLE = ir.DoubleType()
 
 
+def _min_max_i64_element(ty) -> bool:
+    """A declared machine int, whose values the i64 min/max fold holds."""
+    return isinstance(ty, IntType) and ty.name == "pcc.i64"
+
+
 def _is_class_type_for_numeric_builtin(ty) -> bool:
     if isinstance(ty, ClassType):
         return True
@@ -737,13 +742,20 @@ class NumericBuiltinLoweringMixin:
         """True if min()/max() over ``ty`` must compare elements as objects
         rather than assuming that every element can use an integer lane.
         Unknown elements must retain their runtime type and selected identity.
-        Static custom-__lt__ and key folds are resolved before this route."""
-        if isinstance(ty, (StrType, DynType)):
+        Static custom-__lt__ and key folds are resolved before this route.
+
+        A managed list or tuple stores Python int objects: an ordinary ``int``
+        element annotation bounds nothing (a big element overflowed the i64
+        lane), so only declared ``pcc.i64`` elements take the integer fold.
+        A user iterator's elements are unknown, like a dyn iterable's."""
+        if isinstance(ty, (StrType, DynType, ClassType)):
             return True
         if isinstance(ty, ListType):
-            return not isinstance(getattr(ty, "elem", None), IntType)
+            return not _min_max_i64_element(getattr(ty, "elem", None))
         if isinstance(ty, TupleType):
-            return not ty.elems or any(not isinstance(elem, IntType) for elem in ty.elems)
+            return not ty.elems or any(
+                not _min_max_i64_element(elem) for elem in ty.elems
+            )
         return False
 
     def _min_max_obj_lt_class(self, arg):
@@ -951,10 +963,10 @@ class NumericBuiltinLoweringMixin:
             finally:
                 self._try_err_block = previous
                 self._cpy_operand_cleanup_block = saved_cleanup
-        is_class_iter = isinstance(arg_ty, ClassType)
-        if not is_class_iter and not isinstance(
-            arg_ty, (ListType, TupleType, DynType)
-        ):
+        # Only a list or tuple of declared pcc.i64 elements remains here: a
+        # user iterator, a dyn iterable and ordinary int elements took the
+        # object route above.
+        if not isinstance(arg_ty, (ListType, TupleType)):
             return None
         # Optional ``default=`` kwarg.
         default_val = None
@@ -963,33 +975,14 @@ class NumericBuiltinLoweringMixin:
                 default_val = self._emit_expr_as_i64(v)
             else:
                 return None  # unknown kwarg
-        if is_class_iter:
-            # A user-class instance (custom __iter__/__next__, no __len__ /
-            # __getitem__): materialise to a list via the iterator protocol,
-            # then run the index-based min/max over the list. Without this,
-            # min/max(<custom iterator>) bailed to a name lookup (runtime
-            # "NameError: name 'min'/'max'"). Matches CPython min/max via iter.
-            raw = self._emit_expr(arg)
-            raw_obj = marshal.marshal_to_object(
-                self.builder, self.module, self.runtime, raw, arg_ty,
-            )
-            src_obj = self.builder.call(
-                self.runtime["py_list_new"],
-                [ir.Constant(_I64, 0)],
-                name=self._fresh(f"{name}.iter.list"),
-            )
-            self._emit_list_append_via_iter(
-                src_obj, raw_obj, getattr(arg, "span", None),
-            )
-        else:
-            src_val = self._emit_expr(arg)
-            src_obj = marshal.marshal_to_object(
-                self.builder,
-                self.module,
-                self.runtime,
-                src_val,
-                arg_ty,
-            )
+        src_val = self._emit_expr(arg)
+        src_obj = marshal.marshal_to_object(
+            self.builder,
+            self.module,
+            self.runtime,
+            src_val,
+            arg_ty,
+        )
         n_val = self.builder.call(
             self.runtime["py_obj_len"],
             [src_obj],
