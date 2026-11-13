@@ -233,11 +233,28 @@ class CallableSignature:
 
 
 @dataclass(frozen=True)
+class AssociatedConstraint:
+    """`Name = Type` inside a trait bound's generic arguments (an
+    AssociatedItemConstraint, reference/paths.html#paths-in-expressions)."""
+    name: Token
+    type: object
+
+
+@dataclass(frozen=True)
 class TypeBound:
     token: Token
     path: str
     relaxed: bool = False
     callable: CallableSignature | None = None
+    # `Trait<'a, T, Name = U>`: retained as written; no trait or projection
+    # solving consumes them (each semantic owner rejects a non-empty list).
+    lifetimes: tuple[str, ...] = ()
+    arguments: tuple[object, ...] = ()
+    constraints: tuple[AssociatedConstraint, ...] = ()
+
+    @property
+    def generic(self):
+        return bool(self.lifetimes or self.arguments or self.constraints)
 
 
 @dataclass(frozen=True)
@@ -733,14 +750,53 @@ class Parser:
                 if relaxed:
                     raise bound_token.error('only Sized bounds can be relaxed')
                 callable = self.callable_signature()
+            lifetimes, arguments, constraints = (), (), ()
             if self.token.text == '<':
-                raise self.token.error('generic trait bounds and associated projections are not implemented')
-            bounds.append(TypeBound(bound_token, path, relaxed, callable))
+                if callable is not None:
+                    raise self.token.error('Fn-family sugar takes no further generic arguments')
+                lifetimes, arguments, constraints = self.bound_arguments()
+            bounds.append(TypeBound(bound_token, path, relaxed, callable, lifetimes, arguments, constraints))
             if len(bounds) > 16:
                 raise bound_token.error('type parameter bounds exceed implementation limit (16)')
             if not self.accept('+'):
                 break
         return tuple(bounds)
+
+    def bound_arguments(self):
+        """`<'a, T, Name = U>` of a trait bound: lifetimes, then types, then
+        associated item constraints, each kept in source order."""
+        start = self.expect('<')
+        self.type_argument_depth += 1
+        if self.type_argument_depth > 16:
+            raise start.error('generic argument nesting exceeds implementation limit (16)')
+        lifetimes, arguments, constraints = [], [], []
+        try:
+            if self.generic_close():
+                return (), (), ()
+            while True:
+                if self.token.kind == 'lifetime':
+                    if arguments or constraints:
+                        raise self.token.error('lifetime arguments must be provided before type arguments (rustc E0747)')
+                    lifetimes.append(self.take().text)
+                elif self.token.kind == 'name' and self.tokens[self.pos + 1].text == '=':
+                    name = self.take()
+                    self.take()
+                    constraints.append(AssociatedConstraint(name, self.type()))
+                elif self.token.kind == 'name' and self.tokens[self.pos + 1].text == ':':
+                    raise self.token.error('associated type bounds are not implemented')
+                else:
+                    if constraints:
+                        raise self.token.error('generic arguments must come before associated item constraints')
+                    arguments.append(self.type())
+                if len(lifetimes) + len(arguments) + len(constraints) > 16:
+                    raise start.error('generic argument count exceeds implementation limit (16)')
+                if self.generic_close():
+                    return tuple(lifetimes), tuple(arguments), tuple(constraints)
+                self.expect(',')
+                if self.generic_close():
+                    return tuple(lifetimes), tuple(arguments), tuple(constraints)
+        finally:
+            self.type_argument_depth -= 1
 
     def closure_expression(self, token):
         """`move`? `|params|` (`-> T` block | expression), reference/expressions/closure-expr.html.

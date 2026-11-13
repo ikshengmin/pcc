@@ -57,6 +57,8 @@ class StandardMarkers:
         self.first_explicit_bound = None
 
     def resolve(self, bound, scope):
+        if bound.generic:
+            raise bound.token.error('generic arguments and associated item constraints on trait bounds require trait/projection solving, which is not implemented')
         first = bound.path.split('::', 1)[0]
         if first in scope:
             raise bound.token.error('generic parameter shadows the requested standard marker; expected a trait')

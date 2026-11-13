@@ -193,7 +193,8 @@ CAPABILITY = (
     ('qualified-projection', 'fn f<T>()where <T as Iterator>::Item:Copy,T:Iterator{}', 'subjects must be declared'),
     ('lifetime', "fn f<'a,'b>(x:&'a u64)->u64 where 'a:'b{*x}", 'lifetime and higher-ranked where'),
     ('higher-ranked', "fn f<F>()where for<'a> F:Fn(&'a u64){}", 'lifetime and higher-ranked where'),
-    ('generic-trait', 'fn f<T>()where T:Into<u64>{}', 'generic trait bounds'),
+    # Parses now; the checker keeps the trait-argument boundary.
+    ('generic-trait', 'fn f<T>()where T:Into<u64>{}', 'generic arguments and associated item constraints on trait bounds'),
     ('parenthesized-bound', 'fn f<T>(x:T)where T:(Copy){}', 'parenthesized trait bounds'),
     ('dst', 'fn f<T>(x:&T)where T:?Sized{}fn g(x:&[u64]){f(x)}', 'slice types'),
     ('local-relaxed', 'trait A{fn n(&self)->u64;}fn f<T>(x:&T)->u64 where T:?Sized+A{x.n()}', 'relaxed local-trait parameter layouts'),
