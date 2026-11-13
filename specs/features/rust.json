@@ -2472,6 +2472,21 @@
       "status": "missing"
     },
     {
+      "id": "rust.attributes.builtin-derives",
+      "title": "Built-in derives: Copy, Clone, PartialEq and declared Eq/PartialOrd/Ord/Hash/Debug/Default",
+      "chapter_ids": [
+        "rust.ref.7.2"
+      ],
+      "scope": "Qualification missing, not implementation missing: #[derive(..)] on structs and enums retains each path. The nine built-in derives are validated as rustc 1.92.0 does (companion traits: Copy needs Clone, Eq needs PartialEq, PartialOrd needs PartialEq, Ord needs Eq and PartialOrd, E0277; every field type must implement the trait, E0204/E0369/E0277; duplicates E0119; derive on other items E0774). Copy makes the type copied instead of moved; `.clone()` on derived or primitive Clone types is a non-moving copy (exact for PCC's heap-free admitted types) unless the type has its own clone method; `==`/`!=` on derived PartialEq data (and tuples, arrays and unit of it) compare structurally without moving either operand, enums by variant and then only the active payload, arrays through entry-block slots. Eq/PartialOrd/Ord/Hash/Debug/Default are declared and validated; their uses (ordering operators, hashing, formatting, default()) remain explicit gaps, as do string-content equality, procedural derives from other crates (thiserror::Error), unknown derive names, derives on generic declarations and Default on enums. Twelve rejected sources are rejected by local rustc 1.92.0 with the recorded codes; the derives fixture prints the same result from PCC's own compiler, arm64 assembler and Mach-O linker and from a local rustc build (local Mac evidence; the x86-64 Linux run is unrun in this change). No schema2 evidence row is migrated.",
+      "tests": [
+        "tests/rust/test_rust_derives.py",
+        "tests/rust/test_rust_derives.py::test_fixture_runs_natively_with_owned_compile_assemble_and_link@rust-native-reference"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "status": "missing"
+    },
+    {
       "id": "rust.enums.payload-values",
       "title": "Tagged payload enums and by-value bindings",
       "chapter_ids": [

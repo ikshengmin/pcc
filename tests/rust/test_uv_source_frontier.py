@@ -23,20 +23,21 @@ FRONTIER = (
     # Default features enable performance-memory-allocator, so the cfg-gated
     # `extern crate uv_performance_memory_allocator;` is active.
     ("crates/uv/src/bin/uv.rs", "4:14: external crate dependency loading is not implemented"),
-    # `@` patterns, tool lint paths, feature cfg (self-update is off) and the
-    # lifetime argument of `BaseClientBuilder<'a>` (line 70) parse; line 94 is
-    # `#[derive(Debug, Copy, Clone, Eq, PartialEq)]`.
-    ("crates/uv/src/lib.rs", "94:3: unsupported Rust attribute; only repr(C) records and no_mangle functions are admitted"),
+    # `@` patterns, tool lint paths, feature cfg (self-update is off), the
+    # lifetime argument of `BaseClientBuilder<'a>` and the built-in derives of
+    # `GlobalInitialization` parse; line 104 is a `const fn` method.
+    ("crates/uv/src/lib.rs", "104:5: expected 'fn', found 'const'"),
     # The whole root parses and compiles: env!("CARGO_PKG_VERSION") is the
     # `&'static str` "0.13.7" and the disabled test module is skipped. What
     # remains is the gate on every input: PCC has no owned borrow checker,
     # so compiling needs an actual rustc check or the caller's attestation
     # (test_uv_version_compiles_and_runs_natively below).
     ("crates/uv-version/src/lib.rs", "experimental Rust frontend has no borrow checker"),
-    # Grouped uses, `pub use`, `pub(crate)`, `#[cfg(test)]` (off) and
-    # `const VERSION: u32 = 1;` are owned; line 101 is
-    # `#[derive(Debug, thiserror::Error)]`.
-    ("crates/uv-lock/src/lock/mod.rs", "101:3: unsupported Rust attribute; only repr(C) records and no_mangle functions are admitted"),
+    # Grouped uses, `pub use`, `pub(crate)`, `#[cfg(test)]` (off), the const
+    # item and `#[derive(Debug, thiserror::Error)]` parse (the thiserror derive
+    # is a semantic gap); line 104 is the variant helper attribute
+    # `#[error(..)]` of that procedural derive.
+    ("crates/uv-lock/src/lock/mod.rs", "104:5: expected an identifier"),
 )
 
 

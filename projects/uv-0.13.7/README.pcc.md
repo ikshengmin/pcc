@@ -47,9 +47,9 @@ predicate is `cfg(test)`, which the test asserts.
 | Root | First blocker |
 |---|---|
 | `crates/uv/src/bin/uv.rs` | `4:14` `extern crate uv_performance_memory_allocator;` (active under default features) needs external crate loading |
-| `crates/uv/src/lib.rs` | `94:3` `#[derive(Debug, Copy, Clone, Eq, PartialEq)]` derive attribute |
+| `crates/uv/src/lib.rs` | `104:5` `const fn needs_initialization(self)` method |
 | `crates/uv-version/src/lib.rs` | none in the frontend: the whole root compiles, and with the value-only attestation an owned native build prints `0.13.7`; without it, the global gate (no owned borrow checker) remains |
-| `crates/uv-lock/src/lock/mod.rs` | `101:3` `#[derive(Debug, thiserror::Error)]` derive attribute |
+| `crates/uv-lock/src/lock/mod.rs` | `104:5` `#[error(..)]` variant helper attribute of the `thiserror::Error` procedural derive |
 
 Both roots formerly stopped in the lexer at `@` (`lib.rs:1515:34`, the
 `run_variant @ (ToolCommand::Uvx(_) | ToolCommand::Run(_))` binding, and
@@ -81,7 +81,10 @@ whose `version()` prints `0.13.7`, as rustc's build of the same root does
 x86-64 Linux run of the same test is unrun in this change). The lifetime
 argument of `BaseClientBuilder<'a>` (formerly `lib.rs:70:75`) now parses
 (`tests/rust/test_rust_lifetime_arguments.py`); explicit lifetimes still need
-an actual rustc check, as PCC has no owned lifetime analysis.
+an actual rustc check, as PCC has no owned lifetime analysis. Built-in derives
+(`#[derive(Debug, Copy, Clone, Eq, PartialEq)]`, formerly `lib.rs:94:3`) are owned
+(`tests/rust/programs/derives.rs`); `thiserror::Error` is a procedural derive
+from another crate and stays a semantic gap.
 
 ```sh
 uv run pytest -x -q tests/rust/test_uv_source_frontier.py

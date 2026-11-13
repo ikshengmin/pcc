@@ -74,6 +74,7 @@ class LanguageItemContext:
 
 class _ContextSyntaxParser(Parser):
     """Only used by inspect_lang_item_context; never a lowering admission mode."""
+    builtin_derives = False
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.feature_requests = []

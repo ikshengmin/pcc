@@ -66,7 +66,6 @@ def test_array_private_function_type_is_real_ir_array_not_flattened_tuple():
     ('fn f(a:[[u64;4096];4096]){}', 'storage shape'),
     ('fn f(a:[u64]){}', 'slice types'),
     ('fn f<const N:usize>(a:[u64;N]){}', 'const generic'),
-    ('fn f(a:[u64;2],b:[u64;2])->bool{a==b}', 'operator'),
     ('struct R{n:u64} fn f(){let a=[R{n:1};2];}', 'require Copy'),
     ('struct R{n:u64} fn f(){let a=[R{n:1}];let b=a[0];}', 'non-Copy value out of an array'),
     ('struct R{n:u64} impl R{fn take(self)->u64{self.n}} fn f(){let a=[R{n:1}];let b=a[0].take();}', 'non-Copy value receiver out of an array'),

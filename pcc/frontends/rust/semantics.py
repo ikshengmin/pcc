@@ -168,6 +168,7 @@ class Checker:
                     raise const.token.error(f'the name {const.token.text!r} is defined multiple times in the value namespace')
                 self.const_names[const.token.text] = const
         self.evaluating_consts = []
+        self.declared_derives = {}
         self.scopes: list[dict[str, Binding]] = []
         self.serial = 0
         self.loops = []
@@ -215,6 +216,18 @@ class Checker:
         binding = Binding(token.text, ty, mutable, self.serial, parameter)
         self.scopes[-1][token.text] = binding
         return binding
+
+    def builtin_clone(self, ty):
+        """Clone without a user method: derived or primitive Clone types."""
+        from .call_inference import partial
+        from .derives import implements
+        ty = partial(ty)
+        if isinstance(ty, TypeApplication) or isinstance(ty, (InferredInteger, InferredType)):
+            return False
+        base = ty
+        if (base, "clone") in self.methods.declarations or self.traits.candidates(ty, "clone"):
+            return False
+        return implements(self, ty, "Clone")
 
     def constant_named(self, name, token):
         """The const item a bare value name denotes in the current module."""
@@ -324,7 +337,10 @@ class Checker:
             return self.copy_type(ty.element)
         if isinstance(ty, TupleType):
             return all(self.copy_type(item) for item in ty.elements)
-        # Named Rust structs do NOT become Copy just because their fields are.
+        # Named Rust structs do NOT become Copy just because their fields are;
+        # only a validated `#[derive(Copy)]` makes one Copy.
+        if ty in self.records or ty in self.enums:
+            return "Copy" in self.declared_derives.get(ty, ())
         return ty in INTEGERS | {"bool", "()", STATIC_STR}
 
     def valid_type(self, ty: object, token: Token, stack: tuple[str, ...] = (), *, allow_reference=True, require_sized=True) -> None:
@@ -442,6 +458,8 @@ class Checker:
             self.valid_type(name, enum.token)
         for name, record in list(self.records.items()):
             self.valid_type(name, record.token)
+        from .derives import validate_derives
+        validate_derives(self)
         self.traits.prepare()
         self.methods.prepare()
         # rustc evaluates every free const item, used or not.
@@ -764,6 +782,12 @@ class Checker:
                 from .call_inference import partial
                 receiver_type = partial(self.expression(receiver, place_context=True))
                 array_type = receiver_type.referent if isinstance(receiver_type, SharedReference) else receiver_type
+                if (callee.value == "clone" and len(children) == 1 and not explicit_arguments
+                        and not isinstance(receiver_type, SharedReference) and self.builtin_clone(receiver_type)):
+                    # Derived (or primitive) Clone: a non-moving copy of the
+                    # receiver, exact for PCC's heap-free admitted types.
+                    expr.kind, expr.value, expr.children, expr.ty = "clone", None, [receiver], receiver_type
+                    return receiver_type
                 if isinstance(array_type, FixedArrayType) and callee.value == "len":
                     if explicit_arguments:
                         raise callee.token.error("array len is not a generic method")
@@ -911,6 +935,17 @@ class Checker:
                 ty = "bool"
             elif expr.value in {"==", "!=", "<", "<=", ">", ">="}:
                 ty = "bool"
+                from .call_inference import partial
+                operand = partial(common)
+                if expr.value in {"==", "!="} and not (operand in INTEGERS or operand == "bool"
+                                                    or isinstance(operand, (InferredInteger, InferredType))):
+                    from .derives import equality_gap
+                    gap = equality_gap(self, operand)
+                    if gap is not None:
+                        raise expr.token.error(f"operator {expr.value!r} does not accept {operand}: {gap}")
+                    # Structural equality of derived PartialEq data: both
+                    # operands are compared in place, never moved.
+                    expr.kind = "derived_eq"
             else:
                 ty = common
         elif kind == "assign":

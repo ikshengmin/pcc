@@ -343,6 +343,7 @@ class Record:
     field_public: tuple[object, ...] = ()
     item_identity: object = None
     lifetime_parameters: tuple[Token, ...] = ()
+    derives: tuple = ()
 
     @property
     def declaration_name(self):
@@ -363,6 +364,7 @@ class Enumeration:
     public: bool = False
     item_identity: object = None
     lifetime_parameters: tuple[Token, ...] = ()
+    derives: tuple = ()
 
     @property
     def declaration_name(self):
@@ -468,6 +470,10 @@ _COMPARISONS = {"==", "!=", "<", "<=", ">", ">="}
 
 
 class Parser:
+    # Built-in derives need core's trait impls; lang-item context inspection
+    # (a crate defining those traits itself) turns this off.
+    builtin_derives = True
+
     def __init__(self, source: str, *, source_path=None, edition=2021, rustc_check=None,
                  configuration=None, environment=None):
         if type(edition) is not int or edition not in {2015, 2018, 2021, 2024}:
@@ -1091,6 +1097,7 @@ class Parser:
                 language_item = None
                 docs = []
                 inline_attributes = []
+                derives = []
                 while True:
                     docs.extend(self.documentation())
                     if not self.accept("#"):
@@ -1131,6 +1138,13 @@ class Parser:
                         self.expect(")")
                     elif attribute.text == "no_mangle" and not no_mangle:
                         no_mangle = True
+                    elif attribute.text == "derive" and not self.builtin_derives:
+                        raise attribute.error("unsupported Rust attribute in this context: built-in derives expand to "
+                                              "impls of core traits, which this context does not model")
+                    elif attribute.text == "derive":
+                        from .derives import derive_attribute
+                        derives.extend(derive_attribute(self, attribute, attribute_start))
+                        continue
                     else:
                         raise attribute.error("unsupported Rust attribute; only repr(C) records and no_mangle functions are admitted")
                     self.expect("]")
@@ -1142,6 +1156,8 @@ class Parser:
                 public = parse_visibility(self)
                 from .inline_attributes import require_function_target
                 require_function_target(self, inline_attributes)
+                if derives and self.token.text not in {"struct", "enum", "union"}:
+                    raise derives[0].token.error("`derive` may only be applied to `struct`s, `enum`s and `union`s (rustc E0774)")
                 if cfg_attributes and not (self.token.text == 'extern' and self.tokens[self.pos + 1].text == 'crate'):
                     # Any other item is parsed in full (rustc strips only parsed
                     # items), then kept or rolled back when the next item starts.
@@ -1278,6 +1294,7 @@ class Parser:
                     if repr_c or no_mangle:
                         raise self.token.error("enum repr(C) and no_mangle are not supported")
                     self.enumeration(enum_repr, tuple(docs), public=public)
+                    self.enums[-1].derives = tuple(derives)
                     continue
                 if enum_repr is not None:
                     raise self.token.error("integer repr applies only to an enum")
@@ -1285,6 +1302,7 @@ class Parser:
                     if no_mangle:
                         raise self.token.error("no_mangle is supported only on extern C function definitions")
                     self.record(repr_c, tuple(docs), public=public)
+                    self.records[-1].derives = tuple(derives)
                     continue
                 if repr_c:
                     raise self.token.error("repr(C) applies only to a struct")

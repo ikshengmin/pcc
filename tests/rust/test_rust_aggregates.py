@@ -95,7 +95,6 @@ def test_partial_moves_and_field_order_fail_closed(body):
     ("struct P{x:i32} extern \"C\" fn f(p:P){}", "aggregate ABI"),
     ("#[repr(C)] struct P{x:i32} extern \"C\" fn f(p:P){}", "aggregate ABI"),
     ("extern \"C\" fn f(p:(i32,i32)){}", "aggregate ABI"),
-    ("#[derive(Copy,Clone)] struct P{x:i32}", "unsupported Rust attribute"),
     ("#[repr(C)] fn f(){}", "applies only to a struct"),
     ("fn f(){let t=(return,1);}", "diverging tuple operands"),
     ("fn f(){let t=(1,(return,2));}", "diverging tuple operands"),

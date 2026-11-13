@@ -135,6 +135,17 @@ class MoveChecker:
             if not self.checker.through_reference(children[0]):
                 self.loans.append(structural_place(*self.checker.place(children[0])))
             return state
+        if kind in {"clone", "derived_eq"}:
+            # Clone::clone(&x) and PartialEq::eq(&a, &b) borrow their places;
+            # only temporaries are consumed.
+            for child in children:
+                if state is None:
+                    return None
+                if self.checker.place(child) is not None:
+                    self.read_place(child, state, consume=False)
+                else:
+                    state = self.expression(child, state)
+            return state
         if kind in {"index", "array_len"}:
             target = expr if kind == "index" else children[0]
             if self.checker.place(target) is not None:

@@ -201,6 +201,14 @@ class Lowerer:
             self.temps[id(expr)] = self.builder.alloca(self.type(expr.ty), name="aggregate")
         if expr.kind == "index" and not isinstance(expr.children[0].ty, SharedReference) and self.checker.place(expr.children[0]) is None:
             self.temps[("index", id(expr))] = self.builder.alloca(self.type(expr.children[0].ty), name="indexed_array")
+        if expr.kind == "derived_eq":
+            # Array elements are compared through entry-block slots: the IR
+            # builder types `extractvalue` only for struct aggregates.
+            for array_type in self.array_types(expr.children[0].ty):
+                key = ("eq_array", str(array_type))
+                if key not in self.temps:
+                    self.temps[key] = (self.builder.alloca(self.type(array_type), name="eq.left"),
+                                       self.builder.alloca(self.type(array_type), name="eq.right"))
         # Direct-call callee syntax is not a value expression. A qualified
         # method path may share the parser's enum-path shape but has no value
         # type/storage. Method receiver values are already the first actual
@@ -229,6 +237,16 @@ class Lowerer:
                     address = self.builder.gep(storage, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(self.target.pointer_bits), index)])
                     self.builder.store(value, address)
             return self.builder.load(storage)
+        if kind == "clone":
+            # A derived or primitive Clone of heap-free data is the value itself.
+            return self.expression(children[0])
+        if kind == "derived_eq":
+            left = self.expression(children[0])
+            right = self.expression(children[1])
+            if self.builder.block.is_terminated:
+                return None
+            equal = self.equal_values(left, right, children[0].ty)
+            return equal if expr.value == "==" else self.builder.xor(equal, ir.Constant(ir.IntType(1), 1))
         if kind == "array_len":
             base = children[0]
             if self.checker.place(base) is not None:
@@ -576,6 +594,82 @@ class Lowerer:
         self.finish_iteration_scopes(depth)
         self.iteration_scopes.pop()
         return None
+
+    def array_types(self, ty, found=None):
+        """Every array type reachable inside a value of type `ty`."""
+        found = [] if found is None else found
+        if isinstance(ty, FixedArrayType):
+            if ty not in found:
+                found.append(ty)
+            self.array_types(ty.element, found)
+        elif isinstance(ty, TupleType) or ty in self.checker.records:
+            for item in self.checker.fields(ty):
+                self.array_types(item, found)
+        elif ty in self.checker.enums:
+            for fields in self.checker.enums[ty].payloads.values():
+                for item in fields:
+                    self.array_types(item, found)
+        return found
+
+    def equal_values(self, left, right, ty):
+        """Derived PartialEq: fields in declaration order; for an enum, the
+        variant first and then only the active payload, never an inactive
+        one (the same rule as pattern tests)."""
+        true = ir.Constant(ir.IntType(1), 1)
+        if ty == "()" or left is None:
+            return true
+        if isinstance(ty, FixedArrayType):
+            left_slot, right_slot = self.temps[("eq_array", str(ty))]
+            self.builder.store(left, left_slot)
+            self.builder.store(right, right_slot)
+            result = true
+            for index in range(ty.length):
+                position = [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), index)]
+                element_equal = self.equal_values(self.builder.load(self.builder.gep(left_slot, position)),
+                                                  self.builder.load(self.builder.gep(right_slot, position)),
+                                                  ty.element)
+                result = self.builder.and_(result, element_equal)
+            return result
+        if isinstance(ty, TupleType) or ty in self.checker.records:
+            result = true
+            for index, item in enumerate(self.checker.fields(ty)):
+                if item == "()":
+                    continue
+                field_equal = self.equal_values(self.builder.extract_value(left, index),
+                                                self.builder.extract_value(right, index), item)
+                result = self.builder.and_(result, field_equal)
+            return result
+        if ty in self.checker.enums:
+            enum = self.checker.enums[ty]
+            if not enum.payloads:
+                return self.builder.icmp_unsigned("==", left, right)
+            tag = self.builder.extract_value(left, 0)
+            same = self.builder.icmp_unsigned("==", tag, self.builder.extract_value(right, 0))
+            origin = self.builder.block
+            done = self.function.append_basic_block("eq.end")
+            check = self.function.append_basic_block("eq.payload")
+            self.builder.cbranch(same, check, done)
+            incoming = [(ir.Constant(ir.IntType(1), 0), origin)]
+            self.builder.position_at_end(check)
+            for index, (variant, fields) in enumerate(enum.payloads.items(), start=1):
+                active = self.function.append_basic_block("eq.variant")
+                following = self.function.append_basic_block("eq.next")
+                self.builder.cbranch(self.builder.icmp_unsigned(
+                    "==", tag, ir.Constant(tag.type, enum.discriminants[variant])), active, following)
+                self.builder.position_at_end(active)
+                result = self.equal_values(self.builder.extract_value(left, index),
+                                           self.builder.extract_value(right, index), TupleType(fields))
+                incoming.append((result, self.builder.block))
+                self.builder.branch(done)
+                self.builder.position_at_end(following)
+            incoming.append((true, self.builder.block))  # equal unit variants
+            self.builder.branch(done)
+            self.builder.position_at_end(done)
+            phi = self.builder.phi(ir.IntType(1))
+            for value, block in incoming:
+                phi.add_incoming(value, block)
+            return phi
+        return self.builder.icmp_unsigned("==", left, right)
 
     def binary(self, op: str, left, right, ty: str):
         operations = {"+": self.builder.add, "-": self.builder.sub, "*": self.builder.mul, "&": self.builder.and_, "|": self.builder.or_, "^": self.builder.xor}
