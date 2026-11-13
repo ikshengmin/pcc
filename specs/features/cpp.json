@@ -1257,7 +1257,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:58cd651f381feaea0b387f9671a871b56e75fd6ede146e66a8ea535dc1fb0d5e",
+        "source_revision": "sha256:dae4ba4298dc88e072006e31c573425823519c3f88bd99fb9ce4392e3256d862",
         "sources": [
           {
             "path": "pcc/frontends/cpp/classes.py",
@@ -1269,7 +1269,7 @@
           },
           {
             "path": "pcc/frontends/cpp/default_constructors.py",
-            "sha256": "5f241b0bb343de5aaeace18b523202fa317a1ef970f4b2b2fe452eb44ee27387"
+            "sha256": "eb3c70899b0a10d9540d5625350225260cc2df2b10a9f035710e58849bf4c7bf"
           },
           {
             "path": "pcc/frontends/cpp/destructors.py",
@@ -1320,7 +1320,7 @@
         "class.base.init",
         "class.dtor"
       ],
-      "scope": "A dynamic single base is the Itanium primary base: the derived class shares its table pointer at offset 0 and its table holds the base entries with this class's final overriders in place, then its new virtual functions. Same-signature members override implicitly or with override/final, including destructors; overriding a final member, a different non-covariant return, a static overrider and override without an overridden member are ordinary errors. Covariant class pointer/reference returns need no adjustment at offset 0. Abstractness follows the final overriders. Declared constructors store the class table after base construction and before members; every polymorphic destructor stores it on entry ([class.cdtor]/4). Unqualified and explicit destructor calls load the final overrider; qualified calls are direct. An empty non-dynamic base may sit under a new table pointer. Implicit or defaulted virtual destructors, implicit constructors, slicing copies, a nonempty non-dynamic base under a new table pointer and tail-padding reuse remain explicit gaps. Source revision is sha256 of the sorted compact JSON source list.",
+      "scope": "A dynamic single base is the Itanium primary base: the derived class shares its table pointer at offset 0 and its table holds the base entries with this class's final overriders in place, then its new virtual functions. Same-signature members override implicitly or with override/final, including destructors; overriding a final member, a different non-covariant return, a static overrider and override without an overridden member are ordinary errors. Covariant class pointer/reference returns need no adjustment at offset 0. Abstractness follows the final overriders. Declared constructors, and the implicitly declared or first-declaration defaulted default constructor of a non-template class, store the class table after base construction and before members; value-initialization zero-initializes the object before that constructor runs; every polymorphic destructor stores it on entry ([class.cdtor]/4). Unqualified and explicit destructor calls load the final overrider; qualified calls are direct. An empty non-dynamic base may sit under a new table pointer. Implicit or defaulted virtual destructors, implicit or defaulted constructors of class-template specializations or over a base with a user constructor, eager per-unit tables (an out-of-line virtual function must be defined in some linked unit even when no object is created), slicing copies, a nonempty non-dynamic base under a new table pointer and tail-padding reuse remain explicit gaps. Source revision is sha256 of the sorted compact JSON source list.",
       "tests": [
         "tests/cpp/test_cpp_polymorphic_inheritance.py::test_polymorphic_inheritance_originals_lower_to_ir",
         "tests/cpp/test_cpp_polymorphic_inheritance.py::test_derived_table_extends_the_primary_base_table_in_place",
@@ -1329,13 +1329,21 @@
         "tests/cpp/test_cpp_polymorphic_inheritance.py::test_invalid_overriding_originals_are_ordinary_errors",
         "tests/cpp/test_cpp_polymorphic_inheritance.py::test_unmodeled_polymorphic_shapes_keep_an_explicit_capability_code",
         "tests/cpp/test_cpp_polymorphic_inheritance.py::test_polymorphic_originals_execute_against_explicit_cpp17_reference",
-        "tests/cpp/test_cpp_polymorphic_inheritance.py::test_explicit_reference_rejects_invalid_and_accepts_gap_originals"
+        "tests/cpp/test_cpp_polymorphic_inheritance.py::test_explicit_reference_rejects_invalid_and_accepts_gap_originals",
+        "tests/cpp/test_cpp_implicit_polymorphic_constructors.py::test_former_rows_declare_an_implicit_constructor",
+        "tests/cpp/test_cpp_implicit_polymorphic_constructors.py::test_former_rows_link_with_their_virtual_definitions",
+        "tests/cpp/test_cpp_implicit_polymorphic_constructors.py::test_former_inline_virtual_destructor_row_compiles",
+        "tests/cpp/test_cpp_implicit_polymorphic_constructors.py::test_eagerly_emitted_tables_still_need_their_virtual_definitions",
+        "tests/cpp/test_cpp_implicit_polymorphic_constructors.py::test_polymorphic_classes_without_user_constructors_compile_to_stable_artifacts",
+        "tests/cpp/test_cpp_implicit_polymorphic_constructors.py::test_polymorphic_classes_without_user_constructors_execute_against_real_cpp17_reference",
+        "tests/cpp/test_cpp_implicit_polymorphic_constructors.py::test_the_implicit_constructor_stores_the_table_pointer_in_its_c1",
+        "tests/cpp/test_cpp_implicit_polymorphic_constructors.py::test_remaining_constructor_shapes_stay_explicit"
       ],
       "diagnostics": [],
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:8adb141d9b401587eb302273368850933dbc8d4cdedc2a95b13b3edf05f0a4c8",
+        "source_revision": "sha256:5f068efae35ddcc19e2d3ce25557243fd86909c177f4b28a1889d83656daba6e",
         "sources": [
           {
             "path": "pcc/frontends/cpp/allocation.py",
@@ -1348,6 +1356,10 @@
           {
             "path": "pcc/frontends/cpp/constructors.py",
             "sha256": "aeed976a19300ebf8dbdd20454851e86d25ae71c1143b9b8733bbca6170ba84e"
+          },
+          {
+            "path": "pcc/frontends/cpp/default_constructors.py",
+            "sha256": "eb3c70899b0a10d9540d5625350225260cc2df2b10a9f035710e58849bf4c7bf"
           },
           {
             "path": "pcc/frontends/cpp/default_destructors.py",
@@ -1371,7 +1383,7 @@
           },
           {
             "path": "pcc/frontends/cpp/virtual_functions.py",
-            "sha256": "b426d008cec6ab05dd67f95bfe169839845d1fba9bbcba81dfa60b764b1088b9"
+            "sha256": "cbff05e7219e9ccd85da579948c822c4fa42b60396987224b2eb2382ca28ac7b"
           }
         ]
       }
@@ -1400,7 +1412,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:3225c0175749dd30e25679dc6c61cfc2493e0b1762164463003a5be8c5d047e9",
+        "source_revision": "sha256:0bb94205731286cd4cb3c680d5bb3a41059b0e194017fc61a28868feda05bb36",
         "sources": [
           {
             "path": "pcc/frontends/cpp/class_template_members.py",
@@ -1408,7 +1420,7 @@
           },
           {
             "path": "pcc/frontends/cpp/class_templates.py",
-            "sha256": "9783ff06a75c855278975102eb38390f3fe57a7b8b1d8ee628d2e20b0a8e8530"
+            "sha256": "765d744a690f2a2158ffb679faad7ad65a7f3e37c84b4f8f651e6c776dd9fcf2"
           },
           {
             "path": "pcc/frontends/cpp/inheritance.py",
@@ -1445,7 +1457,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:d5a3f078c29bf39cc81da84570038381c0f2b30a1fcf6f3130d5d6603b9198ad",
+        "source_revision": "sha256:022626f656fd454da9d3b8fb729c41ad748dcc0f96b9d932d2ec07c15ebefb3f",
         "sources": [
           {
             "path": "pcc/frontends/cpp/class_template_members.py",
@@ -1453,11 +1465,11 @@
           },
           {
             "path": "pcc/frontends/cpp/class_templates.py",
-            "sha256": "9783ff06a75c855278975102eb38390f3fe57a7b8b1d8ee628d2e20b0a8e8530"
+            "sha256": "765d744a690f2a2158ffb679faad7ad65a7f3e37c84b4f8f651e6c776dd9fcf2"
           },
           {
             "path": "pcc/frontends/cpp/virtual_functions.py",
-            "sha256": "b426d008cec6ab05dd67f95bfe169839845d1fba9bbcba81dfa60b764b1088b9"
+            "sha256": "cbff05e7219e9ccd85da579948c822c4fa42b60396987224b2eb2382ca28ac7b"
           }
         ]
       }
@@ -1485,7 +1497,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:28e1c410bc1a3acb8a9b74c37142176170ac503e9f5e80dff1dc35f108d72bea",
+        "source_revision": "sha256:d38d1a9281d5e24daee12ede6867fc8ddbc943df4f032b59d2292986be348725",
         "sources": [
           {
             "path": "pcc/frontends/cpp/class_template_enums.py",
@@ -1497,7 +1509,7 @@
           },
           {
             "path": "pcc/frontends/cpp/class_templates.py",
-            "sha256": "9783ff06a75c855278975102eb38390f3fe57a7b8b1d8ee628d2e20b0a8e8530"
+            "sha256": "765d744a690f2a2158ffb679faad7ad65a7f3e37c84b4f8f651e6c776dd9fcf2"
           },
           {
             "path": "pcc/frontends/cpp/parser.py",
@@ -3821,7 +3833,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:0bcb8d7eb9a689ad1135b37f9d115f0769ffd318fc25d4c285c0ff460462f9ca",
+        "source_revision": "sha256:8e9958495b1f3e684464d230809cdad521e479b943cc8a910f4380e1a5ea0b28",
         "sources": [
           {
             "path": "pcc/frontends/cpp/arrays.py",
@@ -3833,7 +3845,7 @@
           },
           {
             "path": "pcc/frontends/cpp/class_templates.py",
-            "sha256": "9783ff06a75c855278975102eb38390f3fe57a7b8b1d8ee628d2e20b0a8e8530"
+            "sha256": "765d744a690f2a2158ffb679faad7ad65a7f3e37c84b4f8f651e6c776dd9fcf2"
           },
           {
             "path": "pcc/frontends/cpp/classes.py",
@@ -3874,7 +3886,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:d5e621abce9414862b2426775e82f2da6c0794e0ef38d475cd30713fdbbdaed0",
+        "source_revision": "sha256:9cf148818ebac649589897fa1feba7689cf73622c193f88bb1e8162be96fe27e",
         "sources": [
           {
             "path": "pcc/frontends/cpp/class_template_members.py",
@@ -3882,7 +3894,7 @@
           },
           {
             "path": "pcc/frontends/cpp/class_templates.py",
-            "sha256": "9783ff06a75c855278975102eb38390f3fe57a7b8b1d8ee628d2e20b0a8e8530"
+            "sha256": "765d744a690f2a2158ffb679faad7ad65a7f3e37c84b4f8f651e6c776dd9fcf2"
           },
           {
             "path": "pcc/frontends/cpp/constructors.py",

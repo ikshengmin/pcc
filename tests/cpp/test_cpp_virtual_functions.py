@@ -88,10 +88,9 @@ INVALID = (
     ('override-without-base', 'struct S{S(){} virtual int f() override {return 1;}};', 'cpp.invalid-override'),
     ('final-nonvirtual-member', 'struct S{S(){} int f() final {return 1;}};', 'cpp.invalid-virt-specifier'),
 )
+# The implicit and defaulted default-constructor rows moved verbatim to
+# tests/cpp/test_cpp_implicit_polymorphic_constructors.py (now positive).
 DEFERRED = (
-    ('implicit-default-constructor',
-     'struct V{virtual int f(){return 42;}};int cpp_test_entry(){V v;return v.f();}'),
-    ('defaulted-default-constructor', 'struct D{D()=default; virtual int f(){return 1;}};'),
     ('defaulted-virtual-destructor', 'struct D{D(){} virtual ~D()=default;};'),
     ('variadic-virtual-member', 'struct S{S(){} virtual int f(int,...);};'),
     ('virtual-operator-member', 'struct S{S(){} virtual S& operator=(const S&);};'),

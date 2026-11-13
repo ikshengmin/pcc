@@ -96,7 +96,8 @@ INVALID = (
 
 
 DEFERRED = (
-    "struct S{virtual ~S(){}};",
+    # Original inline virtual destructor moved verbatim to
+    # test_cpp_implicit_polymorphic_constructors (implicit constructor).
     "struct S{~S()=delete;};",
     "struct S{~S()noexcept{}};",
     "struct S{~S(){throw 1;}};",

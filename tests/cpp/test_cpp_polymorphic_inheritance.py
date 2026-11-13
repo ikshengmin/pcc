@@ -103,8 +103,10 @@ GAPS = {
         ("struct B{B(){} virtual ~B(){}};struct D:B{D(){}};", "cpp.unsupported.virtual-functions"),
     "defaulted-virtual-destructor":
         ("struct B{B(){} virtual ~B(){}};struct D:B{D(){} ~D()=default;};", "cpp.unsupported.virtual-functions"),
+    # D's implicit default constructor is now synthesized; constructing its
+    # base B (which has a constructor) from it is the remaining gap.
     "implicit-derived-constructor":
-        ("struct B{B(){} virtual int f(){return 1;}};struct D:B{};", "cpp.unsupported.virtual-functions"),
+        ("struct B{B(){} virtual int f(){return 1;}};struct D:B{};", "cpp.unsupported.constructor-subobjects"),
     "nonempty-non-dynamic-base":
         ("struct B{int x;};struct D:B{D(){} virtual int f(){return 1;}};", "cpp.unsupported.base-classes"),
     "dynamic-base-tail-padding":

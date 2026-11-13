@@ -301,8 +301,12 @@ def _rename(node, name):
     node.declname = name
 
 
-def complete_class(parser, definition):
-    """Check construction rules, then project the table type and object."""
+def complete_class(parser, definition, *, synthesize_constructors=True):
+    """Check construction rules, then project the table type and object.
+
+    Ordinary classes bind defaulted constructors after completion, so a
+    defaulted or implicit default constructor stores the table pointer there.
+    Class-template specializations have no such binding step yet."""
     coord = definition.dtype.coord
     entries = table_entries(definition)
     definition.virtual_entries = entries
@@ -316,10 +320,15 @@ def complete_class(parser, definition):
             symbol.virtual_index, symbol.virtual_slot = overridden.virtual_index, overridden.virtual_slot
     if base_without_destructor(definition):
         _unsupported(coord, "the implicit virtual destructor of a derived class requires special-member synthesis")
-    if definition.defaulted_constructors:
-        _unsupported(coord, "defaulted constructors of polymorphic classes require table-pointer initialization")
-    if not definition.abstract and not definition.constructors.overloads:
-        _unsupported(coord, "implicit constructors of polymorphic classes require table-pointer initialization")
+    implicit = []
+    if not synthesize_constructors:
+        if definition.defaulted_constructors:
+            _unsupported(coord, "defaulted constructors of polymorphic classes require table-pointer initialization")
+        if not definition.abstract and not definition.constructors.overloads:
+            _unsupported(coord, "implicit constructors of polymorphic classes require table-pointer initialization")
+    elif not definition.abstract and not definition.constructors.overloads:
+        from pcc.frontends.cpp.default_constructors import declare_implicit_default_constructor
+        implicit.append(declare_implicit_default_constructor(parser, definition))
     fields, values = [], []
     for index, entry in enumerate(entries):
         name = _slot_name(index)
@@ -338,7 +347,7 @@ def complete_class(parser, definition):
         c_ast.TypeDecl(name, ["const"], c_ast.Struct(tag, None, coord), coord),
         c_ast.InitList(values, coord), None, coord,
     )
-    return [table, storage]
+    return [table, storage, *implicit]
 
 
 def base_without_destructor(definition):
