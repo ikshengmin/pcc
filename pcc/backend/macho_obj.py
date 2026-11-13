@@ -982,12 +982,21 @@ def emit_object(
     # File layout: payloads (aligned), relocation entries, symbols, strings.
     # Zerofill sections take no file space and report offset 0.
     payload_offsets: list[int] = []
-    cursor = spec.MACH_HEADER_64.size + sizeofcmds
-    for sec in sections:
+    section_data_start = spec.MACH_HEADER_64.size + sizeofcmds
+    cursor = section_data_start
+    for index, sec in enumerate(sections):
         if sec.is_zerofill:
             payload_offsets.append(0)
             continue
-        cursor = _align_up(cursor, sec.align_log2)
+        # A section's file offset mirrors its address, as in LLVM's Mach
+        # object writer: offset - fileoff == addr - vmaddr. Aligning the file
+        # cursor on its own put a different gap before an over-aligned
+        # section (a 128-byte global table) than its address got, and the
+        # segment's filesize then exceeded its vmsize, which nm and ld reject
+        # as a malformed object. The data area starts eight-byte aligned (a
+        # 32-byte header and eight-byte load commands), so sections aligned
+        # to eight bytes or less keep the offsets they had.
+        cursor = section_data_start + addrs[index]
         payload_offsets.append(cursor)
         cursor += len(sec.data)
 

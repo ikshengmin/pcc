@@ -251,17 +251,21 @@ def test_pointer_to_got_forms_match_as_and_obey_ld64_boundaries(tmp_path: Path) 
     )
 
     # The absolute eight-byte PTRTGOT form is a real as(1) object shape and
-    # survives relocatable links, but Darwin's final linker rejects it.  Pin
-    # that boundary for both emitters instead of claiming an executable that
-    # the platform oracle itself cannot produce.
+    # survives pcc's relocatable link, but Darwin's final linker rejects it.
+    # Pin that boundary for both emitters instead of claiming an executable
+    # that the platform oracle itself cannot produce. Newer ld64 releases
+    # also refuse it in a relocatable link, with the final link's message;
+    # older ones keep it, and then its relocations must survive unchanged.
     for owner, obj in (("pcc", objects[0]), ("as", objects[1])):
         merged = tmp_path / f"pointer_to_got_{owner}_ld_r.o"
         if owner == "pcc":
             merged.write_bytes(link_relocatable([obj.read_bytes()]))
         else:
             linked = _run(["xcrun", "ld", "-r", str(obj), "-o", str(merged)])
-            assert linked.returncode == 0, linked.stderr
-        merged_rows = _relocation_rows(merged)
+            if linked.returncode != 0:
+                assert "relocation in '_got_absolute' is not supported" in linked.stderr
+                merged = None
+        merged_rows = _relocation_rows(merged if merged is not None else obj)
         input_rows = _relocation_rows(obj)
         assert merged_rows.keys() == input_rows.keys()
         for section_key in input_rows:

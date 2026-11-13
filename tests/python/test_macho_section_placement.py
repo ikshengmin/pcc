@@ -151,11 +151,53 @@ def _inputs(representation):
     return result
 
 
-# Captured from the existing merge before extracting its placement step.
-_MERGED_SHA256 = {
-    8: "ebe840b295e1aae4c5bcc7268767b632b140ea133fa6b1b33e227c21aabe728d",
-    64: "3f5e1b108fd403c842e1619920418c2f45e8bc6fc766a287e5cd227009897950",
+RET = bytes.fromhex("c0035fd6")
+# The two inputs of _inputs: the first __text holds two returns and one
+# inline data byte (4-byte aligned), the second two returns (16-byte
+# aligned); each __data holds one pointer slot, each __bss 5 + index bytes.
+# A text chunk limit of 8 starts the second input's text in a new chunk.
+_MERGED_SECTIONS = {
+    8: [
+        (b"__TEXT", b"__text", 0, 2, RET * 2 + b"\x7f"),
+        (b"__TEXT", b"__text1", 16, 4, RET * 2),
+        (b"__DATA", b"__data", 24, 3, bytes(16)),
+        (b"__DATA", b"__bss", 40, 3, 14),
+    ],
+    64: [
+        (b"__TEXT", b"__text", 0, 4, RET * 2 + b"\x7f" + bytes(7) + RET * 2),
+        (b"__DATA", b"__data", 24, 3, bytes(16)),
+        (b"__DATA", b"__bss", 40, 3, 14),
+    ],
 }
+_MERGED_SYMBOLS = {"_main": 0, "_helper": 16, "_bss0": 40, "_bss1": 48}
+
+
+def _assert_merged_object(blob, chunk_limit):
+    """The merged relocatable object: its sections, symbols and a file
+    layout whose payload offsets mirror the section addresses (filesize
+    never exceeds vmsize), checked field by field rather than by a hash of
+    its bytes."""
+    parsed = spec.parse_object(blob)
+    segment = parsed.command(spec.LC_SEGMENT_64).body
+    assert segment["filesize"] <= segment["vmsize"] == 54
+    found = []
+    for section in parsed.sections():
+        zerofill = (section["flags"] & 0xFF) == spec.S_ZEROFILL
+        if zerofill:
+            payload = section["size"]
+        else:
+            assert section["offset"] - segment["fileoff"] == section["addr"]
+            payload = blob[section["offset"]:section["offset"] + section["size"]]
+        found.append((section["segname"].rstrip(b"\0"), section["sectname"].rstrip(b"\0"),
+                      section["addr"], section["align"], payload))
+    assert found == _MERGED_SECTIONS[chunk_limit]
+    assert sum(section["nreloc"] for section in parsed.sections()) == 2
+    symbols = {row["name"]: row["n_value"] for row in parsed.symbols() if row["n_type"] & 0x0E == 0x0E}
+    assert symbols == _MERGED_SYMBOLS
+
+
+# Captured from the existing merge before extracting its placement step: a
+# change detector for the linked image, not a statement of what is right.
 _IMAGE_SHA256 = {
     8: "68b8777cc9b04786cc768b2c0dbe831ac2e288bd84ab8e3546e0e8102f03da83",
     64: "06d6d2f6733bb28ffdddce2f68357de960df703f4f1409af2be0621e596274ad",
@@ -185,7 +227,7 @@ def test_current_merge_calls_shared_placement_with_exact_output_parity(
     assert calls == [("__TEXT", "__text"), ("__DATA", "__data"), ("__DATA", "__bss")] * 2
     assert (inputs == []) is owned
     if not owned:
-        assert hashlib.sha256(merged.to_macho()).hexdigest() == _MERGED_SHA256[chunk_limit]
+        _assert_merged_object(merged.to_macho(), chunk_limit)
     image = macho_exec.link_prepared_executable(merged, compact_budget=budget)
     assert hashlib.sha256(image).hexdigest() == _IMAGE_SHA256[chunk_limit]
     if budget is not None:
