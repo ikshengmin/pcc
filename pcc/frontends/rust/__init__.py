@@ -15,6 +15,7 @@ from .external_check import (
     CheckedRustSource, ExternalRustcLints, RustcToolchain, RustExternalCheckError,
     check_rust_source, compile_rust_checked,
 )
+from .builtin_macros import CompileEnvironment
 from .configuration import CfgOptions, OwnedRustConfiguration
 from .moves import MoveChecker
 from .reference_admission import reject_uncertified_references as _reject_uncertified_references
@@ -68,12 +69,16 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
                  module_name: str = "rust",
                  target_triple: str = DEFAULT_TARGET,
                  edition: int = 2021,
-                 cfg: CfgOptions | None = None) -> RustCompilation:
+                 cfg: CfgOptions | None = None,
+                 env: CompileEnvironment | dict | None = None) -> RustCompilation:
     """Lower a rustc-checked, nonheap scalar/aggregate crate into PCC's public IR.
 
     `cfg` is an explicit owned cfg configuration (rustc's --cfg/--test/-C
     debug-assertions/-C panic) evaluated against PCC's record of the target's
     built-in cfg; without it, cfg needs an actual CheckedRustSource command.
+    `env` is the explicit compile-time environment env!/option_env! read
+    (a CompileEnvironment or a str->str mapping); the host environment is
+    never consulted.
 
     The legacy opt-in is caller attestation for value-only experimental input,
     never authorization for any reference-bearing program. The rustc_check path
@@ -104,7 +109,11 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
         if type(cfg) is not CfgOptions:
             raise RustError('compile_rust cfg must be CfgOptions')
         configuration = OwnedRustConfiguration(target.triple, edition, cfg)
-    parser = Parser(source, edition=edition, rustc_check=rustc_check, configuration=configuration)
+    environment = env
+    if env is not None and type(env) is not CompileEnvironment:
+        environment = CompileEnvironment.of(env)
+    parser = Parser(source, edition=edition, rustc_check=rustc_check, configuration=configuration,
+                    environment=environment)
     functions = parser.parse()
     resolution = None
     records, enums, consts = parser.records, parser.enums, parser.consts
@@ -157,4 +166,4 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
 __all__ = ["ExternalRustcCheck", "CheckedRustSource", "RustcToolchain",
            "ExternalRustcLints",
            "RustExternalCheckError", "check_rust_source", "compile_rust_checked",
-           "RustCompilation", "RustError", "compile_rust", "CfgOptions"]
+           "RustCompilation", "RustError", "compile_rust", "CfgOptions", "CompileEnvironment"]

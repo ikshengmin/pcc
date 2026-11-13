@@ -5,7 +5,8 @@ files. A root's recorded blocker is updated when the frontend advances past it;
 a change elsewhere must not silently move it. cfg is evaluated by PCC's owned
 configuration for x86_64-unknown-linux-gnu with the cfg inputs `cargo build
 --release` gives each package (its default features and the workspace release
-profile), computed from the pinned manifests. No Cargo, build script, macro or
+profile), and env! reads the crate environment Cargo sets, both computed from
+the pinned manifests. No Cargo, build script, macro or
 upstream test is executed, and no uv build is claimed.
 """
 from pathlib import Path
@@ -25,7 +26,9 @@ FRONTIER = (
     # `@` patterns, tool lint paths and feature cfg (self-update is off) are
     # owned; line 70 has the lifetime `'a`.
     ("crates/uv/src/lib.rs", "70:75: unsupported Rust type \"'a\"; references and traits are not implemented"),
-    ("crates/uv-version/src/lib.rs", "5:5: macro invocations require macro-by-example expansion"),
+    # env!("CARGO_PKG_VERSION") expands to "0.13.7" from the pinned manifest;
+    # the resulting `&'static str` has no runtime representation yet.
+    ("crates/uv-version/src/lib.rs", "5:5: runtime string values are not implemented; env!('CARGO_PKG_VERSION')"),
     # Grouped uses, `pub use`, `pub(crate)`, `#[cfg(test)]` (off) and
     # `const VERSION: u32 = 1;` are owned; line 101 is
     # `#[derive(Debug, thiserror::Error)]`.
@@ -66,18 +69,42 @@ def release_cfg(name):
                              profile="release")[0]
 
 
+def crate_environment(name):
+    """The crate environment Cargo sets for the root's package (no paths)."""
+    import tomllib
+    from pcc.frontends.rust.cargo_config import cargo_environment
+    manifest = PROJECT / name.split("/src/", 1)[0] / "Cargo.toml"
+    if not manifest.is_file():
+        return None  # Not pinned: an env! use there stays an explicit error.
+    workspace = tomllib.loads((PROJECT / "Cargo.toml").read_text())
+    return cargo_environment(tomllib.loads(manifest.read_text()), workspace_manifest=workspace)
+
+
+def test_uv_version_env_expands_to_the_pinned_package_version():
+    from pcc.frontends.rust import RustError
+    from pcc.frontends.rust.syntax import Parser
+    name = "crates/uv-version/src/lib.rs"
+    parser = Parser((PROJECT / name).read_text(encoding="utf-8"), source_path=name, edition=2024,
+                    environment=crate_environment(name))
+    with pytest.raises(RustError):
+        parser.parse()
+    expansion, = parser.macro_expansions
+    assert (expansion.name, expansion.arguments, expansion.value) == ("env", ("CARGO_PKG_VERSION",), "0.13.7")
+    assert (expansion.token.line, expansion.token.column) == (5, 5)
+
+
 @pytest.mark.parametrize("name,blocker", FRONTIER, ids=[name for name, _ in FRONTIER])
 def test_uv_rust_root_stops_at_its_recorded_first_blocker(name, blocker):
     from pcc.frontends.rust import RustError, compile_rust
     from pcc.frontends.rust.configuration import OwnedRustConfiguration
     from pcc.frontends.rust.syntax import Parser
     source = (PROJECT / name).read_text(encoding="utf-8")
-    cfg = release_cfg(name)
+    cfg, environment = release_cfg(name), crate_environment(name)
     try:
-        Parser(source, source_path=name, edition=2024,
+        Parser(source, source_path=name, edition=2024, environment=environment,
                configuration=OwnedRustConfiguration(TARGET, 2024, cfg)).parse()
         compile_rust(source, module_name="uv_root", target_triple=TARGET, overflow_checks=False,
-                     edition=2024, cfg=cfg)
+                     edition=2024, cfg=cfg, env=environment)
     except RustError as error:
         assert blocker in str(error)
     else:

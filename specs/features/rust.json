@@ -2425,6 +2425,21 @@
       "status": "missing"
     },
     {
+      "id": "rust.macros.builtin-env",
+      "title": "Built-in env!/option_env! over an explicit compile-time environment",
+      "chapter_ids": [
+        "rust.ref.3"
+      ],
+      "scope": "Qualification missing, not implementation missing: env!/option_env! are evaluated at parse time against an explicit CompileEnvironment (compile_rust env=..., parse_crate_sources environment=...); the host process environment is never read. Argument rules and messages follow rustc: one or two string literals (option_env!: one), any delimiter, trailing comma, raw strings; `expected string literal`, arity and `not defined at compile time` errors, custom messages. Names the environment marks unavailable, macro-produced arguments (concat!) and a missing environment are explicit errors. cargo_config.cargo_environment derives the crate environment Cargo sets (CARGO_PKG_* with workspace inheritance, empty unset fields, `:`-joined authors, semver parts, CARGO_CRATE_NAME); file-, path- and invocation-dependent names are unavailable unless supplied. The expanded `&'static str` / Option has no runtime representation, so expansions are recorded and the use stops at that gap: no owned execution is claimed. Local rustc 1.92.0 prints the same expanded values and rejects the same invalid uses with the same messages; a real cargo 1.92 build of a synthetic workspace sets the same CARGO_PKG_* values. No schema2 evidence row is migrated.",
+      "tests": [
+        "tests/rust/test_rust_builtin_env.py",
+        "tests/rust/test_uv_source_frontier.py::test_uv_version_env_expands_to_the_pinned_package_version"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "status": "missing"
+    },
+    {
       "id": "rust.enums.payload-values",
       "title": "Tagged payload enums and by-value bindings",
       "chapter_ids": [

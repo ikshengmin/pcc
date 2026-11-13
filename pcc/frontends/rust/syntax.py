@@ -467,7 +467,7 @@ _COMPARISONS = {"==", "!=", "<", "<=", ">", ">="}
 
 class Parser:
     def __init__(self, source: str, *, source_path=None, edition=2021, rustc_check=None,
-                 configuration=None):
+                 configuration=None, environment=None):
         if type(edition) is not int or edition not in {2015, 2018, 2021, 2024}:
             raise RustError('Rust parser crate policy requires an explicit recognized edition')
         if configuration is not None:
@@ -478,6 +478,13 @@ class Parser:
                 raise RustError('an owned cfg configuration and a CheckedRustSource cannot both '
                                 'select cfg; the checked command fixes its own configuration')
         self._configuration = configuration
+        if environment is not None:
+            from .builtin_macros import CompileEnvironment
+            if type(environment) is not CompileEnvironment:
+                raise RustError('Rust parser environment must be a CompileEnvironment')
+        # Explicit env!/option_env! input, and every built-in expansion made.
+        self.environment = environment
+        self.macro_expansions = []
         self.source = source
         self.crate_policy = CratePolicy(edition)
         self.crate_aliases = []
@@ -1660,6 +1667,11 @@ class Parser:
             expr = Expr("trait_path", token, (owner, trait.text, method.text))
         elif text in {"|", "||"} or (text == "move" and self.token.text in {"|", "||"}):
             expr = self.closure_expression(token)
+        elif token.kind == "name" and self.token.text == "!" and text in {"env", "option_env"}:
+            # Built-in expression macros; no macro_rules! can shadow them here,
+            # since macro definitions are not admitted.
+            from .builtin_macros import expand_expression_macro
+            expand_expression_macro(self, token)
         elif token.kind == "name" and self.token.text == "!":
             raise token.error("macro invocations require macro-by-example expansion, which is not implemented")
         elif (token.kind == "name" and text != "_") or text in {"self", "Self", "super", "crate"}:

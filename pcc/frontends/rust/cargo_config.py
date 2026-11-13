@@ -8,12 +8,21 @@ and panic settings. `cargo_cfg_options` turns them into the `CfgOptions` that
 `cargo build` would pass to rustc for this package: `feature="..."` per
 enabled feature, `test` only when asked, and the profile options.
 
+`cargo_environment` gives the compile-time environment Cargo sets for a
+package's crates (environment-variables.html, "Environment variables Cargo
+sets for crates"), as observed from cargo 1.92: every CARGO_PKG_* field is
+set, empty when the manifest omits it; authors are joined with `:`; the
+version's pre-release excludes build metadata; `{ workspace = true }` fields
+come from `[workspace.package]`. Values that depend on files, paths or the
+cargo invocation are marked unavailable unless supplied.
+
 Dependency resolution, the dependencies' own features, build scripts,
 `[target.'cfg(..)'.dependencies]` selection and unification across a
 dependency graph are not modeled here.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from .configuration import CfgOptions
@@ -136,3 +145,81 @@ def cargo_cfg_options(package_manifest, *, workspace_manifest=None, features=(),
     debug_assertions, panic = profile_options(workspace_manifest or package_manifest, profile)
     cfg = tuple(f'feature="{name}"' for name in selection.features)
     return CfgOptions(cfg=cfg, test=test, debug_assertions=debug_assertions, panic=panic), selection
+
+
+_SEMVER = re.compile(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+                     r'(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?')
+_PACKAGE_STRINGS = (('CARGO_PKG_DESCRIPTION', 'description'), ('CARGO_PKG_HOMEPAGE', 'homepage'),
+                    ('CARGO_PKG_REPOSITORY', 'repository'), ('CARGO_PKG_LICENSE', 'license'),
+                    ('CARGO_PKG_RUST_VERSION', 'rust-version'))
+
+
+def _package_field(package, workspace_manifest, key):
+    """A [package] field, following `{ workspace = true }` inheritance."""
+    value = package.get(key)
+    if isinstance(value, dict) and value.get('workspace') is True:
+        inherited = ((workspace_manifest or {}).get('workspace', {}).get('package', {}))
+        if key not in inherited:
+            raise RustError(f'package field {key!r} inherits from [workspace.package], which does not define it')
+        return inherited[key], True
+    return value, False
+
+
+def cargo_environment(package_manifest, *, workspace_manifest=None, manifest_dir=None,
+                      crate_name=None, primary=None):
+    """The compile-time environment Cargo sets for one package's crate."""
+    from .builtin_macros import CompileEnvironment
+    package = package_manifest.get('package')
+    if not isinstance(package, dict) or not isinstance(package.get('name'), str):
+        raise RustError('Cargo manifest requires [package] name')
+    variables, unavailable = {}, {}
+    variables['CARGO_PKG_NAME'] = package['name']
+    library = package_manifest.get('lib', {}).get('name')
+    variables['CARGO_CRATE_NAME'] = crate_name or library or package['name'].replace('-', '_')
+    version, _ = _package_field(package, workspace_manifest, 'version')
+    version = '0.0.0' if version is None else version
+    match = _SEMVER.fullmatch(version) if isinstance(version, str) else None
+    if match is None:
+        raise RustError(f'Cargo package version {version!r} is not a semantic version')
+    variables['CARGO_PKG_VERSION'] = version
+    for name, part in zip(('MAJOR', 'MINOR', 'PATCH', 'PRE'), match.groups()):
+        variables['CARGO_PKG_VERSION_' + name] = part or ''
+    authors, _ = _package_field(package, workspace_manifest, 'authors')
+    if authors is not None and (not isinstance(authors, list) or not all(isinstance(a, str) for a in authors)):
+        raise RustError('Cargo package authors must be a list of strings')
+    variables['CARGO_PKG_AUTHORS'] = ':'.join(authors or ())
+    for variable, key in _PACKAGE_STRINGS:
+        value, _ = _package_field(package, workspace_manifest, key)
+        if value is not None and not isinstance(value, str):
+            raise RustError(f'Cargo package field {key!r} must be a string')
+        variables[variable] = value or ''
+    # Paths are rebased by Cargo when inherited, and an absent readme is
+    # inferred from the package's files: neither is guessed here.
+    license_file, inherited = _package_field(package, workspace_manifest, 'license-file')
+    if inherited:
+        unavailable['CARGO_PKG_LICENSE_FILE'] = 'Cargo rebases an inherited license-file path'
+    else:
+        variables['CARGO_PKG_LICENSE_FILE'] = license_file or ''
+    readme, inherited = _package_field(package, workspace_manifest, 'readme')
+    if inherited:
+        unavailable['CARGO_PKG_README'] = 'Cargo rebases an inherited readme path'
+    elif readme is None:
+        unavailable['CARGO_PKG_README'] = 'Cargo infers an unspecified readme from the package files'
+    else:
+        variables['CARGO_PKG_README'] = 'README.md' if readme is True else '' if readme is False else readme
+    if manifest_dir is None:
+        reason = 'the package directory is a machine-specific path; supply manifest_dir'
+        unavailable['CARGO_MANIFEST_DIR'] = unavailable['CARGO_MANIFEST_PATH'] = reason
+    else:
+        variables['CARGO_MANIFEST_DIR'] = manifest_dir
+        variables['CARGO_MANIFEST_PATH'] = manifest_dir.rstrip('/') + '/Cargo.toml'
+    if primary is None:
+        unavailable['CARGO_PRIMARY_PACKAGE'] = 'it depends on the cargo invocation; supply primary'
+    elif primary:
+        variables['CARGO_PRIMARY_PACKAGE'] = '1'
+    for name, reason in (('CARGO', 'it is the path of the running cargo executable'),
+                         ('OUT_DIR', 'it is set only for packages whose build script ran'),
+                         ('CARGO_BIN_NAME', 'it is set only for binary targets'),
+                         ('CARGO_TARGET_TMPDIR', 'it is set only for integration tests and benches')):
+        unavailable[name] = reason
+    return CompileEnvironment.of(variables, unavailable)

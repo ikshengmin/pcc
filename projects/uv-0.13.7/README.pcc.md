@@ -48,7 +48,7 @@ predicate is `cfg(test)`, which the test asserts.
 |---|---|
 | `crates/uv/src/bin/uv.rs` | `4:14` `extern crate uv_performance_memory_allocator;` (active under default features) needs external crate loading |
 | `crates/uv/src/lib.rs` | `70:75` the lifetime `'a` in a reference type |
-| `crates/uv-version/src/lib.rs` | `5:5` `env!` macro invocation |
+| `crates/uv-version/src/lib.rs` | `5:5` `env!("CARGO_PKG_VERSION")` expands to `"0.13.7"`; the `&'static str` value has no runtime representation yet |
 | `crates/uv-lock/src/lock/mod.rs` | `101:3` `#[derive(Debug, thiserror::Error)]` derive attribute |
 
 Both roots formerly stopped in the lexer at `@` (`lib.rs:1515:34`, the
@@ -70,7 +70,9 @@ are retained with no compile effect, as rustc evaluates none of them
 (`uv.rs:3:3`, `lib.rs:7:3`, `lock/mod.rs:94:3`) are evaluated by the owned
 configuration (`tests/rust/test_rust_owned_cfg.py`), and the integer const
 item `const VERSION: u32 = 1;` (formerly `lock/mod.rs:98:1`) is owned
-(`tests/rust/programs/const_items.rs`).
+(`tests/rust/programs/const_items.rs`). `env!` is evaluated against the crate
+environment Cargo sets, derived from the pinned manifests
+(`tests/rust/test_rust_builtin_env.py`).
 
 ```sh
 uv run pytest -x -q tests/rust/test_uv_source_frontier.py
