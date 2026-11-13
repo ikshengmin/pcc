@@ -69,7 +69,10 @@ class Pools:
         for node in ast.parse(SOURCE.read_text()).body:
             if (isinstance(node, ast.Assign) and len(node.targets) == 1
                     and isinstance(node.targets[0], ast.Name)
-                    and node.targets[0].id in {"READY_NODE_SIZE", "READY_NODE_PREVIOUS_OFFSET"}):
+                    and node.targets[0].id in {
+                        "READY_NODE_SIZE", "READY_NODE_PREVIOUS_OFFSET",
+                        "READY_NODE_DEADLINE_OFFSET", "READY_NODE_NO_DEADLINE",
+                    }):
                 self.namespace[node.targets[0].id] = ast.literal_eval(node.value)
         nodes = [node for node in ast.parse(SOURCE.read_text()).body
                  if isinstance(node, ast.FunctionDef) and node.name in names]

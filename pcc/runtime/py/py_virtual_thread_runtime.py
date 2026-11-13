@@ -68,6 +68,7 @@ define_global_ptr_null("pcc_vthread_ready_head_py")
 define_global_ptr_null("pcc_vthread_ready_tail_py")
 define_global_ptr_null("pcc_vthread_io_ready_head_py")
 define_global_ptr_null("pcc_vthread_io_ready_tail_py")
+define_global_ptr_null("pcc_vthread_io_ready_priority_py")
 define_global_i64("pcc_vthread_io_ready_pending_py", 0)
 define_global_i32("pcc_vthread_io_ready_turn_py", 0)
 define_global_ptr_null("pcc_vthread_ready_free_py")
@@ -580,10 +581,12 @@ def _node_pool_lock_word(kind: int):
 
 
 # ReadyNode keeps the shared 32-byte waiter prefix and an I/O-deque back link.
-# thread@0, next@8, root_handle@16, pool_kind@24, previous@32 (40 bytes).
+# thread@0, next@8, root_handle@16, pool_kind@24, previous@32, deadline@40.
 # Join/channel nodes keep their own layouts and never enter the I/O deque.
-READY_NODE_SIZE = 40
+READY_NODE_SIZE = 48
 READY_NODE_PREVIOUS_OFFSET = 32
+READY_NODE_DEADLINE_OFFSET = 40
+READY_NODE_NO_DEADLINE = 9223372036854775807
 
 
 def _pooled_node_root(node):
@@ -623,6 +626,7 @@ def _ready_alloc():
         store_ptr(node, 0, null())
         store_ptr(node, 8, null())
         store_ptr(node, READY_NODE_PREVIOUS_OFFSET, null())
+        store_i64(node, READY_NODE_DEADLINE_OFFSET, READY_NODE_NO_DEADLINE)
         store_i64(node, 24, 1)
     return node
 
@@ -800,6 +804,17 @@ def _queue_push(head_slot, tail_slot, node) -> None:
 def _io_ready_push(node) -> None:
     # The scheduler mutex owns both links. Only _ready_reserve nodes enter
     # this queue, so the extended ReadyNode layout is always available.
+    # Keep one deadline-selected candidate inside the FIFO, not in a separate
+    # ownership lane. Later long-budget wakeups cannot bury an urgent owner
+    # in the middle of a co-ready batch. Equal deadlines favour new work;
+    # alternate FIFO dispatch still guarantees progress for older owners.
+    priority = global_load_ptr("pcc_vthread_io_ready_priority_py")
+    if (
+        ptr_is_null(priority)
+        or load_i64(node, READY_NODE_DEADLINE_OFFSET)
+        <= load_i64(priority, READY_NODE_DEADLINE_OFFSET)
+    ):
+        global_store_ptr("pcc_vthread_io_ready_priority_py", node)
     tail = global_load_ptr("pcc_vthread_io_ready_tail_py")
     store_ptr(node, 8, null())
     store_ptr(node, READY_NODE_PREVIOUS_OFFSET, tail)
@@ -2179,28 +2194,31 @@ def _dequeue_io_ready():
         node = global_load_ptr("pcc_vthread_io_ready_head_py")
         if ptr_is_null(node):
             break
-        # An already queued readable socket may disconnect before dispatch.
-        # New readiness must not wait for that whole stale cohort. Alternate
-        # newest and oldest entries: prompt new work without starving old work.
-        # Both ends are detached in O(1); the ordinary-work budget is unchanged.
+        # Alternate the deadline-selected candidate and the oldest owner.
+        # The candidate is already linked and rooted; detaching it needs no
+        # scan, allocation or new syscall. This is not a global EDF heap:
+        # when no candidate remains, old work continues in FIFO order until
+        # another readiness observation supplies one.
         turn_slot = global_addr("pcc_vthread_io_ready_turn_py")
         turn = load_i32(turn_slot, 0)
-        store_i32(turn_slot, 0, turn ^ 1)
-        if turn == 0:
-            node = global_load_ptr("pcc_vthread_io_ready_tail_py")
-            previous = load_ptr(node, READY_NODE_PREVIOUS_OFFSET)
-            global_store_ptr("pcc_vthread_io_ready_tail_py", previous)
-            if ptr_is_null(previous):
-                global_store_ptr("pcc_vthread_io_ready_head_py", null())
-            else:
-                store_ptr(previous, 8, null())
+        priority = global_load_ptr("pcc_vthread_io_ready_priority_py")
+        if turn == 0 and ptr_is_null(priority) == 0:
+            node = priority
+            store_i32(turn_slot, 0, 1)
         else:
-            after = load_ptr(node, 8)
+            store_i32(turn_slot, 0, 0)
+        previous = load_ptr(node, READY_NODE_PREVIOUS_OFFSET)
+        after = load_ptr(node, 8)
+        if ptr_is_null(previous):
             global_store_ptr("pcc_vthread_io_ready_head_py", after)
-            if ptr_is_null(after):
-                global_store_ptr("pcc_vthread_io_ready_tail_py", null())
-            else:
-                store_ptr(after, READY_NODE_PREVIOUS_OFFSET, null())
+        else:
+            store_ptr(previous, 8, after)
+        if ptr_is_null(after):
+            global_store_ptr("pcc_vthread_io_ready_tail_py", previous)
+        else:
+            store_ptr(after, READY_NODE_PREVIOUS_OFFSET, previous)
+        if ptr_eq(priority, node):
+            global_store_ptr("pcc_vthread_io_ready_priority_py", null())
         store_ptr(node, 8, null())
         store_ptr(node, READY_NODE_PREVIOUS_OFFSET, null())
         thread = _ready_node_take(node, 1)
@@ -3280,6 +3298,9 @@ def py_virtual_thread_poll_io(timeout_ms: int) -> int:
             if valid:
                 store_ptr(thread, 64, null())
                 store_i64(thread, 120, 0)
+                deadline = load_i64(node, 24)
+                if deadline >= 0:
+                    store_i64(ready_node, READY_NODE_DEADLINE_OFFSET, deadline)
                 # A disconnect cohort still needs cleanup, but must
                 # not fill the priority lane ahead of new read/write events.
                 # Ordinary service remains bounded by the I/O dispatch budget.

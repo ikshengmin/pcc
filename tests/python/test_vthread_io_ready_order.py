@@ -15,6 +15,7 @@ def io_model():
     slots = {
         "pcc_vthread_io_ready_head_py": model.io_head,
         "pcc_vthread_io_ready_tail_py": model.io_tail,
+        "pcc_vthread_io_ready_priority_py": Cell(),
         "pcc_vthread_io_ready_pending_py": Cell({0: 0}),
         "pcc_vthread_io_ready_turn_py": Cell({0: 0}),
         "pcc_vthread_ready_count_py": model.count,
@@ -34,15 +35,22 @@ def io_model():
             selected.append(node)
         elif (isinstance(node, ast.Assign) and len(node.targets) == 1
                 and isinstance(node.targets[0], ast.Name)
-                and node.targets[0].id in {"READY_NODE_SIZE", "READY_NODE_PREVIOUS_OFFSET"}):
+                and node.targets[0].id in {
+                    "READY_NODE_SIZE", "READY_NODE_PREVIOUS_OFFSET",
+                    "READY_NODE_DEADLINE_OFFSET", "READY_NODE_NO_DEADLINE",
+                }):
             selected.append(node)
     exec(compile(ast.Module(selected, type_ignores=[]), str(SOURCE), "exec"), model.namespace)
     return model, slots
 
 
-def admit(model):
+def admit(model, deadline=None):
     thread = model.thread(state=3)
-    model.namespace["_ready_commit"](thread, model.node(thread), 1)
+    node = model.node(thread)
+    node.fields[model.namespace["READY_NODE_DEADLINE_OFFSET"]] = (
+        model.namespace["READY_NODE_NO_DEADLINE"] if deadline is None else deadline
+    )
+    model.namespace["_ready_commit"](thread, node, 1)
     return thread
 
 
@@ -81,6 +89,33 @@ def test_continuous_new_arrivals_do_not_starve_old_readiness():
     assert len(set(serviced)) == len(serviced)
 
 
+@pytest.mark.parametrize("count", [64, 256, 1024])
+def test_short_deadline_owner_is_not_buried_inside_a_mixed_ready_batch(count):
+    model, slots = io_model()
+    old = [admit(model) for _ in range(count)]
+    urgent = admit(model, 1000)
+    later = [admit(model, 30000) for _ in range(count)]
+    first = [take(model), take(model)]
+    assert urgent in first and old[0] in first
+    serviced = first + [take(model) for _ in range(2 * count - 1)]
+    assert len(set(serviced)) == 2 * count + 1
+    assert set(serviced) == set(old + [urgent] + later)
+    assert take(model) is None
+    assert slots["pcc_vthread_io_ready_priority_py"].fields[0] is None
+    assert model.count.fields[0] == 0
+
+
+def test_expired_priority_claim_does_not_retain_a_stale_node():
+    model, slots = io_model()
+    live = admit(model, 30000)
+    cancelled = admit(model, 1000)
+    cancelled.fields[32] = 4
+    assert take(model) is live
+    assert take(model) is None
+    assert slots["pcc_vthread_io_ready_priority_py"].fields[0] is None
+    assert model.count.fields[0] == 0
+
+
 def test_stale_claims_at_both_ends_leave_one_live_owner():
     model, _slots = io_model()
     first, live, last = [admit(model) for _ in range(3)]
@@ -92,8 +127,9 @@ def test_stale_claims_at_both_ends_leave_one_live_owner():
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize("mixed", [False, True], ids=["single-arrival", "mixed-batch"])
 def test_native_late_io_readiness_overtakes_an_already_ready_cohort(
-    tmp_path, threaded_pcc_runtime_archive,
+    tmp_path, threaded_pcc_runtime_archive, mixed,
 ):
     """External C ABI reference of the owned scheduler, including all GCs."""
     binary = _compile(tmp_path, r'''
@@ -104,8 +140,9 @@ def test_native_late_io_readiness_overtakes_an_already_ready_cohort(
         #include <unistd.h>
 
         int main(int argc, char **argv) {
-            if (argc != 3 || pcc_gc_set_backend(atoi(argv[1]))) return 2;
+            if (argc != 4 || pcc_gc_set_backend(atoi(argv[1]))) return 2;
             int count = atoi(argv[2]);
+            int later_count = atoi(argv[3]) ? count : 0;
             if (count < 1 || count > 1024) return 3;
             int old_fds[1024];
             PyObject *oldest = NULL;
@@ -125,10 +162,25 @@ def test_native_late_io_readiness_overtakes_an_already_ready_cohort(
             int pair[2];
             if (pipe(pair)) return 8;
             PyObject *fresh = py_virtual_thread_new(py_None);
-            if (!fresh || py_virtual_thread_block_on_fd(fresh, pair[0], POLLIN, -1)) return 9;
+            if (!fresh || py_virtual_thread_block_on_fd(
+                fresh, pair[0], POLLIN, later_count ? 1000 : -1
+            )) return 9;
             if (write(pair[1], "y", 1) != 1 || py_virtual_thread_poll_io(0) != 1) return 10;
+            int later_fds[1024];
+            for (int i = 0; i < later_count; ++i) {
+                int later[2];
+                if (pipe(later)) return 20;
+                later_fds[i] = later[0];
+                PyObject *task = py_virtual_thread_new(py_None);
+                if (!task || py_virtual_thread_block_on_fd(
+                    task, later[0], POLLIN, 30000
+                )) return 21;
+                py_decref(task);
+                if (write(later[1], "z", 1) != 1 || py_virtual_thread_poll_io(0) != 1) return 22;
+                close(later[1]);
+            }
             int fresh_at = -1, oldest_at = -1;
-            for (int i = 0; i <= count; ++i) {
+            for (int i = 0; i <= count + later_count; ++i) {
                 PyObject *task = py_virtual_thread_poll_ready();
                 if (!task) return 11;
                 if (task == fresh) fresh_at = i;
@@ -140,6 +192,7 @@ def test_native_late_io_readiness_overtakes_an_already_ready_cohort(
             py_decref(oldest);
             close(pair[0]); close(pair[1]);
             for (int i = 0; i < count; ++i) close(old_fds[i]);
+            for (int i = 0; i < later_count; ++i) close(later_fds[i]);
             if (py_virtual_thread_ready_count() || py_virtual_thread_io_wait_count()) return 13;
             int64_t cached = cached_pool_roots();
             if (cached < 0 || pcc_gc_scheduler_root_count() != cached) return 14;
@@ -150,7 +203,7 @@ def test_native_late_io_readiness_overtakes_an_already_ready_cohort(
     for backend in range(5):
         for count in (64, 256, 1024):
             result = subprocess.run(
-                [str(binary), str(backend), str(count)],
+                [str(binary), str(backend), str(count), str(int(mixed))],
                 env=dict(os.environ, PCC_GC_BACKEND=str(backend)),
                 capture_output=True, text=True, timeout=15,
             )
