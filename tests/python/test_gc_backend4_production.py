@@ -747,10 +747,23 @@ def _relocation_type_specific_raw_payload_source() -> str:
             return py_None;
         }
 
-        static int select_for_relocation(PyObject *obj) {
+        /* Objects move only inside a stopped world, and a selection pins
+         * whatever a stopped thread's stack words or registers name: each
+         * check hands its target to this static and clears its own local
+         * before selecting, and reads the target back afterwards. */
+        static PyObject *target_holder;
+
+        /* Clear what the check's construction calls left below its frame:
+         * a stale word there pins the target. */
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+            volatile unsigned char words[65536];
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+        }
+
+        static int select_for_relocation(void) {
             pcc_gc_reset_relocation_set();
             if (pcc_gc_select_relocation_set(65536) <= 0) return 0;
-            return pcc_gc_relocation_set_contains(obj) == 1;
+            return pcc_gc_relocation_set_contains(target_holder) == 1;
         }
 
         static int check_exception(void) {
@@ -776,13 +789,19 @@ def _relocation_type_specific_raw_payload_source() -> str:
             exc->traceback[1].line = 29;
             PyFrameRecord *old_traceback = exc->traceback;
             pcc_gc_publish_initialized((PyObject *)exc);
-            if (!select_for_relocation((PyObject *)exc)) return 12;
+            target_holder = (PyObject *)exc;
+            *(void *volatile *)&exc = 0;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
+            if (!select_for_relocation()) return 12;
+            exc = (PyExceptionObject *)target_holder;
             if (pcc_gc_relocate_copy((PyObject *)exc, 16) != 0) return 15;
             if (pcc_gc_relocation_set_contains((PyObject *)exc) != 1) return 16;
             PyObject *moved_raw = pcc_gc_relocate_copy(
                 (PyObject *)exc, (int64_t)sizeof(PyExceptionObject)
             );
             if (moved_raw == 0) return 13;
+            if (pcc_resume_world() != 0) return 91;
             PyExceptionObject *moved = (PyExceptionObject *)moved_raw;
             if (
                 moved->traceback == 0
@@ -817,13 +836,19 @@ def _relocation_type_specific_raw_payload_source() -> str:
             PyClassObject **old_mro = cls->mro;
             PyClassMethod *old_methods = cls->methods;
             const char **old_fields = cls->field_names;
-            if (!select_for_relocation((PyObject *)cls)) return 23;
+            target_holder = (PyObject *)cls;
+            *(void *volatile *)&cls = 0;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
+            if (!select_for_relocation()) return 23;
+            cls = (PyClassObject *)target_holder;
             if (pcc_gc_relocate_copy((PyObject *)cls, 16) != 0) return 26;
             if (pcc_gc_relocation_set_contains((PyObject *)cls) != 1) return 27;
             PyObject *moved_raw = pcc_gc_relocate_copy(
                 (PyObject *)cls, (int64_t)sizeof(PyClassObject)
             );
             if (moved_raw == 0) return 24;
+            if (pcc_resume_world() != 0) return 91;
             PyClassObject *moved = (PyClassObject *)moved_raw;
             if (
                 moved->bases == 0
@@ -874,11 +899,17 @@ def _relocation_type_specific_raw_payload_source() -> str:
             cls->metaclass = 0;
             if (cls->bases == 0 || cls->mro == 0 || cls->methods == 0) return 71;
             pcc_gc_publish_initialized((PyObject *)cls);
-            if (!select_for_relocation((PyObject *)cls)) return 72;
+            target_holder = (PyObject *)cls;
+            *(void *volatile *)&cls = 0;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
+            if (!select_for_relocation()) return 72;
+            cls = (PyClassObject *)target_holder;
             PyObject *moved_raw = pcc_gc_relocate_copy(
                 (PyObject *)cls, (int64_t)sizeof(PyClassObject)
             );
             if (moved_raw == 0) return 73;
+            if (pcc_resume_world() != 0) return 91;
             PyClassObject *moved = (PyClassObject *)moved_raw;
             int64_t bases_card = pcc_gc_backend4_zpage_owner_slot_span_card(
                 moved_raw, &moved->bases[0]
@@ -918,13 +949,21 @@ def _relocation_type_specific_raw_payload_source() -> str:
             if (cont->stack_chunk == 0 || cont->stack_chunk->slots == 0) return 31;
             PyContinuationStackChunk *old_chunk = cont->stack_chunk;
             PyObject **old_slots = old_chunk->slots;
-            if (!select_for_relocation(cont_raw)) return 32;
+            target_holder = cont_raw;
+            *(void *volatile *)&cont_raw = 0;
+            *(void *volatile *)&cont = 0;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
+            if (!select_for_relocation()) return 32;
+            cont_raw = target_holder;
+            cont = (PyContinuationObject *)cont_raw;
             if (pcc_gc_relocate_copy(cont_raw, 16) != 0) return 37;
             if (pcc_gc_relocation_set_contains(cont_raw) != 1) return 38;
             PyObject *moved_raw = pcc_gc_relocate_copy(
                 cont_raw, (int64_t)sizeof(PyContinuationObject)
             );
             if (moved_raw == 0) return 33;
+            if (pcc_resume_world() != 0) return 91;
             PyContinuationObject *moved = (PyContinuationObject *)moved_raw;
             if (
                 moved->stack_chunk == 0
@@ -958,13 +997,21 @@ def _relocation_type_specific_raw_payload_source() -> str:
             }
             PyListObject *list = (PyListObject *)list_raw;
             PyObject **old_items = list->items;
-            if (!select_for_relocation(list_raw)) return 41;
+            target_holder = list_raw;
+            *(void *volatile *)&list_raw = 0;
+            *(void *volatile *)&list = 0;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
+            if (!select_for_relocation()) return 41;
+            list_raw = target_holder;
+            list = (PyListObject *)list_raw;
             if (pcc_gc_relocate_copy(list_raw, 16) != 0) return 42;
             if (pcc_gc_relocation_set_contains(list_raw) != 1) return 43;
             PyObject *moved_raw = pcc_gc_relocate_copy(
                 list_raw, (int64_t)sizeof(PyListObject)
             );
             if (moved_raw == 0) return 44;
+            if (pcc_resume_world() != 0) return 91;
             PyListObject *moved = (PyListObject *)moved_raw;
             if (
                 moved->items == 0
@@ -999,13 +1046,21 @@ def _relocation_type_specific_raw_payload_source() -> str:
             DictEntry *old_entries = dict->entries;
             int64_t old_capacity = dict->capacity;
             int64_t old_entries_used = dict->entries_used;
-            if (!select_for_relocation(dict_raw)) return 52;
+            target_holder = dict_raw;
+            *(void *volatile *)&dict_raw = 0;
+            *(void *volatile *)&dict = 0;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
+            if (!select_for_relocation()) return 52;
+            dict_raw = target_holder;
+            dict = (PyDictObject *)dict_raw;
             if (pcc_gc_relocate_copy(dict_raw, 16) != 0) return 53;
             if (pcc_gc_relocation_set_contains(dict_raw) != 1) return 54;
             PyObject *moved_raw = pcc_gc_relocate_copy(
                 dict_raw, (int64_t)sizeof(PyDictObject)
             );
             if (moved_raw == 0) return 55;
+            if (pcc_resume_world() != 0) return 91;
             PyDictObject *moved = (PyDictObject *)moved_raw;
             if (
                 moved->indices == 0
@@ -1049,13 +1104,21 @@ def _relocation_type_specific_raw_payload_source() -> str:
             SetEntry *old_entries = set->entries;
             int64_t old_capacity = set->capacity;
             int64_t old_fill = set->fill;
-            if (!select_for_relocation(set_raw)) return 62;
+            target_holder = set_raw;
+            *(void *volatile *)&set_raw = 0;
+            *(void *volatile *)&set = 0;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
+            if (!select_for_relocation()) return 62;
+            set_raw = target_holder;
+            set = (PySetObject *)set_raw;
             if (pcc_gc_relocate_copy(set_raw, 16) != 0) return 63;
             if (pcc_gc_relocation_set_contains(set_raw) != 1) return 64;
             PyObject *moved_raw = pcc_gc_relocate_copy(
                 set_raw, (int64_t)sizeof(PySetObject)
             );
             if (moved_raw == 0) return 65;
+            if (pcc_resume_world() != 0) return 91;
             PySetObject *moved = (PySetObject *)moved_raw;
             if (
                 moved->entries == 0
@@ -1415,8 +1478,16 @@ def test_backend4_deallocating_index_node_is_not_active(tmp_path: Path) -> None:
     )
 
     sweep_src = STRICT_TRACING_SWEEP_COLLECTOR.read_text(encoding="utf-8")
-    py_finalize = sweep_src.split(
+    # finalize_unreachable refuses a pinned object, then hands it to
+    # finalize_unpinned, which publishes death before the freeing note.
+    py_unreachable = sweep_src.split(
         "def pcc_gc_tracing_finalize_unreachable", 1
+    )[1].split("\n@c_abi_export", 1)[0]
+    assert py_unreachable.index("pcc_gc_object_is_address_pinned(obj)") < (
+        py_unreachable.index("pcc_gc_tracing_finalize_unpinned(obj)")
+    )
+    py_finalize = sweep_src.split(
+        "def pcc_gc_tracing_finalize_unpinned", 1
     )[1].split("\n@c_abi_export", 1)[0]
     assert py_finalize.index("store_i32(obj, 12, flags | 524288)") < (
         py_finalize.index("pcc_gc_note_object_freeing(obj)")
@@ -1929,10 +2000,12 @@ def test_backend4_relocation_stress_stable_ids_and_no_old_addresses(tmp_path):
         #include "py_internal.h"
         #include <stdio.h>
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *roots[64];
-            for (int i = 0; i < 64; i++) roots[i] = 0;
+        /* Static roots: a root slot in a thread's stack is rooted by the
+         * count-free conservative scan, which also pins what it names, so
+         * the collector would move none of these objects. */
+        static PyObject *roots[64];
+
+        __attribute__((noinline)) static void build_roots(void) {
             for (int i = 0; i < 64; i++) {
                 pcc_gc_scheduler_root_register(&roots[i]);
                 PyObject *obj = py_list_new(0);
@@ -1940,6 +2013,19 @@ def test_backend4_relocation_stress_stable_ids_and_no_old_addresses(tmp_path):
                 (void)pcc_gc_object_id(obj);
                 pcc_gc_release(obj);
             }
+        }
+
+        /* Clear what build_roots left below main's frame: a stale word
+         * there pins an object. */
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+            volatile unsigned char words[65536];
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+        }
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            build_roots();
+            probe_scrub_stack();
 
             pcc_gc_telemetry_reset();
             int64_t moved = 0;
@@ -2461,9 +2547,9 @@ def test_backend4_capi_internal_owner_slots_trace_and_load_forwarded_values(tmp_
         static PyObject *iter;
         static PyObject *contextvar;
         static PyObject *slice;
-        static ProbeSlots iter_slotsNone = {0};
-        static ProbeSlots context_slotsNone = {0};
-        static ProbeSlots slice_slotsNone = {0};
+        static ProbeSlots iter_slots = {0};
+        static ProbeSlots context_slots = {0};
+        static ProbeSlots slice_slots = {0};
         static PyObject *seq_root;
         static PyObject *iter_root;
         static PyObject *default_root;
@@ -7284,9 +7370,10 @@ def test_backend4_remap_rewrites_weakref_target_slot_before_forwarding_retiremen
             probe_scrub_stack();
             if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(65536) <= 0) return 5;
-            if (pcc_resume_world() != 0) return 91;
             if (pcc_gc_relocation_set_contains(old_target) != 1) return 6;
+            /* The drain copies: it runs inside the same stop. */
             if (pcc_gc_backend4_evacuation_drain(65536) <= 0) return 7;
+            if (pcc_resume_world() != 0) return 91;
 
             (void)pcc_gc_collect(0);
             PyObject *loaded_target = pcc_gc_load_ptr(0, &target_root);
