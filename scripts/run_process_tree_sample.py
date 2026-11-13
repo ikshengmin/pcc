@@ -1419,14 +1419,38 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
                 "largest_rss_bytes\tlargest_command\n"
             )
             samples_stream.flush()
-            process = subprocess.Popen(
-                command,
-                cwd=cwd,
-                env=environment,
-                stdout=stdout_stream,
-                stderr=stderr_stream,
-                start_new_session=True,
-            )
+            try:
+                process = subprocess.Popen(
+                    command,
+                    cwd=cwd,
+                    env=environment,
+                    stdout=stdout_stream,
+                    stderr=stderr_stream,
+                    start_new_session=True,
+                )
+            except OSError as exc:
+                # Popen did not return an owned child handle. Preserve the
+                # launch failure without inventing a target exit code or
+                # attempting cleanup through an unavailable process object.
+                payload.update(
+                    {
+                        "status": "SAMPLER_ERROR",
+                        "completed_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+                        "elapsed_s": time.monotonic() - started,
+                        "returncode": None,
+                        "sample_count": 0,
+                        "error": type(exc).__name__ + ": " + str(exc),
+                        "artifacts": {
+                            "samples": str(samples_path),
+                            "stdout": str(stdout_path),
+                            "stderr": str(stderr_path),
+                        },
+                    }
+                )
+                _persist(result_path, payload)
+                raise ProcessTreeSampleError(
+                    "target launch failed: " + str(exc)
+                ) from exc
             next_progress = started
             try:
                 root_identity = _process_identity(process.pid)

@@ -645,3 +645,59 @@ def test_terminal_argv_cleanup_preserves_guard_status_with_mock_processes(
     assert receipt["returncode"] == (0 if outcome == "COMPLETE" else -signal.SIGTERM)
     assert receipt["terminal_argv_evidence"]["status"] == ("capture_error" if capture_error else "collected")
 
+
+
+@pytest.mark.parametrize("failure", ["missing_executable", "missing_cwd"])
+def test_process_tree_sampler_launch_failure_has_terminal_receipt(
+    tool, tmp_path, monkeypatch, capsys, failure,
+):
+    result = tmp_path / "result.json"
+    marker = tmp_path / "target-ran"
+    missing = tmp_path / "does-not-exist"
+    command = [
+        sys.executable, "-c",
+        "from pathlib import Path; Path(" + repr(str(marker)) + ").touch()",
+    ]
+    cwd = tmp_path
+    if failure == "missing_executable":
+        command[0] = str(missing)
+    else:
+        cwd = missing
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("failed launch must not sample or signal an unowned child")
+
+    for name in (
+        "_process_identity", "_timed_process_table", "_terminate_owned_processes",
+    ):
+        monkeypatch.setattr(tool, name, forbidden)
+    previous_sigint = signal.getsignal(signal.SIGINT)
+    exit_code = tool.main([
+        "--result", str(result),
+        "--samples", str(tmp_path / "samples.tsv"),
+        "--stdout", str(tmp_path / "stdout"),
+        "--stderr", str(tmp_path / "stderr"),
+        "--cwd", str(cwd),
+        "--timeout", "5",
+        "--no-performance-lock",
+        "--", *command,
+    ])
+
+    assert exit_code == 2
+    assert signal.getsignal(signal.SIGINT) == previous_sigint
+    receipt = json.loads(result.read_text())
+    assert receipt["schema"] == "pcc.process_tree_sample.v1"
+    assert receipt["status"] == "SAMPLER_ERROR"
+    assert receipt["completed_at_utc"] >= receipt["started_at_utc"]
+    assert receipt["elapsed_s"] >= 0
+    assert receipt["returncode"] is None
+    assert receipt["sample_count"] == 0
+    assert receipt["command"] == command
+    assert receipt["cwd"] == str(cwd)
+    assert "FileNotFoundError" in receipt["error"]
+    assert str(missing) in receipt["error"]
+    assert "target launch failed" in capsys.readouterr().err
+    assert not marker.exists()
+    assert Path(receipt["artifacts"]["stdout"]).read_bytes() == b""
+    assert Path(receipt["artifacts"]["stderr"]).read_bytes() == b""
+    assert len(Path(receipt["artifacts"]["samples"]).read_text().splitlines()) == 1
