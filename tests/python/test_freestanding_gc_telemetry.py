@@ -8,6 +8,7 @@ from pathlib import Path
 
 from pcc.frontends.python import pipeline
 from pcc.frontends.python.codegen.runtime_abi import (
+    FREESTANDING_GC_CROSS_OBJECT_SIGNATURES,
     FREESTANDING_GC_I64_GLOBALS,
     FREESTANDING_GC_RUNTIME_GLOBALS,
     RUNTIME_SIGNATURES,
@@ -245,7 +246,13 @@ def test_freestanding_gc_telemetry_object_has_typed_cross_object_closure(
     }
     assert undefined == expected_functions | expected_globals
 
-    for symbol in expected_functions:
+    # Every counter getter is a runtime "() -> i64"; before reading, the
+    # telemetry publishes this thread's batched allocation debt through one
+    # registered cross-object call.
+    assert FREESTANDING_GC_CROSS_OBJECT_SIGNATURES[
+        "pcc_gc_cms_note_alloc_flush"
+    ] == ((), "c_void")
+    for symbol in expected_functions - {"pcc_gc_cms_note_alloc_flush"}:
         return_type, parameter_types, var_arg = RUNTIME_SIGNATURES[symbol]
         assert str(return_type) == "i64"
         assert not parameter_types

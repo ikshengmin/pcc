@@ -2123,6 +2123,8 @@ FREESTANDING_GC_THREAD_LOCAL_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_trace_stack_owner',
         'pcc_gc_gray_local_batch',
         'pcc_gc_alloc_stage_local_ring',
+        'pcc_gc_tls_alloc_debt',
+        'pcc_gc_tls_alloc_pushes',
     }
 )
 
@@ -3308,6 +3310,9 @@ def _cross_object_signatures_part_15():
     "pcc_gc_page_evacuating": (("c_ptr",), "c_int64"),
     "pcc_gc_page_set_evacuating": (("c_ptr", "c_int64"), "c_void"),
     "pcc_allocator_alloc_object_outside_evacuation": (("c_int64",), "c_ptr"),
+    # Allocation debt is published per thread in batches.
+    "pcc_gc_cms_note_alloc_flush": ((), "c_void"),
+    "pcc_gc_cms_publish_alloc": (("c_int64", "c_int64"), "c_void"),
     }
 
 

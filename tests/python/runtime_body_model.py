@@ -83,6 +83,9 @@ EXTERN_DEFAULTS = {
     "pcc_gc_page_set_evacuating": lambda page, evacuating: None,
     # Modeled objects have no logical zpage either.
     "pcc_gc_backend4_zpage_find": lambda obj: 0,
+    # Allocation debt a thread has not yet published (pcc_gc_cms_note_alloc
+    # batches it): models publish each allocation at once.
+    "pcc_gc_cms_note_alloc_flush": lambda: None,
 }
 
 

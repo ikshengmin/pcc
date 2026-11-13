@@ -15,6 +15,7 @@ from pcc.unsafe import global_addr, load_i32, load_i64, store_i32, store_i64, pt
 
 backend = extern("pcc_gc_backend", (), c_int64)
 note_alloc = extern("pcc_gc_note_alloc", (c_int64,), c_void)
+flush_alloc = extern("pcc_gc_cms_note_alloc_flush", (), c_void)
 telemetry = extern("pcc_gc_telemetry", (c_int64,), c_int64)
 threshold = extern("pcc_gc_tracing_debt_threshold", (), c_int64)
 budget = extern("pcc_gc_tracing_budget_from_debt", (), c_int64)
@@ -52,6 +53,9 @@ def probe() -> int:
     store_i32(multiplier_cell, 0, 10000)
     status: int = 0
 
+    # A thread publishes its allocation debt in batches: publish what this
+    # probe's own allocations left before the synthetic debt is set.
+    flush_alloc()
     store_i64(debt_cell, 0, 2147483616)
     note_alloc(96)
     crossed_signed: int = int(telemetry(6))

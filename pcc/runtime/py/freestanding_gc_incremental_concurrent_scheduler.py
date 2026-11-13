@@ -10,6 +10,7 @@ from pcc.unsafe import (
     atomic_rmw_i32,
     atomic_rmw_i64,
     atomic_store_i32,
+    define_thread_local_i32,
     function_addr,
     global_addr,
     global_load_ptr,
@@ -1266,6 +1267,16 @@ def pcc_gc_cms_stop_worker() -> i64:
     return 0
 
 
+# Each thread publishes its allocation debt (and allocation count) to the
+# shared words in batches of at least this many bytes, as Go's mcache keeps
+# local statistics: one atomic add per batch, not two per allocation on
+# lines every allocating thread writes. Pacing reads lag by at most a batch
+# per thread.
+ALLOC_DEBT_BATCH_BYTES = 32768
+define_thread_local_i32("pcc_gc_tls_alloc_debt", 0)
+define_thread_local_i32("pcc_gc_tls_alloc_pushes", 0)
+
+
 @c_abi_export("pcc_gc_cms_note_alloc")
 def pcc_gc_cms_note_alloc(bytes: i64) -> None:
     """Record allocation debt for the tracing collector thread (GC1-GC4).
@@ -1277,8 +1288,36 @@ def pcc_gc_cms_note_alloc(bytes: i64) -> None:
     """
     if bytes <= 0:
         bytes: i64 = 1
+    pending: i64 = load_i32(global_addr("pcc_gc_tls_alloc_debt"), 0) + bytes
+    pushes: i64 = load_i32(global_addr("pcc_gc_tls_alloc_pushes"), 0) + 1
+    if pending < ALLOC_DEBT_BATCH_BYTES:
+        store_i32(global_addr("pcc_gc_tls_alloc_debt"), 0, pending)
+        store_i32(global_addr("pcc_gc_tls_alloc_pushes"), 0, pushes)
+        return
+    store_i32(global_addr("pcc_gc_tls_alloc_debt"), 0, 0)
+    store_i32(global_addr("pcc_gc_tls_alloc_pushes"), 0, 0)
+    _cms_publish_alloc(pending, pushes)
+
+
+@c_abi_export("pcc_gc_cms_note_alloc_flush")
+def pcc_gc_cms_note_alloc_flush() -> None:
+    """Publish this thread's unpublished allocation debt now (telemetry
+    reads, thread exit)."""
+    pending: i64 = load_i32(global_addr("pcc_gc_tls_alloc_debt"), 0)
+    pushes: i64 = load_i32(global_addr("pcc_gc_tls_alloc_pushes"), 0)
+    if pending == 0 and pushes == 0:
+        return
+    store_i32(global_addr("pcc_gc_tls_alloc_debt"), 0, 0)
+    store_i32(global_addr("pcc_gc_tls_alloc_pushes"), 0, 0)
+    _cms_publish_alloc(pending, pushes)
+
+
+@c_abi_export("pcc_gc_cms_publish_alloc")
+def _cms_publish_alloc(bytes: i64, pushes: i64) -> None:
+    """Add a thread's batch to the shared debt; assist when it outran the
+    collector."""
     atomic_rmw_i32(
-        "add", global_addr("pcc_gc_cms_queue_pushes"), 0, 1, "release"
+        "add", global_addr("pcc_gc_cms_queue_pushes"), 0, pushes, "release"
     )
     previous: i64 = atomic_rmw_i64("add", global_addr("pcc_gc_debt_bytes"), 0, bytes, "acq_rel")
     debt: i64 = previous + bytes

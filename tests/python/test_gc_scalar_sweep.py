@@ -503,6 +503,10 @@ def test_actual_allocation_fallback_sets_origin_bit_only_on_moving_backends(back
     namespace = dict(obj=0, backend=backend, stored_flags=0, size=64,
                      ptr_is_null=lambda value: int(value == 0),
                      pcc_allocator_alloc_object=lambda size: 4096,
+                     # No relocation copy is allocating (GC4 copy targets
+                     # take pcc_allocator_alloc_object_outside_evacuation).
+                     global_addr=lambda name: name,
+                     load_i32=lambda name, offset: 0,
                      memset=lambda *args: None)
     exec(compile(ast.Module(fallback, type_ignores=[]), "actual-allocation-fallback", "exec"), namespace)
     assert namespace["obj"] == 4096
@@ -638,10 +642,13 @@ def test_claim_uses_actual_unlink_cursor_updates_before_private_link_reuse(which
     rt.begin(); assert rt.enqueue((obj, node)) == 1
     for name in ("pcc_gc_trace_cursor", "pcc_gc_backend4_reset_object_cursor"):
         assert rt.scalar(name) == nxt
-    assert rt.scalar("pcc_gc_object_list_revision") == 1
+    # Only GC4's remap contexts and a queued promotion read the revision:
+    # a GC1 unlink leaves it (pcc_gc_object_list_revision_bump). The unlink
+    # wrapper above fails on a second unlink of the node.
+    assert rt.scalar("pcc_gc_object_list_revision") == 0
     assert rt.read(node, 16) == 0 and rt.read(node, 40) == 64
     rt.seal(); assert rt.drain() == 1
-    assert rt.scalar("pcc_gc_object_list_revision") == 1  # no second unlink
+    assert rt.scalar("pcc_gc_object_list_revision") == 0
 
 
 def test_drain_in_progress_cannot_be_stolen_by_stop_close_or_later_epoch():

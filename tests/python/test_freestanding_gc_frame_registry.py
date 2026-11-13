@@ -213,6 +213,8 @@ def test_frame_registry_has_one_strict_source_owner():
         "pcc_gc_deferred_free_tail", "pcc_gc_deferred_free_pending_count",
         "pcc_gc_deferred_free_pending_bytes", "pcc_gc_deferred_free_local_attempts",
         "pcc_gc_deferred_free_local_fallbacks",
+        # A thread's unpublished allocation debt and count (pcc_gc_cms_note_alloc).
+        "pcc_gc_tls_alloc_debt", "pcc_gc_tls_alloc_pushes",
     }
     assert 'define_thread_local_ptr_null("pcc_gc_frame_node_pool_heads")' in strict
     assert 'define_thread_local_ptr_null("pcc_gc_frame_node_pool_counts")' in strict

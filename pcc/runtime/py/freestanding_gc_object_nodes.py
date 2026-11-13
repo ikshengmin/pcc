@@ -162,7 +162,16 @@ def pcc_gc_object_list_revision_bump() -> None:
     remap contexts compare this revision to detect a freed (and possibly
     reused) object, so records bump it exactly as list nodes do. A record
     registers without the graph lock, so the bump is atomic; readers only
-    compare it for equality."""
+    compare it for equality.
+
+    Only GC4's remap and retirement contexts and the promotion worklist's
+    cursor read it: GC1-GC3 skip the bump, which every allocating thread
+    paid on one shared line, while no promotion is queued."""
+    if (
+        load_i32(global_addr("pcc_gc_backend_selected"), 0) != 4
+        and ptr_is_null(global_load_ptr("pcc_gc_backend3_promotion_head")) != 0
+    ):
+        return
     atomic_rmw_i64(
         "add", global_addr("pcc_gc_object_list_revision"), 0, 1, "relaxed"
     )

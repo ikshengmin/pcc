@@ -22,8 +22,13 @@ DISPATCHER_SOURCE = (
 )
 MAKEFILE = RUNTIME_DIR / "Makefile"
 
+# A thread's unpublished allocation debt and count (pcc_gc_cms_note_alloc).
+TLS_STORAGE_SYMBOLS = {"pcc_gc_tls_alloc_debt", "pcc_gc_tls_alloc_pushes"}
 OWNED_SYMBOLS = {
     "pcc_gc_cms_note_alloc",
+    # A thread publishes its allocation debt in batches.
+    "pcc_gc_cms_note_alloc_flush",
+    "pcc_gc_cms_publish_alloc",
     "pcc_gc_tracing_finish_left_to_mutator",
     "pcc_gc_cms_stop_worker",
     "pcc_gc_complete_claimed_tracing_cycle",
@@ -184,7 +189,19 @@ def _literal_global_imports() -> set[str]:
         value = node.args[0]
         if isinstance(value, ast.Constant) and isinstance(value.value, str):
             globals_.add(value.value)
-    return globals_
+    # A global the module defines itself (its batched allocation debt is
+    # thread-local storage of its own) is no import.
+    defined = {
+        node.value.args[0].value
+        for node in tree.body
+        if isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id.startswith("define_")
+        and node.value.args
+        and isinstance(node.value.args[0], ast.Constant)
+    }
+    return globals_ - defined
 
 
 def _export_body(source: str, symbol: str) -> str:
@@ -290,7 +307,8 @@ def test_incremental_concurrent_scheduler_has_exact_strict_object_closure(
         for line in undefined_result.stdout.splitlines()
         if line.strip()
     }
-    assert undefined == RAW_FUNCTION_IMPORTS | RAW_GLOBAL_IMPORTS
+    # The Darwin thread-local descriptor bootstrap of the batched debt.
+    assert undefined - {"tlv_bootstrap"} == RAW_FUNCTION_IMPORTS | RAW_GLOBAL_IMPORTS
 
     symbols_result = subprocess.run(
         ["nm", "-g", str(obj)], capture_output=True, text=True, timeout=30
@@ -301,7 +319,8 @@ def test_incremental_concurrent_scheduler_has_exact_strict_object_closure(
         for line in symbols_result.stdout.splitlines()
         if line.strip() and " U " not in line
     }
-    assert defined == OWNED_SYMBOLS
+    tls_initializers = {symbol + "$tlv$init" for symbol in TLS_STORAGE_SYMBOLS}
+    assert defined - tls_initializers == OWNED_SYMBOLS | TLS_STORAGE_SYMBOLS
 
 
 def test_incremental_concurrent_scheduler_preserves_bounded_policy_order() -> None:

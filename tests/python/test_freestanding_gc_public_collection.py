@@ -107,6 +107,9 @@ RAW_GLOBAL_IMPORTS = {
     "pcc_gc_minor_heap_size",
     "pcc_gc_pause",
     "pcc_gc_refcount_provenance_probe",
+    # The configuration copies the probe level to the allocator's own
+    # double-free audit word (d1c937309).
+    "pcc_allocator_double_free_audit",
     "pcc_gc_stepmul",
 }
 
@@ -336,6 +339,7 @@ typedef struct WorkerHandle { pthread_t thread; } WorkerHandle;
 
 extern void pcc_gc_maybe_start_cms_worker(void);
 extern void pcc_gc_cms_note_alloc(int64_t bytes);
+extern void pcc_gc_cms_note_alloc_flush(void);
 extern int64_t pcc_gc_cms_stop_worker(void);
 extern int32_t pcc_gc_backend_selected;
 extern int32_t pcc_gc_config_initialized;
@@ -514,6 +518,9 @@ int64_t pcc_gc_scalar_sweep_drain(int64_t worker, int64_t closing, int64_t token
 int64_t pcc_gc_deferred_free_worker_drain(int64_t closing) { (void)closing; return 0; }
 /* No sweep runs in this harness, so nothing is ever deferred to the worker. */
 int64_t pcc_gc_concurrent_sweep_slice(int64_t budget) { (void)budget; return 0; }
+/* The allocator's double-free audit word, which the configuration sets;
+ * this harness links no allocator. */
+int32_t pcc_allocator_double_free_audit;
 /* No mutator publishes gray batches here: the queue stays empty. */
 int32_t pcc_gc_gray_worklist_flush_requested;
 int32_t pcc_gc_gray_worklist_fallback_required;
@@ -533,6 +540,8 @@ int main(void) {
     /* Paced: 64 bytes of debt and no tracking growth begin no cycle. The
      * worker publishes the drain after deciding. */
     pcc_gc_cms_note_alloc(64);
+    /* A thread publishes its allocation debt in batches: publish now. */
+    pcc_gc_cms_note_alloc_flush();
     for (
         int i = 0;
         i < 1000

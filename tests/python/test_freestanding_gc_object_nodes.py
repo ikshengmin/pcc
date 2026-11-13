@@ -78,6 +78,8 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_allocator_record_span_cells",
 }
 RAW_GLOBAL_IMPORTS = {
+    # The revision bump runs only with a reader: GC4 or a queued promotion.
+    "pcc_gc_backend_selected",
     "pcc_gc_backend3_promotion_head",
     "pcc_gc_backend3_promotion_tail",
     "pcc_gc_backend3_young_head",

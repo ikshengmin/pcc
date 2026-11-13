@@ -10,7 +10,7 @@ it reseeds backend4 epoch state and clears deferred object flags.
 """
 
 from pcc import i64
-from pcc.extern import c_abi_export, c_int64, extern
+from pcc.extern import c_abi_export, c_int64, c_void, extern
 from pcc.unsafe import (
     atomic_load_i32,
     atomic_load_i64,
@@ -24,6 +24,7 @@ from pcc.unsafe import (
 __pcc_freestanding__ = True
 
 
+pcc_gc_cms_note_alloc_flush = extern("pcc_gc_cms_note_alloc_flush", (), c_void)
 pcc_gc_relocation_set_size = extern("pcc_gc_relocation_set_size", (), c_int64)
 pcc_gc_metric_pin_balance = extern("pcc_gc_metric_pin_balance", (), c_int64)
 pcc_gc_metric_allocation_count = extern("pcc_gc_metric_allocation_count", (), c_int64)
@@ -265,6 +266,9 @@ pcc_gc_backend4_zpage_free_capacity_bytes = extern(
 @c_abi_export("pcc_gc_telemetry")
 def pcc_gc_telemetry(metric: i64) -> i64:
     gc_backend_current()
+    # This thread's allocation debt and count are published in batches
+    # (pcc_gc_cms_note_alloc): publish the rest before reading.
+    pcc_gc_cms_note_alloc_flush()
     if metric == 146:
         return atomic_load_i64(global_addr("pcc_gc_metric_graph_wait_other_count"), 0, "relaxed")
     if metric == 147:

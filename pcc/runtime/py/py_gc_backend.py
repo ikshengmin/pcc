@@ -6526,6 +6526,7 @@ pcc_gc_gray_worklist_unregister = extern(
 pcc_gc_alloc_stage_thread_exit = extern(
     "pcc_gc_alloc_stage_thread_exit", (), c_void
 )
+pcc_gc_cms_note_alloc_flush = extern("pcc_gc_cms_note_alloc_flush", (), c_void)
 
 
 @c_abi_export("pcc_gc_thread_unregister_buffers")
@@ -6533,6 +6534,8 @@ def pcc_gc_thread_unregister_buffers() -> None:
     pcc_gc_frame_node_tls_pool_drain()
     pcc_gc_gray_worklist_unregister()
     pcc_gc_alloc_stage_thread_exit()
+    # Publish the batch of allocation debt the thread had not yet published.
+    pcc_gc_cms_note_alloc_flush()
     # Called on thread exit. The removed C runtime flushed and freed a
     # PER-THREAD backend-4 medium store-buffer state here. This runtime keeps the
     # backend-4 store buffer as GLOBAL state (see _store_buffer_medium_head;

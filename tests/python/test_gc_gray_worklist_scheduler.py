@@ -765,7 +765,10 @@ def test_allocation_assist_waits_for_hidden_tails_without_paying_debt_or_sweepin
 
     memory.namespace["pcc_gc_tracing_step_cycle"] = observe_step
     before = len(memory.accesses)
-    note_alloc = memory.namespace["pcc_gc_cms_note_alloc"]
+    # The assist acts when a thread publishes its allocation batch
+    # (pcc_gc_cms_note_alloc batches per thread): publish one byte at a time.
+    publish = memory.namespace["pcc_gc_cms_publish_alloc"]
+    note_alloc = lambda size: publish(size, 1)
     note_alloc(1)
     note_alloc(1)
     assert results == [(4, 0), (4, 0)]
