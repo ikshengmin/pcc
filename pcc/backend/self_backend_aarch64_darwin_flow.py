@@ -13,6 +13,9 @@ from .self_backend_aarch64_darwin_materialize import (
     store_large_aggregate_literal_to_address,
 )
 from .self_backend_aarch64_darwin_mem import (
+    emitted_vector_instruction_line,
+    emitted_scalar_register_line,
+    emitted_scalar_immediate_line,
     emitted_memory_instruction_line,
     emitted_move_register_line,
 )
@@ -340,19 +343,19 @@ def emit_bit_count_intrinsic_call(
     src = reg_name(arg_type, 9)
     dst = reg_name(ret_type, 11)
     if callee.startswith("llvm.ctlz."):
-        lines.append(f"  clz {dst}, {src}")
+        lines.append(emitted_scalar_register_line('clz', dst, src))
     elif callee.startswith("llvm.cttz."):
-        lines.append(f"  rbit {dst}, {src}")
-        lines.append(f"  clz {dst}, {dst}")
+        lines.append(emitted_scalar_register_line('rbit', dst, src))
+        lines.append(emitted_scalar_register_line('clz', dst, dst))
     elif callee.startswith("llvm.ctpop."):
         if arg_type.width == 32:
             lines.append(emitted_move_register_line("w10", "w9"))
-            lines.append("  fmov d10, x10")
+            lines.append(emitted_scalar_register_line("fmov", "d10", "x10"))
         else:
-            lines.append("  fmov d10, x9")
-        lines.append("  cnt v10.8b, v10.8b")
-        lines.append("  addv b10, v10.8b")
-        lines.append("  umov w11, v10.b[0]")
+            lines.append(emitted_scalar_register_line("fmov", "d10", "x9"))
+        lines.append(emitted_vector_instruction_line("cnt", 10, 10))
+        lines.append(emitted_vector_instruction_line("addv", 10, 10))
+        lines.append(emitted_vector_instruction_line("umov", 11, 10))
     else:
         raise BackendUnavailable(f"self backend does not support intrinsic {callee!r}")
     lines.extend(store_reg_to_value_slot(dst, func, dest))
@@ -467,7 +470,7 @@ def _phi_copy_to_register(
         # commits one with the same mask); a constant is materialised at
         # 32 bits.
         mask = 0xFF if header.second <= 8 else 0xFFFF
-        lines.append(f"  and {dest}, {dest}, #0x{mask:x}")
+        lines.append(emitted_scalar_immediate_line("and", dest, dest, mask, radix=16))
     return lines
 
 
@@ -698,8 +701,10 @@ def _emit_phi_assignments_buffered(
         )
         type_header: CompilerInt4 = kernel.type_header(phi.second)
         lines.append(
-            f"  {_indexed_phi_mem_op(type_header, load=False)} "
-            f"{reg_name_indexed(kernel, phi.second, 9)}, [x13]"
+            emitted_memory_instruction_line(
+                _indexed_phi_mem_op(type_header, load=False),
+                reg_name_indexed(kernel, phi.second, 9), "x13",
+            )
         )
         index += 1
     index = 0
@@ -709,8 +714,10 @@ def _emit_phi_assignments_buffered(
         type_header = kernel.type_header(phi.second)
         load_reg = dest_regs[index] if dest_regs[index] >= 0 else 9
         lines.append(
-            f"  {_indexed_phi_mem_op(type_header, load=True)} "
-            f"{reg_name_indexed(kernel, phi.second, load_reg)}, [x13]"
+            emitted_memory_instruction_line(
+                _indexed_phi_mem_op(type_header, load=True),
+                reg_name_indexed(kernel, phi.second, load_reg), "x13",
+            )
         )
         if dest_regs[index] < 0:
             lines.extend(

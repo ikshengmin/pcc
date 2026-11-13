@@ -11,6 +11,8 @@ from .self_backend_aarch64_darwin_abi import (
     reg_name_indexed,
 )
 from .self_backend_aarch64_darwin_mem import (
+    emitted_scalar_register_line,
+    emitted_scalar_immediate_line,
     aggregate_copy_chunks,
     chunk_load_op,
     chunk_store_op,
@@ -424,7 +426,7 @@ def _store_aggregate_chunk_to_address(
             target_addr = addr_scratch
         store_reg = _chunk_reg_alias(src_base, sub_size)
         if sub_offset:
-            lines.append(f"  lsr {value_scratch}, {src_base}, #{sub_offset * 8}")
+            lines.append(emitted_scalar_immediate_line('lsr', value_scratch, src_base, sub_offset * 8))
             store_reg = _chunk_reg_alias(value_scratch, sub_size)
         lines.append(
             emitted_memory_instruction_line(
@@ -462,8 +464,8 @@ def _load_aggregate_chunk_from_address(
             )
         )
         if sub_offset:
-            lines.append(f"  lsl {merge_reg}, {merge_reg}, #{sub_offset * 8}")
-        lines.append(f"  orr {dest_alias}, {dest_alias}, {merge_reg}")
+            lines.append(emitted_scalar_immediate_line('lsl', merge_reg, merge_reg, sub_offset * 8))
+        lines.append(emitted_scalar_register_line('orr', dest_alias, dest_alias, merge_reg))
     if acc_base != dest_base:
         lines.append(
             emitted_move_register_line(

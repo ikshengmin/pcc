@@ -3,6 +3,9 @@ from __future__ import annotations
 from .self_backend_target_match import is_aarch64_linux_triple
 from . import BackendUnavailable
 from .self_backend_aarch64_darwin_mem import (
+    emitted_system_register_line,
+    emitted_scalar_register_line,
+    emitted_scalar_immediate_line,
     emitted_addsub_register_line,
     emitted_addsub_immediate_line,
     emitted_fixed_instruction_line,
@@ -41,11 +44,13 @@ def materialize_global_address(
         if is_aarch64_linux_triple(module_symbols.target_triple):
             # Initial-exec GOT entries contain offsets from TP, not addresses.
             scratch = "x17" if reg != "x17" else "x16"
-            lines = ["  sub sp, sp, #16", f"  str {scratch}, [sp]"]
+            lines = [emitted_addsub_immediate_line("sub", "sp", "sp", 16),
+                     emitted_memory_instruction_line("str", scratch, "sp")]
             lines.extend(emitted_global_address_lines(reg, symbol, True))
-            lines.extend([f"  mrs {scratch}, tpidr_el0",
-                          f"  add {reg}, {reg}, {scratch}",
-                          f"  ldr {scratch}, [sp]", "  add sp, sp, #16"])
+            lines.extend([emitted_system_register_line("mrs", scratch, "tpidr_el0"),
+                          emitted_scalar_register_line('add', reg, reg, scratch),
+                          emitted_memory_instruction_line("ldr", scratch, "sp"),
+                          emitted_addsub_immediate_line("add", "sp", "sp", 16)])
             return lines
         return _materialize_thread_local_address(symbol, reg)
     if name not in module_symbols.defined_symbols:
@@ -116,7 +121,7 @@ def materialize_index_to_x10(
         # pointer types), so no sign extension is needed.
         return lines
     if index_type.bits < 64:
-        lines.append("  sxtw x10, w10")
+        lines.append(emitted_scalar_register_line("sxtw", "x10", "w10"))
     return lines
 
 
@@ -142,12 +147,12 @@ def emit_indexed_pointer_add(
         return lines
     if elem_size in (2, 4, 8, 16):
         shift = {2: 1, 4: 2, 8: 3, 16: 4}[elem_size]
-        lines.append(f"  add x11, x9, x10, lsl #{shift}")
+        lines.append(emitted_scalar_register_line("add", "x11", "x9", "x10", shift=shift, explicit_shift=True))
         return lines
     lines.extend(emit_const_to_reg(TypeDesc("int", 64), "x12", elem_size))
     lines.extend(
         [
-            "  mul x10, x10, x12",
+            emitted_scalar_register_line("mul", "x10", "x10", "x12"),
             emitted_addsub_register_line("add", "x11", "x9", "x10"),
         ]
     )

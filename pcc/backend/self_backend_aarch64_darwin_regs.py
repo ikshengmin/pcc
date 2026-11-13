@@ -5,6 +5,9 @@ from __future__ import annotations
 from . import BackendUnavailable
 from .aarch64_fp_immediates import direct_fp_immediate_literal
 from .self_backend_aarch64_darwin_mem import (
+    emitted_fp_immediate_line,
+    emitted_scalar_register_line,
+    emitted_scalar_immediate_line,
     emitted_addsub_immediate_line,
     emitted_addsub_register_line,
     emitted_move_register_line,
@@ -217,16 +220,16 @@ def emit_fp_hex_constant(value_type: TypeDesc, reg: str, token: str) -> list[str
         as_double = bits_to_float64(bits)
         immediate = direct_fp_immediate_literal(float(as_double))
         if immediate is not None:
-            return [f"  fmov {reg}, #{immediate}"]
+            return [emitted_fp_immediate_line(reg, immediate)]
         fp_bits = float32_to_bits(float(as_double))
         lines = emit_const_to_reg(TypeDesc("int", 32), "w12", fp_bits)
-        lines.append(f"  fmov {reg}, w12")
+        lines.append(emitted_scalar_register_line('fmov', reg, 'w12'))
         return lines
     immediate = direct_fp_immediate_literal(bits_to_float64(bits))
     if immediate is not None:
-        return [f"  fmov {reg}, #{immediate}"]
+        return [emitted_fp_immediate_line(reg, immediate)]
     lines = emit_const_to_reg(TypeDesc("int", 64), "x12", u64_as_i64(bits))
-    lines.append(f"  fmov {reg}, x12")
+    lines.append(emitted_scalar_register_line('fmov', reg, 'x12'))
     return lines
 
 
@@ -239,15 +242,15 @@ def emit_fp_constant(value_type: TypeDesc, reg: str, token: str) -> list[str]:
         )
     immediate = direct_fp_immediate_literal(float(token))
     if immediate is not None:
-        return [f"  fmov {reg}, #{immediate}"]
+        return [emitted_fp_immediate_line(reg, immediate)]
     if value_type.width <= 32:
         bits = float32_to_bits(float(token))
         lines = emit_const_to_reg(TypeDesc("int", 32), "w12", bits)
-        lines.append(f"  fmov {reg}, w12")
+        lines.append(emitted_scalar_register_line('fmov', reg, 'w12'))
         return lines
     bits = float64_to_bits(float(token))
     lines = emit_const_to_reg(TypeDesc("int", 64), "x12", u64_as_i64(bits))
-    lines.append(f"  fmov {reg}, x12")
+    lines.append(emitted_scalar_register_line('fmov', reg, 'x12'))
     return lines
 
 

@@ -54,7 +54,8 @@ def self_backend_emitter_source_identity(source_root: str | Path | None = None) 
         key=lambda path: path.name,
     )
     for name in (
-        "arm64_encode.py", "arm64_asm_driver.py", "arm64_elf_driver.py",
+        "arm64_encode.py", "arm64_encode_producer.py", "aarch64_fp_immediates.py",
+        "arm64_asm_driver.py", "arm64_elf_driver.py",
         "x86_64_encode.py", "x86_64_asm_driver.py", "elf_x86_64.py",
         "elf_aarch64_relocations.py", "coff_x86_64.py", "pe_x86_64.py",
         "native_object.py", "owned_object_emit.py", "precise_stackmap.py",

@@ -271,6 +271,47 @@ class AArch64ModuleBuilder:
                 buf.text_builder.close()
         self.closed = True
 
+    def begin_text_section(self) -> None:
+        """Select the owned code section without a directive text adapter."""
+        if self.closed or self.text_layout_finalized:
+            raise EncodeError("module text section is closed or finalized")
+        key = ("__TEXT", "__text")
+        if key not in self.buffers:
+            flags = _SECTION_FLAGS[("__TEXT", "__text", "regular,pure_instructions")]
+            self.buffers[key] = _SectionBuffer("__TEXT", "__text", flags)
+            self.order.append(key)
+        self.current = self.buffers[key]
+        if self.current.text_builder is None:
+            self.current.text_builder = PackedAArch64TextBuilder(
+                structured_symbol_names=self.structured_symbol_names,
+            )
+
+    def append_text_alignment(self, exponent: int) -> None:
+        """Represent supported code alignment without parsing a directive."""
+        current = self.current
+        if self.closed or self.text_layout_finalized:
+            raise EncodeError("module text alignment is closed or finalized")
+        if current is None or not current.is_text or current.text_builder is None:
+            raise EncodeError("typed text alignment outside __TEXT,__text")
+        if exponent < 0 or exponent > 2:
+            raise EncodeError("typed text alignment exceeds the proven range")
+        if current.text_builder.active_data_start >= 0 or current.text_builder.pc % 4:
+            raise EncodeError("typed text alignment inside mixed instruction/data layout")
+        current.align_log2 = max(current.align_log2, exponent)
+
+    def append_symbol_visibility(self, name: str, kind: str) -> None:
+        if self.closed or self.text_layout_finalized:
+            raise EncodeError("module symbol visibility is closed or finalized")
+        validate_emitted_label_name(name)
+        if kind == "global":
+            self.globl.add(name)
+        elif kind == "private_extern":
+            self.private_extern.add(name)
+        elif kind == "weak_definition":
+            self.weak_definitions.add(name)
+        else:
+            raise EncodeError("typed symbol visibility is unsupported")
+
     def append_encoded(self, word: int, relocation_kind: int, symbol_id: int) -> None:
         if self.closed:
             raise EncodeError("module builder is closed")

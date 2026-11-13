@@ -3,6 +3,8 @@ from __future__ import annotations
 from . import BackendUnavailable
 from .self_backend_aarch64_darwin_addr import materialize_global_address
 from .self_backend_aarch64_darwin_mem import (
+    emitted_scalar_register_line,
+    emitted_scalar_immediate_line,
     emitted_addsub_register_line,
     emitted_memory_instruction_line,
     emitted_move_register_line,
@@ -145,19 +147,19 @@ def _emit_constant_expr_binop(
     if op == "add" or op == "sub":
         return [emitted_addsub_register_line(op, dest, dest, rhs)]
     mapping = {
-        "mul": f"  mul {dest}, {dest}, {rhs}",
-        "and": f"  and {dest}, {dest}, {rhs}",
-        "or": f"  orr {dest}, {dest}, {rhs}",
-        "xor": f"  eor {dest}, {dest}, {rhs}",
-        "shl": f"  lslv {dest}, {dest}, {rhs}",
-        "lshr": f"  lsrv {dest}, {dest}, {rhs}",
-        "ashr": f"  asrv {dest}, {dest}, {rhs}",
+        "mul": "mul",
+        "and": "and",
+        "or": "orr",
+        "xor": "eor",
+        "shl": "lslv",
+        "lshr": "lsrv",
+        "ashr": "asrv",
     }
     if op not in mapping:
         raise BackendUnavailable(
             f"self backend does not support constant expression binop {op!r}"
         )
-    return [mapping[op]]
+    return [emitted_scalar_register_line(mapping[op], dest, dest, rhs)]
 
 
 def _materialize_constant_expr_operand(
@@ -865,7 +867,7 @@ def materialize_scalar_value_indexed(
         # A negative double's pattern is >= 2**63: pass the lane its signed
         # spelling (the old lane unboxing turned it into 0.0).
         lines = emit_const_to_reg_bits(int_bits, int_reg, u64_as_i64(fp_bits))
-        lines.append(f"  fmov {reg}, {int_reg}")
+        lines.append(emitted_scalar_register_line('fmov', reg, int_reg))
         return lines
 
     if value == "null" or value in {"poison", "undef", "zeroinitializer"}:
@@ -1052,9 +1054,11 @@ def materialize_value(
             return emit_fp_constant(expected_type, reg, "0.000000e+00")
         if hfa is not None:
             return [
-                f"  fmov {'s' if member_type.width <= 32 else 'd'}"
-                f"{reg_index + member_index}, "
-                f"{'wzr' if member_type.width <= 32 else 'xzr'}"
+                emitted_scalar_register_line(
+                    "fmov",
+                    ("s" if member_type.width <= 32 else "d") + str(reg_index + member_index),
+                    "wzr" if member_type.width <= 32 else "xzr",
+                )
                 for member_index, (member_type, _offset) in enumerate(hfa)
             ]
         if not is_aggregate:
@@ -1137,9 +1141,11 @@ def materialize_value(
             return emit_fp_constant(expected_type, reg, "0.000000e+00")
         if hfa is not None:
             return [
-                f"  fmov {'s' if member_type.width <= 32 else 'd'}"
-                f"{reg_index + member_index}, "
-                f"{'wzr' if member_type.width <= 32 else 'xzr'}"
+                emitted_scalar_register_line(
+                    "fmov",
+                    ("s" if member_type.width <= 32 else "d") + str(reg_index + member_index),
+                    "wzr" if member_type.width <= 32 else "xzr",
+                )
                 for member_index, (member_type, _offset) in enumerate(hfa)
             ]
         if not is_aggregate:
@@ -1215,7 +1221,7 @@ def materialize_value(
                 int_type = TypeDesc("int", 32 if member_size <= 4 else 64)
                 int_reg = "w12" if member_size <= 4 else "x12"
                 lines.extend(emit_const_to_reg(int_type, int_reg, member_bits))
-                lines.append(f"  fmov {hfa_reg}, {int_reg}")
+                lines.append(emitted_scalar_register_line('fmov', hfa_reg, int_reg))
             return lines
         offset = 0
         for chunk_reg, chunk_size in zip(regs, aggregate_reg_chunks(expected_type)):

@@ -1,5 +1,14 @@
 """Linux AArch64 entry sharing the owned AArch64 instruction selector."""
 
+from .self_backend_aarch64_darwin_mem import (
+    emitted_memory_instruction_line,
+    emitted_branch_line,
+    emitted_move_register_line,
+    emitted_scalar_register_line,
+    emitted_scalar_immediate_line,
+    emitted_addsub_immediate_line,
+    emitted_compare_immediate_line,
+)
 from . import BackendUnavailable
 from .self_backend_target_match import is_aarch64_linux_triple
 from .self_backend_parse import parse_self_backend_target_triple
@@ -25,9 +34,9 @@ def emit_linux_vararg_start(func, ap_ptr, module_symbols):
     lines = materialize_pointer(func, ap_ptr, 9, module_symbols)
     for field, delta in ((0, stack), (8, top - 128), (16, top)):
         lines.extend(emit_add_offset("x10", "x29", delta))
-        lines.append(f"  str x10, [x9, #{field}]")
-    lines.extend([f"  mov w10, #{(gp - 8) * 8}", "  str w10, [x9, #24]",
-                  f"  mov w10, #{(fp - 8) * 16}", "  str w10, [x9, #28]"])
+        lines.append(emitted_memory_instruction_line('str', 'x10', 'x9', field, explicit_offset=True))
+    lines.extend([emitted_scalar_immediate_line('mov', 'w10', '', (gp - 8) * 8), emitted_memory_instruction_line('str', 'w10', 'x9', 24, explicit_offset=True),
+                  emitted_scalar_immediate_line('mov', 'w10', '', (fp - 8) * 16), emitted_memory_instruction_line('str', 'w10', 'x9', 28, explicit_offset=True)])
     return lines
 
 
@@ -47,15 +56,15 @@ def emit_linux_va_arg(func, dest, ap, value_type, module_symbols):
     stride = 16 if fp else 8
     label = "L_va_" + sanitize_label(func.name + "_" + dest)
     lines = materialize_pointer(func, ap, 9, module_symbols)
-    lines.extend([f"  ldr w10, [x9, #{offset}]", "  cmp w10, #0",
-                  f"  b.ge {label}_stack", f"  ldr x11, [x9, #{top}]",
-                  "  sxtw x10, w10", "  add x11, x11, x10",
-                  f"  add w10, w10, #{stride}", f"  str w10, [x9, #{offset}]",
-                  f"  b {label}_load", f"{label}_stack:", "  ldr x11, [x9]",
+    lines.extend([emitted_memory_instruction_line('ldr', 'w10', 'x9', offset, explicit_offset=True), emitted_compare_immediate_line('w10', 0),
+                  emitted_branch_line('b.ge', label + '_stack'), emitted_memory_instruction_line('ldr', 'x11', 'x9', top, explicit_offset=True),
+                  emitted_scalar_register_line('sxtw', 'x10', 'w10'), emitted_scalar_register_line('add', 'x11', 'x11', 'x10'),
+                  emitted_addsub_immediate_line('add', 'w10', 'w10', stride), emitted_memory_instruction_line('str', 'w10', 'x9', offset, explicit_offset=True),
+                  emitted_branch_line('b', label + '_load'), f"{label}_stack:", emitted_memory_instruction_line('ldr', 'x11', 'x9'),
                                     ])
     if value_type.align >= 16:
-        lines.extend(["  add x11, x11, #15", "  and x11, x11, #0xfffffffffffffff0"])
-    lines.extend([f"  add x10, x11, #{max(8, value_type.slot_size)}", "  str x10, [x9]", f"{label}_load:"])
+        lines.extend([emitted_addsub_immediate_line('add', 'x11', 'x11', 15), emitted_scalar_immediate_line('and', 'x11', 'x11', 18446744073709551600, radix=16)])
+    lines.extend([emitted_addsub_immediate_line('add', 'x10', 'x11', max(8, value_type.slot_size)), emitted_memory_instruction_line('str', 'x10', 'x9'), f"{label}_load:"])
     lines.extend(load_value_from_address("x11", value_type, 10))
     lines.extend(store_value_regs_to_value_slot(func, dest, 10))
     return lines
@@ -75,27 +84,27 @@ def emit_linux_aggregate_va_arg(func, dest, ap, ty, module_symbols):
     func.platform_intrinsic_labels += 1
     label = "L_vaagg_" + sanitize_label(func.name + "_" + dest) + "_" + str(func.platform_intrinsic_labels)
     lines = materialize_pointer(func, ap, 9, module_symbols)
-    lines.extend([f"  ldr w10, [x9, #{field}]", "  cmp w10, #0", f"  b.ge {label}_stack"])
+    lines.extend([emitted_memory_instruction_line('ldr', 'w10', 'x9', field, explicit_offset=True), emitted_compare_immediate_line('w10', 0), emitted_branch_line('b.ge', label + '_stack')])
     if not hfa and not indirect and ty.align >= 16:
-        lines.extend(["  add w10, w10, #15", "  and w10, w10, #0xfffffff0"])
-    lines.extend([f"  add w12, w10, #{stride}", f"  str w12, [x9, #{field}]",
-                  "  cmp w12, #0", f"  b.gt {label}_stack", f"  ldr x11, [x9, #{top}]",
-                  "  sxtw x10, w10", "  add x11, x11, x10"])
+        lines.extend([emitted_addsub_immediate_line('add', 'w10', 'w10', 15), emitted_scalar_immediate_line('and', 'w10', 'w10', 4294967280, radix=16)])
+    lines.extend([emitted_addsub_immediate_line('add', 'w12', 'w10', stride), emitted_memory_instruction_line('str', 'w12', 'x9', field, explicit_offset=True),
+                  emitted_compare_immediate_line('w12', 0), emitted_branch_line('b.gt', label + '_stack'), emitted_memory_instruction_line('ldr', 'x11', 'x9', top, explicit_offset=True),
+                  emitted_scalar_register_line('sxtw', 'x10', 'w10'), emitted_scalar_register_line('add', 'x11', 'x11', 'x10')])
     if hfa:
         lines.extend(emit_value_slot_base_address(func, dest, "x13"))
         for index, (member, offset) in enumerate(hfa):
             register = "q10" if member.width == 128 else "s10" if member.width <= 32 else "d10"
-            lines.extend([f"  ldr {register}, [x11, #{index * 16}]", f"  str {register}, [x13, #{offset}]"])
+            lines.extend([emitted_memory_instruction_line('ldr', register, 'x11', index * 16, explicit_offset=True), emitted_memory_instruction_line('str', register, 'x13', offset, explicit_offset=True)])
     else:
         if indirect:
-            lines.append("  ldr x11, [x11]")
+            lines.append(emitted_memory_instruction_line('ldr', 'x11', 'x11'))
         lines.extend(copy_address_to_value_slot("x11", func, dest))
-    lines.extend([f"  b {label}_end", f"{label}_stack:", "  ldr x11, [x9]"])
+    lines.extend([emitted_branch_line('b', label + '_end'), f"{label}_stack:", emitted_memory_instruction_line('ldr', 'x11', 'x9')])
     if not indirect and ty.align >= 16:
-        lines.extend(["  add x11, x11, #15", "  and x11, x11, #0xfffffffffffffff0"])
-    lines.extend([f"  add x10, x11, #{8 if indirect else _align_to(ty.slot_size, 8)}", "  str x10, [x9]"])
+        lines.extend([emitted_addsub_immediate_line('add', 'x11', 'x11', 15), emitted_scalar_immediate_line('and', 'x11', 'x11', 18446744073709551600, radix=16)])
+    lines.extend([emitted_addsub_immediate_line('add', 'x10', 'x11', 8 if indirect else _align_to(ty.slot_size, 8)), emitted_memory_instruction_line('str', 'x10', 'x9')])
     if indirect:
-        lines.append("  ldr x11, [x11]")
+        lines.append(emitted_memory_instruction_line('ldr', 'x11', 'x11'))
     lines.extend(copy_address_to_value_slot("x11", func, dest))
     lines.append(label + "_end:")
     return lines
