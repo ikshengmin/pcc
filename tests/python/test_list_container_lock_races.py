@@ -1,8 +1,10 @@
 """Shared lists stay consistent while four carriers mutate and read them.
 
-On GC0 every list transaction takes the list's own container lock (striped
-0/1 words, pcc_container_lock); the tracing and moving collectors keep the
-graph lock. Either way one list operation is one transaction: concurrent
+Without the refcount provenance probe every collector runs in container
+mode (pcc_gc_fix_backend: GC0 and the count-free GC1-GC4), and every list
+transaction takes the list's own container lock (striped 0/1 words,
+pcc_container_lock); the probe keeps the graph lock. Either way one list
+operation is one transaction: concurrent
 adds through append, extend, insert, `+=`, slice assignment and a tuple
 extend lose and duplicate nothing; while writers only append, every copy,
 slice, stepped slice, repeat, concatenation, sorted() and str.join is a
@@ -309,15 +311,18 @@ int main(int argc, char **argv) {
 
 
 @pytest.mark.integration
-def test_list_lock_is_the_container_lock_only_on_gc0_without_the_probe(tmp_path, pcc_runtime_archive):
+def test_list_lock_is_the_container_lock_without_the_probe(tmp_path, pcc_runtime_archive):
     source = tmp_path / "list_lock_mode.c"
     source.write_text(C_PROGRAM, encoding="utf-8")
     binary = tmp_path / "list_lock_mode"
     compile_owned_c_with_runtime(source, binary, runtime_archive=Path(pcc_runtime_archive))
-    cases = [(backend, "0", "1 0\n" if backend == 0 else "0 1\n") for backend in range(5)]
+    # GC0 and the count-free GC1-GC4 (pcc_gc_fix_backend sets
+    # pcc_gc_nonmoving_count_free for every tracing collector) lock lists
+    # themselves.
+    cases = [(backend, "0", "1 0\n") for backend in range(5)]
     # The provenance probe's checked lease path takes the graph lock inside
-    # a transaction, so probed GC0 lists keep the graph lock.
-    cases.append((0, "1", "0 1\n"))
+    # a transaction, so probed lists keep the graph lock on every collector.
+    cases.extend((backend, "1", "0 1\n") for backend in range(5))
     for backend, probe, expected in cases:
         ran = subprocess.run([str(binary), str(backend)], capture_output=True, text=True, timeout=60,
                              env=dict(os.environ, PATH="/nonexistent",

@@ -66,7 +66,7 @@ class NamespaceCommitModel:
         ), self.env)
         _load_helpers(ROOT / 'pcc/runtime/py/py_dict.py', (
             '_dict_insert_rooted_slot', '_dict_replace_value_rooted_slot',
-            '_dict_del_rooted_slot', '_dict_table_lock', '_dict_table_unlock',
+            '_dict_del_rooted_slot', '_dict_table_lock', '_dict_table_unlock', '_dict_graph_table_lock', '_dict_graph_table_unlock',
         ), self.env)
         self.initialize()
 

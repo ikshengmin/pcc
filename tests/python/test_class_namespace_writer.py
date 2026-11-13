@@ -66,6 +66,9 @@ class NamespaceWriterModel:
         self.input_value = 8016
         self.namespace_values = {2000: 3333, 6000: 4444}
         self.mutations = []
+        # Dictionaries marked as class namespaces (py_dict's set keeps the
+        # graph lock for them), with the event count at marking time.
+        self.marked = {}
         self.count = 0
         self.env = self.environment()
         self.store(self.input_class, 0, self.cls)
@@ -273,6 +276,7 @@ class NamespaceWriterModel:
             pcc_gc_root_copy_lease_prepare_locked=prepare, pcc_gc_root_copy_lease_finish=finish,
             py_dict_namespace_set_slots=mutate,
             py_dict_namespace_del_slots=lambda d,k,c: mutate(d,k,0,c),
+            py_dict_mark_class_namespace=lambda d: self.marked.setdefault(d, len(self.events)),
         ))
         return constants
 
@@ -295,6 +299,9 @@ def test_namespace_writer_publishes_owned_value(existing, relocate, alias):
     dictionary = model.load(model.cls, model.env['PYCLASSOBJECT_ATTRS_OFFSET'])
     assert model.namespace_values[dictionary] == model.load(model.input_value)
     assert model.pending == 'incoming-error'
+    if not existing:
+        # The created namespace is marked before the install can publish it.
+        assert dictionary == model.created and model.created in model.marked
     assert model.events.index('del-hint') < model.events.index('dict-operation')
     if relocate:
         assert 'class-moved' in model.events
@@ -466,7 +473,13 @@ class SharedHelperNamespaceWriterModel(NamespaceWriterModel):
             'pcc_gc_store_root': store_root, 'pcc_gc_note_slot_write_barrier': barrier,
             'py_clear_exception': clear, 'py_runtime_error_if_unset': runtime_error,
             'pcc_platform_abort': abort,
+            # Runtime switches read 0 (configuration not yet initialized), so
+            # _special_adopt keeps the durable lease this model checks, as the
+            # pcc_gc_backend() == 4 configuration above does.
+            'global_addr': lambda name: self.global_cells.setdefault(
+                name, 900000 + 64 * len(self.global_cells)),
         })
+        self.global_cells = {}
         load_functions(ROOT / 'pcc/runtime/py/py_class.py', (
             '_special_open', '_special_error', '_special_copy', '_special_adopt',
             '_special_drop', '_special_close',

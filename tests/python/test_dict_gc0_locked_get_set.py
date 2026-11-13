@@ -12,9 +12,12 @@ operation from the start. A dict built from static pairs is private until it
 is returned, so it keeps the unlocked insert.
 
 In container mode (GC0 and the count-free tracers, without the probe) the
-lookup holds only the dict's own container lock, so carriers reading dicts
-do not queue on the graph lock; a set holds the graph lock and, inside it,
-that container lock, which excludes both kinds of reader.
+lookup and the set of an ordinary dict hold only the dict's own container
+lock, so carriers working on different dicts do not queue on the graph
+lock; every other transaction on the tables takes that lock inside the
+graph lock. A class namespace's set keeps the graph lock outside the
+container lock: attribute lookup reads namespace slots under the graph
+lock alone.
 """
 
 from __future__ import annotations
@@ -141,12 +144,20 @@ class Heap:
         self.table = 0
         self.calls.append(("table_unlock", d))
 
+    def rmw(self, op, address, offset, value, order):
+        assert op == "or" and order == "release"
+        old = self.load(address, offset)
+        self.store(address, offset, old | value)
+        return old
+
 
 def _functions(heap, names):
     namespace = {name: getattr(abi, name) for name in dir(abi) if name.isupper()}
     namespace.update({
         "load_i32": heap.load, "load_i64": heap.load, "load_ptr": heap.load,
-        "atomic_load_i64": heap.load,
+        "atomic_load_i32": heap.load, "atomic_load_i64": heap.load,
+        "atomic_rmw_i32": heap.rmw,
+        "_ptr_is_dict": lambda pointer: pointer != 0,
         "store_ptr": heap.store, "store_i64": heap.store,
         "ptr_add": lambda pointer, offset: pointer + offset,
         "ptr_is_null": lambda pointer: pointer == 0,
@@ -167,6 +178,11 @@ def _functions(heap, names):
     tree = ast.parse(DICT_SOURCE.read_text())
     nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
     assert sorted(node.name for node in nodes) == sorted(names)
+    for node in tree.body:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == "_DICT_CLASS_NAMESPACE_FLAG"):
+            namespace["_DICT_CLASS_NAMESPACE_FLAG"] = ast.literal_eval(node.value)
     code = compile(ast.Module(nodes, type_ignores=[]), str(DICT_SOURCE), "exec")
     for const in code.co_consts:
         if isinstance(const, types.CodeType):
@@ -175,12 +191,19 @@ def _functions(heap, names):
 
 
 LOCK_NAMES = ["_dict_table_lock", "_dict_table_unlock", "_dict_read_lock", "_dict_read_unlock"]
-SET_NAMES = ["_dict_gc0_admitted_locked", "_dict_set_gc0_locked"] + LOCK_NAMES
+SET_NAMES = ["_dict_gc0_admitted_locked", "_dict_set_gc0_locked",
+             "_dict_set_needs_graph_lock"] + LOCK_NAMES
 GET_NAMES = ["_dict_gc0_admitted_locked", "_dict_get_gc0_locked"] + LOCK_NAMES
 
 
 def _set_calls(d):
-    """A set: the graph lock, and inside it the dict's container lock."""
+    """A set of an ordinary dict: the dict's container lock alone."""
+    return [("table_lock", d), ("table_unlock", d)]
+
+
+def _namespace_set_calls(d):
+    """A set of a class namespace: the graph lock, and inside it the
+    dict's container lock."""
     return [("lock",), ("table_lock", d), ("table_unlock", d), ("unlock",)]
 
 
@@ -395,7 +418,74 @@ def test_dict_get_set_match_cpython_on_five_collectors(tmp_path, threaded_pcc_ru
     compile_python(str(source), str(executable), backend="self",
                    ir_scaffold_mode="on",
                    runtime_archive=str(threaded_pcc_runtime_archive))
+    expected_lines = expected.stdout.splitlines()
+    events_line = expected_lines.index("['replace', 'del first', 'after', 'del second']")
     for backend in range(5):
         ran = subprocess.run([str(executable)], capture_output=True, text=True, timeout=120,
                              env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)))
-        assert (ran.returncode, ran.stdout, ran.stderr) == (0, expected.stdout, ""), backend
+        if backend == 0:
+            # The counting collector releases a replaced value at once, as
+            # CPython does.
+            assert (ran.returncode, ran.stdout, ran.stderr) == (0, expected.stdout, ""), backend
+            continue
+        # The count-free tracers finalize at a collection, not at the last
+        # release; finalization timing is not a language guarantee. Every
+        # other line is CPython's, and the events keep their program order
+        # with each finalizer at most once.
+        assert (ran.returncode, ran.stderr) == (0, ""), backend
+        lines = ran.stdout.splitlines()
+        assert lines[:events_line] + lines[events_line + 1:] == (
+            expected_lines[:events_line] + expected_lines[events_line + 1:]
+        ), backend
+        events = ast.literal_eval(lines[events_line])
+        program = [event for event in events if not event.startswith("del ")]
+        finalized = [event for event in events if event.startswith("del ")]
+        assert program == ["replace", "after"], backend
+        assert len(set(finalized)) == len(finalized) and set(finalized) <= {"del first", "del second"}, backend
+
+
+def test_class_namespace_set_keeps_the_graph_lock():
+    # Attribute lookup reads a namespace's entry slots and copies the
+    # selected value under the graph lock alone (py_class
+    # _special_lookup_locked), so a namespace's set must exclude it.
+    heap = Heap()
+    key, old, new = heap.obj(), heap.obj(), heap.obj()
+    d = heap.dict([(key, old)])
+    ns = _functions(heap, SET_NAMES + ["py_dict_mark_class_namespace"])
+    ns["py_dict_mark_class_namespace"](d)
+    assert heap.load(d, abi.PYOBJECTHEADER_FLAGS_OFFSET) == 2097152
+    assert ns["_dict_set_gc0_locked"](d, key, new, 2) == 1
+    assert _entry(heap, d, 0) == (key, new)
+    assert heap.refs[new] == 2 and heap.refs[old] == 0
+    assert heap.calls == _namespace_set_calls(d) + [("decref", old)]
+
+
+def test_namespace_flag_is_a_type_specific_dict_bit():
+    # Type-specific header bits start at 2097152 (classes use this value for
+    # PY_FLAG_CLASS_SLOTS_ONLY); no flag shared by every object uses it.
+    shared = (abi.PY_FLAG_IMMORTAL | abi.PY_FLAG_GC_TRACKED | abi.PY_FLAG_FINALIZED
+              | abi.PY_FLAG_GC_PINNED | abi.PY_FLAG_GC_MALLOC_ALLOC
+              | abi.PY_FLAG_GC_DEALLOCATING)
+    heap = Heap()
+    ns = _functions(heap, ["_dict_set_needs_graph_lock"])
+    flag = ns["_DICT_CLASS_NAMESPACE_FLAG"]
+    assert flag == abi.PY_FLAG_CLASS_SLOTS_ONLY and flag & shared == 0
+
+
+def test_every_graph_transaction_on_dict_tables_holds_the_table_lock():
+    # A set of an ordinary dict holds only the table lock, so a transaction
+    # that reads the tables under the graph lock alone could copy a value
+    # the set is releasing. The graph lock appears only in the lock helpers,
+    # in a function that also takes the table lock, or around a root store.
+    tree = ast.parse(DICT_SOURCE.read_text())
+    helpers = {"_dict_read_lock", "_dict_read_unlock", "_dict_graph_table_lock",
+               "_dict_graph_table_unlock"}
+    root_only = {"_dict_slot_adopt"}
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef) or node.name in helpers:
+            continue
+        called = {call.func.id for call in ast.walk(node)
+                  if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)}
+        if "pcc_py_gc_minor_graph_lock" not in called or node.name in root_only:
+            continue
+        assert called & {"_dict_table_lock", "_dict_graph_table_lock"}, node.name

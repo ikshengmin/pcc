@@ -58,7 +58,9 @@ from pcc.unsafe import (
     global_addr,
     global_load_ptr,
     int_to_ptr,
+    atomic_load_i32,
     atomic_load_i64,
+    atomic_rmw_i32,
     is_tagged_int,
     load_i8,
     load_i32,
@@ -344,16 +346,18 @@ def _dict_insert_fast0(d, key, value, slot: int, hash_val: int) -> int:
 
 
 def _dict_table_lock(d) -> None:
-    """Exclude the readers that hold only ``d``'s container lock.
+    """Lock ``d``'s tables in container mode (no-op otherwise).
 
-    Every transaction that changes ``d``'s tables or an entry holds the graph
-    lock, as before, and inside it this lock when the collector runs in
-    container mode (GC0 and the count-free tracers, without the provenance
-    probe). A lookup or an eager keys/values/items copy holds this lock
-    alone (_dict_read_lock), so carriers reading dicts do not queue on the
-    graph lock, while every other reader keeps the graph lock: a writer
-    excludes both kinds. The holder takes no other lock, runs no user code
-    and allocates nothing.
+    In container mode (GC0 and the count-free tracers, without the
+    provenance probe) every transaction on ``d``'s indices, entries or
+    counts holds this lock, readers and writers alike. A lookup, an eager
+    keys/values/items copy and a str/tagged-int set of an ordinary dict hold
+    it alone (_dict_read_lock, _dict_set_gc0_locked), so carriers working on
+    different dicts do not queue on the graph lock. Every other transaction
+    takes the graph lock outside it, as before, which keeps a class
+    namespace (_DICT_CLASS_NAMESPACE_FLAG) and a table replacement (_rehash)
+    excluded from the graph-lock readers outside this module. The holder
+    takes no other lock, runs no user code and allocates nothing.
     """
     if load_i32(global_addr("pcc_gc_list_container_mode"), 0) != 0:
         pcc_container_lock(d)
@@ -376,6 +380,47 @@ def _dict_read_unlock(d) -> None:
     if load_i32(global_addr("pcc_gc_list_container_mode"), 0) != 0:
         pcc_container_unlock(d)
         return
+    pcc_py_gc_minor_graph_unlock()
+
+
+# Header flag of a dict installed as a class namespace (a type-specific bit:
+# classes use the same value for PY_FLAG_CLASS_SLOTS_ONLY). Attribute lookup
+# reads a namespace's entry slots under the graph lock alone and copies the
+# selected value there (py_class _special_lookup_locked), so every writer of
+# a namespace keeps the graph lock even where an ordinary dict's set holds
+# only its container lock.
+_DICT_CLASS_NAMESPACE_FLAG = 2097152
+
+# Optimistic attempts of one rooted operation before it reports a failure;
+# each failed attempt means another writer committed meanwhile.
+_DICT_OPERATION_ATTEMPT_LIMIT = 1048576
+
+
+@c_abi_export("py_dict_mark_class_namespace")
+def py_dict_mark_class_namespace(d) -> None:
+    """Mark ``d`` before it is published as a class namespace."""
+    if _ptr_is_dict(d):
+        atomic_rmw_i32("or", d, PYOBJECTHEADER_FLAGS_OFFSET, _DICT_CLASS_NAMESPACE_FLAG, "release")
+
+
+def _dict_set_needs_graph_lock(d) -> int:
+    """1 when a set of ``d`` must take the graph lock outside its table lock."""
+    if load_i32(global_addr("pcc_gc_list_container_mode"), 0) == 0:
+        return 1
+    if (atomic_load_i32(d, PYOBJECTHEADER_FLAGS_OFFSET, "acquire") & _DICT_CLASS_NAMESPACE_FLAG) != 0:
+        return 1
+    return 0
+
+
+def _dict_graph_table_lock(d) -> None:
+    """The graph lock, then ``d``'s table lock: a graph-locked transaction
+    that reads or writes ``d``'s tables."""
+    pcc_py_gc_minor_graph_lock()
+    _dict_table_lock(d)
+
+
+def _dict_graph_table_unlock(d) -> None:
+    _dict_table_unlock(d)
     pcc_py_gc_minor_graph_unlock()
 
 
@@ -615,8 +660,19 @@ def _dict_rooted_op(d, key, value, mode: int, status_slot, namespace_commit_cont
     result = null()
     done: int = 0
     attempts: int = 0
-    while done == 0 and attempts < 16:
+    # The probe reads the tables without a lock and the commit revalidates
+    # them under it, so an attempt fails only when another writer changed
+    # the dict meanwhile: retry until the operation completes. Giving up
+    # after a few attempts dropped a set (or reported a present key missing)
+    # with no error while other carriers kept inserting.
+    while done == 0:
         attempts = attempts + 1
+        if attempts > _DICT_OPERATION_ATTEMPT_LIMIT:
+            py_runtime_error_if_unset(
+                cstr("dictionary operation"),
+                cstr("the dictionary changed during every attempt of the operation"),
+            )
+            return null()
         d = load_ptr(dict_slot, 0)
         key = load_ptr(key_slot, 0)
         if not _ptr_is_dict(d):
@@ -768,11 +824,21 @@ def _dict_rooted_op(d, key, value, mode: int, status_slot, namespace_commit_cont
                 perturb = _perturb_shift5(perturb)
                 j = (j * 5 + perturb + 1) & mask
                 probes = probes + 1
+        if mode != 2 and restart == 0 and done == 0:
+            # Every slot was probed and none was empty: the key is absent.
+            done = 1
         if mode == 2 and restart == 0 and mutated == 0:
             target: int = insert_slot
             if target < 0:
                 target = first_tombstone
-            if target >= 0:
+            if target < 0 or entries_used >= capacity:
+                # No free index or entry slot: grow the table (a concurrent
+                # grower may already have), then probe the new one.
+                done = 0
+                if _maybe_grow(d) < 0:
+                    py_raise_owned(py_exc_new(19, cstr("dictionary entry storage allocation failed")))
+                    return null()
+            else:
                 inserted: int = _dict_insert_rooted_slot(
                     dict_slot,
                     null(),
@@ -821,13 +887,19 @@ def _rehash(d, new_capacity: int) -> int:
     owner_slot = stack_alloc(8)
     store_ptr(owner_slot, 0, d)
 
+    # The new tables are allocated outside the locks and the snapshot is
+    # revalidated under them, so an attempt fails only when another writer
+    # changed the tables meanwhile. Inserts stop once the table is full, so
+    # retrying converges; giving up after eight attempts left a full table
+    # that every later insert failed on.
     attempt: int = 0
-    while attempt < 8:
+    while attempt < _DICT_OPERATION_ATTEMPT_LIMIT:
         attempt = attempt + 1
         pcc_py_gc_minor_graph_lock()
         if pcc_gc_backend() != initial_backend:
             pcc_py_gc_minor_graph_unlock()
             break
+        _dict_table_lock(d)
         old_entries = load_ptr(d, PYDICTOBJECT_ENTRIES_OFFSET)
         old_indices = load_ptr(d, PYDICTOBJECT_INDICES_OFFSET)
         old_capacity: int = load_i64(d, PYDICTOBJECT_CAPACITY_OFFSET)
@@ -835,11 +907,15 @@ def _rehash(d, new_capacity: int) -> int:
             d, PYDICTOBJECT_ENTRIES_USED_OFFSET
         )
         old_size: int = load_i64(d, PYDICTOBJECT_ITEM_COUNT_OFFSET)
-        pcc_py_gc_minor_graph_unlock()
+        _dict_graph_table_unlock(d)
         if ptr_is_null(old_entries) != 0 or ptr_is_null(old_indices) != 0:
             break
-        if old_capacity <= 0 or new_capacity < old_capacity:
+        if old_capacity <= 0:
             break
+        if new_capacity < old_capacity or old_entries_used <= (old_capacity * 2) // 3:
+            # Another grower already replaced the tables (_maybe_grow, the
+            # only caller, asks only above two thirds of the entries).
+            return 0
         if old_entries_used < 0 or old_entries_used > old_capacity:
             break
         if old_size < 0 or old_size > new_capacity:
@@ -874,6 +950,10 @@ def _rehash(d, new_capacity: int) -> int:
             free(new_entries)
             free(new_indices)
             break
+        # The copy and the installation are one table transaction: a set
+        # holding only the table lock cannot change an old entry after it
+        # was copied, nor release a value the new tables still name.
+        _dict_table_lock(d)
         if (
             ptr_eq(load_ptr(d, PYDICTOBJECT_ENTRIES_OFFSET), old_entries) == 0
             or ptr_eq(load_ptr(d, PYDICTOBJECT_INDICES_OFFSET), old_indices) == 0
@@ -881,7 +961,7 @@ def _rehash(d, new_capacity: int) -> int:
             or load_i64(d, PYDICTOBJECT_ENTRIES_USED_OFFSET) != old_entries_used
             or load_i64(d, PYDICTOBJECT_ITEM_COUNT_OFFSET) != old_size
         ):
-            pcc_py_gc_minor_graph_unlock()
+            _dict_graph_table_unlock(d)
             free(slot_pairs)
             free(new_entries)
             free(new_indices)
@@ -953,7 +1033,7 @@ def _rehash(d, new_capacity: int) -> int:
                 pair_count,
             )
         if copy_valid == 0 or retargeted == 0:
-            pcc_py_gc_minor_graph_unlock()
+            _dict_graph_table_unlock(d)
             free(slot_pairs)
             free(new_entries)
             free(new_indices)
@@ -967,7 +1047,6 @@ def _rehash(d, new_capacity: int) -> int:
             pair_index = pair_index + 1
         # A reader under the container lock sees the old tables or the new
         # ones; the old ones are freed below, after it has left.
-        _dict_table_lock(d)
         store_ptr(d, PYDICTOBJECT_INDICES_OFFSET, new_indices)
         store_ptr(d, PYDICTOBJECT_ENTRIES_OFFSET, new_entries)
         store_i64(d, PYDICTOBJECT_CAPACITY_OFFSET, new_capacity)
@@ -1094,13 +1173,16 @@ def _dict_gc0_admitted_locked() -> int:
 
 
 def _dict_set_gc0_locked(d, key, value, kind: int) -> int:
-    """Threaded GC0 set for a str or tagged-int key in one graph transaction.
+    """Threaded GC0 set for a str or tagged-int key in one transaction.
 
     The probe runs no callback; the new value (and on insert the key) is
     retained under the lock, and a replaced value is released after it,
     where its finalizer may run. Returns 0 with the dict unchanged when the
     rooted operation must decide (equality callbacks, no room, a refused
-    retain).
+    retain). In container mode an ordinary dict holds only its table lock:
+    the transaction neither replaces the tables (growth runs after it, in
+    _rehash) nor touches another object's memory, and every reader of the
+    tables holds that lock too. A class namespace keeps the graph lock.
     """
     hash_val: int = _dict_fast0_hash(key, kind)
     insert_slot = stack_alloc(8)
@@ -1110,7 +1192,9 @@ def _dict_set_gc0_locked(d, key, value, kind: int) -> int:
     retained = stack_alloc(C_POINTER_SIZE)
     released = null()
     done: int = 0
-    pcc_py_gc_minor_graph_lock()
+    graph_locked: int = _dict_set_needs_graph_lock(d)
+    if graph_locked != 0:
+        pcc_py_gc_minor_graph_lock()
     _dict_table_lock(d)
     if _dict_gc0_admitted_locked() != 0:
         ix: int = _dict_probe_fast0(d, key, kind, hash_val, insert_slot)
@@ -1147,7 +1231,8 @@ def _dict_set_gc0_locked(d, key, value, kind: int) -> int:
                         released = load_ptr(key_field, 0)
                         store_ptr(key_field, 0, null())
     _dict_table_unlock(d)
-    pcc_py_gc_minor_graph_unlock()
+    if graph_locked != 0:
+        pcc_py_gc_minor_graph_unlock()
     if ptr_is_null(released) == 0:
         py_decref(released)
     if done == 2:
@@ -1748,13 +1833,13 @@ def _dict_slot_set_core(slots, tokens, known_hash: int, hash_value: int, keep_ex
     plan = stack_alloc(256)
     write_plan = stack_alloc(256)
     while True:
-        pcc_py_gc_minor_graph_lock()
         owner = load_ptr(slots, C_POINTER_SIZE)
+        _dict_graph_table_lock(owner)
         capacity: int = load_i64(owner, PYDICTOBJECT_CAPACITY_OFFSET)
         entries = load_ptr(owner, PYDICTOBJECT_ENTRIES_OFFSET)
         indices = load_ptr(owner, PYDICTOBJECT_INDICES_OFFSET)
         used: int = load_i64(owner, PYDICTOBJECT_ENTRIES_USED_OFFSET)
-        pcc_py_gc_minor_graph_unlock()
+        _dict_graph_table_unlock(owner)
         if capacity <= 0:
             return _dict_slot_error(cstr("dictionary has no hash table"))
         mask: int = capacity - 1
@@ -1767,8 +1852,8 @@ def _dict_slot_set_core(slots, tokens, known_hash: int, hash_value: int, keep_ex
             prepared: int = 0
             token: int = 0
             entry: int = -3
-            pcc_py_gc_minor_graph_lock()
             owner = load_ptr(slots, C_POINTER_SIZE)
+            _dict_graph_table_lock(owner)
             if (ptr_eq(load_ptr(owner, PYDICTOBJECT_ENTRIES_OFFSET), entries) == 0
                 or ptr_eq(load_ptr(owner, PYDICTOBJECT_INDICES_OFFSET), indices) == 0
                 or load_i64(owner, PYDICTOBJECT_CAPACITY_OFFSET) != capacity
@@ -1785,7 +1870,7 @@ def _dict_slot_set_core(slots, tokens, known_hash: int, hash_value: int, keep_ex
                         prepared = 1
                         if token >= 0:
                             store_i64(tokens, 4 * C_POINTER_SIZE, token)
-            pcc_py_gc_minor_graph_unlock()
+            _dict_graph_table_unlock(owner)
             if prepared != 0:
                 pcc_gc_root_copy_lease_finish(plan)
                 if token < 0:
@@ -1826,8 +1911,8 @@ def _dict_slot_set_core(slots, tokens, known_hash: int, hash_value: int, keep_ex
                 pcc_gc_store_ptr_plan_init(write_plan, load_ptr(slots, C_POINTER_SIZE), pcc_gc_backend())
                 copied: int = 0
                 committed: int = 0
-                pcc_py_gc_minor_graph_lock()
                 owner = load_ptr(slots, C_POINTER_SIZE)
+                _dict_graph_table_lock(owner)
                 namespace_valid: int = 1
                 if namespace_commit_context != 0:
                     namespace_valid = py_class_namespace_validate_locked(int_to_ptr(namespace_commit_context), owner)
@@ -1852,16 +1937,14 @@ def _dict_slot_set_core(slots, tokens, known_hash: int, hash_value: int, keep_ex
                             store_i64(tokens, 5 * C_POINTER_SIZE, result_token)
                             committed = 1
                     else:
-                        _dict_table_lock(owner)
                         committed = pcc_gc_store_ptr_plan_commit_locked(write_plan, owner,
                             ptr_add(entries, entry * DICTENTRY_SIZE + DICTENTRY_VALUE_OFFSET),
                             load_ptr(slots, 3 * C_POINTER_SIZE))
-                        _dict_table_unlock(owner)
                     if committed == 0:
                         restart = 1
                 if committed > 0 and keep_existing == 0 and namespace_commit_context != 0:
                     py_class_namespace_commit_locked(int_to_ptr(namespace_commit_context), owner)
-                pcc_py_gc_minor_graph_unlock()
+                _dict_graph_table_unlock(owner)
                 if copied != 0:
                     pcc_gc_root_copy_lease_finish(write_plan)
                 else:
@@ -2222,8 +2305,8 @@ def _dict_slot_update_root_snapshot(slots, tokens, count: int) -> int:
         prepared: int = 0
         key_token: int = 0
         value_token: int = 0
-        pcc_py_gc_minor_graph_lock()
         source = load_ptr(slots, _DICT_SLOT_UPDATE_SOURCE * C_POINTER_SIZE)
+        _dict_graph_table_lock(source)
         used: int = load_i64(source, PYDICTOBJECT_ENTRIES_USED_OFFSET)
         if index >= used:
             status = -1
@@ -2243,7 +2326,7 @@ def _dict_slot_update_root_snapshot(slots, tokens, count: int) -> int:
                 if value_token >= 0:
                     store_i64(tokens, value_index * C_POINTER_SIZE, value_token)
                 store_i64(hashes, output * C_POINTER_SIZE, load_i64(entries, offset + DICTENTRY_HASH_OFFSET))
-        pcc_py_gc_minor_graph_unlock()
+        _dict_graph_table_unlock(source)
         if prepared != 0:
             pcc_gc_root_copy_lease_finish(key_plan)
             pcc_gc_root_copy_lease_finish(value_plan)
@@ -2286,9 +2369,10 @@ def _dict_slot_update_exact(slots, tokens) -> int:
     # equality callbacks. This also handles updating a dictionary from itself.
     if ptr_eq(load_ptr(slots, C_POINTER_SIZE), load_ptr(slots, 2 * C_POINTER_SIZE)) != 0:
         return 0
-    pcc_py_gc_minor_graph_lock()
-    count: int = load_i64(load_ptr(slots, 2 * C_POINTER_SIZE), PYDICTOBJECT_ITEM_COUNT_OFFSET)
-    pcc_py_gc_minor_graph_unlock()
+    count_source = load_ptr(slots, 2 * C_POINTER_SIZE)
+    _dict_graph_table_lock(count_source)
+    count: int = load_i64(count_source, PYDICTOBJECT_ITEM_COUNT_OFFSET)
+    _dict_graph_table_unlock(count_source)
     if count == 0:
         return 0
     if count > 0 and count <= _DICT_SLOT_UPDATE_SNAPSHOT_PAIRS:
@@ -2307,8 +2391,8 @@ def _dict_slot_update_exact(slots, tokens) -> int:
         prepared: int = 0
         key_token: int = 0
         value_token: int = 0
-        pcc_py_gc_minor_graph_lock()
         source = load_ptr(slots, 2 * C_POINTER_SIZE)
+        _dict_graph_table_lock(source)
         used: int = load_i64(source, PYDICTOBJECT_ENTRIES_USED_OFFSET)
         if index >= used:
             status = -1
@@ -2328,7 +2412,7 @@ def _dict_slot_update_exact(slots, tokens) -> int:
                 if value_token >= 0:
                     store_i64(tokens, 6 * C_POINTER_SIZE, value_token)
                 store_i64(hashes, output * 8, load_i64(entries, offset + DICTENTRY_HASH_OFFSET))
-        pcc_py_gc_minor_graph_unlock()
+        _dict_graph_table_unlock(source)
         if prepared != 0:
             pcc_gc_root_copy_lease_finish(key_plan)
             pcc_gc_root_copy_lease_finish(value_plan)
@@ -2549,8 +2633,8 @@ def _dict_materialize_entry(slots, tokens, index: int, kind: int, key_plan, valu
     prepared: int = 0
     key_token: int = 0
     value_token: int = 0
-    pcc_py_gc_minor_graph_lock()
     receiver = load_ptr(slots, _DICT_MATERIALIZE_RECEIVER * C_POINTER_SIZE)
+    _dict_graph_table_lock(receiver)
     if index < load_i64(receiver, PYDICTOBJECT_ENTRIES_USED_OFFSET):
         entries = load_ptr(receiver, PYDICTOBJECT_ENTRIES_OFFSET)
         offset: int = index * DICTENTRY_SIZE
@@ -2567,7 +2651,7 @@ def _dict_materialize_entry(slots, tokens, index: int, kind: int, key_plan, valu
                 prepared = prepared | 2
                 if value_token >= 0:
                     store_i64(tokens, _DICT_MATERIALIZE_VALUE * C_POINTER_SIZE, value_token)
-    pcc_py_gc_minor_graph_unlock()
+    _dict_graph_table_unlock(receiver)
     if prepared & 1:
         pcc_gc_store_root_plan_finish(key_plan)
     if prepared & 2:
@@ -2588,9 +2672,10 @@ def _dict_materialize_body(slots, tokens, kind: int) -> int:
     # Preserve the existing eager materialization's bounded entry count. Each
     # later selection reloads the current table instead of retaining a stale
     # payload pointer across list/tuple allocation or an append callback.
-    pcc_py_gc_minor_graph_lock()
-    limit: int = load_i64(load_ptr(slots, _DICT_MATERIALIZE_RECEIVER * C_POINTER_SIZE), PYDICTOBJECT_ENTRIES_USED_OFFSET)
-    pcc_py_gc_minor_graph_unlock()
+    limit_source = load_ptr(slots, _DICT_MATERIALIZE_RECEIVER * C_POINTER_SIZE)
+    _dict_graph_table_lock(limit_source)
+    limit: int = load_i64(limit_source, PYDICTOBJECT_ENTRIES_USED_OFFSET)
+    _dict_graph_table_unlock(limit_source)
     key_plan = stack_alloc(128)
     value_plan = stack_alloc(128)
     slot_stride: i64 = i64(C_POINTER_SIZE)

@@ -196,6 +196,7 @@ py_class_new_abi = extern(
 )
 py_dict_new = extern("py_dict_new", (), c_ptr)
 py_dict_set = extern("py_dict_set", (c_ptr, c_ptr, c_ptr), c_void)
+py_dict_mark_class_namespace = extern("py_dict_mark_class_namespace", (c_ptr,), c_void)
 py_dict_get = extern("py_dict_get", (c_ptr, c_ptr), c_ptr)
 py_dict_len = extern("py_dict_len", (c_ptr,), c_int64)
 py_dict_keys = extern("py_dict_keys", (c_ptr,), c_ptr)
@@ -653,6 +654,7 @@ def py_class_attrs_dict(cls, create: int):
         created = py_dict_new()
         if ptr_is_null(created) != 0:
             return null()
+        py_dict_mark_class_namespace(created)
         pcc_gc_store_ptr(cls, ptr_add(cls, PYCLASSOBJECT_ATTRS_OFFSET), created)
         py_decref(created)
         attrs = pcc_gc_load_ptr(cls, ptr_add(cls, PYCLASSOBJECT_ATTRS_OFFSET))
@@ -2633,6 +2635,7 @@ def py_class_attrs_retarget(source, destination) -> int:
     existing = pcc_gc_load_ptr(destination, ptr_add(destination, PYCLASSOBJECT_ATTRS_OFFSET))
     if ptr_is_null(existing) == 0:
         return -1
+    py_dict_mark_class_namespace(attrs)
     pcc_gc_store_ptr(destination, ptr_add(destination, PYCLASSOBJECT_ATTRS_OFFSET), attrs)
     return 0
 
@@ -7464,6 +7467,8 @@ def _class_write_acquire_namespace(slots: c_ptr, tokens: c_ptr, create: int) -> 
         return -1
     if ptr_is_null(load_ptr(created_slot, 0)) != 0:
         return _special_error(cstr("class namespace allocation failed"))
+    # Marked before pcc_class_namespace_install_slots can publish it.
+    py_dict_mark_class_namespace(load_ptr(created_slot, 0))
     write_plan = stack_alloc(128)
     pcc_gc_store_ptr_plan_init(write_plan, load_ptr(class_slot, 0), pcc_gc_backend())
     status = pcc_class_namespace_install_slots(class_slot, created_slot, output, token_slot, write_plan, plan, prepared)

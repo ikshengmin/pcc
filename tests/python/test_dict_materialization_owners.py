@@ -46,14 +46,16 @@ class MaterializeMemory(DictMemory):
                 if node.targets[0].id.startswith('_DICT_MATERIALIZE_'):
                     self.ns[node.targets[0].id] = ast.literal_eval(node.value)
         selected = [node for node in tree.body if isinstance(node, ast.FunctionDef)
-                    and (node.name.startswith('_dict_materialize_') or node.name in ('py_dict_keys','py_dict_values','py_dict_items'))]
+                    and (node.name.startswith('_dict_materialize_') or node.name in ('py_dict_keys','py_dict_values','py_dict_items','_dict_table_lock','_dict_table_unlock','_dict_graph_table_lock','_dict_graph_table_unlock'))]
         for node in selected:
             node.decorator_list = []
         exec(compile(ast.Module(body=selected,type_ignores=[]),str(PORT),'exec'),self.ns)
 
     def read(self, pointer, offset):
         if isinstance(pointer, str):
-            assert pointer == "pcc_gc_read_barrier_enabled" and offset == 0
+            # Container mode reads 0: the graph lock is the dict's only lock
+            # here (test_dict_gc0_locked_get_set covers the table lock).
+            assert pointer in ("pcc_gc_read_barrier_enabled", "pcc_gc_list_container_mode") and offset == 0
             return 0
         block, _ = self.location(pointer, offset)
         assert block not in getattr(self, 'retired_tables', ()), 'stale dictionary table'
