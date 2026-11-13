@@ -66,6 +66,9 @@ from pcc.unsafe import (
 # Scheduler state. Raw node layouts are documented at each allocator below.
 define_global_ptr_null("pcc_vthread_ready_head_py")
 define_global_ptr_null("pcc_vthread_ready_tail_py")
+define_global_ptr_null("pcc_vthread_io_ready_head_py")
+define_global_ptr_null("pcc_vthread_io_ready_tail_py")
+define_global_i64("pcc_vthread_io_ready_pending_py", 0)
 define_global_ptr_null("pcc_vthread_ready_free_py")
 define_global_ptr_null("pcc_vthread_timer_head_py")
 define_global_ptr_null("pcc_vthread_timer_free_py")
@@ -142,6 +145,7 @@ define_global_null_ptr_array("pcc_vthread_node_pool_locks_py", 64)
 define_global_null_ptr_array("pcc_vthread_carrier_queues_py", 17424)
 define_global_i64("pcc_vthread_carrier_queue_count_py", 0)
 define_thread_local_i32("pcc_vthread_local_poll_budget_py", 0)
+define_thread_local_i32("pcc_vthread_io_ready_budget_py", 0)
 define_global_i64("pcc_vthread_sleepers_py", 0)
 define_global_i64("pcc_vthread_carrier_count_py", 1)
 define_global_i64("pcc_vthread_carrier_steal_count_py", 0)
@@ -772,8 +776,8 @@ def _join_release(node) -> None:
 
 
 def _queue_push(head_slot, tail_slot, node) -> None:
-    # All callers publish into the injection FIFO under the scheduler lock.
-    # The hint avoids taking that lock on every idle global-queue probe.
+    # Both shared FIFOs publish under the scheduler lock. Their independent
+    # hints avoid taking that lock when the corresponding queue is empty.
     store_ptr(node, 8, null())
     tail = load_ptr(tail_slot, 0)
     if ptr_is_null(tail):
@@ -781,7 +785,10 @@ def _queue_push(head_slot, tail_slot, node) -> None:
     else:
         store_ptr(tail, 8, node)
     store_ptr(tail_slot, 0, node)
-    _counter_set(global_addr("pcc_vthread_injection_pending_py"), 1)
+    if ptr_eq(head_slot, global_addr("pcc_vthread_io_ready_head_py")) != 0:
+        _counter_set(global_addr("pcc_vthread_io_ready_pending_py"), 1)
+    else:
+        _counter_set(global_addr("pcc_vthread_injection_pending_py"), 1)
 
 
 def _carrier_queue(index: int):
@@ -881,7 +888,7 @@ def _push_ready_node(node) -> None:
     )
 
 
-def _publish_ready_node(vthread, node) -> None:
+def _publish_ready_node(vthread, node, io_ready: int = 0) -> None:
     """Queue READY ``vthread`` on its rooted ``node``, or leave it to the step.
 
     Offset 40 is 2 while a carrier runs the thread, from its dequeue until
@@ -903,7 +910,14 @@ def _publish_ready_node(vthread, node) -> None:
     # overwrite that running mark or increment the count after its decrement.
     _counter_add(global_addr("pcc_vthread_ready_count_py"), 1)
     _effect(3, 0, 0, 1)
-    _push_ready_node(node)
+    if io_ready != 0:
+        _queue_push(
+            global_addr("pcc_vthread_io_ready_head_py"),
+            global_addr("pcc_vthread_io_ready_tail_py"),
+            node,
+        )
+    else:
+        _push_ready_node(node)
     _scheduler_signal()
 
 
@@ -1003,11 +1017,11 @@ def _ready_reserve(vthread):
     return node
 
 
-def _ready_commit(vthread, node) -> None:
+def _ready_commit(vthread, node, io_ready: int = 0) -> None:
     """Publish a previously rooted ready or join node."""
     store_i64(vthread, 120, 0)
     atomic_store_i64(vthread, 32, 1, "release")
-    _publish_ready_node(vthread, node)
+    _publish_ready_node(vthread, node, io_ready)
 
 
 def _make_ready(vthread) -> int:
@@ -2141,6 +2155,19 @@ def _dequeue_global():
     return thread
 
 
+def _dequeue_io_ready():
+    if _scheduler_lock() != 0:
+        return null()
+    thread = _dequeue_from(global_addr("pcc_vthread_io_ready_head_py"),
+                           global_addr("pcc_vthread_io_ready_tail_py"))
+    pending: int = 0
+    if ptr_is_null(global_load_ptr("pcc_vthread_io_ready_head_py")) == 0:
+        pending = 1
+    _counter_set(global_addr("pcc_vthread_io_ready_pending_py"), pending)
+    _scheduler_unlock()
+    return thread
+
+
 def _dequeue_carrier(index: int, owner: int):
     while True:
         node = _carrier_pop(index, owner)
@@ -2154,6 +2181,22 @@ def _dequeue_carrier(index: int, owner: int):
 def _dequeue():
     if _counter(global_addr("pcc_vthread_ready_count_py")) == 0:
         return null()
+    io_pending = atomic_load_i64(
+        global_addr("pcc_vthread_io_ready_pending_py"), 0, "acquire"
+    )
+    if io_pending != 0:
+        # Ready I/O must not wait behind a cohort of new application tasks.
+        # Give ordinary work at least one opportunity after eight I/O tasks;
+        # an empty ordinary queue falls back to I/O without an idle sleep.
+        io_budget_slot = global_addr("pcc_vthread_io_ready_budget_py")
+        io_budget = load_i32(io_budget_slot, 0)
+        if io_budget < 8:
+            store_i32(io_budget_slot, 0, io_budget + 1)
+            thread = _dequeue_io_ready()
+            if ptr_is_null(thread) == 0:
+                return thread
+        else:
+            store_i32(io_budget_slot, 0, 0)
     carrier_count = _counter(
         global_addr("pcc_vthread_carrier_queue_count_py")
     )
@@ -2193,7 +2236,10 @@ def _dequeue():
             if ptr_is_null(thread) == 0:
                 return thread
             index = index + 1
-    return _dequeue_global()
+    thread = _dequeue_global()
+    if ptr_is_null(thread) == 0 or io_pending == 0:
+        return thread
+    return _dequeue_io_ready()
 
 
 # Timer node: thread@0, deadline@8, next@16, root_handle@24 (32 bytes).
@@ -3188,7 +3234,7 @@ def py_virtual_thread_poll_io(timeout_ms: int) -> int:
             if valid:
                 store_ptr(thread, 64, null())
                 store_i64(thread, 120, 0)
-                _ready_commit(thread, ready_node)
+                _ready_commit(thread, ready_node, 1)
                 woken = woken + 1
                 _effect(11, 3, 0, 1)
             elif (

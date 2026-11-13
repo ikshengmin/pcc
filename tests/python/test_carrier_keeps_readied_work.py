@@ -19,7 +19,7 @@ NAMES = (
     "_carrier_length_slot", "_carrier_turn_slot", "_carrier_ring_slot",
     "_carrier_push", "_carrier_pop", "_carrier_pop_locked", "_carrier_queues_open",
     "_carrier_queues_close", "_dequeue", "_dequeue_from", "_dequeue_carrier",
-    "_dequeue_global",
+    "_dequeue_global", "_dequeue_io_ready",
 )
 
 
@@ -33,6 +33,8 @@ class Scheduler:
             "pcc_vthread_carrier_steal_count_py": 0,
             "pcc_vthread_local_poll_budget_py": 0,
             "pcc_vthread_injection_pending_py": 0,
+            "pcc_vthread_io_ready_pending_py": 0,
+            "pcc_vthread_io_ready_budget_py": 0,
         }
         self.memory = {}
         self.queue_locked = None
@@ -50,6 +52,7 @@ class Scheduler:
             "int_to_ptr": lambda address: ("pcc_vthread_carrier_queues_py", address - self.queue_address),
             "load_i32": self.load_word,
             "load_i64": self.load_word,
+            "atomic_load_i64": lambda slot, offset, order: self.load_word(slot, offset),
             "store_i32": self.store_word,
             "store_i64": self.store_word,
             "_counter": lambda slot: self.words[slot[0]],
@@ -59,6 +62,7 @@ class Scheduler:
             "global_load_ptr": lambda name: self.memory.get(((name, 0), 0)),
             "store_ptr": lambda slot, offset, value: self.memory.__setitem__((slot, offset), value),
             "ptr_is_null": lambda value: int(value is None),
+            "ptr_eq": lambda left, right: int(left == right),
             "null": lambda: None,
             "_raw_queue_lock": self.lock_queue,
             "_raw_queue_unlock": self.unlock_queue,
@@ -121,6 +125,15 @@ class Scheduler:
 
     def pop(self):
         return self.namespace["_dequeue"]()
+
+    def push_io(self, node):
+        self.words["pcc_vthread_ready_count_py"] += 1
+        self.scheduler_locked = True
+        self.namespace["_queue_push"](
+            ("pcc_vthread_io_ready_head_py", 0),
+            ("pcc_vthread_io_ready_tail_py", 0), node,
+        )
+        self.scheduler_locked = False
 
     def close(self):
         self.scheduler_locked = True
@@ -255,6 +268,45 @@ def test_old_work_and_new_io_wakeup_both_get_prompt_owner_service(cohort, owner_
     remaining = [scheduler.pop() for _ in range(cohort - 1)]
     assert sorted(remaining) == list(range(1, cohort))
     assert scheduler.pop() is None
+
+
+@pytest.mark.parametrize("cohort", [64, 256, 1024])
+def test_io_wakeup_precedes_fresh_and_overflow_cohorts(cohort):
+    scheduler = Scheduler(1, 0)
+    for node in range(cohort):
+        scheduler.push(node)
+    scheduler.push_io("listener")
+    assert scheduler.pop() == "listener"
+    drained = [scheduler.pop() for _ in range(cohort)]
+    assert sorted(drained) == list(range(cohort))
+    assert scheduler.pop() is None
+    assert scheduler.words["pcc_vthread_io_ready_pending_py"] == 0
+
+
+def test_continuous_io_cannot_starve_ordinary_work():
+    scheduler = Scheduler(1, 0)
+    scheduler.push("ordinary")
+    scheduler.push_io("io")
+    for step in range(9):
+        task = scheduler.pop()
+        if task == "ordinary":
+            break
+        assert task == "io"
+        scheduler.push_io(task)
+    else:
+        pytest.fail("ready I/O starved ordinary work")
+    assert step <= 8
+    assert scheduler.pop() == "io"
+    assert scheduler.pop() is None
+
+
+def test_io_only_queue_never_reports_idle_at_budget_boundary():
+    scheduler = Scheduler(1, 0)
+    for node in range(32):
+        scheduler.push_io(node)
+    assert [scheduler.pop() for _ in range(32)] == list(range(32))
+    assert scheduler.pop() is None
+    assert scheduler.words["pcc_vthread_ready_count_py"] == 0
 
 
 def test_closing_and_reopening_preserve_queued_roots_and_injection_order():

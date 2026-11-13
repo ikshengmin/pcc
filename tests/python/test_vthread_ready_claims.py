@@ -31,6 +31,8 @@ class Model:
     def __init__(self):
         self.head = Cell()
         self.tail = Cell()
+        self.io_head = Cell()
+        self.io_tail = Cell()
         self.count = Cell({0: 0})
         self.released = []
         self.events = []
@@ -64,13 +66,14 @@ class Model:
             "py_incref": lambda value: self.retain(value, 1),
             "py_decref": lambda value: self.retain(value, -1),
             "_push_ready_node": self.push,
+            "_queue_push": self.push_into,
             "_scheduler_signal": lambda: self.events.append(("signal",)),
             "_scheduler_lock": self.lock,
             "_scheduler_unlock": lambda: self.events.append(("unlock",)),
             "_effect": lambda *event: self.events.append(event),
             "PY_TYPE_VIRTUAL_THREAD": VTHREAD_TYPE,
         }
-        names = {"_enqueue", "_publish_ready_node", "_dequeue_from", "_step_finished",
+        names = {"_enqueue", "_publish_ready_node", "_ready_commit", "_dequeue_from", "_step_finished",
                  "_ready_node_take", "_join_wake_all", "_pooled_node_root", "_pooled_node_dispose"}
         nodes = [node for node in ast.parse(SOURCE.read_text()).body
                  if isinstance(node, ast.FunctionDef) and node.name in names]
@@ -96,6 +99,10 @@ class Model:
         cell.fields[offset] = value
 
     def global_slot(self, name):
+        if name == "pcc_vthread_io_ready_head_py":
+            return self.io_head
+        if name == "pcc_vthread_io_ready_tail_py":
+            return self.io_tail
         assert name == "pcc_vthread_ready_count_py"
         return self.count
 
@@ -129,13 +136,16 @@ class Model:
         assert value.references >= 0
 
     def push(self, node):
-        tail = self.load(self.tail, 0)
+        self.push_into(self.head, self.tail, node)
+
+    def push_into(self, head_slot, tail_slot, node):
+        tail = self.load(tail_slot, 0)
         if tail is None:
-            self.store(self.head, 0, node)
+            self.store(head_slot, 0, node)
         else:
             self.store(tail, 8, node)
         self.store(node, 8, None)
-        self.store(self.tail, 0, node)
+        self.store(tail_slot, 0, node)
         if self.visible:
             callback, self.visible = self.visible, None
             callback()
@@ -179,6 +189,41 @@ def test_publisher_cannot_overwrite_an_immediate_consumers_running_claim(entrypo
     assert model.count.fields[0] == 0
     assert thread.references == 1
     assert len(model.released) == 1
+
+
+def test_io_ready_publication_keeps_root_and_count_before_immediate_consumer():
+    model = Model()
+    thread = model.thread(state=3)
+    node = model.node(thread)
+    observed = []
+
+    def consume():
+        assert model.count.fields[0] == 1
+        observed.append(model.namespace["_dequeue_from"](model.io_head, model.io_tail))
+
+    model.visible = consume
+    model.namespace["_ready_commit"](thread, node, 1)
+    assert observed == [thread]
+    assert thread.fields[STATE] == thread.fields[RUN_MARK] == 2
+    assert model.count.fields[0] == 0
+    assert thread.references == 1
+    assert model.released == [node]
+    assert model.pop() is None
+
+
+def test_io_wakeup_of_running_owner_defers_to_existing_step_barrier():
+    model = Model()
+    thread = model.thread(state=3, mark=2)
+    node = model.node(thread)
+    model.namespace["_ready_commit"](thread, node, 1)
+    assert thread.fields[STATE] == 1 and thread.fields[RUN_MARK] == 2
+    assert model.count.fields[0] == 0
+    assert model.io_head.fields.get(0) is None
+    assert model.released == [node]
+    model.finish(thread)
+    assert model.pop() is thread
+    assert model.pop() is None
+    assert model.count.fields[0] == 0
 
 
 def test_duplicate_publisher_retires_only_its_unpublished_root():
