@@ -302,4 +302,7 @@ def test_locked_heap_barrier_dispatch_is_gc4_heap_only(backend, count_free, kind
     model = Store(backend=backend, count_free=count_free and backend != 0)
     model.init(owner=kind != 'root')
     assert model.commit(kind, model.VALUE) == 1
-    assert model.locked_heap_barriers == int(backend == 4 and kind != 'root')
+    # GC4's own locked heap-store barrier belonged to the retired relocating
+    # mutator protocol (d09ce30d1): GC4 heap stores now take the shared
+    # count-free barrier, and no backend reaches the GC4-only one.
+    assert model.locked_heap_barriers == 0

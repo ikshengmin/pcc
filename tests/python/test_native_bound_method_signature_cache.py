@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import subprocess
+
+import pytest
 import textwrap
 import re
 
@@ -8,10 +10,14 @@ from pcc.frontends.python.pipeline import compile_python
 
 
 def _bound_method_source() -> str:
+    # An instance method value binds through the runtime's descriptor path;
+    # the generated adapter with its cached signature serves a bound
+    # classmethod value.
     return textwrap.dedent(
         """
         class C:
-            def add(self, x: int) -> int:
+            @classmethod
+            def add(cls, x: int) -> int:
                 return x + 1
 
             def run(self) -> int:
@@ -22,7 +28,8 @@ def _bound_method_source() -> str:
                 return total
 
         def main():
-            print(C().run())
+            f = C.add
+            print(C().run(), f(9))
 
         main()
         """
@@ -42,7 +49,7 @@ def test_bound_method_signature_cache_preserves_call_semantics(tmp_path):
     )
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=20)
     assert run.returncode == 0, run.stderr
-    assert run.stdout == "15\n"
+    assert run.stdout == "15 10\n"
 
 
 def test_bound_method_signature_cache_is_emitted_for_default_free_method(tmp_path):
@@ -59,9 +66,38 @@ def test_bound_method_signature_cache_is_emitted_for_default_free_method(tmp_pat
     )
     ir_text = ll.read_text(encoding="utf-8")
     assert (
-        "@__pcc_native_func_sig_cache_bound_method_signature_cache_C_add_bound"
+        "@__pcc_native_func_sig_cache_bound_method_signature_cache_C_add_classmethod"
         in ir_text
     )
+
+
+def test_valueclass_method_value_is_an_explicit_compile_error(tmp_path):
+    from pcc.frontends.python.codegen.errors import L1CodegenError
+
+    src = tmp_path / "valueclass_method_value.py"
+    src.write_text(
+        textwrap.dedent(
+            """
+            from pcc import valueclass
+
+            @valueclass
+            class C:
+                base: int
+
+                def add(self, x: int) -> int:
+                    return x + self.base
+
+                def bound(self):
+                    return self.add
+
+            print(C(1).bound()(2))
+            """
+        ).lstrip(),
+        encoding="utf-8",
+    )
+    with pytest.raises(Exception, match="valueclass receiver"):
+        compile_python(str(src), str(tmp_path / "out.ll"), backend="self",
+                       ir_scaffold_mode="on", emit_llvm_only=True)
 
 
 def test_native_function_adapter_uses_known_tuple_arg_getter(tmp_path):

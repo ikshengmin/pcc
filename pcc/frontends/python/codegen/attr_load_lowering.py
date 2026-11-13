@@ -548,117 +548,6 @@ class AttrLoadLoweringMixin:
         self._call_user(deleter, [desc_obj, cls_obj], "")
         return True
 
-    def _emit_bound_self_method_value(
-        self,
-        info,
-        method_name: str,
-        method_fn: ir.Function,
-        self_val: ir.Value,
-    ) -> ir.Value:
-        ast_fd = self.class_lowering._find_method_def(info.name, method_name)
-        runtime_args = tuple(a for a in ast_fd.args if a.name != "") if ast_fd else ()
-        user_args = runtime_args[1:] if runtime_args else ()
-        adapter_name = (
-            f"user_{self._module_symbol_suffix(self.ast_module.name or 'mod')}"
-            f"_{info.name}_{method_name}_bound_adapter"
-        )
-        existing = self.module.globals.get(adapter_name)
-        if isinstance(existing, ir.Function):
-            adapter = existing
-        else:
-            adapter_ty = ir.FunctionType(_CSTR, [_CSTR, _CSTR])
-            adapter = ir.Function(self.module, adapter_ty, name=adapter_name)
-            adapter.linkage = "internal"
-            saved_builder = self.builder
-            entry = adapter.append_basic_block(name="entry")
-            self.builder = ir.IRBuilder(entry)
-
-            bound_self = self.builder.call(
-                self.runtime["py_tuple_get"],
-                [adapter.args[0], ir.Constant(_I64, 0)],
-                name="bound.self",
-            )
-            forwarded: list[ir.Value] = [bound_self]
-            for i, ast_arg in enumerate(user_args):
-                arg_obj = self.builder.call(
-                    self.runtime["py_tuple_get"],
-                    [adapter.args[1], ir.Constant(_I64, i)],
-                    name=f"arg.{i}",
-                )
-                param_idx = i + 1
-                param_ir_ty = method_fn.args[param_idx].type
-                target_ty = ast_arg.annotation or DynType(name="dyn")
-                if isinstance(param_ir_ty, ir.PointerType):
-                    forwarded.append(arg_obj)
-                else:
-                    forwarded.append(
-                        marshal.marshal_from_object(
-                            self.builder,
-                            self.module,
-                            self.runtime,
-                            arg_obj,
-                            target_ty,
-                        )
-                    )
-
-            ret_ty = method_fn.function_type.return_type
-            if isinstance(ret_ty, ir.VoidType):
-                self.builder.call(method_fn, forwarded)
-                none_gv = declare_runtime_global(self.module, "py_None")
-                self.builder.ret(self.builder.load(none_gv, name="none"))
-            else:
-                result = self.builder.call(method_fn, forwarded, name="result")
-                if isinstance(ret_ty, ir.PointerType):
-                    self.builder.ret(result)
-                else:
-                    boxed = marshal.marshal_to_object(
-                        self.builder,
-                        self.module,
-                        self.runtime,
-                        result,
-                        ast_fd.return_ty if ast_fd is not None else DynType(name="dyn"),
-                    )
-                    self.builder.ret(boxed)
-            self.builder = saved_builder
-
-        captures = self.builder.call(
-            self.runtime["py_tuple_new"],
-            [ir.Constant(_I64, 1)],
-            name=self._fresh("bound.method.captures"),
-        )
-        self.builder.call(
-            self.runtime["py_tuple_set_item"],
-            [captures, ir.Constant(_I64, 0), self_val],
-        )
-        signature = self._emit_cached_native_func_signature(
-            user_args,
-            f"{self.ast_module.name or 'mod'}.{info.name}.{method_name}.bound",
-        )
-        wrapped_captures = self.builder.call(
-            self.runtime["py_tuple_new"],
-            [ir.Constant(_I64, 2)],
-            name=self._fresh(f"bound.{method_name}.signature.wrapper"),
-        )
-        self.builder.call(
-            self.runtime["py_tuple_set_item"],
-            [wrapped_captures, ir.Constant(_I64, 0), captures],
-        )
-        self.builder.call(
-            self.runtime["py_tuple_set_item"],
-            [wrapped_captures, ir.Constant(_I64, 1), signature],
-        )
-        fn_obj = self.builder.call(
-            self.runtime["py_func_new_bound"],
-            [adapter, wrapped_captures, self._attr_name_ptr(method_name), self_val],
-            name=self._fresh(f"bound.{method_name}.func"),
-        )
-        if ast_fd is not None:
-            emit_function_auto_park_role(self, ast_fd, fn_obj)
-        self._gc_release(captures)
-        self._gc_release(signature)
-        self._gc_release(wrapped_captures)
-        return fn_obj
-
     def _emit_bound_class_method_value(
         self,
         owner_info,
@@ -1942,11 +1831,12 @@ class AttrLoadLoweringMixin:
                     return self._take_slot_call_root(
                         self._emit_slot_call_attribute(lookup, "self.method.value"),
                     )
-                return self._emit_bound_self_method_value(
-                    receiver_info,
-                    expr.name,
-                    method_fn,
-                    self_val,
+                # Its operand is a payload, not an object: the slot-call path
+                # projects valueclass fields only, and the generated adapter
+                # captured the payload where an object belongs.
+                raise L1CodegenError(
+                    "a first-class method value of a valueclass receiver "
+                    "(self." + expr.name + ") is not implemented"
                 )
             return self._unbox_scalar_attr_result(
                 self.class_lowering.emit_self_attr_load(
