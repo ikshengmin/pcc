@@ -454,14 +454,22 @@ fence-lifetime qualification. M2 and later local-model milestones remain open.
 
 ## Gateway Web Frameworks Benchmark: native request path
 
-Latest local Mac retry (2026-11-13): gateway `c2ca245` was compiled from the
-current core checkout at `bd81bf994` using ordinary `uv run pcc --backend self`.
-The native build and 103 focused gateway host tests pass, but original C512
-concurrent-ID preflight still fails before any timed rows: no new valid QPS.
-The unchanged aiohttp control passes; native passes only the diagnostic variant
-which establishes all 512 connections before concurrent requests. GC0–4 and
-the tested polling/scheduling variations do not resolve the original failure.
-The requested ten-round limit has been reached; the cause remains open.
+Latest local Mac retry (2026-11-13): the second authorized ten-round batch has
+stopped. Gateway `5d478b9` was compiled with ordinary `uv run pcc --backend self`
+at core `cdfffdea7`, including recorded uncommitted dependency-closure work.
+The final native artifact still fails original C512 concurrent-ID preflight:
+zero of 30 planned timed rows, and no accepted complete current QPS comparison.
+Intermediate single-route rows passed, but consecutive route transitions did
+not. A diagnostic delay is not part of the unchanged comparison protocol.
+Published correctness work includes exact-identity gateway owner retirement
+and releasing completed task captures after the owning resume/lease boundary.
+Gateway checks are 106 passed; the final core model/ownership selection is 66
+passed. C ABI reference drivers against the verified owned runtime execute the
+capture change across GC0–4, and five I/O reference cases pass in `auto` mode.
+These are not native-pcc1 or full qualification results. Reusing the verified
+fresh archive keeps those checks inside six pytest workers/90 seconds/1 GiB;
+the earlier cold-build memory-limit failures remain recorded and unresolved.
+Full suites/bootstrap remain unrun. The original C512 problem remains open.
 See the sibling `pcc-gateway/benchmarks/web-frameworks.md` for the current
 boundary and reproduction entry. Earlier figures below remain historical.
 
