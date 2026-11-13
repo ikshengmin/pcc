@@ -55,6 +55,8 @@ CASES = [
     ('array-element-types', original('var x [1][1]int')),
     ('array-element-types', original('type T struct{x int};var x [1]T')),
     ('method-values', original('type T int;func(t T)f(){}', 'var t T;_=t.f')),
+    ('function-values', original(body='f:=func()int{return 1};_=f')),
+    ('function-values', original('func f(g func()int)int{return 1}')),
     ('dynamic-string-conversion', original('func f(x int)string{return string(x)}')),
     ('dynamic-string-concatenation', original('func f(a,b string)string{return a+b}')),
     ('division-panic', original('func f(a,b int)int{return a/b}')),

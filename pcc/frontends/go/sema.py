@@ -19,7 +19,7 @@ from pcc.frontends.go.interface_values import (
 )
 from pcc.frontends.go.generics import GenericSession, TypeParameter, comparable, contains_parameter
 from pcc.frontends.go.syntax import (
-    ArraySyntax, Expr, GoDiagnostic, InterfaceMethodSyntax, InterfaceSyntax,
+    ArraySyntax, Expr, FunctionTypeSyntax, GoDiagnostic, InterfaceMethodSyntax, InterfaceSyntax,
     PointerSyntax, SliceSyntax, Stmt, StructSyntax, TypeName,
 )
 from pcc.frontends.go.records import (
@@ -668,6 +668,9 @@ class Analyzer:
         return basic_interface(explicit, embedded, syntax.token)
 
     def resolve_type(self, dtype, *, signature=False):
+        if isinstance(dtype, FunctionTypeSyntax):
+            raise UnsupportedGo(dtype.token, 'go.unsupported.function-values',
+                                "function types require function values and an indirect-call ABI")
         if isinstance(dtype, InterfaceSyntax):
             return self.resolve_interface(dtype)
         if isinstance(dtype, SliceSyntax):
@@ -1310,6 +1313,10 @@ class Analyzer:
         if expr.type is not None:
             return
         kind = expr.kind
+        literal = expr.callee if kind == "call" and expr.callee is not None else expr
+        if literal.kind == "func_literal":
+            raise UnsupportedGo(literal.token, 'go.unsupported.function-values',
+                                "function literals require closure values and captured-variable storage")
         if kind in ("index", "type_apply"):
             base = expr.args[0] if kind == "index" else expr.callee
             function = self.direct_function(base)

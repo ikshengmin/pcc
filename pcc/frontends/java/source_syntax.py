@@ -417,8 +417,10 @@ class SourceParser:
             self.take()
             if self.peek().text != "[":
                 token.error("a type argument must be a reference type")
-            token.error("primitive array type arguments require the next array semantic domain",
-                        code="java.unsupported.generic-declarations")
+            # JLS 4.5.1: an array type is a reference type, so `int[]` is a
+            # valid type argument; it is retained with the one-dimensional
+            # boolean/integral array domain's own shape checks.
+            return self.array_suffix(token.text, local=True)
         if token.text in KEYWORDS or not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", token.text):
             token.error(f"expected a type argument, got {token.text!r}")
         if self.peek().text == "@":

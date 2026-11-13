@@ -191,6 +191,23 @@ class SliceSyntax:
 
 
 @dataclass
+class FunctionTypeSyntax:
+    """`func(params) results`, retained as written (https://go.dev/ref/spec#Function_types)."""
+    token: Token
+    parameters: list
+    names: list
+    result: object
+    result_names: list
+
+
+@dataclass
+class FunctionLiteral:
+    """`func(params) results { body }` (https://go.dev/ref/spec#Function_literals)."""
+    signature: FunctionTypeSyntax
+    body: list
+
+
+@dataclass
 class InterfaceMethodSyntax:
     token: Token
     parameters: tuple
@@ -445,7 +462,9 @@ class GoParser:
             return dtype
         if self.at("interface"):
             return self.interface_type()
-        if signature and self.current.kind in ("map", "chan", "<-", "func"):
+        if self.at("func"):
+            return self.function_type()
+        if signature and self.current.kind in ("map", "chan", "<-"):
             token = self.current
             self.constraint_type()
             self.unsupported(token, 'go.unsupported.interface-types',
@@ -848,9 +867,16 @@ class GoParser:
                 self.fail(self.current, "variadic parameter must be last")
         self.take(")")
 
+    def function_type(self):
+        token = self.take("func")
+        self.take("(")
+        types, names = self.parameter_list()
+        result, result_names = self.function_results()
+        return FunctionTypeSyntax(token, types, names, result, result_names)
+
     def function_results(self):
         if not self.accept("("):
-            if self.current.kind in ("name", "[", "struct", "*", "interface"):
+            if self.current.kind in ("name", "[", "struct", "*", "interface", "func"):
                 return self.datatype(), [None]
             return "void", []
         types, names = self.parameter_list()
@@ -1013,7 +1039,8 @@ class GoParser:
                         body=self.block(), init=init, post=post)
         if token.kind == "type":
             self.unsupported(token, 'go.unsupported.local-type-declarations', "function-local type declarations are not implemented")
-        if token.kind in KEYWORDS:
+        if token.kind in KEYWORDS and token.kind != "func":
+            # `func` starts an expression statement (a called function literal).
             self.fail(token, f"unsupported statement {token.text!r}")
         return self.simple()
 
@@ -1083,6 +1110,17 @@ class GoParser:
             self.take(")")
             self.named_literals = previous
             left.parenthesized = True
+        elif self.at("func"):
+            # A function literal is a signature followed by a body; without
+            # the body the same spelling is a function type operand.
+            signature = self.function_type()
+            if self.at("{"):
+                previous, self.named_literals = self.named_literals, True
+                body = self.block()
+                self.named_literals = previous
+                left = Expr("func_literal", token, FunctionLiteral(signature, body))
+            else:
+                left = Expr("type", token, signature)
         elif self.at("[") or self.at("struct") or self.at("interface"):
             dtype = self.datatype(literal=True)
             left = self.composite_literal(token, dtype) if self.at("{") else Expr("type", token, dtype)
@@ -1109,7 +1147,7 @@ class GoParser:
                     dtype = TypeName(left.token)
                 left = self.composite_literal(left.token, dtype)
             elif self.accept("("):
-                if left.kind not in ("name", "selector", "type", "index", "type_apply") and not (left.kind == "unary" and left.value == "*"):
+                if left.kind not in ("name", "selector", "type", "index", "type_apply", "func_literal") and not (left.kind == "unary" and left.value == "*"):
                     self.fail(token, "only named function calls/conversions are supported")
                 previous, self.named_literals = self.named_literals, True
                 args = [] if self.at(")") else self.expression_list(terminator=")")
