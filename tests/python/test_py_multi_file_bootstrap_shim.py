@@ -1666,7 +1666,9 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
             'target triple = "arm64-apple-darwin23.6.0"',
             emit_mock.call_args.args[0],
         )
-        self.assertFalse(emit_mock.call_args.args[1])
+        # Ordinary application emission runs the target optimizer, as the
+        # host subprocess route does; only source debugging disables it.
+        self.assertTrue(emit_mock.call_args.args[1])
         # The owned Mach-O link runs in process; no link driver is spawned.
         run_cmds = [call.args[0] for call in run_mock.call_args_list]
         self.assertFalse(
@@ -3087,37 +3089,12 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         worker.assert_called_once_with(sidecar, output, "PCO")
 
     def test_resolve_python_config_command_uses_sysconfig_bindir(self):
-        from pcc.frontends.python import pipeline
+        """The libpython route left (15b7a2a31): no python-config is resolved
+        or run, from sysconfig's BINDIR or otherwise."""
+        from pcc.frontends.python import pipeline, pipeline_libpython
 
-        values = {
-            "BINDIR": "/opt/homebrew/python/bin",
-            "LDVERSION": "3.13",
-            "VERSION": "3.13",
-        }
-
-        with mock.patch.dict(os.environ, {}, clear=True):
-            with mock.patch("sysconfig.get_config_var") as get_var:
-                with mock.patch(
-                    "pcc.frontends.python.pipeline_libpython.os.path.isfile"
-                ) as isfile:
-                    with mock.patch(
-                        "pcc.frontends.python.pipeline_libpython.os.access"
-                    ) as access:
-                        get_var.side_effect = lambda name: values.get(name)
-                        isfile.side_effect = (
-                            lambda path: path
-                            == "/opt/homebrew/python/bin/python3.13-config"
-                        )
-                        access.side_effect = (
-                            lambda path, mode: path
-                            == "/opt/homebrew/python/bin/python3.13-config"
-                        )
-                        resolved = pipeline._resolve_python_config_command()
-
-        self.assertEqual(
-            resolved,
-            "/opt/homebrew/python/bin/python3.13-config",
-        )
+        self.assertFalse(hasattr(pipeline, "_resolve_python_config_command"))
+        self.assertFalse(hasattr(pipeline_libpython, "_resolve_python_config_command"))
 
     def test_dataclass_field_imports_stay_off_libpython_path(self):
         """``from dataclasses import dataclass, field`` should be
@@ -4278,8 +4255,11 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self._assert_no_libpython_fallback_calls(out_ll)
         with open(out_ll, "r", encoding="utf-8") as f:
             ir_text = f.read()
-        for symbol in ("calloc", "realloc", "memset", "memcpy", "memmove", "write"):
+        for symbol in ("calloc", "realloc", "write"):
             self.assertIn(f"@{symbol}", ir_text)
+        # Buffer fills and copies may lower to LLVM's memory intrinsics.
+        for symbol in ("memset", "memcpy", "memmove"):
+            self.assertTrue(f"@{symbol}" in ir_text or f"@llvm.{symbol}." in ir_text, symbol)
         self.assertNotIn("@py_mem_", ir_text)
 
         exe = os.path.join(self.td, "unsafe_libc_probe.out")
@@ -4411,15 +4391,11 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         self.assertIn("@pcc_unsafe_test_storage = external global i8", store_ir)
 
     def test_resolve_python_config_command_falls_back_to_python3_config(self):
-        """When sysconfig yields no executable candidate, pipeline
-        should fall back to a bare ``python3-config`` probe."""
+        """No fallback python3-config either: native compiles never consult a
+        host Python configuration tool."""
         from pcc.frontends.python import pipeline
 
-        with mock.patch.dict(os.environ, {}, clear=True):
-            with mock.patch("sysconfig.get_config_var", return_value=None):
-                resolved = pipeline._resolve_python_config_command()
-
-        self.assertEqual(resolved, "python3-config")
+        self.assertFalse(hasattr(pipeline, "_resolve_python_config_command"))
 
 
 if __name__ == "__main__":
