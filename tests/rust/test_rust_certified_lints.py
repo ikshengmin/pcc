@@ -218,7 +218,7 @@ def test_unchanged_project_retains_lint_before_the_next_source_boundary(tmp_path
     # Keep the exact current capability boundary after retained use items.
     # This lint-retention observation is not successful whole-crate compilation.
     with pytest.raises(RustError, match=(
-            r"^src/lib\.rs: 306:1: generic traits and blanket/generic trait impls are not implemented$")):
+            r"^src/lib\.rs: 367:16: generic trait bounds and associated projections are not implemented$")):
         parser.parse()
     assert ['::'.join(token.text for token in item.path) for item in parser.uses] == [
         'core::cmp', 'core::marker::PhantomData']
