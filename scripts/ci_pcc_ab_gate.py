@@ -596,7 +596,7 @@ def verify_campaign(spec, *, baseline_files, candidate_files, deadline_monotonic
         require(file.is_file() and not file.is_symlink() and digest(file) == value, "qualified runtime bytes changed")
     admission = dict(schema="pcc.ci-ab-admission.v1", status="QUALIFIED_FOR_COMPILE_SLICE",
                      baseline=first, candidate=second, source_context=context,
-                     stage2_le_stage1="UNAVAILABLE: no bounded matched full-stage campaign producer",
+                     stage2_le_stage1="UNRUN: qualification alone is not full-stage measurement",
                      performance_result="UNRUN: qualification is not measurement")
     return frozen_proof(spec, admission, path.parent / "provider-cache")
 
@@ -922,7 +922,7 @@ def prepare_campaign(request_path, output_dir, deadline_monotonic):
             "preparation requires fresh campaign-owned output outside checkout")
     output.mkdir(parents=True)
     status = dict(schema="pcc.ci-ab-preparation.v1", status="RUNNING", compile_slice="UNRUN",
-                  stage2_le_stage1="UNAVAILABLE: bounded full-stage producer not implemented")
+                  stage2_le_stage1="UNRUN: mandatory bounded full-stage pairs and unchanged controls")
     try:
         sources, files = {}, {}
         for arm in ("baseline", "candidate"):
@@ -943,7 +943,7 @@ def prepare_campaign(request_path, output_dir, deadline_monotonic):
         context["baseline_tree"] = first["source_tree"]
         admission = dict(schema="pcc.ci-ab-admission.v1", status="QUALIFIED_FOR_COMPILE_SLICE",
                          baseline=first, candidate=second, source_context=context,
-                         stage2_le_stage1="UNAVAILABLE: no bounded matched full-stage campaign producer",
+                         stage2_le_stage1="UNRUN: qualification alone is not full-stage measurement",
                          performance_result="UNRUN: qualification is not measurement")
         save(output / "qualification.json", admission)
         (output / "qualification.json").chmod(0o444)
