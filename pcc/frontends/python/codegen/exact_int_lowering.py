@@ -12,6 +12,7 @@ from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.cpy_import_state import live_import_expr_binding
 from pcc.frontends.python.codegen.vthread_effect_analysis import vthread_delegate_frame_name
+from pcc.frontends.python.codegen.hoist_analysis import _dataclass_field_names, _dataclass_field_value
 from pcc.frontends.python.py_ast import assignment_storage_annotation
 
 
@@ -28,6 +29,29 @@ def _exact_int_is_walrus_call(expr) -> bool:
         and expr.func.ident in ("_walrus", "__walrus__")
         and len(expr.args) == 2
     )
+
+
+def _exact_int_expr_rebinds_name(expr, ident: str) -> bool:
+    """True when evaluating ``expr`` can assign the local ``ident``: a
+    walrus (also inside a comprehension, which binds in the enclosing
+    function) naming it. Plain expressions rebind no local otherwise."""
+    pending = [expr]
+    while pending:
+        node = pending.pop()
+        if node is None:
+            continue
+        if isinstance(node, (tuple, list)):
+            pending.extend(node)
+            continue
+        if _exact_int_is_walrus_call(node):
+            target = node.args[0]
+            if not isinstance(target, Name) or target.ident == ident:
+                return True
+        if isinstance(node, Expr):
+            for field in _dataclass_field_names(node):
+                if field != "span" and field != "ty":
+                    pending.append(_dataclass_field_value(node, field, None))
+    return False
 
 
 def _collect_walrus_target_binding_types(target, out) -> None:
@@ -657,6 +681,7 @@ class ExactIntLoweringMixin:
             lhs_root_lifetimes = ()
             lhs_generator_slot = None
             lhs_quiet_unpinned = False
+            lhs_reload_local = False
             if lhs_pinned:
                 generator_stack = getattr(self, "_generator_ctx_stack", ())
                 if generator_stack:
@@ -764,6 +789,13 @@ class ExactIntLoweringMixin:
                     # pure protocol.  The operands are pinned only around the
                     # slow runtime call below.
                     lhs_quiet_unpinned = True
+                elif self._exact_int_lhs_reloads_from_local(expr.lhs, expr.rhs, lhs_owned):
+                    # A plain local is rooted by its own frame slot, which a
+                    # moving collector updates, and the rhs cannot rebind
+                    # it: reload it after the rhs instead of copying it into
+                    # a temporary root and back.
+                    lhs_quiet_unpinned = True
+                    lhs_reload_local = True
                 else:
                     # A pin keeps the object immobile, but later operand
                     # lowering can still relocate it on another thread.  Keep
@@ -781,6 +813,8 @@ class ExactIntLoweringMixin:
                     as_pcc_object=True,
                     rooted_pcc_lifetimes=lhs_root_lifetimes,
                 )
+            if lhs_reload_local:
+                lhs = self._emit_exact_int_operand_object(expr.lhs)
             if lhs_root_slot is not None:
                 lhs = self.builder.call(
                     self.runtime["pcc_gc_load_ptr"],
@@ -1166,6 +1200,7 @@ class ExactIntLoweringMixin:
         lhs_root_lifetimes = ()
         lhs_generator_slot = None
         lhs_quiet_unpinned = False
+        lhs_reload_local = False
         if lhs_pinned:
             generator_stack = getattr(self, "_generator_ctx_stack", ())
             if generator_stack:
@@ -1269,6 +1304,9 @@ class ExactIntLoweringMixin:
                 lhs_cleanup = ((lhs, True),)
             elif self._exact_int_operand_is_gc_quiet(expr.rhs):
                 lhs_quiet_unpinned = True
+            elif self._exact_int_lhs_reloads_from_local(expr.lhs, expr.rhs, lhs_owned):
+                lhs_quiet_unpinned = True
+                lhs_reload_local = True
             else:
                 lhs_root_slot = self._enter_container_temp_root(
                     lhs,
@@ -1282,6 +1320,8 @@ class ExactIntLoweringMixin:
                 as_pcc_object=True,
                 rooted_pcc_lifetimes=lhs_root_lifetimes,
             )
+        if lhs_reload_local:
+            lhs = self._emit_exact_int_operand_object(expr.lhs)
         if lhs_root_slot is not None:
             lhs = self.builder.call(
                 self.runtime["pcc_gc_load_ptr"],
@@ -1332,6 +1372,26 @@ class ExactIntLoweringMixin:
         if rhs_owned:
             self._gc_release(rhs)
         return result_i1
+
+    def _exact_int_lhs_reloads_from_local(self, lhs: Expr, rhs: Expr, lhs_owned: bool) -> bool:
+        """True when the earlier operand is a borrowed load of a plain
+        function local that lowering ``rhs`` cannot rebind.
+
+        Its frame slot is a registered root that keeps it alive (GC0 counts
+        the slot's reference) and that a moving collector updates, so it is
+        loaded again after ``rhs`` instead of parked in a temporary root.
+        Only a walrus can rebind a local inside an expression; a closure
+        cell is never a plain Name here (hoist_boxing rewrites it), and a
+        module global, which any call may rebind, is not in ``env``.
+        Generator and coroutine frames keep their frame-slot protocol.
+        """
+        if lhs_owned or not isinstance(lhs, Name):
+            return False
+        if getattr(self, "_generator_ctx_stack", ()):
+            return False
+        if lhs.ident in self._cpy_env_flags or lhs.ident not in self.env:
+            return False
+        return not _exact_int_expr_rebinds_name(rhs, lhs.ident)
 
     def _exact_int_operand_is_gc_quiet(self, expr: Expr) -> bool:
         """True when lowering *expr* cannot allocate, raise or run a collector.
