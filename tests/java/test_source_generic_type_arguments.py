@@ -7,8 +7,11 @@ https://docs.oracle.com/javase/specs/jls/se21/html/jls-3.html#jls-3.2
 Type arguments are parsed and retained unresolved. No erasure, capture,
 parameterized-type identity or generic class is modeled; resolving the
 named class still requires its supplied source, so a JDK collection type
-stays a source-dependency boundary. Array type arguments, type annotations
-and member types of parameterized types are explicit gaps.
+stays a source-dependency boundary. A one-dimensional boolean/integral
+array type is a reference type and a valid type argument (`int[]`, as in
+Commons Numbers Primes' `Entry<Set<Integer>, int[]>`); reference and wider
+array type arguments, type annotations and member types of parameterized
+types are explicit gaps.
 """
 import pytest
 
@@ -30,6 +33,10 @@ def result_type(declaration):
     ("List<? extends Number> f(){return null;}", "List<? extends Number>"),
     ("Comparable<? super A> f(){return null;}", "Comparable<? super A>"),
     ("java.util.List<Integer> f(){return null;}", "java.util.List<Integer>"),
+    # Former gap row, moved verbatim: a primitive array is a reference type.
+    ("List<int[]> f(){return null;}", "List<int[]>"),
+    ("Entry<Set<Integer>, int[]> f(){return null;}", "Entry<Set<Integer>,int[]>"),
+    ("Map<long[],boolean[]> f(){return null;}", "Map<long[],boolean[]>"),
 ])
 def test_type_arguments_are_retained_and_nested_closers_split(declaration, text):
     dtype = result_type(declaration)
@@ -61,15 +68,17 @@ def test_invalid_type_arguments_are_ordinary_errors(declaration, message):
     assert not isinstance(caught.value, UnsupportedJava)
 
 
-@pytest.mark.parametrize("declaration", [
-    "List<int[]> f(){return null;}",
-    "List<String[]> f(){return null;}",
-    "Outer<String>.Inner f(){return null;}",
+@pytest.mark.parametrize("declaration,code", [
+    # Former row "List<int[]>" moved to the positive rows above.
+    ("List<String[]> f(){return null;}", "java.unsupported.generic-declarations"),
+    ("Outer<String>.Inner f(){return null;}", "java.unsupported.generic-declarations"),
+    ("List<int[][]> f(){return null;}", "java.unsupported.array-model-shape"),
+    ("List<double[]> f(){return null;}", "java.unsupported.array-model-shape"),
 ])
-def test_unmodeled_type_argument_shapes_are_explicit_gaps(declaration):
+def test_unmodeled_type_argument_shapes_are_explicit_gaps(declaration, code):
     with pytest.raises(UnsupportedJava) as caught:
         result_type(declaration)
-    assert caught.value.code == "java.unsupported.generic-declarations"
+    assert caught.value.code == code
 
 
 def test_resolving_a_parameterized_jdk_type_still_requires_its_source():
