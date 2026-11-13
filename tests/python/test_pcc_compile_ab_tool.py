@@ -39,8 +39,11 @@ def _row(wall, cpu, instructions, cycles, rss, footprint):
 
 
 def _write_build_evidence(
-    tool, tmp_path, compilers, runtime, *, shared_logical_source_root=True
+    tool, tmp_path, compilers, runtime, *, shared_logical_source_root=True,
+    source_variable=None,
 ):
+    if source_variable is None:
+        source_variable = tool.PRIMARY_SOURCE
     canonical_source = tmp_path / "canonical-source"
     canonical_build_root = tmp_path / "canonical-stage-build"
 
@@ -49,7 +52,10 @@ def _write_build_evidence(
         (root / "pcc" / "driver").mkdir()
         (root / "scripts").mkdir()
         (root / "utils" / "fake_libc_include").mkdir(parents=True)
-        (root / tool.PRIMARY_SOURCE).write_text(primary_text, encoding="utf-8")
+        (root / tool.PRIMARY_SOURCE).write_text("exact = True\n", encoding="utf-8")
+        variable = root / source_variable
+        variable.parent.mkdir(parents=True, exist_ok=True)
+        variable.write_text(primary_text, encoding="utf-8")
         (root / "pcc" / "driver" / "cli_core.py").write_text("common = 1\n", encoding="utf-8")
         (root / "pcc" / "__main__.py").write_text("main = 1\n", encoding="utf-8")
         (root / "AGENTS.md").write_text("# frozen\n", encoding="utf-8")
@@ -265,10 +271,10 @@ def _write_build_evidence(
         tool._seal_source_snapshot(source_root, arm + " fixture source snapshot")
         receipts.append(receipt)
     source_diff = tmp_path / "candidate-vs-baseline.diff"
-    baseline_text = (snapshot_roots["baseline"] / tool.PRIMARY_SOURCE).read_text(
+    baseline_text = (snapshot_roots["baseline"] / source_variable).read_text(
         encoding="utf-8"
     )
-    candidate_text = (snapshot_roots["candidate"] / tool.PRIMARY_SOURCE).read_text(
+    candidate_text = (snapshot_roots["candidate"] / source_variable).read_text(
         encoding="utf-8"
     )
     source_diff.write_text(
@@ -276,8 +282,8 @@ def _write_build_evidence(
             difflib.unified_diff(
                 baseline_text.splitlines(keepends=True),
                 candidate_text.splitlines(keepends=True),
-                fromfile="baseline/" + tool.PRIMARY_SOURCE,
-                tofile="candidate/" + tool.PRIMARY_SOURCE,
+                fromfile="baseline/" + source_variable,
+                tofile="candidate/" + source_variable,
                 lineterm="\n",
             )
         ),
@@ -786,7 +792,12 @@ def test_failure_status_only_updates_the_claimed_output(tmp_path):
     assert recorded["run_token"] == "ours"
 
 
-def test_build_receipts_bind_compilers_runtime_manifests_and_single_diff(tmp_path):
+@pytest.mark.parametrize("source_variable", [
+    "pcc/ir/ir.py", "pcc/frontends/python/pipeline_import_scan.py",
+])
+def test_build_receipts_bind_compilers_runtime_manifests_and_single_diff(
+    tmp_path, source_variable,
+):
     tool = _load_tool()
     compilers = []
     for arm in ("candidate", "baseline"):
@@ -796,7 +807,9 @@ def test_build_receipts_bind_compilers_runtime_manifests_and_single_diff(tmp_pat
     runtime = tmp_path / "runtime.a"
     runtime.write_bytes(b"runtime")
     runtime_sha = tool.sha256_path(runtime)
-    receipts, source_diff = _write_build_evidence(tool, tmp_path, compilers, runtime)
+    receipts, source_diff = _write_build_evidence(
+        tool, tmp_path, compilers, runtime, source_variable=source_variable,
+    )
     loaded = [
         tool._load_build_receipt(
             receipt,
@@ -810,9 +823,14 @@ def test_build_receipts_bind_compilers_runtime_manifests_and_single_diff(tmp_pat
         )
     ]
     single = tool._validate_single_variable(
-        loaded[0], loaded[1], [tool.PRIMARY_SOURCE], source_diff
+        loaded[0], loaded[1], [source_variable], source_diff
     )
-    assert single["changed_sources"] == [tool.PRIMARY_SOURCE]
+    assert single["changed_sources"] == [source_variable]
+    assert single["allowed_changed_sources"] == [source_variable]
+    if source_variable == tool.IMPORT_SCAN_SOURCE:
+        assert loaded[0]["receipt"]["primary_source_sha256"] == (
+            loaded[1]["receipt"]["primary_source_sha256"]
+        )
     assert single["logical_source_root"].endswith(
         "/canonical-stage-build/source-snapshot"
     )
@@ -839,18 +857,29 @@ def test_build_receipts_bind_compilers_runtime_manifests_and_single_diff(tmp_pat
     ] = "f" * 64
     with pytest.raises(tool.CompileABError, match="different build producer"):
         tool._validate_single_variable(
-            loaded[0], mismatched_producer, [tool.PRIMARY_SOURCE], source_diff
+            loaded[0], mismatched_producer, [source_variable], source_diff
         )
 
     mismatched_env = copy.deepcopy(loaded[1])
     mismatched_env["receipt"]["environment"]["PCC_PY_FRONTEND_JOBS"] = "9"
     with pytest.raises(tool.CompileABError, match="build environments differ"):
         tool._validate_single_variable(
-            loaded[0], mismatched_env, [tool.PRIMARY_SOURCE], source_diff
+            loaded[0], mismatched_env, [source_variable], source_diff
+        )
+
+    source_diff.write_text("not the canonical source diff\n", encoding="utf-8")
+    with pytest.raises(tool.CompileABError, match="canonical diff"):
+        tool._validate_single_variable(
+            loaded[0], loaded[1], [source_variable], source_diff
         )
 
 
-def test_single_variable_rejects_distinct_absolute_consumed_source_roots(tmp_path):
+@pytest.mark.parametrize("source_variable", [
+    "pcc/ir/ir.py", "pcc/frontends/python/pipeline_import_scan.py",
+])
+def test_single_variable_rejects_distinct_absolute_consumed_source_roots(
+    tmp_path, source_variable,
+):
     tool = _load_tool()
     compilers = []
     for arm in ("candidate", "baseline"):
@@ -865,6 +894,7 @@ def test_single_variable_rejects_distinct_absolute_consumed_source_roots(tmp_pat
         compilers,
         runtime,
         shared_logical_source_root=False,
+        source_variable=source_variable,
     )
     loaded = [
         tool._load_build_receipt(
@@ -880,7 +910,88 @@ def test_single_variable_rejects_distinct_absolute_consumed_source_roots(tmp_pat
     ]
     with pytest.raises(tool.CompileABError, match="different absolute source roots"):
         tool._validate_single_variable(
-            loaded[0], loaded[1], [tool.PRIMARY_SOURCE], source_diff
+            loaded[0], loaded[1], [source_variable], source_diff
+        )
+
+
+@pytest.mark.parametrize("allowed", [
+    ["pcc/driver/cli_core.py"],
+    ["scripts/run_pcc_native_deferred.py"],
+    ["pcc/runtime/py/sample.py"],
+    ["pcc/frontends/python/../python/pipeline_import_scan.py"],
+    ["pcc/ir/ir.py", "pcc/frontends/python/pipeline_import_scan.py"],
+    ["pcc/frontends/python/pipeline_import_scan.py", "scripts/bootstrap.py"],
+    ["pcc/frontends/python/pipeline_import_scan.py", "pcc/runtime/py/sample.py"],
+])
+def test_single_variable_rejects_unadmitted_or_mixed_sources(tmp_path, allowed):
+    tool = _load_tool()
+    baseline = {"source_manifest": {"files": {name: "a" * 64 for name in allowed}}}
+    candidate = {"source_manifest": {"files": {name: "b" * 64 for name in allowed}}}
+    with pytest.raises(tool.CompileABError, match="only admits exactly one"):
+        tool._validate_single_variable(
+            candidate, baseline, allowed, tmp_path / "unused.diff",
+        )
+
+
+@pytest.mark.parametrize("allowed", [
+    [],
+    ["pcc/frontends/python/pipeline_import_scan.py"] * 2,
+])
+def test_scanner_single_variable_rejects_empty_or_duplicate_allowlist(
+    tmp_path, allowed,
+):
+    tool = _load_tool()
+    with pytest.raises(tool.CompileABError, match="non-empty and unique"):
+        tool._validate_single_variable({}, {}, allowed, tmp_path / "unused.diff")
+
+
+@pytest.mark.parametrize("extra_source", [
+    "pcc/ir/ir.py",
+    "pcc/driver/cli_core.py",
+    "scripts/run_pcc_native_deferred.py",
+    "pcc/runtime/py/sample.py",
+])
+def test_scanner_single_variable_rejects_undeclared_source_changes(
+    tmp_path, extra_source,
+):
+    tool = _load_tool()
+    paths = (tool.IMPORT_SCAN_SOURCE, extra_source)
+    baseline = {"source_manifest": {"files": {name: "a" * 64 for name in paths}}}
+    candidate = {"source_manifest": {"files": {name: "b" * 64 for name in paths}}}
+    with pytest.raises(tool.CompileABError, match="not single-variable"):
+        tool._validate_single_variable(
+            candidate, baseline, [tool.IMPORT_SCAN_SOURCE], tmp_path / "unused.diff",
+        )
+
+
+@pytest.mark.parametrize("field,error", [
+    ("origin_source_root", "same canonical source path"),
+    ("build_output_root", "same canonical build-output alias"),
+    ("runtime_bundle", "different runtime bundle"),
+    ("external_tools", "different external tool"),
+    ("producer_tools", "different build producer"),
+    ("host_python_runtime", "different host Python runtimes"),
+])
+def test_scanner_single_variable_preserves_identity_gates(tmp_path, field, error):
+    tool = _load_tool()
+    common = {
+        "origin_source_root": "/canonical-source",
+        "source_root": "/canonical-build/source-snapshot",
+        "logical_source_root": "/canonical-build/source-snapshot",
+        "build_output_root": "/canonical-build",
+        "runtime_bundle": {"sha256": "c" * 64},
+        "external_tools": [{"sha256": "d" * 64}],
+        "producer_tools": {"sha256": "e" * 64},
+        "host_python_runtime": {"sha256": "f" * 64},
+    }
+    candidate = copy.deepcopy(common)
+    baseline = copy.deepcopy(common)
+    candidate["source_manifest"] = {"files": {tool.IMPORT_SCAN_SOURCE: "a" * 64}}
+    baseline["source_manifest"] = {"files": {tool.IMPORT_SCAN_SOURCE: "b" * 64}}
+    candidate[field] = "different"
+    with pytest.raises(tool.CompileABError, match=error):
+        tool._validate_single_variable(
+            candidate, baseline, [tool.IMPORT_SCAN_SOURCE], tmp_path / "unused.diff",
         )
 
 
@@ -1365,6 +1476,18 @@ def test_runtime_bundle_can_verify_against_an_isolated_source_root(
 
 
 def test_runner_writes_complete_manifest_for_four_matched_pairs(tmp_path, monkeypatch):
+    _assert_runner_manifest_for_source(tmp_path, monkeypatch, "pcc/ir/ir.py")
+
+
+def test_runner_writes_scanner_manifest_for_four_matched_pairs(tmp_path, monkeypatch):
+    _assert_runner_manifest_for_source(
+        tmp_path, monkeypatch, "pcc/frontends/python/pipeline_import_scan.py",
+    )
+
+
+def _assert_runner_manifest_for_source(
+    tmp_path, monkeypatch, source_variable,
+):
     tool = _load_tool()
     monkeypatch.setattr(tool, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(
@@ -1434,6 +1557,7 @@ def test_runner_writes_complete_manifest_for_four_matched_pairs(tmp_path, monkey
         tmp_path,
         compilers,
         runtime,
+        source_variable=source_variable,
     )
     recorded_producer_tools = json.loads(
         receipts[0].read_text(encoding="utf-8")
@@ -1473,7 +1597,7 @@ def test_runner_writes_complete_manifest_for_four_matched_pairs(tmp_path, monkey
         "--source-diff",
         str(source_diff),
         "--allowed-changed-source",
-        tool.PRIMARY_SOURCE,
+        source_variable,
         "--warmup",
         str(warmup),
         "--output-dir",
@@ -1499,6 +1623,8 @@ def test_runner_writes_complete_manifest_for_four_matched_pairs(tmp_path, monkey
         "host_source_roots"
     ]["baseline"]
     assert manifest["host_helper_policy"] == "common-frozen-baseline-build-evidence"
+    assert manifest["single_variable"]["changed_sources"] == [source_variable]
+    assert manifest["single_variable"]["allowed_changed_sources"] == [source_variable]
     assert manifest["runtime_bundle"]["archive"].endswith("runtime-bundle/runtime.a")
     assert manifest["compiler_linkage"]["candidate"]["checked"] is True
     assert len(manifest["pairs"]) == 4

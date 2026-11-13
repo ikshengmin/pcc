@@ -138,7 +138,14 @@ STAGE_RESULT_COMPARISON_CONTRACT = {
     "hardware_counters_allowed_for_stage_verdict": False,
 }
 SOURCE_MANIFEST_SCHEMA = "pcc.bootstrap-source-manifest.v1"
+# Historical receipt identity anchor, even when another source is the variable.
 PRIMARY_SOURCE = "pcc/ir/ir.py"
+IMPORT_SCAN_SOURCE = "pcc/frontends/python/pipeline_import_scan.py"
+# These implementations run inside the measured native compiler. The scanner
+# is reached by dependency_closure before frontend workers are selected. Keep
+# all helper/source lookups on the common frozen baseline; this does not admit
+# changes to host helpers or measure a host-Python implementation change.
+COMPILER_VARIABLE_SOURCES = frozenset({PRIMARY_SOURCE, IMPORT_SCAN_SOURCE})
 BUILD_SOURCE_SUPPORT = (
     "AGENTS.md",
     "pyproject.toml",
@@ -1717,10 +1724,11 @@ def _validate_single_variable(
         if candidate_files.get(name) != baseline_files.get(name)
     )
     allowed = sorted(allowed_changed_sources)
-    if allowed != [PRIMARY_SOURCE]:
+    if len(allowed) != 1 or allowed[0] not in COMPILER_VARIABLE_SOURCES:
         raise CompileABError(
-            "this optimization-slice harness only admits pcc/ir/ir.py; "
-            "host-helper changes require a different experiment"
+            "this optimization-slice harness only admits exactly one of "
+            "pcc/ir/ir.py or pcc/frontends/python/pipeline_import_scan.py; "
+            "host-helper, runtime, and mixed changes require a different experiment"
         )
     if changed != allowed:
         raise CompileABError(
@@ -2654,7 +2662,10 @@ def _parser() -> argparse.ArgumentParser:
         "--allowed-changed-source",
         action="append",
         required=True,
-        help="bootstrap-source path allowed to differ; repeat for multiple files",
+        help=(
+            "exactly one native compiler source: "
+            + " or ".join(sorted(COMPILER_VARIABLE_SOURCES))
+        ),
     )
     parser.add_argument("--runtime-archive", required=True)
     parser.add_argument("--warmup", required=True)

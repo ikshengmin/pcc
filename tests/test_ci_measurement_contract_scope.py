@@ -17,7 +17,10 @@ MODULES = (
     "tests/python/test_compile_window_wiring.py",
     "tests/python/test_pcc_compile_ab_tool.py",
 )
-DARWIN_NODE = MODULES[2] + "::test_runner_writes_complete_manifest_for_four_matched_pairs"
+DARWIN_NODES = (
+    MODULES[2] + "::test_runner_writes_complete_manifest_for_four_matched_pairs",
+    MODULES[2] + "::test_runner_writes_scanner_manifest_for_four_matched_pairs",
+)
 
 
 def _write(root, name, text="raise AssertionError('inventory must not import tests')\n"):
@@ -71,25 +74,27 @@ def test_only_actual_darwin_timing_runner_transfers_receipt_coverage():
     manifest, _digest = owners.read_manifest(ROOT)
     rules = [rule for rule in manifest["overrides"]
              if rule["domain"] == "ci-contracts" and rule["nodeid"].split("::")[0] in MODULES]
-    assert rules == [{"domain": "ci-contracts", "lane": "ordinary", "nodeid": DARWIN_NODE,
-                      "platforms": ["macos-arm64"], "tools": {"macos-arm64": []}}]
+    assert rules == [{"domain": "ci-contracts", "lane": "ordinary", "nodeid": node,
+                      "platforms": ["macos-arm64"], "tools": {"macos-arm64": []}}
+                     for node in DARWIN_NODES]
     rows = []
-    for node in (*[path + "::test_portable_receipt" for path in MODULES], DARWIN_NODE):
+    for node in (*[path + "::test_portable_receipt" for path in MODULES], *DARWIN_NODES):
         module, function = node.split("::")
         rows.append({"file": module, "canonical_nodeid": node, "nodeid": node,
                      "function": function, "groups": [], "gates": [],
                      "reference_activity": None, "selected_by_repository": True,
                      "lane": "ordinary"})
     partition = owners.partition(rows, manifest, "ci-contracts", "ordinary", "linux-x86_64")
-    assert partition["local_nodeids"] == sorted(row["nodeid"] for row in rows if row["nodeid"] != DARWIN_NODE)
-    assert [row["nodeid"] for row in partition["transfers"]] == [DARWIN_NODE]
+    assert partition["local_nodeids"] == sorted(row["nodeid"] for row in rows if row["nodeid"] not in DARWIN_NODES)
+    assert [row["nodeid"] for row in partition["transfers"]] == list(DARWIN_NODES)
     mac_rows = [row for row in rows if row["file"] == MODULES[2]]
     mac = owners.partition(mac_rows, manifest, "ci-contracts", "ordinary", "macos-arm64", complete=False)
-    assert mac["local_nodeids"] == [DARWIN_NODE]
+    assert mac["local_nodeids"] == list(DARWIN_NODES)
     assert [row["nodeid"] for row in mac["transfers"]] == [MODULES[2] + "::test_portable_receipt"]
     assert partition["transfers"] == [row for row in mac["obligations"] if row["platform"] == "macos-arm64"]
     registry = json.loads(run.REFERENCES.read_text())["functions"]
-    assert DARWIN_NODE.split("::")[1] not in registry.get(MODULES[2], {})
+    assert all(node.split("::")[1] not in registry.get(MODULES[2], {})
+               for node in DARWIN_NODES)
     assert MODULES[2] in owners.owner_modules(manifest, "ci-contracts", "ordinary", "macos-arm64")
     campaigns = owners.additional_campaigns(["ci-contracts"], manifest)
     assert {"domain": "ci-contracts", "lane": "ordinary", "platform": "macos-arm64",
