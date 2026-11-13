@@ -20,6 +20,7 @@ class _C3Memory(_Memory):
         self.raw, self.spans, self.handles = [], [], {}
         self.reads, self.force, self.fail_kind = 0, force, fail
         self.doc_writes = []
+        self.tracked = []
         self.publish_move=publish_move
         super().__init__("unused")
         self.maps.update({"pcc_class_construct_owned_frame_map":5,
@@ -49,6 +50,8 @@ class _C3Memory(_Memory):
             "pcc_gc_pointer_is_managed":lambda value:isinstance(value, _Object) and value.alive,
             "global_load_ptr":lambda name:self.builtin_classes.get(name, self.none),
             "py_class_write_namespace_slots":self.write_namespace,
+            # A program's class is a collectable container (py_class_new).
+            "py_gc_track":self.tracked.append,
         })
         parsed=ast.parse(PORT.read_text(),filename=str(PORT))
         functions=[node for node in parsed.body if isinstance(node,ast.FunctionDef)
@@ -277,7 +280,10 @@ def test_class_constructor_temporary_snapshots_balance_nonimmortal_base_referenc
     parent=memory.klass("parent",[memory.root])
     parent.flags=0
     result=memory.construct([parent])
-    assert result.alive and parent.alive and parent.references==1
+    # Every temporary snapshot reference was released. The two left are the
+    # creator's and the new class's: a class owns its bases (py_class_dealloc
+    # releases them), as CPython's tp_bases does.
+    assert result.alive and parent.alive and parent.references==2
     assert result.fields[48].fields[8] is parent
     assert not memory.frames and not memory.handles and memory.pin_metric==0
 

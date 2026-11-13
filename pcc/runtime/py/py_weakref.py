@@ -577,6 +577,8 @@ def _weakref_run_callback(wr) -> None:
             # The held weakref owns its callback. Reload after allocations or
             # checked registration may have relocated that owned reference.
             callback = pcc_gc_load_ptr(wr, ptr_add(wr, 24))
+            # A weakref callback is an unraisable boundary: release its owned
+            # result and arguments, then discard its error.
             result = py_obj_call(callback, args, _py_none())
             if ptr_is_null(result) == 0:
                 py_decref(result)

@@ -38,6 +38,7 @@ from pcc.runtime.py.py_abi_constants import (
     PYOBJECTHEADER_FLAGS_OFFSET,
     PYOBJECTHEADER_REFCOUNT_OFFSET,
     PYOBJECTHEADER_TYPE_TAG_OFFSET,
+    PY_FLAG_CLASS_SLOTS_ONLY,
     PY_FLAG_GC_MALLOC_ALLOC,
     PY_FLAG_GC_PINNED,
     PY_FLAG_IMMORTAL,
@@ -732,9 +733,11 @@ def py_subs_object_root():
     store_i32(
         r,
         PYOBJECTHEADER_FLAGS_OFFSET,
-        # Class flag 2 means slots-only. Apply it before the root can be
-        # observed through an MRO, even before the builtin alias is fetched.
-        PY_FLAG_IMMORTAL | PY_FLAG_GC_MALLOC_ALLOC | 2,
+        # object instances have no __dict__: the root is slots-only before
+        # it can be observed through an MRO, even before the builtin alias is
+        # fetched. Flag 2 is GC tracking, which this raw immortal root never
+        # has: no collector list holds it.
+        PY_FLAG_IMMORTAL | PY_FLAG_GC_MALLOC_ALLOC | PY_FLAG_CLASS_SLOTS_ONLY,
     )
     if pcc_gc_pointer_register(r) < 0:
         free(r)

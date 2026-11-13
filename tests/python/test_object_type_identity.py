@@ -96,9 +96,16 @@ class _PredicateModel:
         return result
 
     def load(self, value, offset):
+        if isinstance(value, str):
+            # A scalar global named by global_addr (for example the
+            # count-free flag a body consults): zero unless a case set it.
+            return self.globals.get((value, offset), 0)
         return value.fields.get(offset, 0)
 
     def store(self, value, offset, item):
+        if isinstance(value, str):
+            self.globals[(value, offset)] = item
+            return
         value.fields[offset] = item
 
     def gc_load(self, owner, slot):
@@ -164,7 +171,7 @@ def test_object_builtin_reuses_the_mro_root_and_owned_return(first_provider):
     assert model.load(root, abi.PYCLASSOBJECT_N_MRO_OFFSET) == 1
     assert model.load(model.load(root, abi.PYCLASSOBJECT_MRO_OFFSET), 0) is root
     assert model.load(root, abi.PYOBJECTHEADER_FLAGS_OFFSET) == (
-        abi.PY_FLAG_IMMORTAL | abi.PY_FLAG_GC_MALLOC_ALLOC | 2
+        abi.PY_FLAG_IMMORTAL | abi.PY_FLAG_GC_MALLOC_ALLOC | abi.PY_FLAG_CLASS_SLOTS_ONLY
     )
     assert model.root() is root
     assert model.retains == [root, root]
@@ -183,7 +190,7 @@ def test_mro_root_identity_works_before_the_builtin_alias_cache_is_created():
     child = model.klass()
     root = model.globals["py_object_root_cache"]
     assert "pcc_type_cls_object" not in model.globals
-    assert model.load(root, abi.PYOBJECTHEADER_FLAGS_OFFSET) & 2
+    assert model.load(root, abi.PYOBJECTHEADER_FLAGS_OFFSET) & abi.PY_FLAG_CLASS_SLOTS_ONLY
     assert model.ns["py_builtin_type_class_tag"](root) == -1
     for value in (7, model.heap(abi.PY_TYPE_STR), child, root):
         assert model.ns["py_obj_isinstance"](value, root) == 1
