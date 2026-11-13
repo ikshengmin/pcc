@@ -19,7 +19,6 @@ def compile_source(source, **options):
 
 @pytest.mark.parametrize("source,message", [
     ("enum E{}", "empty enums"),
-    ("enum E{A{x:i32}}", "named enum payload fields"),
     ("enum E{A,A}", "duplicate enum variant"),
     ("enum E{A=3,B=3}", "duplicate enum discriminant"),
     ("enum E{A=3,B,C=4}", "duplicate enum discriminant"),

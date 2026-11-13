@@ -2518,6 +2518,22 @@
       "status": "missing"
     },
     {
+      "id": "rust.enums.struct-like-variants",
+      "title": "Struct-like enum variants, literals and named patterns",
+      "chapter_ids": [
+        "rust.ref.6.7",
+        "rust.ref.9"
+      ],
+      "scope": "Qualification missing, not implementation missing: `V { a: T, b: U }` variants are stored like tuple payloads in declaration order with their field names (duplicate E0124, field visibility E0449). Literals `E::V { b, a: x }` and `Self::V { .. }` evaluate fields in source order and store each at its declaration position (unknown E0559, duplicate E0062, missing E0063; a tuple call on a struct variant E0533). Patterns `E::V { a, b: p, mut c, .. }` (and `{ .. }` on tuple or unit variants) become the positional payload pattern they denote (unknown E0026, duplicate E0025, missing without `..` E0027; a tuple pattern on a struct variant E0164), so exhaustiveness, moves, derived equality and lowering are the payload machinery's. Numbered field patterns, ref bindings, struct patterns on records and struct literals for tuple variants remain explicit gaps. Ten rejected sources are rejected by local rustc 1.92.0 with the recorded codes; the named_variants fixture prints the same result from PCC's own compiler, arm64 assembler and Mach-O linker and from a local rustc build (local Mac evidence; the x86-64 Linux run is unrun in this change). No schema2 evidence row is migrated.",
+      "tests": [
+        "tests/rust/test_rust_named_variants.py",
+        "tests/rust/test_rust_named_variants.py::test_fixture_runs_natively_with_owned_compile_assemble_and_link@rust-native-reference"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "status": "missing"
+    },
+    {
       "id": "rust.enums.payload-values",
       "title": "Tagged payload enums and by-value bindings",
       "chapter_ids": [

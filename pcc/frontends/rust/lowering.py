@@ -280,7 +280,10 @@ class Lowerer:
             if kind == "enum_construct":
                 index = list(enum.payloads).index(variant) + 1
                 payload = self.builder.gep(storage, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), index)])
-                for i, (value, child) in enumerate(zip(values, children)):
+                # A struct-like variant literal keeps source evaluation order
+                # and stores each value at its declaration position.
+                positions = expr.binding if isinstance(expr.binding, tuple) else range(len(children))
+                for i, value, child in zip(positions, values, children):
                     if child.ty != "()":
                         field = self.builder.gep(payload, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), i)])
                         self.builder.store(value, field)

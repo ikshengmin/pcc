@@ -49,7 +49,7 @@ predicate is `cfg(test)`, which the test asserts.
 | `crates/uv/src/bin/uv.rs` | `4:14` `extern crate uv_performance_memory_allocator;` (active under default features) needs external crate loading |
 | `crates/uv/src/lib.rs` | `121:36` `format!(..)` (core formatting and an owned `String`) |
 | `crates/uv-version/src/lib.rs` | none in the frontend: the whole root compiles, and with the value-only attestation an owned native build prints `0.13.7`; without it, the global gate (no owned borrow checker) remains |
-| `crates/uv-lock/src/lock/mod.rs` | `105:24` named-field enum variant `UnsupportedVersion { supported: u32, version: u32 }` |
+| `crates/uv-lock/src/lock/mod.rs` | `140:1` `static LINUX_MARKERS: LazyLock<UniversalMarker> = LazyLock::new(..)` static item |
 
 Both roots formerly stopped in the lexer at `@` (`lib.rs:1515:34`, the
 `run_variant @ (ToolCommand::Uvx(_) | ToolCommand::Run(_))` binding, and
@@ -90,7 +90,8 @@ methods (formerly `lib.rs:104:5`) are ordinary run-time functions
 expands to its defining match (`tests/rust/programs/matches.rs`). Helper attributes of
 procedural derives (`#[error(..)]`, `#[from]`, formerly `lib.rs:112:3` and
 `lock/mod.rs:104:5`) are retained uninterpreted; the `thiserror::Error` derive
-itself stays an explicit semantic gap.
+itself stays an explicit semantic gap. Struct-like enum variants (formerly
+`lock/mod.rs:105:24`) are owned (`tests/rust/programs/named_variants.rs`).
 
 ```sh
 uv run pytest -x -q tests/rust/test_uv_source_frontier.py

@@ -366,6 +366,8 @@ class Enumeration:
     documentation: tuple[Documentation, ...] = ()
     variant_documentation: tuple[tuple[Documentation, ...], ...] = ()
     payload_documentation: dict[str, tuple[tuple[Documentation, ...], ...]] = field(default_factory=dict)
+    # Struct-like variants: field name tokens in declaration (payload) order.
+    named_payloads: dict[str, tuple[Token, ...]] = field(default_factory=dict)
     public: bool = False
     item_identity: object = None
     lifetime_parameters: tuple[Token, ...] = ()
@@ -468,6 +470,10 @@ class Pattern:
     ty: object = None
     binding: object = None
     variant: str | None = None
+    # A struct-like variant pattern `V { a, b: p, .. }`: written field tokens
+    # and the rest flag, until checking converts it to positional children.
+    named_fields: object = None
+    named: bool = False
 
 
 _TYPES = {"i32", "i64", "u32", "u64", "isize", "usize", "bool", "()"}
@@ -1930,6 +1936,7 @@ class Parser:
         self.expect("{")
         from .derives import helper_attributes
         variants, payloads, variant_docs, payload_docs, retained = [], {}, [], {}, []
+        named_payloads = {}
         while not self.accept("}"):
             variant_docs.append(self.documentation())
             retained.extend(helper_attributes(self, helpers))
@@ -1947,8 +1954,29 @@ class Parser:
                     raise variant.error("empty tuple variants are not implemented; use a unit variant")
                 payloads[variant.text] = tuple(fields)
                 payload_docs[variant.text] = tuple(field_docs)
-            if self.token.text == "{":
-                raise self.token.error("named enum payload fields are not implemented")
+            if self.accept("{"):
+                # A struct-like variant (Rust Reference items/enumerations):
+                # stored positionally like a tuple payload, with its names.
+                fields, field_docs, names = [], [], []
+                while not self.accept("}"):
+                    field_docs.append(self.documentation())
+                    retained.extend(helper_attributes(self, helpers))
+                    if self.token.text == "pub":
+                        raise self.token.error("visibility qualifiers are not permitted on enum variant fields (rustc E0449)")
+                    field_name = self.name()
+                    if field_name.text in {item.text for item in names}:
+                        raise field_name.error(f"field `{field_name.text}` is already declared (rustc E0124)")
+                    self.expect(":")
+                    names.append(field_name)
+                    fields.append(self.type())
+                    if self.accept("}"):
+                        break
+                    self.expect(",")
+                if not fields:
+                    raise variant.error("empty struct-like variants are not implemented; use a unit variant")
+                payloads[variant.text] = tuple(fields)
+                payload_docs[variant.text] = tuple(field_docs)
+                named_payloads[variant.text] = tuple(names)
             value = self.expression() if self.accept("=") else None
             variants.append((variant, value))
             if self.accept("}"):
@@ -1961,7 +1989,8 @@ class Parser:
         self.enums.append(Enumeration(name, variants, representation, payloads=payloads, public=public,
                                       type_parameters=parameters, documentation=documentation,
                                       variant_documentation=tuple(variant_docs), payload_documentation=payload_docs,
-                                      lifetime_parameters=lifetime_parameters, helper_attributes=tuple(retained)))
+                                      lifetime_parameters=lifetime_parameters, helper_attributes=tuple(retained),
+                                      named_payloads=named_payloads))
 
     def pattern(self, *, alternatives=True) -> Pattern:
         if alternatives:
@@ -2010,7 +2039,28 @@ class Parser:
             if variant is None:
                 raise token.error("generic type path is not a value binding pattern")
             result = Pattern("variant", token, (owner, variant))
-            if self.accept("("):
+            if self.accept("{"):
+                result.kind, result.named = "payload", True
+                written, rest = [], False
+                while not self.accept("}"):
+                    if self.accept(".."):
+                        rest = True
+                        self.expect("}")
+                        break
+                    if self.token.text == "ref":
+                        raise self.token.error("ref binding patterns are not implemented")
+                    mutable = self.accept("mut")
+                    field_name = self.name()
+                    if mutable or not self.accept(":"):
+                        result.children.append(Pattern("binding", field_name, mutable))
+                    else:
+                        result.children.append(self.pattern())
+                    written.append(field_name)
+                    if self.accept("}"):
+                        break
+                    self.expect(",")
+                result.named_fields = (tuple(written), rest)
+            elif self.accept("("):
                 result.kind = "payload"
                 while not self.accept(")"):
                     result.children.append(self.pattern())

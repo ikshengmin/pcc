@@ -114,6 +114,11 @@ def check_pattern(checker, pattern, ty, *, allow_inferred=False):
             raise pattern.token.error("unknown enum variant pattern")
         unify(name, ty, pattern.token)
         fields = checker.generics.specialized_payload(name, variant)
+        named = enum.named_payloads.get(variant)
+        if pattern.named_fields is not None:
+            convert_named_pattern(pattern, variant, named, fields)
+        elif pattern.kind == "payload" and not pattern.named and named is not None:
+            raise pattern.token.error(f"expected tuple struct or tuple variant, found struct variant `{variant}` (rustc E0164)")
         if pattern.kind == "payload":
             if fields is None or len(fields) != len(pattern.children):
                 raise pattern.token.error("enum payload pattern shape does not match variant")
@@ -132,6 +137,34 @@ def binding_patterns(pattern):
         yield pattern
     for child in pattern.children:
         yield from binding_patterns(child)
+
+
+def convert_named_pattern(pattern, variant, named, fields):
+    """`V { a, b: p, .. }` -> the positional payload pattern it denotes."""
+    from .syntax import Pattern
+    written, rest = pattern.named_fields
+    names = [token.text for token in named] if named is not None else []
+    if fields is not None and named is None and written:
+        raise pattern.token.error('numbered field patterns on tuple variants are not implemented')
+    positional = [None] * len(names)
+    for token, child in zip(written, pattern.children):
+        if token.text not in names:
+            raise token.error(f'variant `{variant}` does not have a field named `{token.text}` (rustc E0026)')
+        index = names.index(token.text)
+        if positional[index] is not None:
+            raise token.error(f'field `{token.text}` bound multiple times in the pattern (rustc E0025)')
+        positional[index] = child
+    missing = [names[index] for index, child in enumerate(positional) if child is None]
+    if missing and not rest:
+        raise pattern.token.error(f'pattern does not mention field `{missing[0]}` (rustc E0027)')
+    pattern.named_fields = None
+    if fields is None:
+        pattern.kind, pattern.children = "variant", []
+    elif named is None:
+        pattern.children = [Pattern("wildcard", pattern.token) for _ in fields]
+    else:
+        pattern.children = [child if child is not None else Pattern("wildcard", pattern.token)
+                            for child in positional]
 
 
 def pattern_bindings(pattern):

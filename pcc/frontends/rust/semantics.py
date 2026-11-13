@@ -217,6 +217,49 @@ class Checker:
         self.scopes[-1][token.text] = binding
         return binding
 
+    def struct_variant(self, path, token):
+        """(enum owner, enum, variant) when `path` names a struct-like variant."""
+        if not isinstance(path, str) or "::" not in path:
+            return None
+        owner, variant = path.rsplit("::", 1)
+        if owner == "Self":
+            resolved = self.generics.enum_constructor_type("Self", token)
+            enum = self.generics.definitions.get(resolved.name if isinstance(resolved, TypeApplication) else resolved)
+        elif self.module_resolution is not None:
+            declaration = self.module_resolution.resolve(owner, "type", self.current_module, token, _optional_final=True)
+            enum = declaration.syntax if declaration is not None else None
+        else:
+            enum = self.generics.definitions.get(owner)
+        if not isinstance(enum, Enumeration) or variant not in enum.discriminants:
+            return None
+        if variant not in enum.named_payloads:
+            raise token.error("struct literal syntax for tuple or unit variants is not implemented")
+        return owner, enum, variant
+
+    def construct_struct_variant(self, expr, children):
+        """`E::V { a: x, b }`: fields evaluate in source order and are stored
+        at their declaration positions (an `enum_construct` with a mapping)."""
+        owner, enum, variant = self.struct_variant(expr.binding, expr.token)
+        enum_name = self.generics.enum_constructor_type(owner, expr.token)
+        self.valid_type(enum_name, expr.token)
+        field_types = self.generics.specialized_payload(enum_name, variant)
+        names = [token.text for token in enum.named_payloads[variant]]
+        provided, indices = set(), []
+        for field, child in zip(expr.value, children):
+            if field.text not in names:
+                raise field.error(f"variant `{owner}::{variant}` has no field named `{field.text}` (rustc E0559)")
+            if field.text in provided:
+                raise field.error(f"field `{field.text}` specified more than once (rustc E0062)")
+            provided.add(field.text)
+            index = names.index(field.text)
+            indices.append(index)
+            unify(field_types[index], self.expression(child), field)
+        missing = [name for name in names if name not in provided]
+        if missing:
+            raise expr.token.error(f"missing field `{missing[0]}` in initializer of `{owner}::{variant}` (rustc E0063)")
+        expr.kind, expr.value, expr.binding = "enum_construct", variant, tuple(indices)
+        return enum_name
+
     def builtin_clone(self, ty):
         """Clone without a user method: derived or primitive Clone types."""
         from .call_inference import partial
@@ -666,6 +709,8 @@ class Checker:
             if any(isinstance(item, SharedReference) for item in elements):
                 raise expr.token.error("aggregate reference storage requires lifetime analysis, which is not implemented")
             ty = TupleType(elements)
+        elif kind == "construct" and self.struct_variant(expr.binding, expr.token) is not None:
+            ty = self.construct_struct_variant(expr, children)
         elif kind == "construct":
             # Only a struct literal may omit its known owner's arguments.
             # Type annotations and abstract parameters keep their own rules.
@@ -838,6 +883,8 @@ class Checker:
                 if not isinstance(enum, Enumeration) or variant not in enum.discriminants:
                     raise callee.token.error("unknown enum constructor")
                 fields = self.generics.specialized_payload(enum_name, variant)
+                if variant in enum.named_payloads:
+                    raise callee.token.error(f"expected function, tuple struct or tuple variant, found struct variant `{variant}` (rustc E0533)")
                 if fields is None:
                     raise callee.token.error("unit variant does not take constructor arguments")
                 if len(children) - 1 != len(fields):
