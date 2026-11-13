@@ -1508,6 +1508,14 @@
         ]
       }
     },
+    "tests/go/test_function_literal_syntax.py": {
+      "test_reference_accepts_the_same_sources": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.go.darwin_execution.reference_rejection for each unchanged valid function-type or function-literal source; the selected development Go toolchain builds each package and must return zero. Owned parsing and explicit checker-gap tests remain separate."
+        ]
+      }
+    },
     "tests/go/test_integer_range.py": {
       "test_identical_integer_range_program_matches_official_raw_streams": {
         "activity": "external-reference",

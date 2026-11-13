@@ -112,6 +112,25 @@ def test_trait_bound_rustc_oracle_has_a_separate_reference_lane():
             "reference" if name == reference else "ordinary")
 
 
+def test_go_function_literal_reference_keeps_owned_checks_in_their_original_lane():
+    module = "tests/go/test_function_literal_syntax.py"
+    registry = json.loads(run.REFERENCES.read_text())["functions"]
+    reference = "test_reference_accepts_the_same_sources"
+    assert set(registry[module]) == {reference}
+    assert registry[module][reference]["activity"] == "external-reference"
+    assert not registry[module][reference].get("conditional")
+    tree = ast.parse((ROOT / module).read_text())
+    functions = {node.name: node for node in tree.body
+                 if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")}
+    assert reference in functions
+    for name, function in functions.items():
+        marks = {ast.unparse(mark.func if isinstance(mark, ast.Call) else mark)
+                 for mark in function.decorator_list}
+        integration = "pytest.mark.integration" in marks
+        assert classify(module, name, integration, registry) == (
+            "reference" if name == reference else "integration" if integration else "ordinary")
+
+
 def test_reviewed_reference_functions_exist_and_rust_negative_controls_stay():
     data = json.loads(run.REFERENCES.read_text())["functions"]
     for module, functions in data.items():
