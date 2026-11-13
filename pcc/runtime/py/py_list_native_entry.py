@@ -290,7 +290,17 @@ pcc_list_body_py_list_take_for_gen_frame = extern(
 
 @c_abi_export("py_list_take_for_gen_frame")
 def py_list_take_for_gen_frame(lst: c_ptr, i: int) -> c_ptr:
-    """Publish the private moving-frame input before the body's first poll."""
+    # As every wrapper here: the count-free collectors' stopped-world scans
+    # cover the input on this stack, and GC0 without frame tracking needs no
+    # activation protocol. Otherwise publish the private moving-frame input
+    # before the body's first poll.
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            or (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
+                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
+                and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0)):
+        inputs = stack_alloc(1 * 8)
+        store_ptr(inputs, 0 * 8, lst)
+        return pcc_list_body_py_list_take_for_gen_frame(inputs, i)
     native_frame_bytes: int = 40
     native_range_capacity: int = 8
     native_ranges_bytes: int = 128

@@ -35,7 +35,7 @@ def test_list_prepare_has_no_polling_shim_or_implicit_role():
 def test_public_native_entries_use_local_literal_layouts_and_keep_gc0_bypass():
     fs = functions(parsed("py_list_native_entry.py"))
     wrappers = {name: fn for name, fn in fs.items() if name.startswith("py_list_") or name == "pcc_list_grow_for_mutation"}
-    assert len(wrappers) == 31
+    assert len(wrappers) == 32
     required_gc0 = {"py_list_contains", "py_list_index", "py_list_index_range", "py_list_count", "py_list_remove", "py_list_pop"}
     for name, fn in wrappers.items():
         literals = {n.target.id: n.value.value for n in fn.body if isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name) and isinstance(n.value, ast.Constant)}

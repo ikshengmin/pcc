@@ -560,36 +560,65 @@ def _deallocating_relocation_quarantine_source() -> str:
             return obj;
         }
 
+        /* Probe objects live in statics: a selection pins whatever a
+         * stopped thread's stack words or registers name, and objects move
+         * only inside a stopped world whose resume rewrites references. */
+        static ProbeListObject *before_select;
+        static ProbeListObject *after_select;
+
+        __attribute__((noinline)) static int build_before(void) {
+            before_select = new_list();
+            if (before_select == 0) return 3;
+            py_header_flags_or(&before_select->h, PY_FLAG_GC_DEALLOCATING);
+            return 0;
+        }
+
+        __attribute__((noinline)) static int build_after(void) {
+            after_select = new_list();
+            return after_select == 0 ? 5 : 0;
+        }
+
+        /* Clear what the builders' calls left below main's frame, or a
+         * stale word there pins a probe object. */
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+            volatile unsigned char words[65536];
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+        }
+
         int main(void) {
             if (pcc_gc_set_backend(
                     PCC_GC_KIND_COLORED_RELOCATING
                 ) != 0) return 2;
+            py_gc_disable();
 
             /* pcc_gc_alloc hands back a half-initialized object carrying
              * PY_FLAG_GC_FRESH_ALLOC, and the selector refuses a fresh owner
              * outright, so new_list publishes the way a real constructor
              * does.  Without that, BOTH halves of this probe passed for the
              * wrong reason: nothing was ever selectable, so the DEALLOCATING
-             * quarantine below was never the flag that decided anything.  Selection is also per page and budget 1 takes one
-             * object from the best-scoring page, which need not be this
-             * object's page -- so ask for room and assert containment. */
-            ProbeListObject *before_select = new_list();
-            if (before_select == 0) return 3;
-            py_header_flags_or(
-                &before_select->h, PY_FLAG_GC_DEALLOCATING
-            );
+             * quarantine below was never the flag that decided anything.
+             * Selection takes the live objects of the sparsest slabs within
+             * its budget: ask for room and assert containment. */
+            int built = build_before();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             pcc_gc_reset_relocation_set();
             (void)pcc_gc_select_relocation_set(1000);
             if (
                 pcc_gc_relocation_set_contains((PyObject *)before_select) != 0
             ) return 4;
+            pcc_gc_reset_relocation_set();
+            if (pcc_resume_world() != 0) return 91;
             py_header_flags_and(
                 &before_select->h, ~PY_FLAG_GC_DEALLOCATING
             );
             pcc_gc_release((PyObject *)before_select);
 
-            ProbeListObject *after_select = new_list();
-            if (after_select == 0) return 5;
+            built = build_after();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 92;
             pcc_gc_reset_relocation_set();
             (void)pcc_gc_select_relocation_set(1000);
             if (
@@ -608,8 +637,8 @@ def _deallocating_relocation_quarantine_source() -> str:
                 (PyObject *)after_select, 64
             );
             if (copied == 0) return 8;
+            if (pcc_resume_world() != 0) return 93;
             py_decref(copied);
-            pcc_gc_release((PyObject *)after_select);
             return 0;
         }
     '''
@@ -633,16 +662,16 @@ def _relocation_slot_retain_balance_source() -> str:
             return pcc_refcount_load(&((PyObjectHeader *)obj)->refcount);
         }
 
-        int main(void) {
-            if (
-                pcc_refcount_strategy() != PCC_REFCOUNT_STRATEGY_ATOMIC
-            ) return 1;
-            if (
-                pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0
-            ) return 2;
+        /* Probe objects live in statics: a selection pins whatever a
+         * stopped thread's words name, and objects move only inside a
+         * stopped world whose resume rewrites references. */
+        static PyObject *child;
+        static ProbeListObject *owner;
 
-            PyObject *child = py_list_new(0);
-            ProbeListObject *owner = (ProbeListObject *)pcc_gc_alloc(
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            child = py_list_new(0);
+            owner = (ProbeListObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeListObject), PY_TYPE_LIST, 0
             );
             if (child == 0 || owner == 0) return 3;
@@ -653,10 +682,29 @@ def _relocation_slot_retain_balance_source() -> str:
             pcc_gc_store_ptr((PyObject *)owner, &owner->items[0], child);
             py_decref(child);
             if (refcount_of(child) != 1) return 5;
-
             pcc_gc_publish_initialized((PyObject *)owner);
+            return 0;
+        }
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+            volatile unsigned char words[65536];
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+        }
+
+        int main(void) {
+            if (
+                pcc_refcount_strategy() != PCC_REFCOUNT_STRATEGY_ATOMIC
+            ) return 1;
+            if (
+                pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0
+            ) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             pcc_gc_reset_relocation_set();
-            if (pcc_gc_select_relocation_set(1) != 1) return 6;
+            (void)pcc_gc_select_relocation_set(1000);
+            if (pcc_gc_relocation_set_contains((PyObject *)owner) != 1) return 6;
             PyObject *moved_raw = pcc_gc_relocate_copy(
                 (PyObject *)owner, (int64_t)sizeof(ProbeListObject)
             );
@@ -681,6 +729,7 @@ def _relocation_slot_retain_balance_source() -> str:
             /* NEW owns its fresh allocation result, forwarding edge, and the
              * source's transferred outstanding count until caller release. */
             if (refcount_of(moved_raw) != 3) return 10;
+            if (pcc_resume_world() != 0) return 91;
             return 0;
         }
     '''
@@ -2053,31 +2102,67 @@ def test_backend4_obj_dispatch_loads_forwarded_exception_slots(tmp_path):
                 return obj != 0 && pcc_gc_object_id(obj) == expected;
             }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *exc_root = 0;
+        static PyObject *exc_root;
+        static PyObject *message;
+        static PyObject *cause;
+        static PyObject *context;
+        static PyObject *exc;
+        static ProbeExceptionObject *raw_exc;
+        static PyObject *cls_obj;
+        static int64_t class_id;
+        static int64_t message_id;
+        static int64_t cause_id;
+        static int64_t context_id;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            exc_root = 0;
             pcc_gc_scheduler_root_register(&exc_root);
 
-            PyObject *message = py_list_new(0);
-            PyObject *cause = py_list_new(0);
-            PyObject *context = py_list_new(0);
+            message = py_list_new(0);
+            cause = py_list_new(0);
+            context = py_list_new(0);
             if (message == 0 || cause == 0 || context == 0) return 3;
 
-            PyObject *exc = py_exc_new_with_value(PY_EXC_VALUEERROR, message);
+            exc = py_exc_new_with_value(PY_EXC_VALUEERROR, message);
             if (exc == 0) return 4;
             py_exc_set_cause(exc, cause);
             py_exc_set_context(exc, context);
             pcc_gc_store_root(&exc_root, exc);
 
-            ProbeExceptionObject *raw_exc = (ProbeExceptionObject *)exc;
-            PyObject *cls_obj = (PyObject *)raw_exc->exc_class;
+            raw_exc = (ProbeExceptionObject *)exc;
+            cls_obj = (PyObject *)raw_exc->exc_class;
             if (cls_obj == 0) return 5;
-            int64_t class_id = pcc_gc_object_id(cls_obj);
-            int64_t message_id = pcc_gc_object_id(message);
-            int64_t cause_id = pcc_gc_object_id(cause);
-            int64_t context_id = pcc_gc_object_id(context);
+            class_id = pcc_gc_object_id(cls_obj);
+            message_id = pcc_gc_object_id(message);
+            cause_id = pcc_gc_object_id(cause);
+            context_id = pcc_gc_object_id(context);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(128) <= 0) return 6;
             if (pcc_gc_relocation_set_contains(cls_obj) != 1) return 7;
             if (pcc_gc_relocation_set_contains(message) != 1) return 8;
@@ -2087,6 +2172,7 @@ def test_backend4_obj_dispatch_loads_forwarded_exception_slots(tmp_path):
             if (pcc_gc_relocate_copy(message, (int64_t)sizeof(ProbeListObject)) == 0) return 12;
             if (pcc_gc_relocate_copy(cause, (int64_t)sizeof(ProbeListObject)) == 0) return 13;
             if (pcc_gc_relocate_copy(context, (int64_t)sizeof(ProbeListObject)) == 0) return 14;
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *type_name = py_obj_type_name(exc_root);
             PyObject *expected_type_name = py_str_new("ValueError", 10);
@@ -2167,24 +2253,54 @@ def test_backend4_obj_dispatch_loads_forwarded_instance_class_slot(tmp_path):
         );
         extern PyObject *py_instance_new(ProbeClassObject *cls);
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *inst_root = 0;
+        static PyObject *inst_root;
+        static const char *fields[1] = {"value"};
+        static ProbeClassObject *cls;
+        static PyObject *inst;
+        static int64_t class_id;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            inst_root = 0;
             pcc_gc_scheduler_root_register(&inst_root);
 
-            const char *fields[1] = {"value"};
-            ProbeClassObject *cls = py_class_new("MovedClass", 0, 0, fields, 1);
+            cls = py_class_new("MovedClass", 0, 0, fields, 1);
             if (cls == 0) return 3;
             cls->instance_size = (int32_t)sizeof(ProbeInstanceObject);
-            PyObject *inst = py_instance_new(cls);
+            inst = py_instance_new(cls);
             if (inst == 0) return 4;
-            int64_t class_id = pcc_gc_object_id((PyObject *)cls);
+            class_id = pcc_gc_object_id((PyObject *)cls);
             pcc_gc_store_root(&inst_root, inst);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(128) <= 0) return 5;
             if (pcc_gc_relocation_set_contains((PyObject *)cls) != 1) return 6;
             if (pcc_gc_relocate_copy((PyObject *)cls, (int64_t)sizeof(ProbeClassObject)) == 0) return 7;
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *type_name = py_obj_type_name(inst_root);
             PyObject *expected_type_name = py_str_new("MovedClass", 10);
@@ -2228,16 +2344,44 @@ def test_backend4_list_get_loads_forwarded_item_slot(tmp_path):
             PyObject **items;
         } ProbeListObject;
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static PyObject *lst;
+        static PyObject *value;
+        static int64_t value_id;
 
-            PyObject *lst = py_list_new(4);
-            PyObject *value = py_list_new(0);
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            lst = py_list_new(4);
+            value = py_list_new(0);
             if (lst == 0 || value == 0) return 3;
             py_list_append(lst, value);
-            int64_t value_id = pcc_gc_object_id(value);
+            value_id = pcc_gc_object_id(value);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 4;
             if (pcc_gc_relocation_set_contains(value) != 1) return 5;
             PyObject *moved_value_raw = pcc_gc_relocate_copy(
@@ -2246,6 +2390,7 @@ def test_backend4_list_get_loads_forwarded_item_slot(tmp_path):
             );
             if (moved_value_raw == 0) return 6;
             pcc_gc_release(moved_value_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *got = py_list_get(lst, 0);
             if (got == 0) return 7;
@@ -2310,27 +2455,41 @@ def test_backend4_capi_internal_owner_slots_trace_and_load_forwarded_values(tmp_
             probe->slots[probe->count++] = slot;
         }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static PyObject *seq;
+        static PyObject *seq_item;
+        static PyObject *default_value;
+        static PyObject *iter;
+        static PyObject *contextvar;
+        static PyObject *slice;
+        static ProbeSlots iter_slotsNone = {0};
+        static ProbeSlots context_slotsNone = {0};
+        static ProbeSlots slice_slotsNone = {0};
+        static PyObject *seq_root;
+        static PyObject *iter_root;
+        static PyObject *default_root;
+        static PyObject *context_root;
+        static PyObject *slice_root;
+        static int64_t seq_id;
+        static int64_t default_id;
 
-            PyObject *seq = py_list_new(0);
-            PyObject *seq_item = py_int_from_i64(42);
-            PyObject *default_value = py_list_new(0);
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            seq = py_list_new(0);
+            seq_item = py_int_from_i64(42);
+            default_value = py_list_new(0);
             if (seq == 0 || seq_item == 0 || default_value == 0) return 3;
             py_list_append(seq, seq_item);
 
-            PyObject *iter = PySeqIter_New(seq);
-            PyObject *contextvar = PyContextVar_New("owner_slots", default_value);
-            PyObject *slice = PySlice_New(
+            iter = PySeqIter_New(seq);
+            contextvar = PyContextVar_New("owner_slots", default_value);
+            slice = PySlice_New(
                 py_int_from_i64(1),
                 py_int_from_i64(5),
                 py_None
             );
             if (iter == 0 || contextvar == 0 || slice == 0) return 4;
 
-            ProbeSlots iter_slots = {0};
-            ProbeSlots context_slots = {0};
-            ProbeSlots slice_slots = {0};
             if (!pcc_capi_visit_cext_object_slots(
                     iter, capture_owned_slot, &iter_slots
                 )) return 5;
@@ -2344,11 +2503,11 @@ def test_backend4_capi_internal_owner_slots_trace_and_load_forwarded_values(tmp_
             if (context_slots.count != 2) return 9;
             if (slice_slots.count != 3) return 10;
 
-            PyObject *seq_root = 0;
-            PyObject *iter_root = 0;
-            PyObject *default_root = 0;
-            PyObject *context_root = 0;
-            PyObject *slice_root = 0;
+            seq_root = 0;
+            iter_root = 0;
+            default_root = 0;
+            context_root = 0;
+            slice_root = 0;
             pcc_gc_scheduler_root_register(&seq_root);
             pcc_gc_scheduler_root_register(&iter_root);
             pcc_gc_scheduler_root_register(&default_root);
@@ -2365,8 +2524,22 @@ def test_backend4_capi_internal_owner_slots_trace_and_load_forwarded_values(tmp_
             pcc_gc_release(contextvar);
             pcc_gc_release(slice);
 
-            int64_t seq_id = pcc_gc_object_id(seq);
-            int64_t default_id = pcc_gc_object_id(default_value);
+            seq_id = pcc_gc_object_id(seq);
+            default_id = pcc_gc_object_id(default_value);
+            return 0;
+        }
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+            volatile unsigned char words[65536];
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+        }
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(128) <= 0) return 11;
             if (!pcc_gc_relocation_set_contains(seq)) return 12;
             if (!pcc_gc_relocation_set_contains(default_value)) return 13;
@@ -2378,6 +2551,7 @@ def test_backend4_capi_internal_owner_slots_trace_and_load_forwarded_values(tmp_
                 default_value,
                 (int64_t)sizeof(ProbeListObject)
             );
+            if (pcc_resume_world() != 0) return 91;
             if (moved_seq == 0 || moved_default == 0) return 14;
             pcc_gc_release(moved_seq);
             pcc_gc_release(moved_default);
@@ -2437,17 +2611,46 @@ def test_backend4_list_concat_loads_forwarded_item_slot(tmp_path):
             PyObject **items;
         } ProbeListObject;
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static PyObject *left;
+        static PyObject *right;
+        static PyObject *value;
+        static int64_t value_id;
 
-            PyObject *left = py_list_new(4);
-            PyObject *right = py_list_new(4);
-            PyObject *value = py_list_new(0);
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            left = py_list_new(4);
+            right = py_list_new(4);
+            value = py_list_new(0);
             if (left == 0 || right == 0 || value == 0) return 3;
             py_list_append(left, value);
-            int64_t value_id = pcc_gc_object_id(value);
+            value_id = pcc_gc_object_id(value);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 4;
             if (pcc_gc_relocation_set_contains(value) != 1) return 5;
             PyObject *moved_value_raw = pcc_gc_relocate_copy(
@@ -2456,6 +2659,7 @@ def test_backend4_list_concat_loads_forwarded_item_slot(tmp_path):
             );
             if (moved_value_raw == 0) return 6;
             pcc_gc_release(moved_value_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *out = py_list_concat(left, right);
             if (out == 0) return 7;
@@ -2493,7 +2697,16 @@ def test_backend4_list_mutations_load_forwarded_item_slots(tmp_path):
             PyObject **items;
         } ProbeListObject;
 
-            static PyObject *relocate_rooted_box(PyObject **root_slot, PyObject *old_value) {
+            static PyObject *value_root;
+            static PyObject *pop_list;
+            static PyObject *remove_list;
+            static PyObject *clear_list;
+            static PyObject *reverse_list;
+            static PyObject *old_value;
+            static PyObject *other;
+            /* The old address is the static old_value, never an argument:
+             * a stack word or register naming it would pin it. */
+            static PyObject *relocate_rooted_box(PyObject **root_slot) {
                 if (pcc_gc_select_relocation_set(128) <= 0) return 0;
                 if (pcc_gc_relocation_set_contains(*root_slot) != 1) return 0;
                 PyObject *moved_raw = pcc_gc_relocate_copy(
@@ -2507,17 +2720,18 @@ def test_backend4_list_mutations_load_forwarded_item_slots(tmp_path):
             return loaded;
         }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *value_root = 0;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            value_root = 0;
             pcc_gc_scheduler_root_register(&value_root);
 
-            PyObject *pop_list = py_list_new(0);
-            PyObject *remove_list = py_list_new(0);
-            PyObject *clear_list = py_list_new(0);
-            PyObject *reverse_list = py_list_new(0);
-            PyObject *old_value = py_list_new(0);
-            PyObject *other = py_int_from_i64(7);
+            pop_list = py_list_new(0);
+            remove_list = py_list_new(0);
+            clear_list = py_list_new(0);
+            reverse_list = py_list_new(0);
+            old_value = py_list_new(0);
+            other = py_int_from_i64(7);
             if (pop_list == 0 || remove_list == 0 || clear_list == 0 || reverse_list == 0 || old_value == 0 || other == 0) {
                 return 3;
             }
@@ -2530,8 +2744,23 @@ def test_backend4_list_mutations_load_forwarded_item_slots(tmp_path):
             py_list_append(reverse_list, other);
             pcc_gc_release(old_value);
 
-            PyObject *value = relocate_rooted_box(&value_root, old_value);
+            return 0;
+        }
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+            volatile unsigned char words[65536];
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+        }
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
+            PyObject *value = relocate_rooted_box(&value_root);
             if (value == 0) return 10;
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *popped = py_list_pop(pop_list, 0);
             if (popped == 0) return 4;
@@ -2585,16 +2814,44 @@ def test_backend4_tuple_get_loads_forwarded_item_slot(tmp_path):
                 PyObject **items;
             } ProbeListObject;
 
-            int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static PyObject *tuple;
+        static PyObject *value;
+        static int64_t value_id;
 
-            PyObject *tuple = py_tuple_new(1);
-            PyObject *value = py_list_new(0);
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            tuple = py_tuple_new(1);
+            value = py_list_new(0);
             if (tuple == 0 || value == 0) return 3;
             py_tuple_set_item(tuple, 0, value);
-            int64_t value_id = pcc_gc_object_id(value);
+            value_id = pcc_gc_object_id(value);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+            /* The conservative scan reads every word of the live stack: clear what
+
+             * probe_build's calls left below main's frame, or a stale word there
+
+             * pins a probe object (as Boehm's GC_clear_stack). */
+
+            __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+                volatile unsigned char words[65536];
+
+                for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+            }
+
+
+            int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 4;
             if (pcc_gc_relocation_set_contains(value) != 1) return 5;
             PyObject *moved_value_raw = pcc_gc_relocate_copy(
@@ -2603,6 +2860,7 @@ def test_backend4_tuple_get_loads_forwarded_item_slot(tmp_path):
             );
             if (moved_value_raw == 0) return 6;
             pcc_gc_release(moved_value_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *got = py_tuple_get(tuple, 0);
             if (got == 0) return 7;
@@ -2642,17 +2900,46 @@ def test_backend4_tuple_concat_loads_forwarded_item_slot(tmp_path):
                 PyObject **items;
             } ProbeListObject;
 
-            int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static PyObject *left;
+        static PyObject *right;
+        static PyObject *value;
+        static int64_t value_id;
 
-            PyObject *left = py_tuple_new(1);
-            PyObject *right = py_tuple_new(0);
-            PyObject *value = py_list_new(0);
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            left = py_tuple_new(1);
+            right = py_tuple_new(0);
+            value = py_list_new(0);
             if (left == 0 || right == 0 || value == 0) return 3;
             py_tuple_set_item(left, 0, value);
-            int64_t value_id = pcc_gc_object_id(value);
+            value_id = pcc_gc_object_id(value);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+            /* The conservative scan reads every word of the live stack: clear what
+
+             * probe_build's calls left below main's frame, or a stale word there
+
+             * pins a probe object (as Boehm's GC_clear_stack). */
+
+            __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+                volatile unsigned char words[65536];
+
+                for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+            }
+
+
+            int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 4;
             if (pcc_gc_relocation_set_contains(value) != 1) return 5;
             PyObject *moved_value_raw = pcc_gc_relocate_copy(
@@ -2661,6 +2948,7 @@ def test_backend4_tuple_concat_loads_forwarded_item_slot(tmp_path):
             );
             if (moved_value_raw == 0) return 6;
             pcc_gc_release(moved_value_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *out = py_tuple_concat(left, right);
             if (out == 0) return 7;
@@ -2714,38 +3002,55 @@ def test_backend4_relocation_preserves_descriptor_slots(tmp_path):
             return pcc_gc_object_id(resolved);
         }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *prop_root = 0;
-            PyObject *cm_root = 0;
-            PyObject *sm_root = 0;
+        static PyObject *prop_root;
+        static PyObject *cm_root;
+        static PyObject *sm_root;
+        static PyObject *fget;
+        static PyObject *fset;
+        static PyObject *fdel;
+        static PyObject *cm_func;
+        static PyObject *sm_func;
+        static int64_t fget_id;
+        static int64_t fset_id;
+        static int64_t fdel_id;
+        static int64_t cm_id;
+        static int64_t sm_id;
+        static ProbePropertyObject *prop;
+        static ProbeClassMethodObject *cm;
+        static ProbeStaticMethodObject *sm;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            prop_root = 0;
+            cm_root = 0;
+            sm_root = 0;
             pcc_gc_scheduler_root_register(&prop_root);
             pcc_gc_scheduler_root_register(&cm_root);
             pcc_gc_scheduler_root_register(&sm_root);
 
-            PyObject *fget = py_str_new("fget", 4);
-            PyObject *fset = py_str_new("fset", 4);
-            PyObject *fdel = py_str_new("fdel", 4);
-            PyObject *cm_func = py_str_new("cm", 2);
-            PyObject *sm_func = py_str_new("sm", 2);
+            fget = py_str_new("fget", 4);
+            fset = py_str_new("fset", 4);
+            fdel = py_str_new("fdel", 4);
+            cm_func = py_str_new("cm", 2);
+            sm_func = py_str_new("sm", 2);
             if (fget == 0 || fset == 0 || fdel == 0 || cm_func == 0 || sm_func == 0) return 3;
-            int64_t fget_id = pcc_gc_object_id(fget);
-            int64_t fset_id = pcc_gc_object_id(fset);
-            int64_t fdel_id = pcc_gc_object_id(fdel);
-            int64_t cm_id = pcc_gc_object_id(cm_func);
-            int64_t sm_id = pcc_gc_object_id(sm_func);
+            fget_id = pcc_gc_object_id(fget);
+            fset_id = pcc_gc_object_id(fset);
+            fdel_id = pcc_gc_object_id(fdel);
+            cm_id = pcc_gc_object_id(cm_func);
+            sm_id = pcc_gc_object_id(sm_func);
 
-            ProbePropertyObject *prop = (ProbePropertyObject *)pcc_gc_alloc(
+            prop = (ProbePropertyObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbePropertyObject),
                 PY_TYPE_PROPERTY,
                 0x100
             );
-            ProbeClassMethodObject *cm = (ProbeClassMethodObject *)pcc_gc_alloc(
+            cm = (ProbeClassMethodObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeClassMethodObject),
                 PY_TYPE_CLASSMETHOD,
                 0x100
             );
-            ProbeStaticMethodObject *sm = (ProbeStaticMethodObject *)pcc_gc_alloc(
+            sm = (ProbeStaticMethodObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeStaticMethodObject),
                 PY_TYPE_STATICMETHOD,
                 0x100
@@ -2764,6 +3069,30 @@ def test_backend4_relocation_preserves_descriptor_slots(tmp_path):
             pcc_gc_publish_initialized((PyObject *)prop);
             pcc_gc_publish_initialized((PyObject *)cm);
             pcc_gc_publish_initialized((PyObject *)sm);
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 5;
             if (pcc_gc_relocation_set_contains((PyObject *)prop) != 1) return 6;
             if (pcc_gc_relocation_set_contains((PyObject *)cm) != 1) return 7;
@@ -2771,6 +3100,7 @@ def test_backend4_relocation_preserves_descriptor_slots(tmp_path):
             if (pcc_gc_relocate_copy((PyObject *)prop, (int64_t)sizeof(ProbePropertyObject)) == 0) return 9;
             if (pcc_gc_relocate_copy((PyObject *)cm, (int64_t)sizeof(ProbeClassMethodObject)) == 0) return 10;
             if (pcc_gc_relocate_copy((PyObject *)sm, (int64_t)sizeof(ProbeStaticMethodObject)) == 0) return 11;
+            if (pcc_resume_world() != 0) return 91;
 
             ProbePropertyObject *moved_prop = (ProbePropertyObject *)pcc_gc_load_ptr(0, &prop_root);
             ProbeClassMethodObject *moved_cm = (ProbeClassMethodObject *)pcc_gc_load_ptr(0, &cm_root);
@@ -2812,16 +3142,21 @@ def test_backend4_relocation_preserves_memoryview_base(tmp_path):
             PyObject *base;
         } ProbeMemoryViewObject;
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *root = 0;
+        static PyObject *root;
+        static PyObject *base;
+        static int64_t base_id;
+        static ProbeMemoryViewObject *mv;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            root = 0;
             pcc_gc_scheduler_root_register(&root);
 
-            PyObject *base = py_str_new("memoryview-base", 15);
+            base = py_str_new("memoryview-base", 15);
             if (base == 0) return 3;
-            int64_t base_id = pcc_gc_object_id(base);
+            base_id = pcc_gc_object_id(base);
 
-            ProbeMemoryViewObject *mv = (ProbeMemoryViewObject *)pcc_gc_alloc(
+            mv = (ProbeMemoryViewObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeMemoryViewObject),
                 PY_TYPE_MEMORYVIEW,
                 0x100
@@ -2832,9 +3167,34 @@ def test_backend4_relocation_preserves_memoryview_base(tmp_path):
 
             pcc_gc_telemetry_reset();
             pcc_gc_publish_initialized((PyObject *)mv);
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 5;
             if (pcc_gc_relocation_set_contains((PyObject *)mv) != 1) return 6;
             if (pcc_gc_relocate_copy((PyObject *)mv, (int64_t)sizeof(ProbeMemoryViewObject)) == 0) return 7;
+            if (pcc_resume_world() != 0) return 91;
 
             ProbeMemoryViewObject *moved = (ProbeMemoryViewObject *)pcc_gc_load_ptr(0, &root);
             if (moved == 0) return 8;
@@ -2873,23 +3233,53 @@ def test_backend4_memoryview_loads_forwarded_base_slot(tmp_path):
             PyObject **items;
         } ProbeListObject;
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *base_root = 0;
-            PyObject *mv_root = 0;
+        static PyObject *base_root;
+        static PyObject *mv_root;
+        static PyObject *base;
+        static PyObject *mv;
+        static int64_t base_id;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            base_root = 0;
+            mv_root = 0;
             pcc_gc_scheduler_root_register(&base_root);
             pcc_gc_scheduler_root_register(&mv_root);
 
-            PyObject *base = py_list_new(0);
-            PyObject *mv = py_memoryview_new(base);
+            base = py_list_new(0);
+            mv = py_memoryview_new(base);
             if (base == 0 || mv == 0) return 3;
-            int64_t base_id = pcc_gc_object_id(base);
+            base_id = pcc_gc_object_id(base);
             pcc_gc_store_root(&base_root, base);
             pcc_gc_store_root(&mv_root, mv);
             pcc_gc_release(base);
             pcc_gc_release(mv);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 4;
             if (pcc_gc_relocation_set_contains(base_root) != 1) return 5;
             PyObject *moved_base_raw = pcc_gc_relocate_copy(
@@ -2898,6 +3288,7 @@ def test_backend4_memoryview_loads_forwarded_base_slot(tmp_path):
             );
             if (moved_base_raw == 0) return 6;
             pcc_gc_release(moved_base_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *loaded_base = pcc_gc_load_ptr(0, &base_root);
             if (loaded_base == 0) return 7;
@@ -2959,23 +3350,34 @@ def test_backend4_container_dealloc_loads_forwarded_reference_slots(tmp_path):
             return 1;
         }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static PyObject *value_root;
+        static PyObject *list;
+        static PyObject *tuple;
+        static PyObject *dict;
+        static PyObject *set;
+        static PyObject *value;
+        static PyObject *key;
 
-            PyObject *value_root = 0;
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            value_root = 0;
             pcc_gc_scheduler_root_register(&value_root);
 
-            PyObject *list = py_list_new(0);
-            PyObject *tuple = py_tuple_new(1);
-            PyObject *dict = py_dict_new();
-            PyObject *set = py_set_new();
-            PyObject *value = py_tuple_new(1);
-            PyObject *key = py_str_new("k", 1);
+            list = py_list_new(0);
+            tuple = py_tuple_new(1);
+            dict = py_dict_new();
+            set = py_set_new();
+            value = py_tuple_new(1);
+            key = py_str_new("k", 1);
             if (list == 0 || tuple == 0 || dict == 0 || set == 0 || value == 0 || key == 0) return 3;
             py_tuple_set_item(value, 0, py_None);
+            /* The probe is the tuple's constructor: publish it once filled. */
+            pcc_gc_publish_initialized(value);
 
             py_list_append(list, value);
             py_tuple_set_item(tuple, 0, value);
+            pcc_gc_publish_initialized(tuple);
             py_dict_set(dict, key, value);
             py_set_add(set, value);
             pcc_gc_store_root(&value_root, value);
@@ -2983,7 +3385,22 @@ def test_backend4_container_dealloc_loads_forwarded_reference_slots(tmp_path):
             pcc_gc_release(key);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+            volatile unsigned char words[65536];
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+        }
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (!relocate_value(&value_root)) return 4;
+            if (pcc_resume_world() != 0) return 91;
             PyObject *loaded_value = pcc_gc_load_ptr(0, &value_root);
             if (loaded_value == 0) return 5;
             if (loaded_value == value) return 6;
@@ -3020,17 +3437,22 @@ def test_backend4_relocation_preserves_func_entry_and_captures(tmp_path):
             return py_tuple_get(captures, 0);
         }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *root = 0;
+        static PyObject *root;
+        static PyObject *capture;
+        static PyObject *captures;
+        static PyObject *fn;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            root = 0;
             pcc_gc_scheduler_root_register(&root);
 
-            PyObject *capture = py_str_new("capture", 7);
-            PyObject *captures = py_tuple_new(1);
+            capture = py_str_new("capture", 7);
+            captures = py_tuple_new(1);
             if (capture == 0 || captures == 0) return 3;
             py_tuple_set_item(captures, 0, capture);
 
-            PyObject *fn = py_func_new((void *)probe_entry, captures);
+            fn = py_func_new((void *)probe_entry, captures);
             if (fn == 0) return 4;
             pcc_gc_store_root(&root, fn);
             pcc_gc_release(fn);
@@ -3038,11 +3460,36 @@ def test_backend4_relocation_preserves_func_entry_and_captures(tmp_path):
             pcc_gc_release(capture);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 5;
             if (pcc_gc_relocation_set_contains(root) != 1) return 6;
             PyObject *moved_raw = pcc_gc_relocate_copy(root, (int64_t)sizeof(PyFuncObject));
             if (moved_raw == 0) return 7;
             pcc_gc_release(moved_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *loaded = pcc_gc_load_ptr(0, &root);
             if (loaded == 0) return 8;
@@ -3092,19 +3539,27 @@ def test_backend4_func_call_loads_forwarded_captures_slot(tmp_path):
             return py_tuple_get(captures, 0);
         }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *fn_root = 0;
-            PyObject *captures_root = 0;
+        static PyObject *fn_root;
+        static PyObject *captures_root;
+        static PyObject *capture;
+        static PyObject *captures;
+        static PyObject *fn;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            fn_root = 0;
+            captures_root = 0;
             pcc_gc_scheduler_root_register(&fn_root);
             pcc_gc_scheduler_root_register(&captures_root);
 
-            PyObject *capture = py_str_new("capture", 7);
-            PyObject *captures = py_tuple_new(1);
+            capture = py_str_new("capture", 7);
+            captures = py_tuple_new(1);
             if (capture == 0 || captures == 0) return 3;
             py_tuple_set_item(captures, 0, capture);
+            /* The probe is the tuple's constructor: publish it once filled. */
+            pcc_gc_publish_initialized(captures);
 
-            PyObject *fn = py_func_new((void *)probe_entry, captures);
+            fn = py_func_new((void *)probe_entry, captures);
             if (fn == 0) return 4;
             pcc_gc_store_root(&fn_root, fn);
             pcc_gc_store_root(&captures_root, captures);
@@ -3113,6 +3568,30 @@ def test_backend4_func_call_loads_forwarded_captures_slot(tmp_path):
             pcc_gc_release(capture);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(128) <= 0) return 5;
             if (pcc_gc_relocation_set_contains(captures_root) != 1) return 6;
             PyObject *moved_captures_raw = pcc_gc_relocate_copy(
@@ -3121,6 +3600,7 @@ def test_backend4_func_call_loads_forwarded_captures_slot(tmp_path):
             );
             if (moved_captures_raw == 0) return 7;
             pcc_gc_release(moved_captures_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *loaded_captures = pcc_gc_load_ptr(0, &captures_root);
             if (loaded_captures == 0) return 8;
@@ -3173,19 +3653,27 @@ def test_backend4_func_relocation_loads_forwarded_captures_slot(tmp_path):
             return py_tuple_get(captures, 0);
         }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *fn_root = 0;
-            PyObject *captures_root = 0;
+        static PyObject *fn_root;
+        static PyObject *captures_root;
+        static PyObject *capture;
+        static PyObject *captures;
+        static PyObject *fn;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            fn_root = 0;
+            captures_root = 0;
             pcc_gc_scheduler_root_register(&fn_root);
             pcc_gc_scheduler_root_register(&captures_root);
 
-            PyObject *capture = py_str_new("capture", 7);
-            PyObject *captures = py_tuple_new(1);
+            capture = py_str_new("capture", 7);
+            captures = py_tuple_new(1);
             if (capture == 0 || captures == 0) return 3;
             py_tuple_set_item(captures, 0, capture);
+            /* The probe is the tuple's constructor: publish it once filled. */
+            pcc_gc_publish_initialized(captures);
 
-            PyObject *fn = py_func_new((void *)probe_entry, captures);
+            fn = py_func_new((void *)probe_entry, captures);
             if (fn == 0) return 4;
             pcc_gc_store_root(&fn_root, fn);
             pcc_gc_store_root(&captures_root, captures);
@@ -3193,6 +3681,30 @@ def test_backend4_func_relocation_loads_forwarded_captures_slot(tmp_path):
             pcc_gc_release(captures);
             pcc_gc_release(capture);
 
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(128) <= 0) return 5;
             PyObject *moved_captures_raw = pcc_gc_relocate_copy(
                 captures_root,
@@ -3212,6 +3724,7 @@ def test_backend4_func_relocation_loads_forwarded_captures_slot(tmp_path):
             );
             if (moved_fn_raw == 0) return 9;
             pcc_gc_release(moved_fn_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *loaded_fn_obj = pcc_gc_load_ptr(0, &fn_root);
             if (loaded_fn_obj == 0) return 10;
@@ -3219,7 +3732,9 @@ def test_backend4_func_relocation_loads_forwarded_captures_slot(tmp_path):
             PyFuncObject *loaded_fn = (PyFuncObject *)loaded_fn_obj;
             if (loaded_fn->entry != probe_entry) return 12;
             if (loaded_fn->captures != loaded_captures) return 13;
-            if (pcc_gc_telemetry(PCC_GC_COUNTER_READ_BARRIERS) < 1) return 14;
+            /* The stop's resume rewrote every reference (4e2feca72): the
+             * accessor's loads are plain, no read barrier runs. */
+            if (pcc_gc_telemetry(PCC_GC_COUNTER_READ_BARRIERS) != 0) return 14;
 
             PyObject *args = py_tuple_new(0);
             PyObject *result = py_func_call(loaded_fn_obj, args);
@@ -3257,17 +3772,21 @@ def test_backend4_relocation_preserves_iter_sequence_and_index(tmp_path):
             int64_t index;
         } ProbeIterObject;
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *root = 0;
+        static PyObject *root;
+        static PyObject *seq;
+        static ProbeIterObject *it;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            root = 0;
             pcc_gc_scheduler_root_register(&root);
 
-            PyObject *seq = py_list_new(0);
+            seq = py_list_new(0);
             if (seq == 0) return 3;
             py_list_append(seq, py_int_from_i64(10));
             py_list_append(seq, py_int_from_i64(20));
 
-            ProbeIterObject *it = (ProbeIterObject *)pcc_gc_alloc(
+            it = (ProbeIterObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeIterObject),
                 PY_TYPE_ITER,
                 0
@@ -3282,6 +3801,30 @@ def test_backend4_relocation_preserves_iter_sequence_and_index(tmp_path):
 
             pcc_gc_telemetry_reset();
             pcc_gc_publish_initialized((PyObject *)it);
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 5;
             if (pcc_gc_relocation_set_contains(root) != 1) return 6;
             PyObject *moved_raw = pcc_gc_relocate_copy(
@@ -3290,6 +3833,7 @@ def test_backend4_relocation_preserves_iter_sequence_and_index(tmp_path):
             );
             if (moved_raw == 0) return 7;
             pcc_gc_release(moved_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *loaded = pcc_gc_load_ptr(0, &root);
             if (loaded == 0) return 8;
@@ -3336,19 +3880,24 @@ def test_backend4_iter_next_loads_forwarded_sequence_slot(tmp_path):
             int64_t index;
         } ProbeIterObject;
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *seq_root = 0;
-            PyObject *it_root = 0;
+        static PyObject *seq_root;
+        static PyObject *it_root;
+        static PyObject *seq;
+        static PyObject *it;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            seq_root = 0;
+            it_root = 0;
             pcc_gc_scheduler_root_register(&seq_root);
             pcc_gc_scheduler_root_register(&it_root);
 
-            PyObject *seq = py_list_new(0);
+            seq = py_list_new(0);
             if (seq == 0) return 3;
             py_list_append(seq, py_int_from_i64(10));
             py_list_append(seq, py_int_from_i64(20));
 
-            PyObject *it = py_obj_iter(seq);
+            it = py_obj_iter(seq);
             if (it == 0) return 4;
             pcc_gc_store_root(&seq_root, seq);
             pcc_gc_store_root(&it_root, it);
@@ -3356,6 +3905,30 @@ def test_backend4_iter_next_loads_forwarded_sequence_slot(tmp_path):
             pcc_gc_release(it);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 5;
             if (pcc_gc_relocation_set_contains(seq_root) != 1) return 6;
             PyObject *moved_seq_raw = pcc_gc_relocate_copy(
@@ -3364,6 +3937,7 @@ def test_backend4_iter_next_loads_forwarded_sequence_slot(tmp_path):
             );
             if (moved_seq_raw == 0) return 7;
             pcc_gc_release(moved_seq_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *loaded_seq = pcc_gc_load_ptr(0, &seq_root);
             if (loaded_seq == 0) return 8;
@@ -3422,17 +3996,22 @@ def test_backend4_relocation_preserves_generator_state_and_slots(tmp_path):
             return pcc_gc_retain(frame);
         }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *root = 0;
+        static PyObject *root;
+        static PyObject *frame;
+        static PyObject *send_value;
+        static ProbeGenObject *gen;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            root = 0;
             pcc_gc_scheduler_root_register(&root);
 
-            PyObject *frame = py_list_new(0);
-            PyObject *send_value = py_int_from_i64(42);
+            frame = py_list_new(0);
+            send_value = py_int_from_i64(42);
             if (frame == 0 || send_value == 0) return 3;
             py_list_append(frame, py_int_from_i64(7));
 
-            ProbeGenObject *gen = (ProbeGenObject *)pcc_gc_alloc(
+            gen = (ProbeGenObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeGenObject),
                 PY_TYPE_GEN,
                 0
@@ -3452,6 +4031,30 @@ def test_backend4_relocation_preserves_generator_state_and_slots(tmp_path):
 
             pcc_gc_telemetry_reset();
             pcc_gc_publish_initialized((PyObject *)gen);
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 5;
             if (pcc_gc_relocation_set_contains(root) != 1) return 6;
             PyObject *moved_raw = pcc_gc_relocate_copy(
@@ -3460,6 +4063,7 @@ def test_backend4_relocation_preserves_generator_state_and_slots(tmp_path):
             );
             if (moved_raw == 0) return 7;
             pcc_gc_release(moved_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *loaded = pcc_gc_load_ptr(0, &root);
             if (loaded == 0) return 8;
@@ -3515,21 +4119,29 @@ def test_backend4_relocation_preserves_coroutine_shell_state(tmp_path):
             return py_tuple_get(captures, 0);
         }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *root = 0;
+        static PyObject *root;
+        static PyObject *captures;
+        static PyObject *args;
+        static PyObject *capture;
+        static PyObject *arg;
+        static PyObject *result;
+        static ProbeCoroutineObject *coro;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            root = 0;
             pcc_gc_scheduler_root_register(&root);
 
-            PyObject *captures = py_tuple_new(1);
-            PyObject *args = py_tuple_new(1);
-            PyObject *capture = py_str_new("coro-capture", 12);
-            PyObject *arg = py_int_from_i64(5);
-            PyObject *result = py_int_from_i64(99);
+            captures = py_tuple_new(1);
+            args = py_tuple_new(1);
+            capture = py_str_new("coro-capture", 12);
+            arg = py_int_from_i64(5);
+            result = py_int_from_i64(99);
             if (captures == 0 || args == 0 || capture == 0 || arg == 0 || result == 0) return 3;
             py_tuple_set_item(captures, 0, capture);
             py_tuple_set_item(args, 0, arg);
 
-            ProbeCoroutineObject *coro = (ProbeCoroutineObject *)pcc_gc_alloc(
+            coro = (ProbeCoroutineObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeCoroutineObject),
                 PY_TYPE_COROUTINE,
                 0
@@ -3555,6 +4167,30 @@ def test_backend4_relocation_preserves_coroutine_shell_state(tmp_path):
 
             pcc_gc_telemetry_reset();
             pcc_gc_publish_initialized((PyObject *)coro);
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 5;
             if (pcc_gc_relocation_set_contains(root) != 1) return 6;
             PyObject *moved_raw = pcc_gc_relocate_copy(
@@ -3563,6 +4199,7 @@ def test_backend4_relocation_preserves_coroutine_shell_state(tmp_path):
             );
             if (moved_raw == 0) return 7;
             pcc_gc_release(moved_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *loaded = pcc_gc_load_ptr(0, &root);
             if (loaded == 0) return 8;
@@ -3617,20 +4254,29 @@ def test_backend4_relocation_preserves_task_slots_and_done(tmp_path):
             return pcc_gc_object_id(resolved);
         }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *root = 0;
+        static PyObject *root;
+        static PyObject *coro;
+        static PyObject *result;
+        static PyObject *waiter;
+        static int64_t coro_id;
+        static int64_t result_id;
+        static int64_t waiter_id;
+        static ProbeTaskObject *task;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            root = 0;
             pcc_gc_scheduler_root_register(&root);
 
-            PyObject *coro = py_str_new("task-coro", 9);
-            PyObject *result = py_str_new("task-result", 11);
-            PyObject *waiter = py_str_new("task-waiter", 11);
+            coro = py_str_new("task-coro", 9);
+            result = py_str_new("task-result", 11);
+            waiter = py_str_new("task-waiter", 11);
             if (coro == 0 || result == 0 || waiter == 0) return 3;
-            int64_t coro_id = pcc_gc_object_id(coro);
-            int64_t result_id = pcc_gc_object_id(result);
-            int64_t waiter_id = pcc_gc_object_id(waiter);
+            coro_id = pcc_gc_object_id(coro);
+            result_id = pcc_gc_object_id(result);
+            waiter_id = pcc_gc_object_id(waiter);
 
-            ProbeTaskObject *task = (ProbeTaskObject *)pcc_gc_alloc(
+            task = (ProbeTaskObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeTaskObject),
                 PY_TYPE_TASK,
                 0x100
@@ -3651,6 +4297,30 @@ def test_backend4_relocation_preserves_task_slots_and_done(tmp_path):
 
             pcc_gc_telemetry_reset();
             pcc_gc_publish_initialized((PyObject *)task);
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 5;
             if (pcc_gc_relocation_set_contains(root) != 1) return 6;
             PyObject *moved_raw = pcc_gc_relocate_copy(
@@ -3659,6 +4329,7 @@ def test_backend4_relocation_preserves_task_slots_and_done(tmp_path):
             );
             if (moved_raw == 0) return 7;
             pcc_gc_release(moved_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             ProbeTaskObject *moved = (ProbeTaskObject *)pcc_gc_load_ptr(0, &root);
             if (moved == 0) return 8;
@@ -3708,22 +4379,34 @@ def test_backend4_relocation_preserves_exception_slots_and_traceback(tmp_path):
             PyObject **items;
         } ProbeListObject;
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *root = 0;
+        static PyObject *root;
+        static PyObject *exc_class;
+        static PyObject *message;
+        static PyObject *cause;
+        static PyObject *context;
+        static int64_t exc_class_id;
+        static int64_t message_id;
+        static int64_t cause_id;
+        static int64_t context_id;
+        static ProbeExceptionObject *exc;
+        static void *old_traceback;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            root = 0;
             pcc_gc_scheduler_root_register(&root);
 
-            PyObject *exc_class = py_str_new("exc-class", 9);
-            PyObject *message = py_list_new(0);
-            PyObject *cause = py_list_new(0);
-            PyObject *context = py_list_new(0);
+            exc_class = py_str_new("exc-class", 9);
+            message = py_list_new(0);
+            cause = py_list_new(0);
+            context = py_list_new(0);
             if (exc_class == 0 || message == 0 || cause == 0 || context == 0) return 3;
-            int64_t exc_class_id = pcc_gc_object_id(exc_class);
-            int64_t message_id = pcc_gc_object_id(message);
-            int64_t cause_id = pcc_gc_object_id(cause);
-            int64_t context_id = pcc_gc_object_id(context);
+            exc_class_id = pcc_gc_object_id(exc_class);
+            message_id = pcc_gc_object_id(message);
+            cause_id = pcc_gc_object_id(cause);
+            context_id = pcc_gc_object_id(context);
 
-            ProbeExceptionObject *exc = (ProbeExceptionObject *)pcc_gc_alloc(
+            exc = (ProbeExceptionObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeExceptionObject),
                 PY_TYPE_EXC,
                 0
@@ -3739,7 +4422,7 @@ def test_backend4_relocation_preserves_exception_slots_and_traceback(tmp_path):
             exc->n_frames = 1;
             exc->cap_frames = 1;
             if (exc->traceback == 0) return 5;
-            void *old_traceback = exc->traceback;
+            old_traceback = exc->traceback;
             pcc_gc_store_ptr((PyObject *)exc, &exc->exc_class, exc_class);
             pcc_gc_store_ptr((PyObject *)exc, &exc->message, message);
             pcc_gc_store_ptr((PyObject *)exc, &exc->cause, cause);
@@ -3753,6 +4436,30 @@ def test_backend4_relocation_preserves_exception_slots_and_traceback(tmp_path):
 
             pcc_gc_telemetry_reset();
             pcc_gc_publish_initialized((PyObject *)exc);
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 6;
             if (pcc_gc_relocation_set_contains(root) != 1) return 7;
             PyObject *moved_raw = pcc_gc_relocate_copy(
@@ -3761,6 +4468,7 @@ def test_backend4_relocation_preserves_exception_slots_and_traceback(tmp_path):
             );
             if (moved_raw == 0) return 8;
             pcc_gc_release(moved_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *loaded = pcc_gc_load_ptr(0, &root);
             if (loaded == 0) return 9;
@@ -3819,23 +4527,32 @@ def test_backend4_exception_accessors_load_forwarded_slots(tmp_path):
             PyObject **items;
         } ProbeListObject;
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *exc_root = 0;
-            PyObject *message_root = 0;
-            PyObject *cause_root = 0;
-            PyObject *context_root = 0;
+        static PyObject *exc_root;
+        static PyObject *message_root;
+        static PyObject *cause_root;
+        static PyObject *context_root;
+        static PyObject *message;
+        static PyObject *cause;
+        static PyObject *context;
+        static PyObject *exc;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            exc_root = 0;
+            message_root = 0;
+            cause_root = 0;
+            context_root = 0;
             pcc_gc_scheduler_root_register(&exc_root);
             pcc_gc_scheduler_root_register(&message_root);
             pcc_gc_scheduler_root_register(&cause_root);
             pcc_gc_scheduler_root_register(&context_root);
 
-            PyObject *message = py_list_new(0);
-            PyObject *cause = py_list_new(0);
-            PyObject *context = py_list_new(0);
+            message = py_list_new(0);
+            cause = py_list_new(0);
+            context = py_list_new(0);
             if (message == 0 || cause == 0 || context == 0) return 3;
 
-            PyObject *exc = py_exc_new_with_value(PY_EXC_RUNTIMEERROR, message);
+            exc = py_exc_new_with_value(PY_EXC_RUNTIMEERROR, message);
             if (exc == 0) return 4;
             py_exc_set_cause(exc, cause);
             py_exc_set_context(exc, context);
@@ -3850,6 +4567,30 @@ def test_backend4_exception_accessors_load_forwarded_slots(tmp_path):
             pcc_gc_release(context);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(256) <= 0) return 5;
             if (pcc_gc_relocation_set_contains(message_root) != 1) return 6;
             if (pcc_gc_relocation_set_contains(cause_root) != 1) return 7;
@@ -3867,6 +4608,7 @@ def test_backend4_exception_accessors_load_forwarded_slots(tmp_path):
                 context_root,
                 (int64_t)sizeof(ProbeListObject)
             );
+            if (pcc_resume_world() != 0) return 91;
             if (moved_message_raw == 0 || moved_cause_raw == 0 || moved_context_raw == 0) {
                 return 9;
             }
@@ -3946,23 +4688,52 @@ def test_backend4_exception_print_loads_forwarded_message_slot(tmp_path):
             int32_t cap_frames;
         } ProbeExceptionObject;
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static PyObject *exc_root;
+        static PyObject *message_root;
+        static PyObject *message;
+        static PyObject *exc;
 
-            PyObject *exc_root = 0;
-            PyObject *message_root = 0;
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            exc_root = 0;
+            message_root = 0;
             pcc_gc_scheduler_root_register(&exc_root);
             pcc_gc_scheduler_root_register(&message_root);
 
-            PyObject *message = py_list_new(0);
+            message = py_list_new(0);
             if (message == 0) return 3;
-            PyObject *exc = py_exc_new_with_value(PY_EXC_RUNTIMEERROR, message);
+            exc = py_exc_new_with_value(PY_EXC_RUNTIMEERROR, message);
             if (exc == 0) return 4;
             pcc_gc_store_root(&message_root, message);
             pcc_gc_store_root(&exc_root, exc);
             pcc_gc_release(message);
             pcc_gc_release(exc);
 
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 5;
             if (pcc_gc_relocation_set_contains(message_root) != 1) return 6;
             PyObject *moved_message_raw = pcc_gc_relocate_copy(
@@ -3971,6 +4742,7 @@ def test_backend4_exception_print_loads_forwarded_message_slot(tmp_path):
             );
             if (moved_message_raw == 0) return 7;
             pcc_gc_release(moved_message_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *loaded_message = pcc_gc_load_ptr(0, &message_root);
             PyObject *loaded_exc = pcc_gc_load_ptr(0, &exc_root);
@@ -3979,7 +4751,9 @@ def test_backend4_exception_print_loads_forwarded_message_slot(tmp_path):
 
             pcc_gc_telemetry_reset();
             py_exc_print_unhandled(loaded_exc);
-            if (pcc_gc_telemetry(PCC_GC_COUNTER_READ_BARRIERS) <= 0) return 10;
+            /* The stop's resume rewrote every reference (4e2feca72): the
+             * accessor's loads are plain, no read barrier runs. */
+            if (pcc_gc_telemetry(PCC_GC_COUNTER_READ_BARRIERS) != 0) return 10;
 
             ProbeExceptionObject *probe = (ProbeExceptionObject *)loaded_exc;
             if (probe->message != loaded_message) return 11;
@@ -4033,14 +4807,22 @@ def test_backend4_tls_exception_accessors_heal_forwarded_reference(tmp_path):
             int32_t cap_frames;
         } ProbeExceptionObject;
 
-        static int relocate_pending_exception(
-            PyObject *old,
-            int64_t expected_id
-        ) {
+        /* Probe objects live in statics and registered static roots; no
+         * stack word or register of main names them when a selection pins
+         * what the stopped threads' words name. */
+        static PyObject *first_root;
+        static PyObject *first;
+        static int64_t first_id;
+        static PyObject *second_root;
+        static PyObject *second;
+        static int64_t second_id;
+
+        /* Reads the object through its static only after the selection. */
+        static int relocate_pending_exception(PyObject **holder, int64_t expected_id) {
             if (pcc_gc_select_relocation_set(128) <= 0) return 0;
-            if (!pcc_gc_relocation_set_contains(old)) return 0;
+            if (!pcc_gc_relocation_set_contains(*holder)) return 0;
             PyObject *moved = pcc_gc_relocate_copy(
-                old,
+                *holder,
                 (int64_t)sizeof(ProbeExceptionObject)
             );
             if (moved == 0 || pcc_gc_object_id(moved) != expected_id) return 0;
@@ -4048,45 +4830,65 @@ def test_backend4_tls_exception_accessors_heal_forwarded_reference(tmp_path):
             return 1;
         }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-
-            PyObject *first_root = 0;
+        __attribute__((noinline)) static int build_first(void) {
+            py_gc_disable();
             pcc_gc_scheduler_root_register(&first_root);
-            PyObject *first = py_exc_new(PY_EXC_VALUEERROR, "current");
+            first = py_exc_new(PY_EXC_VALUEERROR, "current");
             if (first == 0) return 3;
-            int64_t first_id = pcc_gc_object_id(first);
+            first_id = pcc_gc_object_id(first);
             pcc_gc_store_root(&first_root, first);
             py_raise(first);
             pcc_gc_release(first);
-            if (!relocate_pending_exception(first, first_id)) return 4;
+            return 0;
+        }
 
+        __attribute__((noinline)) static int build_second(void) {
+            pcc_gc_scheduler_root_register(&second_root);
+            second = py_exc_new(PY_EXC_KEYERROR, "clear");
+            if (second == 0) return 10;
+            second_id = pcc_gc_object_id(second);
+            pcc_gc_store_root(&second_root, second);
+            py_raise(second);
+            pcc_gc_release(second);
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear
+         * what the builders' calls left below main's frame. */
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+            volatile unsigned char words[65536];
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+        }
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = build_first();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            /* The pending exception is a thread-local root: the stop's
+             * resume rewrites it with every other reference. */
+            if (pcc_stop_the_world() != 0) return 90;
+            if (!relocate_pending_exception(&first, first_id)) return 4;
+            if (pcc_resume_world() != 0) return 91;
             PyObject *current = py_current_exception();
             if (current == 0 || current == first) return 5;
             if (pcc_gc_object_id(current) != first_id) return 6;
             if ((PyObject *)py_tls_exc_get() != current) return 7;
             py_clear_exception();
             if (py_tls_exc_get() != 0) return 9;
-            (void)pcc_gc_load_ptr(0, &first_root);
             pcc_gc_store_root(&first_root, 0);
             pcc_gc_scheduler_root_unregister(&first_root);
 
-            PyObject *second_root = 0;
-            pcc_gc_scheduler_root_register(&second_root);
-            PyObject *second = py_exc_new(PY_EXC_KEYERROR, "clear");
-            if (second == 0) return 10;
-            int64_t second_id = pcc_gc_object_id(second);
-            pcc_gc_store_root(&second_root, second);
-            py_raise(second);
-            pcc_gc_release(second);
-            if (!relocate_pending_exception(second, second_id)) return 11;
-
+            built = build_second();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 92;
+            if (!relocate_pending_exception(&second, second_id)) return 11;
+            if (pcc_resume_world() != 0) return 93;
             py_clear_exception();
             if (py_tls_exc_get() != 0) return 12;
-            (void)pcc_gc_load_ptr(0, &second_root);
             pcc_gc_store_root(&second_root, 0);
             pcc_gc_scheduler_root_unregister(&second_root);
-
             printf("backend4-tls-exception-forwarding-ok\\n");
             return 0;
         }
@@ -4132,23 +4934,53 @@ def test_backend4_raise_context_chaining_resolves_forwarded_current_exception(tm
             int32_t cap_frames;
         } ProbeExceptionObject;
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *first_root = 0;
-            PyObject *second_root = 0;
+        static PyObject *first_root;
+        static PyObject *second_root;
+        static PyObject *first;
+        static PyObject *second;
+        static int64_t first_id;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            first_root = 0;
+            second_root = 0;
             pcc_gc_scheduler_root_register(&first_root);
             pcc_gc_scheduler_root_register(&second_root);
 
-            PyObject *first = py_exc_new(PY_EXC_KEYERROR, "first");
-            PyObject *second = py_exc_new(PY_EXC_VALUEERROR, "second");
+            first = py_exc_new(PY_EXC_KEYERROR, "first");
+            second = py_exc_new(PY_EXC_VALUEERROR, "second");
             if (first == 0 || second == 0) return 3;
-            int64_t first_id = pcc_gc_object_id(first);
+            first_id = pcc_gc_object_id(first);
             pcc_gc_store_root(&first_root, first);
             pcc_gc_store_root(&second_root, second);
 
             py_raise(first);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(128) <= 0) return 4;
             if (pcc_gc_relocation_set_contains(first_root) != 1) return 5;
             PyObject *moved_first_raw = pcc_gc_relocate_copy(
@@ -4157,6 +4989,7 @@ def test_backend4_raise_context_chaining_resolves_forwarded_current_exception(tm
             );
             if (moved_first_raw == 0) return 6;
             pcc_gc_release(moved_first_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *loaded_first = pcc_gc_load_ptr(0, &first_root);
             if (loaded_first == 0) return 7;
@@ -4236,12 +5069,18 @@ def test_backend4_relocation_retargets_class_attrs_side_table(tmp_path):
         extern int64_t py_class_setattr(ProbeClassObject *cls, const char *name, PyObject *value);
         extern PyObject *py_class_getattr(ProbeClassObject *cls, const char *name);
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *root = 0;
+        static PyObject *root;
+        static ProbeClassObject *cls;
+        static PyObject *value;
+        static PyObject *old_attrs;
+        static int64_t attrs_id;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            root = 0;
             pcc_gc_scheduler_root_register(&root);
 
-            ProbeClassObject *cls = (ProbeClassObject *)pcc_gc_alloc(
+            cls = (ProbeClassObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeClassObject),
                 PY_TYPE_CLASS,
                 0
@@ -4263,18 +5102,42 @@ def test_backend4_relocation_retargets_class_attrs_side_table(tmp_path):
             cls->del_method = 0;
             cls->attrs = 0;
 
-            PyObject *value = py_str_new("class-attr", 10);
+            value = py_str_new("class-attr", 10);
             if (value == 0) return 5;
             if (py_class_setattr(cls, "answer", value) != 0) return 6;
             if (cls->attrs == 0) return 17;
-            PyObject *old_attrs = cls->attrs;
-            int64_t attrs_id = pcc_gc_object_id(cls->attrs);
+            old_attrs = cls->attrs;
+            attrs_id = pcc_gc_object_id(cls->attrs);
             pcc_gc_store_root(&root, (PyObject *)cls);
             pcc_gc_release((PyObject *)cls);
             pcc_gc_release(value);
 
             pcc_gc_telemetry_reset();
             pcc_gc_publish_initialized((PyObject *)cls);
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 7;
             if (pcc_gc_relocation_set_contains(root) != 1) return 8;
             if (pcc_gc_relocation_set_contains(old_attrs) != 1) return 20;
@@ -4290,6 +5153,7 @@ def test_backend4_relocation_retargets_class_attrs_side_table(tmp_path):
             );
             if (moved_raw == 0) return 9;
             pcc_gc_release(moved_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *loaded = pcc_gc_load_ptr(0, &root);
             if (loaded == 0) return 10;
@@ -4432,12 +5296,18 @@ def test_backend4_class_relocation_loads_forwarded_attrs_slot(tmp_path):
         extern int64_t py_class_setattr(ProbeClassObject *cls, const char *name, PyObject *value);
         extern PyObject *py_class_getattr(ProbeClassObject *cls, const char *name);
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *root = 0;
+        static PyObject *root;
+        static ProbeClassObject *cls;
+        static PyObject *value;
+        static PyObject *old_attrs;
+        static int64_t attrs_id;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            root = 0;
             pcc_gc_scheduler_root_register(&root);
 
-            ProbeClassObject *cls = (ProbeClassObject *)pcc_gc_alloc(
+            cls = (ProbeClassObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeClassObject),
                 PY_TYPE_CLASS,
                 0
@@ -4459,18 +5329,42 @@ def test_backend4_class_relocation_loads_forwarded_attrs_slot(tmp_path):
             cls->del_method = 0;
             cls->attrs = 0;
 
-            PyObject *value = py_str_new("forwarded-attrs", 15);
+            value = py_str_new("forwarded-attrs", 15);
             if (value == 0) return 4;
             if (py_class_setattr(cls, "answer", value) != 0) return 5;
             if (cls->attrs == 0) return 6;
-            PyObject *old_attrs = cls->attrs;
-            int64_t attrs_id = pcc_gc_object_id(old_attrs);
+            old_attrs = cls->attrs;
+            attrs_id = pcc_gc_object_id(old_attrs);
             pcc_gc_store_root(&root, (PyObject *)cls);
             pcc_gc_release((PyObject *)cls);
             pcc_gc_release(value);
 
             pcc_gc_telemetry_reset();
             pcc_gc_publish_initialized((PyObject *)cls);
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 7;
             if (pcc_gc_relocation_set_contains(root) != 1) return 8;
             if (pcc_gc_relocation_set_contains(old_attrs) != 1) return 9;
@@ -4488,6 +5382,7 @@ def test_backend4_class_relocation_loads_forwarded_attrs_slot(tmp_path):
             );
             if (moved_raw == 0) return 11;
             pcc_gc_release(moved_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *loaded = pcc_gc_load_ptr(0, &root);
             if (loaded == 0) return 12;
@@ -4544,15 +5439,18 @@ def test_backend4_class_attrs_api_resolves_forwarded_class_argument(tmp_path):
         extern int64_t py_class_setattr(ProbeClassObject *cls, const char *name, PyObject *value);
         extern PyObject *py_class_getattr(ProbeClassObject *cls, const char *name);
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static ProbeClassObject *cls;
+        static PyObject *value;
 
-            ProbeClassObject *cls = (ProbeClassObject *)pcc_gc_alloc(
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            cls = (ProbeClassObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeClassObject),
                 PY_TYPE_CLASS,
                 0
             );
-            PyObject *value = py_str_new("forwarded-class-attr", 20);
+            value = py_str_new("forwarded-class-attr", 20);
             if (cls == 0 || value == 0) return 3;
             cls->name = "ForwardedAttrsApiClass";
             cls->n_bases = 0;
@@ -4572,6 +5470,30 @@ def test_backend4_class_attrs_api_resolves_forwarded_class_argument(tmp_path):
 
             pcc_gc_telemetry_reset();
             pcc_gc_publish_initialized((PyObject *)cls);
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 4;
             if (pcc_gc_relocation_set_contains((PyObject *)cls) != 1) return 5;
             PyObject *moved_cls_raw = pcc_gc_relocate_copy(
@@ -4580,6 +5502,7 @@ def test_backend4_class_attrs_api_resolves_forwarded_class_argument(tmp_path):
             );
             if (moved_cls_raw == 0) return 6;
             pcc_gc_release(moved_cls_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             if (py_class_setattr(cls, "answer", value) != 0) return 7;
             ProbeClassObject *moved = (ProbeClassObject *)pcc_gc_note_relocation_read(
@@ -4670,14 +5593,21 @@ def test_backend4_class_relocation_loads_forwarded_metadata_slots(tmp_path):
             return cls;
         }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *root = 0;
+        static PyObject *root;
+        static ProbeClassObject *base;
+        static ProbeClassObject *cls;
+        static PyObject *func;
+        static int64_t base_id;
+        static int64_t func_id;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            root = 0;
             pcc_gc_scheduler_root_register(&root);
 
-            ProbeClassObject *base = new_probe_class("Base", 1003);
-            ProbeClassObject *cls = new_probe_class("Derived", 1004);
-            PyObject *func = py_list_new(0);
+            base = new_probe_class("Base", 1003);
+            cls = new_probe_class("Derived", 1004);
+            func = py_list_new(0);
             if (base == 0 || cls == 0 || func == 0) return 3;
 
             cls->n_bases = 1;
@@ -4694,12 +5624,36 @@ def test_backend4_class_relocation_loads_forwarded_metadata_slots(tmp_path):
             cls->methods[0].func = func;
             cls->del_method = func;
 
-            int64_t base_id = pcc_gc_object_id((PyObject *)base);
-            int64_t func_id = pcc_gc_object_id(func);
+            base_id = pcc_gc_object_id((PyObject *)base);
+            func_id = pcc_gc_object_id(func);
             pcc_gc_store_root(&root, (PyObject *)cls);
             pcc_gc_release((PyObject *)cls);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 5;
             if (pcc_gc_relocation_set_contains((PyObject *)base) != 1) return 6;
             if (pcc_gc_relocation_set_contains(func) != 1) return 7;
@@ -4723,6 +5677,7 @@ def test_backend4_class_relocation_loads_forwarded_metadata_slots(tmp_path):
             );
             if (moved_raw == 0) return 11;
             pcc_gc_release(moved_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *loaded = pcc_gc_load_ptr(0, &root);
             if (loaded == 0) return 12;
@@ -4795,15 +5750,19 @@ def test_backend4_class_lookup_loads_forwarded_method_slot(tmp_path):
         extern PyObject *py_class_lookup(ProbeClassObject *cls, const char *name);
         extern void py_class_add_method(ProbeClassObject *cls, const char *name, PyObject *func);
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static ProbeClassObject *cls;
+        static PyObject *func;
+        static int64_t func_id;
 
-            ProbeClassObject *cls = (ProbeClassObject *)pcc_gc_alloc(
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            cls = (ProbeClassObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeClassObject),
                 PY_TYPE_CLASS,
                 0
             );
-            PyObject *func = py_list_new(0);
+            func = py_list_new(0);
             if (cls == 0 || func == 0) return 3;
             cls->name = "LookupClass";
             cls->n_bases = 0;
@@ -4824,13 +5783,37 @@ def test_backend4_class_lookup_loads_forwarded_method_slot(tmp_path):
                compare before the name itself. */
             py_class_add_method(cls, "method", func);
             if (cls->n_methods != 1 || cls->methods[0].func != func) return 4;
-            int64_t func_id = pcc_gc_object_id(func);
+            func_id = pcc_gc_object_id(func);
             /* Fill the method-location cache before the function moves.  The
                second lookup below must hit that cached location and still
                reload/heal the function slot through the relocation barrier. */
             if (py_class_lookup(cls, "method") != func) return 13;
             pcc_gc_telemetry_reset();
             pcc_gc_publish_initialized((PyObject *)cls);
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 5;
             if (pcc_gc_relocation_set_contains(func) != 1) return 6;
             PyObject *moved_func_raw = pcc_gc_relocate_copy(
@@ -4839,6 +5822,7 @@ def test_backend4_class_lookup_loads_forwarded_method_slot(tmp_path):
             );
             if (moved_func_raw == 0) return 7;
             pcc_gc_release(moved_func_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *looked_up = py_class_lookup(cls, "method");
             if (looked_up == 0) return 8;
@@ -4960,15 +5944,18 @@ def test_backend4_isinstance_resolves_forwarded_class_argument(tmp_path):
 
         extern int64_t py_isinstance(PyObject *obj, ProbeClassObject *cls);
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static ProbeClassObject *cls;
+        static ProbeInstanceObject *inst;
 
-            ProbeClassObject *cls = (ProbeClassObject *)pcc_gc_alloc(
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            cls = (ProbeClassObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeClassObject),
                 PY_TYPE_CLASS,
                 0
             );
-            ProbeInstanceObject *inst = (ProbeInstanceObject *)pcc_gc_alloc(
+            inst = (ProbeInstanceObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeInstanceObject),
                 PY_TYPE_INSTANCE,
                 0
@@ -4994,6 +5981,30 @@ def test_backend4_isinstance_resolves_forwarded_class_argument(tmp_path):
             pcc_gc_telemetry_reset();
             pcc_gc_publish_initialized((PyObject *)cls);
             pcc_gc_publish_initialized((PyObject *)inst);
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 5;
             if (pcc_gc_relocation_set_contains((PyObject *)cls) != 1) return 6;
             PyObject *moved_cls_raw = pcc_gc_relocate_copy(
@@ -5002,6 +6013,7 @@ def test_backend4_isinstance_resolves_forwarded_class_argument(tmp_path):
             );
             if (moved_cls_raw == 0) return 7;
             pcc_gc_release(moved_cls_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             if (py_isinstance((PyObject *)inst, cls) != 1) return 8;
             if (inst->cls == cls) return 9;
@@ -5056,20 +6068,25 @@ def test_backend4_instance_get_field_loads_forwarded_slot(tmp_path):
 
         extern PyObject *py_instance_get_field(ProbeInstanceObject *inst, int32_t idx);
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static ProbeClassObject *cls;
+        static ProbeInstanceObject *inst;
+        static PyObject *value;
+        static int64_t value_id;
 
-            ProbeClassObject *cls = (ProbeClassObject *)pcc_gc_alloc(
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            cls = (ProbeClassObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeClassObject),
                 PY_TYPE_CLASS,
                 0
             );
-            ProbeInstanceObject *inst = (ProbeInstanceObject *)pcc_gc_alloc(
+            inst = (ProbeInstanceObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeInstanceObject),
                 PY_TYPE_INSTANCE,
                 0
             );
-            PyObject *value = py_list_new(0);
+            value = py_list_new(0);
             if (cls == 0 || inst == 0 || value == 0) return 3;
             cls->name = "FieldClass";
             cls->n_bases = 0;
@@ -5088,11 +6105,35 @@ def test_backend4_instance_get_field_loads_forwarded_slot(tmp_path):
             cls->field_names[0] = "field";
             inst->cls = cls;
             inst->fields[0] = value;
-            int64_t value_id = pcc_gc_object_id(value);
+            value_id = pcc_gc_object_id(value);
 
             pcc_gc_telemetry_reset();
             pcc_gc_publish_initialized((PyObject *)cls);
             pcc_gc_publish_initialized((PyObject *)inst);
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 4;
             if (pcc_gc_relocation_set_contains(value) != 1) return 5;
             PyObject *moved_value_raw = pcc_gc_relocate_copy(
@@ -5101,6 +6142,7 @@ def test_backend4_instance_get_field_loads_forwarded_slot(tmp_path):
             );
             if (moved_value_raw == 0) return 6;
             pcc_gc_release(moved_value_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *got = py_instance_get_field(inst, 0);
             if (got == 0) return 7;
@@ -5152,20 +6194,25 @@ def test_backend4_instance_get_field_resolves_forwarded_class_slot(tmp_path):
 
         extern PyObject *py_instance_get_field(ProbeInstanceObject *inst, int32_t idx);
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static ProbeClassObject *cls;
+        static ProbeInstanceObject *inst;
+        static PyObject *value;
+        static int64_t cls_id;
 
-            ProbeClassObject *cls = (ProbeClassObject *)pcc_gc_alloc(
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            cls = (ProbeClassObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeClassObject),
                 PY_TYPE_CLASS,
                 0
             );
-            ProbeInstanceObject *inst = (ProbeInstanceObject *)pcc_gc_alloc(
+            inst = (ProbeInstanceObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeInstanceObject),
                 PY_TYPE_INSTANCE,
                 0
             );
-            PyObject *value = py_str_new("field", 5);
+            value = py_str_new("field", 5);
             if (cls == 0 || inst == 0 || value == 0) return 3;
             cls->name = "ForwardedFieldClass";
             cls->n_bases = 0;
@@ -5184,11 +6231,35 @@ def test_backend4_instance_get_field_resolves_forwarded_class_slot(tmp_path):
             cls->field_names[0] = "field";
             inst->cls = cls;
             inst->fields[0] = value;
-            int64_t cls_id = pcc_gc_object_id((PyObject *)cls);
+            cls_id = pcc_gc_object_id((PyObject *)cls);
 
             pcc_gc_telemetry_reset();
             pcc_gc_publish_initialized((PyObject *)cls);
             pcc_gc_publish_initialized((PyObject *)inst);
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 4;
             if (pcc_gc_relocation_set_contains((PyObject *)cls) != 1) return 5;
             PyObject *moved_cls_raw = pcc_gc_relocate_copy(
@@ -5197,6 +6268,7 @@ def test_backend4_instance_get_field_resolves_forwarded_class_slot(tmp_path):
             );
             if (moved_cls_raw == 0) return 6;
             pcc_gc_release(moved_cls_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *got = py_instance_get_field(inst, 0);
             if (got == 0) return 7;
@@ -5246,10 +6318,13 @@ def test_backend4_instance_new_resolves_forwarded_class_argument(tmp_path):
 
         extern PyObject *py_instance_new(ProbeClassObject *cls);
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static ProbeClassObject *cls;
+        static int64_t cls_id;
 
-            ProbeClassObject *cls = (ProbeClassObject *)pcc_gc_alloc(
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            cls = (ProbeClassObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeClassObject),
                 PY_TYPE_CLASS,
                 0
@@ -5268,10 +6343,34 @@ def test_backend4_instance_new_resolves_forwarded_class_argument(tmp_path):
             cls->type_tag_alloc = PY_TYPE_INSTANCE;
             cls->del_method = 0;
             cls->attrs = 0;
-            int64_t cls_id = pcc_gc_object_id((PyObject *)cls);
+            cls_id = pcc_gc_object_id((PyObject *)cls);
 
             pcc_gc_telemetry_reset();
             pcc_gc_publish_initialized((PyObject *)cls);
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 4;
             if (pcc_gc_relocation_set_contains((PyObject *)cls) != 1) return 5;
             PyObject *moved_cls_raw = pcc_gc_relocate_copy(
@@ -5280,6 +6379,7 @@ def test_backend4_instance_new_resolves_forwarded_class_argument(tmp_path):
             );
             if (moved_cls_raw == 0) return 6;
             pcc_gc_release(moved_cls_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             ProbeInstanceObject *inst = (ProbeInstanceObject *)py_instance_new(cls);
             if (inst == 0) return 7;
@@ -5332,15 +6432,19 @@ def test_backend4_class_add_method_resolves_forwarded_class_argument(tmp_path):
         extern void py_class_add_method(ProbeClassObject *cls, const char *name, PyObject *func);
         extern PyObject *py_class_lookup(ProbeClassObject *cls, const char *name);
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static ProbeClassObject *cls;
+        static PyObject *func;
+        static int64_t cls_id;
 
-            ProbeClassObject *cls = (ProbeClassObject *)pcc_gc_alloc(
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            cls = (ProbeClassObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeClassObject),
                 PY_TYPE_CLASS,
                 0
             );
-            PyObject *func = pcc_gc_alloc(64, PY_TYPE_INT, 0);
+            func = pcc_gc_alloc(64, PY_TYPE_INT, 0);
             if (cls == 0 || func == 0) return 3;
             cls->name = "ForwardedAddMethodClass";
             cls->n_bases = 0;
@@ -5357,11 +6461,35 @@ def test_backend4_class_add_method_resolves_forwarded_class_argument(tmp_path):
             cls->attrs = 0;
             if (cls->mro == 0) return 4;
             cls->mro[0] = cls;
-            int64_t cls_id = pcc_gc_object_id((PyObject *)cls);
+            cls_id = pcc_gc_object_id((PyObject *)cls);
 
             pcc_gc_telemetry_reset();
             pcc_gc_publish_initialized((PyObject *)cls);
             pcc_gc_publish_initialized((PyObject *)func);
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 5;
             if (pcc_gc_relocation_set_contains((PyObject *)cls) != 1) return 6;
             PyObject *moved_cls_raw = pcc_gc_relocate_copy(
@@ -5370,6 +6498,7 @@ def test_backend4_class_add_method_resolves_forwarded_class_argument(tmp_path):
             );
             if (moved_cls_raw == 0) return 7;
             pcc_gc_release(moved_cls_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             py_class_add_method(cls, "method", func);
             PyObject *moved_cls_obj = pcc_gc_note_relocation_read((PyObject *)cls);
@@ -5422,14 +6551,41 @@ def test_backend4_class_new_resolves_forwarded_base_argument(tmp_path):
             int32_t n_fields
         );
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static ProbeClassObject *base;
+        static int64_t base_id;
 
-            ProbeClassObject *base = py_class_new("ForwardedBase", 0, 0, 0, 0);
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            base = py_class_new("ForwardedBase", 0, 0, 0, 0);
             if (base == 0) return 3;
-            int64_t base_id = pcc_gc_object_id((PyObject *)base);
+            base_id = pcc_gc_object_id((PyObject *)base);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 4;
             if (pcc_gc_relocation_set_contains((PyObject *)base) != 1) return 5;
             PyObject *moved_base_raw = pcc_gc_relocate_copy(
@@ -5438,6 +6594,7 @@ def test_backend4_class_new_resolves_forwarded_base_argument(tmp_path):
             );
             if (moved_base_raw == 0) return 6;
             pcc_gc_release(moved_base_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             ProbeClassObject *bases[1];
             bases[0] = base;
@@ -5493,18 +6650,46 @@ def test_backend4_class_new_resolves_forwarded_mro_entries(tmp_path):
             int32_t n_fields
         );
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static ProbeClassObject *grand;
+        static ProbeClassObject *base_bases[1];
+        static ProbeClassObject *base;
+        static int64_t grand_id;
 
-            ProbeClassObject *grand = py_class_new("Grand", 0, 0, 0, 0);
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            grand = py_class_new("Grand", 0, 0, 0, 0);
             if (grand == 0) return 3;
-            ProbeClassObject *base_bases[1];
             base_bases[0] = grand;
-            ProbeClassObject *base = py_class_new("Base", base_bases, 1, 0, 0);
+            base = py_class_new("Base", base_bases, 1, 0, 0);
             if (base == 0) return 4;
-            int64_t grand_id = pcc_gc_object_id((PyObject *)grand);
+            grand_id = pcc_gc_object_id((PyObject *)grand);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 5;
             if (pcc_gc_relocation_set_contains((PyObject *)grand) != 1) return 6;
             PyObject *moved_grand_raw = pcc_gc_relocate_copy(
@@ -5513,6 +6698,7 @@ def test_backend4_class_new_resolves_forwarded_mro_entries(tmp_path):
             );
             if (moved_grand_raw == 0) return 7;
             pcc_gc_release(moved_grand_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             ProbeClassObject *derived_bases[1];
             derived_bases[0] = base;
@@ -5581,16 +6767,21 @@ def test_backend4_exception_match_loads_forwarded_mro_entry(tmp_path):
             return cls;
         }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static PyObject *base_root;
+        static PyObject *derived_root;
+        static ProbeClassObject *base;
+        static ProbeClassObject *derived;
 
-            PyObject *base_root = 0;
-            PyObject *derived_root = 0;
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            base_root = 0;
+            derived_root = 0;
             pcc_gc_scheduler_root_register(&base_root);
             pcc_gc_scheduler_root_register(&derived_root);
 
-            ProbeClassObject *base = new_probe_class("Base");
-            ProbeClassObject *derived = new_probe_class("Derived");
+            base = new_probe_class("Base");
+            derived = new_probe_class("Derived");
             if (base == 0 || derived == 0) return 3;
             derived->n_mro = 2;
             derived->mro = (ProbeClassObject **)calloc(2, sizeof(ProbeClassObject *));
@@ -5603,6 +6794,30 @@ def test_backend4_exception_match_loads_forwarded_mro_entry(tmp_path):
             pcc_gc_release((PyObject *)base);
             pcc_gc_release((PyObject *)derived);
 
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(256) <= 0) return 5;
             if (pcc_gc_relocation_set_contains(base_root) != 1) return 6;
             PyObject *moved_base_raw = pcc_gc_relocate_copy(
@@ -5611,6 +6826,7 @@ def test_backend4_exception_match_loads_forwarded_mro_entry(tmp_path):
             );
             if (moved_base_raw == 0) return 7;
             pcc_gc_release(moved_base_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *loaded_base = pcc_gc_load_ptr(0, &base_root);
             PyObject *loaded_derived = pcc_gc_load_ptr(0, &derived_root);
@@ -5619,7 +6835,9 @@ def test_backend4_exception_match_loads_forwarded_mro_entry(tmp_path):
 
             pcc_gc_telemetry_reset();
             if (py_exc_matches(loaded_derived, loaded_base) != 1) return 10;
-            if (pcc_gc_telemetry(PCC_GC_COUNTER_READ_BARRIERS) <= 0) return 11;
+            /* The stop's resume rewrote every reference (4e2feca72): the
+             * accessor's loads are plain, no read barrier runs. */
+            if (pcc_gc_telemetry(PCC_GC_COUNTER_READ_BARRIERS) != 0) return 11;
 
             ProbeClassObject *derived_probe = (ProbeClassObject *)loaded_derived;
             if ((PyObject *)derived_probe->mro[1] != loaded_base) return 12;
@@ -5670,18 +6888,23 @@ def test_backend4_dunder_lookup_loads_forwarded_instance_class_slot(tmp_path):
             PyObject *fields[1];
         } ProbeInstanceObject;
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static PyObject *cls_root;
+        static PyObject *inst_root;
+        static ProbeClassObject *cls;
+        static ProbeInstanceObject *inst;
 
-            PyObject *cls_root = 0;
-            PyObject *inst_root = 0;
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            cls_root = 0;
+            inst_root = 0;
             pcc_gc_scheduler_root_register(&cls_root);
             pcc_gc_scheduler_root_register(&inst_root);
 
-            ProbeClassObject *cls = (ProbeClassObject *)pcc_gc_alloc(
+            cls = (ProbeClassObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeClassObject), PY_TYPE_CLASS, 0
             );
-            ProbeInstanceObject *inst = (ProbeInstanceObject *)pcc_gc_alloc(
+            inst = (ProbeInstanceObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeInstanceObject), PY_TYPE_INSTANCE, 0
             );
             if (cls == 0 || inst == 0) return 3;
@@ -5711,6 +6934,30 @@ def test_backend4_dunder_lookup_loads_forwarded_instance_class_slot(tmp_path):
 
             pcc_gc_publish_initialized((PyObject *)cls);
             pcc_gc_publish_initialized((PyObject *)inst);
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(256) <= 0) return 4;
             if (pcc_gc_relocation_set_contains(cls_root) != 1) return 5;
             PyObject *moved_cls_raw = pcc_gc_relocate_copy(
@@ -5719,6 +6966,7 @@ def test_backend4_dunder_lookup_loads_forwarded_instance_class_slot(tmp_path):
             );
             if (moved_cls_raw == 0) return 6;
             pcc_gc_release(moved_cls_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *loaded_cls = pcc_gc_load_ptr(0, &cls_root);
             PyObject *loaded_inst = pcc_gc_load_ptr(0, &inst_root);
@@ -5728,7 +6976,9 @@ def test_backend4_dunder_lookup_loads_forwarded_instance_class_slot(tmp_path):
             pcc_gc_telemetry_reset();
             PyObject *s = py_user_str_dispatch(loaded_inst);
             if (s != 0) return 9;
-            if (pcc_gc_telemetry(PCC_GC_COUNTER_READ_BARRIERS) <= 0) return 10;
+            /* The stop's resume rewrote every reference (4e2feca72): the
+             * accessor's loads are plain, no read barrier runs. */
+            if (pcc_gc_telemetry(PCC_GC_COUNTER_READ_BARRIERS) != 0) return 10;
 
             ProbeInstanceObject *loaded_probe = (ProbeInstanceObject *)loaded_inst;
             if ((PyObject *)loaded_probe->cls != loaded_cls) return 11;
@@ -5761,25 +7011,54 @@ def test_backend4_relocation_retargets_weakref_intrusive_list(tmp_path):
             void *next;
         } ProbeWeakRefObject;
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *target_root = 0;
-            PyObject *weakref_root = 0;
+        static PyObject *target_root;
+        static PyObject *weakref_root;
+        static PyObject *target;
+        static PyObject *wr;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            target_root = 0;
+            weakref_root = 0;
             pcc_gc_scheduler_root_register(&target_root);
             pcc_gc_scheduler_root_register(&weakref_root);
 
-            PyObject *target = py_list_new(0);
+            target = py_list_new(0);
             if (target == 0) return 3;
             py_list_append(target, py_int_from_i64(33));
             pcc_gc_store_root(&target_root, target);
 
-            PyObject *wr = py_weakref_new(target, py_None);
+            wr = py_weakref_new(target, py_None);
             if (wr == 0) return 4;
             pcc_gc_store_root(&weakref_root, wr);
             pcc_gc_release(wr);
             pcc_gc_release(target);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 5;
             if (pcc_gc_relocation_set_contains(weakref_root) != 1) return 6;
             PyObject *moved_raw = pcc_gc_relocate_copy(
@@ -5788,6 +7067,7 @@ def test_backend4_relocation_retargets_weakref_intrusive_list(tmp_path):
             );
             if (moved_raw == 0) return 7;
             pcc_gc_release(moved_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *loaded = pcc_gc_load_ptr(0, &weakref_root);
             if (loaded == 0) return 8;
@@ -5833,26 +7113,36 @@ def test_backend4_weakref_callback_loads_forwarded_slot(tmp_path):
             return pcc_gc_retain(py_None);
         }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *target_root = 0;
-            PyObject *weakref_root = 0;
-            PyObject *callback_root = 0;
-            PyObject *seen_root = 0;
+        static PyObject *target_root;
+        static PyObject *weakref_root;
+        static PyObject *callback_root;
+        static PyObject *seen_root;
+        static PyObject *target;
+        static PyObject *seen;
+        static PyObject *captures;
+        static PyObject *callback;
+        static PyObject *wr;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            target_root = 0;
+            weakref_root = 0;
+            callback_root = 0;
+            seen_root = 0;
             pcc_gc_scheduler_root_register(&target_root);
             pcc_gc_scheduler_root_register(&weakref_root);
             pcc_gc_scheduler_root_register(&callback_root);
             pcc_gc_scheduler_root_register(&seen_root);
 
-            PyObject *target = py_list_new(0);
-            PyObject *seen = py_list_new(0);
-            PyObject *captures = py_tuple_new(1);
+            target = py_list_new(0);
+            seen = py_list_new(0);
+            captures = py_tuple_new(1);
             if (target == 0 || seen == 0 || captures == 0) return 3;
             py_tuple_set_item(captures, 0, seen);
 
-            PyObject *callback = py_func_new((void *)probe_callback, captures);
+            callback = py_func_new((void *)probe_callback, captures);
             if (callback == 0) return 4;
-            PyObject *wr = py_weakref_new(target, callback);
+            wr = py_weakref_new(target, callback);
             if (wr == 0) return 5;
 
             pcc_gc_store_root(&target_root, target);
@@ -5866,6 +7156,30 @@ def test_backend4_weakref_callback_loads_forwarded_slot(tmp_path):
             pcc_gc_release(wr);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 6;
             if (pcc_gc_relocation_set_contains(callback_root) != 1) return 7;
             PyObject *moved_callback_raw = pcc_gc_relocate_copy(
@@ -5874,6 +7188,7 @@ def test_backend4_weakref_callback_loads_forwarded_slot(tmp_path):
             );
             if (moved_callback_raw == 0) return 8;
             pcc_gc_release(moved_callback_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *loaded_callback = pcc_gc_load_ptr(0, &callback_root);
             if (loaded_callback == 0) return 9;
@@ -5919,26 +7234,57 @@ def test_backend4_remap_rewrites_weakref_target_slot_before_forwarding_retiremen
         #include "py_internal.h"
         #include <stdio.h>
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *target_root = 0;
-            PyObject *weakref_root = 0;
+        static PyObject *target_root;
+        static PyObject *weakref_root;
+        static PyObject *target;
+        static PyObject *wr;
+        static PyObject *old_target;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            target_root = 0;
+            weakref_root = 0;
             pcc_gc_scheduler_root_register(&target_root);
             pcc_gc_scheduler_root_register(&weakref_root);
 
-            PyObject *target = py_list_new(0);
+            target = py_list_new(0);
             if (target == 0) return 3;
             py_list_append(target, py_int_from_i64(44));
-            PyObject *wr = py_weakref_new(target, py_None);
+            wr = py_weakref_new(target, py_None);
             if (wr == 0) return 4;
             pcc_gc_store_root(&target_root, target);
             pcc_gc_store_root(&weakref_root, wr);
             pcc_gc_release(target);
             pcc_gc_release(wr);
-            PyObject *old_target = target_root;
+            old_target = target_root;
 
             pcc_gc_reset_relocation_set();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(65536) <= 0) return 5;
+            if (pcc_resume_world() != 0) return 91;
             if (pcc_gc_relocation_set_contains(old_target) != 1) return 6;
             if (pcc_gc_backend4_evacuation_drain(65536) <= 0) return 7;
 
@@ -5986,21 +7332,49 @@ def test_backend4_gc_callback_remove_loads_forwarded_list_slot(tmp_path):
             return py_None;
         }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static PyObject *callback_root;
+        static PyObject *captures;
+        static PyObject *callback;
 
-            PyObject *callback_root = 0;
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            callback_root = 0;
             pcc_gc_scheduler_root_register(&callback_root);
 
-            PyObject *captures = py_tuple_new(0);
+            captures = py_tuple_new(0);
             if (captures == 0) return 3;
-            PyObject *callback = py_func_new((void *)probe_callback, captures);
+            callback = py_func_new((void *)probe_callback, captures);
             if (callback == 0) return 4;
             py_gc_callbacks_append(callback);
             pcc_gc_store_root(&callback_root, callback);
             pcc_gc_release(captures);
             pcc_gc_release(callback);
 
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 5;
             if (pcc_gc_relocation_set_contains(callback_root) != 1) return 6;
             PyObject *moved_raw = pcc_gc_relocate_copy(
@@ -6009,6 +7383,7 @@ def test_backend4_gc_callback_remove_loads_forwarded_list_slot(tmp_path):
             );
             if (moved_raw == 0) return 12;
             pcc_gc_release(moved_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *loaded_callback = pcc_gc_load_ptr(0, &callback_root);
             if (loaded_callback == 0) return 7;
@@ -6016,7 +7391,9 @@ def test_backend4_gc_callback_remove_loads_forwarded_list_slot(tmp_path):
 
             pcc_gc_telemetry_reset();
             py_gc_callbacks_remove(loaded_callback);
-            if (pcc_gc_telemetry(PCC_GC_COUNTER_READ_BARRIERS) <= 0) return 9;
+            /* The stop's resume rewrote every reference (4e2feca72): the
+             * accessor's loads are plain, no read barrier runs. */
+            if (pcc_gc_telemetry(PCC_GC_COUNTER_READ_BARRIERS) != 0) return 9;
 
             PyObject *callbacks = py_gc_callbacks_list();
             if (callbacks == 0) return 10;
@@ -6052,17 +7429,22 @@ def test_backend4_relocation_preserves_unstarted_thread_wrapper(tmp_path):
             int64_t finished;
         } ProbeThreadObject;
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *root = 0;
+        static PyObject *root;
+        static PyObject *args;
+        static PyObject *arg;
+        static PyObject *thread;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            root = 0;
             pcc_gc_scheduler_root_register(&root);
 
-            PyObject *args = py_tuple_new(1);
-            PyObject *arg = py_int_from_i64(44);
+            args = py_tuple_new(1);
+            arg = py_int_from_i64(44);
             if (args == 0 || arg == 0) return 3;
             py_tuple_set_item(args, 0, arg);
 
-            PyObject *thread = py_threading_thread_new(py_None, args);
+            thread = py_threading_thread_new(py_None, args);
             if (thread == 0) return 4;
             pcc_gc_store_root(&root, thread);
             pcc_gc_release(thread);
@@ -6070,6 +7452,30 @@ def test_backend4_relocation_preserves_unstarted_thread_wrapper(tmp_path):
             pcc_gc_release(arg);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 5;
             if (pcc_gc_relocation_set_contains(root) != 1) return 6;
             PyObject *moved_raw = pcc_gc_relocate_copy(
@@ -6078,6 +7484,7 @@ def test_backend4_relocation_preserves_unstarted_thread_wrapper(tmp_path):
             );
             if (moved_raw == 0) return 7;
             pcc_gc_release(moved_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *loaded = pcc_gc_load_ptr(0, &root);
             if (loaded == 0) return 8;
@@ -6134,21 +7541,31 @@ def test_backend4_thread_start_loads_forwarded_args_slot(tmp_path):
             return py_tuple_get(args, 0);
         }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *thread_root = 0;
-            PyObject *args_root = 0;
+        static PyObject *thread_root;
+        static PyObject *args_root;
+        static PyObject *captures;
+        static PyObject *callable;
+        static PyObject *arg;
+        static PyObject *args;
+        static PyObject *thread;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            thread_root = 0;
+            args_root = 0;
             pcc_gc_scheduler_root_register(&thread_root);
             pcc_gc_scheduler_root_register(&args_root);
 
-            PyObject *captures = py_tuple_new(0);
-            PyObject *callable = py_func_new((void *)probe_thread_entry, captures);
-            PyObject *arg = py_str_new("thread-arg", 10);
-            PyObject *args = py_tuple_new(1);
+            captures = py_tuple_new(0);
+            callable = py_func_new((void *)probe_thread_entry, captures);
+            arg = py_str_new("thread-arg", 10);
+            args = py_tuple_new(1);
             if (captures == 0 || callable == 0 || arg == 0 || args == 0) return 3;
             py_tuple_set_item(args, 0, arg);
+            /* The probe is the tuple's constructor: publish it once filled. */
+            pcc_gc_publish_initialized(args);
 
-            PyObject *thread = py_threading_thread_new(callable, args);
+            thread = py_threading_thread_new(callable, args);
             if (thread == 0) return 4;
             pcc_gc_store_root(&thread_root, thread);
             pcc_gc_store_root(&args_root, args);
@@ -6159,6 +7576,30 @@ def test_backend4_thread_start_loads_forwarded_args_slot(tmp_path):
             pcc_gc_release(captures);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(128) <= 0) return 5;
             if (pcc_gc_relocation_set_contains(args_root) != 1) return 6;
             PyObject *moved_args_raw = pcc_gc_relocate_copy(
@@ -6167,6 +7608,7 @@ def test_backend4_thread_start_loads_forwarded_args_slot(tmp_path):
             );
             if (moved_args_raw == 0) return 7;
             pcc_gc_release(moved_args_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *loaded_args = pcc_gc_load_ptr(0, &args_root);
             if (loaded_args == 0) return 8;
@@ -6219,19 +7661,48 @@ def test_backend4_module_attr_slot_helper_loads_forwarded_value(tmp_path):
             PyObject **items;
         } ProbeListObject;
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *slot = 0;
+        static PyObject *slot;
+        static PyObject *value;
+        static PyObject *default_value;
+        static int64_t value_id;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            slot = 0;
             pcc_gc_scheduler_root_register(&slot);
 
-            PyObject *value = py_list_new(0);
-            PyObject *default_value = py_str_new("default", 7);
+            value = py_list_new(0);
+            default_value = py_str_new("default", 7);
             if (value == 0 || default_value == 0) return 3;
-            int64_t value_id = pcc_gc_object_id(value);
+            value_id = pcc_gc_object_id(value);
             pcc_gc_store_root(&slot, value);
             pcc_gc_release(value);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) <= 0) return 4;
             if (pcc_gc_relocation_set_contains(slot) != 1) return 5;
             PyObject *moved_raw = pcc_gc_relocate_copy(
@@ -6240,6 +7711,7 @@ def test_backend4_module_attr_slot_helper_loads_forwarded_value(tmp_path):
             );
             if (moved_raw == 0) return 6;
             pcc_gc_release(moved_raw);
+            if (pcc_resume_world() != 0) return 91;
 
             PyObject *loaded = pcc_gc_load_ptr(0, &slot);
             if (loaded == 0) return 7;
@@ -6283,12 +7755,15 @@ def test_backend4_relocation_skips_thread_wrapper_with_native_handle(tmp_path):
             int64_t finished;
         } ProbeThreadObject;
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *root = 0;
+        static PyObject *root;
+        static ProbeThreadObject *thread;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            root = 0;
             pcc_gc_scheduler_root_register(&root);
 
-            ProbeThreadObject *thread = (ProbeThreadObject *)pcc_gc_alloc(
+            thread = (ProbeThreadObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeThreadObject),
                 PY_TYPE_THREAD,
                 0x100
@@ -6305,9 +7780,34 @@ def test_backend4_relocation_skips_thread_wrapper_with_native_handle(tmp_path):
 
             pcc_gc_telemetry_reset();
             pcc_gc_publish_initialized((PyObject *)thread);
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) != 0) return 4;
             if (pcc_gc_relocation_set_contains((PyObject *)thread) != 0) return 5;
             if (pcc_gc_relocate_copy((PyObject *)thread, (int64_t)sizeof(ProbeThreadObject)) != 0) return 6;
+            if (pcc_resume_world() != 0) return 91;
             if (pcc_gc_backend4_verify_no_old_addresses() != 1) return 7;
 
             pcc_gc_store_root(&root, 0);
@@ -6354,25 +7854,32 @@ def test_backend4_relocation_skips_native_handle_wrappers(tmp_path):
             int64_t value;
         } ProbeCondLikeObject;
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static ProbeFileObject *file;
+        static ProbeLockObject *lock;
+        static ProbeRLockObject *rlock;
+        static ProbeCondLikeObject *event;
+        static ProbeCondLikeObject *cond;
+        static ProbeCondLikeObject *sem;
 
-            ProbeFileObject *file = (ProbeFileObject *)pcc_gc_alloc(
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            file = (ProbeFileObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeFileObject), PY_TYPE_FILE, 0
             );
-            ProbeLockObject *lock = (ProbeLockObject *)pcc_gc_alloc(
+            lock = (ProbeLockObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeLockObject), PY_TYPE_THREAD_LOCK, 0
             );
-            ProbeRLockObject *rlock = (ProbeRLockObject *)pcc_gc_alloc(
+            rlock = (ProbeRLockObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeRLockObject), PY_TYPE_THREAD_RLOCK, 0
             );
-            ProbeCondLikeObject *event = (ProbeCondLikeObject *)pcc_gc_alloc(
+            event = (ProbeCondLikeObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeCondLikeObject), PY_TYPE_THREAD_EVENT, 0
             );
-            ProbeCondLikeObject *cond = (ProbeCondLikeObject *)pcc_gc_alloc(
+            cond = (ProbeCondLikeObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeCondLikeObject), PY_TYPE_THREAD_CONDITION, 0
             );
-            ProbeCondLikeObject *sem = (ProbeCondLikeObject *)pcc_gc_alloc(
+            sem = (ProbeCondLikeObject *)pcc_gc_alloc(
                 (int64_t)sizeof(ProbeCondLikeObject), PY_TYPE_THREAD_SEMAPHORE, 0
             );
             if (
@@ -6403,6 +7910,30 @@ def test_backend4_relocation_skips_native_handle_wrappers(tmp_path):
             pcc_gc_publish_initialized((PyObject *)event);
             pcc_gc_publish_initialized((PyObject *)cond);
             pcc_gc_publish_initialized((PyObject *)sem);
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(64) != 0) return 4;
             if (pcc_gc_relocation_set_contains((PyObject *)file) != 0) return 5;
             if (pcc_gc_relocation_set_contains((PyObject *)lock) != 0) return 6;
@@ -6447,6 +7978,7 @@ def test_backend4_relocation_skips_native_handle_wrappers(tmp_path):
                     (int64_t)sizeof(ProbeCondLikeObject)
                 ) != 0
             ) return 16;
+            if (pcc_resume_world() != 0) return 91;
 
             printf("backend4-native-handle-wrapper-skip-ok\\n");
             return 0;
@@ -6471,12 +8003,16 @@ def test_backend4_fragmentation_score_tracks_live_evacuation_debt(tmp_path):
             PyObject **items;
         } ProbeListObject;
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *root = 0;
+        static PyObject *root;
+        static PyObject *s;
+        static int64_t stable;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            root = 0;
             pcc_gc_scheduler_root_register(&root);
-            PyObject *s = py_list_new(0);
-            int64_t stable = pcc_gc_object_id(s);
+            s = py_list_new(0);
+            stable = pcc_gc_object_id(s);
             if (stable <= 0) return 10;
             pcc_gc_store_root(&root, s);
             pcc_gc_release(s);
@@ -6486,6 +8022,30 @@ def test_backend4_fragmentation_score_tracks_live_evacuation_debt(tmp_path):
             if (pcc_gc_backend4_forwarding_entries() != 0) return 12;
             if (pcc_gc_backend4_fragmentation_score() != 0) return 13;
 
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(1) != 1) return 14;
             if (pcc_gc_relocation_set_contains(s) != 1) return 15;
             PyObject *moved = pcc_gc_relocate_copy(
@@ -6493,6 +8053,7 @@ def test_backend4_fragmentation_score_tracks_live_evacuation_debt(tmp_path):
                 (int64_t)sizeof(ProbeListObject)
             );
             if (moved == 0) return 16;
+            if (pcc_resume_world() != 0) return 91;
             pcc_gc_release(moved);
             if (pcc_gc_telemetry(PCC_GC_COUNTER_RELOCATION_FORWARDS) != 1) return 17;
             if (pcc_gc_backend4_forwarding_entries() != 1) return 24;
@@ -6572,25 +8133,57 @@ def test_backend4_genzgc_page_policy_records_candidates_and_evacuated_bytes(tmp_
             return (PyObject *)cls;
         }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *small_root = 0;
-            PyObject *medium_root = 0;
-            PyObject *large_root = 0;
+        static PyObject *small_root;
+        static PyObject *medium_root;
+        static PyObject *large_root;
+        static PyObject *small;
+        static PyObject *medium;
+        static PyObject *large;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            small_root = 0;
+            medium_root = 0;
+            large_root = 0;
             pcc_gc_scheduler_root_register(&small_root);
             pcc_gc_scheduler_root_register(&medium_root);
             pcc_gc_scheduler_root_register(&large_root);
 
-            PyObject *small = new_sized_class(128, "SmallPage", 1101);
-            PyObject *medium = new_sized_class(8192, "MediumPage", 1102);
-            PyObject *large = new_sized_class(70000, "LargePage", 1103);
+            small = new_sized_class(128, "SmallPage", 1101);
+            medium = new_sized_class(8192, "MediumPage", 1102);
+            large = new_sized_class(70000, "LargePage", 1103);
             if (small == 0 || medium == 0 || large == 0) return 3;
             pcc_gc_store_root(&small_root, small);
             pcc_gc_store_root(&medium_root, medium);
             pcc_gc_store_root(&large_root, large);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(32) != 2) return 4;
+            if (pcc_resume_world() != 0) return 91;
             if (pcc_gc_relocation_set_size() != 2) return 5;
             if (pcc_gc_relocation_set_contains(small) != 1) return 6;
             if (pcc_gc_relocation_set_contains(medium) != 1) return 24;
@@ -6713,21 +8306,51 @@ def test_backend4_genzgc_reset_relocation_set_clears_page_policy_shape(tmp_path)
             return (PyObject *)cls;
         }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *small_root = 0;
-            PyObject *medium_root = 0;
+        static PyObject *small_root;
+        static PyObject *medium_root;
+        static PyObject *small;
+        static PyObject *medium;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            small_root = 0;
+            medium_root = 0;
             pcc_gc_scheduler_root_register(&small_root);
             pcc_gc_scheduler_root_register(&medium_root);
 
-            PyObject *small = new_sized_class(128, "ResetSmallPage", 1111);
-            PyObject *medium = new_sized_class(8192, "ResetMediumPage", 1112);
+            small = new_sized_class(128, "ResetSmallPage", 1111);
+            medium = new_sized_class(8192, "ResetMediumPage", 1112);
             if (small == 0 || medium == 0) return 3;
             pcc_gc_store_root(&small_root, small);
             pcc_gc_store_root(&medium_root, medium);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(32) != 2) return 4;
+            if (pcc_resume_world() != 0) return 91;
             if (pcc_gc_relocation_set_size() != 2) return 5;
             if (pcc_gc_backend4_evacuation_candidate_score() != 2) return 6;
             if (pcc_gc_backend4_evacuation_candidate_bytes() != 8320) return 7;
@@ -7265,8 +8888,11 @@ def test_backend4_genzgc_fragmentation_policy_exposes_backlog_and_efficiency(tmp
             return (PyObject *)obj;
         }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static PyObject *a;
+        static PyObject *b;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
             pcc_gc_reset_relocation_set();
             pcc_gc_telemetry_reset();
             if (pcc_gc_backend4_small_page_limit_bytes() != 4096) return 20;
@@ -7276,10 +8902,34 @@ def test_backend4_genzgc_fragmentation_policy_exposes_backlog_and_efficiency(tmp
             if (pcc_gc_telemetry(PCC_GC_COUNTER_GENZGC_MEDIUM_PAGE_LIMIT_BYTES) != 65536) return 24;
             if (pcc_gc_telemetry(PCC_GC_COUNTER_GENZGC_LARGE_DEFER_LIMIT_BYTES) != 65536) return 25;
 
-            PyObject *a = alloc_empty_list_payload(64);
-            PyObject *b = alloc_empty_list_payload(64);
+            a = alloc_empty_list_payload(64);
+            b = alloc_empty_list_payload(64);
             if (a == 0 || b == 0) return 3;
 
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(2) != 2) return 4;
             if (pcc_gc_backend4_evacuation_candidate_bytes() != 128) return 5;
             if (pcc_gc_backend4_fragmentation_backlog_bytes() != 128) return 6;
@@ -7288,6 +8938,7 @@ def test_backend4_genzgc_fragmentation_policy_exposes_backlog_and_efficiency(tmp
 
             PyObject *moved = pcc_gc_relocate_copy(a, 64);
             if (moved == 0) return 9;
+            if (pcc_resume_world() != 0) return 91;
             if (pcc_gc_backend4_evacuated_bytes() != 64) return 10;
             if (pcc_gc_backend4_fragmentation_backlog_bytes() != 64) return 11;
             if (pcc_gc_backend4_evacuation_efficiency_per_mille() != 500) return 12;
@@ -9293,18 +10944,46 @@ def test_backend4_relocated_container_payload_tables_register_spans(tmp_path):
             return 1;
         }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static PyObject *list_obj;
+        static PyObject *dict_obj;
+        static PyObject *set_obj;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
             pcc_gc_telemetry_reset();
 
-            PyObject *list_obj = py_list_new(96);
-            PyObject *dict_obj = py_dict_new();
-            PyObject *set_obj = py_set_new();
+            list_obj = py_list_new(96);
+            dict_obj = py_dict_new();
+            set_obj = py_set_new();
             if (list_obj == 0 || dict_obj == 0 || set_obj == 0) return 3;
             if (!fill_dict(dict_obj)) return 4;
             if (!fill_set(set_obj)) return 5;
 
             pcc_gc_reset_relocation_set();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(65536) <= 0) return 6;
             if (pcc_gc_relocation_set_contains(list_obj) != 1) return 7;
             if (pcc_gc_relocation_set_contains(dict_obj) != 1) return 8;
@@ -9322,6 +11001,7 @@ def test_backend4_relocated_container_payload_tables_register_spans(tmp_path):
                 set_obj,
                 sizeof(PySetObject)
             );
+            if (pcc_resume_world() != 0) return 91;
             if (list_moved == 0 || dict_moved == 0 || set_moved == 0) return 10;
 
             PyListObject *list = (PyListObject *)list_moved;
@@ -9386,35 +11066,64 @@ def test_backend4_continuation_stack_slots_register_payload_spans(tmp_path):
             return a >= 0 && b >= 0 && a != b;
         }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static int32_t frame_map[1] = {96};
+        static PyObject *slots[96];
+        static PyObject *cont_obj;
+        static PyContinuationObject *cont;
+        static int64_t initial_card0;
+        static int64_t initial_card80;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
             pcc_gc_telemetry_reset();
 
-            int32_t frame_map[1] = {96};
-            PyObject *slots[96];
             for (int64_t i = 0; i < 96; i++) {
                 slots[i] = py_int_from_i64(i + 5000);
                 if (slots[i] == 0) return 3;
             }
-            PyObject *cont_obj = py_continuation_new(frame_map, slots, (void *)0x1234);
+            cont_obj = py_continuation_new(frame_map, slots, (void *)0x1234);
             for (int64_t i = 0; i < 96; i++) {
                 pcc_gc_release(slots[i]);
             }
             if (cont_obj == 0) return 4;
 
-            PyContinuationObject *cont = (PyContinuationObject *)cont_obj;
+            cont = (PyContinuationObject *)cont_obj;
             if (cont->stack_chunk == 0 || cont->stack_chunk->slots == 0) return 5;
-            int64_t initial_card0 = pcc_gc_backend4_zpage_owner_slot_span_card(
+            initial_card0 = pcc_gc_backend4_zpage_owner_slot_span_card(
                 cont_obj,
                 &cont->stack_chunk->slots[0]
             );
-            int64_t initial_card80 = pcc_gc_backend4_zpage_owner_slot_span_card(
+            initial_card80 = pcc_gc_backend4_zpage_owner_slot_span_card(
                 cont_obj,
                 &cont->stack_chunk->slots[80]
             );
             if (!card_differs(initial_card0, initial_card80)) return 6;
 
             pcc_gc_reset_relocation_set();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(65536) <= 0) return 7;
             if (pcc_gc_relocation_set_contains(cont_obj) != 1) return 8;
 
@@ -9423,6 +11132,7 @@ def test_backend4_continuation_stack_slots_register_payload_spans(tmp_path):
                 sizeof(PyContinuationObject)
             );
             if (moved_obj == 0) return 9;
+            if (pcc_resume_world() != 0) return 91;
             PyContinuationObject *moved = (PyContinuationObject *)moved_obj;
             if (moved->stack_chunk == 0 || moved->stack_chunk->slots == 0) return 10;
             int64_t moved_card0 = pcc_gc_backend4_zpage_owner_slot_span_card(
@@ -9464,13 +11174,16 @@ def test_backend4_relocated_class_method_table_registers_payload_span(tmp_path):
             return a >= 0 && b >= 0 && a != b;
         }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static PyClassObject *cls;
+        static PyObject *func;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
             pcc_gc_telemetry_reset();
 
-            PyClassObject *cls = py_class_new("PayloadClass", 0, 0, 0, 0);
+            cls = py_class_new("PayloadClass", 0, 0, 0, 0);
             if (cls == 0) return 3;
-            PyObject *func = py_func_new((void *)probe_entry, py_None);
+            func = py_func_new((void *)probe_entry, py_None);
             if (func == 0) return 4;
 
             for (int i = 0; i < 96; i++) {
@@ -9479,6 +11192,30 @@ def test_backend4_relocated_class_method_table_registers_payload_span(tmp_path):
             if (cls->methods == 0 || cls->n_methods <= 80) return 5;
 
             pcc_gc_reset_relocation_set();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(65536) <= 0) return 6;
             if (pcc_gc_relocation_set_contains((PyObject *)cls) != 1) return 7;
             PyObject *moved_obj = pcc_gc_relocate_copy(
@@ -9486,6 +11223,7 @@ def test_backend4_relocated_class_method_table_registers_payload_span(tmp_path):
                 sizeof(PyClassObject)
             );
             if (moved_obj == 0) return 8;
+            if (pcc_resume_world() != 0) return 91;
             PyClassObject *moved = (PyClassObject *)moved_obj;
             if (moved->methods == 0 || moved->n_methods <= 80) return 9;
 
@@ -9787,11 +11525,18 @@ def test_backend4_genzgc_relocation_retargets_remembered_list_slots(tmp_path):
             PyObject **items;
         } ProbeListObject;
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static ProbeListObject *owner;
+        static PyObject *young;
+        static int64_t slots0;
+        static int64_t cards0;
+        static int64_t dirty0;
+        static PyObject **old_slot;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
             pcc_gc_telemetry_reset();
 
-            ProbeListObject *owner = (ProbeListObject *)pcc_gc_alloc(
+            owner = (ProbeListObject *)pcc_gc_alloc(
                 sizeof(ProbeListObject),
                 PY_TYPE_LIST,
                 PY_FLAG_GC_OLD
@@ -9802,14 +11547,14 @@ def test_backend4_genzgc_relocation_retargets_remembered_list_slots(tmp_path):
             owner->items = (PyObject **)calloc(2, sizeof(PyObject *));
             if (owner->items == 0) return 4;
 
-            PyObject *young = py_list_new(0);
+            young = py_list_new(0);
             if (young == 0) return 5;
 
-            int64_t slots0 = pcc_gc_backend4_zpage_remembered_slots();
-            int64_t cards0 = pcc_gc_backend4_zpage_remembered_cards();
-            int64_t dirty0 = pcc_gc_backend4_zpage_dirty_pages();
+            slots0 = pcc_gc_backend4_zpage_remembered_slots();
+            cards0 = pcc_gc_backend4_zpage_remembered_cards();
+            dirty0 = pcc_gc_backend4_zpage_dirty_pages();
 
-            PyObject **old_slot = &owner->items[0];
+            old_slot = &owner->items[0];
             pcc_gc_store_ptr((PyObject *)owner, old_slot, young);
             if (pcc_gc_backend4_remembered_page_contains_slot(old_slot) != 1) return 6;
             if (pcc_gc_backend4_zpage_remembered_slots() - slots0 != 1) return 7;
@@ -9817,6 +11562,30 @@ def test_backend4_genzgc_relocation_retargets_remembered_list_slots(tmp_path):
             if (pcc_gc_backend4_zpage_dirty_pages() - dirty0 != 1) return 9;
 
             pcc_gc_publish_initialized((PyObject *)owner);
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(8) <= 0) return 10;
             if (pcc_gc_relocation_set_contains((PyObject *)owner) != 1) return 11;
             PyObject *moved_raw = pcc_gc_relocate_copy(
@@ -9824,6 +11593,7 @@ def test_backend4_genzgc_relocation_retargets_remembered_list_slots(tmp_path):
                 (int64_t)sizeof(ProbeListObject)
             );
             if (moved_raw == 0) return 12;
+            if (pcc_resume_world() != 0) return 91;
             ProbeListObject *moved = (ProbeListObject *)moved_raw;
             if (moved == owner) return 13;
             if (moved->items == owner->items) return 14;
@@ -9872,11 +11642,18 @@ def test_backend4_genzgc_relocation_retargets_inline_tuple_slots(tmp_path):
             PyObject *items[2];
         } ProbeTupleObject;
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static ProbeTupleObject *owner;
+        static PyObject *young;
+        static int64_t slots0;
+        static int64_t cards0;
+        static int64_t dirty0;
+        static PyObject **old_slot;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
             pcc_gc_telemetry_reset();
 
-            ProbeTupleObject *owner = (ProbeTupleObject *)pcc_gc_alloc(
+            owner = (ProbeTupleObject *)pcc_gc_alloc(
                 sizeof(ProbeTupleObject),
                 PY_TYPE_TUPLE,
                 PY_FLAG_GC_OLD
@@ -9884,19 +11661,43 @@ def test_backend4_genzgc_relocation_retargets_inline_tuple_slots(tmp_path):
             if (owner == 0) return 3;
             owner->len = 2;
 
-            PyObject *young = py_list_new(0);
+            young = py_list_new(0);
             if (young == 0) return 4;
 
-            int64_t slots0 = pcc_gc_backend4_zpage_remembered_slots();
-            int64_t cards0 = pcc_gc_backend4_zpage_remembered_cards();
-            int64_t dirty0 = pcc_gc_backend4_zpage_dirty_pages();
+            slots0 = pcc_gc_backend4_zpage_remembered_slots();
+            cards0 = pcc_gc_backend4_zpage_remembered_cards();
+            dirty0 = pcc_gc_backend4_zpage_dirty_pages();
 
-            PyObject **old_slot = &owner->items[0];
+            old_slot = &owner->items[0];
             pcc_gc_store_ptr((PyObject *)owner, old_slot, young);
             if (pcc_gc_backend4_remembered_page_contains_slot(old_slot) != 1) return 5;
             if (pcc_gc_backend4_zpage_remembered_slots() - slots0 != 1) return 6;
 
             pcc_gc_publish_initialized((PyObject *)owner);
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(8) <= 0) return 7;
             if (pcc_gc_relocation_set_contains((PyObject *)owner) != 1) return 8;
             PyObject *moved_raw = pcc_gc_relocate_copy(
@@ -9904,6 +11705,7 @@ def test_backend4_genzgc_relocation_retargets_inline_tuple_slots(tmp_path):
                 (int64_t)sizeof(ProbeTupleObject)
             );
             if (moved_raw == 0) return 9;
+            if (pcc_resume_world() != 0) return 91;
             ProbeTupleObject *moved = (ProbeTupleObject *)moved_raw;
             if (moved == owner) return 10;
             if (moved->items[0] != young) return 11;
@@ -10148,15 +11950,20 @@ def test_backend4_genzgc_evacuation_incomplete_batches_track_budget_backlog(tmp_
         #include "py_runtime.h"
         #include <stdio.h>
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
-            PyObject *small_root = 0;
-            PyObject *medium_root = 0;
+        static PyObject *small_root;
+        static PyObject *medium_root;
+        static PyObject *small;
+        static PyObject *medium;
+
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+            small_root = 0;
+            medium_root = 0;
             pcc_gc_scheduler_root_register(&small_root);
             pcc_gc_scheduler_root_register(&medium_root);
 
-            PyObject *small = pcc_gc_alloc(128, PY_TYPE_LIST, 0x100);
-            PyObject *medium = pcc_gc_alloc(8192, PY_TYPE_LIST, 0x100);
+            small = pcc_gc_alloc(128, PY_TYPE_LIST, 0x100);
+            medium = pcc_gc_alloc(8192, PY_TYPE_LIST, 0x100);
             if (small == 0 || medium == 0) return 3;
             pcc_gc_store_root(&small_root, small);
             pcc_gc_store_root(&medium_root, medium);
@@ -10164,7 +11971,32 @@ def test_backend4_genzgc_evacuation_incomplete_batches_track_budget_backlog(tmp_
             pcc_gc_telemetry_reset();
             pcc_gc_publish_initialized((PyObject *)small);
             pcc_gc_publish_initialized((PyObject *)medium);
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(32) != 2) return 4;
+            if (pcc_resume_world() != 0) return 91;
             if (pcc_gc_relocation_set_size() != 2) return 5;
             if (pcc_gc_step(1) < 1) return 6;
             if (pcc_gc_relocation_set_size() != 1) return 7;
@@ -10198,17 +12030,45 @@ def test_backend4_genzgc_evacuation_drain_preserves_page_handoff_until_empty(tmp
             PY_FLAG_GC_OLD = 0x100
         };
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static PyObject *a;
+        static PyObject *b;
 
-            PyObject *a = pcc_gc_alloc(128, PY_TYPE_LIST, PY_FLAG_GC_OLD);
-            PyObject *b = pcc_gc_alloc(128, PY_TYPE_LIST, PY_FLAG_GC_OLD);
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            a = pcc_gc_alloc(128, PY_TYPE_LIST, PY_FLAG_GC_OLD);
+            b = pcc_gc_alloc(128, PY_TYPE_LIST, PY_FLAG_GC_OLD);
             if (a == 0 || b == 0) return 3;
 
             pcc_gc_telemetry_reset();
             pcc_gc_publish_initialized((PyObject *)a);
             pcc_gc_publish_initialized((PyObject *)b);
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(8) != 2) return 4;
+            if (pcc_resume_world() != 0) return 91;
             if (pcc_gc_relocation_set_size() != 2) return 5;
             if (pcc_gc_backend4_evacuation_page_candidate_score() != 1) return 6;
 
@@ -10271,12 +12131,16 @@ def test_backend4_genzgc_evacuation_page_handoff_reports_current_pressure(tmp_pa
             return owner;
         }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static ProbeListObject *dirty;
+        static ProbeListObject *clean;
+        static PyObject *young;
 
-            ProbeListObject *dirty = new_old_owner();
-            ProbeListObject *clean = new_old_owner();
-            PyObject *young = pcc_gc_alloc(
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            dirty = new_old_owner();
+            clean = new_old_owner();
+            young = pcc_gc_alloc(
                 64,
                 PY_TYPE_LIST,
                 PY_FLAG_GC_YOUNG | PY_FLAG_GC_PINNED
@@ -10286,7 +12150,32 @@ def test_backend4_genzgc_evacuation_page_handoff_reports_current_pressure(tmp_pa
             pcc_gc_store_ptr((PyObject *)dirty, &dirty->items[0], young);
             pcc_gc_telemetry_reset();
             pcc_gc_publish_initialized((PyObject *)young);
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(8) != 2) return 4;
+            if (pcc_resume_world() != 0) return 91;
             if (pcc_gc_backend4_evacuation_page_candidate_score() != 1) return 5;
             if (pcc_gc_backend4_evacuation_page_candidate_bytes() != 256) return 6;
             if (pcc_gc_backend4_evacuation_page_dirty_cards() != 1) return 7;
@@ -10320,17 +12209,45 @@ def test_backend4_genzgc_evacuation_page_drain_moves_whole_selected_page(tmp_pat
             PY_FLAG_GC_OLD = 0x100
         };
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static PyObject *a;
+        static PyObject *b;
 
-            PyObject *a = pcc_gc_alloc(128, PY_TYPE_LIST, PY_FLAG_GC_OLD);
-            PyObject *b = pcc_gc_alloc(128, PY_TYPE_LIST, PY_FLAG_GC_OLD);
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            a = pcc_gc_alloc(128, PY_TYPE_LIST, PY_FLAG_GC_OLD);
+            b = pcc_gc_alloc(128, PY_TYPE_LIST, PY_FLAG_GC_OLD);
             if (a == 0 || b == 0) return 3;
 
             pcc_gc_telemetry_reset();
             pcc_gc_publish_initialized((PyObject *)a);
             pcc_gc_publish_initialized((PyObject *)b);
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(8) != 2) return 4;
+            if (pcc_resume_world() != 0) return 91;
             if (pcc_gc_relocation_set_size() != 2) return 5;
             if (pcc_gc_backend4_evacuation_page_candidate_score() != 1) return 6;
             if (pcc_gc_backend4_evacuation_page_candidate_bytes() != 256) return 7;
@@ -10601,24 +12518,55 @@ def test_backend4_dict_get_loads_forwarded_key_and_value_slots(tmp_path):
             return (PyObject *)list;
         }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static PyObject *dict;
+        static PyObject *key;
+        static PyObject *value;
+        static int64_t key_id;
+        static int64_t value_id;
 
-            PyObject *dict = py_dict_new();
-            PyObject *key = new_hashable_payload();
-            PyObject *value = new_pointer_payload();
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            dict = py_dict_new();
+            key = new_hashable_payload();
+            value = new_pointer_payload();
             if (dict == 0 || key == 0 || value == 0) return 3;
 
-            int64_t key_id = pcc_gc_object_id(key);
-            int64_t value_id = pcc_gc_object_id(value);
+            key_id = pcc_gc_object_id(key);
+            value_id = pcc_gc_object_id(value);
             py_dict_set(dict, key, value);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(256) <= 0) return 4;
             if (pcc_gc_relocation_set_contains(key) != 1) return 5;
             if (pcc_gc_relocation_set_contains(value) != 1) return 6;
             PyObject *new_key = pcc_gc_relocate_copy(key, 64);
             PyObject *new_value = pcc_gc_relocate_copy(value, 64);
+            if (pcc_resume_world() != 0) return 91;
             if (new_key == 0 || new_value == 0) return 7;
 
             PyObject *got = py_dict_get(dict, new_key);
@@ -10707,21 +12655,50 @@ def test_backend4_dict_traversal_loads_forwarded_key_and_value_slots(tmp_path):
             return (PyObject *)list;
         }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static PyObject *dict;
+        static PyObject *key;
+        static PyObject *value;
 
-            PyObject *dict = py_dict_new();
-            PyObject *key = new_hashable_payload();
-            PyObject *value = new_pointer_payload();
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            dict = py_dict_new();
+            key = new_hashable_payload();
+            value = new_pointer_payload();
             if (dict == 0 || key == 0 || value == 0) return 3;
             py_dict_set(dict, key, value);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(256) <= 0) return 4;
             if (pcc_gc_relocation_set_contains(key) != 1) return 5;
             if (pcc_gc_relocation_set_contains(value) != 1) return 6;
             PyObject *new_key = pcc_gc_relocate_copy(key, 64);
             PyObject *new_value = pcc_gc_relocate_copy(value, 64);
+            if (pcc_resume_world() != 0) return 91;
             if (new_key == 0 || new_value == 0) return 7;
 
             PyObject *keys = py_dict_keys(dict);
@@ -10793,20 +12770,49 @@ def test_backend4_set_contains_loads_forwarded_key_slot(tmp_path):
             return (PyObject *)tuple;
         }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static PyObject *set;
+        static PyObject *value;
+        static int64_t value_id;
 
-            PyObject *set = py_set_new();
-            PyObject *value = new_hashable_payload();
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            set = py_set_new();
+            value = new_hashable_payload();
             if (set == 0 || value == 0) return 3;
             py_set_add(set, value);
-            int64_t value_id = pcc_gc_object_id(value);
+            value_id = pcc_gc_object_id(value);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(128) <= 0) return 4;
             if (pcc_gc_relocation_set_contains(value) != 1) return 5;
             PyObject *moved_value = pcc_gc_relocate_copy(value, 64);
             if (moved_value == 0) return 6;
+            if (pcc_resume_world() != 0) return 91;
 
             if (py_set_contains(set, moved_value) != 1) return 7;
 
@@ -10880,22 +12886,36 @@ def test_backend4_obj_compare_loads_forwarded_container_slots(tmp_path):
             return (PyObject *)list;
         }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static PyObject *tuple_a;
+        static PyObject *tuple_b;
+        static PyObject *list_a;
+        static PyObject *list_b;
+        static PyObject *dict_a;
+        static PyObject *dict_b;
+        static PyObject *set_a;
+        static PyObject *set_b;
+        static PyObject *tuple_s;
+        static PyObject *list_s;
+        static PyObject *dict_k;
+        static PyObject *dict_v;
+        static PyObject *set_s;
 
-            PyObject *tuple_a = py_tuple_new(1);
-            PyObject *tuple_b = py_tuple_new(1);
-            PyObject *list_a = py_list_new(1);
-            PyObject *list_b = py_list_new(1);
-            PyObject *dict_a = py_dict_new();
-            PyObject *dict_b = py_dict_new();
-            PyObject *set_a = py_set_new();
-            PyObject *set_b = py_set_new();
-            PyObject *tuple_s = new_list_payload();
-            PyObject *list_s = new_list_payload();
-            PyObject *dict_k = new_hashable_payload();
-            PyObject *dict_v = new_list_payload();
-            PyObject *set_s = new_hashable_payload();
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            tuple_a = py_tuple_new(1);
+            tuple_b = py_tuple_new(1);
+            list_a = py_list_new(1);
+            list_b = py_list_new(1);
+            dict_a = py_dict_new();
+            dict_b = py_dict_new();
+            set_a = py_set_new();
+            set_b = py_set_new();
+            tuple_s = new_list_payload();
+            list_s = new_list_payload();
+            dict_k = new_hashable_payload();
+            dict_v = new_list_payload();
+            set_s = new_hashable_payload();
             if (tuple_a == 0 || tuple_b == 0 || list_a == 0 || list_b == 0) return 3;
             if (dict_a == 0 || dict_b == 0 || set_a == 0 || set_b == 0) return 4;
             if (tuple_s == 0 || list_s == 0 || dict_k == 0 || dict_v == 0 || set_s == 0) return 5;
@@ -10906,6 +12926,30 @@ def test_backend4_obj_compare_loads_forwarded_container_slots(tmp_path):
             py_set_add(set_a, set_s);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(512) <= 0) return 6;
             if (pcc_gc_relocation_set_contains(tuple_s) != 1) return 19;
             if (pcc_gc_relocation_set_contains(list_s) != 1) return 20;
@@ -10922,6 +12966,7 @@ def test_backend4_obj_compare_loads_forwarded_container_slots(tmp_path):
             if (dict_k_moved == 0) return 26;
             if (dict_v_moved == 0) return 27;
             if (set_moved == 0) return 28;
+            if (pcc_resume_world() != 0) return 91;
 
             py_tuple_set_item(tuple_b, 0, tuple_moved);
             py_list_append(list_b, list_moved);
@@ -11003,19 +13048,49 @@ def test_backend4_json_dumps_loads_forwarded_container_slots(tmp_path):
             return (PyObject *)list;
         }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static PyObject *lst;
+        static PyObject *dict;
+        static PyObject *list_value;
+        static PyObject *dict_key;
+        static PyObject *dict_value;
 
-            PyObject *lst = py_list_new(1);
-            PyObject *dict = py_dict_new();
-            PyObject *list_value = new_list_payload();
-            PyObject *dict_key = py_str_new("json-key", 8);
-            PyObject *dict_value = new_list_payload();
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            lst = py_list_new(1);
+            dict = py_dict_new();
+            list_value = new_list_payload();
+            dict_key = py_str_new("json-key", 8);
+            dict_value = new_list_payload();
             if (lst == 0 || dict == 0 || list_value == 0 || dict_key == 0 || dict_value == 0) return 3;
             py_list_append(lst, list_value);
             py_dict_set(dict, dict_key, dict_value);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(256) <= 0) return 4;
             if (pcc_gc_relocation_set_contains(list_value) != 1) return 5;
             if (pcc_gc_relocation_set_contains(dict_key) != 0) return 6;
@@ -11023,6 +13098,7 @@ def test_backend4_json_dumps_loads_forwarded_container_slots(tmp_path):
 
             PyObject *list_moved = pcc_gc_relocate_copy(list_value, 64);
             PyObject *value_moved = pcc_gc_relocate_copy(dict_value, 64);
+            if (pcc_resume_world() != 0) return 91;
             if (list_moved == 0 || value_moved == 0) return 8;
 
             PyObject *list_json = py_json_dumps(lst);
@@ -11084,15 +13160,22 @@ def test_backend4_print_format_loads_forwarded_sequence_slots(tmp_path):
             return (PyObject *)list;
         }
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static PyObject *lst;
+        static PyObject *tuple;
+        static PyObject *many;
+        static PyObject *list_value;
+        static PyObject *tuple_value;
+        static PyObject *many_value;
 
-            PyObject *lst = py_list_new(1);
-            PyObject *tuple = py_tuple_new(1);
-            PyObject *many = py_tuple_new(1);
-            PyObject *list_value = new_list_payload();
-            PyObject *tuple_value = new_list_payload();
-            PyObject *many_value = new_list_payload();
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            lst = py_list_new(1);
+            tuple = py_tuple_new(1);
+            many = py_tuple_new(1);
+            list_value = new_list_payload();
+            tuple_value = new_list_payload();
+            many_value = new_list_payload();
             if (lst == 0 || tuple == 0 || many == 0) return 3;
             if (list_value == 0 || tuple_value == 0 || many_value == 0) return 4;
             py_list_append(lst, list_value);
@@ -11100,6 +13183,30 @@ def test_backend4_print_format_loads_forwarded_sequence_slots(tmp_path):
             py_tuple_set_item(many, 0, many_value);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             if (pcc_gc_select_relocation_set(256) <= 0) return 5;
             if (pcc_gc_relocation_set_contains(list_value) != 1) return 6;
             if (pcc_gc_relocation_set_contains(tuple_value) != 1) return 7;
@@ -11108,6 +13215,7 @@ def test_backend4_print_format_loads_forwarded_sequence_slots(tmp_path):
             PyObject *list_moved = pcc_gc_relocate_copy(list_value, 64);
             PyObject *tuple_moved = pcc_gc_relocate_copy(tuple_value, 64);
             PyObject *many_moved = pcc_gc_relocate_copy(many_value, 64);
+            if (pcc_resume_world() != 0) return 91;
             if (list_moved == 0 || tuple_moved == 0 || many_moved == 0) return 9;
 
             py_print(lst);
@@ -11145,15 +13253,22 @@ def test_backend4_os_path_helpers_leave_leaf_string_sequence_slots_unforwarded(
         #include "py_internal.h"
         #include <stdio.h>
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static PyObject *join_parts;
+        static PyObject *common_paths;
+        static PyObject *join_a;
+        static PyObject *join_b;
+        static PyObject *common_a;
+        static PyObject *common_b;
 
-            PyObject *join_parts = py_list_new(2);
-            PyObject *common_paths = py_tuple_new(2);
-            PyObject *join_a = py_str_new("root", 4);
-            PyObject *join_b = py_str_new("leaf", 4);
-            PyObject *common_a = py_str_new("/tmp/pcc/a", 10);
-            PyObject *common_b = py_str_new("/tmp/pcc/b", 10);
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            join_parts = py_list_new(2);
+            common_paths = py_tuple_new(2);
+            join_a = py_str_new("root", 4);
+            join_b = py_str_new("leaf", 4);
+            common_a = py_str_new("/tmp/pcc/a", 10);
+            common_b = py_str_new("/tmp/pcc/b", 10);
             if (join_parts == 0 || common_paths == 0) return 3;
             if (join_a == 0 || join_b == 0 || common_a == 0 || common_b == 0) return 4;
 
@@ -11163,7 +13278,32 @@ def test_backend4_os_path_helpers_leave_leaf_string_sequence_slots_unforwarded(
             py_tuple_set_item(common_paths, 1, common_b);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             (void)pcc_gc_select_relocation_set(256);
+            if (pcc_resume_world() != 0) return 91;
             if (pcc_gc_relocation_set_contains(join_a) != 0) return 6;
             if (pcc_gc_relocation_set_contains(join_b) != 0) return 7;
             if (pcc_gc_relocation_set_contains(common_a) != 0) return 8;
@@ -11205,19 +13345,49 @@ def test_backend4_str_join_leaves_leaf_string_list_items_unforwarded(tmp_path):
         #include "py_internal.h"
         #include <stdio.h>
 
-        int main(void) {
-            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+        static PyObject *sep;
+        static PyObject *lst;
+        static PyObject *left;
+        static PyObject *right;
 
-            PyObject *sep = py_str_new("/", 1);
-            PyObject *lst = py_list_new(2);
-            PyObject *left = py_str_new("left", 4);
-            PyObject *right = py_str_new("right", 5);
+        __attribute__((noinline)) static int probe_build(void) {
+            py_gc_disable();
+
+            sep = py_str_new("/", 1);
+            lst = py_list_new(2);
+            left = py_str_new("left", 4);
+            right = py_str_new("right", 5);
             if (sep == 0 || lst == 0 || left == 0 || right == 0) return 3;
             py_list_append(lst, left);
             py_list_append(lst, right);
 
             pcc_gc_telemetry_reset();
+            return 0;
+        }
+
+        /* The conservative scan reads every word of the live stack: clear what
+
+         * probe_build's calls left below main's frame, or a stale word there
+
+         * pins a probe object (as Boehm's GC_clear_stack). */
+
+        __attribute__((noinline)) static void probe_scrub_stack(void) {
+
+            volatile unsigned char words[65536];
+
+            for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+
+        }
+
+
+        int main(void) {
+            if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+            int built = probe_build();
+            if (built != 0) return built;
+            probe_scrub_stack();
+            if (pcc_stop_the_world() != 0) return 90;
             (void)pcc_gc_select_relocation_set(128);
+            if (pcc_resume_world() != 0) return 91;
             if (pcc_gc_relocation_set_contains(left) != 0) return 5;
             if (pcc_gc_relocation_set_contains(right) != 0) return 6;
 

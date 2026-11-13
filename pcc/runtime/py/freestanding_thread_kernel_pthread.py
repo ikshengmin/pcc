@@ -119,6 +119,9 @@ define_thread_local_ptr_null("pcc_tls_thread_record_py")
 # Enabled only by the tracing prototype before managed allocation. Snapshots
 # include raw runtime locals which precise application stack maps do not own.
 define_global_i32("pcc_thread_conservative_roots_enabled", 0)
+# The handle a native root binding answers when the conservative scan
+# already roots its slots (_native_slots_conservative): nothing is bound.
+define_global_i64("pcc_thread_native_root_stack_handle", 0)
 _THREAD_ROOT_DATA: int = 48
 _THREAD_ROOT_BYTES: int = 56
 _THREAD_ROOT_CAPACITY: int = 64
@@ -2088,12 +2091,32 @@ def pcc_gc_native_frame_leave(frame) -> int:
     return 0
 
 
+@c_abi_export("pcc_thread_native_slots_conservative")
+def _native_slots_conservative(slots) -> int:
+    """1 when the conservative stack scan already roots ``slots``: the
+    count-free collectors scan every word of every stopped thread's stack
+    and keep in place what those words name, so a native root range in
+    this thread's own stack needs no binding (as a scheduler root in the
+    stack needs no registration, pcc_gc_stack_slot_root_is_conservative)."""
+    if atomic_load_i32(
+        global_addr("pcc_thread_conservative_roots_enabled"), 0, "acquire"
+    ) == 0:
+        return 0
+    high: int = pcc_thread_stack_high()
+    address: int = ptr_to_int(slots)
+    if high == 0 or address < ptr_to_int(frame_address()) or address >= high:
+        return 0
+    return 1
+
+
 @c_abi_export("pcc_gc_native_root_bind_range")
 def pcc_gc_native_root_bind_range(slots, signed_count: int):
     if (ptr_is_null(slots) or signed_count == 0 or signed_count < -1152921504606846975
             or signed_count > 1152921504606846975):
         pcc_platform_abort()
         return null()
+    if _native_slots_conservative(slots) != 0:
+        return global_addr("pcc_thread_native_root_stack_handle")
     record = _running_thread_record()
     if ptr_is_null(record) != 0:
         pcc_platform_abort()
@@ -2126,6 +2149,8 @@ def pcc_gc_native_root_bind_range(slots, signed_count: int):
 def pcc_gc_native_root_unbind(entry) -> None:
     if ptr_is_null(entry):
         return
+    if ptr_to_int(entry) == ptr_to_int(global_addr("pcc_thread_native_root_stack_handle")):
+        return
     record = _running_thread_record()
     if ptr_is_null(record) != 0:
         pcc_platform_abort()
@@ -2149,6 +2174,8 @@ def pcc_gc_native_root_unbind(entry) -> None:
 @c_abi_export("pcc_gc_native_root_unbind_slots")
 def pcc_gc_native_root_unbind_slots(slots) -> None:
     if ptr_is_null(slots):
+        return
+    if _native_slots_conservative(slots) != 0:
         return
     record = _running_thread_record()
     if ptr_is_null(record) != 0:

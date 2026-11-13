@@ -29,6 +29,7 @@ OWNED_SYMBOLS = {
     "pcc_gc_backend4_relocate_copy_preallocated_unlocked",
     "pcc_gc_relocate_copy",
     "pcc_gc_relocation_copy_evacuation_page_unlist",
+    "pcc_gc_relocation_copy_slab_evacuation_unlist",
 }
 RAW_FUNCTION_IMPORTS = {
     "pcc_gc_gray_count_increment_acq_rel",
@@ -44,6 +45,8 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_backend4_zpage_detach_for_relocation",
     "pcc_gc_backend4_zpage_finish_relocation_detach",
     "pcc_gc_config_ensure",
+    # The nonmoving protocol copies only inside a stopped world.
+    "pcc_thread_world_stop_epoch_held",
     # An allocator cell's page is its object slab's GC page.
     "pcc_gc_page_of",
     "pcc_gc_page_set_evacuating",
@@ -76,6 +79,8 @@ RAW_GLOBAL_IMPORTS = {
     "pcc_gc_backend4_evacuation_page_head",
     "pcc_gc_backend4_relocation_target_alloc",
     "pcc_gc_backend4_reseed_commit_owner",
+    "pcc_gc_backend4_slab_evacuation_head",
+    "pcc_gc_nonmoving_count_free",
     "pcc_gc_backend4_reseed_page_count_cursor",
     "pcc_gc_backend4_reseed_page_revision",
     "pcc_gc_backend4_reseed_relocation_cursor",
@@ -217,7 +222,8 @@ def test_relocation_copy_preserves_transaction_contract() -> None:
     assert "_evacuation_page_unlist(from_page)" in body
     assert "store_ptr(finish_plan, 8, page_node)" in body
     assert "from_slab_page = pcc_gc_page_of(from_obj)" in body
-    assert "_evacuation_page_unlist(from_slab_page)" in body
+    # A slab leaves its own list, apart from the logical zpages'.
+    assert "_slab_evacuation_unlist(from_slab_page)" in body
     assert "pcc_gc_page_set_evacuating(from_slab_page, 0)" in body
     assert "store_ptr(finish_plan, 8, slab_node)" in body
     unlist = strict.split("def _evacuation_page_unlist(page):", 1)[1].split(
@@ -245,6 +251,10 @@ def test_relocation_copy_preserves_transaction_contract() -> None:
     assert "pcc_gc_backend4_zpage_detach_for_relocation(from_obj)" in body
 
     public = strict.split('def pcc_gc_relocate_copy(from_obj, size: i64):', 1)[1]
+    # The nonmoving protocol refuses a copy outside a stopped world: its
+    # resume rewrites every reference (pcc_gc_relocation_settle_stopped).
+    stop_guard = public.index("pcc_thread_world_stop_epoch_held() < 0")
+    assert stop_guard < public.index("eligible = 0", stop_guard) < public.index("pcc_gc_alloc(")
     assert "finish_plan = stack_alloc(24)" in public
     assert "store_ptr(finish_plan, 16, null())" in public
     assert (

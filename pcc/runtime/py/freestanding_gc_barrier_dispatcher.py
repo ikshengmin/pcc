@@ -246,6 +246,9 @@ def pcc_gc_step(budget: i64) -> i64:
                             or ptr_is_null(
                                 global_load_ptr("pcc_gc_backend4_evacuation_page_head")
                             ) == 0
+                            or ptr_is_null(
+                                global_load_ptr("pcc_gc_backend4_slab_evacuation_head")
+                            ) == 0
                             or load_i32(global_addr("pcc_gc_forwarding_population"), 0) > 0
                         )
                     ):

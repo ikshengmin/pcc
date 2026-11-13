@@ -50,6 +50,15 @@ def _evacuation_page_head():
     return global_load_ptr("pcc_gc_backend4_evacuation_page_head")
 
 
+@c_abi_export("pcc_gc_relocation_drain_page_list_head")
+def _page_list_head(slab: i64):
+    """The logical-zpage evacuation list, or with ``slab`` the object-slab
+    one (pcc_gc_backend4_slab_evacuation_head)."""
+    if slab != 0:
+        return global_load_ptr("pcc_gc_backend4_slab_evacuation_head")
+    return global_load_ptr("pcc_gc_backend4_evacuation_page_head")
+
+
 @c_abi_export("pcc_gc_relocation_drain_note_incomplete_batch")
 def _note_incomplete_batch(moved: i64) -> None:
     if moved <= 0 or ptr_is_null(_relocation_set_head()) != 0:
@@ -124,7 +133,7 @@ def pcc_gc_backend4_evacuation_drain(budget: i64) -> i64:
 
 
 @c_abi_export("pcc_gc_relocation_drain_selected_page")
-def _relocate_selected_page(page) -> i64:
+def _relocate_selected_page(page, slab: i64) -> i64:
     if ptr_is_null(page) != 0:
         return 0
     moved: i64 = 0
@@ -173,7 +182,7 @@ def _relocate_selected_page(page) -> i64:
             pcc_thread_safepoint()
 
         pcc_py_gc_minor_graph_lock()
-        head = _evacuation_page_head()
+        head = _page_list_head(slab)
         if ptr_is_null(head) != 0:
             page_complete = 1
         elif ptr_eq(load_ptr(head, 0), page) == 0:
@@ -193,19 +202,28 @@ def pcc_gc_backend4_evacuation_page_drain(page_budget: i64) -> i64:
         return 0
     moved: i64 = 0
     pages: i64 = 0
-    while pages < page_budget:
+    # Logical zpages first, then object slabs.
+    slab: i64 = 0
+    stalled: i64 = 0
+    while pages < page_budget and stalled == 0:
         pcc_py_gc_minor_graph_lock()
-        head = _evacuation_page_head()
-        if ptr_is_null(head) != 0:
-            pcc_py_gc_minor_graph_unlock()
-            break
-        page = load_ptr(head, 0)
+        head = _page_list_head(slab)
+        if ptr_is_null(head) != 0 and slab == 0:
+            slab = 1
+            head = _page_list_head(slab)
+        page = null()
+        if ptr_is_null(head) == 0:
+            page = load_ptr(head, 0)
         pcc_py_gc_minor_graph_unlock()
-        page_moved: i64 = _relocate_selected_page(page)
-        if page_moved <= 0:
-            break
-        moved = moved + page_moved
-        pages = pages + 1
+        if ptr_is_null(page) != 0:
+            stalled = 1
+        else:
+            page_moved: i64 = _relocate_selected_page(page, slab)
+            if page_moved <= 0:
+                stalled = 1
+            else:
+                moved = moved + page_moved
+                pages = pages + 1
     pcc_py_gc_minor_graph_lock()
     _note_incomplete_batch(moved)
     should_remap: i64 = 0

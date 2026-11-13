@@ -340,6 +340,9 @@ _relocate_copy_payload = extern(
     (c_ptr, c_ptr, c_int64, c_int64),
     c_int64,
 )
+pcc_gc_page_set_evacuating = extern(
+    "pcc_gc_page_set_evacuating", (c_ptr, c_int64), c_void
+)
 pcc_gc_relocate_copy = extern(
     "pcc_gc_relocate_copy", (c_ptr, c_int64), c_ptr
 )
@@ -5463,6 +5466,17 @@ def pcc_gc_reset_relocation_set() -> None:
             break
         pcc_thread_safepoint()
         _object_graph_lock()
+
+    # Object slabs leave their evacuation list and evacuate no longer.
+    _object_graph_lock()
+    slab_batch = global_load_ptr("pcc_gc_backend4_slab_evacuation_head")
+    global_store_ptr("pcc_gc_backend4_slab_evacuation_head", null())
+    slab_node = slab_batch
+    while ptr_is_null(slab_node) == 0:
+        pcc_gc_page_set_evacuating(load_ptr(slab_node, 0), 0)
+        slab_node = load_ptr(slab_node, 8)
+    _object_graph_unlock()
+    _backend4_evacuation_page_finish_detached(slab_batch)
 
     _object_graph_lock()
     global_store_ptr("pcc_gc_backend4_reset_object_cursor", pcc_gc_object_walk_first())

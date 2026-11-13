@@ -52,6 +52,9 @@ pcc_gc_backend4_zpage_finish_relocation_detach = extern(
     "pcc_gc_backend4_zpage_finish_relocation_detach", (c_ptr,), c_void
 )
 pcc_gc_config_ensure = extern("pcc_gc_config_ensure", (), c_int64)
+pcc_thread_world_stop_epoch_held = extern(
+    "pcc_thread_world_stop_epoch_held", (), c_int64
+)
 pcc_gc_page_of = extern("pcc_gc_page_of", (c_ptr,), c_ptr)
 pcc_gc_page_set_evacuating = extern(
     "pcc_gc_page_set_evacuating", (c_ptr, c_int64), c_void
@@ -160,6 +163,28 @@ def _evacuation_page_unlist(page):
         else:
             prev_page = page_node
             page_node = next_page
+    return found
+
+
+@c_abi_export("pcc_gc_relocation_copy_slab_evacuation_unlist")
+def _slab_evacuation_unlist(page):
+    """Unlink ``page``'s node from the slab evacuation list and return it
+    (detached), or NULL. The caller holds the graph lock and frees it."""
+    found = null()
+    prev_node = null()
+    node = global_load_ptr("pcc_gc_backend4_slab_evacuation_head")
+    while ptr_is_null(node) == 0 and ptr_is_null(found) != 0:
+        nxt = load_ptr(node, 8)
+        if ptr_eq(load_ptr(node, 0), page) != 0:
+            if ptr_is_null(prev_node) != 0:
+                global_store_ptr("pcc_gc_backend4_slab_evacuation_head", nxt)
+            else:
+                store_ptr(prev_node, 8, nxt)
+            store_ptr(node, 8, null())
+            found = node
+        else:
+            prev_node = node
+            node = nxt
     return found
 
 
@@ -393,8 +418,8 @@ def pcc_gc_backend4_relocate_copy_preallocated_unlocked(
                 store_i32(from_page, 108, 0)
                 store_ptr(finish_plan, 8, page_node)
     if ptr_is_null(from_slab_page) == 0:
-        # The slab stays on the evacuation list while the relocation set
-        # holds another of its objects; the last copy clears it.
+        # The slab stays on the slab evacuation list while the relocation
+        # set holds another of its objects; the last copy clears it.
         slab_has_candidate: i64 = 0
         if pcc_gc_relocation_member_count(from_obj) != 0:
             slab_has_candidate = 1
@@ -404,7 +429,7 @@ def pcc_gc_backend4_relocate_copy_preallocated_unlocked(
                 slab_has_candidate = 1
             scan = load_ptr(scan, 8)
         if slab_has_candidate == 0:
-            slab_node = _evacuation_page_unlist(from_slab_page)
+            slab_node = _slab_evacuation_unlist(from_slab_page)
             if ptr_is_null(slab_node) == 0:
                 pcc_gc_page_set_evacuating(from_slab_page, 0)
                 store_ptr(finish_plan, 8, slab_node)
@@ -425,6 +450,13 @@ def pcc_gc_relocate_copy(from_obj, size: i64):
     tag: i64 = 0
     slot_count: i64 = -1
     if load_i32(global_addr("pcc_gc_backend_selected"), 0) != 4:
+        eligible = 0
+    elif (
+        load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+        and pcc_thread_world_stop_epoch_held() < 0
+    ):
+        # The nonmoving protocol moves objects only inside a stopped world,
+        # whose resume rewrites every reference (pcc_gc_relocation_settle_stopped).
         eligible = 0
     elif load_i64(
         global_addr("pcc_gc_backend4_reseed_commit_owner"), 0

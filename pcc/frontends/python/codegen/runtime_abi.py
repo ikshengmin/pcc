@@ -2045,6 +2045,7 @@ FREESTANDING_GC_PTR_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_backend4_active_small_old_page',
         'pcc_gc_backend4_active_small_young_page',
         'pcc_gc_backend4_evacuation_page_head',
+        'pcc_gc_backend4_slab_evacuation_head',
         'pcc_gc_concurrent_sweep_objects',
         'pcc_gc_backend4_evacuation_find_memo_page',
         'pcc_gc_backend4_evacuation_find_memo_node',

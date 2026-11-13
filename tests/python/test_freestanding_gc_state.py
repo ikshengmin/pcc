@@ -223,8 +223,9 @@ def test_freestanding_gc_state_has_complete_raw_abi_and_initial_values(
     # c2ea4d51a); GC4 owes a remap until the world resumes (1, 4e2feca72);
     # object-slab GC pages alternate mark bitmaps by one epoch word (1,
     # 0872e7cfd). A GC4 relocation copy allocates outside the slabs being
-    # evacuated while one word says so (1).
-    assert len(expected) == 287
+    # evacuated while one word says so (1). Its evacuating object slabs have
+    # their own list, apart from the logical zpages' (1).
+    assert len(expected) == 288
     assert expected["pcc_gc_backend4_remap_owed"] == ("define_global_i32", 0)
     assert expected["pcc_gc_page_mark_epoch_word"] == ("define_global_i64", 0)
     assert expected["pcc_gc_nonmoving_count_free"] == ("define_global_i32", 0)

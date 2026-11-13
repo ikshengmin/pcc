@@ -94,6 +94,9 @@ pcc_allocator_record_span_page = extern(
     "pcc_allocator_record_span_page", (c_ptr,), c_ptr
 )
 pcc_gc_page_evacuating = extern("pcc_gc_page_evacuating", (c_ptr,), c_int64)
+pcc_gc_pin_conservative_thread_roots = extern(
+    "pcc_gc_pin_conservative_thread_roots", (), c_void
+)
 pcc_gc_alloc_stage_drain_locked = extern(
     "pcc_gc_alloc_stage_drain_locked", (), c_int64
 )
@@ -1110,7 +1113,7 @@ def _slab_rank_locked(ranked, page_budget: i64, live_percent: i64) -> i64:
 @c_abi_export("pcc_gc_relocation_selector_slab_add_candidate")
 def _slab_add_candidate(obj, page, size: i64, plan) -> i64:
     """Add ``obj`` of the slab ``page`` to the relocation set; the slab joins
-    the evacuation page list with its first candidate. As
+    the slab evacuation list with its first candidate. As
     _backend4_add_candidate_node, whose page is a logical zpage."""
     if load_i64(global_addr("pcc_gc_backend4_relocation_reset_owner"), 0) != 0:
         return 0
@@ -1161,20 +1164,16 @@ def _slab_add_candidate(obj, page, size: i64, plan) -> i64:
         global_addr("pcc_gc_backend4_evacuation_candidates"), 0, candidates + 1
     )
     if list_page != 0:
+        # The slab joins the slab evacuation list, never the logical-zpage
+        # list: that list's readers use the zpage layout.
         page_node = load_ptr(plan, 8)
         store_ptr(plan, 8, load_ptr(page_node, 8))
         store_ptr(page_node, 0, page)
         store_ptr(
-            page_node, 8, global_load_ptr("pcc_gc_backend4_evacuation_page_head")
+            page_node, 8, global_load_ptr("pcc_gc_backend4_slab_evacuation_head")
         )
-        global_store_ptr("pcc_gc_backend4_evacuation_page_head", page_node)
+        global_store_ptr("pcc_gc_backend4_slab_evacuation_head", page_node)
         pcc_gc_page_set_evacuating(page, 1)
-        revision: i64 = load_i64(
-            global_addr("pcc_gc_backend4_reseed_page_revision"), 0
-        )
-        store_i64(
-            global_addr("pcc_gc_backend4_reseed_page_revision"), 0, revision + 1
-        )
     _backend4_note_page_candidate(size, null())
     return 1
 
@@ -1300,6 +1299,14 @@ def pcc_gc_select_relocation_set(budget: i64) -> i64:
     if owner_thread_id <= 0:
         return 0
     if ptr_is_null(_zpage_head()) != 0:
+        if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
+            # Under the nonmoving protocol an object moves only inside a
+            # stopped world and only when no thread's stack or registers
+            # name it: select in the caller's stop, after pinning what the
+            # stopped threads' words name, as the collector's step does.
+            if pcc_thread_world_stop_epoch_held() < 0:
+                return 0
+            pcc_gc_pin_conservative_thread_roots()
         # GC4 objects are allocator cells: their pages are object slabs. An
         # explicit selection takes every slab with live objects, sparsest
         # first, as the logical zpages admitted every page with room.
