@@ -24,9 +24,10 @@ FRONTIER = (
     # `extern crate uv_performance_memory_allocator;` is active.
     ("crates/uv/src/bin/uv.rs", "4:14: external crate dependency loading is not implemented"),
     # `@` patterns, tool lint paths, feature cfg (self-update is off), the
-    # lifetime argument of `BaseClientBuilder<'a>` and the built-in derives of
-    # `GlobalInitialization` parse; line 104 is a `const fn` method.
-    ("crates/uv/src/lib.rs", "104:5: expected 'fn', found 'const'"),
+    # lifetime argument of `BaseClientBuilder<'a>`, the built-in derives of
+    # `GlobalInitialization` and its `const fn` method parse; line 105 is the
+    # method's body, `matches!(self, Self::Initialize)`.
+    ("crates/uv/src/lib.rs", "105:9: macro invocations require macro-by-example expansion"),
     # The whole root parses and compiles: env!("CARGO_PKG_VERSION") is the
     # `&'static str` "0.13.7" and the disabled test module is skipped. What
     # remains is the gate on every input: PCC has no owned borrow checker,
