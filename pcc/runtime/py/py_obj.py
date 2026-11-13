@@ -188,6 +188,9 @@ pcc_allocator_alloc_object = extern(
 pcc_allocator_alloc_object_outside_evacuation = extern(
     "pcc_allocator_alloc_object_outside_evacuation", (c_int64,), c_ptr
 )
+pcc_allocator_object_publish_fresh = extern(
+    "pcc_allocator_object_publish_fresh", (c_ptr,), c_int64
+)
 pcc_gc_backend4_try_zpage_alloc = extern(
     "pcc_gc_backend4_try_zpage_alloc",
     (c_int64, c_int32),
@@ -537,7 +540,9 @@ def pcc_gc_alloc(size: int, type_tag: int, flags: int):
                 stored_flags = stored_flags | 65536
         else:
             stored_flags = stored_flags & ~65536
+    from_allocator: int = 0
     if ptr_is_null(obj) != 0:
+        from_allocator = 1
         # Zero-filled like calloc: fresh objects are
         # GC-visible before their constructor fills the body; visitors
         # must see NULL slots, not malloc garbage.  Objects draw from the
@@ -567,8 +572,17 @@ def pcc_gc_alloc(size: int, type_tag: int, flags: int):
         pcc_debug_note_alloc_size(obj, size)
     # Exact provenance is visible before the tracking layer can publish the
     # object.  Backend-0 objects and graph leaves intentionally stay here.
-    if pcc_gc_pointer_register(obj) < 0:
-        return null()
+    # A cell the allocator just handed out publishes without the radix
+    # validation pcc_gc_pointer_register gives an arbitrary pointer; a large
+    # raw mapping (0) and a zpage object keep that path.
+    published: int = 0
+    if from_allocator != 0:
+        published = pcc_allocator_object_publish_fresh(obj)
+        if published < 0:
+            return null()
+    if published == 0:
+        if pcc_gc_pointer_register(obj) < 0:
+            return null()
     # The tracing collectors index the new object; GC0 keeps no index.
     # Count-free GC1/GC2 stage it in this thread's ring and the next
     # graph-lock holder that needs the index registers the batch.

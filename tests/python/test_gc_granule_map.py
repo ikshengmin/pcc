@@ -595,6 +595,10 @@ def test_granule_grow_preserves_all_sixteen_keys_per_slab(
     assert out == ["0", "9600", "9600"]
 
 
+def py_fallback_alloc_index(py_alloc: str) -> int:
+    return py_alloc.index("obj = pcc_allocator_alloc_object(size)")
+
+
 def test_gc_alloc_fallback_tails_preserve_publication_order_by_runtime_mode() -> None:
     """Lock semantic order without conflating C calloc and pcc-Py slabs."""
 
@@ -624,11 +628,19 @@ def test_gc_alloc_fallback_tails_preserve_publication_order_by_runtime_mode() ->
         "store_i32(obj, PYOBJECTHEADER_TYPE_TAG_OFFSET, type_tag)",
         "store_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET, stored_flags)",
         "pcc_debug_note_alloc_size(obj, size)",
+        "pcc_allocator_object_publish_fresh(obj)",
         "pcc_gc_pointer_register(obj)",
         "pcc_gc_note_object_allocated_sized(obj, size)",
     ]
     py_positions = [py_alloc.index(token) for token in py_tokens]
     assert py_positions == sorted(py_positions)
+    # Only the allocator's own result publishes without the radix
+    # validation: a zpage object (or any other origin) keeps the register.
+    fresh = py_alloc.index("published = pcc_allocator_object_publish_fresh(obj)")
+    assert py_alloc.rindex("if from_allocator != 0:", 0, fresh) > py_alloc.index(
+        "from_allocator = 1"
+    )
+    assert py_alloc.index("from_allocator = 1") < py_fallback_alloc_index(py_alloc)
     py_fallback_alloc = py_alloc.index("obj = pcc_allocator_alloc_object(size)")
     py_header_publish = py_alloc.index(
         "store_i64(obj, PYOBJECTHEADER_REFCOUNT_OFFSET, 1)"

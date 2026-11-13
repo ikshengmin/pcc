@@ -154,6 +154,9 @@ pcc_gc_granule_object_publish = extern(
 pcc_gc_granule_object_retire = extern(
     "pcc_gc_granule_object_retire", (c_ptr,), c_int64
 )
+pcc_allocator_object_retire_live = extern(
+    "pcc_allocator_object_retire_live", (c_ptr,), c_int64
+)
 pcc_gc_managed_pointer_index_insert = extern(
     "pcc_gc_managed_pointer_index_insert", (c_ptr,), c_int64
 )
@@ -300,6 +303,16 @@ pcc_thread_no_park_enter = extern("pcc_thread_no_park_enter", (), c_void)
 pcc_thread_no_park_exit = extern("pcc_thread_no_park_exit", (), c_void)
 pcc_gc_page_mark_set = extern("pcc_gc_page_mark_set", (c_ptr,), c_int64)
 pcc_gc_page_mark_assign = extern("pcc_gc_page_mark_assign", (c_ptr, c_int64), c_void)
+pcc_gc_page_mark_assign_cell = extern(
+    "pcc_gc_page_mark_assign_cell", (c_ptr, c_int64, c_int64), c_void
+)
+pcc_allocator_object_cell_locate = extern(
+    "pcc_allocator_object_cell_locate", (c_ptr, c_ptr), c_ptr
+)
+# pcc_allocator_object_cell_locate's answer (freestanding_allocator).
+_CELL_LOCATE_SPAN = 0
+_CELL_LOCATE_CELL = 8
+_CELL_LOCATE_BYTES = 16
 pcc_gc_object_is_black = extern("pcc_gc_object_is_black", (c_ptr, c_int64), c_int64)
 pcc_gc_object_list_revision_bump = extern(
     "pcc_gc_object_list_revision_bump", (), c_void
@@ -4585,10 +4598,25 @@ def pcc_gc_free_object_memory(o) -> None:
     if is_tagged_int(o) != 0:
         return
     if _gc0_terminal_free_has_no_metadata(o) != 0:
+        # The predicate just proved what pcc_gc_note_object_freeing and
+        # pcc_gc_pointer_unregister would establish again for this object:
+        # GC0's atomic counts, no lease, no identity list (nothing can add
+        # a dying object to one) and a LIVE exact object cell. Their
+        # answers for it are the free-watch note and one lifecycle CAS, so
+        # take those directly instead of repeating the provenance probe
+        # and the cell's radix validation.
         if ptr_eq(o, global_load_ptr("pcc_gc_last_noted_free")) == 0:
-            pcc_gc_note_object_freeing(o)
-        if pcc_gc_pointer_unregister(o) < 0:
+            watch = global_load_ptr("pcc_gc_free_watch")
+            if ptr_is_null(watch) == 0 and ptr_eq(load_ptr(watch, _FREE_WATCH_OBJECT), o) != 0:
+                store_i64(watch, _FREE_WATCH_NOTED, 1)
+            global_store_ptr("pcc_gc_last_noted_free", o)
+        if (atomic_load_i64(global_addr("pcc_gc_scalar_sweep_state"), 0, "acquire") != 0
+                and pcc_gc_scalar_sweep_owns(o) != 0):
             return
+        if pcc_allocator_object_retire_live(o) == 0:
+            # Not LIVE any more: the ordinary retirement decides.
+            if pcc_gc_pointer_unregister(o) < 0:
+                return
         free(o)
         return
     if pcc_gc_pointer_is_managed(o) == 0:
@@ -5148,12 +5176,13 @@ def pcc_gc_register_object_cell(o, size: int) -> int:
     if (load_i32(o, 12) & 384) != 0:
         # A generation bit asks for the locked young-list registration.
         return 0
-    record = pcc_allocator_object_node_record_ensure(o)
+    # One span lookup answers the record, the span and the cell number.
+    located = stack_alloc(_CELL_LOCATE_BYTES)
+    record = pcc_allocator_object_cell_locate(o, located)
     if ptr_is_null(record) != 0:
         return 0
-    span = pcc_gc_granule_span(o)
-    if ptr_is_null(span) != 0:
-        return 0
+    span = load_ptr(located, _CELL_LOCATE_SPAN)
+    cell: int = load_i64(located, _CELL_LOCATE_CELL)
     if size < 16:
         size = 16
     pcc_thread_no_park_enter()
@@ -5167,7 +5196,7 @@ def pcc_gc_register_object_cell(o, size: int) -> int:
         # Allocated during a mark: born marked (black).
         color = 32
     # A reused cell's bit may be its previous object's: assign it.
-    pcc_gc_page_mark_assign(o, color & 32)
+    pcc_gc_page_mark_assign_cell(span, cell, color & 32)
     store_i32(o, 12, (flags & ~56) | color | 16384)
     # Every allocating thread reaches here: write the shared request word
     # only when it changes, so its line stays shared between them.

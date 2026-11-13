@@ -10,6 +10,7 @@ from pcc.unsafe import (
     global_addr,
     global_load_ptr,
     global_store_ptr,
+    int_to_ptr,
     is_tagged_int,
     load_i32,
     load_i64,
@@ -17,9 +18,8 @@ from pcc.unsafe import (
     malloc,
     null,
     ptr_eq,
-    ptr_add,
-    ptr_diff,
     ptr_is_null,
+    ptr_to_int,
     store_i32,
     store_i64,
     store_ptr,
@@ -50,19 +50,17 @@ NODE_RECORD_SPAN = 24
 OBJECT_NODE_RECORD_BYTES = 96
 # The record's index key (freestanding_gc_index_table RECORD_INDEX_KEY).
 RECORD_INDEX_KEY = 88
+# The allocator's object span descriptor (freestanding_allocator): its cell
+# count, its record array (SPAN_NODE_RECORDS_OFFSET) and the next span with
+# records (SPAN_RECORD_NEXT_OFFSET). A walk reads them directly: every step
+# of every collector pass used to call the allocator three times for them.
+SPAN_CELL_COUNT = 24
+SPAN_NODE_RECORDS = 48
+SPAN_RECORD_NEXT = 56
 
 pcc_gc_object_index_find = extern("pcc_gc_object_index_find", (c_ptr,), c_ptr)
 pcc_allocator_record_span_first = extern(
     "pcc_allocator_record_span_first", (), c_ptr
-)
-pcc_allocator_record_span_next = extern(
-    "pcc_allocator_record_span_next", (c_ptr,), c_ptr
-)
-pcc_allocator_record_span_records = extern(
-    "pcc_allocator_record_span_records", (c_ptr,), c_ptr
-)
-pcc_allocator_record_span_cells = extern(
-    "pcc_allocator_record_span_cells", (c_ptr,), c_int64
 )
 pcc_thread_owns_stopped_world = extern("pcc_thread_owns_stopped_world", (), c_int64)
 pcc_gc_granule_is_object_start = extern("pcc_gc_granule_is_object_start", (c_ptr,), c_int64)
@@ -73,23 +71,33 @@ def pcc_gc_object_list_head() -> c_ptr:
     return global_load_ptr("pcc_gc_object_head")
 
 
+@c_abi_export("pcc_gc_object_walk_records_at")
+def _object_walk_records_at(span: c_ptr, at: i64) -> c_ptr:
+    """The first registered record at address ``at`` or later in ``span``'s
+    record array, then in the record spans after it, or NULL. ``at`` is a
+    record address of ``span`` or its array's end."""
+    while ptr_is_null(span) == 0:
+        records: i64 = atomic_load_i64(span, SPAN_NODE_RECORDS, "acquire")
+        end: i64 = records + load_i64(span, SPAN_CELL_COUNT) * OBJECT_NODE_RECORD_BYTES
+        while at < end:
+            record = int_to_ptr(at)
+            if atomic_load_i64(record, RECORD_INDEX_KEY, "acquire") != 0:
+                return record
+            at = at + OBJECT_NODE_RECORD_BYTES
+        span = load_ptr(span, SPAN_RECORD_NEXT)
+        if ptr_is_null(span) == 0:
+            at = atomic_load_i64(span, SPAN_NODE_RECORDS, "acquire")
+    return null()
+
+
 @c_abi_export("pcc_gc_object_walk_records_from")
 def _object_walk_records_from(span: c_ptr, cell: i64) -> c_ptr:
     """The first registered record at or after ``cell`` of ``span``, then of
     the record spans after it, or NULL."""
-    found = null()
-    while ptr_is_null(found) != 0 and ptr_is_null(span) == 0:
-        records = pcc_allocator_record_span_records(span)
-        count: i64 = pcc_allocator_record_span_cells(span)
-        while ptr_is_null(found) != 0 and cell < count:
-            record = ptr_add(records, cell * OBJECT_NODE_RECORD_BYTES)
-            if atomic_load_i64(record, RECORD_INDEX_KEY, "acquire") != 0:
-                found = record
-            cell = cell + 1
-        if ptr_is_null(found) != 0:
-            span = pcc_allocator_record_span_next(span)
-            cell = 0
-    return found
+    if ptr_is_null(span) != 0:
+        return null()
+    records: i64 = atomic_load_i64(span, SPAN_NODE_RECORDS, "acquire")
+    return _object_walk_records_at(span, records + cell * OBJECT_NODE_RECORD_BYTES)
 
 
 @c_abi_export("pcc_gc_object_walk_first")
@@ -112,8 +120,8 @@ def pcc_gc_object_walk_next(node: c_ptr) -> c_ptr:
         if ptr_is_null(nxt) == 0:
             return nxt
         return _object_walk_records_from(pcc_allocator_record_span_first(), 0)
-    cell: i64 = ptr_diff(node, pcc_allocator_record_span_records(span)) // OBJECT_NODE_RECORD_BYTES
-    return _object_walk_records_from(span, cell + 1)
+    # A record's successor in its array is the next address to test.
+    return _object_walk_records_at(span, ptr_to_int(node) + OBJECT_NODE_RECORD_BYTES)
 
 
 @c_abi_export("pcc_gc_object_list_non_slab_enumerate")

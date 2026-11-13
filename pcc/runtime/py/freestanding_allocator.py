@@ -2233,6 +2233,36 @@ def pcc_allocator_object_node_record_ensure(ptr) -> c_ptr:
     return int_to_ptr(records_bits + cell * OBJECT_NODE_RECORD_BYTES)
 
 
+# pcc_allocator_object_cell_locate's answer: the cell's span and number.
+CELL_LOCATE_SPAN = 0
+CELL_LOCATE_CELL = 8
+CELL_LOCATE_BYTES = 16
+
+
+@c_abi_export("pcc_allocator_object_cell_locate")
+def pcc_allocator_object_cell_locate(ptr, out) -> c_ptr:
+    """pcc_allocator_object_node_record_ensure that also writes the cell's
+    span (CELL_LOCATE_SPAN) and cell number (CELL_LOCATE_CELL) to ``out``,
+    so a registration that needs all three finds the span once."""
+    if ptr_is_null(ptr) != 0:
+        return null()
+    span = _granule_radix_span_key(
+        logical_shift_right_i64(ptr_diff(ptr, null()), 12)
+    )
+    cell: i64 = _object_cell_number(span, ptr)
+    if cell < 0:
+        return null()
+    records_bits: i64 = atomic_load_i64(span, SPAN_NODE_RECORDS_OFFSET, "acquire")
+    if records_bits == 0:
+        # The slab's first registration maps its record array.
+        if ptr_is_null(pcc_allocator_object_node_record_ensure(ptr)) != 0:
+            return null()
+        records_bits = atomic_load_i64(span, SPAN_NODE_RECORDS_OFFSET, "acquire")
+    store_ptr(out, CELL_LOCATE_SPAN, span)
+    store_i64(out, CELL_LOCATE_CELL, cell)
+    return int_to_ptr(records_bits + cell * OBJECT_NODE_RECORD_BYTES)
+
+
 @c_abi_export("pcc_allocator_record_span_page")
 def pcc_allocator_record_span_page(span: c_ptr) -> c_ptr:
     """A listed span's GC page header, just after its records; its two mark
@@ -2370,6 +2400,72 @@ def pcc_gc_granule_object_retire(ptr) -> i64:
     if observed == state or observed == GC_STATE_FREE:
         return 1
     return -1
+
+
+@c_abi_export("pcc_allocator_object_publish_fresh")
+def pcc_allocator_object_publish_fresh(ptr) -> i64:
+    """pcc_gc_granule_object_publish for an allocation that
+    pcc_allocator_alloc_object (or its evacuation-aware variant) has just
+    returned, with that function's results: 1 published, 0 not an object
+    cell (a large raw mapping, which keeps exact-set provenance), -1 a state
+    that cannot be published.
+
+    Only the allocator's own result may come here. Its prefix exists, and an
+    object cell carries the MAPPING_SIZE -1 origin that only the object-slab
+    carve and the object free lists stamp (free() routes on it the same
+    way), so the radix walk that validates an arbitrary pointer is not
+    repeated for every allocation. The exact-cache seed is the one publish
+    performs.
+    """
+    if load_i64(ptr, GRANULE_MAPPING_SIZE_OFFSET) != -1:
+        return 0
+    observed: i64 = atomic_cas_i64(
+        ptr,
+        GRANULE_STATE_OFFSET,
+        GC_STATE_RESERVED,
+        GC_STATE_LIVE,
+        "release",
+        "relaxed",
+    )
+    if observed != GC_STATE_RESERVED and observed != GC_STATE_LIVE:
+        return -1
+    published_bits: i64 = ptr_diff(ptr, null())
+    atomic_store_i64(
+        global_addr("pcc_allocator_exact_object_cache"),
+        (
+            (
+                logical_shift_right_i64(published_bits, 4)
+                ^ logical_shift_right_i64(published_bits, 12)
+            )
+            & 8191
+        )
+        * 8,
+        published_bits,
+        "relaxed",
+    )
+    return 1
+
+
+@c_abi_export("pcc_allocator_object_retire_live")
+def pcc_allocator_object_retire_live(ptr) -> i64:
+    """pcc_gc_granule_object_retire for an object whose caller has just
+    seen pcc_gc_granule_is_object_start answer 1: a structurally exact,
+    LIVE object-family cell. Spans are immortal and object bindings
+    permanent, so that answer still holds and only the lifecycle CAS
+    remains. 1 when this call moved LIVE to FREE; 0 when the word no
+    longer reads LIVE, leaving the caller's ordinary retirement to decide.
+    """
+    observed: i64 = atomic_cas_i64(
+        ptr,
+        GRANULE_STATE_OFFSET,
+        GC_STATE_LIVE,
+        GC_STATE_FREE,
+        "release",
+        "relaxed",
+    )
+    if observed == GC_STATE_LIVE:
+        return 1
+    return 0
 
 
 @c_abi_export("pcc_gc_granule_is_object_start")

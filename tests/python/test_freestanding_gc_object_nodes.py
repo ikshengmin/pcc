@@ -43,6 +43,7 @@ OWNED_SYMBOLS = {
     "pcc_gc_object_list_revision_bump",
     "pcc_gc_object_walk_first",
     "pcc_gc_object_walk_next",
+    "pcc_gc_object_walk_records_at",
     "pcc_gc_object_walk_records_from",
     "pcc_gc_object_node_next",
     "pcc_gc_object_node_plan_requires_prepare",
@@ -77,9 +78,6 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_thread_owns_stopped_world",
     "pcc_gc_granule_is_object_start",
     "pcc_allocator_record_span_first",
-    "pcc_allocator_record_span_next",
-    "pcc_allocator_record_span_records",
-    "pcc_allocator_record_span_cells",
 }
 # The thread-local live-byte delta is defined here. A Mach-O object that
 # defines a thread-local imports the platform's TLS bootstrap for it.
@@ -280,6 +278,43 @@ def test_object_nodes_have_exact_strict_object_closure(
         if line.strip() and " U " not in line
     }
     assert defined == OWNED_SYMBOLS | OWNED_THREAD_LOCALS
+
+
+def _module_int_constant(source: str, name: str) -> int:
+    for node in ast.parse(source).body:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == name):
+            assert isinstance(node.value, ast.Constant)
+            return node.value.value
+    raise AssertionError(f"{name} is not a module constant")
+
+
+def test_object_walk_reads_the_allocator_span_layout() -> None:
+    """The walk steps through a span's record array with the allocator's own
+    descriptor offsets instead of calling the allocator for each record."""
+    strict = STRICT_SOURCE.read_text(encoding="utf-8")
+    allocator = (STRICT_SOURCE.parent / "freestanding_allocator.py").read_text(
+        encoding="utf-8"
+    )
+    assert _module_int_constant(strict, "SPAN_NODE_RECORDS") == _module_int_constant(
+        allocator, "SPAN_NODE_RECORDS_OFFSET"
+    )
+    assert _module_int_constant(strict, "SPAN_RECORD_NEXT") == _module_int_constant(
+        allocator, "SPAN_RECORD_NEXT_OFFSET"
+    )
+    assert _module_int_constant(strict, "OBJECT_NODE_RECORD_BYTES") == (
+        _module_int_constant(allocator, "OBJECT_NODE_RECORD_BYTES")
+    )
+    # The span's cell count is the word pcc_allocator_record_span_cells reads.
+    cells = _export_body(allocator, "pcc_allocator_record_span_cells")
+    count = _module_int_constant(strict, "SPAN_CELL_COUNT")
+    assert f"return load_i64(span, {count})" in cells
+    for name in ("pcc_gc_object_walk_next", "pcc_gc_object_walk_records_at"):
+        body = _export_body(strict, name)
+        assert "pcc_allocator_record_span_records" not in body
+        assert "pcc_allocator_record_span_cells" not in body
+        assert "//" not in body
 
 
 def test_object_nodes_preserve_pool_list_and_young_invariants() -> None:

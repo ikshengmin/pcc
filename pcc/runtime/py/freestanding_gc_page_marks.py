@@ -174,6 +174,30 @@ def pcc_gc_page_mark_assign(obj: c_ptr, marked: i64) -> None:
         atomic_rmw_i64("and", bitmap, (cell // 64) * 8, ~bit, "acq_rel")
 
 
+@c_abi_export("pcc_gc_page_mark_assign_cell")
+def pcc_gc_page_mark_assign_cell(span: c_ptr, cell: i64, marked: i64) -> None:
+    """pcc_gc_page_mark_assign for cell ``cell`` of record span ``span``,
+    which the registering caller has already located.
+
+    A bit that already reads ``marked`` is left alone. Outside a mark a
+    reused cell's bit is clear (bitmaps are cleared when a mark begins and
+    only a mark sets them; a freed cell was white), and no mark can begin
+    while the caller holds its no-park scope. The unconditional
+    read-modify-write took the span's bitmap line, shared by every core
+    allocating cells of that span, exclusively on every allocation."""
+    bitmap = pcc_gc_page_bitmap(span, pcc_gc_page_mark_epoch())
+    if ptr_is_null(bitmap) != 0:
+        return
+    offset: i64 = (cell // 64) * 8
+    bit: i64 = 1 << (cell & 63)
+    word: i64 = atomic_load_i64(bitmap, offset, "acquire")
+    if marked != 0:
+        if (word & bit) == 0:
+            atomic_rmw_i64("or", bitmap, offset, bit, "acq_rel")
+    elif (word & bit) != 0:
+        atomic_rmw_i64("and", bitmap, offset, ~bit, "acq_rel")
+
+
 @c_abi_export("pcc_gc_object_is_white")
 def pcc_gc_object_is_white(obj: c_ptr, flags: i64) -> i64:
     """1 when the current mark has not reached ``obj``: an object cell's

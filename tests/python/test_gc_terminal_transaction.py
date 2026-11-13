@@ -29,6 +29,9 @@ class TerminalRuntime(Runtime):
             "pcc_gc_granule_is_object_start": lambda obj: (
                 1 if self.granules.get(obj) == "live" else -1),
             "pcc_gc_granule_object_retire": self.retire,
+            # A LIVE exact cell retires with its lifecycle CAS alone; the
+            # transaction order checked here is the same retirement.
+            "pcc_allocator_object_retire_live": self.retire_validated_live,
             "pcc_gc_managed_pointer_index_remove": self.remove_exact,
             "pcc_gc_note_object_freeing": self.note,
             "_minor_block_containing": lambda obj: 0,
@@ -66,6 +69,13 @@ class TerminalRuntime(Runtime):
             return -1
         if obj not in self.granules:
             return 0
+        self.granules[obj] = "free"
+        return 1
+
+    def retire_validated_live(self, obj):
+        if obj in self.retirement_failures or self.granules.get(obj) != "live":
+            return 0
+        self.events.append(("retire", obj, self.graph))
         self.granules[obj] = "free"
         return 1
 
@@ -182,11 +192,12 @@ def test_only_nonmoving_already_noted_path_fuses_transactions(backend, noted, or
     rt = TerminalRuntime(backend)
     obj = rt.object(origin, noted=noted)
     rt.terminal(obj)
-    fused = backend in (1, 2) and noted
-    # GC3 retains both its post-retirement node and minor-block transactions.
-    transactions = (1 if fused else 2) + 2 * (backend == 3)
+    # The nonmoving count-free collectors fuse; GC3 joined them when its
+    # nursery (and the minor-block transaction it added) was retired.
+    fused = backend in (1, 2, 3) and noted
+    transactions = 1 if fused else 2
     transactions += int(not fused and origin != "live")
-    assert rt.kinds().count("find") == (1 if fused else 2) + (backend == 3)
+    assert rt.kinds().count("find") == (1 if fused else 2)
     assert rt.kinds().count("lock") == rt.kinds().count("unlock") == transactions
     assert rt.kinds().count("note") == int(not noted)
     assert ("retire", obj, int(fused)) in rt.events and obj in rt.freed
@@ -248,3 +259,102 @@ def test_non_raw_allocation_origins_keep_existing_no_free_exit(backend, flags):
     rt.terminal(obj)
     assert rt.kinds() == ["lock", "find", "retire", "unlock"]
     assert not rt.freed
+
+
+class Gc0TerminalRuntime(TerminalRuntime):
+    """GC0's terminal object: _gc0_terminal_free_has_no_metadata has proved
+    the atomic counts, no lease, no identity list and a LIVE exact cell."""
+
+    def __init__(self, state=0):
+        super().__init__(0, state)
+        self.define_tls("pcc_gc_free_watch")
+        self.retire_live_result = None
+        self.ns.update({
+            "_gc0_terminal_free_has_no_metadata": lambda obj: 1,
+            "_FREE_WATCH_OBJECT": 8,
+            "_FREE_WATCH_NOTED": 16,
+            "pcc_allocator_object_retire_live": self.retire_live,
+        })
+
+    def retire_live(self, obj):
+        self.events.append(("retire_live", obj, self.graph))
+        if self.retire_live_result is not None:
+            return self.retire_live_result
+        if self.granules.get(obj) != "live":
+            return 0
+        self.granules[obj] = "free"
+        return 1
+
+    def watch(self, obj):
+        record = self.next_address
+        self.next_address += 64
+        self.memory[record] = {0: 0, 8: obj, 16: 0}
+        self.ns["global_store_ptr"]("pcc_gc_free_watch", record)
+        return record
+
+
+def test_gc0_terminal_free_retires_its_cell_without_another_probe():
+    """The predicate's proof stands in for the note and unregister probes:
+    one lifecycle CAS outside the graph lock, then the physical free."""
+    rt = Gc0TerminalRuntime()
+    obj = rt.object(noted=False)
+    rt.terminal(obj)
+    assert rt.kinds() == ["retire_live", "free"]
+    assert ("retire_live", obj, 0) in rt.events
+    assert rt.granules[obj] == "free" and obj in rt.freed
+    assert rt.scalar("pcc_gc_last_noted_free") == obj
+
+
+def test_gc0_terminal_free_reports_its_death_to_a_watch():
+    rt = Gc0TerminalRuntime()
+    obj = rt.object(noted=False)
+    record = rt.watch(obj)
+    other = rt.object(noted=False)
+    rt.terminal(other)
+    assert rt.read(record, 16) == 0  # Another object's death is not this one.
+    rt.terminal(obj)
+    assert rt.read(record, 16) == 1 and obj in rt.freed
+
+
+def test_gc0_terminal_free_after_its_note_keeps_the_watch_untouched():
+    rt = Gc0TerminalRuntime()
+    obj = rt.object(noted=True)
+    record = rt.watch(obj)
+    rt.terminal(obj)
+    # The note that set last_noted_free already answered the watch.
+    assert rt.read(record, 16) == 0
+    assert rt.kinds() == ["retire_live", "free"] and obj in rt.freed
+
+
+def test_gc0_terminal_free_falls_back_when_the_cell_is_no_longer_live():
+    rt = Gc0TerminalRuntime()
+    obj = rt.object("reserved", noted=False)
+    rt.terminal(obj)
+    # The ordinary unregister decides: it retires the RESERVED cell and
+    # drops its exact key under the graph lock.
+    assert rt.kinds()[:2] == ["retire_live", "retire"]
+    assert "exact" in rt.kinds() and obj in rt.freed and obj not in rt.exact
+
+
+def test_gc0_terminal_free_leaves_a_failed_retirement_to_the_unregister():
+    rt = Gc0TerminalRuntime()
+    obj = rt.object(noted=False)
+    rt.retire_live_result = 0
+    rt.retirement_failures.add(obj)
+    rt.terminal(obj)
+    assert rt.kinds() == ["retire_live", "retire"]
+    assert not rt.freed and rt.granules[obj] == "live"
+
+
+@pytest.mark.parametrize("state", (1, 2, 3, 4))
+def test_gc0_terminal_free_keeps_the_scalar_sweep_owner_check(state):
+    rt = Gc0TerminalRuntime(state)
+    obj = rt.object(noted=False)
+    owned = {}
+    rt.ns["pcc_gc_scalar_sweep_owns"] = lambda o: owned.get(o, 0)
+    owned[obj] = 1
+    rt.terminal(obj)
+    assert "retire_live" not in rt.kinds() and not rt.freed
+    owned[obj] = 0
+    rt.terminal(obj)
+    assert rt.kinds() == ["retire_live", "free"] and obj in rt.freed
