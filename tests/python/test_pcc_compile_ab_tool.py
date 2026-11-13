@@ -1486,9 +1486,15 @@ def test_runner_writes_scanner_manifest_for_four_matched_pairs(tmp_path, monkeyp
 
 
 def _assert_runner_manifest_for_source(
-    tmp_path, monkeypatch, source_variable,
+    tmp_path, monkeypatch, source_variable, *, unchanged_control=False,
+    guarded=False, failure=None,
 ):
     tool = _load_tool()
+    real_linkage = tool._linkage
+    if unchanged_control:
+        fake_time = tmp_path / "fake-time"
+        fake_time.write_text("protocol fixture", encoding="utf-8")
+        monkeypatch.setattr(tool, "TIME_BINARY", fake_time)
     monkeypatch.setattr(tool, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(
         tool,
@@ -1578,7 +1584,10 @@ def _assert_runner_manifest_for_source(
     warmup = tmp_path / "warmup.py"
     warmup.write_text("warmup\n", encoding="utf-8")
     inputs = []
-    for index, value in enumerate(("74856", "84856", "94856", "104856"), 1):
+    expected_values = ["74856", "84856", "94856", "104856"]
+    if unchanged_control:
+        expected_values += ["114856", "124856"]
+    for index, value in enumerate(expected_values, 1):
         source = tmp_path / f"pair{index}.py"
         source.write_text(value + "\n", encoding="utf-8")
         inputs.append(source)
@@ -1606,10 +1615,30 @@ def _assert_runner_manifest_for_source(
         "100",
     ]
     for source, expected in zip(
-        inputs, ("74856", "84856", "94856", "104856"), strict=True
+        inputs, expected_values, strict=True
     ):
         argv.extend(("--input", str(source), "--expected-output", expected))
-    manifest = tool.run(tool._parser().parse_args(argv))
+    launches = []
+    if unchanged_control:
+        argv.extend(("--unchanged-control", "--frontend-jobs", "1" if guarded else "2",
+                     "--self-backend-jobs", "2"))
+        _mock_control_processes(tool, tmp_path, monkeypatch, launches,
+                                linkage_validator=real_linkage, failure=failure)
+    args = tool._parser().parse_args(argv)
+
+    def run():
+        if guarded:
+            contract = _write_guard_contract(tool, tmp_path, monkeypatch)
+            with tool._performance_lock() as token:
+                return tool.run_guarded(args, performance_lock_token=token, **contract)
+        return tool.run(args)
+
+    if failure is not None:
+        with pytest.raises(tool.CompileABError):
+            run()
+        persisted = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+        return tool, None, persisted, launches, args
+    manifest = run()
     persisted = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["status"] == persisted["status"] == "DENIED"
     assert manifest["claim_level"] == "optimization-slice"
@@ -1627,7 +1656,7 @@ def _assert_runner_manifest_for_source(
     assert manifest["single_variable"]["allowed_changed_sources"] == [source_variable]
     assert manifest["runtime_bundle"]["archive"].endswith("runtime-bundle/runtime.a")
     assert manifest["compiler_linkage"]["candidate"]["checked"] is True
-    assert len(manifest["pairs"]) == 4
+    assert len(manifest["pairs"]) == len(expected_values)
     assert manifest["warmup"]["schedule"] == [
         "candidate",
         "baseline",
@@ -1635,16 +1664,14 @@ def _assert_runner_manifest_for_source(
         "candidate",
     ]
     assert [pair["order"] for pair in manifest["pairs"]] == [
-        ["candidate", "baseline"],
-        ["baseline", "candidate"],
-        ["candidate", "baseline"],
-        ["baseline", "candidate"],
+        list(tool.pair_order(index)) for index in range(1, len(expected_values) + 1)
     ]
     assert all(
         pair["candidate"]["binary_sha256"] == pair["baseline"]["binary_sha256"]
         for pair in manifest["pairs"]
     )
     assert all(pair["candidate"]["run"]["returncode"] == 0 for pair in manifest["pairs"])
+    return tool, manifest, persisted, launches, args
 
 
 def _admission_receipt_fixture(tmp_path):
@@ -1800,3 +1827,394 @@ def test_stage1_produced_admission_receipt_passes_strict_loader(tmp_path, monkey
     stage_ab._assert_stage1_admission_budget(
         loaded["receipt"], expected=cap, arm="candidate",
     )
+
+
+def _write_guard_contract(tool, tmp_path, monkeypatch):
+    """Synthetic protocol evidence only. No guard or compiler is executed."""
+    from scripts import run_process_tree_sample as sampler
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("guard contract validation must not observe the host")
+
+    monkeypatch.setattr(sampler, "_host_memory_observation", forbidden)
+    monkeypatch.setattr(tool.time, "monotonic", lambda: 100.0)
+    monkeypatch.setenv("PATH", os.defpath)
+    path = tmp_path / "outer-guard.json"
+    cap = 3 * 1024**3
+    observation = {
+        "platform": "darwin", "reclaimable_bytes": cap + tool.CI_TREE_RESERVE_BYTES,
+        "disk_free_bytes": 32 * 1024**3, "swap_total_bytes": 0,
+        "swap_used_bytes": 0, "swap_free_bytes": 0,
+    }
+    selection = sampler.select_tree_memory_budget(
+        0, default_ceiling=tool.CI_TREE_CEILING_BYTES,
+        minimum_bytes=tool.CI_TREE_FLOOR_BYTES,
+        reserve_bytes=tool.CI_TREE_RESERVE_BYTES, observation=observation,
+    )
+    environment = {
+        "PCC_WORKER_TREE_BUDGET_BYTES": str(cap),
+        "PCC_WORKER_TREE_STATE_PATH": str(path) + ".worker-rss.tsv",
+        "PCC_WORKER_TREE_RECOVERY": "pcc.worker-tree-recovery.v1\t1.0,3.0\t4.0\t200.0",
+    }
+    for key, value in environment.items():
+        monkeypatch.setenv(key, value)
+    command = [sys.executable, str(tmp_path / "ci-orchestrator.py"), "--guarded"]
+    payload = {
+        "schema": "pcc.process_tree_sample.v1", "status": "RUNNING",
+        "command": command, "cwd": str(tmp_path.resolve()),
+        "environment": environment, "max_tree_rss_bytes": cap,
+        "memory_budget_selection": selection,
+        "resource_preflight": selection["resource_preflight"],
+        "darwin_preflight_reserve_bytes": tool.CI_TREE_RESERVE_BYTES,
+        "started_at_utc": "2026-11-13T00:00:00+00:00",
+        "timeout_s": 100.0, "interval_s": 0.25,
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return {
+        "guard_result_path": path, "expected_guard_command": command,
+        "expected_guard_cwd": tmp_path, "campaign_deadline_monotonic": 200.0,
+    }
+
+
+def _mock_control_processes(tool, tmp_path, monkeypatch, launches, *, linkage_validator, failure=None):
+    """Exercise real harness parsing and validation, replacing only Popen."""
+    monkeypatch.setattr(tool, "require_claim_platform", lambda: None)
+    otool = tmp_path / "fake-otool"
+    otool.write_text("protocol fixture", encoding="utf-8")
+    monkeypatch.setattr(tool, "OTOOL_BINARY", otool)
+    # Restore the real linkage validator replaced by the old smoke helper.
+    monkeypatch.setattr(tool, "_linkage", linkage_validator)
+    monkeypatch.setattr(tool, "_process_group_exists", lambda process: False)
+
+    class Process:
+        def __init__(self, command, **kwargs):
+            self.command = command
+            self.pid = 12345
+            self.returncode = 0
+            self.stdout = ""
+            self.stderr = ""
+            launches.append({"command": command, **kwargs})
+            if command[0] == str(tool.TIME_BINARY):
+                assert command[1:3] == ["-lp", "-o"]
+                assert command[5:8] == ["--ir-scaffold=on", "--backend", "self"]
+                assert command[9] == "-o"
+                source, output = Path(command[8]), Path(command[10])
+                output.write_bytes(source.read_bytes())
+                output.chmod(0o755)
+                wall = 10 if "arm-a" in command[4] else 12
+                if "-ctl-a" in output.name:
+                    wall = 8  # Deliberate control drift must not adjust A/B.
+                Path(command[3]).write_text(
+                    f"real {wall}.0\nuser 8.0\nsys 1.0\n"
+                    "100 maximum resident set size\n100 instructions retired\n"
+                    "100 cycles elapsed\n100 peak memory footprint\n",
+                    encoding="utf-8",
+                )
+                if output.name == "pair1-ctl-b.bin":
+                    if failure == "bytes":
+                        output.write_bytes(b"different\n")
+                    elif failure == "compiler_mutation":
+                        Path(command[4]).write_bytes(b"changed compiler")
+                    elif failure == "deadline":
+                        monkeypatch.setattr(tool.time, "monotonic", lambda: 201.0)
+            elif command[0] == str(otool):
+                assert command[1] == "-L"
+                if failure == "linkage" and Path(command[2]).name == "pair1-ctl-b.bin":
+                    self.stdout = "libpython3.15.dylib\n"
+                else:
+                    self.stdout = "libSystem.B.dylib\n"
+            else:
+                assert len(command) == 1
+                self.stdout = Path(command[0]).read_text(encoding="utf-8")
+                if Path(command[0]).name.startswith("pair1-ctl-"):
+                    if failure == "stdout":
+                        self.stdout = "wrong\n"
+                    elif failure == "stderr":
+                        self.stderr = "unexpected diagnostic\n"
+                    elif failure == "returncode":
+                        self.returncode = 1
+
+        def communicate(self, timeout):
+            launches[-1]["timeout"] = timeout
+            return self.stdout, self.stderr
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("control protocol regression must not launch a real process")
+
+    monkeypatch.setattr(tool.subprocess, "Popen", Process)
+    monkeypatch.setattr(tool.subprocess, "run", forbidden)
+
+
+def test_guarded_budget_forwards_actual_admission_and_equal_private_environments(tmp_path, monkeypatch):
+    tool = _load_tool()
+    contract = _write_guard_contract(tool, tmp_path, monkeypatch)
+    budget = tool._validated_worker_budget(**contract)
+    assert budget.max_tree_rss_bytes == 3 * 1024**3
+    assert budget.deadline_monotonic == 200.0
+    assert budget.remaining_timeout(120) == 100.0
+    monkeypatch.setenv("PCC_UNRELATED_FORGED_SETTING", "1")
+    environments = []
+    for name in ("arm-a", "arm-b", "ctl-a", "ctl-b"):
+        private = tmp_path / name
+        env = tool._measurement_env(
+            tmp_path / "runtime.a", 0, host_source_root=tmp_path / "common-source",
+            host_python=Path(sys.executable), private_root=private,
+            frontend_jobs=1, self_backend_jobs=2, worker_budget=budget,
+        )
+        assert all(env[key] == budget.environment[key] for key in tool.WORKER_BUDGET_KEYS)
+        assert env["PCC_MACHO_LINK_JOBS"] == "2"
+        assert "PCC_UNRELATED_FORGED_SETTING" not in env
+        environments.append(tool._normalized_measurement_env(
+            env, host_source_root=tmp_path / "common-source", private_root=private,
+        ))
+    assert all(value == environments[0] for value in environments)
+
+
+@pytest.mark.parametrize("missing", [
+    "PCC_WORKER_TREE_BUDGET_BYTES", "PCC_WORKER_TREE_STATE_PATH", "PCC_WORKER_TREE_RECOVERY",
+])
+def test_guarded_budget_rejects_partial_environment(tmp_path, monkeypatch, missing):
+    tool = _load_tool()
+    contract = _write_guard_contract(tool, tmp_path, monkeypatch)
+    monkeypatch.delenv(missing)
+    with pytest.raises(tool.CompileABError, match="budget is missing or mismatched"):
+        tool._validated_worker_budget(**contract)
+
+
+@pytest.mark.parametrize("mutation", [
+    "schema", "status", "command", "cwd", "cap", "cap_below_floor", "ceiling",
+    "reserve", "selection", "observation", "preflight", "environment", "mailbox",
+    "recovery", "retry", "grace", "nan_deadline", "expired", "extended", "timing", "started_at_utc",
+])
+def test_guarded_budget_rejects_forged_or_malformed_contract(tmp_path, monkeypatch, mutation):
+    tool = _load_tool()
+    contract = _write_guard_contract(tool, tmp_path, monkeypatch)
+    path = contract["guard_result_path"]
+    payload = json.loads(path.read_text())
+    if mutation in ("schema", "status", "cwd", "started_at_utc"):
+        payload[mutation] = "wrong"
+    elif mutation == "command":
+        payload["command"] = ["unrelated"]
+    elif mutation == "cap":
+        payload["max_tree_rss_bytes"] = 5 * 1024**3
+    elif mutation == "cap_below_floor":
+        payload["max_tree_rss_bytes"] = 1024**3
+    elif mutation == "ceiling":
+        payload["memory_budget_selection"]["default_ceiling_bytes"] *= 2
+    elif mutation == "reserve":
+        payload["memory_budget_selection"]["configured_host_memory_reserve_bytes"] = 0
+    elif mutation == "selection":
+        payload["memory_budget_selection"]["selection_kind"] = "explicit"
+    elif mutation == "observation":
+        payload["memory_budget_selection"]["observation"]["reclaimable_bytes"] += 1024**3
+    elif mutation == "preflight":
+        payload["resource_preflight"] = {}
+    elif mutation == "environment":
+        payload["environment"]["PCC_WORKER_TREE_BUDGET_BYTES"] = "1"
+    elif mutation == "timing":
+        payload["timeout_s"] = 0
+    else:
+        key = "PCC_WORKER_TREE_RECOVERY"
+        replacements = {
+            "mailbox": "not-the-guard.worker-rss.tsv", "recovery": "malformed",
+            "retry": "pcc.worker-tree-recovery.v1\t1.0,30.0\t31.0\t200.0",
+            "grace": "pcc.worker-tree-recovery.v1\t1.0,3.0\t5.0\t200.0",
+            "nan_deadline": "pcc.worker-tree-recovery.v1\t1.0,3.0\t4.0\tnan",
+            "expired": "pcc.worker-tree-recovery.v1\t1.0,3.0\t4.0\t99.0",
+            "extended": "pcc.worker-tree-recovery.v1\t1.0,3.0\t4.0\t201.0",
+        }
+        if mutation == "mailbox":
+            key = "PCC_WORKER_TREE_STATE_PATH"
+        payload["environment"][key] = replacements[mutation]
+        monkeypatch.setenv(key, replacements[mutation])
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(tool.CompileABError):
+        tool._validated_worker_budget(**contract)
+
+
+def test_guard_budget_revalidates_receipt_environment_and_original_deadline(tmp_path, monkeypatch):
+    tool = _load_tool()
+    contract = _write_guard_contract(tool, tmp_path, monkeypatch)
+    budget = tool._validated_worker_budget(**contract)
+    monkeypatch.setattr(tool.time, "monotonic", lambda: 199.0)
+    assert budget.remaining_timeout(100) == 1.0
+    monkeypatch.setattr(tool.time, "monotonic", lambda: 200.0)
+    with pytest.raises(tool.CompileABError, match="deadline exhausted"):
+        budget.verify()
+    monkeypatch.setattr(tool.time, "monotonic", lambda: 100.0)
+    monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(4 * 1024**3))
+    with pytest.raises(tool.CompileABError, match="environment changed"):
+        budget.verify()
+    monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(3 * 1024**3))
+    payload = json.loads(contract["guard_result_path"].read_text())
+    payload["status"] = "TIMEOUT"
+    contract["guard_result_path"].write_text(json.dumps(payload))
+    with pytest.raises(tool.CompileABError, match="guard contract changed"):
+        budget.verify()
+
+
+def test_guarded_entry_rejects_fake_lock_and_silent_default_workers(tmp_path, monkeypatch):
+    from argparse import Namespace
+    tool = _load_tool()
+    monkeypatch.setattr(tool, "REPO_ROOT", tmp_path)
+    contract = _write_guard_contract(tool, tmp_path, monkeypatch)
+    args = Namespace(unchanged_control=True, frontend_jobs=10, self_backend_jobs=8,
+                     output_dir=str(tmp_path / "output"))
+    with pytest.raises(tool.CompileABError, match="live performance lock token"):
+        tool.run_guarded(args, performance_lock_token=True, **contract)
+    with tool._performance_lock() as token:
+        with pytest.raises(tool.CompileABError, match="frontend=1 and backend<=2"):
+            tool.run_guarded(args, performance_lock_token=token, **contract)
+        args.frontend_jobs = 1
+        args.self_backend_jobs = 2
+        args.unchanged_control = False
+        with pytest.raises(tool.CompileABError, match="requires the unchanged control"):
+            tool.run_guarded(args, performance_lock_token=token, **contract)
+    with pytest.raises(tool.CompileABError, match="live performance lock token"):
+        tool.run_guarded(args, performance_lock_token=token, **contract)
+
+
+def test_guarded_child_refuses_missing_budget_before_popen(tmp_path, monkeypatch):
+    tool = _load_tool()
+    contract = _write_guard_contract(tool, tmp_path, monkeypatch)
+    monkeypatch.setattr(tool, "_ACTIVE_WORKER_BUDGET", tool._validated_worker_budget(**contract))
+    def forbidden(*args, **kwargs):
+        pytest.fail("malformed budget must be rejected before Popen")
+    monkeypatch.setattr(tool.subprocess, "Popen", forbidden)
+    with pytest.raises(tool.CompileABError, match="child environment does not match"):
+        tool._run_process(["never-run"], timeout=10, env={}, cwd=tmp_path)
+
+
+def test_control_requires_six_inputs_before_any_process(tmp_path, monkeypatch):
+    from argparse import Namespace
+    tool = _load_tool()
+    monkeypatch.setattr(tool, "require_claim_platform", lambda: None)
+    monkeypatch.setattr(tool, "TIME_BINARY", Path(sys.executable))
+    args = Namespace(inputs=["a", "b", "c", "d"], unchanged_control=True)
+    with pytest.raises(tool.CompileABError, match="six distinct matched inputs"):
+        tool._run_experiment(args, run_token="not-launched")
+
+
+@pytest.mark.parametrize("guarded", [False, True])
+def test_unchanged_control_uses_baseline_and_keeps_metrics_separate(tmp_path, monkeypatch, guarded):
+    tool, manifest, persisted, launches, args = _assert_runner_manifest_for_source(
+        tmp_path, monkeypatch, "pcc/frontends/python/pipeline_import_scan.py",
+        unchanged_control=True, guarded=guarded,
+    )
+    assert manifest == persisted
+    control = manifest["unchanged_control"]
+    assert control["status"] == "MEASURED"
+    assert control["identity_sha256"] == tool._canonical_sha256(control["identity"])
+    assert len(control["pairs"]) == 6
+    assert len({pair["input_sha256"] for pair in control["pairs"]}) == 6
+    assert len(control["warmup"]) == 2
+    assert manifest["candidate"]["snapshot"] != manifest["baseline"]["snapshot"]
+    for index, pair in enumerate(control["pairs"], 1):
+        assert pair["status"] == "VALIDATED"
+        assert pair["order"] == (["control_a", "control_b"] if index % 2 else ["control_b", "control_a"])
+        for arm in ("control_a", "control_b"):
+            assert pair[arm]["command"][4] == manifest["baseline"]["snapshot"]
+            assert pair[arm]["command"][8] == manifest["pairs"][index - 1]["input"]
+            assert pair[arm]["binary_sha256"] == manifest["pairs"][index - 1]["baseline"]["binary_sha256"]
+            assert pair[arm]["run"]["stdout"] == pair["expected_stdout"]
+            assert pair[arm]["linkage"]["checked"]
+    a, b = (control["environment_by_context"][key] for key in ("control_a", "control_b"))
+    assert a["HOME"] != b["HOME"]
+    assert a["PCC_SOURCE_ROOT"] == b["PCC_SOURCE_ROOT"] == manifest["host_source_roots"]["baseline"]
+    assert control["summary"]["pair_wins"]["wall_s"] == {"control_a": 6, "control_b": 0, "ties": 0}
+    assert control["summary"]["paired_median_control_b_over_a_ratios"]["wall_s"] == 1.5
+    assert control["summary"]["drift_subtracted_from_ab"] is False
+    assert control["summary"]["ab_thresholds_relaxed"] is False
+    assert manifest["summary"]["paired_median_wall_speedup"] == 1.2
+    assert manifest["summary"]["verdict"] == "DENY"  # Original 100x threshold remains.
+    assert manifest["claim_level"] == "optimization-slice"
+    assert "pcc2-to-pcc3 fixed point" in manifest["does_not_prove"]
+    timed = [row for row in launches if row["command"][0] == str(tool.TIME_BINARY)]
+    assert len(timed) == 32  # 4 A/B + 4 A/A warmups, 12 A/B + 12 A/A measurements.
+    if guarded:
+        assert manifest["worker_budget"]["max_tree_rss_bytes"] == 3 * 1024**3
+        assert manifest["worker_budget"]["per_arm_tree_rss_claim"] is False
+        assert manifest["protocol"]["measurement_worker_policy"] == {
+            "requested_frontend_jobs": 1,
+            "effective_frontend_policy": "explicit_serial_native_frontend",
+            "effective_frontend_jobs": 1, "self_backend_jobs": 2,
+            "macho_link_jobs": 2, "production_stage2_native_auto_equivalent": False,
+        }
+        assert manifest["mode"].endswith("/serial-compile-slice")
+        for row in launches:
+            assert row["env"]["PCC_PY_FRONTEND_JOBS"] == "1"
+            assert row["env"]["PCC_SELF_BACKEND_JOBS"] == "2"
+            assert row["env"]["PCC_MACHO_LINK_JOBS"] == "2"
+            assert row["timeout"] <= 100
+            for key in tool.WORKER_BUDGET_KEYS:
+                assert row["env"][key] == manifest["worker_budget"]["worker_environment"][key]
+    else:
+        assert "worker_budget" not in manifest
+
+
+@pytest.mark.parametrize("failure", ["bytes", "stdout", "stderr", "returncode", "linkage", "compiler_mutation", "deadline"])
+def test_control_failure_retains_partial_receipt_and_cannot_accept(tmp_path, monkeypatch, failure):
+    _tool, _manifest, persisted, launches, _args = _assert_runner_manifest_for_source(
+        tmp_path, monkeypatch, "pcc/frontends/python/pipeline_import_scan.py",
+        unchanged_control=True, guarded=True, failure=failure,
+    )
+    assert persisted["status"] == "ERROR"
+    assert "summary" not in persisted
+    assert len(persisted["pairs"]) == 1
+    control = persisted["unchanged_control"]
+    assert control["status"] == "IN_PROGRESS"
+    assert len(control["pairs"]) == 1
+    assert control["pairs"][0]["status"] == "IN_PROGRESS"
+    assert "metrics" in control["pairs"][0]["control_a"]
+    assert "metrics" in control["pairs"][0]["control_b"]
+    assert not any("pair2-" in row["command"][-1] for row in launches)
+
+
+def test_ordinary_environment_does_not_trust_inherited_budget_without_contract(tmp_path, monkeypatch):
+    tool = _load_tool()
+    monkeypatch.setenv("PATH", os.defpath)
+    for key in tool.WORKER_BUDGET_KEYS:
+        monkeypatch.setenv(key, "forged")
+    env = tool._measurement_env(
+        tmp_path / "runtime.a", 0, host_source_root=tmp_path / "source",
+        host_python=Path(sys.executable), private_root=tmp_path / "private",
+        frontend_jobs=10, self_backend_jobs=8,
+    )
+    assert not any(key in env for key in tool.WORKER_BUDGET_KEYS)
+    assert env["PCC_PY_FRONTEND_JOBS"] == "10"
+    assert env["PCC_SELF_BACKEND_JOBS"] == "8"
+    assert env["PCC_MACHO_LINK_JOBS"] == "8"
+
+
+def test_guarded_measurement_rejects_numeric_two_frontend_bypass(tmp_path, monkeypatch):
+    tool = _load_tool()
+    budget = tool._validated_worker_budget(**_write_guard_contract(tool, tmp_path, monkeypatch))
+    with pytest.raises(tool.CompileABError, match="frontend=1 and backend<=2"):
+        tool._measurement_env(
+            tmp_path / "runtime.a", 0, host_source_root=tmp_path / "source",
+            host_python=Path(sys.executable), private_root=tmp_path / "private",
+            frontend_jobs=2, self_backend_jobs=2, worker_budget=budget,
+        )
+
+
+def test_guard_progress_rewrites_preserve_live_admission_contract(tmp_path, monkeypatch):
+    tool = _load_tool()
+    contract = _write_guard_contract(tool, tmp_path, monkeypatch)
+    budget = tool._validated_worker_budget(**contract)
+    path = contract["guard_result_path"]
+    original_stat = path.stat()
+    payload = json.loads(path.read_text())
+    payload.update(elapsed_s=10.0, sample_count=40, peak_tree_rss_bytes=123456,
+                   peak_process_count=3, process_table_retry_count=1,
+                   command_lookup_failure_count=0,
+                   largest_process_observed={"pid": 42, "rss_bytes": 123456})
+    replacement = path.with_suffix(".tmp")
+    replacement.write_text(json.dumps(payload), encoding="utf-8")
+    os.replace(replacement, path)
+    assert path.stat().st_ino != original_stat.st_ino
+    budget.verify()
+    assert budget.remaining_timeout(120) == 100
+    payload["timeout_s"] += 1
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(tool.CompileABError, match="guard contract changed"):
+        budget.verify()

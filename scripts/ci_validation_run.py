@@ -33,6 +33,7 @@ CI_CONTRACT_MODULES = (
     "tests/python/test_compile_window_measurement.py",
     "tests/python/test_compile_window_wiring.py",
     "tests/python/test_pcc_compile_ab_tool.py",
+    "tests/python/test_pcc_ci_ab_tool.py",
 )
 
 

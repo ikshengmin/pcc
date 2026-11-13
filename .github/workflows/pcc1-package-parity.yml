@@ -23,6 +23,19 @@ on:
         type: choice
         options: [both, integration, not integration]
         default: both
+      performance_ab:
+        description: "Opt in to the qualified bounded compiler A/B; joins the existing master push queue"
+        type: boolean
+        default: false
+      ab_baseline_sha:
+        description: "Full baseline compiler commit SHA; distinct from coverage base_sha; identical tools required"
+        type: string
+      ab_baseline_run:
+        description: "Successful exact-baseline qualification run_id:attempt (all original owners required)"
+        type: string
+      ab_input_manifest:
+        description: "Tracked reviewed pcc.ci-ab-inputs.v1 corpus JSON path; required with performance_ab"
+        type: string
   push:
     branches: [master]
     paths:
@@ -593,9 +606,10 @@ permissions:
 
 # Let active native qualification finish; only queued initial pushes supersede
 # each other. Manual runs, PRs and reruns keep independent groups, including
-# manual full-chain qualification.
+# manual full-chain qualification. Only explicit A/B dispatches join the exact
+# initial-push group instead, so they cannot outrun active or queued validation.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'push' && github.run_attempt == 1 && github.ref || format('{0}-{1}', github.run_id, github.run_attempt) }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && inputs.performance_ab && 'push' || github.event_name }}-${{ (github.event_name == 'push' && github.run_attempt == 1 || github.event_name == 'workflow_dispatch' && inputs.performance_ab) && github.ref || format('{0}-{1}', github.run_id, github.run_attempt) }}
   cancel-in-progress: false
   queue: max
 
@@ -2201,3 +2215,109 @@ jobs:
           name: cpp17-${{ matrix.system }}-${{ matrix.machine }}-${{ github.sha }}
           path: ${{ runner.temp }}/cpp17-${{ github.run_id }}-${{ github.run_attempt }}/
           if-no-files-found: warn
+
+
+  pcc-ab-qualification:
+    name: Check explicit A/B source selectors and original owner prerequisites
+    needs: [validation-plan, source-validation, shared-source-validation, source-platform-validation, source-platform-coverage, numpy-source-frontier, orjson-source-frontier, ci-plan, macos-pcc0-regressions, macos-pcc0-float-doc-regressions, macos-pcc0-indexed-split, worker-prior-preflight, windows-rss-publication, other-platform-native-wheel, pcc1-package-parity, pytest-markers, cpp17]
+    if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && inputs.performance_ab }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+      - name: Bind exact requested sources without accepting caller qualification claims
+        env:
+          PCC_AB_NEEDS: ${{ toJSON(needs) }}
+        run: python scripts/ci_pcc_ab_gate.py --write-request "$RUNNER_TEMP/pcc-ab-request.json"
+      - name: Retain selected source request or prerequisite failure
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pcc-ab-request-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: error
+          path: ${{ runner.temp }}/pcc-ab-request*.json
+
+  pcc-compile-ab:
+    name: Bounded qualified compiler A/B (not Stage2 versus Stage1)
+    needs: [validation-plan, source-validation, shared-source-validation, source-platform-validation, source-platform-coverage, numpy-source-frontier, orjson-source-frontier, ci-plan, macos-pcc0-regressions, macos-pcc0-float-doc-regressions, macos-pcc0-indexed-split, worker-prior-preflight, windows-rss-publication, other-platform-native-wheel, pcc1-package-parity, pytest-markers, cpp17, pcc-ab-qualification]
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.performance_ab && needs.pcc-ab-qualification.result == 'success' }}
+    runs-on: macos-15
+    # Identical 200-minute ceiling; one absolute deadline includes setup,
+    # authenticated source/receipt preparation, both strict builds and all pairs.
+    timeout-minutes: 200
+    permissions:
+      contents: read
+      actions: read
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PCC_BUILD_BACKEND: self
+      PCC_RUNTIME_CC: pcc
+      PCC_RUNTIME_HIGH: py
+    steps:
+      - name: Fix the campaign deadline before any preparation
+        shell: python {0}
+        run: |
+          import os, time
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as output:
+              # Five minutes remain for terminal metadata/artifact retention.
+              output.write('PCC_CI_AB_DEADLINE_EPOCH=' + str(int(time.time()) + 11700) + '\n')
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+      - uses: astral-sh/setup-uv@v7
+      - name: Install frozen dependencies without a project build hook
+        run: uv sync --frozen --dev --no-install-project
+      - name: Download only this attempt's selected request
+        uses: actions/download-artifact@v7
+        with:
+          name: pcc-ab-request-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pcc-ab-request
+      - name: Qualify both real sources and run the bounded compile slice
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          chmod a-w "$RUNNER_TEMP/pcc-ab-request/pcc-ab-request.json"
+          uv run --frozen --no-sync python scripts/run_pcc_ci_ab.py \
+            --campaign-request "$RUNNER_TEMP/pcc-ab-request/pcc-ab-request.json" \
+            --output-dir "$RUNNER_TEMP/pcc-ci-ab-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --job-deadline-epoch "$PCC_CI_AB_DEADLINE_EPOCH"
+      - name: Record the job outcome even when qualification or setup failed
+        if: always()
+        shell: python {0}
+        env:
+          PCC_AB_JOB_STATUS: ${{ job.status }}
+        run: |
+          import json, os, pathlib
+          out = pathlib.Path(os.environ['RUNNER_TEMP']) / ('pcc-ci-ab-' + os.environ['GITHUB_RUN_ID'] + '-' + os.environ['GITHUB_RUN_ATTEMPT'])
+          out.mkdir(parents=True, exist_ok=True)
+          (out / 'job-outcome.json').write_text(json.dumps({
+              'repository': os.environ['GITHUB_REPOSITORY'], 'sha': os.environ['GITHUB_SHA'],
+              'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'job_status': os.environ['PCC_AB_JOB_STATUS'],
+              'deadline_epoch': os.environ.get('PCC_CI_AB_DEADLINE_EPOCH'),
+              'stage2_le_stage1': 'UNAVAILABLE: no bounded full-stage campaign producer',
+              'claim': 'Job status is not a performance acceptance receipt',
+          }, sort_keys=True, indent=2) + '\n')
+      - name: Preserve all partial campaign receipts and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pcc-compile-ab-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
+          path: ${{ runner.temp }}/pcc-ci-ab-${{ github.run_id }}-${{ github.run_attempt }}/

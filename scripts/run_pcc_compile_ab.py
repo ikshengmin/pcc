@@ -156,10 +156,191 @@ BUILD_SOURCE_SUPPORT = (
     "scripts/pcc_link_elf.py",
 )
 _ACTIVE_PROCESS: subprocess.Popen[str] | None = None
+_HELD_PERFORMANCE_LOCK: object | None = None
+_ACTIVE_WORKER_BUDGET: _WorkerBudget | None = None
+WORKER_BUDGET_KEYS = (
+    "PCC_WORKER_TREE_BUDGET_BYTES",
+    "PCC_WORKER_TREE_STATE_PATH",
+    "PCC_WORKER_TREE_RECOVERY",
+)
+CI_TREE_CEILING_BYTES = 4 * 1024**3
+CI_TREE_FLOOR_BYTES = 2 * 1024**3
+CI_TREE_RESERVE_BYTES = 512 * 1024**2
 
 
 class CompileABError(RuntimeError):
     pass
+
+
+class _WorkerBudget:
+    """Source-owned guard contract, not authority inferred from environment.
+
+    The orchestrator must have launched the named sampler and matched its exact
+    child command. These file/closure checks bind that launch's live receipt;
+    they do not authenticate arbitrary files or replace the outer watchdog.
+    """
+
+    def __init__(self, receipt, environment, deadline_monotonic, files, guard_contract):
+        self.receipt = receipt
+        self.environment = environment
+        self.max_tree_rss_bytes = receipt["max_tree_rss_bytes"]
+        self.deadline_monotonic = deadline_monotonic
+        self._files = files
+        self._guard_contract = guard_contract
+
+    def verify(self):
+        path = Path(self.receipt["guard_result"]["path"])
+        if path.is_symlink() or not path.is_file():
+            raise CompileABError("enclosing guard contract disappeared or became a symlink")
+        current = _load_json_object(path, "enclosing guard result")
+        if _guard_contract_fields(current) != self._guard_contract:
+            raise CompileABError("enclosing guard contract changed")
+        for receipt in self._files:
+            _verify_receipt(receipt, "enclosing guard contract")
+        if any(os.environ.get(key) != value for key, value in self.environment.items()):
+            raise CompileABError("enclosing guard environment changed")
+        if time.monotonic() >= self.deadline_monotonic:
+            raise CompileABError("enclosing guard deadline exhausted")
+
+    def remaining_timeout(self, requested):
+        self.verify()
+        remaining = self.deadline_monotonic - time.monotonic()
+        if not math.isfinite(requested) or requested <= 0 or remaining <= 0:
+            raise CompileABError("enclosing guard deadline exhausted or timeout invalid")
+        return min(requested, remaining)
+
+
+def _guard_contract_fields(payload):
+    # The sampler atomically replaces RUNNING receipts with progress telemetry.
+    # Bind admission and ownership, never inode/mtime or changing RSS counters.
+    return {key: payload.get(key) for key in (
+        "schema", "status", "started_at_utc", "command", "cwd", "environment",
+        "timeout_s", "interval_s", "max_tree_rss_bytes",
+        "darwin_preflight_reserve_bytes", "memory_budget_selection", "resource_preflight",
+    )}
+
+
+def _validated_worker_budget(
+    *, guard_result_path: Path, expected_guard_command: list[str],
+    expected_guard_cwd: Path, campaign_deadline_monotonic: float,
+) -> _WorkerBudget:
+    """Read existing admission evidence only; never observe or re-admit memory."""
+    path = Path(guard_result_path).expanduser().absolute()
+    if path.is_symlink() or not path.is_file():
+        raise CompileABError("enclosing guard result must be a regular existing file")
+    guard = _load_json_object(path, "enclosing guard result")
+    guard_contract = _guard_contract_fields(guard)
+    if (guard.get("schema") != "pcc.process_tree_sample.v1"
+            or guard.get("status") != "RUNNING"
+            or not isinstance(expected_guard_command, list) or not expected_guard_command
+            or any(not isinstance(value, str) or not value for value in expected_guard_command)
+            or guard.get("command") != expected_guard_command
+            or guard.get("cwd") != str(Path(expected_guard_cwd).resolve(strict=True))):
+        raise CompileABError("enclosing guard command, cwd or running state is invalid")
+    try:
+        started = dt.datetime.fromisoformat(guard["started_at_utc"])
+        if started.utcoffset() != dt.timedelta(0):
+            raise ValueError("guard start must identify UTC")
+    except (KeyError, TypeError, ValueError) as exc:
+        raise CompileABError("enclosing guard start identity is malformed") from exc
+    if any(type(guard.get(key)) not in (int, float)
+           or not math.isfinite(guard[key]) or guard[key] <= 0
+           for key in ("timeout_s", "interval_s")):
+        raise CompileABError("enclosing guard timing contract is malformed")
+    cap = guard.get("max_tree_rss_bytes")
+    selection = guard.get("memory_budget_selection")
+    recorded = guard.get("environment")
+    if (type(cap) is not int or not CI_TREE_FLOOR_BYTES <= cap <= CI_TREE_CEILING_BYTES
+            or not isinstance(selection, dict) or not isinstance(recorded, dict)
+            or selection.get("selection_kind") != "automatic"
+            or selection.get("max_tree_rss_bytes") != cap
+            or selection.get("default_ceiling_bytes") != CI_TREE_CEILING_BYTES
+            or selection.get("minimum_tree_rss_bytes") != CI_TREE_FLOOR_BYTES
+            or selection.get("configured_host_memory_reserve_bytes") != CI_TREE_RESERVE_BYTES
+            or selection.get("explicit_requested_bytes") != 0
+            or guard.get("darwin_preflight_reserve_bytes") != CI_TREE_RESERVE_BYTES):
+        raise CompileABError("enclosing guard admission envelope is invalid")
+    if any(type(selection.get(key)) is not int for key in (
+        "max_tree_rss_bytes", "default_ceiling_bytes", "minimum_tree_rss_bytes",
+        "configured_host_memory_reserve_bytes", "explicit_requested_bytes",
+    )):
+        raise CompileABError("enclosing guard admission fields must be integers")
+    observation = selection.get("observation")
+    if (not isinstance(observation, dict) or observation.get("platform") != "darwin"
+            or any(type(observation.get(key)) is not int or observation[key] < 0
+                   for key in ("reclaimable_bytes", "disk_free_bytes", "swap_total_bytes",
+                               "swap_used_bytes", "swap_free_bytes"))):
+        raise CompileABError("enclosing guard Darwin admission observation is missing")
+    # Reuse the guard's pure selection function with its recorded observation.
+    # Supplying observation prevents any fresh host probe or budget selection.
+    try:
+        from scripts import run_process_tree_sample as sampler
+    except ModuleNotFoundError as exc:
+        if exc.name != "scripts":
+            raise
+        import run_process_tree_sample as sampler
+    sampler_path = Path(sampler.__file__).resolve(strict=True)
+    if sampler_path != Path(__file__).resolve().with_name("run_process_tree_sample.py"):
+        raise CompileABError("enclosing guard validator comes from a different tool tree")
+    sampler_receipt = _path_receipt(sampler_path)
+    try:
+        expected_selection = sampler.select_tree_memory_budget(
+            0, default_ceiling=CI_TREE_CEILING_BYTES, minimum_bytes=CI_TREE_FLOOR_BYTES,
+            reserve_bytes=CI_TREE_RESERVE_BYTES, observation=observation,
+        )
+    except (KeyError, TypeError, ValueError, sampler.ProcessTreeSampleError) as exc:
+        raise CompileABError("enclosing guard recorded admission is invalid") from exc
+    if (selection != expected_selection
+            or guard.get("resource_preflight") != expected_selection["resource_preflight"]):
+        raise CompileABError("enclosing guard admission differs from its recorded observation")
+    environment = {key: os.environ.get(key) for key in WORKER_BUDGET_KEYS}
+    if (any(not isinstance(value, str) or not value for value in environment.values())
+            or any(recorded.get(key) != value for key, value in environment.items())
+            or environment[WORKER_BUDGET_KEYS[0]] != str(cap)
+            or environment[WORKER_BUDGET_KEYS[1]] != str(path) + ".worker-rss.tsv"):
+        raise CompileABError("enclosing guard worker budget is missing or mismatched")
+    recovery = environment[WORKER_BUDGET_KEYS[2]].split("\t")
+    try:
+        schema, timeouts_text, grace_text, deadline_text = recovery
+        timeouts = tuple(float(value) for value in timeouts_text.split(","))
+        grace = float(grace_text)
+        deadline = float(deadline_text)
+    except (TypeError, ValueError) as exc:
+        raise CompileABError("enclosing guard recovery contract is malformed") from exc
+    if (schema != "pcc.worker-tree-recovery.v1"
+            or timeouts != sampler._SAFETY_PROCESS_TABLE_TIMEOUTS_S
+            or grace != sum(timeouts)
+            or not math.isfinite(deadline)
+            or not math.isfinite(campaign_deadline_monotonic)
+            or deadline > campaign_deadline_monotonic
+            or deadline <= time.monotonic()):
+        raise CompileABError("enclosing guard recovery policy or original deadline is invalid")
+    receipt = {
+        "schema": "pcc.compile-ab-worker-budget.v1",
+        "scope": "inherited_campaign_tree",
+        "guard_result": {
+            "path": str(path),
+            "contract": guard_contract,
+            "contract_sha256": _canonical_sha256(guard_contract),
+            "observed_payload_canonical_sha256": _canonical_sha256(guard),
+        },
+        "guard_command": expected_guard_command,
+        "guard_cwd": guard["cwd"],
+        "guard_started_at_utc": guard.get("started_at_utc"),
+        "guard_timeout_s": guard.get("timeout_s"),
+        "max_tree_rss_bytes": cap,
+        "memory_budget_selection": selection,
+        "worker_environment": environment,
+        "deadline_monotonic": deadline,
+        "campaign_deadline_monotonic": campaign_deadline_monotonic,
+        "sampler_tool": sampler_receipt,
+        "enforcement": "outer_sampled_tree_watchdog_not_kernel_hard_limit",
+        "terminal_guard_verdict": "pending_must_be_verified_by_orchestrator",
+        "per_arm_tree_rss_claim": False,
+    }
+    budget = _WorkerBudget(receipt, environment, deadline, [sampler_receipt], guard_contract)
+    budget.verify()
+    return budget
 
 
 def require_claim_platform() -> None:
@@ -361,6 +542,43 @@ def summarize_pairs(
     }
 
 
+def summarize_unchanged_pairs(pairs: list[dict[str, Any]]) -> dict[str, Any]:
+    if len(pairs) < 6 or any(pair.get("status") != "VALIDATED" for pair in pairs):
+        raise CompileABError("unchanged control requires six complete validated pairs")
+    metrics = ("wall_s",) + RESOURCE_METRICS
+    medians = {
+        arm: {metric: float(median(pair[arm]["metrics"][metric] for pair in pairs))
+              for metric in metrics}
+        for arm in ("control_a", "control_b")
+    }
+    ratios = {}
+    wins = {}
+    for metric in metrics:
+        left = [pair["control_a"]["metrics"][metric] for pair in pairs]
+        right = [pair["control_b"]["metrics"][metric] for pair in pairs]
+        if any(not math.isfinite(value) or value <= 0 for value in left + right):
+            raise CompileABError("unchanged control metrics must be positive and finite")
+        ratios[metric] = [b / a for a, b in zip(left, right, strict=True)]
+        wins[metric] = {
+            "control_a": sum(a < b for a, b in zip(left, right, strict=True)),
+            "control_b": sum(b < a for a, b in zip(left, right, strict=True)),
+            "ties": sum(a == b for a, b in zip(left, right, strict=True)),
+        }
+    return {
+        "verdict": "OBSERVATION_ONLY",
+        "pair_count": len(pairs),
+        "medians": medians,
+        "paired_control_b_over_a_ratios": ratios,
+        "paired_median_control_b_over_a_ratios": {
+            metric: float(median(values)) for metric, values in ratios.items()
+        },
+        "pair_wins": wins,
+        "drift_subtracted_from_ab": False,
+        "ab_thresholds_relaxed": False,
+        "memory_scope": "nonadditive_process_max_and_coordinator_footprint_not_tree_rss",
+    }
+
+
 def _run_process(
     command: list[str],
     *,
@@ -369,6 +587,10 @@ def _run_process(
     cwd: Path = REPO_ROOT,
 ) -> subprocess.CompletedProcess[str]:
     global _ACTIVE_PROCESS
+    if _ACTIVE_WORKER_BUDGET is not None:
+        timeout = _ACTIVE_WORKER_BUDGET.remaining_timeout(timeout)
+        if any(env.get(key) != value for key, value in _ACTIVE_WORKER_BUDGET.environment.items()):
+            raise CompileABError("child environment does not match the enclosing worker budget")
     process = subprocess.Popen(
         command,
         cwd=cwd,
@@ -454,6 +676,7 @@ def _measurement_env(
     private_root: Path,
     frontend_jobs: int,
     self_backend_jobs: int,
+    worker_budget: _WorkerBudget | None = None,
 ) -> dict[str, str]:
     if frontend_jobs <= 0 or self_backend_jobs <= 0:
         raise CompileABError("measurement worker counts must be positive")
@@ -512,6 +735,14 @@ def _measurement_env(
             "PCC_HOST_PYTHON": str(host_python),
         }
     )
+    if worker_budget is not None:
+        worker_budget.verify()
+        if frontend_jobs != 1 or self_backend_jobs > 2:
+            raise CompileABError("guarded measurement requires frontend=1 and backend<=2")
+        # Numeric two bypasses native source/AST risk lanes. A serial frontend
+        # is a strict subset without changing worker policy or observing CPUs.
+        env.update(worker_budget.environment)
+        env["PCC_MACHO_LINK_JOBS"] = "2"
     return env
 
 
@@ -2151,6 +2382,7 @@ def _verify_build_evidence(bundle: dict[str, Any]) -> None:
 
 @contextmanager
 def _performance_lock():
+    global _HELD_PERFORMANCE_LOCK
     lock_path = REPO_ROOT / "build" / ".pcc-performance.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with ExitStack() as held:
@@ -2171,9 +2403,12 @@ def _performance_lock():
         lock_stream.write((json.dumps(owner, sort_keys=True) + "\n").encode("utf-8"))
         lock_stream.flush()
         os.fsync(lock_stream.fileno())
+        token = object()
+        _HELD_PERFORMANCE_LOCK = token
         try:
-            yield
+            yield token
         finally:
+            _HELD_PERFORMANCE_LOCK = None
             owner["active"] = False
             owner["completed_at_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
             lock_stream.seek(0)
@@ -2184,7 +2419,8 @@ def _performance_lock():
 
 
 def _run_experiment(
-    args: argparse.Namespace, *, run_token: str
+    args: argparse.Namespace, *, run_token: str,
+    worker_budget: _WorkerBudget | None = None,
 ) -> dict[str, Any]:
     require_claim_platform()
     if not TIME_BINARY.is_file():
@@ -2193,6 +2429,9 @@ def _run_experiment(
         raise CompileABError(
             "claim-grade A/B requires an even number of at least four matched inputs"
         )
+    unchanged_control = bool(getattr(args, "unchanged_control", False))
+    if unchanged_control and len(args.inputs) < 6:
+        raise CompileABError("unchanged control requires at least six distinct matched inputs")
     if len(args.expected_output) != len(args.inputs):
         raise CompileABError("--expected-output count must match --input count")
     _validate_thresholds(
@@ -2358,6 +2597,7 @@ def _run_experiment(
             private_root=private_roots[arm],
             frontend_jobs=args.frontend_jobs,
             self_backend_jobs=args.self_backend_jobs,
+            worker_budget=worker_budget,
         )
         for arm in ("candidate", "baseline")
     }
@@ -2371,6 +2611,23 @@ def _run_experiment(
     }
     if normalized_env_by_arm["candidate"] != normalized_env_by_arm["baseline"]:
         raise CompileABError("measurement arm environments differ beyond private paths")
+    control_envs = {}
+    control_private_roots = {}
+    if unchanged_control:
+        for arm, suffix in (("control_a", "ctl-a"), ("control_b", "ctl-b")):
+            private_root = output_dir / "private-state" / suffix
+            control_private_roots[arm] = private_root
+            control_envs[arm] = _measurement_env(
+                bundled_archive, args.gc_backend,
+                host_source_root=common_host_source_root, host_python=host_python,
+                private_root=private_root, frontend_jobs=args.frontend_jobs,
+                self_backend_jobs=args.self_backend_jobs, worker_budget=worker_budget,
+            )
+            if _normalized_measurement_env(
+                control_envs[arm], host_source_root=common_host_source_root,
+                private_root=private_root,
+            ) != normalized_env_by_arm["baseline"]:
+                raise CompileABError("unchanged control environments differ beyond private paths")
     compiler_linkage = {
         "candidate": _linkage(
             candidate,
@@ -2440,7 +2697,7 @@ def _run_experiment(
             ],
             "compile_timeout_s": args.compile_timeout,
             "run_timeout_s": args.run_timeout,
-            "minimum_pairs": 4,
+            "minimum_pairs": 6 if unchanged_control else 4,
             "order": [list(pair_order(index)) for index in range(1, len(inputs) + 1)],
             "warmup_in_statistics": False,
         },
@@ -2455,7 +2712,109 @@ def _run_experiment(
         },
         "pairs": [],
     }
+    if worker_budget is not None:
+        manifest["worker_budget"] = worker_budget.receipt
+        manifest["mode"] += "/serial-compile-slice"
+        manifest["protocol"]["worker_ceiling"] = {
+            "frontend": 1, "self_backend": 2, "macho_link": 2,
+        }
+        manifest["protocol"]["measurement_worker_policy"] = {
+            "requested_frontend_jobs": args.frontend_jobs,
+            "effective_frontend_policy": "explicit_serial_native_frontend",
+            "effective_frontend_jobs": 1,
+            "self_backend_jobs": args.self_backend_jobs,
+            "macho_link_jobs": 2,
+            "production_stage2_native_auto_equivalent": False,
+        }
+        manifest["does_not_prove"].extend([
+            "production Stage2 native auto worker policy parity",
+            "Stage2 <= Stage1 same-window wall and process-tree RSS",
+        ])
+    if unchanged_control:
+        identity = {
+            "compiler": _path_receipt(baseline),
+            "baseline_build_receipt": _path_receipt(Path(build_evidence["baseline"]["receipt"])),
+            "bootstrap_source_sha256": baseline_build["source_manifest"]["bootstrap_source_sha256"],
+            "runtime_bundle": current_runtime_evidence,
+            "external_tools": current_external_tools,
+            "host_python_runtime": current_host_python_runtime,
+            "producer_tools": current_producer_tools,
+            "host_source_root": str(common_host_source_root),
+            "input_sha256": input_hashes,
+            "warmup_sha256": warmup_sha256,
+        }
+        manifest["unchanged_control"] = {
+            "schema": "pcc.compile-ab-unchanged-control.v1",
+            "status": "IN_PROGRESS",
+            "kind": "same_frozen_baseline_binary_both_contexts",
+            "identity": identity,
+            "identity_sha256": _canonical_sha256(identity),
+            "environment_by_context": control_envs,
+            "normalized_environment": normalized_env_by_arm["baseline"],
+            "warmup": [],
+            "pairs": [],
+            "statistics_are_separate_from_ab": True,
+        }
     _persist(manifest_path, manifest)
+
+    def run_control_pair(source, source_hash, expected_stdout, expected_binary_hash,
+                         *, label, pair_index, warmup=False):
+        # Both contexts execute the exact same frozen baseline path, input,
+        # runtime and helper closure. Only private state/output paths differ.
+        control = manifest["unchanged_control"]
+        pair = {
+            "pair_index": pair_index, "input": str(source),
+            "input_sha256": source_hash, "expected_stdout": expected_stdout,
+            "order": (["control_a", "control_b"] if pair_index % 2
+                      else ["control_b", "control_a"]),
+            "status": "IN_PROGRESS",
+        }
+        control["warmup" if warmup else "pairs"].append(pair)
+        _persist(manifest_path, manifest)
+
+        def verify_control():
+            if _canonical_sha256(control["identity"]) != control["identity_sha256"]:
+                raise CompileABError("unchanged control identity changed")
+            _verify_receipt(control["identity"]["compiler"], "unchanged control compiler")
+            _verify_measurement_inputs(frozen_stats, candidate, baseline, runtime_bundle,
+                                       external_receipts, build_evidence)
+            _verify_file_hash(source, source_hash, label + " input")
+
+        for arm in pair["order"]:
+            verify_control()
+            suffix = "ctl-a" if arm == "control_a" else "ctl-b"
+            output = output_dir / (label + "-" + suffix + ".bin")
+            pair[arm] = _compile_one(
+                baseline, source, output, timeout=args.compile_timeout,
+                env=control_envs[arm], log_prefix=output_dir / (label + "-" + suffix),
+                cwd=private_work,
+            )
+            _persist(manifest_path, manifest)
+            verify_control()
+        # As in A/B, finish both timed compiles before asymmetric validation.
+        for arm in ("control_a", "control_b"):
+            row = pair[arm]
+            output = Path(row["binary_path"])
+            _verify_file_hash(output, row["binary_sha256"], label + " output")
+            row["run"] = _run_output(output, timeout=args.run_timeout,
+                                     env=control_envs[arm], cwd=private_work)
+            _persist(manifest_path, manifest)
+            row["linkage"] = _linkage(output, timeout=args.run_timeout,
+                                      env=control_envs[arm], cwd=private_work)
+            _persist(manifest_path, manifest)
+            verify_control()
+            _verify_file_hash(output, row["binary_sha256"], label + " output")
+        a, b = pair["control_a"], pair["control_b"]
+        if a["binary_sha256"] != b["binary_sha256"] or a["binary_sha256"] != expected_binary_hash:
+            raise CompileABError(label + " unchanged control binaries differ")
+        if a["run"] != b["run"]:
+            raise CompileABError(label + " unchanged control runtime results differ")
+        if a["run"]["returncode"] != 0 or a["run"]["stderr"]:
+            raise CompileABError(label + " unchanged control runtime failed")
+        if a["run"]["stdout"] != expected_stdout:
+            raise CompileABError(label + " unchanged control stdout differs from expected")
+        pair["status"] = "VALIDATED"
+        _persist(manifest_path, manifest)
 
     warmup_schedule = ("candidate", "baseline", "baseline", "candidate")
     warmup_rows: list[dict[str, Any]] = []
@@ -2519,6 +2878,13 @@ def _run_experiment(
     manifest["warmup"]["schedule"] = list(warmup_schedule)
     manifest["warmup"]["executions"] = warmup_rows
     _persist(manifest_path, manifest)
+    if unchanged_control:
+        for index in (1, 2):
+            run_control_pair(
+                warmup, warmup_sha256, warmup_rows[0]["run"]["stdout"],
+                warmup_rows[0]["binary_sha256"], label=f"warmup{index + 4}",
+                pair_index=index, warmup=True,
+            )
 
     for pair_index, source in enumerate(inputs, 1):
         pair: dict[str, Any] = {
@@ -2528,6 +2894,8 @@ def _run_experiment(
             "expected_stdout": args.expected_output[pair_index - 1] + "\n",
             "order": list(pair_order(pair_index)),
         }
+        manifest["pairs"].append(pair)
+        _persist(manifest_path, manifest)
         for arm in pair["order"]:
             compiler = candidate if arm == "candidate" else baseline
             suffix = "arm-a" if arm == "candidate" else "arm-b"
@@ -2569,6 +2937,7 @@ def _run_experiment(
                 source, input_hashes[pair_index - 1], f"pair {pair_index} input"
             )
             pair[arm] = row
+            _persist(manifest_path, manifest)
             print(
                 f"[pcc-ab] pair={pair_index} arm={arm} done "
                 f"wall={row['metrics']['wall_s']:.2f}s",
@@ -2606,8 +2975,13 @@ def _run_experiment(
             )
         if pair["candidate"]["run"]["stderr"]:
             raise CompileABError(f"pair {pair_index} emitted runtime stderr")
-        manifest["pairs"].append(pair)
         _persist(manifest_path, manifest)
+        if unchanged_control:
+            run_control_pair(
+                source, input_hashes[pair_index - 1], expected_stdout,
+                pair["baseline"]["binary_sha256"], label=f"pair{pair_index}",
+                pair_index=pair_index,
+            )
 
     ending_hashes = _frozen_hashes(candidate, baseline, bundled_archive)
     if ending_hashes != frozen_hashes:
@@ -2626,6 +3000,14 @@ def _run_experiment(
         max_compute_regression_ratio=args.max_compute_regression_ratio,
         max_memory_regression_ratio=args.max_memory_regression_ratio,
     )
+    if unchanged_control:
+        control = manifest["unchanged_control"]
+        if len(control["pairs"]) != len(manifest["pairs"]):
+            raise CompileABError("unchanged control is incomplete")
+        control["summary"] = summarize_unchanged_pairs(control["pairs"])
+        control["status"] = "MEASURED"
+    if worker_budget is not None:
+        worker_budget.verify()
     manifest["ending_hashes"] = ending_hashes
     manifest["completed_at_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
     manifest["status"] = (
@@ -2649,6 +3031,44 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             error=str(exc),
         )
         raise
+
+
+def run_guarded(
+    args: argparse.Namespace, *, guard_result_path: Path,
+    expected_guard_command: list[str], expected_guard_cwd: Path,
+    campaign_deadline_monotonic: float, performance_lock_token: object,
+) -> dict[str, Any]:
+    """Only the source-owned CI orchestrator may reuse its held lock/guard."""
+    global _ACTIVE_WORKER_BUDGET
+    if (_HELD_PERFORMANCE_LOCK is None
+            or performance_lock_token is not _HELD_PERFORMANCE_LOCK
+            or _ACTIVE_WORKER_BUDGET is not None):
+        raise CompileABError("guarded A/B requires this process's live performance lock token")
+    if not getattr(args, "unchanged_control", False):
+        raise CompileABError("guarded A/B requires the unchanged control")
+    if not (args.frontend_jobs == 1 and 1 <= args.self_backend_jobs <= 2):
+        raise CompileABError("guarded A/B requires explicit frontend=1 and backend<=2")
+    budget = _validated_worker_budget(
+        guard_result_path=guard_result_path, expected_guard_command=expected_guard_command,
+        expected_guard_cwd=expected_guard_cwd,
+        campaign_deadline_monotonic=campaign_deadline_monotonic,
+    )
+    run_token = os.urandom(16).hex()
+    output_dir = Path(args.output_dir).expanduser().absolute()
+    _ACTIVE_WORKER_BUDGET = budget
+    try:
+        result = _run_experiment(args, run_token=run_token, worker_budget=budget)
+        budget.verify()
+        return result
+    except BaseException as exc:
+        _mark_owned_run_failure(
+            output_dir, run_token=run_token,
+            status="INTERRUPTED" if isinstance(exc, KeyboardInterrupt) else "ERROR",
+            error=str(exc),
+        )
+        raise
+    finally:
+        _ACTIVE_WORKER_BUDGET = None
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -2676,6 +3096,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-timeout", type=int, default=20)
     parser.add_argument("--frontend-jobs", type=int, default=10)
     parser.add_argument("--self-backend-jobs", type=int, default=8)
+    parser.add_argument("--unchanged-control", action="store_true",
+                        help="run separate baseline/baseline controls on every matched input (at least six)")
     parser.add_argument("--gc-backend", type=int, default=0, choices=range(5))
     parser.add_argument("--min-speedup-ratio", type=float, default=1.08)
     parser.add_argument("--max-compute-regression-ratio", type=float, default=1.0)

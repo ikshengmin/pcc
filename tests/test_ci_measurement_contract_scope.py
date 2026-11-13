@@ -16,6 +16,7 @@ MODULES = (
     "tests/python/test_compile_window_measurement.py",
     "tests/python/test_compile_window_wiring.py",
     "tests/python/test_pcc_compile_ab_tool.py",
+    "tests/python/test_pcc_ci_ab_tool.py",
 )
 DARWIN_NODES = (
     MODULES[2] + "::test_runner_writes_complete_manifest_for_four_matched_pairs",
