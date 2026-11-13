@@ -1803,6 +1803,9 @@ int64_t   py_virtual_thread_cancel_timer(PyObject *vthread);
 int64_t   py_virtual_thread_poll_timers(void);
 int64_t   py_virtual_thread_timer_count(void);
 int64_t   py_virtual_thread_block_on_fd(PyObject *vthread, int64_t fd, int64_t events, int64_t timeout_ms);
+/* Register without a synchronous poll; returns 0 parked or -1 on failure.
+ * Readiness before/during registration must still wake the task. */
+int64_t   py_virtual_thread_wait_on_fd(PyObject *vthread, int64_t fd, int64_t events, int64_t timeout_ms);
 int64_t   py_virtual_thread_poll_io(int64_t timeout_ms);
 int64_t   py_virtual_thread_io_wait_count(void);
 int64_t   py_virtual_thread_io_wait_active(void);

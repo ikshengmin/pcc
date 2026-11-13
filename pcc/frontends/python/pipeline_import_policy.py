@@ -358,6 +358,7 @@ NATIVE_IMPORT_FROMS = {
             "yield_now",
             "sleep_current",
             "block_current_on_fd",
+            "wait_current_on_fd",
             "readable",
             "writable",
             "tcp_listen",

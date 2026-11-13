@@ -130,7 +130,10 @@ def test_current_wait_and_sleep_current_root_current_across_scalar_lowering() ->
         reload = branch.index(
             "self._load_virtual_thread_operand_root(", scalar
         )
-        runtime_call = branch.index(f'self.runtime["{runtime_name}"]')
+        runtime_call = branch.index(
+            "self.runtime[runtime_name]" if branch is current_wait
+            else f'self.runtime["{runtime_name}"]'
+        )
         release = branch.index(
             "self._release_rooted_pcc_lifetimes(", runtime_call
         )

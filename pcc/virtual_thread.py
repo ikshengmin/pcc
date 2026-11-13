@@ -212,6 +212,18 @@ def block_current_on_fd(fd: int, events: int, timeout_ms: int) -> None:
     _trap("block_current_on_fd")
 
 
+def wait_current_on_fd(fd: int, events: int, timeout_ms: int) -> None:
+    """Register and suspend for readiness after a nonblocking operation.
+
+    This avoids a second readiness probe after read/write/accept returned
+    would-block. Registration still observes readiness that arrives before
+    the task parks. Unlike block_current_on_fd, this may suspend even when
+    the descriptor is already ready. Keep the descriptor owned and open
+    through completion or cancellation; retry the operation after waking.
+    """
+    _trap("wait_current_on_fd")
+
+
 def readable(fd: int) -> None:
     """Park until ``fd`` may be readable; retry the nonblocking operation.
 
@@ -320,6 +332,7 @@ __all__ = [
     "yield_now",
     "sleep_current",
     "block_current_on_fd",
+    "wait_current_on_fd",
     "readable",
     "writable",
     "tcp_listen",

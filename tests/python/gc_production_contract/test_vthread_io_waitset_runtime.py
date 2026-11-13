@@ -86,6 +86,53 @@ static int check_socket_ready(void) {
     return active_scheduler_roots() == 0;
 }
 
+/* wait_current_on_fd contract: registration is the observation after a
+ * nonblocking operation; readiness arriving on either side must not be lost. */
+static int check_observed_wait(int already_ready, int timeout) {
+    int fds[2];
+    if (pipe(fds) != 0) return 0;
+    PyObject *vt = new_vthread();
+    if (vt == NULL) return 0;
+    if (already_ready && write(fds[1], "a", 1) != 1) return 0;
+    if (py_virtual_thread_wait_on_fd(vt, fds[0], POLLIN, timeout ? 3 : -1) != 0) return 0;
+    if (((PyVirtualThreadObject *)vt)->io_entry == NULL) return 0;
+    pcc_gc_release(vt);
+    (void)pcc_gc_collect(0);
+    if (active_scheduler_roots() != 1) return 0;
+    if (timeout) (void)poll(NULL, 0, 8);
+    else if (!already_ready && write(fds[1], "b", 1) != 1) return 0;
+    if (py_virtual_thread_poll_io(0) != 1 || !finish_one_ready()) return 0;
+    close(fds[0]); close(fds[1]);
+    return active_scheduler_roots() == 0;
+}
+
+static int check_observed_wait_completion_cancels_registration(void) {
+    int fds[2];
+    if (pipe(fds) != 0) return 0;
+    PyObject *vt = new_vthread();
+    if (vt == NULL) return 0;
+    if (py_virtual_thread_wait_on_fd(vt, fds[0], POLLIN, -1) != 0) return 0;
+    if (py_virtual_thread_complete(vt, py_None) != 0) return 0;
+    if (((PyVirtualThreadObject *)vt)->io_entry != NULL) return 0;
+    pcc_gc_release(vt);
+    if (write(fds[1], "c", 1) != 1 || py_virtual_thread_poll_io(0) != 0) return 0;
+    close(fds[0]); close(fds[1]);
+    return py_virtual_thread_io_wait_count() == 0 && active_scheduler_roots() == 0;
+}
+
+static int check_existing_probe_keeps_immediate_ready_result(void) {
+    int fds[2];
+    if (pipe(fds) != 0) return 0;
+    PyObject *vt = new_vthread();
+    if (vt == NULL || write(fds[1], "r", 1) != 1) return 0;
+    if (py_virtual_thread_block_on_fd(vt, fds[0], POLLIN, -1) != 1) return 0;
+    if (((PyVirtualThreadObject *)vt)->io_entry != NULL) return 0;
+    if (!finish_one_ready()) return 0;
+    pcc_gc_release(vt);
+    close(fds[0]); close(fds[1]);
+    return active_scheduler_roots() == 0;
+}
+
 static int check_data_readiness_precedes_disconnect_cleanup(void) {
     int data[2], closed[2];
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, data) != 0) return 0;
@@ -302,6 +349,11 @@ int main(int argc, char **argv) {
     int ok = py_virtual_thread_io_backend() == expected
         && check_pipe_ready()
         && check_socket_ready()
+        && check_observed_wait(0, 0)
+        && check_observed_wait(1, 0)
+        && check_observed_wait(0, 1)
+        && check_observed_wait_completion_cancels_registration()
+        && check_existing_probe_keeps_immediate_ready_result()
         && check_data_readiness_precedes_disconnect_cleanup()
         && check_timeout()
         && check_same_fd_waiters()

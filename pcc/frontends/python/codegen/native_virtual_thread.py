@@ -66,6 +66,7 @@ _VTHREAD_EXPORTS = (
     "yield_now",
     "sleep_current",
     "block_current_on_fd",
+    "wait_current_on_fd",
     "readable",
     "writable",
     "tcp_listen",
@@ -111,6 +112,7 @@ def _is_vthread_export(name: str) -> bool:
         or name == "yield_now"
         or name == "sleep_current"
         or name == "block_current_on_fd"
+        or name == "wait_current_on_fd"
         or name == "readable"
         or name == "writable"
         or name == "tcp_listen"
@@ -819,6 +821,7 @@ class NativeVirtualThreadLoweringMixin:
         fd: Expr,
         events: Expr | int,
         timeout_ms: Expr | int,
+        runtime_name: str = "py_virtual_thread_block_on_fd",
     ) -> ir.Value:
         current = self.builder.call(
             self.runtime["py_virtual_thread_current"],
@@ -857,7 +860,7 @@ class NativeVirtualThreadLoweringMixin:
             )
         )
         rc = self.builder.call(
-            self.runtime["py_virtual_thread_block_on_fd"],
+            self.runtime[runtime_name],
             [
                 self._load_virtual_thread_operand_root(current_root),
                 fd_value,
@@ -2937,6 +2940,12 @@ class NativeVirtualThreadLoweringMixin:
                 args[0],
                 args[1],
                 args[2],
+            )
+        if kind == "pcc.virtual_thread.wait_current_on_fd":
+            if len(args) != 3:
+                return None
+            return self._emit_virtual_thread_current_fd_wait(
+                args[0], args[1], args[2], "py_virtual_thread_wait_on_fd",
             )
         if kind == "pcc.virtual_thread.readable":
             if len(args) != 1:

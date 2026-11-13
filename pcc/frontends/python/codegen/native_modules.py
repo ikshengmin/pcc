@@ -177,6 +177,7 @@ def _is_virtual_thread_export(name: str) -> bool:
         or name == "yield_now"
         or name == "sleep_current"
         or name == "block_current_on_fd"
+        or name == "wait_current_on_fd"
         or name == "readable"
         or name == "writable"
         or name == "tcp_listen"

@@ -3070,41 +3070,41 @@ def py_virtual_thread_io_resource_close_begin(fd: int) -> int:
     return 0
 
 
-@c_abi_export("py_virtual_thread_block_on_fd_generation")
-def py_virtual_thread_block_on_fd_generation(
-    vthread,
-    fd: int,
-    generation: int,
-    events: int,
-    timeout_ms: int,
+def _block_on_fd_common(
+    vthread, fd: int, events: int, timeout_ms: int,
+    generation: int, check_generation: int, probe_ready: int,
 ) -> int:
+    """One registration/cancellation protocol for both observation styles."""
     vthread = _checked(vthread)
     if (
         ptr_is_null(vthread)
         or atomic_load_i64(vthread, 32, "acquire") == 4
         or fd < 0
-        or generation <= 0
+        or (check_generation != 0 and generation <= 0)
     ):
         return -1
     if events == 0:
         events = 1
     if _scheduler_lock() != 0:
         return -1
-    resource = _io_resource_find(fd)
-    if ptr_is_null(resource) or load_i64(resource, 8) != generation:
-        _scheduler_unlock()
-        py_raise_owned(py_exc_new(14, cstr("TCP descriptor was closed")))
-        return -1
+    if check_generation != 0:
+        resource = _io_resource_find(fd)
+        if ptr_is_null(resource) or load_i64(resource, 8) != generation:
+            _scheduler_unlock()
+            py_raise_owned(py_exc_new(14, cstr("TCP descriptor was closed")))
+            return -1
     if atomic_load_i64(vthread, 32, "acquire") == 4:
         _scheduler_unlock()
         return -1
     if load_i64(vthread, 120) >= 4 or ptr_is_null(load_ptr(vthread, 104)) == 0:
         _scheduler_unlock()
         return -1
-    ready = poll_fd(fd, events, 0)
-    if ready < 0:
-        _scheduler_unlock()
-        return -1
+    ready: int = 0
+    if probe_ready != 0:
+        ready = poll_fd(fd, events, 0)
+        if ready < 0:
+            _scheduler_unlock()
+            return -1
     _timer_cancel(vthread)
     _io_cancel(vthread)
     if ready != 0:
@@ -3123,47 +3123,31 @@ def py_virtual_thread_block_on_fd_generation(
     result = _io_add(vthread, fd, events, deadline)
     _scheduler_unlock()
     return result
+
+
+@c_abi_export("py_virtual_thread_block_on_fd_generation")
+def py_virtual_thread_block_on_fd_generation(
+    vthread, fd: int, generation: int, events: int, timeout_ms: int,
+) -> int:
+    return _block_on_fd_common(vthread, fd, events, timeout_ms, generation, 1, 1)
 
 
 @c_abi_export("py_virtual_thread_block_on_fd")
 def py_virtual_thread_block_on_fd(
-    vthread, fd: int, events: int, timeout_ms: int
+    vthread, fd: int, events: int, timeout_ms: int,
 ) -> int:
-    vthread = _checked(vthread)
-    if ptr_is_null(vthread) or atomic_load_i64(vthread, 32, "acquire") == 4 or fd < 0:
-        return -1
-    if events == 0:
-        events = 1
-    if _scheduler_lock() != 0:
-        return -1
-    if atomic_load_i64(vthread, 32, "acquire") == 4:
-        _scheduler_unlock()
-        return -1
-    if load_i64(vthread, 120) >= 4 or ptr_is_null(load_ptr(vthread, 104)) == 0:
-        _scheduler_unlock()
-        return -1
-    ready = poll_fd(fd, events, 0)
-    if ready < 0:
-        _scheduler_unlock()
-        return -1
-    _timer_cancel(vthread)
-    _io_cancel(vthread)
-    if ready != 0:
-        if atomic_load_i64(vthread, 32, "acquire") == 2:
-            _scheduler_unlock()
-            return 1
-        if _make_ready(vthread) != 0:
-            _scheduler_unlock()
-            return -1
-        _scheduler_unlock()
-        return 1
-    deadline = -1
-    if timeout_ms >= 0:
-        deadline = _now_ms() + timeout_ms
-    atomic_store_i64(vthread, 32, 3, "release")
-    result = _io_add(vthread, fd, events, deadline)
-    _scheduler_unlock()
-    return result
+    return _block_on_fd_common(vthread, fd, events, timeout_ms, 0, 0, 1)
+
+
+@c_abi_export("py_virtual_thread_wait_on_fd")
+def py_virtual_thread_wait_on_fd(
+    vthread, fd: int, events: int, timeout_ms: int,
+) -> int:
+    # The caller has already attempted its nonblocking operation. Registering
+    # interest observes readiness that arrives before or during registration;
+    # a separate synchronous poll would repeat that observation. This entry
+    # deliberately suspends even if the fd is already ready.
+    return _block_on_fd_common(vthread, fd, events, timeout_ms, 0, 0, 0)
 
 
 def _result_bits(result, fd: int) -> int:
