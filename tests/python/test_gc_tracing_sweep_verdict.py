@@ -32,6 +32,10 @@ class _SweepBoundary:
             "pcc_gc_tracing_finish_stop_epoch": {0: finish_epoch},
             "pcc_gc_user_finalizer_runs": {0: 0},
             "pcc_gc_backend4_no_refcounts": {0: int(count_free)},
+            # No finish filled a candidate list: the passes walk the nodes.
+            "pcc_gc_tracing_candidate_count": {0: 0},
+            "pcc_gc_tracing_candidate_commit": {0: -1},
+            "pcc_gc_tracing_finish_commits": {0: 0},
         }
         self.forwardings = {}
         namespace = {
@@ -60,6 +64,9 @@ class _SweepBoundary:
             "pcc_thread_world_stop_epoch_held": lambda: self.held_epoch,
             # The sweep's walk already read the candidate's own pin.
             "pcc_gc_tracing_clear_unpinned": self.clear,
+            # With no user code since the weak-ref batches settled every
+            # candidate's refs, PASS1 clears without its own weak-ref step.
+            "pcc_gc_tracing_clear_referents": self.clear_settled,
             "pcc_gc_tracing_finalize_unpinned": self.reclaim_unpinned,
             "pcc_gc_visit_object_slots": self.visit_slots,
             "py_weakref_invalidate_tracing_candidates": self.invalidate_candidates,
@@ -168,6 +175,12 @@ class _SweepBoundary:
     def clear(self, obj):
         self.events.append("weakref:" + obj["name"])
         obj["weakref_live"] = False
+        self.events.append("clear:" + obj["name"])
+        obj["edges"].clear()
+
+    def clear_settled(self, obj):
+        # The batch already invalidated this candidate's weak refs.
+        assert obj["weakref_live"] is False
         self.events.append("clear:" + obj["name"])
         obj["edges"].clear()
 
@@ -493,3 +506,95 @@ def test_gc4_selected_but_unforwarded_candidate_still_finalizes_and_reclaims():
     assert boundary.sweep(1) == 0
     assert boundary.events.count("del:selected") == 1
     assert boundary.events.count("free:selected") == 1
+
+
+def _listed_boundary(*, commit=1):
+    """A GC1 count-free sweep in its finish's own stopped world, its passes
+    driven by the candidate list that finish sealed (commit 1)."""
+    boundary = _SweepBoundary(backend=1, held_epoch=7, finish_epoch=7, count_free=True)
+    boundary.global_cells.update({
+        "pcc_gc_concurrent_sweep_allowed": {0: 0},
+        "pcc_gc_tracing_finish_commits": {0: 1},
+        # The model's list is never larger than its candidates.
+        "pcc_gc_tracing_candidate_capacity": {0: 0},
+    })
+    boundary.visited = []
+    namespace = boundary.sweep.__globals__
+    is_active = namespace["pcc_gc_object_node_is_active"]
+
+    def node_is_active(node):
+        boundary.visited.append(node[0]["name"])
+        return is_active(node)
+
+    namespace["pcc_gc_object_node_is_active"] = node_is_active
+    boundary.listed_nodes = {}
+    object_head = namespace["global_load_ptr"]
+    namespace["global_load_ptr"] = lambda name: (
+        boundary.listed_nodes if name == "pcc_gc_tracing_candidate_nodes" else object_head(name)
+    )
+
+    def seal(*objects):
+        nodes = [node for node in boundary.nodes if any(node[0] is obj for obj in objects)]
+        boundary.listed_nodes.clear()
+        boundary.listed_nodes.update({index * 8: node for index, node in enumerate(nodes)})
+        boundary.global_cells["pcc_gc_tracing_candidate_count"][0] = len(nodes)
+        boundary.global_cells["pcc_gc_tracing_candidate_commit"][0] = commit
+
+    boundary.seal = seal
+    return boundary
+
+
+def test_listed_sweep_visits_only_its_finish_candidates_with_the_walks_verdicts():
+    """The passes of a sweep whose finish listed its candidates visit that
+    list, not every registered object, and reach exactly the walk's
+    finalizations, clears and frees."""
+    outcomes = []
+    live_visits = []
+    for listed in (False, True):
+        boundary = _listed_boundary()
+        live = boundary.object("live", candidate=False)
+        first = boundary.object("first")
+        second = boundary.object("second")
+        first["edges"] = [second]
+        second["edges"] = [first]
+        boundary.roots = [live]
+        if listed:
+            boundary.seal(first, second)
+        assert boundary.sweep(9223372036854775807) == 2
+        outcomes.append([event for event in boundary.events
+                         if event.split(":")[0] in ("del", "clear", "free")])
+        live_visits.append(boundary.visited.count("live"))
+        if listed:
+            # The list is retired once its sweep consumed it.
+            assert boundary.global_cells["pcc_gc_tracing_candidate_commit"][0] == -1
+    # PASS0, PASS1 and PASS2 each walked past the live object; listed, only
+    # the post-finalizer reachability recheck (a whole-heap mark) visits it.
+    assert live_visits[0] - live_visits[1] == 3
+    assert outcomes[0] == outcomes[1]
+    assert outcomes[1] == ["del:first", "del:second", "clear:first", "clear:second",
+                           "free:first", "free:second"]
+
+
+def test_listed_sweep_stops_when_a_finalizer_commits_another_finish():
+    """A collection nested in a finalizer finishes and sweeps on its own;
+    the outer listed sweep must not keep visiting its stale list."""
+    boundary = _listed_boundary()
+    first = boundary.object("first")
+    second = boundary.object("second")
+    boundary.seal(first, second)
+    commits = boundary.global_cells["pcc_gc_tracing_finish_commits"]
+    boundary.callbacks["first"] = lambda obj: commits.__setitem__(0, commits[0] + 1)
+    assert boundary.sweep(9223372036854775807) == 0
+    assert "del:first" in boundary.events and "del:second" not in boundary.events
+    assert not any(event.startswith(("clear:", "free:")) for event in boundary.events)
+
+
+def test_unsealed_or_stale_list_leaves_the_sweep_to_its_walk():
+    for commit in (0, 2):
+        boundary = _listed_boundary(commit=commit)
+        live = boundary.object("live", candidate=False)
+        dead = boundary.object("dead")
+        boundary.roots = [live]
+        boundary.seal(dead)
+        assert boundary.sweep(9223372036854775807) == 1
+        assert "live" in boundary.visited and "free:dead" in boundary.events

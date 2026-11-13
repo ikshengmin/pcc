@@ -110,6 +110,9 @@ pcc_gc_gray_worklist_clear_stopped = extern(
 pcc_gc_object_walk_first = extern("pcc_gc_object_walk_first", (), c_ptr)
 pcc_gc_object_walk_next = extern("pcc_gc_object_walk_next", (c_ptr,), c_ptr)
 pcc_gc_object_is_white = extern("pcc_gc_object_is_white", (c_ptr, c_int64), c_int64)
+pcc_gc_tracing_candidates_reset = extern("pcc_gc_tracing_candidates_reset", (), c_void)
+pcc_gc_tracing_candidates_note = extern("pcc_gc_tracing_candidates_note", (c_ptr,), c_void)
+pcc_gc_tracing_candidates_seal = extern("pcc_gc_tracing_candidates_seal", (c_int64,), c_void)
 
 
 @c_abi_export("pcc_gc_trace_mark_gray_if_known")
@@ -542,6 +545,14 @@ def pcc_gc_finish_tracing_cycle(
         pcc_platform_abort()
         return 0
     marked_bytes: i64 = 0
+    # The nonmoving count-free collectors' sweep visits the candidates this
+    # walk flags instead of walking every object again for each of its
+    # passes (pcc_gc_tracing_candidates_note).
+    listing: i64 = 0
+    if (load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
+            and (claim_backend == 1 or claim_backend == 2 or claim_backend == 3)):
+        listing = 1
+        pcc_gc_tracing_candidates_reset()
     node = pcc_gc_object_walk_first()
     while ptr_is_null(node) == 0:
         nxt = pcc_gc_object_walk_next(node)
@@ -555,6 +566,8 @@ def pcc_gc_finish_tracing_cycle(
         flags: i64 = load_i32(obj, 12)
         if pcc_gc_object_is_white(obj, flags) != 0:
             store_i32(obj, 12, flags | 1024)
+            if listing != 0:
+                pcc_gc_tracing_candidates_note(node)
         else:
             store_i32(obj, 12, flags & ~1024)
             # The node records the object's size at offset 8.
@@ -586,6 +599,8 @@ def pcc_gc_finish_tracing_cycle(
     )
     # Preserve cycle_requested: roots/barriers/reset may have published work
     # while this claimant was waiting for the stopped-world cut.
+    if listing != 0:
+        pcc_gc_tracing_candidates_seal(commits + 1)
     store_i64(
         global_addr("pcc_gc_tracing_finish_commits"), 0, commits + 1
     )

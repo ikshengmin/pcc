@@ -60,6 +60,9 @@ pcc_gc_drain_all_gray_unlocked = extern(
 pcc_gc_tracing_clear_unpinned = extern(
     "pcc_gc_tracing_clear_unpinned", (c_ptr,), c_void
 )
+pcc_gc_tracing_clear_referents = extern(
+    "pcc_gc_tracing_clear_referents", (c_ptr,), c_void
+)
 pcc_gc_visit_object_slots = extern(
     "pcc_gc_visit_object_slots", (c_ptr, c_ptr, c_ptr), c_int64
 )
@@ -98,6 +101,80 @@ pcc_platform_monotonic_us = extern("pcc_platform_monotonic_us", (), c_int64)
 pcc_gc_object_walk_first = extern("pcc_gc_object_walk_first", (), c_ptr)
 pcc_gc_object_walk_next = extern("pcc_gc_object_walk_next", (c_ptr,), c_ptr)
 pcc_gc_object_is_white = extern("pcc_gc_object_is_white", (c_ptr, c_int64), c_int64)
+
+
+# The nodes a mark's finish found white, collected by the finish's own walk
+# (pcc_gc_tracing_candidates_note). The sweep of that mark visits them
+# instead of walking every registered object again for each pass. Until the
+# next finish the set only shrinks -- a recheck or a resurrection clears
+# flags, and only a finish sets them -- so it stays a superset of the
+# candidates, and every pass still checks each node's own state. Nodes stay
+# valid: records are never freed, and only a sweep frees a pooled node. A
+# finish committed meanwhile (a collection nested in a finalizer, which
+# swept these candidates itself) retires the list. COMMIT names the finish
+# that filled it; a count of -1 marks a list that could not grow, which the
+# sweep does not use.
+# The list's storage is freestanding_gc_state's pcc_gc_tracing_candidate_*.
+# A list is mapped for the largest sweep; one this much larger than the
+# candidates it held is returned after its sweep.
+CANDIDATE_INITIAL_CAPACITY = 4096
+
+
+@c_abi_export("pcc_gc_tracing_candidates_reset")
+def pcc_gc_tracing_candidates_reset() -> None:
+    """Start the candidate list of a finish (stopped world, graph lock)."""
+    store_i64(global_addr("pcc_gc_tracing_candidate_count"), 0, 0)
+    store_i64(global_addr("pcc_gc_tracing_candidate_commit"), 0, -1)
+
+
+@c_abi_export("pcc_gc_tracing_candidates_note")
+def pcc_gc_tracing_candidates_note(node) -> None:
+    count: i64 = load_i64(global_addr("pcc_gc_tracing_candidate_count"), 0)
+    if count < 0:
+        return
+    capacity: i64 = load_i64(global_addr("pcc_gc_tracing_candidate_capacity"), 0)
+    nodes = global_load_ptr("pcc_gc_tracing_candidate_nodes")
+    if count >= capacity:
+        grown: i64 = capacity * 2
+        if grown < CANDIDATE_INITIAL_CAPACITY:
+            grown = CANDIDATE_INITIAL_CAPACITY
+        bigger = malloc(grown * 8)
+        if ptr_is_null(bigger) != 0:
+            # An incomplete list is never used: its sweep walks.
+            store_i64(global_addr("pcc_gc_tracing_candidate_count"), 0, -1)
+            return
+        index: i64 = 0
+        while index < count:
+            store_ptr(bigger, index * 8, load_ptr(nodes, index * 8))
+            index = index + 1
+        if ptr_is_null(nodes) == 0:
+            free(nodes)
+        nodes = bigger
+        global_store_ptr("pcc_gc_tracing_candidate_nodes", nodes)
+        store_i64(global_addr("pcc_gc_tracing_candidate_capacity"), 0, grown)
+    store_ptr(nodes, count * 8, node)
+    store_i64(global_addr("pcc_gc_tracing_candidate_count"), 0, count + 1)
+
+
+@c_abi_export("pcc_gc_tracing_candidates_seal")
+def pcc_gc_tracing_candidates_seal(commit: i64) -> None:
+    """The list is complete for finish ``commit``."""
+    if load_i64(global_addr("pcc_gc_tracing_candidate_count"), 0) >= 0:
+        store_i64(global_addr("pcc_gc_tracing_candidate_commit"), 0, commit)
+
+
+@c_abi_export("pcc_gc_tracing_candidates_retire")
+def pcc_gc_tracing_candidates_retire() -> None:
+    """The sweep consumed the list: no later sweep may use it, and a mapping
+    far larger than its candidates is returned."""
+    store_i64(global_addr("pcc_gc_tracing_candidate_commit"), 0, -1)
+    count: i64 = load_i64(global_addr("pcc_gc_tracing_candidate_count"), 0)
+    capacity: i64 = load_i64(global_addr("pcc_gc_tracing_candidate_capacity"), 0)
+    store_i64(global_addr("pcc_gc_tracing_candidate_count"), 0, 0)
+    if capacity > CANDIDATE_INITIAL_CAPACITY and count * 4 < capacity:
+        free(global_load_ptr("pcc_gc_tracing_candidate_nodes"))
+        global_store_ptr("pcc_gc_tracing_candidate_nodes", null())
+        store_i64(global_addr("pcc_gc_tracing_candidate_capacity"), 0, 0)
 
 
 @c_abi_export("pcc_gc_record_sweep_phase")
@@ -440,21 +517,57 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
     held: i64 = pcc_thread_world_stop_epoch_held()
     if held < 0 or held != load_i64(global_addr("pcc_gc_tracing_finish_stop_epoch"), 0):
         pcc_gc_tracing_recheck_reachability_after_finalizers()
+    weak_callbacks: i64 = 0
     if count_free != 0:
-        if py_weakref_invalidate_tracing_candidates() != 0:
+        weak_callbacks = py_weakref_invalidate_tracing_candidates()
+        if weak_callbacks != 0:
             # Weak callbacks can resurrect other candidates. Their new roots
             # must be visible before any candidate's finalizer can run.
             pcc_gc_tracing_recheck_reachability_after_finalizers()
     finalizer_runs: i64 = load_i64(global_addr("pcc_gc_user_finalizer_runs"), 0)
+    # The nonmoving count-free collectors visit their finish's candidate
+    # list (pcc_gc_tracing_candidates_note) instead of every object.
+    listed: i64 = 0
+    selected_backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+    if (
+        count_free != 0
+        and (selected_backend == 1 or selected_backend == 2 or selected_backend == 3)
+        and load_i64(global_addr("pcc_gc_tracing_candidate_count"), 0) >= 0
+        and load_i64(global_addr("pcc_gc_tracing_candidate_commit"), 0) > 0
+        and load_i64(global_addr("pcc_gc_tracing_candidate_commit"), 0)
+        == load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0)
+    ):
+        # A finish commits from 1; no finish has filled a list at commit 0.
+        listed = 1
+    listed_nodes = null()
+    listed_count: i64 = 0
+    listed_commit: i64 = 0
+    if listed != 0:
+        listed_nodes = global_load_ptr("pcc_gc_tracing_candidate_nodes")
+        listed_count = load_i64(global_addr("pcc_gc_tracing_candidate_count"), 0)
+        listed_commit = load_i64(global_addr("pcc_gc_tracing_candidate_commit"), 0)
 
     # PASS 0: finalizers see intact fields.  C-extension tags are excluded
     # because their lifecycle is owned by the C-API bridge.
     started: i64 = pcc_platform_monotonic_us()
     visited: i64 = 0
-    node = pcc_gc_object_walk_first()
-    while ptr_is_null(node) == 0:
+    # A listed pass visits the list's entries; a finish committed by a
+    # collection nested in a finalizer ends it (that collection swept them).
+    cursor: i64 = 0
+    node = pcc_gc_object_walk_first() if listed == 0 else (
+        load_ptr(listed_nodes, 0) if listed_count > 0 else null())
+    while ptr_is_null(node) == 0 and (
+        listed == 0
+        or load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0) == listed_commit
+    ):
         visited = visited + 1
-        nxt = pcc_gc_object_walk_next(node)
+        cursor = cursor + 1
+        if listed == 0:
+            nxt = pcc_gc_object_walk_next(node)
+        elif cursor < listed_count:
+            nxt = load_ptr(listed_nodes, cursor * 8)
+        else:
+            nxt = null()
         if pcc_gc_object_node_is_active(node) != 0:
             obj = load_ptr(node, 0)
             flags: i64 = load_i32(obj, 12)
@@ -491,15 +604,38 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
     if count_free != 0:
         py_weakref_clear_tracing_candidates()
 
+    # No user code ran since the weak refs to candidates were settled (no
+    # weak callback, finalizer or generator close): none can have gained a
+    # weak ref, so clearing skips each one's walk of the weak-ref lists.
+    weak_settled: i64 = 0
+    if (
+        count_free != 0
+        and weak_callbacks == 0
+        and (selected_backend == 1 or selected_backend == 2 or selected_backend == 3)
+        and load_i64(global_addr("pcc_gc_user_finalizer_runs"), 0) == finalizer_runs
+    ):
+        weak_settled = 1
+
     # PASS 1: clear at most budget candidates without freeing any sibling.
     started = pcc_platform_monotonic_us()
     visited = 0
     cleared: i64 = 0
     cleared_nonclasses: i64 = 0
-    node = pcc_gc_object_walk_first()
-    while ptr_is_null(node) == 0 and cleared < budget:
+    cursor = 0
+    node = pcc_gc_object_walk_first() if listed == 0 else (
+        load_ptr(listed_nodes, 0) if listed_count > 0 else null())
+    while ptr_is_null(node) == 0 and cleared < budget and (
+        listed == 0
+        or load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0) == listed_commit
+    ):
         visited = visited + 1
-        nxt = pcc_gc_object_walk_next(node)
+        cursor = cursor + 1
+        if listed == 0:
+            nxt = pcc_gc_object_walk_next(node)
+        elif cursor < listed_count:
+            nxt = load_ptr(listed_nodes, cursor * 8)
+        else:
+            nxt = null()
         if pcc_gc_object_node_is_active(node) == 0:
             node = nxt
             continue
@@ -519,7 +655,10 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
             # instances. Empty owning slots prove clearing already finished;
             # do not spend each slice clearing the same class again.
             if count_free == 0 or is_class == 0 or _class_needs_clear(obj) != 0:
-                pcc_gc_tracing_clear_unpinned(obj)
+                if weak_settled != 0:
+                    pcc_gc_tracing_clear_referents(obj)
+                else:
+                    pcc_gc_tracing_clear_unpinned(obj)
                 if count_free != 0 and is_class != 0:
                     pcc_gc_visit_object_slots(obj, _clear_class_layout_slot, null())
                 else:
@@ -550,10 +689,21 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
                 defer_concurrent = 0
     deferred: i64 = 0
     classes_kept: i64 = 0
-    node = pcc_gc_object_walk_first()
-    while ptr_is_null(node) == 0:
+    cursor = 0
+    node = pcc_gc_object_walk_first() if listed == 0 else (
+        load_ptr(listed_nodes, 0) if listed_count > 0 else null())
+    while ptr_is_null(node) == 0 and (
+        listed == 0
+        or load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0) == listed_commit
+    ):
         visited = visited + 1
-        nxt = pcc_gc_object_walk_next(node)
+        cursor = cursor + 1
+        if listed == 0:
+            nxt = pcc_gc_object_walk_next(node)
+        elif cursor < listed_count:
+            nxt = load_ptr(listed_nodes, cursor * 8)
+        else:
+            nxt = null()
         if pcc_gc_object_node_is_active(node) == 0:
             node = nxt
             continue
@@ -589,6 +739,8 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
                         pcc_gc_tracing_finalize_unpinned(obj)
                 reclaimed = reclaimed + 1
         node = nxt
+    if listed != 0:
+        pcc_gc_tracing_candidates_retire()
     if deferred != 0:
         # Publish after the walk. The kept classes stay candidates until the
         # collector thread has freed every deferred instance.

@@ -224,8 +224,10 @@ def test_freestanding_gc_state_has_complete_raw_abi_and_initial_values(
     # object-slab GC pages alternate mark bitmaps by one epoch word (1,
     # 0872e7cfd). A GC4 relocation copy allocates outside the slabs being
     # evacuated while one word says so (1). Its evacuating object slabs have
-    # their own list, apart from the logical zpages' (1).
-    assert len(expected) == 288
+    # their own list, apart from the logical zpages' (1). A count-free
+    # mark's finish lists its candidates for the sweep: nodes, count,
+    # capacity and the finish commit (4).
+    assert len(expected) == 292
     assert expected["pcc_gc_backend4_remap_owed"] == ("define_global_i32", 0)
     assert expected["pcc_gc_page_mark_epoch_word"] == ("define_global_i64", 0)
     assert expected["pcc_gc_nonmoving_count_free"] == ("define_global_i32", 0)
@@ -355,10 +357,15 @@ def test_raw_gc_state_uses_string_kinds_not_managed_llvm_type_registry():
         for name, (kind, _value) in _state_definitions(STATE_SOURCE).items()
     }
     # The application safepoint gate intentionally imports this existing
-    # raw flag through declare_runtime_global; no other raw state may leak.
-    assert set(expected) & set(RUNTIME_GLOBALS) == {"pcc_gc_backend4_auto_step_pending"}
-    assert expected["pcc_gc_backend4_auto_step_pending"] == "i32"
-    assert str(RUNTIME_GLOBALS["pcc_gc_backend4_auto_step_pending"]) == "i32"
+    # raw flag through declare_runtime_global, and the root pin lock gate
+    # (OwnershipLoweringMixin._emit_root_pin_lock) reads the frozen
+    # container-mode word; no other raw state may leak.
+    assert set(expected) & set(RUNTIME_GLOBALS) == {
+        "pcc_gc_backend4_auto_step_pending", "pcc_gc_list_container_mode",
+    }
+    for name in ("pcc_gc_backend4_auto_step_pending", "pcc_gc_list_container_mode"):
+        assert expected[name] == "i32"
+        assert str(RUNTIME_GLOBALS[name]) == "i32"
     assert all(isinstance(name, str) for name in runtime_abi.FREESTANDING_GC_RUNTIME_GLOBALS)
 
 

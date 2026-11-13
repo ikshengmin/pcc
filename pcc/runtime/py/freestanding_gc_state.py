@@ -423,6 +423,13 @@ define_global_i64("pcc_gc_concurrent_sweep_count", 0)
 define_global_i64("pcc_gc_concurrent_sweep_next", 0)
 define_global_i64("pcc_gc_concurrent_sweep_remaining", 0)
 define_global_i64("pcc_gc_concurrent_sweep_freed", 0)
+# The nodes a count-free GC1-GC3 mark's finish found white, their count
+# (-1: the list could not grow and is not used), the mapped capacity, and
+# the finish commit that filled them (-1: none; the sweep retires it).
+define_global_ptr_null("pcc_gc_tracing_candidate_nodes")
+define_global_i64("pcc_gc_tracing_candidate_count", 0)
+define_global_i64("pcc_gc_tracing_candidate_capacity", 0)
+define_global_i64("pcc_gc_tracing_candidate_commit", -1)
 # The stopped-world epoch the last mark finished in (-1: the world ran).
 define_global_i64("pcc_gc_tracing_finish_stop_epoch", -1)
 # The stopped-world epoch the current mark's roots were seeded in. A final

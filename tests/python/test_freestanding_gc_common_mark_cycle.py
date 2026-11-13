@@ -79,6 +79,10 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_platform_abort",
     "pcc_thread_world_stop_epoch_held",
     "py_incref",
+    # A count-free finish lists the candidates its walk flags for the sweep.
+    "pcc_gc_tracing_candidates_reset",
+    "pcc_gc_tracing_candidates_note",
+    "pcc_gc_tracing_candidates_seal",
 }
 RAW_GLOBAL_IMPORTS = {
     "pcc_gc_backend4_no_refcounts",

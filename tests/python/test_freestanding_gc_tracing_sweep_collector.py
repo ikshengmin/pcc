@@ -37,6 +37,11 @@ OWNED_SYMBOLS = {
     "pcc_gc_tracing_has_sweep_candidate",
     "pcc_gc_tracing_recheck_reachability_after_finalizers",
     "pcc_gc_tracing_sweep_unreachable",
+    # A count-free mark's finish lists its candidates; the sweep visits them.
+    "pcc_gc_tracing_candidates_reset",
+    "pcc_gc_tracing_candidates_note",
+    "pcc_gc_tracing_candidates_seal",
+    "pcc_gc_tracing_candidates_retire",
 }
 RAW_FUNCTION_IMPORTS = {
     "pcc_gc_object_walk_first",
@@ -57,6 +62,8 @@ RAW_FUNCTION_IMPORTS = {
     'pcc_gc_object_node_is_active',
     'pcc_gc_seed_roots',
     'pcc_gc_tracing_clear_unpinned',
+    # A candidate whose weak refs are settled is cleared directly.
+    'pcc_gc_tracing_clear_referents',
     'pcc_gc_visit_object_slots',
     'pcc_py_gc_minor_graph_lock',
     'pcc_py_gc_minor_graph_unlock',
@@ -72,6 +79,11 @@ RAW_FUNCTION_IMPORTS = {
     'py_weakref_clear_tracing_candidates',
 }
 RAW_GLOBAL_IMPORTS = {
+    # The finish's candidate list.
+    "pcc_gc_tracing_candidate_nodes",
+    "pcc_gc_tracing_candidate_count",
+    "pcc_gc_tracing_candidate_capacity",
+    "pcc_gc_tracing_candidate_commit",
     # Deferred-sweep state; a finished deferral with classes left requests a stop.
     "pcc_gc_concurrent_sweep_allowed",
     "pcc_gc_concurrent_sweep_state",

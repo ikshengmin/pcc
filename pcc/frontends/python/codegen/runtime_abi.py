@@ -2002,6 +2002,9 @@ FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_backend4_remembered_page_index_count',
         'pcc_gc_backend4_remembered_page_index_used',
         'pcc_gc_tracing_finish_stop_epoch',
+        'pcc_gc_tracing_candidate_count',
+        'pcc_gc_tracing_candidate_capacity',
+        'pcc_gc_tracing_candidate_commit',
         'pcc_gc_tracing_seed_stop_epoch',
         'pcc_gc_user_finalizer_runs',
         'pcc_gc_object_list_revision',
@@ -2049,6 +2052,7 @@ FREESTANDING_GC_PTR_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_backend4_evacuation_page_head',
         'pcc_gc_backend4_slab_evacuation_head',
         'pcc_gc_concurrent_sweep_objects',
+        'pcc_gc_tracing_candidate_nodes',
         'pcc_gc_backend4_evacuation_find_memo_page',
         'pcc_gc_backend4_evacuation_find_memo_node',
         'pcc_gc_backend4_free_page_head',
@@ -3327,6 +3331,12 @@ def _cross_object_signatures_part_15():
     # A started thread keeps emptied scheduler-root nodes until it exits.
     "pcc_gc_scheduler_root_tls_cache_drain": ((), "c_void"),
     "pcc_thread_exit_unregisters": ((), "c_int64"),
+    # A count-free mark's finish lists its candidates for the sweep.
+    "pcc_gc_tracing_candidates_reset": ((), "c_void"),
+    "pcc_gc_tracing_candidates_note": (("c_ptr",), "c_void"),
+    "pcc_gc_tracing_candidates_seal": (("c_int64",), "c_void"),
+    # Its sweep clears a candidate whose weak refs are already settled.
+    "pcc_gc_tracing_clear_referents": (("c_ptr",), "c_void"),
     }
 
 

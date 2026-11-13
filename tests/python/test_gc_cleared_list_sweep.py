@@ -68,7 +68,9 @@ def test_list_claim_releases_items_before_seal_and_only_worker_retires_shell(
     obj, node, items = rt.list(capacity, tracked=tracked)
     gc_node = rt.tracked_nodes.get(obj)
     rt.begin()
-    admitted = int(backend in (1, 2))
+    # GC3 joined GC1/GC2's mutator protocol (03cbd1849): its cleared lists
+    # are claimed by the same scalar sweep; only GC4 relocates.
+    admitted = int(backend in (1, 2, 3))
     assert rt.enqueue((obj, node)) == admitted
     if admitted:
         assert rt.freed == {items} and rt.read(obj, 0) == 731

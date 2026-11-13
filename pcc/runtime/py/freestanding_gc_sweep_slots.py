@@ -4,6 +4,7 @@ from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.runtime.py.py_abi_constants import PY_TYPE_DICT, PY_TYPE_LIST, PY_TYPE_SET, PY_TYPE_TUPLE, PY_TYPE_VTHREAD_CHANNEL
 from pcc.unsafe import (
+    abi_constant,
     global_addr,
     is_tagged_int,
     load_i32,
@@ -136,6 +137,28 @@ def pcc_gc_tracing_clear_referents(obj) -> None:
     if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
         return
     tag: i64 = load_i32(obj, 8)
+    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
+        # A count-free clear stores NULL into every owned slot and releases
+        # nothing (pcc_gc_tracing_clear_slot): a tuple's or list's items are
+        # its owned slots, which the visitor would visit one call each.
+        if tag == PY_TYPE_TUPLE:
+            length: i64 = load_i64(obj, abi_constant("object.tuple.length_offset"))
+            index: i64 = 0
+            while index < length:
+                store_ptr(obj, abi_constant("object.tuple.items_offset") + index * 8, null())
+                index = index + 1
+            pcc_gc_clear_container_metadata(obj, tag)
+            return
+        if tag == PY_TYPE_LIST:
+            items = load_ptr(obj, abi_constant("object.list.items_offset"))
+            if ptr_is_null(items) == 0:
+                length: i64 = load_i64(obj, abi_constant("object.list.length_offset"))
+                index: i64 = 0
+                while index < length:
+                    store_ptr(items, index * 8, null())
+                    index = index + 1
+            pcc_gc_clear_container_metadata(obj, tag)
+            return
     handled: i64 = pcc_gc_visit_object_slots(
         obj, pcc_gc_tracing_clear_slot, null()
     )

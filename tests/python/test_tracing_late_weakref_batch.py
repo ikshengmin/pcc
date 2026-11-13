@@ -56,6 +56,9 @@ class LateWeakBatch(WeakBatch):
             pcc_gc_drain_all_gray_unlocked=lambda: 0,
             py_user_del_dispatch=self.finalize,
             pcc_gc_tracing_clear_unpinned=self.clear,
+            # With no user code since the batches settled every weak ref to
+            # a candidate, PASS1 clears without its own weak-ref walk.
+            pcc_gc_tracing_clear_referents=self.clear_settled,
             pcc_gc_tracing_finalize_unpinned=self.destroyed.append,
             pcc_gc_scalar_sweep_try_enqueue=lambda obj, node: 0,
             abi_constant=lambda name: -1,  # No class objects in this model.
@@ -135,6 +138,11 @@ class LateWeakBatch(WeakBatch):
         # Real PASS1's generic invalidation must find the late targets already
         # detached, or it would incorrectly deliver their callbacks here.
         self.ns["py_weakref_invalidate"](obj)
+        self.cleared.append(obj)
+        self.store(obj, 48, 0)
+
+    def clear_settled(self, obj):
+        self.clear_hook(obj)
         self.cleared.append(obj)
         self.store(obj, 48, 0)
 
