@@ -1039,6 +1039,16 @@ class GoParser:
                         body=self.block(), init=init, post=post)
         if token.kind == "type":
             self.unsupported(token, 'go.unsupported.local-type-declarations', "function-local type declarations are not implemented")
+        if self.accept("defer"):
+            # https://go.dev/ref/spec#Defer_statements: "defer" Expression,
+            # a function or method call that is not parenthesized.
+            start = self.current
+            call = self.expression()
+            if call.parenthesized:
+                self.fail(start, "expression in defer must not be parenthesized")
+            if call.kind != "call":
+                self.fail(start, "expression in defer must be function call")
+            return Stmt("defer", token, exprs=[call])
         if token.kind in KEYWORDS and token.kind != "func":
             # `func` starts an expression statement (a called function literal).
             self.fail(token, f"unsupported statement {token.text!r}")

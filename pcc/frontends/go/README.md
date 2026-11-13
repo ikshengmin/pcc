@@ -725,6 +725,7 @@ renew that historical qualification.
 | `go.capability.limit-struct-fields` | Explicitly unimplemented boundary: limit struct fields | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.limit-type-expansion` | Explicitly unimplemented boundary: limit type expansion | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.local-type-declarations` | Explicitly unimplemented boundary: local type declarations | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.defer` | Explicitly unimplemented boundary: deferred calls (`defer` statements parse and their call is checked; function-exit sequencing and panic/recover unwinding are not implemented) | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.function-values` | Explicitly unimplemented boundary: function values (function types and literals parse; closures and indirect calls are not implemented) | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.method-values` | Explicitly unimplemented boundary: method values | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.negative-shift-panic` | Explicitly unimplemented boundary: negative shift panic | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |

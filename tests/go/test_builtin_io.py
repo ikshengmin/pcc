@@ -142,8 +142,13 @@ def test_nonlinux_output_is_an_explicit_target_boundary():
 
 @pytest.mark.parametrize('statement', ['defer f()', 'go f()'])
 def test_terminal_panic_does_not_claim_defer_or_goroutine_support(statement):
-    with pytest.raises(GoDiagnostic, match='unsupported statement'):
+    # `defer` now parses (tests/go/test_defer_statements.py), and its call is
+    # the explicit go.unsupported.defer gap: no deferred call can run.
+    expected = 'deferred calls require' if statement.startswith('defer') else 'unsupported statement'
+    with pytest.raises(GoDiagnostic, match=expected) as caught:
         compile_go(source(statement+';panic(1)', 'func f(){}'))
+    if statement.startswith('defer'):
+        assert caught.value.code == 'go.unsupported.defer'
 
 
 def capture(directory, owner, binary, input_hash):
