@@ -968,6 +968,19 @@ def test_strict_body_accepts_only_catch_class_references(indexed, shape):
 ''').body[0]
         assert ast.dump(function, include_attributes=False) == ast.dump(expected, include_attributes=False)
     _strict_check_body(body, indexed, actual=shape == 'actual-source-ir')
+    # The local ABI transports the same root address. Include direct,
+    # aliased, quoted, and full historical-body shapes without new CI nodes.
+    local_body = body.replace('pcc_gc_frame_enter', 'pcc_gc_frame_enter_local')
+    local_body = local_body.replace('pcc_gc_frame_leave', 'pcc_gc_frame_leave_local')
+    _strict_check_body(local_body, indexed, actual=shape == 'actual-source-ir')
+    if shape == 'rooted':
+        # Exact operation rejected by Windows f238 run 43355964970,
+        # job 131897138960. The surrounding reduced body is synthetic.
+        local_body = local_body.replace(
+            'call void (ptr, ptr) @pcc_gc_frame_enter_local(ptr @frame_map, ptr %frame.slot)',
+            'call void (ptr, ptr) @pcc_gc_frame_enter_local(ptr @.pcc.gc.frame.map.1, ptr %except.class.slot.11302.21)',
+        ).replace('%class.slot', '%except.class.slot.11302.21')
+        _strict_check_body(local_body, indexed)
 
 
 @pytest.mark.parametrize('indexed', (False, True))
@@ -1025,8 +1038,36 @@ def test_strict_body_rejects_class_construction_or_escape(indexed, shape):
         body = body.replace(' %class.slot = alloca ptr\n', '')
     else:
         body = body.replace(' ret ptr null', additions[shape] + ' ret ptr null')
-    with pytest.raises(AssertionError):
-        _strict_check_body(body, indexed)
+    # Retain every constructor, raise, load/return, alias-escape and cleanup
+    # rejection after admitting only the two exact local bookkeeping calls.
+    local_body = body.replace('pcc_gc_frame_enter', 'pcc_gc_frame_enter_local')
+    local_body = local_body.replace('pcc_gc_frame_leave', 'pcc_gc_frame_leave_local')
+    for candidate in (body, local_body):
+        with pytest.raises(AssertionError):
+            _strict_check_body(candidate, indexed)
+    if shape == 'unparsed-frame-operand':
+        local_catch = _STRICT_CATCH_BODY.replace('pcc_gc_frame_enter', 'pcc_gc_frame_enter_local')
+        local_catch = local_catch.replace('pcc_gc_frame_leave', 'pcc_gc_frame_leave_local')
+        for invalid in (
+            'call void @pcc_gc_frame_enter_local_unknown(ptr @frame_map, ptr %class.slot)',
+            'call void @pcc_gc_frame_leave_local_unknown(ptr %frame.slot)',
+            'call void @pcc_gc_frame_enter_local(ptr %class.live, ptr %class.slot)',
+            'call void @pcc_gc_frame_enter_local(ptr %frame.slot, ptr %class.slot)',
+            'call void @pcc_gc_frame_enter_local(ptr null, ptr %class.slot)',
+            'call void @pcc_gc_frame_enter_local(ptr @frame_map, ptr %class.live)',
+            'call void @pcc_gc_frame_enter_local(ptr @frame_map, ptr %class.slot, ptr null)',
+            'call void @pcc_gc_frame_enter_local(ptr %class.slot)',
+            'call void @pcc_gc_frame_leave_local(ptr %class.live)',
+            'call void @pcc_gc_frame_leave_local(ptr %class.slot, ptr null)',
+            'call void @pcc_gc_frame_leave_local(ptr %cleanup.slot)',
+            '%node = call ptr @pcc_gc_frame_enter_local(ptr @frame_map, ptr %class.slot)',
+            'call i64 @pcc_gc_frame_leave_local(ptr %class.slot)',
+            'call void @unowned_sink(ptr %frame.slot)',
+            '%noncatch = load ptr, ptr %class.slot\n ret ptr %noncatch',
+        ):
+            malformed = local_catch.replace(' ret ptr null', ' ' + invalid + '\n ret ptr null')
+            with pytest.raises(AssertionError):
+                _strict_check_body(malformed, indexed)
 
 
 def load_file(name, path, monkeypatch):

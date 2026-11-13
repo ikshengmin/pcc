@@ -130,6 +130,18 @@ def require_no_notimplemented_stub(body, symbol):
             valid = rooted(pointers[0]) and (pointers[1] == 'null' or pointers[1] in values)
         elif callee == 'pcc_gc_load_ptr' and len(pointers) == 2:
             valid = pointers[0] == 'null' and rooted(pointers[1]) and result in values
+        elif callee == 'pcc_gc_frame_enter_local' and len(pointers) == 2:
+            # The activation-private ABI is void(map, slots), not a class
+            # consumer or a returned frame-node handle. Keep the exact void
+            # call shape and the same disjoint map/local-root roles.
+            valid = (result is None
+                     and re.fullmatch(r'call void(?: \(ptr, ptr\))? @"?pcc_gc_frame_enter_local"?\(.*\)', operation) is not None
+                     and pointers[0] != 'null' and pointers[0] not in values
+                     and not rooted(pointers[0]) and rooted(pointers[1]))
+        elif callee == 'pcc_gc_frame_leave_local' and len(pointers) == 1:
+            valid = (result is None
+                     and re.fullmatch(r'call void(?: \(ptr\))? @"?pcc_gc_frame_leave_local"?\(.*\)', operation) is not None
+                     and rooted(pointers[0]))
         elif callee == 'pcc_gc_frame_enter' and len(pointers) == 2:
             valid = pointers[0] is not None and pointers[0] not in values and not rooted(pointers[0]) and rooted(pointers[1])
         elif callee == 'pcc_gc_frame_leave' and len(pointers) == 1:
