@@ -46,6 +46,7 @@ def _write_build_evidence(
 
     def populate_source(root, primary_text):
         (root / "pcc" / "ir").mkdir(parents=True)
+        (root / "pcc" / "driver").mkdir()
         (root / "scripts").mkdir()
         (root / "utils" / "fake_libc_include").mkdir(parents=True)
         (root / tool.PRIMARY_SOURCE).write_text(primary_text, encoding="utf-8")
