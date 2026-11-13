@@ -7,8 +7,8 @@ It never applies a patch, downloads sources, builds a runtime, or runs a shell.
 Both complete read-only source trees and a qualified runtime are explicit inputs.
 Input expected_output is complete stdout and must end in a newline, matching
 the existing compile harness; it is never whitespace-normalized.
-All preparation, two strict Stage1 builds, six compile pairs and baseline A/A
-controls share one absolute job deadline and one sampled process-tree guard.
+All preparation, two strict Stage1 builds, explicit candidate mechanism assertions,
+six compile pairs and baseline A/A controls share one absolute job deadline and one sampled process-tree guard.
 """
 from __future__ import annotations
 
@@ -46,8 +46,13 @@ TOOLS = (
     "scripts/run_pcc_stage1_build.py", "scripts/run_pcc_compile_ab.py",
     "scripts/run_process_tree_sample.py", "scripts/file_lock.py",
     "pcc/tools/runtime_archive_provenance.py",
+    "scripts/pcc_ci_ab_mechanism.py",
+    "scripts/data/ci_ab_import_scan/identity_cases.py",
+    "scripts/data/ci_ab_import_scan/native_cases.py",
 )
 _MODULES = {}
+_MECHANISM_PROOFS = {}
+_PARENT_LAUNCHES = {}
 NOT_PROVEN = [
     "Stage2 <= Stage1 wall time or process-tree memory",
     "new Stage1 -> Stage2 -> Stage3 fixed point",
@@ -93,8 +98,19 @@ def _persist(path, payload):
     temporary.replace(path)
 
 
-def _json(path):
-    value = json.loads(path.read_text(encoding="utf-8"))
+def _json(path, *, max_bytes=None):
+    if max_bytes is None:
+        content = path.read_bytes()
+    else:
+        mode = path.lstat()
+        if (path.is_symlink() or not stat.S_ISREG(mode.st_mode) or mode.st_nlink != 1
+                or not 1 <= mode.st_size <= max_bytes):
+            raise CampaignError("terminal metadata must be a bounded private regular file: " + str(path))
+        with path.open("rb") as stream:
+            content = stream.read(max_bytes + 1)
+        if len(content) > max_bytes:
+            raise CampaignError("terminal metadata grew beyond its bound")
+    value = json.loads(content)
     if not isinstance(value, dict):
         raise CampaignError("expected JSON object: " + str(path))
     return value
@@ -423,6 +439,173 @@ def _build_arm(args, output, arm, root, files, frozen, ab):
     return _archive_arm(output, arm, ab, frozen["runtime_archive"]["sha256"])
 
 
+
+def _mechanism_inputs(frozen, roots, trees, arms, ab):
+    """Fresh strict receipt, full candidate tree and unchanged literal artifacts."""
+    mechanism = _load("pcc_ci_ab_mechanism")
+    if frozen["allowed_changed_source"] != mechanism.SOURCE:
+        raise CampaignError("no explicit candidate mechanism for this compiler source")
+    row = arms["candidate"]
+    compiler = _safe_path(row["compiler"])
+    receipt = _file({"path": row["receipt"], "sha256": row["receipt_sha256"]})
+    loaded = ab._load_build_receipt(
+        receipt, arm="candidate", compiler_sha256=_sha(compiler),
+        compiler_size_bytes=compiler.stat().st_size,
+        runtime_sha256=frozen["runtime_archive"]["sha256"], expected_gc_backend=0)
+    source_files = loaded["source_manifest"]["files"]
+    if (source_files.get(mechanism.SOURCE) != trees["candidate"][mechanism.SOURCE]["sha256"]
+            or any(trees["candidate"].get(name, {}).get("sha256") != digest
+                   for name, digest in source_files.items())):
+        raise CampaignError("candidate mechanism compiler is from another source tree")
+    if _tree(roots["candidate"]) != trees["candidate"]:
+        raise CampaignError("candidate mechanism source changed")
+    for name, digest in mechanism.ARTIFACTS.items():
+        path = roots["candidate"] / mechanism.DATA / name
+        if _sha(path) != digest:
+            raise CampaignError("preserved candidate mechanism assertions changed: " + name)
+    return mechanism, loaded
+
+
+def _run_mechanism(args, output, frozen, roots, trees, arms, ab):
+    """An additional bounded phase, never a substitute for original gates."""
+    mechanism, loaded = _mechanism_inputs(frozen, roots, trees, arms, ab)
+    guard = ab._validated_worker_budget(**_guard_kwargs(args, output))
+    root = output / "candidate-mechanism"
+    root.mkdir()
+    inputs = root / "inputs"
+    inputs.mkdir()
+    inputs_receipts = {}
+    for name, digest in mechanism.ARTIFACTS.items():
+        path = inputs / name
+        shutil.copy2(roots["candidate"] / mechanism.DATA / name, path)
+        path.chmod(0o444)
+        inputs_receipts[name] = {"path": str(path), "sha256": digest}
+        _file(inputs_receipts[name])
+    (inputs / "conftest.py").write_text(mechanism.CONFTEST, encoding="utf-8")
+    (inputs / "pytest.ini").write_text(
+        "[pytest]\naddopts =\nmarkers =\n    integration: explicit candidate native acceptance\n    xdist_group(name): one bound mechanism evidence group\n", encoding="utf-8")
+    _seal(inputs)
+    for name in ("conftest.py", "pytest.ini"):
+        inputs_receipts[name] = {"path": str(inputs / name), "sha256": _sha(inputs / name)}
+    for name, digest in frozen["runtime_files"].items():
+        path = Path(frozen["runtime_archive"]["path"]).parent / name
+        inputs_receipts["runtime/" + name] = {"path": str(path), "sha256": digest}
+    for name in TOOLS:
+        inputs_receipts["tool/" + name] = {"path": str(REPO_ROOT / name), "sha256": _sha(REPO_ROOT / name)}
+    # Live source is not chmod'ed: its full identity is rechecked independently.
+    # Tool receipts are checked with readonly=False in the runner, which also
+    # checks against this exact qualified candidate full-tree manifest.
+    tool_receipts = {key: inputs_receipts.pop(key) for key in list(inputs_receipts) if key.startswith("tool/")}
+    phase_timeout = guard.remaining_timeout(_remaining(args.campaign_deadline_monotonic, mechanism.PHASE_SECONDS))
+    request = {
+        "schema": mechanism.SCHEMA, "source_root": str(roots["candidate"]),
+        "source_files": trees["candidate"], "target_sha": frozen["target_sha"], "run_token": args.run_token,
+        "compiler": arms["candidate"]["compiler"], "receipt": arms["candidate"]["receipt"],
+        "receipt_sha256": arms["candidate"]["receipt_sha256"],
+        "runtime_archive": frozen["runtime_archive"]["path"], "inputs": inputs_receipts,
+        "tools": tool_receipts, "compiler_sha256": loaded["receipt"]["compiler_sha256"],
+        "phase_deadline_monotonic": time.monotonic() + phase_timeout,
+        "guard": {key: str(value) if isinstance(value, Path) else value
+                  for key, value in _guard_kwargs(args, output).items()},
+    }
+    request_path = root / "request.json"
+    _persist(request_path, request)
+    request_path.chmod(0o444)
+    env = ab._measurement_env(
+        Path(frozen["runtime_archive"]["path"]), 0,
+        host_source_root=roots["candidate"], host_python=Path(sys.executable).resolve(),
+        private_root=root / "private", frontend_jobs=1, self_backend_jobs=2, worker_budget=guard)
+    env.pop("PYTHONPYCACHEPREFIX", None)
+    env.update(PYTHONDONTWRITEBYTECODE="1", PYTEST_DISABLE_PLUGIN_AUTOLOAD="1", PYTEST_ADDOPTS="",
+               PYTHONPATH=str(roots["candidate"]) + os.pathsep + str(REPO_ROOT / "scripts"), PCC_NO_AUTO_PCC1="1",
+               PCC_CURRENT_PCC1=arms["candidate"]["compiler"], PCC_REQUIRE_PCC1="1")
+    command = [str(Path(sys.executable).resolve()), str(REPO_ROOT / "scripts/pcc_ci_ab_mechanism.py"),
+               "--request", str(request_path)]
+    started = time.monotonic()
+    result = ab._run_process(command, timeout=_remaining(request["phase_deadline_monotonic"], phase_timeout),
+                             env=env, cwd=root)
+    (root / "runner.stdout").write_text(result.stdout, encoding="utf-8")
+    (root / "runner.stderr").write_text(result.stderr, encoding="utf-8")
+    if result.returncode != 0:
+        raise CampaignError("candidate mechanism assertion phase failed: " + str(result.returncode))
+    guard.verify()
+    evidence = _json(root / "result.json")
+    mechanism.validate_result(evidence, request=request_path, root=root)
+    _mechanism_inputs(frozen, roots, trees, arms, ab)
+    _verify_live_source(trees["candidate"])
+    _verify_live_import_origins(trees["candidate"])
+    _remaining(request["phase_deadline_monotonic"], mechanism.PHASE_SECONDS)
+    _seal(root)
+    files = _tree(root)
+    proof = {"schema": mechanism.SCHEMA, "status": "PASSED", "root": str(root),
+             "files": files, "sha256": _identity(files), "request_sha256": _sha(request_path),
+             "result_sha256": _sha(root / "result.json"), "command": command,
+             "environment": env, "returncode": result.returncode,
+             "elapsed_seconds": time.monotonic() - started, "phase_ceiling_seconds": mechanism.PHASE_SECONDS,
+             "source_sha256": _identity(trees["candidate"]), "candidate_sha": frozen["target_sha"], "run_token": args.run_token,
+             "compiler_receipt_sha256": loaded["sha256"], "budget": guard.receipt,
+             "scope": "candidate exact-str identity; CPython and host/native emitted execution on GC0-4",
+             "does_not_prove": ["total allocation count", "Stage2 <= Stage1", "original gates"]}
+    _remaining(request["phase_deadline_monotonic"], mechanism.PHASE_SECONDS)
+    _MECHANISM_PROOFS[id(proof)] = (proof, _identity(proof))
+    return proof
+
+
+def _verify_mechanism(proof, *, output, ab, launched=False):
+    if (not isinstance(proof, dict) or proof.get("status") != "PASSED"
+            or proof.get("returncode") != 0 or proof.get("root") != str(output / "candidate-mechanism")):
+        raise CampaignError("candidate mechanism proof is missing or belongs to another campaign")
+    if launched:
+        registered = _MECHANISM_PROOFS.get(id(proof))
+        if registered is None or registered[0] is not proof or registered[1] != _identity(proof):
+            raise CampaignError("candidate mechanism proof was not produced by this campaign launch")
+    root = _safe_path(proof["root"])
+    files = _tree(root)
+    if files != proof.get("files") or _identity(files) != proof.get("sha256"):
+        raise CampaignError("candidate mechanism frozen evidence changed after use")
+    request_path = _file({"path": str(root / "request.json"), "sha256": proof.get("request_sha256")})
+    result_path = _file({"path": str(root / "result.json"), "sha256": proof.get("result_sha256")})
+    mechanism = _load("pcc_ci_ab_mechanism")
+    evidence = _json(result_path)
+    mechanism.validate_result(evidence, request=request_path, root=root)
+    request = _json(request_path)
+    campaign = _json(output / "manifest.json")
+    if (request.get("run_token") != proof.get("run_token") or proof.get("run_token") != campaign.get("run_token")
+            or request.get("guard", {}).get("guard_result_path") != str(output / "guard.json")
+            or request["guard"].get("expected_guard_command") != proof.get("budget", {}).get("guard_command")
+            or proof.get("command") != [str(Path(sys.executable).resolve()),
+                    str(REPO_ROOT / "scripts/pcc_ci_ab_mechanism.py"), "--request", str(request_path)]):
+        raise CampaignError("candidate mechanism proof belongs to a different campaign launch")
+    actual_guard = _json(output / "guard.json")
+    if (actual_guard.get("command") != request["guard"]["expected_guard_command"]
+            or actual_guard.get("cwd") != str(REPO_ROOT)
+            or actual_guard.get("max_tree_rss_bytes") != proof["budget"].get("max_tree_rss_bytes")
+            or any(actual_guard.get("environment", {}).get(key) != value
+                   for key, value in proof["budget"].get("worker_environment", {}).items())):
+        raise CampaignError("candidate mechanism enclosing guard identity changed")
+    if (_tree(Path(request["source_root"])) != request["source_files"]
+            or _identity(request["source_files"]) != proof["source_sha256"]
+            or request["target_sha"] != proof["candidate_sha"]):
+        raise CampaignError("candidate mechanism source identity changed after use")
+    for row in request["inputs"].values():
+        _file(row)
+    for row in request["tools"].values():
+        _file(row, readonly=False)
+    compiler = _safe_path(request["compiler"])
+    loaded = ab._load_build_receipt(
+        _file({"path": request["receipt"], "sha256": request["receipt_sha256"]}), arm="candidate",
+        compiler_sha256=_sha(compiler), compiler_size_bytes=compiler.stat().st_size,
+        runtime_sha256=_sha(Path(request["runtime_archive"])), expected_gc_backend=0)
+    if (loaded["sha256"] != proof["compiler_receipt_sha256"] or _sha(compiler) != request["compiler_sha256"]
+            or evidence["host_python_runtime"] != loaded["host_python_runtime"]):
+        raise CampaignError("candidate mechanism compiler/receipt changed after use")
+    for receipt in loaded["external_tools"]:
+        ab.verify_portable_file_receipt(receipt, "candidate mechanism external tool")
+    if ab.host_python_runtime_evidence(Path(sys.executable).resolve()) != evidence["host_python_runtime"]:
+        raise CampaignError("candidate mechanism CPython runtime changed after use")
+    return proof
+
+
 def _compile_args(frozen, output, arms, ab):
     argv = ["--candidate", arms["candidate"]["compiler"], "--baseline", arms["baseline"]["compiler"],
             "--candidate-build-receipt", arms["candidate"]["receipt"],
@@ -491,16 +674,24 @@ def _guarded(args, output, ab):
         # Recheck validation and producer bytes as well as caller input trees.
         _validate_spec(spec, output, ab, prepared_root=prepared_root)
         _verify_live_import_origins(trees["candidate"])
-        manifest.update(phase="MEASURING", arms=arms)
+        manifest.update(phase="VERIFYING_CANDIDATE_MECHANISM", arms=arms)
+        _persist(output / "manifest.json", manifest)
+        mechanism_proof = _run_mechanism(args, output, frozen, roots, trees, arms, ab)
+        _verify_mechanism(mechanism_proof, output=output, ab=ab, launched=True)
+        _verify_frozen_qualification(proof)
+        manifest.update(phase="MEASURING", arms=arms, candidate_mechanism=mechanism_proof)
         _persist(output / "manifest.json", manifest)
         result = ab.run_guarded(_compile_args(frozen, output, arms, ab),
                                 performance_lock_token=token, **_guard_kwargs(args, output))
-        _verify_frozen_qualification(proof)
-        _verify_live_source(trees["candidate"])
-        _verify_live_import_origins(trees["candidate"])
         manifest.update(phase="MEASURED", compile_summary=result.get("summary"),
                         measurement_status=result.get("status"),
                         compile_manifest=str(output / "compile-ab/manifest.json"))
+        if result.get("status") == "ACCEPTED":
+            context, completion, compile_hash = _finish_guarded(
+                args, output, manifest, spec, trees, proof, mechanism_proof,
+                result, ab, prepared_root=prepared_root)
+            manifest.update(campaign_context=context, completion=completion,
+                            compile_manifest_sha256=compile_hash, candidate_mechanism_sha256=_identity(mechanism_proof))
         _persist(output / "manifest.json", manifest)
         return 0 if result.get("status") == "ACCEPTED" else 1
 
@@ -515,10 +706,181 @@ def _child_command(args, output):
             "--run-token", args.run_token]
 
 
-def _terminal(manifest, guard, error=None):
+
+COMPLETION_SCHEMA = "pcc.ci-compile-ab-completion.v1"
+COMPLETION_MAX_BYTES = 64 * 1024
+TERMINAL_MANIFEST_MAX_BYTES = 8 * 1024 * 1024
+TERMINAL_GUARD_MAX_BYTES = 1024 * 1024
+_COMPLETION_RESULT_FIELDS = (
+    "schema", "phase", "compile_summary", "measurement_status", "source_identities",
+    "arms", "qualification", "compile_manifest", "worker_policy", "measurement_mode",
+    "runtime_build", "enforcement",
+)
+_GUARD_CONTRACT_KEYS = (
+    "schema", "status", "started_at_utc", "command", "cwd", "environment",
+    "timeout_s", "interval_s", "max_tree_rss_bytes",
+    "darwin_preflight_reserve_bytes", "memory_budget_selection", "resource_preflight",
+)
+
+
+def _launch_contract(args, output, *, input_kind, input_sha256, target_sha):
+    return {"run_token": args.run_token, "input_kind": input_kind,
+            "input_sha256": input_sha256, "target_sha": target_sha,
+            "command": _child_command(args, output), "cwd": str(REPO_ROOT),
+            "output": str(output), "job_deadline_epoch": args.job_deadline_epoch,
+            "campaign_deadline_monotonic": args.campaign_deadline_monotonic}
+
+
+def _guard_contract_digest(guard):
+    # The original sampler changes terminal state/telemetry, not its launch
+    # contract. Match its already-validated RUNNING contract without importing
+    # a producer or reading source/runtime trees in the outer process.
+    contract = {key: guard.get(key) for key in _GUARD_CONTRACT_KEYS}
+    contract["status"] = "RUNNING"
+    return _identity(contract)
+
+
+def _finish_guarded(args, output, manifest, spec, trees, qualification,
+                    mechanism, result, ab, *, prepared_root):
+    """All expensive final verification stays inside the existing watchdog.
+
+    The outer process can be uv's venv while this source-owned child uses the
+    receipt-bound resolved base interpreter. Only this child rechecks runtime
+    identity. Its compact completion attests to those checks, not new evidence.
+    """
+    if result.get("status") != "ACCEPTED":
+        raise CampaignError("cannot complete a rejected compile experiment")
+    _verify_frozen_qualification(qualification)
+    _verify_live_source(trees["candidate"])
+    _verify_live_import_origins(trees["candidate"])
+    _verify_mechanism(mechanism, output=output, ab=ab, launched=True)
+    _validate_spec(spec, output, ab, prepared_root=prepared_root)
+    _verify_frozen_qualification(qualification)
+    _verify_live_import_origins(trees["candidate"])
+    compile_path = output / "compile-ab/manifest.json"
+    if (compile_path.is_symlink() or not compile_path.is_file()
+            or compile_path.stat().st_nlink != 1 or _json(compile_path) != result):
+        raise CampaignError("accepted compile manifest changed before completion")
+    compile_hash = _sha(compile_path)
+    compile_path.chmod(0o444)
+    context = _load("ci_pcc_ab_gate").finish_campaign(qualification)
+    guard = ab._validated_worker_budget(**_guard_kwargs(args, output))
+    guard.verify()
+    completion = {
+        "schema": COMPLETION_SCHEMA, "status": "VERIFIED_ACCEPTED",
+        "launch": _launch_contract(args, output, input_kind=manifest["input_kind"],
+                                   input_sha256=manifest["input_sha256"], target_sha=spec["target_sha"]),
+        "guard_contract_sha256": guard.receipt["guard_result"]["contract_sha256"],
+        "campaign_context_sha256": _identity(context),
+        "result_body_sha256": _identity({key: manifest.get(key) for key in _COMPLETION_RESULT_FIELDS}),
+        "mechanism": {"proof_sha256": _identity(mechanism),
+                      "request_sha256": mechanism["request_sha256"],
+                      "result_sha256": mechanism["result_sha256"],
+                      "tree_sha256": mechanism["sha256"],
+                      "source_sha256": mechanism["source_sha256"],
+                      "compiler_receipt_sha256": mechanism["compiler_receipt_sha256"]},
+        "compile_manifest_sha256": compile_hash,
+        "verified_at_monotonic": time.monotonic(),
+    }
+    encoded = json.dumps(completion, sort_keys=True, indent=2, allow_nan=False) + "\n"
+    if len(encoded.encode()) > COMPLETION_MAX_BYTES:
+        raise CampaignError("compact completion exceeded its metadata limit")
+    path = output / "completion.json"
+    if path.exists() or path.is_symlink():
+        raise CampaignError("refusing existing completion receipt")
+    _remaining(args.campaign_deadline_monotonic, JOB_SECONDS)
+    _persist(path, completion)
+    path.chmod(0o444)
+    guard.verify()
+    if _sha(compile_path) != compile_hash:
+        raise CampaignError("compile manifest changed while finalizing completion")
+    return context, {"path": str(path), "sha256": _sha(path), "size_bytes": path.stat().st_size}, compile_hash
+
+
+def _verify_completion(manifest, guard, *, output, expected):
+    """Bounded metadata only; never re-import helpers or walk inputs here."""
+    if (not isinstance(expected, dict) or set(expected) != {"launch", "started_monotonic"}
+            or not isinstance(expected["launch"], dict)):
+        raise CampaignError("terminal acceptance lacks the parent's original launch contract")
+    registered = _PARENT_LAUNCHES.get(id(expected))
+    if registered is None or registered[0] is not expected or registered[1] != _identity(expected):
+        raise CampaignError("completion expectations were not retained by this parent launch")
+    launch = expected["launch"]
+    if (guard.get("schema") != "pcc.process_tree_sample.v1" or guard.get("status") != "COMPLETE"
+            or type(guard.get("returncode")) is not int or guard["returncode"] != 0
+            or guard.get("command") != launch["command"] or guard.get("cwd") != launch["cwd"]
+            or launch["output"] != str(output) or manifest.get("run_token") != launch["run_token"]
+            or manifest.get("input_kind") != launch["input_kind"]
+            or manifest.get("input_sha256") != launch["input_sha256"]
+            or manifest.get("absolute_deadline_monotonic") != launch["campaign_deadline_monotonic"]):
+        raise CampaignError("completion does not match the actual parent-owned guard launch")
+    receipt = manifest.get("completion")
+    if (not isinstance(receipt, dict) or set(receipt) != {"path", "sha256", "size_bytes"}
+            or receipt.get("path") != str(output / "completion.json")
+            or type(receipt.get("size_bytes")) is not int
+            or not 1 <= receipt["size_bytes"] <= COMPLETION_MAX_BYTES):
+        raise CampaignError("missing or unbounded compact completion receipt")
+    path = _safe_path(receipt["path"])
+    mode = path.lstat()
+    if (not stat.S_ISREG(mode.st_mode) or mode.st_nlink != 1 or mode.st_mode & 0o222
+            or mode.st_size != receipt["size_bytes"]):
+        raise CampaignError("completion receipt is not private, read-only bounded metadata")
+    with path.open("rb") as stream:
+        content = stream.read(COMPLETION_MAX_BYTES + 1)
+    if len(content) > COMPLETION_MAX_BYTES or hashlib.sha256(content).hexdigest() != receipt.get("sha256"):
+        raise CampaignError("completion receipt changed after guarded verification")
+    value = json.loads(content)
+    fields = {"schema", "status", "launch", "guard_contract_sha256", "campaign_context_sha256",
+              "result_body_sha256", "mechanism", "compile_manifest_sha256", "verified_at_monotonic"}
+    if (not isinstance(value, dict) or set(value) != fields or value.get("schema") != COMPLETION_SCHEMA
+            or value.get("status") != "VERIFIED_ACCEPTED" or value.get("launch") != launch
+            or value.get("guard_contract_sha256") != _guard_contract_digest(guard)):
+        raise CampaignError("compact completion identity or original guard contract differs")
+    verified = value["verified_at_monotonic"]
+    if (type(verified) not in (int, float) or not math.isfinite(verified)
+            or not expected["started_monotonic"] <= verified <= launch["campaign_deadline_monotonic"]):
+        raise CampaignError("final verification was not completed inside the original deadline")
+    if value["result_body_sha256"] != _identity({key: manifest.get(key) for key in _COMPLETION_RESULT_FIELDS}):
+        raise CampaignError("verified child result body changed after guarded completion")
+    context = manifest.get("campaign_context")
+    if (not isinstance(context, dict) or context.get("final_identity_status") != "EXACT_PAIR_REAUTHENTICATED"
+            or value["campaign_context_sha256"] != _identity(context)):
+        raise CampaignError("authenticated campaign context changed after completion")
+    mechanism = manifest.get("candidate_mechanism")
+    if (not isinstance(mechanism, dict) or mechanism.get("status") != "PASSED"
+            or mechanism.get("run_token") != launch["run_token"] or mechanism.get("candidate_sha") != launch["target_sha"]
+            or mechanism.get("root") != str(output / "candidate-mechanism")):
+        raise CampaignError("completion has no matching candidate mechanism identity")
+    if _identity(mechanism) != manifest.get("candidate_mechanism_sha256"):
+        raise CampaignError("bounded mechanism proof metadata changed after guarded verification")
+    compact = {"proof_sha256": manifest.get("candidate_mechanism_sha256"),
+               "request_sha256": mechanism.get("request_sha256"), "result_sha256": mechanism.get("result_sha256"),
+               "tree_sha256": mechanism.get("sha256"), "source_sha256": mechanism.get("source_sha256"),
+               "compiler_receipt_sha256": mechanism.get("compiler_receipt_sha256")}
+    digests = [*compact.values(), value["compile_manifest_sha256"], value["campaign_context_sha256"]]
+    if (value["mechanism"] != compact or any(not isinstance(digest, str) or len(digest) != 64
+            or any(char not in "0123456789abcdef" for char in digest) for digest in digests)
+            or manifest.get("compile_manifest") != str(output / "compile-ab/manifest.json")
+            or manifest.get("compile_manifest_sha256") != value["compile_manifest_sha256"]):
+        raise CampaignError("completion artifact identities changed")
+    # Do not reread mechanism/compile bundles here: their full verification was
+    # performed under the watchdog, and their immutable hashes remain evidence.
+    return value
+
+
+def _terminal(manifest, guard, error=None, *, output=None, expected=None):
     status = guard.get("status") if isinstance(guard, dict) else None
-    if status == "COMPLETE" and guard.get("returncode") == 0 and manifest.get("phase") == "MEASURED":
-        terminal = "SUCCEEDED"
+    if (status == "COMPLETE" and guard.get("returncode") == 0
+            and manifest.get("phase") == "MEASURED" and manifest.get("measurement_status") == "ACCEPTED"
+            and manifest.get("campaign_context", {}).get("final_identity_status") == "EXACT_PAIR_REAUTHENTICATED"
+            and error is None):
+        try:
+            if output is None:
+                raise CampaignError("terminal acceptance requires owned completion metadata")
+            _verify_completion(manifest, guard, output=output, expected=expected)
+            terminal = "SUCCEEDED"
+        except Exception as exc:
+            error, terminal = exc, "FAILED"
     elif status in {"TIMEOUT", "MEMORY_LIMIT", "INTERRUPTED", "PREFLIGHT_REJECTED"}:
         terminal = status
     elif manifest.get("child_status") in {"TIMEOUT", "INTERRUPTED"}:
@@ -554,7 +916,8 @@ def run(args):
                 "runtime_build": "not_performed; frozen qualified runtime required",
                 "enforcement": "sampled_campaign_tree; not kernel hard limit or per-arm tree RSS"}
     _persist(output / "manifest.json", manifest)
-    error, guard = None, None
+    error, guard, terminal_expected = None, None, None
+    terminal_result = None
     reserve_key = "PCC_BOOTSTRAP_HOST_MEMORY_RESERVE_BYTES"
     previous_reserve = os.environ.get(reserve_key)
     try:
@@ -598,6 +961,12 @@ def run(args):
             "--auto-tree-rss-ceiling-bytes", str(CEILING), "--min-tree-rss-bytes", str(FLOOR),
             "--darwin-preflight-reserve-bytes", str(RESERVE), "--no-performance-lock",
             "--", *_child_command(args, output)])
+        terminal_expected = {
+            "launch": _launch_contract(args, output, input_kind=kind, input_sha256=spec_hash,
+                                       target_sha=os.environ.get("GITHUB_SHA")),
+            "started_monotonic": time.monotonic(),
+        }
+        _PARENT_LAUNCHES[id(terminal_expected)] = (terminal_expected, _identity(terminal_expected))
         previous_sigterm = signal.getsignal(signal.SIGTERM)
         signal.signal(signal.SIGTERM, sampler._request_interrupt)
         try:
@@ -611,11 +980,23 @@ def run(args):
             os.environ.pop(reserve_key, None)
         else:
             os.environ[reserve_key] = previous_reserve
-        manifest = _json(output / "manifest.json")
+        terminal_path = output / "manifest.json"
+        try:
+            manifest = _json(terminal_path, max_bytes=TERMINAL_MANIFEST_MAX_BYTES)
+        except Exception as exc:
+            # Preserve malformed/oversized child evidence; write a small failure
+            # receipt separately rather than replacing the child's raw artifact.
+            error = error or exc
+            manifest = {"schema": SCHEMA, "phase": "TERMINAL_METADATA_REJECTED", "run_token": args.run_token}
+            terminal_path = output / "terminal.json"
         if guard is None and (output / "guard.json").is_file():
-            guard = _json(output / "guard.json")
-        _persist(output / "manifest.json", _terminal(manifest, guard, error))
-    return 0 if _json(output / "manifest.json")["status"] == "SUCCEEDED" else 1
+            try:
+                guard = _json(output / "guard.json", max_bytes=TERMINAL_GUARD_MAX_BYTES)
+            except Exception as exc:
+                error = error or exc
+        terminal_result = _terminal(manifest, guard, error, output=output, expected=terminal_expected)
+        _persist(terminal_path, terminal_result)
+    return 0 if terminal_result["status"] == "SUCCEEDED" else 1
 
 
 def _parser():

@@ -1671,8 +1671,8 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
     assert concurrency == (
         "  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' "
         "&& inputs.performance_ab && 'push' || github.event_name }}-"
-        "${{ (github.event_name == 'push' && github.run_attempt == 1 "
-        "|| github.event_name == 'workflow_dispatch' && inputs.performance_ab) && github.ref "
+        "${{ github.event_name == 'workflow_dispatch' && inputs.performance_ab && 'refs/heads/master' "
+        "|| github.event_name == 'push' && github.run_attempt == 1 && github.ref "
         "|| format('{0}-{1}', github.run_id, github.run_attempt) }}\n"
         "  cancel-in-progress: false\n"
         "  queue: max"
@@ -1701,6 +1701,10 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
          "gate-workflow_dispatch-101-2", False),
         ({"event_name": "workflow_dispatch", "ref": "refs/heads/topic"},
          "gate-workflow_dispatch-101-1", False),
+        ({"event_name": "workflow_dispatch", "ref": "refs/heads/ci-ab/scanner/b" + "b" * 40 + "-r123-a2/c" + "c" * 40},
+         "gate-workflow_dispatch-101-1", False),
+        ({"event_name": "workflow_dispatch", "ref": "refs/heads/ci-ab/scanner/b" + "b" * 40 + "-r123-a2/c" + "c" * 40,
+          "run_attempt": "3"}, "gate-workflow_dispatch-101-3", False),
         ({"event_name": "workflow_dispatch", "workflow": "other"},
          "other-workflow_dispatch-101-1", False),
         ({"event_name": "pull_request", "ref": "refs/pull/7/merge"},
@@ -1729,7 +1733,7 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
                                       lambda match: str(evaluate(match.group(1))), group)
                 selected_group = expected_group
                 if github.event_name == "workflow_dispatch" and performance_ab:
-                    selected_group = f"{github.workflow}-push-{github.ref}"
+                    selected_group = f"{github.workflow}-push-refs/heads/master"
                 assert actual_group == selected_group
                 assert json.loads(cancel) is expected_cancel
     for name in ("macos-pcc0-regressions", "macos-pcc0-float-doc-regressions", "macos-pcc0-indexed-split"):

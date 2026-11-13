@@ -24,7 +24,7 @@ on:
         options: [both, integration, not integration]
         default: both
       performance_ab:
-        description: "Opt in to the qualified bounded compiler A/B; joins the existing master push queue"
+        description: "Opt in to bounded compiler A/B on master or the reserved scanner candidate dispatch ref; uses the master push queue"
         type: boolean
         default: false
       ab_baseline_sha:
@@ -598,18 +598,17 @@ on:
       - "scripts/ci_validation*.py"
       - "scripts/data/ci_validation*.json"
 
-# Deliberate validation push: omit [skip ci] only when this batch is ready.
-# Interim publication commits carry [skip ci]; the planner covers the complete
-# range since the last successful validation, not merely github.event.before.
+# Purposeful publication pushes run CI. The planner covers the complete range
+# since the last successful validation, not merely github.event.before.
 permissions:
   contents: read
 
-# Let active native qualification finish; only queued initial pushes supersede
-# each other. Manual runs, PRs and reruns keep independent groups, including
-# manual full-chain qualification. Only explicit A/B dispatches join the exact
-# initial-push group instead, so they cannot outrun active or queued validation.
+# Let active native qualification finish, with queue:max retaining pending runs.
+# Ordinary manual runs, PRs and reruns keep their original independent groups.
+# Every explicit A/B dispatch and rerun, including reserved candidate refs, joins
+# the exact master initial-push queue rather than a separate branch queue.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && inputs.performance_ab && 'push' || github.event_name }}-${{ (github.event_name == 'push' && github.run_attempt == 1 || github.event_name == 'workflow_dispatch' && inputs.performance_ab) && github.ref || format('{0}-{1}', github.run_id, github.run_attempt) }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && inputs.performance_ab && 'push' || github.event_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.performance_ab && 'refs/heads/master' || github.event_name == 'push' && github.run_attempt == 1 && github.ref || format('{0}-{1}', github.run_id, github.run_attempt) }}
   cancel-in-progress: false
   queue: max
 
@@ -2281,6 +2280,16 @@ jobs:
       - uses: astral-sh/setup-uv@v7
       - name: Install frozen dependencies without a project build hook
         run: uv sync --frozen --dev --no-install-project
+      - name: Install locked dev dependencies in the resolved campaign Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          SETUP_PYTHON="$(python -I -c 'from pathlib import Path; import sys; print(Path(sys.executable).resolve())')"
+          CAMPAIGN_PYTHON="$(uv run --frozen --no-sync python -I -c 'from pathlib import Path; import sys; print(Path(sys.executable).resolve())')"
+          test "$CAMPAIGN_PYTHON" = "$SETUP_PYTHON"
+          REQUIREMENTS="$RUNNER_TEMP/pcc-ab-dev-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.txt"
+          uv export --frozen --only-group dev --no-emit-project --format requirements.txt --output-file "$REQUIREMENTS"
+          uv pip install --python "$CAMPAIGN_PYTHON" --require-hashes --only-binary :all: --reinstall --no-deps --no-python-downloads --requirements "$REQUIREMENTS"
       - name: Download only this attempt's selected request
         uses: actions/download-artifact@v7
         with:

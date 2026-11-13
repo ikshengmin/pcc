@@ -150,7 +150,7 @@ def test_remaining_uses_original_deadline(tool, monkeypatch):
 
 
 @pytest.mark.parametrize("guard, child, expected", [
-    ({"status": "COMPLETE", "returncode": 0}, {"phase": "MEASURED"}, "SUCCEEDED"),
+    ({"status": "COMPLETE", "returncode": 0}, {"phase": "MEASURED"}, "FAILED"),
     ({"status": "COMPLETE", "returncode": 1}, {"phase": "MEASURED"}, "FAILED"),
     ({"status": "COMPLETE", "returncode": 0}, {"phase": "BUILDING_BASELINE"}, "FAILED"),
     ({"status": "MEMORY_LIMIT", "returncode": 0}, {"phase": "MEASURED"}, "MEMORY_LIMIT"),
@@ -374,3 +374,522 @@ def test_bytecode_preconditions_fail_before_loading_project_tools(tool, tmp_path
     receipt = json.loads((output / "manifest.json").read_text())
     assert receipt["status"] == "FAILED"
     assert "bytecode" in receipt["error"] or "PYTHONDONTWRITEBYTECODE" in receipt["error"]
+
+
+@pytest.fixture
+def mechanism():
+    return _load(ROOT / "scripts/pcc_ci_ab_mechanism.py", "ci_ab_mechanism_test")
+
+
+def _mechanism_result_fixture(tool, mechanism, tmp_path):
+    """Synthetic protocol evidence only; never execution acceptance."""
+    root = tmp_path / "candidate-mechanism"
+    inputs = root / "inputs"
+    inputs.mkdir(parents=True)
+    for name in mechanism.ARTIFACTS:
+        shutil.copy2(ROOT / mechanism.DATA / name, inputs / name)
+    source = tmp_path / "source"
+    for relative in (mechanism.SOURCE, mechanism.FIXTURE):
+        path = source / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / relative, path)
+    host_source = source / "pcc/frontends/python/pipeline.py"
+    host_source.write_text("def compile_python(): pass\n")
+    compiler, runtime, host = (tmp_path / name for name in ("pcc1", "runtime.a", "python"))
+    for path in (compiler, runtime, host):
+        path.write_bytes(b"synthetic evidence, not executable")
+    source_files = tool._tree(source, readonly=False)
+    payload = {"source_root": str(source), "source_files": source_files,
+               "compiler": str(compiler), "runtime_archive": str(runtime), "receipt_sha256": "a" * 64}
+    request = root / "request.json"
+    tool._persist(request, payload)
+    collected = [dict(row, nodeid="node-" + str(n) + "@" + mechanism.GROUP)
+                 for n, row in enumerate(mechanism.expected_cases(inputs / "identity_cases.py"))]
+    result = {"schema": mechanism.SCHEMA, "status": "PASSED", "pytest_exitcode": 0,
+              "request_sha256": tool._sha(request), "assertions_enabled": True, "implementation": "cpython",
+              "collected": collected, "reports": [{"nodeid": row["nodeid"], "when": when,
+                  "outcome": "passed", "wasxfail": None} for row in collected for when in ("setup", "call", "teardown")],
+              "executions": [], "compiles": [], "programs": [], "source_sha256": tool._identity(source_files),
+              "compiler_receipt_sha256": payload["receipt_sha256"], "guard_contract_sha256": "b" * 64,
+              "import_origins": {"pcc.frontends.python.pipeline_import_scan": {
+                  "path": str(source / mechanism.SOURCE), "sha256": tool._sha(source / mechanism.SOURCE)}},
+              "host_python_runtime": {"runtime_files": {"executable": {"path": str(host), "sha256": tool._sha(host)}}}}
+    for owner in ("cpython", "pcc0", "pcc1"):
+        program = root / (owner + ".py")
+        program.write_bytes(mechanism.program_bytes(source / mechanism.SOURCE, inputs / "native_cases.py",
+                                                     native=owner != "cpython"))
+        result["programs"].append({"owner": owner, "path": program.name, "sha256": tool._sha(program)})
+        if owner == "cpython":
+            runs = [None]
+            binary, command = host, [str(host), str(program)]
+        else:
+            runs = range(5)
+            binary = root / (owner + "-binary")
+            binary.write_bytes(b"synthetic native output, not executed")
+            command = [str(binary)]
+            native = {"command": [str(compiler), "--backend", "self", "--ir-scaffold", "on", str(program), "-o", str(binary)],
+                      "returncode": 0, "environment": {"PCC_RUNTIME_ARCHIVE": str(runtime),
+                      "PCC_HOST_PYTHON": "/usr/bin/false", "PCC_HOST_PCC": "/usr/bin/false"}}
+            result["compiles"].append({"owner": owner, "binary": binary.name, "binary_sha256": tool._sha(binary),
+                "linkage": {"checked": True, "links_libpython": False, "links_llvm": False},
+                "fixture_sha256": tool._sha(source / mechanism.FIXTURE),
+                "native_compile": native if owner == "pcc1" else None,
+                "host_origin": {"path": str(host_source), "sha256": tool._sha(host_source), "name": "compile_python"}})
+        for gc in runs:
+            out = mechanism.EXPECTED + ("" if gc is None else "GC " + str(gc) + "\n")
+            row = {"owner": owner, "gc": gc, "returncode": 0, "stdout": out, "stderr": "", "command": command,
+                   "binary_sha256": tool._sha(binary), "environment": {} if gc is None else
+                   {"PCC_GC_BACKEND": str(gc), "PATH": "/nonexistent"}}
+            for key in ("stdout", "stderr"):
+                path = root / (owner + "-" + str(gc) + "." + key)
+                path.write_text(row[key])
+                row[key + "_path"] = path.name
+            result["executions"].append(row)
+    result["lanes"] = {}
+    for lane, names in mechanism.LANES.items():
+        invocation = json.loads(json.dumps({key: value for key, value in result.items() if key != "lanes"}))
+        invocation["lane"] = lane
+        invocation["collected"] = [row for row in collected if row["name"] in names]
+        nodes = {row["nodeid"] for row in invocation["collected"]}
+        invocation["reports"] = [row for row in result["reports"] if row["nodeid"] in nodes]
+        owners = set() if lane == "ordinary" else {"cpython"} if lane == "reference" else {"pcc0", "pcc1"}
+        for key in ("executions", "compiles", "programs"):
+            invocation[key] = [row for row in result[key] if row["owner"] in owners]
+        workers = {}
+        for index in range(6):
+            worker = json.loads(json.dumps(invocation))
+            name = "gw" + str(index)
+            worker["worker_identity"] = {"worker": name, "pid": 100 + index, "workercount": 6, "lane": lane,
+                                         "request_sha256": result["request_sha256"]}
+            if index:
+                worker.update(status="IDLE", reports=[], executions=[], compiles=[], programs=[])
+            path = root / ("worker-" + lane + "-" + name + ".json")
+            tool._persist(path, worker)
+            workers[name] = {"path": path.name, "sha256": tool._sha(path), "worker": name}
+        invocation["xdist"] = {"workers": 6, "dist": "loadgroup", "group": mechanism.GROUP,
+                               "executing_worker": "gw0", "worker_results": workers}
+        controller = {"reports": invocation["reports"], "pytest_exitcode": 0, "completed_workers": workers,
+                      "lane": lane, "request_sha256": result["request_sha256"], "worker_identity": {"worker": None}}
+        path = root / ("controller-" + lane + ".json")
+        tool._persist(path, controller)
+        invocation["controller"] = {"path": path.name, "sha256": tool._sha(path)}
+        invocation["selection"] = [str(inputs / "identity_cases.py")] if lane == "ordinary" else [
+            str(inputs / "native_cases.py") + "::" + (mechanism.REFERENCE if lane == "reference" else mechanism.NATIVE)]
+        path = root / ("lane-" + lane + ".json")
+        tool._persist(path, invocation)
+        result["lanes"][lane] = {"path": path.name, "sha256": tool._sha(path)}
+    return result, request, root
+
+
+def test_mechanism_preserves_complete_identity_artifacts(mechanism):
+    for name, digest in mechanism.ARTIFACTS.items():
+        assert mechanism._sha(ROOT / mechanism.DATA / name) == digest
+    cases = mechanism.expected_cases(ROOT / mechanism.DATA / "identity_cases.py")
+    assert len(cases) == 19
+    assert sum(row["name"] == mechanism.UNIT_NAMES[0] for row in cases) == 5
+    assert sum(row["name"] == mechanism.UNIT_NAMES[1] for row in cases) == 11
+    assert sum(row["name"] == mechanism.REFERENCE for row in cases) == 1
+    assert {row["parameters"]["python_program_compiler"] for row in cases if row["name"] == mechanism.NATIVE} == {"pcc0", "pcc1"}
+
+
+def test_mechanism_protocol_fixture_is_not_execution_acceptance(tool, mechanism, tmp_path):
+    result, request, root = _mechanism_result_fixture(tool, mechanism, tmp_path)
+    mechanism.validate_result(result, request=request, root=root)
+    # A complete synthetic shape cannot produce a launch-bound campaign proof.
+    with pytest.raises(tool.CampaignError, match="not produced"):
+        tool._verify_mechanism({"status": "PASSED", "returncode": 0, "root": str(root)},
+                               output=tmp_path, ab=None, launched=True)
+
+
+@pytest.mark.parametrize("mutation", [
+    "returncode_only", "missing_case", "missing_report", "skip", "xfail", "empty_xfail", "missing_gc",
+    "wrong_gc_output", "missing_owner", "host_fallback", "missing_origins", "program_drift", "binary_drift",
+    "source_drift", "foreign_origin", "missing_worker", "duplicate_worker_pid", "worker_collection",
+    "worker_receipt", "worker_execution", "worker_assertions", "reference_command", "assertions_disabled",
+    "missing_lane", "mixed_reference_selection", "controller_reports",
+])
+def test_mechanism_rejects_incomplete_fabricated_or_mutated_evidence(tool, mechanism, tmp_path, mutation):
+    result, request, root = _mechanism_result_fixture(tool, mechanism, tmp_path)
+    if mutation == "returncode_only":
+        result = {"status": "PASSED", "returncode": 0}
+    elif mutation == "missing_case":
+        result["collected"].pop()
+    elif mutation == "missing_report":
+        result["reports"].pop()
+    elif mutation == "skip":
+        result["reports"][0]["outcome"] = "skipped"
+    elif mutation in {"xfail", "empty_xfail"}:
+        result["reports"][0]["wasxfail"] = "reason" if mutation == "xfail" else ""
+    elif mutation == "missing_gc":
+        result["executions"].pop()
+    elif mutation == "wrong_gc_output":
+        result["executions"][-1]["stdout"] = mechanism.EXPECTED + "GC 0\n"
+    elif mutation == "missing_owner":
+        result["compiles"].pop()
+    elif mutation == "host_fallback":
+        result["compiles"][1]["native_compile"]["environment"]["PCC_HOST_PYTHON"] = sys.executable
+    elif mutation == "missing_origins":
+        result["import_origins"] = {}
+    elif mutation == "program_drift":
+        (root / result["programs"][0]["path"]).write_text("print('fake')\n")
+    elif mutation == "binary_drift":
+        (root / result["compiles"][0]["binary"]).write_text("changed")
+    elif mutation == "source_drift":
+        payload = json.loads(request.read_text())
+        (Path(payload["source_root"]) / mechanism.SOURCE).write_text("def wrong(): pass\n")
+    elif mutation == "foreign_origin":
+        result["import_origins"]["pcc.frontends.python.pipeline_import_scan"]["path"] = str(tmp_path / "foreign.py")
+    elif mutation == "missing_lane":
+        result["lanes"].pop("reference")
+    elif (mutation.startswith("worker_") or mutation in {"duplicate_worker_pid", "missing_worker", "mixed_reference_selection", "controller_reports"}):
+        lane_receipt = result["lanes"]["integration"]
+        lane_path = root / lane_receipt["path"]
+        invocation = json.loads(lane_path.read_text())
+        receipt = invocation["xdist"]["worker_results"]["gw5"]
+        path = root / receipt["path"]
+        worker = json.loads(path.read_text())
+        if mutation == "duplicate_worker_pid":
+            worker["worker_identity"]["pid"] = 100
+        elif mutation == "worker_collection":
+            worker["collected"].pop()
+        elif mutation == "worker_receipt":
+            worker["compiler_receipt_sha256"] = "f" * 64
+        elif mutation == "worker_execution":
+            worker["executions"] = [{"owner": "pretend"}]
+        elif mutation == "worker_assertions":
+            worker["assertions_enabled"] = False
+        elif mutation == "missing_worker":
+            invocation["xdist"]["worker_results"].pop("gw5")
+        elif mutation == "mixed_reference_selection":
+            invocation["selection"] = [str(root / "inputs/native_cases.py")]
+        else:
+            invocation["reports"].pop()
+        tool._persist(path, worker)
+        receipt["sha256"] = tool._sha(path)
+        if mutation != "controller_reports":
+            controller_receipt = invocation["controller"]
+            controller_path = root / controller_receipt["path"]
+            controller = json.loads(controller_path.read_text())
+            controller["completed_workers"] = invocation["xdist"]["worker_results"]
+            tool._persist(controller_path, controller)
+            controller_receipt["sha256"] = tool._sha(controller_path)
+        tool._persist(lane_path, invocation)
+        lane_receipt["sha256"] = tool._sha(lane_path)
+    elif mutation == "reference_command":
+        result["executions"][0]["command"] = ["/bin/true"]
+    else:
+        result["assertions_enabled"] = False
+    failure = {
+        "duplicate_worker_pid": "six distinct worker processes",
+        "worker_collection": "worker identity, collection",
+        "worker_receipt": "worker identity, collection",
+        "worker_assertions": "worker identity, collection",
+        "worker_execution": "unexpected work outside",
+        "missing_worker": "six-worker lane execution",
+        "mixed_reference_selection": "selection was not separate",
+        "controller_reports": "actual controller and worker reports disagree",
+    }.get(mutation)
+    with pytest.raises(mechanism.MechanismError, match=failure):
+        mechanism.validate_result(result, request=request, root=root)
+
+
+def _completion_fixture(tool, tmp_path):
+    """Synthetic bounded metadata only; real launch is mocked in these tests."""
+    output = tmp_path / "campaign"
+    output.mkdir()
+    args = argparse.Namespace(run_token="original-parent-token", campaign_request="request",
+                              job_deadline_epoch=500, campaign_deadline_monotonic=200)
+    launch = tool._launch_contract(args, output, input_kind="request", input_sha256="a" * 64, target_sha="b" * 40)
+    expected = {"launch": launch, "started_monotonic": 90}
+    tool._PARENT_LAUNCHES[id(expected)] = (expected, tool._identity(expected))
+    guard = {"schema": "pcc.process_tree_sample.v1", "status": "COMPLETE", "returncode": 0,
+             "command": launch["command"], "cwd": launch["cwd"], "started_at_utc": "2026-11-13T00:00:00+00:00",
+             "environment": {"PCC_WORKER_TREE_BUDGET_BYTES": str(3 * 1024 ** 3)},
+             "timeout_s": 110, "interval_s": 0.1, "max_tree_rss_bytes": 3 * 1024 ** 3,
+             "darwin_preflight_reserve_bytes": 512 * 1024 ** 2,
+             "memory_budget_selection": {"selection_kind": "automatic"}, "resource_preflight": {"status": "ok"}}
+    mechanism = {"status": "PASSED", "run_token": args.run_token, "candidate_sha": "b" * 40,
+                 "root": str(output / "candidate-mechanism"), "request_sha256": "c" * 64,
+                 "result_sha256": "d" * 64, "sha256": "e" * 64,
+                 "source_sha256": "f" * 64, "compiler_receipt_sha256": "1" * 64}
+    context = {"final_identity_status": "EXACT_PAIR_REAUTHENTICATED", "promotion": "NOT_AUTHORIZED"}
+    manifest = {"phase": "MEASURED", "measurement_status": "ACCEPTED", "run_token": args.run_token,
+                "input_kind": "request", "input_sha256": "a" * 64, "absolute_deadline_monotonic": 200,
+                "campaign_context": context, "candidate_mechanism": mechanism,
+                "candidate_mechanism_sha256": tool._identity(mechanism),
+                "compile_manifest": str(output / "compile-ab/manifest.json"), "compile_manifest_sha256": "3" * 64}
+    completion = {"schema": tool.COMPLETION_SCHEMA, "status": "VERIFIED_ACCEPTED", "launch": launch,
+                  "guard_contract_sha256": tool._guard_contract_digest(guard),
+                  "campaign_context_sha256": tool._identity(context), "verified_at_monotonic": 100,
+                  "result_body_sha256": tool._identity({key: manifest.get(key) for key in tool._COMPLETION_RESULT_FIELDS}),
+                  "compile_manifest_sha256": "3" * 64,
+                  "mechanism": {"proof_sha256": tool._identity(mechanism), "request_sha256": "c" * 64, "result_sha256": "d" * 64,
+                                "tree_sha256": "e" * 64, "source_sha256": "f" * 64, "compiler_receipt_sha256": "1" * 64}}
+    path = output / "completion.json"
+    tool._persist(path, completion)
+    path.chmod(0o444)
+    manifest["completion"] = {"path": str(path), "sha256": tool._sha(path), "size_bytes": path.stat().st_size}
+    return output, manifest, guard, expected, completion
+
+
+def test_terminal_requires_actual_mechanism_and_final_pair_reauthentication(tool, tmp_path, monkeypatch):
+    output, child, guard, expected, _ = _completion_fixture(tool, tmp_path)
+    def forbidden(*args, **kwargs):
+        pytest.fail("outer terminal must not import helpers or traverse source/runtime evidence")
+    for name in ("_load", "_tree", "_verify_mechanism", "_verify_live_source"):
+        monkeypatch.setattr(tool, name, forbidden)
+    # A different outer venv prefix must not invalidate the base child's receipt.
+    monkeypatch.setattr(tool, "sys", types.SimpleNamespace(prefix="outer-uv-venv"))
+    result = tool._terminal(child, guard, output=output, expected=expected)
+    assert result["status"] == "SUCCEEDED"
+    # Parent status/telemetry updates must not invalidate any referenced digest.
+    tool._verify_completion(result, guard, output=output, expected=expected)
+
+
+@pytest.mark.parametrize("mutation", [
+    "returncode_only", "missing_expected", "copied_expected", "mutated_expected", "missing_receipt", "other_run", "other_input", "other_kind",
+    "other_target", "other_output", "command", "guard_contract", "guard_returncode", "guard_schema",
+    "late_verification", "early_verification", "context", "mechanism", "proof_nested", "proof_hash", "compile_hash",
+    "receipt_hash", "mutable", "symlink", "hardlink", "oversized", "partial_json", "copy_replay",
+    "summary", "arms", "qualification", "source_identities",
+])
+def test_terminal_rejects_forged_replayed_or_mutated_compact_completion(tool, tmp_path, mutation):
+    output, manifest, guard, expected, completion = _completion_fixture(tool, tmp_path)
+    path = output / "completion.json"
+    rewrite = False
+    if mutation == "returncode_only":
+        manifest = {"phase": "MEASURED", "measurement_status": "ACCEPTED"}
+    elif mutation == "missing_expected":
+        expected = None
+    elif mutation == "copied_expected":
+        expected = json.loads(json.dumps(expected))
+    elif mutation == "mutated_expected":
+        expected["started_monotonic"] = 1
+    elif mutation == "missing_receipt":
+        manifest.pop("completion")
+    elif mutation in {"other_run", "other_input", "other_kind", "other_target", "other_output"}:
+        key = {"other_run": "run_token", "other_input": "input_sha256", "other_kind": "input_kind",
+               "other_target": "target_sha", "other_output": "output"}[mutation]
+        # Keep the real registered parent expectation. Forge only a resealed
+        # child receipt, without mutating the fixture's shared launch object.
+        completion = json.loads(json.dumps(completion))
+        completion["launch"][key] = "another-launch"
+        rewrite = True
+    elif mutation == "command":
+        guard["command"] = ["/bin/true"]
+    elif mutation == "guard_contract":
+        guard["max_tree_rss_bytes"] += 1
+    elif mutation == "guard_returncode":
+        guard["returncode"] = 1
+    elif mutation == "guard_schema":
+        guard["schema"] = "pretend"
+    elif mutation in {"late_verification", "early_verification"}:
+        completion["verified_at_monotonic"] = 201 if mutation == "late_verification" else 89
+        rewrite = True
+    elif mutation == "context":
+        manifest["campaign_context"]["promotion"] = "unauthorized-change"
+    elif mutation == "mechanism":
+        manifest["candidate_mechanism"]["source_sha256"] = "9" * 64
+    elif mutation == "proof_nested":
+        manifest["candidate_mechanism"]["budget"] = {"pretend": "different nested metadata"}
+    elif mutation == "proof_hash":
+        manifest["candidate_mechanism_sha256"] = "9" * 64
+    elif mutation == "compile_hash":
+        completion["compile_manifest_sha256"] = "9" * 64
+        rewrite = True
+    elif mutation in {"summary", "arms", "qualification", "source_identities"}:
+        manifest["compile_summary" if mutation == "summary" else mutation] = {"changed": True}
+    elif mutation == "receipt_hash":
+        manifest["completion"]["sha256"] = "9" * 64
+    elif mutation == "mutable":
+        path.chmod(0o644)
+    elif mutation == "symlink":
+        moved = output / "other.json"
+        path.rename(moved)
+        path.symlink_to(moved)
+    elif mutation == "hardlink":
+        import os
+        os.link(path, output / "alias.json")
+    elif mutation == "oversized":
+        path.chmod(0o644)
+        path.write_bytes(b" " * (tool.COMPLETION_MAX_BYTES + 1))
+        path.chmod(0o444)
+        manifest["completion"].update(sha256=tool._sha(path), size_bytes=path.stat().st_size)
+    elif mutation == "partial_json":
+        path.chmod(0o644)
+        path.write_text("{")
+        path.chmod(0o444)
+        manifest["completion"].update(sha256=tool._sha(path), size_bytes=path.stat().st_size)
+    else:
+        completion = json.loads(json.dumps(completion))
+        completion["launch"]["run_token"] = "earlier-run-token"
+        rewrite = True
+    if rewrite:
+        path.chmod(0o644)
+        tool._persist(path, completion)
+        path.chmod(0o444)
+        manifest["completion"].update(sha256=tool._sha(path), size_bytes=path.stat().st_size)
+    assert tool._terminal(manifest, guard, output=output, expected=expected)["status"] == "FAILED"
+
+
+def test_terminal_guard_digest_preserves_original_admission_contract(tool, tmp_path):
+    output, manifest, guard, expected, _ = _completion_fixture(tool, tmp_path)
+    ab = _load(ROOT / "scripts/run_pcc_compile_ab.py", "terminal_guard_contract_test")
+    original = ab._guard_contract_fields(guard)
+    original["status"] = "RUNNING"
+    assert tool._guard_contract_digest(guard) == tool._identity(original)
+    guard.update(peak_tree_rss_bytes=123, sample_count=999)
+    assert tool._terminal(manifest, guard, output=output, expected=expected)["status"] == "SUCCEEDED"
+
+
+def test_guarded_completion_runs_full_checks_before_sealing_metadata(tool, tmp_path, monkeypatch):
+    output = tmp_path / "out"
+    (output / "compile-ab").mkdir(parents=True)
+    result = {"status": "ACCEPTED", "summary": {"verdict": "ACCEPT"}}
+    tool._persist(output / "compile-ab/manifest.json", result)
+    calls = []
+    for name, label in (("_verify_frozen_qualification", "qualification"), ("_verify_live_source", "source"),
+                        ("_verify_live_import_origins", "origins"), ("_verify_mechanism", "mechanism"),
+                        ("_validate_spec", "spec")):
+        monkeypatch.setattr(tool, name, lambda *args, _label=label, **kwargs: calls.append(_label))
+    context = {"final_identity_status": "EXACT_PAIR_REAUTHENTICATED"}
+    monkeypatch.setattr(tool, "_load", lambda name: types.SimpleNamespace(
+        finish_campaign=lambda proof: (calls.append("provider-final") or context)))
+    guard = types.SimpleNamespace(receipt={"guard_result": {"contract_sha256": "a" * 64}},
+                                  verify=lambda: calls.append("guard"))
+    ab = types.SimpleNamespace(_validated_worker_budget=lambda **kwargs: guard)
+    monkeypatch.setattr(tool.time, "monotonic", lambda: 100)
+    args = argparse.Namespace(run_token="token", campaign_request="request", job_deadline_epoch=500,
+                              campaign_deadline_monotonic=200)
+    mechanism = {key: "c" * 64 for key in ("request_sha256", "result_sha256", "sha256", "source_sha256", "compiler_receipt_sha256")}
+    context_out, receipt, digest = tool._finish_guarded(args, output,
+        {"input_kind": "request", "input_sha256": "b" * 64}, {"target_sha": "d" * 40},
+        {"candidate": {}}, object(), mechanism, result, ab, prepared_root=None)
+    assert calls == ["qualification", "source", "origins", "mechanism", "spec",
+                     "qualification", "origins", "provider-final", "guard", "guard"]
+    assert context_out == context
+    assert digest == tool._sha(output / "compile-ab/manifest.json")
+    assert receipt["size_bytes"] <= tool.COMPLETION_MAX_BYTES
+    assert (output / "completion.json").stat().st_mode & 0o222 == 0
+    assert (output / "compile-ab/manifest.json").stat().st_mode & 0o222 == 0
+
+
+def test_terminal_json_reads_are_bounded_and_preserve_oversized_child_file(tool, tmp_path):
+    path = tmp_path / "manifest.json"
+    path.write_text(" " * 17)
+    with pytest.raises(tool.CampaignError, match="bounded"):
+        tool._json(path, max_bytes=16)
+    assert path.read_text() == " " * 17
+
+
+@pytest.mark.parametrize("worker, options, valid", [
+    (None, {"numprocesses": 6, "dist": "loadgroup"}, True),
+    ({"workercount": 6, "workerid": "gw2"}, {"numprocesses": None, "dist": "no", "loadgroup": True}, True),
+    (None, {"numprocesses": 0, "dist": "no"}, False),
+    ({"workercount": 5, "workerid": "gw2"}, {"loadgroup": True}, False),
+    ({"workercount": 6, "workerid": "gw2"}, {"loadgroup": False}, False),
+    ({"workercount": 6, "workerid": "gw3"}, {"loadgroup": True}, False),
+])
+def test_mechanism_checks_real_controller_and_worker_options(mechanism, tmp_path, monkeypatch, worker, options, valid):
+    path = tmp_path / "request.json"
+    path.write_text("{}")
+    state = types.SimpleNamespace(worker="gw2" if worker else None, lane="ordinary", result={}, request=path)
+    monkeypatch.setattr(mechanism, "_STATE", state)
+    config = types.SimpleNamespace(workerinput=worker, getoption=lambda name: options.get(name),
+                                  pluginmanager=types.SimpleNamespace(register=lambda *args: None))
+    if valid:
+        mechanism.configure(config)
+        assert state.result["worker_identity"]["workercount"] == 6
+    else:
+        with pytest.raises(mechanism.MechanismError):
+            mechanism.configure(config)
+
+
+def test_mechanism_never_persists_inherited_secret_environment(mechanism, tmp_path, monkeypatch):
+    sentinel = "SENTINEL-SECRET-MUST-NOT-BE-PERSISTED"
+    monkeypatch.setenv("GH_TOKEN", sentinel)
+    monkeypatch.setenv("PCC_UNEXPECTED_SECRET", sentinel)
+    monkeypatch.setenv("GITHUB_FAKE_PRIVATE", sentinel)
+    state = object.__new__(mechanism.Recorder)
+    state.root, state.record_path = tmp_path, tmp_path / "result.json"
+    state.active_owner, state.lane = None, "reference"
+    state.result = {"executions": []}
+    state.verify = lambda: None
+    state.remaining = lambda seconds: seconds
+    state.program = lambda *args: None
+    state.ab = types.SimpleNamespace(_run_process=lambda *args, **kwargs:
+        types.SimpleNamespace(returncode=0, stdout=mechanism.EXPECTED, stderr=""))
+    state.execute([sys.executable, str(tmp_path / "reference.py")], cwd=tmp_path,
+                  capture_output=True, text=True, timeout=20)
+    for path in tmp_path.rglob("*"):
+        if path.is_file():
+            assert sentinel not in path.read_text()
+    row = json.loads((tmp_path / "result.json").read_text())["executions"][0]
+    assert "GH_TOKEN" not in row["environment"]
+    assert not set(row["environment"]) - set(mechanism.PUBLIC_ENV_KEYS)
+
+
+def test_native_mechanism_uses_existing_process_owner_and_phase_deadline(mechanism, tmp_path):
+    calls = []
+    state = object.__new__(mechanism.Recorder)
+    state.active_owner, state.compiler, state.source = "pcc1", tmp_path / "pcc1", tmp_path
+    state.remaining = lambda seconds: min(seconds, 17)
+    state.ab = types.SimpleNamespace(_run_process=lambda command, **kwargs:
+        (calls.append((command, kwargs)) or types.SimpleNamespace(returncode=0, stdout="ok", stderr="")))
+    command = [str(state.compiler), "--backend", "self", "--ir-scaffold", "on", "source.py", "-o", "out"]
+    env = {"PCC_HOST_PYTHON": "/usr/bin/false", "PCC_HOST_PCC": "/usr/bin/false"}
+    state.compile_native(command, env=env, timeout=400, stderr_path=str(tmp_path / "compile.stderr"))
+    assert calls[0][1]["timeout"] == 17
+    assert calls[0][1]["env"] == env
+    with pytest.raises(mechanism.MechanismError):
+        state.compile_native(["/bin/true"], env=env, timeout=400, stderr_path="unused")
+
+
+@pytest.mark.parametrize("mutation", ["copied", "changed", "id_alias"])
+def test_mechanism_launch_registry_rejects_copies_mutation_and_id_alias(tool, tmp_path, mutation):
+    original = {"status": "PASSED", "returncode": 0, "root": str(tmp_path / "candidate-mechanism")}
+    tool._MECHANISM_PROOFS[id(original)] = (original, tool._identity(original))
+    if mutation == "copied":
+        supplied = dict(original)
+    elif mutation == "changed":
+        supplied = original
+        supplied["extra"] = True
+    else:
+        supplied = dict(original)
+        tool._MECHANISM_PROOFS[id(supplied)] = (original, tool._identity(supplied))
+    with pytest.raises(tool.CampaignError, match="not produced"):
+        tool._verify_mechanism(supplied, output=tmp_path, ab=None, launched=True)
+
+
+@pytest.mark.parametrize("outcome", ["failed", "missing", "returncode_only"])
+def test_failed_or_unproven_mechanism_stops_before_timing(tool, tmp_path, monkeypatch, outcome):
+    from contextlib import nullcontext
+    output = tmp_path / "campaign"
+    output.mkdir()
+    captured = output / "campaign-spec.json"
+    captured.write_text("{}")
+    captured.chmod(0o444)
+    tool._persist(output / "manifest.json", {"run_token": "owned", "status": "IN_PROGRESS",
+        "input_kind": "spec", "input_sha256": tool._sha(captured)})
+    trees = {"baseline": {}, "candidate": {}}
+    monkeypatch.setattr(tool, "_validate_spec", lambda *args, **kwargs: ({"baseline": tmp_path, "candidate": tmp_path}, trees))
+    monkeypatch.setattr(tool, "_qualification", lambda *args: {})
+    monkeypatch.setattr(tool, "_verify_frozen_qualification", lambda *args: None)
+    monkeypatch.setattr(tool, "_verify_live_source", lambda *args: None)
+    monkeypatch.setattr(tool, "_verify_live_import_origins", lambda *args: None)
+    monkeypatch.setattr(tool, "_freeze_inputs", lambda *args: {})
+    monkeypatch.setattr(tool, "_build_arm", lambda *args: {})
+    monkeypatch.setattr(tool, "_tree", lambda *args: {})
+    def mechanism(*args):
+        if outcome == "failed":
+            raise tool.CampaignError("actual mechanism assertions failed")
+        return None if outcome == "missing" else {"returncode": 0}
+    monkeypatch.setattr(tool, "_run_mechanism", mechanism)
+    ab = types.SimpleNamespace(require_claim_platform=lambda: None,
+        _validated_worker_budget=lambda **kwargs: types.SimpleNamespace(deadline_monotonic=100),
+        _performance_lock=lambda: nullcontext(object()),
+        run_guarded=lambda *args, **kwargs: pytest.fail("timing must not run without mechanism proof"))
+    args = argparse.Namespace(campaign_deadline_monotonic=100, job_deadline_epoch=200,
+                              run_token="owned", campaign_request=None)
+    with pytest.raises(tool.CampaignError):
+        tool._guarded(args, output, ab)
