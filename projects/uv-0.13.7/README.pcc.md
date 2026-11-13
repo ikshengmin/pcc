@@ -40,7 +40,7 @@ shared source-lock loader and records each root's first blocker:
 | Root | First blocker |
 |---|---|
 | `crates/uv/src/bin/uv.rs` | `3:3` `#[cfg(feature = ...)]` needs a checked Cargo configuration |
-| `crates/uv/src/lib.rs` | `1:15` tool lint path in `#![deny(clippy::print_stdout, ...)]` |
+| `crates/uv/src/lib.rs` | `7:3` `#[cfg(feature = "self-update")]` needs a checked Cargo configuration |
 | `crates/uv-version/src/lib.rs` | `5:5` `env!` macro invocation |
 | `crates/uv-lock/src/lock/mod.rs` | `94:3` `#[cfg(test)]` needs a checked Cargo configuration |
 
@@ -56,7 +56,10 @@ are now parsed into one checked import per leaf
 `74:5`) resolve with rustc's E0364/E0365 visibility checks
 (`tests/rust/programs/use_public_reexport.rs`). Restricted visibility
 (`pub(crate) mod export;`, formerly `87:4`) is owned too
-(`tests/rust/programs/visibility_restricted.rs`).
+(`tests/rust/programs/visibility_restricted.rs`). Tool-scoped crate lints
+(`#![deny(clippy::print_stdout, clippy::print_stderr)]`, formerly `lib.rs:1:15`)
+are retained with no compile effect, as rustc evaluates none of them
+(`tests/rust/programs/tool_lints.rs`). Three roots now stop at `cfg`.
 
 ```sh
 uv run pytest -x -q tests/rust/test_uv_source_frontier.py

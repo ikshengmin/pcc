@@ -19,6 +19,14 @@ class MetaItem:
     source_span: tuple[int, int]
 
 
+# Lint tools rustc 1.92.0 accepts in a scoped lint path `tool::lint` (every
+# edition); any other tool is E0710. rustc itself evaluates none of these
+# lints while compiling: clippy, rustdoc and the others act only in their own
+# tool runs, and rustc neither validates their lint names nor enforces
+# forbid/allow conflicts between them.
+LINT_TOOLS = frozenset({'clippy', 'rustdoc', 'diagnostic', 'rustfmt', 'miri', 'rust_analyzer', 'rustc'})
+
+
 @dataclass(frozen=True)
 class CrateLintAttribute:
     """Original syntax, not an owned implementation of the named lint."""
@@ -27,14 +35,25 @@ class CrateLintAttribute:
     lints: tuple[MetaItem, ...]
     source_span: tuple[int, int]
 
+    @property
+    def builtin_lints(self):
+        """Lints rustc itself evaluates; tool-scoped lints have no compile effect."""
+        return tuple(item for item in self.lints if '::' not in item.name)
+
 
 def crate_lint_attribute(parser, token, start):
-    values = meta_list(parser)
+    values = meta_list(parser, paths=True)
     if not values:
         raise token.error('crate lint transition requires missing_docs; empty lint lists are not implemented')
     for item in values:
-        if item.name != 'missing_docs' or item.form != 'word':
-            raise item.token.error('crate lint transition implements only missing_docs word metadata; other lints, groups and reasons are not implemented')
+        if '::' in item.name:
+            tool = item.name.split('::', 1)[0]
+            if tool not in LINT_TOOLS:
+                raise item.token.error(f'unknown tool name {tool!r} found in scoped lint: {item.name!r}')
+            if item.form != 'word':
+                raise item.token.error('malformed lint attribute input: a scoped lint is a path, not a value or list')
+        elif item.name != 'missing_docs' or item.form != 'word':
+            raise item.token.error('crate lint transition implements only missing_docs word metadata and tool-scoped lints; other lints, groups and reasons are not implemented')
     end = parser.expect(']')
     return CrateLintAttribute(token, token.text, values,
                               (offset(parser, start), offset(parser, end) + 1))
@@ -53,7 +72,9 @@ def offset(parser, token):
     return parser.line_offsets[token.line - 1] + token.column - 1
 
 
-def meta_list(parser, depth=0, *, cfg_literals=False):
+def meta_list(parser, depth=0, *, cfg_literals=False, paths=False):
+    """Attribute metadata items. With `paths`, an item may be a SimplePath
+    (`clippy::print_stdout`); its name is the `::`-joined spelling."""
     if depth >= 32:
         raise parser.token.error('attribute metadata nesting exceeds implementation limit (32)')
     parser.expect('(')
@@ -61,6 +82,11 @@ def meta_list(parser, depth=0, *, cfg_literals=False):
     while not parser.accept(')'):
         token = (parser.take() if cfg_literals and parser.token.kind == 'keyword'
                  and parser.token.text in {'true', 'false'} else parser.name())
+        name = token.text
+        while paths and parser.accept('::'):
+            name += '::' + parser.name().text
+            if name.count('::') > 32:
+                raise token.error('attribute path exceeds implementation limit (32 segments)')
         form, value, children = 'word', None, ()
         if parser.accept('='):
             literal = parser.take()
@@ -71,7 +97,7 @@ def meta_list(parser, depth=0, *, cfg_literals=False):
             form, children = 'list', meta_list(parser, depth + 1, cfg_literals=cfg_literals)
         end = parser.tokens[parser.pos - 1]
         end_offset = end.source_end if end.source_end is not None else offset(parser, end) + len(end.text)
-        values.append(MetaItem(token, token.text, form, value, children, (offset(parser, token), end_offset)))
+        values.append(MetaItem(token, name, form, value, children, (offset(parser, token), end_offset)))
         if parser.accept(')'):
             break
         parser.expect(',')

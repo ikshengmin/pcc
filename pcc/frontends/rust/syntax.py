@@ -975,7 +975,8 @@ class Parser:
                 lint = crate_lint_attribute(self, attribute, start)
                 self.crate_lint_attributes += (lint,)
                 self.crate_documentation = tuple(crate_docs)
-                self.require_checked_crate_lint(lint)
+                if lint.builtin_lints:
+                    self.require_checked_crate_lint(lint)
                 continue
             if attribute.text == 'cfg_attr':
                 from .configuration import crate_cfg_attribute, apply_crate_cfg

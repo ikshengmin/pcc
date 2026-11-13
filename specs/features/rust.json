@@ -2378,6 +2378,21 @@
       "status": "missing"
     },
     {
+      "id": "rust.attributes.tool-scoped-crate-lints",
+      "title": "Tool-scoped crate lint attributes",
+      "chapter_ids": [
+        "rust.ref.7.3"
+      ],
+      "scope": "Qualification missing, not implementation missing: crate-root allow/warn/deny/forbid lists may name scoped lints `tool::lint` (multi-segment paths) for the tools rustc 1.92.0 accepts (clippy, rustdoc, diagnostic, rustfmt, miri, rust_analyzer, rustc). They are retained as original syntax with spans and have no compile effect, matching rustc, which evaluates none of them, validates no tool lint names and enforces no forbid/allow conflict between them; no checked source is required for them. Unknown tools (E0710) and valued scoped lints (E0452) are rejected; builtin lints in the same list keep the missing_docs checked-source requirement. Bare unknown builtin names, reasons and item/module-level lint attributes remain gaps. Fixture tool_lints: local rustc 1.92.0 build and an owned pcc0 self-backend Linux x86-64 executable (container) both produce 0xfedcba9876543210; Darwin cross-emission passes. No schema2 evidence row is migrated.",
+      "tests": [
+        "tests/rust/test_rust_tool_lints.py",
+        "tests/rust/test_rust_tool_lints.py::test_tool_lint_fixture_owned_execution@rust-native-reference"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "status": "missing"
+    },
+    {
       "id": "rust.enums.payload-values",
       "title": "Tagged payload enums and by-value bindings",
       "chapter_ids": [

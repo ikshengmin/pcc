@@ -17,9 +17,10 @@ TARGET = "x86_64-unknown-linux-gnu"
 
 FRONTIER = (
     ("crates/uv/src/bin/uv.rs", "3:3: cfg requires an actual source/options-bound CheckedRustSource configuration"),
-    # `@` patterns now lex and parse; the first parser blocker is the tool
-    # lint path in `#![deny(clippy::print_stdout, clippy::print_stderr)]`.
-    ("crates/uv/src/lib.rs", "1:15: expected ',', found '::'"),
+    # `@` patterns and the tool lint paths in
+    # `#![deny(clippy::print_stdout, clippy::print_stderr)]` are owned; line 7
+    # is `#[cfg(feature = "self-update")]`.
+    ("crates/uv/src/lib.rs", "7:3: cfg requires an actual source/options-bound CheckedRustSource configuration"),
     ("crates/uv-version/src/lib.rs", "5:5: macro invocations require macro-by-example expansion"),
     # Grouped use trees, `pub use` re-exports and `pub(crate) mod export;` now
     # parse; line 94 is `#[cfg(test)] mod windows_emulation_tests;`.
