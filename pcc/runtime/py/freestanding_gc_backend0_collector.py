@@ -579,11 +579,9 @@ def _collect(pairs, candidate_count: i64) -> i64:
     finalized: i64 = _maybe_finalize_unreachable(unreachable, count)
     if weak_callbacks != 0 or finalized != 0:
         _recompute_reachability()
-        # Finalizers can create new weakrefs. As in CPython 3.15, clear these
-        # silently before any tp_clear-equivalent work can expose a partially
-        # cleared peer through a callback. Recompute erased the batch bit;
-        # rearm only the original disposal set's still-unreachable members.
-        # Resurrected and newly allocated targets do not belong to this cut.
+        # Recompute erased the batch bit; rearm only the original disposal
+        # set's still-unreachable members. Resurrected and newly allocated
+        # targets do not belong to this cut.
         i = 0
         while i < count:
             node = load_ptr(unreachable, i * 8)
@@ -594,7 +592,12 @@ def _collect(pairs, candidate_count: i64) -> i64:
             ):
                 store_i32(node, 16, load_i32(node, 16) | _COLLECTOR_WEAK_CANDIDATE)
             i = i + 1
-        py_weakref_clear_gc0_candidates()
+    # As in CPython 3.15, refs without callbacks kept their targets through
+    # finalizers, and finalizers or callbacks may have created refs: clear
+    # those to still-dead targets silently before any tp_clear-equivalent
+    # work can expose a partially cleared peer. The early pass's late list
+    # holds exactly these refs, so this visits no other weakref.
+    py_weakref_clear_gc0_candidates()
 
     i: i64 = 0
     while i < count:

@@ -22,7 +22,8 @@ class WeakBatch:
     def __init__(self, backend=0):
         self.backend = backend
         self.words = {}
-        self.head = 0
+        # py_weakref_head and an open weak window's py_weakref_late_head.
+        self.heads = {"py_weakref_head": 0, "py_weakref_late_head": 0}
         self.none = 0xF000
         self.next = 0x10000
         self.candidates = set()
@@ -48,8 +49,9 @@ class WeakBatch:
         ns.update(
             load_i32=self.load, load_i64=self.load, load_ptr=self.load,
             store_i32=self.store, store_i64=self.store, store_ptr=self.store,
-            global_load_ptr=lambda name: self.none if name == "py_None" else self.head,
+            global_load_ptr=lambda name: self.none if name == "py_None" else self.heads[name],
             global_store_ptr=self.global_store,
+            global_addr=self.window_addr,
             ptr_is_null=lambda value: int(value == 0), is_tagged_int=lambda value: value & 1,
             ptr_eq=lambda left, right: int(left == right), ptr_add=lambda base, offset: base + offset,
             null=lambda: 0, cstr=lambda text: text,
@@ -82,12 +84,14 @@ class WeakBatch:
                  "py_weakref_clear_gc0_candidates",
                  "py_weakref_invalidate", "py_weakref_call"}
         ns["_weakref_target_is_base_object"] = lambda target: 0
+        # Model targets are bare addresses without a type header.
+        ns["_weakref_tag_refused"] = lambda tag: 0
         load_functions(SOURCE, names, ns)
         self.ns = ns
 
     def load(self, base, offset=0):
         assert not self.poison_freed or not any(
-            address <= base + offset < address + 48
+            address <= base + offset < address + 56
             for address in self.freed if address in self.refcounts
         ), (
             "read from freed weakref", base, offset,
@@ -101,10 +105,31 @@ class WeakBatch:
         if offset == 0 and base in self.refcounts:
             self.refcounts[base] = value
 
+    @property
+    def head(self):
+        return self.heads["py_weakref_head"]
+
+    @head.setter
+    def head(self, value):
+        self.heads["py_weakref_head"] = value
+
+    @property
+    def late(self):
+        return self.heads["py_weakref_late_head"]
+
+    def window_addr(self, name):
+        assert name == "pcc_weakref_late_windows"
+        return 0xE000
+
+    @property
+    def windows(self):
+        return self.words.get(0xE000, 0)
+
     def global_store(self, name, value):
-        assert name == "py_weakref_head"
-        self.head = value
-        self.events.append(("link", value))
+        assert name in self.heads
+        self.heads[name] = value
+        if name == "py_weakref_head":
+            self.events.append(("link", value))
 
     def malloc(self, size):
         self.malloc_calls += 1
@@ -191,16 +216,21 @@ class WeakBatch:
         if not self.fail_tracking:
             self.store(wr, 12, self.load(wr, 12) | 2)
 
-    def ref(self, target, callback=0, *, candidate=False, count=1, dying=False):
-        wr = self.allocate_object(48, abi.PY_TYPE_WEAKREF, 524288 if dying else 0)
+    def ref(self, target, callback=0, *, candidate=False, count=1, dying=False,
+            late=False):
+        """A weakref on the ordinary list, or on an open window's late list."""
+        wr = self.allocate_object(56, abi.PY_TYPE_WEAKREF, 524288 if dying else 0)
         self.refcounts[wr] = count
         self.store(wr, 16, target)
         self.store(wr, 24, callback)
         self.store(wr, 32, 0)
-        self.store(wr, 40, self.head)
-        if self.head:
-            self.store(self.head, 32, wr)
-        self.head = wr
+        self.store(wr, 48, -1)
+        name = "py_weakref_late_head" if late else "py_weakref_head"
+        head = self.heads[name]
+        self.store(wr, 40, head)
+        if head:
+            self.store(head, 32, wr)
+        self.heads[name] = wr
         if candidate:
             self.candidates.add(wr)
         return wr
@@ -265,8 +295,15 @@ def test_dead_and_callback_free_refs_clear_without_callback_holds():
     model.candidates.add(target)
     refs = [model.ref(target), model.ref(target, 0x8000, count=0),
             model.ref(target, 0x8100, dying=True)]
+    plain, dead, dying = refs
     assert model.batch() == 0
-    assert all(model.load(wr, 16) == 0 for wr in refs)
+    assert model.load(dead, 16) == model.load(dying, 16) == 0
+    # CPython 3.15 keeps a callback-free ref's target through finalizers:
+    # the early pass moves it to the open window's late list.
+    assert model.load(plain, 16) == target
+    assert model.late == plain and model.windows == 1
+    assert model.ns["py_weakref_clear_gc0_candidates"]() == 1
+    assert model.load(plain, 16) == 0 and model.late == 0 and model.windows == 0
     assert model.allocated == [] and model.calls == []
 
 
@@ -431,27 +468,36 @@ def test_terminal_null_and_tagged_targets_leave_the_chain_untouched(target):
 
 
 def test_gc0_silent_clear_never_queues_or_retains_callback_owners():
+    """The late clear settles only the late list, silently, with no holds."""
     model = WeakBatch()
     target = 0x2000
     model.candidates.add(target)
-    refs = [model.ref(target, 0x8000), model.ref(target),
-            model.ref(target, 0x8100, candidate=True),
-            model.ref(target, 0x8200, count=0),
-            model.ref(target, 0x8300, dying=True)]
-    untouched = [model.ref(0x3000, 0x8400), model.ref(0), model.ref(1)]
-    words_before = dict(model.words)
+    model.words[0xE000] = 1  # One open weak window.
+    refs = [model.ref(target, 0x8000, late=True), model.ref(target, late=True),
+            model.ref(target, 0x8100, candidate=True, late=True),
+            model.ref(target, 0x8200, count=0, late=True),
+            model.ref(target, 0x8300, dying=True, late=True)]
+    untouched = [model.ref(0x3000, 0x8400, late=True), model.ref(0, late=True),
+                 model.ref(1, late=True)]
+    ordinary = model.ref(target, 0x8500)
     counts_before = dict(model.refcounts)
-    head_before = model.head
     next_before = model.next
     # A callback queue allocation would fail. This phase must not attempt one.
     model.fail_at = 1
     assert model.ns["py_weakref_clear_gc0_candidates"]() == len(refs)
-    expected = dict(words_before)
-    expected.update({wr + 16: 0 for wr in refs})
-    assert model.words == expected
-    assert model.head == head_before and model.refcounts == counts_before
+    assert [model.load(wr, 16) for wr in refs] == [0] * len(refs)
     assert [model.load(wr, 16) for wr in untouched] == [0x3000, 0, 1]
-    assert model.calls == model.events == model.allocated == model.freed == []
+    # A ref on the ordinary list is not this pass's: the early pass decided it.
+    assert model.load(ordinary, 16) == target
+    assert model.late == 0 and model.windows == 0
+    chain, wr = [], model.head
+    while wr:
+        chain.append(wr)
+        wr = model.load(wr, 40)
+    assert sorted(chain) == sorted(refs + untouched + [ordinary])
+    assert model.refcounts == counts_before
+    assert model.calls == model.allocated == model.freed == []
+    assert not any(event[0] in ("retain", "release", "track") for event in model.events)
     assert model.malloc_calls == 0
     assert model.next == next_before
     assert model.ns["py_weakref_clear_gc0_candidates"]() == 0

@@ -40,7 +40,8 @@ not rebuilding all of CPython.
 | `numbers` | skeleton+ | numeric ABC hierarchy and registration surface |
 | `enum` | skeleton+ | Enum/IntEnum, auto, unique, iteration/value lookup |
 | `inspect` | skeleton | signature, predicates, getmembers/getdoc/unwrap |
-| `weakref` | skeleton | ref/proxy/WeakValueDictionary/WeakKeyDictionary/WeakSet/finalize |
+| `weakref` | provider | builtin dispatch owns ref/proxy and the no-argument weak dictionaries; WeakSet from `_weakrefset` |
+| `_weakrefset` | port | CPython 3.15 `Lib/_weakrefset.py` over the native `ref` |
 | `dataclasses` | skeleton | @dataclass decorator |
 | `builtins` | skeleton | int/str/bytes/bool/list/dict/... constructors |
 

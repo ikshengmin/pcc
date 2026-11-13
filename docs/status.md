@@ -52,6 +52,17 @@ weak objects, `__builtin_va_arg_pack`; cross-object weak coalescing stops at the
 owned Mach-O linker's stack-map identity check. Constructor lowering ran on
 arm64 Darwin only; the Linux lowering is unrun.
 
+The checked-unit `weakref.WeakSet` that `98cb7308` added had no native
+lowering, so a Stage1 compile of `c_gnu_attributes` stopped at the CPython
+bridge gate. WeakSet is now CPython 3.15's `_weakrefset` compiled through a
+`weakref` provider over the native `ref`, whose hash/equality follow the
+referent; weak references follow CPython 3.15's order (refs with callbacks
+clear before finalizers, refs without one after). A multi-module native build
+of the real `c_ast`/`c_declaration_state`/`c_gnu_attributes` runs on all five
+collectors (local Mac); Stage1 itself was not re-run.
+`tests/python/test_weakset_weakref_order_native.py` holds the eight-case
+program and its CPython 3.15 reference.
+
 Speed (separate same-input A/Bs, five alternating pairs each, sqlite3.c,
 medians in the commit messages): owned preprocessing 3.12 s → 1.10 s over three
 changes; parse → passes → codegen 26.39 s → 24.35 s (visitor binding) and

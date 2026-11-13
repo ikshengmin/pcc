@@ -69,6 +69,9 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_backend4_source_side_table_plan_commit",
     "pcc_gc_backend4_source_side_table_plan_finish",
     "pcc_gc_backend4_source_side_table_plan_prepare",
+    # Only a zpage owner's payload spans are page-accounted; an allocator
+    # cell's payload lies outside its object slab.
+    "pcc_gc_backend4_zpage_find",
     "pcc_gc_backend4_zpage_payload_span_preflight_locked",
     "pcc_gc_backend4_zpage_publish_relocation_payload_spans_locked",
     "pcc_gc_load_ptr",
@@ -86,6 +89,8 @@ RAW_GLOBAL_IMPORTS = {
     "pcc_gc_continuation_root_head",
     "pcc_gc_relocate_slot_pairs_ctx",
     "py_weakref_head",
+    # A relocated weakref may head an open weak window's late list.
+    "py_weakref_late_head",
 }
 
 

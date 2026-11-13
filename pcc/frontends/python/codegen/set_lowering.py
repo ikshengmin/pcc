@@ -535,7 +535,9 @@ class SetLoweringMixin:
             fn_name = (
                 "py_set_issubset" if name == "issubset" else "py_set_issuperset"
             )
-            if not self._owned_release_needed(recv, attr.obj):
+            # The release below must own its reference. A borrowed receiver
+            # (the dyn tag guard releases its own) takes one here as well.
+            if recv_borrowed or not self._owned_release_needed(recv, attr.obj):
                 recv = self._gc_retain(recv, name=self._fresh("set.predicate.receiver"))
             self._gc_pin(recv)
             other = self._emit_expr_with_cpy_operand_cleanup(

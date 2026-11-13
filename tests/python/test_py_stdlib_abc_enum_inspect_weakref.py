@@ -64,30 +64,23 @@ def test_inspect_signature_predicates_members_and_docs():
     assert ("x", 1) in inspect.getmembers(C)
 
 
-def test_weakref_subset_containers_and_finalize():
+def test_weakref_provider_holds_only_true_weak_containers():
+    """The provider holds CPython's WeakSet; builtin dispatch owns ref/proxy.
+
+    Its former strong-reference stand-ins (proxy returning its referent,
+    dictionaries and finalize holding strong references) are gone: a name the
+    provider lacks fails instead of silently keeping objects alive.
+    """
+    import gc
+
     class Box:
         pass
 
     b = Box()
-    r = weakref.ref(b)
-    assert r() is b
-    assert weakref.proxy(b) is b
-
-    wv = weakref.WeakValueDictionary()
-    wv["b"] = b
-    assert wv["b"] is b
-    assert wv.get("missing") is None
-
-    wk = weakref.WeakKeyDictionary()
-    wk[b] = 7
-    assert wk[b] == 7
-
     ws = weakref.WeakSet([b])
-    assert b in ws
-
-    called = []
-    fin = weakref.finalize(b, lambda x: called.append(x), 3)
-    assert fin.alive
-    fin()
-    assert called == [3]
-    assert not fin.alive
+    assert b in ws and len(ws) == 1
+    del b
+    gc.collect()
+    assert len(ws) == 0
+    for stand_in in ("proxy", "WeakValueDictionary", "WeakKeyDictionary", "finalize"):
+        assert not hasattr(weakref, stand_in), stand_in

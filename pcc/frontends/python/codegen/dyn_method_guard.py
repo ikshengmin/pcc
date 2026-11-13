@@ -24,6 +24,8 @@ from pcc.ir.compat import ir
 from pcc.frontends.python.py_ast import Attr, Call
 
 
+_I1 = ir.IntType(1)
+_I32 = ir.IntType(32)
 _I64 = ir.IntType(64)
 _CSTR = ir.IntType(8).as_pointer()
 
@@ -96,6 +98,16 @@ class DynMethodGuardMixin:
                 recv,
                 attr.name,
                 expr,
+            )
+        if native_result.type == _I1:
+            # Predicates (issubset, issuperset, isdisjoint) answer a native
+            # bit; generic dispatch answers the bool object. Join as objects:
+            # py_bool_from_bit returns an immortal singleton.
+            native_result = self.builder.call(
+                self.runtime["py_bool_from_bit"],
+                [self.builder.zext(native_result, _I32,
+                                   name=self._fresh(f"{label}.bit"))],
+                name=self._fresh(f"{label}.bool"),
             )
         native_exit = self.builder.block
         self._gc_release_if_owned(recv, attr.obj)

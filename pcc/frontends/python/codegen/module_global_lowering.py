@@ -8,6 +8,7 @@ from pcc.frontends.python.py_ast import Assign, Attr, AugAssign, BoolLit, DynTyp
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.import_lowering import _dataclass_field_names, _dataclass_field_value
+from pcc.frontends.python.pipeline_import_policy import native_builtin_import_from_owns
 from pcc.frontends.python.codegen.layer1_support import _import_from_module_or_empty
 from pcc.frontends.python.py_ast import assignment_storage_annotation
 from pcc.frontends.python.symbol_names import identifier_symbol
@@ -414,6 +415,9 @@ class ModuleGlobalLoweringMixin:
                             if imported == "*" or exports.get(imported, {}).get("kind") == "typing_metadata":
                                 continue
                             if module_name == "pcc" and imported in ("valueclass", "i64", "u64"):
+                                continue
+                            if native_builtin_import_from_owns(module_name, imported):
+                                # A compile-time alias of builtin dispatch.
                                 continue
                             name = alias or imported
                             slot = self._native_extension_module_global(name)

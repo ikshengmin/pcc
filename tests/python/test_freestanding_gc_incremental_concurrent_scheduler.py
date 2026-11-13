@@ -105,6 +105,10 @@ RAW_FUNCTION_IMPORTS = {
     "py_decref",
     "py_incref",
 }
+# Thread-locals the strict object defines: a thread's unpublished allocation
+# debt and its pending push count until a batch is due.
+OWNED_THREAD_LOCALS = {"pcc_gc_tls_alloc_debt", "pcc_gc_tls_alloc_pushes"}
+
 RAW_GLOBAL_IMPORTS = {
     # No mark begins while a finished mark's deferred frees remain.
     "pcc_gc_concurrent_sweep_state",

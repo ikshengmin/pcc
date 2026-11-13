@@ -3656,6 +3656,8 @@ class NativeModuleAliasMixin:
             if (builtin_module is not None
                     and native_builtin_dispatch_owns(builtin_module, attr.name)):
                 owned = self._emit_native_builtin_module_call(expr)
+                if owned is None and builtin_module == "weakref":
+                    owned = self._emit_native_weakref_call(expr)
                 if owned is not None:
                     return owned
         if live_import_expr_binding(self, attr.obj):

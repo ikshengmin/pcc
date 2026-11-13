@@ -484,10 +484,12 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
     # Finalizers can resurrect candidates and create new weakrefs. Preserve
     # those of resurrected targets, then silently clear the remaining refs as
     # CPython 3.15 does before tp_clear. Late callbacks must not be delivered.
+    # Refs without callbacks kept their targets through finalizers on the
+    # early pass's late list; the late clear visits only that list.
     if load_i64(global_addr("pcc_gc_user_finalizer_runs"), 0) != finalizer_runs:
         pcc_gc_tracing_recheck_reachability_after_finalizers()
-        if count_free != 0:
-            py_weakref_clear_tracing_candidates()
+    if count_free != 0:
+        py_weakref_clear_tracing_candidates()
 
     # PASS 1: clear at most budget candidates without freeing any sibling.
     started = pcc_platform_monotonic_us()

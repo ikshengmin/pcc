@@ -502,6 +502,7 @@ class ExplicitPinCycle(ExplicitPins):
             "pcc_gc_tracing_finalize_unpinned": self.destroy_scalar,
             "py_user_del_dispatch": self.scalar_finalizer,
             "py_weakref_invalidate_tracing_candidates": lambda: 0,
+            "py_weakref_clear_tracing_candidates": lambda: 0,
             "pcc_platform_monotonic_us": lambda: 100,
             "pcc_gc_tracing_recheck_reachability_after_finalizers": self.unexpected_recheck,
         })

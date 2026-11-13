@@ -169,8 +169,12 @@ def _assert_weakref_commit_body_calls(commit):
                   if isinstance(node, ast.Call)]
     assert all(isinstance(node.func, ast.Name) for node in body_calls)
     calls = {node.func.id for node in body_calls}
-    assert calls == {"abi_constant", "load_ptr", "store_ptr", "ptr_is_null",
-                     "global_store_ptr", "null"}
+    # Reading and comparing the two list heads (an open weak window's late
+    # list, py_weakref.py) is allocation-free and cannot fail either.
+    assert calls <= {"abi_constant", "load_ptr", "store_ptr", "ptr_is_null",
+                     "ptr_eq", "global_load_ptr", "global_store_ptr", "null"}
+    assert {"abi_constant", "load_ptr", "store_ptr", "ptr_is_null",
+            "global_store_ptr", "null"} <= calls
 
 
 @pytest.mark.parametrize("forbidden_call", [

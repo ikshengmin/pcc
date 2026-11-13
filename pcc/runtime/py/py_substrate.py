@@ -335,6 +335,8 @@ define_global_i8("py_set_dummy_storage", 0)
 define_global_ptr_to_global("py_set_dummy", "py_set_dummy_storage")
 define_global_i32("py_next_user_tag", PY_TYPE_USER_CLASS_START)
 define_global_ptr_null("py_weakref_head")
+# Refs a collection's open weak window holds back (py_weakref.py).
+define_global_ptr_null("py_weakref_late_head")
 define_global_ptr_null("py_object_root_cache")
 define_global_i32("py_class_attr_cache_epoch", 0)
 # Native type-predicate caches are invalidated by supported C object retyping.

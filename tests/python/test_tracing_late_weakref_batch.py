@@ -82,8 +82,8 @@ class LateWeakBatch(WeakBatch):
     def global_load(self, name):
         if name == "py_None":
             return self.none
-        if name == "py_weakref_head":
-            return self.head
+        if name in self.heads:
+            return self.heads[name]
         return self.load(self.global_addr(name))
 
     def object(self, flags=1024 | 8):
@@ -192,7 +192,10 @@ def test_early_batch_keeps_callback_queue_and_leases_across_chain_mutation(backe
 
     def first_callback(wr):
         assert wr == refs[2]
-        assert all(model.ns["py_weakref_call"](ref) == model.none for ref in refs)
+        # CPython 3.15: callbacks run after refs with callbacks are cleared;
+        # a ref without one still names its target until after finalizers.
+        assert model.ns["py_weakref_call"](refs[0]) == target
+        assert all(model.ns["py_weakref_call"](ref) == model.none for ref in refs[1:])
         assert model.load(target, 48) == 777
         replacement.append(model.weak(live_target))
         model.head = replacement[0]
@@ -204,7 +207,9 @@ def test_early_batch_keeps_callback_queue_and_leases_across_chain_mutation(backe
     assert [event[0] for event in model.lease_events] == [
         "acquire", "acquire", "release", "release",
     ]
-    assert model.rechecks == 1 and model.silent_clears == []
+    # The late clear settles the callback-free ref before slot destruction.
+    assert model.rechecks == 1 and model.silent_clears == [1]
+    assert model.load(refs[0], 16) == 0
     assert model.destroyed == [target]
     assert model.load(replacement[0], 16) == live_target
 
@@ -236,7 +241,8 @@ def test_resurrection_preserves_late_ref_until_a_later_genuine_death(backend):
     model.store(target, 12, model.load(target, 12) | 1024 | 8)
     assert model.sweep() == 1
     assert model.calls == [refs[0]] and model.destroyed == [target]
-    assert model.rechecks == 2 and model.silent_clears == [0]
+    # Each sweep's late clear visits only its own (here empty) late list.
+    assert model.rechecks == 2 and model.silent_clears == [0, 0]
     assert len(refs) == 1 and not model.leases
 
 
@@ -262,7 +268,8 @@ def test_late_clear_covers_all_candidates_before_bounded_slices(backend):
     assert model.sweep(budget=1) == 1
     assert model.sweep(budget=1) == 0
     assert model.destroyed == model.cleared == [other, first]
-    assert model.rechecks == 1 and model.silent_clears == [2]
+    # Later slices' late clears find their late lists empty.
+    assert model.rechecks == 1 and model.silent_clears == [2, 0, 0]
     assert model.calls == model.lease_events == [] and not model.leases
 
 
@@ -321,5 +328,6 @@ def test_no_finalizer_activity_does_not_repeat_batch_or_recheck(backend):
 
     model.ns["py_weakref_invalidate_tracing_candidates"] = record_batch
     assert model.sweep() == 1
-    assert batches == [True] and model.silent_clears == []
+    # The late clear runs once over an empty late list: no weakref pass.
+    assert batches == [True] and model.silent_clears == [0]
     assert model.rechecks == 0

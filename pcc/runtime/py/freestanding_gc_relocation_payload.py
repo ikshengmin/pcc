@@ -1214,10 +1214,13 @@ def pcc_gc_relocation_payload_commit_weakref(from_obj, to_obj, tag: i64) -> None
         nxt = load_ptr(from_obj, 40)
         store_ptr(to_obj, 32, prev)
         store_ptr(to_obj, 40, nxt)
-        if ptr_is_null(prev) != 0:
-            global_store_ptr("py_weakref_head", to_obj)
-        else:
+        if ptr_is_null(prev) == 0:
             store_ptr(prev, 40, to_obj)
+        elif ptr_eq(global_load_ptr("py_weakref_late_head"), from_obj) != 0:
+            # An open weak window holds this ref back (py_weakref.py).
+            global_store_ptr("py_weakref_late_head", to_obj)
+        elif ptr_eq(global_load_ptr("py_weakref_head"), from_obj) != 0:
+            global_store_ptr("py_weakref_head", to_obj)
         if ptr_is_null(nxt) == 0:
             store_ptr(nxt, 32, to_obj)
         store_ptr(from_obj, 32, from_obj)

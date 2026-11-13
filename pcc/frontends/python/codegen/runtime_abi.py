@@ -2101,6 +2101,7 @@ FREESTANDING_GC_PTR_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_backend0_subset_pairs',
         'py_set_dummy',
         'py_weakref_head',
+        'py_weakref_late_head',
     }
 )
 

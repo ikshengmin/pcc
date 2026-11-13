@@ -97,9 +97,14 @@ class LateWeakrefCollection(WeakBatch):
                 obj for obj in self.index
                 if self.ns["pcc_gc_backend0_is_weak_candidate"](obj)
             }
-            before = (self.next, self.malloc_calls, len(self.calls), len(self.events))
+            def effects():
+                # Returning a late ref to the ordinary list relinks it; that
+                # list link is the only state this pass may write.
+                return (self.next, self.malloc_calls, len(self.calls),
+                        [event for event in self.events if event[0] != "link"])
+            before = effects()
             result = actual_clear()
-            assert (self.next, self.malloc_calls, len(self.calls), len(self.events)) == before
+            assert effects() == before
             self.silent_passes.append((self.recomputes, candidates, result))
             self.events.append(("silent_clear", self.recomputes))
             return result
@@ -122,12 +127,12 @@ class LateWeakrefCollection(WeakBatch):
     def global_load(self, name):
         if name == "py_None":
             return self.none
-        if name == "py_weakref_head":
-            return self.head
+        if name in self.heads:
+            return self.heads[name]
         return self.load(self.global_addr(name))
 
     def global_store(self, name, value):
-        if name == "py_weakref_head":
+        if name in self.heads:
             super().global_store(name, value)
         else:
             self.store(self.global_addr(name), 0, value)
@@ -237,7 +242,8 @@ class LateWeakrefCollection(WeakBatch):
         callback = 0x8000
         self.callbacks[callback] = lambda wr: pytest.fail("late weakref callback ran")
         wr = self.ns["py_weakref_new"](target, callback)
-        assert wr and self.head == wr
+        # Created inside the collection's weak window: its late clear decides.
+        assert wr and self.late == wr
         return wr
 
     def collect(self, scope, candidates):
@@ -295,7 +301,9 @@ def test_late_links_clear_as_one_silent_cut_before_any_field_clear(scope, creato
     assert model.collect(scope, original) == 2
     assert model.calls == list(reversed(early))
     assert model.recomputes == 2
-    assert model.silent_passes == [(1, set(original), 2), (2, {first, second}, 2)]
+    # The early pass clears refs with callbacks itself; the one late clear
+    # runs after the post-finalizer recompute.
+    assert model.silent_passes == [(2, {first, second}, 2)]
     assert model.cleared == model.disposed == [first, second]
     assert all(model.load(wr, 16) == target for wr, target in preserved)
     assert all(model.load(wr, 16) == 0 for wr in early + model.late_dead)
@@ -321,7 +329,7 @@ def test_finalizer_only_zero_count_remains_in_silent_cut_and_flags_are_cleared(s
     assert model.collect(scope, [target]) == 1
     assert model.calls == []
     assert model.recomputes == 2
-    assert model.silent_passes == [(1, {target}, 0), (2, {target}, 1)]
+    assert model.silent_passes == [(2, {target}, 1)]
     assert model.cleared == model.disposed == [target]
 
 
@@ -338,7 +346,7 @@ def test_finalizer_invalidated_original_node_is_not_rearmed_or_dereferenced(scop
     model.finalizers[first] = invalidate_original
     assert model.collect(scope, [first, removed]) == 1
     assert model.calls == []
-    assert model.silent_passes == [(1, {first, removed}, 0), (2, {first}, 1)]
+    assert model.silent_passes == [(2, {first}, 1)]
     assert model.cleared == model.disposed == [first]
     assert model.load(model.nodes[removed], 0) == 0
 

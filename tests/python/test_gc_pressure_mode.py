@@ -440,7 +440,9 @@ def test_gc0_completion_hook_distinguishes_empty_success_from_failure(
         pcc_gc_tracked_dematerialize=dematerialize,
         _finish_subset=finish, _recompute_reachability=mark,
         py_weakref_invalidate_gc0_candidates=weak_candidates,
-        py_weakref_clear_gc0_candidates=lambda: pytest.fail('unexpected late weakref pass'),
+        # The late clear always closes the early pass's weak window; it
+        # visits only the late list, empty here.
+        py_weakref_clear_gc0_candidates=lambda: 0,
         _maybe_finalize_unreachable=finalize, malloc=allocate, free=free,
         pcc_gc_pressure_collection_completed=complete,
     )

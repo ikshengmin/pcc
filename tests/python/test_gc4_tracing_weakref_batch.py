@@ -67,10 +67,13 @@ def test_all_targets_are_cleared_before_callbacks_and_unreachable_refs_are_silen
         raise AssertionError("unexpected fatal weakref batch failure")
 
     namespace = {
-        "global_load_ptr": lambda name: refs[0],
+        # Every ref has a callback: none moves to the late list.
+        "global_load_ptr": lambda name: refs[0] if name == "py_weakref_head" else 0,
+        "global_addr": lambda name: 0x50000,
+        "store_i32": lambda base, offset, value: words.__setitem__(base + offset, value),
         "load_ptr": lambda base, offset: words[base + offset],
         "load_i64": lambda base, offset: words[base + offset],
-        "load_i32": lambda base, offset: words[base + offset],
+        "load_i32": lambda base, offset: words.get(base + offset, 0),
         "store_ptr": lambda base, offset, value: words.__setitem__(base + offset, value),
         "store_i64": lambda base, offset, value: words.__setitem__(base + offset, value),
         "ptr_is_null": lambda ptr: ptr == 0, "is_tagged_int": lambda ptr: ptr & 1,
@@ -129,6 +132,11 @@ class SilentTracingClear(WeakBatch):
     def clear(self):
         return self.ns["py_weakref_clear_tracing_candidates"]()
 
+    def late_ref(self, target, callback):
+        """A ref an open weak window holds: the late clear's only input."""
+        self.words[0xE000] = 1
+        return self.ref(target, callback, late=True)
+
     def forbid_callback_work(self):
         def unexpected(*args):
             pytest.fail("silent clear allocated, retained, leased or called user code")
@@ -144,13 +152,14 @@ class SilentTracingClear(WeakBatch):
 def test_post_finalizer_clear_never_queues_callbacks_even_for_live_refs(backend):
     model = SilentTracingClear(backend)
     target = model.target()
-    refs = [model.ref(target, callback) for callback in (0, 0x8000, 0x8100, 0x8200)]
+    refs = [model.late_ref(target, callback) for callback in (0, 0x8000, 0x8100, 0x8200)]
     model.store(refs[2], 12, 1024)
     model.store(refs[3], 12, 524288)
     before = dict(model.refcounts)
     model.forbid_callback_work()
     assert model.clear() == 4
     assert all(model.load(ref, 16) == 0 for ref in refs)
+    assert model.late == 0 and model.windows == 0
     assert model.clear() == 0
     assert model.calls == [] and model.refcounts == before
 
@@ -177,7 +186,7 @@ def test_silent_clear_preserves_existing_target_qualification(exclusion):
     else:
         assert exclusion == "null"
         target = 0
-    ref = model.ref(target, 0x8000)
+    ref = model.late_ref(target, 0x8000)
     model.forbid_callback_work()
     assert model.clear() == 0
     assert model.load(ref, 16) == target
@@ -188,7 +197,7 @@ def test_silent_clear_qualifies_the_relocation_resolved_target(candidate):
     model = SilentTracingClear()
     source, target = model.target(), model.target(1024 if candidate else 0)
     model.forwarded[source] = target
-    ref = model.ref(source, 0x8000)
+    ref = model.late_ref(source, 0x8000)
     model.forbid_callback_work()
     assert model.clear() == int(candidate)
     assert model.load(ref, 16) == (0 if candidate else source)
@@ -197,7 +206,7 @@ def test_silent_clear_qualifies_the_relocation_resolved_target(candidate):
 def test_silent_tracing_clear_rejects_running_world_before_mutation():
     model = SilentTracingClear()
     target = model.target()
-    ref = model.ref(target, 0x8000)
+    ref = model.late_ref(target, 0x8000)
     model.stopped = False
     with pytest.raises(RuntimeError, match="abort"):
         model.clear()
@@ -207,7 +216,7 @@ def test_silent_tracing_clear_rejects_running_world_before_mutation():
 def test_silent_tracing_clear_does_not_handle_gc0():
     model = SilentTracingClear(0)
     target = model.target()
-    ref = model.ref(target, 0x8000)
+    ref = model.late_ref(target, 0x8000)
     model.stopped = False
     assert model.clear() == 0
     assert model.load(ref, 16) == target

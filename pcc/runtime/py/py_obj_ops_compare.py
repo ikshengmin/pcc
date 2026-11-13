@@ -30,7 +30,7 @@ from pcc.runtime.py.py_abi_constants import (
 from pcc.extern import extern, c_abi_export, c_ptr, c_int32, c_int64, c_void, c_double
 from pcc.runtime.py.py_abi_constants import PY_TYPE_ELLIPSIS, PY_TYPE_NOTIMPLEMENTED
 from pcc.runtime.py.py_abi_constants import PY_OBJ_CMP_UNORDERED, C_POINTER_SIZE, DICTENTRY_KEY_OFFSET, DICTENTRY_SIZE, DICTENTRY_VALUE_OFFSET, PYBYTEARRAYOBJECT_BYTE_LEN_OFFSET, PYBYTEARRAYOBJECT_DATA_OFFSET, PYBYTESOBJECT_BYTE_LEN_OFFSET, PYBYTESOBJECT_DATA_OFFSET, PYDICTOBJECT_ENTRIES_OFFSET, PYDICTOBJECT_ENTRIES_USED_OFFSET, PYDICTOBJECT_ITEM_COUNT_OFFSET, PYFLOATOBJECT_VALUE_OFFSET, PYINTOBJECT_DIGITS_OFFSET, PYINTOBJECT_NDIGITS_OFFSET, PYINTOBJECT_SIGN_OFFSET, PYCLASSOBJECT_FIELD_NAMES_OFFSET, PYCLASSOBJECT_NAME_OFFSET, PYCLASSOBJECT_N_FIELDS_OFFSET, PYINSTANCEOBJECT_CLS_OFFSET, PYINSTANCEOBJECT_FIELDS_OFFSET, PYLISTOBJECT_ITEMS_OFFSET, PYMEMORYVIEWOBJECT_BASE_OFFSET, PYOBJECTHEADER_TYPE_TAG_OFFSET, PYSTROBJECT_BYTE_LEN_OFFSET, PYSTROBJECT_DATA_OFFSET, PYSTROBJECT_HASH_OFFSET, PYTUPLEOBJECT_ITEMS_OFFSET, PYTUPLEOBJECT_LEN_OFFSET, PY_TYPE_BOOL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_DICT, PY_TYPE_FLOAT, PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_MEMORYVIEW, PY_TYPE_NONE, PY_TYPE_SET, PY_TYPE_STR, PY_TYPE_TUPLE, PY_TYPE_VALUEBOX
-from pcc.runtime.py.py_abi_constants import PY_TYPE_CLASS, PY_TYPE_COMPLEX, PY_TYPE_INSTANCE, PY_TYPE_USER_CLASS_START
+from pcc.runtime.py.py_abi_constants import PY_TYPE_CLASS, PY_TYPE_COMPLEX, PY_TYPE_INSTANCE, PY_TYPE_USER_CLASS_START, PY_TYPE_WEAKREF
 from pcc.unsafe import (
     cstr,
     define_global_i32,
@@ -105,6 +105,9 @@ py_obj_getitem       = extern("py_obj_getitem",       (c_ptr, c_ptr),           
 py_user_hash_dispatch = extern("py_user_hash_dispatch", (c_ptr, c_ptr),            c_int64)
 py_user_contains_dispatch = extern("py_user_contains_dispatch", (c_ptr, c_ptr, c_ptr), c_int64)
 py_user_eq_dispatch = extern("py_user_eq_dispatch", (c_ptr, c_ptr),               c_int64)
+# CPython weakref_hash/weakref_richcompare: referent hash and equality.
+py_weakref_hash = extern("py_weakref_hash", (c_ptr,), c_int64)
+py_weakref_eq = extern("py_weakref_eq", (c_ptr, c_ptr), c_int64)
 py_user_order_dispatch = extern("py_user_order_dispatch", (c_ptr, c_ptr, c_int64), c_int64)
 
 pcc_gc_load_ptr      = extern("pcc_gc_load_ptr",      (c_ptr, c_ptr),              c_ptr)
@@ -843,6 +846,8 @@ def py_obj_eq_value(a, b) -> int:
         return 0
     if tb == PY_TYPE_NONE:
         return 0
+    if ta == PY_TYPE_WEAKREF and tb == PY_TYPE_WEAKREF:
+        return py_weakref_eq(a, b)
 
     # User instances: honor __eq__ for container key lookup and ``==``.
     # Tri-state: -1 = no user __eq__ (or NotImplemented) -> keep the
@@ -998,6 +1003,8 @@ def py_obj_hash(o) -> int:
         return h
     if tag == PY_TYPE_INSTANCE or tag >= PY_TYPE_USER_CLASS_START:
         return py_user_hash_dispatch(o, null())
+    if tag == PY_TYPE_WEAKREF:
+        return py_weakref_hash(o)
     return 0
 
 

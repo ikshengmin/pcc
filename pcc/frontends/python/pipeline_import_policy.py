@@ -183,10 +183,19 @@ NATIVE_BUILTIN_IMPORTS_WITH_COMPILED_PROVIDER = frozenset(
     # ``HIGHEST_PROTOCOL``, ``DEFAULT_PROTOCOL`` and the error classes are
     # values of the compiled provider; ``range(pickle.HIGHEST_PROTOCOL + 1)``
     # stubbed its whole function in the native pipeline.
+    # ``weakref``: builtin dispatch owns ref/proxy and the no-argument weak
+    # dictionaries; ``WeakSet`` is CPython's pure-Python ``_weakrefset``
+    # class compiled from the provider. ``c_gnu_attributes`` keeps one, so a
+    # pcc1 carrying the C frontend needs it in the native closure.
     {"os", "platform", "subprocess", "contextvars", "contextlib", "functools",
-     "json", "math", "time", "shlex", "pickle"}
+     "json", "math", "time", "shlex", "pickle", "weakref"}
 )
 
+
+
+_WEAKREF_DISPATCH_OWNED = frozenset(
+    {"ref", "proxy", "WeakValueDictionary", "WeakKeyDictionary"}
+)
 
 
 def native_builtin_dispatch_owns(module_name: str, attribute: str) -> bool:
@@ -194,8 +203,19 @@ def native_builtin_dispatch_owns(module_name: str, attribute: str) -> bool:
     module also has a compiled provider binding. pickle's provider keeps a
     host-CPython fallback for dumps/loads whose flattened format cannot nest
     (``[1, (2, 3.5)]`` came back as ``[1, (2,), 3.5]``); a provider's other
-    values, and functools.partial, belong to the provider."""
+    values, and functools.partial, belong to the provider. The weakref
+    runtime owns true weak references; its provider holds only WeakSet."""
+    if module_name == "weakref":
+        return attribute in _WEAKREF_DISPATCH_OWNED
     return module_name == "pickle" and attribute in ("dumps", "loads")
+
+
+def native_builtin_import_from_owns(module_name: str, attribute: str) -> bool:
+    """Whether ``from module import attribute`` binds builtin dispatch's
+    value although the module has a compiled provider. The weakref provider
+    holds only WeakSet: ``from weakref import ref`` must name the runtime's
+    true weak reference, exactly as ``weakref.ref(...)`` does."""
+    return module_name == "weakref" and attribute in _WEAKREF_DISPATCH_OWNED
 
 
 # A shallow explicit multi-file compile normally admits every directly
@@ -204,7 +224,7 @@ def native_builtin_dispatch_owns(module_name: str, attribute: str) -> bool:
 # semantic objects that require its compiled provider.
 REQUIRED_COMPILED_STDLIB_PROVIDERS = frozenset(
     {"os", "platform", "subprocess", "contextvars", "contextlib", "functools",
-     "json", "math", "time", "shlex"}
+     "json", "math", "time", "shlex", "weakref"}
 )
 
 NATIVE_IMPORT_FROMS = {

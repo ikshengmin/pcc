@@ -75,8 +75,10 @@ _STATUSES: Dict[str, StdlibModuleStatus] = {
     "weakref": StdlibModuleStatus(
         "weakref",
         MODE_NATIVE_DYNAMIC,
-        "weakref.ref subset",
-        ("tests/test_gc_g3_weakref.py",),
+        "weakref.ref/proxy, no-argument weak dictionaries and WeakSet "
+        "(CPython _weakrefset compiled over the native ref)",
+        ("tests/test_gc_g3_weakref.py",
+         "tests/python/test_weakset_weakref_order_native.py"),
     ),
     "threading": StdlibModuleStatus(
         "threading",

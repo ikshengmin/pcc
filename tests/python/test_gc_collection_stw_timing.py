@@ -188,7 +188,9 @@ class CollectionWindow:
             "_prepare_subset": lambda pairs, count: count,
             "_recompute_reachability": lambda: self.advance("mark", 13),
             "py_weakref_invalidate_gc0_candidates": lambda: self.advance("weak", 7) or 0,
-            "py_weakref_clear_gc0_candidates": lambda: pytest.fail("unexpected late weakref pass"),
+            # The late clear closes the early pass's weak window over the
+            # late list only (empty here).
+            "py_weakref_clear_gc0_candidates": lambda: 0,
             "_maybe_finalize_unreachable": lambda unreachable, count: self.advance("finalizers", 11) or 0,
             "malloc": lambda size: None if gc0_exit == "allocation" else "scratch",
             "free": lambda ptr: self.advance("free", 2),
@@ -442,7 +444,8 @@ def test_owned_strict_collection_timing_objects_have_exact_symbol_closure(tmp_pa
     # Keep the full-source compiles in one test so default xdist does not run
     # them concurrently. The existing LLVM/clang tests remain reference lanes.
     owners = ((collector.STRICT_SOURCE, collector.OWNED_SYMBOLS, collector.RAW_IMPORTS),
-              (scheduler.STRICT_SOURCE, scheduler.OWNED_SYMBOLS,
+              (scheduler.STRICT_SOURCE,
+               scheduler.OWNED_SYMBOLS | scheduler.OWNED_THREAD_LOCALS,
                scheduler.RAW_FUNCTION_IMPORTS | scheduler.RAW_GLOBAL_IMPORTS))
     with patch.object(subprocess, "Popen", side_effect=AssertionError("external build process")):
         for source, expected_definitions, expected_imports in owners:

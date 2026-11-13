@@ -2649,9 +2649,13 @@ def _py_decref_finish(prepared) -> None:
     # Native instances finalize while their weakrefs still identify them.
     # Their deallocator invalidates only after resurrection has been ruled
     # out. C-extension objects keep their existing generic dealloc boundary.
-    # Invalidation walks the process's weakref list; an empty list has
-    # nothing to clear, and no weakref to a dead object can appear.
-    if (delay_instance_metadata == 0 or pcc_capi_is_cext_type_tag(tag_dbg) != 0) and ptr_is_null(global_load_ptr("py_weakref_head")) == 0:
+    # Invalidation walks the process's weakref lists; with both empty there
+    # is nothing to clear, and no weakref to a dead object can appear. The
+    # late list is non-empty only inside a collection's weak window.
+    if (delay_instance_metadata == 0 or pcc_capi_is_cext_type_tag(tag_dbg) != 0) and (
+        ptr_is_null(global_load_ptr("py_weakref_head")) == 0
+        or ptr_is_null(global_load_ptr("py_weakref_late_head")) == 0
+    ):
         py_weakref_invalidate(o)
     if delay_zpage_freeing_note == 0 and delay_instance_metadata == 0:
         pcc_gc_note_object_freeing(o)

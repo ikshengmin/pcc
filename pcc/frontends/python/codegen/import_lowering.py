@@ -16,6 +16,7 @@ from pcc.frontends.python.codegen.layer1_support import (
     _import_from_module_or_empty,
 )
 from pcc.frontends.python.codegen.local_bound_lowering import mark_local_bound
+from pcc.frontends.python.pipeline_import_policy import native_builtin_import_from_owns
 
 _Name = Name
 _CSTR = ir.IntType(8).as_pointer()
@@ -1107,6 +1108,21 @@ class ImportLoweringMixin:
             if not remaining_builtin_names:
                 return
             stmt_names = remaining_builtin_names
+            stmt = ImportFrom(stmt.span, stmt.module, tuple(stmt_names), stmt.level)
+        if any(native_builtin_import_from_owns(import_module, name)
+               for name, _alias in stmt_names):
+            # Builtin dispatch owns these names although the module has a
+            # compiled provider; the provider binds only the remaining ones.
+            remaining_owned: list[tuple[str, Optional[str]]] = []
+            for binding in stmt_names:
+                member_stmt = ImportFrom(stmt.span, stmt.module, (binding,), stmt.level)
+                if not (native_builtin_import_from_owns(import_module, binding[0])
+                        and self._register_native_builtin_import_from_aliases(
+                            member_stmt, import_module)):
+                    remaining_owned.append(binding)
+            if not remaining_owned:
+                return
+            stmt_names = remaining_owned
             stmt = ImportFrom(stmt.span, stmt.module, tuple(stmt_names), stmt.level)
 
         # Multi-file compile: if the source module is a sibling being

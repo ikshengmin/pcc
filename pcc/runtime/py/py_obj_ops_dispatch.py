@@ -197,6 +197,15 @@ py_set_new = extern("py_set_new", (), c_ptr)
 py_set_from_iterable = extern("py_set_from_iterable", (c_ptr,), c_ptr)
 py_set_update = extern("py_set_update", (c_ptr, c_ptr), c_void)
 py_set_intersection = extern("py_set_intersection", (c_ptr, c_ptr), c_ptr)
+py_set_add = extern("py_set_add", (c_ptr, c_ptr), c_void)
+py_set_remove = extern("py_set_remove", (c_ptr, c_ptr), c_int64)
+py_set_clear = extern("py_set_clear", (c_ptr,), c_void)
+py_set_contains = extern("py_set_contains", (c_ptr, c_ptr), c_int64)
+py_set_issubset = extern("py_set_issubset", (c_ptr, c_ptr), c_int64)
+py_set_issuperset = extern("py_set_issuperset", (c_ptr, c_ptr), c_int64)
+py_set_call_method_slots = extern(
+    "py_set_call_method_slots", (c_ptr, c_int64, c_ptr, c_ptr, c_ptr), c_int64
+)
 py_set_difference = extern("py_set_difference", (c_ptr, c_ptr), c_ptr)
 py_threading_lock_acquire = extern(
     "py_threading_lock_acquire", (c_ptr,), c_int64
@@ -3731,8 +3740,8 @@ def _py_dict_pop_bound(o):
     return fn
 
 
-# Generic dict/list methods and exact bytes/bytearray.find bind here when the compiler could not
-# type the receiver (d.get, d.items, l.extend, getattr(d, "keys"), ...), as
+# Generic dict/list/set methods and exact bytes/bytearray.find bind here when the compiler could not
+# type the receiver (d.get, d.items, l.extend, s.remove, getattr(d, "keys"), ...), as
 # CPython's method descriptors do. A call roots its receiver and arguments
 # in one frame and runs the runtime entry the typed lowering uses.
 _BOUND_METHOD_INPUT0 = 0
@@ -3835,7 +3844,8 @@ def _bound_method_finish(borrowed, slots, tokens, status: int):
     return pcc_gc_take_pinned_slot(result, prior)
 
 
-# Operations: dict 1..11, list 21..28, bytes/bytearray find 31.
+# Operations: dict 1..11, list 21..28, bytes/bytearray find 31, set 41..49
+# and the set algebra 50..57 (50 + py_set_call_method_slots's method code).
 def _bound_method_operation(tag: int, name) -> int:
     if tag == PY_TYPE_DICT:
         if strcmp(name, cstr("get")) == 0:
@@ -3880,6 +3890,41 @@ def _bound_method_operation(tag: int, name) -> int:
     elif tag == PY_TYPE_BYTES or tag == PY_TYPE_BYTEARRAY:
         if strcmp(name, cstr("find")) == 0:
             return 31
+    elif tag == PY_TYPE_SET:
+        if strcmp(name, cstr("add")) == 0:
+            return 41
+        if strcmp(name, cstr("remove")) == 0:
+            return 42
+        if strcmp(name, cstr("discard")) == 0:
+            return 43
+        if strcmp(name, cstr("clear")) == 0:
+            return 44
+        if strcmp(name, cstr("copy")) == 0:
+            return 45
+        if strcmp(name, cstr("issubset")) == 0:
+            return 46
+        if strcmp(name, cstr("issuperset")) == 0:
+            return 47
+        if strcmp(name, cstr("isdisjoint")) == 0:
+            return 48
+        if strcmp(name, cstr("__contains__")) == 0:
+            return 49
+        if strcmp(name, cstr("union")) == 0:
+            return 50
+        if strcmp(name, cstr("intersection")) == 0:
+            return 51
+        if strcmp(name, cstr("difference")) == 0:
+            return 52
+        if strcmp(name, cstr("update")) == 0:
+            return 53
+        if strcmp(name, cstr("intersection_update")) == 0:
+            return 54
+        if strcmp(name, cstr("difference_update")) == 0:
+            return 55
+        if strcmp(name, cstr("symmetric_difference")) == 0:
+            return 56
+        if strcmp(name, cstr("symmetric_difference_update")) == 0:
+            return 57
     return 0
 
 
@@ -3918,6 +3963,40 @@ def _bound_method_name(operation: int):
         return cstr("count")
     if operation == 31:
         return cstr("find")
+    if operation == 41:
+        return cstr("add")
+    if operation == 42:
+        return cstr("remove")
+    if operation == 43:
+        return cstr("discard")
+    if operation == 44:
+        return cstr("clear")
+    if operation == 45:
+        return cstr("copy")
+    if operation == 46:
+        return cstr("issubset")
+    if operation == 47:
+        return cstr("issuperset")
+    if operation == 48:
+        return cstr("isdisjoint")
+    if operation == 49:
+        return cstr("__contains__")
+    if operation == 50:
+        return cstr("union")
+    if operation == 51:
+        return cstr("intersection")
+    if operation == 52:
+        return cstr("difference")
+    if operation == 53:
+        return cstr("update")
+    if operation == 54:
+        return cstr("intersection_update")
+    if operation == 55:
+        return cstr("difference_update")
+    if operation == 56:
+        return cstr("symmetric_difference")
+    if operation == 57:
+        return cstr("symmetric_difference_update")
     return cstr("reverse")
 
 
@@ -3935,6 +4014,12 @@ def _bound_method_arity(operation: int) -> int:
         return 322
     if operation == 24 or operation == 31:
         return 213
+    if operation == 41 or operation == 42 or operation == 43 or (
+            operation >= 46 and operation <= 49):
+        return 111
+    if operation >= 50:
+        # The set algebra binds its own variadic arguments.
+        return -1
     return 0
 
 
@@ -3971,7 +4056,12 @@ def _bound_method_arity_error(operation: int, kind: int, minimum: int,
     message = stack_alloc(160)
     at: int = 0
     if kind == 0 or kind == 1:
-        at = _cstr_append(message, at, cstr("dict.") if operation < 20 else cstr("list."))
+        if operation < 20:
+            at = _cstr_append(message, at, cstr("dict."))
+        elif operation < 40:
+            at = _cstr_append(message, at, cstr("list."))
+        else:
+            at = _cstr_append(message, at, cstr("set."))
         at = _cstr_append(message, at, _bound_method_name(operation))
         if kind == 0:
             at = _cstr_append(message, at, cstr("() takes no arguments ("))
@@ -4011,6 +4101,8 @@ def _bound_method_body(slots, tokens) -> int:
         if load_i32(args, 8) == PY_TYPE_TUPLE:
             nargs = py_tuple_len(args)
     arity: int = _bound_method_arity(operation)
+    if arity < 0:
+        return _bound_method_set_algebra(slots, tokens, captures, args, operation - 50)
     kind: int = unsigned_div_i64(arity, 100)
     minimum: int = unsigned_div_i64(arity, 10) - kind * 10
     maximum: int = arity - unsigned_div_i64(arity, 10) * 10
@@ -4129,6 +4221,45 @@ def _bound_method_body(slots, tokens) -> int:
     elif operation == 28:
         py_list_clear(receiver)
         returns_none = 1
+    elif operation == 41:
+        py_set_add(receiver, argument)
+        returns_none = 1
+    elif operation == 42 or operation == 43:
+        removed: int = py_set_remove(receiver, argument)
+        if py_err_occurred() != 0:
+            return -1
+        if removed < 0 and operation == 42:
+            # KeyError carries the missing key, as CPython's set_remove.
+            py_raise_owned(py_exc_new_with_value(
+                4, load_ptr(slots, _BOUND_METHOD_ARG0 * C_POINTER_SIZE)))
+            return -1
+        returns_none = 1
+    elif operation == 44:
+        py_set_clear(receiver)
+        returns_none = 1
+    elif operation == 45:
+        result = py_set_from_iterable(receiver)
+    elif operation == 46 or operation == 47:
+        contained: int = 0
+        if operation == 46:
+            contained = py_set_issubset(receiver, argument)
+        else:
+            contained = py_set_issuperset(receiver, argument)
+        if py_err_occurred() != 0:
+            return -1
+        result = py_bool_from_bit(1 if contained != 0 else 0)
+    elif operation == 48:
+        common = py_set_intersection(receiver, argument)
+        if ptr_is_null(common) != 0 or py_err_occurred() != 0:
+            return -1
+        shared: int = py_set_len(common)
+        py_decref(common)
+        result = py_bool_from_bit(1 if shared == 0 else 0)
+    elif operation == 49:
+        member: int = py_set_contains(receiver, argument)
+        if py_err_occurred() != 0:
+            return -1
+        result = py_bool_from_bit(1 if member != 0 else 0)
     elif operation == 31:
         # Binary find binds both slice bounds before validating its needle.
         # Each conversion can call user code; reload only from leased roots.
@@ -4171,6 +4302,31 @@ def _bound_method_body(slots, tokens) -> int:
         result = global_load_ptr("py_None")
         py_incref(result)
     store_ptr(slots, _BOUND_METHOD_RESULT * C_POINTER_SIZE, result)
+    return _bound_method_adopt(slots, tokens, _BOUND_METHOD_RESULT)
+
+
+def _bound_method_set_algebra(slots, tokens, captures, args, method: int) -> int:
+    """union/intersection/difference/update families from a bound method.
+
+    py_set_call_method_slots binds the variadic positional iterables exactly
+    as the typed lowering does, from rooted slots; this frame owns them.
+    """
+    store_ptr(slots, _BOUND_METHOD_RECEIVER * C_POINTER_SIZE, py_tuple_get(captures, 0))
+    if _bound_method_adopt(slots, tokens, _BOUND_METHOD_RECEIVER) != 0:
+        return -1
+    args_index: int = _BOUND_METHOD_INPUT1
+    if ptr_is_null(args) != 0 or is_tagged_int(args) != 0 or load_i32(args, 8) != PY_TYPE_TUPLE:
+        store_ptr(slots, _BOUND_METHOD_ARG0 * C_POINTER_SIZE, py_tuple_new(0))
+        if _bound_method_adopt(slots, tokens, _BOUND_METHOD_ARG0) != 0:
+            return -1
+        args_index = _BOUND_METHOD_ARG0
+    # ARG1 stays empty: a bound method call carries no keyword arguments.
+    if py_set_call_method_slots(
+            ptr_add(slots, _BOUND_METHOD_RECEIVER * C_POINTER_SIZE), method,
+            ptr_add(slots, args_index * C_POINTER_SIZE),
+            ptr_add(slots, _BOUND_METHOD_ARG1 * C_POINTER_SIZE),
+            ptr_add(slots, _BOUND_METHOD_RESULT * C_POINTER_SIZE)) != 0:
+        return -1
     return _bound_method_adopt(slots, tokens, _BOUND_METHOD_RESULT)
 
 
@@ -4391,7 +4547,7 @@ def py_obj_getattr(o, name):
             return _py_dict_pop_bound(o)
         if tag == PY_TYPE_SET:  # PY_TYPE_SET
             return _py_set_pop_bound(o)
-    if (tag == PY_TYPE_DICT or tag == PY_TYPE_LIST
+    if (tag == PY_TYPE_DICT or tag == PY_TYPE_LIST or tag == PY_TYPE_SET
             or tag == PY_TYPE_BYTES or tag == PY_TYPE_BYTEARRAY):
         bound_operation: int = _bound_method_operation(tag, name)
         if bound_operation != 0:
