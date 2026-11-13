@@ -474,43 +474,43 @@ fence-lifetime qualification. M2 and later local-model milestones remain open.
 
 ## Gateway Web Frameworks Benchmark: native request path
 
-Latest local Mac retry (2026-11-13): the fifth batch stopped after five
-authorized rounds. It first synchronized core `d279c8a77` and rebuilt from the
-current directory with `uv run pcc --backend self`; C512 still failed. The final
-artifact is core `18d492149` plus the recorded uncommitted dependency-closure
-change, with gateway `698ba38` (server source `72fe5ef`). Input hashes match
-before and after both builds. The final original RSpec, connection-recycling
-and C512 concurrent-ID gates pass, but its first timed `GET /` has **325 connect
-and 2,197 write errors**. **Zero of 30** planned rows are accepted; there is no
-valid final QPS or complete comparison. Limits and error rejection are unchanged.
+Latest local Mac result (2026-11-14): the original C512 comparison now
+completes **30/30 timed rows**, with zero connect/read/write/timeout/deadline
+or HTTP-status errors. All ten server arms complete their pre/post HTTP gates,
+upstream RSpec and connection recycling; every row is server-bound. Five-run
+medians are **3,893.5 / 3,569.6 / 3,817.9 requests/s** for GET /, dynamic GET
+and POST /user. The same-host aiohttp 3.14.5 / CPython 3.14.7 medians are
+28,403.7 / 25,143.6 / 27,595.6 requests/s. This is one carrier/event loop,
+GC0, three load threads on Apple M2 Max / macOS 27.2.1, not a published rank.
 
-The native mixed-cohort reproducer exposed a gap in the previous two-ended
-queue: a short-deadline owner between two cohorts ran at positions 128/512/2,048
-for cohort sizes 64/256/1,024. `395b2d693` retains the original I/O deadline in
-each rooted ready node. One deadline-selected candidate remains linked in the
-FIFO and alternates with the oldest owner, with constant-time removal. This
-does not implement a global EDF heap or change caller deadlines. The candidate
-completed 14 original benchmark rows, including two full native route triples,
-but the third native POST failed with 534 connect, 3 read and 2,541 write errors.
-Partial rows are not a complete performance result.
+The successful artifact uses gateway `3fd9910` and current-directory host-pcc0
+`uv run pcc --backend self` at core `91b57a2dd`, including the recorded
+uncommitted dependency-closure change. Before/after input hashes match. Its
+SHA-256 is `a09b26b8d16b7b828a6a37396bc44171841bbfbccaaebd1e49ccc4e0982b3397`.
+Core changed between the failed baseline and this build, so no isolated
+compiler or throughput speedup is attributed to the gateway change.
 
-External tracing on that candidate verified `listen(..., 128)` and observed at
-most about 0.53 ms from reported listener readiness to accept, while a C512
-preflight connection still reset. Observed listener polls were typically 2–5 ms apart.
-A separate native persistent-carrier reproducer then showed a newly registered
-fd waiting through 64 preselected CPU steps. `1ecedd7c6` checks the live fd-wait
-count before the next ready step, retaining pure-compute batching. The final
-native reproducer observes the fd after one CPU step on GC0–4.
+The observed failure path was concrete: the accept owner parked on
+`connections_lock` while the main thread retired connection tasks. That lock
+wake placed the listener in ordinary ready work, even though new connections
+were already pending; a traced interval was about 400 ms. Matched mutex
+addresses and native stacks identify `_accept_batch` as the waiter and
+`_reap_connection_owners` as the releaser. Interposition was diagnostic only.
 
-The final focused models are **70 passed**. **Three native reference cases**
-pass with six pytest workers and the unchanged 90-second/1-GiB guard: single
-arrival and mixed cohorts at 64/256/1,024 owners on every GC, plus the real
-persistent-carrier fd-registration case on every GC. These are external C ABI
-drivers against the freshly built owned runtime, not native-pcc1 qualification.
-They prove the isolated scheduling corrections, not resolution of C512 or a
-throughput gain. The final network failure remains unresolved. Gateway source
-is unchanged in this batch; its prior 114 host checks are historical evidence.
-Full suites, bootstrap and live TLS qualification remain unrun.
+Gateway `3fd9910` publishes accepted handles in a short, non-resumable metadata
+helper and retires each exact terminal owner by a checked position and swap.
+The whole-ledger Python partition is gone from the publication lock. List
+identity, later publications, terminal-task barriers and handle release outside
+the lock are preserved. Native symbols confirm the publication/retirement
+helpers are ordinary functions; **117 focused gateway checks pass**. The
+original concurrency, backlog, deadlines, request/connection limits, routing
+and error rejection are unchanged. The final measurement uses no interposer.
+
+The supplemental GC1 run confirmed backend 1 and passed basic HTTP and
+connection recycling, then its C512 client failed while setting TCP_NODELAY
+with EINVAL. This is unresolved; GC2–4 were not run after that failure. The
+completed comparison is GC0 evidence. Full suites, bootstrap and live TLS
+qualification remain unrun.
 See the sibling `pcc-gateway/benchmarks/web-frameworks.md` for the current
 boundary and reproduction entry. Earlier figures below remain historical.
 
