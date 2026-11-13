@@ -3234,11 +3234,13 @@ def py_virtual_thread_poll_io(timeout_ms: int) -> int:
             if valid:
                 store_ptr(thread, 64, null())
                 store_i64(thread, 120, 0)
-                # A disconnect/timeout cohort still needs cleanup, but must
+                # A disconnect cohort still needs cleanup, but must
                 # not fill the priority lane ahead of new read/write events.
                 # Ordinary service remains bounded by the I/O dispatch budget.
+                # Keep timeout wakeups prompt: they may drive a listener's
+                # periodic accept check as well as request deadline handling.
                 io_ready: int = 1
-                if hit == 0 or (bits & 56) != 0:
+                if (bits & 56) != 0:
                     io_ready = 0
                 _ready_commit(thread, ready_node, io_ready)
                 woken = woken + 1
