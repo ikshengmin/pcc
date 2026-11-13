@@ -286,6 +286,10 @@ class Function:
     # Trait method `where Self: ...` bounds; Self is not a method parameter.
     self_bounds: tuple[TypeBound, ...] = ()
     inline_attributes: tuple[object, ...] = ()
+    # `const fn`: callable at run time like any function. Its const-context
+    # body rules are rustc's to check (compilation already requires that
+    # check or its attestation); PCC never evaluates it at compile time.
+    const_fn: bool = False
     # Synthesized concrete body inherited from this declaration-owned default.
     default_source: tuple[str, str] | None = None
 
@@ -1185,14 +1189,19 @@ class Parser:
                         raise use_token.error('representation/no_mangle attributes do not apply to use declarations')
                     self.use_declaration(use_token, public, tuple(docs))
                     continue
-                if self.token.text == 'const' and self.tokens[self.pos + 1].text != 'fn':
+                const_fn = None
+                if self.token.text == 'const' and self.tokens[self.pos + 1].text not in {'fn', 'unsafe', 'extern', 'async'}:
                     const_token = self.take()
                     if repr_c or enum_repr or no_mangle or inline_attributes or language_item is not None:
                         raise const_token.error('representation/no_mangle/inline/lang attributes do not apply to const items')
                     self.const_item(public, tuple(docs))
                     continue
                 if self.token.text == 'const':
-                    raise self.token.error('const fn requires checking function bodies against const-evaluation rules, which is not implemented')
+                    # `const fn` / `const unsafe fn` / `const extern "C" fn`
+                    # (Rust Reference items/functions.html#const-functions).
+                    const_fn = self.take()
+                    if self.token.text == 'async':
+                        raise self.token.error('async functions are not implemented')
                 if self.accept("trait"):
                     if repr_c or enum_repr or no_mangle:
                         raise self.token.error("attributes on traits are not implemented")
@@ -1268,6 +1277,13 @@ class Parser:
                         method_docs, method_inline = function_attributes(self)
                         visible = parse_visibility(self)
                         require_function_target(self, method_inline)
+                        const_method = None
+                        if self.token.text == 'const' and self.tokens[self.pos + 1].text in {'fn', 'unsafe', 'extern'}:
+                            const_method = self.take()
+                            if trait_name is not None:
+                                raise const_method.error('functions in trait impls cannot be declared const (rustc E0379)')
+                        elif self.token.text == 'const':
+                            raise self.token.error('associated constants in impls are not implemented')
                         unsafe = self.accept("unsafe")
                         if trait_name is not None and (visible or unsafe):
                             raise self.token.error("trait impl methods must be safe and have no visibility qualifier in this slice")
@@ -1282,6 +1298,7 @@ class Parser:
                         functions.append(self.function("Rust", visible, False, unsafe,
                             implementation=implementation, documentation=method_docs,
                             inline_attributes=method_inline))
+                        functions[-1].const_fn = const_method is not None
                     if associated_types:
                         original = implementation
                         implementation = replace(original, associated_types=tuple(associated_types))
@@ -1314,6 +1331,8 @@ class Parser:
                 if self.accept("extern"):
                     extern_token = self.tokens[self.pos - 1]
                     if self.accept("crate"):
+                        if const_fn is not None:
+                            raise const_fn.error("expected `fn` after `const extern`")
                         if unsafe or no_mangle or repr_c or enum_repr is not None or language_item is not None:
                             raise self.token.error("attributes/unsafe on crate aliases are not implemented")
                         item = self.extern_crate_item(extern_token, self.tokens[item_start], public, tuple(docs))
@@ -1335,6 +1354,8 @@ class Parser:
                             raise token.error('only the non-unwinding extern "C" ABI is supported')
                     abi = "C"
                     if self.accept("{"):
+                        if const_fn is not None:
+                            raise const_fn.error("an extern block cannot be `const`")
                         if no_mangle or public or docs:
                             raise self.token.error("attributes and visibility on extern blocks are not supported")
                         while not self.accept("}"):
@@ -1347,6 +1368,7 @@ class Parser:
                         continue
                 functions.append(self.function(abi, public, no_mangle, unsafe, documentation=tuple(docs),
                                                inline_attributes=tuple(inline_attributes)))
+                functions[-1].const_fn = const_fn is not None
             except RustError as error:
                 # rustc strips a disabled item before resolving or expanding
                 # anything in it; it only has to be valid syntax, which the

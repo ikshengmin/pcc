@@ -174,6 +174,10 @@ def _encode_str(s, buf, ensure_ascii=True) -> None:
             buf.append('\\"')
         elif c == "\\":
             buf.append("\\\\")
+        elif c == "\b":
+            buf.append("\\b")
+        elif c == "\f":
+            buf.append("\\f")
         elif c == "\n":
             buf.append("\\n")
         elif c == "\r":
@@ -353,6 +357,10 @@ class _Decoder:
                     out.append("\\")
                 elif esc == "/":
                     out.append("/")
+                elif esc == "b":
+                    out.append("\b")
+                elif esc == "f":
+                    out.append("\f")
                 elif esc == "n":
                     out.append("\n")
                 elif esc == "r":

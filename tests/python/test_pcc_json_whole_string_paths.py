@@ -28,6 +28,8 @@ PROVIDER = REPO_ROOT / "pcc" / "stdlib" / "json.py"
 _STRINGS = [
     "", "plain", " ", "~", "a b ~ !#$%&'()*+,-./:;<=>?@[]^_`{|}",
     'quote"inside', "back\\slash", '"', "\\", "\\\"",
+    "\b", "\f", "bs\bx", "ff\fx", "\\b", "\\f",
+    "\x07\b\t\n\x0b\f\r\x0e",
     "tab\tx", "nl\nx", "cr\rx", "\x00", "\x1f", "\x7f", "del\x7fx",
     "é", "café", "日本語", "🚀", "mixed é\"\\\n\x7f🚀",
     "long ascii " * 50,
@@ -56,6 +58,9 @@ _DOCUMENTS = [
     '"escape at the end\\\\"',
     '["\\"", "\\\\", "/", "\\/"]',
 ]
+# Actual CPython canonical bytes are inputs to both decoders, not just
+# outputs of the same implementation being round-tripped.
+_DOCUMENTS.append(host_json.dumps(_STRINGS))
 
 
 def _provider():
@@ -112,6 +117,8 @@ def main():
             print(json.loads(text) == obj)
     for text in DOCUMENTS:
         print(json.dumps(json.loads(text)))
+    for value in json.loads(DOCUMENTS[-1]):
+        print([ord(character) for character in value])
 
 
 main()

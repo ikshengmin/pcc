@@ -12,6 +12,7 @@ NATIVE_WIRE_CONTRACT_PROGRAM = '''import json
 from pcc.frontends.python.py_ast_contract import PY_AST_FIELD_NAME_OVERRIDES
 from pcc.frontends.python.pipeline_ast_wire import (
     _PY_AST_FIELD_NAME_OVERRIDES, _py_ast_to_wire, _py_ast_from_wire,
+    _decode_py_ast_wire,
 )
 from pcc.frontends.python.py_ast import DynType, SetType, ClassType, ValueArrayType
 from pcc.frontends.python.py_lift import parse_and_lift
@@ -30,6 +31,10 @@ def main():
     recovered = _py_ast_from_wire(json.loads(json.dumps(_py_ast_to_wire(module))))
     assert recovered == module
     assert recovered.body[0].body[1].args[1].default.ident == "token"
+    escaped = _decode_py_ast_wire(__HOST_ESCAPE_WIRE__)
+    assert [ord(character) for character in escaped.docstring] == __ESCAPE_POINTS__
+    assert json.dumps(escaped.docstring) == __HOST_ESCAPE_TEXT__
+    assert _py_ast_from_wire(_py_ast_to_wire(escaped)) == escaped
     print("AST_WIRE_CONTRACT_OK")
 main()
 '''
@@ -204,7 +209,20 @@ def test_native_ast_wire_uses_shared_contract_all_gcs(
 ) -> None:
     source = tmp_path / "wire_contract.py"
     binary = tmp_path / "wire_contract"
-    source.write_text(NATIVE_WIRE_CONTRACT_PROGRAM)
+    # The host produces canonical short escapes. A provider-only roundtrip
+    # would miss a decoder that only accepts its own Unicode escape spelling.
+    value = "\b\f\t\n\r\"\\\x00\x1f"
+    wire = json.dumps({
+        "schema": "pcc.frontends.python.py_ast.v1",
+        "module": {
+            "__pcc_py_ast_v1__": "Module",
+            "fields": {"name": "escapes", "body": [], "docstring": value},
+        },
+    })
+    program = NATIVE_WIRE_CONTRACT_PROGRAM.replace("__HOST_ESCAPE_WIRE__", repr(wire))
+    program = program.replace("__HOST_ESCAPE_TEXT__", repr(json.dumps(value)))
+    program = program.replace("__ESCAPE_POINTS__", "[8, 12, 9, 10, 13, 34, 92, 0, 31]")
+    source.write_text(program)
     python_program_compiler(
         str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
