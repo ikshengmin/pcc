@@ -282,9 +282,16 @@ class ConsumerModel:
                    load_i64=lambda p,o: self.load(p,o) or 0,
                    load_i32=lambda p,o: self.load(p,o) or 0, store_i32=self.store,
                    memset=lambda p,v,n: [self.store(p,o,None) for o in range(0,n,8)],
+                   # Frame maps give their slot counts. The collector
+                   # configuration words read zero: not the GC0 fast
+                   # publication, so results take the general lease path.
                    global_addr=lambda x: {'pcc_named_protocol_borrowed_map':-3,
                         'pcc_named_protocol_owned_map':7, 'pcc_tuple_iter_borrowed_map':-1,
-                        'pcc_tuple_iter_owned_map':5}[x],
+                        'pcc_tuple_iter_owned_map':5,
+                        'pcc_gc_config_initialized':10**9,
+                        'pcc_gc_backend_selected':10**9+8,
+                        'pcc_gc_refcount_provenance_probe':10**9+16,
+                        'pcc_diagnostics_runtime_log_fast_state':10**9+24}[x],
                    global_load_ptr=lambda x: self.current[x],
                    pcc_gc_frame_enter=enter, pcc_gc_frame_leave=leave,
                    pcc_gc_foreign_lease_acquire=self.acquire,

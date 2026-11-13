@@ -55,6 +55,9 @@ class SortModel(_ExtensionModel):
             'pcc_gc_backend4_retarget_mutator_payload_locked': self.retarget,
             'pcc_gc_backend4_zpage_register_owner_payload_span': self.register_payload,
             'global_addr': lambda name: 11,
+            # The sorted frame registers its owned map (11 slots) by address.
+            'pcc_gc_frame_enter': self.enter,
+            'pcc_gc_frame_leave': self.leave,
             'pcc_gc_root_copy_lease': self.copy,
             'pcc_gc_root_move': self.move,
             'py_list_new': self.list_new, 'py_list_len': self.length,

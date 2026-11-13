@@ -92,6 +92,8 @@ def _production_generation():
         "L1CodegenError": RuntimeError,
         "_is_import_stmt": lambda statement: False,
         "_is_import_from_stmt": lambda statement: False,
+        # The fixture proves no closed-young domain; its phases are timed alike.
+        "closed_young_module_denial": lambda module: "timing fixture",
     })
     exec(compile(module, str(SOURCE), "exec"), namespace)
 
@@ -115,6 +117,9 @@ def _production_generation():
             self._sibling_module_inits = ("sibling",)
             self._native_module_exports = {"sibling": {}}
             self._hoisted_class_capture_params = {}
+            # No link-time closed-young proof or domain (layer1_init's defaults).
+            self._closed_young_closure = None
+            self._closed_young_domain_input = None
             self.fail_body = fail_body
             self.class_lowering = SimpleNamespace(
                 prepare_class_init_outlines=operation("prepare_classes"),
