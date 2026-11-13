@@ -44,6 +44,61 @@ def _compile(tmp_path: Path, source: str, runtime_archive: Path) -> Path:
     return exe
 
 
+@pytest.mark.integration
+def test_completed_steps_drop_continuations_after_the_callback_returns(
+    tmp_path: Path, threaded_pcc_runtime_archive: Path,
+) -> None:
+    """C ABI reference probe of the owned runtime, including captured data."""
+    exe = _compile(tmp_path, r'''
+        #include "py_runtime.h"
+        #include "py_internal.h"
+        #include <stdint.h>
+        #include <stdio.h>
+        #include <stdlib.h>
+
+        static int callback_kept_capture;
+        static int64_t resume(PyObject *thread, PyObject *continuation) {
+            PyObject *value = py_continuation_get_slot(continuation, 0);
+            if (value == NULL || py_list_len(value) != 0) return -1;
+            if (py_virtual_thread_complete(thread, value) != 0) return -2;
+            callback_kept_capture =
+                ((PyVirtualThreadObject *)thread)->continuation == continuation
+                && py_continuation_slot_count(continuation) == 1;
+            py_decref(value);
+            return callback_kept_capture ? 0 : -3;
+        }
+        int main(int argc, char **argv) {
+            if (argc != 2 || pcc_gc_set_backend(atoi(argv[1])) != 0) return 2;
+            int32_t map[1] = {1};
+            PyObject *value = py_list_new(0);
+            PyObject *slots[1] = {value};
+            PyObject *cont = py_continuation_new_typed(map, slots, (void *)&resume);
+            if (value == NULL || cont == NULL) return 3;
+            PyObject *thread = py_virtual_thread_new(cont);
+            py_decref(value); value = NULL; slots[0] = NULL;
+            py_decref(cont); cont = NULL;
+            if (thread == NULL || py_virtual_thread_start(thread) != 0) return 4;
+            if (py_virtual_thread_run_once() != 1 || !callback_kept_capture) return 5;
+            if (((PyVirtualThreadObject *)thread)->continuation != NULL) return 6;
+            (void)pcc_gc_collect(0);
+            value = py_virtual_thread_result(thread);
+            if (value == NULL || py_list_len(value) != 0) return 7;
+            py_decref(value);
+            py_decref(thread);
+            puts("TERMINAL_CAPTURE_RELEASE_OK");
+            return 0;
+        }
+    ''', threaded_pcc_runtime_archive)
+    for backend in range(5):
+        result = subprocess.run(
+            [str(exe), str(backend)], capture_output=True, text=True, timeout=30,
+            env=dict(os.environ, PCC_GC_BACKEND=str(backend)),
+        )
+        assert (result.returncode, result.stdout, result.stderr) == (
+            0, "TERMINAL_CAPTURE_RELEASE_OK\n", "",
+        ), backend
+
+
 def test_virtual_thread_ready_entry_pool_preserves_roots_across_backends(
     tmp_path: Path, pcc_runtime_archive: Path,
 ) -> None:

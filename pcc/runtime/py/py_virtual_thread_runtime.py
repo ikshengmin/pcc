@@ -3420,11 +3420,18 @@ def _run_ready_step() -> int:
     store_ptr(ready_cell, 0, ready)
     ready_lease = pcc_gc_foreign_lease_acquire(ready_cell)
     continuation_cell = stack_alloc(8)
-    store_ptr(continuation_cell, 0, pcc_gc_load_ptr(ready, ptr_add(ready, 16)))
+    continuation_slot = ptr_add(ready, 16)
+    store_ptr(continuation_cell, 0, pcc_gc_load_ptr(ready, continuation_slot))
     continuation_lease = pcc_gc_foreign_lease_acquire(continuation_cell)
     result = _run_ready_thread(ready, load_ptr(continuation_cell, 0))
     if continuation_lease > 0:
         pcc_gc_foreign_lease_release(continuation_cell, continuation_lease)
+    if result == 2:
+        # This step finished the task, and its resume no longer borrows the
+        # continuation. Drop captures here, outside scheduler locks, instead
+        # of retaining them until a later batch retires the task handles.
+        pcc_gc_store_ptr(ready, continuation_slot, null())
+        result = 1
     if ready_lease > 0:
         pcc_gc_foreign_lease_release(ready_cell, ready_lease)
     py_decref(ready)
@@ -3475,9 +3482,19 @@ def _run_ready_thread(ready, continuation) -> int:
                     result = -1
             elif rc != 0:
                 result = -1
-    if result == 1 and atomic_load_i64(ready, 32, "acquire") == 2:
-        if py_virtual_thread_complete(ready, global_load_ptr("py_None")) != 0:
-            result = -1
+    if result == 1:
+        state = atomic_load_i64(ready, 32, "acquire")
+        if state == 2:
+            if py_virtual_thread_complete(ready, global_load_ptr("py_None")) != 0:
+                result = -1
+            else:
+                result = 2
+        elif state == 4:
+            result = 2
+    # Private result 2 means terminal in this owned step. Do not infer this
+    # after _step_finished: another carrier may already be resuming the task.
+    # _run_ready_step releases its continuation lease before dropping captures
+    # and maps this result back to the public one-step result of 1.
     if _step_finished(ready) != 0:
         return -1
     return result
