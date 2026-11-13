@@ -1074,7 +1074,7 @@ def test_build_receipt_rejects_origin_consumption_and_output_overlap(tmp_path):
     receipt["environment"]["PCC_SOURCE_ROOT"] = origin
     receipt["environment"]["PCC_REPO_ROOT"] = origin
     receipt["environment_sha256"] = tool._canonical_sha256(receipt["environment"])
-    receipt["command"][14] = str(Path(origin) / "pcc" / "__main__.py")
+    receipt["command"][12] = str(Path(origin) / "pcc" / "__main__.py")
     receipt["command_sha256"] = tool._canonical_sha256(receipt["command"])
     receipts[0].write_text(json.dumps(receipt), encoding="utf-8")
     with pytest.raises(tool.CompileABError, match="owned build snapshot"):
@@ -1106,7 +1106,7 @@ def test_build_receipt_rejects_origin_consumption_and_output_overlap(tmp_path):
 
 @pytest.mark.parametrize(
     ("position", "replacement_name"),
-    ((3, "other.time"), (8, "other.profile.json"), (16, "other-pcc1")),
+    ((3, "other.time"), (8, "other.profile.json"), (14, "other-pcc1")),
 )
 def test_build_receipt_binds_exact_command_artifact_paths(
     tmp_path, position, replacement_name
