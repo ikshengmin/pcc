@@ -1914,7 +1914,17 @@ def _mock_control_processes(tool, tmp_path, monkeypatch, launches, *, linkage_va
                     if failure == "bytes":
                         output.write_bytes(b"different\n")
                     elif failure == "compiler_mutation":
-                        Path(command[4]).write_bytes(b"changed compiler")
+                        # The real snapshot is sealed. Deliberately corrupt our
+                        # owned fixture, then restore its mode so this reaches
+                        # the identity guard rather than failing at open().
+                        compiler = Path(command[4])
+                        original_mode = compiler.stat().st_mode
+                        assert original_mode & 0o222 == 0
+                        compiler.chmod(original_mode | 0o200)
+                        try:
+                            compiler.write_bytes(b"changed compiler")
+                        finally:
+                            compiler.chmod(original_mode)
                     elif failure == "deadline":
                         monkeypatch.setattr(tool.time, "monotonic", lambda: 201.0)
             elif command[0] == str(otool):
@@ -2159,6 +2169,11 @@ def test_control_failure_retains_partial_receipt_and_cannot_accept(tmp_path, mon
         unchanged_control=True, guarded=True, failure=failure,
     )
     assert persisted["status"] == "ERROR"
+    if failure == "compiler_mutation":
+        assert "unchanged control compiler changed during A/B" in persisted["error"]
+        compiler = Path(persisted["unchanged_control"]["identity"]["compiler"]["path"])
+        assert compiler.read_bytes() == b"changed compiler"
+        assert compiler.stat().st_mode == persisted["unchanged_control"]["identity"]["compiler"]["mode"]
     assert "summary" not in persisted
     assert len(persisted["pairs"]) == 1
     control = persisted["unchanged_control"]
