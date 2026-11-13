@@ -79,6 +79,88 @@ entry:
 '''
 
 
+_TAIL_CALL_IR = '''target triple = "aarch64-unknown-linux-gnu"
+declare i64 @callee(i64, ptr)
+define i64 @wrapper(i64 %value, ptr %pointer) {
+entry:
+  %result = call i64 @callee(i64 %value, ptr %pointer)
+  ret i64 %result
+}
+'''
+
+
+@pytest.mark.parametrize("target", [TARGET, "arm64-apple-darwin"])
+@pytest.mark.parametrize("optimize", [False, True])
+@pytest.mark.parametrize("source", [_TAIL_CALL_IR, _ROOTS_IR], ids=["tail-call", "managed-roots"])
+def test_aarch64_text_oracle_matches_explicit_optimization(monkeypatch, target, optimize, source):
+    from pcc.backend.self_backend_dispatch import emit_self_asm
+
+    monkeypatch.delenv("PCC_SELF_TARGET_PASSES", raising=False)
+    monkeypatch.delenv("PCC_SELF_TARGET_PASS_TRANSPORT", raising=False)
+    source = source.replace(TARGET, target)
+    text_assembly = emit_self_asm(source, aarch64_optimize=optimize)
+    indexed_assembly = target_objects.emit_indexed_assembly(
+        parse_self_backend_module(source), optimize=optimize,
+    )
+    assert text_assembly == indexed_assembly
+    assert target_objects.encode_assembly_object(text_assembly, target) == (
+        target_objects.encode_assembly_object(indexed_assembly, target)
+    )
+
+
+def test_linux_text_optimization_override_preserves_default_and_changes_code(monkeypatch):
+    from pcc.backend.self_backend_aarch64_linux import emit_aarch64_linux_asm
+    from pcc.backend.self_backend_dispatch import emit_self_asm
+
+    monkeypatch.delenv("PCC_SELF_TARGET_PASSES", raising=False)
+    monkeypatch.delenv("PCC_SELF_TARGET_PASS_TRANSPORT", raising=False)
+    unoptimized = emit_aarch64_linux_asm(_TAIL_CALL_IR, optimize=False)
+    optimized = emit_aarch64_linux_asm(_TAIL_CALL_IR, optimize=True)
+    assert emit_aarch64_linux_asm(_TAIL_CALL_IR) == unoptimized
+    assert emit_self_asm(_TAIL_CALL_IR) == unoptimized
+    assert "  bl callee" in unoptimized
+    assert "  bl callee" not in optimized
+    assert "  b callee" in optimized
+    assert target_objects.encode_assembly_object(unoptimized, TARGET) != (
+        target_objects.encode_assembly_object(optimized, TARGET)
+    )
+
+
+@pytest.mark.parametrize("optimize", [False, True])
+def test_explicit_aarch64_optimization_keeps_target_pass_owner(monkeypatch, optimize):
+    from pcc.backend import self_backend_dispatch as dispatch
+    from pcc.backend import self_backend_aarch64_linux as linux
+
+    observed = []
+
+    def emit(source, optimize=False):
+        observed.append((source, optimize))
+        return "assembly before target passes"
+
+    def target_passes(assembly, target_id):
+        observed.append((assembly, target_id))
+        return "assembly after target passes"
+
+    monkeypatch.setattr(linux, "emit_aarch64_linux_asm", emit)
+    monkeypatch.setattr(dispatch, "run_self_target_pass_pipeline", target_passes)
+    assert dispatch.emit_self_asm(_TAIL_CALL_IR, aarch64_optimize=optimize) == (
+        "assembly after target passes"
+    )
+    assert observed == [
+        (_TAIL_CALL_IR, optimize),
+        ("assembly before target passes", "self-aarch64-linux-v0"),
+    ]
+
+
+def test_aarch64_optimization_override_rejects_another_architecture():
+    from pcc.backend import BackendUnavailable
+    from pcc.backend.self_backend_dispatch import emit_self_asm
+
+    source = _TAIL_CALL_IR.replace(TARGET, "x86_64-unknown-linux-gnu")
+    with pytest.raises(BackendUnavailable, match="AArch64 optimization requested for"):
+        emit_self_asm(source, aarch64_optimize=True)
+
+
 def _forbid_text_assembly(monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("finalized Linux transport used a text assembler")
@@ -470,7 +552,7 @@ def test_worker_uses_structured_linux_elf_and_preserves_other_routes(tmp_path, t
             assert any(s.name == ".pcc_stackmaps" and s.data for s in obj.sections)
             source_ir = (tmp_path / "module_0.ll").read_text()
             expected = target_objects.encode_assembly_object(
-                target_objects.emit_indexed_assembly(parse_self_backend_module(source_ir), optimize=False),
+                target_objects.emit_indexed_assembly(parse_self_backend_module(source_ir), optimize=True),
                 target,
             )
             assert payload == expected

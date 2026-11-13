@@ -1995,7 +1995,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert counts is None
             else:
                 assert nodes == [gate.ARM_TRANSPORT_TEST]
-                assert counts == ((8,) if integration else (7,))
+                assert counts == ((8,) if integration else (19,))
         elif name.startswith("aarch64-regalloc-"):
             assert target == "darwin" and machine == "arm64"
             assert env["PCC_RUNTIME_ARCHIVE"] == str(archive)
@@ -2137,7 +2137,7 @@ def test_linux_arm_transport_inputs_markers_and_exact_inventory_are_bound():
                 assert isinstance(mark.args[1], (ast.List, ast.Tuple))
                 count *= len(mark.args[1].elts)
         counts[integration] += count
-    assert counts == {False: 7, True: 8}
+    assert counts == {False: 19, True: 8}
     native = ast.parse((ROOT / gate.ARM_TRANSPORT_NATIVE_TEST).read_text())
     tests = [node for node in native.body if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")]
     assert [node.name for node in tests] == ["test_linux_aarch64_transport_executes_tls_varargs_and_managed_reload"]

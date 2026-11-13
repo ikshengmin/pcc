@@ -5,12 +5,12 @@ from .self_backend_target_match import is_aarch64_linux_triple
 from .self_backend_parse import parse_self_backend_target_triple
 
 
-def emit_aarch64_linux_asm(ir_text: str) -> str:
+def emit_aarch64_linux_asm(ir_text: str, optimize: bool = False) -> str:
     from .self_backend_aarch64_darwin import emit_aarch64_darwin_asm
     triple = parse_self_backend_target_triple(ir_text)
     if not is_aarch64_linux_triple(triple):
         raise BackendUnavailable("AArch64 Linux emitter received " + triple)
-    return emit_aarch64_darwin_asm(ir_text, optimize=False)
+    return emit_aarch64_darwin_asm(ir_text, optimize=optimize)
 
 
 def emit_linux_vararg_start(func, ap_ptr, module_symbols):

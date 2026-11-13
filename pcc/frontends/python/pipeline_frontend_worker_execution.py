@@ -1232,6 +1232,11 @@ def run_codegen_worker(
                         text_target = parse_self_backend_target_triple(ir_text)
                         if is_aarch64_darwin_triple(text_target) or text_target == "unknown-unknown-unknown":
                             text_asm = emit_aarch64_darwin_asm(ir_text, optimize=True)
+                        elif is_aarch64_linux_triple(text_target):
+                            # The oracle must use the same code-changing
+                            # options as indexed assembly, not the Linux text
+                            # entry's compatibility default.
+                            text_asm = emit_self_asm(ir_text, aarch64_optimize=True)
                         else:
                             text_asm = emit_self_asm(ir_text)
                         if worker_timing:

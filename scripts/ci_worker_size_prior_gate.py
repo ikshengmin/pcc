@@ -739,7 +739,7 @@ def run(out, phase, *, strict_closure_timeout=300, full_chain=False):
                 run_pytest(out, "windows-exit-native", [EXIT_TEST, TAR_ATTRIBUTES_TEST],
                            env, integration=True, counts=(6, 2))
             elif sys.platform.startswith("linux") and platform.machine().lower() in ("aarch64", "arm64"):
-                run_pytest(out, "linux-arm-transport-host", [ARM_TRANSPORT_TEST], env, counts=(7,))
+                run_pytest(out, "linux-arm-transport-host", [ARM_TRANSPORT_TEST], env, counts=(19,))
                 run_pytest(out, "linux-arm-transport-routes", [ARM_TRANSPORT_TEST], env, integration=True, counts=(8,))
                 run_pytest(out, "linux-arm-transport-native", [ARM_TRANSPORT_NATIVE_TEST
                            + "::test_linux_aarch64_transport_executes_tls_varargs_and_managed_reload"],
