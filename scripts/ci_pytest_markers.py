@@ -289,6 +289,7 @@ def run(args):
                    PCC_PLATFORM_TEST_COMPILER=str(compiler),
                    PCC_TEST_COMPILER_LOG=str(out / "pytest" / "pcc1-routing.jsonl"),
                    PCC_TEST_NO_NATIVE_PROVISIONING="1", UV_PYTHON_DOWNLOADS="never",
+                   PCC_RUN_CPYTHON_REFERENCE="1",
                    PCC_CI_STAGE1_MANIFEST=str((args.bundle / "manifest.json").resolve()),
                    PCC_CI_STAGE1_MANIFEST_SHA256=digest(args.bundle / "manifest.json"),
                    PCC_MARKER_REPORT_DIR=str(out / "pytest"), PCC_MARKER_PARTITION=partition)

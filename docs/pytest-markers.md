@@ -88,6 +88,17 @@ active CI run.
 
 ## Limits and honest results
 
+The integration remainder also runs the unchanged WeakSet regression programs
+with explicit host pcc0 and admitted native pcc1 owners. A fresh CPython process
+owns pcc0 so pytest's native API routing cannot relabel it. Both owners use the
+admitted threaded runtime, default Python IR passes, all five collectors and
+the original semantic expectations; a read-only collector query verifies the
+selected backend. The original peer tests remain selected, and the ordinary
+marker enables their CPython 3.15 reference opt-in. Owner receipts, compile
+logs and host implementation identity are retained under `weakset-owners/`.
+This supplemental coverage is execution-pending until CI runs it; source
+review and harness unit tests are not native semantic acceptance.
+
 Each marker retains its existing watchdog allowance: 2400 seconds for
 non-integration and 1800 seconds for integration. Linux/Windows retain the
 16 GiB tree ceiling. macOS uses the existing observed-memory admission with a

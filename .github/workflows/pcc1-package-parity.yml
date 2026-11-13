@@ -273,6 +273,7 @@ on:
       - "tests/python/test_user_ordering_exhaustion.py"
       - "scripts/ci_stage1_artifact_export.py"
       - "scripts/ci_pytest_markers.py"
+      - "scripts/ci_weakset_owners.py"
       - "tests/python/test_pcc_bootstrap_full.py"
       - "tests/test_ci_stage1_bundle.py"
       - "scripts/ci_stage1_bundle.py"
@@ -552,6 +553,7 @@ on:
       - "tests/python/test_user_ordering_exhaustion.py"
       - "scripts/ci_stage1_artifact_export.py"
       - "scripts/ci_pytest_markers.py"
+      - "scripts/ci_weakset_owners.py"
       - "tests/python/test_pcc_bootstrap_full.py"
       - "tests/test_ci_stage1_bundle.py"
       - "scripts/ci_stage1_bundle.py"
@@ -2030,6 +2032,7 @@ jobs:
             build/pytest-markers/**/junit.xml
             build/pytest-markers/**/inventory-*.json
             build/pytest-markers/**/configuration.json
+            build/pytest-markers/**/weakset-owners/**
 
   cpp17:
     needs: validation-plan
