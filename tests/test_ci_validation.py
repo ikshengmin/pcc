@@ -112,6 +112,42 @@ def test_trait_bound_rustc_oracle_has_a_separate_reference_lane():
             "reference" if name == reference else "ordinary")
 
 
+def test_outlives_rustc_oracle_keeps_certified_owned_execution_in_its_lane():
+    module = "tests/rust/test_rust_data_outlives_bounds.py"
+    registry = json.loads(run.REFERENCES.read_text())["functions"]
+    reference = "test_rustc_gives_the_same_verdicts_and_value"
+    owned = "test_checked_program_runs_with_owned_compile_assemble_and_link"
+    assert set(registry[module]) == {reference, owned}
+    assert registry[module][reference]["activity"] == "external-reference"
+    assert not registry[module][reference].get("conditional")
+    assert registry[module][owned]["activity"] == "mandatory-same-input-certification-and-owned-contract"
+    assert registry[module][owned]["conditional"] is True
+    tree = ast.parse((ROOT / module).read_text())
+    functions = {node.name: node for node in tree.body
+                 if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")}
+    assert {reference, owned} <= functions.keys()
+    for name, function in functions.items():
+        marks = {ast.unparse(mark.func if isinstance(mark, ast.Call) else mark)
+                 for mark in function.decorator_list}
+        integration = "pytest.mark.integration" in marks
+        assert classify(module, name, integration, registry) == (
+            "reference" if name == reference else "integration" if integration else "ordinary")
+    # A conditional record documents the mandatory certifier; it is not a waiver
+    # and must never move this owned contract into the optional reference lane.
+    assert classify(module, owned, False, registry) == "ordinary"
+    assert classify(module, owned, True, registry) == "integration"
+    calls = {name: {ast.unparse(node.func) for node in ast.walk(function)
+                    if isinstance(node, ast.Call)} for name, function in functions.items()}
+    assert {"run_rustc_str_function", "subprocess.run"} <= calls[reference]
+    assert {"certify_source", "run_owned_u64_function"} <= calls[owned]
+    assert "certify_source" not in calls[reference]
+    assert "run_owned_u64_function" not in calls[reference]
+    for name in (reference, owned):
+        marks = {ast.unparse(mark.func if isinstance(mark, ast.Call) else mark)
+                 for mark in functions[name].decorator_list}
+        assert "pytest.mark.pcc_gate" in marks
+
+
 def test_go_function_literal_reference_keeps_owned_checks_in_their_original_lane():
     module = "tests/go/test_function_literal_syntax.py"
     registry = json.loads(run.REFERENCES.read_text())["functions"]

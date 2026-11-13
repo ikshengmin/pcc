@@ -2133,6 +2133,21 @@
         ]
       }
     },
+    "tests/rust/test_rust_data_outlives_bounds.py": {
+      "test_checked_program_runs_with_owned_compile_assemble_and_link": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": [
+          "Calls actual tests.rust.certification_support.certify_source for the unchanged PROGRAM and aarch64-apple-darwin target before run_owned_u64_function compiles, assembles, links and executes it through PCC. Conditional records preserve the original ordinary/integration lane, not optional certification; the actual check and Darwin prerequisites remain mandatory."
+        ]
+      },
+      "test_rustc_gives_the_same_verdicts_and_value": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls run_rustc_str_function, which builds the unchanged PROGRAM and observer with actual development rustc and executes the result, then directly invokes rustc --emit=metadata on six outlives-bound sources: four accepted and two rejected with E0261/E0637. This oracle does not certify the owned execution sibling."
+        ]
+      }
+    },
     "tests/rust/test_rust_derives.py": {
       "test_rustc_rejects_the_same_sources_with_the_recorded_codes": {
         "activity": "external-reference",
