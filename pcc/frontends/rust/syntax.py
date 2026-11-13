@@ -129,8 +129,9 @@ def lex(source: str) -> list[Token]:
             continue
         op = next((op for op in _OPERATORS if source.startswith(op, i)), None)
         # `$` is a Rust token (reference/tokens.html#punctuation) used only by
-        # macros by example; the parser reports macro syntax as a gap.
-        if op is None and char in "{}()[];,:.+-*/%!=<>&|^#?$":
+        # macros by example; the parser reports macro syntax as a gap. `@`
+        # separates an identifier pattern from its subpattern.
+        if op is None and char in "{}()[];,:.+-*/%!=<>&|^#?$@":
             op = char
         if op is None:
             raise Token(char, "", ln, column).error(f"unsupported Rust token {char!r}")
@@ -1715,6 +1716,13 @@ class Parser:
             if name.text == "_":
                 raise name.error("mut wildcard is not a binding")
             result = Pattern("binding", name, token.text == "mut")
+            if self.accept("@"):
+                # Rust Reference patterns.html#identifier-patterns:
+                # `ref? mut? IDENTIFIER @ PatternNoTopAlt`. The binding takes
+                # the whole matched value; the subpattern decides the match.
+                # A top-level `|` after it belongs to the enclosing pattern.
+                result.kind = "at"
+                result.children.append(self.pattern(alternatives=False))
         else:
             raise token.error("reference, range, named-field and rest patterns are not implemented")
         if alternatives and self.accept("|"):

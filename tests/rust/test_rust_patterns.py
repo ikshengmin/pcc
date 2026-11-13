@@ -89,6 +89,34 @@ def test_match_joins_moves_on_every_live_edge(body):
         compile_source(source)
 
 
+# Identifier patterns with `@` subpatterns (Rust Reference
+# https://doc.rust-lang.org/reference/patterns.html#identifier-patterns):
+# `ref? mut? IDENTIFIER @ PatternNoTopAlt`. The rejected sources below were
+# checked with rustc 1.92.0: E0382 (partially moved value), E0416 (duplicate
+# binding), E0004 (non-exhaustive) and E0408 (`y @ 1 | 2` binds y in one
+# alternative only; or-pattern binding unification remains a PCC gap).
+@pytest.mark.parametrize("source,message", [
+    ("struct P{x:i32} enum E{A(P),B} fn f(e:E){match e{w @ E::A(p)=>(),_=>()}}", "use of moved value"),
+    ("enum E{A(i32),B} fn f(e:E){match e{x @ E::A(x)=>(),_=>()}}", "duplicate binding"),
+    ("fn f(b:bool){match b{t @ true=>()}}", "non-exhaustive"),
+    ("fn f(x:i32){match x{y @ 1 | 2=>(),_=>()}}", "bindings inside or-patterns"),
+])
+def test_identifier_at_subpattern_diagnostics(source, message):
+    with pytest.raises(RustError, match=message):
+        compile_source(source)
+
+
+@pytest.mark.parametrize("source", [
+    "fn f()->u64{match true{t @ true=>1,_f @ false=>2}}",
+    "enum E{A(i32),B} fn f(e:E)->i32{match e{w @ E::A(p)=>p,_=>0}}",
+    "fn f(x:i32){match x{y @ (1 | 2)=>(),_=>()}}",
+    "fn f(x:i32)->i32{match x{mut y @ 3=>{y=y+1;y},_=>0}}",
+    "fn f(x:(i32,i32))->i32{match x{w @ (a @ 1, b)=>a+b+w.0,_=>0}}",
+])
+def test_identifier_at_subpattern_shapes(source):
+    assert "define" in compile_source(source).ir_text
+
+
 def test_diverging_match_arm_does_not_poison_live_move_state():
     compile_source('struct P{x:i32} fn take(p:P){} fn f(b:bool){let p=P{x:1};match b{true=>{take(p);return;},false=>{}} take(p);}')
 
@@ -109,7 +137,7 @@ def test_whole_official_sources_remain_explicit_frontiers(name,sha,message):
     assert path.read_bytes()==original
 
 
-PROGRAMS = ["enum_match", "tuple_match", "match_effects", "enum_wide", "match_aggregate_result"]
+PROGRAMS = ["enum_match", "tuple_match", "match_effects", "enum_wide", "match_aggregate_result", "at_bindings"]
 
 
 @pytest.mark.xdist_group(name='rust-native-reference')

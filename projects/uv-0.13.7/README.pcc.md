@@ -40,9 +40,15 @@ shared source-lock loader and records each root's first blocker:
 | Root | First blocker |
 |---|---|
 | `crates/uv/src/bin/uv.rs` | `3:3` `#[cfg(feature = ...)]` needs a checked Cargo configuration |
-| `crates/uv/src/lib.rs` | `1515:34` `@` binding pattern (`run_variant @ (...)`) |
+| `crates/uv/src/lib.rs` | `1:15` tool lint path in `#![deny(clippy::print_stdout, ...)]` |
 | `crates/uv-version/src/lib.rs` | `5:5` `env!` macro invocation |
-| `crates/uv-lock/src/lock/mod.rs` | `10666:22` `@` inside a `macro_rules!` matcher |
+| `crates/uv-lock/src/lock/mod.rs` | `3:23` grouped `use std::collections::{...}` declaration |
+
+Both roots formerly stopped in the lexer at `@` (`lib.rs:1515:34`, the
+`run_variant @ (ToolCommand::Uvx(_) | ToolCommand::Run(_))` binding, and
+`lock/mod.rs:10666:22` inside a `macro_rules!` matcher). Identifier `@`
+subpatterns are now owned (`tests/rust/programs/at_bindings.rs`); macro
+matchers remain a macro-by-example gap.
 
 ```sh
 uv run pytest -x -q tests/rust/test_uv_source_frontier.py

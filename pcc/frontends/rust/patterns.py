@@ -49,8 +49,11 @@ def check_enums(checker, declarations=None):
             previous = value
 
 
+BINDING_KINDS = frozenset({"binding", "at"})
+
+
 def contains_binding(pattern):
-    return pattern.kind == "binding" or any(contains_binding(child) for child in pattern.children)
+    return pattern.kind in BINDING_KINDS or any(contains_binding(child) for child in pattern.children)
 
 
 # Standard prelude tuple variants (std::prelude::v1).
@@ -61,10 +64,14 @@ def check_pattern(checker, pattern, ty, *, allow_inferred=False):
     pattern.ty = ty
     if pattern.kind == "wildcard":
         return
-    if pattern.kind == "binding":
+    if pattern.kind in BINDING_KINDS:
         if pattern.token.text in checker.scopes[-1]:
             raise pattern.token.error("duplicate binding in pattern")
         pattern.binding = checker.bind(pattern.token, ty, pattern.value)
+        if pattern.kind == "at":
+            # `x @ p`: p is checked against the same scrutinee type and its
+            # own bindings share this pattern's scope (E0416 on reuse).
+            check_pattern(checker, pattern.children[0], ty, allow_inferred=allow_inferred)
     elif pattern.kind == "or":
         if contains_binding(pattern):
             raise pattern.token.error("bindings inside or-patterns require alternative binding unification, which is not implemented")
@@ -120,18 +127,23 @@ def check_pattern(checker, pattern, ty, *, allow_inferred=False):
         raise pattern.token.error("unsupported pattern")
 
 
-def pattern_bindings(pattern):
-    if pattern.kind == "binding":
-        yield pattern.binding
+def binding_patterns(pattern):
+    if pattern.kind in BINDING_KINDS:
+        yield pattern
     for child in pattern.children:
-        yield from pattern_bindings(child)
+        yield from binding_patterns(child)
+
+
+def pattern_bindings(pattern):
+    for item in binding_patterns(pattern):
+        yield item.binding
 
 
 def validate_pattern(checker, pattern):
     pattern.ty = resolve(pattern.ty)
     if pattern.kind == "literal":
         pattern.value = checker.validate(pattern.value)
-    if pattern.kind == "binding":
+    if pattern.kind in BINDING_KINDS:
         pattern.binding.ty = resolve(pattern.binding.ty)
     for child in pattern.children:
         validate_pattern(checker, child)
@@ -188,6 +200,9 @@ def validate_match(checker, expr):
             row = pending.pop()
             if row[0].kind == "or":
                 pending.extend((option,) + row[1:] for option in row[0].children)
+            elif row[0].kind == "at":
+                # `x @ p` matches exactly the values p matches.
+                pending.append((row[0].children[0],) + row[1:])
             else:
                 expanded.append(row)
             if len(expanded) + len(pending) > MAX_PATTERN_ROWS:

@@ -70,7 +70,21 @@ class MoveChecker:
         # payload move prevents rematching that enum, even for another field.
         # Tuple wildcards below still permit independent unmoved field access.
         kind = pattern.kind
-        if kind == "binding":
+        if kind == "at":
+            # `x @ p` inspects exactly what p inspects. When selected, p's
+            # bindings take their parts before x takes the whole value, so a
+            # Copy part may be bound beside a moved whole; a non-Copy part
+            # cannot be moved twice, even out of a temporary scrutinee.
+            from .patterns import binding_patterns
+            self.pattern_access(pattern.children[0], state, place, bind=bind)
+            if not bind:
+                return
+            for inner in binding_patterns(pattern.children[0]):
+                if not self.checker.copy_type(inner.binding.ty):
+                    raise inner.token.error(
+                        f"use of moved value: {pattern.token.text!r} @ pattern moves the value "
+                        f"that its subpattern binding {inner.token.text!r} also moves")
+        if kind in {"binding", "at"}:
             if bind:
                 if place is not None:
                     self.access(*place, pattern.ty, pattern.token, state, consume=True)

@@ -613,6 +613,8 @@ class Lowerer:
         true = ir.Constant(ir.IntType(1), 1)
         if pattern.kind in {"wildcard", "unit", "binding"}:
             return true
+        if pattern.kind == "at":
+            return self.pattern_test(pattern.children[0], value)
         if pattern.kind == "literal":
             return self.builder.icmp_unsigned("==", value, ir.Constant(self.type(pattern.ty), int(pattern.value)))
         if pattern.kind in {"variant", "payload"}:
@@ -657,9 +659,12 @@ class Lowerer:
 
         if not contains_binding(pattern):
             return
-        if pattern.kind == "binding":
+        if pattern.kind in {"binding", "at"}:
             if pattern.ty != "()":
                 self.builder.store(value, self.slots[pattern.binding.serial])
+            if pattern.kind == "at":
+                # The subpattern binds parts of the same (unchanged) value.
+                self.bind_pattern(pattern.children[0], value)
         elif pattern.kind in {"tuple", "payload"}:
             if pattern.kind == "payload":
                 value = self.payload_value(pattern, value)

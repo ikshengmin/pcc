@@ -17,9 +17,11 @@ TARGET = "x86_64-unknown-linux-gnu"
 
 FRONTIER = (
     ("crates/uv/src/bin/uv.rs", "3:3: cfg requires an actual source/options-bound CheckedRustSource configuration"),
-    ("crates/uv/src/lib.rs", "1515:34: unsupported Rust token '@'"),
+    # `@` patterns now lex and parse; the first parser blocker is the tool
+    # lint path in `#![deny(clippy::print_stdout, clippy::print_stderr)]`.
+    ("crates/uv/src/lib.rs", "1:15: expected ',', found '::'"),
     ("crates/uv-version/src/lib.rs", "5:5: macro invocations require macro-by-example expansion"),
-    ("crates/uv-lock/src/lock/mod.rs", "10666:22: unsupported Rust token '@'"),
+    ("crates/uv-lock/src/lock/mod.rs", "3:23: glob and grouped use declarations are not implemented"),
 )
 
 

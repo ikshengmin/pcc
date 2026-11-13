@@ -2346,6 +2346,23 @@
       "status": "missing"
     },
     {
+      "id": "rust.patterns.identifier-subpatterns",
+      "title": "Identifier patterns with @ subpatterns",
+      "chapter_ids": [
+        "rust.ref.9"
+      ],
+      "scope": "Qualification missing, not implementation missing: `ref? mut? IDENTIFIER @ PatternNoTopAlt` binds the whole matched value while the subpattern alone decides the match and exhaustiveness; subpattern bindings share the arm scope (duplicates rejected) and bind before the whole value, so Copy parts may accompany a moved whole while a non-Copy part is rejected as a double move (rustc E0382). `ref` bindings, bindings inside or-pattern alternatives, and `@` in let/for/closure parameters remain gaps. The original fixture tests/rust/programs/at_bindings.rs executed natively on Linux x86-64 (pcc0, self backend) with the value rustc 1.92.0's own build prints, and cross-emits Darwin; no schema2 evidence row is migrated.",
+      "tests": [
+        "tests/rust/test_rust_patterns.py::test_identifier_at_subpattern_diagnostics",
+        "tests/rust/test_rust_patterns.py::test_identifier_at_subpattern_shapes",
+        "tests/rust/test_rust_patterns.py::test_original_match_fixture_full_width_owned_execution@rust-native-reference",
+        "tests/rust/test_rust_patterns.py::test_development_only_rustc_checks_match_sources@rust-native-reference"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "status": "missing"
+    },
+    {
       "id": "rust.enums.payload-values",
       "title": "Tagged payload enums and by-value bindings",
       "chapter_ids": [
