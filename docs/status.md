@@ -476,8 +476,8 @@ boundary and reproduction entry. Earlier figures below remain historical.
 Profiler repair `8d16e7f60` resolves named Apple sample frames by their actual
 program counters in the captured binary, preserving ambiguous grouped-PC
 weights. Its 29 focused tests pass and the live gateway capture was reprocessed;
-this fixes attribution, not gateway throughput. Full suites/bootstrap remain
-unrun. No speculative scheduler or collector change was published in this retry.
+this fixes attribution, not gateway throughput. That earlier profiling
+checkpoint did not establish native-pcc1 or full qualification.
 
 The next queue-pressure probe uses 400 yielding tasks on a persistent carrier.
 At `92d73d8ab`, the last task first enters after 9,113 task steps: overflow
