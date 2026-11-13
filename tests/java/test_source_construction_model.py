@@ -168,7 +168,7 @@ GAPS = [
     ('missing-owned-class', 'class A{void run(){new Missing();}}', 'source-dependency'),
     ('bootstrap-string', 'class A{void run(){new String();}}', 'string-literals'),
     ('qualified-type', 'class A{void run(){new q.B();}}', 'implicit-type-metadata'),
-    ('diamond', 'class A{void run(){new A<>();}}', 'generic-declarations'),
+    # 'diamond' moved to test_source_generic_class_creation (an ordinary error now).
     ('constructor-type-arguments', 'class A{void run(){new <String>A();}}', 'object-expressions'),
     ('anonymous', 'class A{void run(){new A(){};}}', 'member-types'),
     ('reference-array', 'class A{void run(){new A[1];}}', 'array-model-shape'),

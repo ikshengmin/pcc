@@ -493,6 +493,9 @@ class ClassModelProject(SourceProject):
         if target is None and token.text != "String":
             token.error("source reference declaration requires supplied class source for " + str(dtype),
                         code="java.unsupported.source-dependency")
+        if dtype.diamond:
+            # JLS 15.9.1: `<>` needs a generic class to infer arguments for.
+            token.error("cannot use '<>' with non-generic class " + token.text)
         if dtype.arguments:
             # JLS 4.5: String and every supplied class here are non-generic;
             # generic class declarations are gated before this model.
