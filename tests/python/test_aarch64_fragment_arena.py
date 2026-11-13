@@ -502,3 +502,199 @@ def test_typed_publication_rejects_bad_fixup_before_symbol_publication():
             if sink is not None:
                 sink.close()
             end_direct_instruction_capture()
+
+
+def test_typed_memory_barriers_preserve_sequence_adjacency_and_labels():
+    owner = fragments.AArch64EmissionFragments()
+    try:
+        span = owner.new_fragment()
+        owner.append_branch(span, "b", "L_next")
+        owner.append_memory_pair_barrier(span, True)
+        owner.append_memory_pair_barrier(span, False)
+        owner.append_label(span, "L_next")
+        owner.append_nop(span)
+        before = _read(owner, span)
+        assert _read(owner, owner.drop_fallthrough_branches(span)) == before
+        assert _read(owner, span) == before
+        assert [row[2] for row in before[1:3]] == [
+            fragments.EMISSION_RECORD_MEMORY_PAIR_BARRIER,
+            fragments.EMISSION_RECORD_MEMORY_PAIR_BARRIER,
+        ]
+    finally:
+        owner.close()
+
+
+def test_typed_memory_barrier_replay_matches_text_layout_across_fragments(monkeypatch):
+    from pcc.backend import arm64_encode as encoder
+    from pcc.backend.arm64_asm_driver import assemble_file
+    from pcc.backend.native_object import NativeObject, encode_native_object
+    from pcc.backend.self_backend_aarch64_darwin import (
+        _NativeAArch64Emission, _drop_fallthrough_uncond_branches,
+    )
+    from pcc.backend.self_backend_aarch64_darwin_mem import (
+        begin_direct_instruction_capture, end_direct_instruction_capture,
+    )
+    from pcc.backend.self_backend_target_passes import (
+        AARCH64_MEMORY_PAIR_BARRIER_BEGIN, AARCH64_MEMORY_PAIR_BARRIER_END,
+        pair_adjacent_aarch64_64bit_memory_ops,
+    )
+
+    lines = [
+        ".section __TEXT,__text,regular,pure_instructions", "_probe:",
+        "  b L_next", AARCH64_MEMORY_PAIR_BARRIER_BEGIN,
+        AARCH64_MEMORY_PAIR_BARRIER_BEGIN, AARCH64_MEMORY_PAIR_BARRIER_END,
+        AARCH64_MEMORY_PAIR_BARRIER_END, "L_next:", "  nop",
+    ]
+    expected = assemble_file("\n".join(pair_adjacent_aarch64_64bit_memory_ops(
+        _drop_fallthrough_uncond_branches(lines), enabled=False,
+    )))
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("typed barrier entered instruction text adapter")
+
+    monkeypatch.setattr(encoder, "_encode_one", forbidden)
+    monkeypatch.setattr(encoder, "assemble_text_lines", forbidden)
+    begin_direct_instruction_capture()
+    sink = None
+    try:
+        sink = _NativeAArch64Emission()
+        sink.append(lines[0])
+        owner = sink.fragments
+        # Construct the closing half first; only replay order defines nesting.
+        closing = owner.new_fragment()
+        owner.append_memory_pair_barrier(closing, False)
+        owner.append_memory_pair_barrier(closing, False)
+        owner.append_label(closing, "L_next")
+        owner.append_nop(closing)
+        opening = owner.new_fragment()
+        owner.append_label(opening, "_probe")
+        owner.append_branch(opening, "b", "L_next")
+        owner.append_memory_pair_barrier(opening, True)
+        owner.append_memory_pair_barrier(opening, True)
+        whole = owner.new_fragment()
+        owner.extend_fragment(whole, opening)
+        owner.extend_fragment(whole, closing)
+        assert _read(owner, owner.drop_fallthrough_branches(whole)) == _read(owner, whole)
+        sink.publish_fragment(opening)
+        assert sink.barrier_depth == 2
+        sink.publish_fragment(closing)
+        assert sink.barrier_depth == 0
+        assert sink.structured_count == 2
+        assert sink.builder.text_size() == 8
+        sink.release_captured_function()
+        actual = sink.builder.finish()
+        assert actual == expected
+        assert encode_native_object(NativeObject.from_sections(
+            actual[0], undefined=actual[1],
+        )) == encode_native_object(NativeObject.from_sections(
+            expected[0], undefined=expected[1],
+        ))
+        assert sink.fallback_lines == []
+    finally:
+        if sink is not None:
+            sink.close()
+        end_direct_instruction_capture()
+
+
+def test_typed_memory_barriers_reject_unbalanced_or_malformed_publication():
+    from pcc.backend import BackendUnavailable
+    from pcc.backend.self_backend_aarch64_darwin import _NativeAArch64Emission
+    from pcc.backend.self_backend_aarch64_darwin_mem import (
+        begin_direct_instruction_capture, end_direct_instruction_capture,
+    )
+
+    for case in ("unmatched_end", "unclosed_begin", "direction", "relocation", "symbol"):
+        begin_direct_instruction_capture()
+        sink = None
+        try:
+            sink = _NativeAArch64Emission()
+            sink.append(".section __TEXT,__text,regular,pure_instructions")
+            span = sink.fragments.new_fragment()
+            sink.fragments.append_memory_pair_barrier(span, case != "unmatched_end")
+            if case == "unclosed_begin":
+                sink.publish_fragment(span)
+                with pytest.raises(BackendUnavailable, match="unterminated barrier"):
+                    sink.release_captured_function()
+                assert sink.barrier_depth == 1
+            else:
+                if case == "direction":
+                    sink.fragments.records.set(0, 2)
+                elif case == "relocation":
+                    sink.fragments.records.set(2, -26)
+                elif case == "symbol":
+                    sink.fragments.records.set(3, 0)
+                with pytest.raises(BackendUnavailable):
+                    sink.publish_fragment(span)
+                assert sink.barrier_depth == 0
+                assert sink.fragment_record_count == 0
+            assert sink.builder.text_size() == 0
+            assert sink.structured_count == 0
+        finally:
+            if sink is not None:
+                sink.close()
+            end_direct_instruction_capture()
+
+
+def test_typed_unknown_directive_and_malformed_label_are_not_erased():
+    from pcc.backend import BackendUnavailable
+    from pcc.backend.self_backend_aarch64_darwin import _NativeAArch64Emission
+    from pcc.backend.self_backend_aarch64_darwin_mem import (
+        begin_direct_instruction_capture, end_direct_instruction_capture,
+    )
+
+    for malformed_label in (False, True):
+        begin_direct_instruction_capture()
+        sink = None
+        try:
+            sink = _NativeAArch64Emission()
+            sink.append(".section __TEXT,__text,regular,pure_instructions")
+            owner = sink.fragments
+            span = owner.new_fragment()
+            owner.append_branch(span, "b", "L_next")
+            if not malformed_label:
+                record_id = len(owner.records) // 4
+                owner.records.append4(0, -99, 0, -1)
+                owner.spans.append(span, record_id)
+            owner.append_label(span, "L_next")
+            if malformed_label:
+                owner.records.set(len(owner.records) - 2, 1)
+            before = _read(owner, span)
+            rewritten = owner.drop_fallthrough_branches(span)
+            assert _read(owner, rewritten) == before
+            with pytest.raises(BackendUnavailable):
+                sink.publish_fragment(rewritten)
+            # Publication is incremental: the earlier valid branch remains.
+            assert sink.builder.text_size() == 4
+        finally:
+            if sink is not None:
+                sink.close()
+            end_direct_instruction_capture()
+
+
+def test_typed_memory_barrier_rejection_preserves_root_and_record_storage(monkeypatch):
+    owner = fragments.AArch64EmissionFragments()
+    try:
+        stale = owner.new_fragment()
+        owner.reset()
+        current = owner.new_fragment()
+        owner.append_nop(current)
+        before = _read(owner, current)
+        with pytest.raises(RuntimeError, match="stale"):
+            owner.append_memory_pair_barrier(stale, True)
+        assert len(owner.records) == 4
+
+        def interrupted_append(span, record_id):
+            assert len(owner.records) == 8
+            raise MemoryError("interrupted barrier publication")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(owner.spans, "append", interrupted_append)
+            with pytest.raises(MemoryError, match="interrupted barrier publication"):
+                owner.append_memory_pair_barrier(current, True)
+        assert len(owner.records) == 4
+        assert _read(owner, current) == before
+        assert owner.symbol_names == []
+    finally:
+        owner.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        owner.append_memory_pair_barrier(current, True)

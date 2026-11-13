@@ -171,6 +171,7 @@ from .self_backend_value_arena import (
 from .self_backend_aarch64_fragments import (
     AArch64EmissionFragments,
     EMISSION_RECORD_LABEL,
+    EMISSION_RECORD_MEMORY_PAIR_BARRIER,
 )
 from .self_backend_aarch64_darwin_tlv import elide_dead_tlv_resolver_saves
 
@@ -245,7 +246,15 @@ class _NativeAArch64Emission:
                 raise BackendUnavailable("emission fragment record ID is invalid")
             record: CompilerInt4 = records.get4_unchecked(record_id)
             family = record.second
-            if family == EMISSION_RECORD_LABEL:
+            if family == EMISSION_RECORD_MEMORY_PAIR_BARRIER:
+                if record.first not in (0, 1) or record.third != 0 or record.fourth != -1:
+                    raise BackendUnavailable("emission fragment memory barrier is invalid")
+                self.barrier_depth = advance_aarch64_memory_pair_barrier(
+                    self.barrier_depth, record.first == 1,
+                )
+            elif family == EMISSION_RECORD_LABEL:
+                if record.third != 0 or record.fourth != -1:
+                    raise BackendUnavailable("emission fragment label metadata is invalid")
                 if record.first < 0 or record.first >= len(fragments.symbol_names):
                     raise BackendUnavailable("emission fragment label ID is invalid")
                 self.builder.append_label(fragments.symbol_names[record.first])
