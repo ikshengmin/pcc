@@ -245,31 +245,86 @@ def test_managed_index_counts_new_publications_not_reregistration_or_scratch():
     assert freeze_events[-1] == 'read' and freeze_events.count('freeze') == 1
 
 
+@pytest.mark.parametrize('publisher', [
+    'pcc_gc_granule_object_publish', 'pcc_allocator_object_publish_fresh',
+])
 @pytest.mark.parametrize('state,expected_count,status', [(7, 1, 1), (8, 0, 1), (9, 0, -1)])
-def test_object_granule_counts_only_successful_reserved_to_live(state, expected_count, status):
+def test_object_granule_counts_only_successful_reserved_to_live(
+    publisher, state, expected_count, status,
+):
     p = Pressure(1)
     current = [state]
+    events = []
 
     def compare(slot, offset, expected, replacement, success, failure):
+        assert (slot, offset, expected, replacement, success, failure) == (
+            4096, -48, 7, 8, 'release', 'relaxed',
+        )
+        events.append('cas')
         old = current[0]
         if old == expected:
             current[0] = replacement
         return old
 
+    def note():
+        # Publication merely requests work: no collection runs inside the CAS
+        # or before the ordinary cache seed and allocation publication finish.
+        assert current[0] == 8
+        events.append('publication')
+        p.ns['pcc_gc_pressure_note_publication']()
+
+    def cache(slot, offset, value, order):
+        assert (slot, value, order) == ('pcc_allocator_exact_object_cache', 4096, 'relaxed')
+        events.append('cache')
+
+    def origin(slot, offset):
+        assert (slot, offset) == (4096, -32)
+        return -1
+
     ns = dict(i64=int, GC_STATE_RESERVED=7, GC_STATE_LIVE=8, GRANULE_STATE_OFFSET=-48,
+              GRANULE_MAPPING_SIZE_OFFSET=-32, load_i64=origin,
               _granule_object_slot=lambda value: value,
               ptr_is_null=lambda value: value == 0, null=lambda: 0,
               ptr_diff=lambda left, right: left - right, global_addr=lambda name: name,
               logical_shift_right_i64=lambda value, bits: value >> bits,
-              atomic_cas_i64=compare, atomic_store_i64=lambda *args: None,
-              pcc_gc_pressure_note_publication=p.ns['pcc_gc_pressure_note_publication'])
+              atomic_cas_i64=compare, atomic_store_i64=cache,
+              pcc_gc_pressure_note_publication=note)
     text = transform.instrument_source((RUNTIME / 'freestanding_allocator.py').read_text(), 'freestanding_allocator', 1)
-    bodies(text, {'pcc_gc_granule_object_publish'}, ns)
-    assert ns['pcc_gc_granule_object_publish'](4096) == status
-    assert p.counter(0) == expected_count
+    bodies(text, {publisher}, ns)
+    assert ns[publisher](4096) == status
+    expected_events = ['cas'] + ['publication'] * expected_count
     if status == 1:
-        assert ns['pcc_gc_granule_object_publish'](4096) == 1
-        assert p.counter(0) == expected_count
+        expected_events.append('cache')
+    assert events == expected_events
+    assert p.counter(0) == p.counter(1) == expected_count
+    assert p.calls == 0
+    if status == 1:
+        assert ns[publisher](4096) == 1
+        assert events == expected_events + ['cas', 'cache']
+        assert p.counter(0) == p.counter(1) == expected_count
+        assert p.calls == 0
+
+
+@pytest.mark.parametrize('mapping_size', [0, 4096])
+def test_fresh_publication_leaves_non_cell_fallback_uncounted(mapping_size):
+    p = Pressure(1)
+
+    def origin(slot, offset):
+        assert (slot, offset) == (4096, -32)
+        return mapping_size
+
+    def unexpected(*args):
+        pytest.fail('a non-cell publication must return before the lifecycle CAS or cache seed')
+
+    ns = dict(i64=int, GRANULE_MAPPING_SIZE_OFFSET=-32, load_i64=origin,
+              atomic_cas_i64=unexpected, atomic_store_i64=unexpected,
+              pcc_gc_pressure_note_publication=p.ns['pcc_gc_pressure_note_publication'])
+    text = transform.instrument_source(
+        (RUNTIME / 'freestanding_allocator.py').read_text(), 'freestanding_allocator', 1,
+    )
+    bodies(text, {'pcc_allocator_object_publish_fresh'}, ns)
+    assert ns['pcc_allocator_object_publish_fresh'](4096) == 0
+    assert p.counter(0) == p.counter(1) == p.calls == 0
 
 
 @pytest.mark.parametrize('active,sweep,commits,had,expected', [
