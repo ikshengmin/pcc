@@ -12,6 +12,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import textwrap
 from types import SimpleNamespace
 
 import pytest
@@ -282,6 +283,7 @@ def test_timeout_retains_manifest_before_worker_removes_workspace(tmp_path, fron
     worker.write_text(
         "import os, shutil, signal, sys, time\n"
         "from pathlib import Path\n"
+        "time.sleep(0.7)  # Exercise startup longer than the guard budget.\n"
         "manifest = Path(sys.argv[-1])\n"
         "def stop(*args):\n"
         "    shutil.rmtree(manifest.parent)\n"
@@ -290,9 +292,70 @@ def test_timeout_retains_manifest_before_worker_removes_workspace(tmp_path, fron
         "print(os.getpid(), flush=True)\n"
         "while True: time.sleep(0.01)\n"
     )
+    # The cleanup scenario requires an installed handler, not fast interpreter
+    # startup. Keep the readiness rendezvous inside the original 8s watchdog.
+    # Only this fixture's Popen is wrapped; production guard clocks/caps remain
+    # unchanged, including startup time in the 0.6s deadline.
+    launcher = tmp_path / "ready_guard.py"
+    launcher.write_text(textwrap.dedent("""\
+        import ctypes
+        import os
+        import runpy
+        import signal
+        import subprocess
+        import sys
+        import time
+        from pathlib import Path
+
+        tool, worker, stdout = sys.argv[1:4]
+        sys.path.insert(0, str(Path(tool).parent))
+        namespace = runpy.run_path(tool)
+        original_popen = subprocess.Popen
+        # Resolve libc before fork. This single-threaded Linux fixture arms the
+        # exact worker before exec, including its interpreter-startup window.
+        libc = ctypes.CDLL(None, use_errno=True)
+        prctl = libc.prctl
+        prctl.argtypes = [ctypes.c_int] + [ctypes.c_ulong] * 4
+        prctl.restype = ctypes.c_int
+        PR_SET_PDEATHSIG = 1
+
+        def launch_ready_worker(argv, *args, **kwargs):
+            if argv[:2] != [sys.executable, worker]:
+                return original_popen(argv, *args, **kwargs)
+            if kwargs.get("preexec_fn") is not None:
+                raise RuntimeError("fixture worker already has preexec setup")
+            parent_pid = os.getpid()
+
+            def arm_parent_death():
+                if prctl(PR_SET_PDEATHSIG, signal.SIGKILL, 0, 0, 0) != 0:
+                    os._exit(126)
+                # A parent killed before prctl cannot deliver the signal.
+                # Check after arming, so death on either side is covered.
+                if os.getppid() != parent_pid:
+                    os._exit(126)
+
+            kwargs["preexec_fn"] = arm_parent_death
+            process = original_popen(argv, *args, **kwargs)
+            deadline = time.monotonic() + 3.0
+            try:
+                while not Path(stdout).read_text().strip():
+                    if process.poll() is not None or time.monotonic() >= deadline:
+                        raise RuntimeError("manifest cleanup worker did not become ready")
+                    time.sleep(0.01)
+            except BaseException:
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=2)
+                raise
+            return process
+
+        subprocess.Popen = launch_ready_worker
+        raise SystemExit(namespace["main"](sys.argv[4:]))
+        """))
     result = tmp_path / "result.json"
     command = [
-        sys.executable, str(TOOL), "--result", str(result),
+        sys.executable, str(launcher), str(TOOL), str(worker), str(tmp_path / "target.stdout"),
+        "--result", str(result),
         "--samples", str(tmp_path / "samples.tsv"), "--stdout", str(tmp_path / "target.stdout"),
         "--stderr", str(tmp_path / "target.stderr"), "--cwd", str(ROOT),
         "--timeout", "0.6", "--interval", "0.02", "--max-tree-rss-bytes", str(128 * 1024 * 1024),
@@ -581,3 +644,4 @@ def test_terminal_argv_cleanup_preserves_guard_status_with_mock_processes(
     assert len(cleanup) == len(captures) == len(samples) == 1
     assert receipt["returncode"] == (0 if outcome == "COMPLETE" else -signal.SIGTERM)
     assert receipt["terminal_argv_evidence"]["status"] == ("capture_error" if capture_error else "collected")
+
