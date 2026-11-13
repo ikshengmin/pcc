@@ -1062,6 +1062,7 @@ def _runtime_signatures_part_23():
     "py_virtual_thread_new": (_PYOBJ, [_PYOBJ], False),
     "py_virtual_thread_start": (_I64, [_PYOBJ], False),
     "py_virtual_thread_park": (_I64, [_PYOBJ], False),
+    "py_virtual_thread_wait_on_fd": (_I64, [_PYOBJ, _I64, _I64, _I64], False),
     }
 
 
@@ -1076,7 +1077,6 @@ def _runtime_signatures_part_24():
     "py_virtual_thread_poll_timers": (_I64, [], False),
     "py_virtual_thread_timer_count": (_I64, [], False),
     "py_virtual_thread_block_on_fd": (_I64, [_PYOBJ, _I64, _I64, _I64], False),
-    "py_virtual_thread_wait_on_fd": (_I64, [_PYOBJ, _I64, _I64, _I64], False),
     "py_virtual_thread_poll_io": (_I64, [_I64], False),
     "py_virtual_thread_io_wait_count": (_I64, [], False),
     "py_virtual_thread_io_wait_active": (_I64, [], False),
