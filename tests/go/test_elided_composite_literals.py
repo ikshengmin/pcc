@@ -11,9 +11,8 @@ a local development go1.23.6 reference.
 """
 import pytest
 
-from pcc.frontends.go import GoDiagnostic, UnsupportedGo, compile_go, compile_go_packages
+from pcc.frontends.go import GoDiagnostic, UnsupportedGo, compile_go
 from pcc.frontends.go.syntax import GoParser, SliceSyntax
-from scripts import ci_go_math_bits_project as project
 from tests.go.darwin_execution import (
     REFERENCE_UNAVAILABLE, UNAVAILABLE, reference_rejection, run_owned_go_function, run_reference_go_function,
 )
@@ -122,17 +121,3 @@ def test_remaining_literal_shapes_stay_explicit(source, code):
     with pytest.raises(UnsupportedGo) as caught:
         compile_go(source, 'gap.go')
     assert caught.value.code == code
-
-
-def test_math_bits_external_test_package_now_stops_at_a_function_literal():
-    _, files = project.load_inputs()
-    source = lambda names: [(name, files[project.PACKAGE_DIR + '/' + name].decode('utf-8')) for name in names]
-    packages = {
-        'main': [('m.go', 'package main;import _ "math/bits_test";func main(){}')],
-        project.PACKAGE: source(project.NORMAL + project.INTERNAL_TEST),
-        project.PACKAGE + '_test': source(project.EXTERNAL_TEST),
-    }
-    # Previously bits_test.go:458:23 (the slice type of the TestReverse
-    # table), then :461:3 (its elided {x, r} rows).
-    with pytest.raises(GoDiagnostic, match=r"bits_test.go:716:10: Go: unsupported expression token 'func'"):
-        compile_go_packages(packages, target_triple='x86_64-unknown-linux-gnu')

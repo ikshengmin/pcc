@@ -1404,6 +1404,24 @@
       "evidence": []
     },
     {
+      "id": "go.capability.function-values",
+      "title": "Function values",
+      "chapter_ids": [
+        "function-types"
+      ],
+      "scope": "Explicitly rejected capability: function values. Function types and function literals (including a called literal used as a statement) are parsed and retained, but closures, captured-variable storage and indirect calls are not implemented, so the checker rejects the first function type or literal it checks. No broader implementation or runtime support is claimed.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound",
+        "tests/go/test_function_literal_syntax.py"
+      ],
+      "diagnostics": [
+        "go.unsupported.function-values"
+      ],
+      "evidence": []
+    },
+    {
       "id": "go.capability.method-values",
       "title": "Method values",
       "chapter_ids": [
@@ -3387,7 +3405,7 @@
         "expressions",
         "types"
       ],
-      "scope": "Elided element literal types: within an array composite literal an element or key that is itself a composite literal may omit its type, which becomes the element type (array or admitted record); a type-less literal anywhere else (struct fields, keys of arrays, statements) is a missing-type source error. An elided &T for pointer elements stays the addressed-composite gap. Slice types are ordinary syntax everywhere; outside signatures the checker keeps go.unsupported.slice-storage at the same type, so the unchanged math/bits bits_test.go parses past its TestReverse table to the function literal at 716:10. No slices, maps, nested arrays, shared runtime or native pcc1 claim.",
+      "scope": "Elided element literal types: within an array composite literal an element or key that is itself a composite literal may omit its type, which becomes the element type (array or admitted record); a type-less literal anywhere else (struct fields, keys of arrays, statements) is a missing-type source error. An elided &T for pointer elements stays the addressed-composite gap. Slice types are ordinary syntax everywhere; outside signatures the checker keeps go.unsupported.slice-storage at the same type, so the unchanged math/bits bits_test.go parses past its TestReverse table (the next stop was the function literal at 716:10). No slices, maps, nested arrays, shared runtime or native pcc1 claim.",
       "tests": [
         "tests/go/test_elided_composite_literals.py::test_elided_elements_are_type_less_composite_nodes",
         "tests/go/test_elided_composite_literals.py::test_slice_types_parse_outside_signatures",
@@ -3397,22 +3415,21 @@
         "tests/go/test_elided_composite_literals.py::test_fixture_executes_linux_owned_observers",
         "tests/go/test_elided_composite_literals.py::test_invalid_elisions_are_source_errors",
         "tests/go/test_elided_composite_literals.py::test_reference_rejects_the_same_sources_at_the_same_positions",
-        "tests/go/test_elided_composite_literals.py::test_remaining_literal_shapes_stay_explicit",
-        "tests/go/test_elided_composite_literals.py::test_math_bits_external_test_package_now_stops_at_a_function_literal"
+        "tests/go/test_elided_composite_literals.py::test_remaining_literal_shapes_stay_explicit"
       ],
       "diagnostics": [],
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:0c78cd6cc3400f0f19c603722ff1cf6857a8d972e1c97da6e6d7736a8c3e9646",
+        "source_revision": "sha256:451121abd30b22e8113bbce926d63d4338c52f7d03874ce054b4386d710f2214",
         "sources": [
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "af5dc9408f3835d8ba7eba86f1fb47fc78b00306c25d381f35730d764b412244"
+            "sha256": "27527dd38ea21b3a1babee1dcd00d3b0b548369c67da06adbbfe222d27f7ab38"
           },
           {
             "path": "pcc/frontends/go/syntax.py",
-            "sha256": "19131c68a60a6909e7a784eb1254ea54bc4cb22369cdc9962d2419673d0b99f6"
+            "sha256": "e132c0200bc099f7a2be6c3d7aefe1f637e61fa5c157d228505a8b2d3f8ca96a"
           },
           {
             "path": "tests/go/darwin_execution.py",
@@ -3420,7 +3437,7 @@
           },
           {
             "path": "tests/go/test_elided_composite_literals.py",
-            "sha256": "f57eca15ae2704aeffe5e8e616583b100bbbbaf2bf08ff2a343e3f66697c1542"
+            "sha256": "85b7d8a6a984b982cf75d22cc19366f78566bc9bcf97e2cb774ca2e2cf32efa1"
           },
           {
             "path": "tests/go/fixtures/elided_composite_literals.go",
@@ -3432,9 +3449,9 @@
         {
           "id": "elided-literals-linux-pcc0-self",
           "kind": "full-feature",
-          "scope": "Elided element literal types: within an array composite literal an element or key that is itself a composite literal may omit its type, which becomes the element type (array or admitted record); a type-less literal anywhere else (struct fields, keys of arrays, statements) is a missing-type source error. An elided &T for pointer elements stays the addressed-composite gap. Slice types are ordinary syntax everywhere; outside signatures the checker keeps go.unsupported.slice-storage at the same type, so the unchanged math/bits bits_test.go parses past its TestReverse table to the function literal at 716:10. No slices, maps, nested arrays, shared runtime or native pcc1 claim.",
+          "scope": "Elided element literal types: within an array composite literal an element or key that is itself a composite literal may omit its type, which becomes the element type (array or admitted record); a type-less literal anywhere else (struct fields, keys of arrays, statements) is a missing-type source error. An elided &T for pointer elements stays the addressed-composite gap. Slice types are ordinary syntax everywhere; outside signatures the checker keeps go.unsupported.slice-storage at the same type, so the unchanged math/bits bits_test.go parses past its TestReverse table (the next stop was the function literal at 716:10). No slices, maps, nested arrays, shared runtime or native pcc1 claim.",
           "status": "unrun",
-          "source_revision": "sha256:0c78cd6cc3400f0f19c603722ff1cf6857a8d972e1c97da6e6d7736a8c3e9646",
+          "source_revision": "sha256:451121abd30b22e8113bbce926d63d4338c52f7d03874ce054b4386d710f2214",
           "mode": "pcc0",
           "platform": "linux-x86_64",
           "backend": "self",
@@ -3448,8 +3465,7 @@
             "tests/go/test_elided_composite_literals.py::test_fixture_executes_linux_owned_observers",
             "tests/go/test_elided_composite_literals.py::test_invalid_elisions_are_source_errors",
             "tests/go/test_elided_composite_literals.py::test_reference_rejects_the_same_sources_at_the_same_positions",
-            "tests/go/test_elided_composite_literals.py::test_remaining_literal_shapes_stay_explicit",
-            "tests/go/test_elided_composite_literals.py::test_math_bits_external_test_package_now_stops_at_a_function_literal"
+            "tests/go/test_elided_composite_literals.py::test_remaining_literal_shapes_stay_explicit"
           ],
           "evidence": [],
           "reason": "Local Mac evidence only: owned arm64 Darwin execution of four observers matched a local development go1.23.6 reference, and five rejections matched its positions; the Linux owned observers and the pinned go1.27.3 official comparison are UNRUN."
@@ -3465,7 +3481,7 @@
         "feature_id": "go.capability.array-bounds-panic",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3473,7 +3489,7 @@
         "feature_id": "go.capability.array-element-types",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3481,7 +3497,7 @@
         "feature_id": "go.capability.blank-method-declarations",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3489,7 +3505,7 @@
         "feature_id": "go.capability.blank-package-variables",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3497,7 +3513,7 @@
         "feature_id": "go.capability.blank-struct-fields",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3505,7 +3521,7 @@
         "feature_id": "go.capability.builtin-io",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3513,7 +3529,7 @@
         "feature_id": "go.capability.complex-types",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3521,7 +3537,7 @@
         "feature_id": "go.capability.dynamic-string-concatenation",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3529,7 +3545,7 @@
         "feature_id": "go.capability.dynamic-string-conversion",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3537,7 +3553,7 @@
         "feature_id": "go.capability.embedded-fields",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3545,7 +3561,7 @@
         "feature_id": "go.capability.floating-types",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3553,7 +3569,7 @@
         "feature_id": "go.capability.generic-boundaries",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3561,7 +3577,7 @@
         "feature_id": "go.capability.interface-types",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3569,7 +3585,7 @@
         "feature_id": "go.capability.limit-array-elements",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3577,7 +3593,7 @@
         "feature_id": "go.capability.limit-constant-precision",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3585,7 +3601,7 @@
         "feature_id": "go.capability.limit-function-arity",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3593,7 +3609,7 @@
         "feature_id": "go.capability.limit-generic-instances",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3601,7 +3617,7 @@
         "feature_id": "go.capability.limit-record-layout",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3609,7 +3625,7 @@
         "feature_id": "go.capability.limit-string-bytes",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3617,7 +3633,7 @@
         "feature_id": "go.capability.limit-struct-fields",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3625,7 +3641,7 @@
         "feature_id": "go.capability.limit-type-expansion",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3633,7 +3649,7 @@
         "feature_id": "go.capability.linkname-directives",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3641,7 +3657,15 @@
         "feature_id": "go.capability.local-type-declarations",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
+        }
+      },
+      {
+        "code": "go.unsupported.function-values",
+        "feature_id": "go.capability.function-values",
+        "source": {
+          "path": "pcc/frontends/go/diagnostics.py",
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3649,7 +3673,7 @@
         "feature_id": "go.capability.method-values",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3657,7 +3681,7 @@
         "feature_id": "go.capability.negative-shift-panic",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3665,7 +3689,7 @@
         "feature_id": "go.capability.package-initialization",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3673,7 +3697,7 @@
         "feature_id": "go.capability.pointer-composite-address",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3681,7 +3705,7 @@
         "feature_id": "go.capability.pointer-conversions",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3689,7 +3713,7 @@
         "feature_id": "go.capability.pointer-escape",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3697,7 +3721,7 @@
         "feature_id": "go.capability.pointer-iteration-identity",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3705,7 +3729,7 @@
         "feature_id": "go.capability.pointer-nil",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3713,7 +3737,7 @@
         "feature_id": "go.capability.pointer-signatures",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3721,7 +3745,7 @@
         "feature_id": "go.capability.pointer-storage",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3729,7 +3753,7 @@
         "feature_id": "go.capability.predeclared-shadowing",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3737,7 +3761,7 @@
         "feature_id": "go.capability.slice-storage",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3745,7 +3769,7 @@
         "feature_id": "go.capability.string-bounds-panic",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       },
       {
@@ -3753,7 +3777,7 @@
         "feature_id": "go.capability.unsafe-operations",
         "source": {
           "path": "pcc/frontends/go/diagnostics.py",
-          "sha256": "44549e09aa0c507008b2bc16a55f71c43718aa5d2feacb043c55f4fede1e573b"
+          "sha256": "7b504b6250410d224ff775fe3ef67e646828311934b6616212e0e151b98d1a12"
         }
       }
     ],
