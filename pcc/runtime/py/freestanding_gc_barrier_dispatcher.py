@@ -10,6 +10,7 @@ from pcc.unsafe import (
     is_tagged_int,
     load_i32,
     load_i64,
+    load_ptr,
     null,
     ptr_diff,
     ptr_is_null,
@@ -74,6 +75,9 @@ pcc_stop_the_world = extern("pcc_stop_the_world", (), c_int64)
 pcc_resume_world = extern("pcc_resume_world", (), c_int64)
 pcc_py_gc_minor_graph_lock = extern(
     "pcc_py_gc_minor_graph_lock", (), c_void
+)
+pcc_py_gc_minor_graph_unlock = extern(
+    "pcc_py_gc_minor_graph_unlock", (), c_void
 )
 pcc_gc_gray_count_increment_acq_rel = extern(
     "pcc_gc_gray_count_increment_acq_rel", (), c_void
@@ -423,6 +427,29 @@ def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
     if atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") == 0:
         return
     pcc_gc_count_free_barrier_shade(value)
+
+
+@c_abi_export("pcc_gc_note_root_slot_barrier")
+def pcc_gc_note_root_slot_barrier(slot) -> None:
+    """The store barrier for the value a producer just published in ``slot``,
+    a root of the calling thread (a slot frame's result: the _adopt helpers).
+
+    Outside container mode (the provenance probe) the slot is reread and
+    barriered under the graph lock, as those helpers did. In container mode
+    every collector scans roots with the world stopped, an object a running
+    thread names never moves, and the count-free barrier is the unlocked one
+    (pcc_gc_note_slot_write_barrier), so no lock is taken: every special
+    method call, sequence repeat and slot-frame call of every thread queued
+    on the graph lock here.
+    """
+    if load_i32(global_addr("pcc_gc_list_container_mode"), 0) != 0:
+        pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
+        return
+    pcc_py_gc_minor_graph_lock()
+    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
+    pcc_py_gc_minor_graph_unlock()
+
+
 @c_abi_export("pcc_gc_note_write_barrier")
 def pcc_gc_note_write_barrier(owner, value) -> None:
     pcc_gc_note_slot_write_barrier(owner, null(), value)

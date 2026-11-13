@@ -297,6 +297,9 @@ pcc_gc_note_slot_write_barrier = extern(
     (c_ptr, c_ptr, c_ptr),
     c_void,
 )
+pcc_gc_note_root_slot_barrier = extern(
+    "pcc_gc_note_root_slot_barrier", (c_ptr,), c_void
+)
 pcc_gc_backend4_zpage_register_owner_payload_span = extern(
     "pcc_gc_backend4_zpage_register_owner_payload_span",
     (c_ptr, c_ptr, c_int64),
@@ -6963,9 +6966,7 @@ def _special_adopt(slots, tokens, index: int) -> int:
     if token < 0:
         return _special_error(cstr("special-call result lease acquisition failed"))
     store_i64(tokens, index * C_POINTER_SIZE, token)
-    pcc_py_gc_minor_graph_lock()
-    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
-    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_note_root_slot_barrier(slot)
     return 0
 
 

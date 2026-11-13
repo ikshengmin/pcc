@@ -43,6 +43,9 @@ pcc_re_match_method_address = extern("pcc_re_match_method_address", (), c_ptr)
 pcc_re_engine_fullmatch_flags = extern(
     "pcc_re_engine_fullmatch_flags", (c_ptr, c_int64, c_ptr, c_int64, c_int64, c_ptr, c_int32, c_ptr), c_int32
 )
+pcc_gc_note_root_slot_barrier = extern(
+    "pcc_gc_note_root_slot_barrier", (c_ptr,), c_void
+)
 pcc_re_engine_group_names_flags = extern("pcc_re_engine_group_names_flags", (c_ptr, c_int64, c_ptr, c_int32), c_int32)
 
 _RE_RESULT = 0
@@ -75,9 +78,7 @@ def _re_adopt(slots: c_ptr, tokens: c_ptr, index: int) -> int:
         py_runtime_error_if_unset(cstr("re.Match"), cstr("object address lease failed"))
         return 0
     store_i64(tokens, index * 8, token)
-    pcc_py_gc_minor_graph_lock()
-    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
-    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_note_root_slot_barrier(slot)
     return 1
 
 

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from tests.python.root_slot_barrier_model import locked_root_slot_barrier
 
 
 _ABI_SOURCE = Path(__file__).parents[2] / 'pcc/runtime/py/py_abi_constants.py'
@@ -354,6 +355,7 @@ class PercentMemory:
             pcc_gc_store_root=self.drop, py_tls_exc_swap_slot=swap,
             pcc_py_gc_minor_graph_lock=lambda: self.park(),
             pcc_py_gc_minor_graph_unlock=lambda: None,
+            pcc_gc_note_root_slot_barrier=lambda slot: locked_root_slot_barrier(self.env)(slot),
             pcc_gc_note_slot_write_barrier=lambda *args: None,
             pcc_gc_take_pinned_slot=take, _unicode_format_pin=pin,
             pcc_platform_abort=lambda: pytest.fail('owner protocol abort'),

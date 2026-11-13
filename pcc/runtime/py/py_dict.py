@@ -139,6 +139,9 @@ pcc_gc_note_slot_write_barrier = extern(
     (c_ptr, c_ptr, c_ptr),
     c_void,
 )
+pcc_gc_note_root_slot_barrier = extern(
+    "pcc_gc_note_root_slot_barrier", (c_ptr,), c_void
+)
 pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
 
 py_list_new = extern("py_list_new", (c_int64,), c_ptr)
@@ -1772,9 +1775,7 @@ def _dict_slot_adopt(slots, tokens, index: int) -> int:
     if token < 0:
         return _dict_slot_error(cstr("dictionary result lease failed"))
     store_i64(tokens, index * C_POINTER_SIZE, token)
-    pcc_py_gc_minor_graph_lock()
-    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
-    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_note_root_slot_barrier(slot)
     if py_err_occurred() != 0:
         return -1
     return 0

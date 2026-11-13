@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from test_foreign_address_leases import _functions
+from tests.python.root_slot_barrier_model import locked_root_slot_barrier
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "pcc/runtime/py/py_exc_traceback.py"
@@ -45,6 +46,7 @@ class Model:
             pcc_gc_store_root=self.root_store,
             pcc_py_gc_minor_graph_lock=self.graph_lock,
             pcc_py_gc_minor_graph_unlock=self.graph_unlock,
+            pcc_gc_note_root_slot_barrier=lambda slot: locked_root_slot_barrier(self.ns)(slot),
             pcc_gc_scheduler_root_register_handle=self.register,
             pcc_mutex_lock=self.lock, pcc_mutex_unlock=self.unlock,
             _tb_cache_mutex=lambda: 99,

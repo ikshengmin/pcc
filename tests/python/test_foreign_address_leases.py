@@ -5,6 +5,7 @@ import pytest
 
 from pcc.runtime.py import py_abi_constants as abi
 from tests.python.runtime_body_model import load_functions
+from tests.python.root_slot_barrier_model import locked_root_slot_barrier
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNTIME = ROOT / "pcc/runtime/py"
@@ -53,7 +54,8 @@ class Model:
             pcc_gc_managed_pointer_index_contains=lambda p:0,
             pcc_gc_managed_pointer_index_seen=lambda p:0,
             pcc_gc_static_literal_contains=lambda p:0,
-            pcc_py_gc_minor_graph_lock=self.lock, pcc_py_gc_minor_graph_unlock=self.unlock)
+            pcc_py_gc_minor_graph_lock=self.lock, pcc_py_gc_minor_graph_unlock=self.unlock,
+            pcc_gc_note_root_slot_barrier=lambda slot: locked_root_slot_barrier(self.ns)(slot))
         self.ns.update({name: value for name, value in vars(abi).items()
                         if name.startswith("PY_TYPE_")})
         _functions(RUNTIME / "freestanding_gc_root_operations.py", {

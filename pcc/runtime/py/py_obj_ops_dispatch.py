@@ -142,6 +142,9 @@ py_str_count = extern("py_str_count", (c_ptr, c_ptr), c_int64)
 py_str_count_range = extern(
     "py_str_count_range", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64
 )
+pcc_gc_note_root_slot_barrier = extern(
+    "pcc_gc_note_root_slot_barrier", (c_ptr,), c_void
+)
 py_list_len = extern("py_list_len", (c_ptr,), c_int64)
 py_list_get = extern("py_list_get", (c_ptr, c_int64), c_ptr)
 py_list_set = extern("py_list_set", (c_ptr, c_int64, c_ptr), c_void)
@@ -1452,9 +1455,7 @@ def _bitwise_adopt(slots: c_ptr, tokens: c_ptr, index: int) -> int:
     if token < 0:
         return _bitwise_error(7, cstr("binary bitwise result lease failed"))
     store_i64(tokens, index * C_POINTER_SIZE, token)
-    pcc_py_gc_minor_graph_lock()
-    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
-    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_note_root_slot_barrier(slot)
     if ptr_is_null(load_ptr(slot, 0)) != 0:
         return _bitwise_error(19, cstr("binary bitwise result allocation failed"))
     return -1 if py_err_occurred() != 0 else 0
@@ -3486,9 +3487,7 @@ def _bound_list_adopt(slots, tokens, index: int) -> int:
         if py_err_occurred() == 0:
             py_raise_owned(py_exc_new(7, cstr("bound list method owner lease failed")))
         return -1
-    pcc_py_gc_minor_graph_lock()
-    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
-    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_note_root_slot_barrier(slot)
     if ptr_is_null(load_ptr(slot, 0)) != 0:
         if py_err_occurred() == 0:
             py_raise_owned(py_exc_new(19, cstr("bound list method allocation failed")))
@@ -3767,9 +3766,7 @@ def _bound_method_adopt(slots, tokens, index: int) -> int:
         if py_err_occurred() == 0:
             py_raise_owned(py_exc_new(7, cstr("bound method owner lease failed")))
         return -1
-    pcc_py_gc_minor_graph_lock()
-    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
-    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_note_root_slot_barrier(slot)
     if ptr_is_null(load_ptr(slot, 0)) != 0:
         if py_err_occurred() == 0:
             py_raise_owned(py_exc_new(19, cstr("bound method allocation failed")))
@@ -5139,9 +5136,7 @@ def _descriptor_call_adopt(slots, tokens, index: int) -> int:
         if py_err_occurred() == 0:
             py_raise_owned(py_exc_new(7, cstr("descriptor constructor owner lease failed")))
         return -1
-    pcc_py_gc_minor_graph_lock()
-    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
-    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_note_root_slot_barrier(slot)
     return -1 if py_err_occurred() != 0 else 0
 
 

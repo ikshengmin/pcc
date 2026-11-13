@@ -1710,6 +1710,8 @@ RUNTIME_GLOBALS: dict[str, ir.Type] = {
     "pcc_gc_gray_worklist_flush_requested": _I32,
     "pcc_object_type_epoch": _I64,
     "pcc_gc_backend4_auto_step_pending": _I32,
+    # Read by compiled root pins (ownership_lowering._emit_root_pin_lock).
+    "pcc_gc_list_container_mode": _I32,
 }
 
 # Raw five-GC storage is consumed only through pcc.unsafe.  Keep its
@@ -3371,6 +3373,7 @@ RUNTIME_MUTABLE_GLOBALS = frozenset(
         "pcc_thread_stop_requested",
         "pcc_gc_gray_worklist_flush_requested",
         "pcc_gc_backend4_auto_step_pending",
+        "pcc_gc_list_container_mode",
         "py_func_code_class_cache",
         "pcc_builtin_function_cache",
     }

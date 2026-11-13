@@ -59,19 +59,31 @@ def check_return_cfg(body):
         if drops:
             assert len(swaps) == 2 and len(clears) == 1, (name, 'unprotected pending exception')
             assert swaps[0] < min(drops) <= max(drops) < clears[0] < swaps[1]
-    pending = [(next(iter(blocks)), (), 0)]
+    # A path also carries the i1 conditions it branched on that the function
+    # branches on more than once: a second branch on the same value (a root
+    # pin's lock and its matching unlock, both taken only outside container
+    # mode) follows the same edge.
+    branch_counts = {}
+    for lines in blocks.values():
+        for line in lines:
+            match = re.match(r'br i1 (%[\w.$]+), label', line)
+            if match:
+                branch_counts[match[1]] = branch_counts.get(match[1], 0) + 1
+    repeated = {condition for condition, count in branch_counts.items() if count > 1}
+    pending = [(next(iter(blocks)), (), 0, ())]
     visited = set()
     returns = 0
     handoffs = 0
     while pending:
-        block, incoming, lock_depth = pending.pop()
-        state = block, incoming, lock_depth
+        block, incoming, lock_depth, decided = pending.pop()
+        state = block, incoming, lock_depth, decided
         if state in visited:
             continue
         visited.add(state)
-        assert len(visited) <= len(blocks) * 12
+        assert len(visited) <= len(blocks) * 24
         stack = list(incoming)
         successors = []
+        branch_edges = None
         lines = blocks[block]
         for index, line in enumerate(lines):
             enter = re.search(r'@pcc_gc_frame_enter_lifo(?:_mapped)?\(ptr [^,]+, ptr (%[\w.$]+)\)', line)
@@ -97,12 +109,27 @@ def check_return_cfg(body):
                 handoffs += 1
             if line.startswith('br '):
                 successors = re.findall(r'label %([\w.$]+)', line)
+                conditional = re.match(r'br i1 (%[\w.$]+), label %([\w.$]+), label %([\w.$]+)', line)
+                if conditional and conditional[1] in repeated:
+                    condition = conditional[1]
+                    taken = dict(decided)
+                    if condition in taken:
+                        successors = [conditional[2] if taken[condition] else conditional[3]]
+                    else:
+                        branch_edges = tuple(
+                            (successor, tuple(sorted(decided + ((condition, value),))))
+                            for successor, value in ((conditional[2], True), (conditional[3], False))
+                        )
             if line.startswith('ret '):
                 assert not stack, ('live temporary frames at return', block, stack)
                 assert lock_depth == 0, ('graph lock held at return', block)
                 returns += 1
-        for successor in successors:
-            pending.append((successor, tuple(stack), lock_depth))
+        if branch_edges is not None:
+            for successor, branch_decided in branch_edges:
+                pending.append((successor, tuple(stack), lock_depth, branch_decided))
+        else:
+            for successor in successors:
+                pending.append((successor, tuple(stack), lock_depth, decided))
     assert returns and handoffs
     return handoffs
 

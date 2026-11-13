@@ -13,6 +13,7 @@ import pytest
 
 from pcc.runtime.py import py_abi_constants as abi
 from tests.python.runtime_body_model import load_functions
+from tests.python.root_slot_barrier_model import locked_root_slot_barrier
 
 
 PORT = Path(__file__).resolve().parents[2] / "pcc/runtime/py/py_set.py"
@@ -97,6 +98,7 @@ class Memory:
             "pcc_gc_store_root": self.store_root,
             "pcc_py_gc_minor_graph_lock": self.lock,
             "pcc_py_gc_minor_graph_unlock": self.unlock,
+            "pcc_gc_note_root_slot_barrier": lambda slot: locked_root_slot_barrier(ns)(slot),
             "py_err_occurred": lambda: int(self.error is not None),
             "py_exc_new": lambda kind, message: (kind, message),
             "py_raise_owned": self.raise_error,

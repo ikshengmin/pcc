@@ -201,6 +201,45 @@ class OwnershipLoweringMixin:
     def _value_is_never_gc_object(self, value: ir.Value) -> bool:
         return value in getattr(self, "_never_gc_object_values", ())
 
+    def _emit_root_pin_lock(self) -> ir.Value:
+        """Take the graph lock around a root reload and pin, unless the
+        collector runs in container mode; return whether it was taken.
+
+        The lock keeps a moving collector from relocating the object between
+        the reload and the pin. In container mode (every collector without
+        the provenance probe) no object a running thread names moves, so the
+        pin needs no lock: every return of a heap value, generator yield and
+        extern root repin of every thread queued on it. The mode is read once
+        and the matching _emit_root_pin_unlock uses the same answer.
+        """
+        from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
+
+        mode = self.builder.load(
+            declare_runtime_global(self.module, "pcc_gc_list_container_mode"),
+            name=self._fresh("gc.container.mode"),
+        )
+        locked = self.builder.icmp_signed(
+            "==", mode, ir.Constant(ir.IntType(32), 0), name=self._fresh("gc.root.pin.locked"),
+        )
+        take = self.current_function.append_basic_block(name=self._fresh("gc.root.pin.lock"))
+        held = self.current_function.append_basic_block(name=self._fresh("gc.root.pin.held"))
+        self.builder.cbranch(locked, take, held)
+        self.builder.position_at_end(take)
+        self.builder.call(self.runtime["pcc_py_gc_minor_graph_lock"], [])
+        self.builder.branch(held)
+        self.builder.position_at_end(held)
+        return locked
+
+    def _emit_root_pin_unlock(self, locked: ir.Value) -> None:
+        """Release what the matching _emit_root_pin_lock took."""
+        release = self.current_function.append_basic_block(name=self._fresh("gc.root.pin.unlock"))
+        done = self.current_function.append_basic_block(name=self._fresh("gc.root.pin.done"))
+        self.builder.cbranch(locked, release, done)
+        self.builder.position_at_end(release)
+        self.builder.call(self.runtime["pcc_py_gc_minor_graph_unlock"], [])
+        self.builder.branch(done)
+        self.builder.position_at_end(done)
+
     def _gc_pin(self, obj: ir.Value) -> None:
         # pcc_gc_pin returns immediately for a tagged immediate, so emitting
         # the call for one is pure overhead — and it also spares the GC

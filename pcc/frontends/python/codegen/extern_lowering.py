@@ -339,11 +339,11 @@ class ExternScaffoldMixin:
         # A later operand or a nested call may have temporarily pinned and
         # unpinned an alias. Roots remain authoritative; reestablish our one
         # lease without changing its metric before exposing any raw pointer.
-        self.builder.call(self.runtime["pcc_py_gc_minor_graph_lock"], [])
+        pin_locked = self._emit_root_pin_lock()
         value = self._extern_load_root(root)
         self._gc_unpin(value)
         self._gc_pin(value)
-        self.builder.call(self.runtime["pcc_py_gc_minor_graph_unlock"], [])
+        self._emit_root_pin_unlock(pin_locked)
         return value
 
     def _extern_take_root(self, root):

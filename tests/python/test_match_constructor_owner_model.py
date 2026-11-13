@@ -3,6 +3,7 @@ import ast
 from pathlib import Path
 
 import pytest
+from tests.python.root_slot_barrier_model import locked_root_slot_barrier
 
 SOURCE = Path(__file__).resolve().parents[2] / "pcc/runtime/py/py_re_match_runtime.py"
 
@@ -54,6 +55,7 @@ class MatchModel:
             'pcc_gc_store_root': self.store_root,
             'pcc_py_gc_minor_graph_lock': self.lock,
             'pcc_py_gc_minor_graph_unlock': self.unlock,
+            'pcc_gc_note_root_slot_barrier': lambda slot: locked_root_slot_barrier(namespace)(slot),
             'pcc_gc_note_slot_write_barrier': self.barrier,
             'pcc_platform_abort': lambda: (_ for _ in ()).throw(RuntimeError('abort')),
             'py_tls_exc_swap_slot': self.swap_error,

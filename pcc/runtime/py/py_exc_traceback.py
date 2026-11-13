@@ -127,6 +127,9 @@ pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_p
 pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
 pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
 pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void)
+pcc_gc_note_root_slot_barrier = extern(
+    "pcc_gc_note_root_slot_barrier", (c_ptr,), c_void
+)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 py_cleanup_one_root_preserving_exception = extern("py_cleanup_one_root_preserving_exception", (c_ptr,), c_void)
@@ -760,9 +763,7 @@ def _tb_error(message) -> int:
 def _tb_adopt(slot) -> None:
     # NEW results are stored directly into an empty registered slot before
     # any call. The barrier reloads under the relocation graph lock.
-    pcc_py_gc_minor_graph_lock()
-    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
-    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_note_root_slot_barrier(slot)
 
 
 def _tb_cache_class(cache, registered, name, destination, candidate) -> int:

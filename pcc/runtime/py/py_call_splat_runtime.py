@@ -62,6 +62,9 @@ py_raise_owned = extern("py_raise_owned", (c_ptr,), c_void)
 py_runtime_error_if_unset = extern(
     "py_runtime_error_if_unset", (c_ptr, c_ptr), c_ptr
 )
+pcc_gc_note_root_slot_barrier = extern(
+    "pcc_gc_note_root_slot_barrier", (c_ptr,), c_void
+)
 
 
 def _require_result(result, helper_name, message):
@@ -367,9 +370,7 @@ def _call_diagnostic_adopt(slots, tokens, index: int) -> int:
         _require_result(null(), cstr("call diagnostic"), cstr("diagnostic value lease failed"))
         return -1
     store_i64(tokens, index * 8, token)
-    pcc_py_gc_minor_graph_lock()
-    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
-    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_note_root_slot_barrier(slot)
     return 0
 
 

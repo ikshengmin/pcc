@@ -14,6 +14,7 @@ import sys
 import pytest
 
 from test_foreign_address_leases import _functions
+from tests.python.root_slot_barrier_model import locked_root_slot_barrier
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -64,6 +65,7 @@ class ProtocolModel:
             pcc_gc_foreign_lease_release=self.release,
             pcc_py_gc_minor_graph_lock=lambda: self.events.append(("lock",)),
             pcc_py_gc_minor_graph_unlock=lambda: self.events.append(("unlock",)),
+            pcc_gc_note_root_slot_barrier=lambda slot: locked_root_slot_barrier(self.ns)(slot),
             pcc_gc_note_slot_write_barrier=self.barrier,
             pcc_gc_store_root=self.clear_root,
             pcc_platform_abort=lambda: pytest.fail("unexpected abort"),

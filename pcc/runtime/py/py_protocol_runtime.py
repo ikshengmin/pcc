@@ -170,6 +170,9 @@ py_set_difference_update = extern("py_set_difference_update", (c_ptr, c_ptr), c_
 py_set_symmetric_difference_update = extern(
     "py_set_symmetric_difference_update", (c_ptr, c_ptr), c_void
 )
+pcc_gc_note_root_slot_barrier = extern(
+    "pcc_gc_note_root_slot_barrier", (c_ptr,), c_void
+)
 py_dict_update = extern("py_dict_update", (c_ptr, c_ptr), c_void)
 py_obj_issubclass = extern("py_obj_issubclass", (c_ptr, c_ptr), c_int64)
 py_dict_new = extern("py_dict_new", (), c_ptr)
@@ -268,9 +271,7 @@ def _protocol_unary_adopt(slots: c_ptr, tokens: c_ptr, index: int) -> int:
         py_runtime_error_if_unset(cstr("user protocol call"), cstr("unary result owner lease failed"))
         return -1
     store_i64(tokens, offset, token)
-    pcc_py_gc_minor_graph_lock()
-    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
-    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_note_root_slot_barrier(slot)
     return 0
 
 
@@ -411,9 +412,7 @@ def _protocol_binary_adopt(slots: c_ptr, tokens: c_ptr, index: int) -> int:
         py_runtime_error_if_unset(cstr("user protocol call"), cstr("binary result owner lease failed"))
         return -1
     store_i64(tokens, offset, token)
-    pcc_py_gc_minor_graph_lock()
-    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
-    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_note_root_slot_barrier(slot)
     return 0
 
 
@@ -1611,9 +1610,7 @@ def _builtin_init_adopt(slots, tokens, index: int) -> int:
     if token < 0:
         return _builtin_init_error(cstr("initializer result lease failed"))
     store_i64(tokens, index * C_POINTER_SIZE, token)
-    pcc_py_gc_minor_graph_lock()
-    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
-    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_note_root_slot_barrier(slot)
     return -1 if py_err_occurred() != 0 else 0
 
 
@@ -1940,9 +1937,7 @@ def _index_slot_adopt(slots, tokens) -> int:
     if token < 0:
         return _index_slot_error(cstr("index result lease acquisition failed"))
     store_i64(tokens, _INDEX_RESULT_SLOT * C_POINTER_SIZE, token)
-    pcc_py_gc_minor_graph_lock()
-    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
-    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_note_root_slot_barrier(slot)
     return 0
 
 
@@ -2600,9 +2595,7 @@ def _named_adopt(slots, tokens, index: int) -> int:
         py_runtime_error_if_unset(cstr("named protocol"), cstr("result owner lease failed"))
         return -1
     store_i64(tokens, index * C_POINTER_SIZE, token)
-    pcc_py_gc_minor_graph_lock()
-    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
-    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_note_root_slot_barrier(slot)
     return 0
 
 

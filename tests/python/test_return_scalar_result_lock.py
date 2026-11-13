@@ -59,9 +59,16 @@ def test_scalar_return_skips_graph_lock_and_heap_return_keeps_it(tmp_path):
     locking = [label for label, lines in blocks.items()
                if any("@pcc_py_gc_minor_graph_lock(" in line for line in lines)]
     assert locking, "the heap-result branch keeps its graph transaction"
-    # Every lock sits in the branch the peeked result selects only when it
-    # is a non-NULL, untagged pointer.
-    assert all(label.startswith("return.pin.header") for label in locking), locking
+    # The lock is taken only in a root-pin lock block, entered from the branch
+    # the peeked result selects when it is a non-NULL, untagged pointer, and
+    # only when the collector is not in container mode.
+    assert all(label.startswith("gc.root.pin.lock") for label in locking), locking
+    for lock in locking:
+        entries = [label for label, lines in blocks.items()
+                   if any(line.startswith("br ") and "%" + lock in line for line in lines)]
+        assert entries and all(label.startswith("return.pin.header") for label in entries), entries
+        for label in entries:
+            assert any("@pcc_gc_list_container_mode" in line for line in blocks[label]), blocks[label]
     for label, lines in blocks.items():
         branch = next((line for line in lines if line.startswith("br i1")), None)
         if branch is None or "return.pin.header" not in branch:

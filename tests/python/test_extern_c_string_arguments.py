@@ -471,6 +471,15 @@ class _PinModel:
     def _as_gc_ptr(self, slot):
         return slot
 
+    def _emit_root_pin_lock(self):
+        # Outside container mode the root pin takes the graph lock.
+        self.call("pcc_py_gc_minor_graph_lock", [])
+        return True
+
+    def _emit_root_pin_unlock(self, locked):
+        assert locked is True
+        self.call("pcc_py_gc_minor_graph_unlock", [])
+
     def _gc_pin(self, value):
         if value is not None:
             value["pinned"] = True

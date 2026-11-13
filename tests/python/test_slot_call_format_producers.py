@@ -11,6 +11,7 @@ import pytest
 from tests.python.test_shared_call_binding import _emit
 from tests.python.test_slot_call_subscript_producers import _assert_immediate_publication
 from tests.python.owned_regression_support import assert_owned_program, explicit_owned_runtime
+from tests.python.root_slot_barrier_model import locked_root_slot_barrier
 
 
 @pytest.mark.parametrize('expression,runtime', (
@@ -218,6 +219,7 @@ def test_actual_format_callback_owner_disposal_and_error(failure, relocate):
                           type_ignores=[])
     model = _CallbackModel(failure, relocate)
     env = model.environment()
+    env['pcc_gc_note_root_slot_barrier'] = locked_root_slot_barrier(env)
     exec(compile(selected, str(path), 'exec'), env)
     result = env['_call_object_format']('value', None if failure == 'empty' else 'spec')
     assert model.frames == set() and model.lease == {}

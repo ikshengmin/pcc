@@ -11,6 +11,7 @@ from tests.python.owned_regression_support import (
     assert_owned_program,
     explicit_owned_runtime,
 )
+from tests.python.root_slot_barrier_model import locked_root_slot_barrier
 
 
 class BinaryOwnerModel:
@@ -236,6 +237,7 @@ class BinaryOwnerModel:
                    pcc_gc_root_copy_borrowed_lease=self.copy, pcc_gc_store_root=self.drop,
                    pcc_py_gc_minor_graph_lock=lambda: self.park('graph-lock'),
                    pcc_py_gc_minor_graph_unlock=lambda: None,
+                   pcc_gc_note_root_slot_barrier=lambda slot: locked_root_slot_barrier(env)(slot),
                    pcc_gc_note_slot_write_barrier=lambda owner, slot, value: None,
                    pcc_gc_load_ptr=load_gc, pcc_gc_pin=pin,
                    pcc_gc_take_pinned_slot=take, py_tls_exc_swap_slot=swap,

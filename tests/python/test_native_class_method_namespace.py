@@ -12,6 +12,7 @@ import sys
 from pcc.frontends.python.pipeline import compile_python
 from pcc.runtime.py import py_abi_constants as abi
 from tests.python.test_set_call_slot_roots import Block, Memory, Object
+from tests.python.root_slot_barrier_model import locked_root_slot_barrier
 from tests.python.owned_regression_support import assert_owned_program, explicit_owned_runtime
 
 
@@ -66,6 +67,19 @@ main()
 
 
 class DirMemory(Memory):
+    def runtime_global(self, name):
+        if name == "pcc_runtime_module_class_cache":
+            return self.module_class_root
+        # Every other runtime word reads 0 (configuration not initialized),
+        # so _special_adopt's GC0 gate keeps the lease and barrier protocol
+        # this model checks.
+        cells = self.__dict__.setdefault("runtime_global_cells", {})
+        if name not in cells:
+            cell = Block()
+            cell.fields[0] = 0
+            cells[name] = cell
+        return cells[name]
+
     def __init__(self, phase="none", failure=None):
         super().__init__(phase, fail_copy=1 if failure == "copy" else 0,
                          fail_register=1 if failure == "register" else 0)
@@ -82,7 +96,7 @@ class DirMemory(Memory):
             "py_runtime_error_if_unset": self.runtime_error,
             "_special_native_instance": lambda obj: isinstance(obj, Object) and obj.tag == abi.PY_TYPE_INSTANCE,
             "global_load_ptr": lambda name: self.module_class if name == "pcc_runtime_module_class_cache" else self.none,
-            "global_addr": lambda name: self.module_class_root if name == "pcc_runtime_module_class_cache" else None,
+            "global_addr": self.runtime_global,
             "py_obj_special_call_slots": self.special_call,
             "py_obj_call_slots": self.ordinary_call,
             "py_obj_getattr": self.getattr,
@@ -483,6 +497,7 @@ def _dir_lock_probe(text, move, missing=False):
         "ptr_is_null": lambda value: int(value is None),
         "pcc_py_gc_minor_graph_lock": lock,
         "pcc_py_gc_minor_graph_unlock": unlock,
+        "pcc_gc_note_root_slot_barrier": lambda slot: locked_root_slot_barrier(namespace)(slot),
         "pcc_gc_load_ptr": read,
         "ptr_add": lambda pointer, offset: (pointer, offset),
         "load_i32": lambda pointer, offset: 1,

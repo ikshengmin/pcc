@@ -658,13 +658,13 @@ class TypeAbiLoweringMixin:
         roots = self._valueclass_payload_owned_roots(output)
         paths = self._valueclass_payload_pointer_field_paths(ty)
         pins = []
-        self.builder.call(self.runtime["pcc_py_gc_minor_graph_lock"], [])
+        pin_locked = self._emit_root_pin_lock()
         for index, root in enumerate(roots):
             current = self.builder.call(self.runtime["pcc_gc_load_ptr"], [ir.Constant(_CSTR, None), self._as_gc_ptr(root)])
             prior = self._extern_prior_pin(current)
             self._gc_pin(current)
             pins.append((root, prior, paths[index]))
-        self.builder.call(self.runtime["pcc_py_gc_minor_graph_unlock"], [])
+        self._emit_root_pin_unlock(pin_locked)
         for root in reversed(roots):
             self._emit_gc_frame_leave_for_slot(root)
         self.builder.store(self.builder.load(output), handoff)

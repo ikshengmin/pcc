@@ -2206,9 +2206,7 @@ def _format_callback_adopt(slots: c_ptr, tokens: c_ptr, index: int) -> int:
         py_runtime_error_if_unset(cstr("format callback"), cstr("result owner lease failed"))
         return -1
     store_i64(tokens, offset, token)
-    pcc_py_gc_minor_graph_lock()
-    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
-    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_note_root_slot_barrier(slot)
     return 0
 
 
@@ -2417,6 +2415,9 @@ define_global_i32("pcc_percent_owned_map", _PERCENT_SLOT_COUNT)
 pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
 py_dict_get_default_slots = extern(
     "py_dict_get_default_slots", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64
+)
+pcc_gc_note_root_slot_barrier = extern(
+    "pcc_gc_note_root_slot_barrier", (c_ptr,), c_void
 )
 py_bytes_from_obj = extern("py_bytes_from_obj", (c_ptr,), c_ptr)
 

@@ -3152,11 +3152,11 @@ class GeneratorLoweringMixin:
                     break
             if result_name is None:
                 raise L1CodegenError("yield result has no registered local owner")
-            self.builder.call(self.runtime["pcc_py_gc_minor_graph_lock"], [])
+            pin_locked = self._emit_root_pin_lock()
             current = self.builder.load(result_slot)
             prior_pin = self._extern_prior_pin(current)
             self._gc_pin(current)
-            self.builder.call(self.runtime["pcc_py_gc_minor_graph_unlock"], [])
+            self._emit_root_pin_unlock(pin_locked)
         worker_timing = str(
             os.environ.get("PCC_PY_FRONTEND_WORKER_TIMING", "") or ""
         ).strip().lower() in ("1", "true", "yes", "on")

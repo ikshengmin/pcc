@@ -9,6 +9,7 @@ import ast
 from pathlib import Path
 
 import pytest
+from tests.python.root_slot_barrier_model import locked_root_slot_barrier
 
 
 ROOT = Path(__file__).parents[2]
@@ -271,6 +272,7 @@ class NamespaceWriterModel:
             _special_drop=drop, _special_close=close, _special_error=error,
             py_tls_exc_swap_slot=swap, py_dict_new=new_dictionary, py_str_new=new_key,
             pcc_py_gc_minor_graph_lock=lock, pcc_py_gc_minor_graph_unlock=unlock,
+            pcc_gc_note_root_slot_barrier=lambda slot: locked_root_slot_barrier(constants)(slot),
             pcc_gc_backend=lambda: 4, pcc_gc_store_ptr_plan_init=init,
             pcc_gc_store_ptr_plan_commit_locked=commit, pcc_gc_store_ptr_plan_finish=finish,
             pcc_gc_root_copy_lease_prepare_locked=prepare, pcc_gc_root_copy_lease_finish=finish,

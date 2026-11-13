@@ -566,10 +566,11 @@ class ReturnLoweringMixin:
             empty = self.builder._block
             self.builder.cbranch(peek_managed, header, ready)
             self.builder.position_at_end(header)
+            pin_locked = None
             if source_slot is not None:
                 # Reload, inspect and pin under the graph transaction. The
                 # registered owner remains live through the lock's entry poll.
-                self.builder.call(self.runtime["pcc_py_gc_minor_graph_lock"], [])
+                pin_locked = self._emit_root_pin_lock()
             value = self.builder.call(
                 self.runtime["pcc_gc_load_ptr"],
                 [ir.Constant(value.type, None), self._as_gc_ptr(slot)],
@@ -582,8 +583,8 @@ class ReturnLoweringMixin:
             prior_bits = self.builder.and_(flags, ir.Constant(ir.IntType(32), PY_FLAG_GC_PINNED))
             prior_value = self.builder.zext(prior_bits, ir.IntType(64))
             self._gc_pin(value)
-            if source_slot is not None:
-                self.builder.call(self.runtime["pcc_py_gc_minor_graph_unlock"], [])
+            if pin_locked is not None:
+                self._emit_root_pin_unlock(pin_locked)
             previous = self.builder._block
             self.builder.branch(ready)
             self.builder.position_at_end(ready)
