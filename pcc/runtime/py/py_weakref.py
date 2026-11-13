@@ -365,6 +365,9 @@ def py_weakref_hash(ref) -> int:
     hashed: int = py_obj_hash(target)
     py_decref(target)
     if py_err_occurred() != 0:
+        # A recursive hash may have cached a success before this outer
+        # invocation failed. CPython overwrites that cache with -1 on error.
+        store_i64(ref, _WEAKREF_HASH, -1)
         return -1
     store_i64(ref, _WEAKREF_HASH, hashed)
     return hashed

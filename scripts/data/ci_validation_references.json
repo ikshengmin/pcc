@@ -1,5 +1,13 @@
 {
   "functions": {
+    "tests/python/test_weakref_hash_reentrant_failure_native.py": {
+      "test_weakref_failed_outer_hash_cpython_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Executes the identical strongly-live-target reentrant weakref hash program in actual CPython 3.15.0: nested success caches 73, the outer ValueError invalidates that cache, and retry calls the target again to cache 99. Requires exact stdout, zero exit status and empty stderr. Native execution remains a separate integration test using the existing compiler/runtime fixtures on all five collectors; this reference does not establish bootstrap, moving-GC lifetime safety or performance."
+        ]
+      }
+    },
     "tests/test_ci_ab_import_scan_corpus.py": {
       "test_corpus_matches_cpython_reference": {
         "activity": "external-reference",
