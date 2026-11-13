@@ -31,6 +31,26 @@ local execution is UNRUN under CI-only instructions. Remote CI must qualify the
 new revision. This does not qualify Stage2 time/RSS <= Stage1, native fixed point,
 or shared-runtime Mac/QPS acceptance. See [CI validation](ci-validation.md).
 
+## Rust reference lanes with a local rustc receipt (local Mac, 2026-11-13)
+
+A receipt for the local rustup toolchain (rustc 1.92.0, 60 hashed files) was
+built with `scripts.ci_validation_tools.rust_installation` and kept outside
+Git. It marks `aarch64-apple-darwin` AVAILABLE and `x86_64-unknown-linux-gnu`
+UNRUN_PREREQUISITE (no Linux core/std installed). With it, `tests/rust -m ""`
+(including integration) ran 3304 nodes: 2891 passed, and every one of the 413
+failures is rustc's `E0463: can't find crate for std/core` for the Linux target
+(18 of them surface as the expected rejection code not matching). Those are the
+missing prerequisite, not defects, and CI exports the receipt only when the
+Linux target is available. All nine Darwin-certified functions (27 nodes:
+actual checks for `aarch64-apple-darwin`, then owned Mach-O cross-emission of
+reference-bearing programs) passed. The Linux reference lanes and the Linux
+container runs of the recent Rust fixtures remain UNRUN by request. Repro:
+
+```sh
+uv run python -c "import json,subprocess,sys; from scripts.ci_validation_tools import rust_installation; c=subprocess.run(['rustup','which','rustc'],capture_output=True,text=True,check=True).stdout.strip(); open(sys.argv[1],'w').write(json.dumps(rust_installation(c),indent=2))" /tmp/rust-installation.json
+PCC_RUSTC_INSTALL_RECEIPT=/tmp/rust-installation.json uv run pytest -x --maxfail=0 -m "" tests/rust
+```
+
 ## numpy through uv locks (local Mac, 2026-11-13)
 
 `pcc sync --locked` rejected every lock written by current uv (0.13.7 writes

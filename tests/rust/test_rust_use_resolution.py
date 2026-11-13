@@ -430,11 +430,17 @@ def test_original_project_keeps_both_use_items_before_the_next_parser_gap(tmp_pa
     # Keep the whole authenticated source. Observe the real parser's next
     # boundary without accepting a rewritten prefix or a discarded declaration:
     # every earlier Fn-family bound, `Some(e)` pattern, closure, integer
-    # range loop and the impl lifetime parameter is parsed.
+    # range loop, the impl lifetime parameter and both blanket trait impls
+    # (`&'a mut I`, and the cfg(feature = "std") `Box<I>` one, parsed then
+    # disabled) are parsed; the next boundary is `Iterator<Item = ..>`.
     assert parse_retaining_associated_types(parser, monkeypatch, (
-        306, 1, 'generic traits and blanket/generic trait impls are not implemented', ('&', 306, 51))) == [
+        367, 16, 'generic trait bounds and associated projections are not implemented', '<')) == [
         ('Item', 28, 10, None, [('Sized', True)]),
         ('Error', 31, 10, None, []),
+        ('Item', 310, 10, 'I::Item', []),
+        ('Error', 311, 10, 'I::Error', []),
+        ('Item', 339, 10, 'I::Item', []),
+        ('Error', 340, 10, 'I::Error', []),
     ]
     assert ['::'.join(token.text for token in item.path) for item in parser.uses] == [
         'core::cmp', 'core::marker::PhantomData']

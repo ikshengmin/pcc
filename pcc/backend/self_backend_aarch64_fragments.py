@@ -30,14 +30,19 @@ from .self_backend_value_arena import (
 
 
 EMISSION_RECORD_LABEL = -1
+# A zero-width source-semantics event, retained through every sequence pass.
+# first is 1 for begin and 0 for end; third/fourth remain 0/-1.
+EMISSION_RECORD_MEMORY_PAIR_BARRIER = -2
 
 
 class AArch64EmissionFragments:
     """Native records plus persistent sequence roots for one emission scope.
 
     Instruction records use (word, family, relocation kind, symbol ID), just
-    like the direct encoder. A negative family identifies a label whose first
-    field indexes the owned symbol side table. No record contains a pointer.
+    like the direct encoder. EMISSION_RECORD_LABEL uses its first field to
+    index the owned symbol side table. EMISSION_RECORD_MEMORY_PAIR_BARRIER
+    uses its first field for begin/end (1/0); it has no symbol or code bytes.
+    Other negative families are unsupported. No record contains a pointer.
     This first producer slice encodes pointer reloads; unsupported operand
     families still fail through the canonical encoder before publication.
     """
@@ -99,6 +104,25 @@ class AArch64EmissionFragments:
         validate_emitted_label_name(name)
         symbol_id = intern_emitted_symbol(name, self.symbol_ids, self.symbol_names)
         self._append_record(fragment, CompilerInt4(symbol_id, EMISSION_RECORD_LABEL, 0, -1))
+
+    def append_memory_pair_barrier(self, fragment: CompilerInt2, begin: bool) -> None:
+        """Record a boundary, not an instruction and not a hardware fence.
+
+        Nesting is validated in replay order, not construction order: separate
+        fragments may contribute opposite ends of the same protected region.
+        Do not omit these events when assembling a sequence for optimization.
+        """
+        self._require_open()
+        self.spans.length(fragment)
+        old_records = len(self.records)
+        try:
+            self._append_record(
+                fragment,
+                CompilerInt4(1 if begin else 0, EMISSION_RECORD_MEMORY_PAIR_BARRIER, 0, -1),
+            )
+        except Exception:
+            self.records.truncate(old_records)
+            raise
 
     def _append_fixup(
         self, fragment: CompilerInt2, word: int, family: int, kind: int, target: str,

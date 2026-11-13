@@ -44,6 +44,15 @@ class StaticTraits:
 
     def prepare(self):
         checker = self.checker
+        for implementation in self.implementations:
+            # The former parse-time rule, now applied to retained syntax:
+            # impl type parameters, impl where predicates or a generic trait.
+            if implementation.trait is not None and (
+                    implementation.type_parameters or implementation.where_predicates
+                    or not isinstance(implementation.trait, str)):
+                raise implementation.token.error(
+                    'generic traits and blanket/generic trait impls require impl instantiation and '
+                    'coherence checking, which is not implemented')
         declarations = {}
         for trait in self.declarations:
             if trait.token.text in declarations:

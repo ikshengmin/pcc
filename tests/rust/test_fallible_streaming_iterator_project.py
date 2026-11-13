@@ -19,7 +19,7 @@ from scripts.ci_fallible_streaming_iterator import (
 from scripts.ci_source_frontier_support import (
     RSS_BYTES, materialize_snapshot, save, verify_snapshot,
 )
-from tests.rust.certification_support import actual_check_prerequisite
+from tests.rust.certification_support import actual_check_prerequisite, darwin_check_prerequisite
 
 CONSUMER = ROOT / "tests/rust/project_consumers/fallible_streaming_iterator.rs"
 EXPECTED = bytes.fromhex("1032547698badcfe")
@@ -237,3 +237,22 @@ def test_original_package_self_checks_and_real_api_native_reference(tmp_path):
             raise
         finally:
             save(tmp_path / "reference.json", receipt)
+
+
+@pytest.mark.xdist_group(name='rust-native-reference')
+@pytest.mark.pcc_gate(unavailable=darwin_check_prerequisite())
+def test_parser_frontier_under_an_actual_darwin_target_check(tmp_path):
+    """The same frontier, certified for the local aarch64-apple-darwin target
+    (the Linux-target lanes need x86_64-unknown-linux-gnu core/std)."""
+    from pcc.frontends.rust import RustError, check_rust_source
+    from pcc.frontends.rust.syntax import Parser
+    from tests.rust.test_rust_certified_references import toolchain
+    _, files = load_inputs()
+    source = files['src/lib.rs'].decode()
+    checked = check_rust_source(source, toolchain=toolchain(), evidence_directory=tmp_path / 'actual-check',
+                                target_triple='aarch64-apple-darwin', edition=2015)
+    parser = Parser(source, source_path='src/lib.rs', edition=2015, rustc_check=checked)
+    with pytest.raises(RustError, match=r'^src/lib\.rs: 367:16: generic trait bounds and associated projections are not implemented$'):
+        parser.parse()
+    # Both blanket trait impls before it were parsed and retained.
+    assert [str(item.owner) for item in parser.implementations if item.trait] == ["&'a mut I"]

@@ -1308,14 +1308,13 @@ class Parser:
                     owner = self.type()
                     trait_name = None
                     if self.accept("for"):
-                        if parameters or not isinstance(owner, str):
-                            raise token.error("generic traits and blanket/generic trait impls are not implemented")
+                        # Generic and blanket trait impls (`impl<T> Tr for S<T>`,
+                        # `impl<'a, I: ?Sized> Tr for &'a mut I where I: Tr`) are
+                        # parsed and retained; their instantiation is a semantic gap.
                         trait_name, owner = owner, self.type()
                     where_predicates = ()
                     if self.token.text == "where":
-                        where_token = self.take()
-                        if trait_name is not None:
-                            raise where_token.error("trait impl constraints require generic/coherence checking, which is not implemented")
+                        self.take()
                         where_predicates = self.function_where_clause(parameters, owner_parameters=())
                     self.expect("{")
                     docs.extend(self.documentation(inner=True))

@@ -2563,6 +2563,21 @@
       "status": "missing"
     },
     {
+      "id": "rust.traits.generic-impl-syntax",
+      "title": "Generic and blanket trait impl syntax with an explicit instantiation gap",
+      "chapter_ids": [
+        "rust.ref.6.12"
+      ],
+      "scope": "Explicitly unimplemented semantics with owned syntax: trait impls with type parameters, reference or generic self types (`impl<'a, I: ?Sized> Tr for &'a mut I where I: Tr`, `impl<T: Copy> Tr for S<T>`) and where clauses are parsed and retained (parameters, lifetime parameters, self type, predicates, associated type definitions such as `type Item = I::Item;`). Their instantiation (impl type parameters, impl where predicates or a generic trait) needs impl selection with coherence checking, which is not implemented; it is reported at the impl as before. Concrete trait impls, including for generic instances such as `impl Tr for R<u64>`, are unchanged. fallible-streaming-iterator's parser frontier moves from lib.rs:306:1 to 367:16 under an actual aarch64-apple-darwin check (local Mac rustc 1.92.0 receipt); the Linux-target lane is unrun.",
+      "tests": [
+        "tests/rust/test_rust_generic_trait_impl_syntax.py",
+        "tests/rust/test_fallible_streaming_iterator_project.py::test_parser_frontier_under_an_actual_darwin_target_check@rust-native-reference"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "status": "missing"
+    },
+    {
       "id": "rust.enums.payload-values",
       "title": "Tagged payload enums and by-value bindings",
       "chapter_ids": [
