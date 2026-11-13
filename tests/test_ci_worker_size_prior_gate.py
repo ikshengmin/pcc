@@ -1385,16 +1385,40 @@ def workflow_native_platforms(body, *, legacy):
 
 
 def assert_workflow_marker_permissions(text):
-    # Global scope is contents-read only. The planner and three same-run artifact
-    # consumers alone add Actions read; no original producer gains permissions.
+    # Global scope and A/B request qualification are contents-read only. The
+    # planner, three same-run consumers and explicit A/B receipt reader add
+    # Actions read; no original producer gains permissions.
     global_block = re.search(r"(?m)^permissions:\n((?:  [^\n]*\n)+)", text)
     assert global_block is not None and global_block.group(1) == "  contents: read\n"
-    assert len(re.findall(r"(?m)^\s*permissions:[^\n]*", text)) == 5
-    for name in ("validation-plan", "shared-source-validation", "source-platform-coverage", "pytest-markers"):
+    expected = {
+        "validation-plan": "      contents: read\n      actions: read\n",
+        "shared-source-validation": "      contents: read\n      actions: read\n",
+        "source-platform-coverage": "      contents: read\n      actions: read\n",
+        "pytest-markers": "      contents: read\n      actions: read\n",
+        "pcc-ab-qualification": "      contents: read\n",
+        "pcc-compile-ab": "      contents: read\n      actions: read\n",
+    }
+    assert len(re.findall(r"(?m)^\s*permissions:[^\n]*", text)) == len(expected) + 1
+    for name, permissions in expected.items():
         body = workflow_job(text, name)
         permission_block = re.search(r"(?m)^    permissions:\n((?:      [^\n]*\n)+)", body)
         assert permission_block is not None
-        assert permission_block.group(1) == "      contents: read\n      actions: read\n"
+        assert permission_block.group(1) == permissions
+
+
+def assert_workflow_optional_ab_controls(text):
+    dispatch = workflow_job(text.split("\nconcurrency:\n", 1)[0], "workflow_dispatch")
+    inputs = dispatch.split("      performance_ab:\n", 1)[1]
+    option = re.split(r"(?m)^      [A-Za-z0-9_-]+:", inputs, maxsplit=1)[0]
+    assert re.findall(r"(?m)^        type: (.+)$", option) == ["boolean"]
+    assert re.findall(r"(?m)^        default: (.+)$", option) == ["false"]
+    expected = {
+        "pcc-ab-qualification": "${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && inputs.performance_ab }}",
+        "pcc-compile-ab": "${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.performance_ab && needs.pcc-ab-qualification.result == 'success' }}",
+    }
+    for name, condition in expected.items():
+        body = workflow_job(text, name)
+        assert re.findall(r"(?m)^    if: (.+)$", body) == [condition]
 
 
 
@@ -1417,6 +1441,8 @@ def assert_workflow_job_budgets(text):
         "pcc1-package-parity": 200,
         "pytest-markers": 60,
         "cpp17": 15,
+        "pcc-ab-qualification": 5,
+        "pcc-compile-ab": 200,
     }
     jobs = text.split("\njobs:\n", 1)[1]
     assert re.findall(r"(?m)^  ([A-Za-z0-9_-]+):$", jobs) == list(expected)
@@ -1643,8 +1669,10 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
     assert text.count("concurrency:") == 1 and "concurrency:" not in jobs
     concurrency = header.split("\nconcurrency:\n", 1)[1].strip("\n")
     assert concurrency == (
-        "  group: ${{ github.workflow }}-${{ github.event_name }}-"
-        "${{ github.event_name == 'push' && github.run_attempt == 1 && github.ref "
+        "  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' "
+        "&& inputs.performance_ab && 'push' || github.event_name }}-"
+        "${{ (github.event_name == 'push' && github.run_attempt == 1 "
+        "|| github.event_name == 'workflow_dispatch' && inputs.performance_ab) && github.ref "
         "|| format('{0}-{1}', github.run_id, github.run_attempt) }}\n"
         "  cancel-in-progress: false\n"
         "  queue: max"
@@ -1652,7 +1680,9 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
     group = concurrency.splitlines()[0].removeprefix("  group: ")
     cancel = concurrency.splitlines()[1].removeprefix("  cancel-in-progress: ")
     queue = concurrency.splitlines()[2].removeprefix("  queue: ")
-    # Retain one active run and up to 100 pending in each unchanged group.
+    # Ordinary events retain their groups. Explicit A/B dispatches share the
+    # initial push group so they cannot compete with its performance owners.
+    # Retain one active run and up to 100 pending in each selected group.
     # GitHub orders arrivals at the group, not commits, and can cancel overflow.
     assert queue == "max"
     base = dict(workflow="gate", event_name="push", ref="refs/heads/master",
@@ -1669,6 +1699,10 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
          "gate-workflow_dispatch-102-1", False),
         ({"event_name": "workflow_dispatch", "run_attempt": "2"},
          "gate-workflow_dispatch-101-2", False),
+        ({"event_name": "workflow_dispatch", "ref": "refs/heads/topic"},
+         "gate-workflow_dispatch-101-1", False),
+        ({"event_name": "workflow_dispatch", "workflow": "other"},
+         "other-workflow_dispatch-101-1", False),
         ({"event_name": "pull_request", "ref": "refs/pull/7/merge"},
          "gate-pull_request-101-1", False),
         ({"event_name": "pull_request", "ref": "refs/pull/7/merge", "run_id": "102"},
@@ -1681,17 +1715,23 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
         # Evaluate only the exact source expressions locked above, not a scheduler.
         github.run_attempt = int(github.run_attempt)
         for full_chain in (False, True):
-            context = dict(github=github, inputs=SimpleNamespace(full_chain=full_chain),
-                           format=str.format)
+            for performance_ab in (False, True):
+                context = dict(github=github,
+                               inputs=SimpleNamespace(full_chain=full_chain,
+                                                      performance_ab=performance_ab),
+                               format=str.format)
 
-            def evaluate(expression):
-                return eval(expression.replace("&&", "and").replace("||", "or"),
-                            {"__builtins__": {}}, context)
+                def evaluate(expression):
+                    return eval(expression.replace("&&", "and").replace("||", "or"),
+                                {"__builtins__": {}}, context)
 
-            actual_group = re.sub(r"\$\{\{ (.*?) \}\}",
-                                  lambda match: str(evaluate(match.group(1))), group)
-            assert actual_group == expected_group
-            assert json.loads(cancel) is expected_cancel
+                actual_group = re.sub(r"\$\{\{ (.*?) \}\}",
+                                      lambda match: str(evaluate(match.group(1))), group)
+                selected_group = expected_group
+                if github.event_name == "workflow_dispatch" and performance_ab:
+                    selected_group = f"{github.workflow}-push-{github.ref}"
+                assert actual_group == selected_group
+                assert json.loads(cancel) is expected_cancel
     for name in ("macos-pcc0-regressions", "macos-pcc0-float-doc-regressions", "macos-pcc0-indexed-split"):
         body = workflow_job(text, name)
         assert "timeout-minutes: 25" in body and "scripts/ci_macos_regression_gate.py" in body
@@ -1700,6 +1740,27 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
     assert 'PCC_BOOTSTRAP_AUTO_TREE_RSS_CEILING_BYTES: "4294967296"' in mac
     assert 'PCC_BOOTSTRAP_MIN_TREE_RSS_BYTES: "2147483648"' in mac
     assert 'PCC_BOOTSTRAP_HOST_MEMORY_RESERVE_BYTES: "536870912"' in mac
+    assert_workflow_optional_ab_controls(text)
+    option = text.split("      performance_ab:\n", 1)[1].split("      ab_baseline_sha:\n", 1)[0]
+    for before, after in (("type: boolean", "type: string"), ("default: false", "default: true")):
+        assert before in option
+        with pytest.raises(AssertionError):
+            assert_workflow_optional_ab_controls(text.replace(option, option.replace(before, after), 1))
+    for name in ("pcc-ab-qualification", "pcc-compile-ab"):
+        body = workflow_job(text, name)
+        for before, after in (
+            ("github.event_name == 'workflow_dispatch'", "github.event_name == 'push'"),
+            (" && inputs.performance_ab", ""),
+            ("!cancelled() && ", ""),
+        ):
+            assert before in body
+            with pytest.raises(AssertionError):
+                assert_workflow_optional_ab_controls(text.replace(body, body.replace(before, after), 1))
+    body = workflow_job(text, "pcc-compile-ab")
+    changed = body.replace(" && needs.pcc-ab-qualification.result == 'success'", "")
+    assert changed != body
+    with pytest.raises(AssertionError):
+        assert_workflow_optional_ab_controls(text.replace(body, changed, 1))
     assert_workflow_marker_permissions(text)
     # Keep these negative controls in the existing node: HOST_COUNTS is an
     # exact execution inventory, not a reason to drop the rejection checks.
