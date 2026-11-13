@@ -454,22 +454,34 @@ fence-lifetime qualification. M2 and later local-model milestones remain open.
 
 ## Gateway Web Frameworks Benchmark: native request path
 
-Latest local Mac retry (2026-11-13): the second authorized ten-round batch has
-stopped. Gateway `5d478b9` was compiled with ordinary `uv run pcc --backend self`
-at core `cdfffdea7`, including recorded uncommitted dependency-closure work.
-The final native artifact still fails original C512 concurrent-ID preflight:
-zero of 30 planned timed rows, and no accepted complete current QPS comparison.
-Intermediate single-route rows passed, but consecutive route transitions did
-not. A diagnostic delay is not part of the unchanged comparison protocol.
-Published correctness work includes exact-identity gateway owner retirement
-and releasing completed task captures after the owning resume/lease boundary.
-Gateway checks are 106 passed; the final core model/ownership selection is 66
-passed. C ABI reference drivers against the verified owned runtime execute the
-capture change across GC0–4, and five I/O reference cases pass in `auto` mode.
-These are not native-pcc1 or full qualification results. Reusing the verified
-fresh archive keeps those checks inside six pytest workers/90 seconds/1 GiB;
-the earlier cold-build memory-limit failures remain recorded and unresolved.
-Full suites/bootstrap remain unrun. The original C512 problem remains open.
+Latest local Mac retry (2026-11-13): the third batch stopped after its five
+authorized rounds. Gateway `5527492` was compiled from the current directory
+with `uv run pcc --backend self` at core `bc6743593`, including the recorded
+uncommitted dependency-closure work. Input hashes were unchanged across this
+build. The original RSpec, connection-recycling and C512 concurrent-ID checks
+pass, but the consecutive dynamic GET has 285 connect, 7 read and 115 write
+errors. Only one of 30 planned timed rows is accepted: `GET /` at 1,333.3
+requests/s. **There is no accepted complete current QPS comparison.** An earlier
+artifact in this batch reached 3,767.1 requests/s on that single route but also
+failed the next route; these different worktree inputs are not a controlled
+performance A/B. No timing, concurrency or error criterion was weakened.
+
+Gateway `5527492` keeps accepted-socket admission and task publication in one
+resumable batch and tests cancellation ownership and close-then-raise cleanup.
+Its server/streaming selection is 109 passed. A separate native diagnostic
+checks 4,577 responses on 512 connections: reaching the 1,000-request limit on
+one connection does not close the others. A debug run on the preceding failed
+artifact observes read errno -54 (ECONNRESET), not EINTR or EBADF. An independent
+listener probe admits 128 queued sockets even with requested backlog 4,096;
+that is a platform constraint, not proof of the gateway failure's cause.
+Connection admission/cleanup overlap remains the observed failure boundary;
+the exact cause is unresolved. This batch adds no new core runtime change.
+
+The preceding batch's core model/ownership selection was 66 passed. Its C ABI
+reference drivers executed terminal-capture cleanup across GC0–4 and five I/O
+cases in `auto` mode against the verified owned runtime. Those are historical
+reference results, not new native-pcc1 qualification; the earlier cold-build
+1-GiB failures remain recorded. Full suites/bootstrap remain unrun.
 See the sibling `pcc-gateway/benchmarks/web-frameworks.md` for the current
 boundary and reproduction entry. Earlier figures below remain historical.
 
