@@ -240,6 +240,38 @@ def test_live_pending_candidate_is_rechecked_before_finalizer_or_weakref():
     assert admission.index("graph_matches(count)") < admission.index("| CANDIDATE;")
     assert "header->refcount !=" not in admission
     assert "flags=0x%x refcount=%lld" in admission
+    # Keep compound-failure operands visible without changing the predicates
+    # or inspecting potentially reclaimed objects. This is source wiring,
+    # not execution coverage of the native diagnostic paths.
+    diagnostic = fixture.split("static void report_live_verdict_failure(", 1)[1].split(
+        "static int run_mode(void) {", 1)[0]
+    for field in (
+        "status=%d phase=%d mode=%d effective_backend=%lld",
+        "finalizers=%d expected_finalizers=%d",
+        "weak_callbacks=%d expected_weak_callbacks=0",
+        "collected=%lld expected_collected=0",
+        "known_first=%d expected_known_first=1",
+        "known_second=%d gc_callbacks=%d callback_error=%d",
+    ):
+        assert field in diagnostic
+    assert (
+        "status, phase, mode, (long long)pcc_gc_backend(), "
+        "finalizers, expected_finalizers, weak_callbacks, (long long)collected, "
+        "known_first, known_second, gc_callbacks, callback_error);"
+    ) in " ".join(diagnostic.split())
+    assert "watched[" not in diagnostic
+    assert "py_" not in diagnostic
+    assert "pcc_gc_collect" not in diagnostic
+    run = fixture.split("static int run_mode(void) {", 1)[1].split("int main(", 1)[0]
+    for status, expected in ((143, "0"), (150, "count")):
+        assert (
+            f"if (finalizers != {expected} || weak_callbacks != 0 || collected != 0 "
+            "|| known_first != 1) { "
+            f"report_live_verdict_failure({status}, {expected}, collected, known_first, known_second); "
+            f"return {status}; "
+            "}"
+        ) in " ".join(run.split())
+    assert fixture.count("report_live_verdict_failure(") == 3
     boundary = _SweepBoundary()
     root = boundary.object("root", candidate=False)
     middle = boundary.object("middle", candidate=False)

@@ -237,6 +237,22 @@ static int inspect_live(int index) {
     return same && weak_matches(index, 1);
 }
 
+static void report_live_verdict_failure(int status, int expected_finalizers,
+                                       int64_t collected, int known_first,
+                                       int known_second) {
+    /* Failure-only scalar diagnostics: watched addresses may be reclaimed.
+     * The native receipt separately records the requested gc_backend. */
+    printf("sweep-verdict:detail status=%d phase=%d mode=%d effective_backend=%lld "
+           "finalizers=%d expected_finalizers=%d "
+           "weak_callbacks=%d expected_weak_callbacks=0 "
+           "collected=%lld expected_collected=0 "
+           "known_first=%d expected_known_first=1 "
+           "known_second=%d gc_callbacks=%d callback_error=%d\n",
+           status, phase, mode, (long long)pcc_gc_backend(),
+           finalizers, expected_finalizers, weak_callbacks, (long long)collected,
+           known_first, known_second, gc_callbacks, callback_error);
+}
+
 static int run_mode(void) {
     phase = 4;
     int count = mode == 4 || mode == 7 ? 2 : 1;
@@ -265,7 +281,10 @@ static int run_mode(void) {
     int known_second = count == 2 ? (int)pcc_gc_object_is_known_no_lock(watched[1]) : 0;
     if (callback_error != 0) return 142;
     if (mode == 1 || mode == 5 || mode == 6) {
-        if (finalizers != 0 || weak_callbacks != 0 || collected != 0 || known_first != 1) return 143;
+        if (finalizers != 0 || weak_callbacks != 0 || collected != 0 || known_first != 1) {
+            report_live_verdict_failure(143, 0, collected, known_first, known_second);
+            return 143;
+        }
         if (!inspect_live(0)) return 144;
         if (mode == 5 && gc_callbacks != 2) return 145;
     } else if (mode == 2) {
@@ -276,7 +295,10 @@ static int run_mode(void) {
         pcc_gc_end_explicit_tracing_collect();
         if (finalizers != 1 || weak_callbacks != 1) return 149;
     } else if (mode == 3 || mode == 4) {
-        if (finalizers != count || weak_callbacks != 0 || collected != 0 || known_first != 1) return 150;
+        if (finalizers != count || weak_callbacks != 0 || collected != 0 || known_first != 1) {
+            report_live_verdict_failure(150, count, collected, known_first, known_second);
+            return 150;
+        }
         if (!inspect_live(0)) return 151;
         if (count == 2 && (known_second != 1 || !inspect_live(1))) return 152;
     } else if (mode == 7) {
