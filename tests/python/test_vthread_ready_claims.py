@@ -67,6 +67,7 @@ class Model:
             "py_decref": lambda value: self.retain(value, -1),
             "_push_ready_node": self.push,
             "_queue_push": self.push_into,
+            "_io_ready_push": lambda node: self.push_into(self.io_head, self.io_tail, node),
             "_scheduler_signal": lambda: self.events.append(("signal",)),
             "_scheduler_lock": self.lock,
             "_scheduler_unlock": lambda: self.events.append(("unlock",)),

@@ -65,6 +65,11 @@ class Pools:
                  "_pooled_node_root", "_pooled_node_dispose", "_ready_reserve",
                  "_ready_alloc", "_ready_release", "_join_alloc", "_join_recycle",
                  "_channel_group_alloc", "_channel_group_recycle"}
+        for node in ast.parse(SOURCE.read_text()).body:
+            if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and node.targets[0].id in {"READY_NODE_SIZE", "READY_NODE_PREVIOUS_OFFSET"}):
+                self.namespace[node.targets[0].id] = ast.literal_eval(node.value)
         nodes = [node for node in ast.parse(SOURCE.read_text()).body
                  if isinstance(node, ast.FunctionDef) and node.name in names]
         assert {node.name for node in nodes} == names

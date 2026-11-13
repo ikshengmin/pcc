@@ -44,6 +44,7 @@ HOT_WORDS: dict[str, tuple[str, str]] = {
     "pcc_vthread_io_ready_pending_py": ("written", "vthread-io-ready"),
     "pcc_vthread_io_ready_head_py": ("written", "vthread-io-ready"),
     "pcc_vthread_io_ready_tail_py": ("written", "vthread-io-ready"),
+    "pcc_vthread_io_ready_turn_py": ("written", "vthread-io-ready"),
     "pcc_vthread_io_count_py": ("written", "vthread-io-wait"),
     # Written by running threads.
     "py_gc_tracked_count": ("written", "tracked-count"),

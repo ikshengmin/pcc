@@ -69,6 +69,7 @@ define_global_ptr_null("pcc_vthread_ready_tail_py")
 define_global_ptr_null("pcc_vthread_io_ready_head_py")
 define_global_ptr_null("pcc_vthread_io_ready_tail_py")
 define_global_i64("pcc_vthread_io_ready_pending_py", 0)
+define_global_i32("pcc_vthread_io_ready_turn_py", 0)
 define_global_ptr_null("pcc_vthread_ready_free_py")
 define_global_ptr_null("pcc_vthread_timer_head_py")
 define_global_ptr_null("pcc_vthread_timer_free_py")
@@ -578,7 +579,13 @@ def _node_pool_lock_word(kind: int):
     return ptr_add(aligned, (kind - 1) * 128)
 
 
-# Ready node: thread@0, next@8, root_handle@16, pool_kind@24 (32 bytes).
+# ReadyNode keeps the shared 32-byte waiter prefix and an I/O-deque back link.
+# thread@0, next@8, root_handle@16, pool_kind@24, previous@32 (40 bytes).
+# Join/channel nodes keep their own layouts and never enter the I/O deque.
+READY_NODE_SIZE = 40
+READY_NODE_PREVIOUS_OFFSET = 32
+
+
 def _pooled_node_root(node):
     # A cached node keeps its empty slot registered. Reusing that stable
     # address needs only the normal root write barrier, not registry mutation.
@@ -608,13 +615,14 @@ def _ready_alloc():
         _counter_add(global_addr("pcc_vthread_ready_reuse_py"), 1)
     _raw_queue_unlock(word)
     if ptr_is_null(node):
-        node = malloc(32)
+        node = malloc(READY_NODE_SIZE)
         if ptr_is_null(node) == 0:
             store_ptr(node, 16, null())
             _counter_add(global_addr("pcc_vthread_ready_alloc_py"), 1)
     if ptr_is_null(node) == 0:
         store_ptr(node, 0, null())
         store_ptr(node, 8, null())
+        store_ptr(node, READY_NODE_PREVIOUS_OFFSET, null())
         store_i64(node, 24, 1)
     return node
 
@@ -713,6 +721,7 @@ def _ready_release(node) -> None:
     if pool_kind == 3:
         _channel_group_recycle(node)
         return
+    store_ptr(node, READY_NODE_PREVIOUS_OFFSET, null())
     store_i64(node, 24, 1)
     word = _node_pool_lock_word(1)
     _raw_queue_lock(word)
@@ -776,8 +785,8 @@ def _join_release(node) -> None:
 
 
 def _queue_push(head_slot, tail_slot, node) -> None:
-    # Both shared FIFOs publish under the scheduler lock. Their independent
-    # hints avoid taking that lock when the corresponding queue is empty.
+    # The shared injection FIFO publishes under the scheduler lock. Its hint
+    # avoids taking that lock when the queue is empty.
     store_ptr(node, 8, null())
     tail = load_ptr(tail_slot, 0)
     if ptr_is_null(tail):
@@ -785,10 +794,21 @@ def _queue_push(head_slot, tail_slot, node) -> None:
     else:
         store_ptr(tail, 8, node)
     store_ptr(tail_slot, 0, node)
-    if ptr_eq(head_slot, global_addr("pcc_vthread_io_ready_head_py")) != 0:
-        _counter_set(global_addr("pcc_vthread_io_ready_pending_py"), 1)
+    _counter_set(global_addr("pcc_vthread_injection_pending_py"), 1)
+
+
+def _io_ready_push(node) -> None:
+    # The scheduler mutex owns both links. Only _ready_reserve nodes enter
+    # this queue, so the extended ReadyNode layout is always available.
+    tail = global_load_ptr("pcc_vthread_io_ready_tail_py")
+    store_ptr(node, 8, null())
+    store_ptr(node, READY_NODE_PREVIOUS_OFFSET, tail)
+    if ptr_is_null(tail):
+        global_store_ptr("pcc_vthread_io_ready_head_py", node)
     else:
-        _counter_set(global_addr("pcc_vthread_injection_pending_py"), 1)
+        store_ptr(tail, 8, node)
+    global_store_ptr("pcc_vthread_io_ready_tail_py", node)
+    _counter_set(global_addr("pcc_vthread_io_ready_pending_py"), 1)
 
 
 def _carrier_queue(index: int):
@@ -911,11 +931,7 @@ def _publish_ready_node(vthread, node, io_ready: int = 0) -> None:
     _counter_add(global_addr("pcc_vthread_ready_count_py"), 1)
     _effect(3, 0, 0, 1)
     if io_ready != 0:
-        _queue_push(
-            global_addr("pcc_vthread_io_ready_head_py"),
-            global_addr("pcc_vthread_io_ready_tail_py"),
-            node,
-        )
+        _io_ready_push(node)
     else:
         _push_ready_node(node)
     _scheduler_signal()
@@ -2158,8 +2174,38 @@ def _dequeue_global():
 def _dequeue_io_ready():
     if _scheduler_lock() != 0:
         return null()
-    thread = _dequeue_from(global_addr("pcc_vthread_io_ready_head_py"),
-                           global_addr("pcc_vthread_io_ready_tail_py"))
+    thread = null()
+    while True:
+        node = global_load_ptr("pcc_vthread_io_ready_head_py")
+        if ptr_is_null(node):
+            break
+        # An already queued readable socket may disconnect before dispatch.
+        # New readiness must not wait for that whole stale cohort. Alternate
+        # newest and oldest entries: prompt new work without starving old work.
+        # Both ends are detached in O(1); the ordinary-work budget is unchanged.
+        turn_slot = global_addr("pcc_vthread_io_ready_turn_py")
+        turn = load_i32(turn_slot, 0)
+        store_i32(turn_slot, 0, turn ^ 1)
+        if turn == 0:
+            node = global_load_ptr("pcc_vthread_io_ready_tail_py")
+            previous = load_ptr(node, READY_NODE_PREVIOUS_OFFSET)
+            global_store_ptr("pcc_vthread_io_ready_tail_py", previous)
+            if ptr_is_null(previous):
+                global_store_ptr("pcc_vthread_io_ready_head_py", null())
+            else:
+                store_ptr(previous, 8, null())
+        else:
+            after = load_ptr(node, 8)
+            global_store_ptr("pcc_vthread_io_ready_head_py", after)
+            if ptr_is_null(after):
+                global_store_ptr("pcc_vthread_io_ready_tail_py", null())
+            else:
+                store_ptr(after, READY_NODE_PREVIOUS_OFFSET, null())
+        store_ptr(node, 8, null())
+        store_ptr(node, READY_NODE_PREVIOUS_OFFSET, null())
+        thread = _ready_node_take(node, 1)
+        if ptr_is_null(thread) == 0:
+            break
     pending: int = 0
     if ptr_is_null(global_load_ptr("pcc_vthread_io_ready_head_py")) == 0:
         pending = 1
