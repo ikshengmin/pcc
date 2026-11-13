@@ -29,6 +29,11 @@ RSS = 1073741824
 DISK_FLOOR = 1073741824
 COLLECTION_MODULES = 10
 REFERENCES = ROOT / "scripts/data/ci_validation_references.json"
+CI_CONTRACT_MODULES = (
+    "tests/python/test_compile_window_measurement.py",
+    "tests/python/test_compile_window_wiring.py",
+    "tests/python/test_pcc_compile_ab_tool.py",
+)
 
 
 def save(path, value):
@@ -51,7 +56,13 @@ def modules(domain, root=ROOT):
         for pattern in data["refresh_globs"]:
             paths.update(root.glob(pattern))
     elif domain == "ci-contracts":
+        # Receipt/measurement contracts have no workflow text or test_ci_ name.
+        # Inventory whole modules, including platform-owned nodes, fail closed.
+        absent = sorted(path for path in CI_CONTRACT_MODULES if not (root / path).is_file())
+        if absent:
+            raise ValueError("explicit CI contract scope disappeared: " + repr(absent))
         paths = set(root.glob("tests/test_ci_*.py"))
+        paths.update(root / path for path in CI_CONTRACT_MODULES)
         paths.update(root.glob("tests/test_xdist*.py"))
         for path in root.glob("tests/**/test_*.py"):
             if ".github/workflows/" in path.read_text(encoding="utf-8"):

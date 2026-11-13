@@ -3,6 +3,13 @@
   "default_platform": "linux-x86_64",
   "overrides": [
     {
+      "domain": "ci-contracts",
+      "lane": "ordinary",
+      "nodeid": "tests/python/test_pcc_compile_ab_tool.py::test_runner_writes_complete_manifest_for_four_matched_pairs",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": []}
+    },
+    {
       "domain": "cpp",
       "lane": "reference",
       "nodeid": "tests/cpp/test_cpp_cerrno_ctime_headers.py::test_darwin_error_numbers_equal_the_actual_sdk_header",
