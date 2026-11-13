@@ -38,7 +38,11 @@ def test_retirement_reverses_owners_and_reloads_remaining_children(kind, backend
               ptr_add=lambda p, o: p + o, ptr_is_null=lambda p: int(p == 0), null=lambda: 0,
               pcc_gc_backend=lambda: backend, pcc_gc_load_ptr=lambda o, p: memory[p],
               py_decref=release, free=lambda p: frees.append(("array", p)),
-              pcc_gc_free_object_memory=lambda p: frees.append(("object", p)))
+              pcc_gc_free_object_memory=lambda p: frees.append(("object", p)),
+              # The bulk tail retires only callback-free nonterminal owners;
+              # every child here may run a finalizer, so it consumes none
+              # and each one takes the ordinary release below.
+              pcc_gc_release_nonterminal_tail=lambda slots, n: n)
     source = Path(__file__).resolve().parents[2] / "pcc/runtime/py/py_obj_dealloc.py"
     body = [node for node in ast.parse(source.read_text()).body
             if isinstance(node, ast.FunctionDef) and node.name == "py_dealloc_" + kind]

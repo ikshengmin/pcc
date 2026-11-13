@@ -905,24 +905,29 @@ def test_typed_list_i64_runtime_helpers_match_c_fast_path():
     import pcc
 
     repo_root = Path(pcc.__file__).resolve().parents[1]
-    py_list_src = repo_root / "pcc" / "runtime" / "py" / "py_list.py"
-    text = py_list_src.read_text(encoding="utf-8")
+    runtime = repo_root / "pcc" / "runtime" / "py"
+    # Each public helper is a native entry (py_list_native_entry.py) over a
+    # body in py_list.py; neither half may run the list sanity probe.
+    sources = {
+        "entry": (runtime / "py_list_native_entry.py").read_text(encoding="utf-8"),
+        "body": (runtime / "py_list.py").read_text(encoding="utf-8"),
+    }
     for helper in (
         "py_list_get_i64",
         "py_list_get_i64_nonnegative",
         "py_list_len",
     ):
-        match = re.search(
-            # Stop at the next top-level definition (decorated or not): the
-            # helper after py_list_get_i64_nonnegative is an undecorated
-            # private def, and the old lookahead ran past it.
-            rf"def {helper}\([^)]*\).*?(?=\n\n(?:@|def )|\Z)",
-            text,
-            re.DOTALL,
-        )
-        assert match is not None, helper
-        body = match.group(0)
-        assert "_list_is_sane" not in body, body
+        for half, symbol in (("entry", helper), ("body", "pcc_list_body_" + helper)):
+            text = sources[half]
+            marker = f'@c_abi_export("{symbol}")\n'
+            assert marker in text, (half, symbol)
+            body = text.split(marker, 1)[1]
+            # Stop at the next top-level definition (decorated or not).
+            end = re.search(r"\n\n(?:@|def |[A-Za-z_][A-Za-z0-9_]* = )", body)
+            if end is not None:
+                body = body[: end.start()]
+            assert body.startswith("def "), (half, symbol)
+            assert "_list_is_sane" not in body, body
 
 
 def test_unsafe_i64_typed_list_int_loop_runs_without_libpython(tmp_path, monkeypatch):
