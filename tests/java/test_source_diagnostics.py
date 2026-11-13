@@ -118,7 +118,7 @@ def test_source_capability_has_explicit_code(source, suffix, message, monkeypatc
 
 @pytest.mark.parametrize("source,suffix,message", [
     ("class Diagnostic{final int x;}", "final-instance-fields", "final instance fields require"),
-    ("class Diagnostic{static {}}", "static-initialization", "static initializer execution"),
+    # `class Diagnostic{static {}}` moved to test_source_static_initializers.
     ("class Diagnostic{int hashCode(){return 42;}}", "object-inherited-methods", "Object override/final/access semantics"),
 ])
 def test_semantic_model_capability_is_not_runtime_support(source, suffix, message):

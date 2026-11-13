@@ -263,8 +263,9 @@ MODEL_BOUNDARIES = [
     ("model-instance-method", "class BlankFinal{int run(){final int x;x=42;return x;}}", "java.unsupported.blank-final-local"),
     ("model-constructor", "class BlankFinal{BlankFinal(){final int x;x=42;}}", "java.unsupported.blank-final-local"),
     ("model-instance-initializer", "class BlankFinal{{final int x;x=42;}}", "java.unsupported.blank-final-local"),
-    # The initializer itself is the earlier explicit boundary, before its body.
-    ("model-static-initializer", "class BlankFinal{static{final int x;x=42;}}", "java.unsupported.static-initialization"),
+    # Static initializers are now checked (test_source_static_initializers),
+    # so the blank final local in the body is the boundary, as in the rows above.
+    ("model-static-initializer", "class BlankFinal{static{final int x;x=42;}}", "java.unsupported.blank-final-local"),
     ("model-enhanced-for-body", original("for(int item:new int[]{42}){final int x;x=item;}return 42;"), "java.unsupported.blank-final-local"),
     ("model-unused-local", original("final int x;return 42;"), "java.unsupported.blank-final-local"),
     ("model-grouped-declaration", original("final int a=7,b;b=35;return a+b;"), "java.unsupported.blank-final-local"),

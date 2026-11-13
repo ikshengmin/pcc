@@ -147,8 +147,8 @@ def test_invalid_class_initialization_originals_fail_as_java_errors(name, text, 
 
 @pytest.mark.parametrize("members,code", [
     ("static int[] V={42};", "java.unsupported.static-initialization"),
-    ("static final int[] V;static{V=new int[]{42};}", "java.unsupported.static-initialization"),
-    ("static final int V=f();static{}static int f(){return 42;}", "java.unsupported.static-initialization"),
+    # The blank final and empty static block rows moved to
+    # test_source_static_initializers (former-blank-array-row, former-empty-block-row).
     # Legal Java (both read null), but cyclic lazy evaluation stays a gap.
     ("static final int[] A=ArrayExample.B;static final int[] B=ArrayExample.A;", "java.unsupported.cyclic-initialization"),
 ])

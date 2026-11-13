@@ -130,6 +130,9 @@ class SourceClass:
     token: Token | None = None
     instance_initializers: tuple[Node, ...] = ()
     initialization_steps: tuple = ()
+    # Class model only: `static { ... }` blocks in textual order; each block's
+    # value is the number of fields declared before it (JLS 8.7, 12.4.2).
+    static_initializers: tuple[Node, ...] = ()
     static_imports: tuple[tuple[Token, ...], ...] = ()
     member_classes: tuple = ()
     enclosing_name: str | None = None
@@ -606,6 +609,7 @@ class SourceParser:
             self.peek().error("inheritance, generics and interfaces require the shared Java runtime")
         self.expect("{")
         methods, fields, constructors, initializers, initialization_steps, members = [], [], [], [], [], []
+        static_initializers = []
         while not self.accept("}"):
             if self.accept(";"):
                 continue
@@ -625,7 +629,12 @@ class SourceParser:
             if self.class_model and self.peek().text == "{":
                 self.require_no_override("an initializer")
                 if mods == {"static"}:
-                    self.peek().error("static initializer execution requires shared Java class initialization", code="java.unsupported.static-initialization")
+                    # JLS 8.7: checked in a static context and retained as a
+                    # class-initialization step (source_class_initialization).
+                    initializer = self.block()
+                    initializer.value = len(fields)
+                    static_initializers.append(initializer)
+                    continue
                 if mods:
                     self.peek().error("invalid instance initializer modifier")
                 initializer = self.block()
@@ -687,7 +696,9 @@ class SourceParser:
                     if instance and "final" in mods and not (isinstance(field_type, ArrayType) and initialized):
                         result.error("final instance fields require constructor definite-unassignment semantics",
                                      code="java.unsupported.final-instance-fields")
-                    if not initialized and not instance:
+                    if not initialized and not instance and not self.class_model:
+                        # The class model checks blank static finals against
+                        # its static initializers (JLS 8.3.1.2, 16.8).
                         method_name.error("blank final fields require shared Java class initialization", code="java.unsupported.static-initialization")
                     initializer = ((self.array_initializer(field_type)
                                     if isinstance(field_type, ArrayType) and self.peek().text == "{" else self.expression())
@@ -720,6 +731,7 @@ class SourceParser:
                                         parameter_final=parameter_final, override=override))
         program.methods, program.fields, program.constructors = tuple(methods), tuple(fields), tuple(constructors)
         program.instance_initializers, program.initialization_steps = tuple(initializers), tuple(initialization_steps)
+        program.static_initializers = tuple(static_initializers)
         program.member_classes = tuple(members)
         return program
 
