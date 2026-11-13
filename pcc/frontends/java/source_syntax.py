@@ -677,10 +677,10 @@ class SourceParser:
                 if not instance and "final" not in mods:
                     result.error("mutable static fields require shared Java class initialization", code="java.unsupported.static-initialization")
                 while True:
+                    # Native mode rejects array fields in array_suffix; the
+                    # class model checks static final array fields as class
+                    # variables initialized by class initialization.
                     field_type = self.array_suffix(common_type)
-                    if isinstance(field_type, ArrayType) and not instance:
-                        result.error("static array fields require shared Java class initialization",
-                                     code="java.unsupported.array-storage")
                     initialized = bool(self.accept("="))
                     if instance and "final" in mods and not (isinstance(field_type, ArrayType) and initialized):
                         result.error("final instance fields require constructor definite-unassignment semantics",

@@ -45,9 +45,16 @@ from .self_backend_aarch64_darwin_mem import (
     emitted_compare_register_line,
     emitted_cset_line,
     emitted_direct_call_line,
+    emitted_fixed_instruction_line,
     emitted_global_address_lines,
+    emitted_indirect_branch_line,
     emitted_memory_instruction_line,
+    emitted_move_register_line,
     emitted_movewide_instruction_line,
+    emitted_pair_instruction_line,
+    emitted_scalar_immediate_line,
+    emitted_scalar_register_line,
+    emitted_vector_instruction_line,
 )
 from .self_backend_aarch64_darwin_regs import emit_add_offset, emit_const_to_reg
 from .self_backend_aarch64_darwin_ops import sign_extend_int_reg
@@ -142,9 +149,8 @@ def _emit_aligned_simd_block_copy(
     lines.extend(materialize_pointer(func, src_value, 10, module_symbols))
     offset = 0
     while offset < size:
-        address_suffix = "" if offset == 0 else f", #{offset}"
-        lines.append(f"  ldr q0, [x10{address_suffix}]")
-        lines.append(f"  str q0, [x9{address_suffix}]")
+        lines.append(emitted_memory_instruction_line("ldr", "q0", "x10", offset))
+        lines.append(emitted_memory_instruction_line("str", "q0", "x9", offset))
         offset += 16
     return lines
 
@@ -156,11 +162,10 @@ def _emit_aligned_simd_block_zero(
     module_symbols: PreparedModuleSymbols,
 ) -> list[str]:
     lines = materialize_pointer(func, dst_value, 9, module_symbols)
-    lines.append("  movi v0.16b, #0")
+    lines.append(emitted_vector_instruction_line('movi', 0))
     offset = 0
     while offset < size:
-        address_suffix = "" if offset == 0 else f", #{offset}"
-        lines.append(f"  str q0, [x9{address_suffix}]")
+        lines.append(emitted_memory_instruction_line("str", "q0", "x9", offset))
         offset += 16
     return lines
 
@@ -382,7 +387,7 @@ def emit_minmax_intrinsic_call(
         lines.extend(sign_extend_int_reg(lhs_type, lhs_reg))
         lines.extend(sign_extend_int_reg(rhs_type, rhs_reg))
     lines.append(emitted_compare_register_line(lhs_reg, rhs_reg))
-    lines.append(f"  csel {dst_reg}, {lhs_reg}, {rhs_reg}, {selected_cc}")
+    lines.append(emitted_scalar_register_line('csel', dst_reg, lhs_reg, rhs_reg, selected_cc))
     lines.extend(store_value_regs_to_value_slot(func, dest, 11))
     return lines
 
@@ -450,7 +455,7 @@ def _emit_vector_minmax_intrinsic_call(
             lines.extend(sign_extend_int_reg(lane_type, lhs_reg))
             lines.extend(sign_extend_int_reg(lane_type, rhs_reg))
         lines.append(emitted_compare_register_line(lhs_reg, rhs_reg))
-        lines.append(f"  csel {dst_reg}, {lhs_reg}, {rhs_reg}, {selected_cc}")
+        lines.append(emitted_scalar_register_line('csel', dst_reg, lhs_reg, rhs_reg, selected_cc))
         lines.extend(store_value_to_address(dst_addr, lane_type, 11))
     return lines
 
@@ -533,11 +538,11 @@ def _emit_vector_bswap_intrinsic_call(
             dst_addr = "x14"
         lines.extend(load_value_from_address(src_addr, lane_type, 9))
         if lane_type.width == 16:
-            lines.append("  rev16 w10, w9")
+            lines.append(emitted_scalar_register_line('rev16', 'w10', 'w9'))
         elif lane_type.width == 32:
-            lines.append("  rev w10, w9")
+            lines.append(emitted_scalar_register_line('rev', 'w10', 'w9'))
         else:
-            lines.append("  rev x10, x9")
+            lines.append(emitted_scalar_register_line('rev', 'x10', 'x9'))
         lines.extend(store_value_to_address(dst_addr, lane_type, 10))
     return lines
 
@@ -591,11 +596,11 @@ def emit_bswap_intrinsic_call(
         )
     lines = materialize_value(func, value, arg_type, 9, module_symbols)
     if arg_type.width == 16:
-        lines.append("  rev16 w10, w9")
+        lines.append(emitted_scalar_register_line('rev16', 'w10', 'w9'))
     elif arg_type.width == 32:
-        lines.append("  rev w10, w9")
+        lines.append(emitted_scalar_register_line('rev', 'w10', 'w9'))
     elif arg_type.width == 64:
-        lines.append("  rev x10, x9")
+        lines.append(emitted_scalar_register_line('rev', 'x10', 'x9'))
     else:
         raise BackendUnavailable(
             f"self backend {callee} intrinsic currently only supports i16/i32/i64 in {func.name!r}"
@@ -802,7 +807,7 @@ def emit_vector_reduce_mul_intrinsic_call(
             addr_reg = "x14"
         lines.extend(load_value_from_address(addr_reg, lane_type, 10))
         lane_reg = "x10" if lane_type.width > 32 else "w10"
-        lines.append(f"  mul {acc_reg}, {acc_reg}, {lane_reg}")
+        lines.append(emitted_scalar_register_line('mul', acc_reg, acc_reg, lane_reg))
     lines.extend(store_value_regs_to_value_slot(func, dest, 11))
     return lines
 
@@ -845,7 +850,7 @@ def emit_vector_reduce_or_intrinsic_call(
             lines.extend(emit_add_offset("x14", "x15", lane_index * lane_stride))
             addr_reg = "x14"
         lines.extend(load_value_from_address(addr_reg, lane_type, 10))
-        lines.append(f"  orr {acc_reg}, {acc_reg}, {lane_reg}")
+        lines.append(emitted_scalar_register_line('orr', acc_reg, acc_reg, lane_reg))
     lines.extend(store_value_regs_to_value_slot(func, dest, 11))
     return lines
 
@@ -889,7 +894,7 @@ def emit_vector_reduce_umax_intrinsic_call(
             addr_reg = "x14"
         lines.extend(load_value_from_address(addr_reg, lane_type, 10))
         lines.append(emitted_compare_register_line(acc_reg, lane_reg))
-        lines.append(f"  csel {acc_reg}, {acc_reg}, {lane_reg}, hs")
+        lines.append(emitted_scalar_register_line('csel', acc_reg, acc_reg, lane_reg, 'hs'))
     lines.extend(store_value_regs_to_value_slot(func, dest, 11))
     return lines
 
@@ -963,9 +968,9 @@ def emit_usub_sat_intrinsic_call(
         dst_reg = "x11" if ret_type.width > 32 else "w11"
         zero_reg = "xzr" if ret_type.width > 32 else "wzr"
         lines.append(
-            f"  subs {dst_reg}, {reg_name(ret_type, 9)}, {reg_name(ret_type, 10)}"
+            emitted_scalar_register_line('subs', dst_reg, reg_name(ret_type, 9), reg_name(ret_type, 10))
         )
-        lines.append(f"  csel {dst_reg}, {dst_reg}, {zero_reg}, hs")
+        lines.append(emitted_scalar_register_line('csel', dst_reg, dst_reg, zero_reg, 'hs'))
         lines.extend(store_value_regs_to_value_slot(func, dest, 11))
         return lines
     lane_type, lane_stride = _vector_lane_stride(ret_type)
@@ -988,9 +993,9 @@ def emit_usub_sat_intrinsic_call(
         lines.extend(load_value_from_address(lhs_addr, lane_type, 9))
         lines.extend(load_value_from_address(rhs_addr, lane_type, 10))
         lines.append(
-            f"  subs {dst_reg}, {reg_name(lane_type, 9)}, {reg_name(lane_type, 10)}"
+            emitted_scalar_register_line('subs', dst_reg, reg_name(lane_type, 9), reg_name(lane_type, 10))
         )
-        lines.append(f"  csel {dst_reg}, {dst_reg}, {zero_reg}, hs")
+        lines.append(emitted_scalar_register_line('csel', dst_reg, dst_reg, zero_reg, 'hs'))
         lines.extend(store_value_to_address(dst_addr, lane_type, 11))
     return lines
 
@@ -1024,9 +1029,9 @@ def emit_uadd_sat_intrinsic_call(
         dst_reg = "x11" if ret_type.width > 32 else "w11"
         zero_reg = "xzr" if ret_type.width > 32 else "wzr"
         lines.append(
-            f"  adds {dst_reg}, {reg_name(ret_type, 9)}, {reg_name(ret_type, 10)}"
+            emitted_scalar_register_line('adds', dst_reg, reg_name(ret_type, 9), reg_name(ret_type, 10))
         )
-        lines.append(f"  csinv {dst_reg}, {dst_reg}, {zero_reg}, lo")
+        lines.append(emitted_scalar_register_line('csinv', dst_reg, dst_reg, zero_reg, 'lo'))
         lines.extend(store_value_regs_to_value_slot(func, dest, 11))
         return lines
     lane_type, lane_stride = _vector_lane_stride(ret_type)
@@ -1049,9 +1054,9 @@ def emit_uadd_sat_intrinsic_call(
         lines.extend(load_value_from_address(lhs_addr, lane_type, 9))
         lines.extend(load_value_from_address(rhs_addr, lane_type, 10))
         lines.append(
-            f"  adds {dst_reg}, {reg_name(lane_type, 9)}, {reg_name(lane_type, 10)}"
+            emitted_scalar_register_line('adds', dst_reg, reg_name(lane_type, 9), reg_name(lane_type, 10))
         )
-        lines.append(f"  csinv {dst_reg}, {dst_reg}, {zero_reg}, lo")
+        lines.append(emitted_scalar_register_line('csinv', dst_reg, dst_reg, zero_reg, 'lo'))
         lines.extend(store_value_to_address(dst_addr, lane_type, 11))
     return lines
 
@@ -1096,17 +1101,17 @@ def emit_umul_overflow_intrinsic_call(
     lines = materialize_value(func, lhs, lhs_type, 9, module_symbols)
     lines.extend(materialize_value(func, rhs, rhs_type, 10, module_symbols))
     if lhs_type.width == 64:
-        lines.append("  mul x11, x9, x10")
-        lines.append("  umulh x12, x9, x10")
+        lines.append(emitted_scalar_register_line('mul', 'x11', 'x9', 'x10'))
+        lines.append(emitted_scalar_register_line('umulh', 'x12', 'x9', 'x10'))
         lines.append(emitted_compare_immediate_line("x12", 0))
         lines.append(emitted_cset_line("w12", "ne"))
     else:
-        lines.append("  umull x11, w9, w10")
-        lines.append("  lsr x12, x11, #32")
+        lines.append(emitted_scalar_register_line('umull', 'x11', 'w9', 'w10'))
+        lines.append(emitted_scalar_immediate_line('lsr', 'x12', 'x11', 32))
         lines.append(emitted_compare_immediate_line("x12", 0))
         lines.append(emitted_cset_line("w12", "ne"))
-        lines.append("  uxtw x11, w11")
-        lines.append("  orr x11, x11, x12, lsl #32")
+        lines.append(emitted_scalar_register_line('uxtw', 'x11', 'w11'))
+        lines.append(emitted_scalar_register_line('orr', 'x11', 'x11', 'x12', shift=32))
     lines.extend(store_value_regs_to_value_slot(func, dest, 11))
     return lines
 
@@ -1155,12 +1160,12 @@ def emit_unsigned_addsub_overflow_intrinsic_call(
     lines = materialize_value(func, lhs, lhs_type, 9, module_symbols)
     lines.extend(materialize_value(func, rhs, rhs_type, 10, module_symbols))
     if lhs_type.width == 64:
-        lines.append(f"  {mnemonic} x11, x9, x10")
+        lines.append(emitted_scalar_register_line(mnemonic, 'x11', 'x9', 'x10'))
         lines.append(emitted_cset_line("w12", condition))
     else:
-        lines.append(f"  {mnemonic} w11, w9, w10")
+        lines.append(emitted_scalar_register_line(mnemonic, 'w11', 'w9', 'w10'))
         lines.append(emitted_cset_line("w12", condition))
-        lines.append("  orr x11, x11, x12, lsl #32")
+        lines.append(emitted_scalar_register_line('orr', 'x11', 'x11', 'x12', shift=32))
     lines.extend(store_value_regs_to_value_slot(func, dest, 11))
     return lines
 
@@ -1242,12 +1247,12 @@ def emit_signed_addsub_overflow_intrinsic_call(
     lines = materialize_value(func, lhs, lhs_type, 9, module_symbols)
     lines.extend(materialize_value(func, rhs, rhs_type, 10, module_symbols))
     if lhs_type.width == 64:
-        lines.append(f"  {mnemonic} x11, x9, x10")
+        lines.append(emitted_scalar_register_line(mnemonic, 'x11', 'x9', 'x10'))
         lines.append(emitted_cset_line("w12", "vs"))
     else:
-        lines.append(f"  {mnemonic} w11, w9, w10")
+        lines.append(emitted_scalar_register_line(mnemonic, 'w11', 'w9', 'w10'))
         lines.append(emitted_cset_line("w12", "vs"))
-        lines.append("  orr x11, x11, x12, lsl #32")
+        lines.append(emitted_scalar_register_line('orr', 'x11', 'x11', 'x12', shift=32))
     lines.extend(store_value_regs_to_value_slot(func, dest, 11))
     return lines
 
@@ -1318,18 +1323,18 @@ def emit_smul_overflow_intrinsic_call(
     lines = materialize_value(func, lhs, lhs_type, 9, module_symbols)
     lines.extend(materialize_value(func, rhs, rhs_type, 10, module_symbols))
     if lhs_type.width == 64:
-        lines.append("  mul x11, x9, x10")
-        lines.append("  smulh x12, x9, x10")
-        lines.append("  asr x13, x11, #63")
+        lines.append(emitted_scalar_register_line('mul', 'x11', 'x9', 'x10'))
+        lines.append(emitted_scalar_register_line('smulh', 'x12', 'x9', 'x10'))
+        lines.append(emitted_scalar_immediate_line('asr', 'x13', 'x11', 63))
         lines.append(emitted_compare_register_line("x12", "x13"))
         lines.append(emitted_cset_line("w12", "ne"))
     else:
-        lines.append("  smull x11, w9, w10")
-        lines.append("  sxtw x13, w11")
+        lines.append(emitted_scalar_register_line('smull', 'x11', 'w9', 'w10'))
+        lines.append(emitted_scalar_register_line('sxtw', 'x13', 'w11'))
         lines.append(emitted_compare_register_line("x11", "x13"))
         lines.append(emitted_cset_line("w12", "ne"))
-        lines.append("  uxtw x11, w11")
-        lines.append("  orr x11, x11, x12, lsl #32")
+        lines.append(emitted_scalar_register_line('uxtw', 'x11', 'w11'))
+        lines.append(emitted_scalar_register_line('orr', 'x11', 'x11', 'x12', shift=32))
     lines.extend(store_value_regs_to_value_slot(func, dest, 11))
     return lines
 
@@ -1391,12 +1396,12 @@ def emit_fshl_intrinsic_call(
     lines = materialize_value(func, lhs, lhs_type, 9, module_symbols)
     lines.extend(materialize_value(func, rhs, rhs_type, 10, module_symbols))
     lines.extend(materialize_value(func, shift, shift_type, 11, module_symbols))
-    lines.append(f"  and {shift_reg}, {shift_reg}, #{width_mask}")
-    lines.append(f"  neg {width_reg}12, {shift_reg}")
-    lines.append(f"  and {width_reg}12, {width_reg}12, #{width_mask}")
-    lines.append(f"  lslv {dst_reg}, {lhs_reg}, {shift_reg}")
-    lines.append(f"  lsrv {width_reg}13, {rhs_reg}, {width_reg}12")
-    lines.append(f"  orr {dst_reg}, {dst_reg}, {width_reg}13")
+    lines.append(emitted_scalar_immediate_line('and', shift_reg, shift_reg, width_mask))
+    lines.append(emitted_scalar_register_line('neg', f'{width_reg}12', shift_reg))
+    lines.append(emitted_scalar_immediate_line('and', f'{width_reg}12', f'{width_reg}12', width_mask))
+    lines.append(emitted_scalar_register_line('lslv', dst_reg, lhs_reg, shift_reg))
+    lines.append(emitted_scalar_register_line('lsrv', f'{width_reg}13', rhs_reg, f'{width_reg}12'))
+    lines.append(emitted_scalar_register_line('orr', dst_reg, dst_reg, f'{width_reg}13'))
     lines.extend(store_value_regs_to_value_slot(func, dest, 14))
     return lines
 
@@ -1488,16 +1493,16 @@ def _emit_vector_funnel_shift_intrinsic_call(
         )
         lhs_reg = reg_name(lane_type, 9)
         rhs_reg = reg_name(lane_type, 10)
-        lines.append(f"  and {shift_reg}, {shift_reg}, #{width_mask}")
-        lines.append(f"  neg {width_reg}12, {shift_reg}")
-        lines.append(f"  and {width_reg}12, {width_reg}12, #{width_mask}")
+        lines.append(emitted_scalar_immediate_line('and', shift_reg, shift_reg, width_mask))
+        lines.append(emitted_scalar_register_line('neg', f'{width_reg}12', shift_reg))
+        lines.append(emitted_scalar_immediate_line('and', f'{width_reg}12', f'{width_reg}12', width_mask))
         if direction == "fshl":
-            lines.append(f"  lslv {dst_reg}, {lhs_reg}, {shift_reg}")
-            lines.append(f"  lsrv {width_reg}12, {rhs_reg}, {width_reg}12")
+            lines.append(emitted_scalar_register_line('lslv', dst_reg, lhs_reg, shift_reg))
+            lines.append(emitted_scalar_register_line('lsrv', f'{width_reg}12', rhs_reg, f'{width_reg}12'))
         else:
-            lines.append(f"  lsrv {dst_reg}, {rhs_reg}, {shift_reg}")
-            lines.append(f"  lslv {width_reg}12, {lhs_reg}, {width_reg}12")
-        lines.append(f"  orr {dst_reg}, {dst_reg}, {width_reg}12")
+            lines.append(emitted_scalar_register_line('lsrv', dst_reg, rhs_reg, shift_reg))
+            lines.append(emitted_scalar_register_line('lslv', f'{width_reg}12', lhs_reg, f'{width_reg}12'))
+        lines.append(emitted_scalar_register_line('orr', dst_reg, dst_reg, f'{width_reg}12'))
         lines.extend(store_value_to_address(dst_addr, lane_type, 13))
     return lines
 
@@ -1559,12 +1564,12 @@ def emit_fshr_intrinsic_call(
     lines = materialize_value(func, lhs, lhs_type, 9, module_symbols)
     lines.extend(materialize_value(func, rhs, rhs_type, 10, module_symbols))
     lines.extend(materialize_value(func, shift, shift_type, 11, module_symbols))
-    lines.append(f"  and {shift_reg}, {shift_reg}, #{width_mask}")
-    lines.append(f"  neg {width_reg}12, {shift_reg}")
-    lines.append(f"  and {width_reg}12, {width_reg}12, #{width_mask}")
-    lines.append(f"  lsrv {dst_reg}, {rhs_reg}, {shift_reg}")
-    lines.append(f"  lslv {width_reg}13, {lhs_reg}, {width_reg}12")
-    lines.append(f"  orr {dst_reg}, {dst_reg}, {width_reg}13")
+    lines.append(emitted_scalar_immediate_line('and', shift_reg, shift_reg, width_mask))
+    lines.append(emitted_scalar_register_line('neg', f'{width_reg}12', shift_reg))
+    lines.append(emitted_scalar_immediate_line('and', f'{width_reg}12', f'{width_reg}12', width_mask))
+    lines.append(emitted_scalar_register_line('lsrv', dst_reg, rhs_reg, shift_reg))
+    lines.append(emitted_scalar_register_line('lslv', f'{width_reg}13', lhs_reg, f'{width_reg}12'))
+    lines.append(emitted_scalar_register_line('orr', dst_reg, dst_reg, f'{width_reg}13'))
     lines.extend(store_value_regs_to_value_slot(func, dest, 14))
     return lines
 
@@ -1595,13 +1600,13 @@ def emit_dynamic_alloca_call(
             f"self backend dynamic alloca alignment must be a power of two in {func.name!r}"
         )
     lines = materialize_value(func, size_value, size_type, 9, module_symbols)
-    lines.append("  add x9, x9, #15")
-    lines.append("  and x9, x9, #0xfffffffffffffff0")
-    lines.append("  mov x10, sp")
-    lines.append("  sub x10, x10, x9")
+    lines.append(emitted_addsub_immediate_line('add', 'x9', 'x9', 15))
+    lines.append(emitted_scalar_immediate_line('and', 'x9', 'x9', 0xfffffffffffffff0, radix=16))
+    lines.append(emitted_move_register_line('x10', 'sp'))
+    lines.append(emitted_scalar_register_line('sub', 'x10', 'x10', 'x9'))
     if align > 16:
-        lines.append("  and x10, x10, #" + hex((1 << 64) - align))
-    lines.append("  mov sp, x10")
+        lines.append(emitted_scalar_immediate_line("and", "x10", "x10", (1 << 64) - align, radix=16))
+    lines.append(emitted_move_register_line('sp', 'x10'))
     if dest is not None and parsed_function_has_value_slot(func, dest):
         lines.extend(store_value_regs_to_value_slot(func, dest, 10))
     return lines
@@ -1636,7 +1641,7 @@ def emit_abs_intrinsic_call(
     lines = materialize_value(func, value, value_type, 9, module_symbols)
     lines.extend(sign_extend_int_reg(value_type, src_reg))
     lines.append(emitted_compare_immediate_line(src_reg, 0))
-    lines.append(f"  cneg {dst_reg}, {src_reg}, mi")
+    lines.append(emitted_scalar_register_line('cneg', dst_reg, src_reg, 'mi'))
     lines.extend(store_value_regs_to_value_slot(func, dest, 10))
     return lines
 
@@ -1673,23 +1678,23 @@ def emit_copysign_intrinsic_call(
     if lhs_type.width == 32:
         lines.extend(
             [
-                "  fmov w11, s9",
-                "  fmov w12, s10",
-                "  and w11, w11, #0x7fffffff",
-                "  and w12, w12, #0x80000000",
-                "  orr w11, w11, w12",
-                "  fmov s11, w11",
+                emitted_scalar_register_line('fmov', 'w11', 's9'),
+                emitted_scalar_register_line('fmov', 'w12', 's10'),
+                emitted_scalar_immediate_line('and', 'w11', 'w11', 0x7fffffff, radix=16),
+                emitted_scalar_immediate_line('and', 'w12', 'w12', 0x80000000, radix=16),
+                emitted_scalar_register_line('orr', 'w11', 'w11', 'w12'),
+                emitted_scalar_register_line('fmov', 's11', 'w11'),
             ]
         )
     else:
         lines.extend(
             [
-                "  fmov x11, d9",
-                "  fmov x12, d10",
-                "  and x11, x11, #0x7fffffffffffffff",
-                "  and x12, x12, #0x8000000000000000",
-                "  orr x11, x11, x12",
-                "  fmov d11, x11",
+                emitted_scalar_register_line('fmov', 'x11', 'd9'),
+                emitted_scalar_register_line('fmov', 'x12', 'd10'),
+                emitted_scalar_immediate_line('and', 'x11', 'x11', 0x7fffffffffffffff, radix=16),
+                emitted_scalar_immediate_line('and', 'x12', 'x12', 0x8000000000000000, radix=16),
+                emitted_scalar_register_line('orr', 'x11', 'x11', 'x12'),
+                emitted_scalar_register_line('fmov', 'd11', 'x11'),
             ]
         )
     lines.extend(store_value_regs_to_value_slot(func, dest, 11))
@@ -1720,7 +1725,7 @@ def emit_fabs_intrinsic_call(
             f"self backend {callee} intrinsic currently only supports float/double in {func.name!r}"
         )
     lines = materialize_value(func, value, value_type, 9, module_symbols)
-    lines.append(f"  fabs {reg_name(ret_type, 11)}, {reg_name(value_type, 9)}")
+    lines.append(emitted_scalar_register_line('fabs', reg_name(ret_type, 11), reg_name(value_type, 9)))
     lines.extend(store_value_regs_to_value_slot(func, dest, 11))
     return lines
 
@@ -1803,7 +1808,7 @@ def _emit_frint_intrinsic_call(
             f"self backend {callee} intrinsic currently only supports float/double in {func.name!r}"
         )
     lines = materialize_value(func, value, value_type, 9, module_symbols)
-    lines.append(f"  {asm_op} {reg_name(ret_type, 11)}, {reg_name(value_type, 9)}")
+    lines.append(emitted_scalar_register_line(asm_op, reg_name(ret_type, 11), reg_name(value_type, 9)))
     lines.extend(store_value_regs_to_value_slot(func, dest, 11))
     return lines
 
@@ -1832,7 +1837,7 @@ def emit_sqrt_intrinsic_call(
             f"self backend {callee} intrinsic currently only supports float/double in {func.name!r}"
         )
     lines = materialize_value(func, value, value_type, 9, module_symbols)
-    lines.append(f"  fsqrt {reg_name(ret_type, 11)}, {reg_name(value_type, 9)}")
+    lines.append(emitted_scalar_register_line('fsqrt', reg_name(ret_type, 11), reg_name(value_type, 9)))
     lines.extend(store_value_regs_to_value_slot(func, dest, 11))
     return lines
 
@@ -1876,7 +1881,7 @@ def emit_is_fpclass_intrinsic_call(
     fraction_mask = 0x000FFFFFFFFFFFFF if value_type.width > 32 else 0x007FFFFF
     quiet_nan_bit = 0x0008000000000000 if value_type.width > 32 else 0x00400000
     lines = materialize_value(func, value, value_type, 9, module_symbols)
-    lines.append(f"  fmov {bits_reg}, {reg_name(value_type, 9)}")
+    lines.append(emitted_scalar_register_line('fmov', bits_reg, reg_name(value_type, 9)))
     lines.append(emitted_movewide_instruction_line("movz", "w11", 0))
     handled_mask = 0
 
@@ -1887,51 +1892,51 @@ def emit_is_fpclass_intrinsic_call(
             lines.extend(emit_const_to_reg(int_type, mask_reg, value_bits))
             lines.append(emitted_compare_register_line(bits_reg, mask_reg))
         lines.append(emitted_cset_line("w14", "eq"))
-        lines.append("  orr w11, w11, w14")
+        lines.append(emitted_scalar_register_line('orr', 'w11', 'w11', 'w14'))
 
     def _start_sign_predicate(negative: bool) -> None:
         lines.extend(emit_const_to_reg(int_type, mask_reg, sign_bit))
-        lines.append(f"  tst {bits_reg}, {mask_reg}")
+        lines.append(emitted_scalar_register_line('tst', bits_reg, mask_reg))
         lines.append(emitted_cset_line("w14", "ne" if negative else "eq"))
 
     def _and_exponent_zero(expected_zero: bool) -> None:
         lines.extend(emit_const_to_reg(int_type, mask_reg, exponent_mask))
-        lines.append(f"  and {tmp_reg}, {bits_reg}, {mask_reg}")
+        lines.append(emitted_scalar_register_line('and', tmp_reg, bits_reg, mask_reg))
         lines.append(emitted_compare_immediate_line(tmp_reg, 0))
         lines.append(emitted_cset_line("w15", "eq" if expected_zero else "ne"))
-        lines.append("  and w14, w14, w15")
+        lines.append(emitted_scalar_register_line('and', 'w14', 'w14', 'w15'))
 
     def _and_exponent_all(expected_all: bool) -> None:
         lines.extend(emit_const_to_reg(int_type, mask_reg, exponent_mask))
-        lines.append(f"  and {tmp_reg}, {bits_reg}, {mask_reg}")
+        lines.append(emitted_scalar_register_line('and', tmp_reg, bits_reg, mask_reg))
         lines.append(emitted_compare_register_line(tmp_reg, mask_reg))
         lines.append(emitted_cset_line("w15", "eq" if expected_all else "ne"))
-        lines.append("  and w14, w14, w15")
+        lines.append(emitted_scalar_register_line('and', 'w14', 'w14', 'w15'))
 
     def _and_fraction_zero(expected_zero: bool) -> None:
         lines.extend(emit_const_to_reg(int_type, mask_reg, fraction_mask))
-        lines.append(f"  and {tmp2_reg}, {bits_reg}, {mask_reg}")
+        lines.append(emitted_scalar_register_line('and', tmp2_reg, bits_reg, mask_reg))
         lines.append(emitted_compare_immediate_line(tmp2_reg, 0))
         lines.append(emitted_cset_line("w15", "eq" if expected_zero else "ne"))
-        lines.append("  and w14, w14, w15")
+        lines.append(emitted_scalar_register_line('and', 'w14', 'w14', 'w15'))
 
     def _and_quiet_nan_bit_set(expected_set: bool) -> None:
         lines.extend(emit_const_to_reg(int_type, mask_reg, quiet_nan_bit))
-        lines.append(f"  tst {bits_reg}, {mask_reg}")
+        lines.append(emitted_scalar_register_line('tst', bits_reg, mask_reg))
         lines.append(emitted_cset_line("w15", "ne" if expected_set else "eq"))
-        lines.append("  and w14, w14, w15")
+        lines.append(emitted_scalar_register_line('and', 'w14', 'w14', 'w15'))
 
     def _or_normal(negative: bool) -> None:
         _start_sign_predicate(negative)
         _and_exponent_zero(False)
         _and_exponent_all(False)
-        lines.append("  orr w11, w11, w14")
+        lines.append(emitted_scalar_register_line('orr', 'w11', 'w11', 'w14'))
 
     def _or_subnormal(negative: bool) -> None:
         _start_sign_predicate(negative)
         _and_exponent_zero(True)
         _and_fraction_zero(False)
-        lines.append("  orr w11, w11, w14")
+        lines.append(emitted_scalar_register_line('orr', 'w11', 'w11', 'w14'))
 
     def _or_nan(signaling: bool) -> None:
         # LLVM defines these mask bits in llvm/ADT/FloatingPointMode.h's
@@ -1943,7 +1948,7 @@ def emit_is_fpclass_intrinsic_call(
             _and_quiet_nan_bit_set(False)
         else:
             _and_quiet_nan_bit_set(True)
-        lines.append("  orr w11, w11, w14")
+        lines.append(emitted_scalar_register_line('orr', 'w11', 'w11', 'w14'))
 
     if mask & 0x1:
         _or_nan(signaling=True)
@@ -2382,7 +2387,7 @@ def emit_call_instruction_indexed(
                 value_id=callee_value_id,
             )
         )
-        lines.append("  blr x12")
+        lines.append(emitted_indirect_branch_line('blr', 'x12'))
     else:
         from .self_backend_aarch64_gc_calls import gc_short_call_lines
 
@@ -2519,7 +2524,7 @@ def emit_call_instruction(
             raise BackendUnavailable(
                 f"self backend llvm.trap expects 0 args in {func.name!r}"
             )
-        return ["  brk #0"]
+        return [emitted_fixed_instruction_line('brk #0')]
     if not is_indirect and callee in ("llvm.threadlocal.address", "llvm.threadlocal.address.p0"):
         if (len(args) != 1 or not ret_type.is_ptr or not args[0][0].is_ptr
                 or not args[0][1].startswith("@")
@@ -2542,7 +2547,7 @@ def emit_call_instruction(
             symbol = asm_symbol(args[0][1][1:], module_symbols)
             lines = emitted_global_address_lines("x0", symbol, False)
             lines.append(emitted_memory_instruction_line("ldr", "x16", "x0"))
-            lines.append("  blr x16")
+            lines.append(emitted_indirect_branch_line('blr', 'x16'))
             result_register = 0
         committed = commit_allocated_scalar_result(
             func, dest, ret_type, "x" + str(result_register),
@@ -2559,10 +2564,10 @@ def emit_call_instruction(
         lines = materialize_value(func, args[0][1], args[0][0], 9, module_symbols)
         for first in range(19, 31, 2):
             offset = (first - 19) * 8
-            lines.append(f"  stp x{first}, x{first + 1}, [x9, #{offset}]")
+            lines.append(emitted_pair_instruction_line('stp', f'x{first}', f'x{first + 1}', 'x9', offset, explicit_offset=True))
         lines.extend([
-            "  mov x10, sp", "  stp x10, xzr, [x9, #96]",
-            "  stp xzr, xzr, [x9, #112]",
+            emitted_move_register_line('x10', 'sp'), emitted_pair_instruction_line('stp', 'x10', 'xzr', 'x9', 96, explicit_offset=True),
+            emitted_pair_instruction_line('stp', 'xzr', 'xzr', 'x9', 112, explicit_offset=True),
         ])
         if dest is not None and parsed_function_has_value_slot(func, dest):
             lines.extend(store_value_regs_to_value_slot(func, dest, 10))
@@ -2576,7 +2581,7 @@ def emit_call_instruction(
             )
         if dest is None or not parsed_function_has_value_slot(func, dest):
             return []
-        lines = ["  mov x10, x29"]
+        lines = [emitted_move_register_line('x10', 'x29')]
         lines.extend(store_value_regs_to_value_slot(func, dest, 10))
         return lines
     if not is_indirect and callee.startswith("llvm.bswap."):
@@ -2921,7 +2926,7 @@ def emit_call_instruction(
                 value_id=indirect_callee_value_id,
             )
         )
-        lines.append("  blr x12")
+        lines.append(emitted_indirect_branch_line('blr', 'x12'))
     else:
         lines.append(
             emitted_direct_call_line(

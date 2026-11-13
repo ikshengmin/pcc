@@ -3379,6 +3379,82 @@
           "reason": "New source implementation and complete source/native/reference obligations; full-feature acceptance has not been established for this revision. Official Go comparison, whole-language results and native pcc1 qualification must remain separately reported."
         }
       ]
+    },
+    {
+      "id": "go.expressions.elided-composite-literal-types",
+      "title": "Elided element types in array composite literals",
+      "chapter_ids": [
+        "expressions",
+        "types"
+      ],
+      "scope": "Elided element literal types: within an array composite literal an element or key that is itself a composite literal may omit its type, which becomes the element type (array or admitted record); a type-less literal anywhere else (struct fields, keys of arrays, statements) is a missing-type source error. An elided &T for pointer elements stays the addressed-composite gap. Slice types are ordinary syntax everywhere; outside signatures the checker keeps go.unsupported.slice-storage at the same type, so the unchanged math/bits bits_test.go parses past its TestReverse table to the function literal at 716:10. No slices, maps, nested arrays, shared runtime or native pcc1 claim.",
+      "tests": [
+        "tests/go/test_elided_composite_literals.py::test_elided_elements_are_type_less_composite_nodes",
+        "tests/go/test_elided_composite_literals.py::test_slice_types_parse_outside_signatures",
+        "tests/go/test_elided_composite_literals.py::test_fixture_compiles_without_an_external_owner",
+        "tests/go/test_elided_composite_literals.py::test_fixture_runs_natively_with_owned_compile_assemble_and_link",
+        "tests/go/test_elided_composite_literals.py::test_reference_toolchain_computes_the_same_values",
+        "tests/go/test_elided_composite_literals.py::test_fixture_executes_linux_owned_observers",
+        "tests/go/test_elided_composite_literals.py::test_invalid_elisions_are_source_errors",
+        "tests/go/test_elided_composite_literals.py::test_reference_rejects_the_same_sources_at_the_same_positions",
+        "tests/go/test_elided_composite_literals.py::test_remaining_literal_shapes_stay_explicit",
+        "tests/go/test_elided_composite_literals.py::test_math_bits_external_test_package_now_stops_at_a_function_literal"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:0c78cd6cc3400f0f19c603722ff1cf6857a8d972e1c97da6e6d7736a8c3e9646",
+        "sources": [
+          {
+            "path": "pcc/frontends/go/sema.py",
+            "sha256": "af5dc9408f3835d8ba7eba86f1fb47fc78b00306c25d381f35730d764b412244"
+          },
+          {
+            "path": "pcc/frontends/go/syntax.py",
+            "sha256": "19131c68a60a6909e7a784eb1254ea54bc4cb22369cdc9962d2419673d0b99f6"
+          },
+          {
+            "path": "tests/go/darwin_execution.py",
+            "sha256": "77f97901f7f91264c096f81cfd2aba96d8961e8b2ad94d6e056359b7559ae113"
+          },
+          {
+            "path": "tests/go/test_elided_composite_literals.py",
+            "sha256": "f57eca15ae2704aeffe5e8e616583b100bbbbaf2bf08ff2a343e3f66697c1542"
+          },
+          {
+            "path": "tests/go/fixtures/elided_composite_literals.go",
+            "sha256": "9c471f37d4429f95b076ea2179c715746318c0873c5547436dce5b3354bf716d"
+          }
+        ]
+      },
+      "acceptance": [
+        {
+          "id": "elided-literals-linux-pcc0-self",
+          "kind": "full-feature",
+          "scope": "Elided element literal types: within an array composite literal an element or key that is itself a composite literal may omit its type, which becomes the element type (array or admitted record); a type-less literal anywhere else (struct fields, keys of arrays, statements) is a missing-type source error. An elided &T for pointer elements stays the addressed-composite gap. Slice types are ordinary syntax everywhere; outside signatures the checker keeps go.unsupported.slice-storage at the same type, so the unchanged math/bits bits_test.go parses past its TestReverse table to the function literal at 716:10. No slices, maps, nested arrays, shared runtime or native pcc1 claim.",
+          "status": "unrun",
+          "source_revision": "sha256:0c78cd6cc3400f0f19c603722ff1cf6857a8d972e1c97da6e6d7736a8c3e9646",
+          "mode": "pcc0",
+          "platform": "linux-x86_64",
+          "backend": "self",
+          "gc": "not_applicable",
+          "required_tests": [
+            "tests/go/test_elided_composite_literals.py::test_elided_elements_are_type_less_composite_nodes",
+            "tests/go/test_elided_composite_literals.py::test_slice_types_parse_outside_signatures",
+            "tests/go/test_elided_composite_literals.py::test_fixture_compiles_without_an_external_owner",
+            "tests/go/test_elided_composite_literals.py::test_fixture_runs_natively_with_owned_compile_assemble_and_link",
+            "tests/go/test_elided_composite_literals.py::test_reference_toolchain_computes_the_same_values",
+            "tests/go/test_elided_composite_literals.py::test_fixture_executes_linux_owned_observers",
+            "tests/go/test_elided_composite_literals.py::test_invalid_elisions_are_source_errors",
+            "tests/go/test_elided_composite_literals.py::test_reference_rejects_the_same_sources_at_the_same_positions",
+            "tests/go/test_elided_composite_literals.py::test_remaining_literal_shapes_stay_explicit",
+            "tests/go/test_elided_composite_literals.py::test_math_bits_external_test_package_now_stops_at_a_function_literal"
+          ],
+          "evidence": [],
+          "reason": "Local Mac evidence only: owned arm64 Darwin execution of four observers matched a local development go1.23.6 reference, and five rejections matched its positions; the Linux owned observers and the pinned go1.27.3 official comparison are UNRUN."
+        }
+      ]
     }
   ],
   "diagnostics": {

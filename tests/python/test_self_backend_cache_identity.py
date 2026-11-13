@@ -23,7 +23,29 @@ def test_emitter_identity_tracks_only_self_backend_implementation(tmp_path):
     emitter_change = self_backend_emitter_source_identity(tmp_path)
     object_emitter.write_text("OBJECT = 2\n", encoding="utf-8")
     object_change = self_backend_emitter_source_identity(tmp_path)
+    # The direct producer is outside the self_backend*.py family glob.
+    producer = backend_dir / "arm64_encode_producer.py"
+    producer.write_text("ENCODER = 1\n", encoding="utf-8")
+    producer_added = self_backend_emitter_source_identity(tmp_path)
+    producer.write_text("ENCODER = 2\n", encoding="utf-8")
+    producer_changed = self_backend_emitter_source_identity(tmp_path)
+    fp_immediates = backend_dir / "aarch64_fp_immediates.py"
+    fp_immediates.write_text("FP_IMMEDIATES = 1\n", encoding="utf-8")
+    fp_immediates_added = self_backend_emitter_source_identity(tmp_path)
+    fp_immediates.write_text("FP_IMMEDIATES = 2\n", encoding="utf-8")
+    fp_immediates_changed = self_backend_emitter_source_identity(tmp_path)
+    semantics = backend_dir / "self_backend_aarch64_semantics.py"
+    semantics.write_text("SEMANTICS = 1\n", encoding="utf-8")
+    semantics_added = self_backend_emitter_source_identity(tmp_path)
+    semantics.write_text("SEMANTICS = 2\n", encoding="utf-8")
+    semantics_changed = self_backend_emitter_source_identity(tmp_path)
 
     assert unrelated_change == first
     assert emitter_change != first
     assert object_change != emitter_change
+    assert producer_added != object_change
+    assert producer_changed != producer_added
+    assert fp_immediates_added != producer_changed
+    assert fp_immediates_changed != fp_immediates_added
+    assert semantics_added != fp_immediates_changed
+    assert semantics_changed != semantics_added

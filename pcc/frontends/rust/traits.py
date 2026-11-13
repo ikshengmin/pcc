@@ -249,6 +249,8 @@ class StaticTraits:
         for name, bounds in function.effective_parameter_bounds:
             local, markers = set(), []
             for bound in bounds:
+                if bound.generic:
+                    raise bound.token.error('generic arguments and associated item constraints on trait bounds require trait/projection solving, which is not implemented')
                 if bound.path not in self.traits or bound.path in scope:
                     markers.append(bound)
                     continue

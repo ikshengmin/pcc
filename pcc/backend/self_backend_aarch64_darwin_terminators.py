@@ -538,4 +538,4 @@ def emit_switch_terminator_indexed(
 
 
 def emit_unreachable_terminator() -> list[str]:
-    return ["  brk #0"]
+    return [emitted_fixed_instruction_line("brk #0")]

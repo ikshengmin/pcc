@@ -45,6 +45,8 @@ from .self_backend_aarch64_darwin_abi import (
     reg_name_indexed,
 )
 from .self_backend_aarch64_darwin_mem import (
+    emitted_scalar_register_line,
+    emitted_scalar_immediate_line,
     emitted_frame_pair_line,
     emitted_memory_instruction_line,
     emitted_move_register_line,
@@ -2426,7 +2428,7 @@ def commit_allocated_scalar_result(
         # Mirror the pre-existing slot round trip: i1/i8 use a byte slot and
         # i16 a halfword slot.  Wider sub-i32 values already use a word slot.
         mask = 0xFF if value_type.width <= 8 else 0xFFFF
-        return [f"  and {dest_reg}, {source_reg}, #0x{mask:x}"]
+        return [emitted_scalar_immediate_line("and", dest_reg, source_reg, mask, radix=16)]
     if dest_reg == source_reg:
         return []
     return [emitted_move_register_line(dest_reg, source_reg)]
@@ -2453,7 +2455,7 @@ def commit_allocated_scalar_result_indexed(
     type_header: CompilerInt4 = kernel.type_header(type_id)
     if type_header.first == TYPE_KIND_INT and type_header.second <= 16:
         mask = 0xFF if type_header.second <= 8 else 0xFFFF
-        return [f"  and {dest_reg}, {source_reg}, #0x{mask:x}"]
+        return [emitted_scalar_immediate_line("and", dest_reg, source_reg, mask, radix=16)]
     if dest_reg == source_reg:
         return []
     return [emitted_move_register_line(dest_reg, source_reg)]

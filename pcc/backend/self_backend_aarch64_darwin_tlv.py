@@ -20,6 +20,13 @@ which is exactly what its rewritten form guarantees.
 from __future__ import annotations
 
 from .arm64_encode import lse_atomic_kind
+from .self_backend_aarch64_darwin_mem import (
+    emitted_addsub_immediate_line,
+    emitted_fixed_instruction_line,
+    emitted_global_address_lines,
+    emitted_memory_instruction_line,
+    emitted_move_register_line,
+)
 
 _X0 = 1
 _X16 = 2
@@ -120,25 +127,24 @@ def tlv_resolver_lines(symbol: str, reg: str, preserve: int, *, emitted: bool = 
     slots = {name: 8 * index for index, name in enumerate(stored)}
     lines = []
     if frame:
-        lines.append("  sub sp, sp, #" + str(frame))
+        lines.append(emitted_addsub_immediate_line("sub", "sp", "sp", frame))
     for name in stored:
-        lines.append("  str " + name + ", " + _slot(slots[name]))
+        lines.append(emitted_memory_instruction_line("str", name, "sp", slots[name]))
     if keep_flags:
-        lines.append("  mrs x17, nzcv")
-        lines.append("  str x17, " + _slot(nzcv_slot))
-    lines.append("  adrp x0, " + symbol + "@PAGE")
-    lines.append("  add x0, x0, " + symbol + "@PAGEOFF")
-    lines.append("  ldr x16, [x0]")
-    lines.append("  blr x16")
+        lines.append(emitted_fixed_instruction_line("mrs x17, nzcv"))
+        lines.append(emitted_memory_instruction_line("str", "x17", "sp", nzcv_slot))
+    lines.extend(emitted_global_address_lines("x0", symbol, False))
+    lines.append(emitted_memory_instruction_line("ldr", "x16", "x0"))
+    lines.append(emitted_fixed_instruction_line("blr x16"))
     if keep_flags:
-        lines.append("  ldr x17, " + _slot(nzcv_slot))
-        lines.append("  msr nzcv, x17")
+        lines.append(emitted_memory_instruction_line("ldr", "x17", "sp", nzcv_slot))
+        lines.append(emitted_fixed_instruction_line("msr nzcv, x17"))
     if reg != "x0":
-        lines.append("  mov " + reg + ", x0")
+        lines.append(emitted_move_register_line(reg, "x0"))
     for name in restored:
-        lines.append("  ldr " + name + ", " + _slot(slots[name]))
+        lines.append(emitted_memory_instruction_line("ldr", name, "sp", slots[name]))
     if frame:
-        lines.append("  add sp, sp, #" + str(frame))
+        lines.append(emitted_addsub_immediate_line("add", "sp", "sp", frame))
     return lines
 
 

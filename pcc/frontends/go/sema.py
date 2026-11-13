@@ -1320,7 +1320,16 @@ class Analyzer:
                 raise GoDiagnostic(expr.token, "multiple indices require a generic function instantiation")
         if kind in ("array", "composite"):
             syntax = expr.value
-            if isinstance(syntax, ArraySyntax) and syntax.length is None:
+            if syntax is None:
+                # Only an array/slice/map element may elide its literal type.
+                if expr.elided_type is None:
+                    raise GoDiagnostic(expr.token, "missing type in composite literal")
+                if isinstance(underlying(expr.elided_type), PointerType):
+                    raise UnsupportedGo(expr.token, 'go.unsupported.pointer-composite-address',
+                                        "an elided &T composite literal requires distinct allocation/lifetime analysis")
+                expr.type = expr.elided_type
+                dtype = underlying(expr.type)
+            elif isinstance(syntax, ArraySyntax) and syntax.length is None:
                 element = self.resolve_type(syntax.element)
                 if (not isinstance(element, TypeParameter) and not is_integer(element)
                         and not is_boolean(element) and not isinstance(underlying(element), StructType)):
@@ -1375,6 +1384,8 @@ class Analyzer:
                 for index, item in zip(indices, expr.args):
                     if index >= dtype.count:
                         raise GoDiagnostic(item.token, "array literal index out of bounds")
+                    if item.kind == "composite" and item.value is None:
+                        item.elided_type = dtype.element
                     self.expression(item)
                     coerce(item, dtype.element)
             if self.function is not None:

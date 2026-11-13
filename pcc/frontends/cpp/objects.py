@@ -1,8 +1,9 @@
 """Namespace objects with checked identity, linkage and static initialization.
 
 This is not a dynamic-initialization runtime: only target-proven integral/enum
-values, zero initialization, null pointers and addresses of declared namespace
-objects are admitted. Class lifetime, floating constant evaluation, inline/TLS,
+values, zero initialization, null pointers, addresses of declared namespace
+objects and static data members, and ordinary string literals (a `const char*`
+initialized with the literal's static array, [conv.array]) are admitted. Class lifetime, floating constant evaluation, inline/TLS,
 block extern/static and dependent object declarations stay explicit gaps.
 
 Rules: N4659 [basic.def], [basic.link], [basic.start.static], [dcl.init].
@@ -16,6 +17,52 @@ from pcc.frontends.cpp.constants import KNOWN, converted_fact
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.sema import Symbol
 from pcc.frontends.cpp.types import ConstType, array_type, is_enum_type, pointer_type, unqualified
+
+
+def static_initializer(parser, dtype, coord):
+    """`= expression` of an object with static storage duration ([basic.start.static]).
+
+    Returns the projected constant initializer and, for integral/enum types,
+    its proof. Anything needing dynamic initialization stays explicit.
+    """
+    equals = parser._accept("=")
+    if parser._peek().value == "{":
+        raise CppDiagnostic("cpp.unsupported.namespace-object-initialization",
+                            "namespace list initialization is not implemented", parser._peek().coord)
+    assert equals is not None
+    expression = parser._expression()
+    parser._require_value(expression)
+    converted = parser._convert(expression, dtype, coord)
+    if pointer_type(dtype):
+        if expression.null_pointer or expression.static_address is not None:
+            # A null pointer is a target pointer constant, not a host int.
+            return converted, None
+        node = expression.node
+        if isinstance(node, c_ast.Constant) and node.type == "string":
+            # The literal's array object has static storage; its decayed
+            # address is an address constant ([expr.const]/6).
+            return converted, None
+        raise CppDiagnostic("cpp.unsupported.static-initialization-analysis",
+                            "pointer static initializer requires a null constant, a string literal or a namespace object address", coord)
+    if parser.types.integral(dtype) or is_enum_type(dtype):
+        proof = converted_fact(parser._constant_fact(expression), dtype, parser.types, coord)
+        if proof.status != KNOWN:
+            raise CppDiagnostic("cpp.unsupported.dynamic-initialization",
+                                "initializer is not a modeled target constant; dynamic initialization is not implemented", coord)
+        # Static storage needs a typed constant initializer. This does not
+        # fold executable expressions or publish a mutable object's proof.
+        return parser._enum_constant_expression(dtype, proof.value, coord).node, proof
+    raise CppDiagnostic("cpp.unsupported.static-initialization-analysis",
+                        "floating static constant evaluation is not implemented", coord)
+
+
+def zero_initializer(parser, dtype, coord):
+    """[dcl.init]/6: a definition without an initializer is zero-initialized."""
+    if isinstance(dtype, ConstType):
+        raise CppDiagnostic("cpp.const-initializer", "const objects require an initializer", coord)
+    zero = c_ast.Constant("int", "0", coord)
+    target = c_ast.Typename(None, [], parser._scalar_type(None, dtype, coord), coord)
+    return c_ast.Cast(target, zero, coord)
 
 
 def parse_namespace_object(parser, name, dtype, storage, implicit_extern=False):
@@ -51,40 +98,9 @@ def parse_namespace_object(parser, name, dtype, storage, implicit_extern=False):
     init = None
     proof = None
     if has_initializer:
-        equals = parser._accept("=")
-        if parser._peek().value == "{":
-            raise CppDiagnostic("cpp.unsupported.namespace-object-initialization",
-                                "namespace list initialization is not implemented", parser._peek().coord)
-        assert equals is not None
-        expression = parser._expression()
-        parser._require_value(expression)
-        converted = parser._convert(expression, dtype, coord)
-        if pointer_type(dtype):
-            if expression.null_pointer:
-                # A null pointer is a target pointer constant, not a host int.
-                init = converted
-            elif expression.static_address is not None:
-                init = converted
-            else:
-                raise CppDiagnostic("cpp.unsupported.static-initialization-analysis",
-                                    "pointer static initializer requires a null constant or namespace object address", coord)
-        elif parser.types.integral(dtype) or is_enum_type(dtype):
-            proof = converted_fact(parser._constant_fact(expression), dtype, parser.types, coord)
-            if proof.status != KNOWN:
-                raise CppDiagnostic("cpp.unsupported.dynamic-initialization",
-                                    "initializer is not a modeled target constant; dynamic initialization is not implemented", coord)
-            # Static storage needs a typed constant initializer. This does not
-            # fold executable expressions or publish a mutable object's proof.
-            init = parser._enum_constant_expression(dtype, proof.value, coord).node
-        else:
-            raise CppDiagnostic("cpp.unsupported.static-initialization-analysis",
-                                "floating static constant evaluation is not implemented", coord)
+        init, proof = static_initializer(parser, dtype, coord)
     elif definition:
-        if isinstance(dtype, ConstType):
-            raise CppDiagnostic("cpp.const-initializer", "const objects require an initializer", coord)
-        zero = c_ast.Constant("int", "0", coord)
-        target = c_ast.Typename(None, [], parser._scalar_type(None, dtype, coord), coord)
-        init = c_ast.Cast(target, zero, coord)
+        init = zero_initializer(parser, dtype, coord)
     if parser._peek().value == ",":
         raise CppDiagnostic("cpp.unsupported.init-declarator-list",
                             "multiple object declarators require separate point-of-declaration processing", parser._peek().coord)

@@ -252,7 +252,9 @@ def test_parser_frontier_under_an_actual_darwin_target_check(tmp_path):
     checked = check_rust_source(source, toolchain=toolchain(), evidence_directory=tmp_path / 'actual-check',
                                 target_triple='aarch64-apple-darwin', edition=2015)
     parser = Parser(source, source_path='src/lib.rs', edition=2015, rustc_check=checked)
-    with pytest.raises(RustError, match=r'^src/lib\.rs: 367:16: generic trait bounds and associated projections are not implemented$'):
+    # Formerly 367:16, the bound Iterator<Item = Result<&'a T, E>> of
+    # `convert`; now the outlives bound `T: 'a` of `struct Convert`.
+    with pytest.raises(RustError, match=r'^src/lib\.rs: 373:28: generic bounds and default arguments require trait/constraint checking, which is not implemented$'):
         parser.parse()
     # Both blanket trait impls before it were parsed and retained.
     assert [str(item.owner) for item in parser.implementations if item.trait] == ["&'a mut I"]

@@ -85,6 +85,7 @@ def emit_function_prologue(
     *,
     registers_prepared: bool = False,
     padding=(),
+    native_events=None,
 ) -> list[str]:
     from .definition_linkage import checked_function_definition_linkage
     linkage = checked_function_definition_linkage(func, module_symbols.target_triple)
@@ -106,18 +107,32 @@ def emit_function_prologue(
             and func.name in func.type_context.debug_info.functions):
         func.aarch64_frameless = False
     symbol = asm_symbol(func.name, module_symbols)
-    lines = ["", ".p2align 2"]
-    if func.is_global:
-        lines.append(f".globl {symbol}")
-    if linkage == "external_odr":
-        lines.append(f".weak_definition {symbol}")
-    lines.append(f"{symbol}:")
+    lines = []
+    if native_events is None:
+        lines.extend(["", ".p2align 2"])
+        if func.is_global:
+            lines.append(f".globl {symbol}")
+        if linkage == "external_odr":
+            lines.append(f".weak_definition {symbol}")
+        lines.append(f"{symbol}:")
+    else:
+        from .self_backend_aarch64_fragments import (
+            EMISSION_DIRECTIVE_P2ALIGN, EMISSION_DIRECTIVE_GLOBAL,
+            EMISSION_DIRECTIVE_WEAK_DEFINITION,
+        )
+        native_events.append_empty()
+        native_events.append_code_directive(EMISSION_DIRECTIVE_P2ALIGN, 2)
+        if func.is_global:
+            native_events.append_code_directive(EMISSION_DIRECTIVE_GLOBAL, symbol=symbol)
+        if linkage == "external_odr":
+            native_events.append_code_directive(EMISSION_DIRECTIVE_WEAK_DEFINITION, symbol=symbol)
+        native_events.append_label(symbol)
     linux = is_aarch64_linux_triple(module_symbols.target_triple)
     func.platform_frame_extra = 192 if linux and func.is_vararg else 0
     if linux and func.name == "_start":
         if len(func.args) != 1 or not func.args[0].type.is_ptr or not func.ret_type.is_void:
             raise ValueError("Linux _start requires void (ptr initial_stack)")
-        lines.append("  mov x0, sp")
+        lines.append(emitted_move_register_line("x0", "sp"))
     if func.platform_frame_extra:
         func.aarch64_frameless = False
     func.aarch64_dynamic_stack = function_uses_dynamic_alloca(func)
@@ -180,8 +195,8 @@ def emit_function_prologue(
     if func.platform_frame_extra:
         # Preserve incoming variadic registers before normal argument lowering.
         for index in range(8):
-            lines.append(f"  str x{index}, [sp, #{index * 8}]")
-            lines.append(f"  str q{index}, [sp, #{64 + index * 16}]")
+            lines.append(emitted_memory_instruction_line("str", "x" + str(index), "sp", index * 8, explicit_offset=True))
+            lines.append(emitted_memory_instruction_line("str", "q" + str(index), "sp", 64 + index * 16, explicit_offset=True))
     kernel = get_indexed_function_kernel(func)
     if func.indexed_slot_projection and kernel.hidden_sret_slot_id >= 0:
         hidden_slot_id = kernel.hidden_sret_slot_id

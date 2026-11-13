@@ -2578,6 +2578,21 @@
       "status": "missing"
     },
     {
+      "id": "rust.traits.bound-argument-syntax",
+      "title": "Trait bound generic arguments and associated item constraints with an explicit semantic gap",
+      "chapter_ids": [
+        "rust.ref.10.6"
+      ],
+      "scope": "Explicitly unimplemented semantics with owned syntax: trait bounds with generic arguments (`Tr<'a, u8>`) and associated item constraints (`I: Iterator<Item = Result<&'a T, E>>`) are parsed and retained in source order, including split closing angles; misordered lifetimes (E0747) and arguments after a constraint are parse errors as in rustc. Every semantic owner (standard markers, local trait bounds, associated type bounds) rejects a bound carrying them, since trait and projection solving are not implemented; associated type bounds (`Item: Copy`) remain a parse-time gap. fallible-streaming-iterator's parser frontier moves from lib.rs:367:16 to 373:28 under an actual aarch64-apple-darwin check (local Mac rustc 1.92.0 receipt); the Linux-target lane is unrun.",
+      "tests": [
+        "tests/rust/test_rust_trait_bound_arguments.py",
+        "tests/rust/test_fallible_streaming_iterator_project.py::test_parser_frontier_under_an_actual_darwin_target_check@rust-native-reference"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "status": "missing"
+    },
+    {
       "id": "rust.enums.payload-values",
       "title": "Tagged payload enums and by-value bindings",
       "chapter_ids": [

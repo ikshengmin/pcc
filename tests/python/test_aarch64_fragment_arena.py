@@ -698,3 +698,220 @@ def test_typed_memory_barrier_rejection_preserves_root_and_record_storage(monkey
         owner.close()
     with pytest.raises(RuntimeError, match="closed"):
         owner.append_memory_pair_barrier(current, True)
+
+
+@pytest.mark.parametrize("operation, expected", [
+    ("mul", ["mul"]), ("sdiv", ["sdiv"]), ("udiv", ["udiv"]),
+    ("and", ["and"]), ("or", ["orr"]), ("xor", ["eor"]),
+    ("shl", ["lslv"]), ("lshr", ["lsrv"]), ("ashr", ["asrv"]),
+    ("srem", ["sdiv", "msub"]), ("urem", ["udiv", "msub"]),
+])
+def test_direct_producer_captures_only_selected_opcode(operation, expected):
+    from pcc.backend import self_backend_aarch64_darwin_mem as mem
+    from pcc.backend.self_backend_aarch64_darwin_ops import emit_binop
+    from pcc.backend.self_backend_aarch64_semantics import OPCODE_NAMES
+    from pcc.backend.self_backend_ir import TypeDesc
+
+    mem.begin_direct_instruction_capture(capture_semantics=True)
+    try:
+        lines = emit_binop(operation, TypeDesc("int", 64))
+        records = mem.borrow_direct_instruction_records()
+        provenance = mem.borrow_direct_instruction_semantics()
+        assert len(records) == len(lines) * 4 == len(expected) * 4
+        assert [OPCODE_NAMES[provenance.require_header(i).first]
+                for i in range(len(lines))] == expected
+    finally:
+        mem.end_direct_instruction_capture()
+
+
+def test_direct_producer_preserves_mov_alias_and_explicit_shift():
+    from pcc.backend import self_backend_aarch64_darwin_mem as mem
+    from pcc.backend import self_backend_aarch64_semantics as sem
+
+    mem.begin_direct_instruction_capture(capture_semantics=True)
+    try:
+        mem.emitted_scalar_immediate_line("mov", "x9", "", 0)
+        mem.emitted_movewide_instruction_line("movz", "x9", 0)
+        mem.emitted_movewide_instruction_line("movz", "x9", 0, explicit_shift=True)
+        records = mem.borrow_direct_instruction_records()
+        owner = mem.borrow_direct_instruction_semantics()
+        assert records.get4_unchecked(0).first == records.get4_unchecked(1).first
+        assert [sem.OPCODE_NAMES[owner.require_header(i).first] for i in range(3)] == ["mov", "movz", "movz"]
+        assert owner.require_header(1).fourth == 2
+        assert owner.require_header(2).fourth == 3
+        assert owner.operand(2, 2).first == sem.TOKEN_SHIFT
+    finally:
+        mem.end_direct_instruction_capture()
+
+
+def test_direct_producer_preserves_sp_zero_register_and_address_form():
+    from pcc.backend import self_backend_aarch64_darwin_mem as mem
+    from pcc.backend import self_backend_aarch64_semantics as sem
+
+    mem.begin_direct_instruction_capture(capture_semantics=True)
+    try:
+        mem.emitted_memory_instruction_line("str", "xzr", "sp")
+        mem.emitted_memory_instruction_line("str", "wzr", "x29", 4)
+        owner = mem.borrow_direct_instruction_semantics()
+        assert owner.operand(0, 0).second == sem.REGISTER_XZR
+        assert owner.operand(0, 1).second == sem.ADDRESS_BASE
+        assert owner.operand(0, 2).second == sem.REGISTER_SP
+        assert owner.operand(1, 0).second == sem.REGISTER_WZR
+        assert owner.operand(1, 1).second == sem.ADDRESS_OFFSET
+        assert owner.operand(1, 3).second == 4
+    finally:
+        mem.end_direct_instruction_capture()
+
+
+def test_direct_producer_rejects_unknown_without_text_fallback():
+    from pcc.backend import self_backend_aarch64_darwin_mem as mem
+
+    mem.begin_direct_instruction_capture(capture_semantics=True)
+    try:
+        mem.emitted_fixed_instruction_line("nop")
+        records = mem.borrow_direct_instruction_records()
+        owner = mem.borrow_direct_instruction_semantics()
+        lengths = (len(records), len(owner.headers), len(owner.tokens))
+        with pytest.raises(EncodeError):
+            mem.emitted_memory_instruction_line("unknown", "x9", "x10")
+        assert (len(records), len(owner.headers), len(owner.tokens)) == lengths
+    finally:
+        mem.end_direct_instruction_capture()
+    mem.begin_direct_instruction_capture(capture_semantics=True)
+    try:
+        assert len(mem.borrow_direct_instruction_records()) == 0
+        assert len(mem.borrow_direct_instruction_semantics().headers) == 0
+    finally:
+        mem.end_direct_instruction_capture()
+
+
+def test_direct_producer_rolls_back_record_publication(monkeypatch):
+    from pcc.backend import self_backend_aarch64_darwin_mem as mem
+    from pcc.backend.self_backend_value_arena import CompilerIntArena
+
+    mem.begin_direct_instruction_capture(capture_semantics=True)
+    try:
+        mem.emitted_fixed_instruction_line("nop")
+        records = mem.borrow_direct_instruction_records()
+        owner = mem.borrow_direct_instruction_semantics()
+        lengths = (len(records), len(owner.headers), len(owner.tokens))
+        original = CompilerIntArena.append4
+
+        def fail_after_append(self, first, second, third, fourth):
+            original(self, first, second, third, fourth)
+            if self is records:
+                raise MemoryError("instruction publication interrupted")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(CompilerIntArena, "append4", fail_after_append)
+            with pytest.raises(MemoryError, match="publication interrupted"):
+                mem.emitted_move_register_line("x9", "x10")
+        assert (len(records), len(owner.headers), len(owner.tokens)) == lengths
+        mem.emitted_move_register_line("x9", "x10")
+        assert len(records) == len(owner.headers) == 8
+    finally:
+        mem.end_direct_instruction_capture()
+
+
+def test_direct_producer_tlv_retains_exact_inactive_text():
+    from pcc.backend import self_backend_aarch64_darwin_mem as mem
+    from pcc.backend.self_backend_aarch64_darwin_tlv import tlv_resolver_lines
+
+    expected = [
+        "  sub sp, sp, #48", "  str x0, [sp]", "  str x16, [sp, #8]",
+        "  str x17, [sp, #16]", "  str x30, [sp, #24]", "  mrs x17, nzcv",
+        "  str x17, [sp, #32]", "  adrp x0, _tls@PAGE",
+        "  add x0, x0, _tls@PAGEOFF", "  ldr x16, [x0]", "  blr x16",
+        "  ldr x17, [sp, #32]", "  msr nzcv, x17", "  mov x9, x0",
+        "  ldr x0, [sp]", "  ldr x16, [sp, #8]", "  ldr x17, [sp, #16]",
+        "  ldr x30, [sp, #24]", "  add sp, sp, #48",
+    ]
+    assert tlv_resolver_lines("_tls", "x9", 31, emitted=True) == expected
+    mem.begin_direct_instruction_capture(capture_semantics=True)
+    try:
+        lines = tlv_resolver_lines("_tls", "x9", 31, emitted=True)
+        markers = [mem.DIRECT_INSTRUCTION_PLACEHOLDER] * len(expected)
+        markers[10] = mem.DIRECT_INDIRECT_CALL_INSTRUCTION_PLACEHOLDER
+        assert lines == markers
+        assert len(mem.borrow_direct_instruction_records()) == len(expected) * 4
+        assert len(mem.borrow_direct_instruction_semantics().headers) == len(expected) * 4
+    finally:
+        mem.end_direct_instruction_capture()
+
+
+@pytest.mark.parametrize("helper, arguments, keywords, expected", [
+    ("emitted_memory_instruction_line", ("str", "x9", "sp", 0), {"explicit_offset": True}, "  str x9, [sp, #0]"),
+    ("emitted_scalar_register_line", ("add", "x11", "x9", "x10"), {"explicit_shift": True}, "  add x11, x9, x10, lsl #0"),
+    ("emitted_scalar_immediate_line", ("and", "x9", "x9", 0xfffffffffffffff0), {"radix": 16}, "  and x9, x9, #0xfffffffffffffff0"),
+    ("emitted_atomic_instruction_line", ("ldaxr", "x11", "x9"), {}, "  ldaxr x11, [x9]"),
+    ("emitted_atomic_instruction_line", ("stlxr", "w13", "x9", "x12"), {}, "  stlxr w13, x12, [x9]"),
+    ("emitted_atomic_instruction_line", ("casal", "x10", "x9", "x11"), {}, "  casal x10, x11, [x9]"),
+    ("emitted_system_register_line", ("mrs", "x17", "tpidr_el0"), {}, "  mrs x17, tpidr_el0"),
+    ("emitted_indirect_branch_line", ("blr", "x12"), {}, "  blr x12"),
+    ("emitted_pair_instruction_line", ("stp", "x0", "x1", "x9", 0), {"explicit_offset": True}, "  stp x0, x1, [x9, #0]"),
+    ("emitted_fp_immediate_line", ("d10", "1.0"), {}, "  fmov d10, #1.0"),
+    ("emitted_fp_immediate_line", ("s10", "2.0"), {}, "  fmov s10, #2.0"),
+    ("emitted_vector_instruction_line", ("movi", 0), {}, "  movi v0.16b, #0"),
+    ("emitted_vector_instruction_line", ("cnt", 10, 10), {}, "  cnt v10.8b, v10.8b"),
+    ("emitted_vector_instruction_line", ("addv", 10, 10), {}, "  addv b10, v10.8b"),
+    ("emitted_vector_instruction_line", ("umov", 11, 10), {}, "  umov w11, v10.b[0]"),
+])
+def test_direct_producer_extended_shapes_preserve_text_and_provenance(helper, arguments, keywords, expected):
+    from pcc.backend import self_backend_aarch64_darwin_mem as mem
+    from pcc.backend.arm64_encode import assemble_text
+
+    emit = getattr(mem, helper)
+    assert emit(*arguments, **keywords) == expected
+    # MOVI is absent from the legacy text encoder; retain an explicit ISA
+    # word assertion rather than pretending this case ran a text oracle.
+    reference = ((0x4F00E400).to_bytes(4, "little")
+                 if helper == "emitted_vector_instruction_line" and arguments[0] == "movi"
+                 else assemble_text(expected + "\n").code)
+    mem.begin_direct_instruction_capture(capture_semantics=True)
+    try:
+        marker = (mem.DIRECT_INDIRECT_CALL_INSTRUCTION_PLACEHOLDER
+                  if helper == "emitted_indirect_branch_line" and arguments[0] == "blr"
+                  else mem.DIRECT_INSTRUCTION_PLACEHOLDER)
+        assert emit(*arguments, **keywords) == marker
+        records = mem.borrow_direct_instruction_records()
+        owner = mem.borrow_direct_instruction_semantics()
+        assert len(records) == len(owner.headers) == 4
+        assert records.get4_unchecked(0).first == int.from_bytes(reference, "little")
+        assert owner.require_header(0).first > 0
+    finally:
+        mem.end_direct_instruction_capture()
+
+
+@pytest.mark.parametrize("literal,width", [("1.0", 32), ("2.0", 64)])
+def test_direct_fp_constant_producer_retains_exact_literal(literal, width):
+    from pcc.backend import self_backend_aarch64_darwin_mem as mem
+    from pcc.backend.self_backend_aarch64_darwin_regs import emit_fp_constant
+    from pcc.backend.self_backend_aarch64_semantics import TOKEN_FLOAT_IMMEDIATE
+    from pcc.backend.self_backend_ir import TypeDesc
+
+    register = "s9" if width == 32 else "d9"
+    assert emit_fp_constant(TypeDesc("fp", width), register, literal) == ["  fmov " + register + ", #" + literal]
+    mem.begin_direct_instruction_capture(capture_semantics=True)
+    try:
+        assert emit_fp_constant(TypeDesc("fp", width), register, literal) == [mem.DIRECT_INSTRUCTION_PLACEHOLDER]
+        assert mem.borrow_direct_instruction_semantics().operand(0, 1).first == TOKEN_FLOAT_IMMEDIATE
+    finally:
+        mem.end_direct_instruction_capture()
+
+
+def test_direct_producer_transitive_source_inventory_has_no_raw_instructions():
+    import ast
+    from pathlib import Path
+    from pcc.backend import self_backend_aarch64_darwin_mem as mem
+
+    backend = Path(mem.__file__).parent
+    names = ["self_backend_aarch64_darwin_" + suffix + ".py" for suffix in (
+        "materialize", "addr", "memory", "regs", "regalloc", "slots", "flow",
+        "ops", "compute", "calls", "terminators", "returns", "abi", "tail_calls",
+        "branch_protection", "symbols",
+    )] + ["self_backend_aarch64_gc_calls.py", "self_backend_aarch64_linux.py"]
+    for name in names:
+        tree = ast.parse((backend / name).read_text())
+        assert not [node.lineno for node in ast.walk(tree)
+                    if isinstance(node, ast.Constant) and isinstance(node.value, str)
+                    and node.value.startswith("  ")], name

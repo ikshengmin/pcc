@@ -9,6 +9,14 @@ stack walk roots them.
 from __future__ import annotations
 
 from .self_backend_aarch64_darwin_mem import (
+    emitted_memory_instruction_line,
+    emitted_branch_line,
+    emitted_move_register_line,
+    emitted_scalar_register_line,
+    emitted_scalar_immediate_line,
+    emitted_addsub_immediate_line,
+    emitted_compare_immediate_line,
+
     emitted_direct_call_line,
     emitted_global_address_lines,
 )
@@ -50,7 +58,7 @@ _WALKED_FRAME_CALLS = (
 def _flag(lines, name, module_symbols, *, acquire=False):
     symbol = asm_symbol_prevalidated(name, module_symbols)
     lines.extend(emitted_global_address_lines("x16", symbol, True))
-    lines.append("  ldar w17, [x16]" if acquire else "  ldr w17, [x16]")
+    lines.append(emitted_memory_instruction_line('ldar', 'w17', 'x16') if acquire else emitted_memory_instruction_line('ldr', 'w17', 'x16'))
 
 
 def _owned_runtime_import(callee, module_symbols) -> bool:
@@ -109,32 +117,32 @@ def gc_short_call_lines(func, callee, label_serial, ret_kind, arg_kinds, module_
         # These managed runtime entries poll before their bodies. A pending
         # stop must enter the original function, even on its otherwise empty path.
         _flag(lines, "pcc_thread_stop_requested", module_symbols, acquire=True)
-        lines.append("  cbnz w17, " + slow)
+        lines.append(emitted_branch_line('cbnz', slow, 'w17'))
     if load:
-        lines.append("  cbz x1, " + empty)
+        lines.append(emitted_branch_line('cbz', empty, 'x1'))
         # Preserve the runtime's slot-before-barrier-state read order. x15 is
         # ABI scratch and no call occurs while this raw value is needed.
-        lines.append("  ldr x15, [x1]")
+        lines.append(emitted_memory_instruction_line('ldr', 'x15', 'x1'))
         _flag(lines, "pcc_gc_read_barrier_enabled", module_symbols)
-        lines.append("  cbnz w17, " + slow)
-        lines.extend(["  mov x0, x15", "  b " + done, empty + ":", "  mov x0, #0", "  b " + done])
+        lines.append(emitted_branch_line('cbnz', slow, 'w17'))
+        lines.extend([emitted_move_register_line('x0', 'x15'), emitted_branch_line('b', done), empty + ":", emitted_scalar_immediate_line('mov', 'x0', '', 0), emitted_branch_line('b', done)])
     else:
         if barrier:
             value = "x2" if count == 3 else "x1"
-            lines.extend(["  cbz " + value + ", " + done,
-                          "  and x17, " + value + ", #1",
-                          "  cbnz x17, " + done])
+            lines.extend([emitted_branch_line('cbz', done, value),
+                          emitted_scalar_immediate_line('and', 'x17', value, 1),
+                          emitted_branch_line('cbnz', done, 'x17')])
         if frame:
             # Configuration parsed, backend 0 and no backend-0 frame roots,
             # published by the runtime as one word.
             _flag(lines, "pcc_gc_frame_registry_inactive", module_symbols)
-            lines.append("  cbz w17, " + slow)
+            lines.append(emitted_branch_line('cbz', slow, 'w17'))
         else:
             _flag(lines, "pcc_gc_config_initialized", module_symbols)
-            lines.append("  cbz w17, " + slow)
+            lines.append(emitted_branch_line('cbz', slow, 'w17'))
             _flag(lines, "pcc_gc_backend_selected", module_symbols)
-            lines.append("  cbnz w17, " + slow)
-        lines.append("  b " + done)
+            lines.append(emitted_branch_line('cbnz', slow, 'w17'))
+        lines.append(emitted_branch_line('b', done))
     lines.append(slow + ":")
     lines.append(emitted_direct_call_line(asm_symbol_prevalidated(callee, module_symbols)))
     lines.append(done + ":")

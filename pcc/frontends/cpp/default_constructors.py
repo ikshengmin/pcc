@@ -32,6 +32,39 @@ def defer_definition(definition, symbol, parameter_scope, declaration, this):
     definition.defaulted_constructors.append(pending)
 
 
+def declare_implicit_default_constructor(parser, definition):
+    """[class.ctor]/4-7: a class without a user-declared constructor has an
+    implicitly-declared default constructor: public, defaulted on its first
+    declaration, hence not user-provided (value-initialization zeroes the
+    object first). It is defined like `T() = default;`: the base, the class's
+    own table pointer ([class.cdtor]/4) and members, through the same deferred
+    owner, and is emitted only when construction selects it."""
+    from pcc.frontends.cpp.constructors import _complete_name, _declaration
+    from pcc.frontends.cpp.sema import Scope, Symbol
+    owner = definition.dtype
+    coord = owner.coord
+    symbol = Symbol(owner.name, 'function', coord, dtype='void', parameters=())
+    symbol.class_owner, symbol.access = owner, 'public'
+    symbol.owner = definition.scope
+    symbol.constructor = True
+    symbol.constructor_explicit = False
+    symbol.constructor_user_provided = False
+    symbol.constructor_defaulted = True
+    symbol.constructor_defaulted_on_first_declaration = True
+    symbol.constructor_implicit = True
+    symbol.constructor_trivial = False
+    symbol.constructor_deleted = False
+    symbol.method_static = False
+    symbol.method_const = False
+    symbol.internal_linkage = owner.internal_linkage
+    symbol.c_name = _complete_name(owner, ())
+    definition.constructors.overloads.append(symbol)
+    parser.function_projection_names.add(symbol.c_name)
+    declaration, this = _declaration(parser, symbol, [], [], True)
+    defer_definition(definition, symbol, Scope(definition.scope), declaration, this)
+    return declaration
+
+
 def bind_defaulted_definitions(parser, definition):
     if not definition.defaulted_constructors:
         return
@@ -55,7 +88,7 @@ def bind_defaulted_definitions(parser, definition):
     for pending in definition.defaulted_constructors:
         symbol = pending.symbol
         symbol.constructor_deleted = definition.default_constructor_deleted
-        symbol.constructor_trivial = not symbol.constructor_user_provided and not any(
+        symbol.constructor_trivial = not symbol.constructor_user_provided and not definition.polymorphic and not any(
             getattr(member, 'default_initializer_tokens', None) is not None
             for member in definition.members)
         if symbol.constructor_deleted:

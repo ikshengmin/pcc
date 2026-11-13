@@ -35,7 +35,8 @@ external compiler fallback, independent collector, or scheduler.
   mask. Nonconstant untyped shift operands acquire the enclosing Go context type.
 
 - Fixed arrays of scalar integers/bools and admitted value records, explicit constant lengths and `[...]`
-  composite literals, positional/keyed elements, zero-filled holes, ordinary
+  composite literals, positional/keyed elements, elided element literal types
+  (`[2]T{{1, 2}, {3, 4}}`), zero-filled holes, ordinary
   indexing and mutable package/local storage. Arrays retain value-copy semantics
   in assignment, parameters and returns through the private PCC Go ABI (not a C
   ABI claim). Array lengths are limited to 4096 elements; nested arrays remain an

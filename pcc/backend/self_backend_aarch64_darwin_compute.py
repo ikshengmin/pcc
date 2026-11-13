@@ -27,6 +27,8 @@ from .self_backend_aarch64_darwin_materialize import (
     store_large_aggregate_literal_to_address,
 )
 from .self_backend_aarch64_darwin_mem import (
+    emitted_scalar_register_line,
+    emitted_scalar_immediate_line,
     emitted_addsub_immediate_line,
     emitted_compare_immediate_line,
     emitted_compare_register_line,
@@ -147,12 +149,12 @@ def _binop_immediate_line(
             _logical_imm(constant, width == 64)
         except EncodeError:
             return ""
-        return "  and " + result + ", " + lhs + ", #" + str(constant)
+        return emitted_scalar_immediate_line("and", result, lhs, constant)
     if op == "shl" or op == "lshr" or op == "ashr":
         if constant < 0 or constant >= width:
             return ""
         mnemonic = "lsl" if op == "shl" else ("lsr" if op == "lshr" else "asr")
-        return "  " + mnemonic + " " + result + ", " + lhs + ", #" + str(constant)
+        return emitted_scalar_immediate_line(mnemonic, result, lhs, constant)
     return ""
 
 
@@ -190,7 +192,7 @@ def _emit_boolean_select_indexed(func, kernel, destination, type_id, record, sym
     assigned = allocated_scalar_register_indexed(kernel, destination, type_id)
     result = reg_name_indexed(kernel, type_id, assigned) if assigned >= 0 else "w12"
     if true_bit >= 0 and false_bit >= 0 and true_bit == false_bit:
-        lines = ["  mov " + result + ", #" + str(true_bit)]
+        lines = [emitted_scalar_immediate_line("mov", result, "", true_bit)]
     else:
         name = kernel.value_name(condition) if condition >= 0 else kernel.call_texts[-condition - 1]
         lines = materialize_scalar_value_indexed(
@@ -198,18 +200,18 @@ def _emit_boolean_select_indexed(func, kernel, destination, type_id, record, sym
         )
         if true_bit >= 0 and false_bit >= 0:
             if true_bit == 0:
-                lines.extend(["  mov w11, #1", "  eor w9, w9, w11"])
-            lines.append("  and " + result + ", w9, #1")
+                lines.extend([emitted_scalar_immediate_line("mov", "w11", "", 1), emitted_scalar_register_line("eor", "w9", "w9", "w11")])
+            lines.append(emitted_scalar_immediate_line("and", result, "w9", 1))
         else:
             name = kernel.value_name(other) if other >= 0 else kernel.call_texts[-other - 1]
             lines.extend(materialize_scalar_value_indexed(
                 func, kernel, name, type_id, 10, symbols, value_id=other,
             ))
             if true_bit == 0 or false_bit == 1:
-                lines.extend(["  mov w11, #1", "  eor w9, w9, w11"])
+                lines.extend([emitted_scalar_immediate_line("mov", "w11", "", 1), emitted_scalar_register_line("eor", "w9", "w9", "w11")])
             operation = "orr" if true_bit == 1 or false_bit == 1 else "and"
-            lines.append("  " + operation + " " + result + ", w9, w10")
-            lines.append("  and " + result + ", " + result + ", #1")
+            lines.append(emitted_scalar_register_line(operation, result, "w9", "w10"))
+            lines.append(emitted_scalar_immediate_line("and", result, result, 1))
     lines.extend(_commit_or_spill_scalar_result_indexed(
         func, kernel, destination, type_id, result, canonical_boolean=True,
     ))
@@ -802,7 +804,7 @@ def _emit_vector_select(
         )
         lines.append(emitted_compare_immediate_line("w9", 0))
         lines.append(
-            f"  csel {reg_name(lane_type, 12)}, {reg_name(lane_type, 10)}, {reg_name(lane_type, 11)}, ne"
+            emitted_scalar_register_line('csel', reg_name(lane_type, 12), reg_name(lane_type, 10), reg_name(lane_type, 11), 'ne')
         )
         lines.extend(store_value_to_address(dst_addr, lane_type, 12))
     return lines
@@ -831,7 +833,7 @@ def _emit_aggregate_select(
     )
     lines.extend(emit_value_slot_base_address(func, dest, "x12"))
     lines.append(emitted_compare_immediate_line("w9", 0))
-    lines.append("  csel x13, x10, x11, ne")
+    lines.append(emitted_scalar_register_line("csel", "x13", "x10", "x11", "ne"))
     lines.extend(copy_address_to_address("x13", "x12", value_type.slot_size))
     return lines
 
@@ -1004,7 +1006,7 @@ def _emit_vector_fcmp(
                 module_symbols,
             )
         )
-        lines.append(f"  fcmp {reg_name(lane_type, 9)}, {reg_name(lane_type, 10)}")
+        lines.append(emitted_scalar_register_line('fcmp', reg_name(lane_type, 9), reg_name(lane_type, 10)))
         lines.extend(emit_fcmp_result(cond))
         lines.extend(store_value_to_address(dst_addr, I1, 11))
     return lines
@@ -1211,7 +1213,7 @@ def emit_compute_instruction_by_id(
                         )
                     )
                     lines.append(
-                        f"  {fusion.mnemonic} x11, x9, x10, x12"
+                        emitted_scalar_register_line(fusion.mnemonic, 'x11', 'x9', 'x10', 'x12')
                     )
                     lines.extend(
                         _commit_or_spill_scalar_result_indexed(
@@ -1338,7 +1340,7 @@ def emit_compute_instruction_by_id(
                 )
                 if boolean_logic:
                     result_name = reg_name_indexed(indexed_kernel, value_type_id, result_register)
-                    lines.append("  and " + result_name + ", " + result_name + ", #1")
+                    lines.append(emitted_scalar_immediate_line("and", result_name, result_name, 1))
                 lines.extend(
                     _commit_or_spill_scalar_result_indexed(
                         func,
@@ -1380,7 +1382,7 @@ def emit_compute_instruction_by_id(
                     func, fusion.accumulator, value_type, 12, module_symbols
                 )
             )
-            lines.append(f"  {fusion.mnemonic} x11, x9, x10, x12")
+            lines.append(emitted_scalar_register_line(fusion.mnemonic, 'x11', 'x9', 'x10', 'x12'))
             lines.extend(
                 _commit_or_spill_scalar_result(
                     func, dest, value_type, "x11", indexed_dest_id
@@ -1443,7 +1445,7 @@ def emit_compute_instruction_by_id(
         if not (indexed_dest_has_slot if indexed_kernel is not None else parsed_function_has_value_slot(func, dest)):
             return []
         lines = materialize_value(func, value, value_type, 9, module_symbols)
-        lines.append(f"  fneg {reg_name(value_type, 11)}, {reg_name(value_type, 9)}")
+        lines.append(emitted_scalar_register_line('fneg', reg_name(value_type, 11), reg_name(value_type, 9)))
         lines.extend(
             store_reg_to_value_slot(reg_name(value_type, 11), func, dest)
         )
@@ -1640,7 +1642,7 @@ def emit_compute_instruction_by_id(
             )
         lines = materialize_value(func, lhs, value_type, 9, module_symbols)
         lines.extend(materialize_value(func, rhs, value_type, 10, module_symbols))
-        lines.append(f"  fcmp {reg_name(value_type, 9)}, {reg_name(value_type, 10)}")
+        lines.append(emitted_scalar_register_line('fcmp', reg_name(value_type, 9), reg_name(value_type, 10)))
         lines.extend(emit_fcmp_result(cond))
         lines.extend(store_reg_to_value_slot("w11", func, dest))
         return lines
@@ -1827,10 +1829,7 @@ def emit_compute_instruction_by_id(
                     else "csel"
                 )
                 lines.append(
-                    f"  {mnemonic} "
-                    f"{reg_name_indexed(indexed_kernel, value_type_id, 12)}, "
-                    f"{reg_name_indexed(indexed_kernel, value_type_id, 10)}, "
-                    f"{reg_name_indexed(indexed_kernel, value_type_id, 11)}, ne"
+                    emitted_scalar_register_line(mnemonic, reg_name_indexed(indexed_kernel, value_type_id, 12), reg_name_indexed(indexed_kernel, value_type_id, 10), reg_name_indexed(indexed_kernel, value_type_id, 11), 'ne')
                 )
                 lines.extend(
                     _commit_or_spill_scalar_result_indexed(
@@ -1869,11 +1868,11 @@ def emit_compute_instruction_by_id(
         lines.append(emitted_compare_immediate_line("w9", 0))
         if value_type.is_fp:
             lines.append(
-                f"  fcsel {reg_name(value_type, 12)}, {reg_name(value_type, 10)}, {reg_name(value_type, 11)}, ne"
+                emitted_scalar_register_line('fcsel', reg_name(value_type, 12), reg_name(value_type, 10), reg_name(value_type, 11), 'ne')
             )
         else:
             lines.append(
-                f"  csel {reg_name(value_type, 12)}, {reg_name(value_type, 10)}, {reg_name(value_type, 11)}, ne"
+                emitted_scalar_register_line('csel', reg_name(value_type, 12), reg_name(value_type, 10), reg_name(value_type, 11), 'ne')
             )
         lines.extend(
             _commit_or_spill_scalar_result(
@@ -2086,8 +2085,10 @@ def emit_compute_instruction_by_id(
                         ))
                     result_name = "x" + str(result_register) if result_register >= 0 else "x11"
                     shift = {1: 0, 2: 1, 4: 2, 8: 3, 16: 4}[element_size]
-                    suffix = "" if shift == 0 else f", lsl #{shift}"
-                    lines.append(f"  add {result_name}, {base_name}, x{index_register}{suffix}")
+                    lines.append(emitted_scalar_register_line(
+                        "add", result_name, base_name, "x" + str(index_register),
+                        shift=shift,
+                    ))
                     if result_register < 0:
                         lines.extend(_commit_or_spill_scalar_result_indexed(
                             func, indexed_kernel, indexed_dest_id, gep_span.second, "x11",

@@ -192,8 +192,10 @@ CLASS_UNIMPLEMENTED_CASES = (
     # Original ~S(); declaration is now positive in test_cpp_destructors.
     # Original declaration is retained verbatim as a positive member-function obligation.
     "struct Base{};struct S:virtual Base{};",
-    "struct S{virtual int method();};",
-    "struct S{static int value;};",
+    # Original virtual-method declaration moved verbatim to
+    # test_cpp_implicit_polymorphic_constructors (implicit constructor).
+    # Original static data member declaration moved verbatim to
+    # test_cpp_static_data_members (an external object declaration).
     "struct S{int value:3;};",
     "struct S{struct Nested{};};",
     "namespace n{using T=int;}struct S{using n::T;};",

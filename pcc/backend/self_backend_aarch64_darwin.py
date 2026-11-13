@@ -61,10 +61,12 @@ from .self_backend_aarch64_darwin_memory import (
 )
 from .self_backend_aarch64_darwin_mem import (
     DIRECT_CALL_INSTRUCTION_PLACEHOLDER,
+    DIRECT_INDIRECT_CALL_INSTRUCTION_PLACEHOLDER,
     DIRECT_INSTRUCTION_PLACEHOLDER,
     begin_direct_instruction_capture,
     borrow_direct_instruction_records,
     borrow_direct_instruction_symbol_names,
+    borrow_direct_instruction_semantics,
     end_direct_instruction_capture,
     direct_instruction_capture_active,
     require_direct_instruction_capture_idle,
@@ -172,6 +174,18 @@ from .self_backend_aarch64_fragments import (
     AArch64EmissionFragments,
     EMISSION_RECORD_LABEL,
     EMISSION_RECORD_MEMORY_PAIR_BARRIER,
+    EMISSION_RECORD_EMPTY,
+    EMISSION_RECORD_DIRECTIVE,
+    EMISSION_DIRECTIVE_P2ALIGN,
+    EMISSION_DIRECTIVE_GLOBAL,
+    EMISSION_DIRECTIVE_PRIVATE_EXTERN,
+    EMISSION_DIRECTIVE_WEAK_DEFINITION,
+    EMISSION_DIRECTIVE_TEXT_SECTION,
+    EMISSION_DIRECTIVE_METADATA,
+    EMISSION_DIRECTIVE_SUBSECTIONS,
+)
+from .self_backend_aarch64_semantics import (
+    TOKEN_SYMBOL, append_semantic_instruction, append_semantic_event,
 )
 from .self_backend_aarch64_darwin_tlv import elide_dead_tlv_resolver_saves
 
@@ -186,12 +200,15 @@ _MODULE_SYMBOLS = PreparedModuleSymbols(
 class _NativeAArch64Emission:
     """One module emission scope over the canonical incremental assembler.
 
-    Producer helpers still return per-function/fragments lists in this slice.
-    This owner consumes them immediately, reusing the captured word arena per
-    function and retaining no module instruction slots or coordinate remaps.
+    Unoptimized emission retains the incremental per-function route.
+    Optimized emission records one complete module event sequence and one
+    packed provenance owner, retires transient function captures after copying,
+    then runs all target passes before replay and final layout. No instruction
+    text is retained or parsed on that route; peak memory still needs CI proof.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, optimize: bool = False) -> None:
+        direct_semantics = borrow_direct_instruction_semantics() if optimize else None
         self.symbol_names: list[str] = []
         self.symbol_ids: dict[str, int] = {}
         self.builder = AArch64ModuleBuilder(self.symbol_names)
@@ -200,7 +217,7 @@ class _NativeAArch64Emission:
         try:
             self.scratch: CompilerIntArena = CompilerIntArena()
             try:
-                self.fragments: AArch64EmissionFragments = AArch64EmissionFragments()
+                self.fragments: AArch64EmissionFragments = AArch64EmissionFragments(capture_semantics=optimize)
             except Exception:
                 self.scratch.close()
                 raise
@@ -216,12 +233,22 @@ class _NativeAArch64Emission:
         self.barrier_depth: int = 0
         self.fragment_record_count: int = 0
         self.fallback_lines: list[str] = []
+        self.collecting_optimized: bool = optimize
+        try:
+            self.module_span: CompilerInt2 = self.fragments.new_fragment() if optimize else CompilerInt2(-1, 0)
+        except Exception:
+            self.close()
+            raise
+        self.direct_semantics = direct_semantics
+        self.metadata_lines: list[str] = []
+        self.metadata_prefix_open: bool = optimize
         # Imported names are live module bindings under pcc1; read them once
         # per emission scope instead of on every emitted line (a third of
         # append's samples).
         self._family_fallback = EMITTED_INSTRUCTION_FALLBACK
         self._direct_placeholder = DIRECT_INSTRUCTION_PLACEHOLDER
         self._direct_call_placeholder = DIRECT_CALL_INSTRUCTION_PLACEHOLDER
+        self._direct_indirect_call_placeholder = DIRECT_INDIRECT_CALL_INSTRUCTION_PLACEHOLDER
         self._family_call = EMITTED_INSTRUCTION_CALL
         self._fixup_call = STRUCTURED_FIXUP_CALL
         self._barrier_begin = AARCH64_MEMORY_PAIR_BARRIER_BEGIN
@@ -235,7 +262,173 @@ class _NativeAArch64Emission:
         self.scratch.close()
         self.fragments.close()
 
+    def _capture_event(self, event: CompilerInt4) -> None:
+        semantics = self.fragments.semantics
+        if semantics is None:
+            raise BackendUnavailable("optimized AArch64 semantics owner is missing")
+        append_semantic_event(self.fragments, semantics, self.module_span, event)
+        if event.second == EMISSION_RECORD_MEMORY_PAIR_BARRIER:
+            self.barrier_depth = advance_aarch64_memory_pair_barrier(self.barrier_depth, event.first == 1)
+
+    def append_empty(self) -> None:
+        if self.collecting_optimized:
+            self._capture_event(CompilerInt4(0, EMISSION_RECORD_EMPTY, 0, -1))
+
+    def append_label(self, name: str) -> None:
+        if not self.collecting_optimized:
+            self.builder.append_label(name)
+            return
+        validate_emitted_label_name(name)
+        symbol_id = intern_emitted_symbol(name, self.fragments.symbol_ids, self.fragments.symbol_names)
+        self._capture_event(CompilerInt4(symbol_id, EMISSION_RECORD_LABEL, 0, -1))
+
+    def append_code_directive(self, kind: int, argument: int = 0, symbol: str = "") -> None:
+        if not self.collecting_optimized:
+            raise BackendUnavailable("typed code directive requires optimized event capture")
+        symbol_id = -1
+        if symbol:
+            validate_emitted_label_name(symbol)
+            symbol_id = intern_emitted_symbol(symbol, self.fragments.symbol_ids, self.fragments.symbol_names)
+        self._capture_event(CompilerInt4(kind, EMISSION_RECORD_DIRECTIVE, argument, symbol_id))
+        if kind == EMISSION_DIRECTIVE_TEXT_SECTION:
+            self.metadata_prefix_open = False
+
+    def extend_metadata(self, lines: list[str]) -> None:
+        if not self.collecting_optimized:
+            self.extend(lines)
+            return
+        if not self.metadata_prefix_open:
+            raise BackendUnavailable("global/data metadata cannot enter the code event stream")
+        # Only the existing owned global/data prefix enters this boundary.
+        # Never disguise a machine instruction or text-section data as metadata.
+        allowed = (
+            ".section", ".p2align", ".globl", ".private_extern", ".weak_definition",
+            ".quad", ".long", ".short", ".byte", ".space", ".float", ".double",
+            ".ascii", ".asciz", ".subsections_via_symbols",
+        )
+        for line in lines:
+            if not line:
+                self.append_empty()
+            elif line.endswith(":") and not line.startswith((" ", ".")):
+                self.append_label(line[:-1])
+            else:
+                # A global initializer is one original optimizer event even
+                # when it contains several data directives. Validate each
+                # adapter line but retain that single event position.
+                for part in line.splitlines():
+                    directive = part.split(None, 1)[0] if part.strip() else ""
+                    if directive and directive not in allowed:
+                        raise BackendUnavailable("instruction or unsupported directive in metadata adapter")
+                    if directive == ".section":
+                        section_name = "".join(part.split()[1:])
+                        if section_name.startswith("__TEXT,__text"):
+                            raise BackendUnavailable("code section cannot enter metadata adapter")
+                index = len(self.metadata_lines)
+                self.metadata_lines.append(line)
+                self._capture_event(CompilerInt4(EMISSION_DIRECTIVE_METADATA, EMISSION_RECORD_DIRECTIVE, index, -1))
+
+    def _capture_line(self, line: str) -> None:
+        if line in (DIRECT_INSTRUCTION_PLACEHOLDER, DIRECT_CALL_INSTRUCTION_PLACEHOLDER, DIRECT_INDIRECT_CALL_INSTRUCTION_PLACEHOLDER):
+            if self.direct_semantics is None or self.fragments.semantics is None:
+                raise BackendUnavailable("optimized instruction provenance is missing")
+            if self.direct_index * 4 >= len(self.direct_records):
+                raise BackendUnavailable("direct instruction transport is truncated")
+            record: CompilerInt4 = self.direct_records.get4_unchecked(self.direct_index)
+            header: CompilerInt4 = self.direct_semantics.require_header(self.direct_index)
+            if line == DIRECT_INDIRECT_CALL_INSTRUCTION_PLACEHOLDER:
+                _require_indirect_call_record(record)
+            if (line == DIRECT_CALL_INSTRUCTION_PLACEHOLDER) != (record.second == EMITTED_INSTRUCTION_CALL):
+                raise BackendUnavailable("direct call marker does not match record family")
+            word, family, kind, symbol_id = record.first, record.second, record.third, record.fourth
+            if family == EMITTED_INSTRUCTION_CALL:
+                word, kind = 0x94000000, STRUCTURED_FIXUP_CALL
+            if kind != 0:
+                if symbol_id < 0 or symbol_id >= len(self.direct_symbols):
+                    raise BackendUnavailable("direct instruction relocation symbol is invalid")
+                symbol_id = intern_emitted_symbol(self.direct_symbols[symbol_id], self.fragments.symbol_ids, self.fragments.symbol_names)
+            operands = []
+            index = 0
+            while index < header.fourth:
+                token: CompilerInt4 = self.direct_semantics.operand(self.direct_index, index)
+                if token.first == TOKEN_SYMBOL:
+                    if token.second < 0 or token.second >= len(self.direct_symbols):
+                        raise BackendUnavailable("direct semantic symbol is invalid")
+                    target = intern_emitted_symbol(self.direct_symbols[token.second], self.fragments.symbol_ids, self.fragments.symbol_names)
+                    token = CompilerInt4(token.first, target, token.third, token.fourth)
+                operands.append(token)
+                index += 1
+            append_semantic_instruction(
+                self.fragments, self.fragments.semantics, self.module_span,
+                CompilerInt4(word, family, kind, symbol_id), header.first, header.second, operands,
+            )
+            self.direct_index += 1
+            return
+        if line == AARCH64_MEMORY_PAIR_BARRIER_BEGIN or line == AARCH64_MEMORY_PAIR_BARRIER_END:
+            self._capture_event(CompilerInt4(1 if line == AARCH64_MEMORY_PAIR_BARRIER_BEGIN else 0, EMISSION_RECORD_MEMORY_PAIR_BARRIER, 0, -1))
+            return
+        if not line:
+            self.append_empty()
+            return
+        if line.endswith(":") and not line.startswith((" ", ".")):
+            self.append_label(line[:-1])
+            return
+        raise BackendUnavailable("optimized native instruction lacks typed producer provenance")
+
+    def finish_optimized_instructions(self, metadata_labels, cold_fallthrough_edges) -> None:
+        from .self_backend_aarch64_typed_peepholes import run_aarch64_typed_peepholes
+        from .self_backend_aarch64_typed_cfg import run_aarch64_typed_cfg_passes
+        if not self.collecting_optimized or self.fragments.semantics is None:
+            raise BackendUnavailable("optimized module capture is not active")
+        require_closed_aarch64_memory_pair_barrier(self.barrier_depth)
+        self.fragments.semantics.require_complete(self.fragments.records, len(self.fragments.symbol_names))
+        span = run_aarch64_typed_peepholes(self.fragments, self.fragments.semantics, self.module_span)
+        span = run_aarch64_typed_cfg_passes(self.fragments, self.fragments.semantics, span, metadata_labels, cold_fallthrough_edges)
+        self.collecting_optimized = False
+        self.publish_fragment(span)
+        require_closed_aarch64_memory_pair_barrier(self.barrier_depth)
+        # The builder now owns words, fixups and symbols. Retire module
+        # provenance storage before final layout and PC-based metadata allocate.
+        self.fragments.close()
+        self.metadata_lines.clear()
+
+    def _publish_directive(self, record: CompilerInt4) -> None:
+        kind = record.first
+        if kind == EMISSION_DIRECTIVE_TEXT_SECTION and record.third == 0 and record.fourth == -1:
+            self.builder.begin_text_section()
+        elif kind == EMISSION_DIRECTIVE_P2ALIGN and record.fourth == -1:
+            self.builder.append_text_alignment(record.third)
+        elif kind in (EMISSION_DIRECTIVE_GLOBAL, EMISSION_DIRECTIVE_PRIVATE_EXTERN, EMISSION_DIRECTIVE_WEAK_DEFINITION):
+            if record.third != 0 or record.fourth < 0 or record.fourth >= len(self.fragments.symbol_names):
+                raise BackendUnavailable("typed visibility event is invalid")
+            name = self.fragments.symbol_names[record.fourth]
+            visibility = "global"
+            if kind == EMISSION_DIRECTIVE_PRIVATE_EXTERN:
+                visibility = "private_extern"
+            elif kind == EMISSION_DIRECTIVE_WEAK_DEFINITION:
+                visibility = "weak_definition"
+            self.builder.append_symbol_visibility(name, visibility)
+        elif kind == EMISSION_DIRECTIVE_METADATA:
+            if record.fourth != -1 or record.third < 0 or record.third >= len(self.metadata_lines):
+                raise BackendUnavailable("metadata event payload is invalid")
+            self.builder.append_chunk(self.metadata_lines[record.third])
+        elif kind == EMISSION_DIRECTIVE_SUBSECTIONS and record.third == 0 and record.fourth == -1:
+            pass
+        else:
+            raise BackendUnavailable("typed code directive is unsupported")
+
     def publish_fragment(self, fragment: CompilerInt2) -> None:
+        if self.collecting_optimized:
+            self.fragments.start_cursor(fragment)
+            record_id = self.fragments.next_record_id()
+            while record_id >= 0:
+                if record_id >= len(self.fragments.records) // 4:
+                    raise BackendUnavailable("emission fragment record ID is invalid")
+                record: CompilerInt4 = self.fragments.records.get4_unchecked(record_id)
+                if record.second == EMISSION_RECORD_MEMORY_PAIR_BARRIER:
+                    self.barrier_depth = advance_aarch64_memory_pair_barrier(self.barrier_depth, record.first == 1)
+                record_id = self.fragments.next_record_id()
+            self.fragments.extend_fragment(self.module_span, fragment)
+            return
         fragments: AArch64EmissionFragments = self.fragments
         records: CompilerIntArena = fragments.records
         fragments.start_cursor(fragment)
@@ -246,7 +439,12 @@ class _NativeAArch64Emission:
                 raise BackendUnavailable("emission fragment record ID is invalid")
             record: CompilerInt4 = records.get4_unchecked(record_id)
             family = record.second
-            if family == EMISSION_RECORD_MEMORY_PAIR_BARRIER:
+            if family == EMISSION_RECORD_EMPTY:
+                if record.first != 0 or record.third != 0 or record.fourth != -1:
+                    raise BackendUnavailable("empty emission event is invalid")
+            elif family == EMISSION_RECORD_DIRECTIVE:
+                self._publish_directive(record)
+            elif family == EMISSION_RECORD_MEMORY_PAIR_BARRIER:
                 if record.first not in (0, 1) or record.third != 0 or record.fourth != -1:
                     raise BackendUnavailable("emission fragment memory barrier is invalid")
                 self.barrier_depth = advance_aarch64_memory_pair_barrier(
@@ -274,7 +472,7 @@ class _NativeAArch64Emission:
                 else:
                     if kind not in (
                         STRUCTURED_FIXUP_BRANCH19, STRUCTURED_FIXUP_BRANCH26,
-                        STRUCTURED_FIXUP_CALL,
+                        STRUCTURED_FIXUP_CALL, 1, 2, 3, 4, 5,
                     ):
                         raise BackendUnavailable("emission fragment relocation is unsupported")
                     if (family == EMITTED_INSTRUCTION_CALL) != (kind == STRUCTURED_FIXUP_CALL):
@@ -285,7 +483,8 @@ class _NativeAArch64Emission:
                         raise BackendUnavailable("emission fragment symbol ID is invalid")
                     if record.first < 0 or record.first > 0xFFFFFFFF:
                         raise BackendUnavailable("emission fragment word is outside uint32")
-                    _validate_text_fixup_word(record.first, kind)
+                    if kind < 0:
+                        _validate_text_fixup_word(record.first, kind)
                     validate_emitted_label_name(fragments.symbol_names[symbol_id])
                     symbol_id = intern_emitted_symbol(
                         fragments.symbol_names[symbol_id], self.symbol_ids, self.symbol_names,
@@ -318,14 +517,24 @@ class _NativeAArch64Emission:
             raise BackendUnavailable("direct instruction transport has trailing records")
         self.direct_records.clear()
         self.direct_index = 0
-        self.fragments.reset()
+        if self.collecting_optimized:
+            if self.direct_semantics is None:
+                raise BackendUnavailable("optimized direct semantics owner is missing")
+            self.direct_semantics.reset()
+        else:
+            self.fragments.reset()
 
     def append(self, line: str) -> None:
+        if self.collecting_optimized:
+            self._capture_line(line)
+            return
         family = self._family_fallback
-        if line == self._direct_placeholder or line == self._direct_call_placeholder:
+        if line in (self._direct_placeholder, self._direct_call_placeholder, self._direct_indirect_call_placeholder):
             if self.direct_index * 4 >= len(self.direct_records):
                 raise BackendUnavailable("direct instruction transport is truncated")
             record: CompilerInt4 = self.direct_records.get4_unchecked(self.direct_index)
+            if line == self._direct_indirect_call_placeholder:
+                _require_indirect_call_record(record)
             if (line == self._direct_call_placeholder) != (
                 record.second == self._family_call
             ):
@@ -389,6 +598,15 @@ class _NativeAArch64Emission:
             self.call_count += 1
         elif family != self._family_scalar:
             raise BackendUnavailable("direct memory instruction family is invalid")
+
+
+def _require_indirect_call_record(record: CompilerInt4) -> None:
+    if (
+        record.second != EMITTED_INSTRUCTION_SCALAR or record.third != 0 or record.fourth != -1
+        or record.first < 0 or record.first > 0xFFFFFFFF
+        or record.first & 0xFFFFFC1F != 0xD63F0000
+    ):
+        raise BackendUnavailable("direct indirect-call marker does not match a BLR word")
 
 
 def _function_symbol(name: str) -> str:
@@ -592,7 +810,7 @@ def emit_aarch64_darwin_indexed_transport(
     if has_source_debug(prepared.functions):
         optimize = False
     structured_sections = []
-    native_text = structured_instructions and not optimize
+    native_text = structured_instructions
     encoded_line_records = None if native_text else CompilerIntArena()
     structured_symbol_names: list[str] = []
     structured_counts: list[int] = []
@@ -673,8 +891,8 @@ def _emit_prepared_aarch64_darwin_lines(
     if has_source_debug(getattr(prepared, "functions", ())):
         optimize = False
     direct_instruction_capture = (
-        encoded_line_records is not None or native_undefined is not None
-    ) and not optimize
+        encoded_line_records is not None and not optimize
+    ) or native_undefined is not None
     # A nested entry must fail before it can close or contaminate its caller's
     # arena. The ordinary ASM path must not inherit a structured caller either.
     if _AARCH64_EMISSION_ACTIVE:
@@ -683,12 +901,12 @@ def _emit_prepared_aarch64_darwin_lines(
     native_sink: _NativeAArch64Emission | None = None
     try:
         if direct_instruction_capture:
-            begin_direct_instruction_capture()
+            begin_direct_instruction_capture(capture_semantics=optimize)
         else:
             require_direct_instruction_capture_idle()
         try:
             if native_undefined is not None:
-                native_sink = _NativeAArch64Emission()
+                native_sink = _NativeAArch64Emission(optimize=optimize)
             return _emit_prepared_aarch64_darwin_lines_active(
                 prepared,
                 optimize,
@@ -779,7 +997,7 @@ def _emit_prepared_aarch64_darwin_lines_active(
     _emit_trace("stack map plans end")
     lines = _emit_globals(globals_, _MODULE_SYMBOLS)
     if native_sink is not None:
-        native_sink.extend(lines)
+        native_sink.extend_metadata(lines)
         lines = []
     _emit_trace("globals end")
     debug_plans: list[DebugFunctionPlan] = []
@@ -788,7 +1006,10 @@ def _emit_prepared_aarch64_darwin_lines_active(
         if native_sink is None:
             lines.append(".section __TEXT,__text,regular,pure_instructions")
         else:
-            native_sink.append(".section __TEXT,__text,regular,pure_instructions")
+            if native_sink.collecting_optimized:
+                native_sink.append_code_directive(EMISSION_DIRECTIVE_TEXT_SECTION)
+            else:
+                native_sink.append(".section __TEXT,__text,regular,pure_instructions")
         for func in functions:
             # Plan before the prologue invokes block-local allocation.  The
             # allocator extends the delayed multiply operands through the
@@ -876,10 +1097,23 @@ def _emit_prepared_aarch64_darwin_lines_active(
             plan.packed_records.retire_emission_state()
     if native_sink is not None:
         if (
-            optimize or structured_sections is None or structured_counts is None
+            structured_sections is None or structured_counts is None
             or native_undefined is None or native_fallback_lines is None
         ):
             raise BackendUnavailable("native text emission sinks are incomplete")
+        if optimize:
+            metadata_labels: set[str] = set()
+            for func in functions:
+                plan = stack_map_plans[func.name]
+                packed = plan.packed_records
+                if packed is not None:
+                    exceptional_blocks = packed.exceptional_blocks
+                else:
+                    exceptional_blocks = [record.exceptional_block for record in plan.records]
+                for exceptional_block in exceptional_blocks:
+                    if exceptional_block:
+                        metadata_labels.add(_block_label(func.name, exceptional_block))
+            native_sink.finish_optimized_instructions(metadata_labels, cold_fallthrough_edges)
         native_sink.builder.finalize_text_layout()
         target_offsets = native_sink.builder.text_label_offsets()
         if functions:
@@ -981,6 +1215,7 @@ def _emit_prepared_aarch64_darwin_lines_active(
                 direct_instruction_records is not None
                 and line in (
                     DIRECT_INSTRUCTION_PLACEHOLDER, DIRECT_CALL_INSTRUCTION_PLACEHOLDER,
+                    DIRECT_INDIRECT_CALL_INSTRUCTION_PLACEHOLDER,
                 )
             ):
                 if direct_instruction_index * 4 >= len(direct_instruction_records):
@@ -990,6 +1225,8 @@ def _emit_prepared_aarch64_darwin_lines_active(
                 direct_record = direct_instruction_records.get4_unchecked(
                     direct_instruction_index
                 )
+                if line == DIRECT_INDIRECT_CALL_INSTRUCTION_PLACEHOLDER:
+                    _require_indirect_call_record(direct_record)
                 if (line == DIRECT_CALL_INSTRUCTION_PLACEHOLDER) != (
                     direct_record.second == EMITTED_INSTRUCTION_CALL
                 ):
@@ -2461,6 +2698,7 @@ def _emit_function(
         phase_start = phase_timing.start()
     lines = _prologue_emit_function_prologue(
         func, _MODULE_SYMBOLS, registers_prepared=True, padding=frame_padding,
+        native_events=native_sink if native_sink is not None and native_sink.collecting_optimized else None,
     )
     if native_sink is not None:
         native_sink.extend(lines)
@@ -2646,7 +2884,7 @@ def _after_last_call_part(parts: list[str]) -> int:
     index = len(parts) - 1
     while index >= 0:
         if (
-            parts[index] == DIRECT_CALL_INSTRUCTION_PLACEHOLDER
+            parts[index] in (DIRECT_CALL_INSTRUCTION_PLACEHOLDER, DIRECT_INDIRECT_CALL_INSTRUCTION_PLACEHOLDER)
             or parts[index].lstrip().startswith(("bl ", "blr "))
         ):
             return index + 1
@@ -2957,11 +3195,13 @@ def _emit_dense_indexed_function_blocks(
     block_count = layout_count if layout_count else len(kernel.block_names)
     # The native owner consumes labels, not assembly formatting. Keep their
     # existing typed path instead of rendering and reparsing a label line at
-    # every block; inter-block blank lines have no native representation.
+    # every block in the unoptimized path. Optimized module passes require
+    # inter-block EMPTY events for their original event-distance semantics.
     # Custom sinks/builders retain their append callbacks and exact text.
     native_block_labels = (
         type(native_sink) is _NativeAArch64Emission
         and type(native_sink.builder) is AArch64ModuleBuilder
+        and not native_sink.collecting_optimized
     )
     direct_targets = _direct_branch_targets_in_range(kernel)
     while block_position < block_count:

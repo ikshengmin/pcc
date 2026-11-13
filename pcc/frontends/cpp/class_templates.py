@@ -606,7 +606,7 @@ def complete_layout(parser, dtype, pattern, arguments, coord):
             # After every member declaration of this specialization: its own
             # table holds each final overrider, so each is ODR-used.
             from pcc.frontends.cpp.virtual_functions import complete_class
-            tables = complete_class(parser, definition)
+            tables = complete_class(parser, definition, synthesize_constructors=False)
             from pcc.frontends.cpp.class_template_members import request_body
             for entry in definition.virtual_entries:
                 if not entry.deleting and not entry.overrider.method_pure:

@@ -5,6 +5,9 @@ from .self_backend_analysis import value_has_uses
 from .self_backend_aarch64_darwin_abi import aggregate_fits_reg_abi, reg_name
 from .self_backend_aarch64_darwin_abi import reg_name_indexed
 from .self_backend_aarch64_darwin_mem import (
+    emitted_atomic_instruction_line,
+    emitted_scalar_register_line,
+    emitted_scalar_immediate_line,
     emitted_branch_line,
     emitted_compare_register_line,
     emitted_cset_line,
@@ -699,7 +702,7 @@ def emit_memory_instruction_by_id(
                 if source is None:
                     lines.extend(materialize_value(func, value, value_type, 10, module_symbols))
                     source = r_val
-                lines.append(f"  {'neg' if op == 'sub' else 'mvn'} {r_val}, {source}")
+                lines.append(emitted_scalar_register_line("neg" if op == "sub" else "mvn", r_val, source))
                 source = r_val
             elif source is None:
                 lines.extend(materialize_value(func, value, value_type, 10, module_symbols))
@@ -708,17 +711,17 @@ def emit_memory_instruction_by_id(
                 _LSE_RMW_BASE[op] + _LSE_ORDERING_SUFFIX[ordering]
                 + _atomic_size_suffix(value_type)
             )
-            lines.append(f"  {mnemonic} {source}, {r_old}, [{address_register}]")
+            lines.append(emitted_atomic_instruction_line(mnemonic, source, address_register, r_old))
         else:
             lines.extend(materialize_value(func, value, value_type, 10, module_symbols))
             label = "Lat_" + sanitize_label(func.name) + "_" + sanitize_label(dest)
             lines.append(f"{label}:")
-            lines.append(f"  {load_exclusive} {r_old}, [{address_register}]")
+            lines.append(emitted_atomic_instruction_line(load_exclusive, r_old, address_register))
             if op == "xchg":
                 lines.append(emitted_move_register_line(r_new, r_val))
             else:
-                lines.append(f"  {_ATOMIC_RMW_COMPUTE[op]} {r_new}, {r_old}, {r_val}")
-            lines.append(f"  {store_exclusive} w13, {r_new}, [{address_register}]")
+                lines.append(emitted_scalar_register_line(_ATOMIC_RMW_COMPUTE[op], r_new, r_old, r_val))
+            lines.append(emitted_atomic_instruction_line(store_exclusive, "w13", address_register, r_new))
             lines.append(emitted_branch_line("cbnz", label, "w13"))
         used = (indexed_kernel.value_is_used(indexed_dest_id) if indexed_kernel is not None
                 else value_has_uses(func, dest))
@@ -778,24 +781,26 @@ def emit_memory_instruction_by_id(
             if value_type.width in (8, 16):
                 # CASB/CASH compare the low bits and zero-extend the observed
                 # value; compare against the same zero-extended expectation.
-                lines.append(f"  and {r_exp}, {r_exp}, #{'0xff' if value_type.width == 8 else '0xffff'}")
+                lines.append(emitted_scalar_immediate_line("and", r_exp, r_exp, 0xff if value_type.width == 8 else 0xffff, radix=16))
             lines.append(emitted_move_register_line(r_old, r_exp))
             lines.append(
-                f"  cas{ordering_suffix}{_atomic_size_suffix(value_type)} "
-                f"{r_old}, {r_des}, [{address_register}]"
+                emitted_atomic_instruction_line(
+                    "cas" + ordering_suffix + _atomic_size_suffix(value_type),
+                    r_old, address_register, r_des,
+                )
             )
             lines.append(emitted_compare_register_line(r_old, r_exp))
         else:
             base = "Lat_" + sanitize_label(func.name) + "_" + sanitize_label(dest)
             lines.append(f"{base}_retry:")
-            lines.append(f"  {load_exclusive} {r_old}, [{address_register}]")
+            lines.append(emitted_atomic_instruction_line(load_exclusive, r_old, address_register))
             lines.append(emitted_compare_register_line(r_old, r_exp))
             lines.append(emitted_branch_line("b.ne", base + "_fail"))
-            lines.append(f"  {store_exclusive} w13, {r_des}, [{address_register}]")
+            lines.append(emitted_atomic_instruction_line(store_exclusive, "w13", address_register, r_des))
             lines.append(emitted_branch_line("cbnz", base + "_retry", "w13"))
             lines.append(emitted_branch_line("b", base + "_done"))
             lines.append(f"{base}_fail:")
-            lines.append("  clrex")
+            lines.append(emitted_fixed_instruction_line("clrex"))
             lines.append(f"{base}_done:")
         if projection.first >= 0 and indexed_kernel is not None:
             projected_name = indexed_kernel.value_name(projection.first)
@@ -828,7 +833,7 @@ def emit_memory_instruction_by_id(
         return lines
 
     if kind_id == PARSED_INSTRUCTION_KIND_FENCE:
-        return ["  dmb ish"]
+        return [emitted_fixed_instruction_line("dmb ish")]
 
     if kind_id == PARSED_INSTRUCTION_KIND_LOAD:
         if indexed_kernel is not None:

@@ -8,6 +8,8 @@ from .self_backend_aarch64_darwin_abi import (
     reg_name_indexed,
 )
 from .self_backend_aarch64_darwin_mem import (
+    emitted_scalar_register_line,
+    emitted_scalar_immediate_line,
     emitted_addsub_register_line,
     emitted_cset_line,
     emitted_move_register_line,
@@ -34,29 +36,29 @@ def emit_binop(op: str, value_type: TypeDesc) -> list[str]:
     if op == "add" or op == "sub":
         return [emitted_addsub_register_line(op, r11, r9, r10)]
     mapping = {
-        "mul": f"  mul {r11}, {r9}, {r10}",
-        "sdiv": f"  sdiv {r11}, {r9}, {r10}",
-        "udiv": f"  udiv {r11}, {r9}, {r10}",
-        "and": f"  and {r11}, {r9}, {r10}",
-        "or": f"  orr {r11}, {r9}, {r10}",
-        "xor": f"  eor {r11}, {r9}, {r10}",
-        "shl": f"  lslv {r11}, {r9}, {r10}",
-        "lshr": f"  lsrv {r11}, {r9}, {r10}",
-        "ashr": f"  asrv {r11}, {r9}, {r10}",
+        "mul": "mul",
+        "sdiv": "sdiv",
+        "udiv": "udiv",
+        "and": "and",
+        "or": "orr",
+        "xor": "eor",
+        "shl": "lslv",
+        "lshr": "lsrv",
+        "ashr": "asrv",
     }
     if op == "srem":
         return [
-            f"  sdiv {r11}, {r9}, {r10}",
-            f"  msub {r11}, {r11}, {r10}, {r9}",
+            emitted_scalar_register_line('sdiv', r11, r9, r10),
+            emitted_scalar_register_line('msub', r11, r11, r10, r9),
         ]
     if op == "urem":
         return [
-            f"  udiv {r11}, {r9}, {r10}",
-            f"  msub {r11}, {r11}, {r10}, {r9}",
+            emitted_scalar_register_line('udiv', r11, r9, r10),
+            emitted_scalar_register_line('msub', r11, r11, r10, r9),
         ]
     if op not in mapping:
         raise BackendUnavailable(f"self backend does not support binop {op!r}")
-    return [mapping[op]]
+    return [emitted_scalar_register_line(mapping[op], r11, r9, r10)]
 
 
 def emit_binop_indexed(
@@ -87,31 +89,31 @@ def emit_binop_indexed(
     if op == "add" or op == "sub":
         return [emitted_addsub_register_line(op, r11, r9, r10)]
     mapping = {
-        "mul": f"  mul {r11}, {r9}, {r10}",
-        "sdiv": f"  sdiv {r11}, {r9}, {r10}",
-        "udiv": f"  udiv {r11}, {r9}, {r10}",
-        "and": f"  and {r11}, {r9}, {r10}",
-        "or": f"  orr {r11}, {r9}, {r10}",
-        "xor": f"  eor {r11}, {r9}, {r10}",
-        "shl": f"  lslv {r11}, {r9}, {r10}",
-        "lshr": f"  lsrv {r11}, {r9}, {r10}",
-        "ashr": f"  asrv {r11}, {r9}, {r10}",
+        "mul": "mul",
+        "sdiv": "sdiv",
+        "udiv": "udiv",
+        "and": "and",
+        "or": "orr",
+        "xor": "eor",
+        "shl": "lslv",
+        "lshr": "lsrv",
+        "ashr": "asrv",
     }
     # The quotient cannot overwrite either input before MSUB consumes it.
     quotient = reg_name_indexed(kernel, type_id, 11)
     if op == "srem":
         return [
-            f"  sdiv {quotient}, {r9}, {r10}",
-            f"  msub {r11}, {quotient}, {r10}, {r9}",
+            emitted_scalar_register_line('sdiv', quotient, r9, r10),
+            emitted_scalar_register_line('msub', r11, quotient, r10, r9),
         ]
     if op == "urem":
         return [
-            f"  udiv {quotient}, {r9}, {r10}",
-            f"  msub {r11}, {quotient}, {r10}, {r9}",
+            emitted_scalar_register_line('udiv', quotient, r9, r10),
+            emitted_scalar_register_line('msub', r11, quotient, r10, r9),
         ]
     if op not in mapping:
         raise BackendUnavailable(f"self backend does not support binop {op!r}")
-    return [mapping[op]]
+    return [emitted_scalar_register_line(mapping[op], r11, r9, r10)]
 
 
 def emit_aggregate_bitwise_binop(
@@ -142,7 +144,7 @@ def emit_aggregate_bitwise_binop(
         abi_value_reg_names(value_type, rhs_start),
         abi_value_reg_names(value_type, dest_start),
     ):
-        lines.append(f"  {mnemonic} {dest_reg}, {lhs_reg}, {rhs_reg}")
+        lines.append(emitted_scalar_register_line(mnemonic, dest_reg, lhs_reg, rhs_reg))
     return lines
 
 
@@ -155,14 +157,14 @@ def emit_fbinop(op: str, value_type: TypeDesc) -> list[str]:
     r10 = reg_name(value_type, 10)
     r11 = reg_name(value_type, 11)
     mapping = {
-        "fadd": f"  fadd {r11}, {r9}, {r10}",
-        "fsub": f"  fsub {r11}, {r9}, {r10}",
-        "fmul": f"  fmul {r11}, {r9}, {r10}",
-        "fdiv": f"  fdiv {r11}, {r9}, {r10}",
+        "fadd": "fadd",
+        "fsub": "fsub",
+        "fmul": "fmul",
+        "fdiv": "fdiv",
     }
     if op not in mapping:
         raise BackendUnavailable(f"self backend does not support floating binop {op!r}")
-    return [mapping[op]]
+    return [emitted_scalar_register_line(mapping[op], r11, r9, r10)]
 
 
 def emit_cast(op: str, src_type: TypeDesc, dst_type: TypeDesc) -> list[str]:
@@ -175,9 +177,9 @@ def emit_cast(op: str, src_type: TypeDesc, dst_type: TypeDesc) -> list[str]:
                 f"self backend bitcast requires same-size scalars, got {src_type.describe()} -> {dst_type.describe()}"
             )
         if src_type.is_fp and dst_type.is_int:
-            return [f"  fmov {dst10}, {src9}"]
+            return [emitted_scalar_register_line('fmov', dst10, src9)]
         if src_type.is_int and dst_type.is_fp:
-            return [f"  fmov {dst10}, {src9}"]
+            return [emitted_scalar_register_line('fmov', dst10, src9)]
         return [emitted_move_register_line(dst10, src9)]
 
     if op == "fpext":
@@ -185,14 +187,14 @@ def emit_cast(op: str, src_type: TypeDesc, dst_type: TypeDesc) -> list[str]:
             raise BackendUnavailable(
                 f"self backend fpext mismatch: {src_type.describe()} -> {dst_type.describe()}"
             )
-        return [f"  fcvt {dst10}, {src9}"]
+        return [emitted_scalar_register_line('fcvt', dst10, src9)]
 
     if op == "fptrunc":
         if not src_type.is_fp or not dst_type.is_fp:
             raise BackendUnavailable(
                 f"self backend fptrunc mismatch: {src_type.describe()} -> {dst_type.describe()}"
             )
-        return [f"  fcvt {dst10}, {src9}"]
+        return [emitted_scalar_register_line('fcvt', dst10, src9)]
 
     if op == "ptrtoint":
         if not src_type.is_ptr or not dst_type.is_int:
@@ -231,7 +233,7 @@ def emit_cast(op: str, src_type: TypeDesc, dst_type: TypeDesc) -> list[str]:
                 f"self backend zext mismatch: {src_type.describe()} -> {dst_type.describe()}"
             )
         if src_type.width == 1:
-            return ["  and w10, w9, #1"]
+            return [emitted_scalar_immediate_line("and", "w10", "w9", 1)]
         if src_type.width not in (8, 16, 32, 64):
             return _zero_extend_odd_width("x10" if src_type.width > 32 else "w10",
                                           "x9" if src_type.width > 32 else "w9",
@@ -246,21 +248,21 @@ def emit_cast(op: str, src_type: TypeDesc, dst_type: TypeDesc) -> list[str]:
                 f"self backend sext mismatch: {src_type.describe()} -> {dst_type.describe()}"
             )
         if src_type.width == 8:
-            return ["  sxtb x10, w9" if dst_type.width > 32 else "  sxtb w10, w9"]
+            return [emitted_scalar_register_line("sxtb", "x10" if dst_type.width > 32 else "w10", "w9")]
         if src_type.width == 16:
-            return ["  sxth x10, w9" if dst_type.width > 32 else "  sxth w10, w9"]
+            return [emitted_scalar_register_line("sxth", "x10" if dst_type.width > 32 else "w10", "w9")]
         if src_type.width == 32 and dst_type.width > 32:
-            return ["  sxtw x10, w9"]
+            return [emitted_scalar_register_line("sxtw", "x10", "w9")]
         if src_type.width == 1:
             return (
                 [
-                    "  and w10, w9, #1",
-                    "  neg w10, w10",
+                    emitted_scalar_immediate_line("and", "w10", "w9", 1),
+                    emitted_scalar_register_line("neg", "w10", "w10"),
                 ]
                 if dst_type.width <= 32
                 else [
-                    "  and w10, w9, #1",
-                    "  neg x10, x10",
+                    emitted_scalar_immediate_line("and", "w10", "w9", 1),
+                    emitted_scalar_register_line("neg", "x10", "x10"),
                 ]
             )
         if src_type.width not in (8, 16, 32, 64):
@@ -275,8 +277,8 @@ def emit_cast(op: str, src_type: TypeDesc, dst_type: TypeDesc) -> list[str]:
                 f"self backend sitofp mismatch: {src_type.describe()} -> {dst_type.describe()}"
             )
         if src_type.width > 32:
-            return [f"  scvtf {dst10}, x9"]
-        return [f"  scvtf {dst10}, w9"]
+            return [emitted_scalar_register_line('scvtf', dst10, 'x9')]
+        return [emitted_scalar_register_line('scvtf', dst10, 'w9')]
 
     if op == "uitofp":
         if not src_type.is_int or not dst_type.is_fp:
@@ -284,22 +286,22 @@ def emit_cast(op: str, src_type: TypeDesc, dst_type: TypeDesc) -> list[str]:
                 f"self backend uitofp mismatch: {src_type.describe()} -> {dst_type.describe()}"
             )
         if src_type.width > 32:
-            return [f"  ucvtf {dst10}, x9"]
-        return [f"  ucvtf {dst10}, w9"]
+            return [emitted_scalar_register_line('ucvtf', dst10, 'x9')]
+        return [emitted_scalar_register_line('ucvtf', dst10, 'w9')]
 
     if op == "fptosi":
         if not src_type.is_fp or not dst_type.is_int:
             raise BackendUnavailable(
                 f"self backend fptosi mismatch: {src_type.describe()} -> {dst_type.describe()}"
             )
-        return [f"  fcvtzs {dst10}, {src9}"]
+        return [emitted_scalar_register_line('fcvtzs', dst10, src9)]
 
     if op == "fptoui":
         if not src_type.is_fp or not dst_type.is_int:
             raise BackendUnavailable(
                 f"self backend fptoui mismatch: {src_type.describe()} -> {dst_type.describe()}"
             )
-        return [f"  fcvtzu {dst10}, {src9}"]
+        return [emitted_scalar_register_line('fcvtzu', dst10, src9)]
 
     raise BackendUnavailable(f"self backend does not support cast op {op!r}")
 
@@ -341,12 +343,12 @@ def emit_cast_indexed(
             (src.first == TYPE_KIND_FP and dst.first == TYPE_KIND_INT)
             or (src.first == TYPE_KIND_INT and dst.first == TYPE_KIND_FP)
         ):
-            return [f"  fmov {dst10}, {src9}"]
+            return [emitted_scalar_register_line('fmov', dst10, src9)]
         return _cast_move(dst10, src9)
     if op == "fpext" or op == "fptrunc":
         if src.first != TYPE_KIND_FP or dst.first != TYPE_KIND_FP:
             raise BackendUnavailable(f"self backend {op} type mismatch")
-        return [f"  fcvt {dst10}, {src9}"]
+        return [emitted_scalar_register_line('fcvt', dst10, src9)]
     if op == "ptrtoint":
         if src.first != TYPE_KIND_PTR or dst.first != TYPE_KIND_INT:
             raise BackendUnavailable("self backend ptrtoint type mismatch")
@@ -373,7 +375,7 @@ def emit_cast_indexed(
         if src.first != TYPE_KIND_INT or dst.first != TYPE_KIND_INT:
             raise BackendUnavailable("self backend zext type mismatch")
         if src.second == 1:
-            return ["  and " + dst_w + ", " + src_w + ", #1"]
+            return [emitted_scalar_immediate_line("and", dst_w, src_w, 1)]
         if src.second not in (8, 16, 32, 64):
             return _zero_extend_odd_width(dst_x if src.second > 32 else dst_w,
                                           src_x if src.second > 32 else src_w,
@@ -386,19 +388,19 @@ def emit_cast_indexed(
             raise BackendUnavailable("self backend sext type mismatch")
         if src.second == 8:
             return [
-                "  sxtb " + (dst_x if dst.second > 32 else dst_w) + ", " + src_w
+                emitted_scalar_register_line("sxtb", dst_x if dst.second > 32 else dst_w, src_w)
             ]
         if src.second == 16:
             return [
-                "  sxth " + (dst_x if dst.second > 32 else dst_w) + ", " + src_w
+                emitted_scalar_register_line("sxth", dst_x if dst.second > 32 else dst_w, src_w)
             ]
         if src.second == 32 and dst.second > 32:
-            return ["  sxtw " + dst_x + ", " + src_w]
+            return [emitted_scalar_register_line("sxtw", dst_x, src_w)]
         if src.second == 1:
             return (
-                ["  and " + dst_w + ", " + src_w + ", #1", "  neg " + dst_w + ", " + dst_w]
+                [emitted_scalar_immediate_line("and", dst_w, src_w, 1), emitted_scalar_register_line("neg", dst_w, dst_w)]
                 if dst.second <= 32
-                else ["  and " + dst_w + ", " + src_w + ", #1", "  neg " + dst_x + ", " + dst_x]
+                else [emitted_scalar_immediate_line("and", dst_w, src_w, 1), emitted_scalar_register_line("neg", dst_x, dst_x)]
             )
         if src.second not in (8, 16, 32, 64):
             wide = dst.second > 32
@@ -409,12 +411,12 @@ def emit_cast_indexed(
         if src.first != TYPE_KIND_INT or dst.first != TYPE_KIND_FP:
             raise BackendUnavailable(f"self backend {op} type mismatch")
         mnemonic = "scvtf" if op == "sitofp" else "ucvtf"
-        return [f"  {mnemonic} {dst10}, {src_x if src.second > 32 else src_w}"]
+        return [emitted_scalar_register_line(mnemonic, dst10, src_x if src.second > 32 else src_w)]
     if op == "fptosi" or op == "fptoui":
         if src.first != TYPE_KIND_FP or dst.first != TYPE_KIND_INT:
             raise BackendUnavailable(f"self backend {op} type mismatch")
         mnemonic = "fcvtzs" if op == "fptosi" else "fcvtzu"
-        return [f"  {mnemonic} {dst10}, {src9}"]
+        return [emitted_scalar_register_line(mnemonic, dst10, src9)]
     raise BackendUnavailable(f"self backend does not support cast op {op!r}")
 
 
@@ -425,13 +427,13 @@ def _zero_extend_odd_width(dst: str, src: str, width: int) -> list[str]:
     width after a truncation; extension must not expose those bits. A W
     destination also clears the upper half of its X register.
     """
-    return [f"  and {dst}, {src}, #{(1 << width) - 1}"]
+    return [emitted_scalar_immediate_line('and', dst, src, (1 << width) - 1)]
 
 
 def _sign_extend_odd_width(dst: str, src: str, width: int, reg_bits: int) -> list[str]:
     """Sign-extend from bit ``width - 1`` with the shift pair used elsewhere."""
     shift = reg_bits - width
-    return [f"  lsl {dst}, {src}, #{shift}", f"  asr {dst}, {dst}, #{shift}"]
+    return [emitted_scalar_immediate_line('lsl', dst, src, shift), emitted_scalar_immediate_line('asr', dst, dst, shift)]
 
 
 def sign_extend_int_reg(value_type: TypeDesc, reg: str) -> list[str]:
@@ -444,17 +446,17 @@ def sign_extend_int_reg(value_type: TypeDesc, reg: str) -> list[str]:
         return []
     if width == 1:
         return [
-            f"  and {reg}, {reg}, #1",
-            f"  neg {reg}, {reg}",
+            emitted_scalar_immediate_line('and', reg, reg, 1),
+            emitted_scalar_register_line('neg', reg, reg),
         ]
     if width == 8:
-        return [f"  sxtb {reg}, {reg}"]
+        return [emitted_scalar_register_line('sxtb', reg, reg)]
     if width == 16:
-        return [f"  sxth {reg}, {reg}"]
+        return [emitted_scalar_register_line('sxth', reg, reg)]
     shift = 32 - width
     return [
-        f"  lsl {reg}, {reg}, #{shift}",
-        f"  asr {reg}, {reg}, #{shift}",
+        emitted_scalar_immediate_line('lsl', reg, reg, shift),
+        emitted_scalar_immediate_line('asr', reg, reg, shift),
     ]
 
 
@@ -472,15 +474,15 @@ def sign_extend_int_reg_indexed(
     if width >= 32:
         return []
     if width == 1:
-        return [f"  and {reg}, {reg}, #1", f"  neg {reg}, {reg}"]
+        return [emitted_scalar_immediate_line('and', reg, reg, 1), emitted_scalar_register_line('neg', reg, reg)]
     if width == 8:
-        return [f"  sxtb {reg}, {reg}"]
+        return [emitted_scalar_register_line('sxtb', reg, reg)]
     if width == 16:
-        return [f"  sxth {reg}, {reg}"]
+        return [emitted_scalar_register_line('sxth', reg, reg)]
     shift = 32 - width
     return [
-        f"  lsl {reg}, {reg}, #{shift}",
-        f"  asr {reg}, {reg}, #{shift}",
+        emitted_scalar_immediate_line('lsl', reg, reg, shift),
+        emitted_scalar_immediate_line('asr', reg, reg, shift),
     ]
 
 
@@ -542,12 +544,12 @@ def emit_fcmp_result(cond: str) -> list[str]:
         return [
             emitted_cset_line("w11", "eq"),
             emitted_cset_line("w12", "vs"),
-            "  orr w11, w11, w12",
+            emitted_scalar_register_line("orr", "w11", "w11", "w12"),
         ]
     if cond == "one":
         return [
             emitted_cset_line("w11", "mi"),
             emitted_cset_line("w12", "gt"),
-            "  orr w11, w11, w12",
+            emitted_scalar_register_line("orr", "w11", "w11", "w12"),
         ]
     raise BackendUnavailable(f"self backend does not support fcmp {cond!r}")

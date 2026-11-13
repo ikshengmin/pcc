@@ -2431,6 +2431,14 @@
         ]
       }
     },
+    "tests/rust/test_rust_trait_bound_arguments.py": {
+      "test_rustc_gives_the_same_verdicts": {
+        "activity": "external-reference",
+        "reason": [
+          "Invokes actual development rustc with --emit=metadata on five unchanged trait-bound argument sources. Requires successful compilation for three accepted forms and nonzero status with the expected diagnostic for two rejected argument orders. This oracle does not certify owned compilation or native execution."
+        ]
+      }
+    },
     "tests/rust/test_rust_targets.py": {
       "test_original_scalar_programs_cross_emit_arm64_macho_without_source_rewrite": {
         "activity": "mandatory-same-input-when-required",
