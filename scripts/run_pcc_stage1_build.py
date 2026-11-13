@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import signal
 import sys
+import subprocess
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -166,6 +167,8 @@ def _snapshot_producer_tools(output_dir: Path, ab) -> tuple[dict[str, Any], dict
     for name, source in (
         ("run_pcc_stage1_build.py", Path(__file__).resolve(strict=True)),
         ("run_pcc_compile_ab.py", AB_TOOL.resolve(strict=True)),
+        ("file_lock.py", (REPO_ROOT / "scripts/file_lock.py").resolve(strict=True)),
+        ("run_process_tree_sample.py", (REPO_ROOT / "scripts/run_process_tree_sample.py").resolve(strict=True)),
     ):
         target = root / name
         live_receipts[name] = ab._copy_frozen(source, target, "build producer tool")
@@ -391,12 +394,32 @@ def _run_build(args: argparse.Namespace, ab, *, run_token: str) -> dict[str, Any
         "stage1 source snapshot",
         require_read_only=True,
     )
+    measured_command = command
+    if getattr(args, "measure_compile_window", False):
+        evidence = output_dir / "compile-process"
+        evidence.mkdir()
+        measured_command = [
+            str(host_python), str(output_dir / "producer-tools/run_process_tree_sample.py"),
+            "--result", str(evidence / "result.json"),
+            "--samples", str(evidence / "samples.tsv"),
+            "--stdout", str(evidence / "target.stdout"),
+            "--stderr", str(evidence / "target.stderr"),
+            "--cwd", str(source_snapshot_root), "--timeout", str(args.timeout),
+            "--interval", "0.25", "--max-tree-rss-bytes", str(args.memory_budget_bytes),
+            "--no-performance-lock", "--preserve-worker-budget", "--", *command,
+        ]
     result = ab._run_process(
-        command,
-        timeout=args.timeout,
-        env=env,
-        cwd=source_snapshot_root,
+        measured_command, timeout=args.timeout, env=env, cwd=source_snapshot_root,
     )
+    if getattr(args, "measure_compile_window", False):
+        # Preserve the legacy compiler diagnostics, not the observer's progress.
+        result = subprocess.CompletedProcess(
+            command, result.returncode,
+            (evidence / "target.stdout").read_text(encoding="utf-8")
+            if (evidence / "target.stdout").is_file() else result.stdout,
+            (evidence / "target.stderr").read_text(encoding="utf-8")
+            if (evidence / "target.stderr").is_file() else result.stderr,
+        )
     (output_dir / "stage1.stdout").write_text(result.stdout, encoding="utf-8")
     (output_dir / "stage1.stderr").write_text(result.stderr, encoding="utf-8")
     if result.returncode != 0:
@@ -587,6 +610,7 @@ def _parser() -> argparse.ArgumentParser:
         dest="performance_lock",
         action="store_false",
     )
+    parser.add_argument("--measure-compile-window", action="store_true")
     parser.set_defaults(performance_lock=True)
     return parser
 

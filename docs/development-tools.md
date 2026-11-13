@@ -68,6 +68,34 @@ local link paths. Its semantic-review boundary is recorded in
 
 ## Profiling checks
 
+### Matched Stage1/Stage2 compile windows
+
+`run_pcc_stage_ab.py --measure-compile-window` opts into separate compile-only
+wall and sampled process-tree RSS evidence. It reuses the existing process-tree
+sampler around each actual compile command, including compile wrappers and
+native deferred work, after source/runtime preparation and before publication
+or functional smoke checks. The unchanged outer guards still cover the whole
+stage. The nested sampler retains the outer worker-admission observations and
+original recovery deadline rather than narrowing the scheduler's budget view.
+The standalone Stage1 measurement flag requires a matching enclosing sampler;
+the Stage A/B harness supplies it. It never replaces an absent outer guard.
+
+New compile-window evidence is separate from legacy outer elapsed/RSS and
+compiler diagnostic metrics. Raw sample and result artifacts, command/root
+identity, cap, sample interval/count, cleanup status and producer hashes must
+validate before a same-source Stage2/Stage1 ratio is available. Sampled RSS is
+not an exact peak, and observed-exit timing includes sampling/liveness detection
+latency. Missing observations, unsuccessful stages, mismatched resources or
+tools, and historical snapshots lacking the measurement contract cannot become
+valid comparisons. Existing source/runtime leases, native auto-worker policy,
+fixed-point and five-GC requirements remain independent and mandatory.
+
+Fewer than five adjacent alternating pairs are screening only. Even a complete
+measurement does not automatically accept a source change, certify correctness
+or establish fixed-point/five-GC qualification. Adding measurement support is
+not a performance result; execution and performance claims require recorded
+runs.
+
 ### Optional process RSS history
 
 `run_process_tree_sample.py --process-rss-history` streams the already sampled

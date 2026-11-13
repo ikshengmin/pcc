@@ -200,7 +200,14 @@ def build_source_files(source_root: Path) -> list[Path]:
                 )
             if path.is_file() and path.suffix not in skipped_suffixes:
                 files.append(path)
-    for name in BUILD_SOURCE_SUPPORT:
+    support = list(BUILD_SOURCE_SUPPORT)
+    bootstrap = root / "scripts/bootstrap.py"
+    if (bootstrap.is_file() and
+            'COMPILE_WINDOW_SCHEMA = "pcc.compile-process-window.v1"' in bootstrap.read_text(encoding="utf-8")):
+        # Historical snapshots keep their original closure. Measurement-capable
+        # snapshots freeze the observer and its import dependency explicitly.
+        support += ["scripts/run_process_tree_sample.py", "scripts/run_pcc_compile_ab.py", "scripts/file_lock.py"]
+    for name in support:
         path = root / name
         if path.is_symlink():
             raise CompileABError(
@@ -1148,7 +1155,7 @@ def host_python_runtime_evidence(host_python: Path) -> dict[str, Any]:
 def current_producer_tool_evidence() -> tuple[dict[str, Any], list[dict[str, Any]]]:
     evidence: dict[str, Any] = {}
     live: list[dict[str, Any]] = []
-    for name in ("run_pcc_stage1_build.py", "run_pcc_compile_ab.py"):
+    for name in ("run_pcc_stage1_build.py", "run_pcc_compile_ab.py", "run_process_tree_sample.py", "file_lock.py"):
         path = REPO_ROOT / "scripts" / name
         receipt = _path_receipt(path.resolve(strict=True))
         live.append(receipt)

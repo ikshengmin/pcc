@@ -94,6 +94,8 @@ def _configured_host_memory_reserve_bytes(environment):
         raise BootstrapError(str(exc)) from exc
 
 
+COMPILE_WINDOW_SCHEMA = "pcc.compile-process-window.v1"
+
 class Options:
     """Resolved bootstrap settings (environment defaults + CLI overrides)."""
 
@@ -724,11 +726,13 @@ def _posix_guard_command(
         ]
     else:
         command += ["--max-tree-rss-bytes", str(options.max_tree_rss_bytes)]
-    if sys.platform == "darwin":
+    if sys.platform == "darwin" and options.env.get("PCC_BOOTSTRAP_MEASURE_COMPILE_WINDOW") != "1":
         command += [
             "--darwin-preflight-reserve-bytes",
             str(options.host_memory_reserve_bytes),
         ]
+    if options.env.get("PCC_BOOTSTRAP_MEASURE_COMPILE_WINDOW") == "1":
+        command.append("--preserve-worker-budget")
     if options.keep_process_samples:
         command.append("--process-rss-history")
     command += ["--", *target]
@@ -853,14 +857,18 @@ def _windows_guarded_run(
 def _run_guarded(
     target: list[str], options: Options, stage: int, environment: dict[str, str]
 ) -> tuple[int, Path | None]:
-    if options.external_memory_guard == "1":
+    measured = options.env.get("PCC_BOOTSTRAP_MEASURE_COMPILE_WINDOW") == "1"
+    if options.external_memory_guard == "1" and not measured:
         return (
             subprocess.run(
                 target, cwd=str(ROOT), env=environment, check=False
             ).returncode,
             None,
         )
-    if options.checkpoint_guard_dir is not None:
+    if measured:
+        guard_dir = options.out_dir / f"stage{stage}.compile-process"
+        guard_dir.mkdir(parents=True, exist_ok=False)
+    elif options.checkpoint_guard_dir is not None:
         guard_dir = Path(options.checkpoint_guard_dir)
         guard_dir.mkdir(parents=True, exist_ok=False)
     else:
@@ -1086,7 +1094,8 @@ def _run_stage(stage: int, out_exe: Path, cmd: list[str], options: Options) -> N
             f"elapsed_ms={stage_elapsed_ms} rc={stage_returncode} output=<none>"
         )
         raise BootstrapError("<stage failed>", exit_code=int(stage_returncode))
-    if guard_dir is not None and not options.keep_process_samples:
+    if (guard_dir is not None and not options.keep_process_samples
+            and options.env.get("PCC_BOOTSTRAP_MEASURE_COMPILE_WINDOW") != "1"):
         shutil.rmtree(guard_dir, ignore_errors=True)
     if not out_exe.is_file() or out_exe.stat().st_size == 0:
         print(

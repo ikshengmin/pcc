@@ -1325,7 +1325,18 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
         if args.max_tree_rss_bytes > 0
         else _PROCESS_TABLE_TIMEOUTS_S
     )
-    if args.max_tree_rss_bytes > 0:
+    preserve_worker_budget = getattr(args, "preserve_worker_budget", False)
+    if preserve_worker_budget:
+        if (args.max_tree_rss_bytes <= 0
+                or environment.get("PCC_WORKER_TREE_BUDGET_BYTES") != str(args.max_tree_rss_bytes)
+                or not environment.get("PCC_WORKER_TREE_STATE_PATH")
+                or not environment.get("PCC_WORKER_TREE_RECOVERY", "").startswith(
+                    "pcc.worker-tree-recovery.v1\t")):
+            payload.update(status="SAMPLER_ERROR", returncode=None, sample_count=0,
+                           error="nested measurement requires the matching outer worker budget")
+            _persist(result_path, payload)
+            raise ProcessTreeSampleError(payload["error"])
+    if args.max_tree_rss_bytes > 0 and not preserve_worker_budget:
         environment["PCC_WORKER_TREE_STATE_PATH"] = worker_state_path
         environment["PCC_WORKER_TREE_BUDGET_BYTES"] = str(args.max_tree_rss_bytes)
         # Bind recovery to this guard's actual retry policy and ORIGINAL
@@ -1343,6 +1354,9 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
         if args.performance_lock
         else contextlib.nullcontext()
     )
+    target_started = None
+    target_finished = None
+    root_identity = None
     samples: list[dict[str, object]] = []
     known_pids: set[int] = set()
     observed_processes: dict[int, _ProcessIdentity] = {}
@@ -1448,6 +1462,7 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
                     message += "; could not persist failure receipt: " + str(receipt_error)
                 raise ProcessTreeSampleError(message) from exc
             try:
+                target_started = time.monotonic()
                 process = subprocess.Popen(
                     command,
                     cwd=cwd,
@@ -1498,7 +1513,7 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
                     )
                     known_pids.update(tree)
                     tree_rss = sum(row[1] for row in tree.values())
-                    if args.max_tree_rss_bytes > 0:
+                    if args.max_tree_rss_bytes > 0 and not preserve_worker_budget:
                         state_tmp = worker_state_path + ".tmp"
                         with open(state_tmp, "w", encoding="utf-8") as state_stream:
                             state_stream.write(
@@ -1626,6 +1641,7 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
                             remaining = _owned_session_pids(
                                 process.pid, observed_processes, after_exit,
                             )
+                            target_finished = time.monotonic()
                             if remaining:
                                 known_pids.update(remaining)
                                 payload["post_exit_cleanup_pids"] = sorted(remaining)
@@ -1694,6 +1710,26 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
             },
         }
     )
+    if preserve_worker_budget:
+        # Separate from legacy elapsed_s (which includes admission, lock and I/O).
+        # End is observed root exit plus the owned-descendant liveness check.
+        payload["target_window"] = {
+            "schema": "pcc.compile-process-window.v1",
+            "scope": "launch_to_observed_owned_tree_exit_including_compile_wrappers",
+            "start_monotonic_s": target_started,
+            "samples_elapsed_origin_monotonic_s": started,
+            "end_monotonic_s": target_finished,
+            "wall_s": None if target_started is None or target_finished is None else target_finished - target_started,
+            "root_pid": None if process is None else process.pid,
+            "root_start_identity": None if root_identity is None else list(root_identity.start_time),
+            "clean_exit": bool(target_finished is not None and not payload.get("post_exit_cleanup_pids")
+                               and not sampler_error and not timed_out and not interrupted and not memory_limited),
+            "worker_budget_scope": "inherited_outer_tree" if preserve_worker_budget else "target_tree",
+            "samples_sha256": hashlib.sha256(samples_path.read_bytes()).hexdigest(),
+            "sampler_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "lock_tool_sha256": hashlib.sha256(Path(compile_ab.exclusive_file_lock.__wrapped__.__code__.co_filename).read_bytes()).hexdigest(),
+            "support_tool_sha256": hashlib.sha256(Path(compile_ab.__file__).read_bytes()).hexdigest(),
+        }
     if sampler_error:
         payload["error"] = sampler_error
     if process_rss_history is not None:
@@ -1722,6 +1758,8 @@ def run(args: argparse.Namespace) -> dict[str, object]:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--preserve-worker-budget", action="store_true",
+                        help="retain matching outer worker observations and original recovery deadline")
     parser.add_argument("--result", required=True)
     parser.add_argument("--samples", required=True)
     parser.add_argument("--stdout", required=True)

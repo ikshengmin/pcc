@@ -9,6 +9,17 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 
 ## Source-platform CI coverage (execution pending)
 
+The Stage1 strict receipt reader now admits its producer's known memory-budget
+selection extension while checking the selected cap against the consumed
+environment; original v3 receipts remain readable. The Stage A/B harness has an
+opt-in matched compile-only wall/RSS window that excludes preparation and smoke,
+retains raw observations, and preserves the enclosing admission budget and
+deadline. Source review and mocked regressions are added; execution remains
+UNRUN under CI-only instructions. No Stage2 <= Stage1 claim follows from this
+measurement support. Qualifying runs need five alternating pairs, unchanged
+resource limits, native correctness and the Stage1/2/3 fixed point separately.
+See [measurement usage](development-tools.md#matched-stage1stage2-compile-windows).
+
 The source validation workflow now declares exact node/platform owners, adding
 a real macOS arm64 owner for the unchanged Darwin errno SDK reference test.
 The final coverage job joins complete raw phase/subtest evidence from every

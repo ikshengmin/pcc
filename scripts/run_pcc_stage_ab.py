@@ -358,6 +358,160 @@ def assert_stage_envelope_parity(arm_record: dict[str, Any], *, arm: str) -> Non
         )
 
 
+def _compile_measurement(directory: Path, *, expected_command, expected_cwd,
+                         expected_sampler_sha256: str, expected_cap: int,
+                         expected_support_sha256: str | None = None,
+                         expected_lock_sha256: str | None = None) -> dict[str, Any]:
+    """Read durable compile-only evidence. Never substitute outer observations."""
+    raw = _read_json(directory / "result.json")
+    window = raw.get("target_window", {})
+    artifacts = raw.get("artifacts", {})
+    if not isinstance(window, dict) or not isinstance(artifacts, dict):
+        raise StageABError("compile-window and artifact receipts must be objects")
+    samples_path = directory / "samples.tsv"
+    if (raw.get("schema") != "pcc.process_tree_sample.v1"
+            or raw.get("status") != "COMPLETE" or type(raw.get("returncode")) is not int
+            or raw.get("returncode") != 0
+            or window.get("schema") != "pcc.compile-process-window.v1"
+            or window.get("clean_exit") is not True
+            or raw.get("post_exit_cleanup_pids")
+            or window.get("worker_budget_scope") != "inherited_outer_tree"
+            or window.get("sampler_sha256") != expected_sampler_sha256
+            or (expected_support_sha256 is not None and
+                window.get("support_tool_sha256") != expected_support_sha256)
+            or (expected_lock_sha256 is not None and
+                window.get("lock_tool_sha256") != expected_lock_sha256)
+            or raw.get("max_tree_rss_bytes") != expected_cap
+            or raw.get("interval_s") != 0.25
+            or raw.get("cwd") != str(expected_cwd)
+            or (expected_command is not None and raw.get("command") != expected_command)
+            or artifacts.get("samples") != str(samples_path)):
+        raise StageABError("invalid compile-window identity, scope or outcome")
+    count = raw.get("sample_count")
+    if type(count) is not int or count <= 0:
+        raise StageABError("compile-window has no valid sample count")
+    data = samples_path.read_bytes()
+    if hashlib.sha256(data).hexdigest() != window.get("samples_sha256"):
+        raise StageABError("compile-window samples hash mismatch")
+    try:
+        rows = data.decode("utf-8").splitlines()
+    except UnicodeDecodeError as exc:
+        raise StageABError("compile-window samples are not UTF-8") from exc
+    if (len(rows) != count + 1 or rows[0] !=
+            "elapsed_s\ttree_rss_bytes\tprocess_count\tlargest_pid\tlargest_rss_bytes\tlargest_command"):
+        raise StageABError("compile-window sample rows mismatch")
+    peaks = []
+    previous = -1.0
+    origin = _measured_number(window, "samples_elapsed_origin_monotonic_s")
+    start = _measured_number(window, "start_monotonic_s")
+    end = _measured_number(window, "end_monotonic_s")
+    for row in rows[1:]:
+        fields = row.split("\t")
+        if len(fields) != 6:
+            raise StageABError("malformed compile-window sample")
+        try:
+            elapsed = float(fields[0])
+            rss, processes = int(fields[1]), int(fields[2])
+            largest_pid, largest_rss = int(fields[3]), int(fields[4])
+        except ValueError as exc:
+            raise StageABError("compile-window sample contains invalid numbers") from exc
+        if (not math.isfinite(elapsed) or elapsed < previous or rss < 0 or processes < 0
+                or largest_pid < 0 or largest_rss < 0 or largest_rss > rss
+                or (processes == 0 and (rss != 0 or largest_pid != 0 or largest_rss != 0))
+                or origin + elapsed < start - 1e-6 or origin + elapsed > end + 1e-6):
+            raise StageABError("invalid compile-window sample")
+        previous = elapsed
+        peaks.append(rss)
+    wall = _measured_number(window, "wall_s")
+    start = _measured_number(window, "start_monotonic_s")
+    end = _measured_number(window, "end_monotonic_s")
+    peak = _measured_number(raw, "peak_tree_rss_bytes")
+    if (wall <= 0 or end <= start or abs((end - start) - wall) > 1e-6
+            or peak <= 0 or max(peaks) != peak
+            or type(window.get("root_pid")) is not int or window["root_pid"] <= 0
+            or not isinstance(window.get("root_start_identity"), list)
+            or len(window["root_start_identity"]) != 2
+            or any(type(value) is not int or value < 0 for value in window["root_start_identity"])
+            or window.get("scope") != "launch_to_observed_owned_tree_exit_including_compile_wrappers"):
+        raise StageABError("invalid compile-window timing, root or RSS")
+    return {
+        "schema": window["schema"], "scope": window["scope"],
+        "wall_s": wall, "peak_tree_rss_bytes": peak,
+        "sample_count": count, "interval_s": raw["interval_s"],
+        "observed_sample_elapsed_s": [float(rows[1].split("\t")[0]), float(rows[-1].split("\t")[0])],
+        "samples_elapsed_origin_monotonic_s": window.get("samples_elapsed_origin_monotonic_s"),
+        "max_tree_rss_bytes": expected_cap, "command": raw["command"],
+        "cwd": raw["cwd"], "root_pid": window["root_pid"],
+        "root_start_identity": window["root_start_identity"],
+        "samples": str(samples_path), "samples_sha256": window["samples_sha256"],
+        "result": str(directory / "result.json"),
+        "result_sha256": hashlib.sha256((directory / "result.json").read_bytes()).hexdigest(),
+        "sampler_sha256": expected_sampler_sha256,
+        "support_tool_sha256": window.get("support_tool_sha256"),
+        "lock_tool_sha256": window.get("lock_tool_sha256"),
+        "clean_exit": True,
+    }
+
+
+def summarize_compile_windows(pairs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Same-source Stage2/Stage1 observations, never a correctness acceptance."""
+    ratios = {arm: {name: [] for name in ("wall_s", "peak_tree_rss_bytes")}
+              for arm in ("baseline", "candidate")}
+    available = bool(pairs)
+    alternating = bool(pairs)
+    for offset, pair in enumerate(pairs):
+        index = pair.get("index")
+        if (type(index) is not int or index < 1
+                or tuple(pair.get("order", ())) != pair_order(index)
+                or index != pairs[0].get("index", 0) + offset):
+            alternating = False
+        for arm in ratios:
+            record = pair.get(arm, {})
+            first, second = record.get("stage1", {}), record.get("stage2", {})
+            left, right = first.get("compile_measurement"), second.get("compile_measurement")
+            valid = bool(left and right)
+            if valid:
+                valid = (first.get("source_sha256") is not None
+                         and first.get("source_sha256") == second.get("source_sha256")
+                         and first.get("runtime_sha256") is not None
+                         and first.get("runtime_sha256") == second.get("runtime_sha256")
+                         and first.get("resource_envelope") is not None
+                         and envelope_parity_key(first["resource_envelope"]) ==
+                             envelope_parity_key(second.get("resource_envelope", {})))
+                for key in ("schema", "scope", "interval_s", "max_tree_rss_bytes", "sampler_sha256", "support_tool_sha256", "lock_tool_sha256"):
+                    valid = valid and left.get(key) is not None and left.get(key) == right.get(key)
+                valid = valid and left.get("clean_exit") is True and right.get("clean_exit") is True
+                for measurement in (left, right):
+                    valid = (valid and measurement.get("schema") == "pcc.compile-process-window.v1"
+                             and measurement.get("scope") == "launch_to_observed_owned_tree_exit_including_compile_wrappers"
+                             and type(measurement.get("sample_count")) is int
+                             and measurement["sample_count"] > 0
+                             and measurement.get("interval_s") == 0.25)
+            for name in ratios[arm]:
+                ratio = None
+                if valid:
+                    try:
+                        ratio = _measured_ratio(_measured_number(right, name), _measured_number(left, name))
+                    except StageABError:
+                        pass
+                if ratio is None:
+                    available = False
+                ratios[arm][name].append(ratio)
+    return {
+        "availability": "AVAILABLE" if available else "UNAVAILABLE",
+        "qualification": ("UNAVAILABLE" if not available else
+                          "SCREENING_UNQUALIFIED" if len(pairs) < 5 or not alternating else
+                          "MEASURED_NOT_CORRECTNESS_QUALIFIED"),
+        "pair_count": len(pairs), "alternating_pairs": alternating,
+        "ratios_by_arm": ratios,
+        "median_stage2_over_stage1": {
+            arm: {name: _complete_median(values) if values else None
+                  for name, values in metrics.items()} for arm, metrics in ratios.items()},
+        "automatic_acceptance": False,
+        "remaining_gates": ["five_gc", "native_public_cli", "stage1_stage2_stage3_fixed_point"],
+    }
+
+
 def summarize_pairs(pairs: list[dict[str, Any]]) -> dict[str, Any]:
     if not pairs:
         raise StageABError("cannot summarize empty stage pairs")
@@ -368,6 +522,7 @@ def summarize_pairs(pairs: list[dict[str, Any]]) -> dict[str, Any]:
         "comparison_contract": COMPARISON_CONTRACT,
         "verdict": "MEASURED_NO_AUTOMATIC_ACCEPTANCE",
         "stages": {},
+        "same_source_stage2_over_stage1": summarize_compile_windows(pairs),
     }
     for stage in stages:
         by_arm: dict[str, list[dict[str, float | None]]] = {
@@ -501,6 +656,8 @@ def _run_stage1(
         "--direct-indexed-emit",
         "--no-performance-lock",
     ]
+    if getattr(args, "measure_compile_window", False):
+        command.append("--measure-compile-window")
     process = sampler.run(
         _sampler_args(
             sampler,
@@ -532,7 +689,20 @@ def _run_stage1(
         output_root=output,
         source_root=source_snapshot,
     )
+    compile_measurement = None
+    if getattr(args, "measure_compile_window", False):
+        compile_measurement = _compile_measurement(
+            output / "compile-process", expected_command=receipt["command"],
+            expected_cwd=source_snapshot,
+            expected_sampler_sha256=ab.sha256_path(PROCESS_SAMPLER),
+            expected_support_sha256=ab.sha256_path(COMPILE_AB_TOOL),
+            expected_lock_sha256=ab.sha256_path(REPO_ROOT / "scripts/file_lock.py"),
+            expected_cap=args.max_tree_rss_bytes,
+        )
     return {
+        "compile_measurement": compile_measurement,
+        "source_sha256": receipt["bootstrap_source_sha256"],
+        "runtime_sha256": receipt["runtime_archive_sha256"],
         "result_path": str(output / "stage1-result.json"),
         "receipt_path": str(output / "build-receipt.json"),
         "result": result,
@@ -595,6 +765,9 @@ def _run_stage2(
         "2",
         "--reuse-stage1",
     ]
+    if getattr(args, "measure_compile_window", False):
+        environment["PCC_BOOTSTRAP_MEASURE_COMPILE_WINDOW"] = "1"
+        environment["PCC_BOOTSTRAP_STAGE_TIMEOUT"] = str(args.stage2_timeout)
     original_environment = os.environ.copy()
     os.environ.clear()
     os.environ.update(environment)
@@ -635,7 +808,32 @@ def _run_stage2(
         env=environment,
         cwd=output,
     )
+    compile_measurement = None
+    if getattr(args, "measure_compile_window", False):
+        compile_measurement = _compile_measurement(
+            output / "stage2.compile-process", expected_command=None,
+            expected_cwd=source_root,
+            expected_sampler_sha256=ab.sha256_path(PROCESS_SAMPLER),
+            expected_support_sha256=ab.sha256_path(COMPILE_AB_TOOL),
+            expected_lock_sha256=ab.sha256_path(REPO_ROOT / "scripts/file_lock.py"),
+            expected_cap=args.max_tree_rss_bytes,
+        )
+        expected_target = [str(compiler), "--profile-json", str(profile / "stage2.json"),
+                           "--backend", "self", str(source_root / "pcc/__main__.py"),
+                           "-o", str(pcc2)]
+        codegen_plan = (str(pcc2) + ".pcc-codegen-plan"
+                        if (environment.get("PCC_BOOTSTRAP_DEFER_FRONTEND_CODEGEN") or "1") == "1" else "")
+        link_plan = (str(pcc2) + ".pcc-link-plan"
+                     if (environment.get("PCC_BOOTSTRAP_DEFER_SELF_LINK") or "1") == "1" else "")
+        if codegen_plan or link_plan:
+            expected_target = [sys.executable, str(source_root / "scripts/run_pcc_native_deferred.py"),
+                               str(compiler), codegen_plan, link_plan, "--", *expected_target]
+        if compile_measurement["command"] != expected_target:
+            raise StageABError("Stage2 compile-window target differs from requested compile")
     return {
+        "compile_measurement": compile_measurement,
+        "source_sha256": receipt["bootstrap_source_sha256"],
+        "runtime_sha256": receipt["runtime_archive_sha256"],
         "result_path": str(profile / "stage2.result.json"),
         "result": result,
         "metric_scopes": STAGE2_METRIC_SCOPES,
@@ -660,6 +858,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     baseline_source = Path(args.baseline_source).expanduser().resolve(strict=True)
     candidate_source = Path(args.candidate_source).expanduser().resolve(strict=True)
     runtime_archive = Path(args.runtime_archive).expanduser().resolve(strict=True)
+    if getattr(args, "measure_compile_window", False):
+        for source in (baseline_source, candidate_source):
+            bootstrap_text = (source / "scripts/bootstrap.py").read_text(encoding="utf-8")
+            if ('COMPILE_WINDOW_SCHEMA = "pcc.compile-process-window.v1"' not in bootstrap_text
+                    or ab.sha256_path(source / "scripts/run_process_tree_sample.py") != ab.sha256_path(PROCESS_SAMPLER)
+                    or ab.sha256_path(source / "scripts/run_pcc_compile_ab.py") != ab.sha256_path(COMPILE_AB_TOOL)
+                    or ab.sha256_path(source / "scripts/file_lock.py") != ab.sha256_path(REPO_ROOT / "scripts/file_lock.py")):
+                raise StageABError("source snapshot does not support this compile-window producer identity")
     stage1._validate_source_root(str(baseline_source), ab)
     stage1._validate_source_root(str(candidate_source), ab)
     stage1._require_immutable_source(baseline_source, ab)
@@ -829,6 +1035,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--candidate-source", required=True)
     parser.add_argument("--runtime-archive", required=True)
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--measure-compile-window", action="store_true")
     parser.add_argument("--pairs", type=int, default=2)
     parser.add_argument("--first-pair-index", type=int, default=1)
     parser.add_argument(
