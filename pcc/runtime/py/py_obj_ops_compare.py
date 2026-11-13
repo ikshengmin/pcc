@@ -655,7 +655,9 @@ def py_obj_eq_value(a, b) -> int:
     ta: int = _type_of(a)
     tb: int = _type_of(b)
     if ptr_eq(a, b) != 0:
-        if ta != PY_TYPE_FLOAT and ta != PY_TYPE_INSTANCE and ta < PY_TYPE_USER_CLASS_START:
+        # A live weakref delegates even self-comparison to its referent.
+        if (ta != PY_TYPE_FLOAT and ta != PY_TYPE_INSTANCE
+                and ta != PY_TYPE_WEAKREF and ta < PY_TYPE_USER_CLASS_START):
             return 1
 
     # numpy / C-extension scalar ==: drive its tp_richcompare (Py_EQ=2), same as

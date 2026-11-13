@@ -1,5 +1,13 @@
 {
   "functions": {
+    "tests/python/test_weakref_reflexive_equality_native.py": {
+      "test_weakref_nonreflexive_equality_cpython_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Executes the identical strongly-live-target weakref equality program in actual CPython 3.15.0. Checks direct same-handle and boxed equality, genuinely distinct callback-bearing references, referent __eq__ side effects, and independent list/tuple/set identity-or-equality controls. Requires exact stdout, zero exit status and empty stderr. Native execution remains a separate integration test on all five collectors; this does not certify inequality, non-bool comparison results, collection timing, bootstrap or performance."
+        ]
+      }
+    },
     "tests/python/test_weakref_hash_reentrant_failure_native.py": {
       "test_weakref_failed_outer_hash_cpython_reference": {
         "activity": "external-reference",
