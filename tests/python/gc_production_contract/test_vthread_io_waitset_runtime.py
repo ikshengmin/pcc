@@ -9,13 +9,14 @@ from pathlib import Path
 
 import pytest
 
+from tests.python.vthread_pool_root_probe import CACHED_POOL_ROOT_PROBE
 
 REPO_ROOT = Path(__file__).absolute().parents[3]
 RUNTIME_DIR = REPO_ROOT / "pcc" / "runtime"
 pytestmark = pytest.mark.xdist_group(name="vthread_io_waitset_runtime")
 
 
-_SOURCE = r"""
+_SOURCE = CACHED_POOL_ROOT_PROBE + r"""
 #define _POSIX_C_SOURCE 200809L
 #include "py_runtime.h"
 #include "py_internal.h"
@@ -27,6 +28,14 @@ _SOURCE = r"""
 #include <stdlib.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
+static int64_t active_scheduler_roots(void) {
+    /* Empty cached slots remain registered. Validate every cached slot,
+       then count only roots that can retain a task. */
+    int64_t cached = cached_pool_roots();
+    if (cached < 0) return -1;
+    return pcc_gc_scheduler_root_count() - cached;
+}
 
 static PyObject *new_vthread(void) {
     return py_virtual_thread_new(py_None);
@@ -50,15 +59,15 @@ static int check_pipe_ready(void) {
     if (((PyVirtualThreadObject *)vt)->io_entry == NULL) return 0;
     pcc_gc_release(vt);
     (void)pcc_gc_collect(0);
-    if (pcc_gc_scheduler_root_count() != 1) return 0;
+    if (active_scheduler_roots() != 1) return 0;
     if (write(fds[1], "p", 1) != 1) return 0;
     if (py_virtual_thread_poll_io(0) != 1) return 0;
     if (py_virtual_thread_io_wait_count() != 0) return 0;
-    if (pcc_gc_scheduler_root_count() != 1) return 0;
+    if (active_scheduler_roots() != 1) return 0;
     if (!finish_one_ready()) return 0;
     close(fds[0]);
     close(fds[1]);
-    return pcc_gc_scheduler_root_count() == 0;
+    return active_scheduler_roots() == 0;
 }
 
 static int check_socket_ready(void) {
@@ -74,7 +83,7 @@ static int check_socket_ready(void) {
     if (!finish_one_ready()) return 0;
     close(fds[0]);
     close(fds[1]);
-    return pcc_gc_scheduler_root_count() == 0;
+    return active_scheduler_roots() == 0;
 }
 
 static int check_data_readiness_precedes_disconnect_cleanup(void) {
@@ -105,7 +114,7 @@ static int check_data_readiness_precedes_disconnect_cleanup(void) {
     close(closed[0]);
     return py_virtual_thread_ready_count() == 0
         && py_virtual_thread_io_wait_count() == 0
-        && pcc_gc_scheduler_root_count() == 0;
+        && active_scheduler_roots() == 0;
 }
 
 static int check_timeout(void) {
@@ -121,7 +130,7 @@ static int check_timeout(void) {
     if (!finish_one_ready()) return 0;
     close(fds[0]);
     close(fds[1]);
-    return pcc_gc_scheduler_root_count() == 0;
+    return active_scheduler_roots() == 0;
 }
 
 static int check_same_fd_waiters(void) {
@@ -136,7 +145,7 @@ static int check_same_fd_waiters(void) {
     pcc_gc_release(second);
     (void)pcc_gc_collect(0);
     if (py_virtual_thread_io_wait_count() != 2) return 0;
-    if (pcc_gc_scheduler_root_count() != 2) return 0;
+    if (active_scheduler_roots() != 2) return 0;
     if (write(fds[1], "m", 1) != 1) return 0;
     if (py_virtual_thread_poll_io(0) != 2) return 0;
     if (py_virtual_thread_ready_count() != 2) return 0;
@@ -145,7 +154,7 @@ static int check_same_fd_waiters(void) {
     close(fds[0]);
     close(fds[1]);
     return py_virtual_thread_io_wait_count() == 0
-        && pcc_gc_scheduler_root_count() == 0;
+        && active_scheduler_roots() == 0;
 }
 
 static int check_complete_cancels_wait(void) {
@@ -154,11 +163,11 @@ static int check_complete_cancels_wait(void) {
     PyObject *vt = new_vthread();
     if (vt == NULL) return 0;
     if (py_virtual_thread_block_on_fd(vt, fds[0], POLLIN, -1) != 0) return 0;
-    if (pcc_gc_scheduler_root_count() != 1) return 0;
+    if (active_scheduler_roots() != 1) return 0;
     if (py_virtual_thread_complete(vt, py_None) != 0) return 0;
     if (((PyVirtualThreadObject *)vt)->io_entry != NULL) return 0;
     if (py_virtual_thread_io_wait_count() != 0) return 0;
-    if (pcc_gc_scheduler_root_count() != 0) return 0;
+    if (active_scheduler_roots() != 0) return 0;
     pcc_gc_release(vt);
     if (write(fds[1], "x", 1) != 1) return 0;
     if (py_virtual_thread_poll_io(0) != 0) return 0;
@@ -234,7 +243,7 @@ static int check_live_wait_registration_and_cancel_interrupt(void) {
     close(first_pipe[1]);
     close(second_pipe[0]);
     close(second_pipe[1]);
-    return pcc_gc_scheduler_root_count() == 0;
+    return active_scheduler_roots() == 0;
 }
 
 static int check_pool_stop_restart_preserves_parked_io(void) {
@@ -248,21 +257,21 @@ static int check_pool_stop_restart_preserves_parked_io(void) {
     pcc_gc_release(vt);
     (void)pcc_gc_collect(0);
     if (py_virtual_thread_io_wait_count() != 1) return 0;
-    if (pcc_gc_scheduler_root_count() != 1) return 0;
+    if (active_scheduler_roots() != 1) return 0;
 
     /* Stop owns the initialized waitset lifetime, but the parked IO node and
      * its scheduler root remain the durable registration source. */
     if (py_virtual_thread_carrier_pool_stop() != 2) return 0;
     if (py_virtual_thread_io_wait_active() != 0) return 0;
     if (py_virtual_thread_io_wait_count() != 1) return 0;
-    if (pcc_gc_scheduler_root_count() != 1) return 0;
+    if (active_scheduler_roots() != 1) return 0;
 
     /* Starting a fresh pool must rebuild that parked fd before any carrier
      * runs.  A second clean stop must preserve the same root exactly once. */
     if (py_virtual_thread_carrier_pool_start(2) != 2) return 0;
     if (py_virtual_thread_carrier_pool_stop() != 2) return 0;
     if (py_virtual_thread_io_wait_count() != 1) return 0;
-    if (pcc_gc_scheduler_root_count() != 1) return 0;
+    if (active_scheduler_roots() != 1) return 0;
 
     if (write(fds[1], "r", 1) != 1) return 0;
     if (py_virtual_thread_poll_io(0) != 1) return 0;
@@ -270,7 +279,7 @@ static int check_pool_stop_restart_preserves_parked_io(void) {
     close(fds[0]);
     close(fds[1]);
     return py_virtual_thread_io_wait_count() == 0
-        && pcc_gc_scheduler_root_count() == 0;
+        && active_scheduler_roots() == 0;
 }
 
 int main(int argc, char **argv) {
@@ -302,7 +311,7 @@ int main(int argc, char **argv) {
         && py_virtual_thread_io_backend() == expected
         && py_virtual_thread_ready_count() == 0
         && py_virtual_thread_io_wait_count() == 0
-        && pcc_gc_scheduler_root_count() == 0
+        && active_scheduler_roots() == 0
         && py_virtual_thread_node_pool_stat(
             PCC_VTHREAD_NODE_IO, PCC_VTHREAD_POOL_REUSES
         ) > 0;
