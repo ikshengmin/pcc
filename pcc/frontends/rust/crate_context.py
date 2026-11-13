@@ -128,9 +128,10 @@ def _join_path(directory, relative, token):
 
 
 class _Loader:
-    def __init__(self, sources, parser_type=Parser):
+    def __init__(self, sources, parser_type=Parser, configuration=None):
         self.sources = sources
         self.parser_type = parser_type
+        self.configuration = configuration
         self.context_parsers = []
         self.active_files = []
         self.module_count = 0
@@ -143,7 +144,8 @@ class _Loader:
             raise RustError(f'{path}: Rust module source is missing from the supplied closure')
         self.active_files.append(path)
         try:
-            parser = self.parser_type(source.text, source_path=path, edition=identity.crate.edition)
+            options = {} if self.configuration is None else {'configuration': self.configuration}
+            parser = self.parser_type(source.text, source_path=path, edition=identity.crate.edition, **options)
             self.context_parsers.append(parser)
             functions = parser.parse(_module=bool(identity.components))
             body = ModuleBody(functions, parser.records, parser.enums,
@@ -206,19 +208,22 @@ class _Loader:
                             MappingProxyType(items), tuple(children))
 
 
-def parse_crate_sources(crate_root, sources, *, crate_name, edition):
+def parse_crate_sources(crate_root, sources, *, crate_name, edition, configuration=None):
     """Parse a supplied original multi-file crate without flattening its scopes.
 
-    No Cargo build, target/compiler feature overrides, external crates, cfg
-    selection, macros, prelude synthesis or lang-item registration occur here.
+    No Cargo build, external crates, macros, prelude synthesis or lang-item
+    registration occur here. cfg selection uses only an explicit
+    OwnedRustConfiguration (shared by every file, so a disabled `mod` never
+    loads its file); without one, cfg stays an explicit boundary.
     A `no_core`/staged context still fails in the same existing Parser path.
     The complete original source map is frozen before any file is parsed.
     """
     return _parse_crate_sources(crate_root, sources, crate_name=crate_name,
-                                edition=edition, parser_type=Parser)[0]
+                                edition=edition, parser_type=Parser,
+                                configuration=configuration)[0]
 
 
-def _parse_crate_sources(crate_root, sources, *, crate_name, edition, parser_type):
+def _parse_crate_sources(crate_root, sources, *, crate_name, edition, parser_type, configuration=None):
     root = _logical_path(crate_root)
     if (not isinstance(crate_name, str) or not crate_name.isascii()
             or not crate_name.isidentifier() or crate_name == "_"):
@@ -249,6 +254,6 @@ def _parse_crate_sources(crate_root, sources, *, crate_name, edition, parser_typ
         digest.update(encoded)
         digest.update(bytes.fromhex(source.sha256))
     identity = CrateId(crate_name, root, edition, digest.hexdigest())
-    loader = _Loader(frozen, parser_type)
+    loader = _Loader(frozen, parser_type, configuration)
     graph = loader.parse_file(root, ModuleId(identity, ()), PurePosixPath(root).parent)
     return CrateSyntax(graph, edition, frozen), loader.context_parsers

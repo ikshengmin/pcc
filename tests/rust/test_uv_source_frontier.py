@@ -2,7 +2,10 @@
 
 The pinned roots (projects/uv-0.13.7, MIT OR Apache-2.0) are unchanged upstream
 files. A root's recorded blocker is updated when the frontend advances past it;
-a change elsewhere must not silently move it. No Cargo, build script, macro or
+a change elsewhere must not silently move it. cfg is evaluated by PCC's owned
+configuration for x86_64-unknown-linux-gnu with the cfg inputs `cargo build
+--release` gives each package (its default features and the workspace release
+profile), computed from the pinned manifests. No Cargo, build script, macro or
 upstream test is executed, and no uv build is claimed.
 """
 from pathlib import Path
@@ -16,15 +19,16 @@ REVISION = "316c827e058c16b71d5c507a20729c2995a7bcce"
 TARGET = "x86_64-unknown-linux-gnu"
 
 FRONTIER = (
-    ("crates/uv/src/bin/uv.rs", "3:3: cfg requires an actual source/options-bound CheckedRustSource configuration"),
-    # `@` patterns and the tool lint paths in
-    # `#![deny(clippy::print_stdout, clippy::print_stderr)]` are owned; line 7
-    # is `#[cfg(feature = "self-update")]`.
-    ("crates/uv/src/lib.rs", "7:3: cfg requires an actual source/options-bound CheckedRustSource configuration"),
+    # Default features enable performance-memory-allocator, so the cfg-gated
+    # `extern crate uv_performance_memory_allocator;` is active.
+    ("crates/uv/src/bin/uv.rs", "4:14: external crate dependency loading is not implemented"),
+    # `@` patterns, tool lint paths and feature cfg (self-update is off) are
+    # owned; line 70 has the lifetime `'a`.
+    ("crates/uv/src/lib.rs", "70:75: unsupported Rust type \"'a\"; references and traits are not implemented"),
     ("crates/uv-version/src/lib.rs", "5:5: macro invocations require macro-by-example expansion"),
-    # Grouped use trees, `pub use` re-exports and `pub(crate) mod export;` now
-    # parse; line 94 is `#[cfg(test)] mod windows_emulation_tests;`.
-    ("crates/uv-lock/src/lock/mod.rs", "94:3: cfg requires an actual source/options-bound CheckedRustSource configuration"),
+    # Grouped uses, `pub use`, `pub(crate)` and `#[cfg(test)]` (off) are owned;
+    # line 98 is `const VERSION: u32 = 1;`.
+    ("crates/uv-lock/src/lock/mod.rs", "98:1: expected 'fn', found 'const'"),
 )
 
 
@@ -43,14 +47,36 @@ def test_pinned_uv_originals_match_their_source_lock():
     assert python["project"]["version"] == "0.13.7" and python["build-system"]["build-backend"] == "maturin"
 
 
+def release_cfg(name):
+    """The cfg inputs of `cargo build --release` for the root's package."""
+    import tomllib
+    from pcc.frontends.rust.cargo_config import cargo_cfg_options
+    workspace = tomllib.loads((PROJECT / "Cargo.toml").read_text())
+    package = name.split("/src/", 1)[0]
+    manifest = PROJECT / package / "Cargo.toml"
+    if not manifest.is_file():
+        # crates/uv-lock/Cargo.toml is not pinned; this root's only cfg
+        # predicate is `test`, so its features cannot change the result.
+        import re
+        source = (PROJECT / name).read_text(encoding="utf-8")
+        assert set(re.findall(r"#\[cfg\((.*?)\)\]", source)) == {"test"}
+        return cargo_cfg_options({}, workspace_manifest=workspace, profile="release")[0]
+    return cargo_cfg_options(tomllib.loads(manifest.read_text()), workspace_manifest=workspace,
+                             profile="release")[0]
+
+
 @pytest.mark.parametrize("name,blocker", FRONTIER, ids=[name for name, _ in FRONTIER])
 def test_uv_rust_root_stops_at_its_recorded_first_blocker(name, blocker):
     from pcc.frontends.rust import RustError, compile_rust
+    from pcc.frontends.rust.configuration import OwnedRustConfiguration
     from pcc.frontends.rust.syntax import Parser
     source = (PROJECT / name).read_text(encoding="utf-8")
+    cfg = release_cfg(name)
     try:
-        Parser(source, source_path=name, edition=2024).parse()
-        compile_rust(source, module_name="uv_root", target_triple=TARGET, overflow_checks=False, edition=2024)
+        Parser(source, source_path=name, edition=2024,
+               configuration=OwnedRustConfiguration(TARGET, 2024, cfg)).parse()
+        compile_rust(source, module_name="uv_root", target_triple=TARGET, overflow_checks=False,
+                     edition=2024, cfg=cfg)
     except RustError as error:
         assert blocker in str(error)
     else:

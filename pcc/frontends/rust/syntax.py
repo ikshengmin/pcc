@@ -446,9 +446,18 @@ _COMPARISONS = {"==", "!=", "<", "<=", ">", ">="}
 
 
 class Parser:
-    def __init__(self, source: str, *, source_path=None, edition=2021, rustc_check=None):
+    def __init__(self, source: str, *, source_path=None, edition=2021, rustc_check=None,
+                 configuration=None):
         if type(edition) is not int or edition not in {2015, 2018, 2021, 2024}:
             raise RustError('Rust parser crate policy requires an explicit recognized edition')
+        if configuration is not None:
+            from .configuration import OwnedRustConfiguration
+            if type(configuration) is not OwnedRustConfiguration or configuration.edition != edition:
+                raise RustError('Rust parser configuration must be an OwnedRustConfiguration for this edition')
+            if rustc_check is not None:
+                raise RustError('an owned cfg configuration and a CheckedRustSource cannot both '
+                                'select cfg; the checked command fixes its own configuration')
+        self._configuration = configuration
         self.source = source
         self.crate_policy = CratePolicy(edition)
         self.crate_aliases = []
@@ -980,13 +989,10 @@ class Parser:
                 continue
             if attribute.text == 'cfg_attr':
                 from .configuration import crate_cfg_attribute, apply_crate_cfg
-                from .external_check import CheckedRustSource
                 syntax = crate_cfg_attribute(self, attribute, start)
                 self.crate_cfg_syntax += (syntax,)
                 self.crate_documentation = tuple(crate_docs)
-                if type(self._rustc_check) is not CheckedRustSource:
-                    raise attribute.error('cfg_attr requires an actual source/options-bound CheckedRustSource configuration')
-                context = self._rustc_check.configuration(self.source, edition=self.crate_policy.edition)
+                context = self.cfg_configuration(attribute, 'cfg_attr')
                 self.crate_policy, configured = apply_crate_cfg(syntax, context, self.crate_policy)
                 self.crate_cfg_attributes += (configured,)
                 continue
@@ -1012,7 +1018,10 @@ class Parser:
             self.crate_policy = self.crate_policy.with_no_std(attribute)
         self.crate_documentation = tuple(crate_docs)
         self.validate_attribute_context()
+        pending_cfg = None
         while self.token.kind != "eof" and not (_inline and self.token.text == "}"):
+            self.finish_configured_item(pending_cfg, functions)
+            pending_cfg = None
             item_start = self.pos
             cfg_attributes = []
             repr_c = no_mangle = False
@@ -1034,12 +1043,9 @@ class Parser:
                     continue
                 if attribute.text == 'cfg':
                     from .configuration import item_cfg_attribute, ConfiguredItemAttribute
-                    from .external_check import CheckedRustSource
                     syntax = item_cfg_attribute(self, attribute, attribute_start)
                     self.item_cfg_syntax += (syntax,)
-                    if type(self._rustc_check) is not CheckedRustSource:
-                        raise attribute.error('cfg requires an actual source/options-bound CheckedRustSource configuration')
-                    context = self._rustc_check.configuration(self.source, edition=self.crate_policy.edition)
+                    context = self.cfg_configuration(attribute, 'cfg')
                     cfg_attributes.append(ConfiguredItemAttribute(syntax, context, context.predicate(syntax.predicate)))
                     continue
                 if attribute.text == "lang":
@@ -1069,11 +1075,16 @@ class Parser:
                 self.expect("]")
             if docs and self.token.kind == "eof":
                 raise docs[-1].token.error("outer documentation attribute has no following item")
+            # Taken before the visibility, so a disabled item's `pub(in ..)`
+            # restriction is rolled back with everything else it declared.
+            cfg_snapshot = self.item_snapshot(functions) if cfg_attributes else None
             public = parse_visibility(self)
             from .inline_attributes import require_function_target
             require_function_target(self, inline_attributes)
             if cfg_attributes and not (self.token.text == 'extern' and self.tokens[self.pos + 1].text == 'crate'):
-                raise self.token.error('conditional item gating is implemented only for extern crate declarations; other item syntax requires its own configuration owner')
+                # Any other item is parsed in full (rustc strips only parsed
+                # items), then kept or rolled back when the next item starts.
+                pending_cfg = (tuple(cfg_attributes), item_start, cfg_snapshot)
             if language_item is not None and self.token.text != "trait":
                 raise language_item.token.error("language item requires a trait target")
             if self.accept("mod"):
@@ -1225,6 +1236,7 @@ class Parser:
                                                     tuple(self.tokens[item_start:self.pos]), item.source_span)
                         self.conditional_items += (configured,)
                         if not configured.enabled:
+                            del self.visibility_restrictions[cfg_snapshot[-1]:]
                             continue
                     self.register_extern_crate(item)
                     continue
@@ -1248,6 +1260,7 @@ class Parser:
                     continue
             functions.append(self.function(abi, public, no_mangle, unsafe, documentation=tuple(docs),
                                            inline_attributes=tuple(inline_attributes)))
+        self.finish_configured_item(pending_cfg, functions)
         if _inline:
             self.expect("}")
         self.validate_attribute_context()
@@ -1260,6 +1273,42 @@ class Parser:
 
     def validate_crate_policy(self):
         self.crate_policy.require_owned_lang_item_context()
+
+    def cfg_configuration(self, attribute, kind):
+        """The one cfg owner of this parse: owned, or an actual checked command."""
+        if self._configuration is not None:
+            return self._configuration
+        from .external_check import CheckedRustSource
+        if type(self._rustc_check) is not CheckedRustSource:
+            raise attribute.error(f'{kind} requires an actual source/options-bound CheckedRustSource configuration')
+        return self._rustc_check.configuration(self.source, edition=self.crate_policy.edition)
+
+    # Every parser collection one module item can extend. A disabled item is
+    # parsed like any other, then each collection is cut back to its length
+    # before the item, so nothing it declared reaches names, files or IR.
+    _ITEM_COLLECTIONS = ('records', 'enums', 'implementations', 'traits', 'modules', 'uses',
+                         'crate_aliases', 'attribute_requirements', 'visibility_restrictions')
+
+    def item_snapshot(self, functions):
+        return (len(functions),) + tuple(len(getattr(self, name)) for name in self._ITEM_COLLECTIONS)
+
+    def finish_configured_item(self, pending, functions):
+        if pending is None:
+            return
+        from .attribute_metadata import offset
+        from .configuration import ConfiguredItem
+        attributes, start, snapshot = pending
+        declared = [functions[snapshot[0]:]] + [
+            getattr(self, name)[length:] for name, length in zip(self._ITEM_COLLECTIONS, snapshot[1:])]
+        first, last = self.tokens[start], self.tokens[self.pos - 1]
+        end = last.source_end if last.source_end is not None else offset(self, last) + len(last.text)
+        configured = ConfiguredItem(attributes, tuple(item for group in declared for item in group),
+                                    tuple(self.tokens[start:self.pos]), (offset(self, first), end))
+        self.conditional_items += (configured,)
+        if not configured.enabled:
+            del functions[snapshot[0]:]
+            for name, length in zip(self._ITEM_COLLECTIONS, snapshot[1:]):
+                del getattr(self, name)[length:]
 
     def require_checked_crate_lint(self, attribute):
         # A successful check of the exact source owns all lint-level effects,

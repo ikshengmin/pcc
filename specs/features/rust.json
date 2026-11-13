@@ -2393,6 +2393,22 @@
       "status": "missing"
     },
     {
+      "id": "rust.cfg.owned-configuration",
+      "title": "Owned cfg configuration, item gating and Cargo feature/profile inputs",
+      "chapter_ids": [
+        "rust.ref.5"
+      ],
+      "scope": "Qualification missing, not implementation missing: compile_rust(cfg=CfgOptions) and parse_crate_sources(configuration=...) evaluate cfg with PCC's own configuration: explicit rustc-style inputs (--cfg specs, --test, -C debug-assertions, -C panic; built-in names cannot be spoofed) plus the recorded built-in cfg of x86_64-unknown-linux-gnu/-musl and aarch64-apple-darwin (arm64 spelling), which a test compares with `rustc --print cfg`. Option-dependent names without an explicit choice, the 16 unstable cfg names and version(..)/target(..) (E0658), other list predicates (E0537), literals (E0565) and path keys are errors; unknown names are false as in rustc. Every module item kind with #[cfg] is parsed in full and then kept or rolled back (functions, records, enums, traits, impls, modules, uses, extern crates, attribute requirements and visibility restrictions), so a disabled outlined module never loads its file; the CheckedRustSource route uses the same gating. pcc/frontends/rust/cargo_config.py resolves one package's features (default, implicit optional-dependency features, dep:, dep/feat, weak dep?/feat) and profile debug-assertions/panic with inherits. Each predicate's selection matches local rustc 1.92.0 on the host target for two option sets; the cfg_owned fixture compiles for both targets and its owned Linux x86-64 execution matches rustc 1.91.1 built with the same options (container). cfg on fields, variants, statements, expressions and impl/trait members, item cfg_attr, dependency graphs and target-specific dependency tables remain gaps. No schema2 evidence row is migrated.",
+      "tests": [
+        "tests/rust/test_rust_owned_cfg.py",
+        "tests/rust/test_rust_owned_cfg.py::test_cfg_fixture_owned_execution_matches_rustc_with_the_same_options@rust-native-reference",
+        "tests/rust/test_uv_source_frontier.py"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "status": "missing"
+    },
+    {
       "id": "rust.enums.payload-values",
       "title": "Tagged payload enums and by-value bindings",
       "chapter_ids": [

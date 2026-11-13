@@ -80,6 +80,17 @@ def meta_list(parser, depth=0, *, cfg_literals=False, paths=False):
     parser.expect('(')
     values = []
     while not parser.accept(')'):
+        if cfg_literals and parser.token.kind == 'string':
+            # A bare literal inside a cfg list, as in `version("1.80")`; the
+            # cfg owner decides whether that form is allowed (rustc E0565).
+            literal = parser.take()
+            end_offset = literal.source_end if literal.source_end is not None else offset(parser, literal) + len(literal.text)
+            values.append(MetaItem(literal, literal.text, 'literal', literal.literal_value, (),
+                                   (offset(parser, literal), end_offset)))
+            if parser.accept(')'):
+                break
+            parser.expect(',')
+            continue
         token = (parser.take() if cfg_literals and parser.token.kind == 'keyword'
                  and parser.token.text in {'true', 'false'} else parser.name())
         name = token.text
@@ -94,7 +105,7 @@ def meta_list(parser, depth=0, *, cfg_literals=False, paths=False):
                 raise literal.error('attribute metadata requires a literal string; expression/macro expansion is not implemented')
             form, value = 'value', literal.literal_value
         elif parser.token.text == '(':
-            form, children = 'list', meta_list(parser, depth + 1, cfg_literals=cfg_literals)
+            form, children = 'list', meta_list(parser, depth + 1, cfg_literals=cfg_literals, paths=paths)
         end = parser.tokens[parser.pos - 1]
         end_offset = end.source_end if end.source_end is not None else offset(parser, end) + len(end.text)
         values.append(MetaItem(token, name, form, value, children, (offset(parser, token), end_offset)))

@@ -35,14 +35,21 @@ so the GitHub originals are the pinned identities.
 ## Current frontier (host pcc, Rust parser, edition 2024)
 
 `tests/rust/test_uv_source_frontier.py` verifies the identities through the
-shared source-lock loader and records each root's first blocker:
+shared source-lock loader and records each root's first blocker. cfg is
+evaluated by PCC's owned configuration for `x86_64-unknown-linux-gnu` with the
+inputs `cargo build --release` gives each package, computed from the pinned
+manifests by `pcc/frontends/rust/cargo_config.py`: uv's default features
+(`performance`, `performance-memory-allocator` and the `test-*` set), no
+`test`, and the workspace release profile (no debug assertions,
+`panic = "abort"`). `crates/uv-lock/Cargo.toml` is not pinned; that root's only
+predicate is `cfg(test)`, which the test asserts.
 
 | Root | First blocker |
 |---|---|
-| `crates/uv/src/bin/uv.rs` | `3:3` `#[cfg(feature = ...)]` needs a checked Cargo configuration |
-| `crates/uv/src/lib.rs` | `7:3` `#[cfg(feature = "self-update")]` needs a checked Cargo configuration |
+| `crates/uv/src/bin/uv.rs` | `4:14` `extern crate uv_performance_memory_allocator;` (active under default features) needs external crate loading |
+| `crates/uv/src/lib.rs` | `70:75` the lifetime `'a` in a reference type |
 | `crates/uv-version/src/lib.rs` | `5:5` `env!` macro invocation |
-| `crates/uv-lock/src/lock/mod.rs` | `94:3` `#[cfg(test)]` needs a checked Cargo configuration |
+| `crates/uv-lock/src/lock/mod.rs` | `98:1` `const VERSION: u32 = 1;` const item |
 
 Both roots formerly stopped in the lexer at `@` (`lib.rs:1515:34`, the
 `run_variant @ (ToolCommand::Uvx(_) | ToolCommand::Run(_))` binding, and
@@ -59,7 +66,9 @@ are now parsed into one checked import per leaf
 (`tests/rust/programs/visibility_restricted.rs`). Tool-scoped crate lints
 (`#![deny(clippy::print_stdout, clippy::print_stderr)]`, formerly `lib.rs:1:15`)
 are retained with no compile effect, as rustc evaluates none of them
-(`tests/rust/programs/tool_lints.rs`). Three roots now stop at `cfg`.
+(`tests/rust/programs/tool_lints.rs`). The three former `cfg` blockers
+(`uv.rs:3:3`, `lib.rs:7:3`, `lock/mod.rs:94:3`) are evaluated by the owned
+configuration (`tests/rust/test_rust_owned_cfg.py`).
 
 ```sh
 uv run pytest -x -q tests/rust/test_uv_source_frontier.py
