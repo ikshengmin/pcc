@@ -549,6 +549,23 @@ class ReturnLoweringMixin:
             self._return_cleanup_roots = saved_roots
             self._restore_try_err_block(saved_error)
         if not self._builder_block_is_terminated():
+            # A tagged integer or NULL result has no header to pin and
+            # nothing a collector can move: it needs neither the graph
+            # transaction nor a pin. Forwarding never changes those bits, so
+            # a plain load of this private slot decides.
+            peek = self.builder.load(slot, name=self._fresh("return.cleanup.peek"))
+            peek_bits = self.builder.ptrtoint(peek, ir.IntType(64))
+            peek_tagged = self.builder.icmp_unsigned(
+                "!=", self.builder.and_(peek_bits, ir.Constant(ir.IntType(64), 1)),
+                ir.Constant(ir.IntType(64), 0),
+            )
+            peek_nonnull = self.builder.icmp_unsigned("!=", peek, ir.Constant(peek.type, None))
+            peek_managed = self.builder.and_(peek_nonnull, self.builder.not_(peek_tagged))
+            header = self.current_function.append_basic_block(name=self._fresh("return.pin.header"))
+            ready = self.current_function.append_basic_block(name=self._fresh("return.pin.ready"))
+            empty = self.builder._block
+            self.builder.cbranch(peek_managed, header, ready)
+            self.builder.position_at_end(header)
             if source_slot is not None:
                 # Reload, inspect and pin under the graph transaction. The
                 # registered owner remains live through the lock's entry poll.
@@ -560,31 +577,19 @@ class ReturnLoweringMixin:
             )
             # Preserve an existing pin lease. The new owned return remains
             # pinned through every local finalizer and root unregistration.
-            bits = self.builder.ptrtoint(value, ir.IntType(64))
-            tagged = self.builder.icmp_unsigned(
-                "!=", self.builder.and_(bits, ir.Constant(ir.IntType(64), 1)),
-                ir.Constant(ir.IntType(64), 0),
-            )
-            nonnull = self.builder.icmp_unsigned("!=", value, ir.Constant(value.type, None))
-            managed = self.builder.and_(nonnull, self.builder.not_(tagged))
-            header = self.current_function.append_basic_block(name=self._fresh("return.pin.header"))
-            ready = self.current_function.append_basic_block(name=self._fresh("return.pin.ready"))
-            empty = self.builder._block
-            self.builder.cbranch(managed, header, ready)
-            self.builder.position_at_end(header)
             address = self.builder.gep(value, [ir.Constant(ir.IntType(64), PYOBJECTHEADER_FLAGS_OFFSET)])
             flags = self.builder.load(self.builder.bitcast(address, ir.IntType(32).as_pointer()))
             prior_bits = self.builder.and_(flags, ir.Constant(ir.IntType(32), PY_FLAG_GC_PINNED))
             prior_value = self.builder.zext(prior_bits, ir.IntType(64))
+            self._gc_pin(value)
+            if source_slot is not None:
+                self.builder.call(self.runtime["pcc_py_gc_minor_graph_unlock"], [])
             previous = self.builder._block
             self.builder.branch(ready)
             self.builder.position_at_end(ready)
             prior = self.builder.phi(ir.IntType(64), name=self._fresh("return.pin.prior"))
             prior.add_incoming(ir.Constant(ir.IntType(64), 0), empty)
             prior.add_incoming(prior_value, previous)
-            self._gc_pin(value)
-            if source_slot is not None:
-                self.builder.call(self.runtime["pcc_py_gc_minor_graph_unlock"], [])
             # Keeps its own exit: the handoff below must follow every frame
             # leave (pcc_gc_take_pinned_slot's no-park contract), which a
             # shared exit would run after it.
