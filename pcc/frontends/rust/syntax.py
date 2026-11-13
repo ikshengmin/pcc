@@ -474,9 +474,10 @@ _COMPARISONS = {"==", "!=", "<", "<=", ">", ">="}
 
 
 class Parser:
-    # Built-in derives need core's trait impls; lang-item context inspection
-    # (a crate defining those traits itself) turns this off.
-    builtin_derives = True
+    # Built-in derives and core's macros (env!, option_env!, matches!) come
+    # from core; lang-item context inspection (a crate defining core items
+    # itself) turns them off.
+    core_prelude = True
 
     def __init__(self, source: str, *, source_path=None, edition=2021, rustc_check=None,
                  configuration=None, environment=None):
@@ -1142,7 +1143,7 @@ class Parser:
                         self.expect(")")
                     elif attribute.text == "no_mangle" and not no_mangle:
                         no_mangle = True
-                    elif attribute.text == "derive" and not self.builtin_derives:
+                    elif attribute.text == "derive" and not self.core_prelude:
                         raise attribute.error("unsupported Rust attribute in this context: built-in derives expand to "
                                               "impls of core traits, which this context does not model")
                     elif attribute.text == "derive":
@@ -1801,11 +1802,13 @@ class Parser:
             expr = Expr("trait_path", token, (owner, trait.text, method.text))
         elif text in {"|", "||"} or (text == "move" and self.token.text in {"|", "||"}):
             expr = self.closure_expression(token)
-        elif token.kind == "name" and self.token.text == "!" and text in {"env", "option_env"}:
-            # Built-in expression macros; no macro_rules! can shadow them here,
+        elif (token.kind == "name" and self.token.text == "!" and text in {"env", "option_env", "matches"}
+                and self.core_prelude):
+            # Core's expression macros; no macro_rules! can shadow them here,
             # since macro definitions are not admitted.
-            from .builtin_macros import expand_expression_macro
-            expr = expand_expression_macro(self, token)
+            from .builtin_macros import expand_expression_macro, expand_matches
+            expr = (expand_matches(self, token) if text == "matches"
+                    else expand_expression_macro(self, token))
         elif token.kind == "name" and self.token.text == "!":
             raise token.error("macro invocations require macro-by-example expansion, which is not implemented")
         elif (token.kind == "name" and text != "_") or text in {"self", "Self", "super", "crate"}:

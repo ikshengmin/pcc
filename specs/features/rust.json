@@ -2503,6 +2503,21 @@
       "status": "missing"
     },
     {
+      "id": "rust.macros.core-matches",
+      "title": "core matches! macro",
+      "chapter_ids": [
+        "rust.ref.3"
+      ],
+      "scope": "Qualification missing, not implementation missing: `matches!(value, pattern $(,)?)` with any delimiter is expanded at parse time into core's definition, `match value { pattern => true, _ => false }`, so typing, exhaustiveness, place inspection without moves and lowering are the match machinery's (or-patterns, payload and tuple patterns included). Guards need match guards and stay an explicit gap; lang-item context inspection, where the crate defines core itself, has no core macros or built-in derives. The matches fixture prints the same result from PCC's own compiler, arm64 assembler and Mach-O linker and from a local rustc 1.92.0 build (local Mac evidence; the x86-64 Linux run is unrun in this change). No schema2 evidence row is migrated.",
+      "tests": [
+        "tests/rust/test_rust_matches_macro.py",
+        "tests/rust/test_rust_matches_macro.py::test_fixture_runs_natively_with_owned_compile_assemble_and_link@rust-native-reference"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "status": "missing"
+    },
+    {
       "id": "rust.enums.payload-values",
       "title": "Tagged payload enums and by-value bindings",
       "chapter_ids": [
