@@ -3774,6 +3774,17 @@ def _persistent_carrier_worker(arg):
     while (
         _counter(global_addr("pcc_vthread_persistent_pool_stop_py")) == 0
     ):
+        # A resumed task can introduce an fd wait after this batch was chosen.
+        # Observe live waits before the next ready step instead of retaining a
+        # stale compute/I/O batch allowance. This is one scalar load; a purely
+        # compute-ready cohort still amortizes polling over its original batch.
+        if (
+            ready_steps_remaining > 0
+            and atomic_load_i64(
+                global_addr("pcc_vthread_io_count_py"), 0, "acquire"
+            ) > 0
+        ):
+            ready_steps_remaining = 0
         if ready_steps_remaining <= 0:
             py_virtual_thread_poll_timers()
             py_virtual_thread_poll_io(0)

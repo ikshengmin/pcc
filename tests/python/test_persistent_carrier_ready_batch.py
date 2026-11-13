@@ -58,13 +58,18 @@ def run_worker(steps, ready_count, io_waits=0, io_ready=0):
         assert state["sleepers"] >= 0
         return before
 
+    def load_atomic(key, offset, order):
+        assert offset == 0 and order == "acquire"
+        value = {
+            "pcc_vthread_io_count_py": io_waits,
+            "pcc_vthread_io_ready_pending_py": io_ready,
+        }[key]
+        return value(state["steps"]) if callable(value) else value
+
     ns = {
         "atomic_rmw_i64": sleeper_count,
         "atomic_fence": lambda order: None,
-        "atomic_load_i64": lambda key, offset, order: {
-            "pcc_vthread_io_count_py": io_waits,
-            "pcc_vthread_io_ready_pending_py": io_ready,
-        }[key],
+        "atomic_load_i64": load_atomic,
         "load_i64": lambda arg, offset: 1,
         "load_i32": lambda key, offset: tls[key],
         "store_i32": lambda key, offset, value: tls.__setitem__(key, value),
@@ -115,6 +120,23 @@ def test_pending_or_readied_io_is_repolled_within_eight_ready_steps(io_waits, io
     assert max(after - before for before, after in zip(polls, polls[1:])) <= 8
     assert state["steps"] - polls[-1] <= 8
     assert state["steps"] == 130 and state["failures"] == 0
+
+
+def test_new_fd_wait_interrupts_an_already_selected_compute_batch():
+    events, state = run_worker([1] * 10, 1000, io_waits=lambda steps: steps >= 1)
+    assert [step for event, step in events if event == "io"] == list(range(10))
+    assert state["steps"] == 10 and state["failures"] == 0
+
+
+@pytest.mark.parametrize("io_waits", [1, 512])
+def test_live_fd_waits_are_observed_between_ready_steps(io_waits):
+    events, _state = run_worker([1] * 10, 1000, io_waits=io_waits)
+    assert [step for event, step in events if event == "io"] == list(range(10))
+
+
+def test_already_readied_io_keeps_batching_when_no_fd_waits_remain():
+    events, _state = run_worker([1] * 20, 1000, io_ready=1)
+    assert [step for event, step in events if event == "io"] == [0, 8, 16]
 
 
 def test_stolen_ready_batch_repolls_after_idle_wakeup():

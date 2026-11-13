@@ -2,6 +2,7 @@
 
 import ast
 import os
+from pathlib import Path
 import subprocess
 
 import pytest
@@ -210,3 +211,23 @@ def test_native_late_io_readiness_overtakes_an_already_ready_cohort(
             assert result.returncode == 0 and not result.stderr, (
                 backend, count, result.returncode, result.stdout, result.stderr,
             )
+
+
+@pytest.mark.integration
+def test_native_new_fd_wait_interrupts_a_preselected_compute_batch(
+    tmp_path, threaded_pcc_runtime_archive,
+):
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "fixtures/native/vthread_new_fd_wait.c"
+    ).read_text()
+    binary = _compile(tmp_path, source, threaded_pcc_runtime_archive)
+    for backend in range(5):
+        result = subprocess.run(
+            [str(binary), str(backend)],
+            env=dict(os.environ, PCC_GC_BACKEND=str(backend)),
+            capture_output=True, text=True, timeout=15,
+        )
+        assert (result.returncode, result.stdout, result.stderr) == (
+            0, "IO_OBSERVED_AFTER_CPU_STEPS=1\n", "",
+        ), backend
