@@ -1108,8 +1108,9 @@ class CppParser:
                                           on_name=declarator_name,
                                           parse_noexcept=self._declaration_noexcept).parse()
             is_function = any(chunk.kind == "function" for chunk in declarator.chunks)
+            # A class-qualified object declarator names a static data member.
             name, result_type = self._apply_declarator(declarator, result_type, function=is_function,
-                                                       member=member_owner is not None and is_function,
+                                                       member=member_owner is not None,
                                                        namespace_function=namespace_owner is not None and is_function)
         finally:
             self.scope = parent
@@ -1149,8 +1150,8 @@ class CppParser:
             if noreturn:
                 raise CppDiagnostic("cpp.invalid-noreturn", "noreturn applies to a function declaration", name.coord)
             if member_owner is not None:
-                raise CppDiagnostic("cpp.unsupported.static-data-members",
-                                    "static data members require separate storage and ODR semantics", name.coord)
+                from pcc.frontends.cpp.static_data_members import parse_static_data_member
+                return parse_static_data_member(self, name, result_type, storage, member_definition, member_owner)
             if template_parameters:
                 raise CppDiagnostic("cpp.unsupported.variable-templates",
                                     "variable templates require instantiation and ODR semantics", name.coord)
@@ -2456,7 +2457,8 @@ class CppParser:
                               discarded_node=expression.node if class_glvalue else None,
                               discarded_fact=self._constant_fact(expression) if class_glvalue else None,
                               static_address=(expression.symbol if operator == "&"
-                                              and getattr(expression.symbol, "namespace_object", False)
+                                              and (getattr(expression.symbol, "namespace_object", False)
+                                                   or getattr(expression.symbol, "static_data_member", False))
                                               else None))
         if is_class_type(expression.dtype):
             raise CppDiagnostic("cpp.unsupported.class-operators", "class unary operator lookup/conversion is not implemented", coord)

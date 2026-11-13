@@ -692,6 +692,9 @@ def member_access(parser, expression, operator, member):
             # separate dependency; do not erase calls or invent such a proof.
             result.constant_fact = unmodeled(result.dtype, "object enumerator base constant evaluation", member.coord)
         return result
+    if getattr(symbol, "static_data_member", False):
+        from pcc.frontends.cpp.static_data_members import object_member_access
+        return object_member_access(parser, expression, operator, symbol, member)
     if symbol.kind != "member":
         raise CppDiagnostic("cpp.member-not-value", "member '" + member.value + "' is not a data member", member.coord)
     if not expression.lvalue and operator == ".":

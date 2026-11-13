@@ -1257,11 +1257,11 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:dae4ba4298dc88e072006e31c573425823519c3f88bd99fb9ce4392e3256d862",
+        "source_revision": "sha256:54865635387c2c36c8bab688525caf160b80773ee080d52c8ac7935deb821104",
         "sources": [
           {
             "path": "pcc/frontends/cpp/classes.py",
-            "sha256": "6197e1ce686c9d637b25c663829cddb490c1155bde378eaca5f4a17e0e4c38c2"
+            "sha256": "4c7ee0c41d0797953054867a93059de2bee35573b676b8540cbfe7e59e6eca6d"
           },
           {
             "path": "pcc/frontends/cpp/constructors.py",
@@ -1289,7 +1289,7 @@
           },
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "955de51fb2d2f485e9ca4d05ec36526ac5a2fedb6fef91a9b564048d1131c172"
+            "sha256": "98d883a4e1425fed2b3dbe7c87b23b376e972cd3682c6dc8ed326a60c52f36f6"
           },
           {
             "path": "pcc/frontends/cpp/references.py",
@@ -1343,7 +1343,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:5f068efae35ddcc19e2d3ce25557243fd86909c177f4b28a1889d83656daba6e",
+        "source_revision": "sha256:42383b75e232a10a0008963bf8c59c96d71cb1af9ceeba880b6463769564a8f9",
         "sources": [
           {
             "path": "pcc/frontends/cpp/allocation.py",
@@ -1351,7 +1351,7 @@
           },
           {
             "path": "pcc/frontends/cpp/classes.py",
-            "sha256": "6197e1ce686c9d637b25c663829cddb490c1155bde378eaca5f4a17e0e4c38c2"
+            "sha256": "4c7ee0c41d0797953054867a93059de2bee35573b676b8540cbfe7e59e6eca6d"
           },
           {
             "path": "pcc/frontends/cpp/constructors.py",
@@ -1497,7 +1497,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:d38d1a9281d5e24daee12ede6867fc8ddbc943df4f032b59d2292986be348725",
+        "source_revision": "sha256:c4fd8ce4381a7c7c77978122018e09e2d301bf7ae4da52c47953746f0903688c",
         "sources": [
           {
             "path": "pcc/frontends/cpp/class_template_enums.py",
@@ -1513,7 +1513,7 @@
           },
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "955de51fb2d2f485e9ca4d05ec36526ac5a2fedb6fef91a9b564048d1131c172"
+            "sha256": "98d883a4e1425fed2b3dbe7c87b23b376e972cd3682c6dc8ed326a60c52f36f6"
           },
           {
             "path": "pcc/frontends/cpp/template_id_members.py",
@@ -2101,14 +2101,89 @@
       "evidence": []
     },
     {
+      "id": "cpp.static-data-members",
+      "title": "Non-inline static data members of non-template classes",
+      "chapter_ids": [
+        "class.mem",
+        "class.access",
+        "basic"
+      ],
+      "scope": "Non-inline static data members of non-template classes: the in-class declaration declares one external object (Itanium _ZN..E) under the member's access; one namespace-scope definition T C::m = init; defines it, with its initializer looked up and access-checked in the class scope and initialized by the shared static initialization owner (constants, zero, null, object addresses, and string literals for const char pointers, also admitted for namespace objects). Simple and qualified names, assignments, addresses and x.m / p->m (base evaluated, then the static object) work across translation units; redefinition, type mismatch, undeclared members, repeated storage, private access and member conflicts are ordinary errors. TinyXML2's XMLUtil::writeBoolTrue/False compile, and tinyxml2.cpp moves from tinyxml2.h:640:21 to 993:25 (protected base constructor). Remaining gaps are in cpp.member-storage.",
+      "tests": [
+        "tests/cpp/test_cpp_static_data_members.py::test_former_declaration_row_declares_an_external_object",
+        "tests/cpp/test_cpp_static_data_members.py::test_definition_is_one_external_initialized_object",
+        "tests/cpp/test_cpp_static_data_members.py::test_programs_compile_to_stable_linux_artifacts",
+        "tests/cpp/test_cpp_static_data_members.py::test_programs_run_natively_with_owned_compile_assemble_and_link",
+        "tests/cpp/test_cpp_static_data_members.py::test_reference_compiler_returns_the_same_value",
+        "tests/cpp/test_cpp_static_data_members.py::test_programs_execute_against_real_cpp17_reference_on_linux",
+        "tests/cpp/test_cpp_static_data_members.py::test_invalid_static_data_members_are_ordinary_errors",
+        "tests/cpp/test_cpp_static_data_members.py::test_reference_compiler_rejects_the_same_sources",
+        "tests/cpp/test_cpp_static_data_members.py::test_remaining_static_member_shapes_stay_explicit",
+        "tests/cpp/test_cpp_static_data_members.py::test_odr_use_without_a_definition_fails_at_link_like_a_real_toolchain"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:746e5904916f9c71b86a96c495996c719c2faf8120fba2defc3e93a8fc107b40",
+        "sources": [
+          {
+            "path": "pcc/frontends/cpp/classes.py",
+            "sha256": "4c7ee0c41d0797953054867a93059de2bee35573b676b8540cbfe7e59e6eca6d"
+          },
+          {
+            "path": "pcc/frontends/cpp/objects.py",
+            "sha256": "8878c3a460c61f3083bde0d6df13b751ccd1d704557f68f7a0c1aededc4a2c93"
+          },
+          {
+            "path": "pcc/frontends/cpp/parser.py",
+            "sha256": "98d883a4e1425fed2b3dbe7c87b23b376e972cd3682c6dc8ed326a60c52f36f6"
+          },
+          {
+            "path": "pcc/frontends/cpp/static_data_members.py",
+            "sha256": "16be770899f427e3a8f3ad3fa6239e830ca08e6c75038b05aa78de0c2931347d"
+          }
+        ]
+      },
+      "acceptance": [
+        {
+          "id": "static-data-members-linux-pcc0-self",
+          "kind": "full-feature",
+          "scope": "Non-inline static data members of non-template classes: the in-class declaration declares one external object (Itanium _ZN..E) under the member's access; one namespace-scope definition T C::m = init; defines it, with its initializer looked up and access-checked in the class scope and initialized by the shared static initialization owner (constants, zero, null, object addresses, and string literals for const char pointers, also admitted for namespace objects). Simple and qualified names, assignments, addresses and x.m / p->m (base evaluated, then the static object) work across translation units; redefinition, type mismatch, undeclared members, repeated storage, private access and member conflicts are ordinary errors. TinyXML2's XMLUtil::writeBoolTrue/False compile, and tinyxml2.cpp moves from tinyxml2.h:640:21 to 993:25 (protected base constructor). Remaining gaps are in cpp.member-storage.",
+          "status": "unrun",
+          "source_revision": "sha256:746e5904916f9c71b86a96c495996c719c2faf8120fba2defc3e93a8fc107b40",
+          "mode": "pcc0",
+          "platform": "linux-x86_64",
+          "backend": "self",
+          "gc": "not_applicable",
+          "required_tests": [
+            "tests/cpp/test_cpp_static_data_members.py::test_former_declaration_row_declares_an_external_object",
+            "tests/cpp/test_cpp_static_data_members.py::test_definition_is_one_external_initialized_object",
+            "tests/cpp/test_cpp_static_data_members.py::test_programs_compile_to_stable_linux_artifacts",
+            "tests/cpp/test_cpp_static_data_members.py::test_programs_run_natively_with_owned_compile_assemble_and_link",
+            "tests/cpp/test_cpp_static_data_members.py::test_reference_compiler_returns_the_same_value",
+            "tests/cpp/test_cpp_static_data_members.py::test_programs_execute_against_real_cpp17_reference_on_linux",
+            "tests/cpp/test_cpp_static_data_members.py::test_invalid_static_data_members_are_ordinary_errors",
+            "tests/cpp/test_cpp_static_data_members.py::test_reference_compiler_rejects_the_same_sources",
+            "tests/cpp/test_cpp_static_data_members.py::test_remaining_static_member_shapes_stay_explicit",
+            "tests/cpp/test_cpp_static_data_members.py::test_odr_use_without_a_definition_fails_at_link_like_a_real_toolchain"
+          ],
+          "evidence": [],
+          "reason": "Local Mac evidence only: ten programs run natively with owned arm64 Darwin compile, assemble and link and return 42, matching a local Apple clang 21 -std=c++17 reference, which also rejects all nine invalid sources under -pedantic-errors. The Linux x86-64 execution against the real C++17 reference is UNRUN."
+        }
+      ]
+    },
+    {
       "id": "cpp.member-storage",
       "title": "Static data member storage \u2014 remaining capability boundary",
       "chapter_ids": [
         "dcl.dcl"
       ],
-      "scope": "Static data member declaration/definition and storage ownership remain explicitly unavailable through cpp.unsupported.static-data-members. Non-inline static member functions are separately scoped in cpp.static-member-functions.",
+      "scope": "Static data members of non-template classes are supported by cpp.static-data-members. In-class initializers (constant and inline members), arrays, class-type members, union and internal-linkage classes and class templates remain explicitly unavailable through cpp.unsupported.static-data-members. Non-inline static member functions are separately scoped in cpp.static-member-functions.",
       "status": "explicitly_unimplemented",
-      "tests": [],
+      "tests": [
+        "tests/cpp/test_cpp_static_data_members.py::test_remaining_static_member_shapes_stay_explicit"
+      ],
       "diagnostics": [
         "cpp.unsupported.static-data-members"
       ],
@@ -2793,7 +2868,6 @@
         "tests/cpp/test_cpp_static_members.py::test_static_invalid_or_deferred_is_explicit_before_emission[struct S{static int f(){return 42;}};-cpp.unsupported.inline-member-functions]",
         "tests/cpp/test_cpp_static_members.py::test_static_invalid_or_deferred_is_explicit_before_emission[struct S{static int f(int);int f(long);};-cpp.unsupported.mixed-static-overloads]",
         "tests/cpp/test_cpp_static_members.py::test_static_invalid_or_deferred_is_explicit_before_emission[struct S{static int f(int);};int S::f(long n){return 0;}-cpp.no-matching-member]",
-        "tests/cpp/test_cpp_static_members.py::test_static_invalid_or_deferred_is_explicit_before_emission[struct S{static int value;};-cpp.unsupported.static-data-members]",
         "tests/cpp/test_cpp_static_members.py::test_static_owned_object_is_deterministic[class-alias-in-parameter]",
         "tests/cpp/test_cpp_static_members.py::test_static_owned_object_is_deterministic[const-dot-static-call]",
         "tests/cpp/test_cpp_static_members.py::test_static_owned_object_is_deterministic[enclosing-c-linkage-does-not-change-members]",
@@ -3778,11 +3852,11 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:56acef668d9a56c9ac5d630ac0d37298c3ef4e4cbd9392b0434fbae18d0e0a84",
+        "source_revision": "sha256:c40a4a78728d1ebc4f3d487a0175dff063359fa9a7d6919051effa8f8392e9da",
         "sources": [
           {
             "path": "pcc/frontends/cpp/classes.py",
-            "sha256": "6197e1ce686c9d637b25c663829cddb490c1155bde378eaca5f4a17e0e4c38c2"
+            "sha256": "4c7ee0c41d0797953054867a93059de2bee35573b676b8540cbfe7e59e6eca6d"
           },
           {
             "path": "pcc/frontends/cpp/initializers.py",
@@ -3833,7 +3907,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:8e9958495b1f3e684464d230809cdad521e479b943cc8a910f4380e1a5ea0b28",
+        "source_revision": "sha256:219df7ee61ce1dcad3db0db9c2d5e85f46f18f0d85fd20a983542cda9109759e",
         "sources": [
           {
             "path": "pcc/frontends/cpp/arrays.py",
@@ -3849,7 +3923,7 @@
           },
           {
             "path": "pcc/frontends/cpp/classes.py",
-            "sha256": "6197e1ce686c9d637b25c663829cddb490c1155bde378eaca5f4a17e0e4c38c2"
+            "sha256": "4c7ee0c41d0797953054867a93059de2bee35573b676b8540cbfe7e59e6eca6d"
           },
           {
             "path": "pcc/frontends/cpp/member_initialization.py",
@@ -3886,7 +3960,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:9cf148818ebac649589897fa1feba7689cf73622c193f88bb1e8162be96fe27e",
+        "source_revision": "sha256:b4fd926016adb778733b86c1cc01acd5bf3ab4c58c14791824ea78d16a135bfc",
         "sources": [
           {
             "path": "pcc/frontends/cpp/class_template_members.py",
@@ -3910,7 +3984,7 @@
           },
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "955de51fb2d2f485e9ca4d05ec36526ac5a2fedb6fef91a9b564048d1131c172"
+            "sha256": "98d883a4e1425fed2b3dbe7c87b23b376e972cd3682c6dc8ed326a60c52f36f6"
           },
           {
             "path": "pcc/frontends/cpp/sema.py",
@@ -3942,7 +4016,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:2594e621d3a14076b9240fc6458195b6efffa38d91ad2383c199098214480ed0",
+        "source_revision": "sha256:d9a8869fea6264900afaef3df6fb360cf101cdcd5da6be998f05ec3abe045178",
         "sources": [
           {
             "path": "pcc/frontends/c/evaluator/c_evaluator.py",
@@ -3962,7 +4036,7 @@
           },
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "955de51fb2d2f485e9ca4d05ec36526ac5a2fedb6fef91a9b564048d1131c172"
+            "sha256": "98d883a4e1425fed2b3dbe7c87b23b376e972cd3682c6dc8ed326a60c52f36f6"
           }
         ]
       }
@@ -3984,11 +4058,11 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:f9755e85e00078d8178d3b0d4e44973814483436df5fe8695a74f49326db0ceb",
+        "source_revision": "sha256:7c8cdf5973121fb1a38e4e352a602b755f2d3f1346c6b0869a8dd30488f5dc54",
         "sources": [
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "955de51fb2d2f485e9ca4d05ec36526ac5a2fedb6fef91a9b564048d1131c172"
+            "sha256": "98d883a4e1425fed2b3dbe7c87b23b376e972cd3682c6dc8ed326a60c52f36f6"
           },
           {
             "path": "pcc/frontends/cpp/static_casts.py",
@@ -4016,11 +4090,11 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:7735df78a21138f06107a64757b26482cc45f3b9483c3391bc01dcd12cb44746",
+        "source_revision": "sha256:a56734048299da2ed5c36f753f3da900348ee3c7d02a8b33a109e3edd07d2c6f",
         "sources": [
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "955de51fb2d2f485e9ca4d05ec36526ac5a2fedb6fef91a9b564048d1131c172"
+            "sha256": "98d883a4e1425fed2b3dbe7c87b23b376e972cd3682c6dc8ed326a60c52f36f6"
           },
           {
             "path": "pcc/frontends/cpp/string_literals.py",
@@ -4989,8 +5063,8 @@
         "code": "cpp.unsupported.static-data-members",
         "feature_id": "cpp.member-storage",
         "source": {
-          "path": "pcc/frontends/cpp/parser.py",
-          "sha256": "87128c6e99f0345ba136aa6a8bbc2637ed92f77b786b07fe9c760da99889d785"
+          "path": "pcc/frontends/cpp/static_data_members.py",
+          "sha256": "16be770899f427e3a8f3ad3fa6239e830ca08e6c75038b05aa78de0c2931347d"
         }
       },
       {

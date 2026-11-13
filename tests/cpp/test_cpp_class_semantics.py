@@ -194,7 +194,8 @@ CLASS_UNIMPLEMENTED_CASES = (
     "struct Base{};struct S:virtual Base{};",
     # Original virtual-method declaration moved verbatim to
     # test_cpp_implicit_polymorphic_constructors (implicit constructor).
-    "struct S{static int value;};",
+    # Original static data member declaration moved verbatim to
+    # test_cpp_static_data_members (an external object declaration).
     "struct S{int value:3;};",
     "struct S{struct Nested{};};",
     "namespace n{using T=int;}struct S{using n::T;};",
