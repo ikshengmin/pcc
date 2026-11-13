@@ -16,6 +16,7 @@ import datetime as dt
 import errno
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -1221,6 +1222,25 @@ def _capture_worker_manifests(processes, observed_processes, *, verified_argv=No
     return dict(evidence, status="collected")
 
 
+def _inherited_observer_deadline(environment, cap, requested_deadline):
+    """Observe inside the original recovery deadline, without issuing a budget."""
+    try:
+        schema, retries, grace, deadline = environment["PCC_WORKER_TREE_RECOVERY"].split("\t")
+        retries = tuple(float(value) for value in retries.split(","))
+        grace, deadline = float(grace), float(deadline)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ProcessTreeSampleError("invalid inherited observer recovery contract") from exc
+    if (schema != "pcc.worker-tree-recovery.v1"
+            or retries != _SAFETY_PROCESS_TABLE_TIMEOUTS_S or grace != sum(retries)
+            or not math.isfinite(requested_deadline)
+            or requested_deadline <= time.monotonic()
+            or not math.isfinite(deadline) or deadline <= time.monotonic()
+            or cap <= 0 or environment.get("PCC_WORKER_TREE_BUDGET_BYTES") != str(cap)
+            or not environment.get("PCC_WORKER_TREE_STATE_PATH")):
+        raise ProcessTreeSampleError("invalid or exhausted inherited observer budget")
+    return min(requested_deadline, deadline)
+
+
 def _run(args: argparse.Namespace) -> dict[str, object]:
     global _INTERRUPT_REQUESTED
     _INTERRUPT_REQUESTED = False
@@ -1231,6 +1251,9 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
     if args.darwin_preflight_reserve_bytes < 0:
         raise ProcessTreeSampleError("preflight reserve must be zero or positive")
     auto_ceiling = args.auto_tree_rss_ceiling_bytes
+    preserve_worker_budget = getattr(args, "preserve_worker_budget", False)
+    if preserve_worker_budget and (auto_ceiling or args.darwin_preflight_reserve_bytes):
+        raise ProcessTreeSampleError("inherited observation cannot re-admit memory")
     if auto_ceiling < 0 or args.min_tree_rss_bytes <= 0:
         raise ProcessTreeSampleError("automatic tree budget bounds must be positive")
     if auto_ceiling and args.max_tree_rss_bytes:
@@ -1336,6 +1359,13 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
                            error="nested measurement requires the matching outer worker budget")
             _persist(result_path, payload)
             raise ProcessTreeSampleError(payload["error"])
+        try:
+            deadline = _inherited_observer_deadline(environment, args.max_tree_rss_bytes, deadline)
+        except ProcessTreeSampleError as exc:
+            payload.update(status="SAMPLER_ERROR", returncode=None, sample_count=0,
+                           error=str(exc))
+            _persist(result_path, payload)
+            raise
     if args.max_tree_rss_bytes > 0 and not preserve_worker_budget:
         environment["PCC_WORKER_TREE_STATE_PATH"] = worker_state_path
         environment["PCC_WORKER_TREE_BUDGET_BYTES"] = str(args.max_tree_rss_bytes)
