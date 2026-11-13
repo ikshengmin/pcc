@@ -474,7 +474,46 @@ fence-lifetime qualification. M2 and later local-model milestones remain open.
 
 ## Gateway Web Frameworks Benchmark: native request path
 
-Latest local Mac result (2026-11-14): the original C512 comparison now
+The five-round local Mac optimization checkpoint (2026-11-14) completes the
+original comparison with **30/30 timed rows**, ten completed server arms and
+zero transport/HTTP errors; every row is server-bound. Five-run medians are
+**4,425.1 / 4,155.7 / 4,406.1 QPS** (GET /, dynamic GET, POST /user), versus
+same-run aiohttp **29,803.8 / 26,450.8 / 29,252.2**. Native p99 is
+**260.4 / 263.0 / 251.1 ms**. This is GC0, one carrier and three load threads
+on Apple M2 Max / macOS 27.2.1: throughput remains only 14.8–15.7% of the
+same-host reference, not a public dashboard rank.
+
+The measured executable is gateway `fd69cf7` built from current-directory host
+pcc0/self at core `9e3df71e3`, including the unchanged uncommitted dependency
+closure work; before/after input hashes match. Its SHA-256 is
+`a5ac9861182e391f5a8806d7edaadac37484ec6fc86e418cd8225c5a4914e920`.
+Core's `wait_current_on_fd` shares the existing registration/root/cancellation
+protocol and omits the redundant synchronous probe only after a nonblocking
+observation. The same-input native HTTP A/B gains 4.1–5.1% with 5/5 pair wins
+per route and sharply lower p99. The ABI chunk-limit follow-up is included.
+
+Gateway retains byte snapshots without temporary views, bulk copying with
+alias/custom-index semantics preserved, and linear fragmented-header scanning
+outside the complete-head decoder frame. Their five-pair component receipts
+are described in `pcc-gateway/benchmarks/web-frameworks.md`; they are not HTTP
+multipliers. The existing known-root switch changes 709 IR call sites but
+shows no measured gain, so it is not enabled. No collector or ownership
+protocol was forked, and no finalizer/recheck/weakref behavior was weakened.
+
+Fourteen focused lowering/ABI checks and the fresh 15-case five-GC I/O waitset
+matrix pass. The final 170 gateway HTTP/server/streaming checks pass, as do
+emitted buffer/parser programs against CPython on GC0–4. Heap-bigint rebinding
+and earlier-argument survival pass on both known-root arms and all collectors.
+The latest validated-load CPU sample has no `poll` samples; root storage is
+7.2% self / 16.0% inclusive (including terminal release), and allocation is
+6.8% inclusive. These identify remaining owners, not a GC-sweep bottleneck.
+
+Full GC1–4 HTTP, four-carrier scaling, whole suites, bootstrap and live TLS
+were not run for this checkpoint. The older GC1 TCP_NODELAY/EINVAL client
+failure below is not renewed or resolved by these focused checks. The
+five-round optimization budget is complete; no further candidate was added.
+
+First accepted local Mac baseline (2026-11-14): the original C512 comparison
 completes **30/30 timed rows**, with zero connect/read/write/timeout/deadline
 or HTTP-status errors. All ten server arms complete their pre/post HTTP gates,
 upstream RSpec and connection recycling; every row is server-bound. Five-run
