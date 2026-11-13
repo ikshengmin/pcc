@@ -968,137 +968,86 @@ class NumericBuiltinLoweringMixin:
         # object route above.
         if not isinstance(arg_ty, (ListType, TupleType)):
             return None
-        # Optional ``default=`` kwarg.
-        default_val = None
-        for k, v in expr.kwargs or ():
-            if k == "default":
-                default_val = self._emit_expr_as_i64(v)
-            else:
-                return None  # unknown kwarg
-        src_val = self._emit_expr(arg)
-        src_obj = marshal.marshal_to_object(
-            self.builder,
-            self.module,
-            self.runtime,
-            src_val,
-            arg_ty,
-        )
-        n_val = self.builder.call(
-            self.runtime["py_obj_len"],
-            [src_obj],
-            name=self._fresh(f"{name}.src.len"),
-        )
-        fn = self.current_function
-        idx_slot = self._alloca_in_entry(_I64, name=f"{name}.idx.addr")
-        acc_slot = self._alloca_in_entry(_I64, name=f"{name}.acc.addr")
-        # Initial fill: if empty and no default → runtime error (we'd
-        # have to emit a trap). With default, seed. With non-empty,
-        # seed from elem[0] below.
-        is_empty = self.builder.icmp_signed(
-            "==",
-            n_val,
-            ir.Constant(_I64, 0),
-            name=self._fresh(f"{name}.empty"),
-        )
-        empty_bb = fn.append_basic_block(name=self._fresh(f"{name}.empty"))
-        seed_bb = fn.append_basic_block(name=self._fresh(f"{name}.seed"))
-        self.builder.cbranch(is_empty, empty_bb, seed_bb)
-        self.builder.position_at_end(empty_bb)
-        if default_val is not None:
-            self.builder.store(default_val, acc_slot)
-        else:
-            # No default: store 0 as a fallback (Python would raise
-            # ValueError; we don't have exception wiring here).
-            self.builder.store(ir.Constant(_I64, 0), acc_slot)
-        self.builder.store(ir.Constant(_I64, 1), idx_slot)
-        end_bb = fn.append_basic_block(name=self._fresh(f"{name}.end"))
-        self.builder.branch(end_bb)
+        return self._emit_min_max_i64_fold(expr, name)
 
-        self.builder.position_at_end(seed_bb)
-        # Seed accumulator from index 0.
-        zero_box = self.builder.call(
-            self.runtime["py_int_from_i64"],
-            [ir.Constant(_I64, 0)],
-            name=self._fresh(f"{name}.seed.box"),
-        )
-        first = self.builder.call(
-            self.runtime["py_obj_getitem"],
-            [src_obj, zero_box],
-            name=self._fresh(f"{name}.first"),
-        )
-        first_i64 = marshal.marshal_from_object(
-            self.builder,
-            self.module,
-            self.runtime,
-            first,
-            IntType(name="int"),
-        )
-        self.builder.store(first_i64, acc_slot)
-        self.builder.store(ir.Constant(_I64, 1), idx_slot)
+    def _emit_min_max_i64_item(self, source, index, name, span):
+        """Unbox one NEW indexed item, retiring its owner on every edge."""
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cleanup = self._cpy_operand_cleanup_block
+        item = self._new_slot_call_root(name + ".item")
+        try:
+            self._try_err_block = self._slot_call_cleanup_block((item,), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_runtime_call(
+                "py_obj_getitem_i64", (source,), result_slot=item,
+                suffix_args=(index,), span=span,
+            )
+            value = self._slot_call_runtime_call(
+                "py_int_to_i64_lane", (item,),
+                suffix_args=(ir.Constant(_I32.as_pointer(), None),), span=span,
+            )
+            self._release_slot_call_roots((item,))
+            return value
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cleanup
 
-        cond_bb = fn.append_basic_block(name=self._fresh(f"{name}.cond"))
-        body_bb = fn.append_basic_block(name=self._fresh(f"{name}.body"))
-        step_bb = fn.append_basic_block(name=self._fresh(f"{name}.step"))
-        self.builder.branch(cond_bb)
-        self.builder.position_at_end(cond_bb)
-        cur = self.builder.load(idx_slot, name=self._fresh(f"{name}.idx"))
-        cond = self.builder.icmp_signed(
-            "<",
-            cur,
-            n_val,
-            name=self._fresh(f"{name}.cond.i1"),
-        )
-        self.builder.cbranch(cond, body_bb, end_bb)
-        self.builder.position_at_end(body_bb)
-        idx_box = self.builder.call(
-            self.runtime["py_int_from_i64"],
-            [cur],
-            name=self._fresh(f"{name}.idx.box"),
-        )
-        elem_obj = self.builder.call(
-            self.runtime["py_obj_getitem"],
-            [src_obj, idx_box],
-            name=self._fresh(f"{name}.elem"),
-        )
-        elem_i64 = marshal.marshal_from_object(
-            self.builder,
-            self.module,
-            self.runtime,
-            elem_obj,
-            IntType(name="int"),
-        )
-        acc_cur = self.builder.load(
-            acc_slot,
-            name=self._fresh(f"{name}.acc"),
-        )
-        cmp_op = "<" if name == "min" else ">"
-        is_better = self.builder.icmp_signed(
-            cmp_op,
-            elem_i64,
-            acc_cur,
-            name=self._fresh(f"{name}.cmp"),
-        )
-        new_acc = self.builder.select(
-            is_better,
-            elem_i64,
-            acc_cur,
-            name=self._fresh(f"{name}.pick"),
-        )
-        self.builder.store(new_acc, acc_slot)
-        self.builder.branch(step_bb)
-        self.builder.position_at_end(step_bb)
-        nxt = self.builder.add(
-            cur,
-            ir.Constant(_I64, 1),
-            name=self._fresh(f"{name}.idx.next"),
-        )
-        self.builder.store(nxt, idx_slot)
-        self.builder.branch(cond_bb)
-        self.builder.position_at_end(end_bb)
-        return self.builder.load(
-            acc_slot,
-            name=self._fresh(f"{name}.result"),
-        )
+    def _emit_min_max_i64_fold(self, expr, name):
+        """Fold declared machine integers while retaining the managed source.
+
+        Keywords already use the Python wrapper. An empty keyword-free fold
+        must raise, and both seed and loop items own NEW references even when
+        the integer is heap-boxed. Only scalar values cross item cleanup.
+        """
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cleanup = self._cpy_operand_cleanup_block
+        try:
+            source = self._emit_slot_call_operand(expr.args[0], name + ".iterable")
+            self._try_err_block = self._slot_call_cleanup_block((source,), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            count = self._slot_call_runtime_call("py_obj_len", (source,), span=expr.span)
+            fn = self.current_function
+            idx_slot = self._alloca_in_entry(_I64, name=name + ".idx.addr")
+            acc_slot = self._alloca_in_entry(_I64, name=name + ".acc.addr")
+            empty = fn.append_basic_block(name=self._fresh(name + ".empty"))
+            seed = fn.append_basic_block(name=self._fresh(name + ".seed"))
+            cond = fn.append_basic_block(name=self._fresh(name + ".cond"))
+            body = fn.append_basic_block(name=self._fresh(name + ".body"))
+            end = fn.append_basic_block(name=self._fresh(name + ".end"))
+            self.builder.cbranch(
+                self.builder.icmp_signed("==", count, ir.Constant(_I64, 0)), empty, seed,
+            )
+            self.builder.position_at_end(empty)
+            self._emit_builtin_exception_and_branch(
+                "ValueError", name + "() arg is an empty sequence", expr.span,
+            )
+            self.builder.position_at_end(seed)
+            first = self._emit_min_max_i64_item(
+                source, ir.Constant(_I64, 0), name, expr.span,
+            )
+            self.builder.store(first, acc_slot)
+            self.builder.store(ir.Constant(_I64, 1), idx_slot)
+            self.builder.branch(cond)
+            self.builder.position_at_end(cond)
+            index = self.builder.load(idx_slot, name=self._fresh(name + ".idx"))
+            self.builder.cbranch(self.builder.icmp_signed("<", index, count), body, end)
+            self.builder.position_at_end(body)
+            value = self._emit_min_max_i64_item(source, index, name, expr.span)
+            acc = self.builder.load(acc_slot, name=self._fresh(name + ".acc"))
+            better = self.builder.icmp_signed("<" if name == "min" else ">", value, acc)
+            self.builder.store(self.builder.select(better, value, acc), acc_slot)
+            self.builder.store(self.builder.add(index, ir.Constant(_I64, 1)), idx_slot)
+            self.builder.branch(cond)
+            self.builder.position_at_end(end)
+            result = self.builder.load(acc_slot, name=self._fresh(name + ".result"))
+            self._release_slot_call_roots((source,))
+            return result
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cleanup
+
     def _min_max_argument_lane(self, args) -> Optional[str]:
         """``"int"`` or ``"float"`` when every argument has that one scalar
         type (bool is its own type, folded as int); None otherwise."""

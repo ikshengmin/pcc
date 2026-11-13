@@ -1,5 +1,19 @@
 {
   "functions": {
+    "tests/python/test_native_min_max_i64_ownership.py": {
+      "test_i64_min_max_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls assert_reference_program to execute the explicit i64 min/max semantic corpus in actual CPython. Checks empty ValueError messages, defaults, singleton and signed i64 boundary values. This reference does not establish native compilation, collector ownership or Stage2 acceptance."
+        ]
+      },
+      "test_i64_min_max_five_gc": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls assert_owned_program, which first executes the same corpus in actual CPython and then compares self-backed native results using the existing pcc0/pcc1 compiler fixtures and five collector selectors. This mixed reference/native test belongs to the reference lane; requested fixture labels do not alone establish actual compiler routing. The separate boxed-item allocation test is native-only and remains integration."
+        ]
+      }
+    },
     "tests/cpp/test_cpp_protected_base_constructors.py": {
       "test_reference_compiler_returns_the_same_value": {
         "activity": "external-reference",

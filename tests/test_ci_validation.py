@@ -1617,3 +1617,37 @@ def test_protected_base_constructor_references_keep_owned_checks_in_their_lane()
             assert not calls & set(reference_calls.values())
         assert classify(module, name, integration, registry) == (
             "reference" if name in reference_calls else "ordinary")
+
+
+def test_i64_min_max_oracles_keep_native_only_ownership_in_integration():
+    module = "tests/python/test_native_min_max_i64_ownership.py"
+    registry = json.loads(run.REFERENCES.read_text())["functions"]
+    reference_calls = {
+        "test_i64_min_max_reference": "assert_reference_program",
+        "test_i64_min_max_five_gc": "assert_owned_program",
+    }
+    native_only = "test_i64_min_max_releases_boxed_items"
+    ir_only = "test_i64_fold_publishes_each_item_before_cleanup"
+    assert set(registry[module]) == set(reference_calls)
+    tree = ast.parse((ROOT / module).read_text())
+    functions = {node.name: node for node in tree.body
+                 if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")}
+    assert functions.keys() == reference_calls.keys() | {native_only, ir_only}
+    for name, function in functions.items():
+        calls = {node.func.id for node in ast.walk(function)
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+        marks = {ast.unparse(mark.func if isinstance(mark, ast.Call) else mark)
+                 for mark in function.decorator_list}
+        integration = "pytest.mark.integration" in marks
+        assert integration == (name in {"test_i64_min_max_five_gc", native_only})
+        if name in reference_calls:
+            assert reference_calls[name] in calls
+            assert registry[module][name]["activity"] == "external-reference"
+            assert not registry[module][name].get("conditional")
+        else:
+            assert not calls & set(reference_calls.values())
+        if name == native_only:
+            assert {"python_program_compiler", "run_process_group_timeout"} <= calls
+        assert classify(module, name, integration, registry) == (
+            "reference" if name in reference_calls
+            else "integration" if name == native_only else "ordinary")
