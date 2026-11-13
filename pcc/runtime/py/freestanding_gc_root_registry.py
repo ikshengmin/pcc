@@ -15,6 +15,8 @@ from pcc.unsafe import (
     atomic_store_i32,
     define_global_i32,
     define_global_ptr_null,
+    define_thread_local_i32,
+    define_thread_local_ptr_null,
     frame_address,
     free,
     gc_backend_current,
@@ -49,6 +51,7 @@ pcc_py_gc_minor_graph_unlock = extern(
     "pcc_py_gc_minor_graph_unlock", (), c_void
 )
 pcc_thread_is_running = extern("pcc_thread_is_running", (), c_int64)
+pcc_thread_exit_unregisters = extern("pcc_thread_exit_unregisters", (), c_int64)
 pcc_thread_stack_high = extern("pcc_thread_stack_high", (), c_int64)
 
 
@@ -59,11 +62,19 @@ pcc_thread_stack_high = extern("pcc_thread_stack_high", (), c_int64)
 # full GC walks stop the world, and introspection holds this word throughout.
 # GC3's incremental cursor retains its graph protocol. Cold/non-running GC4
 # callers do not gain fast admission from an existing thread ID. Freed nodes
-# ([0] slot, [8] next, [16] previous)
+# ([0] slot, [8] next, [16] previous, [24] this thread's cache link)
 # are kept for reuse, up to 4096.
 define_global_i32("pcc_py_gc_scheduler_root_spin", 0)
 define_global_ptr_null("pcc_py_gc_scheduler_root_free_head")
 define_global_i32("pcc_py_gc_scheduler_root_free_count", 0)
+# A thread whose exit unregisters it (pcc_thread_start) keeps up to 64 of its
+# unregistered nodes linked in the list with an empty slot and reuses them:
+# every walker skips an empty slot, so a registration or an unregistration
+# then writes only the node's slot word, without the list word every thread
+# contended on (a closure's construction registered and unregistered two
+# slot frames). pcc_gc_scheduler_root_tls_cache_drain unlinks them at exit.
+define_thread_local_ptr_null("pcc_gc_scheduler_root_tls_cache")
+define_thread_local_i32("pcc_gc_scheduler_root_tls_cache_count", 0)
 # The handle of a slot the count-free collectors already root through the
 # thread's conservative stack scan: its address, never linked or freed.
 define_global_ptr_null("pcc_py_gc_scheduler_root_stack_handle")
@@ -127,10 +138,10 @@ def _scheduler_root_node_take(slot):
         )
     _scheduler_root_spin_release()
     if ptr_is_null(node) != 0:
-        node = malloc(24)
+        node = malloc(32)
         if ptr_is_null(node) != 0:
             return node
-    memset(node, 0, 24)
+    memset(node, 0, 32)
     store_ptr(node, 0, slot)
     return node
 
@@ -152,6 +163,11 @@ def _scheduler_root_node_give(node) -> None:
 @c_abi_export("pcc_gc_cycle_requested_store_release")
 def pcc_gc_cycle_requested_store_release(value: i64) -> None:
     slot = global_addr("pcc_gc_cycle_requested")
+    # Every root registration and unregistration of every thread requests a
+    # cycle; storing a value the word already holds made its line bounce
+    # between carriers for nothing.
+    if atomic_load_i32(slot, 0, "acquire") == value:
+        return
     atomic_store_i32(slot, 0, value, "release")
 
 
@@ -339,6 +355,20 @@ def pcc_gc_scheduler_root_register_handle(slot) -> c_ptr:
         or (load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
             and _scheduler_handle_needs_graph(backend) == 0)
     ):
+        cached = global_load_ptr("pcc_gc_scheduler_root_tls_cache")
+        if ptr_is_null(cached) == 0:
+            # Still linked with an empty slot: publishing the slot registers
+            # it. Every walker of this list stops the world or holds the list
+            # word, and no poll separates the pop from the store.
+            global_store_ptr("pcc_gc_scheduler_root_tls_cache", load_ptr(cached, 24))
+            store_i32(
+                global_addr("pcc_gc_scheduler_root_tls_cache_count"), 0,
+                load_i32(global_addr("pcc_gc_scheduler_root_tls_cache_count"), 0) - 1,
+            )
+            store_ptr(cached, 24, null())
+            store_ptr(cached, 0, slot)
+            pcc_gc_cycle_requested_store_release(1)
+            return cached
         # Reuse and publish under one list acquisition. Splitting these two
         # tiny changes made the one global word bounce between carriers twice
         # per registration even though no allocation was needed.
@@ -398,6 +428,16 @@ def pcc_gc_scheduler_root_unregister_handle(handle) -> None:
         or (load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
             and _scheduler_handle_needs_graph(backend) == 0)
     ):
+        cache_count: i64 = load_i32(global_addr("pcc_gc_scheduler_root_tls_cache_count"), 0)
+        if cache_count < 64 and pcc_thread_exit_unregisters() != 0:
+            # Empty the slot and keep the node linked for this thread's next
+            # registration (see pcc_gc_scheduler_root_tls_cache).
+            store_ptr(handle, 0, null())
+            store_ptr(handle, 24, global_load_ptr("pcc_gc_scheduler_root_tls_cache"))
+            global_store_ptr("pcc_gc_scheduler_root_tls_cache", handle)
+            store_i32(global_addr("pcc_gc_scheduler_root_tls_cache_count"), 0, cache_count + 1)
+            pcc_gc_cycle_requested_store_release(1)
+            return
         # Detach and recycle in the same critical section. Neither operation
         # allocates or polls; a full pool frees only after dropping the word.
         _scheduler_root_spin_acquire()
@@ -418,6 +458,24 @@ def pcc_gc_scheduler_root_unregister_handle(handle) -> None:
         pcc_py_gc_minor_graph_unlock()
         _scheduler_root_node_give(handle)
     pcc_gc_cycle_requested_store_release(1)
+
+
+@c_abi_export("pcc_gc_scheduler_root_tls_cache_drain")
+def pcc_gc_scheduler_root_tls_cache_drain() -> None:
+    """Unlink this thread's cached empty nodes; called as the thread exits."""
+    node = global_load_ptr("pcc_gc_scheduler_root_tls_cache")
+    if ptr_is_null(node) != 0:
+        return
+    global_store_ptr("pcc_gc_scheduler_root_tls_cache", null())
+    store_i32(global_addr("pcc_gc_scheduler_root_tls_cache_count"), 0, 0)
+    while ptr_is_null(node) == 0:
+        following = load_ptr(node, 24)
+        store_ptr(node, 24, null())
+        _scheduler_root_spin_acquire()
+        _scheduler_root_unlink(node)
+        _scheduler_root_spin_release()
+        _scheduler_root_node_give(node)
+        node = following
 
 
 @c_abi_export("pcc_gc_scheduler_root_unregister")

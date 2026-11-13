@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -52,6 +53,8 @@ INTERNAL_SYMBOLS = {
     "pcc_gc_continuation_root_list_acquire",
     "pcc_gc_continuation_root_list_release",
     "pcc_gc_continuation_root_writers_need_graph",
+    # A started thread's emptied scheduler-root nodes leave the list at exit.
+    "pcc_gc_scheduler_root_tls_cache_drain",
 }
 # The list word and the free-node list this module owns.
 OWNED_GLOBALS = {
@@ -60,10 +63,14 @@ OWNED_GLOBALS = {
     "pcc_py_gc_scheduler_root_free_count",
     "pcc_py_gc_scheduler_root_stack_handle",
     "pcc_py_gc_continuation_root_spin",
+    # This thread's emptied scheduler-root nodes, still linked, for reuse.
+    "pcc_gc_scheduler_root_tls_cache",
+    "pcc_gc_scheduler_root_tls_cache_count",
 }
 RAW_FUNCTION_IMPORTS = {
     "pcc_gc_backend3_revoke_closed_young_domain",
     "pcc_thread_is_running",
+    "pcc_thread_exit_unregisters",
     "pcc_thread_stack_high",
     "free",
     "malloc",
@@ -167,6 +174,13 @@ def test_root_registry_object_has_exact_raw_closure(tmp_path: Path, emitter: str
         if line.strip()
     }
     expected = (RAW_FUNCTION_IMPORTS | RAW_GLOBAL_IMPORTS) - {"memset"}
+    # The thread-local node cache reaches its TLS through the platform's
+    # access helper (Darwin's _tlv_bootstrap, ELF's __tls_get_addr).
+    tls_helpers = undefined & {"tlv_bootstrap", "tls_get_addr"}
+    assert len(tls_helpers) <= 1
+    if sys.platform == "darwin":
+        assert tls_helpers == {"tlv_bootstrap"}
+    undefined = undefined - tls_helpers
     # The explicit zero-fill intrinsic can lower to either libc spelling in
     # the external LLVM oracle. Keep all other dependencies exact; owned
     # lowering retains memset for the dynamic-size operation.

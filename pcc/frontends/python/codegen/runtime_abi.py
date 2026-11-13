@@ -2127,6 +2127,8 @@ FREESTANDING_GC_THREAD_LOCAL_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_tls_alloc_debt',
         'pcc_gc_tls_live_bytes_delta',
         'pcc_gc_tls_alloc_pushes',
+        'pcc_gc_scheduler_root_tls_cache',
+        'pcc_gc_scheduler_root_tls_cache_count',
     }
 )
 
@@ -3320,6 +3322,9 @@ def _cross_object_signatures_part_15():
     "pcc_gc_live_bytes_flush": ((), "c_void"),
     # A registered thread keeps its exception root until it unregisters.
     "py_tls_exc_retire_root": ((), "c_void"),
+    # A started thread keeps emptied scheduler-root nodes until it exits.
+    "pcc_gc_scheduler_root_tls_cache_drain": ((), "c_void"),
+    "pcc_thread_exit_unregisters": ((), "c_int64"),
     }
 
 

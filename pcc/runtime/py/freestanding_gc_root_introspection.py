@@ -53,7 +53,10 @@ def pcc_gc_scheduler_root_count() -> i64:
     node = global_load_ptr("pcc_gc_scheduler_root_head")
     count: i64 = 0
     while ptr_is_null(node) == 0:
-        count = count + 1
+        # A node a thread keeps for reuse has an empty slot and roots
+        # nothing (pcc_gc_scheduler_root_tls_cache).
+        if ptr_is_null(load_ptr(node, 0)) == 0:
+            count = count + 1
         node = load_ptr(node, 8)
     pcc_gc_scheduler_root_list_release()
     pcc_py_gc_minor_graph_unlock()

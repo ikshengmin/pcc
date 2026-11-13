@@ -25,7 +25,8 @@ MODES = [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (4, 1)]
 
 
 class RootState:
-    def __init__(self, backend=4, tracing=1, initialized=1, frozen=1, running="running"):
+    def __init__(self, backend=4, tracing=1, initialized=1, frozen=1, running="running",
+                 exit_unregisters=0):
         self.memory = {}
         self.address = 1024
         self.graph_depth = 0
@@ -62,6 +63,9 @@ class RootState:
             "gc_backend_current": lambda: backend,
             "pcc_py_gc_minor_graph_lock": self.graph_lock,
             "pcc_py_gc_minor_graph_unlock": self.graph_unlock,
+            # Whether this thread exits through pcc_thread_unregister_current
+            # (pcc_thread_start); only such a thread caches emptied nodes.
+            "pcc_thread_exit_unregisters": lambda: exit_unregisters,
         }
         self.ns = ns
         load_functions(RUNTIME / "freestanding_thread_kernel_pthread.py",
@@ -79,6 +83,7 @@ class RootState:
             "pcc_gc_scheduler_root_link_locked", "_scheduler_root_link",
             "pcc_gc_scheduler_root_unlink_locked", "_scheduler_root_unlink",
             "pcc_gc_scheduler_root_register_handle", "pcc_gc_scheduler_root_unregister_handle",
+            "pcc_gc_scheduler_root_tls_cache_drain",
         }, ns)
 
     def allocate_raw(self, size):
@@ -96,7 +101,8 @@ class RootState:
         self.freed.append(pointer)
 
     def memset(self, base, value, size):
-        assert value == 0 and size == 24
+        # [0] slot, [8] next, [16] previous, [24] this thread's cache link.
+        assert value == 0 and size == 32
         for offset in range(0, size, 8):
             self.store(base, offset, 0)
 
@@ -325,3 +331,39 @@ def test_revision_uses_atomics_only_when_writers_have_independent_locks(backend,
     independent_locks = backend == 0 or (backend == 4 and tracing)
     assert len(state.revision_attempts) == int(independent_locks)
     assert state.atomic_revision_reads == ([(initial, "acquire")] if independent_locks else [])
+
+
+@pytest.mark.parametrize("backend,tracing", [(0, 0), (4, 1)])
+def test_started_thread_reuses_emptied_nodes_without_the_list_word(backend, tracing):
+    # A thread whose exit unregisters it keeps an unregistered node linked
+    # with an empty slot (every walker skips it) and reuses it for its next
+    # registration: neither change takes the list word or touches the list.
+    state = RootState(backend, tracing, exit_unregisters=1)
+    first = state.register(0x10000)
+    linked = state.linked()
+    entries, revision = state.list_entries, state.revision
+    state.unregister(first)
+    assert state.linked() == linked and state.read(first, 0) == 0
+    assert state.read("pcc_gc_scheduler_root_tls_cache", 0) == first
+    again = state.register(0x10008)
+    assert again == first and state.read(first, 0) == 0x10008
+    assert state.read("pcc_gc_scheduler_root_tls_cache", 0) == 0
+    assert state.list_entries == entries and state.revision == revision
+    assert state.graph_entries == 0 and state.read(SPIN, 0) == 0
+    # At exit the cached nodes leave the list and return to the pool.
+    state.unregister(again)
+    state.ns["pcc_gc_scheduler_root_tls_cache_drain"]()
+    assert state.linked() == [] and state.read("pcc_gc_scheduler_root_tls_cache", 0) == 0
+    assert state.read("pcc_gc_scheduler_root_tls_cache_count", 0) == 0
+    assert state.read("pcc_py_gc_scheduler_root_free_count", 0) == 1
+
+
+def test_started_thread_cache_holds_at_most_64_nodes():
+    state = RootState(0, 0, exit_unregisters=1)
+    handles = [state.register(0x10000 + 8 * index) for index in range(65)]
+    for handle in handles:
+        state.unregister(handle)
+    assert state.read("pcc_gc_scheduler_root_tls_cache_count", 0) == 64
+    # The 65th was detached and pooled as before.
+    assert len(state.linked()) == 64
+    assert state.read("pcc_py_gc_scheduler_root_free_count", 0) == 1

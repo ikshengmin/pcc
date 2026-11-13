@@ -532,6 +532,11 @@ pcc_gc_frame_node_tls_pool_drain = extern(
     (),
     c_void,
 )
+pcc_gc_scheduler_root_tls_cache_drain = extern(
+    "pcc_gc_scheduler_root_tls_cache_drain",
+    (),
+    c_void,
+)
 pcc_gc_alloc_stage_enable = extern(
     "pcc_gc_alloc_stage_enable", (c_int64,), c_void
 )
@@ -6267,10 +6272,12 @@ def pcc_gc_note_pin(delta: int) -> None:
 def _scheduler_root_node_alloc(slot):
     if ptr_is_null(slot) != 0:
         return null()
-    node = malloc(24)
+    # A scheduler-root node has a fourth word, the per-thread cache link of
+    # freestanding_gc_root_registry.
+    node = malloc(32)
     if ptr_is_null(node) != 0:
         return null()
-    memset(node, 0, 24)
+    memset(node, 0, 32)
     store_ptr(node, 0, slot)
     return node
 
@@ -6536,6 +6543,8 @@ pcc_gc_cms_note_alloc_flush = extern("pcc_gc_cms_note_alloc_flush", (), c_void)
 @c_abi_export("pcc_gc_thread_unregister_buffers")
 def pcc_gc_thread_unregister_buffers() -> None:
     pcc_gc_frame_node_tls_pool_drain()
+    # After the exception root is retired: its node may be among them.
+    pcc_gc_scheduler_root_tls_cache_drain()
     pcc_gc_gray_worklist_unregister()
     pcc_gc_alloc_stage_thread_exit()
     # Publish the batch of allocation debt the thread had not yet published.
