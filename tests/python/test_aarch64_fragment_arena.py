@@ -224,3 +224,281 @@ def test_text_label_adapter_keeps_its_own_comment_normalization():
 
     with pytest.raises(EncodeError):
         assemble_file(".section __TEXT,__text,regular,pure_instructions\nLfoo //comment:\n")
+
+
+def test_typed_fallthrough_rewrite_preserves_record_identity_and_snapshot():
+    owner = fragments.AArch64EmissionFragments()
+    try:
+        prefix = owner.new_fragment()
+        suffix = owner.new_fragment()
+        owner.append_label(suffix, "L_next")
+        owner.append_nop(suffix)
+        owner.append_branch(prefix, "b", "L_next")
+        owner.extend_fragment(prefix, suffix)
+        owner.append_label(suffix, "L_later")
+        before = _read(owner, prefix)
+        rewritten = owner.drop_fallthrough_branches(prefix)
+        assert _read(owner, prefix) == before
+        assert _read(owner, rewritten) == before[1:]
+        assert [row[0] for row in before] == [2, 0, 1]
+        assert owner.spans.projection_count == 0
+        assert _read(owner, owner.drop_fallthrough_branches(rewritten)) == before[1:]
+    finally:
+        owner.close()
+
+
+def test_typed_fallthrough_keeps_calls_conditions_aliases_and_nonlocal_targets():
+    owner = fragments.AArch64EmissionFragments()
+    try:
+        span = owner.new_fragment()
+        owner.append_call(span, "L_call")
+        owner.append_label(span, "L_call")
+        owner.append_branch(span, "b.eq", "L_cond")
+        owner.append_label(span, "L_cond")
+        owner.append_branch(span, "cbz", "L_zero", "x2")
+        owner.append_label(span, "L_zero")
+        owner.append_branch(span, "cbnz", "L_nonzero", "w3")
+        owner.append_label(span, "L_nonzero")
+        owner.append_branch(span, "b", "L_target")
+        owner.append_label(span, "L_alias")
+        owner.append_label(span, "L_target")
+        owner.append_branch(span, "b", "_global")
+        owner.append_label(span, "_global")
+        owner.append_branch(span, "b", "L_blocked")
+        owner.append_nop(span)
+        owner.append_label(span, "L_blocked")
+        owner.append_branch(span, "b", "L_external")
+        # Raw/prepatched branches are not symbolic deletion candidates.
+        owner.append_word(span, 0x14000000, EMITTED_INSTRUCTION_SCALAR)
+        owner.append_label(span, "L_raw")
+        owner.append_word(span, 0x14000001, EMITTED_INSTRUCTION_SCALAR)
+        owner.append_label(span, "L_patched")
+        before = _read(owner, span)
+        assert _read(owner, owner.drop_fallthrough_branches(span)) == before
+    finally:
+        owner.close()
+
+
+def test_typed_branch_rejection_preserves_records_and_symbols():
+    owner = fragments.AArch64EmissionFragments()
+    try:
+        span = owner.new_fragment()
+        owner.append_label(span, "L_kept")
+        before = _read(owner, span)
+        symbols = list(owner.symbol_names)
+        for mnemonic, target, register in (
+            ("bl", "L_valid", ""), ("tbz", "L_valid", "x0"),
+            ("cbz", "L_valid", "sp"), ("b", "L_bad\n  nop", ""),
+            ("b.eq", ".directive", ""),
+        ):
+            with pytest.raises(EncodeError):
+                owner.append_branch(span, mnemonic, target, register)
+            assert _read(owner, span) == before
+            assert owner.symbol_names == symbols
+        with pytest.raises(EncodeError):
+            owner.append_call(span, "_bad; nop")
+        assert _read(owner, span) == before
+        assert owner.symbol_names == symbols
+    finally:
+        owner.close()
+
+
+def test_typed_branch_publication_matches_same_pass_text_object(monkeypatch):
+    from pcc.backend import arm64_encode as encoder
+    from pcc.backend.arm64_asm_driver import assemble_file
+    from pcc.backend.native_object import NativeObject, encode_native_object
+    from pcc.backend.self_backend_aarch64_darwin import (
+        _NativeAArch64Emission, _drop_fallthrough_uncond_branches,
+    )
+    from pcc.backend.self_backend_aarch64_darwin_mem import (
+        begin_direct_instruction_capture, end_direct_instruction_capture,
+    )
+
+    # Apply exactly the same single pass to the same sequence in each arm.
+    # This component comparison does not claim optimized module-route parity.
+    lines = [
+        ".section __TEXT,__text,regular,pure_instructions", "_probe:",
+        "  bl _external", "  b L_next", "L_next:",
+        "  b.eq L_done", "  cbz x2, L_done", "  cbnz w3, L_done",
+        "  b L_done", "L_alias:", "L_done:", "  nop",
+    ]
+    expected = assemble_file("\n".join(_drop_fallthrough_uncond_branches(lines)))
+    expected_pco = encode_native_object(NativeObject.from_sections(
+        expected[0], undefined=expected[1],
+    ))
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("typed fragment entered an instruction text adapter")
+
+    monkeypatch.setattr(encoder, "_encode_one", forbidden)
+    monkeypatch.setattr(encoder, "assemble_text_lines", forbidden)
+    begin_direct_instruction_capture()
+    sink = None
+    try:
+        sink = _NativeAArch64Emission()
+        sink.append(lines[0])
+        # Force fragment symbol IDs to differ from module symbol IDs.
+        sink.symbol_names.append("_unused")
+        sink.symbol_ids["_unused"] = 0
+        span = sink.fragments.new_fragment()
+        sink.fragments.append_label(span, "_probe")
+        sink.fragments.append_call(span, "_external")
+        sink.fragments.append_branch(span, "b", "L_next")
+        sink.fragments.append_label(span, "L_next")
+        sink.fragments.append_branch(span, "b.eq", "L_done")
+        sink.fragments.append_branch(span, "cbz", "L_done", "x2")
+        sink.fragments.append_branch(span, "cbnz", "L_done", "w3")
+        sink.fragments.append_branch(span, "b", "L_done")
+        sink.fragments.append_label(span, "L_alias")
+        sink.fragments.append_label(span, "L_done")
+        sink.fragments.append_nop(span)
+        sink.publish_fragment(sink.fragments.drop_fallthrough_branches(span))
+        # Capture release must not erase builder-owned symbols/fixups.
+        sink.release_captured_function()
+        actual = sink.builder.finish()
+        assert actual == expected
+        assert encode_native_object(NativeObject.from_sections(
+            actual[0], undefined=actual[1],
+        )) == expected_pco
+        assert sink.call_count == 1
+        assert sink.fallback_lines == []
+    finally:
+        if sink is not None:
+            sink.close()
+        end_direct_instruction_capture()
+
+
+def test_typed_fixups_reject_stale_roots_without_symbol_or_record_publication(monkeypatch):
+    owner = fragments.AArch64EmissionFragments()
+    try:
+        stale = owner.new_fragment()
+        owner.reset()
+        current = owner.new_fragment()
+        owner.append_nop(current)
+        before = _read(owner, current)
+        for append in (owner.append_call,):
+            with pytest.raises(RuntimeError, match="stale"):
+                append(stale, "_new_symbol")
+        with pytest.raises(RuntimeError, match="stale"):
+            owner.append_branch(stale, "b", "L_new_symbol")
+        assert _read(owner, current) == before
+        assert owner.symbol_names == []
+        assert len(owner.records) == 4
+        original_interner = fragments.intern_emitted_symbol
+        for append_name in (False, True):
+            def interrupted_interner(name, ids, names):
+                ids[name] = len(names)
+                if append_name:
+                    names.append(name)
+                raise MemoryError("interrupted interning")
+
+            with monkeypatch.context() as patch:
+                patch.setattr(fragments, "intern_emitted_symbol", interrupted_interner)
+                with pytest.raises(MemoryError, match="interrupted interning"):
+                    owner.append_call(current, "_new_symbol")
+            assert owner.symbol_names == []
+            assert owner.symbol_ids == {}
+            assert len(owner.records) == 4
+            assert _read(owner, current) == before
+
+        owner.append_call(current, "_existing")
+        existing = _read(owner, current)
+        names_before = list(owner.symbol_names)
+        ids_before = dict(owner.symbol_ids)
+
+        def interrupted_reuse(name, ids, names):
+            original_interner(name, ids, names)
+            raise MemoryError("interrupted reuse")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(fragments, "intern_emitted_symbol", interrupted_reuse)
+            with pytest.raises(MemoryError, match="interrupted reuse"):
+                owner.append_call(current, "_existing")
+        assert owner.symbol_names == names_before
+        assert owner.symbol_ids == ids_before
+        assert _read(owner, current) == existing
+
+        # Fail after append4, before the sequence root commits. Internal span
+        # node allocation is not part of the rollback contract.
+        record_length = len(owner.records)
+
+        def interrupted_span_append(span, record_id):
+            assert len(owner.records) == record_length + 4
+            assert record_id == record_length // 4
+            raise MemoryError("interrupted span publication")
+
+        for target in ("_new_symbol", "_existing"):
+            with monkeypatch.context() as patch:
+                patch.setattr(owner.spans, "append", interrupted_span_append)
+                with pytest.raises(MemoryError, match="interrupted span publication"):
+                    owner.append_call(current, target)
+            assert len(owner.records) == record_length
+            assert owner.symbol_names == names_before
+            assert owner.symbol_ids == ids_before
+            assert _read(owner, current) == existing
+    finally:
+        owner.close()
+
+
+def test_typed_fallthrough_rejects_invalid_record_ids_without_mutating_input():
+    owner = fragments.AArch64EmissionFragments()
+    try:
+        span = owner.new_fragment()
+        owner.append_nop(span)
+        owner.spans.append(span, 999)
+        records_before = len(owner.records)
+        symbols_before = list(owner.symbol_names)
+        with pytest.raises(EncodeError, match="record ID"):
+            owner.drop_fallthrough_branches(span)
+        owner.start_cursor(span)
+        assert owner.next_record_id() == 0
+        assert owner.next_record_id() == 999
+        assert owner.next_record_id() == -1
+        assert len(owner.records) == records_before
+        assert owner.symbol_names == symbols_before
+    finally:
+        owner.close()
+
+
+def test_typed_publication_rejects_bad_fixup_before_symbol_publication():
+    from pcc.backend.self_backend_aarch64_darwin import _NativeAArch64Emission
+    from pcc.backend.self_backend_aarch64_darwin_mem import (
+        begin_direct_instruction_capture, end_direct_instruction_capture,
+    )
+
+    # Validate both unpatched instruction shape and untrusted symbol spelling
+    # before interning into the module-owned symbol table.
+    from pcc.backend import BackendUnavailable
+
+    for corruption in ("call_word", "name", "branch_high", "branch_negative"):
+        begin_direct_instruction_capture()
+        sink = None
+        try:
+            sink = _NativeAArch64Emission()
+            sink.append(".section __TEXT,__text,regular,pure_instructions")
+            span = sink.fragments.new_fragment()
+            if corruption in ("branch_high", "branch_negative"):
+                sink.fragments.append_branch(span, "b.eq", "L_target")
+                bad_word = 0x154000000 if corruption == "branch_high" else -0xAC000000
+                sink.fragments.records.set(0, bad_word)
+            else:
+                sink.fragments.append_call(span, "_callee")
+                if corruption == "name":
+                    sink.fragments.symbol_names[0] = "_callee\n  nop"
+                else:
+                    sink.fragments.records.set(0, 0x94000001)
+            expected_error = (
+                BackendUnavailable
+                if corruption in ("branch_high", "branch_negative") else EncodeError
+            )
+            with pytest.raises(expected_error):
+                sink.publish_fragment(span)
+            assert sink.symbol_names == []
+            assert sink.symbol_ids == {}
+            assert sink.builder.text_size() == 0
+            assert sink.fragment_record_count == 0
+            assert sink.structured_count == 0
+        finally:
+            if sink is not None:
+                sink.close()
+            end_direct_instruction_capture()

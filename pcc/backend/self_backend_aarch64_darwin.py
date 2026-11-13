@@ -33,10 +33,14 @@ from .arm64_encode import (
     EMITTED_INSTRUCTION_MOVE,
     EMITTED_INSTRUCTION_SCALAR,
     EMITTED_INSTRUCTION_UNSCALED,
+    STRUCTURED_FIXUP_BRANCH19,
+    STRUCTURED_FIXUP_BRANCH26,
     STRUCTURED_FIXUP_CALL,
+    _validate_text_fixup_word,
     append_emitted_instruction_record,
     intern_emitted_symbol,
     lse_atomic_kind,
+    validate_emitted_label_name,
 )
 from .code_profile import apply_function_order_profile
 from .precise_stackmap import precise_stackmap_tables_enabled
@@ -246,21 +250,48 @@ class _NativeAArch64Emission:
                     raise BackendUnavailable("emission fragment label ID is invalid")
                 self.builder.append_label(fragments.symbol_names[record.first])
             else:
-                if record.third != 0 or record.fourth != -1:
-                    raise BackendUnavailable("emission fragment relocation is unsupported")
+                kind = record.third
+                symbol_id = record.fourth
                 if family not in (
                     EMITTED_INSTRUCTION_SCALAR,
                     EMITTED_INSTRUCTION_MOVE,
                     EMITTED_INSTRUCTION_UNSCALED,
+                    EMITTED_INSTRUCTION_CALL,
                 ):
                     raise BackendUnavailable("emission fragment instruction family is invalid")
-                self.builder.append_encoded(record.first, 0, -1)
+                if kind == 0:
+                    if symbol_id != -1 or family == EMITTED_INSTRUCTION_CALL:
+                        raise BackendUnavailable("emission fragment relocation is invalid")
+                else:
+                    if kind not in (
+                        STRUCTURED_FIXUP_BRANCH19, STRUCTURED_FIXUP_BRANCH26,
+                        STRUCTURED_FIXUP_CALL,
+                    ):
+                        raise BackendUnavailable("emission fragment relocation is unsupported")
+                    if (family == EMITTED_INSTRUCTION_CALL) != (kind == STRUCTURED_FIXUP_CALL):
+                        raise BackendUnavailable("emission fragment call family is invalid")
+                    if family not in (EMITTED_INSTRUCTION_SCALAR, EMITTED_INSTRUCTION_CALL):
+                        raise BackendUnavailable("emission fragment branch family is invalid")
+                    if symbol_id < 0 or symbol_id >= len(fragments.symbol_names):
+                        raise BackendUnavailable("emission fragment symbol ID is invalid")
+                    if record.first < 0 or record.first > 0xFFFFFFFF:
+                        raise BackendUnavailable("emission fragment word is outside uint32")
+                    _validate_text_fixup_word(record.first, kind)
+                    validate_emitted_label_name(fragments.symbol_names[symbol_id])
+                    symbol_id = intern_emitted_symbol(
+                        fragments.symbol_names[symbol_id], self.symbol_ids, self.symbol_names,
+                    )
+                # The builder validates unpatched fixup words and resolves all
+                # branch displacements only after the rewritten final layout.
+                self.builder.append_encoded(record.first, kind, symbol_id)
                 self.structured_count += 1
                 self.direct_count += 1
                 if family == EMITTED_INSTRUCTION_MOVE:
                     self.move_count += 1
                 elif family == EMITTED_INSTRUCTION_UNSCALED:
                     self.unscaled_count += 1
+                elif family == EMITTED_INSTRUCTION_CALL:
+                    self.call_count += 1
             self.fragment_record_count += 1
             record_id = fragments.next_record_id()
 
