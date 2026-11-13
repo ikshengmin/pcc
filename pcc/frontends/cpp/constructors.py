@@ -341,10 +341,11 @@ def lower_base_initializer(parser, definition, this, initializer, *, constructio
         raise CppDiagnostic("cpp.unsupported.destructor-subobjects",
                             "base construction requires an enclosing closed-construction proof", slot.coord)
     arguments = [] if initializer is None else list(initializer.expressions)
+    # [class.base.init]: the base subobject of *this, a `definition` object.
     return [constructor_call(parser, base, arguments, slot.subobject_address(this, slot.coord), slot.coord,
                              construction_calls=construction_calls,
                              initialization_kind="value" if initializer is not None and not arguments else "default",
-                             object_type=base)]
+                             object_type=base, access_object=definition.dtype)]
 
 
 def bind_constructor_body(parser, definition, symbol, parameter_scope, declaration, this, coord):
@@ -538,8 +539,14 @@ def closed_construction_body(body, construction_calls):
 
 def constructor_call(parser, dtype, arguments, address, coord, require_closed=False, *,
                      direct_list=False, copy_initialization=False, construction_calls=None,
-                     initialization_kind="default", object_type=None):
-    """Select the existing C1 at an already-evaluated complete-object address."""
+                     initialization_kind="default", object_type=None, access_object=None):
+    """Select the existing C1 at an already-evaluated complete-object address.
+
+    `access_object` is the class of the object expression when the
+    constructed object is a base subobject of it (a mem-initializer of a
+    derived class): access then follows [class.access.base]/5 and
+    [class.protected], as for a member named through that object.
+    """
     group = dtype.definition.constructors
     from pcc.frontends.cpp.inheritance import is_proper_base
     if (len(arguments) == 1 and (unqualified(arguments[0].dtype) is dtype
@@ -559,7 +566,11 @@ def constructor_call(parser, dtype, arguments, address, coord, require_closed=Fa
     selected = resolve_overload(group,
                                 [arg.dtype for arg in arguments], parser.types, coord,
                                 [arg.null_pointer for arg in arguments], [arg.lvalue or arg.assignment_result for arg in arguments])
-    parser.scope.check_member_access(selected, coord)
+    if access_object is None:
+        parser.scope.check_member_access(selected, coord)
+    else:
+        from pcc.frontends.cpp.inheritance import require_member_access
+        require_member_access(parser.scope, selected, dtype, access_object, coord)
     from pcc.frontends.cpp.default_constructors import require_usable
     require_usable(selected, coord, object_type=object_type, initialization_kind=initialization_kind)
     from pcc.frontends.cpp.class_template_members import request_body
