@@ -1,0 +1,145 @@
+"""Synthetic executable import-scan input; see the corpus README."""
+
+from urllib.parse import quote
+
+
+def compute():
+    total = 0
+    total = total + 1
+    total = total + 2
+    total = total + 3
+    total = total + 4
+    total = total + 5
+    total = total + 6
+    total = total + 7
+    total = total + 8
+    total = total + 9
+    total = total + 10
+    total = total + 11
+    total = total + 12
+    total = total + 13
+    total = total + 14
+    total = total + 15
+    total = total + 16
+    total = total + 17
+    total = total + 18
+    total = total + 19
+    total = total + 20
+    total = total + 21
+    total = total + 22
+    total = total + 23
+    total = total + 24
+    total = total + 25
+    total = total + 26
+    total = total + 27
+    total = total + 28
+    total = total + 29
+    total = total + 30
+    total = total + 31
+    total = total + 32
+    total = total + 33
+    total = total + 34
+    total = total + 35
+    total = total + 36
+    total = total + 37
+    total = total + 38
+    total = total + 39
+    total = total + 40
+    total = total + 41
+    total = total + 42
+    total = total + 43
+    total = total + 44
+    total = total + 45
+    total = total + 46
+    total = total + 47
+    total = total + 48
+    total = total + 49
+    total = total + 50
+    total = total + 51
+    total = total + 52
+    total = total + 53
+    total = total + 54
+    total = total + 55
+    total = total + 56
+    total = total + 57
+    total = total + 58
+    total = total + 59
+    total = total + 60
+    total = total + 61
+    total = total + 62
+    total = total + 63
+    total = total + 64
+    total = total + 65
+    total = total + 66
+    total = total + 67
+    total = total + 68
+    total = total + 69
+    total = total + 70
+    total = total + 71
+    total = total + 72
+    total = total + 73
+    total = total + 74
+    total = total + 75
+    total = total + 76
+    total = total + 77
+    total = total + 78
+    total = total + 79
+    total = total + 80
+    total = total + 81
+    total = total + 82
+    total = total + 83
+    total = total + 84
+    total = total + 85
+    total = total + 86
+    total = total + 87
+    total = total + 88
+    total = total + 89
+    total = total + 90
+    total = total + 91
+    total = total + 92
+    total = total + 93
+    total = total + 94
+    total = total + 95
+    total = total + 96
+    total = total + 97
+    total = total + 98
+    total = total + 99
+    total = total + 100
+    total = total + 101
+    total = total + 102
+    total = total + 103
+    total = total + 104
+    total = total + 105
+    total = total + 106
+    total = total + 107
+    total = total + 108
+    total = total + 109
+    total = total + 110
+    total = total + 111
+    total = total + 112
+    total = total + 113
+    total = total + 114
+    total = total + 115
+    total = total + 116
+    total = total + 117
+    total = total + 118
+    total = total + 119
+    total = total + 120
+    total = total + 121
+    total = total + 122
+    total = total + 123
+    total = total + 124
+    total = total + 125
+    total = total + 126
+    total = total + 127
+    total = total + 128
+    return total
+
+
+print(compute())
+print(quote("a b/c", safe=""))
+try:
+    raise AttributeError("exercise the fallback import at runtime")
+except AttributeError:
+    from urllib.parse import quote as fallback_quote
+    print(fallback_quote("d e/f", safe=""))

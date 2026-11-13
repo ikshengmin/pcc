@@ -305,6 +305,8 @@
     "tests/python/test_native_local_module_function_replacement.py",
     "tests/python/test_native_module_attr_pointer_storage.py",
     "tests/python/test_pcc1_python_smoke.py",
+    "tests/python/test_pipeline_import_scan.py",
+    "tests/python/test_attribute_error_import_filter_native.py",
     "tests/python/test_pipeline_profile.py",
     "tests/python/test_roadmap_deepwire.py",
     "tests/c/test_c_natural_record_layout.py"

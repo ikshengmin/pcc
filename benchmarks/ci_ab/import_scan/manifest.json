@@ -1,0 +1,30 @@
+{
+  "schema": "pcc.ci-ab-inputs.v1",
+  "warmup": "benchmarks/ci_ab/import_scan/warmup.py",
+  "inputs": [
+    {
+      "path": "benchmarks/ci_ab/import_scan/negative_n.py",
+      "expected_output": "528\na%20b%2Fc\nd%20e%2Ff\n"
+    },
+    {
+      "path": "benchmarks/ci_ab/import_scan/positive_n.py",
+      "expected_output": "528\na%20b%2Fc\nd%20e%2Ff\n"
+    },
+    {
+      "path": "benchmarks/ci_ab/import_scan/positive_4n.py",
+      "expected_output": "8256\na%20b%2Fc\nd%20e%2Ff\n"
+    },
+    {
+      "path": "benchmarks/ci_ab/import_scan/negative_4n.py",
+      "expected_output": "8256\na%20b%2Fc\nd%20e%2Ff\n"
+    },
+    {
+      "path": "benchmarks/ci_ab/import_scan/negative_16n.py",
+      "expected_output": "131328\na%20b%2Fc\nd%20e%2Ff\n"
+    },
+    {
+      "path": "benchmarks/ci_ab/import_scan/positive_16n.py",
+      "expected_output": "131328\na%20b%2Fc\nd%20e%2Ff\n"
+    }
+  ]
+}

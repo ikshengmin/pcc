@@ -357,6 +357,75 @@ def test_shared_scope_refreshes_new_elf_macho_odr_modules_without_old_counts():
     assert "7056" not in json.dumps(shared)
 
 
+def test_shared_scope_collects_import_scanner_semantics_outside_ci_contracts():
+    modules = (
+        "tests/python/test_pipeline_import_scan.py",
+        "tests/python/test_attribute_error_import_filter_native.py",
+    )
+    scope = json.loads((ROOT / "scripts/data/ci_validation_shared.json").read_text())
+    for module in modules:
+        assert scope["extra_modules"].count(module) == 1
+    files = run.modules("shared")
+    assert set(modules) <= set(files)
+    # Use the complete real inventory, not a fabricated module-only collection.
+    assert [path for shard in run.collection_plan(files) for path in shard] == files
+    assert set(modules).isdisjoint(run.CI_CONTRACT_MODULES)
+    assert set(modules).isdisjoint(run.modules("ci-contracts"))
+    for lane in ("ordinary", "integration", "reference"):
+        assert plan.requires_native_inputs("shared", lane)
+
+
+def test_import_scanner_functions_keep_ordinary_reference_and_native_lanes():
+    scanner = "tests/python/test_pipeline_import_scan.py"
+    native = "tests/python/test_attribute_error_import_filter_native.py"
+    registry = json.loads(run.REFERENCES.read_text())["functions"]
+    functions = {}
+    for module in (scanner, native):
+        tree = ast.parse((ROOT / module).read_text())
+        # No module-wide mark may silently change these function lane owners.
+        assert not any(
+            isinstance(node, (ast.Assign, ast.AnnAssign)) and any(
+                isinstance(target, ast.Name) and target.id == "pytestmark"
+                for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+            ) for node in tree.body
+        )
+        functions[module] = {
+            node.name: node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")
+        }
+
+    def integration_mark(function):
+        marks = {ast.unparse(mark.func if isinstance(mark, ast.Call) else mark)
+                 for mark in function.decorator_list}
+        assert marks <= {"pytest.mark.parametrize", "pytest.mark.integration"}
+        return "pytest.mark.integration" in marks
+
+    assert "test_pipeline_reexports_import_scanners_by_identity" in functions[scanner]
+    assert "test_attribute_error_filter_preserves_real_discovery_targets" in functions[scanner]
+    assert not registry.get(scanner)
+    for name, function in functions[scanner].items():
+        integration = integration_mark(function)
+        assert not integration
+        assert classify(scanner, name, integration, registry) == "ordinary"
+
+    reference = "test_attribute_error_filter_cpython_reference"
+    emitted = "test_attribute_error_filter_native"
+    assert set(functions[native]) == {reference, emitted}
+    assert set(registry[native]) == {reference}
+    entry = registry[native][reference]
+    assert entry["activity"] == "external-reference" and not entry.get("conditional")
+    assert not integration_mark(functions[native][reference])
+    assert classify(native, reference, integration_mark(functions[native][reference]), registry) == "reference"
+    # Derive the marker from the actual native test; passing a literal True
+    # would hide a removed integration decorator.
+    integration = integration_mark(functions[native][emitted])
+    assert integration
+    assert classify(native, emitted, integration, registry) == "integration"
+    assert {"pcc_runtime_archive", "python_program_compiler"} <= {
+        argument.arg for argument in functions[native][emitted].args.args
+    }
+
+
 def test_guard_keeps_six_workers_90_seconds_1gib_without_injected_fail_fast(tmp_path):
     command = run.pytest_command(tmp_path, ["tests/example.py"])
     assert "-x" in command and "--maxfail=0" in command

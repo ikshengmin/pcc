@@ -1,5 +1,21 @@
 {
   "functions": {
+    "tests/test_ci_ab_import_scan_corpus.py": {
+      "test_corpus_matches_cpython_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Executes the frozen warmup and six standalone import-scan corpus entries in actual CPython using its stdlib urllib.parse; requires exact stdout, zero exit status and empty stderr. The same sources are shared by baseline and candidate. This reference does not establish native compilation, emitted execution, collector qualification, allocation reuse or performance."
+        ]
+      }
+    },
+    "tests/python/test_attribute_error_import_filter_native.py": {
+      "test_attribute_error_filter_cpython_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Executes the extracted production import filter and common exact-string content, all-splitlines-separator, string-subclass, duck-typed callback and exception scenarios in actual CPython. Native execution remains a separately marked integration test through the existing pcc0/pcc1 fixtures with observed GC0 through GC4 identity. These common semantics checks do not establish candidate allocation reuse or performance."
+        ]
+      }
+    },
     "tests/rust/test_rust_empty_call_arguments.py": {
       "test_actual_rustc_accepts_exact_empty_call_originals": {
         "activity": "mandatory-same-input-certification-and-owned-contract",
