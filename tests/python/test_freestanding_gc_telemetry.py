@@ -247,12 +247,12 @@ def test_freestanding_gc_telemetry_object_has_typed_cross_object_closure(
     assert undefined == expected_functions | expected_globals
 
     # Every counter getter is a runtime "() -> i64"; before reading, the
-    # telemetry publishes this thread's batched allocation debt through one
-    # registered cross-object call.
-    assert FREESTANDING_GC_CROSS_OBJECT_SIGNATURES[
-        "pcc_gc_cms_note_alloc_flush"
-    ] == ((), "c_void")
-    for symbol in expected_functions - {"pcc_gc_cms_note_alloc_flush"}:
+    # telemetry publishes this thread's batched allocation debt and live-byte
+    # change through registered cross-object calls.
+    flushes = {"pcc_gc_cms_note_alloc_flush", "pcc_gc_live_bytes_flush"}
+    for flush in flushes:
+        assert FREESTANDING_GC_CROSS_OBJECT_SIGNATURES[flush] == ((), "c_void")
+    for symbol in expected_functions - flushes:
         return_type, parameter_types, var_arg = RUNTIME_SIGNATURES[symbol]
         assert str(return_type) == "i64"
         assert not parameter_types

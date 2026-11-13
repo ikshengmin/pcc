@@ -86,6 +86,8 @@ EXTERN_DEFAULTS = {
     # Allocation debt a thread has not yet published (pcc_gc_cms_note_alloc
     # batches it): models publish each allocation at once.
     "pcc_gc_cms_note_alloc_flush": lambda: None,
+    # Likewise a thread's live-byte change (pcc_gc_live_bytes_note).
+    "pcc_gc_live_bytes_flush": lambda: None,
 }
 
 

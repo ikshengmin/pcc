@@ -317,6 +317,8 @@ _backend3_young_unlink = extern(
 )
 _object_known_size = extern("pcc_gc_object_known_size", (c_ptr,), c_int64)
 _live_bytes_subtract = extern("pcc_gc_live_bytes_subtract", (c_int64,), c_void)
+_live_bytes_note = extern("pcc_gc_live_bytes_note", (c_int64,), c_void)
+_live_bytes_flush = extern("pcc_gc_live_bytes_flush", (), c_void)
 _relocate_copy_supported_tag = extern(
     "pcc_gc_generational_oldify_supported_tag", (c_int64,), c_int64
 )
@@ -5091,7 +5093,7 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
         final_generation: int = load_i32(o, 12) & 384
         if final_generation == 128:
             _backend3_young_link_head(node)
-        atomic_rmw_i64("add", global_addr("pcc_gc_live_bytes"), 0, size, "relaxed")
+        _live_bytes_note(size)
         if (
             ptr_is_null(prepared_zpage) == 0
             and prepared_zpage_from_free != 0
@@ -5162,7 +5164,10 @@ def pcc_gc_register_object_cell(o, size: int) -> int:
     # A reused cell's bit may be its previous object's: assign it.
     pcc_gc_page_mark_assign(o, color & 32)
     store_i32(o, 12, (flags & ~56) | color | 16384)
-    store_i32(global_addr("pcc_gc_cycle_requested"), 0, 1)
+    # Every allocating thread reaches here: write the shared request word
+    # only when it changes, so its line stays shared between them.
+    if load_i32(global_addr("pcc_gc_cycle_requested"), 0) == 0:
+        store_i32(global_addr("pcc_gc_cycle_requested"), 0, 1)
     node = pcc_gc_object_node_take_record(record)
     store_ptr(node, 0, o)
     store_i64(node, 8, size)
@@ -5176,8 +5181,7 @@ def pcc_gc_register_object_cell(o, size: int) -> int:
     _set_object_node_young_prev(node, null())
     pcc_gc_object_list_revision_bump()
     pcc_gc_object_index_record_publish(record, o)
-    atomic_rmw_i64("add", global_addr("pcc_gc_live_bytes"), 0, size, "relaxed")
-    global_store_ptr("pcc_gc_last_alloc", o)
+    _live_bytes_note(size)
     pcc_thread_no_park_exit()
     return 1
 
@@ -6536,6 +6540,7 @@ def pcc_gc_thread_unregister_buffers() -> None:
     pcc_gc_alloc_stage_thread_exit()
     # Publish the batch of allocation debt the thread had not yet published.
     pcc_gc_cms_note_alloc_flush()
+    _live_bytes_flush()
     # Called on thread exit. The removed C runtime flushed and freed a
     # PER-THREAD backend-4 medium store-buffer state here. This runtime keeps the
     # backend-4 store buffer as GLOBAL state (see _store_buffer_medium_head;

@@ -21,6 +21,8 @@ threshold = extern("pcc_gc_tracing_debt_threshold", (), c_int64)
 budget = extern("pcc_gc_tracing_budget_from_debt", (), c_int64)
 discharge = extern("pcc_gc_tracing_discharge_debt", (c_int64,), c_void)
 subtract_live = extern("pcc_gc_live_bytes_subtract", (c_int64,), c_void)
+# A thread publishes its live-byte change in batches.
+flush_live = extern("pcc_gc_live_bytes_flush", (), c_void)
 new_list = extern("py_list_new", (c_int64,), c_rawptr)
 decref = extern("py_decref", (c_ptr,), c_void)
 known_size = extern("pcc_gc_object_known_size", (c_ptr,), c_int64)
@@ -115,23 +117,32 @@ def probe() -> int:
         status = status | 1048576
     store_i32(multiplier_cell, 0, 10000)
     store_i64(debt_cell, 0, 0)
+    # Publish this thread's pending change before setting the synthetic total.
+    flush_live()
     store_i64(live_cell, 0, 2147483712)
     subtract_live(64)
+    flush_live()
     if load_i64(live_cell, 0) != 2147483648:
         status = status | 256
+    # Accounting is exact signed i64: a batch of frees published before
+    # another thread's allocations reads below zero, never clamps.
     subtract_live(2147483649)
-    if load_i64(live_cell, 0) != 0:
+    flush_live()
+    if load_i64(live_cell, 0) != -1:
         status = status | 512
     subtract_live(-1)
-    if load_i64(live_cell, 0) != 0:
+    flush_live()
+    if load_i64(live_cell, 0) != -1:
         status = status | 1024
 
     # Exercise the real allocation/free writers across the signed boundary.
     # Only one tiny list and its normal payload are actually allocated.
     store_i64(override_cell, 0, 1099511627776)
+    flush_live()
     store_i64(live_cell, 0, 2147483632)
     obj = new_list(0)
     object_bytes: int = 0
+    flush_live()
     allocated_live: int = int(load_i64(live_cell, 0))
     if ptr_is_null(obj) != 0:
         status = status | 2048
@@ -140,6 +151,7 @@ def probe() -> int:
         if object_bytes <= 16 or allocated_live != 2147483632 + object_bytes:
             status = status | 4096
         decref(obj)
+        flush_live()
         if load_i64(live_cell, 0) != 2147483632:
             status = status | 8192
 

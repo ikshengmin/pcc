@@ -146,6 +146,9 @@ class GC3(RetirementState):
             '_py_decref_checked_tail': self.counted_decref,
         })
         self.load_bodies('freestanding_gc_object_nodes.py')
+        # One modeled thread publishes each live-byte change at once; the
+        # batching itself is covered by test_freestanding_gc_object_nodes.
+        self.ns['pcc_gc_live_bytes_note'] = self.publish_live_bytes
         self.load_bodies('freestanding_gc_forwarding_identity.py')
         self.load_bodies('freestanding_gc_object_slots.py')
         self.load_bodies('freestanding_gc_relocation_payload.py')
@@ -209,6 +212,9 @@ class GC3(RetirementState):
             '_FREE_WATCH_OBJECT': 8, '_FREE_WATCH_NOTED': 16,
         })
         self.store('py_cpy_handle_release_fn', 0, self.foreign_releases.append)
+
+    def publish_live_bytes(self, delta):
+        self.store('pcc_gc_live_bytes', 0, self.load('pcc_gc_live_bytes', 0) + delta)
 
     def load_bodies(self, filename, names=None):
         load_functions(PY / filename, names, self.ns)

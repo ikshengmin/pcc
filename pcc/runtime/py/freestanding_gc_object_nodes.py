@@ -3,9 +3,9 @@
 from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
-    atomic_cas_i64,
     atomic_load_i64,
     atomic_rmw_i64,
+    define_thread_local_i32,
     free,
     global_addr,
     global_load_ptr,
@@ -542,20 +542,41 @@ def pcc_gc_object_known_size(obj: c_ptr) -> i64:
     return 0
 
 
+# Each thread publishes its live-byte changes to pcc_gc_live_bytes in batches
+# of at least this many bytes either way, as it publishes allocation debt
+# (freestanding_gc_incremental_concurrent_scheduler): one atomic add per batch
+# instead of an atomic update per registration and per free on a line every
+# allocating thread and the sweeper write. The shared total lags by at most a
+# batch per thread, and reads below zero while a thread's frees are published
+# before another thread's allocations of the same bytes; its reader (the
+# idle-step exit) only compares it with the marked bytes.
+LIVE_BYTES_BATCH = 32768
+define_thread_local_i32("pcc_gc_tls_live_bytes_delta", 0)
+
+
+@c_abi_export("pcc_gc_live_bytes_note")
+def pcc_gc_live_bytes_note(delta: i64) -> None:
+    pending: i64 = load_i32(global_addr("pcc_gc_tls_live_bytes_delta"), 0) + delta
+    if pending < LIVE_BYTES_BATCH and pending > 0 - LIVE_BYTES_BATCH:
+        store_i32(global_addr("pcc_gc_tls_live_bytes_delta"), 0, pending)
+        return
+    store_i32(global_addr("pcc_gc_tls_live_bytes_delta"), 0, 0)
+    atomic_rmw_i64("add", global_addr("pcc_gc_live_bytes"), 0, pending, "relaxed")
+
+
+@c_abi_export("pcc_gc_live_bytes_flush")
+def pcc_gc_live_bytes_flush() -> None:
+    """Publish this thread's unpublished live-byte change now (telemetry
+    reads, thread exit)."""
+    pending: i64 = load_i32(global_addr("pcc_gc_tls_live_bytes_delta"), 0)
+    if pending == 0:
+        return
+    store_i32(global_addr("pcc_gc_tls_live_bytes_delta"), 0, 0)
+    atomic_rmw_i64("add", global_addr("pcc_gc_live_bytes"), 0, pending, "relaxed")
+
+
 @c_abi_export("pcc_gc_live_bytes_subtract")
 def pcc_gc_live_bytes_subtract(size: i64) -> None:
-    # Registration of an object cell adds without the graph lock
-    # (pcc_gc_register_object_cell), so every update is atomic. The count
-    # never goes below zero.
     if size <= 0:
         return
-    slot = global_addr("pcc_gc_live_bytes")
-    live: i64 = atomic_load_i64(slot, 0, "relaxed")
-    while True:
-        updated: i64 = 0
-        if size < live:
-            updated = live - size
-        observed: i64 = atomic_cas_i64(slot, 0, live, updated, "relaxed", "relaxed")
-        if observed == live:
-            return
-        live = observed
+    pcc_gc_live_bytes_note(0 - size)

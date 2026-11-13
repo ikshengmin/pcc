@@ -44,6 +44,9 @@ class Registration(Index):
         }.items():
             self.store(name, 0, value)
         self.ns.update({
+            # One modeled thread publishes each live-byte change at once.
+            '_live_bytes_note': lambda delta: self.store(
+                'pcc_gc_live_bytes', 0, self.load('pcc_gc_live_bytes') + delta),
             'store_i32': self.store,
             'atomic_store_i32': self.store,
             'stack_alloc': lambda size: self.calloc(1, size),

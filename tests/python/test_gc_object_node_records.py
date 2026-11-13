@@ -46,6 +46,14 @@ HARNESS = r'''
     extern int64_t pcc_gc_alloc_stage_drain_stopped(void);
     extern int64_t pcc_py_gc_object_count;
     extern int64_t pcc_gc_live_bytes;
+    extern void pcc_gc_live_bytes_flush(void);
+
+    /* A thread publishes its live-byte change in batches: publish this
+       thread's batch before reading the shared total. */
+    static int64_t live_now(void) {
+        pcc_gc_live_bytes_flush();
+        return pcc_gc_live_bytes;
+    }
 
     enum { NODE_OBJECT = 0, NODE_SIZE = 8, NODE_RECORD_SPAN = 24, RECORD_INDEX_KEY = 88 };
 
@@ -85,7 +93,7 @@ HARNESS = r'''
         py_gc_init();
         py_gc_disable();
         int64_t hashed = pcc_py_gc_object_count;
-        int64_t live = pcc_gc_live_bytes;
+        int64_t live = live_now();
         PyObject *obj = pcc_gc_alloc(64, PY_TYPE_TUPLE, 0);
         if (obj == NULL) return 1;
         pcc_gc_alloc_stage_drain_stopped();
@@ -115,13 +123,13 @@ HARNESS = r'''
         if (known(obj) != 2) return 11;
         if (pcc_gc_object_index_find_stable(obj) != record) return 12;
         if (pcc_py_gc_object_count != hashed) return 13;
-        if (pcc_gc_live_bytes != live + 64) return 14;
+        if (live_now() != live + 64) return 14;
 
         /* A second registration of the same object changes nothing. */
         pcc_gc_note_object_allocated_sized(obj, 64);
         if (pcc_gc_object_list_head() == record || !walked(record)) return 15;
         if (pcc_gc_object_index_find(obj) != record) return 16;
-        if (pcc_gc_live_bytes != live + 64) return 17;
+        if (live_now() != live + 64) return 17;
 
         /* Interior pointers and other cells never alias the record. */
         void *interior = (char *)obj + 16;
@@ -141,7 +149,7 @@ HARNESS = r'''
         if (field(record, RECORD_INDEX_KEY) != NULL) return 24;
         if (pcc_gc_object_index_find(obj) != NULL || known(obj) != 0) return 25;
         if (pcc_gc_object_list_head() == record || walked(record)) return 26;
-        if (pcc_gc_live_bytes != live) return 27;
+        if (live_now() != live) return 27;
 
         /* The cell's next object registers through the same record. */
         header(obj, PY_TYPE_TUPLE);
@@ -151,7 +159,7 @@ HARNESS = r'''
         if (*(int64_t *)((char *)record + NODE_SIZE) != 48) return 30;
         pcc_gc_note_object_freeing(obj);
         if (pcc_gc_object_index_find(obj) != NULL) return 31;
-        if (pcc_py_gc_object_count != hashed || pcc_gc_live_bytes != live) return 32;
+        if (pcc_py_gc_object_count != hashed || live_now() != live) return 32;
 
         /* Storage the object allocator does not own keeps a pooled node
            in the object hash. */

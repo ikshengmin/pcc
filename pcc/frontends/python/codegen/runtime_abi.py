@@ -2125,6 +2125,7 @@ FREESTANDING_GC_THREAD_LOCAL_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_gray_local_batch',
         'pcc_gc_alloc_stage_local_ring',
         'pcc_gc_tls_alloc_debt',
+        'pcc_gc_tls_live_bytes_delta',
         'pcc_gc_tls_alloc_pushes',
     }
 )
@@ -3314,6 +3315,9 @@ def _cross_object_signatures_part_15():
     # Allocation debt is published per thread in batches.
     "pcc_gc_cms_note_alloc_flush": ((), "c_void"),
     "pcc_gc_cms_publish_alloc": (("c_int64", "c_int64"), "c_void"),
+    # Live bytes are published per thread in batches.
+    "pcc_gc_live_bytes_note": (("c_int64",), "c_void"),
+    "pcc_gc_live_bytes_flush": ((), "c_void"),
     }
 
 

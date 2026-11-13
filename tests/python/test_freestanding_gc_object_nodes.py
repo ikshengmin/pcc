@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,9 @@ OWNED_SYMBOLS = {
     "pcc_gc_backend3_young_unlink",
     "pcc_gc_backend3_promotion_unlink",
     "pcc_gc_live_bytes_subtract",
+    # A thread's live-byte change is published in batches.
+    "pcc_gc_live_bytes_note",
+    "pcc_gc_live_bytes_flush",
     "pcc_gc_object_known_size",
     "pcc_gc_object_list_head",
     "pcc_gc_object_list_non_slab_enumerate",
@@ -77,6 +81,11 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_allocator_record_span_records",
     "pcc_allocator_record_span_cells",
 }
+# The thread-local live-byte delta is defined here. A Mach-O object that
+# defines a thread-local imports the platform's TLS bootstrap for it.
+OWNED_THREAD_LOCALS = {"pcc_gc_tls_live_bytes_delta"}
+TLS_RUNTIME_IMPORTS = {"tlv_bootstrap"} if sys.platform == "darwin" else set()
+
 RAW_GLOBAL_IMPORTS = {
     # The revision bump runs only with a reader: GC4 or a queued promotion.
     "pcc_gc_backend_selected",
@@ -245,7 +254,7 @@ def test_object_nodes_have_exact_strict_object_closure(
         timeout=30,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert _literal_global_imports() == RAW_GLOBAL_IMPORTS
+    assert _literal_global_imports() == RAW_GLOBAL_IMPORTS | OWNED_THREAD_LOCALS
     assert RAW_GLOBAL_IMPORTS <= FREESTANDING_GC_RUNTIME_GLOBALS
 
     undefined_result = subprocess.run(
@@ -259,7 +268,7 @@ def test_object_nodes_have_exact_strict_object_closure(
         for line in undefined_result.stdout.splitlines()
         if line.strip()
     }
-    assert undefined == RAW_FUNCTION_IMPORTS | RAW_GLOBAL_IMPORTS
+    assert undefined == RAW_FUNCTION_IMPORTS | RAW_GLOBAL_IMPORTS | TLS_RUNTIME_IMPORTS
 
     symbols_result = subprocess.run(
         ["nm", "-g", str(obj)], capture_output=True, text=True, timeout=30
@@ -270,7 +279,7 @@ def test_object_nodes_have_exact_strict_object_closure(
         for line in symbols_result.stdout.splitlines()
         if line.strip() and " U " not in line
     }
-    assert defined == OWNED_SYMBOLS
+    assert defined == OWNED_SYMBOLS | OWNED_THREAD_LOCALS
 
 
 def test_object_nodes_preserve_pool_list_and_young_invariants() -> None:
@@ -313,14 +322,16 @@ def test_object_nodes_preserve_pool_list_and_young_invariants() -> None:
         known_size.index("pcc_gc_object_node_size(node)")
     )
 
-    # Live bytes never go below zero, and the debit is one CAS because an
-    # object cell registers (adds) without the graph lock.
+    # A debit is this thread's change, as a registration's credit is: the
+    # shared total moves by one atomic add per batch, never per object.
     live = _export_body(strict, "pcc_gc_live_bytes_subtract")
-    assert 'slot = global_addr("pcc_gc_live_bytes")' in live
-    assert "updated: i64 = 0" in live and "if size < live:" in live
-    assert "updated = live - size" in live
-    assert "atomic_cas_i64(slot, 0, live, updated" in live
-    assert "store_i64(" not in live
+    assert "pcc_gc_live_bytes_note(0 - size)" in live
+    assert "atomic" not in live and "store_i64(" not in live
+    note = _export_body(strict, "pcc_gc_live_bytes_note")
+    assert "pending < LIVE_BYTES_BATCH and pending > 0 - LIVE_BYTES_BATCH" in note
+    assert note.count('atomic_rmw_i64("add", global_addr("pcc_gc_live_bytes")') == 1
+    flush = _export_body(strict, "pcc_gc_live_bytes_flush")
+    assert flush.count('atomic_rmw_i64("add", global_addr("pcc_gc_live_bytes")') == 1
 
 
 def test_production_archive_has_one_object_node_owner(
