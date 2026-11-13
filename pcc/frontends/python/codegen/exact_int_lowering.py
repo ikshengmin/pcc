@@ -833,9 +833,7 @@ class ExactIntLoweringMixin:
                     ],
                     name=self._fresh("exact.int.lhs.rooted"),
                 )
-                # The root held a temporary retain in addition to the source
-                # owner's reference.  Clear only that retain here; the
-                # reloaded pointer now carries the original ownership bit.
+                lhs, lhs_owned = self._keep_rooted_exact_int_lhs(lhs, lhs_owned)
                 self._release_rooted_pcc_lifetimes(((lhs_root_slot, False),))
                 self._gc_pin(lhs)
                 lhs_cleanup = ((lhs, lhs_owned),)
@@ -1352,6 +1350,7 @@ class ExactIntLoweringMixin:
                 ],
                 name=self._fresh("exact.int.compare.lhs.rooted"),
             )
+            lhs, lhs_owned = self._keep_rooted_exact_int_lhs(lhs, lhs_owned)
             self._release_rooted_pcc_lifetimes(((lhs_root_slot, False),))
             self._gc_pin(lhs)
             lhs_cleanup = ((lhs, lhs_owned),)
@@ -1390,6 +1389,21 @@ class ExactIntLoweringMixin:
         if rhs_owned:
             self._gc_release(rhs)
         return result_i1
+
+    def _keep_rooted_exact_int_lhs(self, lhs: ir.Value, lhs_owned: bool):
+        """Own the reloaded earlier operand before its temporary root goes.
+
+        The root holds a retain of its own. An owned operand keeps its
+        reference past the root. A borrowed one (a module global, or a local
+        that a walrus rebinds) may have lost its source's reference while the
+        rhs ran -- ``G + f()`` where ``f`` rebinds ``G`` -- so the root's
+        retain can be its last, and GC0 frees an object at its last release.
+        Retain it for the operation; the caller releases it after the result.
+        """
+        if lhs_owned:
+            return lhs, True
+        kept = self._gc_retain(lhs, name=self._fresh("exact.int.lhs.kept"))
+        return kept, True
 
     def _exact_int_lhs_reloads_from_local(self, lhs: Expr, rhs: Expr, lhs_owned: bool) -> bool:
         """True when the earlier operand is a borrowed load of a plain

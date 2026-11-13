@@ -125,6 +125,38 @@ LAMBDA_DEFAULTS = (
 )
 SEMANTICS += LAMBDA_DEFAULTS
 
+# The right operand drops the left operand's source reference: a call
+# rebinds the module global, a walrus rebinds the local. The left operand is
+# still the old big integer (Language Reference 6.16), so it must outlive its
+# source; GC0 frees an object at its last reference.
+REBOUND_SOURCES = (
+    "BIG = 0\n"
+    "\n"
+    "def bump_big() -> int:\n"
+    "    global BIG\n"
+    "    BIG = 5\n"
+    "    return 1\n"
+    "\n"
+    "def global_rebound() -> None:\n"
+    "    global BIG\n"
+    "    BIG = 10 ** 30\n"
+    "    added = BIG + bump_big()\n"
+    "    BIG = 10 ** 30\n"
+    "    greater = BIG > bump_big()\n"
+    "    print(added, greater, BIG)\n"
+    "\n"
+    "def walrus_rebound() -> None:\n"
+    "    total = 10 ** 30\n"
+    "    added = total + len([(total := 7)])\n"
+    "    limit = 10 ** 30\n"
+    "    greater = limit > len([(limit := 0)])\n"
+    "    print(added, total, greater, limit)\n"
+    "\n"
+    "global_rebound()\n"
+    "walrus_rebound()\n"
+)
+SEMANTICS += REBOUND_SOURCES
+
 
 def _env() -> dict[str, str]:
     env = os.environ.copy()
