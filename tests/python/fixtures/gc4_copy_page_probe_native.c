@@ -315,6 +315,13 @@ void *pcc_gc_alloc(int64_t n, int32_t tag, int32_t flags) {
     (void)n; (void)tag; (void)flags; unexpected_calls++; return NULL;
 }
 int64_t pcc_gc_config_ensure(void) { unexpected_calls++; return 4; }
+/* The linked public wrapper imports this ABI, but these cases exercise only
+ * the preallocated locked entry. No stopped-world provider is modeled here;
+ * reaching this dependency must fail rather than invent a held epoch. */
+int64_t pcc_thread_world_stop_epoch_held(void) {
+    fputs("isolated copy fixture has no stopped-world epoch provider\n", stderr);
+    abort();
+}
 void *pcc_gc_forwarding_install_plan_prepare(void *a, void *b) {
     (void)a; (void)b; unexpected_calls++; return NULL;
 }
@@ -578,6 +585,7 @@ static int membership_state_case(const char *mode) {
 
 int main(int argc, char **argv) {
     if (argc != 2) return 2;
+    if (!strcmp(argv[1], "world-stop-epoch-unavailable")) pcc_thread_world_stop_epoch_held();
     if (!strcmp(argv[1], "platform-abort")) pcc_platform_abort();
     if (!strcmp(argv[1], "index-invalid-generation")) pcc_gc_object_index_write_end(2);
     if (!strcmp(argv[1], "index-stage-disabled") ||

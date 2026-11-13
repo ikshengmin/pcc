@@ -383,6 +383,20 @@ def test_isolated_index_dependencies_fail_closed(emitted_copy, case):
         assert "no allocation staging provider" in result.stderr
 
 
+def test_isolated_copy_world_stop_dependency_fails_closed(emitted_copy):
+    _build, _obj, _index_obj, executable = emitted_copy
+    # Exercise the fixture provider itself. This is not a stopped-world or
+    # public-wrapper integration test; ordinary locked-entry cases must not call it.
+    result = subprocess.run(
+        [sys.executable, "-c",
+         "import os,resource,sys; resource.setrlimit(resource.RLIMIT_CORE,(0,0)); "
+         "os.execv(sys.argv[1],sys.argv[1:])", str(executable), "world-stop-epoch-unavailable"],
+        capture_output=True, text=True, timeout=5,
+    )
+    assert result.returncode == -signal.SIGABRT, result.stdout + result.stderr
+    assert result.stderr == "isolated copy fixture has no stopped-world epoch provider\n"
+
+
 def _owned_elf_symbol_names(path: Path) -> tuple[set[str], set[str]]:
     # Inspect the emitted bytes without a separately scheduled nm process.
     # Unlike archive resolution, exact closure includes weak undefined names.
