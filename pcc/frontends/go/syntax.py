@@ -257,6 +257,8 @@ class Expr:
     pointer_nonnull: bool = False
     iteration_binding: bool = False
     indirect_receiver: bool = False
+    # Set by the checker for an element literal whose type was elided.
+    elided_type: object = None
 
 
 @dataclass
@@ -454,10 +456,10 @@ class GoParser:
         if self.at("["):
             token = self.take("[")
             if self.at("]"):
-                if signature:
-                    self.take("]")
-                    return SliceSyntax(token, self.datatype(signature=True))
-                self.unsupported(token, 'go.unsupported.slice-storage', "slice types require shared-runtime backing storage support")
+                # A slice type is ordinary syntax; outside signatures the
+                # checker reports the missing backing storage at its use.
+                self.take("]")
+                return SliceSyntax(token, self.datatype(signature=signature))
             if self.accept("..."):
                 if not literal:
                     self.fail(token, "inferred array length is only valid in a composite literal")
@@ -1052,15 +1054,23 @@ class GoParser:
         previous, self.named_literals = self.named_literals, True
         args, keys = [], []
         while not self.at("}"):
-            item = self.expression()
+            item = self.literal_element()
             key = item if self.accept(":") else None
-            args.append(self.expression() if key is not None else item)
+            args.append(self.literal_element() if key is not None else item)
             keys.append(key)
             if not self.accept(","):
                 break
         self.take("}")
         self.named_literals = previous
         return Expr("array" if isinstance(dtype, ArraySyntax) else "composite", token, dtype, args, keys=keys)
+
+    def literal_element(self):
+        # Go spec, Composite literals: an element or key that is itself a
+        # composite literal may elide its type ({...}); the checker supplies
+        # it from the enclosing array, slice or map type, or rejects it.
+        if self.at("{"):
+            return self.composite_literal(self.current, None)
+        return self.expression()
 
     def expression(self, minimum=1):
         token = self.current
