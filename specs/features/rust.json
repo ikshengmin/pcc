@@ -2534,6 +2534,21 @@
       "status": "missing"
     },
     {
+      "id": "rust.items.static-items",
+      "title": "Static items and static mut",
+      "chapter_ids": [
+        "rust.ref.6.10"
+      ],
+      "scope": "Qualification missing, not implementation missing: module-scope `static [mut] NAME: Type = expr;` items of integer, bool or &str type are value-namespace declarations (visibility, cfg rollback, use and module paths), each one global place: evaluated once at its declaration with the const evaluator (initializers may read consts and, as rustc accepts, immutable statics), lowered to an internal global (constant unless mut), read by loading and written by storing, including compound assignment. Every use of a `static mut` needs an unsafe context (E0133); assignment to an immutable static is E0594; let bindings cannot shadow statics (E0530); calling one is E0618. References to statics, interior mutability, other static types (std's LazyLock in uv) and block-scoped statics remain explicit gaps. Seven rejected sources are rejected by local rustc 1.92.0 with the recorded codes; the statics fixture (a static mut counter updated across calls) prints the same result from PCC's own compiler, arm64 assembler and Mach-O linker and from a local rustc build (local Mac evidence; the x86-64 Linux run is unrun in this change). No schema2 evidence row is migrated.",
+      "tests": [
+        "tests/rust/test_rust_static_items.py",
+        "tests/rust/test_rust_static_items.py::test_fixture_runs_natively_with_owned_compile_assemble_and_link@rust-native-reference"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "status": "missing"
+    },
+    {
       "id": "rust.enums.payload-values",
       "title": "Tagged payload enums and by-value bindings",
       "chapter_ids": [

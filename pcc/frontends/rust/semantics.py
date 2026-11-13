@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .syntax import ConstItem, Enumeration, Expr, Function, Record, RustError, Token
+from .syntax import ConstItem, Enumeration, Expr, Function, Record, RustError, StaticItem, Token
 from .types import (
     INTEGER_TYPES, STATIC_STR, FixedArrayType, SharedReference, TupleType, TypeApplication, TypeParameter, integer_bits,
     is_static_str,
@@ -208,7 +208,10 @@ class Checker:
     def bind(self, token: Token, ty: object, mutable: bool, *, parameter=False) -> Binding:
         # An identifier pattern naming a const is a constant pattern in Rust,
         # never a fresh binding; keep that form an explicit gap.
-        if self.constant_named(token.text, token) is not None:
+        item = self.constant_named(token.text, token)
+        if isinstance(item, StaticItem):
+            raise token.error(f'let bindings cannot shadow statics: {token.text!r} (rustc E0530)')
+        if item is not None:
             raise token.error(f'{token.text!r} names a constant: constant patterns and bindings that '
                               'would shadow a constant are not implemented')
         self.source_type_access(ty, token)
@@ -313,15 +316,16 @@ class Checker:
                 self.current_module = const.item_identity.module
             # In a const item an elided `&str` lifetime is 'static.
             ty = STATIC_STR if is_static_str(const.ty, elided_is_static=True) else self.generics.normalize(const.ty, const.token)
+            label = 'static' if isinstance(const, StaticItem) else 'const'
             if ty not in INTEGERS | {"bool", STATIC_STR}:
-                raise const.token.error(f'const items of type {ty} are not implemented; integer, bool and &str const items are')
+                raise const.token.error(f'{label} items of type {ty} are not implemented; integer, bool and &str {label} items are')
             pending, count = [const.expression], 0
             while pending:
                 node = pending.pop()
                 count += 1
                 if count > 1024:
                     raise node.token.error('const initializer exceeds implementation limit (1024 nodes)')
-                if node.kind not in {'integer', 'bool', 'string', 'group', 'unary', 'binary', 'cast', 'name', 'variant', 'const'}:
+                if node.kind not in {'integer', 'bool', 'string', 'group', 'unary', 'binary', 'cast', 'name', 'variant', 'const', 'static'}:
                     raise node.token.error('const initializers support literals, operators, casts and other const '
                                            'items; calls, blocks and other expressions are not implemented')
                 pending.extend(node.children)
@@ -330,12 +334,35 @@ class Checker:
             if ty == STATIC_STR:
                 value = self.static_str_value(const.expression)
             if value is None:
-                raise const.expression.token.error('const initializer is not a closed constant expression')
+                raise const.expression.token.error(f'{label} initializer is not a closed constant expression')
             const.ty, const.value, const.evaluated = ty, value, True
             return const
         finally:
             self.evaluating_consts.pop()
             self.scopes, self.current_module, self.type_scope, self.abstract_function = saved
+
+    def item_value_kind(self, item, token):
+        """A const use folds to its value; a static use reads its place.
+        Any use of a `static mut` needs an unsafe context (rustc E0133)."""
+        if not isinstance(item, StaticItem):
+            return "const"
+        if item.mutable and not self.unsafe_depth:
+            raise token.error(f"use of mutable static `{item.token.text}` is unsafe and requires an unsafe block (rustc E0133)")
+        return "static"
+
+    def assigns_static(self, lhs):
+        """Type an assignment target; True when it is a static item."""
+        if lhs.kind not in {"name", "variant", "static"}:
+            return False
+        if lhs.kind == "name" and self.local(str(lhs.value)) is not None:
+            return False
+        if lhs.kind != "static":
+            item = (self.constant_named(str(lhs.value), lhs.token) if lhs.kind == "name"
+                    else self.constant_path(lhs.value[0], lhs.value[1], lhs.token))
+            if not isinstance(item, StaticItem):
+                return False
+            self.expression(lhs, place_context=True)
+        return lhs.kind == "static"
 
     def static_str_value(self, expr):
         """The literal text a `&'static str` const initializer denotes."""
@@ -343,7 +370,7 @@ class Checker:
             expr = expr.children[0]
         if expr.kind == "string":
             return expr.value
-        if expr.kind == "const":
+        if expr.kind == "const" or expr.kind == "static" and not expr.binding.mutable:
             return expr.binding.value
         return None
 
@@ -630,9 +657,9 @@ class Checker:
             ty = "bool"
         elif kind == "variant" and self.constant_path(expr.value[0], expr.value[1], expr.token) is not None:
             const = self.evaluate_const(self.constant_path(expr.value[0], expr.value[1], expr.token), expr.token)
-            expr.kind, expr.binding, expr.value = "const", const, None
+            expr.kind, expr.binding, expr.value = self.item_value_kind(const, expr.token), const, None
             ty = const.ty
-        elif kind == "const":
+        elif kind in {"const", "static"}:
             ty = expr.binding.ty
         elif kind == "string":
             ty = STATIC_STR
@@ -790,7 +817,7 @@ class Checker:
             const = self.constant_named(str(expr.value), expr.token) if binding is None else None
             if const is not None:
                 self.evaluate_const(const, expr.token)
-                expr.kind, expr.binding, expr.value = "const", const, None
+                expr.kind, expr.binding, expr.value = self.item_value_kind(const, expr.token), const, None
                 ty = const.ty
             else:
                 if binding is None:
@@ -902,7 +929,8 @@ class Checker:
                 fn = (self.module_resolution.function(name, self.current_module, callee.token)
                       if self.module_resolution is not None else self.names.get(name))
                 if fn is None and name in self.const_names:
-                    raise callee.token.error(f'expected function, found constant {name!r} (rustc E0618)')
+                    kind_name = 'static' if isinstance(self.const_names[name], StaticItem) else 'constant'
+                    raise callee.token.error(f'expected function, found {kind_name} {name!r} (rustc E0618)')
                 if fn is None:
                     raise callee.token.error(f"unknown function {callee.value!r}")
                 explicit_arguments = path.arguments if isinstance(path, TypeApplication) else None
@@ -995,6 +1023,13 @@ class Checker:
                     expr.kind = "derived_eq"
             else:
                 ty = common
+        elif kind == "assign" and self.assigns_static(children[0]):
+            lhs = children[0]
+            static = lhs.binding
+            if not static.mutable:
+                raise lhs.token.error(f"cannot assign to immutable static item `{static.token.text}` (rustc E0594)")
+            unify(static.ty, self.expression(children[1]), expr.token)
+            ty = "()"
         elif kind == "assign":
             lhs = children[0]
             target = self.expression(lhs, place_context=True)
@@ -1189,6 +1224,13 @@ class Checker:
             return expr.value
         if kind == "const":
             return expr.binding.value
+        if kind == "static":
+            # A static is a place. Only while evaluating a const/static
+            # initializer may an immutable static's value be read (rustc
+            # accepts it); PCC's static types have no interior mutability.
+            if self.evaluating_consts and not expr.binding.mutable:
+                return expr.binding.value
+            return None
         if kind == "group":
             return values[0]
         if kind == "bool":

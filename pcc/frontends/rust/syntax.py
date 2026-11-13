@@ -446,6 +446,25 @@ class ConstItem:
 
 
 @dataclass
+class StaticItem:
+    """A module-scope `static [mut] NAME: Type = expr;` (Rust Reference
+    items/static-items): one place in memory, unlike a const."""
+    token: Token
+    ty: object
+    expression: Expr
+    mutable: bool = False
+    public: object = False
+    documentation: tuple[Documentation, ...] = ()
+    item_identity: object = None
+    value: object = None
+    evaluated: bool = False
+
+    @property
+    def declaration_name(self):
+        return self.item_identity.binding_key if self.item_identity is not None else self.token.text
+
+
+@dataclass
 class ModuleBody:
     functions: list[Function]
     records: list[Record]
@@ -459,6 +478,7 @@ class ModuleBody:
     conditional_items: tuple = ()
     uses: list[UseDeclaration] = field(default_factory=list)
     consts: list[ConstItem] = field(default_factory=list)
+    statics: list[StaticItem] = field(default_factory=list)
 
 
 @dataclass
@@ -511,6 +531,7 @@ class Parser:
         self.crate_aliases = []
         self.uses = []
         self.consts = []
+        self.statics = []
         # Every parsed `pub(...)`, shared with inline child-module parsers.
         self.visibility_restrictions = []
         self.line_offsets = [0]
@@ -929,6 +950,7 @@ class Parser:
         child.modules, child.attribute_requirements, child.crate_aliases = [], [], []
         child.uses = []
         child.consts = []
+        child.statics = []
         child.crate_stability = None
         child.crate_documentation = ()
         child.crate_lint_attributes = ()
@@ -941,7 +963,7 @@ class Parser:
         return ModuleBody(functions, child.records, child.enums, child.implementations,
                           child.traits, child.modules, child.crate_documentation,
                           child.crate_aliases, child.crate_policy, child.conditional_items,
-                          uses=child.uses, consts=child.consts)
+                          uses=child.uses, consts=child.consts, statics=child.statics)
 
     def const_item(self, public, documentation):
         """`const NAME: Type = Expression;` (Rust Reference items/constant-items)."""
@@ -1213,6 +1235,19 @@ class Parser:
                         raise const_token.error('representation/no_mangle/inline/lang attributes do not apply to const items')
                     self.const_item(public, tuple(docs))
                     continue
+                if self.token.text == 'static':
+                    static_token = self.take()
+                    if repr_c or enum_repr or no_mangle or inline_attributes or language_item is not None:
+                        raise static_token.error('representation/no_mangle/inline/lang attributes on static items are not implemented')
+                    mutable = self.accept('mut')
+                    name = self.name()
+                    self.expect(':')
+                    ty = self.type()
+                    self.expect('=')
+                    expression = self.expression()
+                    self.expect(';')
+                    self.statics.append(StaticItem(name, ty, expression, mutable, public, tuple(docs)))
+                    continue
                 if self.token.text == 'const':
                     # `const fn` / `const unsafe fn` / `const extern "C" fn`
                     # (Rust Reference items/functions.html#const-functions).
@@ -1426,7 +1461,7 @@ class Parser:
     # Every parser collection one module item can extend. A disabled item is
     # parsed like any other, then each collection is cut back to its length
     # before the item, so nothing it declared reaches names, files or IR.
-    _ITEM_COLLECTIONS = ('records', 'enums', 'implementations', 'traits', 'modules', 'uses', 'consts',
+    _ITEM_COLLECTIONS = ('records', 'enums', 'implementations', 'traits', 'modules', 'uses', 'consts', 'statics',
                          'crate_aliases', 'attribute_requirements', 'visibility_restrictions',
                          'macro_expansions')
 
@@ -1648,8 +1683,8 @@ class Parser:
                 raise self.token.error("unterminated block")
             if self.token.text == 'use':
                 raise self.token.error('block-scoped use declarations require lexical item scopes, which are not implemented')
-            if self.token.text == 'const':
-                raise self.token.error('block-scoped const items and inline const blocks require lexical item scopes, which are not implemented')
+            if self.token.text in {'const', 'static'}:
+                raise self.token.error('block-scoped const/static items and inline const blocks require lexical item scopes, which are not implemented')
             if self.accept(";"):
                 continue
             if self.accept("let"):

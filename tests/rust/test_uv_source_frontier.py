@@ -37,9 +37,10 @@ FRONTIER = (
     ("crates/uv-version/src/lib.rs", "experimental Rust frontend has no borrow checker"),
     # Grouped uses, `pub use`, `pub(crate)`, `#[cfg(test)]` (off), the const
     # item and `#[derive(Debug, thiserror::Error)]` parse (the thiserror derive
-    # is a semantic gap), its retained helper attributes and the struct-like
-    # variants parse; line 140 is `static LINUX_MARKERS: LazyLock<..> = ..;`.
-    ("crates/uv-lock/src/lock/mod.rs", "140:1: expected 'fn', found 'static'"),
+    # is a semantic gap), its retained helper attributes, the struct-like
+    # variants and the `static .. LazyLock<..>` items parse; line 364 has the
+    # slice parameter `supported_environments: &[MarkerTree]`.
+    ("crates/uv-lock/src/lock/mod.rs", "364:30: slice types and array-to-slice unsizing are not implemented"),
 )
 
 

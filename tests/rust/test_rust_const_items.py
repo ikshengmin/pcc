@@ -114,7 +114,7 @@ def test_rustc_rejects_the_same_const_sources_with_the_recorded_codes(tmp_path):
     ('const A: (u32, u32) = (1, 2);', 'const items of type'),
     ('const A: u32 = f(); fn f()->u32{1}', 'calls, blocks and other expressions'),
     ('const _: u32 = 1;', 'unnamed const items'),
-    ('pub fn f(){ const N: u32 = 1; }', 'block-scoped const items'),
+    ('pub fn f(){ const N: u32 = 1; }', 'block-scoped const/static items'),
     ('pub fn f()->u32{ const { 1 } }', 'inline const blocks'),
 ])
 def test_unowned_const_forms_are_explicit_gaps(source, message):

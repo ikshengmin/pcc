@@ -125,7 +125,7 @@ class MoveChecker:
 
     def expression(self, expr: Expr, state: State) -> State | None:
         kind, children = expr.kind, expr.children
-        if kind in {"integer", "bool", "unit", "variant", "const", "string"}:
+        if kind in {"integer", "bool", "unit", "variant", "const", "static", "string"}:
             return state
         if kind == "borrow":
             self.read_place(children[0], state, consume=False)
@@ -184,6 +184,8 @@ class MoveChecker:
             return result
         if kind in {"discard", "statement", "cast", "unary", "unsafe"}:
             return self.expression(children[0], state)
+        if kind == "assign" and children[0].kind == "static":
+            return self.expression(children[1], state)  # Statics hold Copy data only.
         if kind == "assign":
             result = self.expression(children[1], state)
             if result is None:

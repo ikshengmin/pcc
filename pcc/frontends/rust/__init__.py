@@ -116,12 +116,12 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
                     environment=environment)
     functions = parser.parse()
     resolution = None
-    records, enums, consts = parser.records, parser.enums, parser.consts
+    records, enums, consts = parser.records, parser.enums, parser.consts + parser.statics
     if parser.modules or parser.crate_aliases or parser.uses:
         from .module_resolution import ModuleResolution, inline_crate
         resolution = ModuleResolution(inline_crate(parser, functions))
         functions, records, enums = resolution.functions, resolution.records, resolution.enums
-        consts = resolution.consts
+        consts = resolution.consts + resolution.statics
     from .inline_attributes import collect_inline_hints
     inline_hints = collect_inline_hints(functions, parser.traits)
     if rustc_check is None:

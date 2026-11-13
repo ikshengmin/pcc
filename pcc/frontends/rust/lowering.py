@@ -84,7 +84,27 @@ class Lowerer:
             return tag
         return ir_type(ty, self.target.pointer_bits)
 
-    def static_str(self, text):
+    def static_global(self, item):
+        """The one global place of a static item, initialized with its value."""
+        cache = self.__dict__.setdefault('static_globals', {})
+        if id(item) not in cache:
+            ty = self.type(item.ty)
+            storage = ir.GlobalVariable(self.module, ty, f"__pcc_rust_static_{len(cache)}")
+            storage.linkage = "internal"
+            storage.global_constant = not item.mutable
+            if item.ty == STATIC_STR:
+                self.static_str(item.value, load=False)
+                storage.initializer = self.static_str_constant(item.value)
+            else:
+                storage.initializer = ir.Constant(ty, int(item.value))
+            cache[id(item)] = storage
+        return cache[id(item)]
+
+    def static_str_constant(self, text):
+        """The (pointer, length) aggregate constant of literal text."""
+        return self.static_strings_descriptor_value[text.encode('utf-8')]
+
+    def static_str(self, text, *, load=True):
         """A `&'static str` value: private readonly UTF-8 bytes and a
         private (pointer, length) descriptor, loaded as one value. The
         backend relocates pointers in static aggregate initializers, not in
@@ -106,7 +126,8 @@ class Lowerer:
             descriptor.initializer = ir.Constant(self.type(STATIC_STR), [
                 pointer, ir.Constant(ir.IntType(self.target.pointer_bits), len(data))])
             cache[data] = descriptor
-        return self.builder.load(cache[data])
+            self.__dict__.setdefault('static_strings_descriptor_value', {})[data] = descriptor.initializer
+        return self.builder.load(cache[data]) if load else cache[data]
 
     def place_pointer(self, expr):
         if expr.kind == "group":
@@ -115,6 +136,8 @@ class Lowerer:
             return self.expression(expr.children[0])
         if expr.kind == "name":
             return self.slots.get(expr.binding.serial)
+        if expr.kind == "static":
+            return self.static_global(expr.binding)
         if expr.kind == "index":
             base = expr.children[0]
             if isinstance(base.ty, SharedReference):
@@ -292,6 +315,8 @@ class Lowerer:
             return ir.Constant(self.type(expr.ty), expr.value)
         if kind == "bool":
             return ir.Constant(ir.IntType(1), int(expr.value))
+        if kind == "static":
+            return self.builder.load(self.static_global(expr.binding))
         if kind == "string" or kind == "const" and expr.ty == STATIC_STR:
             return self.static_str(expr.value if kind == "string" else expr.binding.value)
         if kind == "const":
