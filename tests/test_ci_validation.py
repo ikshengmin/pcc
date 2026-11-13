@@ -1582,3 +1582,38 @@ def test_static_data_member_references_keep_owned_checks_in_their_original_lane(
             assert not registry[module][name].get("conditional")
         assert classify(module, name, integration, registry) == (
             "reference" if name in references else "integration" if integration else "ordinary")
+
+
+def test_protected_base_constructor_references_keep_owned_checks_in_their_lane():
+    module = "tests/cpp/test_cpp_protected_base_constructors.py"
+    registry = json.loads(run.REFERENCES.read_text())["functions"]
+    reference_calls = {
+        "test_reference_compiler_returns_the_same_value": "run_reference_cpp",
+        "test_reference_compiler_rejects_the_same_sources": "reference_rejects",
+        "test_programs_execute_against_real_cpp17_reference_on_linux": "execute_row_pair",
+    }
+    owned_calls = {
+        "test_programs_compile_to_stable_linux_artifacts": "compile_host_cpp",
+        "test_programs_run_natively_with_owned_compile_assemble_and_link": "run_owned_cpp",
+        "test_inaccessible_constructors_are_ordinary_errors": "CppParser",
+    }
+    assert set(registry[module]) == set(reference_calls)
+    tree = ast.parse((ROOT / module).read_text())
+    functions = {node.name: node for node in tree.body
+                 if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")}
+    assert reference_calls.keys() | owned_calls.keys() == functions.keys()
+    for name, function in functions.items():
+        calls = {node.func.id for node in ast.walk(function)
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+        assert (reference_calls | owned_calls)[name] in calls
+        marks = {ast.unparse(mark.func if isinstance(mark, ast.Call) else mark)
+                 for mark in function.decorator_list}
+        integration = "pytest.mark.integration" in marks
+        assert integration == (name == "test_programs_execute_against_real_cpp17_reference_on_linux")
+        if name in reference_calls:
+            assert registry[module][name]["activity"] == "external-reference"
+            assert not registry[module][name].get("conditional")
+        else:
+            assert not calls & set(reference_calls.values())
+        assert classify(module, name, integration, registry) == (
+            "reference" if name in reference_calls else "ordinary")

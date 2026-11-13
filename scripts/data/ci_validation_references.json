@@ -1,5 +1,25 @@
 {
   "functions": {
+    "tests/cpp/test_cpp_protected_base_constructors.py": {
+      "test_reference_compiler_returns_the_same_value": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.darwin_execution.run_reference_cpp, which builds the unchanged protected-base-constructor units and observer with the selected development C++17 compiler and executes the result. Owned native execution remains a separate test."
+        ]
+      },
+      "test_reference_compiler_rejects_the_same_sources": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.darwin_execution.reference_rejects for each unchanged inaccessible-constructor source using the selected development C++17 compiler with -pedantic-errors and -fsyntax-only."
+        ]
+      },
+      "test_programs_execute_against_real_cpp17_reference_on_linux": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.sizeof_execution.execute_row_pair on unchanged protected-base-constructor units, retaining owned artifacts and executing an actual C++17 reference compiled by compile_reference_cpp with PCC_CPP_ORACLE or g++."
+        ]
+      }
+    },
     "tests/cpp/test_cpp_static_data_members.py": {
       "test_reference_compiler_returns_the_same_value": {
         "activity": "external-reference",
