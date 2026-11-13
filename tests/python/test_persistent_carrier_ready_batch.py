@@ -10,7 +10,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def run_worker(steps, ready_count):
+def run_worker(steps, ready_count, io_waits=0, io_ready=0):
     events = []
     state = {"steps": 0, "stop": 0, "carriers": 0, "failures": 0}
     tls = {"pcc_current_virtual_thread_carrier_py": -1}
@@ -50,6 +50,10 @@ def run_worker(steps, ready_count):
         return step()
 
     ns = {
+        "atomic_load_i64": lambda key, offset, order: {
+            "pcc_vthread_io_count_py": io_waits,
+            "pcc_vthread_io_ready_pending_py": io_ready,
+        }[key],
         "load_i64": lambda arg, offset: 1,
         "load_i32": lambda key, offset: tls[key],
         "store_i32": lambda key, offset, value: tls.__setitem__(key, value),
@@ -86,6 +90,16 @@ def test_stop_is_observed_after_each_step():
     events, state = run_worker([1], 1000)
     assert state["steps"] == 1
     assert events == [("timers", 0), ("io", 0)]
+
+
+@pytest.mark.parametrize("io_waits,io_ready", [(1, 0), (0, 1), (512, 0), (512, 1)])
+def test_pending_or_readied_io_is_repolled_within_eight_ready_steps(io_waits, io_ready):
+    events, state = run_worker([1] * 130, 1000, io_waits, io_ready)
+    polls = [step for event, step in events if event == "io"]
+    assert polls[0] == 0
+    assert max(after - before for before, after in zip(polls, polls[1:])) <= 8
+    assert state["steps"] - polls[-1] <= 8
+    assert state["steps"] == 130 and state["failures"] == 0
 
 
 def test_stolen_ready_batch_repolls_after_idle_wakeup():

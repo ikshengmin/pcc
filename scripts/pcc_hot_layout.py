@@ -41,6 +41,10 @@ CACHE_LINE = 128
 # name -> (role, group). Extend this table when a profile shows a new word
 # written or polled on a hot path; the linked test fails on a new conflict.
 HOT_WORDS: dict[str, tuple[str, str]] = {
+    "pcc_vthread_io_ready_pending_py": ("written", "vthread-io-ready"),
+    "pcc_vthread_io_ready_head_py": ("written", "vthread-io-ready"),
+    "pcc_vthread_io_ready_tail_py": ("written", "vthread-io-ready"),
+    "pcc_vthread_io_count_py": ("written", "vthread-io-wait"),
     # Written by running threads.
     "py_gc_tracked_count": ("written", "tracked-count"),
     "pcc_gc_tracked_after_collect": ("written", "tracked-count"),

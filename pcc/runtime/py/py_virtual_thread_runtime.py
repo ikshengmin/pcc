@@ -3686,8 +3686,17 @@ def _persistent_carrier_worker(arg):
             py_virtual_thread_poll_timers()
             py_virtual_thread_poll_io(0)
             ready_steps_remaining = py_virtual_thread_ready_count()
-            if ready_steps_remaining > ready_batch_limit:
-                ready_steps_remaining = ready_batch_limit
+            batch_limit = ready_batch_limit
+            # Readiness needs both prompt polling and prompt dispatch. Keep
+            # compute-only batches intact, but do not make pending socket I/O
+            # wait through 64 application continuations before observing it.
+            if (
+                atomic_load_i64(global_addr("pcc_vthread_io_count_py"), 0, "acquire") > 0
+                or atomic_load_i64(global_addr("pcc_vthread_io_ready_pending_py"), 0, "acquire") != 0
+            ):
+                batch_limit = 8
+            if ready_steps_remaining > batch_limit:
+                ready_steps_remaining = batch_limit
         step = _run_ready_step()
         ready_steps_remaining = ready_steps_remaining - 1
         if step < 0:
